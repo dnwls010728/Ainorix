@@ -9,6 +9,7 @@
 #include "core/Log.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
+#include "render/GpuRenderer.h"
 
 namespace oe {
 
@@ -78,6 +79,46 @@ bool WaitFor(std::future<T>& f) {
     return f.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
 }
 
+// One editor viewport frame: the game camera, or the free editor camera with grid.
+struct FrameRequest {
+    int width = 640, height = 360;
+    bool game = false;
+    Vec3 eye{6, 5, 8};
+    Vec3 target{0, 0, 0};
+    float fov = 60.0f;
+    bool grid = false;
+    bool colliders = false;
+    EntityId selected = kNullEntity;
+};
+
+// Main thread only.
+Image RenderFrame(Engine& engine, const FrameRequest& fr) {
+    int w = fr.width < 16 ? 16 : (fr.width > 4096 ? 4096 : fr.width);
+    int h = fr.height < 16 ? 16 : (fr.height > 4096 ? 4096 : fr.height);
+    RenderTarget rt;
+    rt.Resize(w, h);
+    float aspect = static_cast<float>(w) / static_cast<float>(h);
+    RenderView view;
+    MakeSceneView(engine.GetScene(), aspect, view);
+    if (!fr.game) {
+        Color clear = view.clearColor;
+        float fov = fr.fov > 1.0f && fr.fov < 179.0f ? fr.fov : 60.0f;
+        view = MakeLookAtView(fr.eye, fr.target, fov, aspect);
+        view.clearColor = clear;
+        view.drawGrid = fr.grid;
+    }
+    view.highlight = fr.selected;
+    if (fr.colliders) AppendColliderLines(engine.GetScene(), view.lines);
+    engine.AppendDebugLines(view.lines);
+    engine.DisplayRenderer().Render(engine.GetScene(), view, rt);
+    return rt.ToImage();
+}
+
+Vec3 JsonVec(const Json& j, Vec3 def) {
+    if (!j.isArray() || j.size() < 3) return def;
+    return Vec3(j[0].asFloat(def.x), j[1].asFloat(def.y), j[2].asFloat(def.z));
+}
+
 }  // namespace
 
 std::string FindEditorDir() {
@@ -114,35 +155,17 @@ HttpResponse HandleEditorRequest(Engine& engine, const std::string& editorDir, c
     }
 
     if (req.path == "/api/frame.png" && req.method == "GET") {
-        int w = std::atoi(req.Query("w", "640").c_str());
-        int h = std::atoi(req.Query("h", "360").c_str());
-        w = w < 16 ? 16 : (w > 2048 ? 2048 : w);
-        h = h < 16 ? 16 : (h > 2048 ? 2048 : h);
-        bool game = req.Query("game") == "1";
-        Vec3 eye = ParseVec(req.Query("eye"), Vec3(6, 5, 8));
-        Vec3 target = ParseVec(req.Query("target"), Vec3(0, 0, 0));
-        float fov = static_cast<float>(std::atof(req.Query("fov", "60").c_str()));
-        bool grid = req.Query("grid") == "1";
-        bool colliders = req.Query("colliders") == "1";
-        EntityId sel = static_cast<EntityId>(std::strtoul(req.Query("sel", "0").c_str(), nullptr, 10));
-        auto future = engine.PostJob([&engine, w, h, game, eye, target, fov, grid, colliders, sel] {
-            RenderTarget rt;
-            rt.Resize(w, h);
-            float aspect = static_cast<float>(w) / static_cast<float>(h);
-            RenderView view;
-            MakeSceneView(engine.GetScene(), aspect, view);
-            if (!game) {
-                Color clear = view.clearColor;
-                view = MakeLookAtView(eye, target, fov, aspect);
-                view.clearColor = clear;
-                view.drawGrid = grid;
-            }
-            view.highlight = sel;
-            if (colliders) AppendColliderLines(engine.GetScene(), view.lines);
-            engine.AppendDebugLines(view.lines);
-            engine.Renderer().Render(engine.GetScene(), view, rt);
-            return EncodePng(rt.ToImage());
-        });
+        FrameRequest fr;
+        fr.width = std::atoi(req.Query("w", "640").c_str());
+        fr.height = std::atoi(req.Query("h", "360").c_str());
+        fr.game = req.Query("game") == "1";
+        fr.eye = ParseVec(req.Query("eye"), fr.eye);
+        fr.target = ParseVec(req.Query("target"), fr.target);
+        fr.fov = static_cast<float>(std::atof(req.Query("fov", "60").c_str()));
+        fr.grid = req.Query("grid") == "1";
+        fr.colliders = req.Query("colliders") == "1";
+        fr.selected = static_cast<EntityId>(std::strtoul(req.Query("sel", "0").c_str(), nullptr, 10));
+        auto future = engine.PostJob([&engine, fr] { return EncodePng(RenderFrame(engine, fr)); });
         if (!WaitFor(future)) return Error(500, "timeout", "engine did not respond");
         std::vector<uint8_t> png = future.get();
         HttpResponse r;
@@ -163,6 +186,73 @@ HttpResponse HandleEditorRequest(Engine& engine, const std::string& editorDir, c
     }
 
     return Error(404, "not_found", "unknown route " + req.method + " " + req.path);
+}
+
+bool AcceptEditorStream(const HttpRequest& req, int* status) {
+    *status = 403;
+    if (req.path != "/api/stream") {
+        *status = 404;
+        return false;
+    }
+    if (!HostAllowed(req)) return false;
+    // Browsers send Origin on WebSocket upgrades and do not apply CORS to
+    // them, so without this check any web page could watch the viewport.
+    std::string origin = req.Header("origin");
+    if (!origin.empty()) {
+        std::string host = origin.substr(origin.find("://") == std::string::npos ? 0 : origin.find("://") + 3);
+        std::string name = host.substr(0, host.rfind(':'));
+        if (name != "127.0.0.1" && name != "localhost" && name != "[::1]") return false;
+    }
+    return true;
+}
+
+void RunEditorStream(Engine& engine, const HttpRequest&, WebSocket& ws) {
+    // Tell the editor which renderer it is looking at (it picks the frame size from that).
+    auto info = engine.PostJob([&engine] {
+        std::string name = engine.DisplayRenderer().Name();
+        return std::vector<uint8_t>(name.begin(), name.end());
+    });
+    if (!WaitFor(info)) return;
+    std::vector<uint8_t> nameBytes = info.get();
+    std::string name(nameBytes.begin(), nameBytes.end());
+    Json h = Json::MakeObject();
+    h["type"] = "hello";
+    h["renderer"] = name;
+    h["gpu"] = name.rfind("gpu", 0) == 0;
+    if (!ws.SendText(h.dump())) return;
+
+    std::string message;
+    while (ws.Read(message)) {
+        std::string err;
+        Json j = Json::parse(message, &err);
+        if (!err.empty() || !j.isObject()) continue;
+        FrameRequest fr;
+        fr.width = j["w"].asInt(640);
+        fr.height = j["h"].asInt(360);
+        fr.game = j["game"].asBool(false);
+        fr.eye = JsonVec(j["eye"], fr.eye);
+        fr.target = JsonVec(j["target"], fr.target);
+        fr.fov = j["fov"].asFloat(60.0f);
+        fr.grid = j["grid"].asBool(false);
+        fr.colliders = j["colliders"].asBool(false);
+        fr.selected = static_cast<EntityId>(j["sel"].asNumber(0));
+        int quality = j["quality"].asInt(85);
+        // Render + read back on the main thread, encode here (off the main thread).
+        std::shared_ptr<Image> image = std::make_shared<Image>();
+        auto job = engine.PostJob([&engine, fr, image] {
+            *image = RenderFrame(engine, fr);
+            return std::vector<uint8_t>();
+        });
+        if (!WaitFor(job)) break;
+        std::vector<uint8_t> jpeg = EncodeJpeg(*image, quality);
+        if (!ws.SendBinary(jpeg.data(), jpeg.size())) break;
+    }
+}
+
+bool StartEditorServer(HttpServer& server, Engine& engine, int port, std::string* error) {
+    std::string editorDir = FindEditorDir();
+    server.OnWebSocket(AcceptEditorStream, [&engine](const HttpRequest& r, WebSocket& ws) { RunEditorStream(engine, r, ws); });
+    return server.Start(port, [&engine, editorDir](const HttpRequest& r) { return HandleEditorRequest(engine, editorDir, r); }, error);
 }
 
 }  // namespace oe

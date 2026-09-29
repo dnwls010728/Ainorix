@@ -6,6 +6,7 @@
 
 #include "assets/Assets.h"
 #include "render/Mesh.h"
+#include "render/RenderScene.h"
 #include "render/Renderer.h"
 #include "render/UI.h"
 #include "scene/Components.h"
@@ -53,17 +54,6 @@ uint32_t Blend(uint32_t dst, const Color& src, float a) {
 
 // ----- Lighting ------------------------------------------------------------------
 
-struct DirLight {
-    Vec3 dir;  // direction the light travels
-    Color color;
-};
-
-struct PointLightData {
-    Vec3 pos;
-    Color color;
-    float range;
-};
-
 // Depth map rendered from the first directional light (orthographic).
 struct ShadowMap {
     bool enabled = false;
@@ -94,8 +84,8 @@ struct ShadowMap {
 
 struct Lighting {
     Color ambient{0, 0, 0};
-    std::vector<DirLight> dirs;
-    std::vector<PointLightData> points;
+    std::vector<RenderDirLight> dirs;
+    std::vector<RenderPointLight> points;
     ShadowMap shadow;
 
     Color At(const Vec3& wpos, const Vec3& n) const {
@@ -106,7 +96,7 @@ struct Lighting {
             float lit = i == 0 ? shadow.Lit(wpos, n) : 1.0f;
             c = c + dirs[i].color * (ndl * lit);
         }
-        for (const PointLightData& p : points) {
+        for (const RenderPointLight& p : points) {
             Vec3 d = p.pos - wpos;
             float dist = Length(d);
             if (dist >= p.range || dist < 1e-5f) continue;
@@ -257,6 +247,11 @@ int g_maxRenderThreads = 16;
 
 // Runs fn(bandIndex, y0, y1) over horizontal bands on worker threads.
 void ParallelBands(int height, const std::function<void(int, int, int)>& fn) {
+#ifdef __EMSCRIPTEN__
+    // The web build is single threaded (no SharedArrayBuffer requirements for hosts).
+    fn(0, 0, height);
+    return;
+#endif
     unsigned hw = std::min(static_cast<unsigned>(std::max(1, g_maxRenderThreads)), std::max(1u, std::thread::hardware_concurrency()));
     int bands = static_cast<int>(std::min<unsigned>(std::min(hw, 16u), static_cast<unsigned>(std::max(1, height / 32))));
     if (bands <= 1) {
@@ -290,25 +285,13 @@ void DrawOutline(RenderTarget& t, EntityId id) {
     }
 }
 
-// A mesh instance ready to draw.
-struct DrawItem {
-    EntityId id;
-    std::shared_ptr<const Mesh> mesh;
-    Mat4 world;
-    Mat4 normalMatrix;
-    Color tint;
-    const Texture* textureOverride = nullptr;
-    std::shared_ptr<const Texture> textureHold;
-    bool unlit, flat, castShadows, error;
-};
-
 // Transforms mesh vertices into world space once per item.
 struct Transformed {
     std::vector<Vec3> wpos;
     std::vector<Vec3> nrm;
 };
 
-Transformed TransformItem(const DrawItem& item) {
+Transformed TransformItem(const RenderItem& item) {
     Transformed t;
     const Mesh& m = *item.mesh;
     t.wpos.resize(m.positions.size());
@@ -331,61 +314,18 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
-    // ----- Draw list
-    std::vector<DrawItem> items;
-    for (const auto& kv : scene.Pool<MeshRenderer>()) {
-        const MeshRenderer& mr = kv.second;
-        if (!mr.visible) continue;
-        DrawItem it;
-        it.id = kv.first;
-        it.world = scene.WorldMatrix(kv.first);
-        it.normalMatrix = it.world.Inverse().Transposed();
-        it.tint = mr.color;
-        it.unlit = mr.unlit;
-        it.flat = mr.shading == "flat";
-        it.castShadows = mr.castShadows;
-        it.error = false;
-        it.mesh = assets_ ? assets_->GetMesh(mr.mesh) : std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), GetBuiltinMesh(mr.mesh));
-        if (!it.mesh) {
-            // Missing/broken asset: a loud magenta cube so it shows up in screenshots.
-            it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), GetBuiltinMesh("cube"));
-            it.tint = Color(1, 0, 1);
-            it.unlit = true;
-            it.error = true;
-        }
-        if (!mr.texture.empty() && assets_ && !it.error) {
-            it.textureHold = assets_->GetTexture(mr.texture);
-            it.textureOverride = it.textureHold.get();
-        }
-        items.push_back(std::move(it));
-    }
-
-    // ----- Lights
+    std::vector<RenderItem> items = GatherRenderItems(scene, assets_);
+    RenderLights gathered = GatherRenderLights(scene);
     Lighting lighting;
-    bool shadows = false;
-    float shadowStrength = 0.75f;
-    for (const auto& kv : scene.Pool<DirectionalLight>()) {
-        DirLight l;
-        l.dir = Normalize(scene.WorldMatrix(kv.first).TransformDir(Vec3(0, 0, -1)));
-        l.color = kv.second.color * kv.second.intensity;
-        lighting.ambient = lighting.ambient + kv.second.ambient;
-        if (lighting.dirs.empty()) {
-            shadows = kv.second.shadows;
-            shadowStrength = kv.second.shadowStrength;
-        }
-        lighting.dirs.push_back(l);
-    }
-    if (lighting.dirs.empty()) {
-        lighting.dirs.push_back({Normalize(Vec3(-0.4f, -1.0f, -0.3f)), Color(1, 1, 1)});
-        lighting.ambient = Color(0.25f, 0.25f, 0.28f);
-    }
-    for (const auto& kv : scene.Pool<PointLight>()) {
-        lighting.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity, std::max(0.01f, kv.second.range)});
-    }
+    lighting.ambient = gathered.ambient;
+    lighting.dirs = gathered.dirs;
+    lighting.points = gathered.points;
+    const bool shadows = gathered.shadows;
+    const float shadowStrength = gathered.shadowStrength;
 
     std::vector<Transformed> transformed;
     transformed.reserve(items.size());
-    for (const DrawItem& it : items) transformed.push_back(TransformItem(it));
+    for (const RenderItem& it : items) transformed.push_back(TransformItem(it));
 
     // ----- Shadow map (first directional light, fitted to the shadow casters + receivers)
     if (shadows && !items.empty()) {
@@ -403,14 +343,9 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             ShadowMap& sm = lighting.shadow;
             sm.enabled = true;
             sm.strength = shadowStrength;
-            Vec3 center = (lo + hi) * 0.5f;
-            float radius = std::max(0.5f, Length(hi - lo) * 0.5f);
-            Vec3 dir = lighting.dirs[0].dir;
-            Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
-            Mat4 lview = Mat4::LookAt(center - dir * (radius * 2.0f), center, up);
-            Mat4 lproj = Mat4::Orthographic(radius, 1.0f, 0.01f, radius * 4.0f);
-            sm.viewProj = lproj * lview;
-            sm.texelWorld = 2.0f * radius / static_cast<float>(sm.size);
+            ShadowFit fit = FitShadow(lo, hi, lighting.dirs[0].dir, sm.size);
+            sm.viewProj = fit.viewProj;
+            sm.texelWorld = fit.texelWorld;
             sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
             // Light-space vertices once, then rasterize depth in parallel bands.
             std::vector<std::vector<Vec4>> lightClip(items.size());
@@ -450,13 +385,13 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
       Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), y0, y1);
       int drawn = 0;
       for (size_t i = 0; i < items.size(); ++i) {
-        const DrawItem& it = items[i];
+        const RenderItem& it = items[i];
         const Mesh& m = *it.mesh;
         const Transformed& tr = transformed[i];
         for (const Submesh& sub : m.submeshes) {
             Material mat;
             mat.base = it.tint * sub.baseColor;
-            mat.texture = it.textureOverride ? it.textureOverride : (sub.texture >= 0 && sub.texture < static_cast<int>(m.textures.size()) ? m.textures[static_cast<size_t>(sub.texture)].get() : nullptr);
+            mat.texture = it.SubmeshTexture(sub);
             mat.unlit = it.unlit;
             mat.flat = it.flat;
             mat.id = it.id;

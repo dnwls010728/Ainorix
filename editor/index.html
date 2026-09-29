@@ -82,11 +82,12 @@
 
   <section id="viewportPanel" class="panel">
     <div id="viewport" tabindex="0">
-      <img id="frame" alt="viewport" draggable="false">
+      <canvas id="frame" aria-label="viewport"></canvas>
       <div class="vp-top">
         <span id="viewBadge" class="badge">Scene</span>
         <span id="playBadge" class="badge play" hidden>● PLAYING — edits are reverted on Stop</span>
         <span id="selBadge" class="badge sel" hidden></span>
+        <span id="rendererBadge" class="badge renderer" title="Renderer drawing this viewport"></span>
       </div>
       <div id="viewHelp" class="vp-help">
         <span><kbd>Drag</kbd> orbit</span><span><kbd>Right-drag</kbd> pan</span><span><kbd>Wheel</kbd> zoom</span>

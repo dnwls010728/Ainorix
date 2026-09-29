@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- OwnEngine web player page, written by `oe package --web` (fills in the title).
+     Loads oe_player.js/.wasm (the engine built with Emscripten) and game.pak
+     (the project files). Serve the folder over http(s); browsers refuse to
+     load WebAssembly from file:// URLs. `oe serve <folder>` does that locally. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>{{TITLE}}</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+  #status {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+    color: #c9d1e0; font: 15px/1.5 system-ui, sans-serif; background: #0d1017; text-align: center; padding: 24px;
+  }
+  #status .bar { width: min(320px, 70vw); height: 4px; background: #232a38; border-radius: 2px; overflow: hidden; }
+  #status .bar div { width: 0; height: 100%; background: #5b9bff; transition: width .2s; }
+  #status[hidden] { display: none; }
+  #status.error { color: #ffd7d7; background: #1d0e10; white-space: pre-wrap; }
+  #status code { background: #232a38; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div id="status"><div id="statusText">Loading {{TITLE}}…</div><div class="bar"><div id="progress"></div></div></div>
+<script>
+(function () {
+  var status = document.getElementById("status");
+  var statusText = document.getElementById("statusText");
+  function fail(message) {
+    status.hidden = false;
+    status.className = "error";
+    status.innerHTML = "";
+    status.textContent = message;
+  }
+  if (location.protocol === "file:") {
+    fail("This game has to be served over http(s) - browsers do not run WebAssembly from file:// pages.\n\n" +
+         "Locally: oe serve <this folder>   (or any static web server)\nOnline: upload the folder to itch.io, GitHub Pages, Netlify, ...");
+    return;
+  }
+  if (!window.WebAssembly) { fail("This browser does not support WebAssembly."); return; }
+
+  // game.pak = "OEPAK001" + uint32 (little endian) index length + JSON index
+  // {"files":[{"path","offset","size"}]} + the file bytes. Unpacked to /game.
+  function loadPak(done) {
+    fetch("game.pak").then(function (r) {
+      if (!r.ok) throw new Error("game.pak: HTTP " + r.status);
+      var total = +r.headers.get("content-length") || 0;
+      if (!r.body || !total) return r.arrayBuffer();
+      var reader = r.body.getReader(), chunks = [], got = 0;
+      return (function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) {
+            var all = new Uint8Array(got), at = 0;
+            chunks.forEach(function (c) { all.set(c, at); at += c.length; });
+            return all.buffer;
+          }
+          chunks.push(res.value);
+          got += res.value.length;
+          document.getElementById("progress").style.width = Math.min(100, 100 * got / total) + "%";
+          return pump();
+        });
+      })();
+    }).then(function (buf) {
+      var bytes = new Uint8Array(buf);
+      if (new TextDecoder().decode(bytes.subarray(0, 8)) !== "OEPAK001") throw new Error("game.pak is not an OwnEngine game package");
+      var n = new DataView(buf).getUint32(8, true);
+      var index = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + n)));
+      done(index.files, bytes, 12 + n);
+    }).catch(function (e) { fail("Cannot load the game data.\n\n" + e.message); });
+  }
+
+  window.Module = {
+    canvas: document.getElementById("canvas"),
+    arguments: ["/game"],
+    print: function (t) { console.log(t); },
+    printErr: function (t) { console.warn(t); },
+    preRun: [function () {
+      Module.addRunDependency("game.pak");
+      loadPak(function (files, bytes, base) {
+        files.forEach(function (f) {
+          var path = "/game/" + f.path;
+          FS.mkdirTree(path.substring(0, path.lastIndexOf("/")));
+          FS.writeFile(path, bytes.subarray(base + f.offset, base + f.offset + f.size));
+        });
+        Module.removeRunDependency("game.pak");
+      });
+    }],
+    onRuntimeInitialized: function () {
+      statusText.textContent = "Starting…";
+      setTimeout(function () { if (status.className !== "error") status.hidden = true; }, 0);
+      document.getElementById("canvas").focus();
+    },
+    onAbort: function (what) { fail("The game stopped with an error.\n\n" + what); }
+  };
+  var script = document.createElement("script");
+  script.src = "oe_player.js";
+  script.onerror = function () { fail("Cannot load oe_player.js."); };
+  document.body.appendChild(script);
+})();
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <string>
@@ -23,6 +24,7 @@
 #include "core/Log.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
+#include "render/GpuRenderer.h"
 
 using namespace oe;
 
@@ -40,7 +42,7 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to"};
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -91,9 +93,31 @@ Vec3 ParseVec(const std::string& s, Vec3 def) {
     return Vec3(v[0], v[1], v[2]);
 }
 
+// Turns on the GPU renderer as asked by --renderer: auto (default: GPU when
+// available, else software), gpu (required) or software. With a window the
+// GPU device presents into it. Returns false (and sets exitCode) only when
+// the GPU was required and is unavailable.
+bool SetupRenderer(Engine& engine, const Args& a, Window* window, int& exitCode) {
+    std::string mode = a.Get("--renderer", "auto");
+    if (mode == "software") return true;
+    if (mode != "auto" && mode != "gpu") {
+        exitCode = Fail("invalid_argument", "--renderer must be auto, gpu or software");
+        return false;
+    }
+    std::string err;
+    if (engine.EnableGpu(window, &err)) return true;
+    if (mode == "gpu") {
+        exitCode = Fail("gpu_unavailable", err, "Use --renderer software.");
+        return false;
+    }
+    OE_LOG_WARN("render", "GPU renderer unavailable, using the software renderer: %s", err.c_str());
+    return true;
+}
+
 // Runs the engine main loop: posted API jobs, real-time simulation and the
 // optional native window. Returns when the window closes or `quit` is set.
-void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit) {
+// The window shows the GPU renderer when it was enabled for that window.
+void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, bool gpuWindow = false) {
     RenderTarget frame;
     double last = PlatformTimeSeconds();
     double fpsTimer = last;
@@ -106,7 +130,9 @@ void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit) {
         last = now;
         if (window) {
             int w = window->Width(), h = window->Height();
-            if (w > 0 && h > 0) {
+            if (engine.Gpu() && gpuWindow) {
+                engine.PresentGameView();
+            } else if (w > 0 && h > 0) {
                 if (frame.width != w || frame.height != h) frame.Resize(w, h);
                 engine.RenderGameView(frame);
                 window->Present(frame);
@@ -126,9 +152,8 @@ void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit) {
 }
 
 bool StartServer(HttpServer& server, Engine& engine, int port) {
-    std::string editorDir = FindEditorDir();
     std::string err;
-    if (!server.Start(port, [&engine, editorDir](const HttpRequest& r) { return HandleEditorRequest(engine, editorDir, r); }, &err)) {
+    if (!StartEditorServer(server, engine, port, &err)) {
         OE_LOG_ERROR("http", "%s", err.c_str());
         return false;
     }
@@ -147,17 +172,22 @@ int CmdHelp() {
                  "                                    Start the web editor (http://127.0.0.1:7777)\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
+                 "  serve <dir> [--port 8080] [--no-browser]\n"
+                 "                                    Serve a web package (oe package --web) on http://127.0.0.1\n"
                  "  exec [path] <command> [json] [--save]\n"
                  "                                    Run one API command, print the JSON result\n"
                  "  script [path] [--save]            Run newline-delimited {\"command\",\"args\"} from stdin\n"
                  "  mcp [path] [--port P]             MCP server on stdio (optionally also serve the editor)\n"
                  "  mcp --connect <port>              MCP server that drives a running editor\n"
                  "  import <path> <file> [--to rel]   Copy a model/texture/sound into the project (prints asset.info)\n"
-                 "  package [path] [--out dist/Name] [--name N]\n"
-                 "                                    Build a standalone game folder (Name.exe + game data)\n"
+                 "  package [path] [--out dist/Name] [--name N] [--web]\n"
+                 "                                    Build a standalone game: Name.exe + game data, or with --web\n"
+                 "                                    an HTML5/WebGL2 folder (index.html + wasm) for any web host\n"
                  "  api [--markdown]                  Print the command reference\n"
                  "  version                           Print version info as JSON\n\n"
-                 "[path] = project directory (default .), project.json or *.scene.json\n",
+                 "[path] = project directory (default .), project.json or *.scene.json\n"
+                 "--renderer auto|gpu|software (run, editor, mcp --port, render): auto = GPU when available.\n"
+                 "  render defaults to software (deterministic hash); the others to auto.\n",
                  OE_VERSION, PlatformName());
     return 0;
 }
@@ -197,7 +227,12 @@ int CmdRender(const Args& a) {
     }
     view.drawGrid = a.Has("--grid");
     if (a.Has("--colliders")) AppendColliderLines(engine.GetScene(), view.lines);
-    RenderStats stats = engine.Renderer().Render(engine.GetScene(), view, rt);
+    IRenderer* renderer = &engine.Renderer();
+    if (a.Get("--renderer", "software") != "software") {
+        if (!SetupRenderer(engine, a, nullptr, code)) return code;
+        if (engine.Gpu()) renderer = engine.Gpu();
+    }
+    RenderStats stats = renderer->Render(engine.GetScene(), view, rt);
 
     std::string out = AbsolutePath(a.Get("--out", "frame.png"));
     if (!WritePng(out, rt.ToImage())) return Fail("write_failed", "cannot write " + out);
@@ -209,6 +244,7 @@ int CmdRender(const Args& a) {
     res["result"]["frame"] = static_cast<uint64_t>(engine.Frame());
     res["result"]["camera"] = custom ? "custom" : (hasCamera ? "scene" : "default (scene has no active camera)");
     res["result"]["hash"] = Format("%016llx", static_cast<unsigned long long>(rt.Hash()));
+    res["result"]["renderer"] = renderer->Name();
     res["result"]["stats"]["entities"] = stats.drawnEntities;
     res["result"]["stats"]["triangles"] = stats.triangles;
     res["result"]["stats"]["ms"] = stats.milliseconds;
@@ -280,12 +316,13 @@ int CmdRun(const Args& a) {
     if (!OpenOrFail(engine, a, code)) return code;
     std::unique_ptr<Window> window = CreatePlatformWindow("OwnEngine - " + engine.GetScene().name, a.GetInt("--width", 1280), a.GetInt("--height", 720));
     if (!window) return Fail("no_window", std::string("platform '") + PlatformName() + "' has no native window", "Use `oe render` or `oe editor` instead.");
+    if (!SetupRenderer(engine, a, window.get(), code)) return code;
     HttpServer server;
     if (a.Has("--port") && !StartServer(server, engine, a.GetInt("--port", 7777))) return Fail("server_failed", "cannot start API server");
     if (!a.Has("--mute")) engine.EnableAudioOutput();
     engine.Play();
     std::atomic<bool> quit{false};
-    MainLoop(engine, window.get(), quit);
+    MainLoop(engine, window.get(), quit, true);
     return 0;
 }
 
@@ -302,8 +339,11 @@ int CmdEditor(const Args& a) {
     if (!a.Has("--mute")) engine.EnableAudioOutput();
     std::unique_ptr<Window> window;
     if (a.Has("--window")) window = CreatePlatformWindow("OwnEngine Game View", 960, 540);
+    // The GPU device serves the editor viewport (offscreen) and, with --window, presents the game view.
+    if (!SetupRenderer(engine, a, window.get(), code)) return code;
+    OE_LOG_INFO("editor", "viewport renderer: %s", engine.DisplayRenderer().Name());
     std::atomic<bool> quit{false};
-    MainLoop(engine, window.get(), quit);
+    MainLoop(engine, window.get(), quit, true);
     return 0;
 }
 
@@ -333,7 +373,10 @@ int CmdMcp(const Args& a) {
     int code = 0;
     if (!OpenOrFail(engine, a, code)) return code;
     HttpServer server;
-    if (a.Has("--port")) StartServer(server, engine, a.GetInt("--port", 7777));
+    if (a.Has("--port")) {
+        if (!SetupRenderer(engine, a, nullptr, code)) return code;
+        StartServer(server, engine, a.GetInt("--port", 7777));
+    }
     std::atomic<bool> quit{false};
     // MCP I/O on a worker thread; engine work stays on the main thread.
     std::thread io([&] {
@@ -377,7 +420,9 @@ int CmdApi(const Args& a) {
         }
     }
     md += "## Component types\n\n";
-    for (const Json& t : engine.Call("component.types", Json())["result"].items()) {
+    // Keep the result alive: a range-for over a member of a temporary would dangle.
+    Json types = engine.Call("component.types", Json());
+    for (const Json& t : types["result"].items()) {
         md += "### " + t["name"].asString() + "\n\n" + t["doc"].asString() + "\n\n| field | type | default | description |\n|---|---|---|---|\n";
         for (const auto& kv : t["schema"]["properties"].members()) {
             md += "| `" + kv.first + "` | " + kv.second["x-oe-type"].asString() + " | `" + t["defaults"][kv.first].dump() + "` | " +
@@ -430,8 +475,33 @@ int CmdImport(const Args& a) {
     return 0;
 }
 
-// Builds a standalone game folder: <out>/<Name>.exe (the player runtime) plus
-// <out>/game/ with the project's scenes, scripts and assets.
+// Folder with the web runtime (oe_player.js + oe_player.wasm from
+// build_web.sh / build_web.bat), or "" when it has not been built.
+std::string FindWebRuntime() {
+    std::string candidates[] = {JoinPath(ExecutableDirectory(), "web"), JoinPath(OE_SOURCE_DIR, "build/bin/web"), JoinPath(OE_SOURCE_DIR, "build-web/bin")};
+    for (const std::string& c : candidates) {
+        if (FileExists(JoinPath(c, "oe_player.js")) && FileExists(JoinPath(c, "oe_player.wasm"))) return c;
+    }
+    return "";
+}
+
+std::string HtmlEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            default: out += c;
+        }
+    }
+    return out;
+}
+
+// Builds a standalone game folder:
+//   desktop: <out>/<Name>.exe (the player runtime) + <out>/game/ (project files)
+//   --web:   <out>/index.html + oe_player.js + oe_player.wasm + game.pak, for any static web host
 int CmdPackage(const Args& a) {
     Engine engine;
     int code = 0;
@@ -440,14 +510,63 @@ int CmdPackage(const Args& a) {
     if (!FileExists(JoinPath(projectDir, "project.json"))) {
         return Fail("not_a_project", "no project.json in " + projectDir, "Package a project directory (created with `oe new`).");
     }
+    const bool web = a.Has("--web");
     std::string name = a.Get("--name", engine.ProjectName().empty() ? "Game" : engine.ProjectName());
     for (char& c : name) {
         if (std::string("<>:\"/\\|?*").find(c) != std::string::npos || static_cast<unsigned char>(c) < 32) c = '_';
     }
-    std::string out = AbsolutePath(a.Get("--out", "dist/" + name));
+    std::string out = AbsolutePath(a.Get("--out", "dist/" + name + (web ? "-web" : "")));
     const std::string projectAbs = AbsolutePath(projectDir);
     if (out == projectAbs || out.rfind(projectAbs + "/", 0) == 0) {
-        return Fail("invalid_output", "the output folder must be outside the project", "Use --out dist/" + name + ".");
+        return Fail("invalid_output", "the output folder must be outside the project", "Use --out dist/" + name + (web ? "-web" : "") + ".");
+    }
+    std::vector<std::string> files = GameFiles(projectDir);
+    Json fileList = Json::MakeArray();
+    for (const std::string& f : files) fileList.push(f);
+
+    if (web) {
+        std::string runtime = FindWebRuntime();
+        if (runtime.empty()) {
+            return Fail("web_runtime_missing", "the web runtime (web/oe_player.js + oe_player.wasm) has not been built",
+                        "Build it once with build_web.bat (Windows) or ./build_web.sh, which need the Emscripten SDK (emsdk).");
+        }
+        std::string shell;
+        if (!ReadTextFile(JoinPath(runtime, "index.html"), shell) && !ReadTextFile(JoinPath(OE_SOURCE_DIR, "tools/player/web/index.html"), shell)) {
+            return Fail("web_runtime_missing", "web/index.html (the player page) is missing", "Rebuild with build.bat / build_web.bat.");
+        }
+        // Only reuse a folder that is empty or an earlier web package (has game.pak).
+        if (IsDirectory(out) && !ListFiles(out, "", false).empty() && !FileExists(JoinPath(out, "game.pak"))) {
+            return Fail("output_not_empty", out + " exists and is not an OwnEngine web package", "Pick another --out folder or empty it.");
+        }
+        Json project;
+        std::string text;
+        if (ReadTextFile(JoinPath(projectDir, "project.json"), text)) project = Json::parse(text);
+        std::string title = project["window"]["title"].asString(name);
+        std::string page;
+        for (size_t pos = 0;;) {
+            size_t at = shell.find("{{TITLE}}", pos);
+            page += shell.substr(pos, at == std::string::npos ? std::string::npos : at - pos);
+            if (at == std::string::npos) break;
+            page += HtmlEscape(title);
+            pos = at + 9;
+        }
+        double bytes = 0;
+        std::string err;
+        if (!WriteGamePak(projectDir, files, JoinPath(out, "game.pak"), &err, &bytes)) return Fail("write_failed", err);
+        if (!WriteTextFile(JoinPath(out, "index.html"), page)) return Fail("write_failed", "cannot write " + JoinPath(out, "index.html"));
+        for (const char* f : {"oe_player.js", "oe_player.wasm"}) {
+            if (!CopyFileTo(JoinPath(runtime, f), JoinPath(out, f))) return Fail("write_failed", std::string("cannot write ") + f);
+        }
+        Json res = Json::MakeObject();
+        res["ok"] = true;
+        res["result"]["dir"] = out;
+        res["result"]["index"] = JoinPath(out, "index.html");
+        res["result"]["files"] = fileList;
+        res["result"]["dataBytes"] = bytes;
+        res["result"]["next"] = "Test locally with `oe serve " + out + "`, then upload the folder to any static web host "
+                                "(itch.io: zip it and upload as an HTML game; GitHub Pages, Netlify, ...).";
+        PrintJson(res);
+        return 0;
     }
 
 #ifdef _WIN32
@@ -466,16 +585,12 @@ int CmdPackage(const Args& a) {
     if (!RemoveAll(gameDir)) return Fail("write_failed", "cannot clean " + gameDir, "Close the running game first.");
 
     // Game data: everything in the project except hidden files and agent notes.
-    Json files = Json::MakeArray();
     double bytes = 0;
-    for (const std::string& src : ListFiles(projectDir, "", true)) {
-        std::string rel = RelativePath(src, projectDir);
-        bool hidden = rel[0] == '.' || rel.find("/.") != std::string::npos;
-        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md") continue;
+    for (const std::string& rel : files) {
+        std::string src = JoinPath(projectDir, rel);
         if (!CopyFileTo(src, JoinPath(gameDir, rel))) return Fail("write_failed", "cannot copy " + rel);
         std::vector<unsigned char> data;
         if (ReadBinaryFile(src, data)) bytes += static_cast<double>(data.size());
-        files.push(rel);
     }
     std::string exe = JoinPath(out, name + exeExt);
     if (!CopyFileTo(player, exe)) return Fail("write_failed", "cannot write " + exe, "Close the running game first.");
@@ -484,11 +599,44 @@ int CmdPackage(const Args& a) {
     res["ok"] = true;
     res["result"]["exe"] = exe;
     res["result"]["gameDir"] = gameDir;
-    res["result"]["files"] = files;
+    res["result"]["files"] = fileList;
     res["result"]["dataBytes"] = bytes;
     res["result"]["next"] = "Run " + exe + " or zip the folder " + out + " to share it.";
     PrintJson(res);
     return 0;
+}
+
+// Serves a folder (a web package) on http://127.0.0.1:<port> so the browser
+// can load WebAssembly; file:// pages cannot.
+int CmdServe(const Args& a) {
+    std::string dir = AbsolutePath(a.positional.empty() ? "." : a.positional[0]);
+    if (!FileExists(JoinPath(dir, "index.html"))) {
+        return Fail("not_found", "no index.html in " + dir, "Pass the folder made by `oe package --web`.");
+    }
+    int port = a.GetInt("--port", 8080);
+    HttpServer server;
+    std::string err;
+    auto handler = [dir](const HttpRequest& req) {
+        HttpResponse r;
+        std::string path = req.path == "/" ? "/index.html" : req.path;
+        bool safe = req.method == "GET" && path.find("..") == std::string::npos && path.find('\\') == std::string::npos;
+        std::vector<unsigned char> data;
+        if (!safe || !ReadBinaryFile(dir + path, data)) {
+            r.status = 404;
+            r.body = "{\"ok\":false,\"error\":{\"code\":\"not_found\"}}";
+            return r;
+        }
+        auto ends = [&](const char* ext) { return path.size() >= std::strlen(ext) && path.compare(path.size() - std::strlen(ext), std::string::npos, ext) == 0; };
+        r.contentType = ends(".html") ? "text/html; charset=utf-8" : ends(".js") ? "text/javascript" : ends(".wasm") ? "application/wasm"
+                      : ends(".json") ? "application/json" : ends(".png") ? "image/png" : ends(".css") ? "text/css" : "application/octet-stream";
+        r.body.assign(data.begin(), data.end());
+        return r;
+    };
+    if (!server.Start(port, handler, &err)) return Fail("server_failed", err, "Pick another port with --port.");
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/";
+    OE_LOG_INFO("serve", "serving %s at %s (Ctrl+C to quit)", dir.c_str(), url.c_str());
+    if (!a.Has("--no-browser")) PlatformOpenUrl(url);
+    for (;;) PlatformSleep(1.0);
 }
 
 int CmdVersion() {
@@ -497,6 +645,11 @@ int CmdVersion() {
     v["version"] = OE_VERSION;
     v["platform"] = PlatformName();
     v["renderer"] = "software";
+    // Probe the GPU backend (headless device) so tools can tell what `--renderer gpu` would use.
+    Engine engine;
+    std::string err;
+    if (engine.EnableGpu(nullptr, &err)) v["gpu"] = engine.Gpu()->Name();
+    else v["gpu"] = "unavailable: " + err;
     PrintJson(v);
     return 0;
 }
@@ -519,5 +672,6 @@ int main(int argc, char** argv) {
     if (cmd == "api") return CmdApi(a);
     if (cmd == "import") return CmdImport(a);
     if (cmd == "package") return CmdPackage(a);
+    if (cmd == "serve") return CmdServe(a);
     return Fail("unknown_command", "unknown command '" + cmd + "'", "Run `oe help`.");
 }

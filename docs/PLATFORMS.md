@@ -2,29 +2,29 @@
 
 The engine is split so that only two small layers touch a platform:
 
-1. **Platform layer** — `engine/platform/Platform.h`: window, input events (keys, mouse/touch), present, audio output, time, sleep, open URL, executable path, stdio mode.
-2. **Render backend** — `IRenderer` in `engine/render/Renderer.h`. The software rasterizer is the reference implementation and runs everywhere (including headless CI and AI verification). Hardware backends must fill the same `RenderTarget` color/id buffers on request, so screenshots and picking behave identically on every platform.
+1. **Platform layer** — `engine/platform/Platform.h`: window, input events (keys, mouse/touch), present, audio output, time, sleep, open URL, executable path, stdio mode, and `CreateGpuDevice`.
+2. **Render backend** — `IRenderer` in `engine/render/Renderer.h`. The software rasterizer is the reference implementation and runs everywhere (including headless CI and AI verification). `GpuRenderer` draws the same scene through sokol_gfx; a platform only supplies a `GpuDevice` (`engine/render/GpuDevice.h`: sokol environment, window swapchain, present, readback). Screenshots and picking keep using the software renderer, so they behave identically on every platform.
 
-Everything else (`core`, `scene`, `api`, `app`) is portable C++17 with no OS headers. Sockets are the one exception: `HttpServer.cpp` has Winsock and POSIX branches.
+Everything else (`core`, `scene`, `api`, `app`, `render`) is portable C++17 with no OS headers. Sockets are the one exception: `HttpServer.cpp` has Winsock and POSIX branches.
 
-| Platform | Status | Platform layer | Renderer plan | Notes |
+| Platform | Status | Platform layer | Renderer | Notes |
 |---|---|---|---|---|
-| Windows (x64) | **Working** | `win32/PlatformWin32.cpp` (Win32 + GDI present) | Software now; D3D12 or Vulkan next | Built with MSVC via `build.bat` |
-| Headless / Linux server | **Working** (`null` platform) | `null/PlatformNull.cpp` | Software | CLI, MCP, editor server, PNG renders; no native window |
-| Web (WASM) | Planned | Emscripten: canvas + `requestAnimationFrame` main loop | Software → `putImageData` first, then WebGPU | Editor already runs in a browser; the engine API would be called in-process instead of over HTTP |
-| Android | Planned | NDK `android_native_app_glue`, `ANativeWindow_lock` for software present | Vulkan (GLES 3 fallback) | Touch → `InputState` keys/axes; assets from APK |
-| iOS | Planned | UIKit + `CAMetalLayer` | Metal | Software frames can be shown via `CGImage` during bring-up |
-| macOS | Planned | AppKit (`NSWindow` + `CAMetalLayer`) | Metal | `null` platform already builds with clang for CLI/MCP use |
-| Linux desktop | Planned | X11/Wayland (or SDL3 as a shortcut) | Vulkan | |
-| Nintendo Switch / PlayStation / Xbox | Planned (requires NDA SDKs) | Per-console platform file kept in a private `platforms/<name>/` folder | NVN / GNM(X) / D3D12 | See below |
+| Windows (x64) | **Working** | `win32/PlatformWin32.cpp` (Win32 window, waveOut) + `win32/GpuD3D11.cpp` | Direct3D 11 (WARP fallback), software fallback | Built with MSVC via `build.bat`; `oe package` ships `Name.exe` |
+| Web (WASM) | **Working** | `web/PlatformWeb.cpp` (canvas, DOM input + touch, WebAudio) + `web/GpuWebGL.cpp` | WebGL2 (2D-canvas software fallback) | Built with Emscripten via `build_web.sh` / `build_web.bat`; `oe package --web`. Single threaded, so any static host works (no COOP/COEP headers). Simulation is bit-identical to native |
+| Headless / Linux server | **Working** (`null` platform) | `null/PlatformNull.cpp` + `null/GpuEgl.cpp` when EGL/GLES are installed | Software; GLES 3 over EGL for GPU screenshots and the editor viewport | CLI, MCP, editor server, PNG renders; no native window |
+| Android | Planned | NDK `android_native_app_glue` | GLES 3 through sokol_gfx (the WebGL2 shaders already compile for it) | Touch → `InputState` keys/axes; assets from APK |
+| iOS | Planned | UIKit + `CAMetalLayer` | Metal through sokol_gfx (add `metal_ios` to the shader targets) | |
+| macOS | Planned | AppKit (`NSWindow` + `CAMetalLayer`) | Metal through sokol_gfx | `null` platform already builds with clang for CLI/MCP use |
+| Linux desktop | Planned | X11/Wayland (or SDL3 as a shortcut) | GLES 3 / GL core through sokol_gfx | Headless GLES already works |
+| Nintendo Switch / PlayStation / Xbox | Planned (requires NDA SDKs) | Per-console platform file kept in a private `platforms/<name>/` folder | Console API behind `GpuDevice`/`IRenderer` | See below |
 
 ## Porting checklist
 
-1. Add `engine/platform/<name>/Platform<Name>.cpp` implementing every function in `Platform.h`.
+1. Add `engine/platform/<name>/Platform<Name>.cpp` implementing every function in `Platform.h`. For GPU rendering implement `CreateGpuDevice` (a `GpuDevice` for a sokol_gfx backend, plus the `SOKOL_IMPL` translation unit — see `win32/GpuD3D11.cpp`, `web/GpuWebGL.cpp`); until then return nullptr and the software renderer is used everywhere (or compile `null/GpuNone.cpp`).
 2. Select it in `CMakeLists.txt` (`OE_PLATFORM`) using a toolchain file (Emscripten, Android NDK, Xcode, console SDK).
 3. Implement `CreateAudioDevice` (e.g. Web Audio, AAudio, CoreAudio); the mixer already produces 48 kHz stereo floats. Map touches to `mouseX/mouseY` + `MouseLeft`.
 4. Map device input to the key names documented in `scene/Systems.h` (`W`, `Space`, `Left`, …). Add gamepad/touch axes to `InputState` when a platform needs them — the API (`input.key`) must stay able to inject the same input for automated tests.
-5. Run `oe_tests` on the device or simulator. The render determinism test compares frame hashes; a hardware backend may differ from the software reference, so compare hashes per backend.
+5. Run `oe_tests` on the device or simulator. Frame hashes come from the software renderer and must match every other platform; `GpuRendererMatchesSoftware` checks the GPU backend against it with a tolerance.
 
 ## Consoles
 
@@ -34,7 +34,7 @@ Console SDKs are under NDA, so their code cannot live in this public tree. The l
 - The engine avoids features consoles commonly restrict: no runtime code generation, no `fork`/processes, no dependency on a system shell, file access goes through `core/FileSystem`.
 - The developer tooling (HTTP editor server, MCP) is for dev kits only. Shipping builds should compile it out; a `OE_ENABLE_DEVTOOLS` CMake option is the planned switch.
 
-## Why a software renderer first
+## Why keep a software renderer
 
 - Identical pixels on every OS and in CI, which makes frame hashes usable as test oracles for AI agents.
 - No GPU or driver needed to verify a change (`oe render` works over SSH, in containers, in CI).

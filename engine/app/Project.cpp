@@ -1,5 +1,8 @@
 #include "app/Project.h"
 
+#include <algorithm>
+#include <cstdint>
+
 #include "audio/Wav.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -69,6 +72,50 @@ Json MakeSampleScene(const std::string& name) {
     }
     scene.name = name;
     return scene.ToJson();
+}
+
+std::vector<std::string> GameFiles(const std::string& projectDir) {
+    std::vector<std::string> files;
+    for (const std::string& src : ListFiles(projectDir, "", true)) {
+        std::string rel = RelativePath(src, projectDir);
+        bool hidden = rel.empty() || rel[0] == '.' || rel.find("/.") != std::string::npos;
+        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md") continue;
+        files.push_back(rel);
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+bool WriteGamePak(const std::string& projectDir, const std::vector<std::string>& files, const std::string& outPath, std::string* error,
+                  double* dataBytes) {
+    Json index = Json::MakeObject();
+    index["files"] = Json::MakeArray();
+    std::string data;
+    for (const std::string& rel : files) {
+        std::vector<unsigned char> bytes;
+        if (!ReadBinaryFile(JoinPath(projectDir, rel), bytes)) {
+            if (error) *error = "cannot read " + rel;
+            return false;
+        }
+        Json entry = Json::MakeObject();
+        entry["path"] = rel;
+        entry["offset"] = static_cast<double>(data.size());
+        entry["size"] = static_cast<double>(bytes.size());
+        index["files"].push(entry);
+        data.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+    std::string header = index.dump();
+    std::string pak = "OEPAK001";
+    uint32_t n = static_cast<uint32_t>(header.size());
+    for (int i = 0; i < 4; ++i) pak += static_cast<char>((n >> (8 * i)) & 0xFF);
+    pak += header;
+    pak += data;
+    if (!WriteTextFile(outPath, pak)) {
+        if (error) *error = "cannot write " + outPath;
+        return false;
+    }
+    if (dataBytes) *dataBytes = static_cast<double>(data.size());
+    return true;
 }
 
 }  // namespace oe

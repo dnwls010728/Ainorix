@@ -11,9 +11,9 @@
 ├──────────────┬─────────────────────┬──────────────────────┬──────────────────────┤
 │ CommandRegistry (api)              │ Scene + reflection   │ IRenderer            │
 │  schema-validated commands         │  (scene)             │  SoftwareRenderer    │
-│                                    │  components, systems │  color/depth/id bufs │
+│                                    │  components, systems │  GpuRenderer (sokol) │
 ├──────────────┴─────────────────────┴──────────────────────┴──────────────────────┤
-│ core: Json · Math · Log · Image(PNG) · FileSystem          platform: Win32 | Null  │
+│ core: Json · Math · Log · Image · FileSystem      platform: Win32 | Web | Null     │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -30,7 +30,7 @@
 
 ## Threading
 
-The engine is single-threaded. The HTTP server and the MCP reader run on their own threads and hand work to the main thread through `Engine::PostCall` / `PostJob`; the main loop drains that queue every iteration (`tools/oe/main.cpp: MainLoop`). The CLI and tests call `Engine::Call` directly.
+The engine is single-threaded (the GPU device lives on the main thread too). The HTTP server, each editor viewport stream (WebSocket; it JPEG-encodes frames off the main thread) and the MCP reader run on their own threads and hand work to the main thread through `Engine::PostCall` / `PostJob`; the main loop drains that queue every iteration (`tools/oe/main.cpp: MainLoop`). The CLI and tests call `Engine::Call` directly.
 
 ## Scene model
 
@@ -40,12 +40,12 @@ The engine is single-threaded. The HTTP server and the MCP reader run on their o
 
 ## Rendering
 
-`SoftwareRenderer` does near-plane clipping, back-face culling, depth testing and flat Lambert shading from directional lights, writes an entity-id buffer for picking, and optionally draws the editor grid and a selection outline. Output is a `RenderTarget` that can be presented by a window, encoded to PNG, or hashed.
+Both renderers consume the same scene description (`render/RenderScene.h`, UI quads from `render/UI.h`). `SoftwareRenderer` is the deterministic reference: clipping, culling, depth testing, textured smooth/flat Lambert shading, shadow map, an entity-id buffer for picking, editor grid and selection outline; its `RenderTarget` is presented by a window, encoded to PNG, or hashed. `GpuRenderer` draws the same thing through sokol_gfx (D3D11 / WebGL2 / GLES3) with MSAA, filtered shadows and mipmaps, straight into the window's swapchain or offscreen with readback (editor viewport, GPU screenshots). The platform supplies its `GpuDevice`. See [RENDERING.md](RENDERING.md).
 
 ## Roadmap
 
 - Scripting for gameplay (candidate: Lua or WebAssembly modules so scripts are sandboxed and hot-reloadable by agents).
-- Hardware renderers (D3D12/Vulkan/Metal/WebGPU) behind `IRenderer`, textured/smooth-shaded meshes, glTF import.
+- Materials with custom shaders and post-processing effects on the GPU renderer (the composite pass is the hook); more sokol_gfx backends (Metal, Vulkan, WebGPU).
 - TTF fonts for the UI (non-ASCII text), UI layout containers. (Physics, audio, UI, prefabs: done — see [PHYSICS.md](PHYSICS.md), [GAMEPLAY.md](GAMEPLAY.md).)
 - Prefabs and multi-scene projects; asset pipeline with content hashes.
-- Web/Android/Apple/console platform layers (see [PLATFORMS.md](PLATFORMS.md)).
+- Android/Apple/console platform layers (Web and Windows are done; see [PLATFORMS.md](PLATFORMS.md)).

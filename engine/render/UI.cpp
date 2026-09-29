@@ -80,35 +80,22 @@ UIRect Place(EntityId id, UIRect::Kind kind, const std::string& anchor, float x,
     return r;
 }
 
-uint32_t Pack(const Color& c) {
-    auto ch = [](float v) { return static_cast<uint32_t>(Clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-    return ch(c.r) | (ch(c.g) << 8) | (ch(c.b) << 16) | 0xFF000000u;
+void AddRect(std::vector<UIQuad>& out, float x0, float y0, float x1, float y1, const Color& c, float alpha, EntityId id) {
+    UIQuad q;
+    q.x0 = static_cast<int>(std::lround(x0));
+    q.y0 = static_cast<int>(std::lround(y0));
+    q.x1 = static_cast<int>(std::lround(x1));
+    q.y1 = static_cast<int>(std::lround(y1));
+    if (q.x1 <= q.x0 || q.y1 <= q.y0) return;
+    q.color = c;
+    q.alpha = alpha;
+    q.entity = id;
+    out.push_back(q);
 }
 
-void FillRect(RenderTarget& t, float x0, float y0, float x1, float y1, const Color& c, float alpha, EntityId id) {
-    int ix0 = std::max(0, static_cast<int>(std::lround(x0)));
-    int iy0 = std::max(0, static_cast<int>(std::lround(y0)));
-    int ix1 = std::min(t.width, static_cast<int>(std::lround(x1)));
-    int iy1 = std::min(t.height, static_cast<int>(std::lround(y1)));
-    uint32_t solid = Pack(c);
-    for (int y = iy0; y < iy1; ++y) {
-        for (int x = ix0; x < ix1; ++x) {
-            size_t i = static_cast<size_t>(y) * static_cast<size_t>(t.width) + static_cast<size_t>(x);
-            if (alpha >= 0.999f) {
-                t.color[i] = solid;
-            } else {
-                uint32_t d = t.color[i];
-                Color dc((d & 0xFF) / 255.0f, ((d >> 8) & 0xFF) / 255.0f, ((d >> 16) & 0xFF) / 255.0f);
-                t.color[i] = Pack(dc * (1.0f - alpha) + c * alpha);
-            }
-            t.ids[i] = id;
-        }
-    }
-}
-
-// Draws text with its block's top-left at (x, y); lines are aligned inside
+// Adds text with its block's top-left at (x, y); lines are aligned inside
 // the block by `ax` (0 left, 0.5 center, 1 right).
-void DrawText(RenderTarget& t, const std::string& text, float x, float y, float lineHeight, float ax, const Color& c, EntityId id) {
+void AddText(std::vector<UIQuad>& out, const std::string& text, float x, float y, float lineHeight, float ax, const Color& c, EntityId id) {
     float u = lineHeight / 8.0f;
     float blockW, blockH;
     MeasureText(text, lineHeight, &blockW, &blockH);
@@ -128,12 +115,17 @@ void DrawText(RenderTarget& t, const std::string& text, float x, float y, float 
                     if (!(bits & (1u << gy))) continue;
                     float px = lx + (static_cast<float>(col) * 6.0f + static_cast<float>(gx)) * u;
                     float py = ly + static_cast<float>(gy) * u;
-                    FillRect(t, px, py, px + u, py + u, c, 1.0f, id);
+                    AddRect(out, px, py, px + u, py + u, c, 1.0f, id);
                 }
             }
             ++col;
         }
     }
+}
+
+uint32_t Pack(const Color& c) {
+    auto ch = [](float v) { return static_cast<uint32_t>(Clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    return ch(c.r) | (ch(c.g) << 8) | (ch(c.b) << 16) | 0xFF000000u;
 }
 
 }  // namespace
@@ -171,29 +163,52 @@ std::vector<UIRect> LayoutUI(const Scene& scene, int width, int height) {
     return out;
 }
 
-void DrawUI(const Scene& scene, RenderTarget& target) {
-    float s = static_cast<float>(target.height) / kUIReferenceHeight;
-    for (const UIRect& r : LayoutUI(scene, target.width, target.height)) {
+std::vector<UIQuad> BuildUIQuads(const Scene& scene, int width, int height) {
+    std::vector<UIQuad> out;
+    float s = static_cast<float>(height) / kUIReferenceHeight;
+    for (const UIRect& r : LayoutUI(scene, width, height)) {
         switch (r.kind) {
             case UIRect::Kind::Panel: {
                 const UIPanel* p = scene.Get<UIPanel>(r.entity);
-                FillRect(target, r.x, r.y, r.x + r.w, r.y + r.h, p->color, p->opacity, r.entity);
+                AddRect(out, r.x, r.y, r.x + r.w, r.y + r.h, p->color, p->opacity, r.entity);
                 break;
             }
             case UIRect::Kind::Button: {
                 const UIButton* b = scene.Get<UIButton>(r.entity);
-                FillRect(target, r.x, r.y, r.x + r.w, r.y + r.h, b->color, 1.0f, r.entity);
+                AddRect(out, r.x, r.y, r.x + r.w, r.y + r.h, b->color, 1.0f, r.entity);
                 float tw, th;
                 MeasureText(b->text, b->size * s, &tw, &th);
-                DrawText(target, b->text, r.x + (r.w - tw) * 0.5f, r.y + (r.h - th) * 0.5f, b->size * s, 0.5f, b->textColor, r.entity);
+                AddText(out, b->text, r.x + (r.w - tw) * 0.5f, r.y + (r.h - th) * 0.5f, b->size * s, 0.5f, b->textColor, r.entity);
                 break;
             }
             case UIRect::Kind::Text: {
                 const UIText* tx = scene.Get<UIText>(r.entity);
                 float ax, ay;
                 Anchor(tx->anchor, &ax, &ay);
-                DrawText(target, tx->text, r.x, r.y, tx->size * s, ax, tx->color, r.entity);
+                AddText(out, tx->text, r.x, r.y, tx->size * s, ax, tx->color, r.entity);
                 break;
+            }
+        }
+    }
+    return out;
+}
+
+void DrawUI(const Scene& scene, RenderTarget& t) {
+    for (const UIQuad& q : BuildUIQuads(scene, t.width, t.height)) {
+        int x0 = std::max(0, q.x0), y0 = std::max(0, q.y0);
+        int x1 = std::min(t.width, q.x1), y1 = std::min(t.height, q.y1);
+        uint32_t solid = Pack(q.color);
+        for (int y = y0; y < y1; ++y) {
+            for (int x = x0; x < x1; ++x) {
+                size_t i = static_cast<size_t>(y) * static_cast<size_t>(t.width) + static_cast<size_t>(x);
+                if (q.alpha >= 0.999f) {
+                    t.color[i] = solid;
+                } else {
+                    uint32_t d = t.color[i];
+                    Color dc((d & 0xFF) / 255.0f, ((d >> 8) & 0xFF) / 255.0f, ((d >> 16) & 0xFF) / 255.0f);
+                    t.color[i] = Pack(dc * (1.0f - q.alpha) + q.color * q.alpha);
+                }
+                t.ids[i] = q.entity;
             }
         }
     }

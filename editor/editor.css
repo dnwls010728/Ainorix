@@ -214,6 +214,8 @@ body.playing #viewport::after { box-shadow: inset 0 0 0 3px var(--play); }
 }
 .badge.play { color: #1a1200; background: var(--play); border-color: var(--play); }
 .badge.sel { margin-left: auto; color: #cfe0ff; border-color: rgba(91, 155, 255, .55); }
+.badge.renderer { opacity: .7; }
+.badge.sel[hidden] + .badge.renderer { margin-left: auto; }
 .vp-help {
   position: absolute; left: .6rem; bottom: .6rem; display: flex; flex-wrap: wrap; gap: .35rem .8rem; pointer-events: none;
   font-size: .82rem; color: #d6dbe4; padding: .3rem .55rem; border-radius: var(--radius);
