@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ownengine": {
+      "command": "build/bin/oe.exe",
+      "args": ["mcp", "samples/Hello", "--port", "7777"]
+    }
+  }
+}

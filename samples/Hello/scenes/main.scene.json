@@ -1,0 +1,117 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Main",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Main Camera",
+      "components": {
+        "Transform": {
+          "position": [0, 4.5, 9],
+          "rotation": [-22, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Camera": {
+          "fov": 60,
+          "nearPlane": 0.100000001,
+          "farPlane": 500,
+          "clearColor": [0.119999997, 0.140000001, 0.180000007],
+          "active": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Sun",
+      "components": {
+        "Transform": {
+          "position": [0, 6, 0],
+          "rotation": [-55, 35, 0],
+          "scale": [1, 1, 1]
+        },
+        "DirectionalLight": {
+          "color": [1, 0.970000029, 0.899999976],
+          "intensity": 1,
+          "ambient": [0.180000007, 0.200000003, 0.25]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [16, 1, 16]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [0.360000014, 0.5, 0.340000004],
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Spinning Cube",
+      "components": {
+        "Transform": {
+          "position": [-2.5, 1, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1.20000005, 1.20000005, 1.20000005]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.899999976, 0.349999994, 0.25],
+          "visible": true
+        },
+        "Rotator": {
+          "degreesPerSecond": [20, 60, 0]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [0, 0.5, 2],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [0.25, 0.550000012, 0.949999988],
+          "visible": true
+        },
+        "PlayerController": {
+          "speed": 4,
+          "jumpSpeed": 5,
+          "gravity": 12,
+          "verticalVelocity": 0
+        },
+        "Tag": {
+          "tags": "player"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Pyramid",
+      "components": {
+        "Transform": {
+          "position": [2.79999995, 0.75, -1],
+          "rotation": [0, 20, 0],
+          "scale": [1.5, 1.5, 1.5]
+        },
+        "MeshRenderer": {
+          "mesh": "pyramid",
+          "color": [0.949999988, 0.800000012, 0.300000012],
+          "visible": true
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OwnEngine Editor</title>
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<header id="toolbar">
+  <div class="brand">OwnEngine <span id="sceneName" class="muted"></span><span id="dirty" class="dirty" hidden>●</span></div>
+  <div class="group">
+    <button id="btnSave" title="Save scene (Ctrl+S)">Save</button>
+    <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+  </div>
+  <div class="group">
+    <button id="btnPlay" class="accent" title="Play">▶ Play</button>
+    <button id="btnPause" title="Pause">❚❚</button>
+    <button id="btnStep" title="Step one frame">Step</button>
+    <button id="btnStop" title="Stop and restore scene">■ Stop</button>
+    <span id="simInfo" class="muted mono"></span>
+  </div>
+  <div class="group">
+    <label class="seg"><input type="radio" name="view" value="scene" checked> Scene</label>
+    <label class="seg"><input type="radio" name="view" value="game"> Game</label>
+    <label class="check"><input type="checkbox" id="chkGrid" checked> Grid</label>
+  </div>
+  <div class="group right">
+    <span id="conn" class="muted">connecting…</span>
+  </div>
+</header>
+
+<main id="layout">
+  <section id="hierarchy" class="panel">
+    <div class="panel-title">
+      Hierarchy
+      <select id="addEntity" title="Add entity">
+        <option value="">+ Add</option>
+        <option value="empty">Empty</option>
+        <option value="cube">Cube</option>
+        <option value="sphere">Sphere</option>
+        <option value="plane">Plane</option>
+        <option value="pyramid">Pyramid</option>
+        <option value="camera">Camera</option>
+        <option value="light">Directional Light</option>
+      </select>
+    </div>
+    <ul id="tree" class="tree" tabindex="0"></ul>
+  </section>
+
+  <section id="viewportPanel" class="panel">
+    <div id="viewport" tabindex="0">
+      <img id="frame" alt="viewport" draggable="false">
+      <div id="viewHelp" class="overlay muted">Drag: orbit · Right/Shift-drag: pan · Wheel: zoom · Click: select · F: focus</div>
+      <div id="playHint" class="overlay bottom" hidden>Game view focused: W A S D / arrows / Space are sent to the engine</div>
+    </div>
+  </section>
+
+  <section id="inspector" class="panel">
+    <div class="panel-title">Inspector</div>
+    <div id="inspectorBody" class="inspector-body"><p class="muted pad">Select an entity.</p></div>
+  </section>
+
+  <section id="console" class="panel">
+    <div class="panel-title">
+      Console <span class="muted small">— the same command API AI agents use (MCP / CLI / HTTP)</span>
+      <button id="btnClearLog" class="small-btn">Clear</button>
+    </div>
+    <div id="log" class="log mono"></div>
+    <form id="cmdForm" class="cmd">
+      <span class="mono prompt">&gt;</span>
+      <input id="cmdInput" class="mono" autocomplete="off" spellcheck="false" placeholder='entity.create {"name":"Box","components":{"MeshRenderer":{"color":"#ff8800"}}}   (Tab completes, ↑ history)'>
+    </form>
+  </section>
+</main>
+<datalist id="commandList"></datalist>
+<script src="editor.js"></script>
+</body>
+</html>
