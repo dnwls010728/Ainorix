@@ -11,7 +11,7 @@ class Engine;
 //   GET  /                  editor UI (static files from editorDir)
 //   POST /api/call          {"command": "...", "args": {...}} -> envelope
 //   GET  /api/commands      command list with schemas
-//   GET  /api/frame.png     rendered frame (?w,h,eye=x,y,z,target=x,y,z,fov,grid,sel,game)
+//   GET  /api/frame.png     rendered frame (?w,h,eye=x,y,z,target=x,y,z,fov,grid,colliders,sel,game)
 // Handlers run on the server thread and marshal engine work to the main thread.
 HttpResponse HandleEditorRequest(Engine& engine, const std::string& editorDir, const HttpRequest& request);
 

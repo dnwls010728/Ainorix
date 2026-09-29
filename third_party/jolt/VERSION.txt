@@ -1,0 +1,4 @@
+Jolt Physics v5.6.0 (https://github.com/jrouwe/JoltPhysics), unmodified.
+Source: https://github.com/jrouwe/JoltPhysics/archive/refs/tags/v5.6.0.tar.gz
+SHA-256 of the archive: 6e069ee0172478cc78182047aac87e5310ba14a67a53348ae14cc37801fd3f8e
+Only Jolt/, Build/CMakeLists.txt and LICENSE are included. Build options are set in the top-level CMakeLists.txt.

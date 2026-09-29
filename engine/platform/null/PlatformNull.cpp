@@ -2,6 +2,7 @@
 // backend is not written yet. All engine features except the native game
 // window work (API, MCP, editor server, software rendering to PNG).
 #include <chrono>
+#include <cstdio>
 #include <thread>
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -13,6 +14,8 @@
 namespace oe {
 
 std::unique_ptr<Window> CreatePlatformWindow(const std::string&, int, int) { return nullptr; }
+
+std::unique_ptr<AudioDevice> CreateAudioDevice(int) { return nullptr; }
 
 const char* PlatformName() { return "null"; }
 
@@ -37,6 +40,10 @@ std::string ExecutableDirectory() {
     }
 #endif
     return ".";
+}
+
+void PlatformShowError(const std::string& title, const std::string& message) {
+    std::fprintf(stderr, "%s: %s\n", title.c_str(), message.c_str());
 }
 
 void PlatformSetBinaryStdio() {}

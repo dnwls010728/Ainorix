@@ -18,8 +18,10 @@
 #include "api/McpServer.h"
 #include "app/Engine.h"
 #include "app/Project.h"
+#include "assets/Assets.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 
 using namespace oe;
@@ -38,7 +40,7 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size"};
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -143,13 +145,16 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--no-browser] [--window]\n"
                  "                                    Start the web editor (http://127.0.0.1:7777)\n"
-                 "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid]\n"
+                 "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
                  "  exec [path] <command> [json] [--save]\n"
                  "                                    Run one API command, print the JSON result\n"
                  "  script [path] [--save]            Run newline-delimited {\"command\",\"args\"} from stdin\n"
                  "  mcp [path] [--port P]             MCP server on stdio (optionally also serve the editor)\n"
                  "  mcp --connect <port>              MCP server that drives a running editor\n"
+                 "  import <path> <file> [--to rel]   Copy a model/texture/sound into the project (prints asset.info)\n"
+                 "  package [path] [--out dist/Name] [--name N]\n"
+                 "                                    Build a standalone game folder (Name.exe + game data)\n"
                  "  api [--markdown]                  Print the command reference\n"
                  "  version                           Print version info as JSON\n\n"
                  "[path] = project directory (default .), project.json or *.scene.json\n",
@@ -191,6 +196,7 @@ int CmdRender(const Args& a) {
         view.clearColor = clear;
     }
     view.drawGrid = a.Has("--grid");
+    if (a.Has("--colliders")) AppendColliderLines(engine.GetScene(), view.lines);
     RenderStats stats = engine.Renderer().Render(engine.GetScene(), view, rt);
 
     std::string out = AbsolutePath(a.Get("--out", "frame.png"));
@@ -276,6 +282,7 @@ int CmdRun(const Args& a) {
     if (!window) return Fail("no_window", std::string("platform '") + PlatformName() + "' has no native window", "Use `oe render` or `oe editor` instead.");
     HttpServer server;
     if (a.Has("--port") && !StartServer(server, engine, a.GetInt("--port", 7777))) return Fail("server_failed", "cannot start API server");
+    if (!a.Has("--mute")) engine.EnableAudioOutput();
     engine.Play();
     std::atomic<bool> quit{false};
     MainLoop(engine, window.get(), quit);
@@ -292,6 +299,7 @@ int CmdEditor(const Args& a) {
     std::string url = "http://127.0.0.1:" + std::to_string(port) + "/";
     OE_LOG_INFO("editor", "editor ready at %s (Ctrl+C to quit)", url.c_str());
     if (!a.Has("--no-browser")) PlatformOpenUrl(url);
+    if (!a.Has("--mute")) engine.EnableAudioOutput();
     std::unique_ptr<Window> window;
     if (a.Has("--window")) window = CreatePlatformWindow("OwnEngine Game View", 960, 540);
     std::atomic<bool> quit{false};
@@ -381,6 +389,108 @@ int CmdApi(const Args& a) {
     return 0;
 }
 
+// Copies an external file (model, texture, sound) into the project. This is a
+// CLI-only command: the API stays sandboxed to the project directory.
+int CmdImport(const Args& a) {
+    if (a.positional.size() < 2) return Fail("missing_argument", "usage: oe import <project> <file> [--to assets/models/name.glb]");
+    Engine engine;
+    Args open;
+    open.positional.push_back(a.positional[0]);
+    int code = 0;
+    if (!OpenOrFail(engine, open, code)) return code;
+    std::string src = a.positional[1];
+    std::vector<unsigned char> bytes;
+    if (!ReadBinaryFile(src, bytes)) return Fail("not_found", "cannot read " + src);
+    std::string name = src.substr(src.find_last_of("/\\") + 1);
+    std::string kind = AssetManager::KindOf(name);
+    std::string folder = kind == "model" ? "assets/models/" : kind == "texture" ? "assets/textures/" : kind == "audio" ? "sounds/" : "assets/";
+    std::string rel = a.Get("--to", folder + name);
+    std::string dest;
+    try {
+        dest = engine.ResolvePath(rel);
+    } catch (const ApiError& e) {
+        return Fail(e.code, e.what(), e.hint);
+    }
+    CreateDirectories(ParentPath(dest));
+    FILE* f = std::fopen(dest.c_str(), "wb");
+    if (!f || std::fwrite(bytes.data(), 1, bytes.size(), f) != bytes.size()) {
+        if (f) std::fclose(f);
+        return Fail("write_failed", "cannot write " + dest);
+    }
+    std::fclose(f);
+    Json res = Json::MakeObject();
+    res["ok"] = true;
+    res["result"]["path"] = rel;
+    res["result"]["kind"] = kind;
+    if (kind == "model" || kind == "texture" || kind == "audio") {
+        Json info = engine.Call("asset.info", Json(Json::Object{{"path", rel}}));
+        if (info["ok"].asBool()) res["result"]["info"] = info["result"];
+    }
+    PrintJson(res);
+    return 0;
+}
+
+// Builds a standalone game folder: <out>/<Name>.exe (the player runtime) plus
+// <out>/game/ with the project's scenes, scripts and assets.
+int CmdPackage(const Args& a) {
+    Engine engine;
+    int code = 0;
+    if (!OpenOrFail(engine, a, code)) return code;
+    const std::string projectDir = engine.ProjectDir();
+    if (!FileExists(JoinPath(projectDir, "project.json"))) {
+        return Fail("not_a_project", "no project.json in " + projectDir, "Package a project directory (created with `oe new`).");
+    }
+    std::string name = a.Get("--name", engine.ProjectName().empty() ? "Game" : engine.ProjectName());
+    for (char& c : name) {
+        if (std::string("<>:\"/\\|?*").find(c) != std::string::npos || static_cast<unsigned char>(c) < 32) c = '_';
+    }
+    std::string out = AbsolutePath(a.Get("--out", "dist/" + name));
+    const std::string projectAbs = AbsolutePath(projectDir);
+    if (out == projectAbs || out.rfind(projectAbs + "/", 0) == 0) {
+        return Fail("invalid_output", "the output folder must be outside the project", "Use --out dist/" + name + ".");
+    }
+
+#ifdef _WIN32
+    const std::string exeExt = ".exe";
+#else
+    const std::string exeExt = "";
+#endif
+    std::string player = JoinPath(ExecutableDirectory(), "oe_player" + exeExt);
+    if (!FileExists(player)) return Fail("player_missing", "player runtime not found at " + player, "Build it with build.bat (target oe_player).");
+
+    // Only reuse a folder that is empty or an earlier package (has game/project.json).
+    std::string gameDir = JoinPath(out, "game");
+    if (IsDirectory(out) && !ListFiles(out, "", false).empty() && !FileExists(JoinPath(gameDir, "project.json"))) {
+        return Fail("output_not_empty", out + " exists and is not an OwnEngine package", "Pick another --out folder or empty it.");
+    }
+    if (!RemoveAll(gameDir)) return Fail("write_failed", "cannot clean " + gameDir, "Close the running game first.");
+
+    // Game data: everything in the project except hidden files and agent notes.
+    Json files = Json::MakeArray();
+    double bytes = 0;
+    for (const std::string& src : ListFiles(projectDir, "", true)) {
+        std::string rel = RelativePath(src, projectDir);
+        bool hidden = rel[0] == '.' || rel.find("/.") != std::string::npos;
+        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md") continue;
+        if (!CopyFileTo(src, JoinPath(gameDir, rel))) return Fail("write_failed", "cannot copy " + rel);
+        std::vector<unsigned char> data;
+        if (ReadBinaryFile(src, data)) bytes += static_cast<double>(data.size());
+        files.push(rel);
+    }
+    std::string exe = JoinPath(out, name + exeExt);
+    if (!CopyFileTo(player, exe)) return Fail("write_failed", "cannot write " + exe, "Close the running game first.");
+
+    Json res = Json::MakeObject();
+    res["ok"] = true;
+    res["result"]["exe"] = exe;
+    res["result"]["gameDir"] = gameDir;
+    res["result"]["files"] = files;
+    res["result"]["dataBytes"] = bytes;
+    res["result"]["next"] = "Run " + exe + " or zip the folder " + out + " to share it.";
+    PrintJson(res);
+    return 0;
+}
+
 int CmdVersion() {
     Json v = Json::MakeObject();
     v["engine"] = "OwnEngine";
@@ -407,5 +517,7 @@ int main(int argc, char** argv) {
     if (cmd == "script") return CmdScript(a);
     if (cmd == "mcp") return CmdMcp(a);
     if (cmd == "api") return CmdApi(a);
+    if (cmd == "import") return CmdImport(a);
+    if (cmd == "package") return CmdPackage(a);
     return Fail("unknown_command", "unknown command '" + cmd + "'", "Run `oe help`.");
 }

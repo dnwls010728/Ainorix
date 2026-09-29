@@ -2,7 +2,7 @@
 
 The engine is split so that only two small layers touch a platform:
 
-1. **Platform layer** — `engine/platform/Platform.h`: window, input events, present, time, sleep, open URL, executable path, stdio mode.
+1. **Platform layer** — `engine/platform/Platform.h`: window, input events (keys, mouse/touch), present, audio output, time, sleep, open URL, executable path, stdio mode.
 2. **Render backend** — `IRenderer` in `engine/render/Renderer.h`. The software rasterizer is the reference implementation and runs everywhere (including headless CI and AI verification). Hardware backends must fill the same `RenderTarget` color/id buffers on request, so screenshots and picking behave identically on every platform.
 
 Everything else (`core`, `scene`, `api`, `app`) is portable C++17 with no OS headers. Sockets are the one exception: `HttpServer.cpp` has Winsock and POSIX branches.
@@ -22,8 +22,9 @@ Everything else (`core`, `scene`, `api`, `app`) is portable C++17 with no OS hea
 
 1. Add `engine/platform/<name>/Platform<Name>.cpp` implementing every function in `Platform.h`.
 2. Select it in `CMakeLists.txt` (`OE_PLATFORM`) using a toolchain file (Emscripten, Android NDK, Xcode, console SDK).
-3. Map device input to the key names documented in `scene/Systems.h` (`W`, `Space`, `Left`, …). Add gamepad/touch axes to `InputState` when a platform needs them — the API (`input.key`) must stay able to inject the same input for automated tests.
-4. Run `oe_tests` on the device or simulator. The render determinism test compares frame hashes; a hardware backend may differ from the software reference, so compare hashes per backend.
+3. Implement `CreateAudioDevice` (e.g. Web Audio, AAudio, CoreAudio); the mixer already produces 48 kHz stereo floats. Map touches to `mouseX/mouseY` + `MouseLeft`.
+4. Map device input to the key names documented in `scene/Systems.h` (`W`, `Space`, `Left`, …). Add gamepad/touch axes to `InputState` when a platform needs them — the API (`input.key`) must stay able to inject the same input for automated tests.
+5. Run `oe_tests` on the device or simulator. The render determinism test compares frame hashes; a hardware backend may differ from the software reference, so compare hashes per backend.
 
 ## Consoles
 

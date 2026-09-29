@@ -4,11 +4,17 @@
 #include <cctype>
 
 #include "app/Engine.h"
+#include "assets/Assets.h"
+#include "audio/AudioSystem.h"
 #include "core/FileSystem.h"
 #include "core/Image.h"
 #include "core/Log.h"
 #include "render/Mesh.h"
+#include "render/UI.h"
 #include "scene/Components.h"
+#include "scene/Prefab.h"
+#include "physics/PhysicsWorld.h"
+#include "script/ScriptHost.h"
 
 namespace oe {
 
@@ -193,6 +199,9 @@ Json SimState(Engine& e) {
     Json keys = Json::MakeArray();
     for (const std::string& k : e.Input().down) keys.push(k);
     s["keysDown"] = keys;
+    s["scriptErrors"] = static_cast<uint64_t>(e.Scripts().Errors().size());
+    s["sceneName"] = e.GetScene().name;
+    s["entities"] = static_cast<uint64_t>(e.GetScene().Entities().size());
     return s;
 }
 
@@ -219,6 +228,9 @@ ViewRequest ParseView(Engine& e, const Json& args) {
         MakeSceneView(e.GetScene(), aspect, r.view);
     }
     r.view.drawGrid = args["grid"].asBool(false);
+    if (args["colliders"].asBool(false)) AppendColliderLines(e.GetScene(), r.view.lines);
+    e.AppendDebugLines(r.view.lines);
+    if (args.has("ui")) r.view.drawUI = args["ui"].asBool(true);
     if (args["highlight"].isNumber()) r.view.highlight = static_cast<EntityId>(args["highlight"].asNumber());
     return r;
 }
@@ -236,6 +248,8 @@ Params ViewParams() {
         .Opt("height", "integer", "Image height in pixels (default 360).")
         .OptWith("camera", CameraSchema())
         .Opt("grid", "boolean", "Draw the editor ground grid (default false).")
+        .Opt("colliders", "boolean", "Draw collider wireframes: green solid, yellow trigger, cyan character (default false).")
+        .Opt("ui", "boolean", "Draw the in-game UI (default: true with the scene camera, false with a free camera).")
         .Opt("highlight", "integer", "Entity id to outline.");
     return p;
 }
@@ -528,7 +542,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              });
 
     Register(r, "component.set", "Change some fields of an existing component (partial update).",
-             Params().ReqWith("id", EntityRefSchema("Entity id or name.")).Req("type", "string", "Component type name.").Req("values", "object", "Field values to change."),
+             Params().ReqWith("id", EntityRefSchema("Entity id or name.")).Req("type", "string", "Component type name.").Req("values", "object", "Field values to change.")
+                 .Opt("merge", "string", "Undo group key: consecutive edits with the same key become one undo step (used for editor drags)."),
              true, [](Engine& e, const Json& a) {
                  EntityId id = RequireEntity(e, a);
                  const ComponentType& t = RequireType(a["type"]);
@@ -588,6 +603,54 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return SimState(e);
              });
 
+    Register(r, "input.click", "Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick on the next simulated frame.",
+             Params()
+                 .Req("x", "number", "Pixel x (0 = left).")
+                 .Req("y", "number", "Pixel y (0 = top).")
+                 .Opt("width", "integer", "Width of the image the coordinates refer to (default 640, like render.screenshot).")
+                 .Opt("height", "integer", "Height of that image (default 360)."),
+             false, [](Engine& e, const Json& a) {
+                 InputState& in = e.Input();
+                 int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
+                 in.mouseX = a["x"].asFloat() / static_cast<float>(w);
+                 in.mouseY = a["y"].asFloat() / static_cast<float>(h);
+                 in.viewWidth = w;
+                 in.viewHeight = h;
+                 in.pressedThisFrame.insert("MouseLeft");
+                 Json out = SimState(e);
+                 EntityId hit = HitTestButton(e.GetScene(), a["x"].asFloat(), a["y"].asFloat(), w, h);
+                 out["button"] = hit;
+                 if (hit != kNullEntity) out["buttonName"] = e.GetScene().Record(hit)->name;
+                 return out;
+             });
+
+    Register(r, "input.mouse", "Move the mouse over the game view and optionally press/release a button.",
+             Params()
+                 .Req("x", "number", "Pixel x.")
+                 .Req("y", "number", "Pixel y.")
+                 .Opt("width", "integer", "Width of the image the coordinates refer to (default 640).")
+                 .Opt("height", "integer", "Height of that image (default 360).")
+                 .Opt("button", "string", "MouseLeft or MouseRight.")
+                 .Opt("down", "boolean", "Press (true) or release (false) the button."),
+             false, [](Engine& e, const Json& a) {
+                 InputState& in = e.Input();
+                 int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
+                 in.mouseX = a["x"].asFloat() / static_cast<float>(w);
+                 in.mouseY = a["y"].asFloat() / static_cast<float>(h);
+                 in.viewWidth = w;
+                 in.viewHeight = h;
+                 if (a.has("button")) {
+                     std::string b = a["button"].asString();
+                     if (a["down"].asBool(true)) {
+                         if (!in.IsDown(b)) in.pressedThisFrame.insert(b);
+                         in.down.insert(b);
+                     } else {
+                         in.down.erase(b);
+                     }
+                 }
+                 return SimState(e);
+             });
+
     Register(r, "input.clear", "Release all keys.", Params(), false, [](Engine& e, const Json&) {
         e.Input().down.clear();
         e.Input().pressedThisFrame.clear();
@@ -641,10 +704,413 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         });
     }
 
-    Register(r, "render.meshes", "Names of the built-in meshes usable in MeshRenderer.mesh.", Params(), false, [](Engine&, const Json&) {
+    Register(r, "render.meshes", "Values usable in MeshRenderer.mesh: built-in shapes and the project's model files.", Params(), false, [](Engine& e, const Json&) {
         Json list = Json::MakeArray();
         for (const std::string& n : BuiltinMeshNames()) list.push(n);
+        for (const std::string& f : ListFiles(e.ProjectDir(), "", true)) {
+            std::string rel = RelativePath(f, e.ProjectDir());
+            if (rel.rfind("build/", 0) != 0 && AssetManager::KindOf(rel) == "model") list.push(rel);
+        }
         return list;
+    });
+
+    // ----- scripting -------------------------------------------------------------
+    Register(r, "script.eval", "Run Lua code in the game's script state and return the result (expressions are returned directly).",
+             Params()
+                 .Req("code", "string", "Lua source, e.g. \"scene.find('Player')\" or a block with return.")
+                 .OptWith("entity", EntityRefSchema("Bind `self` to this entity's script instance (or a plain entity handle).")),
+             true, [](Engine& e, const Json& a) {
+                 EntityId id = a.has("entity") ? RequireEntity(e, a, "entity") : kNullEntity;
+                 return e.Scripts().Eval(a["code"].asString(), id);
+             });
+
+    Register(r, "script.reload", "Reload all loaded Lua modules now (running instances keep their state).", Params(), false,
+             [](Engine& e, const Json&) {
+                 Json list = Json::MakeArray();
+                 for (const std::string& p : e.Scripts().ReloadAll()) list.push(p);
+                 Json out = Json::MakeObject();
+                 out["reloaded"] = list;
+                 return out;
+             });
+
+    Register(r, "script.errors", "Script errors (load, runtime, eval) with file:line, entity and frame.",
+             Params().Opt("clear", "boolean", "Clear the list after returning it."), false, [](Engine& e, const Json& a) {
+                 Json list = Json::MakeArray();
+                 for (const ScriptError& err : e.Scripts().Errors()) {
+                     Json j = Json::MakeObject();
+                     j["script"] = err.script;
+                     j["entity"] = err.entity;
+                     j["message"] = err.message;
+                     j["frame"] = static_cast<uint64_t>(err.frame);
+                     list.push(j);
+                 }
+                 if (a["clear"].asBool(false)) e.Scripts().ClearErrors();
+                 return list;
+             });
+
+    Register(r, "script.list", "Lua files in the project, which entities use them, and the running script state.", Params(), false,
+             [](Engine& e, const Json&) {
+                 Json files = Json::MakeArray();
+                 for (const std::string& f : ListFiles(e.ProjectDir(), ".lua", true)) {
+                     std::string rel = RelativePath(f, e.ProjectDir());
+                     if (rel.rfind("build/", 0) == 0) continue;
+                     Json j = Json::MakeObject();
+                     j["path"] = rel;
+                     Json users = Json::MakeArray();
+                     for (const auto& kv : e.GetScene().Pool<Script>()) {
+                         if (kv.second.path == rel) users.push(kv.first);
+                     }
+                     j["entities"] = users;
+                     files.push(j);
+                 }
+                 Json out = e.Scripts().Status();
+                 out["files"] = files;
+                 return out;
+             });
+
+    Register(r, "script.read", "Read a Lua file from the project.", Params().Req("path", "string", "e.g. \"scripts/player.lua\"."), false,
+             [](Engine& e, const Json& a) {
+                 std::string path = e.ResolvePath(a["path"].asString());
+                 std::string text;
+                 if (!ReadTextFile(path, text)) throw ApiError("not_found", "cannot read " + a["path"].asString(), "Call script.list to see script files.");
+                 Json out = Json::MakeObject();
+                 out["path"] = a["path"].asString();
+                 out["source"] = text;
+                 return out;
+             });
+
+    Register(r, "script.write", "Create or overwrite a Lua file in the project (hot-reloaded if it is running).",
+             Params().Req("path", "string", "Must end with .lua, e.g. \"scripts/enemy.lua\".").Req("source", "string", "Lua source code."), false,
+             [](Engine& e, const Json& a) {
+                 std::string rel = a["path"].asString();
+                 if (rel.size() < 5 || rel.compare(rel.size() - 4, 4, ".lua") != 0) throw ApiError("invalid_path", "script path must end with .lua");
+                 std::string path = e.ResolvePath(rel);
+                 if (!WriteTextFile(path, a["source"].asString())) throw ApiError("write_failed", "cannot write " + rel);
+                 Json out = Json::MakeObject();
+                 out["path"] = rel;
+                 Json reloaded = Json::MakeArray();
+                 for (const std::string& p : e.Scripts().PollHotReload()) reloaded.push(p);
+                 out["reloaded"] = reloaded;
+                 return out;
+             });
+
+    // ----- game runtime ------------------------------------------------------------
+    Register(r, "game.state", "Runtime scene and game data (game.set values) of the current play session.", Params(), false,
+             [](Engine& e, const Json&) {
+                 Json out = Json::MakeObject();
+                 out["inPlaySession"] = e.InPlaySession();
+                 out["scene"] = e.RuntimeScene();
+                 out["sceneName"] = e.GetScene().name;
+                 out["data"] = e.GameData();
+                 out["frame"] = static_cast<uint64_t>(e.Frame());
+                 return out;
+             });
+
+    Register(r, "game.load_scene", "Switch to another scene during a play session (like game.loadScene in Lua).",
+             Params().Req("path", "string", "Scene file relative to the project."), false, [](Engine& e, const Json& a) {
+                 if (!e.InPlaySession()) throw ApiError("not_simulating", "no play session", "Use scene.load to edit another scene, or sim.play/sim.step first.");
+                 e.ReadProjectJson(a["path"].asString());  // validate now for a clear error
+                 e.RequestSceneChange(a["path"].asString());
+                 Json out = Json::MakeObject();
+                 out["pending"] = a["path"].asString();
+                 out["hint"] = "The scene changes at the end of the next simulated frame (sim.step).";
+                 return out;
+             });
+
+    // ----- audio -------------------------------------------------------------------
+    {
+        Json presets = Json::MakeArray();
+        for (const std::string& p : SoundPresets()) presets.push(p);
+        Json presetSchema = Json::MakeObject();
+        presetSchema["type"] = "string";
+        presetSchema["enum"] = presets;
+        presetSchema["description"] = "Sound style.";
+        Register(r, "audio.generate", "Synthesize a sound effect WAV into the project (for games without audio assets).",
+                 Params()
+                     .Req("path", "string", "Output .wav path, e.g. \"sounds/coin.wav\".")
+                     .ReqWith("preset", presetSchema)
+                     .Opt("seed", "integer", "0 = canonical sound; other values vary the pitch slightly."),
+                 false, [](Engine& e, const Json& a) {
+                     std::string rel = a["path"].asString();
+                     if (rel.size() < 5 || rel.compare(rel.size() - 4, 4, ".wav") != 0) throw ApiError("invalid_path", "audio path must end with .wav");
+                     std::vector<float> mono;
+                     if (!GenerateSound(a["preset"].asString(), static_cast<uint32_t>(a["seed"].asInt(0)), mono)) throw ApiError("invalid_preset", "unknown preset");
+                     if (!WriteWav(e.ResolvePath(rel), mono, 1, kAudioSampleRate)) throw ApiError("write_failed", "cannot write " + rel);
+                     Json out = Json::MakeObject();
+                     out["path"] = rel;
+                     out["seconds"] = static_cast<double>(mono.size()) / kAudioSampleRate;
+                     return out;
+                 });
+    }
+
+    Register(r, "audio.play", "Play a WAV clip now (mixed while simulating).",
+             Params().Req("path", "string", "WAV file relative to the project.").Opt("volume", "number", "0..2 (default 1).").Opt("loop", "boolean", "Repeat forever."),
+             false, [](Engine& e, const Json& a) {
+                 Json out = Json::MakeObject();
+                 out["voice"] = e.Audio().Play(a["path"].asString(), a["volume"].asFloat(1.0f), 1.0f, a["loop"].asBool(false), kNullEntity);
+                 return out;
+             });
+
+    Register(r, "audio.stop", "Stop one voice (by id) or all sounds.", Params().Opt("voice", "integer", "Voice id from audio.play; omit to stop everything."), false,
+             [](Engine& e, const Json& a) {
+                 Json out = Json::MakeObject();
+                 if (a.has("voice")) {
+                     out["stopped"] = e.Audio().Stop(a["voice"].asInt());
+                 } else {
+                     e.Audio().StopAll();
+                     out["stopped"] = true;
+                 }
+                 return out;
+             });
+
+    Register(r, "audio.state", "Playing voices, sounds played this session (with frame numbers) and capture status.", Params(), false,
+             [](Engine& e, const Json&) { return e.Audio().State(); });
+
+    Register(r, "audio.capture", "Record the mixed audio of simulated frames: start, sim.step, then stop to get peak/RMS and optionally a WAV.",
+             Params()
+                 .Req("action", "string", "\"start\" or \"stop\".")
+                 .Opt("path", "string", "On stop: also write the capture to this .wav path."),
+             false, [](Engine& e, const Json& a) {
+                 std::string action = a["action"].asString();
+                 if (action == "start") {
+                     e.Audio().StartCapture();
+                     Json out = Json::MakeObject();
+                     out["capturing"] = true;
+                     return out;
+                 }
+                 if (action != "stop") throw ApiError("invalid_argument", "action must be \"start\" or \"stop\"");
+                 if (!e.Audio().Capturing()) throw ApiError("not_capturing", "no capture in progress", "Call audio.capture {action:\"start\"} first.");
+                 return e.Audio().StopCapture(a.has("path") ? e.ResolvePath(a["path"].asString()) : std::string());
+             });
+
+    // ----- prefabs ---------------------------------------------------------------
+    Register(r, "prefab.create", "Save an entity and its children as a reusable prefab file.",
+             Params().ReqWith("id", EntityRefSchema("Root entity id or name.")).Req("path", "string", "Must end with .prefab.json, e.g. \"prefabs/coin.prefab.json\"."),
+             false, [](Engine& e, const Json& a) {
+                 EntityId id = RequireEntity(e, a);
+                 std::string rel = a["path"].asString();
+                 if (rel.size() < 12 || rel.compare(rel.size() - 12, 12, ".prefab.json") != 0) throw ApiError("invalid_path", "prefab path must end with .prefab.json");
+                 Json prefab = MakePrefab(e.GetScene(), id);
+                 if (!WriteTextFile(e.ResolvePath(rel), prefab.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + rel);
+                 Json out = Json::MakeObject();
+                 out["path"] = rel;
+                 out["entities"] = static_cast<uint64_t>(prefab["entities"].size());
+                 return out;
+             });
+
+    Register(r, "prefab.instantiate", "Create a copy of a prefab in the scene. Returns the new root entity.",
+             Params()
+                 .Req("path", "string", "Prefab file, e.g. \"prefabs/coin.prefab.json\".")
+                 .Opt("name", "string", "Name for the new root entity.")
+                 .OptWith("parent", EntityRefSchema("Parent entity id or name."))
+                 .Opt("position", "vec3", "Root position (local to the parent)."),
+             true, [](Engine& e, const Json& a) {
+                 EntityId parent = a.has("parent") ? RequireEntity(e, a, "parent") : kNullEntity;
+                 EntityId root = e.InstantiatePrefabFile(a["path"].asString(), parent);
+                 Scene& s = e.GetScene();
+                 if (a.has("name")) s.Record(root)->name = a["name"].asString();
+                 if (a.has("position")) s.Add<Transform>(root).position = ReadVec3(a["position"], Vec3());
+                 return s.EntityToJson(root);
+             });
+
+    Register(r, "prefab.list", "Prefab files in the project and how many instances the scene has of each.", Params(), false,
+             [](Engine& e, const Json&) {
+                 Json list = Json::MakeArray();
+                 for (const std::string& f : ListFiles(e.ProjectDir(), ".prefab.json", true)) {
+                     std::string rel = RelativePath(f, e.ProjectDir());
+                     if (rel.rfind("build/", 0) == 0) continue;
+                     Json j = Json::MakeObject();
+                     j["path"] = rel;
+                     Json users = Json::MakeArray();
+                     for (const auto& kv : e.GetScene().Pool<Prefab>()) {
+                         if (kv.second.path == rel) users.push(kv.first);
+                     }
+                     j["instances"] = users;
+                     list.push(j);
+                 }
+                 return list;
+             });
+
+    // ----- physics ---------------------------------------------------------------
+    Register(r, "physics.raycast", "Cast a ray against colliders and characters; returns the first hit (triggers are ignored).",
+             Params()
+                 .Req("origin", "vec3", "Ray start [x,y,z].")
+                 .Req("direction", "vec3", "Ray direction (normalized automatically).")
+                 .Opt("maxDistance", "number", "Maximum distance in meters (default 1000)."),
+             false, [](Engine& e, const Json& a) {
+                 RaycastHit hit = e.Physics().Raycast(e.GetScene(), ReadVec3(a["origin"], Vec3()), ReadVec3(a["direction"], Vec3(0, -1, 0)),
+                                                      a["maxDistance"].asFloat(1000.0f));
+                 Json out = Json::MakeObject();
+                 out["hit"] = hit.hit;
+                 if (hit.hit) {
+                     out["entity"] = hit.entity;
+                     if (const EntityRecord* rec = e.GetScene().Record(hit.entity)) out["name"] = rec->name;
+                     out["point"] = Json(Json::Array{hit.point.x, hit.point.y, hit.point.z});
+                     out["normal"] = Json(Json::Array{hit.normal.x, hit.normal.y, hit.normal.z});
+                     out["distance"] = hit.distance;
+                 }
+                 return out;
+             });
+
+    Register(r, "physics.overlap", "Entities whose colliders/characters intersect a sphere (triggers are ignored).",
+             Params().Req("center", "vec3", "Sphere center [x,y,z].").Req("radius", "number", "Sphere radius in meters."), false,
+             [](Engine& e, const Json& a) {
+                 Json list = Json::MakeArray();
+                 for (EntityId id : e.Physics().OverlapSphere(e.GetScene(), ReadVec3(a["center"], Vec3()), a["radius"].asFloat(1.0f))) {
+                     list.push(EntitySummary(e.GetScene(), id));
+                 }
+                 return list;
+             });
+
+    Register(r, "physics.contacts", "Pairs touching after the last simulation step (collisions and trigger overlaps).",
+             Params().OptWith("id", EntityRefSchema("Only pairs involving this entity.")), false, [](Engine& e, const Json& a) {
+                 EntityId filter = a.has("id") ? RequireEntity(e, a) : kNullEntity;
+                 Json list = Json::MakeArray();
+                 for (const ContactPair& c : e.Physics().Contacts()) {
+                     if (filter != kNullEntity && c.a != filter && c.b != filter) continue;
+                     Json j = Json::MakeObject();
+                     j["a"] = c.a;
+                     j["b"] = c.b;
+                     const EntityRecord* ra = e.GetScene().Record(c.a);
+                     const EntityRecord* rb = e.GetScene().Record(c.b);
+                     j["names"] = Json(Json::Array{ra ? ra->name : "?", rb ? rb->name : "?"});
+                     j["kind"] = c.trigger ? "trigger" : "collision";
+                     list.push(j);
+                 }
+                 return list;
+             });
+
+    Register(r, "physics.state", "Physics backend, gravity, body counts and warnings (e.g. invalid shapes).", Params(), false,
+             [](Engine& e, const Json&) { return e.Physics().Stats(); });
+
+    // ----- assets ----------------------------------------------------------------
+    Register(r, "asset.list", "Project files by kind (model, texture, audio, script, prefab, scene) with sizes.",
+             Params().Opt("kind", "string", "Only this kind."), false, [](Engine& e, const Json& a) {
+                 std::string kind = a["kind"].asString("");
+                 Json list = Json::MakeArray();
+                 for (const std::string& f : ListFiles(e.ProjectDir(), "", true)) {
+                     std::string rel = RelativePath(f, e.ProjectDir());
+                     if (rel.rfind("build/", 0) == 0 || rel.rfind(".", 0) == 0) continue;
+                     std::string k = AssetManager::KindOf(rel);
+                     if (k == "other" || (!kind.empty() && k != kind)) continue;
+                     std::vector<unsigned char> bytes;
+                     Json j = Json::MakeObject();
+                     j["path"] = rel;
+                     j["kind"] = k;
+                     list.push(j);
+                 }
+                 return list;
+             });
+
+    Register(r, "asset.info", "Details of a project file: model vertices/triangles/materials/textures/bounds (+ a scale hint), image size, sound length.",
+             Params().Req("path", "string", "Project-relative path, or a built-in mesh name."), false,
+             [](Engine& e, const Json& a) { return e.Assets().Info(a["path"].asString()); });
+
+    Register(r, "asset.reload", "Forget cached models/textures so they are reloaded from disk.", Params(), false, [](Engine& e, const Json&) {
+        e.Assets().Clear();
+        Json out = Json::MakeObject();
+        out["cleared"] = true;
+        return out;
+    });
+
+    Register(r, "asset.generate_texture", "Create a PNG texture procedurally (checker, grid, bricks, gradient, noise).",
+             Params()
+                 .Req("path", "string", "Output .png path, e.g. \"assets/textures/floor.png\".")
+                 .Req("pattern", "string", "checker | grid | bricks | gradient | noise")
+                 .Opt("size", "integer", "Width and height in pixels (default 256).")
+                 .Opt("color1", "vec3", "First color [r,g,b] 0..1.")
+                 .Opt("color2", "vec3", "Second color [r,g,b] 0..1.")
+                 .Opt("cells", "integer", "Pattern repeats across the image (default 8)."),
+             false, [](Engine& e, const Json& a) {
+                 std::string rel = a["path"].asString();
+                 if (rel.size() < 5 || rel.compare(rel.size() - 4, 4, ".png") != 0) throw ApiError("invalid_path", "texture path must end with .png");
+                 std::string pattern = a["pattern"].asString();
+                 int size = std::clamp(a["size"].asInt(256), 8, 2048);
+                 int cells = std::clamp(a["cells"].asInt(8), 1, 256);
+                 Vec3 c1 = ReadVec3(a["color1"], Vec3(0.85f, 0.85f, 0.85f)), c2 = ReadVec3(a["color2"], Vec3(0.35f, 0.35f, 0.4f));
+                 Image img;
+                 img.width = img.height = size;
+                 img.rgba.resize(static_cast<size_t>(size) * size * 4);
+                 uint32_t rng = 12345;
+                 auto noise = [&]() { rng = rng * 1664525u + 1013904223u; return static_cast<float>(rng >> 8) / 16777216.0f; };
+                 float cell = static_cast<float>(size) / static_cast<float>(cells);
+                 for (int y = 0; y < size; ++y) {
+                     for (int x = 0; x < size; ++x) {
+                         float t = 0;
+                         float fx = static_cast<float>(x) / cell, fy = static_cast<float>(y) / cell;
+                         if (pattern == "checker") t = ((static_cast<int>(fx) + static_cast<int>(fy)) & 1) ? 1.0f : 0.0f;
+                         else if (pattern == "grid") t = (fx - std::floor(fx) < 0.06f || fy - std::floor(fy) < 0.06f) ? 1.0f : 0.0f;
+                         else if (pattern == "bricks") {
+                             float by = fy * 2.0f;
+                             float bx = fx + ((static_cast<int>(by) & 1) ? 0.5f : 0.0f);
+                             t = (by - std::floor(by) < 0.1f || bx - std::floor(bx) < 0.05f) ? 1.0f : 0.0f;
+                         } else if (pattern == "gradient") t = static_cast<float>(y) / static_cast<float>(size - 1);
+                         else if (pattern == "noise") t = noise();
+                         else throw ApiError("invalid_argument", "unknown pattern '" + pattern + "'", "Use checker, grid, bricks, gradient or noise.");
+                         Vec3 c = c1 * (1 - t) + c2 * t;
+                         uint8_t* px = &img.rgba[(static_cast<size_t>(y) * size + x) * 4];
+                         px[0] = static_cast<uint8_t>(Clamp(c.x, 0, 1) * 255);
+                         px[1] = static_cast<uint8_t>(Clamp(c.y, 0, 1) * 255);
+                         px[2] = static_cast<uint8_t>(Clamp(c.z, 0, 1) * 255);
+                         px[3] = 255;
+                     }
+                 }
+                 std::string full = e.ResolvePath(rel);
+                 CreateDirectories(ParentPath(full));
+                 if (!WritePng(full, img)) throw ApiError("write_failed", "cannot write " + rel);
+                 Json out = Json::MakeObject();
+                 out["path"] = rel;
+                 out["size"] = size;
+                 return out;
+             });
+
+    // ----- debug drawing -----------------------------------------------------------
+    Register(r, "debug.draw", "Draw lines/boxes/spheres in every view (visible in screenshots) to mark points, paths or areas.",
+             Params()
+                 .Opt("lines", "array", "[{a:[x,y,z], b:[x,y,z], color?:[r,g,b]}]")
+                 .Opt("boxes", "array", "[{center:[x,y,z], size:[x,y,z], color?}]")
+                 .Opt("spheres", "array", "[{center:[x,y,z], radius:number, color?}]")
+                 .Opt("seconds", "number", "Lifetime in simulated seconds (default: until debug.clear)."),
+             false, [](Engine& e, const Json& a) {
+                 float seconds = a.has("seconds") ? a["seconds"].asFloat() : -1.0f;
+                 size_t before = e.DebugLineCount();
+                 auto color = [](const Json& j) {
+                     Vec3 c = ReadVec3(j["color"], Vec3(1, 0.2f, 0.9f));
+                     return Color(c.x, c.y, c.z);
+                 };
+                 for (const Json& l : a["lines"].items()) e.AddDebugLine(ReadVec3(l["a"], Vec3()), ReadVec3(l["b"], Vec3()), color(l), seconds);
+                 for (const Json& b : a["boxes"].items()) {
+                     Vec3 c = ReadVec3(b["center"], Vec3()), h = ReadVec3(b["size"], Vec3(1, 1, 1)) * 0.5f;
+                     Vec3 p[8];
+                     for (int i = 0; i < 8; ++i) p[i] = c + Vec3(i & 1 ? h.x : -h.x, i & 2 ? h.y : -h.y, i & 4 ? h.z : -h.z);
+                     const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+                     for (const auto& ed : edges) e.AddDebugLine(p[ed[0]], p[ed[1]], color(b), seconds);
+                 }
+                 for (const Json& s : a["spheres"].items()) {
+                     Vec3 c = ReadVec3(s["center"], Vec3());
+                     float r = s["radius"].asFloat(0.5f);
+                     for (int axis = 0; axis < 3; ++axis) {
+                         for (int i = 0; i < 24; ++i) {
+                             float a0 = 2 * kPi * static_cast<float>(i) / 24, a1 = 2 * kPi * static_cast<float>(i + 1) / 24;
+                             auto pt = [&](float ang) {
+                                 float u = std::cos(ang) * r, v = std::sin(ang) * r;
+                                 return axis == 0 ? c + Vec3(0, u, v) : axis == 1 ? c + Vec3(u, 0, v) : c + Vec3(u, v, 0);
+                             };
+                             e.AddDebugLine(pt(a0), pt(a1), color(s), seconds);
+                         }
+                     }
+                 }
+                 Json out = Json::MakeObject();
+                 out["added"] = static_cast<uint64_t>(e.DebugLineCount() - before);
+                 out["total"] = static_cast<uint64_t>(e.DebugLineCount());
+                 return out;
+             });
+
+    Register(r, "debug.clear", "Remove all debug lines.", Params(), false, [](Engine& e, const Json&) {
+        e.ClearDebugLines();
+        Json out = Json::MakeObject();
+        out["cleared"] = true;
+        return out;
     });
 
     // ----- history -----------------------------------------------------------------

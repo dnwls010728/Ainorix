@@ -5,6 +5,13 @@
 
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "scene/Prefab.h"
+#include "assets/Assets.h"
+#include "audio/AudioSystem.h"
+#include "physics/PhysicsWorld.h"
+#include "platform/Platform.h"
+#include "render/UI.h"
+#include "script/ScriptHost.h"
 
 namespace oe {
 
@@ -21,7 +28,10 @@ std::string Lower(std::string s) {
 }
 }  // namespace
 
-Engine::Engine() : renderer_(std::make_unique<SoftwareRenderer>()) {
+Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std::make_unique<SoftwareRenderer>(assets_.get())) {
+    scripts_ = std::make_unique<ScriptHost>(*this);
+    physics_ = std::make_unique<PhysicsWorld>();
+    audio_ = std::make_unique<AudioSystem>(*this);
     RegisterBuiltinCommands(commands_);
     projectDir_ = AbsolutePath(".");
 }
@@ -93,6 +103,7 @@ bool Engine::LoadScene(const std::string& path, std::string* error) {
     }
     playing_ = false;
     playSnapshot_.reset();
+    ResetRuntime();
     frame_ = 0;
     simTime_ = 0;
     SetSceneLocation(path);
@@ -120,6 +131,7 @@ void Engine::NewScene(const std::string& name) {
     scene_.name = name;
     playing_ = false;
     playSnapshot_.reset();
+    ResetRuntime();
     frame_ = 0;
     simTime_ = 0;
     scenePath_.clear();
@@ -141,14 +153,77 @@ std::string Engine::ResolvePath(const std::string& path) const {
     return full;
 }
 
+Json Engine::ReadProjectJson(const std::string& path) const {
+    std::string full = ResolvePath(path);
+    std::string text;
+    if (!ReadTextFile(full, text)) throw ApiError("not_found", "cannot read '" + path + "'", "Paths are relative to the project directory.");
+    std::string err;
+    Json json = Json::parse(text, &err);
+    if (!err.empty()) throw ApiError("invalid_json", path + ": " + err);
+    return json;
+}
+
+EntityId Engine::InstantiatePrefabFile(const std::string& path, EntityId parent) {
+    Json prefab = ReadProjectJson(path);
+    std::string err;
+    EntityId root = InstantiatePrefab(scene_, prefab, path, parent, &err);
+    if (root == kNullEntity) throw ApiError("invalid_prefab", err);
+    return root;
+}
+
 // ----- Simulation ----------------------------------------------------------
 
-void Engine::Play() {
-    if (!playSnapshot_) {
-        playSnapshot_ = std::make_unique<Json>(scene_.ToJson());
-        frame_ = 0;
-        simTime_ = 0;
+void Engine::BeginSessionIfNeeded() {
+    if (playSnapshot_) return;
+    playSnapshot_ = std::make_unique<Json>(scene_.ToJson());
+    frame_ = 0;
+    simTime_ = 0;
+    ResetRuntime();  // fresh Lua state and physics world for every session
+    gameData_ = Json::MakeObject();
+    runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
+    pendingScene_.clear();
+}
+
+void Engine::EnableAudioOutput() {
+    if (audio_->HasDevice()) return;
+    std::unique_ptr<AudioDevice> device = CreateAudioDevice(kAudioSampleRate);
+    if (device) {
+        OE_LOG_INFO("audio", "output: %s", device->Name());
+        audio_->AttachDevice(std::move(device));
+    } else {
+        OE_LOG_WARN("audio", "no audio output device; sounds are mixed but not played");
     }
+}
+
+void Engine::ResetRuntime() {
+    debugLines_.clear();
+    scripts_->Reset();
+    physics_->Reset();
+    audio_->Reset();
+    pendingScene_.clear();
+}
+
+void Engine::ApplySceneChange() {
+    std::string path = pendingScene_;
+    pendingScene_.clear();
+    std::string err;
+    try {
+        Json json = ReadProjectJson(path);
+        if (!scene_.FromJson(json, &err)) throw ApiError("invalid_scene", path + ": " + err);
+    } catch (const ApiError& e) {
+        scripts_->RecordError("", kNullEntity, std::string("game.loadScene failed: ") + e.what());
+        return;
+    }
+    physics_->Reset();
+    scripts_->ResetInstances();
+    audio_->OnSceneChanged();
+    runtimeScene_ = path;
+    Touch();
+    OE_LOG_INFO("game", "scene changed to %s at frame %llu", path.c_str(), static_cast<unsigned long long>(frame_));
+}
+
+void Engine::Play() {
+    BeginSessionIfNeeded();
     playing_ = true;
     accumulator_ = 0;
     OE_LOG_INFO("sim", "play");
@@ -166,8 +241,10 @@ void Engine::Stop() {
         scene_.FromJson(*playSnapshot_, &err);
         playSnapshot_.reset();
     }
+    ResetRuntime();
     input_.down.clear();
     input_.pressedThisFrame.clear();
+    gameData_ = Json::MakeObject();
     frame_ = 0;
     simTime_ = 0;
     Touch();
@@ -175,36 +252,71 @@ void Engine::Stop() {
 }
 
 void Engine::Step(int frames) {
-    if (!playSnapshot_) {
-        playSnapshot_ = std::make_unique<Json>(scene_.ToJson());
-        frame_ = 0;
-        simTime_ = 0;
-    }
-    for (int i = 0; i < frames; ++i) {
-        UpdateSystems(scene_, input_, static_cast<float>(kFixedDt));
-        ++frame_;
-        simTime_ += kFixedDt;
-    }
+    BeginSessionIfNeeded();
+    scripts_->PollHotReload();  // pick up script / asset files edited since the last step
+    assets_->PollChanges();
+    for (int i = 0; i < frames; ++i) SimulateFrame();
     if (frames > 0) Touch();
 }
 
 void Engine::Tick(double realDt) {
     if (!playing_) return;
+    hotReloadTimer_ += realDt;
+    if (hotReloadTimer_ >= 0.5) {
+        hotReloadTimer_ = 0.0;
+        scripts_->PollHotReload();
+        assets_->PollChanges();
+    }
     accumulator_ += std::min(realDt, 0.25);
     int steps = 0;
     while (accumulator_ >= kFixedDt && steps < 8) {
-        UpdateSystems(scene_, input_, static_cast<float>(kFixedDt));
-        ++frame_;
-        simTime_ += kFixedDt;
+        SimulateFrame();
         accumulator_ -= kFixedDt;
         ++steps;
     }
     if (steps > 0) Touch();
 }
 
+void Engine::AddDebugLine(const Vec3& a, const Vec3& b, const Color& color, float seconds) {
+    if (debugLines_.size() >= 20000) return;
+    debugLines_.push_back({{a, b, color}, seconds < 0 ? -1.0 : simTime_ + static_cast<double>(seconds)});
+}
+
+void Engine::AppendDebugLines(std::vector<DebugLine>& out) const {
+    for (const TimedLine& t : debugLines_) out.push_back(t.line);
+}
+
+void Engine::SimulateFrame() {
+    // Expire debug lines whose time is up (0-second lines live for one frame).
+    debugLines_.erase(std::remove_if(debugLines_.begin(), debugLines_.end(), [&](const TimedLine& t) { return t.expires >= 0 && t.expires <= simTime_; }),
+                      debugLines_.end());
+    // Scripts run first so they see this frame's edge-triggered input.
+    const float dt = static_cast<float>(kFixedDt);
+    scripts_->Update(dt);
+    EntityId clicked = kNullEntity;
+    if (input_.pressedThisFrame.count("MouseLeft")) {
+        clicked = HitTestButton(scene_, input_.mouseX * static_cast<float>(input_.viewWidth), input_.mouseY * static_cast<float>(input_.viewHeight),
+                                input_.viewWidth, input_.viewHeight);
+    }
+    UpdateSystems(scene_, input_, dt);
+    std::vector<PhysicsEvent> events = physics_->Step(scene_, dt);
+    UpdateLateSystems(scene_, dt);
+    scripts_->DispatchPhysicsEvents(events);
+    if (clicked != kNullEntity && scene_.Exists(clicked)) {
+        OE_LOG_INFO("ui", "button '%s' clicked", scene_.Record(clicked)->name.c_str());
+        scripts_->Notify(clicked, "onClick");
+    }
+    if (!pendingScene_.empty()) ApplySceneChange();
+    audio_->Update(scene_);
+    audio_->Render();
+    ++frame_;
+    simTime_ += kFixedDt;
+}
+
 RenderStats Engine::RenderGameView(RenderTarget& target) {
     RenderView view;
     MakeSceneView(scene_, static_cast<float>(target.width) / static_cast<float>(target.height), view);
+    AppendDebugLines(view.lines);
     return renderer_->Render(scene_, view, target);
 }
 
@@ -213,10 +325,12 @@ RenderStats Engine::RenderGameView(RenderTarget& target) {
 void Engine::ResetHistory() {
     undo_.clear();
     redo_.clear();
+    lastMergeKey_.clear();
 }
 
 bool Engine::Undo() {
     if (undo_.empty() || playSnapshot_) return false;
+    lastMergeKey_.clear();
     redo_.push_back(scene_.ToJson());
     std::string err;
     scene_.FromJson(undo_.back(), &err);
@@ -228,6 +342,7 @@ bool Engine::Undo() {
 
 bool Engine::Redo() {
     if (redo_.empty() || playSnapshot_) return false;
+    lastMergeKey_.clear();
     undo_.push_back(scene_.ToJson());
     std::string err;
     scene_.FromJson(redo_.back(), &err);
@@ -259,8 +374,15 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
         Json before = record ? scene_.ToJson() : Json();
         Json result = cmd->run(*this, args);
         if (record) {
-            undo_.push_back(std::move(before));
-            if (undo_.size() > kMaxUndo) undo_.erase(undo_.begin());
+            // Consecutive calls with the same non-empty merge key (e.g. an
+            // editor drag) collapse into one undo step.
+            const Json* merge = args.find("merge");
+            std::string mergeKey = merge && merge->isString() ? merge->asString() : std::string();
+            if (mergeKey.empty() || mergeKey != lastMergeKey_ || undo_.empty()) {
+                undo_.push_back(std::move(before));
+                if (undo_.size() > kMaxUndo) undo_.erase(undo_.begin());
+            }
+            lastMergeKey_ = mergeKey;
             redo_.clear();
             dirty_ = true;
         }

@@ -175,6 +175,7 @@ Change some fields of an existing component (partial update).
 | `id` | integer \| string | yes | Entity id or name. |
 | `type` | string | yes | Component type name. |
 | `values` | object | yes | Field values to change. |
+| `merge` | string |  | Undo group key: consecutive edits with the same key become one undo step (used for editor drags). |
 
 ### `component.remove` *(undoable edit)*
 
@@ -222,6 +223,30 @@ Press or release a key ("W", "A", "S", "D", "Space", "Left", ...).
 | `key` | string | yes | Key name. |
 | `down` | boolean |  | true = press (default), false = release. |
 
+### `input.click`
+
+Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick on the next simulated frame.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `x` | number | yes | Pixel x (0 = left). |
+| `y` | number | yes | Pixel y (0 = top). |
+| `width` | integer |  | Width of the image the coordinates refer to (default 640, like render.screenshot). |
+| `height` | integer |  | Height of that image (default 360). |
+
+### `input.mouse`
+
+Move the mouse over the game view and optionally press/release a button.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `x` | number | yes | Pixel x. |
+| `y` | number | yes | Pixel y. |
+| `width` | integer |  | Width of the image the coordinates refer to (default 640). |
+| `height` | integer |  | Height of that image (default 360). |
+| `button` | string |  | MouseLeft or MouseRight. |
+| `down` | boolean |  | Press (true) or release (false) the button. |
+
 ### `input.clear`
 
 Release all keys.
@@ -238,6 +263,8 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 | `height` | integer |  | Image height in pixels (default 360). |
 | `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees}. Default: the scene's active camera. |
 | `grid` | boolean |  | Draw the editor ground grid (default false). |
+| `colliders` | boolean |  | Draw collider wireframes: green solid, yellow trigger, cyan character (default false). |
+| `ui` | boolean |  | Draw the in-game UI (default: true with the scene camera, false with a free camera). |
 | `highlight` | integer |  | Entity id to outline. |
 | `path` | string |  | Also write the PNG to this path (relative to the project). |
 | `inline` | boolean |  | Return the PNG as base64 in png_base64 (default true when no path is given). |
@@ -252,13 +279,227 @@ Return the entity visible at a pixel of a rendered view.
 | `height` | integer |  | Image height in pixels (default 360). |
 | `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees}. Default: the scene's active camera. |
 | `grid` | boolean |  | Draw the editor ground grid (default false). |
+| `colliders` | boolean |  | Draw collider wireframes: green solid, yellow trigger, cyan character (default false). |
+| `ui` | boolean |  | Draw the in-game UI (default: true with the scene camera, false with a free camera). |
 | `highlight` | integer |  | Entity id to outline. |
 | `x` | integer | yes | Pixel x (0 = left). |
 | `y` | integer | yes | Pixel y (0 = top). |
 
 ### `render.meshes`
 
-Names of the built-in meshes usable in MeshRenderer.mesh.
+Values usable in MeshRenderer.mesh: built-in shapes and the project's model files.
+
+## script
+
+### `script.eval` *(undoable edit)*
+
+Run Lua code in the game's script state and return the result (expressions are returned directly).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `code` | string | yes | Lua source, e.g. "scene.find('Player')" or a block with return. |
+| `entity` | integer \| string |  | Bind `self` to this entity's script instance (or a plain entity handle). |
+
+### `script.reload`
+
+Reload all loaded Lua modules now (running instances keep their state).
+
+### `script.errors`
+
+Script errors (load, runtime, eval) with file:line, entity and frame.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `clear` | boolean |  | Clear the list after returning it. |
+
+### `script.list`
+
+Lua files in the project, which entities use them, and the running script state.
+
+### `script.read`
+
+Read a Lua file from the project.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | e.g. "scripts/player.lua". |
+
+### `script.write`
+
+Create or overwrite a Lua file in the project (hot-reloaded if it is running).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Must end with .lua, e.g. "scripts/enemy.lua". |
+| `source` | string | yes | Lua source code. |
+
+## game
+
+### `game.state`
+
+Runtime scene and game data (game.set values) of the current play session.
+
+### `game.load_scene`
+
+Switch to another scene during a play session (like game.loadScene in Lua).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Scene file relative to the project. |
+
+## audio
+
+### `audio.generate`
+
+Synthesize a sound effect WAV into the project (for games without audio assets).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Output .wav path, e.g. "sounds/coin.wav". |
+| `preset` | string | yes | Sound style. |
+| `seed` | integer |  | 0 = canonical sound; other values vary the pitch slightly. |
+
+### `audio.play`
+
+Play a WAV clip now (mixed while simulating).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | WAV file relative to the project. |
+| `volume` | number |  | 0..2 (default 1). |
+| `loop` | boolean |  | Repeat forever. |
+
+### `audio.stop`
+
+Stop one voice (by id) or all sounds.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `voice` | integer |  | Voice id from audio.play; omit to stop everything. |
+
+### `audio.state`
+
+Playing voices, sounds played this session (with frame numbers) and capture status.
+
+### `audio.capture`
+
+Record the mixed audio of simulated frames: start, sim.step, then stop to get peak/RMS and optionally a WAV.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `action` | string | yes | "start" or "stop". |
+| `path` | string |  | On stop: also write the capture to this .wav path. |
+
+## prefab
+
+### `prefab.create`
+
+Save an entity and its children as a reusable prefab file.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Root entity id or name. |
+| `path` | string | yes | Must end with .prefab.json, e.g. "prefabs/coin.prefab.json". |
+
+### `prefab.instantiate` *(undoable edit)*
+
+Create a copy of a prefab in the scene. Returns the new root entity.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Prefab file, e.g. "prefabs/coin.prefab.json". |
+| `name` | string |  | Name for the new root entity. |
+| `parent` | integer \| string |  | Parent entity id or name. |
+| `position` | array |  | Root position (local to the parent). |
+
+### `prefab.list`
+
+Prefab files in the project and how many instances the scene has of each.
+
+## physics
+
+### `physics.raycast`
+
+Cast a ray against colliders and characters; returns the first hit (triggers are ignored).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `origin` | array | yes | Ray start [x,y,z]. |
+| `direction` | array | yes | Ray direction (normalized automatically). |
+| `maxDistance` | number |  | Maximum distance in meters (default 1000). |
+
+### `physics.overlap`
+
+Entities whose colliders/characters intersect a sphere (triggers are ignored).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `center` | array | yes | Sphere center [x,y,z]. |
+| `radius` | number | yes | Sphere radius in meters. |
+
+### `physics.contacts`
+
+Pairs touching after the last simulation step (collisions and trigger overlaps).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string |  | Only pairs involving this entity. |
+
+### `physics.state`
+
+Physics backend, gravity, body counts and warnings (e.g. invalid shapes).
+
+## asset
+
+### `asset.list`
+
+Project files by kind (model, texture, audio, script, prefab, scene) with sizes.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `kind` | string |  | Only this kind. |
+
+### `asset.info`
+
+Details of a project file: model vertices/triangles/materials/textures/bounds (+ a scale hint), image size, sound length.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project-relative path, or a built-in mesh name. |
+
+### `asset.reload`
+
+Forget cached models/textures so they are reloaded from disk.
+
+### `asset.generate_texture`
+
+Create a PNG texture procedurally (checker, grid, bricks, gradient, noise).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Output .png path, e.g. "assets/textures/floor.png". |
+| `pattern` | string | yes | checker | grid | bricks | gradient | noise |
+| `size` | integer |  | Width and height in pixels (default 256). |
+| `color1` | array |  | First color [r,g,b] 0..1. |
+| `color2` | array |  | Second color [r,g,b] 0..1. |
+| `cells` | integer |  | Pattern repeats across the image (default 8). |
+
+## debug
+
+### `debug.draw`
+
+Draw lines/boxes/spheres in every view (visible in screenshots) to mark points, paths or areas.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `lines` | array |  | [{a:[x,y,z], b:[x,y,z], color?:[r,g,b]}] |
+| `boxes` | array |  | [{center:[x,y,z], size:[x,y,z], color?}] |
+| `spheres` | array |  | [{center:[x,y,z], radius:number, color?}] |
+| `seconds` | number |  | Lifetime in simulated seconds (default: until debug.clear). |
+
+### `debug.clear`
+
+Remove all debug lines.
 
 ## history
 

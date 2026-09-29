@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <mmsystem.h>
 #include <shellapi.h>
 
 #include <fcntl.h>
@@ -129,6 +130,32 @@ private:
                     self->width_ = LOWORD(lp);
                     self->height_ = HIWORD(lp);
                     return 0;
+                case WM_MOUSEMOVE:
+                case WM_LBUTTONDOWN:
+                case WM_LBUTTONUP:
+                case WM_RBUTTONDOWN:
+                case WM_RBUTTONUP: {
+                    if (self->input_ && self->width_ > 0 && self->height_ > 0) {
+                        InputState& in = *self->input_;
+                        in.mouseX = static_cast<float>(static_cast<short>(LOWORD(lp))) / static_cast<float>(self->width_);
+                        in.mouseY = static_cast<float>(static_cast<short>(HIWORD(lp))) / static_cast<float>(self->height_);
+                        in.viewWidth = self->width_;
+                        in.viewHeight = self->height_;
+                        const char* button = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) ? "MouseLeft"
+                                             : (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) ? "MouseRight" : nullptr;
+                        if (button) {
+                            if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
+                                if (!in.IsDown(button)) in.pressedThisFrame.insert(button);
+                                in.down.insert(button);
+                                SetCapture(hwnd);
+                            } else {
+                                in.down.erase(button);
+                                ReleaseCapture();
+                            }
+                        }
+                    }
+                    return 0;
+                }
                 case WM_KILLFOCUS:
                     if (self->input_) self->input_->down.clear();
                     return 0;
@@ -162,7 +189,81 @@ private:
     std::vector<uint32_t> bgra_;
 };
 
+// waveOut output. The engine submits one buffer per simulated frame; a few
+// buffers of silence are queued first so timing jitter does not starve it.
+class WaveOutDevice final : public AudioDevice {
+public:
+    bool Init(int sampleRate) {
+        WAVEFORMATEX fmt{};
+        fmt.wFormatTag = WAVE_FORMAT_PCM;
+        fmt.nChannels = 2;
+        fmt.nSamplesPerSec = static_cast<DWORD>(sampleRate);
+        fmt.wBitsPerSample = 16;
+        fmt.nBlockAlign = 4;
+        fmt.nAvgBytesPerSec = fmt.nSamplesPerSec * 4;
+        return waveOutOpen(&out_, WAVE_MAPPER, &fmt, 0, 0, CALLBACK_NULL) == MMSYSERR_NOERROR;
+    }
+    ~WaveOutDevice() override {
+        if (!out_) return;
+        waveOutReset(out_);
+        for (auto& b : buffers_) {
+            if (b->hdr.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(out_, &b->hdr, sizeof(WAVEHDR));
+        }
+        waveOutClose(out_);
+    }
+    const char* Name() const override { return "waveOut (48 kHz stereo)"; }
+    void Submit(const float* samples, int frames) override {
+        int pending = 0;
+        for (auto& b : buffers_) pending += (b->hdr.dwFlags & WHDR_PREPARED) && !(b->hdr.dwFlags & WHDR_DONE);
+        if (pending == 0) {  // (re)start: prime with ~50 ms of silence
+            std::vector<float> silence(static_cast<size_t>(frames) * 2, 0.0f);
+            for (int i = 0; i < 3; ++i) Queue(silence.data(), frames);
+        } else if (pending > 12) {
+            return;  // running ahead of the device: drop rather than add latency
+        }
+        Queue(samples, frames);
+    }
+
+private:
+    struct Buffer {
+        WAVEHDR hdr{};
+        std::vector<int16_t> data;
+    };
+    void Queue(const float* samples, int frames) {
+        Buffer* free = nullptr;
+        for (auto& b : buffers_) {
+            if (!(b->hdr.dwFlags & WHDR_PREPARED) || (b->hdr.dwFlags & WHDR_DONE)) {
+                free = b.get();
+                break;
+            }
+        }
+        if (!free) {
+            buffers_.push_back(std::make_unique<Buffer>());
+            free = buffers_.back().get();
+        }
+        if (free->hdr.dwFlags & WHDR_PREPARED) waveOutUnprepareHeader(out_, &free->hdr, sizeof(WAVEHDR));
+        free->data.resize(static_cast<size_t>(frames) * 2);
+        for (size_t i = 0; i < free->data.size(); ++i) {
+            float s = samples[i] < -1.0f ? -1.0f : (samples[i] > 1.0f ? 1.0f : samples[i]);
+            free->data[i] = static_cast<int16_t>(s * 32767.0f);
+        }
+        free->hdr = WAVEHDR{};
+        free->hdr.lpData = reinterpret_cast<LPSTR>(free->data.data());
+        free->hdr.dwBufferLength = static_cast<DWORD>(free->data.size() * sizeof(int16_t));
+        waveOutPrepareHeader(out_, &free->hdr, sizeof(WAVEHDR));
+        waveOutWrite(out_, &free->hdr, sizeof(WAVEHDR));
+    }
+    HWAVEOUT out_ = nullptr;
+    std::vector<std::unique_ptr<Buffer>> buffers_;
+};
+
 }  // namespace
+
+std::unique_ptr<AudioDevice> CreateAudioDevice(int sampleRate) {
+    auto d = std::make_unique<WaveOutDevice>();
+    if (!d->Init(sampleRate)) return nullptr;
+    return d;
+}
 
 std::unique_ptr<Window> CreatePlatformWindow(const std::string& title, int width, int height) {
     auto w = std::make_unique<Win32Window>();
@@ -193,6 +294,11 @@ std::string ExecutableDirectory() {
         if (c == '\\') c = '/';
     }
     return path.substr(0, path.rfind('/'));
+}
+
+void PlatformShowError(const std::string& title, const std::string& message) {
+    std::fprintf(stderr, "%s: %s\n", title.c_str(), message.c_str());
+    MessageBoxW(nullptr, Widen(message).c_str(), Widen(title).c_str(), MB_OK | MB_ICONERROR);
 }
 
 void PlatformSetBinaryStdio() {

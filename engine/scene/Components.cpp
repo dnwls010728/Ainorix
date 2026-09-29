@@ -11,6 +11,17 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Velocity>();
     TypeRegistry::Register<PlayerController>();
     TypeRegistry::Register<Tag>();
+    TypeRegistry::Register<Script>();
+    TypeRegistry::Register<Collider>();
+    TypeRegistry::Register<RigidBody>();
+    TypeRegistry::Register<CharacterBody>();
+    TypeRegistry::Register<Prefab>();
+    TypeRegistry::Register<UIText>();
+    TypeRegistry::Register<UIPanel>();
+    TypeRegistry::Register<UIButton>();
+    TypeRegistry::Register<AudioSource>();
+    TypeRegistry::Register<PointLight>();
+    TypeRegistry::Register<CameraFollow>();
 }
 
 }  // namespace oe

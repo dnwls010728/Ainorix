@@ -1,9 +1,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <functional>
+#include <thread>
 
+#include "assets/Assets.h"
 #include "render/Mesh.h"
 #include "render/Renderer.h"
+#include "render/UI.h"
 #include "scene/Components.h"
 
 namespace oe {
@@ -47,107 +51,223 @@ uint32_t Blend(uint32_t dst, const Color& src, float a) {
     return Pack(d * (1.0f - a) + src * a);
 }
 
-struct Light {
+// ----- Lighting ------------------------------------------------------------------
+
+struct DirLight {
     Vec3 dir;  // direction the light travels
     Color color;
 };
 
-struct ScreenVert {
-    float x, y, z;
+struct PointLightData {
+    Vec3 pos;
+    Color color;
+    float range;
 };
 
-class Rasterizer {
-public:
-    Rasterizer(RenderTarget& t, const Mat4& viewProj) : t_(t), viewProj_(viewProj) {}
+// Depth map rendered from the first directional light (orthographic).
+struct ShadowMap {
+    bool enabled = false;
+    int size = 1024;
+    std::vector<float> depth;
+    Mat4 viewProj;
+    float strength = 0.75f;
+    float texelWorld = 0.01f;
 
-    // Clips a triangle (world space) against the near plane and rasterizes it.
-    int DrawTriangle(const Vec3& a, const Vec3& b, const Vec3& c, uint32_t color, EntityId id) {
-        Vec4 in[3] = {viewProj_ * Vec4(a, 1), viewProj_ * Vec4(b, 1), viewProj_ * Vec4(c, 1)};
-        Vec4 poly[4];
-        int count = 0;
-        for (int i = 0; i < 3; ++i) {
-            const Vec4& p = in[i];
-            const Vec4& q = in[(i + 1) % 3];
-            float dp = p.z + p.w, dq = q.z + q.w;  // distance to near plane (z >= -w)
-            if (dp >= 0) poly[count++] = p;
-            if ((dp >= 0) != (dq >= 0)) {
-                float s = dp / (dp - dq);
-                poly[count++] = p + (q - p) * s;
+    // 1 = fully lit, 0 = fully shadowed (3x3 PCF).
+    float Lit(const Vec3& wpos, const Vec3& normal) const {
+        if (!enabled) return 1.0f;
+        Vec4 c = viewProj * Vec4(wpos + normal * (texelWorld * 1.5f), 1.0f);
+        float u = c.x * 0.5f + 0.5f, v = 0.5f - c.y * 0.5f, z = c.z * 0.5f + 0.5f;
+        if (u < 0 || u > 1 || v < 0 || v > 1 || z > 1) return 1.0f;
+        int cx = static_cast<int>(u * static_cast<float>(size)), cy = static_cast<int>(v * static_cast<float>(size));
+        int lit = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                int x = std::clamp(cx + dx, 0, size - 1), y = std::clamp(cy + dy, 0, size - 1);
+                lit += z - 0.002f <= depth[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)];
             }
         }
+        float fraction = static_cast<float>(lit) / 9.0f;
+        return 1.0f - strength * (1.0f - fraction);
+    }
+};
+
+struct Lighting {
+    Color ambient{0, 0, 0};
+    std::vector<DirLight> dirs;
+    std::vector<PointLightData> points;
+    ShadowMap shadow;
+
+    Color At(const Vec3& wpos, const Vec3& n) const {
+        Color c = ambient;
+        for (size_t i = 0; i < dirs.size(); ++i) {
+            float ndl = std::max(0.0f, Dot(n, -dirs[i].dir));
+            if (ndl <= 0) continue;
+            float lit = i == 0 ? shadow.Lit(wpos, n) : 1.0f;
+            c = c + dirs[i].color * (ndl * lit);
+        }
+        for (const PointLightData& p : points) {
+            Vec3 d = p.pos - wpos;
+            float dist = Length(d);
+            if (dist >= p.range || dist < 1e-5f) continue;
+            float ndl = std::max(0.0f, Dot(n, d / dist));
+            float fall = 1.0f - dist / p.range;
+            c = c + p.color * (ndl * fall * fall);
+        }
+        return c;
+    }
+};
+
+// ----- Rasterization ---------------------------------------------------------------
+
+struct Vtx {
+    Vec4 clip;
+    Vec3 wpos;
+    Vec3 nrm;
+    float u = 0, v = 0;
+};
+
+Vtx LerpVtx(const Vtx& a, const Vtx& b, float t) {
+    Vtx r;
+    r.clip = a.clip + (b.clip - a.clip) * t;
+    r.wpos = a.wpos + (b.wpos - a.wpos) * t;
+    r.nrm = a.nrm + (b.nrm - a.nrm) * t;
+    r.u = a.u + (b.u - a.u) * t;
+    r.v = a.v + (b.v - a.v) * t;
+    return r;
+}
+
+struct Material {
+    Color base;
+    const Texture* texture = nullptr;
+    bool unlit = false;
+    bool flat = false;
+    EntityId id = kNullEntity;
+};
+
+enum class Cull { Back, Front };
+
+// Screen-space triangle setup shared by the color and depth-only passes.
+struct Screen {
+    float x, y, z, invW;
+};
+
+// Rasterizes into rows [yMin, yMax). Several rasterizers over disjoint row
+// bands can run in parallel: every pixel is owned by one band and sees the
+// triangles in the same order, so the image is identical to a single thread.
+class Rasterizer {
+public:
+    Rasterizer(int width, int height, float* depth, uint32_t* color, EntityId* ids, int yMin = 0, int yMax = -1)
+        : w_(width), h_(height), yMin_(yMin), yMax_(yMax < 0 ? height : yMax), depth_(depth), color_(color), ids_(ids) {}
+
+    // Clips against the near plane, then rasterizes. `lighting` null = depth only.
+    int Draw(const Vtx in[3], const Material& mat, const Lighting* lighting, Cull cull) {
+        Vtx poly[4];
+        int count = 0;
+        for (int i = 0; i < 3; ++i) {
+            const Vtx& p = in[i];
+            const Vtx& q = in[(i + 1) % 3];
+            float dp = p.clip.z + p.clip.w, dq = q.clip.z + q.clip.w;
+            if (dp >= 0) poly[count++] = p;
+            if ((dp >= 0) != (dq >= 0)) poly[count++] = LerpVtx(p, q, dp / (dp - dq));
+        }
         if (count < 3) return 0;
-        ScreenVert sv[4];
-        for (int i = 0; i < count; ++i) sv[i] = ToScreen(poly[i]);
+        Vec3 faceN = Normalize(Cross(in[1].wpos - in[0].wpos, in[2].wpos - in[0].wpos));
         int drawn = 0;
-        for (int i = 1; i + 1 < count; ++i) drawn += Raster(sv[0], sv[i], sv[i + 1], color, id);
+        for (int i = 1; i + 1 < count; ++i) drawn += Raster(poly[0], poly[i], poly[i + 1], mat, lighting, cull, faceN);
         return drawn;
     }
 
-    void DrawLine(const Vec3& a, const Vec3& b, const Color& color, float alpha) {
-        Vec4 p = viewProj_ * Vec4(a, 1), q = viewProj_ * Vec4(b, 1);
+    void Line(const Vec4& p0, const Vec4& q0, const Color& color, float alpha) {
+        Vec4 p = p0, q = q0;
         float dp = p.z + p.w, dq = q.z + q.w;
         if (dp < 0 && dq < 0) return;
         if (dp < 0) p = p + (q - p) * (dp / (dp - dq));
         else if (dq < 0) q = q + (p - q) * (dq / (dq - dp));
-        ScreenVert s0 = ToScreen(p), s1 = ToScreen(q);
+        Screen s0 = ToScreen(p), s1 = ToScreen(q);
         float dx = s1.x - s0.x, dy = s1.y - s0.y;
         int steps = static_cast<int>(std::max(std::fabs(dx), std::fabs(dy)));
         if (steps > 8192) return;
         for (int i = 0; i <= steps; ++i) {
-            float tt = steps == 0 ? 0.0f : static_cast<float>(i) / static_cast<float>(steps);
-            int x = static_cast<int>(s0.x + dx * tt);
-            int y = static_cast<int>(s0.y + dy * tt);
-            if (x < 0 || y < 0 || x >= t_.width || y >= t_.height) continue;
-            float z = s0.z + (s1.z - s0.z) * tt;
-            size_t idx = static_cast<size_t>(y) * static_cast<size_t>(t_.width) + static_cast<size_t>(x);
-            if (z <= t_.depth[idx] + 1e-4f) t_.color[idx] = Blend(t_.color[idx], color, alpha);
+            float t = steps == 0 ? 0.0f : static_cast<float>(i) / static_cast<float>(steps);
+            int x = static_cast<int>(s0.x + dx * t), y = static_cast<int>(s0.y + dy * t);
+            if (x < 0 || y < yMin_ || x >= w_ || y >= yMax_) continue;
+            float z = s0.z + (s1.z - s0.z) * t;
+            size_t idx = static_cast<size_t>(y) * static_cast<size_t>(w_) + static_cast<size_t>(x);
+            if (z <= depth_[idx] + 1e-4f) color_[idx] = Blend(color_[idx], color, alpha);
         }
     }
 
 private:
-    ScreenVert ToScreen(const Vec4& c) const {
+    Screen ToScreen(const Vec4& c) const {
         float iw = 1.0f / c.w;
-        return {(c.x * iw * 0.5f + 0.5f) * static_cast<float>(t_.width),
-                (0.5f - c.y * iw * 0.5f) * static_cast<float>(t_.height),
-                c.z * iw * 0.5f + 0.5f};
+        return {(c.x * iw * 0.5f + 0.5f) * static_cast<float>(w_), (0.5f - c.y * iw * 0.5f) * static_cast<float>(h_), c.z * iw * 0.5f + 0.5f, iw};
     }
 
-    static float Edge(const ScreenVert& a, const ScreenVert& b, float px, float py) {
-        return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
-    }
+    static float Edge(const Screen& a, const Screen& b, float px, float py) { return (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x); }
 
-    int Raster(const ScreenVert& v0, const ScreenVert& v1, const ScreenVert& v2, uint32_t color, EntityId id) {
-        float area = Edge(v0, v1, v2.x, v2.y);
-        if (area >= 0) return 0;  // back face (counter-clockwise in NDC == clockwise on screen)
-        int minX = std::max(0, static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))));
-        int maxX = std::min(t_.width - 1, static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))));
-        int minY = std::max(0, static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))));
-        int maxY = std::min(t_.height - 1, static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))));
-        if (minX > maxX || minY > maxY) return 0;
-        float inv = 1.0f / area;
+    int Raster(const Vtx& a, const Vtx& b, const Vtx& c, const Material& mat, const Lighting* lighting, Cull cull, const Vec3& faceN) {
+        Screen s0 = ToScreen(a.clip), s1 = ToScreen(b.clip), s2 = ToScreen(c.clip);
+        float area = Edge(s0, s1, s2.x, s2.y);
+        if (area == 0 || (cull == Cull::Back && area > 0) || (cull == Cull::Front && area < 0)) return 0;
+        int minX = std::max(0, static_cast<int>(std::floor(std::min({s0.x, s1.x, s2.x}))));
+        int maxX = std::min(w_ - 1, static_cast<int>(std::ceil(std::max({s0.x, s1.x, s2.x}))));
+        int minY = std::max(yMin_, static_cast<int>(std::floor(std::min({s0.y, s1.y, s2.y}))));
+        int maxY = std::min(yMax_ - 1, static_cast<int>(std::ceil(std::max({s0.y, s1.y, s2.y}))));
+        if (minX > maxX || minY > maxY) return 1;  // front facing, just not in this band
+        const float inv = 1.0f / area;
         for (int y = minY; y <= maxY; ++y) {
             float py = static_cast<float>(y) + 0.5f;
-            size_t row = static_cast<size_t>(y) * static_cast<size_t>(t_.width);
+            size_t row = static_cast<size_t>(y) * static_cast<size_t>(w_);
             for (int x = minX; x <= maxX; ++x) {
                 float px = static_cast<float>(x) + 0.5f;
-                float w0 = Edge(v1, v2, px, py) * inv;
-                float w1 = Edge(v2, v0, px, py) * inv;
-                float w2 = Edge(v0, v1, px, py) * inv;
+                float w0 = Edge(s1, s2, px, py) * inv;
+                float w1 = Edge(s2, s0, px, py) * inv;
+                float w2 = Edge(s0, s1, px, py) * inv;
                 if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-                float z = w0 * v0.z + w1 * v1.z + w2 * v2.z;
+                float z = w0 * s0.z + w1 * s1.z + w2 * s2.z;
                 size_t idx = row + static_cast<size_t>(x);
-                if (z < 0.0f || z >= t_.depth[idx]) continue;
-                t_.depth[idx] = z;
-                t_.color[idx] = color;
-                t_.ids[idx] = id;
+                if (z < 0.0f || z >= depth_[idx]) continue;
+                depth_[idx] = z;
+                if (!lighting) continue;
+                // Perspective-correct attribute weights.
+                float p0 = w0 * s0.invW, p1 = w1 * s1.invW, p2 = w2 * s2.invW;
+                float norm = 1.0f / (p0 + p1 + p2);
+                p0 *= norm;
+                p1 *= norm;
+                p2 *= norm;
+                Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
+                Vec3 n = mat.flat ? faceN : Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
+                Color base = mat.base;
+                if (mat.texture) base = base * mat.texture->Sample(a.u * p0 + b.u * p1 + c.u * p2, a.v * p0 + b.v * p1 + c.v * p2);
+                color_[idx] = Pack(mat.unlit ? base : base * lighting->At(wpos, n));
+                ids_[idx] = mat.id;
             }
         }
         return 1;
     }
 
-    RenderTarget& t_;
-    Mat4 viewProj_;
+    int w_, h_, yMin_, yMax_;
+    float* depth_;
+    uint32_t* color_;
+    EntityId* ids_;
 };
+
+int g_maxRenderThreads = 16;
+
+// Runs fn(bandIndex, y0, y1) over horizontal bands on worker threads.
+void ParallelBands(int height, const std::function<void(int, int, int)>& fn) {
+    unsigned hw = std::min(static_cast<unsigned>(std::max(1, g_maxRenderThreads)), std::max(1u, std::thread::hardware_concurrency()));
+    int bands = static_cast<int>(std::min<unsigned>(std::min(hw, 16u), static_cast<unsigned>(std::max(1, height / 32))));
+    if (bands <= 1) {
+        fn(0, 0, height);
+        return;
+    }
+    std::vector<std::thread> threads;
+    for (int b = 1; b < bands; ++b) threads.emplace_back(fn, b, height * b / bands, height * (b + 1) / bands);
+    fn(0, 0, height / bands);
+    for (std::thread& t : threads) t.join();
+}
 
 void DrawOutline(RenderTarget& t, EntityId id) {
     const Color orange(1.0f, 0.62f, 0.1f);
@@ -170,7 +290,39 @@ void DrawOutline(RenderTarget& t, EntityId id) {
     }
 }
 
+// A mesh instance ready to draw.
+struct DrawItem {
+    EntityId id;
+    std::shared_ptr<const Mesh> mesh;
+    Mat4 world;
+    Mat4 normalMatrix;
+    Color tint;
+    const Texture* textureOverride = nullptr;
+    std::shared_ptr<const Texture> textureHold;
+    bool unlit, flat, castShadows, error;
+};
+
+// Transforms mesh vertices into world space once per item.
+struct Transformed {
+    std::vector<Vec3> wpos;
+    std::vector<Vec3> nrm;
+};
+
+Transformed TransformItem(const DrawItem& item) {
+    Transformed t;
+    const Mesh& m = *item.mesh;
+    t.wpos.resize(m.positions.size());
+    t.nrm.resize(m.positions.size());
+    for (size_t i = 0; i < m.positions.size(); ++i) {
+        t.wpos[i] = item.world.TransformPoint(m.positions[i]);
+        t.nrm[i] = i < m.normals.size() ? Normalize(item.normalMatrix.TransformDir(m.normals[i])) : Vec3(0, 1, 0);
+    }
+    return t;
+}
+
 }  // namespace
+
+void SetMaxRenderThreads(int threads) { g_maxRenderThreads = threads; }
 
 RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view, RenderTarget& target) {
     auto start = std::chrono::steady_clock::now();
@@ -179,54 +331,176 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
-    std::vector<Light> lights;
-    Color ambient(0, 0, 0);
-    for (const auto& kv : scene.Pool<DirectionalLight>()) {
-        Light l;
-        l.dir = Normalize(scene.WorldMatrix(kv.first).TransformDir(Vec3(0, 0, -1)));
-        l.color = kv.second.color * kv.second.intensity;
-        ambient = ambient + kv.second.ambient;
-        lights.push_back(l);
-    }
-    if (lights.empty()) {
-        lights.push_back({Normalize(Vec3(-0.4f, -1.0f, -0.3f)), Color(1, 1, 1)});
-        ambient = Color(0.25f, 0.25f, 0.28f);
-    }
-
-    Rasterizer raster(target, view.proj * view.view);
+    // ----- Draw list
+    std::vector<DrawItem> items;
     for (const auto& kv : scene.Pool<MeshRenderer>()) {
         const MeshRenderer& mr = kv.second;
         if (!mr.visible) continue;
-        const Mesh* mesh = GetBuiltinMesh(mr.mesh);
-        if (!mesh) continue;
-        Mat4 world = scene.WorldMatrix(kv.first);
-        std::vector<Vec3> wp(mesh->positions.size());
-        for (size_t i = 0; i < wp.size(); ++i) wp[i] = world.TransformPoint(mesh->positions[i]);
-        for (size_t i = 0; i + 2 < mesh->indices.size(); i += 3) {
-            const Vec3& a = wp[mesh->indices[i]];
-            const Vec3& b = wp[mesh->indices[i + 1]];
-            const Vec3& c = wp[mesh->indices[i + 2]];
-            Vec3 n = Normalize(Cross(b - a, c - a));
-            Color lit = ambient;
-            for (const Light& l : lights) lit = lit + l.color * std::max(0.0f, Dot(n, -l.dir));
-            stats.triangles += raster.DrawTriangle(a, b, c, Pack(mr.color * lit), kv.first);
+        DrawItem it;
+        it.id = kv.first;
+        it.world = scene.WorldMatrix(kv.first);
+        it.normalMatrix = it.world.Inverse().Transposed();
+        it.tint = mr.color;
+        it.unlit = mr.unlit;
+        it.flat = mr.shading == "flat";
+        it.castShadows = mr.castShadows;
+        it.error = false;
+        it.mesh = assets_ ? assets_->GetMesh(mr.mesh) : std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), GetBuiltinMesh(mr.mesh));
+        if (!it.mesh) {
+            // Missing/broken asset: a loud magenta cube so it shows up in screenshots.
+            it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), GetBuiltinMesh("cube"));
+            it.tint = Color(1, 0, 1);
+            it.unlit = true;
+            it.error = true;
         }
-        ++stats.drawnEntities;
+        if (!mr.texture.empty() && assets_ && !it.error) {
+            it.textureHold = assets_->GetTexture(mr.texture);
+            it.textureOverride = it.textureHold.get();
+        }
+        items.push_back(std::move(it));
     }
 
+    // ----- Lights
+    Lighting lighting;
+    bool shadows = false;
+    float shadowStrength = 0.75f;
+    for (const auto& kv : scene.Pool<DirectionalLight>()) {
+        DirLight l;
+        l.dir = Normalize(scene.WorldMatrix(kv.first).TransformDir(Vec3(0, 0, -1)));
+        l.color = kv.second.color * kv.second.intensity;
+        lighting.ambient = lighting.ambient + kv.second.ambient;
+        if (lighting.dirs.empty()) {
+            shadows = kv.second.shadows;
+            shadowStrength = kv.second.shadowStrength;
+        }
+        lighting.dirs.push_back(l);
+    }
+    if (lighting.dirs.empty()) {
+        lighting.dirs.push_back({Normalize(Vec3(-0.4f, -1.0f, -0.3f)), Color(1, 1, 1)});
+        lighting.ambient = Color(0.25f, 0.25f, 0.28f);
+    }
+    for (const auto& kv : scene.Pool<PointLight>()) {
+        lighting.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity, std::max(0.01f, kv.second.range)});
+    }
+
+    std::vector<Transformed> transformed;
+    transformed.reserve(items.size());
+    for (const DrawItem& it : items) transformed.push_back(TransformItem(it));
+
+    // ----- Shadow map (first directional light, fitted to the shadow casters + receivers)
+    if (shadows && !items.empty()) {
+        Vec3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+        bool anyCaster = false;
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].unlit) continue;
+            anyCaster = anyCaster || items[i].castShadows;
+            for (const Vec3& p : transformed[i].wpos) {
+                lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
+                hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
+            }
+        }
+        if (anyCaster && lo.x <= hi.x) {
+            ShadowMap& sm = lighting.shadow;
+            sm.enabled = true;
+            sm.strength = shadowStrength;
+            Vec3 center = (lo + hi) * 0.5f;
+            float radius = std::max(0.5f, Length(hi - lo) * 0.5f);
+            Vec3 dir = lighting.dirs[0].dir;
+            Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+            Mat4 lview = Mat4::LookAt(center - dir * (radius * 2.0f), center, up);
+            Mat4 lproj = Mat4::Orthographic(radius, 1.0f, 0.01f, radius * 4.0f);
+            sm.viewProj = lproj * lview;
+            sm.texelWorld = 2.0f * radius / static_cast<float>(sm.size);
+            sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
+            // Light-space vertices once, then rasterize depth in parallel bands.
+            std::vector<std::vector<Vec4>> lightClip(items.size());
+            for (size_t i = 0; i < items.size(); ++i) {
+                if (!items[i].castShadows || items[i].unlit) continue;
+                lightClip[i].reserve(transformed[i].wpos.size());
+                for (const Vec3& p : transformed[i].wpos) lightClip[i].push_back(sm.viewProj * Vec4(p, 1.0f));
+            }
+            ParallelBands(sm.size, [&](int, int y0, int y1) {
+                uint32_t dummyColor = 0;
+                EntityId dummyId = kNullEntity;
+                Rasterizer shadowRaster(sm.size, sm.size, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
+                Material none;
+                for (size_t i = 0; i < items.size(); ++i) {
+                    if (lightClip[i].empty()) continue;
+                    const Mesh& m = *items[i].mesh;
+                    for (size_t k = 0; k + 2 < m.indices.size(); k += 3) {
+                        Vtx v[3];
+                        for (int j = 0; j < 3; ++j) v[j].clip = lightClip[i][m.indices[k + static_cast<size_t>(j)]];
+                        // Back faces into the shadow map: avoids self-shadowing acne on lit faces.
+                        shadowRaster.Draw(v, none, nullptr, Cull::Front);
+                    }
+                }
+            });
+        }
+    }
+
+    // ----- Main pass
+    const Mat4 viewProj = view.proj * view.view;
+    std::vector<std::vector<Vec4>> clip(items.size());
+    for (size_t i = 0; i < items.size(); ++i) {
+        clip[i].reserve(transformed[i].wpos.size());
+        for (const Vec3& p : transformed[i].wpos) clip[i].push_back(viewProj * Vec4(p, 1.0f));
+    }
+    int bandTriangles = 0;
+    ParallelBands(target.height, [&](int band, int y0, int y1) {
+      Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), y0, y1);
+      int drawn = 0;
+      for (size_t i = 0; i < items.size(); ++i) {
+        const DrawItem& it = items[i];
+        const Mesh& m = *it.mesh;
+        const Transformed& tr = transformed[i];
+        for (const Submesh& sub : m.submeshes) {
+            Material mat;
+            mat.base = it.tint * sub.baseColor;
+            mat.texture = it.textureOverride ? it.textureOverride : (sub.texture >= 0 && sub.texture < static_cast<int>(m.textures.size()) ? m.textures[static_cast<size_t>(sub.texture)].get() : nullptr);
+            mat.unlit = it.unlit;
+            mat.flat = it.flat;
+            mat.id = it.id;
+            for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
+                Vtx v[3];
+                for (int j = 0; j < 3; ++j) {
+                    uint32_t idx = m.indices[k + static_cast<uint32_t>(j)];
+                    v[j].wpos = tr.wpos[idx];
+                    v[j].nrm = tr.nrm[idx];
+                    v[j].clip = clip[i][idx];
+                    if (idx * 2 + 1 < m.uvs.size()) {
+                        v[j].u = m.uvs[idx * 2];
+                        v[j].v = m.uvs[idx * 2 + 1];
+                    }
+                }
+                drawn += raster.Draw(v, mat, &lighting, Cull::Back);
+            }
+        }
+      }
+      if (band == 0) bandTriangles = drawn;
+    });
+    stats.triangles = bandTriangles;
+    stats.drawnEntities = static_cast<int>(items.size());
+
+    // ----- Overlays
+    Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data());
+    auto line = [&](const Vec3& a, const Vec3& b, const Color& c, float alpha) {
+        raster.Line(viewProj * Vec4(a, 1.0f), viewProj * Vec4(b, 1.0f), c, alpha);
+    };
     if (view.drawGrid) {
         const Color gridColor(0.55f, 0.58f, 0.62f);
         for (int i = -20; i <= 20; ++i) {
             float f = static_cast<float>(i);
             if (i == 0) continue;
-            raster.DrawLine(Vec3(f, 0, -20), Vec3(f, 0, 20), gridColor, 0.25f);
-            raster.DrawLine(Vec3(-20, 0, f), Vec3(20, 0, f), gridColor, 0.25f);
+            line(Vec3(f, 0, -20), Vec3(f, 0, 20), gridColor, 0.25f);
+            line(Vec3(-20, 0, f), Vec3(20, 0, f), gridColor, 0.25f);
         }
-        raster.DrawLine(Vec3(-20, 0, 0), Vec3(20, 0, 0), Color(0.9f, 0.25f, 0.25f), 0.8f);  // X axis
-        raster.DrawLine(Vec3(0, 0, -20), Vec3(0, 0, 20), Color(0.25f, 0.45f, 0.95f), 0.8f);  // Z axis
+        line(Vec3(-20, 0, 0), Vec3(20, 0, 0), Color(0.9f, 0.25f, 0.25f), 0.8f);  // X axis
+        line(Vec3(0, 0, -20), Vec3(0, 0, 20), Color(0.25f, 0.45f, 0.95f), 0.8f);  // Z axis
     }
+    for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
 
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);
+    if (view.drawUI) DrawUI(scene, target);
 
     stats.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return stats;
@@ -235,18 +509,21 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
 bool MakeSceneView(const Scene& scene, float aspect, RenderView& out) {
     for (const auto& kv : scene.Pool<Camera>()) {
         if (!kv.second.active) continue;
+        const Camera& cam = kv.second;
         Mat4 world = scene.WorldMatrix(kv.first);
         Vec3 eye = world.TransformPoint(Vec3(0, 0, 0));
         Vec3 fwd = Normalize(world.TransformDir(Vec3(0, 0, -1)));
         Vec3 up = Normalize(world.TransformDir(Vec3(0, 1, 0)));
         out.view = Mat4::LookAt(eye, eye + fwd, up);
-        out.proj = Mat4::Perspective(Radians(kv.second.fov), aspect, kv.second.nearPlane, kv.second.farPlane);
+        out.proj = cam.projection == "orthographic" ? Mat4::Orthographic(std::max(0.01f, cam.orthoSize), aspect, cam.nearPlane, cam.farPlane)
+                                                    : Mat4::Perspective(Radians(cam.fov), aspect, cam.nearPlane, cam.farPlane);
         out.eye = eye;
-        out.clearColor = kv.second.clearColor;
+        out.clearColor = cam.clearColor;
         out.cameraEntity = kv.first;
         return true;
     }
     out = MakeLookAtView(Vec3(6, 5, 8), Vec3(0, 0, 0), 60.0f, aspect);
+    out.drawUI = true;  // still the game view, just without a camera entity
     return false;
 }
 
@@ -255,6 +532,7 @@ RenderView MakeLookAtView(const Vec3& eye, const Vec3& target, float fovDeg, flo
     v.view = Mat4::LookAt(eye, target, Vec3(0, 1, 0));
     v.proj = Mat4::Perspective(Radians(fovDeg), aspect, 0.05f, 1000.0f);
     v.eye = eye;
+    v.drawUI = false;  // free cameras (editor scene view) show the world only
     return v;
 }
 

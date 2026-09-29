@@ -131,6 +131,47 @@ struct Mat4 {
         r.at(3, 2) = -1.0f;
         return r;
     }
+    static Mat4 Orthographic(float halfHeight, float aspect, float zNear, float zFar) {
+        Mat4 r;
+        float halfWidth = halfHeight * aspect;
+        r.at(0, 0) = 1.0f / halfWidth;
+        r.at(1, 1) = 1.0f / halfHeight;
+        r.at(2, 2) = -2.0f / (zFar - zNear);
+        r.at(2, 3) = -(zFar + zNear) / (zFar - zNear);
+        return r;
+    }
+    Mat4 Transposed() const {
+        Mat4 r;
+        for (int c = 0; c < 4; ++c)
+            for (int rr = 0; rr < 4; ++rr) r.at(rr, c) = at(c, rr);
+        return r;
+    }
+    // General inverse (cofactor expansion). Returns identity if singular.
+    Mat4 Inverse() const {
+        const float* a = m;
+        float inv[16];
+        inv[0] = a[5] * a[10] * a[15] - a[5] * a[11] * a[14] - a[9] * a[6] * a[15] + a[9] * a[7] * a[14] + a[13] * a[6] * a[11] - a[13] * a[7] * a[10];
+        inv[4] = -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] + a[8] * a[6] * a[15] - a[8] * a[7] * a[14] - a[12] * a[6] * a[11] + a[12] * a[7] * a[10];
+        inv[8] = a[4] * a[9] * a[15] - a[4] * a[11] * a[13] - a[8] * a[5] * a[15] + a[8] * a[7] * a[13] + a[12] * a[5] * a[11] - a[12] * a[7] * a[9];
+        inv[12] = -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] + a[8] * a[5] * a[14] - a[8] * a[6] * a[13] - a[12] * a[5] * a[10] + a[12] * a[6] * a[9];
+        inv[1] = -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] + a[9] * a[2] * a[15] - a[9] * a[3] * a[14] - a[13] * a[2] * a[11] + a[13] * a[3] * a[10];
+        inv[5] = a[0] * a[10] * a[15] - a[0] * a[11] * a[14] - a[8] * a[2] * a[15] + a[8] * a[3] * a[14] + a[12] * a[2] * a[11] - a[12] * a[3] * a[10];
+        inv[9] = -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] + a[8] * a[1] * a[15] - a[8] * a[3] * a[13] - a[12] * a[1] * a[11] + a[12] * a[3] * a[9];
+        inv[13] = a[0] * a[9] * a[14] - a[0] * a[10] * a[13] - a[8] * a[1] * a[14] + a[8] * a[2] * a[13] + a[12] * a[1] * a[10] - a[12] * a[2] * a[9];
+        inv[2] = a[1] * a[6] * a[15] - a[1] * a[7] * a[14] - a[5] * a[2] * a[15] + a[5] * a[3] * a[14] + a[13] * a[2] * a[7] - a[13] * a[3] * a[6];
+        inv[6] = -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] + a[4] * a[2] * a[15] - a[4] * a[3] * a[14] - a[12] * a[2] * a[7] + a[12] * a[3] * a[6];
+        inv[10] = a[0] * a[5] * a[15] - a[0] * a[7] * a[13] - a[4] * a[1] * a[15] + a[4] * a[3] * a[13] + a[12] * a[1] * a[7] - a[12] * a[3] * a[5];
+        inv[14] = -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] + a[4] * a[1] * a[14] - a[4] * a[2] * a[13] - a[12] * a[1] * a[6] + a[12] * a[2] * a[5];
+        inv[3] = -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] + a[5] * a[2] * a[11] - a[5] * a[3] * a[10] - a[9] * a[2] * a[7] + a[9] * a[3] * a[6];
+        inv[7] = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] - a[4] * a[2] * a[11] + a[4] * a[3] * a[10] + a[8] * a[2] * a[7] - a[8] * a[3] * a[6];
+        inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] + a[4] * a[1] * a[11] - a[4] * a[3] * a[9] - a[8] * a[1] * a[7] + a[8] * a[3] * a[5];
+        inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] - a[4] * a[1] * a[10] + a[4] * a[2] * a[9] + a[8] * a[1] * a[6] - a[8] * a[2] * a[5];
+        float det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
+        Mat4 r;
+        if (std::fabs(det) < 1e-12f) return r;
+        for (int i = 0; i < 16; ++i) r.m[i] = inv[i] / det;
+        return r;
+    }
     static Mat4 LookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
         Vec3 f = Normalize(target - eye);
         Vec3 s = Normalize(Cross(f, up));
@@ -143,6 +184,12 @@ struct Mat4 {
         return r;
     }
 };
+
+// Euler angles (degrees, no roll) that point the local -Z axis along `dir`.
+inline Vec3 EulerLookDirection(const Vec3& dir) {
+    Vec3 d = Normalize(dir);
+    return Vec3(Degrees(std::asin(Clamp(d.y, -1.0f, 1.0f))), Degrees(std::atan2(-d.x, -d.z)), 0.0f);
+}
 
 // Forward direction (-Z rotated) for euler rotation in degrees.
 inline Vec3 ForwardFromEuler(const Vec3& deg) { return Normalize(Mat4::RotationEuler(deg).TransformDir(Vec3(0, 0, -1))); }

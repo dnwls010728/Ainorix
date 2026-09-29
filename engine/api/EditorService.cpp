@@ -7,6 +7,7 @@
 #include "app/Engine.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 
 namespace oe {
@@ -122,8 +123,9 @@ HttpResponse HandleEditorRequest(Engine& engine, const std::string& editorDir, c
         Vec3 target = ParseVec(req.Query("target"), Vec3(0, 0, 0));
         float fov = static_cast<float>(std::atof(req.Query("fov", "60").c_str()));
         bool grid = req.Query("grid") == "1";
+        bool colliders = req.Query("colliders") == "1";
         EntityId sel = static_cast<EntityId>(std::strtoul(req.Query("sel", "0").c_str(), nullptr, 10));
-        auto future = engine.PostJob([&engine, w, h, game, eye, target, fov, grid, sel] {
+        auto future = engine.PostJob([&engine, w, h, game, eye, target, fov, grid, colliders, sel] {
             RenderTarget rt;
             rt.Resize(w, h);
             float aspect = static_cast<float>(w) / static_cast<float>(h);
@@ -136,6 +138,8 @@ HttpResponse HandleEditorRequest(Engine& engine, const std::string& editorDir, c
                 view.drawGrid = grid;
             }
             view.highlight = sel;
+            if (colliders) AppendColliderLines(engine.GetScene(), view.lines);
+            engine.AppendDebugLines(view.lines);
             engine.Renderer().Render(engine.GetScene(), view, rt);
             return EncodePng(rt.ToImage());
         });

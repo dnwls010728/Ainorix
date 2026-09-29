@@ -25,6 +25,11 @@ struct RenderTarget {
     uint64_t Hash() const;
 };
 
+struct DebugLine {
+    Vec3 a, b;
+    Color color;
+};
+
 struct RenderView {
     Mat4 view;
     Mat4 proj;
@@ -34,6 +39,8 @@ struct RenderView {
     // Editor overlays.
     bool drawGrid = false;
     EntityId highlight = kNullEntity;
+    std::vector<DebugLine> lines;  // drawn after geometry (depth tested)
+    bool drawUI = true;            // screen-space UIText/UIPanel/UIButton
 };
 
 struct RenderStats {
@@ -53,11 +60,22 @@ public:
     virtual RenderStats Render(const Scene& scene, const RenderView& view, RenderTarget& target) = 0;
 };
 
+class AssetManager;
+
 class SoftwareRenderer final : public IRenderer {
 public:
+    // `assets` resolves model files and textures; null = built-in meshes only.
+    explicit SoftwareRenderer(AssetManager* assets = nullptr) : assets_(assets) {}
     const char* Name() const override { return "software"; }
     RenderStats Render(const Scene& scene, const RenderView& view, RenderTarget& target) override;
+
+private:
+    AssetManager* assets_;
 };
+
+// Upper bound for the software renderer's worker threads (default 16). The
+// output is identical for any value; tests use it to prove that.
+void SetMaxRenderThreads(int threads);
 
 // Builds the view from the scene's first active camera. Returns false (and a
 // sensible default view) when the scene has no camera.

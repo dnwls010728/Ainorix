@@ -1,0 +1,2 @@
+cgltf.h v1.15 from https://github.com/jkuhlmann/cgltf, unmodified. License: MIT (LICENSE).
+SHA-256: e378a21c084bf1f288bb799de827bb26906efb024255f1ecf1705ea13f11c6ec

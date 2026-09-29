@@ -48,6 +48,12 @@ bool FileExists(const std::string& path) {
     return fs::exists(U8Path(path), ec);
 }
 
+int64_t FileModifiedTime(const std::string& path) {
+    std::error_code ec;
+    auto t = fs::last_write_time(U8Path(path), ec);
+    return ec ? 0 : static_cast<int64_t>(t.time_since_epoch().count());
+}
+
 bool IsDirectory(const std::string& path) {
     std::error_code ec;
     return fs::is_directory(U8Path(path), ec);
@@ -56,6 +62,19 @@ bool IsDirectory(const std::string& path) {
 bool CreateDirectories(const std::string& path) {
     std::error_code ec;
     fs::create_directories(U8Path(path), ec);
+    return !ec;
+}
+
+bool CopyFileTo(const std::string& from, const std::string& to) {
+    std::error_code ec;
+    fs::path dst = U8Path(to);
+    if (dst.has_parent_path()) fs::create_directories(dst.parent_path(), ec);
+    return fs::copy_file(U8Path(from), dst, fs::copy_options::overwrite_existing, ec) && !ec;
+}
+
+bool RemoveAll(const std::string& path) {
+    std::error_code ec;
+    fs::remove_all(U8Path(path), ec);
     return !ec;
 }
 

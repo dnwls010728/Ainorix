@@ -2,5 +2,6 @@ build/
 out/
 .vs/
 *.user
-*.png
-!docs/**/*.png
+# stray screenshots in the repo root (project textures are tracked)
+/*.png
+dist/

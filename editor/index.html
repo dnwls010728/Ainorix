@@ -7,74 +7,129 @@
 <link rel="stylesheet" href="editor.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-save" viewBox="0 0 16 16"><path d="M3 2h8l3 3v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z M5 2v4h5V2 M5 14v-4h6v4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 16 16"><path d="M5 3 2 6l3 3 M2 6h7a4 4 0 0 1 0 8H6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 16 16"><path d="m11 3 3 3-3 3 M14 6H7a4 4 0 0 0 0 8h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.5l8.2-5.2a.6.6 0 0 0 0-1L5.4 2.3a.6.6 0 0 0-.9.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3" height="11" rx=".7" fill="currentColor"/><rect x="9.5" y="2.5" width="3" height="11" rx=".7" fill="currentColor"/></symbol>
+    <symbol id="i-step" viewBox="0 0 16 16"><path d="M3 2.8v10.4a.6.6 0 0 0 .9.5l7-5.2a.6.6 0 0 0 0-1l-7-5.2a.6.6 0 0 0-.9.5z" fill="currentColor"/><rect x="11.5" y="2.5" width="2" height="11" rx=".6" fill="currentColor"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 16 16"><path d="M2 5.5h12M2 10.5h12M5.5 2v12M10.5 2v12" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="i-box" viewBox="0 0 16 16"><path d="M8 1.8 14 5v6l-6 3.2L2 11V5z M2 5l6 3.2L14 5 M8 8.2v6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-dasharray="2 1.2"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m10.5 10.5 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
 <header id="toolbar">
-  <div class="brand">OwnEngine <span id="sceneName" class="muted"></span><span id="dirty" class="dirty" hidden>●</span></div>
-  <div class="group">
-    <button id="btnSave" title="Save scene (Ctrl+S)">Save</button>
-    <button id="btnUndo" title="Undo (Ctrl+Z)">Undo</button>
-    <button id="btnRedo" title="Redo (Ctrl+Y)">Redo</button>
+  <div class="tb-left">
+    <div class="brand"><span class="logo">OE</span><span class="brand-name">OwnEngine</span></div>
+    <div class="scene-chip" title="Current scene">
+      <span id="sceneName">—</span>
+      <span id="dirty" class="dirty" hidden title="Unsaved changes (Ctrl+S)">● unsaved</span>
+    </div>
+    <div class="btn-group">
+      <button id="btnSave" class="icon-btn" title="Save scene (Ctrl+S)"><svg><use href="#i-save"/></svg><span class="lbl">Save</span></button>
+      <button id="btnUndo" class="icon-btn" title="Undo (Ctrl+Z)"><svg><use href="#i-undo"/></svg></button>
+      <button id="btnRedo" class="icon-btn" title="Redo (Ctrl+Y)"><svg><use href="#i-redo"/></svg></button>
+    </div>
   </div>
-  <div class="group">
-    <button id="btnPlay" class="accent" title="Play">▶ Play</button>
-    <button id="btnPause" title="Pause">❚❚</button>
-    <button id="btnStep" title="Step one frame">Step</button>
-    <button id="btnStop" title="Stop and restore scene">■ Stop</button>
-    <span id="simInfo" class="muted mono"></span>
+
+  <div class="tb-center">
+    <div class="btn-group play-group">
+      <button id="btnPlay" class="icon-btn play" title="Play (Ctrl+P)"><svg><use href="#i-play"/></svg><span class="lbl">Play</span></button>
+      <button id="btnPause" class="icon-btn" title="Pause"><svg><use href="#i-pause"/></svg></button>
+      <button id="btnStep" class="icon-btn" title="Advance one frame (1/60 s)"><svg><use href="#i-step"/></svg></button>
+      <button id="btnStop" class="icon-btn stop" title="Stop and restore the scene"><svg><use href="#i-stop"/></svg></button>
+    </div>
+    <div id="simInfo" class="sim-info mono" title="Simulation frame and time"></div>
   </div>
-  <div class="group">
-    <label class="seg"><input type="radio" name="view" value="scene" checked> Scene</label>
-    <label class="seg"><input type="radio" name="view" value="game"> Game</label>
-    <label class="check"><input type="checkbox" id="chkGrid" checked> Grid</label>
-  </div>
-  <div class="group right">
-    <span id="conn" class="muted">connecting…</span>
+
+  <div class="tb-right">
+    <div class="segmented" role="radiogroup" aria-label="View">
+      <label title="Free editor camera"><input type="radio" name="view" value="scene" checked><span>Scene</span></label>
+      <label title="What the game camera sees; keys and clicks go to the game while playing"><input type="radio" name="view" value="game"><span>Game</span></label>
+    </div>
+    <label class="toggle-chip" title="Ground grid (Scene view)"><input type="checkbox" id="chkGrid" checked><svg><use href="#i-grid"/></svg><span>Grid</span></label>
+    <label class="toggle-chip" title="Collider wireframes: green solid, yellow trigger, cyan character"><input type="checkbox" id="chkColliders"><svg><use href="#i-box"/></svg><span>Colliders</span></label>
+    <div class="ui-scale" title="Interface size">
+      <button id="btnZoomOut" class="icon-btn small" aria-label="Smaller interface">A−</button>
+      <button id="btnZoomIn" class="icon-btn small" aria-label="Larger interface">A+</button>
+    </div>
+    <span id="conn" class="conn"><i></i><span>connecting…</span></span>
   </div>
 </header>
 
 <main id="layout">
   <section id="hierarchy" class="panel">
     <div class="panel-title">
-      Hierarchy
-      <select id="addEntity" title="Add entity">
-        <option value="">+ Add</option>
-        <option value="empty">Empty</option>
-        <option value="cube">Cube</option>
-        <option value="sphere">Sphere</option>
-        <option value="plane">Plane</option>
-        <option value="pyramid">Pyramid</option>
-        <option value="camera">Camera</option>
-        <option value="light">Directional Light</option>
-      </select>
+      <span>Hierarchy</span><span id="entCount" class="count"></span>
+      <div class="menu-wrap">
+        <button id="btnAdd" class="icon-btn small accent-ghost" title="Add entity" aria-haspopup="true"><svg><use href="#i-plus"/></svg><span>Add</span></button>
+        <div id="addMenu" class="menu" hidden></div>
+      </div>
     </div>
-    <ul id="tree" class="tree" tabindex="0"></ul>
+    <div class="search">
+      <svg><use href="#i-search"/></svg>
+      <input id="treeFilter" type="text" placeholder="Filter by name or component" spellcheck="false" autocomplete="off">
+    </div>
+    <ul id="tree" class="tree" tabindex="0" role="tree" aria-label="Scene entities"></ul>
   </section>
+
+  <div class="splitter v" data-split="hier" aria-hidden="true"></div>
 
   <section id="viewportPanel" class="panel">
     <div id="viewport" tabindex="0">
       <img id="frame" alt="viewport" draggable="false">
-      <div id="viewHelp" class="overlay muted">Drag: orbit · Right/Shift-drag: pan · Wheel: zoom · Click: select · F: focus</div>
-      <div id="playHint" class="overlay bottom" hidden>Game view focused: W A S D / arrows / Space are sent to the engine</div>
+      <div class="vp-top">
+        <span id="viewBadge" class="badge">Scene</span>
+        <span id="playBadge" class="badge play" hidden>● PLAYING — edits are reverted on Stop</span>
+        <span id="selBadge" class="badge sel" hidden></span>
+      </div>
+      <div id="viewHelp" class="vp-help">
+        <span><kbd>Drag</kbd> orbit</span><span><kbd>Right-drag</kbd> pan</span><span><kbd>Wheel</kbd> zoom</span>
+        <span><kbd>Click</kbd> select</span><span><kbd>F</kbd> focus</span><span><kbd>Del</kbd> delete</span>
+      </div>
+      <div id="playHint" class="vp-help game" hidden>
+        <span><kbd>W A S D</kbd> <kbd>↑↓←→</kbd> <kbd>Space</kbd> go to the game</span><span><kbd>Click</kbd> UI buttons</span>
+      </div>
+      <div id="offline" class="vp-offline" hidden>
+        <div><strong>Engine offline</strong><br><span>Start it with <code>oe editor &lt;project&gt;</code> — reconnecting…</span></div>
+      </div>
     </div>
   </section>
 
+  <div class="splitter v" data-split="insp" aria-hidden="true"></div>
+
   <section id="inspector" class="panel">
-    <div class="panel-title">Inspector</div>
-    <div id="inspectorBody" class="inspector-body"><p class="muted pad">Select an entity.</p></div>
+    <div class="panel-title"><span>Inspector</span></div>
+    <div id="inspectorBody" class="inspector-body"></div>
   </section>
+
+  <div class="splitter h" data-split="cons" aria-hidden="true"></div>
 
   <section id="console" class="panel">
     <div class="panel-title">
-      Console <span class="muted small">— the same command API AI agents use (MCP / CLI / HTTP)</span>
-      <button id="btnClearLog" class="small-btn">Clear</button>
+      <span>Console</span>
+      <span class="subtle">same command API AI agents use (MCP / CLI / HTTP)</span>
+      <div class="filters" role="group" aria-label="Log filter">
+        <button data-level="all" class="chip on">All</button>
+        <button data-level="info" class="chip">Info <b id="cntInfo">0</b></button>
+        <button data-level="warn" class="chip warn">Warnings <b id="cntWarn">0</b></button>
+        <button data-level="error" class="chip error">Errors <b id="cntError">0</b></button>
+      </div>
+      <button id="btnClearLog" class="icon-btn small">Clear</button>
     </div>
-    <div id="log" class="log mono"></div>
+    <div id="log" class="log mono" data-filter="all"></div>
     <form id="cmdForm" class="cmd">
       <span class="mono prompt">&gt;</span>
-      <input id="cmdInput" class="mono" autocomplete="off" spellcheck="false" placeholder='entity.create {"name":"Box","components":{"MeshRenderer":{"color":"#ff8800"}}}   (Tab completes, ↑ history)'>
+      <input id="cmdInput" class="mono" autocomplete="off" spellcheck="false" placeholder='Type a command, e.g. scene.summary — Tab completes, ↑ history, "help" lists all'>
     </form>
   </section>
 </main>
-<datalist id="commandList"></datalist>
+<div id="toasts" class="toasts" aria-live="polite"></div>
 <script src="editor.js"></script>
 </body>
 </html>

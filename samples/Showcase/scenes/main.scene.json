@@ -1,0 +1,409 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Showcase",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "components": {
+        "Transform": {
+          "position": [0, 8, 0],
+          "rotation": [-50, 35, 0],
+          "scale": [1, 1, 1]
+        },
+        "DirectionalLight": {
+          "color": [1, 0.970000029, 0.899999976],
+          "intensity": 0.949999988,
+          "ambient": [0.159999996, 0.170000002, 0.219999999],
+          "shadows": true,
+          "shadowStrength": 0.75
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [20, 1, 20]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/floor.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, -0.5, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [0, 0.600000024, 2],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "PlayerController": {
+          "speed": 3.5,
+          "jumpSpeed": 5,
+          "gravity": 12,
+          "verticalVelocity": 0
+        },
+        "Tag": {
+          "tags": "player"
+        },
+        "CharacterBody": {
+          "shape": "capsule",
+          "radius": 0.400000006,
+          "height": 1.20000005,
+          "maxSlope": 50,
+          "stepHeight": 0.300000012,
+          "gravityScale": 1,
+          "velocity": [0, 0, 0],
+          "grounded": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Fox",
+      "parent": 3,
+      "components": {
+        "Transform": {
+          "position": [0, -0.600000024, 0],
+          "rotation": [0, 180, 0],
+          "scale": [0.0120000001, 0.0120000001, 0.0120000001]
+        },
+        "MeshRenderer": {
+          "mesh": "assets/models/fox.glb",
+          "color": [1, 1, 1],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Script": {
+          "path": "scripts/face_movement.lua",
+          "params": {},
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Main Camera",
+      "components": {
+        "Transform": {
+          "position": [0, 3.5, 8],
+          "rotation": [-20, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Camera": {
+          "projection": "perspective",
+          "orthoSize": 5,
+          "fov": 55,
+          "nearPlane": 0.100000001,
+          "farPlane": 500,
+          "clearColor": [0.100000001, 0.119999997, 0.180000007],
+          "active": true
+        },
+        "CameraFollow": {
+          "target": 3,
+          "offset": [0, 3.20000005, 5.5],
+          "lookOffset": [0, 0.600000024, 0],
+          "smoothing": 6
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Brick Pillar L",
+      "components": {
+        "Transform": {
+          "position": [-3, 1.25, -2],
+          "rotation": [0, 0, 0],
+          "scale": [1, 2.5, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/bricks.png",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Brick Pillar R",
+      "components": {
+        "Transform": {
+          "position": [3, 1.25, -2],
+          "rotation": [0, 0, 0],
+          "scale": [1, 2.5, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/bricks.png",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Crate 1",
+      "components": {
+        "Transform": {
+          "position": [1.5, 0.400000006, -0.5],
+          "rotation": [0, 20, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/crate.png",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 2,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Crate 2",
+      "components": {
+        "Transform": {
+          "position": [1.70000005, 1.20000005, -0.400000006],
+          "rotation": [0, 50, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/crate.png",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 2,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Ball",
+      "components": {
+        "Transform": {
+          "position": [-1.5, 0.5, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [0.899999976, 0.899999976, 0.949999988],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0.5
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Lamp Warm",
+      "components": {
+        "Transform": {
+          "position": [2.20000005, 1.60000002, -3.20000005],
+          "rotation": [0, 0, 0],
+          "scale": [0.200000003, 0.200000003, 0.200000003]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 0.800000012, 0.449999988],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": true,
+          "castShadows": false,
+          "visible": true
+        },
+        "PointLight": {
+          "color": [1, 0.699999988, 0.349999994],
+          "intensity": 1.60000002,
+          "range": 5
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Lamp Cool",
+      "components": {
+        "Transform": {
+          "position": [-2.20000005, 1.60000002, -3.20000005],
+          "rotation": [0, 0, 0],
+          "scale": [0.200000003, 0.200000003, 0.200000003]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [0.5, 0.699999988, 1],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": true,
+          "castShadows": false,
+          "visible": true
+        },
+        "PointLight": {
+          "color": [0.349999994, 0.550000012, 1],
+          "intensity": 1.60000002,
+          "range": 5
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Title",
+      "components": {
+        "Transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "UIText": {
+          "text": "OwnEngine showcase: glTF model, textures, shadows, point lights",
+          "anchor": "top-left",
+          "x": 24,
+          "y": 20,
+          "size": 22,
+          "color": [1, 1, 1],
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Hint",
+      "components": {
+        "Transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "UIText": {
+          "text": "WASD / arrows: move the fox   Space: jump",
+          "anchor": "bottom",
+          "x": 24,
+          "y": -20,
+          "size": 20,
+          "color": [0.850000024, 0.870000005, 0.920000017],
+          "visible": true,
+          "order": 0
+        }
+      }
+    }
+  ]
+}

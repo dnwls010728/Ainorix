@@ -46,6 +46,6 @@ The engine is single-threaded. The HTTP server and the MCP reader run on their o
 
 - Scripting for gameplay (candidate: Lua or WebAssembly modules so scripts are sandboxed and hot-reloadable by agents).
 - Hardware renderers (D3D12/Vulkan/Metal/WebGPU) behind `IRenderer`, textured/smooth-shaded meshes, glTF import.
-- Physics/collision component, audio, UI.
+- TTF fonts for the UI (non-ASCII text), UI layout containers. (Physics, audio, UI, prefabs: done — see [PHYSICS.md](PHYSICS.md), [GAMEPLAY.md](GAMEPLAY.md).)
 - Prefabs and multi-scene projects; asset pipeline with content hashes.
 - Web/Android/Apple/console platform layers (see [PLATFORMS.md](PLATFORMS.md)).

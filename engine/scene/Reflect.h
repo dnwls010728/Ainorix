@@ -19,7 +19,7 @@ constexpr EntityId kNullEntity = 0;
 // are all generated from this single description.
 // ---------------------------------------------------------------------------
 
-enum class FieldType { Float, Int, Bool, String, Vec3, Color, Entity };
+enum class FieldType { Float, Int, Bool, String, Vec3, Color, Entity, Json };
 const char* ToString(FieldType type);
 
 struct FieldInfo {
@@ -55,6 +55,7 @@ private:
     static FieldType Deduce(const Vec3*) { return FieldType::Vec3; }
     static FieldType Deduce(const Color*) { return FieldType::Color; }
     static FieldType Deduce(const EntityId*) { return FieldType::Entity; }
+    static FieldType Deduce(const oe::Json*) { return FieldType::Json; }
 };
 
 // Type-erased storage for one component type. std::map keeps iteration in

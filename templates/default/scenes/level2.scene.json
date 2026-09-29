@@ -1,0 +1,77 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Level 2",
+  "entities": [
+    {"id": 1, "name": "Main Camera", "components": {
+      "Transform": {"position": [0, 6, 10], "rotation": [-28, 0, 0]},
+      "Camera": {"clearColor": [0.16, 0.12, 0.22]}}},
+    {"id": 2, "name": "Sun", "components": {
+      "Transform": {"position": [0, 6, 0], "rotation": [-50, -30, 0]},
+      "DirectionalLight": {"color": [1, 0.9, 0.8]}}},
+    {"id": 3, "name": "Ground", "components": {
+      "Transform": {"scale": [16, 1, 12]},
+      "MeshRenderer": {"mesh": "plane", "color": [0.45, 0.38, 0.3]},
+      "Collider": {"center": [0, -0.5, 0]}}},
+    {"id": 4, "name": "Player", "components": {
+      "Transform": {"position": [-5, 0.5, 0]},
+      "MeshRenderer": {"mesh": "sphere", "color": [0.25, 0.55, 0.95]},
+      "PlayerController": {},
+      "CharacterBody": {"shape": "sphere", "radius": 0.5},
+      "Tag": {"tags": "player"}}},
+    {"id": 5, "name": "Pillar Left", "components": {
+      "Transform": {"position": [-2, 1, -2.5], "scale": [0.8, 2, 0.8]},
+      "MeshRenderer": {"color": [0.7, 0.7, 0.75]},
+      "Collider": {}}},
+    {"id": 6, "name": "Pillar Right", "components": {
+      "Transform": {"position": [2, 1, -2.5], "scale": [0.8, 2, 0.8]},
+      "MeshRenderer": {"color": [0.7, 0.7, 0.75]},
+      "Collider": {}}},
+    {"id": 7, "name": "Bouncy Ball", "components": {
+      "Transform": {"position": [0, 4, -2.5]},
+      "MeshRenderer": {"mesh": "sphere", "color": [0.9, 0.3, 0.6]},
+      "Collider": {"shape": "sphere", "bounciness": 0.8},
+      "RigidBody": {}}},
+    {"id": 8, "name": "Game Manager", "components": {
+      "Script": {"path": "scripts/game_manager.lua", "params": {"nextScene": ""}}}},
+    {"id": 9, "name": "Score Panel", "components": {
+      "UIPanel": {"x": 16, "y": 16, "width": 300, "height": 88}}},
+    {"id": 10, "name": "Score", "components": {
+      "UIText": {"text": "Coins: 0/4", "x": 32, "y": 30, "size": 32}}},
+    {"id": 11, "name": "Message", "components": {
+      "UIText": {"text": "", "anchor": "center", "y": -60, "size": 64, "color": [1, 0.85, 0.25], "visible": false}}},
+    {"id": 12, "name": "Play Again", "components": {
+      "UIButton": {"text": "Play again", "anchor": "center", "y": 60, "width": 280, "height": 64, "visible": false},
+      "Script": {"path": "scripts/play_again.lua"}}},
+    {"id": 13, "name": "Level Title", "components": {
+      "UIText": {"text": "Level 2", "anchor": "top-right", "x": -24, "y": 24, "size": 32, "color": [0.85, 0.87, 0.92]}}},
+    {"id": 14, "name": "Coin 1", "components": {
+      "Transform": {"position": [-3, 0.6, 0], "scale": [0.5, 0.5, 0.12]},
+      "MeshRenderer": {"mesh": "sphere", "color": [1, 0.84, 0.2]},
+      "Collider": {"shape": "sphere", "isTrigger": true},
+      "Script": {"path": "scripts/coin.lua"},
+      "Tag": {"tags": "coin"},
+      "Prefab": {"path": "prefabs/coin.prefab.json"}}},
+    {"id": 15, "name": "Coin 2", "components": {
+      "Transform": {"position": [-1, 0.6, 0], "scale": [0.5, 0.5, 0.12]},
+      "MeshRenderer": {"mesh": "sphere", "color": [1, 0.84, 0.2]},
+      "Collider": {"shape": "sphere", "isTrigger": true},
+      "Script": {"path": "scripts/coin.lua"},
+      "Tag": {"tags": "coin"},
+      "Prefab": {"path": "prefabs/coin.prefab.json"}}},
+    {"id": 16, "name": "Coin 3", "components": {
+      "Transform": {"position": [1, 0.6, 0], "scale": [0.5, 0.5, 0.12]},
+      "MeshRenderer": {"mesh": "sphere", "color": [1, 0.84, 0.2]},
+      "Collider": {"shape": "sphere", "isTrigger": true},
+      "Script": {"path": "scripts/coin.lua"},
+      "Tag": {"tags": "coin"},
+      "Prefab": {"path": "prefabs/coin.prefab.json"}}},
+    {"id": 17, "name": "Coin 4", "components": {
+      "Transform": {"position": [3, 0.6, 0], "scale": [0.5, 0.5, 0.12]},
+      "MeshRenderer": {"mesh": "sphere", "color": [1, 0.84, 0.2]},
+      "Collider": {"shape": "sphere", "isTrigger": true},
+      "Script": {"path": "scripts/coin.lua"},
+      "Tag": {"tags": "coin"},
+      "Prefab": {"path": "prefabs/coin.prefab.json"}}}
+  ]
+}

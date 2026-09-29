@@ -11,6 +11,7 @@ const char* ToString(FieldType type) {
         case FieldType::Vec3: return "vec3";
         case FieldType::Color: return "color";
         case FieldType::Entity: return "entity";
+        case FieldType::Json: return "json";
     }
     return "float";
 }
@@ -88,6 +89,7 @@ Json FieldToJson(const FieldInfo& field, const void* c) {
         case FieldType::Bool: return Json(At<bool>(c, field.offset));
         case FieldType::String: return Json(At<std::string>(c, field.offset));
         case FieldType::Entity: return Json(At<EntityId>(c, field.offset));
+        case FieldType::Json: return At<Json>(c, field.offset);
         case FieldType::Vec3: {
             const Vec3& v = At<Vec3>(c, field.offset);
             return Json(Json::Array{v.x, v.y, v.z});
@@ -124,6 +126,10 @@ bool FieldFromJson(const FieldInfo& field, void* c, const Json& v, std::string* 
         case FieldType::Entity:
             if (!v.isNumber()) return typeError("an entity id (integer)");
             At<EntityId>(c, field.offset) = static_cast<EntityId>(v.asNumber());
+            return true;
+        case FieldType::Json:
+            if (!v.isObject()) return typeError("a JSON object");
+            At<Json>(c, field.offset) = v;
             return true;
         case FieldType::String: {
             if (!v.isString()) return typeError("a string");
@@ -202,6 +208,7 @@ Json ComponentSchema(const ComponentType& type) {
             case FieldType::Int:
             case FieldType::Entity: p["type"] = "integer"; break;
             case FieldType::Bool: p["type"] = "boolean"; break;
+            case FieldType::Json: p["type"] = "object"; break;
             case FieldType::String: p["type"] = "string"; break;
             case FieldType::Vec3:
             case FieldType::Color:
