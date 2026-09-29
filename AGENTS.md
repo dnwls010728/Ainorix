@@ -9,7 +9,9 @@ build.bat            # Release build -> build/bin/oe.exe, build/bin/oe_tests.exe
 build/bin/oe_tests   # unit tests, exit code 0 = pass
 ```
 
-`build.bat` finds Visual Studio 2022 via vswhere and uses its bundled CMake + Ninja. No dependencies to install (Lua 5.4, Jolt Physics 5.6, stb_image and cgltf are vendored in `third_party/`; the first build compiles Jolt and takes a few minutes).
+`build.bat` finds Visual Studio 2022 via vswhere and uses its bundled CMake + Ninja. No dependencies to install (Lua 5.4, Jolt Physics 5.6, sokol_gfx, stb_image/stb_image_write and cgltf are vendored in `third_party/`; the first build compiles Jolt and takes a few minutes).
+
+Web runtime (needed once for `oe package --web`): install the Emscripten SDK, `set EMSDK=C:\path\to\emsdk`, run `build_web.bat` (Linux/macOS: `./build_web.sh`) -> `build/bin/web/oe_player.js` + `.wasm`. On Linux, `cmake -S . -B build -G Ninja` builds the headless `null` platform (GPU screenshots through EGL when `libegl-dev`/`libgles-dev` are installed).
 
 ## Driving the engine
 
@@ -19,14 +21,14 @@ build/bin/oe_tests   # unit tests, exit code 0 = pass
 | Field schemas | `oe exec samples/Hello component.types` |
 | Edit + save | `oe exec samples/Hello component.set '{"id":"Player","type":"MeshRenderer","values":{"color":"#ff0000"}}' --save` |
 | Many edits | pipe `{"command":..,"args":..}` lines into `oe script samples/Hello --save` |
-| See the result | `oe render samples/Hello --out build/shot.png` then read the PNG |
+| See the result | `oe render samples/Hello --out build/shot.png` then read the PNG (software renderer: deterministic hash). Add `--renderer gpu` (or `render.screenshot {renderer:"gpu"}`) to see what the game window shows |
 | Simulate first | `oe render samples/Hello --frames 120 --out build/shot.png` |
 | Live session | `oe mcp samples/Hello --port 7777` (MCP on stdio + web editor for the human) |
 | Attach to a human's editor | `oe mcp --connect 7777` |
 | Physics | `Collider` (+ `RigidBody` to move, `isTrigger` for volumes), `CharacterBody` for players. Check with `render.screenshot {colliders:true}`, `physics.contacts`, `physics.raycast` — see [docs/PHYSICS.md](docs/PHYSICS.md) |
 | Prefabs, scenes, UI, audio | `prefab.instantiate`, `game.load_scene`/`game.state`, `UIText`/`UIPanel`/`UIButton` + `input.click {x,y}` (screenshot pixels), `audio.generate`/`audio.state`/`audio.capture` — see [docs/GAMEPLAY.md](docs/GAMEPLAY.md) |
 | Models, textures, lights | `oe import <project> <file>` then `asset.info` (gives a scale hint); `MeshRenderer {mesh:"assets/models/x.glb", texture, shading}`, `PointLight`, `DirectionalLight.shadows`, `CameraFollow`, `debug.draw` — see [docs/RENDERING.md](docs/RENDERING.md) |
-| Ship a game | `oe package <project> [--out dist/Name]` -> `dist/Name/Name.exe` (player runtime, no console/editor/API) + `game/` (project files minus AGENTS.md and dotfiles). Optional `project.json` `window {width,height,title,maxRenderWidth}` |
+| Ship a game | `oe package <project> [--out dist/Name]` -> `dist/Name/Name.exe` (player runtime, no console/editor/API) + `game/` (project files minus AGENTS.md and dotfiles). `--web` -> `dist/Name-web/` (`index.html`, `oe_player.js/.wasm`, `game.pak`) for any static host; test with `oe serve dist/Name-web`. Optional `project.json` `window {width,height,title,renderer:auto\|gpu\|software,renderScale,maxRenderWidth}` |
 | Gameplay code | Lua in `<project>/scripts/`, attached via the `Script` component. `script.write`, `script.eval`, `script.errors` — see [docs/SCRIPTING.md](docs/SCRIPTING.md) |
 
 All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"code","message","hint"}}`. Read the `hint` — it says how to fix the call. Entities can be referenced by id or by unique name. Full reference: [docs/API.md](docs/API.md) (regenerate with `oe api --markdown > docs/API.md`).
@@ -42,14 +44,15 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - `engine/audio` — `AudioSystem` (deterministic 48 kHz mixer ticked by the simulation, capture, AudioSource), WAV decode/encode, procedural sound presets.
 - `engine/assets` — `AssetManager` (model/texture cache + hot reload, `asset.info`), glTF loading (cgltf) and image decoding (stb_image); `ThirdPartyImpl.cpp` compiles the single-header libraries.
 - `third_party/stb`, `third_party/cgltf` — stb_image 2.30, cgltf 1.15, unmodified.
-- `engine/render` — `IRenderer` interface, deterministic multi-threaded `SoftwareRenderer` (textures, smooth/flat shading, directional + point lights, shadow map, color + depth + entity-id buffers), built-in meshes; `UI.cpp` lays out and draws UIText/UIPanel/UIButton (5x7 pixel font) and hit-tests buttons.
-- `engine/api` — command registry + all built-in commands (`Commands.cpp`), HTTP server, editor routes, MCP server.
+- `engine/render` — `IRenderer` interface; `RenderScene` (draw list + lights shared by both renderers); deterministic multi-threaded `SoftwareRenderer` (textures, smooth/flat shading, directional + point lights, shadow map, color + depth + entity-id buffers) — the reference for hashes, tests and picking; `GpuRenderer` (sokol_gfx: shadow pass, MSAA scene pass, selection mask, composite + UI; offscreen with readback or into a window) with shaders in `render/shaders/Shaders.glsl`; `GpuDevice.h` is what a platform provides; built-in meshes; `UI.cpp` lays out UIText/UIPanel/UIButton (5x7 pixel font) as quads (`BuildUIQuads`), draws them in software and hit-tests buttons. See [docs/RENDERING.md](docs/RENDERING.md).
+- `engine/api` — command registry + all built-in commands (`Commands.cpp`), HTTP server (+ WebSocket), editor routes and viewport stream (`EditorService.cpp`), MCP server.
 - `engine/app` — `Engine` (scene, fixed-step sim, undo, main-thread job queue), project templates.
-- `engine/platform` — `Platform.h` interface; `win32/` and `null/` (headless) implementations.
+- `engine/platform` — `Platform.h` interface; `win32/` (window, waveOut, `GpuD3D11.cpp`), `web/` (Emscripten canvas/DOM/WebAudio, `GpuWebGL.cpp`), `null/` (headless; `GpuEgl.cpp` or `GpuNone.cpp`), `gl/` (sokol GLES3 implementation + readback shared by web and EGL).
+- `third_party/sokol` — sokol_gfx (graphics API abstraction), unmodified.
 - `samples/Showcase` — rendering sample: textured glTF fox (player + follow camera), shadows, point lights.
 - `templates/default/` — what `oe new` copies (two-level coin game: scenes, prefab, Lua scripts, AGENTS.md). `samples/Hello` is generated from it.
 - `editor/` — web editor (vanilla JS), served by `oe editor`. Uses only the public API.
-- `tools/oe/main.cpp` — CLI front-end. `tools/player/main.cpp` — game runtime shipped by `oe package`. `tests/tests.cpp` — self tests.
+- `tools/oe/main.cpp` — CLI front-end. `tools/player/main.cpp` — game runtime shipped by `oe package` (desktop exe and, built with Emscripten, the web module); `tools/player/web/index.html` — the web page. `tools/shaders/` — regenerates `Shaders.glsl.h`. `tests/tests.cpp` — self tests (also run as WebAssembly: `node build-web/bin/oe_tests.js`).
 
 ## Conventions
 
@@ -60,5 +63,6 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - New command: `Register(...)` in `Commands.cpp` with a `Params()` schema; mark `mutates=true` if it edits the scene (gives undo + revision bump). Throw `ApiError(code, message, hint)` for caller errors.
 - Template changes: edit `templates/default/`, then regenerate the sample (`rm -rf samples/Hello && oe new samples/Hello --name Hello`) and keep the `TemplateGamePlaythrough` test passing.
 - New platform: implement `engine/platform/Platform.h` and add it to `CMakeLists.txt`; see [docs/PLATFORMS.md](docs/PLATFORMS.md).
-- Engine code outside `engine/platform/*` must stay portable C++17 (no OS headers).
+- Engine code outside `engine/platform/*` must stay portable C++17 (no OS headers). Graphics API code goes through sokol_gfx; only `engine/platform/*` compiles a backend (`SOKOL_IMPL`).
+- Shaders: edit `engine/render/shaders/Shaders.glsl`, run `tools/shaders/compile_shaders.bat` (needs `sokol-shdc`), commit the regenerated `Shaders.glsl.h`. Lighting changes must be made in both renderers (`GpuRendererMatchesSoftware` compares them). New screen-space effects go into the composite pass of `GpuRenderer`.
 - Keep `docs/API.md` regenerated when commands or components change, and add a test in `tests/tests.cpp` for new behaviour.

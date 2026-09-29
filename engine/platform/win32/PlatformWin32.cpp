@@ -113,6 +113,7 @@ public:
     int Width() const override { return width_; }
     int Height() const override { return height_; }
     void SetTitle(const std::string& title) override { SetWindowTextW(hwnd_, Widen(title).c_str()); }
+    void* NativeHandle() const override { return hwnd_; }
 
 private:
     static LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {

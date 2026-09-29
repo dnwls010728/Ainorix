@@ -9,6 +9,7 @@
 #include "core/FileSystem.h"
 #include "core/Image.h"
 #include "core/Log.h"
+#include "render/GpuRenderer.h"
 #include "render/Mesh.h"
 #include "render/UI.h"
 #include "scene/Components.h"
@@ -292,7 +293,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         info["engine"] = "OwnEngine";
         info["version"] = OE_VERSION;
         info["platform"] = OE_PLATFORM_NAME;
-        info["renderer"] = e.Renderer().Name();
+        info["renderer"] = e.Renderer().Name();  // screenshots, hashes, picking
+        info["displayRenderer"] = e.DisplayRenderer().Name();  // editor viewport and game window
         info["project"]["name"] = e.ProjectName();
         info["project"]["dir"] = e.ProjectDir();
         info["scene"]["name"] = e.GetScene().name;
@@ -662,17 +664,37 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Params p = ViewParams();
         p.Opt("path", "string", "Also write the PNG to this path (relative to the project).")
             .Opt("inline", "boolean", "Return the PNG as base64 in png_base64 (default true when no path is given).");
+        Json rendererSchema = Json::MakeObject();
+        rendererSchema["type"] = "string";
+        rendererSchema["enum"] = Json::MakeArray();
+        rendererSchema["enum"].push("software");
+        rendererSchema["enum"].push("gpu");
+        rendererSchema["description"] = "software (default: deterministic, the hash is stable across machines) or gpu (what the game window "
+                                        "and editor show: MSAA, filtered shadows, mipmaps; the hash depends on the GPU and driver).";
+        p.OptWith("renderer", rendererSchema);
         Register(r, "render.screenshot", "Render a frame and return it as PNG (and/or save it). Look at it to verify visual changes.", p, false,
                  [](Engine& e, const Json& a) {
                      ViewRequest vr = ParseView(e, a);
                      RenderTarget target;
                      target.Resize(vr.width, vr.height);
-                     RenderStats stats = e.Renderer().Render(e.GetScene(), vr.view, target);
+                     IRenderer* renderer = &e.Renderer();
+                     std::string which = a["renderer"].asString("software");
+                     if (which == "gpu") {
+                         std::string err;
+                         if (!e.EnableGpu(nullptr, &err)) {
+                             throw ApiError("gpu_unavailable", "no GPU renderer: " + err, "Use the default software renderer (omit `renderer`).");
+                         }
+                         renderer = e.Gpu();
+                     } else if (which != "software") {
+                         throw ApiError("invalid_argument", "renderer must be software or gpu", "Omit it for the software renderer.");
+                     }
+                     RenderStats stats = renderer->Render(e.GetScene(), vr.view, target);
                      Image img = target.ToImage();
                      Json out = Json::MakeObject();
                      out["width"] = vr.width;
                      out["height"] = vr.height;
                      out["hash"] = Format("%016llx", static_cast<unsigned long long>(target.Hash()));
+                     out["renderer"] = renderer->Name();
                      out["camera"] = vr.customCamera ? "custom" : (vr.view.cameraEntity ? "scene" : "default (scene has no active camera)");
                      out["stats"]["entities"] = stats.drawnEntities;
                      out["stats"]["triangles"] = stats.triangles;

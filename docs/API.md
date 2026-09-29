@@ -268,6 +268,7 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 | `highlight` | integer |  | Entity id to outline. |
 | `path` | string |  | Also write the PNG to this path (relative to the project). |
 | `inline` | boolean |  | Return the PNG as base64 in png_base64 (default true when no path is given). |
+| `renderer` | string |  | software (default: deterministic, the hash is stable across machines) or gpu (what the game window and editor show: MSAA, filtered shadows, mipmaps; the hash depends on the GPU and driver). |
 
 ### `render.pick`
 
@@ -512,4 +513,235 @@ Undo the last scene edit (not available while simulating).
 Redo the last undone edit.
 
 ## Component types
+
+### Transform
+
+Position, rotation (Euler degrees, applied X then Y then Z) and scale relative to the parent entity.
+
+| field | type | default | description |
+|---|---|---|---|
+| `position` | vec3 | `[0,0,0]` | Local position in meters. +Y is up. |
+| `rotation` | vec3 | `[0,0,0]` | Local rotation as Euler angles in degrees. |
+| `scale` | vec3 | `[1,1,1]` | Local scale factors. |
+
+### MeshRenderer
+
+Draws a mesh: a built-in shape (cube, sphere, plane, pyramid) or a glTF model file. Unknown meshes render as a magenta cube.
+
+| field | type | default | description |
+|---|---|---|---|
+| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, pyramid) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
+| `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the model/texture color, linear RGB 0..1 (or "#rrggbb"). |
+| `texture` | string | `""` | Image (.png/.jpg) overriding the model's own base color texture. Empty = use the model's. |
+| `shading` | string | `"smooth"` | smooth = interpolated vertex normals, flat = faceted. |
+| `unlit` | bool | `false` | Ignore lighting and shadows (UI-like, emissive look). |
+| `castShadows` | bool | `true` | Casts shadows from the directional light. |
+| `visible` | bool | `true` | Whether the mesh is drawn. |
+
+### Camera
+
+Camera looking down its local -Z axis. The first active camera renders the game view.
+
+| field | type | default | description |
+|---|---|---|---|
+| `projection` | string | `"perspective"` | perspective or orthographic (no perspective shrink; good for 2D/isometric). |
+| `orthoSize` | float | `5` | Orthographic: half of the visible height in meters. |
+| `fov` | float | `60` | Perspective: vertical field of view in degrees. |
+| `nearPlane` | float | `0.100000001` | Near clip distance in meters. |
+| `farPlane` | float | `500` | Far clip distance in meters. |
+| `clearColor` | color | `[0.119999997,0.140000001,0.180000007]` | Background color. |
+| `active` | bool | `true` | Only the first active camera (lowest entity id) is used. |
+
+### DirectionalLight
+
+Sun-like light. Direction comes from the entity's rotation (local -Z).
+
+| field | type | default | description |
+|---|---|---|---|
+| `color` | color | `[1,0.970000029,0.899999976]` | Light color. |
+| `intensity` | float | `1` | Brightness multiplier. |
+| `ambient` | color | `[0.180000007,0.200000003,0.25]` | Ambient light added to every surface. |
+| `shadows` | bool | `true` | Cast shadows (first directional light only). |
+| `shadowStrength` | float | `0.75` | 0 = no darkening, 1 = black shadows. |
+
+### Rotator
+
+Behavior: spins the entity at a constant angular speed while simulating.
+
+| field | type | default | description |
+|---|---|---|---|
+| `degreesPerSecond` | vec3 | `[0,45,0]` | Rotation speed per axis in degrees/second. |
+
+### Velocity
+
+Behavior: moves the entity linearly while simulating.
+
+| field | type | default | description |
+|---|---|---|---|
+| `linear` | vec3 | `[0,0,0]` | Velocity in meters/second (world axes). |
+
+### PlayerController
+
+Behavior: moves the entity on the XZ plane with W/A/S/D (or arrow keys) and jumps with Space. Input can be injected through the input.* API.
+
+| field | type | default | description |
+|---|---|---|---|
+| `speed` | float | `4` | Move speed in meters/second. |
+| `jumpSpeed` | float | `5` | Initial upward speed when jumping. |
+| `gravity` | float | `12` | Downward acceleration while airborne (lands at y = 0 + half scale). |
+| `verticalVelocity` | float | `0` | Runtime state: current vertical speed. |
+
+### Tag
+
+Free-form labels for gameplay queries (e.g. "enemy", "pickup").
+
+| field | type | default | description |
+|---|---|---|---|
+| `tags` | string | `""` | Comma separated tags. |
+
+### Script
+
+Runs a Lua script while simulating. The file returns a table with optional onStart(self), onUpdate(self, dt) and onDestroy(self). See docs/SCRIPTING.md.
+
+| field | type | default | description |
+|---|---|---|---|
+| `path` | string | `""` | Lua file relative to the project, e.g. "scripts/rotator.lua". |
+| `params` | json | `{}` | JSON object passed to the script as self.params. |
+| `enabled` | bool | `true` | Disabled scripts are not run. |
+
+### Collider
+
+Collision shape. Alone it is static (walls, floors); add RigidBody to make it move. isTrigger makes it a non-solid volume that reports onTriggerEnter/onTriggerExit.
+
+| field | type | default | description |
+|---|---|---|---|
+| `shape` | string | `"box"` | Shape type. |
+| `size` | vec3 | `[1,1,1]` | Box: full size in local units (multiplied by Transform.scale). Matches the 1x1x1 cube mesh by default. |
+| `radius` | float | `0.5` | Sphere/capsule radius in local units. |
+| `height` | float | `2` | Capsule: total height along local Y, including the rounded ends. |
+| `center` | vec3 | `[0,0,0]` | Offset of the shape from the entity origin (local units). |
+| `isTrigger` | bool | `false` | Non-solid volume: reports overlaps instead of colliding. |
+| `friction` | float | `0.5` | Surface friction (0 = ice, 1 = rubber). |
+| `bounciness` | float | `0` | Restitution (0 = no bounce, 1 = perfectly elastic). |
+
+### RigidBody
+
+Makes a Collider move. dynamic = driven by gravity and collisions; kinematic = follows its Transform (moving platforms, doors) and pushes dynamic bodies.
+
+| field | type | default | description |
+|---|---|---|---|
+| `type` | string | `"dynamic"` | Body type. |
+| `mass` | float | `1` | Mass in kg (dynamic bodies). |
+| `velocity` | vec3 | `[0,0,0]` | Linear velocity in m/s. Written by the simulation every step; set it to launch the body. |
+| `angularVelocity` | vec3 | `[0,0,0]` | Angular velocity in degrees/s (world axes). Written by the simulation. |
+| `gravityScale` | float | `1` | Multiplier for gravity (0 = floats). |
+| `linearDamping` | float | `0.0500000007` | Air resistance. |
+| `lockRotation` | bool | `false` | Prevent the body from rotating (keeps it upright). |
+| `continuous` | bool | `false` | Continuous collision detection for fast objects (prevents tunneling through thin walls). |
+
+### CharacterBody
+
+Physics character for players/NPCs: set velocity (x/z to walk, y to jump) and the engine moves it, sliding along walls, climbing steps and slopes, applying gravity. PlayerController uses it automatically when present.
+
+| field | type | default | description |
+|---|---|---|---|
+| `shape` | string | `"capsule"` | Shape centered on the entity origin. |
+| `radius` | float | `0.400000006` | Radius in meters. |
+| `height` | float | `1.79999995` | Capsule total height in meters. |
+| `maxSlope` | float | `50` | Steepest walkable slope in degrees. |
+| `stepHeight` | float | `0.300000012` | Highest step the character walks up automatically. |
+| `gravityScale` | float | `1` | Multiplier for gravity. |
+| `velocity` | vec3 | `[0,0,0]` | Desired velocity in m/s; after each step it holds the actual velocity. |
+| `grounded` | bool | `false` | Runtime state: true while standing on walkable ground. |
+
+### Prefab
+
+Marks the root of a prefab instance and remembers which prefab file it came from.
+
+| field | type | default | description |
+|---|---|---|---|
+| `path` | string | `""` | Prefab file, e.g. "prefabs/coin.prefab.json". |
+
+### UIText
+
+Screen-space text (ASCII, built-in pixel font). Multi-line with 
+.
+
+| field | type | default | description |
+|---|---|---|---|
+| `text` | string | `"Text"` | Text to show. Non-ASCII characters render as '?'. |
+| `anchor` | string | `"top-left"` | Screen anchor and pivot. |
+| `x` | float | `24` | Horizontal offset in reference pixels (canvas is 1280x720). |
+| `y` | float | `24` | Vertical offset in reference pixels (+y is down). |
+| `size` | float | `32` | Line height in reference pixels. |
+| `color` | color | `[1,1,1]` | Text color. |
+| `visible` | bool | `true` | Hidden elements are not drawn. |
+| `order` | int | `0` | Draw order (higher on top). |
+
+### UIPanel
+
+Screen-space colored rectangle (backgrounds, bars).
+
+| field | type | default | description |
+|---|---|---|---|
+| `anchor` | string | `"top-left"` | Screen anchor and pivot. |
+| `x` | float | `16` | Horizontal offset in reference pixels. |
+| `y` | float | `16` | Vertical offset in reference pixels. |
+| `width` | float | `240` | Width in reference pixels. |
+| `height` | float | `64` | Height in reference pixels. |
+| `color` | color | `[0,0,0]` | Fill color. |
+| `opacity` | float | `0.5` | 0 = invisible, 1 = opaque. |
+| `visible` | bool | `true` | Hidden elements are not drawn. |
+| `order` | int | `-1` | Draw order (higher on top). |
+
+### UIButton
+
+Clickable screen-space button. A click calls onClick(self) on the entity's Script. Click it from tools with input.click.
+
+| field | type | default | description |
+|---|---|---|---|
+| `text` | string | `"Button"` | Label. |
+| `anchor` | string | `"center"` | Screen anchor and pivot. |
+| `x` | float | `0` | Horizontal offset in reference pixels. |
+| `y` | float | `0` | Vertical offset in reference pixels. |
+| `width` | float | `240` | Width in reference pixels. |
+| `height` | float | `64` | Height in reference pixels. |
+| `size` | float | `28` | Label line height in reference pixels. |
+| `color` | color | `[0.25,0.449999988,0.899999976]` | Background color. |
+| `textColor` | color | `[1,1,1]` | Label color. |
+| `visible` | bool | `true` | Hidden buttons are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order (higher on top). |
+
+### AudioSource
+
+Plays a WAV clip while simulating (music, ambience). One-shot effects are easier from Lua: audio.play(path).
+
+| field | type | default | description |
+|---|---|---|---|
+| `clip` | string | `""` | WAV file relative to the project, e.g. "sounds/music.wav". |
+| `volume` | float | `1` | 0..1 (up to 2 for boost). |
+| `pitch` | float | `1` | Playback speed (1 = normal). |
+| `loop` | bool | `false` | Repeat forever. |
+| `playOnStart` | bool | `true` | Start when the entity first appears in a play session. |
+
+### PointLight
+
+Light bulb at the entity position, fading to zero at `range`.
+
+| field | type | default | description |
+|---|---|---|---|
+| `color` | color | `[1,0.850000024,0.600000024]` | Light color. |
+| `intensity` | float | `1.5` | Brightness at the center. |
+| `range` | float | `6` | Distance in meters where the light reaches zero. |
+
+### CameraFollow
+
+Moves this entity (usually the camera) to target + offset after physics each frame and aims it at the target.
+
+| field | type | default | description |
+|---|---|---|---|
+| `target` | entity | `0` | Entity id to follow. |
+| `offset` | vec3 | `[0,4,8]` | Position relative to the target (world axes). |
+| `lookOffset` | vec3 | `[0,0.5,0]` | Point to look at, relative to the target. |
+| `smoothing` | float | `8` | Catch-up speed (per second); 0 = snap instantly. |
 

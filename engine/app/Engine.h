@@ -20,6 +20,9 @@ class ScriptHost;
 class PhysicsWorld;
 class AudioSystem;
 class AssetManager;
+class GpuDevice;
+class GpuRenderer;
+class Window;
 
 // The engine instance: one scene, a fixed-step simulation, a renderer, an
 // undo history and the command API. All state changes from tools go through
@@ -94,8 +97,21 @@ public:
     void EnableAudioOutput();
 
     // ----- Rendering -------------------------------------------------------
+    // The deterministic software renderer: frame hashes, tests, picking, `oe render`.
     IRenderer& Renderer() { return *renderer_; }
     RenderStats RenderGameView(RenderTarget& target);
+
+    // Optional GPU renderer (render/GpuRenderer.h) for what people look at.
+    // Bound to `window` it can present there; headless it renders offscreen.
+    // Returns false (with `error`) when no GPU backend is available. Only one
+    // GPU renderer can exist; a second call just reports whether it is on.
+    bool EnableGpu(Window* window, std::string* error);
+    GpuRenderer* Gpu() { return gpu_.get(); }
+    // GPU when enabled, otherwise the software renderer (editor viewport, game window).
+    IRenderer& DisplayRenderer();
+    // Draws the game view into the GPU window (EnableGpu with a window) and
+    // presents it. `renderScale` < 1 renders the 3D image smaller and upscales it.
+    bool PresentGameView(float renderScale = 1.0f);
 
     // ----- History ---------------------------------------------------------
     bool Undo();
@@ -127,6 +143,8 @@ private:
     InputState input_;
     std::unique_ptr<AssetManager> assets_;
     std::unique_ptr<IRenderer> renderer_;
+    std::unique_ptr<GpuDevice> gpuDevice_;  // declared before gpu_: destroyed after it
+    std::unique_ptr<GpuRenderer> gpu_;
     CommandRegistry commands_;
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;

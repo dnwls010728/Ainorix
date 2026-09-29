@@ -1,4 +1,7 @@
-build/
+# Root build folders only: a bare `build/` also matches third_party/jolt/Build
+# on case-insensitive file systems (Windows) and drops Jolt's CMakeLists.txt.
+/build/
+/build-*/
 out/
 .vs/
 *.user

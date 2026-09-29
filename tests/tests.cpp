@@ -1,4 +1,5 @@
 // Engine self tests. Run: build/bin/oe_tests  (exit code 0 = all passed)
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +17,8 @@
 #include "core/Image.h"
 #include "core/Json.h"
 #include "core/Log.h"
+#include "render/GpuRenderer.h"
+#include "render/UI.h"
 #include "scene/Components.h"
 #include "script/ScriptHost.h"
 
@@ -816,6 +819,106 @@ TEST(ShowcaseFoxModel) {
     e.RenderGameView(single);
     SetMaxRenderThreads(16);
     CHECK(single.Hash() == rt.Hash());
+}
+
+TEST(UIQuadsAreWhatSoftwareDraws) {
+    // Both renderers draw UI from BuildUIQuads; the software result is the reference.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Showcase", &err));
+    std::vector<UIQuad> quads = BuildUIQuads(e.GetScene(), 640, 360);
+    CHECK(quads.size() > 100);  // every lit font pixel is a quad
+    RenderTarget rt;
+    rt.Resize(640, 360);
+    e.RenderGameView(rt);
+    for (const UIQuad& q : quads) {
+        CHECK(q.x1 > q.x0 && q.y1 > q.y0);
+        CHECK(rt.IdAt(q.x0, q.y0) == q.entity);
+    }
+}
+
+TEST(GpuRendererMatchesSoftware) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Showcase", &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    CHECK(&e.DisplayRenderer() == e.Gpu());
+    const int w = 320, h = 180;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    view.highlight = e.GetScene().FindByName("Crate 1");
+    RenderTarget sw, gpu;
+    sw.Resize(w, h);
+    gpu.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    e.Gpu()->Render(e.GetScene(), view, gpu);
+    // Same image up to anti-aliasing and filtering: small mean difference, few outliers.
+    double total = 0;
+    int outliers = 0, orangeSw = 0, orangeGpu = 0;
+    auto orange = [](uint32_t c) { return (c & 0xFF) > 230 && ((c >> 8) & 0xFF) > 140 && ((c >> 8) & 0xFF) < 175 && ((c >> 16) & 0xFF) < 50; };
+    for (size_t i = 0; i < sw.color.size(); ++i) {
+        int worst = 0;
+        for (int ch = 0; ch < 3; ++ch) {
+            int d = std::abs(static_cast<int>((sw.color[i] >> (8 * ch)) & 0xFF) - static_cast<int>((gpu.color[i] >> (8 * ch)) & 0xFF));
+            total += d;
+            worst = std::max(worst, d);
+        }
+        outliers += worst > 64;
+        orangeSw += orange(sw.color[i]);
+        orangeGpu += orange(gpu.color[i]);
+    }
+    double mean = total / (static_cast<double>(sw.color.size()) * 3.0);
+    std::printf("  %s: mean channel difference %.2f, outliers %d of %zu\n", e.Gpu()->Name(), mean, outliers, sw.color.size());
+    CHECK(mean < 6.0);
+    CHECK(outliers < static_cast<int>(sw.color.size()) / 25);
+    CHECK(orangeSw > 30 && orangeGpu > 30);  // selection outline on both
+    // Rendering again (cached meshes/textures) gives the same frame.
+    RenderTarget again;
+    again.Resize(w, h);
+    e.Gpu()->Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == gpu.Hash());
+    // render.screenshot {renderer: gpu} goes through the same renderer.
+    Json shot = Call(e, "render.screenshot", R"J({"renderer": "gpu", "width": 64, "height": 36, "inline": false})J");
+    CHECK(shot["ok"].asBool() && shot["result"]["renderer"].asString() == e.Gpu()->Name());
+    CHECK(!Call(e, "render.screenshot", R"J({"renderer": "vulkan", "inline": false})J")["ok"].asBool());
+}
+
+TEST(WebGamePak) {
+    // `oe package --web` data: the page unpacks game.pak into /game.
+    std::string dir = std::string(OE_SOURCE_DIR) + "/samples/Hello";
+    std::vector<std::string> files = GameFiles(dir);
+    CHECK(std::find(files.begin(), files.end(), "project.json") != files.end());
+    CHECK(std::find(files.begin(), files.end(), "AGENTS.md") == files.end());
+    std::string pak = "build/test_web/game.pak";
+    std::string err;
+    CHECK(WriteGamePak(dir, files, pak, &err));
+    std::vector<unsigned char> bytes;
+    CHECK(ReadBinaryFile(pak, bytes) && bytes.size() > 12);
+    CHECK(std::string(bytes.begin(), bytes.begin() + 8) == "OEPAK001");
+    uint32_t n = bytes[8] | (bytes[9] << 8) | (bytes[10] << 16) | (static_cast<uint32_t>(bytes[11]) << 24);
+    Json index = Json::parse(std::string(bytes.begin() + 12, bytes.begin() + 12 + n), &err);
+    CHECK(err.empty() && index["files"].size() == files.size());
+    for (const Json& f : index["files"].items()) {
+        std::vector<unsigned char> original;
+        CHECK(ReadBinaryFile(dir + "/" + f["path"].asString(), original));
+        size_t at = 12 + n + static_cast<size_t>(f["offset"].asNumber());
+        CHECK(original.size() == static_cast<size_t>(f["size"].asNumber()));
+        CHECK(at + original.size() <= bytes.size() && std::equal(original.begin(), original.end(), bytes.begin() + static_cast<std::ptrdiff_t>(at)));
+    }
+    RemoveAll("build/test_web");
+}
+
+TEST(JpegEncoder) {
+    // The editor viewport stream sends JPEG frames.
+    Image img;
+    img.width = 32;
+    img.height = 16;
+    img.rgba.assign(32 * 16 * 4, 200);
+    std::vector<uint8_t> jpg = EncodeJpeg(img, 85);
+    CHECK(jpg.size() > 100 && jpg[0] == 0xFF && jpg[1] == 0xD8 && jpg[jpg.size() - 2] == 0xFF && jpg.back() == 0xD9);
 }
 
 }  // namespace

@@ -1,0 +1,62 @@
+#pragma once
+#include <memory>
+#include <vector>
+
+#include "core/Math.h"
+#include "render/Mesh.h"
+#include "scene/Scene.h"
+
+namespace oe {
+
+class AssetManager;
+
+// What a frame draws, collected from the scene the same way for every
+// renderer so the software and GPU backends agree on meshes, materials and
+// lights. Items are in entity id order.
+struct RenderItem {
+    EntityId id = kNullEntity;
+    std::shared_ptr<const Mesh> mesh;  // built-in meshes use a non-owning pointer (use_count 0)
+    Mat4 world;
+    Mat4 normalMatrix;
+    Color tint;
+    std::shared_ptr<const Texture> textureOverride;  // MeshRenderer.texture; null = the mesh's own
+    bool unlit = false;
+    bool flat = false;
+    bool castShadows = true;
+    bool error = false;  // missing asset, drawn as an unlit magenta cube
+
+    // Texture of a submesh after applying the override (may be null).
+    const Texture* SubmeshTexture(const Submesh& sub) const;
+};
+
+struct RenderDirLight {
+    Vec3 dir;  // direction the light travels
+    Color color;
+};
+
+struct RenderPointLight {
+    Vec3 pos;
+    Color color;
+    float range;
+};
+
+struct RenderLights {
+    Color ambient{0, 0, 0};
+    std::vector<RenderDirLight> dirs;  // never empty: a default light is added when the scene has none
+    std::vector<RenderPointLight> points;
+    bool shadows = false;  // the first directional light casts shadows
+    float shadowStrength = 0.75f;
+};
+
+std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets);
+RenderLights GatherRenderLights(const Scene& scene);
+
+// Orthographic view-projection of the first directional light, fitted to a
+// bounding box of the shadow casters and receivers.
+struct ShadowFit {
+    Mat4 viewProj;
+    float texelWorld = 0.01f;  // world size of one shadow map texel (size = mapSize)
+};
+ShadowFit FitShadow(const Vec3& lo, const Vec3& hi, const Vec3& lightDir, int mapSize);
+
+}  // namespace oe

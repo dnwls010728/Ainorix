@@ -10,6 +10,8 @@
 #include "audio/AudioSystem.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
+#include "render/GpuDevice.h"
+#include "render/GpuRenderer.h"
 #include "render/UI.h"
 #include "script/ScriptHost.h"
 
@@ -318,6 +320,31 @@ RenderStats Engine::RenderGameView(RenderTarget& target) {
     MakeSceneView(scene_, static_cast<float>(target.width) / static_cast<float>(target.height), view);
     AppendDebugLines(view.lines);
     return renderer_->Render(scene_, view, target);
+}
+
+bool Engine::EnableGpu(Window* window, std::string* error) {
+    if (gpu_) return true;
+    gpuDevice_ = CreateGpuDevice(window, error);
+    if (!gpuDevice_) return false;
+    gpu_ = std::make_unique<GpuRenderer>(*gpuDevice_, assets_.get());
+    OE_LOG_INFO("render", "GPU renderer ready: %s", gpu_->Name());
+    return true;
+}
+
+IRenderer& Engine::DisplayRenderer() {
+    if (gpu_) return *gpu_;
+    return *renderer_;
+}
+
+bool Engine::PresentGameView(float renderScale) {
+    if (!gpu_) return false;
+    int w = 0, h = 0;
+    gpu_->WindowSize(&w, &h);
+    if (w <= 0 || h <= 0) return false;
+    RenderView view;
+    MakeSceneView(scene_, static_cast<float>(w) / static_cast<float>(h), view);
+    AppendDebugLines(view.lines);
+    return gpu_->RenderToWindow(scene_, view, renderScale);
 }
 
 // ----- History -------------------------------------------------------------

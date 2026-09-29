@@ -694,35 +694,106 @@ function camEye() {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Viewport frames: a WebSocket stream of JPEG frames rendered by the engine
+// (GPU renderer when available), falling back to polling /api/frame.png.
+// One request is in flight at a time, so a slow machine lowers the frame
+// rate instead of queueing stale frames.
+// ---------------------------------------------------------------------------
+const stream = { ws: null, open: false, gpu: false, renderer: "", retry: 0, sentAt: 0 };
+
 function viewSize() {
   const vp = $("viewport");
-  const scale = Math.min(1, 1280 / Math.max(1, vp.clientWidth));
-  return [Math.max(16, Math.round(vp.clientWidth * scale)), Math.max(16, Math.round(vp.clientHeight * scale))];
+  // The GPU renderer can afford sharp (device pixel) frames; the software one stays <= 1280 wide.
+  const dpr = stream.gpu ? Math.min(2, window.devicePixelRatio || 1) : 1;
+  const maxW = stream.gpu ? 1920 : 1280;
+  const w = vp.clientWidth * dpr, h = vp.clientHeight * dpr;
+  const scale = Math.min(1, maxW / Math.max(1, w));
+  return [Math.max(16, Math.round(w * scale)), Math.max(16, Math.round(h * scale))];
+}
+
+function frameParams() {
+  const [w, h] = viewSize();
+  const p = { w, h, sel: state.selected || 0, colliders: !!state.colliders, game: state.view === "game" };
+  if (!p.game) {
+    p.eye = camEye().map((v) => +v.toFixed(3));
+    p.target = state.cam.target;
+    p.fov = state.cam.fov;
+    p.grid = !!state.grid;
+  }
+  return p;
 }
 
 function frameUrl() {
-  const [w, h] = viewSize();
-  const p = new URLSearchParams({ w, h, sel: state.selected || 0, t: Date.now() });
-  if (state.colliders) p.set("colliders", "1");
-  if (state.view === "game") p.set("game", "1");
+  const f = frameParams();
+  const p = new URLSearchParams({ w: f.w, h: f.h, sel: f.sel, t: Date.now() });
+  if (f.colliders) p.set("colliders", "1");
+  if (f.game) p.set("game", "1");
   else {
-    p.set("eye", camEye().map((v) => v.toFixed(3)).join(","));
-    p.set("target", state.cam.target.join(","));
-    p.set("fov", state.cam.fov);
-    if (state.grid) p.set("grid", "1");
+    p.set("eye", f.eye.join(","));
+    p.set("target", f.target.join(","));
+    p.set("fov", f.fov);
+    if (f.grid) p.set("grid", "1");
   }
   return "/api/frame.png?" + p;
 }
 
+function connectStream() {
+  let ws;
+  try { ws = new WebSocket(`ws://${location.host}/api/stream`); } catch { return; }
+  ws.binaryType = "blob";
+  ws.onopen = () => { stream.retry = 0; };
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      const m = JSON.parse(e.data);
+      if (m.type === "hello") {
+        stream.open = true;
+        stream.gpu = !!m.gpu;
+        stream.renderer = m.renderer || "";
+        state.frameBusy = false;
+        state.frameDirty = true;
+        updateViewportChrome();
+      }
+      return;
+    }
+    showFrame(e.data);
+  };
+  ws.onclose = () => {
+    const wasOpen = stream.open;
+    stream.open = false;
+    stream.ws = null;
+    state.frameBusy = false;
+    if (wasOpen) updateViewportChrome();
+    setTimeout(connectStream, Math.min(5000, 500 * ++stream.retry));
+  };
+  stream.ws = ws;
+}
+
+async function showFrame(blob) {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const c = $("frame");
+    if (c.width !== bmp.width || c.height !== bmp.height) { c.width = bmp.width; c.height = bmp.height; }
+    c.getContext("2d").drawImage(bmp, 0, 0);
+    bmp.close();
+  } catch { /* a broken frame is simply skipped */ }
+  state.frameBusy = false;
+}
+
 function frameLoop() {
   const playing = state.sim && state.sim.playing;
+  // A frame lost in transit must not stall the viewport forever.
+  if (state.frameBusy && performance.now() - stream.sentAt > 5000) state.frameBusy = false;
   if (!state.frameBusy && (state.frameDirty || playing)) {
     state.frameBusy = true;
     state.frameDirty = false;
-    const img = new Image();
-    img.onload = () => { $("frame").src = img.src; state.frameBusy = false; };
-    img.onerror = () => { state.frameBusy = false; };
-    img.src = frameUrl();
+    stream.sentAt = performance.now();
+    if (stream.open) {
+      stream.ws.send(JSON.stringify(frameParams()));
+    } else {
+      fetch(frameUrl()).then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? showFrame(b) : (state.frameBusy = false)))
+        .catch(() => { state.frameBusy = false; });
+    }
   }
   requestAnimationFrame(frameLoop);
 }
@@ -731,6 +802,9 @@ function updateViewportChrome() {
   const game = state.view === "game";
   const inSession = !!(state.sim && state.sim.inPlaySession);
   $("viewBadge").textContent = game ? "Game · game camera" : "Scene · editor camera";
+  const rb = $("rendererBadge");
+  rb.textContent = stream.open ? (stream.gpu ? stream.renderer.replace(/^gpu \((.*)\)$/, "GPU · $1") : "Software") : "Software · PNG";
+  rb.title = stream.open ? `Viewport renderer: ${stream.renderer} (streamed as JPEG)` : "Viewport renderer: software (PNG polling; no stream connection)";
   $("viewport").classList.toggle("game", game);
   $("viewHelp").hidden = game;
   // The key hint fades out after a few seconds so it does not cover game UI.
@@ -1118,7 +1192,7 @@ async function main() {
     state.types = types.result;
     setupConsole(list.result);
     const i = info.result;
-    logLine(`OwnEngine ${i.version} · platform ${i.platform} · renderer ${i.renderer} · project "${i.project.name}"`, "res");
+    logLine(`OwnEngine ${i.version} · platform ${i.platform} · viewport renderer ${i.displayRenderer || i.renderer} · project "${i.project.name}"`, "res");
     logLine(`Type "help" for commands. Every action in this editor is a call you can also make from the console or via MCP.`, "res");
     const log = await api("log.get", { since: 0 }, { quiet: true });
     state.logSeq = log.ok ? log.result.lastSeq : 0;
@@ -1130,6 +1204,7 @@ async function main() {
   if (ent) select(ent.id);
   refreshAssetLists().catch(() => {});
   setInterval(() => refreshAssetLists().catch(() => {}), 5000);
+  connectStream();
   frameLoop();
   poll();
 }

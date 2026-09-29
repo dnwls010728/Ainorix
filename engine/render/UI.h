@@ -20,6 +20,19 @@ struct UIRect {
 // Visible UI elements in draw order (order, then entity id).
 std::vector<UIRect> LayoutUI(const Scene& scene, int width, int height);
 
+// A solid rectangle of UI, in whole pixels [x0, x1) x [y0, y1). Panels,
+// buttons and every lit pixel of the built-in font become quads, so the
+// software and GPU renderers draw exactly the same UI.
+struct UIQuad {
+    int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    Color color;
+    float alpha = 1.0f;
+    EntityId entity = kNullEntity;
+};
+
+// All visible UI as quads in draw order, for a target of the given size.
+std::vector<UIQuad> BuildUIQuads(const Scene& scene, int width, int height);
+
 // Draws all visible UI on top of the frame (also writes the entity-id buffer).
 void DrawUI(const Scene& scene, RenderTarget& target);
 
