@@ -7,10 +7,12 @@
 #include <cstring>
 
 #include "editor/EditorInternal.h"
+#include "editor/EditorText.h"
 #include "ImGuizmo.h"
 #include "sokol_imgui.h"
 
 #include "app/Engine.h"
+#include "core/Log.h"
 #include "physics/PhysicsWorld.h"
 #include "render/GpuRenderer.h"
 
@@ -235,7 +237,7 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
             Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json("MeshRenderer")}, {"values", ObjectOf({{"material", Json(path)}})}}));
             SelectOnly(id);
         } else {
-            Notify("Drop a material on an entity with a MeshRenderer", true);
+            Notify(Tr("Drop a material on an entity with a MeshRenderer"), true);
         }
     } else if (EndsWith(path, ".lua")) {
         EntityId id = target();
@@ -244,14 +246,14 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
             Call("component.add", ObjectOf({{"id", Json(id)}, {"type", Json("Script")}, {"values", ObjectOf({{"path", Json(path)}})}}));
             SelectOnly(id);
         } else {
-            Notify("Drop a script on an entity", true);
+            Notify(Tr("Drop a script on an entity"), true);
         }
     } else if (EndsWith(path, ".wav")) {
         r = Call("entity.create", ObjectOf({{"name", Json(UniqueName(Stem(path)))},
                                             {"components", ObjectOf({{"Transform", ObjectOf({{"position", Vec3Json(hit)}})},
                                                                      {"AudioSource", ObjectOf({{"clip", Json(path)}})}})}}));
     } else {
-        Notify("Nothing to place for " + path, true);
+        Notify(Format(Tr("Nothing to place for %s"), path.c_str()), true);
         return;
     }
     if (r.isObject() && Ok(r)) {
@@ -264,7 +266,7 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
 void NativeEditor::Impl::ScenePanel() {
     if (focusSceneTab > 0 && --focusSceneTab == 0) ImGui::SetNextWindowFocus();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    bool open = ImGui::Begin("Scene", &showScene, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    bool open = ImGui::Begin(TrId("Scene").c_str(), &showScene, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     sceneFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     sceneHovered = false;
@@ -345,22 +347,21 @@ void NativeEditor::Impl::ScenePanel() {
 
     // Overlay controls (top-left).
     ImGui::SetCursorScreenPos(ImVec2(pos.x + 6, pos.y + 6));
-    OverlayToggle("Grid", &showGrid, "Ground grid");
+    OverlayToggle(Tr("Grid"), &showGrid, Tr("Ground grid"));
     ImGui::SameLine(0, 3);
-    OverlayToggle("Colliders", &showColliders, "Collider wireframes: green solid, yellow trigger, cyan character");
+    OverlayToggle(Tr("Colliders"), &showColliders, Tr("Collider wireframes: green solid, yellow trigger, cyan character"));
     ImGui::SameLine(0, 3);
-    OverlayToggle("Icons", &showIcons, "Markers for cameras, lights and sounds");
+    OverlayToggle(Tr("Icons"), &showIcons, Tr("Markers for cameras, lights and sounds"));
     ImGui::SameLine(0, 3);
     bool mode2D = cam.mode2D;
-    if (OverlayToggle("2D", &mode2D, "Look along -Z (2D games); drag with right/middle mouse to pan")) cam.Set2D(mode2D);
+    if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);
     // Help line (bottom-left) while flying.
     if (sceneLooking) {
-        char text[96];
-        std::snprintf(text, sizeof(text), "Fly: WASD / QE   Shift: faster   Wheel: speed %.1f m/s", flySpeed);
-        dl->AddText(ImVec2(pos.x + 8, pos.y + sceneImageSize.y - ImGui::GetFontSize() - 8), IM_COL32(230, 232, 238, 220), text);
+        std::string text = Format(Tr("Fly: WASD / QE   Shift: faster   Wheel: speed %.1f m/s"), flySpeed);
+        dl->AddText(ImVec2(pos.x + 8, pos.y + sceneImageSize.y - ImGui::GetFontSize() - 8), IM_COL32(230, 232, 238, 220), text.c_str());
     }
     if (InPlaySession()) {
-        const char* t = Playing() ? "Playing - edits are undone on Stop" : "Paused - edits are undone on Stop";
+        const char* t = Tr(Playing() ? "Playing - edits are undone on Stop" : "Paused - edits are undone on Stop");
         ImVec2 ts = ImGui::CalcTextSize(t);
         dl->AddText(ImVec2(pos.x + sceneImageSize.x - ts.x - 10, pos.y + 8), IM_COL32(255, 200, 90, 230), t);
     }
@@ -410,7 +411,7 @@ void NativeEditor::Impl::GamePanel() {
         gameFocused = engine.InPlaySession();
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    bool open = ImGui::Begin("Game", &showGame, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    bool open = ImGui::Begin(TrId("Game").c_str(), &showGame, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     gameHovered = false;
     ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -427,16 +428,16 @@ void NativeEditor::Impl::GamePanel() {
 
     // Bar above the image (the game's own UI owns the image corners).
     ImGui::SetCursorPos(ImGui::GetCursorPos() + ImVec2(6, 3));
-    static const char* aspectNames[] = {"Free aspect", "16:9", "16:10", "4:3"};
+    const char* aspectNames[] = {Tr("Free aspect"), "16:9", "16:10", "4:3"};
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7);
     ImGui::Combo("##aspect", &gameAspect, aspectNames, 4);
-    HelpTooltip("Game view aspect ratio");
+    HelpTooltip(Tr("Game view aspect ratio"));
     ImVec2 barEnd = ImGui::GetCursorScreenPos();
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%s", !session ? "Press Play (Ctrl+P) to run the game here"
-                              : gameFocused ? (windowInput.mouseLocked ? "Game has the mouse - Esc releases it" : "Game has keyboard and mouse - click outside to give them back")
-                                            : "Click the view to play");
+    ImGui::TextDisabled("%s", Tr(!session ? "Press Play (Ctrl+P) to run the game here"
+                                 : gameFocused ? (windowInput.mouseLocked ? "Game has the mouse - Esc releases it" : "Game has keyboard and mouse - click outside to give them back")
+                                               : "Click the view to play"));
     ImGui::SetCursorScreenPos(ImVec2(barEnd.x - 6, barEnd.y + 3));
     avail = ImGui::GetContentRegionAvail();
     if (avail.x < 8 || avail.y < 8) {
@@ -473,7 +474,7 @@ void NativeEditor::Impl::GamePanel() {
     bool flip = FlipViews();
     dl->AddImage(ViewTexture(tex), pos, pos + gameImageSize, ImVec2(0, flip ? 1.0f : 0.0f), ImVec2(1, flip ? 0.0f : 1.0f));
     if (!hasCamera) {
-        const char* t = "No active camera: add a Camera component (Create > Rendering > Camera)";
+        const char* t = Tr("No active camera: add a Camera component (Create > Rendering > Camera)");
         ImVec2 ts = ImGui::CalcTextSize(t);
         dl->AddText(ImVec2(pos.x + (gameImageSize.x - ts.x) * 0.5f, pos.y + (gameImageSize.y - ts.y) * 0.5f), IM_COL32(230, 232, 238, 230), t);
     }

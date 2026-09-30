@@ -79,6 +79,7 @@ struct NativeEditor::Impl {
     InputState windowInput;
     std::string lastNotice;
     ImFont* monoFont = nullptr;  // code editor / console
+    bool forceLanguage = false;  // Options::language wins over the saved choice
 
     // Offscreen target for DrawToImage.
     sg_image offImage{};

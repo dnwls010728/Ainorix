@@ -1,5 +1,7 @@
 # OwnEngine
 
+**한국어** | [English](README.en.md) | [日本語](README.ja.md)
+
 AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터(네이티브 · 웹)와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
 
 ![네이티브 에디터 — Showcase 샘플](docs/images/native-editor.png)
@@ -36,6 +38,7 @@ Visual Studio 2022(“C++를 사용한 데스크톱 개발”)만 있으면 됩�
 ```bat
 build\bin\oe.exe new MyGame                 :: 2스테이지 코인 수집 샘플 게임 프로젝트 생성
 build\bin\oe.exe editor MyGame              :: 네이티브 에디터 (API/웹 에디터도 http://127.0.0.1:7777 에서 동시 제공)
+build\bin\oe.exe editor MyGame --lang ja    :: 에디터 언어 지정 (ko / en / ja, 기본은 OS 언어)
 build\bin\oe.exe editor MyGame --web        :: 웹 에디터만 (브라우저)
 build\bin\oe.exe run MyGame                 :: 네이티브 창에서 플레이 (WASD / Space)
 build\bin\oe.exe render MyGame --out shot.png --frames 60
@@ -52,7 +55,7 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 
 `oe editor`는 **네이티브 에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 창이나 GPU가 없는 환경(Linux 헤드리스 등)이나 `--web`이면 **웹 에디터**가 열립니다. 둘 다 같은 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)
 
-- 도킹 패널: Hierarchy · Inspector · Scene · Game · Assets · Console · Scripts — 배치는 프로젝트별로 저장(`.oe/editor.ini`), View > Reset Layout
+- 도킹 패널: Hierarchy · Inspector · Scene · Game · Assets · Console · Scripts — 배치는 프로젝트별로 저장(`.oe/editor.ini`), 보기 > 레이아웃 초기화
 - Scene 뷰: 우클릭 드래그 + WASD/QE 비행, 가운데 버튼 팬, Alt+좌클릭 궤도, 휠 줌, 클릭 선택, **이동/회전/스케일 기즈모**(Q/W/E/R, 로컬/월드, 스냅), 카메라·라이트 아이콘, 콜라이더 표시, 2D 뷰, 에셋 드래그로 배치
 - Game 뷰: 클릭하면 키보드·마우스가 게임으로(마우스 잠금 게임은 원시 마우스 이동, Esc로 해제), 화면비 고정(16:9 등)
 - Hierarchy: 다중 선택(Ctrl/Shift), 드래그로 부모 변경, 우클릭 메뉴(이름 변경, 복제, 삭제, 자식 생성, 프리팹으로 저장)
@@ -60,7 +63,7 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 - Assets: 더블클릭으로 씬 열기 / 스크립트 편집 / 프리팹 배치, 탐색기에서 파일을 창에 끌어다 놓으면 가져오기
 - Scripts: Lua 편집기(Ctrl+S 저장 → 핫리로드, 오류 표시), Console: 로그 필터 + 명령 입력(Tab 자동완성)
 - AI가 API로 바꾼 내용이 알림과 계층의 표시로 실시간 반영, 저장 안 한 변경은 닫기/씬 전환 때 확인
-- 한글 입력/표시(시스템 한글 폰트 자동 병합, IME), 고해상도(DPI) 대응, 인터페이스 크기 조절
+- 인터페이스 언어: 한국어 · English · 日本語 (OS 언어로 자동 선택, 보기 > 언어 또는 `--lang ko|en|ja`), 한글·일본어 입력/표시(시스템 폰트 자동 병합, IME), 고해상도(DPI) 대응, 인터페이스 크기 조절
 - 단축키: Ctrl+S 저장, Ctrl+Z/Y 되돌리기, Ctrl+D 복제, Del 삭제, F 포커스, F2 이름 변경, Ctrl+P 플레이/정지
 - 에이전트용 에디터 스크린샷: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60]`
 

@@ -3,6 +3,7 @@
 // window work (API, MCP, editor server, software rendering to PNG).
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -18,6 +19,17 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string&, int, int) { ret
 std::unique_ptr<AudioDevice> CreateAudioDevice(int) { return nullptr; }
 
 void PlatformEnableHighDpi() {}
+
+std::string PlatformUserLanguage() {
+    for (const char* var : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
+        const char* v = std::getenv(var);
+        if (!v || !*v) continue;
+        std::string code(v);
+        if (code == "C" || code.rfind("C.", 0) == 0 || code == "POSIX" || code.size() < 2) return "en";
+        return code.substr(0, 2);
+    }
+    return "en";
+}
 
 const char* PlatformName() { return "null"; }
 

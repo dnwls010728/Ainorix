@@ -25,7 +25,7 @@ When no native window or GPU is available (Linux `null` platform, `--renderer so
 - **Console** - the engine log with level/text filters, and a command line: `command.name {"json": "args"}` (Tab completes command names, Up/Down browse history).
 - **Scripts** - Lua editor tabs; Ctrl+S (or Save) writes through `script.write`, which hot-reloads the script, also while the game runs. Errors for the file are listed below it.
 
-The layout (docking), panel visibility, interface size, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). View > Reset Layout restores the default.
+The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). View > Reset Layout restores the default.
 
 ## Controls
 
@@ -45,7 +45,13 @@ The layout (docking), panel visibility, interface size, gizmo/snap settings and 
 
 Leaving with unsaved changes (closing the window, opening or creating a scene) asks to save first. Saving is disabled while a play session runs, because Stop restores the scene.
 
-Korean and other CJK text: the editor merges a system font (Malgun Gothic on Windows, Apple SD Gothic Neo on macOS, Noto CJK / Nanum on Linux) into its UI font, and IME input goes through `WM_CHAR` with the IME window placed by Dear ImGui.
+## Languages
+
+The interface is available in English, Korean (한국어) and Japanese (日本語). The editor starts in the OS language (`PlatformUserLanguage`), then in the choice made under View > Language (saved in `.oe/editor.ini`); `oe editor --lang en|ko|ja` overrides both. API names stay English in every language: commands, component types and fields, and the entity names the Create menu gives (scripts refer to them).
+
+For text, the editor merges system fonts into its UI font: Korean (Malgun Gothic on Windows, Apple SD Gothic Neo on macOS, Noto CJK / Nanum on Linux) and Japanese (Yu Gothic / Meiryo / MS Gothic on Windows, Hiragino on macOS, Noto CJK / IPA Gothic on Linux), the interface language's first. IME input (Korean, Japanese) arrives through `WM_CHAR`, with the IME window placed by Dear ImGui.
+
+Translations live in `engine/editor/EditorText.cpp`: UI strings are written in English in the code as `Tr("...")` (format strings keep their `%` arguments) and windows / popups use `TrId("...")` so their docking IDs do not change with the language. Add a catalog row for every new string; the `EditorTranslations` test scans `engine/editor/*.cpp` and fails for a `Tr` string without Korean and Japanese text or with different `%` arguments.
 
 ## For agents: looking at the editor
 
@@ -55,6 +61,7 @@ The native editor can be rendered headless (needs a GPU backend: D3D11/WARP on W
 oe editor samples/Hello --screenshot build/editor.png                 # default layout, 1600x900
 oe editor samples/Hello --screenshot build/editor.png --select Player # inspector + gizmo on Player
 oe editor samples/Hello --screenshot build/editor.png --play --frames 60  # Game view after 1 s of play
+oe editor samples/Hello --screenshot build/editor.png --lang ja       # Japanese interface (default for screenshots: en)
 ```
 
 Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes window events (keys, mouse, text), `DrawToImage` reads the frame back (see `NativeEditorHeadless` in `tests/tests.cpp`).
@@ -67,6 +74,7 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 - `Editor.cpp` - window events -> Dear ImGui, command helpers, menus, toolbar, status bar, default dock layout, save prompts, preferences (`[OwnEngine][Editor]` in the .ini).
 - `EditorPanels.cpp` - Hierarchy, Inspector, Assets, Console, Scripts.
 - `EditorViewports.cpp` - Scene view (camera, picking, gizmo, markers, drops) and Game view (input forwarding, mouse lock).
+- `EditorText.h/.cpp` - interface languages and the translation catalog (`Tr`, `TrId`).
 - `EditorMath.h` - header-only math (Transform decomposition, editor camera, screen rays) with unit tests.
 - `SokolImGui.cpp` - `sokol_imgui.h` implementation for the engine's graphics API.
 

@@ -2,6 +2,7 @@
 // menus, toolbar, status bar, dock layout, prompts and the main loop.
 // Panels live in EditorPanels.cpp, the Scene/Game views in EditorViewports.cpp.
 #include "editor/EditorInternal.h"
+#include "editor/EditorText.h"
 
 #include <algorithm>
 #include <cctype>
@@ -157,6 +158,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "GizmoLocal=%d", &i) == 1) m->gizmoLocal = i != 0;
     else if (std::sscanf(line, "GameAspect=%d", &i) == 1) m->gameAspect = std::max(0, std::min(3, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
+    else if (std::strncmp(line, "Language=", 9) == 0 && !m->forceLanguage) SetEditorLanguage(ParseEditorLanguage(line + 9));
     else if (std::sscanf(line, "Panels=%d", &i) == 1) {
         m->showHierarchy = i & 1;
         m->showInspector = i & 2;
@@ -184,7 +186,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("[%s][Editor]\n", handler->TypeName);
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
-    buf->appendf("GameAspect=%d\nFlySpeed=%.2f\nPanels=%d\n", m->gameAspect, m->flySpeed, panels);
+    buf->appendf("GameAspect=%d\nFlySpeed=%.2f\nPanels=%d\nLanguage=%s\n", m->gameAspect, m->flySpeed, panels, EditorLanguageCode(GetEditorLanguage()));
     buf->appendf("Camera=%.4f,%.4f,%.4f\nCameraAngles=%.3f,%.3f,%.4f\nCamera2D=%d\n\n", m->cam.target.x, m->cam.target.y, m->cam.target.z, m->cam.yaw,
                  m->cam.pitch, m->cam.distance, m->cam.mode2D);
 }
@@ -430,14 +432,14 @@ void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args,
 
 void NativeEditor::Impl::Save() {
     if (InPlaySession()) {
-        Notify("Stop the game before saving (the scene is restored on stop).", true);
+        Notify(Tr("Stop the game before saving (the scene is restored on stop)."), true);
         return;
     }
     if (scenePath.empty()) {
         openSaveAs = true;
         return;
     }
-    if (Ok(Call("scene.save", Json()))) Notify("Saved " + sceneName);
+    if (Ok(Call("scene.save", Json()))) Notify(Format(Tr("Saved %s"), sceneName.c_str()));
     Refresh(true);
 }
 
@@ -535,7 +537,7 @@ void NativeEditor::Impl::CreatePreset(const char* key) {
         Refresh(true);
         SelectOnly(static_cast<EntityId>(r["result"]["id"].asNumber(0)));
         scrollToRow = Primary();
-        Notify(std::string("Created ") + p->label);
+        Notify(Format(Tr("Created %s"), Tr(p->label)));
     }
 }
 
@@ -559,7 +561,7 @@ void NativeEditor::Impl::RunAction(const PendingAction& action) {
         case PendingAction::Kind::LoadScene:
             if (Ok(Call("scene.load", ObjectOf({{"path", Json(action.path)}})))) {
                 selection.clear();
-                Notify("Opened " + action.path);
+                Notify(Format(Tr("Opened %s"), action.path.c_str()));
             }
             break;
         case PendingAction::Kind::NewScene:
@@ -602,14 +604,14 @@ void NativeEditor::Impl::ImportDroppedFiles() {
             last = ImportAssetFile(engine, f);
             ++imported;
         } catch (const ApiError& e) {
-            Notify(std::string("Import failed: ") + e.what(), true);
+            Notify(Format(Tr("Import failed: %s"), e.what()), true);
         }
     }
     if (imported > 0) {
         RefreshAssets(true);
         selectedAsset = last;
         showAssets = true;
-        Notify(imported == 1 ? "Imported " + last : "Imported " + std::to_string(imported) + " files");
+        Notify(imported == 1 ? Format(Tr("Imported %s"), last.c_str()) : Format(Tr("Imported %d files"), imported));
     }
 }
 
@@ -829,9 +831,9 @@ void NativeEditor::Impl::CreateMenuItems() {
         if (std::strcmp(group, p.group) != 0) {
             if (open) ImGui::EndMenu();
             group = p.group;
-            open = ImGui::BeginMenu(group);
+            open = ImGui::BeginMenu(Tr(group));
         }
-        if (open && ImGui::MenuItem(p.label)) CreatePreset(p.key);
+        if (open && ImGui::MenuItem(Tr(p.label))) CreatePreset(p.key);
     }
     if (open) ImGui::EndMenu();
 }
@@ -839,9 +841,9 @@ void NativeEditor::Impl::CreateMenuItems() {
 void NativeEditor::Impl::MainMenu() {
     if (!ImGui::BeginMainMenuBar()) return;
     bool session = InPlaySession();
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("New Scene", "Ctrl+N")) RequestAction({PendingAction::Kind::NewScene, ""});
-        if (ImGui::BeginMenu("Open Scene", !sceneFiles.empty())) {
+    if (ImGui::BeginMenu(Tr("File"))) {
+        if (ImGui::MenuItem(Tr("New Scene"), "Ctrl+N")) RequestAction({PendingAction::Kind::NewScene, ""});
+        if (ImGui::BeginMenu(Tr("Open Scene"), !sceneFiles.empty())) {
             for (const std::string& s : sceneFiles) {
                 bool current = !scenePath.empty() && scenePath.size() >= s.size() && scenePath.compare(scenePath.size() - s.size(), s.size(), s) == 0;
                 if (ImGui::MenuItem(s.c_str(), nullptr, current)) RequestAction({PendingAction::Kind::LoadScene, s});
@@ -849,54 +851,54 @@ void NativeEditor::Impl::MainMenu() {
             ImGui::EndMenu();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !session)) Save();
-        if (ImGui::MenuItem("Save Scene As...", nullptr, false, !session)) openSaveAs = true;
+        if (ImGui::MenuItem(Tr("Save Scene"), "Ctrl+S", false, !session)) Save();
+        if (ImGui::MenuItem(Tr("Save Scene As..."), nullptr, false, !session)) openSaveAs = true;
         ImGui::Separator();
-        ImGui::TextDisabled("Import: drop files on the window");
+        ImGui::TextDisabled("%s", Tr("Import: drop files on the window"));
         ImGui::Separator();
-        if (ImGui::MenuItem("Exit", "Alt+F4")) RequestAction({PendingAction::Kind::Quit, ""});
+        if (ImGui::MenuItem(Tr("Exit"), "Alt+F4")) RequestAction({PendingAction::Kind::Quit, ""});
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Edit")) {
-        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, sim["undo"].asInt(0) > 0)) Undo();
-        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, sim["redo"].asInt(0) > 0)) Redo();
+    if (ImGui::BeginMenu(Tr("Edit"))) {
+        if (ImGui::MenuItem(Tr("Undo"), "Ctrl+Z", false, sim["undo"].asInt(0) > 0)) Undo();
+        if (ImGui::MenuItem(Tr("Redo"), "Ctrl+Y", false, sim["redo"].asInt(0) > 0)) Redo();
         ImGui::Separator();
         bool any = !selection.empty();
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, any)) DuplicateSelection();
-        if (ImGui::MenuItem("Delete", "Del", false, any)) DeleteSelection();
-        if (ImGui::MenuItem("Rename", "F2", false, any)) {
+        if (ImGui::MenuItem(Tr("Duplicate"), "Ctrl+D", false, any)) DuplicateSelection();
+        if (ImGui::MenuItem(Tr("Delete"), "Del", false, any)) DeleteSelection();
+        if (ImGui::MenuItem(Tr("Rename"), "F2", false, any)) {
             renaming = Primary();
             renameBuffer = Row(renaming) ? Row(renaming)->name : "";
         }
-        if (ImGui::MenuItem("Save as Prefab...", nullptr, false, any)) {
+        if (ImGui::MenuItem(Tr("Save as Prefab..."), nullptr, false, any)) {
             prefabPath = "prefabs/" + (Row(Primary()) ? Row(Primary())->name : std::string("prefab")) + ".prefab.json";
             openPrefabPrompt = true;
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Frame Selected", "F", false, any)) FrameSelection();
-        if (ImGui::MenuItem("Select None", "Esc", false, any)) selection.clear();
+        if (ImGui::MenuItem(Tr("Frame Selected"), "F", false, any)) FrameSelection();
+        if (ImGui::MenuItem(Tr("Select None"), "Esc", false, any)) selection.clear();
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Create")) {
+    if (ImGui::BeginMenu(Tr("Create"))) {
         CreateMenuItems();
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View")) {
-        ImGui::MenuItem("Hierarchy", nullptr, &showHierarchy);
-        ImGui::MenuItem("Inspector", nullptr, &showInspector);
-        ImGui::MenuItem("Scene", nullptr, &showScene);
-        ImGui::MenuItem("Game", nullptr, &showGame);
-        ImGui::MenuItem("Assets", nullptr, &showAssets);
-        ImGui::MenuItem("Console", nullptr, &showConsole);
-        ImGui::MenuItem("Scripts", nullptr, &showScripts);
+    if (ImGui::BeginMenu(Tr("View"))) {
+        ImGui::MenuItem(Tr("Hierarchy"), nullptr, &showHierarchy);
+        ImGui::MenuItem(Tr("Inspector"), nullptr, &showInspector);
+        ImGui::MenuItem(Tr("Scene"), nullptr, &showScene);
+        ImGui::MenuItem(Tr("Game"), nullptr, &showGame);
+        ImGui::MenuItem(Tr("Assets"), nullptr, &showAssets);
+        ImGui::MenuItem(Tr("Console"), nullptr, &showConsole);
+        ImGui::MenuItem(Tr("Scripts"), nullptr, &showScripts);
         ImGui::Separator();
-        ImGui::MenuItem("Grid", "", &showGrid);
-        ImGui::MenuItem("Colliders", "", &showColliders);
-        ImGui::MenuItem("Entity Icons", "", &showIcons);
+        ImGui::MenuItem(Tr("Grid"), "", &showGrid);
+        ImGui::MenuItem(Tr("Colliders"), "", &showColliders);
+        ImGui::MenuItem(Tr("Entity Icons"), "", &showIcons);
         bool mode2D = cam.mode2D;
-        if (ImGui::MenuItem("2D Scene View", "", &mode2D)) cam.Set2D(mode2D);
+        if (ImGui::MenuItem(Tr("2D Scene View"), "", &mode2D)) cam.Set2D(mode2D);
         ImGui::Separator();
-        if (ImGui::BeginMenu("Interface Size")) {
+        if (ImGui::BeginMenu(Tr("Interface Size"))) {
             for (int pct : {80, 90, 100, 110, 125, 150, 175, 200}) {
                 char label[16];
                 std::snprintf(label, sizeof(label), "%d%%", pct);
@@ -904,29 +906,35 @@ void NativeEditor::Impl::MainMenu() {
             }
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Reset Layout")) resetLayout = true;
-        ImGui::MenuItem("ImGui Metrics", nullptr, &showMetrics);
+        if (ImGui::BeginMenu(Tr("Language"))) {
+            for (EditorLanguage l : {EditorLanguage::English, EditorLanguage::Korean, EditorLanguage::Japanese}) {
+                if (ImGui::MenuItem(EditorLanguageName(l), nullptr, GetEditorLanguage() == l)) SetEditorLanguage(l);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem(Tr("Reset Layout"))) resetLayout = true;
+        ImGui::MenuItem(Tr("ImGui Metrics"), nullptr, &showMetrics);
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Play")) {
-        if (ImGui::MenuItem(session ? "Stop" : "Play", "Ctrl+P")) TogglePlay();
-        if (ImGui::MenuItem(Playing() ? "Pause" : "Resume", nullptr, false, session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
-        if (ImGui::MenuItem("Step One Frame", nullptr, false, session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
+    if (ImGui::BeginMenu(Tr("Play"))) {
+        if (ImGui::MenuItem(Tr(session ? "Stop" : "Play"), "Ctrl+P")) TogglePlay();
+        if (ImGui::MenuItem(Tr(Playing() ? "Pause" : "Resume"), nullptr, false, session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
+        if (ImGui::MenuItem(Tr("Step One Frame"), nullptr, false, session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Help")) {
-        ImGui::TextDisabled("Scene view");
-        ImGui::BulletText("Right mouse: look around, WASD/QE fly (wheel = speed)");
-        ImGui::BulletText("Middle mouse: pan    Alt + left mouse: orbit    Wheel: zoom");
-        ImGui::BulletText("Q select, W move, E rotate, R scale, X local/world, F frame");
-        ImGui::BulletText("Ctrl while dragging a gizmo: snap");
-        ImGui::TextDisabled("Game view");
-        ImGui::BulletText("Click it to give the game keyboard and mouse; Esc frees a locked mouse");
-        ImGui::TextDisabled("Everywhere");
-        ImGui::BulletText("Ctrl+S save, Ctrl+Z/Y undo/redo, Ctrl+D duplicate, Del delete, Ctrl+P play/stop");
-        ImGui::BulletText("Drop files on the window to import them into the project");
+    if (ImGui::BeginMenu(Tr("Help"))) {
+        ImGui::TextDisabled("%s", Tr("Scene view"));
+        ImGui::BulletText("%s", Tr("Right mouse: look around, WASD/QE fly (wheel = speed)"));
+        ImGui::BulletText("%s", Tr("Middle mouse: pan    Alt + left mouse: orbit    Wheel: zoom"));
+        ImGui::BulletText("%s", Tr("Q select, W move, E rotate, R scale, X local/world, F frame"));
+        ImGui::BulletText("%s", Tr("Ctrl while dragging a gizmo: snap"));
+        ImGui::TextDisabled("%s", Tr("Game view"));
+        ImGui::BulletText("%s", Tr("Click it to give the game keyboard and mouse; Esc frees a locked mouse"));
+        ImGui::TextDisabled("%s", Tr("Everywhere"));
+        ImGui::BulletText("%s", Tr("Ctrl+S save, Ctrl+Z/Y undo/redo, Ctrl+D duplicate, Del delete, Ctrl+P play/stop"));
+        ImGui::BulletText("%s", Tr("Drop files on the window to import them into the project"));
         ImGui::Separator();
-        ImGui::TextDisabled("OwnEngine %s - agents can attach with: oe mcp --connect <port>", OE_VERSION);
+        ImGui::TextDisabled(Tr("OwnEngine %s - agents can attach with: oe mcp --connect <port>"), OE_VERSION);
         ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
@@ -939,53 +947,53 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
     ImGui::PopStyleVar();
     if (open && ImGui::BeginMenuBar()) {
         bool session = InPlaySession();
-        if (IconButton("##select", Icon::Select, gizmoOp == GizmoOp::None, "Select (Q)")) gizmoOp = GizmoOp::None;
+        if (IconButton("##select", Icon::Select, gizmoOp == GizmoOp::None, Tr("Select (Q)"))) gizmoOp = GizmoOp::None;
         ImGui::SameLine(0, 2);
-        if (IconButton("##move", Icon::Move, gizmoOp == GizmoOp::Translate, "Move (W)")) gizmoOp = GizmoOp::Translate;
+        if (IconButton("##move", Icon::Move, gizmoOp == GizmoOp::Translate, Tr("Move (W)"))) gizmoOp = GizmoOp::Translate;
         ImGui::SameLine(0, 2);
-        if (IconButton("##rotate", Icon::Rotate, gizmoOp == GizmoOp::Rotate, "Rotate (E)")) gizmoOp = GizmoOp::Rotate;
+        if (IconButton("##rotate", Icon::Rotate, gizmoOp == GizmoOp::Rotate, Tr("Rotate (E)"))) gizmoOp = GizmoOp::Rotate;
         ImGui::SameLine(0, 2);
-        if (IconButton("##scale", Icon::Scale, gizmoOp == GizmoOp::Scale, "Scale (R)")) gizmoOp = GizmoOp::Scale;
+        if (IconButton("##scale", Icon::Scale, gizmoOp == GizmoOp::Scale, Tr("Scale (R)"))) gizmoOp = GizmoOp::Scale;
         ImGui::SameLine();
-        if (ImGui::Button(gizmoLocal ? "Local" : "World")) gizmoLocal = !gizmoLocal;
-        HelpTooltip("Gizmo orientation (X)");
+        if (ImGui::Button(Tr(gizmoLocal ? "Local" : "World"))) gizmoLocal = !gizmoLocal;
+        HelpTooltip(Tr("Gizmo orientation (X)"));
         ImGui::SameLine();
-        ImGui::Checkbox("Snap", &snap);
-        HelpTooltip("Snap gizmo moves (hold Ctrl to toggle while dragging)");
+        ImGui::Checkbox(Tr("Snap"), &snap);
+        HelpTooltip(Tr("Snap gizmo moves (hold Ctrl to toggle while dragging)"));
         if (snap) {
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 3.5f);
             ImGui::DragFloat("##snapMove", &snapMove, 0.05f, 0.01f, 100.0f, "%.2f m");
-            HelpTooltip("Move snap");
+            HelpTooltip(Tr("Move snap"));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 3.5f);
             ImGui::DragFloat("##snapAngle", &snapAngle, 0.5f, 1.0f, 180.0f, "%.0f deg");
-            HelpTooltip("Rotate snap");
+            HelpTooltip(Tr("Rotate snap"));
         }
 
         // Play controls in the middle.
         float group = ImGui::GetFrameHeight() * 1.25f * 3 + 4;
         ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, (ImGui::GetWindowWidth() - group) * 0.5f));
         if (session) {
-            if (IconButton("##stop", Icon::Stop, true, "Stop (Ctrl+P) - restores the scene")) TogglePlay();
-        } else if (IconButton("##play", Icon::Play, false, "Play (Ctrl+P)")) {
+            if (IconButton("##stop", Icon::Stop, true, Tr("Stop (Ctrl+P) - restores the scene"))) TogglePlay();
+        } else if (IconButton("##play", Icon::Play, false, Tr("Play (Ctrl+P)"))) {
             TogglePlay();
         }
         ImGui::SameLine(0, 2);
-        if (IconButton("##pause", Icon::Pause, session && !Playing(), Playing() ? "Pause" : "Resume", session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
+        if (IconButton("##pause", Icon::Pause, session && !Playing(), Tr(Playing() ? "Pause" : "Resume"), session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
         ImGui::SameLine(0, 2);
-        if (IconButton("##step", Icon::Step, false, "Step one frame (1/60 s)", session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
+        if (IconButton("##step", Icon::Step, false, Tr("Step one frame (1/60 s)"), session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
 
         // Scene name + save on the right.
-        std::string title = (sceneName.empty() ? std::string("(unsaved scene)") : sceneName) + (Dirty() && !session ? " *" : "");
-        float w = ImGui::CalcTextSize(title.c_str()).x + ImGui::CalcTextSize("Save").x + ImGui::GetStyle().FramePadding.x * 2 + 24;
+        std::string title = (sceneName.empty() ? std::string(Tr("(unsaved scene)")) : sceneName) + (Dirty() && !session ? " *" : "");
+        float w = ImGui::CalcTextSize(title.c_str()).x + ImGui::CalcTextSize(Tr("Save")).x + ImGui::GetStyle().FramePadding.x * 2 + 24;
         ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetWindowWidth() - w));
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(title.c_str());
         HelpTooltip(scenePath);
         ImGui::SameLine();
         ImGui::BeginDisabled(session);
-        if (ImGui::Button("Save")) Save();
+        if (ImGui::Button(Tr("Save"))) Save();
         ImGui::EndDisabled();
         ImGui::EndMenuBar();
     }
@@ -998,26 +1006,26 @@ void NativeEditor::Impl::StatusBar(float barHeight) {
     if (open && ImGui::BeginMenuBar()) {
         bool session = InPlaySession();
         if (session) {
-            ImGui::TextColored(Playing() ? ImVec4(0.45f, 0.85f, 0.55f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1), "%s", Playing() ? "PLAYING" : "PAUSED");
+            ImGui::TextColored(Playing() ? ImVec4(0.45f, 0.85f, 0.55f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1), "%s", Tr(Playing() ? "PLAYING" : "PAUSED"));
             ImGui::SameLine();
         }
-        ImGui::Text("frame %llu", static_cast<unsigned long long>(sim["frame"].asNumber(0)));
+        ImGui::Text(Tr("frame %llu"), static_cast<unsigned long long>(sim["frame"].asNumber(0)));
         ImGui::SameLine();
-        ImGui::TextDisabled("|  %d entities  |  %d fps  |  %s", static_cast<int>(rows.size()), fps,
+        ImGui::TextDisabled(Tr("|  %d entities  |  %d fps  |  %s"), static_cast<int>(rows.size()), fps,
                             engine.Gpu() ? engine.Gpu()->Name() : "software");
         if (!options.serverInfo.empty()) {
             ImGui::SameLine();
             ImGui::TextDisabled("|  %s", options.serverInfo.c_str());
         }
         int scriptErrors = sim["scriptErrors"].asInt(0);
-        std::string counts = (errorCount + scriptErrors > 0 ? std::to_string(errorCount + scriptErrors) + " errors  " : std::string()) +
-                             (warnCount > 0 ? std::to_string(warnCount) + " warnings" : std::string());
+        std::string counts = (errorCount + scriptErrors > 0 ? Format(Tr("%d errors"), errorCount + scriptErrors) + "  " : std::string()) +
+                             (warnCount > 0 ? Format(Tr("%d warnings"), warnCount) : std::string());
         if (!counts.empty()) {
             ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetWindowWidth() - ImGui::CalcTextSize(counts.c_str()).x - 16));
             ImGui::PushStyleColor(ImGuiCol_Text, errorCount + scriptErrors > 0 ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1));
             if (ImGui::Selectable(counts.c_str(), false, 0, ImGui::CalcTextSize(counts.c_str()))) {
                 showConsole = true;
-                ImGui::SetWindowFocus("Console");
+                ImGui::SetWindowFocus("###Console");
             }
             ImGui::PopStyleColor();
         }
@@ -1042,66 +1050,66 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
     ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.27f, nullptr, &center);
     ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
-    ImGui::DockBuilderDockWindow("Hierarchy", left);
-    ImGui::DockBuilderDockWindow("Inspector", right);
-    ImGui::DockBuilderDockWindow("Scene", center);
-    ImGui::DockBuilderDockWindow("Game", center);
-    ImGui::DockBuilderDockWindow("Scripts", center);
-    ImGui::DockBuilderDockWindow("Assets", bottom);
-    ImGui::DockBuilderDockWindow("Console", bottom);
+    ImGui::DockBuilderDockWindow("###Hierarchy", left);
+    ImGui::DockBuilderDockWindow("###Inspector", right);
+    ImGui::DockBuilderDockWindow("###Scene", center);
+    ImGui::DockBuilderDockWindow("###Game", center);
+    ImGui::DockBuilderDockWindow("###Scripts", center);
+    ImGui::DockBuilderDockWindow("###Assets", bottom);
+    ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderFinish(dockspace);
     focusSceneTab = 2;  // once the windows are docked (they appear this frame)
 }
 
 void NativeEditor::Impl::Modals() {
     if (openSavePrompt) {
-        ImGui::OpenPopup("Save changes?");
+        ImGui::OpenPopup(TrId("Save changes?").c_str());
         openSavePrompt = false;
     }
     if (openSaveAs) {
         std::string base = sceneName.empty() ? "untitled" : sceneName;
         for (char& ch : base) ch = (ch == ' ') ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         saveAsPath = "scenes/" + base + ".scene.json";
-        ImGui::OpenPopup("Save Scene As");
+        ImGui::OpenPopup(TrId("Save Scene As").c_str());
         openSaveAs = false;
     }
     if (openPrefabPrompt) {
-        ImGui::OpenPopup("Save as Prefab");
+        ImGui::OpenPopup(TrId("Save as Prefab").c_str());
         openPrefabPrompt = false;
     }
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Save changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Save the changes to \"%s\" first?", sceneName.c_str());
+    if (ImGui::BeginPopupModal(TrId("Save changes?").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text(Tr("Save the changes to \"%s\" first?"), sceneName.c_str());
         ImGui::Spacing();
-        if (ImGui::Button("Save", ImVec2(ImGui::GetFontSize() * 6, 0))) {
+        if (ImGui::Button(Tr("Save"), ImVec2(ImGui::GetFontSize() * 6, 0))) {
             Save();
             if (!Dirty()) RunAction(pending);
             pending = {};
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Don't Save", ImVec2(ImGui::GetFontSize() * 6, 0))) {
+        if (ImGui::Button(Tr("Don't Save"), ImVec2(ImGui::GetFontSize() * 6, 0))) {
             RunAction(pending);
             pending = {};
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button(Tr("Cancel"), ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             pending = {};
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Save Scene As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Path in the project (*.scene.json):");
+    if (ImGui::BeginPopupModal(TrId("Save Scene As").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(Tr("Path in the project (*.scene.json):"));
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24);
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         bool enter = ImGui::InputText("##path", &saveAsPath, ImGuiInputTextFlags_EnterReturnsTrue);
-        if (ImGui::Button("Save", ImVec2(ImGui::GetFontSize() * 6, 0)) || enter) {
+        if (ImGui::Button(Tr("Save"), ImVec2(ImGui::GetFontSize() * 6, 0)) || enter) {
             if (Ok(Call("scene.save", ObjectOf({{"path", Json(saveAsPath)}})))) {
-                Notify("Saved " + saveAsPath);
+                Notify(Format(Tr("Saved %s"), saveAsPath.c_str()));
                 RefreshAssets(true);
                 Refresh(true);
                 if (pending.kind != PendingAction::Kind::None) RunAction(pending);
@@ -1110,27 +1118,27 @@ void NativeEditor::Impl::Modals() {
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button(Tr("Cancel"), ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             pending = {};
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Save as Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("Prefab file (*.prefab.json), with the selected entity and its children:");
+    if (ImGui::BeginPopupModal(TrId("Save as Prefab").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(Tr("Prefab file (*.prefab.json), with the selected entity and its children:"));
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 24);
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         bool enter = ImGui::InputText("##prefab", &prefabPath, ImGuiInputTextFlags_EnterReturnsTrue);
-        if (ImGui::Button("Create", ImVec2(ImGui::GetFontSize() * 6, 0)) || enter) {
+        if (ImGui::Button(Tr("Create"), ImVec2(ImGui::GetFontSize() * 6, 0)) || enter) {
             if (Ok(Call("prefab.create", ObjectOf({{"id", Json(Primary())}, {"path", Json(prefabPath)}})))) {
-                Notify("Created " + prefabPath);
+                Notify(Format(Tr("Created %s"), prefabPath.c_str()));
                 RefreshAssets(true);
                 ImGui::CloseCurrentPopup();
             }
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+        if (ImGui::Button(Tr("Cancel"), ImVec2(ImGui::GetFontSize() * 6, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
 }
@@ -1181,6 +1189,8 @@ bool NativeEditor::Init(std::string* error) {
         return false;
     }
     if (!m.options.layoutFile.empty()) CreateDirectories(ParentPath(m.options.layoutFile));
+    m.forceLanguage = !m.options.language.empty();
+    SetEditorLanguage(ParseEditorLanguage(m.forceLanguage ? m.options.language : PlatformUserLanguage()));
     simgui_desc_t d{};
     d.max_vertices = 1 << 19;
     d.color_format = SG_PIXELFORMAT_RGBA8;
@@ -1207,21 +1217,34 @@ bool NativeEditor::Init(std::string* error) {
     h.WriteAllFn = SettingsWriteAll;
     ImGui::AddSettingsHandler(&h);
 
-    // UI font: the engine's embedded Roboto, with a system font merged in for
-    // Korean/CJK text when one is installed. Code uses Dear ImGui's own font.
+    // UI font: the engine's embedded Roboto, with system fonts merged in for
+    // Korean and Japanese (the interface language's first, so shared CJK
+    // characters take its shapes). Code uses Dear ImGui's own font.
     ImFontConfig cfg;
     cfg.FontDataOwnedByAtlas = false;
     std::snprintf(cfg.Name, sizeof(cfg.Name), "Roboto");
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kDefaultFontData), static_cast<int>(kDefaultFontSize), kBaseFontSize, &cfg);
-    const char* cjk[] = {"C:/Windows/Fonts/malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
-                         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"};
-    for (const char* path : cjk) {
-        if (!FileExists(path)) continue;
-        ImFontConfig merge;
-        merge.MergeMode = true;
-        io.Fonts->AddFontFromFileTTF(path, kBaseFontSize, &merge);
-        break;
+    std::vector<const char*> korean = {"C:/Windows/Fonts/malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                                       "/System/Library/Fonts/Supplemental/AppleGothic.ttf", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                                       "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"};
+    std::vector<const char*> japanese = {"C:/Windows/Fonts/YuGothM.ttc", "C:/Windows/Fonts/meiryo.ttc", "C:/Windows/Fonts/msgothic.ttc",
+                                         "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                                         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                                         "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"};
+    std::vector<std::vector<const char*>> families = {korean, japanese};
+    if (GetEditorLanguage() == EditorLanguage::Japanese) std::swap(families[0], families[1]);
+    std::string merged;
+    for (const auto& family : families) {
+        for (const char* path : family) {
+            if (!FileExists(path)) continue;
+            if (path != merged) {  // Noto CJK covers both: merge it once
+                ImFontConfig merge;
+                merge.MergeMode = true;
+                io.Fonts->AddFontFromFileTTF(path, kBaseFontSize, &merge);
+                merged = path;
+            }
+            break;
+        }
     }
     m.monoFont = io.Fonts->AddFontDefaultVector();
 
@@ -1262,7 +1285,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     m.MainMenu();
     m.Toolbar(bar);
     m.StatusBar(ImGui::GetFrameHeight());
-    ImGuiID dockspace = ImGui::GetID("OwnEngineDockSpace");
+    ImGuiID dockspace = ImGui::GetID("OwnEngineDockSpace2");  // 2: windows are named "Label###Id" since translations
     m.DockLayout(dockspace);
     ImGui::DockSpaceOverViewport(dockspace, ImGui::GetMainViewport());
 
