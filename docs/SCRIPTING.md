@@ -27,6 +27,9 @@ function Spinner:onCollisionExit(other) end
 function Spinner:onTriggerEnter(other) end
 function Spinner:onTriggerExit(other) end
 function Spinner:onClick() end               -- UIButton on the same entity was clicked
+function Spinner:onPointerEnter() end        -- pointer moved onto this UIButton / UISlider
+function Spinner:onPointerExit() end
+function Spinner:onValueChanged(value) end   -- UISlider dragged (see docs/UI.md)
 
 return Spinner
 ```
@@ -58,12 +61,16 @@ Instance fields: `self.id` (entity id), `self.name`, `self.params` (the componen
 | `physics.raycast(origin, dir, maxDist?)` | `{entity, point, normal, distance}` or `nil` |
 | `physics.overlapSphere(center, radius)` / `physics.contacts(id)` | Entity ids |
 | `physics.addImpulse(id, {x,y,z})` | Push a dynamic body |
+| `tilemap.get(id, col, row)` / `tilemap.set(id, col, row, ch)` / `tilemap.solid(id, col, row)` | Read/change a Tilemap cell (row 0 = top); changes update graphics and collision |
+| `tilemap.cellAt(id, {x,y,z})` / `tilemap.cellCenter(id, col, row)` | World point → `col, row`; cell → world position (see [2D.md](2D.md)) |
 | `scene.instantiate(path, {position, name, parent})` | Spawn a prefab, returns the root id |
 | `scene.send(id, method, ...)` / `scene.broadcast(method, ...)` | Call methods on other scripts |
 | `timer.after(s, fn)` / `timer.every(s, fn)` / `timer.cancel(id)` | Timers on simulated time |
 | `game.set(k, v)` / `game.get(k)` / `game.loadScene(path)` / `game.scene()` | Cross-scene data and scene changes |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |
 | `input.mouse()` | Mouse position in the game view (0..1) |
+| `input.mouseDelta()` | Relative mouse motion in pixels since the last step (`dx, dy`; `dy` > 0 = down) — for mouse look |
+| `input.lockMouse(on?)` / `input.mouseLocked()` | Capture the mouse for mouse look: hidden cursor kept in the view (Windows), Pointer Lock (web, editor Game view). **Escape** releases it and the next click captures it again (that click is not passed to the game). Where the browser refuses pointer lock, clicks go through and `input.mouse()` keeps working |
 | `draw.line(a, b, color?, s?)` / `draw.box(c, size, color?, s?)` / `draw.sphere(c, r, color?, s?)` | Debug lines (default: this frame only) |
 | `require("lib.util")` | Loads `lib/util.lua` from the project once per session |
 

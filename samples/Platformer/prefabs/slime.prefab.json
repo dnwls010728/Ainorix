@@ -1,0 +1,22 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Slime",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Slime",
+      "components": {
+        "Transform": {},
+        "Sprite": {"texture": "assets/sprites/slime.png", "columns": 3, "pivotY": 0.34, "order": 3},
+        "SpriteAnimation": {"clip": "walk", "clips": {
+          "walk": {"frames": [0, 1], "fps": 4},
+          "squash": {"frames": [2], "fps": 1, "loop": false}
+        }},
+        "CharacterBody": {"shape": "sphere", "radius": 0.34, "gravityScale": 3, "plane2D": true},
+        "Script": {"path": "scripts/slime.lua", "params": {"speed": 1.6}},
+        "Tag": {"tags": "enemy"}
+      }
+    }
+  ]
+}

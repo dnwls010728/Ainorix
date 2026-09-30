@@ -24,6 +24,13 @@ struct RenderItem {
     bool flat = false;
     bool castShadows = true;
     bool error = false;  // missing asset, drawn as an unlit magenta cube
+    // 2D (Sprite / Tilemap): texture coordinates become uv * uvScale + uvOffset,
+    // texels with alpha below alphaCutoff are discarded (0 = off), and
+    // pointSample picks the nearest texel (pixel art).
+    float uvOffset[2] = {0, 0};
+    float uvScale[2] = {1, 1};
+    float alphaCutoff = 0.0f;
+    bool pointSample = false;
 
     // Texture of a submesh after applying the override (may be null).
     const Texture* SubmeshTexture(const Submesh& sub) const;

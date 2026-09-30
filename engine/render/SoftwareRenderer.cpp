@@ -133,6 +133,10 @@ struct Material {
     bool unlit = false;
     bool flat = false;
     EntityId id = kNullEntity;
+    float uvOffset[2] = {0, 0};
+    float uvScale[2] = {1, 1};
+    float alphaCutoff = 0.0f;  // > 0: texels below it are discarded (sprites)
+    bool nearest = false;
 };
 
 enum class Cull { Back, Front };
@@ -218,18 +222,31 @@ private:
                 float z = w0 * s0.z + w1 * s1.z + w2 * s2.z;
                 size_t idx = row + static_cast<size_t>(x);
                 if (z < 0.0f || z >= depth_[idx]) continue;
-                depth_[idx] = z;
-                if (!lighting) continue;
+                if (!lighting) {
+                    depth_[idx] = z;
+                    continue;
+                }
                 // Perspective-correct attribute weights.
                 float p0 = w0 * s0.invW, p1 = w1 * s1.invW, p2 = w2 * s2.invW;
                 float norm = 1.0f / (p0 + p1 + p2);
                 p0 *= norm;
                 p1 *= norm;
                 p2 *= norm;
+                Color base = mat.base;
+                if (mat.texture) {
+                    float u = (a.u * p0 + b.u * p1 + c.u * p2) * mat.uvScale[0] + mat.uvOffset[0];
+                    float v = (a.v * p0 + b.v * p1 + c.v * p2) * mat.uvScale[1] + mat.uvOffset[1];
+                    if (mat.alphaCutoff > 0 || mat.nearest) {
+                        float alpha = 1.0f;
+                        base = base * mat.texture->Sample(u, v, mat.nearest, &alpha);
+                        if (alpha < mat.alphaCutoff) continue;  // cut out: no depth, color or id
+                    } else {
+                        base = base * mat.texture->Sample(u, v);
+                    }
+                }
+                depth_[idx] = z;
                 Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
                 Vec3 n = mat.flat ? faceN : Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
-                Color base = mat.base;
-                if (mat.texture) base = base * mat.texture->Sample(a.u * p0 + b.u * p1 + c.u * p2, a.v * p0 + b.v * p1 + c.v * p2);
                 color_[idx] = Pack(mat.unlit ? base : base * lighting->At(wpos, n));
                 ids_[idx] = mat.id;
             }
@@ -395,6 +412,12 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             mat.unlit = it.unlit;
             mat.flat = it.flat;
             mat.id = it.id;
+            mat.uvOffset[0] = it.uvOffset[0];
+            mat.uvOffset[1] = it.uvOffset[1];
+            mat.uvScale[0] = it.uvScale[0];
+            mat.uvScale[1] = it.uvScale[1];
+            mat.alphaCutoff = it.alphaCutoff;
+            mat.nearest = it.pointSample;
             for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
                 Vtx v[3];
                 for (int j = 0; j < 3; ++j) {
@@ -435,7 +458,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
 
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);
-    if (view.drawUI) DrawUI(scene, target);
+    if (view.drawUI) DrawUI(scene, target, assets_);
 
     stats.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return stats;

@@ -1,0 +1,921 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Meadow",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [9, -7, 20],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Camera": {
+          "projection": "orthographic",
+          "orthoSize": 5.625,
+          "fov": 60,
+          "nearPlane": 0.100000001,
+          "farPlane": 100,
+          "clearColor": [0.529999971, 0.75, 0.930000007],
+          "active": true
+        },
+        "Script": {
+          "path": "scripts/parallax.lua",
+          "params": {},
+          "enabled": true
+        },
+        "CameraFollow": {
+          "target": 18,
+          "offset": [0, 1.20000005, 20],
+          "lookOffset": [0, 0.5, 0],
+          "smoothing": 7,
+          "useBounds": true,
+          "boundsMin": [10, -9.375, 20],
+          "boundsMax": [86, -5.625, 20]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Hills 1",
+      "components": {
+        "Transform": {
+          "position": [-8, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Hills 2",
+      "components": {
+        "Transform": {
+          "position": [0, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Hills 3",
+      "components": {
+        "Transform": {
+          "position": [8, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Hills 4",
+      "components": {
+        "Transform": {
+          "position": [16, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Hills 5",
+      "components": {
+        "Transform": {
+          "position": [24, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Hills 6",
+      "components": {
+        "Transform": {
+          "position": [32, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Hills 7",
+      "components": {
+        "Transform": {
+          "position": [40, -11.3999996, -6],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax hills"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hills.png",
+          "color": [0.620000005, 0.800000012, 0.899999976],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Cloud 1",
+      "components": {
+        "Transform": {
+          "position": [4, -5, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Cloud 2",
+      "components": {
+        "Transform": {
+          "position": [15, -4.19999981, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Cloud 3",
+      "components": {
+        "Transform": {
+          "position": [27, -5.5, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Cloud 4",
+      "components": {
+        "Transform": {
+          "position": [40, -4.5, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Cloud 5",
+      "components": {
+        "Transform": {
+          "position": [52, -5.19999981, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Cloud 6",
+      "components": {
+        "Transform": {
+          "position": [66, -4.19999981, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Cloud 7",
+      "components": {
+        "Transform": {
+          "position": [80, -5, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Cloud 8",
+      "components": {
+        "Transform": {
+          "position": [92, -4.4000001, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "parallax clouds"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/cloud.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 1,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.5,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 0,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Level",
+      "components": {
+        "Transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Script": {
+          "path": "scripts/level.lua",
+          "params": {},
+          "enabled": true
+        },
+        "Tilemap": {
+          "tileset": "assets/sprites/tiles.png",
+          "columns": 8,
+          "rows": 2,
+          "tileSize": 1,
+          "map": [
+            "X                                                                                              X",
+            "X                                                                                              X",
+            "X                                                                                              X",
+            "X                                                                    c                      F  X",
+            "X                                                                   c                       |  X",
+            "X                                                                  c                        |  X",
+            "X                     c c c c                   cc                c                         |  X",
+            "X                                 cccc          PP                            cc            |  X",
+            "X           ?B?B                 PPPPPP     c            ???         B        XX            |  X",
+            "X       ccc            f  e   b            PPP                      BB                      |  X",
+            "X                    ###########                                   BBB    XX      XX        |  X",
+            "X  S  b  f     t     DDDDDDDDDDD  ^^^^               t e  b  e    BBBB                  f t G  X",
+            "##################   DDDDDDDDDDD#########          ####################               ##########",
+            "DDDDDDDDDDDDDDDDDD   DDDDDDDDDDDDDDDDDDDD          DDDDDDDDDDDDDDDDDDDD               DDDDDDDDDD",
+            "DDDDDDDDDDDDDDDDDD   DDDDDDDDDDDDDDDDDDDD          DDDDDDDDDDDDDDDDDDDD               DDDDDDDDDD"
+          ],
+          "legend": {
+            "#": 0,
+            "D": 1,
+            "B": 2,
+            "P": 3,
+            "^": 4,
+            "?": 5,
+            "u": 6,
+            "b": 7,
+            "f": 8,
+            "|": 9,
+            "F": 10,
+            "t": 11,
+            "X": 12
+          },
+          "solid": "#DBP?uX",
+          "color": [1, 1, 1],
+          "pixelArt": true,
+          "lit": false,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [3.5, -10.5, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "player"
+        },
+        "Script": {
+          "path": "scripts/player.lua",
+          "params": {
+            "speed": 7,
+            "jumpSpeed": 13.5
+          },
+          "enabled": true
+        },
+        "CharacterBody": {
+          "shape": "capsule",
+          "radius": 0.319999993,
+          "height": 0.920000017,
+          "maxSlope": 50,
+          "stepHeight": 0.200000003,
+          "gravityScale": 3,
+          "velocity": [0, 0, 0],
+          "grounded": false,
+          "plane2D": true
+        },
+        "Sprite": {
+          "texture": "assets/sprites/player.png",
+          "color": [1, 1, 1],
+          "frame": 0,
+          "columns": 9,
+          "rows": 1,
+          "pixelsPerUnit": 16,
+          "width": 0,
+          "height": 0,
+          "pivotX": 0.5,
+          "pivotY": 0.460000008,
+          "flipX": false,
+          "flipY": false,
+          "pixelArt": true,
+          "alphaCutoff": 0.5,
+          "lit": false,
+          "order": 5,
+          "visible": true
+        },
+        "SpriteAnimation": {
+          "clips": {
+            "idle": {
+              "frames": [0, 1],
+              "fps": 2
+            },
+            "run": {
+              "frames": [2, 3, 4, 5],
+              "fps": 12
+            },
+            "jump": {
+              "frames": [6],
+              "fps": 1
+            },
+            "fall": {
+              "frames": [7],
+              "fps": 1
+            },
+            "hurt": {
+              "frames": [8],
+              "fps": 1
+            }
+          },
+          "clip": "idle",
+          "speed": 1,
+          "playing": true,
+          "time": 0,
+          "finished": false
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Game",
+      "components": {
+        "Script": {
+          "path": "scripts/game.lua",
+          "params": {},
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "HUD Panel",
+      "components": {
+        "UIPanel": {
+          "anchor": "top-left",
+          "x": 16,
+          "y": 16,
+          "width": 330,
+          "height": 60,
+          "color": [0, 0, 0],
+          "radius": 10,
+          "borderWidth": 0,
+          "borderColor": [1, 1, 1],
+          "clip": false,
+          "opacity": 0.400000006,
+          "visible": true,
+          "order": -1
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "CoinsText",
+      "components": {
+        "UIText": {
+          "text": "COINS 0",
+          "font": "pixel",
+          "size": 28,
+          "color": [1, 1, 1],
+          "anchor": "top-left",
+          "x": 30,
+          "y": 30,
+          "width": 0,
+          "height": 0,
+          "align": "auto",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 0,
+          "outlineColor": [0, 0, 0],
+          "shadowDistance": 2,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "LivesText",
+      "components": {
+        "UIText": {
+          "text": "LIVES 3",
+          "font": "pixel",
+          "size": 28,
+          "color": [1, 1, 1],
+          "anchor": "top-left",
+          "x": 190,
+          "y": 30,
+          "width": 0,
+          "height": 0,
+          "align": "auto",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 0,
+          "outlineColor": [0, 0, 0],
+          "shadowDistance": 2,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "TimeText",
+      "components": {
+        "UIText": {
+          "text": "0.0",
+          "font": "pixel",
+          "size": 28,
+          "color": [1, 1, 1],
+          "anchor": "top-right",
+          "x": -28,
+          "y": 30,
+          "width": 0,
+          "height": 0,
+          "align": "auto",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 2,
+          "outlineColor": [0.100000001, 0.150000006, 0.300000012],
+          "shadowDistance": 0,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "ARROWS/AD move   SPACE/W jump   R restart",
+          "font": "pixel",
+          "size": 16,
+          "color": [1, 1, 1],
+          "anchor": "bottom",
+          "x": 24,
+          "y": -20,
+          "width": 0,
+          "height": 0,
+          "align": "auto",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 1,
+          "outlineColor": [0.100000001, 0.150000006, 0.300000012],
+          "shadowDistance": 0,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "Message",
+      "components": {
+        "UIText": {
+          "text": "",
+          "font": "pixel",
+          "size": 44,
+          "color": [1, 0.899999976, 0.300000012],
+          "anchor": "center",
+          "x": 0,
+          "y": -50,
+          "width": 0,
+          "height": 0,
+          "align": "center",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1.29999995,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 3,
+          "outlineColor": [0.349999994, 0.200000003, 0],
+          "shadowDistance": 0,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
+          "visible": false,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 26,
+      "name": "MessagePanel",
+      "components": {
+        "UIPanel": {
+          "anchor": "center",
+          "x": 0,
+          "y": 0,
+          "width": 760,
+          "height": 250,
+          "color": [0.0500000007, 0.0700000003, 0.119999997],
+          "radius": 18,
+          "borderWidth": 3,
+          "borderColor": [1, 0.899999976, 0.300000012],
+          "clip": false,
+          "opacity": 0.75,
+          "visible": false,
+          "order": -1
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "PlayAgain",
+      "components": {
+        "Script": {
+          "path": "scripts/play_again.lua",
+          "params": {},
+          "enabled": true
+        },
+        "UIButton": {
+          "text": "Play again",
+          "font": "pixel",
+          "size": 28,
+          "textColor": [1, 1, 1],
+          "anchor": "center",
+          "x": 0,
+          "y": 62,
+          "width": 240,
+          "height": 64,
+          "color": [0.25, 0.449999988, 0.899999976],
+          "radius": 10,
+          "borderWidth": 3,
+          "borderColor": [1, 1, 1],
+          "hoverBrightness": 1.14999998,
+          "pressedBrightness": 0.850000024,
+          "interactable": true,
+          "opacity": 1,
+          "visible": false,
+          "order": 10
+        }
+      }
+    }
+  ]
+}

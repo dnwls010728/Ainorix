@@ -13,8 +13,11 @@ struct Texture {
     int width = 0;
     int height = 0;
     std::vector<uint32_t> texels;
+    uint32_t version = 0;  // bumped when texels change in place (font atlases grow)
     // Bilinear sample with repeat wrapping; (0,0) is the top-left corner.
     Color Sample(float u, float v) const;
+    // Same with alpha (0..1) and optional nearest-texel sampling (pixel art).
+    Color Sample(float u, float v, bool nearest, float* alpha) const;
 };
 
 // A range of indices drawn with one material.

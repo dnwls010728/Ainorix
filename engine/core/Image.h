@@ -12,9 +12,9 @@ struct Image {
     std::vector<uint8_t> rgba;
 };
 
-// PNG encoder (RGB, deflate with fixed Huffman + LZ77). No dependencies.
-std::vector<uint8_t> EncodePng(const Image& image);
-bool WritePng(const std::string& path, const Image& image);
+// PNG encoder (RGB, or RGBA with `alpha`; deflate with fixed Huffman + LZ77). No dependencies.
+std::vector<uint8_t> EncodePng(const Image& image, bool alpha = false);
+bool WritePng(const std::string& path, const Image& image, bool alpha = false);
 
 // Baseline JPEG (stb_image_write), quality 1..100. Lossy and much faster
 // than PNG; used to stream the editor viewport.

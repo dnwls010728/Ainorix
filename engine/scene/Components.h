@@ -25,7 +25,7 @@ struct Transform {
 
 struct MeshRenderer {
     static constexpr const char* kTypeName = "MeshRenderer";
-    static constexpr const char* kDoc = "Draws a mesh: a built-in shape (cube, sphere, plane, pyramid) or a glTF model file. Unknown meshes render as a magenta cube.";
+    static constexpr const char* kDoc = "Draws a mesh: a built-in shape (cube, sphere, plane, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.";
     std::string mesh = "cube";
     Color color{0.8f, 0.8f, 0.8f};
     std::string texture;
@@ -34,13 +34,105 @@ struct MeshRenderer {
     bool castShadows = true;
     bool visible = true;
     static void Reflect(FieldList& f) {
-        f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, pyramid) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf).");
+        f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf).");
         f.Add("color", &MeshRenderer::color, "Tint multiplied with the model/texture color, linear RGB 0..1 (or \"#rrggbb\").");
         f.Add("texture", &MeshRenderer::texture, "Image (.png/.jpg) overriding the model's own base color texture. Empty = use the model's.");
         f.Add("shading", &MeshRenderer::shading, "smooth = interpolated vertex normals, flat = faceted.").options = {"smooth", "flat"};
         f.Add("unlit", &MeshRenderer::unlit, "Ignore lighting and shadows (UI-like, emissive look).");
         f.Add("castShadows", &MeshRenderer::castShadows, "Casts shadows from the directional light.");
         f.Add("visible", &MeshRenderer::visible, "Whether the mesh is drawn.");
+    }
+};
+
+// ----- 2D --------------------------------------------------------------------------
+
+struct Sprite {
+    static constexpr const char* kTypeName = "Sprite";
+    static constexpr const char* kDoc = "Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at the entity. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.";
+    std::string texture;
+    Color color{1, 1, 1};
+    int frame = 0;
+    int columns = 1;
+    int rows = 1;
+    float pixelsPerUnit = 16.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float pivotX = 0.5f;
+    float pivotY = 0.5f;
+    bool flipX = false;
+    bool flipY = false;
+    bool pixelArt = true;
+    float alphaCutoff = 0.5f;
+    bool lit = false;
+    int order = 0;
+    bool visible = true;
+    static void Reflect(FieldList& f) {
+        f.Add("texture", &Sprite::texture, "Image file (.png with transparency). A sprite sheet is a grid of equally sized frames.");
+        f.Add("color", &Sprite::color, "Tint multiplied with the image.");
+        f.Add("frame", &Sprite::frame, "Frame index in the sheet, row by row from the top-left (SpriteAnimation sets it).");
+        f.Add("columns", &Sprite::columns, "Frames per row in the sheet.");
+        f.Add("rows", &Sprite::rows, "Rows of frames in the sheet.");
+        f.Add("pixelsPerUnit", &Sprite::pixelsPerUnit, "Image pixels per world unit; sets the size when width/height are 0 (16 = a 16 px frame is 1 unit).");
+        f.Add("width", &Sprite::width, "Width in world units (0 = frame pixels / pixelsPerUnit). Transform.scale multiplies it.");
+        f.Add("height", &Sprite::height, "Height in world units (0 = from pixels).");
+        f.Add("pivotX", &Sprite::pivotX, "Point of the sprite placed at the entity position: 0 = left edge, 0.5 = center, 1 = right edge.");
+        f.Add("pivotY", &Sprite::pivotY, "0 = bottom edge (feet), 0.5 = center, 1 = top edge.");
+        f.Add("flipX", &Sprite::flipX, "Mirror horizontally (face left).");
+        f.Add("flipY", &Sprite::flipY, "Mirror vertically.");
+        f.Add("pixelArt", &Sprite::pixelArt, "Sharp nearest-neighbour pixels instead of smooth filtering.");
+        f.Add("alphaCutoff", &Sprite::alphaCutoff, "Pixels with alpha below this are not drawn (0 = draw everything).");
+        f.Add("lit", &Sprite::lit, "Apply scene lighting (default: full brightness, like classic 2D).");
+        f.Add("order", &Sprite::order, "Sorting among sprites at the same depth: higher is drawn in front.");
+        f.Add("visible", &Sprite::visible, "Whether the sprite is drawn.");
+    }
+};
+
+struct SpriteAnimation {
+    static constexpr const char* kTypeName = "SpriteAnimation";
+    static constexpr const char* kDoc = "Plays frame sequences on the entity's Sprite. clips = {\"run\": {\"frames\": [2,3,4,5], \"fps\": 10, \"loop\": true}}; set clip to switch (restarts it).";
+    Json clips = Json::MakeObject();
+    std::string clip;
+    float speed = 1.0f;
+    bool playing = true;
+    float time = 0.0f;
+    bool finished = false;
+    std::string current;  // runtime: clip that `time` refers to (not reflected)
+    static void Reflect(FieldList& f) {
+        f.Add("clips", &SpriteAnimation::clips, "Clip name -> {frames: [indices], fps: number, loop: bool (default true)}.");
+        f.Add("clip", &SpriteAnimation::clip, "Clip being played. Changing it starts the new clip from its first frame.");
+        f.Add("speed", &SpriteAnimation::speed, "Playback speed multiplier.");
+        f.Add("playing", &SpriteAnimation::playing, "Pause/resume.");
+        f.Add("time", &SpriteAnimation::time, "Runtime: seconds into the current clip.");
+        f.Add("finished", &SpriteAnimation::finished, "Runtime: true once a non-looping clip reached its last frame.");
+    }
+};
+
+struct Tilemap {
+    static constexpr const char* kTypeName = "Tilemap";
+    static constexpr const char* kDoc = "Grid of tiles from a tileset image, written as text rows (map) with a legend of characters. The entity position is the top-left corner; rows go down (-Y), columns right (+X). Solid tiles collide.";
+    std::string tileset;
+    int columns = 1;
+    int rows = 1;
+    float tileSize = 1.0f;
+    Json map = Json::MakeArray();
+    Json legend = Json::MakeObject();
+    std::string solid;
+    Color color{1, 1, 1};
+    bool pixelArt = true;
+    bool lit = false;
+    bool visible = true;
+    static void Reflect(FieldList& f) {
+        f.Add("tileset", &Tilemap::tileset, "Tileset image: a grid of equally sized tiles.");
+        f.Add("columns", &Tilemap::columns, "Tiles per row in the tileset image.");
+        f.Add("rows", &Tilemap::rows, "Rows of tiles in the tileset image.");
+        f.Add("tileSize", &Tilemap::tileSize, "Size of one tile in world units.");
+        f.Add("map", &Tilemap::map, "Array of strings, one per row from the top; one character per tile. Characters not in the legend (space, '.') are empty.");
+        f.Add("legend", &Tilemap::legend, "Character -> tileset frame index, e.g. {\"#\": 0, \"=\": 1}.");
+        f.Add("solid", &Tilemap::solid, "Characters that collide (static boxes, merged along rows), e.g. \"#=\". Others are decoration only.");
+        f.Add("color", &Tilemap::color, "Tint.");
+        f.Add("pixelArt", &Tilemap::pixelArt, "Sharp nearest-neighbour pixels.");
+        f.Add("lit", &Tilemap::lit, "Apply scene lighting.");
+        f.Add("visible", &Tilemap::visible, "Whether the tiles are drawn (they still collide).");
     }
 };
 
@@ -104,11 +196,17 @@ struct CameraFollow {
     Vec3 offset{0, 4, 8};
     Vec3 lookOffset{0, 0.5f, 0};
     float smoothing = 8.0f;
+    bool useBounds = false;
+    Vec3 boundsMin{-1000, -1000, -1000};
+    Vec3 boundsMax{1000, 1000, 1000};
     static void Reflect(FieldList& f) {
         f.Add("target", &CameraFollow::target, "Entity id to follow.");
         f.Add("offset", &CameraFollow::offset, "Position relative to the target (world axes).");
         f.Add("lookOffset", &CameraFollow::lookOffset, "Point to look at, relative to the target.");
         f.Add("smoothing", &CameraFollow::smoothing, "Catch-up speed (per second); 0 = snap instantly.");
+        f.Add("useBounds", &CameraFollow::useBounds, "Clamp the camera position to boundsMin..boundsMax and keep its rotation (2D side-scrollers: the view stops at the level edges).");
+        f.Add("boundsMin", &CameraFollow::boundsMin, "Lowest camera position when useBounds is on.");
+        f.Add("boundsMax", &CameraFollow::boundsMax, "Highest camera position when useBounds is on.");
     }
 };
 
@@ -199,6 +297,7 @@ struct RigidBody {
     float linearDamping = 0.05f;
     bool lockRotation = false;
     bool continuous = false;
+    bool plane2D = false;
     static void Reflect(FieldList& f) {
         f.Add("type", &RigidBody::type, "Body type.").options = {"dynamic", "kinematic"};
         FieldInfo& m = f.Add("mass", &RigidBody::mass, "Mass in kg (dynamic bodies).");
@@ -209,6 +308,7 @@ struct RigidBody {
         f.Add("linearDamping", &RigidBody::linearDamping, "Air resistance.");
         f.Add("lockRotation", &RigidBody::lockRotation, "Prevent the body from rotating (keeps it upright).");
         f.Add("continuous", &RigidBody::continuous, "Continuous collision detection for fast objects (prevents tunneling through thin walls).");
+        f.Add("plane2D", &RigidBody::plane2D, "2D physics: move only in the XY plane and rotate only around Z.");
     }
 };
 
@@ -223,6 +323,7 @@ struct CharacterBody {
     float gravityScale = 1.0f;
     Vec3 velocity{0, 0, 0};
     bool grounded = false;
+    bool plane2D = false;
     static void Reflect(FieldList& f) {
         f.Add("shape", &CharacterBody::shape, "Shape centered on the entity origin.").options = {"capsule", "sphere"};
         f.Add("radius", &CharacterBody::radius, "Radius in meters.");
@@ -232,6 +333,7 @@ struct CharacterBody {
         f.Add("gravityScale", &CharacterBody::gravityScale, "Multiplier for gravity.");
         f.Add("velocity", &CharacterBody::velocity, "Desired velocity in m/s; after each step it holds the actual velocity.");
         f.Add("grounded", &CharacterBody::grounded, "Runtime state: true while standing on walkable ground.");
+        f.Add("plane2D", &CharacterBody::plane2D, "2D games: keep the character on its starting Z (velocity.z is ignored).");
     }
 };
 
@@ -245,41 +347,102 @@ struct Prefab {
 };
 
 // ----- In-game UI ----------------------------------------------------------------
-// UI is laid out on a 1280x720 reference canvas scaled to the screen height.
-// `anchor` picks both the screen point and the element's pivot; x/y are
-// offsets in reference pixels (+x right, +y down). Drawn in `order`, then id.
+// Screen-space UI laid out on a reference canvas (1280x720 unless a UICanvas
+// says otherwise) scaled to the screen. Every element has the same placement
+// fields: `anchor` picks the point of the parent rectangle the element hangs
+// from and its pivot (or a stretch mode), x/y offset it in reference pixels
+// (+x right, +y down), width/height size it. The parent rectangle is the
+// nearest ancestor entity with a UI element, else the screen, so panels can
+// hold buttons and text. Siblings draw in `order`, then id; children draw on
+// top of their parent. A UILayout on the parent arranges children instead
+// (in hierarchy order). A UIPanel with opacity 0 is an invisible container.
 
 inline const std::vector<std::string>& UIAnchors() {
-    static const std::vector<std::string> a = {"top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"};
+    static const std::vector<std::string> a = {"top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right",
+                                               "stretch-top", "stretch-middle", "stretch-bottom", "stretch-left", "stretch-center", "stretch-right", "stretch"};
     return a;
 }
 
+constexpr const char* kUIAnchorDoc =
+    "Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: "
+    "there width/height is added to the parent's size (-40 leaves 20 px on each side).";
+
+// Placement fields shared by all UI components.
+template <class T>
+void ReflectUIPlacement(FieldList& f, const char* sizeDoc) {
+    f.Add("anchor", &T::anchor, kUIAnchorDoc).options = UIAnchors();
+    f.Add("x", &T::x, "Horizontal offset in reference pixels (canvas is 1280x720 by default).");
+    f.Add("y", &T::y, "Vertical offset in reference pixels (+y is down).");
+    f.Add("width", &T::width, sizeDoc);
+    f.Add("height", &T::height, sizeDoc);
+}
+
+template <class T>
+void ReflectUICommon(FieldList& f) {
+    FieldInfo& o = f.Add("opacity", &T::opacity, "0 = invisible, 1 = opaque (this element only; children keep theirs).");
+    o.hasRange = true;
+    o.min = 0.0f;
+    o.max = 1.0f;
+    f.Add("visible", &T::visible, "Hidden elements (and their children) are not drawn and cannot be clicked.");
+    f.Add("order", &T::order, "Draw order among siblings (higher on top).");
+}
+
+constexpr const char* kUIFontDoc =
+    "\"default\" (built-in Roboto), \"pixel\" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). "
+    "Characters a font lacks fall back to the default font.";
+
 struct UIText {
     static constexpr const char* kTypeName = "UIText";
-    static constexpr const char* kDoc = "Screen-space text (ASCII, built-in pixel font). Multi-line with \n.";
+    static constexpr const char* kDoc = "Screen-space text: TrueType fonts (any language the font covers), alignment, wrapping, outline, shadow, rich text.";
     std::string text = "Text";
+    std::string font = "default";
+    float size = 32.0f;
+    Color color{1, 1, 1};
     std::string anchor = "top-left";
     float x = 24.0f;
     float y = 24.0f;
-    float size = 32.0f;
-    Color color{1, 1, 1};
+    float width = 0.0f;
+    float height = 0.0f;
+    std::string align = "auto";
+    std::string verticalAlign = "top";
+    bool wrap = true;
+    float lineSpacing = 1.0f;
+    float letterSpacing = 0.0f;
+    bool bold = false;
+    bool richText = true;
+    float outlineWidth = 0.0f;
+    Color outlineColor{0, 0, 0};
+    float shadowDistance = 0.0f;
+    Color shadowColor{0, 0, 0};
+    int visibleCharacters = -1;
+    float opacity = 1.0f;
     bool visible = true;
     int order = 0;
     static void Reflect(FieldList& f) {
-        f.Add("text", &UIText::text, "Text to show. Non-ASCII characters render as '?'.");
-        f.Add("anchor", &UIText::anchor, "Screen anchor and pivot.").options = UIAnchors();
-        f.Add("x", &UIText::x, "Horizontal offset in reference pixels (canvas is 1280x720).");
-        f.Add("y", &UIText::y, "Vertical offset in reference pixels (+y is down).");
-        f.Add("size", &UIText::size, "Line height in reference pixels.");
+        f.Add("text", &UIText::text, "Text to show (UTF-8). \\n starts a new line. With richText: <color=#ff8800>..</color>, <b>..</b>.");
+        f.Add("font", &UIText::font, kUIFontDoc);
+        f.Add("size", &UIText::size, "Font size in reference pixels (em height; for \"pixel\" the line height).");
         f.Add("color", &UIText::color, "Text color.");
-        f.Add("visible", &UIText::visible, "Hidden elements are not drawn.");
-        f.Add("order", &UIText::order, "Draw order (higher on top).");
+        ReflectUIPlacement<UIText>(f, "Box size in reference pixels; 0 = fit the text. A width makes text wrap and align inside it.");
+        f.Add("align", &UIText::align, "Horizontal alignment of lines; auto follows the anchor (left/center/right).").options = {"auto", "left", "center", "right"};
+        f.Add("verticalAlign", &UIText::verticalAlign, "Vertical alignment inside a box with a height.").options = {"top", "middle", "bottom"};
+        f.Add("wrap", &UIText::wrap, "Break lines at word boundaries to fit width (when width > 0).");
+        f.Add("lineSpacing", &UIText::lineSpacing, "Line height multiplier.");
+        f.Add("letterSpacing", &UIText::letterSpacing, "Extra space between characters in reference pixels.");
+        f.Add("bold", &UIText::bold, "Synthetic bold.");
+        f.Add("richText", &UIText::richText, "Interpret <color=..> and <b> tags.");
+        f.Add("outlineWidth", &UIText::outlineWidth, "Outline thickness in reference pixels (0 = none).");
+        f.Add("outlineColor", &UIText::outlineColor, "Outline color.");
+        f.Add("shadowDistance", &UIText::shadowDistance, "Drop shadow offset (right and down) in reference pixels (0 = none).");
+        f.Add("shadowColor", &UIText::shadowColor, "Drop shadow color (drawn at half the text opacity).");
+        f.Add("visibleCharacters", &UIText::visibleCharacters, "Show only the first N characters (typewriter effects); -1 = all.");
+        ReflectUICommon<UIText>(f);
     }
 };
 
 struct UIPanel {
     static constexpr const char* kTypeName = "UIPanel";
-    static constexpr const char* kDoc = "Screen-space colored rectangle (backgrounds, bars).";
+    static constexpr const char* kDoc = "Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a border. Parent of other UI elements.";
     std::string anchor = "top-left";
     float x = 16.0f;
     float y = 16.0f;
@@ -287,48 +450,191 @@ struct UIPanel {
     float height = 64.0f;
     Color color{0, 0, 0};
     float opacity = 0.5f;
+    float radius = 0.0f;
+    float borderWidth = 0.0f;
+    Color borderColor{1, 1, 1};
+    bool clip = false;
     bool visible = true;
     int order = -1;
     static void Reflect(FieldList& f) {
-        f.Add("anchor", &UIPanel::anchor, "Screen anchor and pivot.").options = UIAnchors();
-        f.Add("x", &UIPanel::x, "Horizontal offset in reference pixels.");
-        f.Add("y", &UIPanel::y, "Vertical offset in reference pixels.");
-        f.Add("width", &UIPanel::width, "Width in reference pixels.");
-        f.Add("height", &UIPanel::height, "Height in reference pixels.");
+        ReflectUIPlacement<UIPanel>(f, "Size in reference pixels.");
         f.Add("color", &UIPanel::color, "Fill color.");
-        FieldInfo& o = f.Add("opacity", &UIPanel::opacity, "0 = invisible, 1 = opaque.");
-        o.hasRange = true; o.min = 0.0f; o.max = 1.0f;
-        f.Add("visible", &UIPanel::visible, "Hidden elements are not drawn.");
-        f.Add("order", &UIPanel::order, "Draw order (higher on top).");
+        f.Add("radius", &UIPanel::radius, "Corner radius in reference pixels.");
+        f.Add("borderWidth", &UIPanel::borderWidth, "Border thickness in reference pixels (0 = none).");
+        f.Add("borderColor", &UIPanel::borderColor, "Border color.");
+        f.Add("clip", &UIPanel::clip, "Children are cut off at the panel's edges (and cannot be clicked outside it).");
+        ReflectUICommon<UIPanel>(f);
     }
 };
 
 struct UIButton {
     static constexpr const char* kTypeName = "UIButton";
-    static constexpr const char* kDoc = "Clickable screen-space button. A click calls onClick(self) on the entity's Script. Click it from tools with input.click.";
+    static constexpr const char* kDoc =
+        "Clickable screen-space button. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit. "
+        "Click it from tools with input.click (ui.layout lists where it is).";
     std::string text = "Button";
+    std::string font = "default";
+    float size = 28.0f;
+    Color textColor{1, 1, 1};
     std::string anchor = "center";
     float x = 0.0f;
     float y = 0.0f;
     float width = 240.0f;
     float height = 64.0f;
-    float size = 28.0f;
     Color color{0.25f, 0.45f, 0.9f};
-    Color textColor{1, 1, 1};
+    float radius = 8.0f;
+    float borderWidth = 0.0f;
+    Color borderColor{1, 1, 1};
+    float hoverBrightness = 1.15f;
+    float pressedBrightness = 0.85f;
+    bool interactable = true;
+    float opacity = 1.0f;
     bool visible = true;
     int order = 10;
+    // Runtime state set by the simulation (not saved).
+    bool hovered = false;
+    bool pressed = false;
     static void Reflect(FieldList& f) {
-        f.Add("text", &UIButton::text, "Label.");
-        f.Add("anchor", &UIButton::anchor, "Screen anchor and pivot.").options = UIAnchors();
-        f.Add("x", &UIButton::x, "Horizontal offset in reference pixels.");
-        f.Add("y", &UIButton::y, "Vertical offset in reference pixels.");
-        f.Add("width", &UIButton::width, "Width in reference pixels.");
-        f.Add("height", &UIButton::height, "Height in reference pixels.");
-        f.Add("size", &UIButton::size, "Label line height in reference pixels.");
-        f.Add("color", &UIButton::color, "Background color.");
+        f.Add("text", &UIButton::text, "Label (same rich text as UIText).");
+        f.Add("font", &UIButton::font, kUIFontDoc);
+        f.Add("size", &UIButton::size, "Label font size in reference pixels.");
         f.Add("textColor", &UIButton::textColor, "Label color.");
-        f.Add("visible", &UIButton::visible, "Hidden buttons are not drawn and cannot be clicked.");
-        f.Add("order", &UIButton::order, "Draw order (higher on top).");
+        ReflectUIPlacement<UIButton>(f, "Size in reference pixels.");
+        f.Add("color", &UIButton::color, "Background color.");
+        f.Add("radius", &UIButton::radius, "Corner radius in reference pixels.");
+        f.Add("borderWidth", &UIButton::borderWidth, "Border thickness in reference pixels (0 = none).");
+        f.Add("borderColor", &UIButton::borderColor, "Border color.");
+        f.Add("hoverBrightness", &UIButton::hoverBrightness, "Background brightness while the pointer is over the button.");
+        f.Add("pressedBrightness", &UIButton::pressedBrightness, "Background brightness while pressed.");
+        f.Add("interactable", &UIButton::interactable, "Disabled buttons are drawn faded and ignore clicks.");
+        ReflectUICommon<UIButton>(f);
+    }
+};
+
+struct UIImage {
+    static constexpr const char* kTypeName = "UIImage";
+    static constexpr const char* kDoc = "Screen-space image: icons, portraits, 9-slice frames, fill bars (fill + fillOrigin), sprite sheet frames.";
+    std::string texture;
+    Color color{1, 1, 1};
+    std::string anchor = "center";
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    int frame = 0;
+    int columns = 1;
+    int rows = 1;
+    float slice = 0.0f;
+    float sliceScale = 1.0f;
+    bool preserveAspect = false;
+    bool pixelArt = false;
+    float fill = 1.0f;
+    std::string fillOrigin = "left";
+    float radius = 0.0f;
+    float opacity = 1.0f;
+    bool visible = true;
+    int order = 0;
+    static void Reflect(FieldList& f) {
+        f.Add("texture", &UIImage::texture, "Image file (png/jpg/bmp/tga). Empty = solid color.");
+        f.Add("color", &UIImage::color, "Tint (multiplies the image).");
+        ReflectUIPlacement<UIImage>(f, "Size in reference pixels; 0 = the image's (frame's) pixel size.");
+        f.Add("frame", &UIImage::frame, "Frame of a sprite sheet (row by row from the top-left).");
+        f.Add("columns", &UIImage::columns, "Sheet columns.");
+        f.Add("rows", &UIImage::rows, "Sheet rows.");
+        f.Add("slice", &UIImage::slice, "9-slice border in image pixels: corners keep their size, edges and center stretch (0 = plain stretch).");
+        f.Add("sliceScale", &UIImage::sliceScale, "Size of the 9-slice border on screen, in reference pixels per image pixel.");
+        f.Add("preserveAspect", &UIImage::preserveAspect, "Fit the image inside the box without distorting it.");
+        f.Add("pixelArt", &UIImage::pixelArt, "Nearest-neighbour sampling (sharp pixels).");
+        FieldInfo& fl = f.Add("fill", &UIImage::fill, "Visible fraction (health bars, cooldowns).");
+        fl.hasRange = true;
+        fl.min = 0.0f;
+        fl.max = 1.0f;
+        f.Add("fillOrigin", &UIImage::fillOrigin, "Side the fill grows from.").options = {"left", "right", "top", "bottom"};
+        f.Add("radius", &UIImage::radius, "Corner radius in reference pixels (round avatars, pills).");
+        ReflectUICommon<UIImage>(f);
+    }
+};
+
+struct UISlider {
+    static constexpr const char* kTypeName = "UISlider";
+    static constexpr const char* kDoc =
+        "Bar showing value in [min, max]: a draggable slider (calls onValueChanged(self, value) on the entity's Script) or, with interactable "
+        "false, a progress/health bar.";
+    float value = 0.5f;
+    float min = 0.0f;
+    float max = 1.0f;
+    float step = 0.0f;
+    std::string direction = "left-to-right";
+    std::string anchor = "center";
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 320.0f;
+    float height = 24.0f;
+    Color color{0.12f, 0.13f, 0.16f};
+    Color fillColor{0.25f, 0.45f, 0.9f};
+    bool handle = true;
+    Color handleColor{1, 1, 1};
+    float radius = 12.0f;
+    bool interactable = true;
+    float opacity = 1.0f;
+    bool visible = true;
+    int order = 10;
+    // Runtime state set by the simulation (not saved).
+    bool hovered = false;
+    bool pressed = false;
+    static void Reflect(FieldList& f) {
+        f.Add("value", &UISlider::value, "Current value.");
+        f.Add("min", &UISlider::min, "Value at the start.");
+        f.Add("max", &UISlider::max, "Value at the end.");
+        f.Add("step", &UISlider::step, "Snap dragged values to multiples of this (0 = continuous).");
+        f.Add("direction", &UISlider::direction, "Fill direction.").options = {"left-to-right", "right-to-left", "bottom-to-top", "top-to-bottom"};
+        ReflectUIPlacement<UISlider>(f, "Size in reference pixels.");
+        f.Add("color", &UISlider::color, "Track (background) color.");
+        f.Add("fillColor", &UISlider::fillColor, "Filled part color.");
+        f.Add("handle", &UISlider::handle, "Draw a round handle at the value.");
+        f.Add("handleColor", &UISlider::handleColor, "Handle color.");
+        f.Add("radius", &UISlider::radius, "Corner radius in reference pixels.");
+        f.Add("interactable", &UISlider::interactable, "Drag to change the value; false = display only (progress bar).");
+        ReflectUICommon<UISlider>(f);
+    }
+};
+
+struct UILayout {
+    static constexpr const char* kTypeName = "UILayout";
+    static constexpr const char* kDoc =
+        "Arranges the UI children of this entity's UI element in a column, row or grid (their anchor/x/y are ignored). "
+        "fit resizes the element to its content (menus, lists, inventories).";
+    std::string direction = "vertical";
+    float spacing = 8.0f;
+    float padding = 0.0f;
+    int columns = 3;
+    std::string align = "start";
+    std::string crossAlign = "start";
+    bool fit = false;
+    static void Reflect(FieldList& f) {
+        f.Add("direction", &UILayout::direction, "vertical (column), horizontal (row) or grid (rows of `columns` equal cells).").options = {"vertical", "horizontal", "grid"};
+        f.Add("spacing", &UILayout::spacing, "Gap between children in reference pixels.");
+        f.Add("padding", &UILayout::padding, "Inner margin on every side in reference pixels.");
+        f.Add("columns", &UILayout::columns, "Cells per row for grid.");
+        f.Add("align", &UILayout::align, "Where the children sit along the layout direction.").options = {"start", "center", "end"};
+        f.Add("crossAlign", &UILayout::crossAlign, "Placement across the direction; stretch makes children as wide (tall) as the element.").options = {"start", "center", "end", "stretch"};
+        f.Add("fit", &UILayout::fit, "Resize the element to wrap its children.");
+    }
+};
+
+struct UICanvas {
+    static constexpr const char* kTypeName = "UICanvas";
+    static constexpr const char* kDoc = "Optional, one per scene: the reference resolution the UI is authored for and how it scales to other screen sizes.";
+    float referenceWidth = 1280.0f;
+    float referenceHeight = 720.0f;
+    float match = 1.0f;
+    static void Reflect(FieldList& f) {
+        f.Add("referenceWidth", &UICanvas::referenceWidth, "Reference canvas width in pixels.");
+        f.Add("referenceHeight", &UICanvas::referenceHeight, "Reference canvas height in pixels.");
+        FieldInfo& m = f.Add("match", &UICanvas::match, "0 = scale with the screen width, 1 = with the height (default), in between = blend.");
+        m.hasRange = true;
+        m.min = 0.0f;
+        m.max = 1.0f;
     }
 };
 

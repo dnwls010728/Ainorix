@@ -79,7 +79,8 @@ std::vector<std::string> GameFiles(const std::string& projectDir) {
     for (const std::string& src : ListFiles(projectDir, "", true)) {
         std::string rel = RelativePath(src, projectDir);
         bool hidden = rel.empty() || rel[0] == '.' || rel.find("/.") != std::string::npos;
-        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md") continue;
+        // tools/ holds development helpers (e.g. art generators), not game data.
+        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md" || rel.rfind("tools/", 0) == 0) continue;
         files.push_back(rel);
     }
     std::sort(files.begin(), files.end());

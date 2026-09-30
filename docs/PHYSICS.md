@@ -13,7 +13,9 @@ Physics runs only while simulating. Each fixed step (1/60 s): **scripts `onUpdat
 | `Collider` | Shape: `box` (`size`, matches the 1×1×1 cube mesh by default), `sphere` (`radius`), `capsule` (`radius`, `height`). `center` offsets it. Scaled by the entity's world scale. `friction`, `bounciness`. Without a RigidBody it is **static** (floors, walls). |
 | `Collider` + `isTrigger` | Non-solid volume. Reports `onTriggerEnter/Exit` for moving bodies and characters (not static colliders). |
 | `RigidBody` | `dynamic` (gravity, collisions, can be pushed) or `kinematic` (follows its Transform — moving platforms, doors — and pushes dynamic bodies). `mass`, `gravityScale`, `linearDamping`, `lockRotation`, `continuous` (anti-tunneling for fast objects). `velocity` / `angularVelocity` are written every step; set them to launch a body. |
-| `CharacterBody` | Player/NPC controller: capsule or sphere centered on the entity. Set `velocity` (x/z to walk, y to jump); the engine slides along walls, climbs `stepHeight` steps and slopes up to `maxSlope`, applies gravity and sets `grounded`. Replaces the Collider on the same entity. |
+| `CharacterBody` | Player/NPC controller: capsule or sphere centered on the entity. Set `velocity` (x/z to walk, y to jump); the engine slides along walls, climbs `stepHeight` steps and slopes up to `maxSlope`, applies gravity and sets `grounded`. Replaces the Collider on the same entity. `plane2D` keeps it on its starting Z for 2D games. Hitting a ceiling ends upward motion. |
+
+`RigidBody.plane2D` restricts a body to the XY plane (rotation around Z only). A `Tilemap` with `solid` characters becomes one static body made of merged boxes (see [2D.md](2D.md)).
 
 `PlayerController` automatically drives a `CharacterBody` when the entity has one (otherwise it falls back to its simple y = 0 ground). Things moved by editing their Transform: statics are teleported, kinematics are moved smoothly, dynamics are teleported and keep their velocity.
 

@@ -475,10 +475,13 @@ int CmdImport(const Args& a) {
     return 0;
 }
 
-// Folder with the web runtime (oe_player.js + oe_player.wasm from
-// build_web.sh / build_web.bat), or "" when it has not been built.
+// Folder with the web runtime (oe_player.js + oe_player.wasm): a local
+// build_web.sh / build_web.bat result first, then the prebuilt runtime/web/.
+// "" when neither exists.
 std::string FindWebRuntime() {
-    std::string candidates[] = {JoinPath(ExecutableDirectory(), "web"), JoinPath(OE_SOURCE_DIR, "build/bin/web"), JoinPath(OE_SOURCE_DIR, "build-web/bin")};
+    std::string candidates[] = {JoinPath(ExecutableDirectory(), "web"), JoinPath(OE_SOURCE_DIR, "build/bin/web"), JoinPath(OE_SOURCE_DIR, "build-web/bin"),
+                                // Prebuilt runtime committed to the repository (no Emscripten needed).
+                                JoinPath(OE_SOURCE_DIR, "runtime/web")};
     for (const std::string& c : candidates) {
         if (FileExists(JoinPath(c, "oe_player.js")) && FileExists(JoinPath(c, "oe_player.wasm"))) return c;
     }
@@ -561,6 +564,7 @@ int CmdPackage(const Args& a) {
         res["ok"] = true;
         res["result"]["dir"] = out;
         res["result"]["index"] = JoinPath(out, "index.html");
+        res["result"]["webRuntime"] = runtime;
         res["result"]["files"] = fileList;
         res["result"]["dataBytes"] = bytes;
         res["result"]["next"] = "Test locally with `oe serve " + out + "`, then upload the folder to any static web host "

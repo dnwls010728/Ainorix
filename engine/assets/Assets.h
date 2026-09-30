@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Json.h"
+#include "render/Font.h"
 #include "render/Mesh.h"
 
 namespace oe {
@@ -26,6 +27,8 @@ public:
     // Built-in mesh name or model path (.glb/.gltf). nullptr + error on failure.
     std::shared_ptr<const Mesh> GetMesh(const std::string& name, std::string* error = nullptr);
     std::shared_ptr<const Texture> GetTexture(const std::string& path, std::string* error = nullptr);
+    // UI font: "default" (built-in Roboto) or a .ttf/.otf/.ttc path. nullptr + error on failure.
+    std::shared_ptr<FontFace> GetFont(const std::string& path, std::string* error = nullptr);
 
     // Reloads assets whose files changed; returns their paths.
     std::vector<std::string> PollChanges();
@@ -44,10 +47,17 @@ private:
     };
     Entry<Mesh> LoadMesh(const std::string& path);
     Entry<Texture> LoadTexture(const std::string& path);
+    struct FontEntry {
+        std::shared_ptr<FontFace> asset;
+        std::string error;
+        int64_t mtime = 0;
+    };
+    FontEntry LoadFont(const std::string& path);
 
     Engine& engine_;
     std::map<std::string, Entry<Mesh>> meshes_;
     std::map<std::string, Entry<Texture>> textures_;
+    std::map<std::string, FontEntry> fonts_;
 };
 
 }  // namespace oe

@@ -23,6 +23,41 @@ Color Texture::Sample(float u, float v) const {
     return top * (1 - ty) + bottom * ty;
 }
 
+Color Texture::Sample(float u, float v, bool nearest, float* alpha) const {
+    if (width <= 0 || height <= 0) {
+        if (alpha) *alpha = 1.0f;
+        return Color(1, 1, 1);
+    }
+    auto wrap = [](int i, int n) { i %= n; return i < 0 ? i + n : i; };
+    auto texel = [&](int px, int py) { return texels[static_cast<size_t>(py) * static_cast<size_t>(width) + static_cast<size_t>(px)]; };
+    if (nearest) {
+        uint32_t c = texel(wrap(static_cast<int>(std::floor(u * static_cast<float>(width))), width),
+                           wrap(static_cast<int>(std::floor(v * static_cast<float>(height))), height));
+        if (alpha) *alpha = static_cast<float>(c >> 24) / 255.0f;
+        return Color((c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f);
+    }
+    float x = u * static_cast<float>(width) - 0.5f;
+    float y = v * static_cast<float>(height) - 0.5f;
+    float fx = std::floor(x), fy = std::floor(y);
+    float tx = x - fx, ty = y - fy;
+    int x0 = wrap(static_cast<int>(fx), width), x1 = wrap(static_cast<int>(fx) + 1, width);
+    int y0 = wrap(static_cast<int>(fy), height), y1 = wrap(static_cast<int>(fy) + 1, height);
+    float r = 0, g = 0, b = 0, a = 0;
+    auto add = [&](int px, int py, float w) {
+        uint32_t c = texel(px, py);
+        r += w * static_cast<float>(c & 0xFF);
+        g += w * static_cast<float>((c >> 8) & 0xFF);
+        b += w * static_cast<float>((c >> 16) & 0xFF);
+        a += w * static_cast<float>(c >> 24);
+    };
+    add(x0, y0, (1 - tx) * (1 - ty));
+    add(x1, y0, tx * (1 - ty));
+    add(x0, y1, (1 - tx) * ty);
+    add(x1, y1, tx * ty);
+    if (alpha) *alpha = a / 255.0f;
+    return Color(r / 255.0f, g / 255.0f, b / 255.0f);
+}
+
 void Mesh::ComputeBounds() {
     if (positions.empty()) {
         boundsMin = boundsMax = Vec3(0, 0, 0);
@@ -86,6 +121,15 @@ Mesh MakePlane() {
     return m;
 }
 
+// 1x1 quad in the XY plane facing +Z (sprites); uv (0,0) = top-left.
+Mesh MakeQuad() {
+    Mesh m;
+    const float h = 0.5f;
+    AddQuad(m, {-h, -h, 0}, {h, -h, 0}, {h, h, 0}, {-h, h, 0});
+    Finish(m);
+    return m;
+}
+
 Mesh MakePyramid() {
     Mesh m;
     const float h = 0.5f;
@@ -138,6 +182,7 @@ const std::map<std::string, Mesh>& Meshes() {
         {"cube", MakeCube()},
         {"plane", MakePlane()},
         {"pyramid", MakePyramid()},
+        {"quad", MakeQuad()},
         {"sphere", MakeSphere(16, 24)},
     };
     return meshes;

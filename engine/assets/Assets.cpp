@@ -242,6 +242,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".glb") || EndsWith(p, ".gltf")) return "model";
     if (EndsWith(p, ".png") || EndsWith(p, ".jpg") || EndsWith(p, ".jpeg") || EndsWith(p, ".bmp") || EndsWith(p, ".tga")) return "texture";
     if (EndsWith(p, ".wav")) return "audio";
+    if (EndsWith(p, ".ttf") || EndsWith(p, ".otf") || EndsWith(p, ".ttc")) return "font";
     if (EndsWith(p, ".lua")) return "script";
     if (EndsWith(p, ".prefab.json")) return "prefab";
     if (EndsWith(p, ".scene.json")) return "scene";
@@ -255,7 +256,7 @@ AssetManager::Entry<Mesh> AssetManager::LoadMesh(const std::string& path) {
         e.mtime = FileModifiedTime(full);
         auto mesh = std::make_shared<Mesh>();
         if (!FileExists(full)) e.error = "model file not found: " + path;
-        else if (KindOf(path) != "model") e.error = "'" + path + "' is not a built-in mesh (cube, sphere, plane, pyramid) or a .glb/.gltf model";
+        else if (KindOf(path) != "model") e.error = "'" + path + "' is not a built-in mesh (cube, sphere, plane, pyramid, quad) or a .glb/.gltf model";
         else if (LoadModelFile(full, *mesh, &e.error)) e.asset = mesh;
         else e.error = path + ": " + e.error;
     } catch (const std::exception& ex) {
@@ -280,6 +281,30 @@ AssetManager::Entry<Texture> AssetManager::LoadTexture(const std::string& path) 
     }
     if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
     return e;
+}
+
+AssetManager::FontEntry AssetManager::LoadFont(const std::string& path) {
+    FontEntry e;
+    try {
+        std::string full = engine_.ResolvePath(path);
+        e.mtime = FileModifiedTime(full);
+        std::vector<unsigned char> bytes;
+        if (KindOf(path) != "font") e.error = "'" + path + "' is not a font (\"default\", \"pixel\" or a .ttf/.otf/.ttc file)";
+        else if (!ReadBinaryFile(full, bytes)) e.error = "font file not found: " + path;
+        else if (!(e.asset = FontFace::Load(std::move(bytes), &e.error))) e.error = path + ": " + e.error;
+    } catch (const std::exception& ex) {
+        e.error = ex.what();
+    }
+    if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
+    return e;
+}
+
+std::shared_ptr<FontFace> AssetManager::GetFont(const std::string& path, std::string* error) {
+    if (path.empty() || path == "default") return FontFace::Default();
+    auto it = fonts_.find(path);
+    if (it == fonts_.end()) it = fonts_.emplace(path, LoadFont(path)).first;
+    if (error) *error = it->second.error;
+    return it->second.asset;
 }
 
 std::shared_ptr<const Mesh> AssetManager::GetMesh(const std::string& name, std::string* error) {
@@ -320,6 +345,12 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
+    for (auto& kv : fonts_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            kv.second = LoadFont(kv.first);
+            changed.push_back(kv.first);
+        }
+    }
     for (const std::string& p : changed) OE_LOG_INFO("assets", "reloaded %s", p.c_str());
     return changed;
 }
@@ -327,6 +358,7 @@ std::vector<std::string> AssetManager::PollChanges() {
 void AssetManager::Clear() {
     meshes_.clear();
     textures_.clear();
+    fonts_.clear();
 }
 
 Json AssetManager::Info(const std::string& path) {
@@ -372,6 +404,12 @@ Json AssetManager::Info(const std::string& path) {
         if (!tex) throw ApiError("invalid_texture", err);
         out["width"] = tex->width;
         out["height"] = tex->height;
+    } else if (kind == "font") {
+        std::string err;
+        auto font = GetFont(path, &err);
+        if (!font) throw ApiError("invalid_font", err);
+        out["family"] = font->familyName;
+        out["hint"] = Format("Use it with UIText/UIButton {font: \"%s\"}. Characters the font lacks fall back to the built-in font.", path.c_str());
     } else if (kind == "audio") {
         std::vector<unsigned char> bytes;
         ReadBinaryFile(engine_.ResolvePath(path), bytes);

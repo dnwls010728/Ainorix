@@ -131,6 +131,7 @@ async function refreshAssetLists() {
     fill("list-texture", of("texture"));
     fill("list-audio", of("audio"));
     fill("list-script", of("script"));
+    fill("list-font", ["default", "pixel", ...of("font")]);
   }
 }
 
@@ -144,8 +145,16 @@ async function refreshAll() {
 }
 
 function applySim(sim) {
+  // A poll answered before our own input.mouse {locked} call must not undo it.
+  if (performance.now() - (state.lockSetAt || 0) < 1000 && state.sim) sim.mouseLocked = state.sim.mouseLocked;
   state.sim = sim;
   state.revision = sim.revision;
+  // The game released the mouse (input.lockMouse(false), Stop, ...): give the pointer back.
+  if (!sim.inPlaySession) state.relockMouse = false;
+  if (document.pointerLockElement === $("viewport") && !gameWantsMouse()) {
+    state.relockMouse = false;
+    document.exitPointerLock();
+  }
   const status = sim.playing ? "▶ playing" : sim.inPlaySession ? "❚❚ paused" : "edit mode";
   $("simInfo").textContent = `${status} · f${sim.frame} · ${sim.time.toFixed(2)}s`;
   $("btnPlay").disabled = sim.playing;
@@ -207,12 +216,14 @@ const compIcons = {
   Velocity: ["➝", "k-script"], PlayerController: ["✚", "k-char"], Tag: ["#", "k-empty"],
   Script: ["λ", "k-script"], Collider: ["▣", "k-physics"], RigidBody: ["⬢", "k-physics"],
   CharacterBody: ["☻" + T, "k-char"], Prefab: ["❖", "k-model"], UIText: ["T", "k-ui"],
-  UIPanel: ["▭", "k-ui"], UIButton: ["▢", "k-ui"], AudioSource: ["♪", "k-audio"],
+  UIPanel: ["▭", "k-ui"], UIButton: ["▢", "k-ui"], UIImage: ["▨", "k-ui"], UISlider: ["⊶", "k-ui"],
+  UILayout: ["☰", "k-ui"], UICanvas: ["⬚", "k-ui"], AudioSource: ["♪", "k-audio"],
   CameraFollow: ["⇢", "k-camera"],
+  Sprite: ["◪", "k-model"], SpriteAnimation: ["⧉", "k-model"], Tilemap: ["▦", "k-physics"],
 };
 function entityKind(components) {
   const has = (c) => components.includes(c);
-  for (const c of ["Camera", "DirectionalLight", "PointLight", "CharacterBody", "UIButton", "UIText", "UIPanel", "RigidBody", "AudioSource", "Prefab", "MeshRenderer", "Collider", "Script"]) {
+  for (const c of ["Camera", "DirectionalLight", "PointLight", "CharacterBody", "UIButton", "UISlider", "UIText", "UIImage", "UIPanel", "Tilemap", "RigidBody", "AudioSource", "Prefab", "Sprite", "MeshRenderer", "Collider", "Script"]) {
     if (has(c)) return compIcons[c];
   }
   return ["○", "k-empty"];
@@ -612,15 +623,23 @@ function fieldRow(id, type, field, schema, value) {
     };
     el.append(picker, text);
   } else if (kind === "json") {
-    el = document.createElement("input");
-    el.type = "text";
-    el.className = "mono";
-    el.value = JSON.stringify(value);
-    el.title = "JSON object";
+    // Multi-line JSON: arrays of strings (Tilemap.map) show one row per line,
+    // so a level can be edited as text. Applied on blur or Ctrl+Enter.
+    el = document.createElement("textarea");
+    el.className = "mono json-field";
+    el.spellcheck = false;
+    el.wrap = "off";
+    const text = Array.isArray(value) && value.every((v) => typeof v === "string")
+      ? "[\n" + value.map((v) => "  " + JSON.stringify(v)).join(",\n") + "\n]"
+      : JSON.stringify(value, null, 1);
+    el.value = text;
+    el.rows = Math.min(16, Math.max(2, text.split("\n").length));
+    el.title = "JSON (object or array) - applied when you leave the field or press Ctrl+Enter";
     trackFocus(el);
     el.onchange = () => {
       try { set(JSON.parse(el.value)); } catch (err) { toast(`${type}.${field}: invalid JSON: ${err.message}`, "error"); }
     };
+    el.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) el.blur(); };
   } else if (schema.enum) {
     el = document.createElement("select");
     el.innerHTML = schema.enum.map((o) => `<option ${o === value ? "selected" : ""}>${escapeHtml(o)}</option>`).join("");
@@ -631,7 +650,7 @@ function fieldRow(id, type, field, schema, value) {
     el.type = "text";
     el.value = value;
     // Suggest project files for path-like fields.
-    const lists = { mesh: "list-mesh", texture: "list-texture", clip: "list-audio" };
+    const lists = { mesh: "list-mesh", texture: "list-texture", clip: "list-audio", font: "list-font" };
     if (lists[field]) el.setAttribute("list", lists[field]);
     if (type === "Script" && field === "path") el.setAttribute("list", "list-script");
     if (el.hasAttribute("list")) el.placeholder = "type or pick a project file";
@@ -719,7 +738,7 @@ function frameParams() {
     p.eye = camEye().map((v) => +v.toFixed(3));
     p.target = state.cam.target;
     p.fov = state.cam.fov;
-    p.grid = !!state.grid;
+    p.grid = !!state.grid && !state.mode2d;
   }
   return p;
 }
@@ -815,6 +834,10 @@ function updateViewportChrome() {
     hint.fadeTimer = setTimeout(() => hint.classList.add("faded"), 4000);
   }
   hint.hidden = !showHint;
+  const wants = gameWantsMouse(), captured = document.pointerLockElement === $("viewport");
+  $("mouseHint").hidden = !(wants || (game && inSession && state.relockMouse));
+  $("mouseHint").innerHTML = captured ? "<kbd>Esc</kbd> release the mouse" : "<kbd>Click</kbd> capture the mouse (mouse look)";
+  if (wants && !captured) hint.classList.remove("faded");
   const ent = !game && state.selected && state.summary && state.summary.entities.find((e) => e.id === state.selected);
   $("selBadge").hidden = !ent;
   if (ent) $("selBadge").textContent = `Selected: ${ent.name}`;
@@ -823,21 +846,71 @@ function updateViewportChrome() {
 function setupViewport() {
   const vp = $("viewport");
   let drag = null;
+  // While playing, the Game view forwards the real mouse (move, press, release)
+  // as input.mouse calls, in order; consecutive moves are merged. Buttons get
+  // hover/pressed looks and sliders can be dragged, like in the game window.
+  const playingGame = () => state.view === "game" && state.sim && state.sim.inPlaySession;
+  const gameMouse = { queue: [], busy: false };
+  const gamePoint = (e) => {
+    const [w, h] = viewSize();
+    if (document.pointerLockElement === vp) return { x: w / 2, y: h / 2, width: w, height: h };
+    const rect = $("frame").getBoundingClientRect();
+    const x = Math.max(0, Math.min(w - 1, Math.floor(((e.clientX - rect.left) / rect.width) * w)));
+    const y = Math.max(0, Math.min(h - 1, Math.floor(((e.clientY - rect.top) / rect.height) * h)));
+    return { x, y, width: w, height: h };
+  };
+  const sendGameMouse = async (args, isMove) => {
+    const last = gameMouse.queue[gameMouse.queue.length - 1];
+    if (isMove && last && last.move) gameMouse.queue[gameMouse.queue.length - 1] = { args, move: true };
+    else gameMouse.queue.push({ args, move: isMove });
+    if (gameMouse.busy) return;
+    gameMouse.busy = true;
+    try {
+      while (gameMouse.queue.length) {
+        const { args: a } = gameMouse.queue.shift();
+        const r = await api("input.mouse", a, { quiet: true });
+        if (r.ok && r.result.buttonName) logLine(`clicked button "${r.result.buttonName}"`, "res");
+      }
+    } finally { gameMouse.busy = false; }
+  };
   vp.addEventListener("contextmenu", (e) => e.preventDefault());
   vp.addEventListener("mousedown", (e) => {
     vp.focus();
-    drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey, moved: false };
+    // A game that asked for input.lockMouse() gets the browser's pointer lock
+    // (again after Escape). The capturing click is not passed to the game.
+    let capture = false;
+    if ((gameWantsMouse() || (state.relockMouse && state.view === "game" && state.sim && state.sim.inPlaySession)) &&
+        document.pointerLockElement !== vp && !state.lockUnavailable) {
+      // Browsers that refuse pointer lock (embedded views) fall back to plain clicks.
+      const req = vp.requestPointerLock();
+      if (req && req.catch) req.catch(() => { state.lockUnavailable = true; });
+      capture = true;
+    }
+    drag = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, pan: e.button === 2 || e.button === 1 || e.shiftKey, moved: false, capture };
+    if (playingGame() && !capture && (e.button === 0 || e.button === 2)) {
+      drag.game = e.button === 0 ? "MouseLeft" : "MouseRight";
+      sendGameMouse({ ...gamePoint(e), button: drag.game, down: true });
+    }
     if (state.view === "scene") vp.classList.add("dragging");
     e.preventDefault();
   });
   window.addEventListener("mousemove", (e) => {
+    // Hover and drags in the Game view (pointer-locked motion goes through mouse look instead).
+    if (playingGame() && document.pointerLockElement !== vp && ((drag && drag.game) || vp.contains(e.target))) {
+      sendGameMouse(gamePoint(e), true);
+    }
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX; drag.y = e.clientY;
     if (Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) > 3) drag.moved = true;
     if (state.view !== "scene") return;
     const c = state.cam;
-    if (drag.pan) {
+    if (state.mode2d) {
+      // 2D: any drag pans in the XY plane, one screen pixel = one view pixel.
+      const s = (2 * c.dist * Math.tan((c.fov * Math.PI) / 360)) / Math.max(1, vp.clientHeight);
+      c.target[0] -= dx * s;
+      c.target[1] += dy * s;
+    } else if (drag.pan) {
       const s = c.dist * 0.0022;
       const right = [Math.cos(c.yaw), 0, -Math.sin(c.yaw)];
       c.target[0] -= right[0] * dx * s;
@@ -852,16 +925,23 @@ function setupViewport() {
   });
   window.addEventListener("mouseup", async (e) => {
     if (!drag) return;
-    const wasClick = !drag.moved && e.button === 0;
+    const wasClick = !drag.moved && e.button === 0 && !drag.capture;
+    const gameButton = drag.game;
     drag = null;
     vp.classList.remove("dragging");
+    if (gameButton) {
+      sendGameMouse({ ...gamePoint(e), button: gameButton, down: false });
+      return;
+    }
     if (wasClick) {
       const rect = $("frame").getBoundingClientRect();
       const [w, h] = viewSize();
       const x = Math.floor(((e.clientX - rect.left) / rect.width) * w);
       const y = Math.floor(((e.clientY - rect.top) / rect.height) * h);
       if (state.view === "game" && state.sim && state.sim.inPlaySession) {
-        const r = await api("input.click", { x, y, width: w, height: h });
+        // With a captured mouse the game's crosshair (view centre) is what gets clicked.
+        const locked = document.pointerLockElement === vp;
+        const r = await api("input.click", locked ? { x: w / 2, y: h / 2, width: w, height: h } : { x, y, width: w, height: h });
         if (r.ok && r.result.buttonName) logLine(`clicked button "${r.result.buttonName}"`, "res");
         return;
       }
@@ -905,6 +985,60 @@ function setupViewport() {
     held.clear();
   });
   new ResizeObserver(() => (state.frameDirty = true)).observe(vp);
+
+  // Mouse look: relative motion under pointer lock is batched and sent as
+  // input.mouse {dx, dy} (the same call an agent would make).
+  let look = { dx: 0, dy: 0, busy: false };
+  const flushLook = async () => {
+    if (look.busy || (!look.dx && !look.dy)) return;
+    const args = { dx: look.dx, dy: look.dy };
+    look.dx = look.dy = 0;
+    look.busy = true;
+    try { await api("input.mouse", args, { quiet: true }); } finally { look.busy = false; flushLook(); }
+  };
+  document.addEventListener("mousemove", (e) => {
+    if (document.pointerLockElement !== vp) return;
+    look.dx += e.movementX;
+    look.dy += e.movementY;
+    flushLook();
+  });
+  document.addEventListener("pointerlockerror", () => { state.lockUnavailable = true; });
+  document.addEventListener("pointerlockchange", () => {
+    const locked = document.pointerLockElement === vp;
+    vp.classList.toggle("mouse-locked", locked);
+    if (locked) {
+      state.relockMouse = false;
+      // Update the local copy now so applySim does not release the pointer before the next poll.
+      if (state.sim && !state.sim.mouseLocked) { state.sim.mouseLocked = true; state.lockSetAt = performance.now(); api("input.mouse", { locked: true }, { quiet: true }); }
+    } else if (state.sim && state.sim.mouseLocked) {
+      // Escape released the pointer: release the game's lock too; a click captures it again.
+      state.relockMouse = true;
+      state.sim.mouseLocked = false;
+      state.lockSetAt = performance.now();
+      api("input.mouse", { locked: false }, { quiet: true });
+    }
+    updateViewportChrome();
+  });
+}
+
+function gameWantsMouse() {
+  return state.view === "game" && !!(state.sim && state.sim.inPlaySession && state.sim.mouseLocked);
+}
+
+// 2D Scene view: front camera (yaw/pitch 0) with a narrow field of view so it
+// looks nearly orthographic; the 3D camera is restored when leaving it.
+function set2D(on, center) {
+  if (on === !!state.mode2d) return;
+  state.mode2d = on;
+  $("chk2D").checked = on;
+  if (on) {
+    state.cam3d = JSON.parse(JSON.stringify(state.cam));
+    const t = center || state.cam.target;
+    state.cam = { target: [round(t[0]), round(t[1]), 0], yaw: 0, pitch: 0, dist: 45, fov: 15 };
+  } else if (state.cam3d) {
+    state.cam = state.cam3d;
+  }
+  state.frameDirty = true;
 }
 
 async function focusSelected() {
@@ -914,6 +1048,7 @@ async function focusSelected() {
   if (!t) { toast("This entity has no Transform to focus on", "warn"); return; }
   if (state.view !== "scene") setView("scene");
   state.cam.target = t.position.map(round);
+  if (state.mode2d) { state.cam.target[2] = 0; state.frameDirty = true; return; }
   state.cam.dist = Math.max(3, Math.max(...t.scale) * 4);
   state.frameDirty = true;
 }
@@ -981,7 +1116,8 @@ const presetGroups = [
   ["Basic", ["empty", "cube", "sphere", "plane", "pyramid"]],
   ["Rendering", ["camera", "light", "pointlight"]],
   ["Physics", ["crate", "ball", "wall"]],
-  ["UI", ["text", "button"]],
+  ["2D", ["sprite", "tilemap", "camera2d"]],
+  ["UI", ["text", "button", "panel", "image", "slider", "progress", "menu"]],
 ];
 const presets = {
   empty: { name: "Empty", icon: ["○", "k-empty"], components: {} },
@@ -997,6 +1133,14 @@ const presets = {
   wall: { name: "Static Wall", entityName: "Wall", icon: compIcons.Collider, components: { Transform: { position: [0, 1, -4], scale: [6, 2, 0.5] }, MeshRenderer: { mesh: "cube", color: [0.6, 0.6, 0.65] }, Collider: {} } },
   text: { name: "UI Text", entityName: "Text", icon: compIcons.UIText, components: { UIText: { text: "Hello" } } },
   button: { name: "UI Button", entityName: "Button", icon: compIcons.UIButton, components: { UIButton: {} } },
+  panel: { name: "UI Panel", entityName: "Panel", icon: compIcons.UIPanel, components: { UIPanel: { anchor: "center", x: 0, y: 0, width: 400, height: 240, color: [0.1, 0.11, 0.15], opacity: 0.9, radius: 12 } } },
+  image: { name: "UI Image", entityName: "Image", icon: compIcons.UIImage, components: { UIImage: { width: 128, height: 128 } } },
+  slider: { name: "UI Slider", entityName: "Slider", icon: compIcons.UISlider, components: { UISlider: {} } },
+  progress: { name: "UI Progress Bar", entityName: "Progress", icon: compIcons.UISlider, components: { UISlider: { interactable: false, handle: false, height: 16, radius: 8, fillColor: [0.24, 0.77, 0.49] } } },
+  menu: { name: "UI Menu (vertical layout)", entityName: "Menu", icon: compIcons.UILayout, components: { UIPanel: { anchor: "center", x: 0, y: 0, width: 320, height: 0, color: [0.1, 0.11, 0.15], opacity: 0.9, radius: 12 }, UILayout: { padding: 20, spacing: 12, crossAlign: "stretch", fit: true } } },
+  sprite: { name: "Sprite", icon: compIcons.Sprite, components: { Transform: {}, Sprite: {} } },
+  tilemap: { name: "Tilemap", icon: compIcons.Tilemap, components: { Transform: { position: [0, 0, 0] }, Tilemap: { map: ["", "", "####"], legend: { "#": 0 }, solid: "#" } } },
+  camera2d: { name: "2D Camera", icon: compIcons.Camera, components: { Transform: { position: [0, 0, 20] }, Camera: { projection: "orthographic", orthoSize: 5.625, active: false } } },
 };
 
 function uniqueName(base) {
@@ -1012,9 +1156,16 @@ async function addPreset(key) {
   const t = components.Transform;
   if (t && state.view === "scene" && key !== "light") {
     const pos = t.position || [0, 0, 0];
-    t.position = [round(pos[0] + state.cam.target[0]), pos[1], round(pos[2] + state.cam.target[2])];
+    t.position = state.mode2d
+      ? [round(pos[0] + state.cam.target[0]), round(pos[1] + state.cam.target[1]), pos[2]]  // 2D: the XY point in view
+      : [round(pos[0] + state.cam.target[0]), pos[1], round(pos[2] + state.cam.target[2])];
   }
-  const r = await edit("entity.create", { name: uniqueName(p.entityName || p.name), components });
+  // UI elements added while a UI element is selected go inside it (panels, menus, layouts).
+  const args = { name: uniqueName(p.entityName || p.name), components };
+  const sel = (state.summary?.entities || []).find((e) => e.id === state.selected);
+  const isUI = (c) => c.startsWith("UI") && c !== "UILayout" && c !== "UICanvas";
+  if (sel && Object.keys(components).some(isUI) && (sel.components || []).some(isUI)) args.parent = sel.id;
+  const r = await edit("entity.create", args);
   if (r.ok) { select(r.result.id); toast(`Created "${r.result.name || p.name}"`); }
 }
 
@@ -1108,6 +1259,7 @@ function setupToolbar() {
   $("btnStop").onclick = () => edit("sim.stop", {});
   $("chkGrid").onchange = (e) => { state.grid = e.target.checked; state.frameDirty = true; };
   $("chkColliders").onchange = (e) => { state.colliders = e.target.checked; state.frameDirty = true; };
+  $("chk2D").onchange = (e) => set2D(e.target.checked);
   for (const r of document.querySelectorAll("input[name=view]")) {
     r.onchange = () => { setView(r.value); $("viewport").focus(); };
   }
@@ -1198,6 +1350,13 @@ async function main() {
     state.logSeq = log.ok ? log.result.lastSeq : 0;
   } catch (_) { /* retried by poll */ }
   await refreshAll().catch(() => {});
+  // Scenes with a Tilemap open in the 2D Scene view, centered on the game camera.
+  const ents = (state.summary && state.summary.entities) || [];
+  if (ents.some((e) => e.components.includes("Tilemap"))) {
+    const cam = ents.find((e) => e.components.includes("Camera"));
+    const r = cam ? await api("entity.get", { id: cam.id }, { quiet: true }) : null;
+    set2D(true, r && r.ok ? r.result.components.Transform.position : null);
+  }
   // Deep link: /#select=Player (entity id or name).
   const want = new URLSearchParams(location.hash.slice(1)).get("select");
   const ent = want && state.summary && state.summary.entities.find((e) => String(e.id) === want || e.name === want);

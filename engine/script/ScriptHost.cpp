@@ -9,6 +9,7 @@
 #include "audio/AudioSystem.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/Components.h"
+#include "scene/TileGrid.h"
 
 // Lua is compiled as C++ (see CMakeLists.txt), so its headers are included
 // without extern "C" and Lua errors unwind C++ destructors.
@@ -541,6 +542,61 @@ void PushVec3(lua_State* L, const Vec3& v) {
     lua_setfield(L, -2, "z");
 }
 
+// ----- tilemap.* (cells are column, row from the top-left; 0-based) -------------------
+
+Tilemap& CheckTilemap(lua_State* L, EntityId id) {
+    Tilemap* tm = SceneOf(L).Get<Tilemap>(id);
+    if (!tm) luaL_error(L, "entity %d has no Tilemap", static_cast<int>(id));
+    return *tm;
+}
+
+// tilemap.get(id, col, row) -> character or nil outside the map
+int L_TilemapGet(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    char c = TileAt(CheckTilemap(L, id), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)));
+    if (c == '\0') lua_pushnil(L);
+    else lua_pushlstring(L, &c, 1);
+    return 1;
+}
+
+// tilemap.set(id, col, row, char) - change one tile (graphics and collision follow)
+int L_TilemapSet(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    size_t len = 0;
+    const char* s = luaL_checklstring(L, 4, &len);
+    lua_pushboolean(L, SetTile(CheckTilemap(L, id), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)), len ? s[0] : ' '));
+    return 1;
+}
+
+// tilemap.cellAt(id, {x,y,z}) -> col, row of the cell containing a world point
+int L_TilemapCellAt(lua_State* L) {
+    return Guard(L, [&] {
+        EntityId id = CheckEntity(L, 1);
+        CheckTilemap(L, id);
+        int col = 0, row = 0;
+        WorldToCell(SceneOf(L), id, CheckVec3(L, 2), col, row);
+        lua_pushinteger(L, col);
+        lua_pushinteger(L, row);
+        return 2;
+    });
+}
+
+// tilemap.cellCenter(id, col, row) -> {x,y,z} world position of the cell center
+int L_TilemapCellCenter(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    CheckTilemap(L, id);
+    PushVec3(L, CellToWorld(SceneOf(L), id, static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3))));
+    return 1;
+}
+
+// tilemap.solid(id, col, row) -> true if that cell collides
+int L_TilemapSolid(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    const Tilemap& tm = CheckTilemap(L, id);
+    lua_pushboolean(L, IsSolid(tm, TileAt(tm, static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)))));
+    return 1;
+}
+
 int L_PhysicsRaycast(lua_State* L) {
     return Guard(L, [&] {
         Vec3 origin = CheckVec3(L, 1);
@@ -616,6 +672,26 @@ int L_InputMouse(lua_State* L) {
     lua_pushnumber(L, in.mouseX);
     lua_pushnumber(L, in.mouseY);
     return 2;
+}
+
+// input.mouseDelta() -> dx, dy: relative mouse motion in pixels this step (mouse look)
+int L_InputMouseDelta(lua_State* L) {
+    const InputState& in = Host(L).GetEngine().Input();
+    lua_pushnumber(L, in.mouseDX);
+    lua_pushnumber(L, in.mouseDY);
+    return 2;
+}
+
+// input.lockMouse(on?) - hide and capture the cursor (default true). The player
+// can always get it back with Escape, which clears the lock.
+int L_InputLockMouse(lua_State* L) {
+    Host(L).GetEngine().Input().mouseLocked = lua_isnone(L, 1) ? true : lua_toboolean(L, 1) != 0;
+    return 0;
+}
+
+int L_InputMouseLocked(lua_State* L) {
+    lua_pushboolean(L, Host(L).GetEngine().Input().mouseLocked);
+    return 1;
 }
 
 int L_TimeFrame(lua_State* L) {
@@ -827,7 +903,9 @@ void ScriptHost::Open() {
                                    {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"all", L_SceneAll},
                                    {"withTag", L_SceneWithTag}, {nullptr, nullptr}};
     SetFuncs(L, "scene", sceneFuncs);
-    const luaL_Reg inputFuncs[] = {{"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse}, {nullptr, nullptr}};
+    const luaL_Reg inputFuncs[] = {{"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
+                                  {"mouseDelta", L_InputMouseDelta}, {"lockMouse", L_InputLockMouse},
+                                  {"mouseLocked", L_InputMouseLocked}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
     const luaL_Reg timeFuncs[] = {{"frame", L_TimeFrame}, {"now", L_TimeNow}, {"dt", L_TimeDt}, {nullptr, nullptr}};
     SetFuncs(L, "time", timeFuncs);
@@ -841,6 +919,9 @@ void ScriptHost::Open() {
     const luaL_Reg physicsFuncs[] = {{"raycast", L_PhysicsRaycast}, {"overlapSphere", L_PhysicsOverlapSphere},
                                      {"addImpulse", L_PhysicsAddImpulse}, {"contacts", L_PhysicsContacts}, {nullptr, nullptr}};
     SetFuncs(L, "physics", physicsFuncs);
+    const luaL_Reg tilemapFuncs[] = {{"get", L_TilemapGet}, {"set", L_TilemapSet}, {"cellAt", L_TilemapCellAt},
+                                     {"cellCenter", L_TilemapCellCenter}, {"solid", L_TilemapSolid}, {nullptr, nullptr}};
+    SetFuncs(L, "tilemap", tilemapFuncs);
     const luaL_Reg logFuncs[] = {{"info", L_Log<LogLevel::Info>}, {"warn", L_Log<LogLevel::Warn>}, {"error", L_Log<LogLevel::Error>}, {nullptr, nullptr}};
     SetFuncs(L, "log", logFuncs);
 
@@ -1055,6 +1136,12 @@ void ScriptHost::Notify(EntityId id, const char* method) {
     auto it = instances_.find(id);
     if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
     CallMethod(id, it->second, method, 0, false);
+}
+
+void ScriptHost::Notify(EntityId id, const char* method, float value) {
+    auto it = instances_.find(id);
+    if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
+    CallMethod(id, it->second, method, value, true);
 }
 
 void ScriptHost::DestroyInstance(EntityId id, Instance& inst, bool callOnDestroy) {

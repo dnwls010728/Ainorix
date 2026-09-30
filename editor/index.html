@@ -53,6 +53,7 @@
       <label title="What the game camera sees; keys and clicks go to the game while playing"><input type="radio" name="view" value="game"><span>Game</span></label>
     </div>
     <label class="toggle-chip" title="Ground grid (Scene view)"><input type="checkbox" id="chkGrid" checked><svg><use href="#i-grid"/></svg><span>Grid</span></label>
+    <label class="toggle-chip" title="2D Scene view: look straight down -Z, drag to pan, wheel to zoom (turned on automatically for scenes with a Tilemap)"><input type="checkbox" id="chk2D"><span>2D</span></label>
     <label class="toggle-chip" title="Collider wireframes: green solid, yellow trigger, cyan character"><input type="checkbox" id="chkColliders"><svg><use href="#i-box"/></svg><span>Colliders</span></label>
     <div class="ui-scale" title="Interface size">
       <button id="btnZoomOut" class="icon-btn small" aria-label="Smaller interface">A−</button>
@@ -94,7 +95,7 @@
         <span><kbd>Click</kbd> select</span><span><kbd>F</kbd> focus</span><span><kbd>Del</kbd> delete</span>
       </div>
       <div id="playHint" class="vp-help game" hidden>
-        <span><kbd>W A S D</kbd> <kbd>↑↓←→</kbd> <kbd>Space</kbd> go to the game</span><span><kbd>Click</kbd> UI buttons</span>
+        <span><kbd>W A S D</kbd> <kbd>↑↓←→</kbd> <kbd>Space</kbd> go to the game</span><span><kbd>Click</kbd> UI buttons</span><span id="mouseHint" hidden></span>
       </div>
       <div id="offline" class="vp-offline" hidden>
         <div><strong>Engine offline</strong><br><span>Start it with <code>oe editor &lt;project&gt;</code> — reconnecting…</span></div>

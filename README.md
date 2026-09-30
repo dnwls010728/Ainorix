@@ -8,12 +8,14 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 |---|---|
 | ![Showcase 렌더](docs/images/showcase.png) | glTF 여우 캐릭터(플레이어 조작 + 팔로우 카메라), 절차 생성 텍스처, 그림자, 포인트 라이트. 결정적 소프트웨어 렌더러의 출력(`oe render`)이며, 게임 창·웹·에디터 뷰포트는 같은 장면을 GPU 렌더러로 그립니다. |
 
-- 별도 설치할 의존성 없음 (MSVC + CMake만 필요, Lua·Jolt Physics·sokol_gfx·stb·cgltf는 소스 동봉). 웹 빌드만 Emscripten SDK 필요
+- 별도 설치할 의존성 없음 (MSVC + CMake만 필요, Lua·Jolt Physics·sokol_gfx·stb·cgltf는 소스 동봉). 웹 런타임도 `runtime/web/`에 미리 빌드되어 포함 — 웹 배포에 Emscripten 불필요
 - Windows(네이티브 창, `Name.exe` 패키징) · Web(WebAssembly + WebGL2, `oe package --web`) · 헤드리스 지원. Android / iOS / macOS / 콘솔은 플랫폼 계층만 추가하면 되도록 분리 — [docs/PLATFORMS.md](docs/PLATFORMS.md)
 - 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰포트용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
 - 렌더링 기능: glTF 모델, PNG/JPEG 텍스처, 스무스/플랫 셰이딩, 포인트 라이트, 그림자, 직교/팔로우 카메라, 디버그 드로잉 — [docs/RENDERING.md](docs/RENDERING.md)
 - Jolt 기반 3D 물리 (강체, 트리거, 캐릭터 컨트롤러, 결정적 시뮬레이션) — [docs/PHYSICS.md](docs/PHYSICS.md)
-- 게임 구성 요소: 프리팹, 씬 전환 + 게임 데이터, 메시지/타이머, 게임 내 UI(텍스트·패널·버튼), 오디오(결정적 믹서, 효과음 생성) — [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
+- 게임 UI: TrueType 폰트(한글 등 모든 언어, 폰트 파일 추가), 앵커·스트레치·부모-자식 배치, 레이아웃(세로/가로/그리드, 크기 맞춤), 리치 텍스트·줄바꿈·외곽선·그림자, 둥근 모서리·테두리 패널, 버튼 상태(호버/눌림/비활성), 이미지(9-slice, 채우기 바), 슬라이더/진행 바, 클리핑, 캔버스 스케일 — [docs/UI.md](docs/UI.md)
+- 2D 게임: 스프라이트·스프라이트 시트 애니메이션(픽셀 아트, 투명 컷아웃), 텍스트로 쓰는 타일맵(충돌 자동 생성), XY 평면 물리, 경계 있는 카메라 추적, 에디터 2D 뷰 — [docs/2D.md](docs/2D.md)
+- 게임 구성 요소: 프리팹, 씬 전환 + 게임 데이터, 메시지/타이머, 게임 내 UI, 오디오(결정적 믹서, 효과음 생성) — [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 스크립팅 (샌드박스, 핫리로드, 에러에 파일:줄 표시) — [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - 결정적(deterministic) 시뮬레이션과 소프트웨어 렌더러: 같은 입력이면 같은 프레임 해시 → AI가 테스트 오라클로 사용 가능
 
@@ -26,7 +28,7 @@ build\bin\oe_tests.exe
 
 Visual Studio 2022(“C++를 사용한 데스크톱 개발”)만 있으면 됩니다. CMake/Ninja는 VS에 포함된 것을 자동으로 사용합니다.
 
-웹 런타임(`oe package --web`에 필요, 한 번만): [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)를 설치하고 `set EMSDK=C:\path\to\emsdk` 후 `build_web.bat` (Linux/macOS: `./build_web.sh`). 결과는 `build\bin\web\`에 들어갑니다.
+웹 런타임(`oe package --web`용)은 `runtime/web/`에 미리 빌드되어 들어 있어 따로 준비할 것이 없습니다. 엔진 C++을 고친 뒤 웹 빌드에도 반영하려면 [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html)를 설치하고 `set EMSDK=C:\path\to\emsdk` 후 `build_web.bat` (Linux/macOS: `./build_web.sh`) — 결과가 `build\bin\web\`와 `runtime\web\`에 들어가니 함께 커밋하세요.
 
 ## 사용법
 
@@ -49,6 +51,7 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 - 계층(Hierarchy) · 뷰포트(궤도/팬/줌, 클릭 선택, F 포커스) · 인스펙터(리플렉션으로 자동 생성) · 콘솔(API 직접 호출)
 - 뷰포트는 엔진이 GPU로 렌더링한 화면을 WebSocket으로 스트리밍(JPEG, 고해상도 디스플레이 대응). GPU가 없으면 소프트웨어 렌더러 + PNG로 자동 전환, 우측 상단 배지에 현재 렌더러 표시
 - Play / Pause / Step / Stop(씬 복원), Undo / Redo, 저장
+- 2D 뷰(타일맵이 있는 씬은 자동): 정면 보기, 드래그로 이동, 휠 확대. JSON 필드(타일맵 map 등)는 여러 줄 텍스트로 편집
 - Game 뷰에서 플레이 중 키 입력이 엔진으로 전달됨
 - 다른 도구(AI 에이전트 등)가 씬을 바꾸면 에디터에 실시간 반영 (바뀐 필드는 인스펙터에서 잠깐 강조)
 - 계층 검색(이름·컴포넌트), 접기/펼치기, 키보드 이동(↑↓←→, Del, F, F2, Ctrl+D)
@@ -92,4 +95,6 @@ third_party/sokol  sokol_gfx (zlib) — D3D11 / WebGL2 / GLES3 추상화
 templates/       `oe new` 프로젝트 템플릿
 samples/Hello    샘플 프로젝트 (템플릿으로 생성)
 samples/Showcase 렌더링 샘플 (glTF 여우 캐릭터, 텍스처, 그림자, 포인트 라이트)
+samples/Platformer 2D 횡스크롤 플랫포머 (텍스트 타일맵, 스프라이트 애니메이션, 적, ? 블록, 패럴랙스)
+samples/FPS      1인칭 슈팅 테스트 게임 (마우스 시점, 히트스캔 권총, 재장전, 움직이는 표적, 결과 화면)
 ```

@@ -35,20 +35,22 @@ Timers run on simulated time at the start of each frame, in creation order (dete
 
 ## In-game UI
 
-Screen-space components, laid out on a **1280×720 reference canvas** scaled to the screen height:
+Screen-space components laid out on a **1280×720 reference canvas** scaled to the screen: `UIText` (TrueType fonts, any language, wrap, outline, rich text), `UIPanel` (rounded, bordered, clipping container), `UIButton`, `UIImage` (9-slice, fill bars), `UISlider` (slider or progress bar), `UILayout` (column/row/grid), `UICanvas` (scaling). Elements nest: a UI entity's rectangle is inside its parent UI entity. Full reference: [UI.md](UI.md).
 
-| Component | Fields |
+| Component | Main fields |
 |---|---|
-| `UIText` | `text` (ASCII; `\n` for lines), `size` (line height), `color` |
-| `UIPanel` | `width`, `height`, `color`, `opacity` |
-| `UIButton` | `text`, `width`, `height`, `size`, `color`, `textColor`; a click calls `onClick(self)` on the entity's Script |
-| all | `anchor` (top-left … bottom-right, center), `x`, `y` offsets in reference px (+y down), `visible`, `order` |
+| `UIText` | `text` (UTF-8, `\n`, `<color=..>`/`<b>`), `font` (`default`, `pixel`, `assets/fonts/x.ttf`), `size`, `color`, `width` (wrap box), `align`, `outlineWidth`, `shadowDistance` |
+| `UIPanel` | `width`, `height`, `color`, `opacity`, `radius`, `borderWidth`, `clip` |
+| `UIButton` | `text`, `width`, `height`, `size`, `color`, `textColor`, `radius`, `interactable`; a click calls `onClick(self)` on the entity's Script |
+| `UIImage` | `texture`, `color`, `frame`/`columns`, `slice`, `fill`, `preserveAspect` |
+| `UISlider` | `value`, `min`, `max`, `step`, `interactable`; dragging calls `onValueChanged(self, value)` |
+| all | `anchor` (9 points + `stretch*`), `x`, `y` offsets in reference px (+y down), `width`, `height`, `opacity`, `visible`, `order` |
 
-The anchor is both the screen point and the element's pivot: `anchor = "bottom-right", x = -20, y = -20` puts the element's bottom-right corner 20 px from the screen corner.
+The anchor is both the point of the parent (or screen) and the element's pivot: `anchor = "bottom-right", x = -20, y = -20` puts the element's bottom-right corner 20 px from the corner.
 
-UI is drawn in the game view (scene camera) and skipped for free cameras (editor scene view, `render.screenshot {camera: ...}`), unless `render.screenshot {ui: true}`. The built-in font is a 5×7 pixel font; non-ASCII text (e.g. Korean) shows `?` until TTF support lands.
+UI is drawn in the game view (scene camera) and skipped for free cameras (editor scene view, `render.screenshot {camera: ...}`), unless `render.screenshot {ui: true}`. `ui.layout` lists every element's pixel rectangle for a screen size.
 
-Clicking from tools: take a screenshot, then `input.click {x, y}` with the pixel coordinates **of that screenshot** (default 640×360; pass `width`/`height` for other sizes). The result says which button is under the point; the click is delivered on the next `sim.step`. `input.mouse` moves/presses without clicking. Scripts read `input.mouse()` (normalized 0..1) and `input.pressed("MouseLeft")`. In the editor, clicking the Game view while simulating sends the same `input.click`.
+Clicking from tools: take a screenshot, then `input.click {x, y}` with the pixel coordinates **of that screenshot** (default 640×360; pass `width`/`height` for other sizes). The result says which button is under the point; the click is delivered on the next `sim.step`. `input.mouse` moves/presses without clicking, adds relative motion for mouse look (`{dx, dy}`, read by scripts with `input.mouseDelta()` on the next step) and sets the mouse lock (`{locked}`; `sim.state.mouseLocked` shows it). Scripts read `input.mouse()` (normalized 0..1) and `input.pressed("MouseLeft")`. In the editor, clicking the Game view while simulating sends the same `input.click`.
 
 ## Audio
 
@@ -67,9 +69,9 @@ WAV files: PCM 8/16/24/32-bit or float, mono/stereo, any sample rate (resampled)
 ## Frame order (reference)
 
 1. Timers, then scripts `onStart` / `onUpdate` (entity id order)
-2. UI button hit test (clicks from this frame)
+2. UI pointer: hover, press, slider drags (from this frame's mouse)
 3. Built-in systems (Rotator, Velocity, PlayerController)
 4. Physics step, then `onCollision*` / `onTrigger*`
-5. `onClick` for the clicked button
+5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onValueChanged`
 6. Pending scene change
 7. AudioSource updates, audio mix

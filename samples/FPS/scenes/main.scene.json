@@ -1,0 +1,1431 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Target Range",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "components": {
+        "Transform": {
+          "position": [0, 10, 0],
+          "rotation": [-50, 35, 0],
+          "scale": [1, 1, 1]
+        },
+        "DirectionalLight": {
+          "color": [1, 0.970000029, 0.899999976],
+          "intensity": 1,
+          "ambient": [0.300000012, 0.319999993, 0.379999995],
+          "shadows": true,
+          "shadowStrength": 0.600000024
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "scale": [40, 1, 40]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/floor.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, -0.5, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Wall North",
+      "components": {
+        "Transform": {
+          "position": [0, 2, -20.5],
+          "rotation": [0, 0, 0],
+          "scale": [42, 4, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.550000012, 0.579999983, 0.639999986],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Wall South",
+      "components": {
+        "Transform": {
+          "position": [0, 2, 20.5],
+          "rotation": [0, 0, 0],
+          "scale": [42, 4, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.550000012, 0.579999983, 0.639999986],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Wall East",
+      "components": {
+        "Transform": {
+          "position": [20.5, 2, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 4, 40]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.550000012, 0.579999983, 0.639999986],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Wall West",
+      "components": {
+        "Transform": {
+          "position": [-20.5, 2, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 4, 40]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.550000012, 0.579999983, 0.639999986],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Cover 1",
+      "components": {
+        "Transform": {
+          "position": [-6, 0.600000024, 5],
+          "rotation": [0, 0, 0],
+          "scale": [4, 1.20000005, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.460000008, 0.5, 0.579999983],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Cover 2",
+      "components": {
+        "Transform": {
+          "position": [6, 0.600000024, 3],
+          "rotation": [0, 0, 0],
+          "scale": [4, 1.20000005, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.460000008, 0.5, 0.579999983],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Cover 3",
+      "components": {
+        "Transform": {
+          "position": [0, 0.600000024, -3],
+          "rotation": [0, 0, 0],
+          "scale": [5, 1.20000005, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.460000008, 0.5, 0.579999983],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Pillar 1",
+      "components": {
+        "Transform": {
+          "position": [-10, 2, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1.5, 4, 1.5]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.620000005, 0.519999981, 0.419999987],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Pillar 2",
+      "components": {
+        "Transform": {
+          "position": [10, 2, -8],
+          "rotation": [0, 0, 0],
+          "scale": [1.5, 4, 1.5]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.620000005, 0.519999981, 0.419999987],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Platform",
+      "components": {
+        "Transform": {
+          "position": [0, 1, -13],
+          "rotation": [0, 0, 0],
+          "scale": [8, 2, 3]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.400000006, 0.439999998, 0.519999981],
+          "texture": "",
+          "shading": "flat",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Crate 1",
+      "components": {
+        "Transform": {
+          "position": [-3, 0.5, 8],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/crate.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1.5,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Crate 2",
+      "components": {
+        "Transform": {
+          "position": [-2.20000005, 0.5, 8.39999962],
+          "rotation": [0, 23, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/crate.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1.5,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Crate 3",
+      "components": {
+        "Transform": {
+          "position": [-2.5999999, 1.5, 8.19999981],
+          "rotation": [0, 6, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/crate.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1.5,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Crate 4",
+      "components": {
+        "Transform": {
+          "position": [8, 0.5, -1],
+          "rotation": [0, 29, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/crate.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1.5,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Crate 5",
+      "components": {
+        "Transform": {
+          "position": [12, 0.5, 6],
+          "rotation": [0, 12, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/crate.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1.5,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Crate 6",
+      "components": {
+        "Transform": {
+          "position": [-12, 0.5, 2],
+          "rotation": [0, 35, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.800000012, 0.800000012, 0.800000012],
+          "texture": "assets/textures/crate.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Collider": {
+          "shape": "box",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "dynamic",
+          "mass": 1.5,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Target 1",
+      "components": {
+        "Transform": {
+          "position": [-6, 1.79999995, 4.19999981],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "none",
+            "distance": 2,
+            "speed": 1,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Target 2",
+      "components": {
+        "Transform": {
+          "position": [6, 1.79999995, 2.20000005],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "none",
+            "distance": 2,
+            "speed": 1,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "Target 3",
+      "components": {
+        "Transform": {
+          "position": [0, 3, -13],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "none",
+            "distance": 2,
+            "speed": 1,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "Target 4",
+      "components": {
+        "Transform": {
+          "position": [-10, 4.5999999, -8],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "none",
+            "distance": 2,
+            "speed": 1,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "Target 5",
+      "components": {
+        "Transform": {
+          "position": [10, 4.5999999, -8],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "none",
+            "distance": 2,
+            "speed": 1,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Target 6",
+      "components": {
+        "Transform": {
+          "position": [0, 1.60000002, -8],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "strafe",
+            "distance": 5,
+            "speed": 1.2,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "kinematic",
+          "mass": 1,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "Target 7",
+      "components": {
+        "Transform": {
+          "position": [-14, 2, -15],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "bob",
+            "distance": 1.2,
+            "speed": 2,
+            "phase": 0,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "kinematic",
+          "mass": 1,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 26,
+      "name": "Target 8",
+      "components": {
+        "Transform": {
+          "position": [14, 2, -15],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "bob",
+            "distance": 1.2,
+            "speed": 2,
+            "phase": 1.5,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "kinematic",
+          "mass": 1,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "Target 9",
+      "components": {
+        "Transform": {
+          "position": [0, 5, -18],
+          "rotation": [0, 0, 0],
+          "scale": [0.800000012, 0.800000012, 0.800000012]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 1, 1],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "strafe",
+            "distance": 8,
+            "speed": 0.8,
+            "phase": 0.7,
+            "health": 1
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        },
+        "RigidBody": {
+          "type": "kinematic",
+          "mass": 1,
+          "velocity": [0, 0, 0],
+          "angularVelocity": [0, 0, 0],
+          "gravityScale": 1,
+          "linearDamping": 0.0500000007,
+          "lockRotation": false,
+          "continuous": false
+        }
+      }
+    },
+    {
+      "id": 28,
+      "name": "Target 10",
+      "components": {
+        "Transform": {
+          "position": [-4, 3.20000005, -13],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [0.550000012, 0.600000024, 0.699999988],
+          "texture": "assets/textures/target.png",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
+        },
+        "Tag": {
+          "tags": "target"
+        },
+        "Script": {
+          "path": "scripts/target.lua",
+          "params": {
+            "move": "none",
+            "distance": 2,
+            "speed": 1,
+            "phase": 0,
+            "health": 3
+          },
+          "enabled": true
+        },
+        "Collider": {
+          "shape": "sphere",
+          "size": [1, 1, 1],
+          "radius": 0.5,
+          "height": 2,
+          "center": [0, 0, 0],
+          "isTrigger": false,
+          "friction": 0.5,
+          "bounciness": 0
+        }
+      }
+    },
+    {
+      "id": 29,
+      "name": "Lamp Warm",
+      "components": {
+        "Transform": {
+          "position": [-8, 3.5, -12],
+          "rotation": [0, 0, 0],
+          "scale": [0.25, 0.25, 0.25]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 0.800000012, 0.5],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": true,
+          "castShadows": false,
+          "visible": true
+        },
+        "PointLight": {
+          "color": [1, 0.699999988, 0.400000006],
+          "intensity": 2,
+          "range": 12
+        }
+      }
+    },
+    {
+      "id": 30,
+      "name": "Lamp Cool",
+      "components": {
+        "Transform": {
+          "position": [8, 3.5, -12],
+          "rotation": [0, 0, 0],
+          "scale": [0.25, 0.25, 0.25]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [0.600000024, 0.800000012, 1],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": true,
+          "castShadows": false,
+          "visible": true
+        },
+        "PointLight": {
+          "color": [0.449999988, 0.649999976, 1],
+          "intensity": 2,
+          "range": 12
+        }
+      }
+    },
+    {
+      "id": 31,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [0, 1.20000005, 14],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Tag": {
+          "tags": "player"
+        },
+        "Script": {
+          "path": "scripts/fps_player.lua",
+          "params": {
+            "speed": 5.5,
+            "sprint": 8.5,
+            "jumpSpeed": 5.5,
+            "sensitivity": 0.12,
+            "magazine": 12,
+            "reloadTime": 1.1
+          },
+          "enabled": true
+        },
+        "CharacterBody": {
+          "shape": "capsule",
+          "radius": 0.400000006,
+          "height": 1.79999995,
+          "maxSlope": 50,
+          "stepHeight": 0.300000012,
+          "gravityScale": 1,
+          "velocity": [0, 0, 0],
+          "grounded": false
+        }
+      }
+    },
+    {
+      "id": 32,
+      "name": "Head",
+      "parent": 31,
+      "components": {
+        "Transform": {
+          "position": [0, 0.649999976, 0],
+          "rotation": [0, 0, 0],
+          "scale": [1, 1, 1]
+        },
+        "Camera": {
+          "projection": "perspective",
+          "orthoSize": 5,
+          "fov": 75,
+          "nearPlane": 0.0500000007,
+          "farPlane": 500,
+          "clearColor": [0.550000012, 0.680000007, 0.850000024],
+          "active": true
+        }
+      }
+    },
+    {
+      "id": 33,
+      "name": "Gun",
+      "parent": 32,
+      "components": {
+        "Transform": {
+          "position": [0.180000007, -0.170000002, -0.5],
+          "rotation": [0, 0, 0],
+          "scale": [0.0549999997, 0.075000003, 0.239999995]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.159999996, 0.170000002, 0.200000003],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": false,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Gun Grip",
+      "parent": 33,
+      "components": {
+        "Transform": {
+          "position": [0, -0.899999976, 0.300000012],
+          "rotation": [-12, 0, 0],
+          "scale": [0.850000024, 1.5, 0.200000003]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.100000001, 0.100000001, 0.119999997],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": false,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 35,
+      "name": "Gun Sight",
+      "parent": 33,
+      "components": {
+        "Transform": {
+          "position": [0, 0.600000024, -0.419999987],
+          "rotation": [0, 0, 0],
+          "scale": [0.300000012, 0.300000012, 0.0799999982]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [0.949999988, 0.5, 0.200000003],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": true,
+          "castShadows": false,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 36,
+      "name": "MuzzleFlash",
+      "parent": 32,
+      "components": {
+        "Transform": {
+          "position": [0.180000007, -0.150000006, -0.660000026],
+          "rotation": [0, 0, 0],
+          "scale": [0.100000001, 0.100000001, 0.100000001]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [1, 0.850000024, 0.400000006],
+          "texture": "",
+          "shading": "smooth",
+          "unlit": true,
+          "castShadows": false,
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 37,
+      "name": "Game Manager",
+      "components": {
+        "Script": {
+          "path": "scripts/game_manager.lua",
+          "params": {},
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": 38,
+      "name": "HUD Panel",
+      "components": {
+        "UIPanel": {
+          "anchor": "top-left",
+          "x": 16,
+          "y": 16,
+          "width": 300,
+          "height": 92,
+          "color": [0, 0, 0],
+          "opacity": 0.5,
+          "visible": true,
+          "order": -1
+        }
+      }
+    },
+    {
+      "id": 39,
+      "name": "TargetsText",
+      "components": {
+        "UIText": {
+          "text": "TARGETS  0 / 10",
+          "anchor": "top-left",
+          "x": 32,
+          "y": 28,
+          "size": 28,
+          "color": [1, 1, 1],
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 40,
+      "name": "TimeText",
+      "components": {
+        "UIText": {
+          "text": "TIME  0.0",
+          "anchor": "top-left",
+          "x": 32,
+          "y": 64,
+          "size": 24,
+          "color": [0.850000024, 0.899999976, 1],
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 41,
+      "name": "AmmoText",
+      "components": {
+        "UIText": {
+          "text": "AMMO  12 / 12",
+          "anchor": "bottom-right",
+          "x": -32,
+          "y": -56,
+          "size": 32,
+          "color": [1, 1, 1],
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 42,
+      "name": "Crosshair",
+      "components": {
+        "UIText": {
+          "text": "+",
+          "anchor": "center",
+          "x": 24,
+          "y": 24,
+          "size": 32,
+          "color": [1, 1, 1],
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 43,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "MOUSE aim  CLICK shoot  WASD move  SHIFT sprint  SPACE jump  R reload  ESC free mouse",
+          "anchor": "bottom",
+          "x": 24,
+          "y": -18,
+          "size": 14,
+          "color": [0.899999976, 0.920000017, 0.959999979],
+          "visible": true,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 44,
+      "name": "ResultPanel",
+      "components": {
+        "UIPanel": {
+          "anchor": "center",
+          "x": 16,
+          "y": 16,
+          "width": 940,
+          "height": 230,
+          "color": [0.0500000007, 0.0700000003, 0.100000001],
+          "opacity": 0.800000012,
+          "visible": false,
+          "order": -1
+        }
+      }
+    },
+    {
+      "id": 45,
+      "name": "ResultText",
+      "components": {
+        "UIText": {
+          "text": "",
+          "anchor": "center",
+          "x": 24,
+          "y": -40,
+          "size": 32,
+          "color": [1, 0.850000024, 0.300000012],
+          "visible": false,
+          "order": 0
+        }
+      }
+    },
+    {
+      "id": 46,
+      "name": "PlayAgain",
+      "components": {
+        "Script": {
+          "path": "scripts/play_again.lua",
+          "params": {},
+          "enabled": true
+        },
+        "UIButton": {
+          "text": "Play again",
+          "anchor": "center",
+          "x": 0,
+          "y": 50,
+          "width": 240,
+          "height": 64,
+          "size": 28,
+          "color": [0.25, 0.449999988, 0.899999976],
+          "textColor": [1, 1, 1],
+          "visible": false,
+          "order": 10
+        }
+      }
+    }
+  ]
+}

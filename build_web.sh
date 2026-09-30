@@ -17,4 +17,6 @@ emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE="$CONFIG" -DOE_BUILD
 cmake --build build-web --target oe_player
 mkdir -p "$BIN/web"
 cp build-web/bin/oe_player.js build-web/bin/oe_player.wasm tools/player/web/index.html "$BIN/web/"
+# Refresh the prebuilt runtime that `oe package --web` falls back to (commit it).
+cp build-web/bin/oe_player.js build-web/bin/oe_player.wasm runtime/web/
 echo "Built: $BIN/web/oe_player.js + oe_player.wasm (used by oe package --web)"

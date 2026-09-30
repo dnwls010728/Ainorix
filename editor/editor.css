@@ -261,6 +261,13 @@ body.playing #viewport::after { box-shadow: inset 0 0 0 3px var(--play); }
 .field:hover { background: rgba(255, 255, 255, .025); }
 .field > label { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
 .field > label.scrub { cursor: ew-resize; }
+.field:has(> .json-field) { grid-template-columns: 1fr; }
+.json-field {
+  width: 100%; min-width: 0; resize: vertical; background: var(--bg); border: 1px solid var(--line-2);
+  border-radius: var(--radius); padding: .3rem .45rem; color: var(--text); font-size: .85rem; line-height: 1.25;
+  white-space: pre; overflow: auto;
+}
+.json-field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .field > label.scrub:hover { color: var(--accent); }
 .vec { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
 .axis { display: flex; align-items: stretch; min-width: 0; border-radius: var(--radius); background: var(--bg); border: 1px solid var(--line-2); }

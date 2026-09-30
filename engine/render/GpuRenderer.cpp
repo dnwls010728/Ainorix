@@ -36,7 +36,11 @@ struct ColorVertex {
 
 struct UIVertex {
     float pos[2];
+    float uv[2];
     float color[4];
+    float border[4];
+    float rect[4];
+    float params[4];  // radius, border width, textured, shaped
 };
 
 void Put(float* dst, const Mat4& m) { std::memcpy(dst, m.m, sizeof(m.m)); }
@@ -98,6 +102,7 @@ struct GpuMesh {
 struct GpuTexture {
     sg_image image{};
     sg_view view{};
+    uint32_t version = 0;
     std::weak_ptr<const Texture> owner;
     bool permanent = false;
     void Destroy() {
@@ -236,7 +241,7 @@ struct GpuRenderer::Impl {
 
     sg_pipeline meshPip{}, shadowPip{}, maskDepthPip{}, maskDrawPip{}, linePip{}, compositePip{}, uiPip{};
     sg_shader meshShd{}, shadowShd{}, solidShd{}, lineShd{}, compositeShd{}, uiShd{};
-    sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, shadowCompare{};
+    sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
     StreamBuffer lines, ui;
@@ -245,6 +250,7 @@ struct GpuRenderer::Impl {
     std::unordered_map<const Mesh*, GpuMesh> meshes;
     std::unordered_map<const Mesh*, GpuMesh> flatMeshes;
     std::unordered_map<const Texture*, GpuTexture> textures;
+    std::unordered_map<const Texture*, GpuTexture> uiTextures;  // no mips; re-uploaded when Texture::version changes
 
     Impl(GpuDevice& d, AssetManager* a, const Settings& s) : device(d), assets(a), settings(s) {}
 
@@ -349,7 +355,11 @@ struct GpuRenderer::Impl {
             d.shader = uiShd;
             d.layout.buffers[0].stride = sizeof(UIVertex);
             d.layout.attrs[ATTR_oe_ui_position] = {0, offsetof(UIVertex, pos), SG_VERTEXFORMAT_FLOAT2};
+            d.layout.attrs[ATTR_oe_ui_texcoord0] = {0, offsetof(UIVertex, uv), SG_VERTEXFORMAT_FLOAT2};
             d.layout.attrs[ATTR_oe_ui_color0] = {0, offsetof(UIVertex, color), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_ui_color1] = {0, offsetof(UIVertex, border), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_ui_shape_rect] = {0, offsetof(UIVertex, rect), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_ui_shape_params] = {0, offsetof(UIVertex, params), SG_VERTEXFORMAT_FLOAT4};
             d.depth.pixel_format = SG_PIXELFORMAT_NONE;
             alphaBlend(d.colors[0]);
             d.sample_count = 1;
@@ -378,6 +388,15 @@ struct GpuRenderer::Impl {
             d.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
             d.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
             nearestClamp = sg_make_sampler(&d);
+            // Pixel art (sprites/tilemaps): sharp texels, no mip blending across sheet frames.
+            d = sg_sampler_desc{};
+            d.min_filter = SG_FILTER_NEAREST;
+            d.mag_filter = SG_FILTER_NEAREST;
+            d.mipmap_filter = SG_FILTER_NEAREST;
+            d.max_lod = 0.0f;
+            d.wrap_u = SG_WRAP_REPEAT;
+            d.wrap_v = SG_WRAP_REPEAT;
+            pixelArt = sg_make_sampler(&d);
             d = sg_sampler_desc{};
             d.min_filter = SG_FILTER_LINEAR;
             d.mag_filter = SG_FILTER_LINEAR;
@@ -406,9 +425,11 @@ struct GpuRenderer::Impl {
         for (auto& kv : meshes) kv.second.Destroy();
         for (auto& kv : flatMeshes) kv.second.Destroy();
         for (auto& kv : textures) kv.second.Destroy();
+        for (auto& kv : uiTextures) kv.second.Destroy();
         meshes.clear();
         flatMeshes.clear();
         textures.clear();
+        uiTextures.clear();
         offscreen.Destroy();
         window.Destroy();
         lines.Destroy();
@@ -432,6 +453,30 @@ struct GpuRenderer::Impl {
         sweep(meshes);
         sweep(flatMeshes);
         sweep(textures);
+        sweep(uiTextures);
+    }
+
+    // UI images and font atlas pages: one level, updated when the texels change.
+    sg_view UITextureFor(const std::shared_ptr<const Texture>& tex) {
+        if (!tex || tex->width <= 0 || tex->height <= 0) return whiteTex;
+        auto found = uiTextures.find(tex.get());
+        if (found != uiTextures.end()) {
+            if (OwnerAlive(false, found->second.owner) && found->second.version == tex->version) return found->second.view;
+            found->second.Destroy();
+            uiTextures.erase(found);
+        }
+        sg_image_desc d{};
+        d.width = tex->width;
+        d.height = tex->height;
+        d.pixel_format = kColorFormat;
+        d.data.mip_levels[0] = {tex->texels.data(), tex->texels.size() * sizeof(uint32_t)};
+        d.label = "oe-ui-texture";
+        GpuTexture g;
+        g.image = sg_make_image(&d);
+        g.view = TextureView(g.image);
+        g.owner = tex;
+        g.version = tex->version;
+        return (uiTextures[tex.get()] = g).view;
     }
 
     // `flat` expands every triangle to its own vertices with the face normal
@@ -687,14 +732,15 @@ struct GpuRenderer::Impl {
                     Color base = it.tint * sub.baseColor;
                     oe_mesh_material_t mu{};
                     Put(mu.base_color, base.r, base.g, base.b, 1);
-                    Put(mu.flags, it.unlit ? 1.0f : 0.0f, tex.id ? 1.0f : 0.0f, 0, 0);
+                    Put(mu.flags, it.unlit ? 1.0f : 0.0f, tex.id ? 1.0f : 0.0f, tex.id ? it.alphaCutoff : 0.0f, 0);
+                    Put(mu.uv_rect, it.uvOffset[0], it.uvOffset[1], it.uvScale[0], it.uvScale[1]);
                     sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                     sg_bindings b{};
                     b.vertex_buffers[0] = gpuMeshes[i]->vbuf;
                     b.index_buffer = gpuMeshes[i]->ibuf;
                     b.views[VIEW_oe_base_tex] = tex.id ? tex : whiteTex;
                     b.views[VIEW_oe_shadow_tex] = shadowTex;
-                    b.samplers[SMP_oe_base_smp] = linearRepeat;
+                    b.samplers[SMP_oe_base_smp] = it.pointSample ? pixelArt : linearRepeat;
                     b.samplers[SMP_oe_shadow_smp] = shadowCompare;
                     sg_apply_bindings(&b);
                     sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
@@ -753,14 +799,38 @@ struct GpuRenderer::Impl {
         }
 
         // ----- UI geometry (full output resolution)
+        // Consecutive quads with the same texture and filter share a draw call.
+        struct UIBatch {
+            sg_view tex;
+            sg_sampler smp;
+            int first, count;
+        };
         std::vector<UIVertex> uiVerts;
+        std::vector<UIBatch> uiBatches;
         if (view.drawUI) {
-            for (const UIQuad& q : BuildUIQuads(scene, outW, outH)) {
+            for (const UIQuad& q : BuildUIQuads(scene, outW, outH, assets)) {
                 float x0 = static_cast<float>(q.x0), y0 = static_cast<float>(q.y0);
                 float x1 = static_cast<float>(q.x1), y1 = static_cast<float>(q.y1);
-                float c[4] = {q.color.r, q.color.g, q.color.b, q.alpha};
-                const float corners[6][2] = {{x0, y0}, {x1, y0}, {x1, y1}, {x0, y0}, {x1, y1}, {x0, y1}};
-                for (const auto& p : corners) uiVerts.push_back({{p[0], p[1]}, {c[0], c[1], c[2], c[3]}});
+                float tw = q.texture ? static_cast<float>(q.texture->width) : 1.0f, th = q.texture ? static_cast<float>(q.texture->height) : 1.0f;
+                float u0 = q.s0 / tw, v0 = q.t0 / th, u1 = q.s1 / tw, v1 = q.t1 / th;
+                UIVertex base{};
+                Put(base.color, q.color.r, q.color.g, q.color.b, q.alpha);
+                Put(base.border, q.borderColor.r, q.borderColor.g, q.borderColor.b, q.borderAlpha);
+                Put(base.rect, q.shape[0], q.shape[1], q.shape[2], q.shape[3]);
+                Put(base.params, q.radius, q.border, q.texture ? 1.0f : 0.0f, q.shaped ? 1.0f : 0.0f);
+                const float corners[6][4] = {{x0, y0, u0, v0}, {x1, y0, u1, v0}, {x1, y1, u1, v1}, {x0, y0, u0, v0}, {x1, y1, u1, v1}, {x0, y1, u0, v1}};
+                for (const auto& p : corners) {
+                    UIVertex v = base;
+                    v.pos[0] = p[0];
+                    v.pos[1] = p[1];
+                    v.uv[0] = p[2];
+                    v.uv[1] = p[3];
+                    uiVerts.push_back(v);
+                }
+                sg_view tex = UITextureFor(q.texture);
+                sg_sampler smp = q.nearest ? nearestClamp : linearClamp;
+                if (!uiBatches.empty() && uiBatches.back().tex.id == tex.id && uiBatches.back().smp.id == smp.id) uiBatches.back().count += 6;
+                else uiBatches.push_back({tex, smp, static_cast<int>(uiVerts.size()) - 6, 6});
             }
         }
         bool haveUI = ui.Write(uiVerts.data(), uiVerts.size() * sizeof(UIVertex));
@@ -790,10 +860,14 @@ struct GpuRenderer::Impl {
                 oe_ui_params_t uu{};
                 Put(uu.screen, 2.0f / static_cast<float>(outW), 2.0f / static_cast<float>(outH), 0, 0);
                 sg_apply_uniforms(UB_oe_ui_params, SG_RANGE(uu));
-                sg_bindings ub{};
-                ub.vertex_buffers[0] = ui.buf;
-                sg_apply_bindings(&ub);
-                sg_draw(0, static_cast<int>(uiVerts.size()), 1);
+                for (const UIBatch& batch : uiBatches) {
+                    sg_bindings ub{};
+                    ub.vertex_buffers[0] = ui.buf;
+                    ub.views[VIEW_oe_ui_tex] = batch.tex;
+                    ub.samplers[SMP_oe_ui_smp] = batch.smp;
+                    sg_apply_bindings(&ub);
+                    sg_draw(batch.first, batch.count, 1);
+                }
             }
             sg_end_pass();
         }

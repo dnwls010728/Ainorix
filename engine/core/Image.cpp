@@ -173,10 +173,11 @@ void PutChunk(std::vector<uint8_t>& out, const char* type, const std::vector<uin
 
 }  // namespace
 
-std::vector<uint8_t> EncodePng(const Image& image) {
+std::vector<uint8_t> EncodePng(const Image& image, bool alpha) {
     const int w = image.width, h = image.height;
+    const size_t channels = alpha ? 4 : 3;
     std::vector<uint8_t> raw;
-    raw.reserve(static_cast<size_t>(h) * (static_cast<size_t>(w) * 3 + 1));
+    raw.reserve(static_cast<size_t>(h) * (static_cast<size_t>(w) * channels + 1));
     for (int y = 0; y < h; ++y) {
         raw.push_back(0);  // filter: none
         const uint8_t* row = image.rgba.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
@@ -184,6 +185,7 @@ std::vector<uint8_t> EncodePng(const Image& image) {
             raw.push_back(row[x * 4 + 0]);
             raw.push_back(row[x * 4 + 1]);
             raw.push_back(row[x * 4 + 2]);
+            if (alpha) raw.push_back(row[x * 4 + 3]);
         }
     }
     std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
@@ -191,7 +193,7 @@ std::vector<uint8_t> EncodePng(const Image& image) {
     PutU32(ihdr, static_cast<uint32_t>(w));
     PutU32(ihdr, static_cast<uint32_t>(h));
     ihdr.push_back(8);  // bit depth
-    ihdr.push_back(2);  // color type RGB
+    ihdr.push_back(alpha ? 6 : 2);  // color type RGBA / RGB
     ihdr.push_back(0);
     ihdr.push_back(0);
     ihdr.push_back(0);
@@ -201,8 +203,8 @@ std::vector<uint8_t> EncodePng(const Image& image) {
     return png;
 }
 
-bool WritePng(const std::string& path, const Image& image) {
-    std::vector<uint8_t> png = EncodePng(image);
+bool WritePng(const std::string& path, const Image& image, bool alpha) {
+    std::vector<uint8_t> png = EncodePng(image, alpha);
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) return false;
     size_t written = std::fwrite(png.data(), 1, png.size(), f);

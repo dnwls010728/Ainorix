@@ -32,7 +32,7 @@ in vec2 texcoord;
 
 out vec3 v_wpos;
 out vec3 v_nrm;
-out vec2 v_uv;
+centroid out vec2 v_uv;
 
 void main() {
     vec4 wp = model * vec4(position, 1.0);
@@ -46,7 +46,8 @@ void main() {
 @fs mesh_fs
 layout(binding=1) uniform mesh_material {
     vec4 base_color;
-    vec4 flags;  // x: unlit, y: textured
+    vec4 flags;    // x: unlit, y: textured, z: alpha cutoff (sprites; 0 = off)
+    vec4 uv_rect;  // uv = v_uv * zw + xy (sprite sheet frame, flips)
 };
 
 layout(binding=2) uniform mesh_lights {
@@ -67,7 +68,7 @@ layout(binding=1) uniform sampler shadow_smp;
 
 in vec3 v_wpos;
 in vec3 v_nrm;
-in vec2 v_uv;
+centroid in vec2 v_uv;
 
 out vec4 frag_color;
 
@@ -99,7 +100,11 @@ float shadow_lit(vec3 wpos, vec3 n) {
 void main() {
     vec3 base = base_color.rgb;
     if (flags.y > 0.5) {
-        base *= texture(sampler2D(base_tex, base_smp), v_uv).rgb;
+        vec4 texel = texture(sampler2D(base_tex, base_smp), v_uv * uv_rect.zw + uv_rect.xy);
+        if (texel.a < flags.z) {
+            discard;
+        }
+        base *= texel.rgb;
     }
     if (flags.x > 0.5) {
         frag_color = vec4(clamp(base, 0.0, 1.0), 1.0);
@@ -202,14 +207,64 @@ layout(binding=0) uniform ui_params {
     vec4 screen;  // xy: 2 / target size in pixels
 };
 
-in vec2 position;  // pixels, top-left origin
-in vec4 color0;
+in vec2 position;     // pixels, top-left origin
+in vec2 texcoord0;    // normalized texture coordinates
+in vec4 color0;       // color * alpha
+in vec4 color1;       // border color and alpha
+in vec4 shape_rect;   // rounded rectangle x0, y0, x1, y1 (pixels)
+in vec4 shape_params; // radius, border width, textured, shaped
 
+out vec2 v_pix;
+out vec2 v_uv;
 out vec4 v_color;
+out vec4 v_border;
+out vec4 v_rect;
+out vec4 v_params;
 
 void main() {
     gl_Position = vec4(position.x * screen.x - 1.0, 1.0 - position.y * screen.y, 0.0, 1.0);
+    v_pix = position;
+    v_uv = texcoord0;
     v_color = color0;
+    v_border = color1;
+    v_rect = shape_rect;
+    v_params = shape_params;
+}
+@end
+
+// Must match ShadeUIQuad in render/UI.cpp (the software renderer).
+@fs ui_fs
+layout(binding=0) uniform texture2D ui_tex;
+layout(binding=0) uniform sampler ui_smp;
+
+in vec2 v_pix;
+in vec2 v_uv;
+in vec4 v_color;
+in vec4 v_border;
+in vec4 v_rect;
+in vec4 v_params;
+
+out vec4 frag_color;
+
+void main() {
+    vec4 c = v_color;
+    if (v_params.z > 0.5) {
+        c *= texture(sampler2D(ui_tex, ui_smp), v_uv);
+    }
+    if (v_params.w > 0.5) {
+        vec2 center = (v_rect.xy + v_rect.zw) * 0.5;
+        vec2 half_size = (v_rect.zw - v_rect.xy) * 0.5;
+        float r = min(v_params.x, min(half_size.x, half_size.y));
+        vec2 q = abs(v_pix - center) - half_size + r;
+        float d = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+        float cover = clamp(0.5 - d, 0.0, 1.0);
+        if (v_params.y > 0.0) {
+            float inner = clamp(0.5 - (d + v_params.y), 0.0, 1.0);
+            c = mix(v_border, c, inner);
+        }
+        c.a *= cover;
+    }
+    frag_color = c;
 }
 @end
 
@@ -223,7 +278,7 @@ void main() {
 @end
 
 @program line line_vs color_fs
-@program ui ui_vs color_fs
+@program ui ui_vs ui_fs
 
 // ----- Composite: scene image -> output, plus the editor selection outline -------
 // Screen-space effects (tone mapping, bloom, color grading...) belong here or

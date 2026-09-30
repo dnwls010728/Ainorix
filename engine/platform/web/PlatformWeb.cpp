@@ -131,6 +131,8 @@ public:
         emscripten_set_touchmove_callback(kCanvas, this, true, &WebWindow::OnTouch);
         emscripten_set_touchcancel_callback(kCanvas, this, true, &WebWindow::OnTouch);
         emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, &WebWindow::OnBlur);
+        emscripten_set_pointerlockchange_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebWindow::OnPointerLock);
+        emscripten_set_pointerlockerror_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebWindow::OnPointerLockError);
         return true;
     }
 
@@ -149,9 +151,23 @@ public:
                     input.mouseY = e.y;
                     break;
                 case Event::Clear: input.down.clear(); break;
+                case Event::Delta:
+                    input.mouseDX += e.x;
+                    input.mouseDY += e.y;
+                    break;
+                case Event::Unlock: input.mouseLocked = false; break;
+                case Event::Lock: input.mouseLocked = true; break;
             }
         }
         events_.clear();
+        // Pointer lock can only be requested from a user gesture: OnMouse asks
+        // for it on the next click while the game wants the mouse locked.
+        wantLock_ = input.mouseLocked;
+        if (!wantLock_ && pointerLocked_) {
+            relockOnClick_ = false;  // the game released it
+            emscripten_exit_pointerlock();
+        }
+        if (pointerLocked_) input.mouseX = input.mouseY = 0.5f;  // UI clicks hit the crosshair
         input.viewWidth = width_;
         input.viewHeight = height_;
         return true;  // a web page is never "closed" by the game loop
@@ -168,7 +184,7 @@ public:
 
 private:
     struct Event {
-        enum Kind { Down, Up, Move, Clear } kind;
+        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock } kind;
         std::string key;
         float x = 0, y = 0;
     };
@@ -206,7 +222,19 @@ private:
 
     static bool OnMouse(int type, const EmscriptenMouseEvent* e, void* user) {
         auto* self = static_cast<WebWindow*>(user);
-        self->Move(static_cast<double>(e->targetX), static_cast<double>(e->targetY));
+        if (self->pointerLocked_) {
+            if (e->movementX != 0 || e->movementY != 0) {
+                self->events_.push_back({Event::Delta, std::string(), static_cast<float>(e->movementX), static_cast<float>(e->movementY)});
+            }
+        } else {
+            self->Move(static_cast<double>(e->targetX), static_cast<double>(e->targetY));
+            // The click that captures the pointer (game start, or after Escape)
+            // is not passed to the game.
+            if (type == EMSCRIPTEN_EVENT_MOUSEDOWN && (self->wantLock_ || self->relockOnClick_) && !self->lockUnavailable_) {
+                emscripten_request_pointerlock(kCanvas, false);
+                return true;
+            }
+        }
         const char* button = e->button == 0 ? "MouseLeft" : (e->button == 2 ? "MouseRight" : nullptr);
         if (button && type == EMSCRIPTEN_EVENT_MOUSEDOWN) self->Push(Event::Down, button);
         if (button && type == EMSCRIPTEN_EVENT_MOUSEUP) self->Push(Event::Up, button);
@@ -222,12 +250,41 @@ private:
         return true;
     }
 
+    // The browser releases the pointer on Escape; tell the game.
+    static bool OnPointerLock(int, const EmscriptenPointerlockChangeEvent* e, void* user) {
+        auto* self = static_cast<WebWindow*>(user);
+        bool was = self->pointerLocked_;
+        self->pointerLocked_ = e->isActive != 0;
+        if (was && !self->pointerLocked_) {
+            if (self->wantLock_) self->relockOnClick_ = true;
+            self->events_.push_back({Event::Unlock, std::string(), 0, 0});
+        }
+        if (!was && self->pointerLocked_) {
+            self->relockOnClick_ = false;
+            self->events_.push_back({Event::Lock, std::string(), 0, 0});
+        }
+        return false;
+    }
+
+    // Pointer lock refused (some embeds, mobile browsers): stop asking and let
+    // clicks through, so the game stays playable with absolute mouse input.
+    static bool OnPointerLockError(int, const void*, void* user) {
+        auto* self = static_cast<WebWindow*>(user);
+        self->lockUnavailable_ = true;
+        self->relockOnClick_ = false;
+        return false;
+    }
+
     static bool OnBlur(int, const EmscriptenFocusEvent*, void* user) {
         static_cast<WebWindow*>(user)->events_.push_back({Event::Clear, std::string(), 0, 0});
         return false;
     }
 
     std::vector<Event> events_;
+    bool wantLock_ = false;
+    bool pointerLocked_ = false;
+    bool relockOnClick_ = false;  // released by Escape, not by the game
+    bool lockUnavailable_ = false;
     int width_ = 0, height_ = 0;
     double cssW_ = 1, cssH_ = 1;
 };

@@ -21,6 +21,14 @@ struct InputState {
     float mouseY = 0.5f;
     int viewWidth = 1280;
     int viewHeight = 720;
+    // Relative mouse motion in pixels since the last simulation step (mouse
+    // look). Platforms accumulate it; it is cleared after every step.
+    float mouseDX = 0.0f;
+    float mouseDY = 0.0f;
+    // Set by the game (input.lockMouse): hide the cursor and keep it in the
+    // view so only relative motion matters. Platforms clear it when the player
+    // presses Escape or the window loses focus.
+    bool mouseLocked = false;
 };
 
 // Advances all behavior components by dt seconds (before physics).

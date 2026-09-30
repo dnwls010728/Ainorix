@@ -225,7 +225,7 @@ Press or release a key ("W", "A", "S", "D", "Space", "Left", ...).
 
 ### `input.click`
 
-Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick on the next simulated frame.
+Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick (or sets a UISlider) on the next simulated frame.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -234,14 +234,31 @@ Click the game view at a pixel (as seen in a screenshot of the given size). Trig
 | `width` | integer |  | Width of the image the coordinates refer to (default 640, like render.screenshot). |
 | `height` | integer |  | Height of that image (default 360). |
 
-### `input.mouse`
+## ui
 
-Move the mouse over the game view and optionally press/release a button.
+### `ui.layout`
+
+Where every visible UI element is on a screen of the given size (pixels, top-left origin), in draw order. Use the centers with input.click.
 
 | arg | type | required | description |
 |---|---|---|---|
-| `x` | number | yes | Pixel x. |
-| `y` | number | yes | Pixel y. |
+| `width` | integer |  | Screen width (default 640, like render.screenshot). |
+| `height` | integer |  | Screen height (default 360). |
+| `interactable` | boolean |  | Only buttons and sliders that accept clicks. |
+
+## input
+
+### `input.mouse`
+
+Move the mouse over the game view, add relative motion (mouse look) and optionally press/release a button.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `x` | number |  | Pixel x (keeps the current position when omitted). |
+| `y` | number |  | Pixel y. |
+| `dx` | number |  | Relative motion in pixels, read by scripts with input.mouseDelta() on the next step (mouse look). |
+| `dy` | number |  | Relative vertical motion in pixels (positive = down). |
+| `locked` | boolean |  | Set the mouse lock state (what input.lockMouse() does; the editor clears it when the player presses Escape). |
 | `width` | integer |  | Width of the image the coordinates refer to (default 640). |
 | `height` | integer |  | Height of that image (default 360). |
 | `button` | string |  | MouseLeft or MouseRight. |
@@ -526,11 +543,11 @@ Position, rotation (Euler degrees, applied X then Y then Z) and scale relative t
 
 ### MeshRenderer
 
-Draws a mesh: a built-in shape (cube, sphere, plane, pyramid) or a glTF model file. Unknown meshes render as a magenta cube.
+Draws a mesh: a built-in shape (cube, sphere, plane, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.
 
 | field | type | default | description |
 |---|---|---|---|
-| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, pyramid) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
+| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
 | `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the model/texture color, linear RGB 0..1 (or "#rrggbb"). |
 | `texture` | string | `""` | Image (.png/.jpg) overriding the model's own base color texture. Empty = use the model's. |
 | `shading` | string | `"smooth"` | smooth = interpolated vertex normals, flat = faceted. |
@@ -638,6 +655,7 @@ Makes a Collider move. dynamic = driven by gravity and collisions; kinematic = f
 | `linearDamping` | float | `0.0500000007` | Air resistance. |
 | `lockRotation` | bool | `false` | Prevent the body from rotating (keeps it upright). |
 | `continuous` | bool | `false` | Continuous collision detection for fast objects (prevents tunneling through thin walls). |
+| `plane2D` | bool | `false` | 2D physics: move only in the XY plane and rotate only around Z. |
 
 ### CharacterBody
 
@@ -653,6 +671,7 @@ Physics character for players/NPCs: set velocity (x/z to walk, y to jump) and th
 | `gravityScale` | float | `1` | Multiplier for gravity. |
 | `velocity` | vec3 | `[0,0,0]` | Desired velocity in m/s; after each step it holds the actual velocity. |
 | `grounded` | bool | `false` | Runtime state: true while standing on walkable ground. |
+| `plane2D` | bool | `false` | 2D games: keep the character on its starting Z (velocity.z is ignored). |
 
 ### Prefab
 
@@ -664,53 +683,157 @@ Marks the root of a prefab instance and remembers which prefab file it came from
 
 ### UIText
 
-Screen-space text (ASCII, built-in pixel font). Multi-line with 
-.
+Screen-space text: TrueType fonts (any language the font covers), alignment, wrapping, outline, shadow, rich text.
 
 | field | type | default | description |
 |---|---|---|---|
-| `text` | string | `"Text"` | Text to show. Non-ASCII characters render as '?'. |
-| `anchor` | string | `"top-left"` | Screen anchor and pivot. |
-| `x` | float | `24` | Horizontal offset in reference pixels (canvas is 1280x720). |
-| `y` | float | `24` | Vertical offset in reference pixels (+y is down). |
-| `size` | float | `32` | Line height in reference pixels. |
+| `text` | string | `"Text"` | Text to show (UTF-8). \n starts a new line. With richText: <color=#ff8800>..</color>, <b>..</b>. |
+| `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
+| `size` | float | `32` | Font size in reference pixels (em height; for "pixel" the line height). |
 | `color` | color | `[1,1,1]` | Text color. |
-| `visible` | bool | `true` | Hidden elements are not drawn. |
-| `order` | int | `0` | Draw order (higher on top). |
+| `anchor` | string | `"top-left"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `24` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `24` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `0` | Box size in reference pixels; 0 = fit the text. A width makes text wrap and align inside it. |
+| `height` | float | `0` | Box size in reference pixels; 0 = fit the text. A width makes text wrap and align inside it. |
+| `align` | string | `"auto"` | Horizontal alignment of lines; auto follows the anchor (left/center/right). |
+| `verticalAlign` | string | `"top"` | Vertical alignment inside a box with a height. |
+| `wrap` | bool | `true` | Break lines at word boundaries to fit width (when width > 0). |
+| `lineSpacing` | float | `1` | Line height multiplier. |
+| `letterSpacing` | float | `0` | Extra space between characters in reference pixels. |
+| `bold` | bool | `false` | Synthetic bold. |
+| `richText` | bool | `true` | Interpret <color=..> and <b> tags. |
+| `outlineWidth` | float | `0` | Outline thickness in reference pixels (0 = none). |
+| `outlineColor` | color | `[0,0,0]` | Outline color. |
+| `shadowDistance` | float | `0` | Drop shadow offset (right and down) in reference pixels (0 = none). |
+| `shadowColor` | color | `[0,0,0]` | Drop shadow color (drawn at half the text opacity). |
+| `visibleCharacters` | int | `-1` | Show only the first N characters (typewriter effects); -1 = all. |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `0` | Draw order among siblings (higher on top). |
 
 ### UIPanel
 
-Screen-space colored rectangle (backgrounds, bars).
+Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a border. Parent of other UI elements.
 
 | field | type | default | description |
 |---|---|---|---|
-| `anchor` | string | `"top-left"` | Screen anchor and pivot. |
-| `x` | float | `16` | Horizontal offset in reference pixels. |
-| `y` | float | `16` | Vertical offset in reference pixels. |
-| `width` | float | `240` | Width in reference pixels. |
-| `height` | float | `64` | Height in reference pixels. |
+| `anchor` | string | `"top-left"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `16` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `16` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `240` | Size in reference pixels. |
+| `height` | float | `64` | Size in reference pixels. |
 | `color` | color | `[0,0,0]` | Fill color. |
-| `opacity` | float | `0.5` | 0 = invisible, 1 = opaque. |
-| `visible` | bool | `true` | Hidden elements are not drawn. |
-| `order` | int | `-1` | Draw order (higher on top). |
+| `radius` | float | `0` | Corner radius in reference pixels. |
+| `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
+| `borderColor` | color | `[1,1,1]` | Border color. |
+| `clip` | bool | `false` | Children are cut off at the panel's edges (and cannot be clicked outside it). |
+| `opacity` | float | `0.5` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `-1` | Draw order among siblings (higher on top). |
 
 ### UIButton
 
-Clickable screen-space button. A click calls onClick(self) on the entity's Script. Click it from tools with input.click.
+Clickable screen-space button. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit. Click it from tools with input.click (ui.layout lists where it is).
 
 | field | type | default | description |
 |---|---|---|---|
-| `text` | string | `"Button"` | Label. |
-| `anchor` | string | `"center"` | Screen anchor and pivot. |
-| `x` | float | `0` | Horizontal offset in reference pixels. |
-| `y` | float | `0` | Vertical offset in reference pixels. |
-| `width` | float | `240` | Width in reference pixels. |
-| `height` | float | `64` | Height in reference pixels. |
-| `size` | float | `28` | Label line height in reference pixels. |
-| `color` | color | `[0.25,0.449999988,0.899999976]` | Background color. |
+| `text` | string | `"Button"` | Label (same rich text as UIText). |
+| `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
+| `size` | float | `28` | Label font size in reference pixels. |
 | `textColor` | color | `[1,1,1]` | Label color. |
-| `visible` | bool | `true` | Hidden buttons are not drawn and cannot be clicked. |
-| `order` | int | `10` | Draw order (higher on top). |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `240` | Size in reference pixels. |
+| `height` | float | `64` | Size in reference pixels. |
+| `color` | color | `[0.25,0.449999988,0.899999976]` | Background color. |
+| `radius` | float | `8` | Corner radius in reference pixels. |
+| `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
+| `borderColor` | color | `[1,1,1]` | Border color. |
+| `hoverBrightness` | float | `1.14999998` | Background brightness while the pointer is over the button. |
+| `pressedBrightness` | float | `0.850000024` | Background brightness while pressed. |
+| `interactable` | bool | `true` | Disabled buttons are drawn faded and ignore clicks. |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
+### UIImage
+
+Screen-space image: icons, portraits, 9-slice frames, fill bars (fill + fillOrigin), sprite sheet frames.
+
+| field | type | default | description |
+|---|---|---|---|
+| `texture` | string | `""` | Image file (png/jpg/bmp/tga). Empty = solid color. |
+| `color` | color | `[1,1,1]` | Tint (multiplies the image). |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `0` | Size in reference pixels; 0 = the image's (frame's) pixel size. |
+| `height` | float | `0` | Size in reference pixels; 0 = the image's (frame's) pixel size. |
+| `frame` | int | `0` | Frame of a sprite sheet (row by row from the top-left). |
+| `columns` | int | `1` | Sheet columns. |
+| `rows` | int | `1` | Sheet rows. |
+| `slice` | float | `0` | 9-slice border in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `preserveAspect` | bool | `false` | Fit the image inside the box without distorting it. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling (sharp pixels). |
+| `fill` | float | `1` | Visible fraction (health bars, cooldowns). |
+| `fillOrigin` | string | `"left"` | Side the fill grows from. |
+| `radius` | float | `0` | Corner radius in reference pixels (round avatars, pills). |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `0` | Draw order among siblings (higher on top). |
+
+### UISlider
+
+Bar showing value in [min, max]: a draggable slider (calls onValueChanged(self, value) on the entity's Script) or, with interactable false, a progress/health bar.
+
+| field | type | default | description |
+|---|---|---|---|
+| `value` | float | `0.5` | Current value. |
+| `min` | float | `0` | Value at the start. |
+| `max` | float | `1` | Value at the end. |
+| `step` | float | `0` | Snap dragged values to multiples of this (0 = continuous). |
+| `direction` | string | `"left-to-right"` | Fill direction. |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `320` | Size in reference pixels. |
+| `height` | float | `24` | Size in reference pixels. |
+| `color` | color | `[0.119999997,0.129999995,0.159999996]` | Track (background) color. |
+| `fillColor` | color | `[0.25,0.449999988,0.899999976]` | Filled part color. |
+| `handle` | bool | `true` | Draw a round handle at the value. |
+| `handleColor` | color | `[1,1,1]` | Handle color. |
+| `radius` | float | `12` | Corner radius in reference pixels. |
+| `interactable` | bool | `true` | Drag to change the value; false = display only (progress bar). |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
+### UILayout
+
+Arranges the UI children of this entity's UI element in a column, row or grid (their anchor/x/y are ignored). fit resizes the element to its content (menus, lists, inventories).
+
+| field | type | default | description |
+|---|---|---|---|
+| `direction` | string | `"vertical"` | vertical (column), horizontal (row) or grid (rows of `columns` equal cells). |
+| `spacing` | float | `8` | Gap between children in reference pixels. |
+| `padding` | float | `0` | Inner margin on every side in reference pixels. |
+| `columns` | int | `3` | Cells per row for grid. |
+| `align` | string | `"start"` | Where the children sit along the layout direction. |
+| `crossAlign` | string | `"start"` | Placement across the direction; stretch makes children as wide (tall) as the element. |
+| `fit` | bool | `false` | Resize the element to wrap its children. |
+
+### UICanvas
+
+Optional, one per scene: the reference resolution the UI is authored for and how it scales to other screen sizes.
+
+| field | type | default | description |
+|---|---|---|---|
+| `referenceWidth` | float | `1280` | Reference canvas width in pixels. |
+| `referenceHeight` | float | `720` | Reference canvas height in pixels. |
+| `match` | float | `1` | 0 = scale with the screen width, 1 = with the height (default), in between = blend. |
 
 ### AudioSource
 
@@ -744,4 +867,62 @@ Moves this entity (usually the camera) to target + offset after physics each fra
 | `offset` | vec3 | `[0,4,8]` | Position relative to the target (world axes). |
 | `lookOffset` | vec3 | `[0,0.5,0]` | Point to look at, relative to the target. |
 | `smoothing` | float | `8` | Catch-up speed (per second); 0 = snap instantly. |
+| `useBounds` | bool | `false` | Clamp the camera position to boundsMin..boundsMax and keep its rotation (2D side-scrollers: the view stops at the level edges). |
+| `boundsMin` | vec3 | `[-1000,-1000,-1000]` | Lowest camera position when useBounds is on. |
+| `boundsMax` | vec3 | `[1000,1000,1000]` | Highest camera position when useBounds is on. |
+
+### Sprite
+
+Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at the entity. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.
+
+| field | type | default | description |
+|---|---|---|---|
+| `texture` | string | `""` | Image file (.png with transparency). A sprite sheet is a grid of equally sized frames. |
+| `color` | color | `[1,1,1]` | Tint multiplied with the image. |
+| `frame` | int | `0` | Frame index in the sheet, row by row from the top-left (SpriteAnimation sets it). |
+| `columns` | int | `1` | Frames per row in the sheet. |
+| `rows` | int | `1` | Rows of frames in the sheet. |
+| `pixelsPerUnit` | float | `16` | Image pixels per world unit; sets the size when width/height are 0 (16 = a 16 px frame is 1 unit). |
+| `width` | float | `0` | Width in world units (0 = frame pixels / pixelsPerUnit). Transform.scale multiplies it. |
+| `height` | float | `0` | Height in world units (0 = from pixels). |
+| `pivotX` | float | `0.5` | Point of the sprite placed at the entity position: 0 = left edge, 0.5 = center, 1 = right edge. |
+| `pivotY` | float | `0.5` | 0 = bottom edge (feet), 0.5 = center, 1 = top edge. |
+| `flipX` | bool | `false` | Mirror horizontally (face left). |
+| `flipY` | bool | `false` | Mirror vertically. |
+| `pixelArt` | bool | `true` | Sharp nearest-neighbour pixels instead of smooth filtering. |
+| `alphaCutoff` | float | `0.5` | Pixels with alpha below this are not drawn (0 = draw everything). |
+| `lit` | bool | `false` | Apply scene lighting (default: full brightness, like classic 2D). |
+| `order` | int | `0` | Sorting among sprites at the same depth: higher is drawn in front. |
+| `visible` | bool | `true` | Whether the sprite is drawn. |
+
+### SpriteAnimation
+
+Plays frame sequences on the entity's Sprite. clips = {"run": {"frames": [2,3,4,5], "fps": 10, "loop": true}}; set clip to switch (restarts it).
+
+| field | type | default | description |
+|---|---|---|---|
+| `clips` | json | `{}` | Clip name -> {frames: [indices], fps: number, loop: bool (default true)}. |
+| `clip` | string | `""` | Clip being played. Changing it starts the new clip from its first frame. |
+| `speed` | float | `1` | Playback speed multiplier. |
+| `playing` | bool | `true` | Pause/resume. |
+| `time` | float | `0` | Runtime: seconds into the current clip. |
+| `finished` | bool | `false` | Runtime: true once a non-looping clip reached its last frame. |
+
+### Tilemap
+
+Grid of tiles from a tileset image, written as text rows (map) with a legend of characters. The entity position is the top-left corner; rows go down (-Y), columns right (+X). Solid tiles collide.
+
+| field | type | default | description |
+|---|---|---|---|
+| `tileset` | string | `""` | Tileset image: a grid of equally sized tiles. |
+| `columns` | int | `1` | Tiles per row in the tileset image. |
+| `rows` | int | `1` | Rows of tiles in the tileset image. |
+| `tileSize` | float | `1` | Size of one tile in world units. |
+| `map` | json | `[]` | Array of strings, one per row from the top; one character per tile. Characters not in the legend (space, '.') are empty. |
+| `legend` | json | `{}` | Character -> tileset frame index, e.g. {"#": 0, "=": 1}. |
+| `solid` | string | `""` | Characters that collide (static boxes, merged along rows), e.g. "#=". Others are decoration only. |
+| `color` | color | `[1,1,1]` | Tint. |
+| `pixelArt` | bool | `true` | Sharp nearest-neighbour pixels. |
+| `lit` | bool | `false` | Apply scene lighting. |
+| `visible` | bool | `true` | Whether the tiles are drawn (they still collide). |
 

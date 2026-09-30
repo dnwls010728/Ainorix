@@ -11,6 +11,7 @@
 
 #include "core/Log.h"
 #include "scene/Components.h"
+#include "scene/TileGrid.h"
 #include "scene/Scene.h"
 
 // Jolt must be included first, then the rest of its headers.
@@ -32,6 +33,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
@@ -204,6 +206,32 @@ std::string ColliderKey(const Scene& s, EntityId id, JPH::Vec3 scale) {
     return key + buf;
 }
 
+// One static compound shape for the solid cells of a tilemap (merged rectangles).
+JPH::RefConst<JPH::Shape> TilemapShape(const Tilemap& tm, JPH::Vec3 scale) {
+    std::vector<TileRect> rects = SolidRects(tm);
+    if (rects.empty()) return nullptr;
+    scale = scale.Abs();
+    const float ts = std::max(0.001f, tm.tileSize);
+    const float depth = std::max(0.5f, ts);  // generous Z thickness so 2D bodies never slip past
+    JPH::StaticCompoundShapeSettings compound;
+    for (const TileRect& r : rects) {
+        JPH::Vec3 half(0.5f * ts * static_cast<float>(r.width), 0.5f * ts * static_cast<float>(r.height), depth);
+        half = half * scale;
+        JPH::Vec3 center((static_cast<float>(r.col) + 0.5f * static_cast<float>(r.width)) * ts,
+                         -(static_cast<float>(r.row) + 0.5f * static_cast<float>(r.height)) * ts, 0.0f);
+        float convex = std::min(JPH::cDefaultConvexRadius, 0.5f * half.ReduceMin());
+        compound.AddShape(center * scale, JPH::Quat::sIdentity(), new JPH::BoxShapeSettings(half, convex));
+    }
+    std::string err;
+    return Build(compound, &err);
+}
+
+std::string TilemapKey(const Tilemap& tm, JPH::Vec3 scale) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "|%.4f|%.4f,%.4f,%.4f", tm.tileSize, scale.GetX(), scale.GetY(), scale.GetZ());
+    return "tilemap|" + tm.map.dump() + "|" + tm.solid + buf;
+}
+
 std::string CharacterKey(const CharacterBody& c) {
     Json j = ComponentToJson(*TypeRegistry::Find("CharacterBody"), &c);
     j.erase("velocity");
@@ -237,6 +265,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         JPH::Ref<JPH::CharacterVirtual> ch;
         std::string key;
         JPH::Vec3 lastPos;
+        float planeZ = 0.0f;  // CharacterBody.plane2D keeps the character on this Z
     };
 
     Impl() : temp(16 * 1024 * 1024), jobs(JPH::cMaxPhysicsJobs) {
@@ -341,10 +370,12 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 bodyToEntity[rec.ch->GetInnerBodyID().GetIndexAndSequenceNumber()] = id;
                 rec.key = key;
                 rec.lastPos = wx.pos;
+                rec.planeZ = wx.pos.GetZ();
                 if (scene.Get<Collider>(id)) Warn(warnings, "entity " + std::to_string(id) + " has both CharacterBody and Collider; the Collider is ignored (CharacterBody defines the shape)");
             } else if (!SamePos(wx.pos, rec.lastPos)) {
                 rec.ch->SetPosition(wx.pos);  // teleported by a script or the editor
                 rec.lastPos = wx.pos;
+                rec.planeZ = wx.pos.GetZ();
             }
         }
         for (auto it = characters.begin(); it != characters.end();) {
@@ -405,7 +436,11 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                     bs.mLinearVelocity = J(rb->velocity);
                     bs.mAngularVelocity = J(rb->angularVelocity) * (kPi / 180.0f);
                     bs.mMotionQuality = rb->continuous ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
-                    if (rb->lockRotation) bs.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
+                    if (rb->plane2D) {
+                        bs.mAllowedDOFs = rb->lockRotation ? JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY : JPH::EAllowedDOFs::Plane2D;
+                    } else if (rb->lockRotation) {
+                        bs.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
+                    }
                     if (rec.kind == Kind::Dynamic) {
                         bs.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
                         bs.mMassPropertiesOverride.mMass = std::max(0.001f, rb->mass);
@@ -450,6 +485,49 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 }
             }
         }
+        // Tilemaps: one static body per map with its solid cells.
+        for (auto& kv : scene.Pool<Tilemap>()) {
+            EntityId id = kv.first;
+            if (seenBodies.count(id) || seenChars.count(id) || seenTriggers.count(id)) {
+                Warn(warnings, "entity " + std::to_string(id) + " has a Tilemap and a Collider/CharacterBody; the tilemap does not collide");
+                continue;
+            }
+            if (kv.second.solid.empty()) continue;
+            WorldXf wx = WorldOf(scene, id);
+            std::string key = TilemapKey(kv.second, wx.scale);
+            auto it = bodies.find(id);
+            if (it != bodies.end() && it->second.key != key) {
+                RemoveBody(id, it->second);
+                bodies.erase(it);
+                it = bodies.end();
+            }
+            if (it == bodies.end()) {
+                JPH::RefConst<JPH::Shape> shape = TilemapShape(kv.second, wx.scale);
+                if (!shape) continue;
+                JPH::BodyCreationSettings bs(shape, wx.pos, wx.rot, JPH::EMotionType::Static, Layers::kStatic);
+                bs.mUserData = id;
+                bs.mFriction = 0.2f;
+                BodyRec rec;
+                rec.kind = Kind::Static;
+                rec.id = bi.CreateAndAddBody(bs, JPH::EActivation::DontActivate);
+                if (rec.id.IsInvalid()) {
+                    Warn(warnings, "physics body limit reached");
+                    continue;
+                }
+                rec.key = key;
+                rec.lastPos = wx.pos;
+                rec.lastRot = wx.rot;
+                bodyToEntity[rec.id.GetIndexAndSequenceNumber()] = id;
+                bodies[id] = rec;
+                added = true;
+            } else if (!SamePos(wx.pos, it->second.lastPos) || !SameRot(wx.rot, it->second.lastRot)) {
+                bi.SetPositionAndRotation(it->second.id, wx.pos, wx.rot, JPH::EActivation::DontActivate);
+                it->second.lastPos = wx.pos;
+                it->second.lastRot = wx.rot;
+            }
+            seenBodies.insert(id);
+        }
+
         for (auto it = bodies.begin(); it != bodies.end();) {
             if (!seenBodies.count(it->first)) {
                 RemoveBody(it->first, it->second);
@@ -480,6 +558,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
             CharacterBody* cb = scene.Get<CharacterBody>(kv.first);
             JPH::CharacterVirtual& ch = *kv.second.ch;
             JPH::Vec3 desired = J(cb->velocity);
+            if (cb->plane2D) desired.SetZ(0.0f);
             JPH::Vec3 v = desired;
             bool onGround = ch.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
             if (onGround && desired.GetY() <= 0.0f) v.SetY(ch.GetGroundVelocity().GetY());
@@ -491,7 +570,27 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
             JPH::IgnoreSingleBodyFilter bodyFilter(ch.GetInnerBodyID());
             ch.ExtendedUpdate(dt, gravity * cb->gravityScale, settings, bpFilter, layerFilter, bodyFilter, shapeFilter, temp);
 
+            // Hitting a ceiling ends the upward motion (otherwise the character
+            // hangs under it until gravity has eaten the jump velocity).
+            JPH::Vec3 after = ch.GetLinearVelocity();
+            if (after.GetY() > 0.0f) {
+                for (const JPH::CharacterContact& c : ch.GetActiveContacts()) {
+                    if (c.mHadCollision && c.mContactNormal.GetY() < -0.5f) {
+                        after.SetY(0.0f);
+                        ch.SetLinearVelocity(after);
+                        break;
+                    }
+                }
+            }
+
             JPH::Vec3 pos = ch.GetPosition();
+            if (cb->plane2D && pos.GetZ() != kv.second.planeZ) {
+                pos.SetZ(kv.second.planeZ);
+                ch.SetPosition(pos);
+                JPH::Vec3 lv = ch.GetLinearVelocity();
+                lv.SetZ(0.0f);
+                ch.SetLinearVelocity(lv);
+            }
             Transform* t = scene.Get<Transform>(kv.first);
             if (t) WritePose(scene, kv.first, pos, WorldOf(scene, kv.first).rot, false);
             kv.second.lastPos = pos;
@@ -776,6 +875,21 @@ void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines) {
             }
             const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
             for (const auto& e : edges) lines.push_back({p[e[0]], p[e[1]], col});
+        }
+    }
+    // Tilemaps: outline of each merged solid rectangle in the tile plane.
+    for (const auto& kv : scene.Pool<Tilemap>()) {
+        const float ts = std::max(0.001f, kv.second.tileSize);
+        Mat4 m = scene.WorldMatrix(kv.first);
+        for (const TileRect& r : SolidRects(kv.second)) {
+            float x0 = static_cast<float>(r.col) * ts, x1 = static_cast<float>(r.col + r.width) * ts;
+            float y0 = -static_cast<float>(r.row) * ts, y1 = -static_cast<float>(r.row + r.height) * ts;
+            Vec3 a = m.TransformPoint(Vec3(x0, y0, 0)), b = m.TransformPoint(Vec3(x1, y0, 0));
+            Vec3 c = m.TransformPoint(Vec3(x1, y1, 0)), d = m.TransformPoint(Vec3(x0, y1, 0));
+            lines.push_back({a, b, solid});
+            lines.push_back({b, c, solid});
+            lines.push_back({c, d, solid});
+            lines.push_back({d, a, solid});
         }
     }
 }

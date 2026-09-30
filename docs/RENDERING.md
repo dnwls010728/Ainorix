@@ -42,12 +42,16 @@ Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffe
 
 | Field | Meaning |
 |---|---|
-| `mesh` | `cube`, `sphere`, `plane`, `pyramid` or a model path. A missing or broken model renders as an **unlit magenta cube** (and a log warning), so problems are visible in screenshots |
+| `mesh` | `cube`, `sphere`, `plane`, `pyramid`, `quad` (1×1 in XY facing +Z) or a model path. A missing or broken model renders as an **unlit magenta cube** (and a log warning), so problems are visible in screenshots |
 | `color` | Tint multiplied with the material / texture |
 | `texture` | Image overriding the model's base color texture (UVs: built-in meshes have 0..1 per face) |
 | `shading` | `smooth` (interpolated vertex normals) or `flat` (faceted) |
 | `unlit` | Ignore lights and shadows |
 | `castShadows` | Contribute to the directional shadow map |
+
+## Sprites and tilemaps (2D)
+
+`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default and do not cast shadows. See [2D.md](2D.md).
 
 ## Lights and shadows
 
@@ -58,7 +62,7 @@ Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffe
 ## Cameras
 
 - `Camera.projection`: `perspective` (`fov`) or `orthographic` (`orthoSize` = half the visible height in meters, for 2D/isometric views).
-- `CameraFollow {target, offset, lookOffset, smoothing}`: after physics each frame the entity moves to target + offset and looks at target + lookOffset. `smoothing` is a catch-up rate per second (0 = snap).
+- `CameraFollow {target, offset, lookOffset, smoothing, useBounds, boundsMin, boundsMax}`: after physics each frame the entity moves to target + offset and looks at target + lookOffset. `smoothing` is a catch-up rate per second (0 = snap). With `useBounds` the position is clamped to the box and the rotation is left alone (2D side-scrollers).
 
 ## Debug drawing
 

@@ -72,10 +72,17 @@ public:
         ShowWindow(hwnd_, SW_SHOW);
         width_ = width;
         height_ = height;
+        // Raw mouse input gives unaccelerated relative motion for mouse look.
+        RAWINPUTDEVICE rid{};
+        rid.usUsagePage = 0x01;  // generic desktop
+        rid.usUsage = 0x02;      // mouse
+        rid.hwndTarget = hwnd_;
+        RegisterRawInputDevices(&rid, 1, sizeof(rid));
         return true;
     }
 
     ~Win32Window() override {
+        SetMouseLock(false);
         if (hwnd_) DestroyWindow(hwnd_);
     }
 
@@ -87,6 +94,18 @@ public:
             DispatchMessageW(&msg);
         }
         input_ = nullptr;
+        // Mouse lock requested by the game: hidden cursor kept inside the
+        // client area (only while this window is in front).
+        if (!input.mouseLocked && mouseLocked_) relockOnClick_ = false;  // the game released it
+        bool want = input.mouseLocked && GetForegroundWindow() == hwnd_;
+        if (want != mouseLocked_) SetMouseLock(want);
+        if (mouseLocked_) {
+            RECT rc;
+            GetClientRect(hwnd_, &rc);
+            MapWindowPoints(hwnd_, nullptr, reinterpret_cast<POINT*>(&rc), 2);
+            ClipCursor(&rc);
+            input.mouseX = input.mouseY = 0.5f;  // UI clicks hit the crosshair
+        }
         return !closed_;
     }
 
@@ -116,6 +135,13 @@ public:
     void* NativeHandle() const override { return hwnd_; }
 
 private:
+    void SetMouseLock(bool on) {
+        if (on == mouseLocked_) return;
+        mouseLocked_ = on;
+        ShowCursor(on ? FALSE : TRUE);
+        if (!on) ClipCursor(nullptr);
+    }
+
     static LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         Win32Window* self = reinterpret_cast<Win32Window*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (msg == WM_NCCREATE) {
@@ -131,6 +157,18 @@ private:
                     self->width_ = LOWORD(lp);
                     self->height_ = HIWORD(lp);
                     return 0;
+                case WM_INPUT: {
+                    if (self->mouseLocked_ && self->input_) {
+                        RAWINPUT raw{};
+                        UINT size = sizeof(raw);
+                        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lp), RID_INPUT, &raw, &size, sizeof(RAWINPUTHEADER)) != static_cast<UINT>(-1) &&
+                            raw.header.dwType == RIM_TYPEMOUSE && !(raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
+                            self->input_->mouseDX += static_cast<float>(raw.data.mouse.lLastX);
+                            self->input_->mouseDY += static_cast<float>(raw.data.mouse.lLastY);
+                        }
+                    }
+                    break;  // DefWindowProc cleans up the raw input buffer
+                }
                 case WM_MOUSEMOVE:
                 case WM_LBUTTONDOWN:
                 case WM_LBUTTONUP:
@@ -138,12 +176,21 @@ private:
                 case WM_RBUTTONUP: {
                     if (self->input_ && self->width_ > 0 && self->height_ > 0) {
                         InputState& in = *self->input_;
-                        in.mouseX = static_cast<float>(static_cast<short>(LOWORD(lp))) / static_cast<float>(self->width_);
-                        in.mouseY = static_cast<float>(static_cast<short>(HIWORD(lp))) / static_cast<float>(self->height_);
+                        if (!self->mouseLocked_) {
+                            in.mouseX = static_cast<float>(static_cast<short>(LOWORD(lp))) / static_cast<float>(self->width_);
+                            in.mouseY = static_cast<float>(static_cast<short>(HIWORD(lp))) / static_cast<float>(self->height_);
+                        }
                         in.viewWidth = self->width_;
                         in.viewHeight = self->height_;
                         const char* button = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) ? "MouseLeft"
                                              : (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) ? "MouseRight" : nullptr;
+                        // After Escape / focus loss, the next click captures the mouse
+                        // again and is not passed to the game.
+                        if (msg == WM_LBUTTONDOWN && self->relockOnClick_ && !self->mouseLocked_) {
+                            self->relockOnClick_ = false;
+                            in.mouseLocked = true;
+                            return 0;
+                        }
                         if (button) {
                             if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
                                 if (!in.IsDown(button)) in.pressedThisFrame.insert(button);
@@ -158,7 +205,12 @@ private:
                     return 0;
                 }
                 case WM_KILLFOCUS:
-                    if (self->input_) self->input_->down.clear();
+                    if (self->input_) {
+                        self->input_->down.clear();
+                        if (self->mouseLocked_) self->relockOnClick_ = true;
+                        self->input_->mouseLocked = false;
+                    }
+                    self->SetMouseLock(false);
                     return 0;
                 case WM_KEYDOWN:
                 case WM_SYSKEYDOWN:
@@ -174,7 +226,16 @@ private:
                             self->input_->down.erase(key);
                         }
                     }
-                    if (wp == VK_ESCAPE && msg == WM_KEYDOWN) self->closed_ = true;
+                    // Escape releases a locked mouse first; otherwise it closes the window.
+                    if (wp == VK_ESCAPE && msg == WM_KEYDOWN) {
+                        if (self->mouseLocked_ && self->input_) {
+                            self->input_->mouseLocked = false;
+                            self->relockOnClick_ = true;
+                            self->SetMouseLock(false);
+                        } else {
+                            self->closed_ = true;
+                        }
+                    }
                     return 0;
                 }
                 default: break;
@@ -186,6 +247,8 @@ private:
     HWND hwnd_ = nullptr;
     int width_ = 0, height_ = 0;
     bool closed_ = false;
+    bool mouseLocked_ = false;
+    bool relockOnClick_ = false;  // released by Escape / focus loss, not by the game
     InputState* input_ = nullptr;
     std::vector<uint32_t> bgra_;
 };

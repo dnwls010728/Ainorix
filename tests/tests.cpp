@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <set>
 #include <filesystem>
 #include <functional>
@@ -17,6 +18,7 @@
 #include "core/Image.h"
 #include "core/Json.h"
 #include "core/Log.h"
+#include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/UI.h"
 #include "scene/Components.h"
@@ -281,6 +283,105 @@ TEST(ScriptEvalAndSandbox) {
     CHECK(t->position.y == 3.0f && t->position.z == 2.0f);  // partial update keeps x/z
     CHECK(Call(e, "history.undo", "{}")["ok"].asBool());    // eval edits are undoable
     CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.y == 0.5f);
+}
+
+TEST(MouseLookInput) {
+    // Relative mouse motion reaches scripts for exactly one step; the lock flag
+    // is set by scripts, visible to tools and released by input.mouse / sim.stop.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("mouselook"), &err));
+    Call(e, "script.write", R"J({"path": "scripts/look.lua", "source": "local M = {}\nfunction M:onStart() self.yaw = 0 input.lockMouse() end\nfunction M:onUpdate(dt) local dx, dy = input.mouseDelta() self.yaw = self.yaw - dx * 0.1 self.lastDy = dy end\nreturn M\n"})J");
+    Call(e, "entity.create", R"J({"name": "Looker", "components": {"Script": {"path": "scripts/look.lua"}}})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(Call(e, "sim.state", "{}")["result"]["mouseLocked"].asBool());
+    Call(e, "input.mouse", R"J({"dx": 30, "dy": -4})J");
+    Call(e, "input.mouse", R"J({"dx": 20})J");  // accumulates until the next step
+    Call(e, "sim.step", R"J({"frames": 3})J");
+    Json r = Call(e, "script.eval", R"J({"code": "{self.yaw, self.lastDy}", "entity": "Looker"})J");
+    CHECK(std::fabs(r["result"]["value"][0].asNumber() + 5.0) < 1e-6);  // 50 px * 0.1, applied once
+    CHECK(r["result"]["value"][1].asNumber() == 0.0);                  // cleared after the step
+    CHECK(Call(e, "input.mouse", R"J({"locked": false})J")["result"]["mouseLocked"].asBool() == false);
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(!Call(e, "script.eval", R"J({"code": "input.mouseLocked()"})J")["result"]["value"].asBool());
+    Call(e, "input.mouse", R"J({"locked": true})J");
+    Call(e, "sim.stop", "{}");
+    CHECK(!Call(e, "sim.state", "{}")["result"]["mouseLocked"].asBool());
+}
+
+TEST(Sprites2DAndTilemaps) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("sprites2d"), &err));
+    // 4x2 sheet with two 2x2 frames: frame 0 has only its top-left texel opaque (red),
+    // frame 1 is fully opaque green.
+    Image sheet;
+    sheet.width = 4;
+    sheet.height = 2;
+    sheet.rgba.assign(4 * 2 * 4, 0);
+    auto px = [&](int x, int y, uint8_t r, uint8_t g, uint8_t a) {
+        uint8_t* p = &sheet.rgba[static_cast<size_t>((y * 4 + x) * 4)];
+        p[0] = r; p[1] = g; p[2] = 0; p[3] = a;
+    };
+    px(0, 0, 255, 0, 255);
+    for (int y = 0; y < 2; ++y)
+        for (int x = 2; x < 4; ++x) px(x, y, 0, 255, 255);
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "sheet.png"), sheet, true));
+
+    Call(e, "scene.new", "{}");
+    Call(e, "component.set", R"J({"id": "Main Camera", "type": "Transform", "values": {"position": [0, 0, 10], "rotation": [0, 0, 0]}})J");
+    Call(e, "component.set", R"J({"id": "Main Camera", "type": "Camera", "values": {"projection": "orthographic", "orthoSize": 1}})J");
+    Call(e, "entity.create", R"J({"name": "S", "components": {"Transform": {}, "Sprite": {"texture": "sheet.png", "columns": 2, "pixelsPerUnit": 2}}})J");
+    EntityId s = e.GetScene().FindByName("S");
+    // The 1x1 unit sprite covers pixels 16..48 of a 64x64 view; picking uses the same cut-out rules as drawing.
+    auto pick = [&](int x, int y) {
+        Json a = Json::MakeObject();
+        a["x"] = x; a["y"] = y; a["width"] = 64; a["height"] = 64;
+        return static_cast<EntityId>(e.Call("render.pick", a)["result"]["id"].asInt());
+    };
+    CHECK(pick(20, 20) == s);           // opaque texel of frame 0
+    CHECK(pick(44, 44) == kNullEntity); // transparent texel: cut out
+    CHECK(pick(44, 20) == kNullEntity);
+    Call(e, "component.set", R"J({"id": "S", "type": "Sprite", "values": {"flipX": true}})J");
+    CHECK(pick(44, 20) == s && pick(20, 20) == kNullEntity);
+    Call(e, "component.set", R"J({"id": "S", "type": "Sprite", "values": {"frame": 1, "flipX": false}})J");
+    CHECK(pick(44, 44) == s);
+
+    // SpriteAnimation drives Sprite.frame on simulated time; non-looping clips stop at the end.
+    Call(e, "component.add", R"J({"id": "S", "type": "SpriteAnimation", "values": {"clip": "a", "clips": {"a": {"frames": [0, 1], "fps": 10, "loop": false}}}})J");
+    Call(e, "sim.step", R"J({"frames": 3})J");
+    CHECK(e.GetScene().Get<Sprite>(s)->frame == 0);
+    Call(e, "sim.step", R"J({"frames": 4})J");
+    CHECK(e.GetScene().Get<Sprite>(s)->frame == 1);
+    CHECK(e.GetScene().Get<SpriteAnimation>(s)->finished);
+    Call(e, "sim.stop", "{}");
+
+    // Tilemap: rows go down from the entity origin; solid cells collide (a 2D character lands on them).
+    Call(e, "entity.create", R"J({"name": "Map", "components": {"Transform": {}, "Tilemap": {"tileset": "sheet.png", "columns": 2,
+        "map": ["....", "#..#", "####"], "legend": {"#": 1}, "solid": "#"}}})J");
+    Call(e, "entity.create", R"J({"name": "Hero", "components": {"Transform": {"position": [1.5, 0, 0]},
+        "CharacterBody": {"shape": "sphere", "radius": 0.3, "plane2D": true, "velocity": [0, 0, 5]}}})J");
+    Call(e, "sim.step", R"J({"frames": 90})J");
+    const Transform* hero = e.GetScene().Get<Transform>(e.GetScene().FindByName("Hero"));
+    CHECK(std::fabs(hero->position.y + 1.7f) < 0.05f);  // resting on row 2 (top at y = -2)
+    CHECK(std::fabs(hero->position.x - 1.5f) < 0.01f);
+    CHECK(hero->position.z == 0.0f);                    // plane2D ignores velocity.z
+    CHECK(e.GetScene().Get<CharacterBody>(e.GetScene().FindByName("Hero"))->grounded);
+    Json r = Call(e, "script.eval", R"J({"code": "{tilemap.get('Map', 0, 1), tilemap.solid('Map', 1, 1), tilemap.get('Map', 9, 9)}"})J");
+    CHECK(r["result"]["value"][0].asString() == "#" && !r["result"]["value"][1].asBool());
+    // Changing a tile from Lua updates collision: a ray down column 2 now stops on row 1.
+    Call(e, "script.eval", R"J({"code": "tilemap.set('Map', 2, 1, '#')"})J");
+    r = Call(e, "physics.raycast", R"J({"origin": [2.5, 0, 0], "direction": [0, -1, 0]})J");
+    CHECK(r["result"]["entity"].asInt() == static_cast<int>(e.GetScene().FindByName("Map")));
+    CHECK(std::fabs(r["result"]["point"][1].asNumber() + 1.0) < 0.02);
+    r = Call(e, "script.eval", R"J({"code": "local c, r = tilemap.cellAt('Map', {x = 2.5, y = -1.2, z = 0}) return {c, r}"})J");
+    CHECK(r["result"]["value"][0].asInt() == 2 && r["result"]["value"][1].asInt() == 1);
+
+    // Jumping into a ceiling ends the upward motion right away.
+    Call(e, "script.eval", R"J({"code": "tilemap.set('Map', 1, 0, '#')"})J");
+    Call(e, "component.set", R"J({"id": "Hero", "type": "CharacterBody", "values": {"velocity": [0, 12, 0]}})J");
+    Call(e, "sim.step", R"J({"frames": 12})J");
+    CHECK(e.GetScene().Get<CharacterBody>(e.GetScene().FindByName("Hero"))->velocity.y <= 0.0f);
 }
 
 TEST(ScriptErrorsAndHotReload) {
@@ -573,7 +674,7 @@ TEST(UIRenderingAndClicks) {
     CHECK(e.Open(TempProject("ui"), &err));
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
     Call(e, "script.write", R"J({"path": "scripts/button.lua", "source": "local M = {}\nfunction M:onClick() clicks = (clicks or 0) + 1 end\nreturn M\n"})J");
-    Call(e, "entity.create", R"J({"name": "Label", "components": {"UIText": {"text": "HI", "x": 0, "y": 0, "size": 80, "color": [1, 1, 1]}}})J");
+    Call(e, "entity.create", R"J({"name": "Label", "components": {"UIText": {"text": "HI", "font": "pixel", "x": 0, "y": 0, "size": 80, "color": [1, 1, 1]}}})J");
     Call(e, "entity.create", R"J({"name": "Btn", "components": {"UIButton": {"anchor": "bottom-right", "x": -10, "y": -10, "width": 200, "height": 100}, "Script": {"path": "scripts/button.lua"}}})J");
     // Text pixels: the 'H' left column starts at the top-left corner.
     RenderTarget rt;
@@ -826,15 +927,198 @@ TEST(UIQuadsAreWhatSoftwareDraws) {
     Engine e;
     std::string err;
     CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Showcase", &err));
-    std::vector<UIQuad> quads = BuildUIQuads(e.GetScene(), 640, 360);
-    CHECK(quads.size() > 100);  // every lit font pixel is a quad
+    std::vector<UIQuad> quads = BuildUIQuads(e.GetScene(), 640, 360, &e.Assets());
+    CHECK(quads.size() > 50);  // one textured quad per glyph
     RenderTarget rt;
     rt.Resize(640, 360);
     e.RenderGameView(rt);
+    std::set<EntityId> drawn;
     for (const UIQuad& q : quads) {
         CHECK(q.x1 > q.x0 && q.y1 > q.y0);
-        CHECK(rt.IdAt(q.x0, q.y0) == q.entity);
+        CHECK(q.texture != nullptr);  // Showcase UI is all text in the default font
+        for (int y = std::max(0, q.y0); y < std::min(360, q.y1); ++y) {
+            for (int x = std::max(0, q.x0); x < std::min(640, q.x1); ++x) {
+                Color c;
+                float a;
+                ShadeUIQuad(q, x + 0.5f, y + 0.5f, &c, &a);
+                if (a >= 0.5f * q.alpha && rt.IdAt(x, y) == q.entity) drawn.insert(q.entity);
+            }
+        }
     }
+    for (const auto& kv : e.GetScene().Pool<UIText>()) CHECK(!kv.second.visible || drawn.count(kv.first));
+}
+
+TEST(UITextFontsAndRichText) {
+    // UTF-8 decoding and the embedded default font.
+    std::vector<uint32_t> cps = DecodeUtf8("A\xea\xb0\x80\xff");
+    CHECK(cps.size() == 3 && cps[0] == 'A' && cps[1] == 0xAC00 && cps[2] == 0xFFFD);
+    std::shared_ptr<FontFace> roboto = FontFace::Default();
+    CHECK(roboto && roboto->familyName == "Roboto" && roboto->HasGlyph('g') && !roboto->HasGlyph(0xAC00));
+    FontFace::Glyph g = roboto->GetGlyph('H', 32, false);
+    CHECK(g.page == 0 && g.w > 10 && g.h > 18 && g.y0 < 0 && g.advance > 15.0f);
+    CHECK(roboto->GetGlyph('H', 32, true).w > g.w);  // synthetic bold is wider
+    float w1, h1, w2, h2, wp, hp;
+    MeasureText("Hello", 32, &w1, &h1, "default");
+    MeasureText("Hello\nWorld", 32, &w2, &h2, "default");
+    MeasureText("Hello", 32, &wp, &hp, "pixel");
+    CHECK(w1 > 60 && w1 < 90 && std::fabs(w2 - w1) < 20 && h2 > h1 * 1.8f);
+    CHECK(wp == (5 * 6 - 1) * 4.0f && hp == 7 * 4.0f);  // pixel font: 6x8 cells of 4 px
+
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_text"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    // A font file in the project (the embedded Roboto written out).
+    CreateDirectories(JoinPath(e.ProjectDir(), "assets/fonts"));
+    CHECK(CopyFileTo(std::string(OE_SOURCE_DIR) + "/third_party/fonts/Roboto-Regular.ttf", JoinPath(e.ProjectDir(), "assets/fonts/body.ttf")));
+    Json info = Call(e, "asset.info", R"J({"path": "assets/fonts/body.ttf"})J")["result"];
+    CHECK(info["kind"].asString() == "font" && info["family"].asString() == "Roboto");
+    Call(e, "entity.create", R"J({"name": "Red", "components": {"UIText": {"text": "<color=#ff0000>WW</color>WW", "font": "assets/fonts/body.ttf", "x": 0, "y": 0, "size": 72}}})J");
+    Call(e, "entity.create", R"J({"name": "Raw", "components": {"UIText": {"text": "<b>", "richText": false, "x": 0, "y": 200, "size": 40}}})J");
+    Call(e, "entity.create", R"J({"name": "Wrapped", "components": {"UIText": {"text": "one two three four five six", "x": 0, "y": 400, "width": 120, "size": 24}}})J");
+    Call(e, "entity.create", R"J({"name": "Typed", "components": {"UIText": {"text": "abc", "x": 600, "y": 0, "visibleCharacters": 0}}})J");
+    RenderTarget rt;
+    rt.Resize(1280, 720);
+    RenderView view;
+    MakeSceneView(e.GetScene(), 1280.0f / 720.0f, view);
+    e.Renderer().Render(e.GetScene(), view, rt);
+    int red = 0, white = 0;
+    EntityId redId = e.GetScene().FindByName("Red");
+    for (int y = 0; y < 100; ++y) {
+        for (int x = 0; x < 400; ++x) {
+            uint32_t c = rt.color[static_cast<size_t>(y) * 1280 + static_cast<size_t>(x)];
+            if (rt.IdAt(x, y) != redId) continue;
+            if ((c & 0xFF) > 200 && ((c >> 8) & 0xFF) < 60) ++red;
+            if ((c & 0xFF) > 200 && ((c >> 8) & 0xFF) > 200) ++white;
+        }
+    }
+    CHECK(red > 200 && white > 200);
+    Json layout = Call(e, "ui.layout", R"J({"width": 1280, "height": 720})J")["result"]["elements"];
+    CHECK(layout.size() == 4);
+    CHECK(layout[1]["rect"][2].asNumber() > 40);   // "<b>" drawn literally: three glyphs
+    CHECK(layout[2]["rect"][2].asNumber() == 120);  // the box width
+    CHECK(layout[2]["rect"][3].asNumber() > 70);    // wrapped onto 3 lines
+    for (const UIQuad& q : BuildUIQuads(e.GetScene(), 1280, 720, &e.Assets())) CHECK(q.entity != e.GetScene().FindByName("Typed"));
+}
+
+TEST(UILayoutAnchorsAndClipping) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_layout"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    // A fitted vertical menu: padding 10, spacing 5, children 100x40 and 120x30.
+    Call(e, "entity.create", R"J({"name": "Menu", "components": {"UIPanel": {"anchor": "top-left", "x": 100, "y": 50, "width": 0, "height": 0}, "UILayout": {"direction": "vertical", "padding": 10, "spacing": 5, "fit": true}}})J");
+    Call(e, "entity.create", R"J({"name": "A", "parent": "Menu", "components": {"UIButton": {"width": 100, "height": 40}}})J");
+    Call(e, "entity.create", R"J({"name": "B", "parent": "Menu", "components": {"UIButton": {"width": 120, "height": 30, "order": -5}}})J");
+    // Stretch inside a clipping panel; a child outside the clip cannot be clicked.
+    Call(e, "entity.create", R"J({"name": "Frame", "components": {"UIPanel": {"anchor": "bottom-right", "x": -20, "y": -20, "width": 200, "height": 100, "clip": true}}})J");
+    Call(e, "entity.create", R"J({"name": "Fill", "parent": "Frame", "components": {"UIImage": {"anchor": "stretch", "width": -20, "height": -20}}})J");
+    Call(e, "entity.create", R"J({"name": "Hidden", "parent": "Frame", "components": {"UIButton": {"anchor": "top-left", "x": 150, "y": 0, "width": 100, "height": 50}}})J");
+    Json els = Call(e, "ui.layout", R"J({"width": 1280, "height": 720})J")["result"]["elements"];
+    std::map<std::string, Json> by;
+    for (const Json& j : els.items()) by[j["name"].asString()] = j["rect"];
+    auto rect = [&](const char* n, double x, double y, double w, double h) {
+        const Json& r = by[n];
+        return std::fabs(r[0].asNumber() - x) < 0.01 && std::fabs(r[1].asNumber() - y) < 0.01 && std::fabs(r[2].asNumber() - w) < 0.01 && std::fabs(r[3].asNumber() - h) < 0.01;
+    };
+    CHECK(rect("Menu", 100, 50, 140, 95));
+    CHECK(rect("A", 110, 60, 100, 40));  // hierarchy order: A first although B has a lower draw order
+    CHECK(rect("B", 110, 105, 120, 30));
+    CHECK(rect("Frame", 1060, 600, 200, 100));
+    CHECK(rect("Fill", 1070, 610, 180, 80));
+    CHECK(Call(e, "input.click", R"J({"x": 1270, "y": 620, "width": 1280, "height": 720})J")["result"]["button"].asInt() == 0);  // clipped part
+    CHECK(Call(e, "input.click", R"J({"x": 1220, "y": 620, "width": 1280, "height": 720})J")["result"]["buttonName"].asString() == "Hidden");
+    // Horizontal row, centered, and a grid.
+    Call(e, "component.set", R"J({"id": "Menu", "type": "UILayout", "values": {"direction": "horizontal", "crossAlign": "center"}})J");
+    els = Call(e, "ui.layout", R"J({"width": 1280, "height": 720})J")["result"]["elements"];
+    for (const Json& j : els.items()) by[j["name"].asString()] = j["rect"];
+    CHECK(rect("Menu", 100, 50, 245, 60));
+    CHECK(rect("B", 215, 65, 120, 30));
+    // UICanvas: author for 1920x1080, match width.
+    Call(e, "entity.create", R"J({"name": "Canvas", "components": {"UICanvas": {"referenceWidth": 1920, "referenceHeight": 1080, "match": 0}}})J");
+    CHECK(std::fabs(Call(e, "ui.layout", R"J({"width": 960, "height": 720})J")["result"]["scale"].asNumber() - 0.5) < 1e-6);
+}
+
+TEST(UIInteractionHoverSliderAndDisabled) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_input"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "script.write", R"J({"path": "scripts/ui_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onPointerEnter() table.insert(log_, 'enter') end
+function M:onPointerExit() table.insert(log_, 'exit') end
+function M:onClick() table.insert(log_, 'click') end
+function M:onValueChanged(v) table.insert(log_, string.format('value %.2f', v)) end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Btn", "components": {"UIButton": {"anchor": "top-left", "x": 0, "y": 0, "width": 200, "height": 100}, "Script": {"path": "scripts/ui_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Off", "components": {"UIButton": {"anchor": "top-left", "x": 300, "y": 0, "width": 200, "height": 100, "interactable": false}, "Script": {"path": "scripts/ui_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Vol", "components": {"UISlider": {"anchor": "top-left", "x": 0, "y": 200, "width": 400, "height": 40, "value": 0, "step": 0.25}, "Script": {"path": "scripts/ui_log.lua"}}})J");
+    auto logText = [&] {
+        return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString();
+    };
+    Call(e, "input.mouse", R"J({"x": 100, "y": 50, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Btn"))->hovered);
+    Call(e, "input.mouse", R"J({"x": 400, "y": 50, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(logText() == "enter,exit");  // the disabled button neither hovers nor clicks
+    // Press on the slider at 60 % and drag past its end: snapped values, callback per change.
+    Call(e, "input.mouse", R"J({"x": 240, "y": 220, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    Call(e, "input.mouse", R"J({"x": 900, "y": 500, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(e.GetScene().Get<UISlider>(e.GetScene().FindByName("Vol"))->value == 1.0f);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(logText() == "enter,exit,enter,value 0.50,exit,value 1.00");
+    Call(e, "input.click", R"J({"x": 100, "y": 50, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(logText() == "enter,exit,enter,value 0.50,exit,value 1.00,enter,click");
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+    CHECK(e.GetScene().Get<UISlider>(e.GetScene().FindByName("Vol"))->value == 0.0f);
+}
+
+TEST(UIGpuMatchesSoftware) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_gpu"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "entity.create", R"J({"name": "Win", "components": {"UIPanel": {"anchor": "center", "x": 0, "y": 0, "width": 700, "height": 500, "radius": 24, "borderWidth": 4, "color": [0.1, 0.1, 0.2], "opacity": 0.9}, "UILayout": {"padding": 30, "spacing": 16, "crossAlign": "stretch"}}})J");
+    Call(e, "entity.create", R"J({"name": "T", "parent": "Win", "components": {"UIText": {"text": "Title <b>bold</b> <color=orange>orange</color>", "size": 40, "outlineWidth": 2}}})J");
+    Call(e, "entity.create", R"J({"name": "S", "parent": "Win", "components": {"UISlider": {"value": 0.4}}})J");
+    Call(e, "entity.create", R"J({"name": "I", "parent": "Win", "components": {"UIImage": {"height": 60, "color": [0.9, 0.3, 0.3], "radius": 30, "fill": 0.6}}})J");
+    Call(e, "entity.create", R"J({"name": "B", "parent": "Win", "components": {"UIButton": {"text": "OK"}}})J");
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    const int w = 640, h = 360;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget sw, gpu;
+    sw.Resize(w, h);
+    gpu.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    e.Gpu()->Render(e.GetScene(), view, gpu);
+    double total = 0;
+    int outliers = 0;
+    for (size_t i = 0; i < sw.color.size(); ++i) {
+        int worst = 0;
+        for (int k = 0; k < 3; ++k) {
+            int d = std::abs(static_cast<int>((sw.color[i] >> (8 * k)) & 0xFF) - static_cast<int>((gpu.color[i] >> (8 * k)) & 0xFF));
+            total += d;
+            worst = std::max(worst, d);
+        }
+        outliers += worst > 24;
+    }
+    double mean = total / (sw.color.size() * 3.0);
+    std::printf("  UI mean channel difference %.3f, outliers %d\n", mean, outliers);
+    CHECK(mean < 0.5 && outliers < 50);
 }
 
 TEST(GpuRendererMatchesSoftware) {

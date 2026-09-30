@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -13,6 +14,7 @@
 #include "render/GpuDevice.h"
 #include "render/GpuRenderer.h"
 #include "render/UI.h"
+#include "scene/Components.h"
 #include "script/ScriptHost.h"
 
 namespace oe {
@@ -244,8 +246,11 @@ void Engine::Stop() {
         playSnapshot_.reset();
     }
     ResetRuntime();
+    uiHovered_ = uiPressed_ = kNullEntity;
     input_.down.clear();
     input_.pressedThisFrame.clear();
+    input_.mouseDX = input_.mouseDY = 0.0f;
+    input_.mouseLocked = false;
     gameData_ = Json::MakeObject();
     frame_ = 0;
     simTime_ = 0;
@@ -295,24 +300,67 @@ void Engine::SimulateFrame() {
     // Scripts run first so they see this frame's edge-triggered input.
     const float dt = static_cast<float>(kFixedDt);
     scripts_->Update(dt);
-    EntityId clicked = kNullEntity;
-    if (input_.pressedThisFrame.count("MouseLeft")) {
-        clicked = HitTestButton(scene_, input_.mouseX * static_cast<float>(input_.viewWidth), input_.mouseY * static_cast<float>(input_.viewHeight),
-                                input_.viewWidth, input_.viewHeight);
-    }
+    std::vector<UIEvent> uiEvents = UpdateUI();
     UpdateSystems(scene_, input_, dt);
     std::vector<PhysicsEvent> events = physics_->Step(scene_, dt);
     UpdateLateSystems(scene_, dt);
     scripts_->DispatchPhysicsEvents(events);
-    if (clicked != kNullEntity && scene_.Exists(clicked)) {
-        OE_LOG_INFO("ui", "button '%s' clicked", scene_.Record(clicked)->name.c_str());
-        scripts_->Notify(clicked, "onClick");
+    for (const UIEvent& ev : uiEvents) {
+        if (!scene_.Exists(ev.id)) continue;
+        if (std::strcmp(ev.method, "onClick") == 0) OE_LOG_INFO("ui", "button '%s' clicked", scene_.Record(ev.id)->name.c_str());
+        if (ev.hasValue) scripts_->Notify(ev.id, ev.method, ev.value);
+        else scripts_->Notify(ev.id, ev.method);
     }
     if (!pendingScene_.empty()) ApplySceneChange();
     audio_->Update(scene_);
     audio_->Render();
     ++frame_;
     simTime_ += kFixedDt;
+}
+
+std::vector<Engine::UIEvent> Engine::UpdateUI() {
+    std::vector<UIEvent> events;
+    const int w = input_.viewWidth, h = input_.viewHeight;
+    const float px = input_.mouseX * static_cast<float>(w), py = input_.mouseY * static_cast<float>(h);
+    std::vector<UIRect> rects;
+    const UIRect* hit = nullptr;
+    if (w > 0 && h > 0 && !input_.mouseLocked) {
+        rects = LayoutUI(scene_, w, h, assets_.get());
+        hit = HitTestUI(rects, px, py);
+    }
+    EntityId hover = hit ? hit->entity : kNullEntity;
+    if (hover != uiHovered_) {
+        if (uiHovered_ != kNullEntity) events.push_back({uiHovered_, "onPointerExit", false, 0.0f});
+        if (hover != kNullEntity) events.push_back({hover, "onPointerEnter", false, 0.0f});
+        uiHovered_ = hover;
+    }
+    if (input_.pressedThisFrame.count("MouseLeft")) {
+        uiPressed_ = hover;
+        if (hit && hit->kind == UIRect::Kind::Button) events.push_back({hover, "onClick", false, 0.0f});
+    } else if (!input_.IsDown("MouseLeft")) {
+        uiPressed_ = kNullEntity;
+    }
+    // A pressed slider follows the pointer (also outside its rectangle) until release.
+    if (UISlider* s = uiPressed_ != kNullEntity ? scene_.Get<UISlider>(uiPressed_) : nullptr) {
+        for (const UIRect& r : rects) {
+            if (r.entity != uiPressed_ || r.kind != UIRect::Kind::Slider || !s->interactable) continue;
+            float v = SliderValueAt(*s, r, px, py);
+            if (v != s->value) {
+                s->value = v;
+                events.push_back({uiPressed_, "onValueChanged", true, v});
+            }
+            break;
+        }
+    }
+    for (auto& kv : scene_.Pool<UIButton>()) {
+        kv.second.hovered = kv.first == uiHovered_;
+        kv.second.pressed = kv.first == uiPressed_;
+    }
+    for (auto& kv : scene_.Pool<UISlider>()) {
+        kv.second.hovered = kv.first == uiHovered_;
+        kv.second.pressed = kv.first == uiPressed_;
+    }
+    return events;
 }
 
 RenderStats Engine::RenderGameView(RenderTarget& target) {

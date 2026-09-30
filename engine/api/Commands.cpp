@@ -200,6 +200,7 @@ Json SimState(Engine& e) {
     Json keys = Json::MakeArray();
     for (const std::string& k : e.Input().down) keys.push(k);
     s["keysDown"] = keys;
+    s["mouseLocked"] = e.Input().mouseLocked;
     s["scriptErrors"] = static_cast<uint64_t>(e.Scripts().Errors().size());
     s["sceneName"] = e.GetScene().name;
     s["entities"] = static_cast<uint64_t>(e.GetScene().Entities().size());
@@ -605,7 +606,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return SimState(e);
              });
 
-    Register(r, "input.click", "Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick on the next simulated frame.",
+    Register(r, "input.click", "Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick (or sets a UISlider) on the next simulated frame.",
              Params()
                  .Req("x", "number", "Pixel x (0 = left).")
                  .Req("y", "number", "Pixel y (0 = top).")
@@ -620,16 +621,52 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  in.viewHeight = h;
                  in.pressedThisFrame.insert("MouseLeft");
                  Json out = SimState(e);
-                 EntityId hit = HitTestButton(e.GetScene(), a["x"].asFloat(), a["y"].asFloat(), w, h);
+                 EntityId hit = HitTestButton(e.GetScene(), a["x"].asFloat(), a["y"].asFloat(), w, h, &e.Assets());
                  out["button"] = hit;
                  if (hit != kNullEntity) out["buttonName"] = e.GetScene().Record(hit)->name;
                  return out;
              });
 
-    Register(r, "input.mouse", "Move the mouse over the game view and optionally press/release a button.",
+    Register(r, "ui.layout", "Where every visible UI element is on a screen of the given size (pixels, top-left origin), in draw order. Use the centers with input.click.",
              Params()
-                 .Req("x", "number", "Pixel x.")
-                 .Req("y", "number", "Pixel y.")
+                 .Opt("width", "integer", "Screen width (default 640, like render.screenshot).")
+                 .Opt("height", "integer", "Screen height (default 360).")
+                 .Opt("interactable", "boolean", "Only buttons and sliders that accept clicks."),
+             false, [](Engine& e, const Json& a) {
+                 int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
+                 bool onlyInteractable = a["interactable"].asBool(false);
+                 auto r1 = [](float v) { return std::round(static_cast<double>(v) * 10.0) / 10.0; };
+                 static const char* kKinds[] = {"UIText", "UIPanel", "UIButton", "UIImage", "UISlider"};
+                 Json list = Json::MakeArray();
+                 for (const UIRect& rc : LayoutUI(e.GetScene(), w, h, &e.Assets())) {
+                     if (onlyInteractable && !rc.interactable) continue;
+                     Json j = Json::MakeObject();
+                     j["id"] = rc.entity;
+                     j["name"] = e.GetScene().Record(rc.entity)->name;
+                     j["type"] = kKinds[static_cast<int>(rc.kind)];
+                     j["rect"] = Json(Json::Array{r1(rc.x), r1(rc.y), r1(rc.w), r1(rc.h)});
+                     j["center"] = Json(Json::Array{r1(rc.x + rc.w * 0.5f), r1(rc.y + rc.h * 0.5f)});
+                     if (rc.parent != kNullEntity) j["parent"] = rc.parent;
+                     if (rc.opacity < 1.0f) j["opacity"] = r1(rc.opacity * 100.0f) / 100.0;
+                     if (rc.interactable) j["interactable"] = true;
+                     if (rc.clipped) j["clip"] = Json(Json::Array{r1(rc.clip[0]), r1(rc.clip[1]), r1(rc.clip[2]), r1(rc.clip[3])});
+                     list.push(j);
+                 }
+                 Json out = Json::MakeObject();
+                 out["width"] = w;
+                 out["height"] = h;
+                 out["scale"] = std::round(static_cast<double>(UIScale(e.GetScene(), w, h)) * 1e5) / 1e5;
+                 out["elements"] = list;
+                 return out;
+             });
+
+    Register(r, "input.mouse", "Move the mouse over the game view, add relative motion (mouse look) and optionally press/release a button.",
+             Params()
+                 .Opt("x", "number", "Pixel x (keeps the current position when omitted).")
+                 .Opt("y", "number", "Pixel y.")
+                 .Opt("dx", "number", "Relative motion in pixels, read by scripts with input.mouseDelta() on the next step (mouse look).")
+                 .Opt("dy", "number", "Relative vertical motion in pixels (positive = down).")
+                 .Opt("locked", "boolean", "Set the mouse lock state (what input.lockMouse() does; the editor clears it when the player presses Escape).")
                  .Opt("width", "integer", "Width of the image the coordinates refer to (default 640).")
                  .Opt("height", "integer", "Height of that image (default 360).")
                  .Opt("button", "string", "MouseLeft or MouseRight.")
@@ -637,10 +674,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              false, [](Engine& e, const Json& a) {
                  InputState& in = e.Input();
                  int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
-                 in.mouseX = a["x"].asFloat() / static_cast<float>(w);
-                 in.mouseY = a["y"].asFloat() / static_cast<float>(h);
-                 in.viewWidth = w;
-                 in.viewHeight = h;
+                 if (a.has("x") || a.has("y")) {
+                     in.mouseX = a["x"].asFloat(in.mouseX * static_cast<float>(w)) / static_cast<float>(w);
+                     in.mouseY = a["y"].asFloat(in.mouseY * static_cast<float>(h)) / static_cast<float>(h);
+                     in.viewWidth = w;
+                     in.viewHeight = h;
+                 }
+                 in.mouseDX += a["dx"].asFloat(0.0f);
+                 in.mouseDY += a["dy"].asFloat(0.0f);
+                 if (a.has("locked")) in.mouseLocked = a["locked"].asBool();
                  if (a.has("button")) {
                      std::string b = a["button"].asString();
                      if (a["down"].asBool(true)) {
@@ -650,7 +692,16 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          in.down.erase(b);
                      }
                  }
-                 return SimState(e);
+                 Json out = SimState(e);
+                 if (a.has("button") && a["down"].asBool(true) && in.viewWidth > 0 && in.viewHeight > 0 && !in.mouseLocked) {
+                     EntityId hit = HitTestButton(e.GetScene(), in.mouseX * static_cast<float>(in.viewWidth), in.mouseY * static_cast<float>(in.viewHeight),
+                                                  in.viewWidth, in.viewHeight, &e.Assets());
+                     if (hit != kNullEntity && e.GetScene().Get<UIButton>(hit)) {
+                         out["button"] = hit;
+                         out["buttonName"] = e.GetScene().Record(hit)->name;
+                     }
+                 }
+                 return out;
              });
 
     Register(r, "input.clear", "Release all keys.", Params(), false, [](Engine& e, const Json&) {

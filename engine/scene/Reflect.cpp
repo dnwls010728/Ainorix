@@ -128,7 +128,7 @@ bool FieldFromJson(const FieldInfo& field, void* c, const Json& v, std::string* 
             At<EntityId>(c, field.offset) = static_cast<EntityId>(v.asNumber());
             return true;
         case FieldType::Json:
-            if (!v.isObject()) return typeError("a JSON object");
+            if (!v.isObject() && !v.isArray()) return typeError("a JSON object or array");
             At<Json>(c, field.offset) = v;
             return true;
         case FieldType::String: {
@@ -208,7 +208,13 @@ Json ComponentSchema(const ComponentType& type) {
             case FieldType::Int:
             case FieldType::Entity: p["type"] = "integer"; break;
             case FieldType::Bool: p["type"] = "boolean"; break;
-            case FieldType::Json: p["type"] = "object"; break;
+            case FieldType::Json: {
+                Json types = Json::MakeArray();
+                types.push("object");
+                types.push("array");
+                p["type"] = types;
+                break;
+            }
             case FieldType::String: p["type"] = "string"; break;
             case FieldType::Vec3:
             case FieldType::Color:

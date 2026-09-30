@@ -19,9 +19,16 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<UIText>();
     TypeRegistry::Register<UIPanel>();
     TypeRegistry::Register<UIButton>();
+    TypeRegistry::Register<UIImage>();
+    TypeRegistry::Register<UISlider>();
+    TypeRegistry::Register<UILayout>();
+    TypeRegistry::Register<UICanvas>();
     TypeRegistry::Register<AudioSource>();
     TypeRegistry::Register<PointLight>();
     TypeRegistry::Register<CameraFollow>();
+    TypeRegistry::Register<Sprite>();
+    TypeRegistry::Register<SpriteAnimation>();
+    TypeRegistry::Register<Tilemap>();
 }
 
 }  // namespace oe

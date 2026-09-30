@@ -25,5 +25,8 @@ if not exist "%~dp0build\bin\web" mkdir "%~dp0build\bin\web"
 copy /y "%~dp0build-web\bin\oe_player.js" "%~dp0build\bin\web\" >nul || exit /b 1
 copy /y "%~dp0build-web\bin\oe_player.wasm" "%~dp0build\bin\web\" >nul || exit /b 1
 copy /y "%~dp0tools\player\web\index.html" "%~dp0build\bin\web\" >nul || exit /b 1
+rem Refresh the prebuilt runtime that `oe package --web` falls back to (commit it).
+copy /y "%~dp0build-web\bin\oe_player.js" "%~dp0runtime\web\" >nul || exit /b 1
+copy /y "%~dp0build-web\bin\oe_player.wasm" "%~dp0runtime\web\" >nul || exit /b 1
 echo.
 echo Built: %~dp0build\bin\web\oe_player.js + oe_player.wasm (used by oe package --web)

@@ -49,6 +49,8 @@ public:
     void DispatchPhysicsEvents(const std::vector<PhysicsEvent>& events);
     // Calls `method(self)` on the entity's script instance if it has one.
     void Notify(EntityId id, const char* method);
+    // Same with a number argument: `method(self, value)`.
+    void Notify(EntityId id, const char* method, float value);
     // Reloads every loaded module regardless of timestamps.
     std::vector<std::string> ReloadAll();
 

@@ -133,6 +133,14 @@ public:
 
 private:
     void SimulateFrame();
+    struct UIEvent {
+        EntityId id;
+        const char* method;
+        bool hasValue;
+        float value;
+    };
+    // Pointer hover/press/click and slider drags for this frame's input.
+    std::vector<UIEvent> UpdateUI();
     void BeginSessionIfNeeded();
     void ResetRuntime();
     void ApplySceneChange();
@@ -168,6 +176,8 @@ private:
     std::vector<TimedLine> debugLines_;
     std::string pendingScene_;
     std::string runtimeScene_;
+    EntityId uiHovered_ = kNullEntity;
+    EntityId uiPressed_ = kNullEntity;
     double simTime_ = 0.0;
     double accumulator_ = 0.0;
 
