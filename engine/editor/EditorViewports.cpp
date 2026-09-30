@@ -12,6 +12,7 @@
 #include "sokol_imgui.h"
 
 #include "app/Engine.h"
+#include "assets/Assets.h"
 #include "core/Log.h"
 #include "physics/PhysicsWorld.h"
 #include "render/GpuRenderer.h"
@@ -286,7 +287,10 @@ void NativeEditor::Impl::ScenePanel() {
     view.clearColor = sceneCam.clearColor;
     view.drawGrid = showGrid;
     view.highlight = Primary();
-    if (showColliders) AppendColliderLines(scene, view.lines);
+    if (showColliders) {
+        TilesetLookup tilesets = engine.Assets().Tilesets();
+        AppendColliderLines(scene, view.lines, &tilesets);
+    }
     engine.AppendDebugLines(view.lines);
     sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kSceneSlot);
     sceneViewMat = view.view;

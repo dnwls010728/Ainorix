@@ -1898,6 +1898,73 @@ TEST(NativeEditorHeadless) {
     frames(2, {close});
     CHECK(!ed.QuitRequested());
 }
+
+TEST(NativeEditorTilePainting) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Dungeon", &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    auto mouse = [](WindowEvent::Type type, float x, float y, int button = 0, bool down = false) {
+        WindowEvent ev;
+        ev.type = type;
+        ev.x = x;
+        ev.y = y;
+        ev.button = button;
+        ev.down = down;
+        return ev;
+    };
+    frames(3);
+    Scene& s = e.GetScene();
+    EntityId level = s.FindByName("Level");
+    ed.Select(level);
+    ed.SetTileBrush(true, '~');
+    frames(3);
+    auto count = [&](char c) {
+        int n = 0;
+        for (const Json& row : s.Get<Tilemap>(level)->map.items()) n += static_cast<int>(std::count(row.asString().begin(), row.asString().end(), c));
+        return n;
+    };
+    const int water = count('~');
+    std::array<float, 4> view = ed.SceneViewRect();
+    CHECK(view[2] > 100 && view[3] > 100);
+    float cx = view[0] + view[2] * 0.5f, cy = view[1] + view[3] * 0.5f;
+    // A left drag paints a line of cells.
+    frames(2, {mouse(WindowEvent::Type::MouseMove, cx, cy)});
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx, cy, 0, true)});
+    frames(2, {mouse(WindowEvent::Type::MouseMove, cx + 60, cy)});
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx + 60, cy, 0, false)});
+    const int painted = count('~') - water;
+    CHECK(painted >= 2);
+    const size_t undo = e.UndoDepth();
+    // A right drag erases (one more undo step).
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx, cy, 1, true)});
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx, cy, 1, false)});
+    CHECK(count('~') == water + painted - 1);
+    CHECK(e.UndoDepth() == undo + 1);
+    // Ctrl+Z undoes the erase, then the whole stroke.
+    frames(4, CtrlChord(WindowKey::Z));
+    CHECK(count('~') == water + painted);
+    frames(4, CtrlChord(WindowKey::Z));
+    CHECK(count('~') == water);
+    // Brush off: clicks select again.
+    ed.SetTileBrush(false, '~');
+    frames(2);
+    CHECK(ed.Selected() == level);
+}
 #endif
 
 }  // namespace

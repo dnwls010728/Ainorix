@@ -1,0 +1,47 @@
+{
+  "image": "assets/tiles/dungeon.png",
+  "columns": 8,
+  "rows": 9,
+  "tiles": {
+    "#": {
+      "autotile": "blob",
+      "frame": 0,
+      "collision": "solid"
+    },
+    "~": {
+      "autotile": "sides",
+      "frame": 52,
+      "collision": "solid"
+    },
+    ".": {
+      "variants": [
+        48,
+        49,
+        50,
+        51,
+        48,
+        49,
+        50,
+        51,
+        48,
+        49,
+        50,
+        51,
+        48,
+        49,
+        50,
+        51,
+        70
+      ]
+    },
+    ",": {
+      "variants": [
+        68,
+        69
+      ]
+    },
+    "E": {
+      "frame": 71
+    }
+  }
+}

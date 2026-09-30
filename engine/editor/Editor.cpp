@@ -15,6 +15,7 @@
 #include "sokol_imgui.h"
 
 #include "app/Engine.h"
+#include "scene/TileGrid.h"
 #include "app/Project.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -514,6 +515,14 @@ void NativeEditor::Impl::FrameSelection() {
     Vec3 p = engine.GetScene().WorldMatrix(id).TransformPoint(Vec3(0, 0, 0));
     Vec3 s = JsonVec3(selected["components"]["Transform"]["scale"], Vec3(1, 1, 1));
     float radius = std::max(0.5f, std::max(std::fabs(s.x), std::max(std::fabs(s.y), std::fabs(s.z))));
+    if (const Tilemap* tm = engine.GetScene().Get<Tilemap>(id)) {
+        // The whole map (the entity origin is its top-left corner).
+        int w = 0, h = 0;
+        MapSize(*tm, w, h);
+        float ts = std::max(0.001f, tm->tileSize);
+        p = engine.GetScene().WorldMatrix(id).TransformPoint(Vec3(0.5f * static_cast<float>(w) * ts, -0.5f * static_cast<float>(h) * ts, 0));
+        radius = std::max(radius, 0.5f * static_cast<float>(std::max(w, h)) * ts * std::max(std::fabs(s.x), std::fabs(s.y)));
+    }
     cam.Frame(p, radius);
 }
 
@@ -1049,6 +1058,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderFinish(dockspace);
+    if (ImGuiDockNode* r = ImGui::DockBuilderGetNode(right)) r->SelectedTabId = ImHashStr("###Inspector");  // Tiles waits behind it
     focusSceneTab = 2;  // once the windows are docked (they appear this frame)
 }
 
@@ -1370,6 +1380,20 @@ void NativeEditor::Select(EntityId id) {
 }
 
 EntityId NativeEditor::Selected() const { return impl_->Primary(); }
+
+void NativeEditor::SetTileBrush(bool paint, char brush) {
+    impl_->tilePaint = paint;
+    impl_->tileBrush = brush;
+    if (paint) {
+        impl_->showTiles = true;
+        impl_->cam.Set2D(true);
+        impl_->FrameSelection();
+    }
+}
+
+std::array<float, 4> NativeEditor::SceneViewRect() const {
+    return {impl_->sceneImagePos.x, impl_->sceneImagePos.y, impl_->sceneImageSize.x, impl_->sceneImageSize.y};
+}
 
 void NativeEditor::FocusGameView(bool focus) {
     Impl& m = *impl_;

@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -66,6 +67,11 @@ public:
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).
     void FocusGameView(bool focus);
     bool GameViewFocused() const;
+    // Tile painting: the Scene view brush on/off and its tile character (Tiles
+    // panel); turning it on switches to the 2D view framed on the selection.
+    void SetTileBrush(bool paint, char brush);
+    // Scene view image in window pixels: x, y, width, height.
+    std::array<float, 4> SceneViewRect() const;
     // Last error or notice shown to the user (toast), for tests.
     std::string LastNotice() const;
 

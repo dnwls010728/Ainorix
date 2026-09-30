@@ -918,20 +918,26 @@ void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, cons
             for (const auto& e : edges) lines.push_back({p[e[0]], p[e[1]], col});
         }
     }
-    // 2D shapes in the entity's XY plane (scaled like the physics shapes).
+    // 2D shapes in the entity's XY plane (scaled like the physics shapes), lifted a
+    // little toward +Z so they are not hidden by the sprites/tiles in the same plane.
+    const Vec3 lift(0, 0, 0.03f);
     auto poly = [&](const Mat4& m, const std::vector<Vec3>& pts, bool closed, Color col) {
         for (size_t i = 0; i + 1 < pts.size() || (closed && i < pts.size() && pts.size() > 2); ++i) {
-            lines.push_back({m.TransformPoint(pts[i]), m.TransformPoint(pts[(i + 1) % pts.size()]), col});
+            lines.push_back({m.TransformPoint(pts[i]) + lift, m.TransformPoint(pts[(i + 1) % pts.size()]) + lift, col});
         }
     };
-    auto circle2 = [&](const Mat4& m, Vec3 c, float r, Color col) { AddCircle(lines, m, c, Vec3(1, 0, 0), Vec3(0, 1, 0), r, col); };
+    auto circle2 = [&](const Mat4& m, Vec3 c, float r, Color col) {
+        size_t first = lines.size();
+        AddCircle(lines, m, c, Vec3(1, 0, 0), Vec3(0, 1, 0), r, col);
+        for (size_t i = first; i < lines.size(); ++i) lines[i].a = lines[i].a + lift, lines[i].b = lines[i].b + lift;
+    };
     auto capsule2 = [&](const Mat4& m, Vec3 c, float r, float half, float angleDeg, Color col) {
         float a = Radians(angleDeg);
         Vec3 axis(-std::sin(a) * half, std::cos(a) * half, 0), side(std::cos(a) * r, std::sin(a) * r, 0);
         circle2(m, c + axis, r, col);
         circle2(m, c - axis, r, col);
-        lines.push_back({m.TransformPoint(c + axis + side), m.TransformPoint(c - axis + side), col});
-        lines.push_back({m.TransformPoint(c + axis - side), m.TransformPoint(c - axis - side), col});
+        lines.push_back({m.TransformPoint(c + axis + side) + lift, m.TransformPoint(c - axis + side) + lift, col});
+        lines.push_back({m.TransformPoint(c + axis - side) + lift, m.TransformPoint(c - axis - side) + lift, col});
     };
     for (const auto& kv : scene.Pool<CharacterBody2D>()) {
         Vec3 scale;

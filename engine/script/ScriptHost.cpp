@@ -694,7 +694,9 @@ int L_PhysicsContacts(lua_State* L) {
     lua_Integer i = 0;
     for (const ContactPair& c : Host(L).GetEngine().Physics().Contacts()) {
         if (c.a != id && c.b != id) continue;
-        lua_pushinteger(L, c.a == id ? c.b : c.a);
+        EntityId other = c.a == id ? c.b : c.a;
+        if (!SceneOf(L).Exists(other)) continue;  // destroyed since the last physics step
+        lua_pushinteger(L, other);
         lua_rawseti(L, -2, ++i);
     }
     return 1;

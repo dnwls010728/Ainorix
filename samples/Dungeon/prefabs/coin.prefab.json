@@ -1,0 +1,44 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Coin",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Coin",
+      "components": {
+        "Transform": {},
+        "Sprite": {
+          "texture": "assets/sprites/coin.png",
+          "columns": 4,
+          "order": 1
+        },
+        "SpriteAnimation": {
+          "clip": "spin",
+          "clips": {
+            "spin": {
+              "frames": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "fps": 8
+            }
+          }
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.3,
+          "isTrigger": true
+        },
+        "Script": {
+          "path": "scripts/coin.lua"
+        },
+        "Tag": {
+          "tags": "coin"
+        }
+      }
+    }
+  ]
+}

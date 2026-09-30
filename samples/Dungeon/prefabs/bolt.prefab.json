@@ -1,0 +1,53 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Bolt",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Bolt",
+      "components": {
+        "Transform": {},
+        "Sprite": {
+          "texture": "assets/sprites/bolt.png",
+          "columns": 2,
+          "order": 3,
+          "lit": false
+        },
+        "SpriteAnimation": {
+          "clip": "glow",
+          "clips": {
+            "glow": {
+              "frames": [
+                0,
+                1
+              ],
+              "fps": 12
+            }
+          }
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.16,
+          "layer": 2,
+          "ignoreLayers": [
+            1,
+            2
+          ]
+        },
+        "RigidBody2D": {
+          "mass": 0.3,
+          "gravityScale": 0,
+          "fixedRotation": true,
+          "bullet": true
+        },
+        "Script": {
+          "path": "scripts/bolt.lua"
+        },
+        "Tag": {
+          "tags": "bolt"
+        }
+      }
+    }
+  ]
+}

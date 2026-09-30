@@ -233,7 +233,10 @@ ViewRequest ParseView(Engine& e, const Json& args) {
         MakeSceneView(e.GetScene(), aspect, r.view);
     }
     r.view.drawGrid = args["grid"].asBool(false);
-    if (args["colliders"].asBool(false)) AppendColliderLines(e.GetScene(), r.view.lines);
+    if (args["colliders"].asBool(false)) {
+        TilesetLookup tilesets = e.Assets().Tilesets();
+        AppendColliderLines(e.GetScene(), r.view.lines, &tilesets);
+    }
     e.AppendDebugLines(r.view.lines);
     if (args.has("ui")) r.view.drawUI = args["ui"].asBool(true);
     if (args["highlight"].isNumber()) r.view.highlight = static_cast<EntityId>(args["highlight"].asNumber());
@@ -1234,6 +1237,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  Json list = Json::MakeArray();
                  for (const ContactPair& c : e.Physics().Contacts()) {
                      if (filter != kNullEntity && c.a != filter && c.b != filter) continue;
+                     if (!e.GetScene().Exists(c.a) || !e.GetScene().Exists(c.b)) continue;  // destroyed since the last step
                      Json j = Json::MakeObject();
                      j["a"] = c.a;
                      j["b"] = c.b;
