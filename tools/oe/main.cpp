@@ -25,6 +25,9 @@
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 #include "render/GpuRenderer.h"
+#if OE_NATIVE_EDITOR
+#include "editor/Editor.h"
+#endif
 
 using namespace oe;
 
@@ -42,7 +45,7 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer"};
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -168,8 +171,11 @@ int CmdHelp() {
                  "Usage: oe <command> [args]\n\n"
                  "  new <dir> [--name N]              Create a project with a sample scene\n"
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
-                 "  editor [path] [--port 7777] [--no-browser] [--window]\n"
-                 "                                    Start the web editor (http://127.0.0.1:7777)\n"
+                 "  editor [path] [--port 7777] [--web] [--no-browser] [--window]\n"
+                 "                                    Native editor window (Windows); --web (or no window/GPU) starts\n"
+                 "                                    the web editor on http://127.0.0.1:7777 instead\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play]\n"
+                 "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
                  "  serve <dir> [--port 8080] [--no-browser]\n"
@@ -326,10 +332,76 @@ int CmdRun(const Args& a) {
     return 0;
 }
 
+#if OE_NATIVE_EDITOR
+std::string EditorLayoutFile(const Engine& engine) {
+    return JoinPath(JoinPath(engine.ProjectDir().empty() ? std::string(".") : engine.ProjectDir(), ".oe"), "editor.ini");
+}
+
+// `oe editor --screenshot`: the native editor drawn offscreen (GPU required),
+// so agents and tests can look at the editor itself.
+int CmdEditorScreenshot(Engine& engine, const Args& a) {
+    int code = 0;
+    if (!SetupRenderer(engine, a, nullptr, code)) return code;
+    if (!engine.Gpu()) return Fail("gpu_unavailable", "the native editor needs the GPU renderer", "Install a GPU backend (Linux: libegl-dev libgles-dev) or use `oe render`.");
+    NativeEditor::Options options;  // no layout file: the default layout, reproducible
+    NativeEditor editor(engine, nullptr, options);
+    std::string err;
+    if (!editor.Init(&err)) return Fail("editor_failed", err);
+    if (a.Has("--select")) {
+        Json r = engine.Call("entity.get", Json(Json::Object{{"id", Json(a.Get("--select"))}}));
+        if (!r["ok"].asBool()) return Fail("not_found", "no entity " + a.Get("--select"));
+        editor.Select(static_cast<EntityId>(r["result"]["id"].asNumber(0)));
+    }
+    if (a.Has("--play")) engine.Call("sim.play", Json());
+    int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
+    int frames = std::max(2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    RenderTarget rt;
+    for (int i = 0; i < frames; ++i) {
+        editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
+        if (i == 1 && a.Has("--play")) editor.FocusGameView(true);  // as after pressing Play
+        if (!editor.DrawToImage(rt)) return Fail("render_failed", "cannot read back the editor frame");
+    }
+    std::string out = AbsolutePath(a.Get("--screenshot"));
+    if (!WritePng(out, rt.ToImage())) return Fail("write_failed", "cannot write " + out);
+    Json res = Json::MakeObject();
+    res["ok"] = true;
+    res["result"]["path"] = out;
+    res["result"]["width"] = rt.width;
+    res["result"]["height"] = rt.height;
+    res["result"]["renderer"] = engine.Gpu()->Name();
+    PrintJson(res);
+    return 0;
+}
+#endif
+
 int CmdEditor(const Args& a) {
     Engine engine;
     int code = 0;
     if (!OpenOrFail(engine, a, code)) return code;
+#if OE_NATIVE_EDITOR
+    if (a.Has("--screenshot")) return CmdEditorScreenshot(engine, a);
+    if (!a.Has("--web")) {
+        // Native editor: one window with the panels; the API stays reachable
+        // for agents (oe mcp --connect) and the web editor on the same port.
+        PlatformEnableHighDpi();
+        std::unique_ptr<Window> window = CreatePlatformWindow("OwnEngine Editor - " + engine.ProjectName(), 1600, 900);
+        std::string gpuError;
+        if (window && a.Get("--renderer", "auto") != "software" && engine.EnableGpu(window.get(), &gpuError)) {
+            int port = a.GetInt("--port", 7777);
+            HttpServer server;
+            NativeEditor::Options options;
+            options.layoutFile = EditorLayoutFile(engine);
+            if (StartServer(server, engine, port)) options.serverInfo = "API http://127.0.0.1:" + std::to_string(port);
+            else OE_LOG_WARN("editor", "port %d is busy: agents cannot attach (pick another with --port)", port);
+            if (!a.Has("--mute")) engine.EnableAudioOutput();
+            window->Maximize();
+            OE_LOG_INFO("editor", "native editor (%s)", engine.Gpu()->Name());
+            return RunNativeEditor(engine, *window, options);
+        }
+        if (!window) OE_LOG_INFO("editor", "no native window on platform '%s': starting the web editor", PlatformName());
+        else OE_LOG_WARN("editor", "native editor needs the GPU renderer (%s): starting the web editor", gpuError.empty() ? "disabled" : gpuError.c_str());
+    }
+#endif
     int port = a.GetInt("--port", 7777);
     HttpServer server;
     if (!StartServer(server, engine, port)) return Fail("server_failed", "cannot listen on port " + std::to_string(port), "Pick another port with --port.");
@@ -443,26 +515,13 @@ int CmdImport(const Args& a) {
     open.positional.push_back(a.positional[0]);
     int code = 0;
     if (!OpenOrFail(engine, open, code)) return code;
-    std::string src = a.positional[1];
-    std::vector<unsigned char> bytes;
-    if (!ReadBinaryFile(src, bytes)) return Fail("not_found", "cannot read " + src);
-    std::string name = src.substr(src.find_last_of("/\\") + 1);
-    std::string kind = AssetManager::KindOf(name);
-    std::string folder = kind == "model" ? "assets/models/" : kind == "texture" ? "assets/textures/" : kind == "audio" ? "sounds/" : "assets/";
-    std::string rel = a.Get("--to", folder + name);
-    std::string dest;
+    std::string rel;
     try {
-        dest = engine.ResolvePath(rel);
+        rel = ImportAssetFile(engine, a.positional[1], a.Get("--to"));
     } catch (const ApiError& e) {
         return Fail(e.code, e.what(), e.hint);
     }
-    CreateDirectories(ParentPath(dest));
-    FILE* f = std::fopen(dest.c_str(), "wb");
-    if (!f || std::fwrite(bytes.data(), 1, bytes.size(), f) != bytes.size()) {
-        if (f) std::fclose(f);
-        return Fail("write_failed", "cannot write " + dest);
-    }
-    std::fclose(f);
+    std::string kind = AssetManager::KindOf(rel);
     Json res = Json::MakeObject();
     res["ok"] = true;
     res["result"]["path"] = rel;

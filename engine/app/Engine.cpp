@@ -487,7 +487,11 @@ std::future<Json> Engine::PostCall(const std::string& name, const Json& args) {
     auto promise = std::make_shared<std::promise<Json>>();
     std::future<Json> future = promise->get_future();
     std::lock_guard<std::mutex> lock(jobsMutex_);
-    jobs_.push_back([this, name, args, promise] { promise->set_value(Call(name, args)); });
+    jobs_.push_back([this, name, args, promise] {
+        Json result = Call(name, args);
+        if (remoteObserver_) remoteObserver_(name, args, result);
+        promise->set_value(std::move(result));
+    });
     return future;
 }
 

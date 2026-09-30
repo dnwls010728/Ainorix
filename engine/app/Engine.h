@@ -128,6 +128,10 @@ public:
     // ----- Threading ---------------------------------------------------------
     // Queues work for the main thread (used by the HTTP server thread).
     std::future<Json> PostCall(const std::string& name, const Json& args);
+    // Called on the main thread after each PostCall command (HTTP, MCP): the
+    // native editor uses it to show what an agent changed. Empty = none.
+    using CallObserver = std::function<void(const std::string& name, const Json& args, const Json& result)>;
+    void SetRemoteCallObserver(CallObserver observer) { remoteObserver_ = std::move(observer); }
     std::future<std::vector<uint8_t>> PostJob(std::function<std::vector<uint8_t>()> job);
     void RunPostedJobs();
 
@@ -185,6 +189,7 @@ private:
     std::vector<Json> redo_;
     std::string lastMergeKey_;  // component.set {merge} of the newest undo step
 
+    CallObserver remoteObserver_;
     std::mutex jobsMutex_;
     std::deque<std::function<void()>> jobs_;
 };

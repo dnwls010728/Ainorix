@@ -308,6 +308,8 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string& title, int, int)
     return w;
 }
 
+void PlatformEnableHighDpi() {}
+
 const char* PlatformName() { return "web"; }
 
 double PlatformTimeSeconds() { return emscripten_get_now() / 1000.0; }

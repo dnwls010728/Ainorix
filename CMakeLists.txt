@@ -184,9 +184,47 @@ if(EMSCRIPTEN)
   return()
 endif()
 
+# ---------------------------------------------------------------------------
+# Native editor (`oe editor`): Dear ImGui (docking) + ImGuizmo drawn with
+# sokol_gfx next to the engine's GpuRenderer in one process. Needs a GPU
+# backend; games (oe_player) never link it. engine/editor/ uses only the
+# command API, like the web editor.
+# ---------------------------------------------------------------------------
+if(NOT OE_GPU_BACKEND STREQUAL "none")
+  add_library(oe_imgui STATIC
+    third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
+    third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_stdlib.cpp third_party/imguizmo/ImGuizmo.cpp)
+  target_include_directories(oe_imgui PUBLIC third_party/imgui third_party/imguizmo)
+  target_compile_definitions(oe_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+  if(MSVC)
+    target_compile_options(oe_imgui PRIVATE /W0 /utf-8)
+  else()
+    target_compile_options(oe_imgui PRIVATE -w)
+  endif()
+  if(WIN32)
+    target_link_libraries(oe_imgui PUBLIC imm32)  # IME candidate window placement (Korean/CJK input)
+  endif()
+
+  file(GLOB OE_EDITOR_SOURCES CONFIGURE_DEPENDS engine/editor/*.cpp)
+  add_library(oe_editor STATIC ${OE_EDITOR_SOURCES})
+  target_link_libraries(oe_editor PUBLIC OwnEngine oe_imgui)
+  target_compile_definitions(oe_editor PRIVATE SOKOL_IMGUI_NO_SOKOL_APP)  # input comes from engine/platform
+  # sokol_imgui.h embeds one shader per graphics API: pick the engine's.
+  if(OE_GPU_BACKEND STREQUAL "d3d11")
+    target_compile_definitions(oe_editor PRIVATE SOKOL_D3D11)
+  else()
+    target_compile_definitions(oe_editor PRIVATE SOKOL_GLES3)
+  endif()
+  set(OE_NATIVE_EDITOR ON)
+endif()
+
 # Command line front-end: `oe` (run, render, exec, editor, mcp, ...)
 add_executable(oe tools/oe/main.cpp)
 target_link_libraries(oe PRIVATE OwnEngine)
+if(OE_NATIVE_EDITOR)
+  target_link_libraries(oe PRIVATE oe_editor)
+  target_compile_definitions(oe PRIVATE OE_NATIVE_EDITOR=1)
+endif()
 
 # Game player runtime that `oe package` copies as <Game>.exe: a windowed app
 # (no console) with a standard main().
@@ -211,6 +249,10 @@ add_custom_target(oe_editor_files ALL
 if(OE_BUILD_TESTS)
   add_executable(oe_tests tests/tests.cpp)
   target_link_libraries(oe_tests PRIVATE OwnEngine)
+  if(OE_NATIVE_EDITOR)
+    target_link_libraries(oe_tests PRIVATE oe_editor)
+    target_compile_definitions(oe_tests PRIVATE OE_NATIVE_EDITOR=1)
+  endif()
   enable_testing()
   add_test(NAME oe_tests COMMAND oe_tests)
 endif()

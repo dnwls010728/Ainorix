@@ -6,6 +6,8 @@
 
 namespace oe {
 
+class Engine;
+
 // New projects are copies of templates/<name>/ (shipped next to the
 // executable, falling back to the source tree):
 //   project.json            {"format":"ownengine.project","name":..,"startScene":..}
@@ -19,6 +21,13 @@ bool CreateProject(const std::string& dir, const std::string& name, std::string*
 
 // The template's start scene, normalized (all component fields present).
 Json MakeSampleScene(const std::string& name);
+
+// Copies a file from anywhere on disk into the open project (oe import, files
+// dropped on the native editor): models go to assets/models/, images to
+// assets/textures/, sounds to sounds/, anything else to assets/, unless
+// `destRel` names the project-relative target. Returns that relative path.
+// Throws ApiError (not_found, invalid_path, write_failed).
+std::string ImportAssetFile(Engine& engine, const std::string& sourcePath, const std::string& destRel = "");
 
 // ----- Packaging (oe package) ----------------------------------------------------
 
