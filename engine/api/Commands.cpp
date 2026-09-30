@@ -10,6 +10,7 @@
 #include "core/Image.h"
 #include "core/Log.h"
 #include "render/GpuRenderer.h"
+#include "render/Material.h"
 #include "render/Mesh.h"
 #include "render/UI.h"
 #include "scene/Components.h"
@@ -1057,7 +1058,53 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json&) { return e.Physics().Stats(); });
 
     // ----- assets ----------------------------------------------------------------
-    Register(r, "asset.list", "Project files by kind (model, texture, audio, script, prefab, scene) with sizes.",
+    // ----- Materials (*.mat.json)
+    auto writeMaterial = [](Engine& e, const std::string& path, const Json& values, bool create, bool overwrite) {
+        if (AssetManager::KindOf(path) != "material") throw ApiError("invalid_path", "material path must end with .mat.json", "e.g. \"materials/gold.mat.json\"");
+        std::string full = e.ResolvePath(path);
+        Json j = DefaultMaterialJson();
+        if (!create || (FileExists(full) && !overwrite)) {
+            if (create) throw ApiError("already_exists", "'" + path + "' exists", "Use material.set to change it, or overwrite: true.");
+            std::string text, err;
+            if (!ReadTextFile(full, text)) throw ApiError("not_found", "no material '" + path + "'", "Create it with material.create.");
+            j = Json::parse(text, &err);
+            if (!err.empty() || !j.isObject()) throw ApiError("invalid_material", path + ": " + (err.empty() ? "not a JSON object" : err));
+        }
+        if (!values.isNull() && !values.isObject()) throw ApiError("invalid_argument", "values must be an object of material fields");
+        for (const auto& kv : values.members()) j[kv.first] = kv.second;
+        // An opacity below 1 only shows with blending.
+        if (values.has("opacity") && !values.has("alphaMode") && values["opacity"].asFloat(1.0f) < 1.0f && j["alphaMode"].asString("opaque") == "opaque") j["alphaMode"] = "blend";
+        Material check;
+        std::string err;
+        TextureLoader load = [&e](const std::string& p, std::string* er) { return e.Assets().GetTexture(p, er); };
+        if (!MaterialFromJson(j, load, check, &err)) {
+            Json docs = MaterialFieldDocs();
+            std::string names;
+            for (const auto& kv : docs.members()) names += (names.empty() ? "" : ", ") + kv.first;
+            throw ApiError("invalid_material", err, "Fields: " + names + ".");
+        }
+        CreateDirectories(ParentPath(full));
+        if (!WriteTextFile(full, j.dump(2) + "\n")) throw ApiError("io_error", "cannot write '" + path + "'");
+        e.Assets().Forget(path);
+        Json out = Json::MakeObject();
+        out["path"] = path;
+        out["values"] = j;
+        out["hint"] = "Use it with MeshRenderer {material: \"" + path + "\"}. Files reload automatically when edited.";
+        return out;
+    };
+    Register(r, "material.create",
+             "Create a material file (*.mat.json): PBR baseColor/opacity/metallic/roughness, base/normal/metallicRoughness/occlusion/emissive textures, "
+             "alphaMode (opaque, mask, blend), doubleSided, unlit, tiling. Assign it with MeshRenderer.material.",
+             Params()
+                 .Req("path", "string", "e.g. \"materials/glass.mat.json\".")
+                 .Opt("values", "object", "Fields to set, e.g. {\"baseColor\": [1, 0.8, 0.2], \"metallic\": 1, \"roughness\": 0.3}. Others keep defaults.")
+                 .Opt("overwrite", "boolean", "Replace an existing file."),
+             false, [writeMaterial](Engine& e, const Json& a) { return writeMaterial(e, a["path"].asString(), a["values"], true, a["overwrite"].asBool(false)); });
+    Register(r, "material.set", "Change fields of a material file (other fields keep their values). Every mesh using it updates.",
+             Params().Req("path", "string", "Material file.").Req("values", "object", "Fields to change."),
+             false, [writeMaterial](Engine& e, const Json& a) { return writeMaterial(e, a["path"].asString(), a["values"], false, false); });
+
+    Register(r, "asset.list", "Project files by kind (model, texture, material, audio, font, script, prefab, scene).",
              Params().Opt("kind", "string", "Only this kind."), false, [](Engine& e, const Json& a) {
                  std::string kind = a["kind"].asString("");
                  Json list = Json::MakeArray();

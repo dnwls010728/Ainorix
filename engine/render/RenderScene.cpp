@@ -64,6 +64,7 @@ std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const Texture* tex) {
     s.indexCount = static_cast<uint32_t>(mesh->indices.size());
     mesh->submeshes = {s};
     mesh->ComputeBounds();
+    mesh->ComputeTangents();
     if (g_tileMeshes.size() > 64) g_tileMeshes.clear();
     g_tileMeshes[key] = mesh;
     return mesh;
@@ -71,10 +72,55 @@ std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const Texture* tex) {
 
 }  // namespace
 
-const Texture* RenderItem::SubmeshTexture(const Submesh& sub) const {
-    if (textureOverride) return textureOverride.get();
-    if (sub.texture >= 0 && sub.texture < static_cast<int>(mesh->textures.size())) return mesh->textures[static_cast<size_t>(sub.texture)].get();
-    return nullptr;
+Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
+    Material m;
+    if (materialOverride) m = *materialOverride;
+    else if (sub.material >= 0 && sub.material < static_cast<int>(mesh->materials.size())) m = mesh->materials[static_cast<size_t>(sub.material)];
+    m.baseColor = m.baseColor * tint;
+    if (textureOverride) m.baseTexture = textureOverride;
+    m.opacity *= Clamp(opacity, 0.0f, 1.0f);
+    if (unlit) m.unlit = true;
+    if (pointSample) m.pixelArt = true;
+    if (alphaCutoff > 0.0f) {
+        m.alphaMode = AlphaMode::Mask;
+        m.alphaCutoff = alphaCutoff;
+    }
+    if (blend || m.opacity < 1.0f) m.alphaMode = AlphaMode::Blend;
+    if (!m.baseTexture && m.alphaMode == AlphaMode::Mask) m.alphaMode = AlphaMode::Opaque;
+    return m;
+}
+
+std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye) {
+    std::vector<DrawCall> opaque, blended;
+    std::vector<float> distance;
+    for (size_t i = 0; i < items.size(); ++i) {
+        const RenderItem& it = items[i];
+        Vec3 center = it.world.TransformPoint((it.mesh->boundsMin + it.mesh->boundsMax) * 0.5f);
+        float d = Length(center - eye);
+        for (size_t s = 0; s < it.mesh->submeshes.size(); ++s) {
+            if (it.mesh->submeshes[s].indexCount == 0) continue;
+            DrawCall dc;
+            dc.item = i;
+            dc.submesh = s;
+            dc.material = it.SubmeshMaterial(it.mesh->submeshes[s]);
+            dc.blend = dc.material.Blended();
+            if (dc.material.opacity <= 0.0f && dc.blend) continue;
+            if (dc.blend) {
+                blended.push_back(std::move(dc));
+                distance.push_back(d);
+            } else {
+                opaque.push_back(std::move(dc));
+            }
+        }
+    }
+    std::vector<size_t> order(blended.size());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        if (distance[a] != distance[b]) return distance[a] > distance[b];
+        return items[blended[a].item].id < items[blended[b].item].id;
+    });
+    for (size_t i : order) opaque.push_back(std::move(blended[i]));
+    return opaque;
 }
 
 std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets) {
@@ -87,6 +133,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.world = scene.WorldMatrix(kv.first);
         it.normalMatrix = it.world.Inverse().Transposed();
         it.tint = mr.color;
+        it.opacity = mr.opacity;
         it.unlit = mr.unlit;
         it.flat = mr.shading == "flat";
         it.castShadows = mr.castShadows;
@@ -97,6 +144,14 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.tint = Color(1, 0, 1);
             it.unlit = true;
             it.error = true;
+        }
+        if (!mr.material.empty() && assets && !it.error) {
+            it.materialOverride = assets->GetMaterial(mr.material);
+            if (!it.materialOverride) {  // broken material file: magenta, like a missing mesh
+                it.tint = Color(1, 0, 1);
+                it.unlit = true;
+                it.error = true;
+            }
         }
         if (!mr.texture.empty() && assets && !it.error) it.textureOverride = assets->GetTexture(mr.texture);
         items.push_back(std::move(it));
@@ -114,6 +169,8 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.castShadows = false;
         it.pointSample = sp.pixelArt;
         it.alphaCutoff = std::max(0.0f, sp.alphaCutoff);
+        it.blend = sp.alphaCutoff <= 0.0f;  // no cutoff: soft edges, alpha blended
+        it.opacity = sp.opacity;
         it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
         if (!sp.texture.empty() && assets) it.textureOverride = assets->GetTexture(sp.texture);
         const Texture* tex = it.textureOverride.get();
@@ -121,6 +178,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.tint = Color(1, 0, 1);  // missing image: magenta, like missing meshes
             it.error = true;
             it.alphaCutoff = 0;
+            it.blend = false;
         }
         float u0, v0, du, dv;
         FrameRect(sp.frame, sp.columns, sp.rows, tex, u0, v0, du, dv);

@@ -467,11 +467,32 @@ Pairs touching after the last simulation step (collisions and trigger overlaps).
 
 Physics backend, gravity, body counts and warnings (e.g. invalid shapes).
 
+## material
+
+### `material.create`
+
+Create a material file (*.mat.json): PBR baseColor/opacity/metallic/roughness, base/normal/metallicRoughness/occlusion/emissive textures, alphaMode (opaque, mask, blend), doubleSided, unlit, tiling. Assign it with MeshRenderer.material.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | e.g. "materials/glass.mat.json". |
+| `values` | object |  | Fields to set, e.g. {"baseColor": [1, 0.8, 0.2], "metallic": 1, "roughness": 0.3}. Others keep defaults. |
+| `overwrite` | boolean |  | Replace an existing file. |
+
+### `material.set`
+
+Change fields of a material file (other fields keep their values). Every mesh using it updates.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Material file. |
+| `values` | object | yes | Fields to change. |
+
 ## asset
 
 ### `asset.list`
 
-Project files by kind (model, texture, audio, script, prefab, scene) with sizes.
+Project files by kind (model, texture, material, audio, font, script, prefab, scene).
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -548,10 +569,12 @@ Draws a mesh: a built-in shape (cube, sphere, plane, pyramid, quad) or a glTF mo
 | field | type | default | description |
 |---|---|---|---|
 | `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
-| `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the model/texture color, linear RGB 0..1 (or "#rrggbb"). |
-| `texture` | string | `""` | Image (.png/.jpg) overriding the model's own base color texture. Empty = use the model's. |
+| `material` | string | `""` | Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. Empty = the model's own materials (glTF) or the default (white, roughness 0.7). |
+| `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the material/texture color, linear RGB 0..1 (or "#rrggbb"). |
+| `opacity` | float | `1` | Below 1 the mesh is drawn transparent (alpha blended, sorted back to front, no shadow). |
+| `texture` | string | `""` | Image (.png/.jpg) overriding the material's base color texture. Empty = use the material's. |
 | `shading` | string | `"smooth"` | smooth = interpolated vertex normals, flat = faceted. |
-| `unlit` | bool | `false` | Ignore lighting and shadows (UI-like, emissive look). |
+| `unlit` | bool | `false` | Ignore lighting and shadows (UI-like, emissive look). Overrides the material. |
 | `castShadows` | bool | `true` | Casts shadows from the directional light. |
 | `visible` | bool | `true` | Whether the mesh is drawn. |
 
@@ -890,7 +913,8 @@ Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at t
 | `flipX` | bool | `false` | Mirror horizontally (face left). |
 | `flipY` | bool | `false` | Mirror vertically. |
 | `pixelArt` | bool | `true` | Sharp nearest-neighbour pixels instead of smooth filtering. |
-| `alphaCutoff` | float | `0.5` | Pixels with alpha below this are not drawn (0 = draw everything). |
+| `alphaCutoff` | float | `0.5` | Pixels with alpha below this are not drawn. 0 = soft edges: the image's alpha is blended (smoke, glows, UI-like art). |
+| `opacity` | float | `1` | Below 1 the sprite is drawn see-through (alpha blended). |
 | `lit` | bool | `false` | Apply scene lighting (default: full brightness, like classic 2D). |
 | `order` | int | `0` | Sorting among sprites at the same depth: higher is drawn in front. |
 | `visible` | bool | `true` | Whether the sprite is drawn. |

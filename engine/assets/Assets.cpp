@@ -7,6 +7,7 @@
 
 #include "app/Engine.h"
 #include "audio/Wav.h"
+#include "render/Material.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
 
@@ -92,6 +93,50 @@ struct Loader {
     std::string modelDir;
     std::map<const cgltf_image*, int> textureIndex;
     std::string warnings;
+    std::map<const cgltf_material*, int> materialIndex;
+
+    std::shared_ptr<const Texture> Tex(const cgltf_texture_view& view) {
+        int i = TextureFor(view);
+        return i >= 0 ? mesh.textures[static_cast<size_t>(i)] : nullptr;
+    }
+
+    // glTF 2.0 metallic-roughness material (+ KHR_materials_emissive_strength, KHR_materials_unlit).
+    int MaterialFor(const cgltf_material* src) {
+        if (!src) return -1;
+        auto it = materialIndex.find(src);
+        if (it != materialIndex.end()) return it->second;
+        Material m;
+        m.metallic = 1.0f;  // glTF defaults
+        m.roughness = 1.0f;
+        if (src->has_pbr_metallic_roughness) {
+            const cgltf_pbr_metallic_roughness& p = src->pbr_metallic_roughness;
+            m.baseColor = Color(p.base_color_factor[0], p.base_color_factor[1], p.base_color_factor[2]);
+            m.opacity = p.base_color_factor[3];
+            m.baseTexture = Tex(p.base_color_texture);
+            m.metallic = p.metallic_factor;
+            m.roughness = p.roughness_factor;
+            m.metallicRoughnessTexture = Tex(p.metallic_roughness_texture);
+        } else {
+            m.metallic = 0.0f;
+            m.roughness = 0.7f;
+            if (src->has_pbr_specular_glossiness) warnings += "specular-glossiness materials are shown as base color only; ";
+        }
+        m.normalTexture = Tex(src->normal_texture);
+        if (m.normalTexture) m.normalScale = src->normal_texture.scale;
+        m.occlusionTexture = Tex(src->occlusion_texture);
+        if (m.occlusionTexture) m.occlusionStrength = src->occlusion_texture.scale;
+        m.emissive = Color(src->emissive_factor[0], src->emissive_factor[1], src->emissive_factor[2]);
+        m.emissiveTexture = Tex(src->emissive_texture);
+        if (src->has_emissive_strength) m.emissiveIntensity = src->emissive_strength.emissive_strength;
+        m.alphaMode = src->alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend : src->alpha_mode == cgltf_alpha_mode_mask ? AlphaMode::Mask : AlphaMode::Opaque;
+        m.alphaCutoff = src->alpha_cutoff;
+        m.doubleSided = src->double_sided;
+        m.unlit = src->unlit;
+        int index = static_cast<int>(mesh.materials.size());
+        mesh.materials.push_back(std::move(m));
+        materialIndex[src] = index;
+        return index;
+    }
 
     int TextureFor(const cgltf_texture_view& view) {
         if (!view.texture || !view.texture->image) return -1;
@@ -163,14 +208,7 @@ struct Loader {
             }
             for (size_t i = 0; i < acc.size(); ++i) mesh.normals[base + i] = Normalize(acc[i]);
         }
-        if (prim.material) {
-            const cgltf_material& mat = *prim.material;
-            if (mat.has_pbr_metallic_roughness) {
-                const float* f = mat.pbr_metallic_roughness.base_color_factor;
-                sub.baseColor = Color(f[0], f[1], f[2]);
-                sub.texture = TextureFor(mat.pbr_metallic_roughness.base_color_texture);
-            }
-        }
+        sub.material = MaterialFor(prim.material);
         mesh.submeshes.push_back(sub);
     }
 
@@ -231,6 +269,7 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
         return false;
     }
     out.ComputeBounds();
+    out.ComputeTangents();
     if (!loader.warnings.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), loader.warnings.c_str());
     return true;
 }
@@ -245,6 +284,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".ttf") || EndsWith(p, ".otf") || EndsWith(p, ".ttc")) return "font";
     if (EndsWith(p, ".lua")) return "script";
     if (EndsWith(p, ".prefab.json")) return "prefab";
+    if (EndsWith(p, ".mat.json")) return "material";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
 }
@@ -281,6 +321,36 @@ AssetManager::Entry<Texture> AssetManager::LoadTexture(const std::string& path) 
     }
     if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
     return e;
+}
+
+AssetManager::Entry<Material> AssetManager::LoadMaterial(const std::string& path) {
+    Entry<Material> e;
+    try {
+        std::string full = engine_.ResolvePath(path);
+        e.mtime = FileModifiedTime(full);
+        std::string text, parseError;
+        if (KindOf(path) != "material") e.error = "'" + path + "' is not a material file (*.mat.json)";
+        else if (!ReadTextFile(full, text)) e.error = "material file not found: " + path;
+        else {
+            Json j = Json::parse(text, &parseError);
+            auto mat = std::make_shared<Material>();
+            TextureLoader load = [this](const std::string& p, std::string* err) { return GetTexture(p, err); };
+            if (!parseError.empty()) e.error = path + ": " + parseError;
+            else if (MaterialFromJson(j, load, *mat, &e.error)) e.asset = mat;
+            else e.error = path + ": " + e.error;
+        }
+    } catch (const std::exception& ex) {
+        e.error = ex.what();
+    }
+    if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
+    return e;
+}
+
+std::shared_ptr<const Material> AssetManager::GetMaterial(const std::string& path, std::string* error) {
+    auto it = materials_.find(path);
+    if (it == materials_.end()) it = materials_.emplace(path, LoadMaterial(path)).first;
+    if (error) *error = it->second.error;
+    return it->second.asset;
 }
 
 AssetManager::FontEntry AssetManager::LoadFont(const std::string& path) {
@@ -345,6 +415,15 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
+    // Materials reload when their file changes or a texture was reloaded (they hold the old one).
+    bool texturesChanged = !changed.empty();
+    for (auto& kv : materials_) {
+        if (texturesChanged || mtimeOf(kv.first) != kv.second.mtime) {
+            bool fileChanged = mtimeOf(kv.first) != kv.second.mtime;
+            kv.second = LoadMaterial(kv.first);
+            if (fileChanged) changed.push_back(kv.first);
+        }
+    }
     for (auto& kv : fonts_) {
         if (mtimeOf(kv.first) != kv.second.mtime) {
             kv.second = LoadFont(kv.first);
@@ -355,9 +434,17 @@ std::vector<std::string> AssetManager::PollChanges() {
     return changed;
 }
 
+void AssetManager::Forget(const std::string& path) {
+    meshes_.erase(path);
+    textures_.erase(path);
+    materials_.erase(path);
+    fonts_.erase(path);
+}
+
 void AssetManager::Clear() {
     meshes_.clear();
     textures_.clear();
+    materials_.clear();
     fonts_.clear();
 }
 
@@ -384,11 +471,30 @@ Json AssetManager::Info(const std::string& path) {
         for (const Submesh& s : mesh->submeshes) {
             Json j = Json::MakeObject();
             j["triangles"] = s.indexCount / 3;
-            j["baseColor"] = Json(Json::Array{s.baseColor.r, s.baseColor.g, s.baseColor.b});
-            j["texture"] = s.texture;
+            j["material"] = s.material;
             subs.push(j);
         }
         out["submeshes"] = subs;
+        Json mats = Json::MakeArray();
+        for (const Material& m : mesh->materials) {
+            Json j = Json::MakeObject();
+            j["baseColor"] = Json(Json::Array{m.baseColor.r, m.baseColor.g, m.baseColor.b});
+            j["opacity"] = m.opacity;
+            j["metallic"] = m.metallic;
+            j["roughness"] = m.roughness;
+            j["alphaMode"] = ToString(m.alphaMode);
+            Json maps = Json::MakeArray();
+            if (m.baseTexture) maps.push("base");
+            if (m.metallicRoughnessTexture) maps.push("metallicRoughness");
+            if (m.normalTexture) maps.push("normal");
+            if (m.occlusionTexture) maps.push("occlusion");
+            if (m.emissiveTexture) maps.push("emissive");
+            j["textures"] = maps;
+            if (m.doubleSided) j["doubleSided"] = true;
+            if (m.unlit) j["unlit"] = true;
+            mats.push(j);
+        }
+        out["materials"] = mats;
         Json texs = Json::MakeArray();
         for (const auto& t : mesh->textures) texs.push(Json(Json::Array{t->width, t->height}));
         out["textures"] = texs;
@@ -404,6 +510,14 @@ Json AssetManager::Info(const std::string& path) {
         if (!tex) throw ApiError("invalid_texture", err);
         out["width"] = tex->width;
         out["height"] = tex->height;
+    } else if (kind == "material") {
+        std::string err;
+        auto mat = GetMaterial(path, &err);
+        if (!mat) throw ApiError("invalid_material", err, "Fields: see material.create / docs/RENDERING.md.");
+        std::string text;
+        ReadTextFile(engine_.ResolvePath(path), text);
+        out["values"] = Json::parse(text);
+        out["alphaMode"] = ToString(mat->alphaMode);
     } else if (kind == "font") {
         std::string err;
         auto font = GetFont(path, &err);

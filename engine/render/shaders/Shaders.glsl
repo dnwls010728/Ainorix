@@ -9,8 +9,9 @@
 // - Matrices come from engine/core/Math.h: column-major, OpenGL clip space
 //   (z in -1..1). Every vertex shader asks sokol-shdc to remap z for HLSL.
 // - Lighting matches the software renderer (engine/render/SoftwareRenderer.cpp):
-//   ambient + directional lights (the first one casts shadows) + point lights
-//   with (1 - d/range)^2 falloff, computed on non-linear colors.
+//   metallic-roughness materials (GGX), ambient + directional lights (the
+//   first one casts shadows) + point lights with (1 - d/range)^2 falloff,
+//   computed on non-linear colors.
 // - Offscreen images are sampled with uv = gl_FragCoord / target size, which
 //   gives the same orientation on every backend.
 
@@ -29,25 +30,34 @@ layout(binding=0) uniform mesh_vs_params {
 in vec3 position;
 in vec3 normal;
 in vec2 texcoord;
+in vec4 tangent;
 
 out vec3 v_wpos;
 out vec3 v_nrm;
+out vec4 v_tan;
 centroid out vec2 v_uv;
 
 void main() {
     vec4 wp = model * vec4(position, 1.0);
     v_wpos = wp.xyz;
     v_nrm = (normal_mat * vec4(normal, 0.0)).xyz;
+    v_tan = vec4((model * vec4(tangent.xyz, 0.0)).xyz, tangent.w);
     v_uv = texcoord;
     gl_Position = view_proj * wp;
 }
 @end
 
+// Metallic-roughness shading. Must match Lighting::Shade and the pixel loop
+// in SoftwareRenderer.cpp (GpuRendererMatchesSoftware compares them).
 @fs mesh_fs
 layout(binding=1) uniform mesh_material {
-    vec4 base_color;
-    vec4 flags;    // x: unlit, y: textured, z: alpha cutoff (sprites; 0 = off)
-    vec4 uv_rect;  // uv = v_uv * zw + xy (sprite sheet frame, flips)
+    vec4 base_color;  // rgb, a: opacity
+    vec4 flags;       // x: unlit, y: base texture, z: alpha cutoff (mask; 0 = off), w: double sided
+    vec4 uv_rect;     // item uv rect: uv * zw + xy (sprite sheet frame, flips)
+    vec4 uv_tiling;   // material: uv * xy + zw
+    vec4 pbr;         // x: metallic, y: roughness, z: normal scale, w: occlusion strength
+    vec4 emissive;    // rgb: emissive * intensity
+    vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
 };
 
 layout(binding=2) uniform mesh_lights {
@@ -55,6 +65,7 @@ layout(binding=2) uniform mesh_lights {
     vec4 ambient;
     vec4 counts;         // x: directional lights, y: point lights, z: shadows on, w: shadow strength
     vec4 shadow_params;  // x: shadow texel size in world units, y: 1 / shadow map size, z: depth bias
+    vec4 eye;            // camera position
     vec4 dir_dir[4];     // direction the light travels
     vec4 dir_color[4];
     vec4 point_pos[16];  // xyz: position, w: range
@@ -65,12 +76,19 @@ layout(binding=0) uniform texture2D base_tex;
 layout(binding=0) uniform sampler base_smp;
 layout(binding=1) uniform texture2D shadow_tex;
 layout(binding=1) uniform sampler shadow_smp;
+layout(binding=2) uniform texture2D normal_tex;
+layout(binding=3) uniform texture2D mr_tex;
+layout(binding=4) uniform texture2D emissive_tex;
+layout(binding=5) uniform texture2D occlusion_tex;
 
 in vec3 v_wpos;
 in vec3 v_nrm;
+in vec4 v_tan;
 centroid in vec2 v_uv;
 
 out vec4 frag_color;
+
+const float PI = 3.14159265;
 
 // 1 = fully lit, 0 = fully shadowed (3x3 PCF with hardware compare).
 float shadow_lit(vec3 wpos, vec3 n) {
@@ -97,49 +115,107 @@ float shadow_lit(vec3 wpos, vec3 n) {
     return 1.0 - counts.w * (1.0 - lit / 9.0);
 }
 
+vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, float ndv, float gv) {
+    float ndl = dot(n, l);
+    if (ndl <= 0.0) {
+        return vec3(0.0);
+    }
+    vec3 h = normalize(l + v);
+    float ndh = max(dot(n, h), 0.0);
+    float vdh = max(dot(v, h), 0.0);
+    float d = ndh * ndh * (a2 - 1.0) + 1.0;
+    float D = a2 / (PI * d * d);
+    float gl = ndl / (ndl * (1.0 - k) + k);
+    float fw = pow(1.0 - vdh, 5.0);
+    vec3 F = f0 * (1.0 - fw) + vec3(fw);
+    float spec = D * gv * gl / (4.0 * ndv * ndl + 1e-4) * PI;
+    return (diffuse + F * spec) * ndl;
+}
+
 void main() {
+    vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
     vec3 base = base_color.rgb;
+    float alpha = base_color.a;
     if (flags.y > 0.5) {
-        vec4 texel = texture(sampler2D(base_tex, base_smp), v_uv * uv_rect.zw + uv_rect.xy);
-        if (texel.a < flags.z) {
-            discard;
-        }
+        vec4 texel = texture(sampler2D(base_tex, base_smp), uv);
         base *= texel.rgb;
+        alpha *= texel.a;
     }
-    if (flags.x > 0.5) {
-        frag_color = vec4(clamp(base, 0.0, 1.0), 1.0);
-        return;
+    if (alpha < flags.z) {
+        discard;
     }
-    vec3 n = normalize(v_nrm);
-    vec3 light = ambient.rgb;
-    int dirs = int(counts.x);
-    for (int i = 0; i < 4; i++) {
-        if (i >= dirs) {
-            break;
+    vec3 color = base;
+    if (flags.x < 0.5) {
+        vec3 ng = normalize(v_nrm);
+        if (flags.w > 0.5 && !gl_FrontFacing) {
+            ng = -ng;
         }
-        float ndl = max(0.0, dot(n, -dir_dir[i].xyz));
-        if (ndl <= 0.0) {
-            continue;
+        vec3 n = ng;
+        if (maps.x > 0.5) {
+            vec3 t = v_tan.xyz - ng * dot(ng, v_tan.xyz);
+            if (length(t) > 1e-6) {
+                t = normalize(t);
+                vec3 b = cross(ng, t) * (v_tan.w < 0.0 ? -1.0 : 1.0);
+                vec3 nt = texture(sampler2D(normal_tex, base_smp), uv).rgb * 2.0 - 1.0;
+                n = normalize(t * (nt.x * pbr.z) + b * (nt.y * pbr.z) + ng * nt.z);
+            }
         }
-        float lit = (i == 0 && counts.z > 0.5) ? shadow_lit(v_wpos, n) : 1.0;
-        light += dir_color[i].rgb * (ndl * lit);
+        float metallic = pbr.x;
+        float roughness = pbr.y;
+        if (maps.y > 0.5) {
+            vec3 mr = texture(sampler2D(mr_tex, base_smp), uv).rgb;
+            roughness *= mr.g;
+            metallic *= mr.b;
+        }
+        float ao = 1.0;
+        if (maps.w > 0.5) {
+            ao = 1.0 + pbr.w * (texture(sampler2D(occlusion_tex, base_smp), uv).r - 1.0);
+        }
+        vec3 v = normalize(eye.xyz - v_wpos);
+        float ndv = max(dot(n, v), 1e-4);
+        vec3 diffuse = base * (1.0 - metallic);
+        vec3 f0 = vec3(0.04) * (1.0 - metallic) + base * metallic;
+        float r = clamp(roughness, 0.04, 1.0);
+        float a2 = r * r * r * r;
+        float k = (r + 1.0) * (r + 1.0) / 8.0;
+        float gv = ndv / (ndv * (1.0 - k) + k);
+        // Ambient: diffuse plus reflected surroundings, approximated by a
+        // hemisphere that is brighter above (sky) than below (ground).
+        vec3 refl = n * (2.0 * dot(n, v)) - v;
+        float sky = 0.6 + 1.6 * (refl.y * 0.5 + 0.5);
+        float fe = pow(1.0 - ndv, 5.0);
+        vec3 fenv = f0 + (max(vec3(1.0 - r), f0) - f0) * fe;
+        color = ambient.rgb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
+        int dirs = int(counts.x);
+        for (int i = 0; i < 4; i++) {
+            if (i >= dirs) {
+                break;
+            }
+            float lit = (i == 0 && counts.z > 0.5) ? shadow_lit(v_wpos, ng) : 1.0;
+            if (lit > 0.0) {
+                color += brdf(n, v, -dir_dir[i].xyz, diffuse, f0, a2, k, ndv, gv) * dir_color[i].rgb * lit;
+            }
+        }
+        int points = int(counts.y);
+        for (int i = 0; i < 16; i++) {
+            if (i >= points) {
+                break;
+            }
+            vec3 d = point_pos[i].xyz - v_wpos;
+            float dist = length(d);
+            float range = point_pos[i].w;
+            if (dist >= range || dist < 1e-5) {
+                continue;
+            }
+            float fall = 1.0 - dist / range;
+            color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * point_color[i].rgb * (fall * fall);
+        }
     }
-    int points = int(counts.y);
-    for (int i = 0; i < 16; i++) {
-        if (i >= points) {
-            break;
-        }
-        vec3 d = point_pos[i].xyz - v_wpos;
-        float dist = length(d);
-        float range = point_pos[i].w;
-        if (dist >= range || dist < 1e-5) {
-            continue;
-        }
-        float ndl = max(0.0, dot(n, d / dist));
-        float fall = 1.0 - dist / range;
-        light += point_color[i].rgb * (ndl * fall * fall);
+    vec3 em = emissive.rgb;
+    if (maps.z > 0.5) {
+        em *= texture(sampler2D(emissive_tex, base_smp), uv).rgb;
     }
-    frag_color = vec4(clamp(base * light, 0.0, 1.0), 1.0);
+    frag_color = vec4(clamp(color + em, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
 }
 @end
 

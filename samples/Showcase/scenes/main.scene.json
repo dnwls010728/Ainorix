@@ -32,7 +32,9 @@
         },
         "MeshRenderer": {
           "mesh": "plane",
+          "material": "",
           "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "assets/textures/floor.png",
           "shading": "smooth",
           "unlit": false,
@@ -77,7 +79,8 @@
           "stepHeight": 0.300000012,
           "gravityScale": 1,
           "velocity": [0, 0, 0],
-          "grounded": false
+          "grounded": false,
+          "plane2D": false
         }
       }
     },
@@ -93,7 +96,9 @@
         },
         "MeshRenderer": {
           "mesh": "assets/models/fox.glb",
+          "material": "",
           "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "",
           "shading": "smooth",
           "unlit": false,
@@ -129,7 +134,10 @@
           "target": 3,
           "offset": [0, 3.20000005, 5.5],
           "lookOffset": [0, 0.600000024, 0],
-          "smoothing": 6
+          "smoothing": 6,
+          "useBounds": false,
+          "boundsMin": [-1000, -1000, -1000],
+          "boundsMax": [1000, 1000, 1000]
         }
       }
     },
@@ -144,7 +152,9 @@
         },
         "MeshRenderer": {
           "mesh": "cube",
+          "material": "",
           "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "assets/textures/bricks.png",
           "shading": "flat",
           "unlit": false,
@@ -174,7 +184,9 @@
         },
         "MeshRenderer": {
           "mesh": "cube",
+          "material": "",
           "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "assets/textures/bricks.png",
           "shading": "flat",
           "unlit": false,
@@ -204,7 +216,9 @@
         },
         "MeshRenderer": {
           "mesh": "cube",
+          "material": "",
           "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "assets/textures/crate.png",
           "shading": "flat",
           "unlit": false,
@@ -229,7 +243,8 @@
           "gravityScale": 1,
           "linearDamping": 0.0500000007,
           "lockRotation": false,
-          "continuous": false
+          "continuous": false,
+          "plane2D": false
         }
       }
     },
@@ -244,7 +259,9 @@
         },
         "MeshRenderer": {
           "mesh": "cube",
+          "material": "",
           "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "assets/textures/crate.png",
           "shading": "flat",
           "unlit": false,
@@ -269,7 +286,8 @@
           "gravityScale": 1,
           "linearDamping": 0.0500000007,
           "lockRotation": false,
-          "continuous": false
+          "continuous": false,
+          "plane2D": false
         }
       }
     },
@@ -284,7 +302,9 @@
         },
         "MeshRenderer": {
           "mesh": "sphere",
-          "color": [0.899999976, 0.899999976, 0.949999988],
+          "material": "materials/chrome.mat.json",
+          "color": [1, 1, 1],
+          "opacity": 1,
           "texture": "",
           "shading": "smooth",
           "unlit": false,
@@ -309,7 +329,8 @@
           "gravityScale": 1,
           "linearDamping": 0.0500000007,
           "lockRotation": false,
-          "continuous": false
+          "continuous": false,
+          "plane2D": false
         }
       }
     },
@@ -324,7 +345,9 @@
         },
         "MeshRenderer": {
           "mesh": "sphere",
+          "material": "",
           "color": [1, 0.800000012, 0.449999988],
+          "opacity": 1,
           "texture": "",
           "shading": "smooth",
           "unlit": true,
@@ -349,7 +372,9 @@
         },
         "MeshRenderer": {
           "mesh": "sphere",
+          "material": "",
           "color": [0.5, 0.699999988, 1],
+          "opacity": 1,
           "texture": "",
           "shading": "smooth",
           "unlit": true,
@@ -373,12 +398,28 @@
           "scale": [1, 1, 1]
         },
         "UIText": {
-          "text": "OwnEngine showcase: glTF model, textures, shadows, point lights",
+          "text": "OwnEngine showcase: glTF model, textures, shadows, point lights, PBR materials, glass",
+          "font": "default",
+          "size": 22,
+          "color": [1, 1, 1],
           "anchor": "top-left",
           "x": 24,
           "y": 20,
-          "size": 22,
-          "color": [1, 1, 1],
+          "width": 0,
+          "height": 0,
+          "align": "auto",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 0,
+          "outlineColor": [0, 0, 0],
+          "shadowDistance": 0,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
           "visible": true,
           "order": 0
         }
@@ -395,13 +436,73 @@
         },
         "UIText": {
           "text": "WASD / arrows: move the fox   Space: jump",
+          "font": "default",
+          "size": 20,
+          "color": [0.850000024, 0.870000005, 0.920000017],
           "anchor": "bottom",
           "x": 24,
           "y": -20,
-          "size": 20,
-          "color": [0.850000024, 0.870000005, 0.920000017],
+          "width": 0,
+          "height": 0,
+          "align": "auto",
+          "verticalAlign": "top",
+          "wrap": true,
+          "lineSpacing": 1,
+          "letterSpacing": 0,
+          "bold": false,
+          "richText": true,
+          "outlineWidth": 0,
+          "outlineColor": [0, 0, 0],
+          "shadowDistance": 0,
+          "shadowColor": [0, 0, 0],
+          "visibleCharacters": -1,
+          "opacity": 1,
           "visible": true,
           "order": 0
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Glass Pane",
+      "components": {
+        "Transform": {
+          "position": [0, 0.800000012, -2],
+          "rotation": [0, 0, 0],
+          "scale": [2.4000001, 1.60000002, 0.100000001]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/glass.mat.json",
+          "color": [1, 1, 1],
+          "opacity": 1,
+          "texture": "",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": false,
+          "visible": true
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Glow Cube",
+      "components": {
+        "Transform": {
+          "position": [0, 0.300000012, -3.20000005],
+          "rotation": [0, 30, 0],
+          "scale": [0.600000024, 0.600000024, 0.600000024]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/glow.mat.json",
+          "color": [1, 1, 1],
+          "opacity": 1,
+          "texture": "",
+          "shading": "smooth",
+          "unlit": false,
+          "castShadows": true,
+          "visible": true
         }
       }
     }

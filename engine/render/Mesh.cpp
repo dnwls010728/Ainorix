@@ -1,6 +1,7 @@
 #include "render/Mesh.h"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 
 namespace oe {
@@ -70,6 +71,38 @@ void Mesh::ComputeBounds() {
     }
 }
 
+void Mesh::ComputeTangents() {
+    const size_t n = positions.size();
+    std::vector<Vec3> du(n, Vec3(0, 0, 0)), dv(n, Vec3(0, 0, 0));  // dP/du, dP/dv
+    if (uvs.size() >= n * 2) {
+        for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+            uint32_t a = indices[i], b = indices[i + 1], c = indices[i + 2];
+            Vec3 e1 = positions[b] - positions[a], e2 = positions[c] - positions[a];
+            float du1 = uvs[b * 2] - uvs[a * 2], dv1 = uvs[b * 2 + 1] - uvs[a * 2 + 1];
+            float du2 = uvs[c * 2] - uvs[a * 2], dv2 = uvs[c * 2 + 1] - uvs[a * 2 + 1];
+            float r = du1 * dv2 - du2 * dv1;
+            if (std::fabs(r) < 1e-12f) continue;
+            float f = 1.0f / r;
+            Vec3 t = (e1 * dv2 - e2 * dv1) * f;
+            Vec3 s = (e2 * du1 - e1 * du2) * f;
+            for (uint32_t k : {a, b, c}) {
+                du[k] += t;
+                dv[k] += s;
+            }
+        }
+    }
+    tangents.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        Vec3 nrm = i < normals.size() ? normals[i] : Vec3(0, 1, 0);
+        Vec3 t = du[i] - nrm * Dot(nrm, du[i]);
+        if (Length(t) < 1e-8f) t = Cross(std::fabs(nrm.y) < 0.99f ? Vec3(0, 1, 0) : Vec3(1, 0, 0), nrm);
+        t = Normalize(t);
+        // Normal maps store +Y towards the top of the image, i.e. decreasing v.
+        float w = Dot(Cross(nrm, t), dv[i]) < 0.0f ? 1.0f : -1.0f;
+        tangents[i] = Vec4(t.x, t.y, t.z, w);
+    }
+}
+
 void Mesh::ComputeNormals() {
     normals.assign(positions.size(), Vec3(0, 0, 0));
     for (size_t i = 0; i + 2 < indices.size(); i += 3) {
@@ -98,6 +131,7 @@ void Finish(Mesh& m) {
     s.indexCount = static_cast<uint32_t>(m.indices.size());
     m.submeshes = {s};
     m.ComputeBounds();
+    m.ComputeTangents();
 }
 
 Mesh MakeCube() {

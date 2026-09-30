@@ -27,7 +27,9 @@ struct MeshRenderer {
     static constexpr const char* kTypeName = "MeshRenderer";
     static constexpr const char* kDoc = "Draws a mesh: a built-in shape (cube, sphere, plane, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.";
     std::string mesh = "cube";
+    std::string material;
     Color color{0.8f, 0.8f, 0.8f};
+    float opacity = 1.0f;
     std::string texture;
     std::string shading = "smooth";
     bool unlit = false;
@@ -35,10 +37,17 @@ struct MeshRenderer {
     bool visible = true;
     static void Reflect(FieldList& f) {
         f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf).");
-        f.Add("color", &MeshRenderer::color, "Tint multiplied with the model/texture color, linear RGB 0..1 (or \"#rrggbb\").");
-        f.Add("texture", &MeshRenderer::texture, "Image (.png/.jpg) overriding the model's own base color texture. Empty = use the model's.");
+        f.Add("material", &MeshRenderer::material,
+              "Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. "
+              "Empty = the model's own materials (glTF) or the default (white, roughness 0.7).");
+        f.Add("color", &MeshRenderer::color, "Tint multiplied with the material/texture color, linear RGB 0..1 (or \"#rrggbb\").");
+        FieldInfo& op = f.Add("opacity", &MeshRenderer::opacity, "Below 1 the mesh is drawn transparent (alpha blended, sorted back to front, no shadow).");
+        op.hasRange = true;
+        op.min = 0.0f;
+        op.max = 1.0f;
+        f.Add("texture", &MeshRenderer::texture, "Image (.png/.jpg) overriding the material's base color texture. Empty = use the material's.");
         f.Add("shading", &MeshRenderer::shading, "smooth = interpolated vertex normals, flat = faceted.").options = {"smooth", "flat"};
-        f.Add("unlit", &MeshRenderer::unlit, "Ignore lighting and shadows (UI-like, emissive look).");
+        f.Add("unlit", &MeshRenderer::unlit, "Ignore lighting and shadows (UI-like, emissive look). Overrides the material.");
         f.Add("castShadows", &MeshRenderer::castShadows, "Casts shadows from the directional light.");
         f.Add("visible", &MeshRenderer::visible, "Whether the mesh is drawn.");
     }
@@ -63,6 +72,7 @@ struct Sprite {
     bool flipY = false;
     bool pixelArt = true;
     float alphaCutoff = 0.5f;
+    float opacity = 1.0f;
     bool lit = false;
     int order = 0;
     bool visible = true;
@@ -80,7 +90,11 @@ struct Sprite {
         f.Add("flipX", &Sprite::flipX, "Mirror horizontally (face left).");
         f.Add("flipY", &Sprite::flipY, "Mirror vertically.");
         f.Add("pixelArt", &Sprite::pixelArt, "Sharp nearest-neighbour pixels instead of smooth filtering.");
-        f.Add("alphaCutoff", &Sprite::alphaCutoff, "Pixels with alpha below this are not drawn (0 = draw everything).");
+        f.Add("alphaCutoff", &Sprite::alphaCutoff, "Pixels with alpha below this are not drawn. 0 = soft edges: the image's alpha is blended (smoke, glows, UI-like art).");
+        FieldInfo& op = f.Add("opacity", &Sprite::opacity, "Below 1 the sprite is drawn see-through (alpha blended).");
+        op.hasRange = true;
+        op.min = 0.0f;
+        op.max = 1.0f;
         f.Add("lit", &Sprite::lit, "Apply scene lighting (default: full brightness, like classic 2D).");
         f.Add("order", &Sprite::order, "Sorting among sprites at the same depth: higher is drawn in front.");
         f.Add("visible", &Sprite::visible, "Whether the sprite is drawn.");

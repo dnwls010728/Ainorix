@@ -129,6 +129,7 @@ async function refreshAssetLists() {
   if (assets.ok) {
     const of = (k) => assets.result.filter((a) => a.kind === k).map((a) => a.path);
     fill("list-texture", of("texture"));
+    fill("list-material", of("material"));
     fill("list-audio", of("audio"));
     fill("list-script", of("script"));
     fill("list-font", ["default", "pixel", ...of("font")]);
@@ -650,7 +651,7 @@ function fieldRow(id, type, field, schema, value) {
     el.type = "text";
     el.value = value;
     // Suggest project files for path-like fields.
-    const lists = { mesh: "list-mesh", texture: "list-texture", clip: "list-audio", font: "list-font" };
+    const lists = { mesh: "list-mesh", material: "list-material", texture: "list-texture", clip: "list-audio", font: "list-font" };
     if (lists[field]) el.setAttribute("list", lists[field]);
     if (type === "Script" && field === "path") el.setAttribute("list", "list-script");
     if (el.hasAttribute("list")) el.placeholder = "type or pick a project file";

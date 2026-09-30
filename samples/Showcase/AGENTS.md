@@ -15,3 +15,4 @@ A two-level coin collecting game: walk into the coins (W/A/S/D, Space jumps), cl
 - Sounds:  `oe exec . audio.generate '{"path":"sounds/jump.wav","preset":"jump"}'` synthesizes effects.
 - Live:    `oe mcp .` exposes every command as an MCP tool (screenshots come back as images).
 - Human:   `oe editor .` opens the web editor on http://127.0.0.1:7777 (same API); `oe run .` plays in a window.
+- Materials: `materials/*.mat.json` (chrome ball, glass pane, glowing cube) are PBR/transparency examples; edit with `material.set`, assign via `MeshRenderer.material`.

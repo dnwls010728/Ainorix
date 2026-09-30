@@ -27,6 +27,7 @@ struct MeshVertex {
     float pos[3];
     float nrm[3];
     float uv[2];
+    float tan[4];
 };
 
 struct ColorVertex {
@@ -239,7 +240,8 @@ struct GpuRenderer::Impl {
     AssetManager* assets;
     Settings settings;
 
-    sg_pipeline meshPip{}, shadowPip{}, maskDepthPip{}, maskDrawPip{}, linePip{}, compositePip{}, uiPip{};
+    sg_pipeline meshPips[2][2]{};  // [blend][double sided]
+    sg_pipeline shadowPip{}, shadowPipTwoSided{}, maskDepthPip{}, maskDrawPip{}, linePip{}, compositePip{}, uiPip{};
     sg_shader meshShd{}, shadowShd{}, solidShd{}, lineShd{}, compositeShd{}, uiShd{};
     sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
     sg_image white{}, shadowMap{};
@@ -264,23 +266,36 @@ struct GpuRenderer::Impl {
         uiShd = sg_make_shader(oe_ui_shader_desc(backend));
 
         const int msaa = settings.msaa;
-        {
-            sg_pipeline_desc d{};
-            d.shader = meshShd;
-            d.layout.buffers[0].stride = sizeof(MeshVertex);
-            d.layout.attrs[ATTR_oe_mesh_position] = {0, offsetof(MeshVertex, pos), SG_VERTEXFORMAT_FLOAT3};
-            d.layout.attrs[ATTR_oe_mesh_normal] = {0, offsetof(MeshVertex, nrm), SG_VERTEXFORMAT_FLOAT3};
-            d.layout.attrs[ATTR_oe_mesh_texcoord] = {0, offsetof(MeshVertex, uv), SG_VERTEXFORMAT_FLOAT2};
-            d.index_type = SG_INDEXTYPE_UINT32;
-            d.depth.pixel_format = kDepthFormat;
-            d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
-            d.depth.write_enabled = true;
-            d.colors[0].pixel_format = kColorFormat;
-            d.cull_mode = SG_CULLMODE_BACK;
-            d.face_winding = SG_FACEWINDING_CCW;
-            d.sample_count = msaa;
-            d.label = "oe-mesh";
-            meshPip = sg_make_pipeline(&d);
+        auto alphaBlend = [](sg_color_target_state& c) {
+            c.pixel_format = kColorFormat;
+            c.blend.enabled = true;
+            c.blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
+            c.blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            c.blend.src_factor_alpha = SG_BLENDFACTOR_ONE;
+            c.blend.dst_factor_alpha = SG_BLENDFACTOR_ZERO;
+        };
+        // Opaque/cut-out surfaces write depth; transparent ones blend and only test it.
+        for (int blend = 0; blend < 2; ++blend) {
+            for (int twoSided = 0; twoSided < 2; ++twoSided) {
+                sg_pipeline_desc d{};
+                d.shader = meshShd;
+                d.layout.buffers[0].stride = sizeof(MeshVertex);
+                d.layout.attrs[ATTR_oe_mesh_position] = {0, offsetof(MeshVertex, pos), SG_VERTEXFORMAT_FLOAT3};
+                d.layout.attrs[ATTR_oe_mesh_normal] = {0, offsetof(MeshVertex, nrm), SG_VERTEXFORMAT_FLOAT3};
+                d.layout.attrs[ATTR_oe_mesh_texcoord] = {0, offsetof(MeshVertex, uv), SG_VERTEXFORMAT_FLOAT2};
+                d.layout.attrs[ATTR_oe_mesh_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
+                d.index_type = SG_INDEXTYPE_UINT32;
+                d.depth.pixel_format = kDepthFormat;
+                d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
+                d.depth.write_enabled = blend == 0;
+                d.colors[0].pixel_format = kColorFormat;
+                if (blend) alphaBlend(d.colors[0]);
+                d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
+                d.face_winding = SG_FACEWINDING_CCW;
+                d.sample_count = msaa;
+                d.label = blend ? "oe-mesh-blend" : "oe-mesh";
+                meshPips[blend][twoSided] = sg_make_pipeline(&d);
+            }
         }
         // Position-only pipelines read the first 12 bytes of MeshVertex.
         auto positionOnly = [](sg_pipeline_desc& d) {
@@ -302,6 +317,9 @@ struct GpuRenderer::Impl {
             d.cull_mode = SG_CULLMODE_FRONT;
             d.label = "oe-shadow";
             shadowPip = sg_make_pipeline(&d);
+            d.cull_mode = SG_CULLMODE_NONE;  // double-sided materials
+            d.label = "oe-shadow-two-sided";
+            shadowPipTwoSided = sg_make_pipeline(&d);
         }
         {
             sg_pipeline_desc d{};
@@ -319,14 +337,6 @@ struct GpuRenderer::Impl {
             d.label = "oe-mask-draw";
             maskDrawPip = sg_make_pipeline(&d);
         }
-        auto alphaBlend = [](sg_color_target_state& c) {
-            c.pixel_format = kColorFormat;
-            c.blend.enabled = true;
-            c.blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
-            c.blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-            c.blend.src_factor_alpha = SG_BLENDFACTOR_ONE;
-            c.blend.dst_factor_alpha = SG_BLENDFACTOR_ZERO;
-        };
         {
             sg_pipeline_desc d{};
             d.shader = lineShd;
@@ -494,6 +504,11 @@ struct GpuRenderer::Impl {
         std::vector<uint32_t> indices;
         auto vertex = [&](uint32_t i, const Vec3& n) {
             MeshVertex v{};
+            const Vec4 t = static_cast<size_t>(i) < m.tangents.size() ? m.tangents[i] : Vec4(1, 0, 0, 1);
+            v.tan[0] = t.x;
+            v.tan[1] = t.y;
+            v.tan[2] = t.z;
+            v.tan[3] = t.w;
             const Vec3& p = m.positions[i];
             v.pos[0] = p.x;
             v.pos[1] = p.y;
@@ -547,22 +562,15 @@ struct GpuRenderer::Impl {
         return map[mesh.get()] = g;
     }
 
-    sg_view TextureFor(const RenderItem& item, const Submesh& sub) {
-        const Texture* tex = item.SubmeshTexture(sub);
+    // Mipmapped GPU copy of a material texture; empty view when there is none.
+    sg_view TextureFor(const std::shared_ptr<const Texture>& owner) {
+        const Texture* tex = owner.get();
         if (!tex || tex->width <= 0 || tex->height <= 0) return sg_view{};
         auto found = textures.find(tex);
         if (found != textures.end() && OwnerAlive(found->second.permanent, found->second.owner)) return found->second.view;
         if (found != textures.end()) {
             found->second.Destroy();
             textures.erase(found);
-        }
-        // Find the owning shared_ptr to track its lifetime.
-        std::shared_ptr<const Texture> owner = item.textureOverride;
-        if (owner.get() != tex) {
-            owner.reset();
-            for (const auto& t : item.mesh->textures) {
-                if (t.get() == tex) owner = t;
-            }
         }
         std::vector<std::vector<uint32_t>> mips = BuildMips(*tex);
         sg_image_desc d{};
@@ -576,8 +584,6 @@ struct GpuRenderer::Impl {
         g.image = sg_make_image(&d);
         g.view = TextureView(g.image);
         g.owner = owner;
-        // A texture kept alive only by a built-in mesh (none today) would never expire.
-        g.permanent = owner == nullptr;
         return (textures[tex] = g).view;
     }
 
@@ -591,6 +597,7 @@ struct GpuRenderer::Impl {
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets);
         RenderLights lights = GatherRenderLights(scene);
+        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye);
         std::vector<const GpuMesh*> gpuMeshes;
         gpuMeshes.reserve(items.size());
         for (const RenderItem& it : items) {
@@ -629,18 +636,24 @@ struct GpuRenderer::Impl {
             pass.attachments.depth_stencil = shadowAtt;
             pass.label = "oe-shadow";
             sg_begin_pass(&pass);
-            sg_apply_pipeline(shadowPip);
-            for (size_t i = 0; i < items.size(); ++i) {
-                const RenderItem& it = items[i];
-                if (!it.castShadows || it.unlit) continue;
+            int current = -1;
+            for (const DrawCall& dc : draws) {
+                const RenderItem& it = items[dc.item];
+                if (!it.castShadows || it.unlit || dc.blend) continue;  // transparent surfaces cast no shadow
+                int want = dc.material.doubleSided ? 1 : 0;
+                if (want != current) {
+                    sg_apply_pipeline(want ? shadowPipTwoSided : shadowPip);
+                    current = want;
+                }
                 oe_pos_vs_params_t u{};
                 Put(u.mvp, fit.viewProj * it.world);
                 sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
                 sg_bindings b{};
-                b.vertex_buffers[0] = gpuMeshes[i]->vbuf;
-                b.index_buffer = gpuMeshes[i]->ibuf;
+                b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
+                b.index_buffer = gpuMeshes[dc.item]->ibuf;
                 sg_apply_bindings(&b);
-                sg_draw(0, static_cast<int>(it.mesh->indices.size()), 1);
+                const Submesh& sub = it.mesh->submeshes[dc.submesh];
+                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
             }
             sg_end_pass();
         }
@@ -699,7 +712,6 @@ struct GpuRenderer::Impl {
             pass.label = "oe-scene";
             sg_begin_pass(&pass);
 
-            sg_apply_pipeline(meshPip);
             oe_mesh_lights_t lu{};
             Put(lu.shadow_vp, fit.viewProj);
             Put(lu.ambient, lights.ambient.r, lights.ambient.g, lights.ambient.b, 0);
@@ -707,6 +719,7 @@ struct GpuRenderer::Impl {
             int points = std::min(kMaxPointLights, static_cast<int>(lights.points.size()));
             Put(lu.counts, static_cast<float>(dirs), static_cast<float>(points), shadows ? 1.0f : 0.0f, lights.shadowStrength);
             Put(lu.shadow_params, fit.texelWorld, 1.0f / static_cast<float>(settings.shadowMapSize), 0.002f, 0);
+            Put(lu.eye, view.eye.x, view.eye.y, view.eye.z, 1);
             for (int i = 0; i < dirs; ++i) {
                 const RenderDirLight& l = lights.dirs[static_cast<size_t>(i)];
                 Put(lu.dir_dir[i], l.dir.x, l.dir.y, l.dir.z, 0);
@@ -717,34 +730,53 @@ struct GpuRenderer::Impl {
                 Put(lu.point_pos[i], l.pos.x, l.pos.y, l.pos.z, l.range);
                 Put(lu.point_color[i], l.color.r, l.color.g, l.color.b, 0);
             }
-            sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
-
-            for (size_t i = 0; i < items.size(); ++i) {
-                const RenderItem& it = items[i];
+            // Draw list order: opaque, then transparent back to front. Switching
+            // pipelines drops uniforms, so the lights are re-applied each time.
+            sg_pipeline current{};
+            for (const DrawCall& dc : draws) {
+                const RenderItem& it = items[dc.item];
+                const Material& m = dc.material;
+                sg_pipeline pip = meshPips[dc.blend ? 1 : 0][m.doubleSided ? 1 : 0];
+                if (pip.id != current.id) {
+                    sg_apply_pipeline(pip);
+                    sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
+                    current = pip;
+                }
                 oe_mesh_vs_params_t vu{};
                 Put(vu.view_proj, viewProj);
                 Put(vu.model, it.world);
                 Put(vu.normal_mat, it.normalMatrix);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
-                for (const Submesh& sub : it.mesh->submeshes) {
-                    if (sub.indexCount == 0) continue;
-                    sg_view tex = TextureFor(it, sub);
-                    Color base = it.tint * sub.baseColor;
-                    oe_mesh_material_t mu{};
-                    Put(mu.base_color, base.r, base.g, base.b, 1);
-                    Put(mu.flags, it.unlit ? 1.0f : 0.0f, tex.id ? 1.0f : 0.0f, tex.id ? it.alphaCutoff : 0.0f, 0);
-                    Put(mu.uv_rect, it.uvOffset[0], it.uvOffset[1], it.uvScale[0], it.uvScale[1]);
-                    sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
-                    sg_bindings b{};
-                    b.vertex_buffers[0] = gpuMeshes[i]->vbuf;
-                    b.index_buffer = gpuMeshes[i]->ibuf;
-                    b.views[VIEW_oe_base_tex] = tex.id ? tex : whiteTex;
-                    b.views[VIEW_oe_shadow_tex] = shadowTex;
-                    b.samplers[SMP_oe_base_smp] = it.pointSample ? pixelArt : linearRepeat;
-                    b.samplers[SMP_oe_shadow_smp] = shadowCompare;
-                    sg_apply_bindings(&b);
-                    sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
-                }
+                sg_view base = TextureFor(m.baseTexture);
+                sg_view normal = m.unlit ? sg_view{} : TextureFor(m.normalTexture);
+                sg_view mr = m.unlit ? sg_view{} : TextureFor(m.metallicRoughnessTexture);
+                sg_view emissive = TextureFor(m.emissiveTexture);
+                sg_view occlusion = m.unlit ? sg_view{} : TextureFor(m.occlusionTexture);
+                Color em = m.emissive * m.emissiveIntensity;
+                oe_mesh_material_t mu{};
+                Put(mu.base_color, m.baseColor.r, m.baseColor.g, m.baseColor.b, m.opacity);
+                Put(mu.flags, m.unlit ? 1.0f : 0.0f, base.id ? 1.0f : 0.0f, m.alphaMode == AlphaMode::Mask ? m.alphaCutoff : 0.0f,
+                    m.doubleSided ? 1.0f : 0.0f);
+                Put(mu.uv_rect, it.uvOffset[0], it.uvOffset[1], it.uvScale[0], it.uvScale[1]);
+                Put(mu.uv_tiling, m.tiling[0], m.tiling[1], m.offset[0], m.offset[1]);
+                Put(mu.pbr, m.metallic, m.roughness, m.normalScale, m.occlusionStrength);
+                Put(mu.emissive, em.r, em.g, em.b, 0);
+                Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
+                sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
+                sg_bindings b{};
+                b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
+                b.index_buffer = gpuMeshes[dc.item]->ibuf;
+                b.views[VIEW_oe_base_tex] = base.id ? base : whiteTex;
+                b.views[VIEW_oe_shadow_tex] = shadowTex;
+                b.views[VIEW_oe_normal_tex] = normal.id ? normal : whiteTex;
+                b.views[VIEW_oe_mr_tex] = mr.id ? mr : whiteTex;
+                b.views[VIEW_oe_emissive_tex] = emissive.id ? emissive : whiteTex;
+                b.views[VIEW_oe_occlusion_tex] = occlusion.id ? occlusion : whiteTex;
+                b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;
+                b.samplers[SMP_oe_shadow_smp] = shadowCompare;
+                sg_apply_bindings(&b);
+                const Submesh& sub = it.mesh->submeshes[dc.submesh];
+                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
             }
 
             if (haveLines) {

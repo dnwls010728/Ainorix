@@ -1083,6 +1083,166 @@ return M
     CHECK(e.GetScene().Get<UISlider>(e.GetScene().FindByName("Vol"))->value == 0.0f);
 }
 
+// Mean color of a pixel block in a rendered target.
+Color MeanColor(const RenderTarget& rt, int x0, int y0, int x1, int y1) {
+    double r = 0, g = 0, b = 0;
+    int n = 0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            uint32_t c = rt.color[static_cast<size_t>(y) * static_cast<size_t>(rt.width) + static_cast<size_t>(x)];
+            r += c & 0xFF;
+            g += (c >> 8) & 0xFF;
+            b += (c >> 16) & 0xFF;
+            ++n;
+        }
+    }
+    return Color(static_cast<float>(r / n / 255), static_cast<float>(g / n / 255), static_cast<float>(b / n / 255));
+}
+
+TEST(MaterialsFilesAndPbr) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("materials"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    // Files: create, validation errors with hints, set, listing, info.
+    Json made = Call(e, "material.create", R"J({"path": "materials/gold.mat.json", "values": {"baseColor": [1, 0.8, 0.2], "metallic": 1, "roughness": 0.3}})J");
+    CHECK(made["ok"].asBool() && made["result"]["values"]["roughness"].asNumber() > 0.29);
+    CHECK(Call(e, "material.create", R"J({"path": "materials/gold.mat.json"})J")["error"]["code"].asString() == "already_exists");
+    Json bad = Call(e, "material.create", R"J({"path": "materials/bad.mat.json", "values": {"shininess": 3}})J");
+    CHECK(bad["error"]["code"].asString() == "invalid_material" && bad["error"]["hint"].asString().find("roughness") != std::string::npos);
+    CHECK(Call(e, "material.create", R"J({"path": "materials/x.json"})J")["error"]["code"].asString() == "invalid_path");
+    CHECK(Call(e, "material.create", R"J({"path": "materials/m.mat.json", "values": {"baseTexture": "missing.png"}})J")["error"]["code"].asString() == "invalid_material");
+    Json glass = Call(e, "material.create", R"J({"path": "materials/glass.mat.json", "values": {"opacity": 0.4}})J");
+    CHECK(glass["result"]["values"]["alphaMode"].asString() == "blend");
+    CHECK(Call(e, "asset.list", R"J({"kind": "material"})J")["result"].size() == 2);
+    CHECK(Call(e, "asset.info", R"J({"path": "materials/glass.mat.json"})J")["result"]["alphaMode"].asString() == "blend");
+
+    // A sphere in front of the camera, lit head-on.
+    Call(e, "entity.create", R"J({"name": "Cam", "components": {"Transform": {"position": [0, 0, 3]}, "Camera": {"clearColor": [0, 0, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Sun", "components": {"Transform": {"rotation": [0, 0, 0]}, "DirectionalLight": {"ambient": [0.2, 0.2, 0.2]}}})J");
+    Call(e, "entity.create", R"J({"name": "Ball", "components": {"MeshRenderer": {"mesh": "sphere", "color": [1, 1, 1], "material": "materials/gold.mat.json"}, "Transform": {"scale": [2, 2, 2]}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 1.0f, view);
+    RenderTarget rt;
+    rt.Resize(128, 128);
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color center = MeanColor(rt, 60, 60, 68, 68);  // the specular highlight of a smooth metal
+    Color rim = MeanColor(rt, 63, 36, 65, 38);
+    CHECK(center.r > 0.9f && center.g > 0.7f);  // bright highlight
+    CHECK(rim.r < center.r && rim.r > rim.b + 0.1f);  // gold-tinted reflections away from it
+    // Rougher: a dimmer, wider highlight. Materials reload when set.
+    Call(e, "material.set", R"J({"path": "materials/gold.mat.json", "values": {"roughness": 0.9, "metallic": 0}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color rough = MeanColor(rt, 60, 60, 68, 68);
+    CHECK(rough.r < center.r + 0.01f && rough.b < 0.35f);
+    // Emissive glows without light; unlit ignores it.
+    Call(e, "material.create", R"J({"path": "materials/neon.mat.json", "values": {"baseColor": [0, 0, 0], "emissive": [0, 1, 0]}})J");
+    Call(e, "component.set", R"J({"id": "Ball", "type": "MeshRenderer", "values": {"material": "materials/neon.mat.json"}})J");
+    Call(e, "component.set", R"J({"id": "Sun", "type": "DirectionalLight", "values": {"intensity": 0, "ambient": [0, 0, 0]}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color glow = MeanColor(rt, 60, 60, 68, 68);
+    CHECK(glow.g > 0.95f && glow.r < 0.05f);
+    // A broken material file renders magenta (like a missing mesh).
+    Call(e, "component.set", R"J({"id": "Ball", "type": "MeshRenderer", "values": {"material": "materials/none.mat.json"}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color magenta = MeanColor(rt, 60, 60, 68, 68);
+    CHECK(magenta.r > 0.95f && magenta.g < 0.05f && magenta.b > 0.95f);
+}
+
+TEST(TransparencyNormalMapsAndDoubleSided) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("transparency"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "entity.create", R"J({"name": "Cam", "components": {"Transform": {"position": [0, 0, 5]}, "Camera": {"clearColor": [0, 0, 0]}}})J");
+    // Created front to back on purpose: the draw list sorts transparent parts back to front.
+    Call(e, "entity.create", R"J({"name": "Front", "components": {"MeshRenderer": {"mesh": "quad", "color": [0, 0, 1], "unlit": true, "opacity": 0.5}, "Transform": {"position": [0, 0, 1], "scale": [2, 2, 1]}}})J");
+    Call(e, "entity.create", R"J({"name": "Middle", "components": {"MeshRenderer": {"mesh": "quad", "color": [0, 1, 0], "unlit": true, "opacity": 0.5}, "Transform": {"position": [0, 0, 0.5], "scale": [2, 2, 1]}}})J");
+    Call(e, "entity.create", R"J({"name": "Back", "components": {"MeshRenderer": {"mesh": "quad", "color": [1, 0, 0], "unlit": true}, "Transform": {"scale": [2, 2, 1]}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 1.0f, view);
+    RenderTarget rt;
+    rt.Resize(64, 64);
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color c = MeanColor(rt, 30, 30, 34, 34);
+    // red, then green at 50 %, then blue at 50 %: (0.25, 0.25, 0.5)
+    CHECK(std::fabs(c.r - 0.25f) < 0.02f && std::fabs(c.g - 0.25f) < 0.02f && std::fabs(c.b - 0.5f) < 0.02f);
+    CHECK(rt.IdAt(32, 32) == e.GetScene().FindByName("Front"));  // at least half opaque: pickable
+    // An opaque surface in front hides transparent ones behind it (depth test, no depth write for glass).
+    Call(e, "component.set", R"J({"id": "Back", "type": "Transform", "values": {"position": [0, 0, 2]}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    c = MeanColor(rt, 30, 30, 34, 34);
+    CHECK(c.r > 0.98f && c.g < 0.02f && c.b < 0.02f);
+    // Sprites: alphaCutoff 0 blends the image's alpha.
+    Call(e, "component.set", R"J({"id": "Back", "type": "Transform", "values": {"position": [0, 0, -1]}})J");
+    Call(e, "component.set", R"J({"id": "Front", "type": "MeshRenderer", "values": {"visible": false}})J");
+    Call(e, "component.set", R"J({"id": "Middle", "type": "MeshRenderer", "values": {"visible": false}})J");
+    Image img;
+    img.width = img.height = 4;
+    img.rgba.assign(64, 255);
+    for (size_t i = 3; i < 64; i += 4) img.rgba[i] = 128;  // white at 50 % alpha
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "soft.png"), img, true));
+    Call(e, "entity.create", R"J({"name": "Smoke", "components": {"Sprite": {"texture": "soft.png", "alphaCutoff": 0, "pixelsPerUnit": 1, "pixelArt": true}}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    c = MeanColor(rt, 30, 30, 34, 34);
+    CHECK(std::fabs(c.r - 1.0f) < 0.02f && std::fabs(c.g - 0.5f) < 0.03f);  // white over red at ~50 %
+
+    // Normal maps: a map tilted towards +u makes a plane lit from +x brighter.
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "entity.create", R"J({"name": "Cam", "components": {"Transform": {"position": [0, 4, 0], "rotation": [-90, 0, 0]}, "Camera": {"clearColor": [0, 0, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Sun", "components": {"Transform": {"rotation": [-30, 90, 0]}, "DirectionalLight": {"ambient": [0, 0, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Floor", "components": {"MeshRenderer": {"mesh": "plane", "color": [1, 1, 1]}, "Transform": {"scale": [4, 1, 4]}}})J");
+    MakeSceneView(e.GetScene(), 1.0f, view);
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color flat = MeanColor(rt, 28, 28, 36, 36);
+    Image nm;
+    nm.width = nm.height = 4;
+    nm.rgba.clear();
+    for (int i = 0; i < 16; ++i) nm.rgba.insert(nm.rgba.end(), {218, 128, 218, 255});  // normal leaning to +u (+x on the plane)
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "tilt.png"), nm, true));
+    Call(e, "material.create", R"J({"path": "tilt.mat.json", "values": {"normalTexture": "tilt.png", "roughness": 1}})J");
+    Call(e, "component.set", R"J({"id": "Floor", "type": "MeshRenderer", "values": {"material": "tilt.mat.json"}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    Color bumped = MeanColor(rt, 28, 28, 36, 36);
+    CHECK(bumped.r > flat.r + 0.1f);
+    // Double-sided: seen from below, a plane only shows when its material is double-sided.
+    Call(e, "component.set", R"J({"id": "Cam", "type": "Transform", "values": {"position": [0, -4, 0], "rotation": [90, 0, 0]}})J");
+    Call(e, "component.set", R"J({"id": "Floor", "type": "MeshRenderer", "values": {"material": "", "unlit": true}})J");
+    MakeSceneView(e.GetScene(), 1.0f, view);
+    e.Renderer().Render(e.GetScene(), view, rt);
+    CHECK(rt.IdAt(32, 32) == kNullEntity);
+    Call(e, "material.create", R"J({"path": "two.mat.json", "values": {"doubleSided": true}})J");
+    Call(e, "component.set", R"J({"id": "Floor", "type": "MeshRenderer", "values": {"material": "two.mat.json"}})J");
+    e.Renderer().Render(e.GetScene(), view, rt);
+    CHECK(rt.IdAt(32, 32) == e.GetScene().FindByName("Floor"));
+}
+
+TEST(GltfMaterialsAreLoaded) {
+    // A glTF with a full metallic-roughness material: factors, alpha mode, double sided, emissive strength.
+    std::string dir = TempProject("gltf_materials");
+    const char* gltf = R"J({
+      "asset": {"version": "2.0"}, "extensionsUsed": ["KHR_materials_emissive_strength"],
+      "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+      "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "material": 0}]}],
+      "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [0.2, 0.4, 0.6, 0.5], "metallicFactor": 0.25, "roughnessFactor": 0.75},
+                     "emissiveFactor": [1, 0.5, 0], "extensions": {"KHR_materials_emissive_strength": {"emissiveStrength": 3}},
+                     "alphaMode": "BLEND", "doubleSided": true}],
+      "buffers": [{"byteLength": 36, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA"}],
+      "bufferViews": [{"buffer": 0, "byteLength": 36}],
+      "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]}]
+    })J";
+    CHECK(WriteTextFile(JoinPath(dir, "tri.gltf"), gltf));
+    Mesh mesh;
+    std::string err;
+    CHECK(LoadModelFile(JoinPath(dir, "tri.gltf"), mesh, &err));
+    CHECK(mesh.materials.size() == 1 && mesh.submeshes.size() == 1 && mesh.submeshes[0].material == 0);
+    const Material& m = mesh.materials[0];
+    CHECK(std::fabs(m.baseColor.g - 0.4f) < 1e-6f && std::fabs(m.opacity - 0.5f) < 1e-6f);
+    CHECK(std::fabs(m.metallic - 0.25f) < 1e-6f && std::fabs(m.roughness - 0.75f) < 1e-6f);
+    CHECK(m.alphaMode == AlphaMode::Blend && m.doubleSided && m.emissiveIntensity == 3.0f && m.emissive.g == 0.5f);
+    CHECK(mesh.tangents.size() == mesh.positions.size());
+}
+
 TEST(UIGpuMatchesSoftware) {
     Engine e;
     std::string err;

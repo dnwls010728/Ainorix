@@ -19,7 +19,10 @@ struct RenderItem {
     Mat4 world;
     Mat4 normalMatrix;
     Color tint;
-    std::shared_ptr<const Texture> textureOverride;  // MeshRenderer.texture; null = the mesh's own
+    std::shared_ptr<const Texture> textureOverride;    // MeshRenderer.texture; null = the material's own
+    std::shared_ptr<const Material> materialOverride;  // MeshRenderer.material; null = the mesh's materials
+    float opacity = 1.0f;  // multiplies the material's opacity; < 1 makes it transparent
+    bool blend = false;    // force alpha blending (sprites without a cutoff)
     bool unlit = false;
     bool flat = false;
     bool castShadows = true;
@@ -32,9 +35,21 @@ struct RenderItem {
     float alphaCutoff = 0.0f;
     bool pointSample = false;
 
-    // Texture of a submesh after applying the override (may be null).
-    const Texture* SubmeshTexture(const Submesh& sub) const;
+    // Material of a submesh with this item's overrides applied (tint, texture,
+    // opacity, unlit, sprite cutoff and sampling).
+    Material SubmeshMaterial(const Submesh& sub) const;
 };
+
+// One submesh to draw. Opaque and cut-out surfaces first (item order), then
+// transparent ones back to front (by distance of the item's bounds center to
+// the eye, ties by id): the order both renderers use.
+struct DrawCall {
+    size_t item = 0;
+    size_t submesh = 0;
+    Material material;
+    bool blend = false;
+};
+std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye);
 
 struct RenderDirLight {
     Vec3 dir;  // direction the light travels

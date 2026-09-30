@@ -28,36 +28,121 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 | Command | Use |
 |---|---|
 | `oe import <project> <file> [--to path]` | Copy an external model/texture/sound into the project (CLI only — the API stays sandboxed to the project) and print its `asset.info` |
-| `asset.list {kind?}` | Files by kind: model, texture, audio, script, prefab, scene |
-| `asset.info {path}` | Model: vertices, triangles, submeshes/materials, textures, bounds, size **and a scale hint**. Texture: size. Sound: length |
+| `asset.list {kind?}` | Files by kind: model, texture, material, font, audio, script, prefab, scene |
+| `asset.info {path}` | Model: vertices, triangles, submeshes (each with a `material` index), a `materials` array, bounds, size **and a scale hint**. Material: its values + alphaMode. Texture: size. Sound: length |
 | `asset.generate_texture {path, pattern, size?, cells?, color1?, color2?}` | Procedural PNG: checker, grid, bricks, gradient, noise |
 | `asset.reload` | Drop cached models/textures |
 | `render.meshes` | Values accepted by `MeshRenderer.mesh` |
 
 Models and textures are cached and **hot-reloaded** when their files change (checked twice a second while playing and before every `sim.step`).
 
-Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its base color factor and base color texture; node transforms are baked in. Skinned models are shown in their bind pose (skeletal animation is on the roadmap).
+Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); node transforms are baked in. Skinned models are shown in their bind pose (skeletal animation is on the roadmap).
 
 ## MeshRenderer
 
 | Field | Meaning |
 |---|---|
 | `mesh` | `cube`, `sphere`, `plane`, `pyramid`, `quad` (1×1 in XY facing +Z) or a model path. A missing or broken model renders as an **unlit magenta cube** (and a log warning), so problems are visible in screenshots |
-| `color` | Tint multiplied with the material / texture |
-| `texture` | Image overriding the model's base color texture (UVs: built-in meshes have 0..1 per face) |
+| `material` | Path to a `.mat.json` applied to every submesh; empty = the model's own glTF materials (default material for built-in meshes). See [Materials](#materials) |
+| `color` | Tint multiplied with the material's base color / texture |
+| `texture` | Image overriding the material's base color texture (UVs: built-in meshes have 0..1 per face) |
+| `opacity` | 0..1; below 1 the object is drawn transparent (see [Transparency](#transparency)) |
 | `shading` | `smooth` (interpolated vertex normals) or `flat` (faceted) |
-| `unlit` | Ignore lights and shadows |
+| `unlit` | Ignore lights and shadows (forces unlit whatever the material says) |
 | `castShadows` | Contribute to the directional shadow map |
+
+## Materials
+
+A material describes how a surface looks: the glTF 2.0 **metallic-roughness** model. Materials come from two places: glTF models bring their own (loaded completely, see below), and you can write **material files** (`*.mat.json`, asset kind `material`) and point a `MeshRenderer` at them.
+
+A material file is a JSON object with any of the fields below (missing fields keep their defaults; `"format": "ownengine.material"` is optional). Texture fields are project paths.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `baseColor` | white | Albedo, `[r,g,b]` 0..1 or `"#rrggbb"` |
+| `opacity` | 1 | Alpha 0..1. Below 1 needs `alphaMode: "blend"` (set automatically by `material.create` when you give `opacity` < 1 without an `alphaMode`) |
+| `baseTexture` | none | Image multiplied with `baseColor` (its alpha with `opacity`) |
+| `metallic` | 0 | 0 = dielectric (plastic, wood, stone), 1 = metal |
+| `roughness` | 0.7 | 0 = mirror-smooth, 1 = fully rough |
+| `metallicRoughnessTexture` | none | glTF layout: green = roughness, blue = metallic, multiplied with the two factors |
+| `normalTexture` | none | Tangent-space normal map, +Y up (OpenGL / glTF convention) |
+| `normalScale` | 1 | Strength of the normal map |
+| `occlusionTexture` | none | Ambient occlusion (red channel); darkens the ambient light only |
+| `occlusionStrength` | 1 | 0..1 |
+| `emissive` | black | Light the surface gives off, `[r,g,b]` |
+| `emissiveIntensity` | 1 | Multiplier for `emissive` (can exceed 1) |
+| `emissiveTexture` | none | Image multiplied with `emissive` |
+| `alphaMode` | `opaque` | `opaque`, `mask` (cut out below `alphaCutoff`) or `blend` (transparent) |
+| `alphaCutoff` | 0.5 | Threshold for `mask` |
+| `doubleSided` | false | Draw back faces too (leaves, cloth, glass panes) |
+| `unlit` | false | Ignore lights: color = base (+ emissive) |
+| `pixelArt` | false | Nearest-neighbour texture sampling |
+| `tiling` | `[1,1]` | UV repeat |
+| `offset` | `[0,0]` | UV offset |
+
+The one-line docs for every field are also in the `invalid_material` error hint. Examples:
+
+```json
+// materials/gold.mat.json — polished metal
+{"baseColor": "#ffc857", "metallic": 1, "roughness": 0.25}
+
+// materials/glass.mat.json — see-through, glossy
+{"baseColor": [0.7, 0.9, 1.0], "opacity": 0.35, "alphaMode": "blend", "roughness": 0.05, "doubleSided": true}
+
+// materials/neon.mat.json — glowing sign
+{"baseColor": [0.05, 0.05, 0.05], "emissive": "#ff2bd6", "emissiveIntensity": 3}
+
+// materials/floor.mat.json — normal-mapped tiled floor
+{"baseTexture": "assets/textures/floor_color.png", "normalTexture": "assets/textures/floor_normal.png",
+ "metallicRoughnessTexture": "assets/textures/floor_orm.png", "roughness": 1, "tiling": [4, 4]}
+```
+
+Create and edit them with commands (both validate the values; errors are `invalid_material` with a hint listing the field names, `already_exists`, or `invalid_path` unless the path ends in `.mat.json`):
+
+```bash
+oe exec samples/Hello material.create '{"path":"materials/gold.mat.json","values":{"baseColor":"#ffc857","metallic":1,"roughness":0.25}}' --save
+oe exec samples/Hello material.set '{"path":"materials/gold.mat.json","values":{"roughness":0.4}}'   # merges into the existing file
+oe exec samples/Hello component.set '{"id":"Ring","type":"MeshRenderer","values":{"material":"materials/gold.mat.json"}}' --save
+oe exec samples/Hello asset.info '{"path":"materials/gold.mat.json"}'
+```
+
+`material.create {path, values?, overwrite?}` writes all fields with defaults plus your `values`; `material.set {path, values}` merges into an existing file. Material files are **hot-reloaded**, also when a texture they use changes.
+
+### How MeshRenderer combines with a material
+
+`MeshRenderer.material` is applied to every submesh. If it is empty, a model uses its own glTF materials and a built-in mesh (`cube`, `sphere`, ...) uses the default material (white, metallic 0, roughness 0.7, opaque). On top of that:
+
+| Field | Effect |
+|---|---|
+| `color` | Tints (multiplies) the material's base color |
+| `texture` | Overrides the base texture |
+| `opacity` | 0..1; below 1 makes the object transparent whatever the material says |
+| `unlit` | Forces unlit |
+
+### glTF materials
+
+glTF models load their full materials: base color factor including alpha, base color / metallic-roughness / normal / occlusion / emissive textures, metallic and roughness factors (glTF default 1 / 1 when a material exists), `alphaMode` and cutoff, `doubleSided`, `KHR_materials_emissive_strength` and `KHR_materials_unlit`. Old specular-glossiness materials fall back to their base color with a warning. Tangents for normal mapping are computed from the UVs. `asset.info` on a model lists each material (base color, opacity, metallic, roughness, alphaMode, which textures it has, doubleSided, unlit); each submesh refers to its material by index.
+
+### Transparency
+
+- **Order**: opaque and `mask` surfaces are drawn first; blended surfaces follow, sorted back to front by the distance from the camera to each object's bounds center (ties by entity id).
+- **Depth**: blended surfaces test against depth but do not write it. `mask` surfaces write depth (pixels below `alphaCutoff` are discarded).
+- **Shadows**: blended surfaces cast no shadows. `mask` surfaces cast shadows of their full geometry (there is no alpha test in the shadow pass). Double-sided materials put both sides into the shadow map and draw back faces with flipped normals.
+- **Picking**: blended surfaces are pickable (`render.pick`, editor click) where they are at least 50% opaque.
+- **Limitations**: sorting is per object, so intersecting transparent objects, or one large transparent object around others, can sort wrongly. Split the mesh or use `mask` where that matters.
 
 ## Sprites and tilemaps (2D)
 
-`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default and do not cast shadows. See [2D.md](2D.md).
+`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id; a cutoff of 0 blends the image alpha instead, with `Sprite.opacity` on top) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default and do not cast shadows. See [2D.md](2D.md).
 
 ## Lights and shadows
 
 - `DirectionalLight`: color, intensity, ambient, `shadows`, `shadowStrength`. The first directional light casts shadows: an orthographic shadow map fitted to the scene (software 1024², GPU 2048² with hardware comparison filtering), 3×3 PCF, back faces rendered to avoid acne.
 - `PointLight`: color, intensity, `range` (quadratic falloff to zero at the range).
-- Lighting is per pixel (Lambert). Colors are treated as display values (no gamma/HDR yet).
+- Lighting is per pixel with a physically based model (glTF metallic-roughness): GGX normal distribution, Smith-Schlick geometry, Schlick Fresnel; F0 is 0.04 for dielectrics and the base color for metals, and the diffuse part is `baseColor * (1 - metallic)`. Both renderers use the same math (`Lighting::Shade` in `SoftwareRenderer.cpp`, `mesh_fs` in `Shaders.glsl`).
+- Light colors include the factor pi and lighting happens on non-linear (display) colors, clamped, with no tone mapping or HDR yet, so a white diffuse surface lit head-on still shows exactly the light color.
+- Ambient = `DirectionalLight.ambient` * (diffuse + environment reflection). There is no skybox or environment map yet: reflections are approximated by a hemisphere that is brighter above (sky) than below (ground). Very smooth metals therefore reflect only this approximation and the highlights of the lights. Ambient occlusion textures darken this ambient term only.
+- Emissive is added after lighting (also for unlit materials).
 
 ## Cameras
 
@@ -77,7 +162,7 @@ Collider wireframes are separate: `render.screenshot {colliders:true}` (see PHYS
 
 GPU: the game window renders at the window's resolution (`project.json` `window.renderScale` 0.25–1 renders the 3D image smaller and upscales it, UI stays sharp) and presents with vsync.
 
-Software: the main pass and the shadow pass are split into horizontal bands rendered on worker threads (one band per core, up to 16). Each pixel belongs to exactly one band and sees triangles in the same order, so the result does not depend on the number of threads (`SetMaxRenderThreads(1)` is used in tests to prove it). The Showcase sample renders at 1280×720 in roughly 14 ms on an 8-core desktop.
+Software: the main pass and the shadow pass are split into horizontal bands rendered on worker threads (one band per core, up to 16). Triangles use a consistent fill rule (a pixel on a shared edge belongs to exactly one of the two triangles, so there are no gaps or double-drawn pixels). Each pixel belongs to exactly one band and sees triangles in the same order, so the result does not depend on the number of threads (`SetMaxRenderThreads(1)` is used in tests to prove it). The Showcase sample renders at 1280×720 in roughly 14 ms on an 8-core desktop.
 
 ## Sample
 

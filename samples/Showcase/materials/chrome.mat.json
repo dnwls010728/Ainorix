@@ -1,0 +1,23 @@
+{
+  "format": "ownengine.material",
+  "baseColor": [0.95, 0.95, 0.97],
+  "opacity": 1,
+  "baseTexture": "",
+  "metallic": 1,
+  "roughness": 0.15,
+  "metallicRoughnessTexture": "",
+  "normalTexture": "",
+  "normalScale": 1,
+  "occlusionTexture": "",
+  "occlusionStrength": 1,
+  "emissive": [0, 0, 0],
+  "emissiveIntensity": 1,
+  "emissiveTexture": "",
+  "alphaMode": "opaque",
+  "alphaCutoff": 0.5,
+  "doubleSided": false,
+  "unlit": false,
+  "pixelArt": false,
+  "tiling": [1, 1],
+  "offset": [0, 0]
+}
