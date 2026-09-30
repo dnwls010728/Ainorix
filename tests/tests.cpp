@@ -1269,6 +1269,11 @@ TEST(UIGpuMatchesSoftware) {
     gpu.Resize(w, h);
     e.Renderer().Render(e.GetScene(), view, sw);
     e.Gpu()->Render(e.GetScene(), view, gpu);
+    // The frame is opaque: UI text/panels blended over it must not punch alpha
+    // holes (they showed as dark boxes behind glyphs in the native editor).
+    bool opaque = true;
+    for (uint32_t c : gpu.color) opaque = opaque && (c >> 24) == 0xFF;
+    CHECK(opaque);
     double total = 0;
     int outliers = 0;
     for (size_t i = 0; i < sw.color.size(); ++i) {

@@ -273,8 +273,11 @@ struct GpuRenderer::Impl {
             c.blend.enabled = true;
             c.blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
             c.blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+            // Alpha composites "over" too, so an opaque target stays opaque. Replacing it
+            // (ONE, ZERO) left each UI glyph quad's coverage in the output alpha, which
+            // anything drawing the image with blending (the native editor) showed as dark boxes.
             c.blend.src_factor_alpha = SG_BLENDFACTOR_ONE;
-            c.blend.dst_factor_alpha = SG_BLENDFACTOR_ZERO;
+            c.blend.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
         };
         // Opaque/cut-out surfaces write depth; transparent ones blend and only test it.
         for (int blend = 0; blend < 2; ++blend) {
