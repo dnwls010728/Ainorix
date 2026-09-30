@@ -42,6 +42,26 @@ oe exec my_game component.add '{"id":"Cube","type":"Script","values":{"path":"sc
 
 Instance fields: `self.id` (entity id), `self.name`, `self.params` (the component's JSON params as a table). Anything you store on `self` persists for the play session.
 
+### Declaring params
+
+Read each param once with a literal default, and tools understand your script: `script.params` (and the native editor's inspector, which shows typed fields for them) finds
+
+```lua
+function Target:onStart()
+  local p = self.params                 -- an alias works too (until the next function)
+  self.move = p.move or "none"          -- string; compared below, so it becomes a choice
+  self.distance = p.distance or 2       -- number
+  self.spin = self.params.spin or {0, 45, 0}   -- vec3
+  self.sensitivity = p.sensitivity or 0.12     -- degrees per pixel   <- the comment becomes the tooltip
+end
+
+function Target:onUpdate(dt)
+  if self.move == "strafe" then ... elseif self.move == "bob" then ... end
+end
+```
+
+`script.params {path}` -> `[{name, type, default, options?, description?, line}]` with types `number`, `boolean`, `string`, `vec3`, `array`, `object` (no default: `any`). Strings compared with two or more literals (`self.move == "bob"`) get `options`; strings like `"#ff8800"` edit as a color in the inspector.
+
 ## Engine API available to scripts
 
 | Function | Description |
@@ -94,6 +114,17 @@ oe exec my_game script.errors
 
 They are also written to the log (`log.get`, the editor console) and counted in `sim.state.scriptErrors`.
 
+Check a script without running it:
+
+```bash
+oe exec my_game script.check '{"path":"scripts/player.lua"}'
+# {"ok": false, "errors": 1, "warnings": 1, "diagnostics": [
+#   {"line": 12, "severity": "error", "message": "'end' expected (to close 'function' at line 5) near <eof>"},
+#   {"line": 8, "severity": "warning", "message": "unknown global 'lgo' - typo, or a missing 'local'?"}]}
+```
+
+Errors are syntax errors (the file does not compile). Warnings come from the compiled code: assigning a global (every script shares globals - usually a missing `local`) and reading a global that is neither part of the sandbox API nor assigned in the file (usually a typo). Pass `source` to check unsaved text; the native editor does this while you type.
+
 ## Hot reload
 
 Saving a script file while simulating reloads it within half a second (and before every `sim.step`). Running instances keep their `self` state and pick up the new functions; a faulted script resumes. `script.reload` forces a reload.
@@ -107,6 +138,8 @@ Saving a script file while simulating reloads it within half a second (and befor
 | `script.list` | Script files, the entities using them, running instances |
 | `script.eval {code, entity?}` | Run Lua now. `"scene.find('Player')"` returns the id; with `entity`, `self` is that entity's live instance (e.g. `"self.speed"`) |
 | `script.errors {clear?}` | Error list |
+| `script.check {path or source}` | Syntax errors and global-variable warnings with line numbers, without running anything |
+| `script.params {path or source}` | Params the script reads (`self.params.x or default`): name, type, default, options, description |
 | `script.reload` | Reload all modules |
 
-Typical loop: `script.write` → `component.add Script` → `sim.step {frames: 60}` → `script.errors` → `render.screenshot` → fix → repeat.
+Typical loop: `script.write` → `script.check` → `component.add Script` → `sim.step {frames: 60}` → `script.errors` → `render.screenshot` → fix → repeat.

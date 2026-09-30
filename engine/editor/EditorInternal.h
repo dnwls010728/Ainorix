@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS  // ImVec2 + ImVec2 (before the first imgui.h)
 #include "imgui.h"
 #include "imgui_stdlib.h"
+#include "TextEditor.h"
 #include "sokol_gfx.h"
 
 #include "core/Json.h"
@@ -44,11 +46,25 @@ struct Toast {
     double until = 0;
 };
 
+struct ScriptDiagnostic {
+    int line = 0;          // 1-based
+    bool error = false;    // error (does not compile / failed at run time) or warning
+    bool runtime = false;  // reported by the running game (script.errors)
+    std::string message;
+};
+
 struct ScriptTab {
     std::string path;
-    std::string text;
-    std::string saved;  // text on disk, to show the modified marker
+    std::unique_ptr<TextEditor> editor;  // syntax highlighting, line numbers, find/replace, markers
+    std::string saved;                   // text on disk
     bool open = true;
+    bool modified = false;
+    size_t undoIndex = 0;                // editor undo index the checks ran for
+    double editedAt = -1;                // pending script.check after typing stops
+    std::vector<ScriptDiagnostic> diagnostics;  // script.check
+    std::vector<ScriptDiagnostic> runtime;      // script.errors for this file
+    std::string runtimeKey;
+    bool markersDirty = true;
 };
 
 enum class GizmoOp { None, Translate, Rotate, Scale };
@@ -131,6 +147,11 @@ struct NativeEditor::Impl {
     std::string selectedAsset;
     std::vector<ScriptTab> scripts;
     int focusScript = -1;
+    bool scriptEditorFocused = false;  // keys belong to the code editor (no scene shortcuts)
+    double lastScriptErrorsPoll = -1;
+    Json scriptErrors = Json::MakeArray();
+    void CheckScript(ScriptTab& tab);
+    void UpdateScriptMarkers(ScriptTab& tab);
     std::string addComponentFilter;
     std::map<std::string, int> dragSerial;  // inspector drag -> undo merge group
     int gizmoSerial = 0;
@@ -232,6 +253,13 @@ struct NativeEditor::Impl {
     void InspectorPanel();
     bool FieldEditor(EntityId id, const std::string& type, const std::string& field, const Json& schema, const Json& value);
     void AddComponentPopup(EntityId id);
+    // Script component params as typed rows (from script.params), inside the inspector table.
+    void ScriptParamsRows(EntityId id, const Json& script);
+    const Json& ScriptParamSchema(const std::string& path);
+    std::map<std::string, std::pair<double, Json>> paramSchemas;  // script path -> (time fetched, script.params)
+    std::set<EntityId> rawParams;                                // entities showing params as JSON text
+    std::string newParamName;
+    int newParamType = 0;
     void AssetsPanel();
     void ConsolePanel();
     void ScriptsPanel();

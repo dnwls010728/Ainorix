@@ -1365,6 +1365,35 @@ TEST(WebGamePak) {
     RemoveAll("build/test_web");
 }
 
+TEST(ScriptCheckAndParams) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/FPS", &err));
+    // Syntax error: line and message, nothing runs.
+    Json r = e.Call("script.check", Json::parse(R"J({"path": "scripts/bad.lua", "source": "local T = {}\nfunction T:onUpdate()\n  print(1\nend\nreturn T"})J"));
+    CHECK(r["ok"].asBool() && !r["result"]["ok"].asBool());
+    CHECK(r["result"]["diagnostics"][0]["line"].asInt() == 4 && r["result"]["diagnostics"][0]["severity"].asString() == "error");
+    // Compiles, but a global is assigned and an unknown one is read.
+    r = e.Call("script.check", Json::parse(R"J({"source": "local T = {}\nfunction T:onUpdate(dt)\n  hits = 1\n  lgo.info(math.floor(dt))\n  log.info(scene.find('A'))\nend\nreturn T"})J"));
+    CHECK(r["result"]["ok"].asBool() && r["result"]["warnings"].asInt() == 2);
+    CHECK(r["result"]["diagnostics"][0]["line"].asInt() == 3 && r["result"]["diagnostics"][1]["line"].asInt() == 4);
+    // Every sample script is clean.
+    for (const char* path : {"scripts/fps_player.lua", "scripts/target.lua"}) {
+        r = e.Call("script.check", Json(Json::Object{{"path", Json(path)}}));
+        CHECK(r["ok"].asBool() && r["result"]["errors"].asInt() == 0 && r["result"]["warnings"].asInt() == 0);
+    }
+    // Params: name, type, default, options from comparisons, trailing comment.
+    r = e.Call("script.params", Json::parse(R"J({"path": "scripts/target.lua"})J"));
+    CHECK(r["ok"].asBool() && r["result"].size() == 5);
+    const Json& move = r["result"][0];
+    CHECK(move["name"].asString() == "move" && move["type"].asString() == "string" && move["default"].asString() == "none");
+    CHECK(move["options"].size() == 3);
+    r = e.Call("script.params", Json::parse(R"J({"source": "local R = {}\nfunction R:onStart()\n  local p = self.params\n  self.v = p.spin or {0, 45, 0} -- deg/s\n  self.on = self.params.enabled or true\nend\nfunction R:onUpdate()\n  local p = self:position()\n  print(p.x)\nend\nreturn R"})J"));
+    CHECK(r["result"].size() == 2);  // p.x in another function is not a param
+    CHECK(r["result"][0]["type"].asString() == "vec3" && r["result"][0]["description"].asString() == "deg/s");
+    CHECK(r["result"][1]["type"].asString() == "boolean");
+}
+
 TEST(EditorMathDecompose) {
     // Gizmo edits turn a world matrix back into Transform fields.
     const Vec3 cases[][3] = {
@@ -1491,6 +1520,37 @@ TEST(EditorTranslations) {
     SetEditorLanguage(EditorLanguage::Japanese);
     CHECK(std::string(Tr("Save")) == "保存" && std::string(Tr("not in the catalog")) == "not in the catalog");
     SetEditorLanguage(EditorLanguage::English);
+}
+
+TEST(NativeEditorScriptProblems) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("editor_scripts"), &err));
+    Call(e, "script.write", R"J({"path": "scripts/warn.lua", "source": "local T = {}\nfunction T:onStart()\n  score = 0\n  lgo.info('x')\nend\nreturn T"})J");
+    Call(e, "script.write", R"J({"path": "scripts/broken.lua", "source": "local T = {}\nfunction T:onStart()\n  print(1\nend\nreturn T"})J");
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update({}, 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    frames(3);
+    ed.OpenScript("scripts/warn.lua");
+    ed.OpenScript("scripts/broken.lua");
+    frames(2);
+    std::vector<std::string> warn = ed.ScriptProblems("scripts/warn.lua");
+    CHECK(warn.size() == 2 && warn[0].rfind("warning 3:", 0) == 0 && warn[1].rfind("warning 4:", 0) == 0);
+    std::vector<std::string> broken = ed.ScriptProblems("scripts/broken.lua");
+    CHECK(broken.size() == 1 && broken[0].rfind("error 4:", 0) == 0);
 }
 
 TEST(NativeEditorHeadless) {

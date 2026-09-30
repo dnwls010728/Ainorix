@@ -61,7 +61,9 @@ build\bin\oe.exe api --markdown             :: print the command reference
 - Hierarchy: multi-select (Ctrl/Shift), drag to re-parent, context menu (rename, duplicate, delete, create child, save as prefab)
 - Inspector: generated from reflection, one drag = one undo step, asset fields with a picker + drag and drop
 - Assets: double-click to open a scene / edit a script / place a prefab; drop files from Explorer on the window to import them
-- Scripts: Lua editor (Ctrl+S saves and hot-reloads, errors listed); Console: log filters + command line (Tab completion)
+- Scripts: Lua code editor - syntax highlighting, line numbers, find / replace / replace all (Ctrl+F), syntax errors and global-variable mistakes marked while you type (line markers + underline + problem list), runtime errors marked, Ctrl+S saves and hot-reloads
+- Script params in the Inspector: the values a script reads are found automatically and shown as typed fields (numbers, checkboxes, choices, vectors, colors, scene pickers), defaults dimmed, Reset buttons, warnings for keys the script does not read
+- Console: log filters + command line (Tab completion)
 - Changes an AI makes through the API show up live as notices and marks in the Hierarchy; unsaved changes are confirmed before closing or switching scenes
 - Interface language: English, 한국어 (Korean), 日本語 (Japanese) - picked from the OS language, View > Language or `--lang en|ko|ja`; Korean/Japanese input and display (system fonts merged automatically, IME), high-DPI aware, adjustable interface size
 - Shortcuts: Ctrl+S save, Ctrl+Z/Y undo/redo, Ctrl+D duplicate, Del delete, F frame, F2 rename, Ctrl+P play/stop
@@ -103,7 +105,7 @@ third_party/lua  Lua 5.4.8 (MIT)
 third_party/jolt Jolt Physics 5.6.0 (MIT)
 third_party/stb, cgltf  image decoders/encoders, glTF decoder (PD/MIT, MIT)
 third_party/sokol  sokol_gfx + sokol_imgui (zlib) - D3D11 / WebGL2 / GLES3 abstraction
-third_party/imgui, imguizmo  Dear ImGui 1.92.9b docking, ImGuizmo (MIT) - native editor only
+third_party/imgui, imguizmo, imguicolortextedit  Dear ImGui 1.92.9b docking, ImGuizmo, ImGuiColorTextEdit (MIT) - native editor only
 templates/       project templates for `oe new`
 samples/Hello    sample project (generated from the template)
 samples/Showcase rendering sample (glTF fox character, textures, shadows, point lights)

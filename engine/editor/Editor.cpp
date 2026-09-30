@@ -574,26 +574,6 @@ void NativeEditor::Impl::RunAction(const PendingAction& action) {
     Refresh(true);
 }
 
-void NativeEditor::Impl::OpenScript(const std::string& path) {
-    for (size_t i = 0; i < scripts.size(); ++i) {
-        if (scripts[i].path == path) {
-            scripts[i].open = true;
-            focusScript = static_cast<int>(i);
-            showScripts = true;
-            return;
-        }
-    }
-    Json r = Call("script.read", ObjectOf({{"path", Json(path)}}));
-    if (!Ok(r)) return;
-    ScriptTab t;
-    t.path = path;
-    t.text = r["result"]["source"].asString("");
-    t.saved = t.text;
-    scripts.push_back(std::move(t));
-    focusScript = static_cast<int>(scripts.size()) - 1;
-    showScripts = true;
-}
-
 void NativeEditor::Impl::ImportDroppedFiles() {
     std::vector<std::string> files;
     files.swap(droppedFiles);
@@ -796,6 +776,7 @@ void NativeEditor::Impl::Shortcuts() {
     const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global)) TogglePlay();
     if (gameFocused && InPlaySession()) return;  // keys belong to the game
+    if (scriptEditorFocused) return;              // and to the code editor (it saves with Ctrl+S itself)
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global)) Save();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global)) Undo();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global)) Redo();
@@ -1233,20 +1214,25 @@ bool NativeEditor::Init(std::string* error) {
                                          "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"};
     std::vector<std::vector<const char*>> families = {korean, japanese};
     if (GetEditorLanguage() == EditorLanguage::Japanese) std::swap(families[0], families[1]);
-    std::string merged;
-    for (const auto& family : families) {
-        for (const char* path : family) {
-            if (!FileExists(path)) continue;
-            if (path != merged) {  // Noto CJK covers both: merge it once
-                ImFontConfig merge;
-                merge.MergeMode = true;
-                io.Fonts->AddFontFromFileTTF(path, kBaseFontSize, &merge);
-                merged = path;
+    // Merges the CJK fonts into the font added just before (UI and code fonts alike).
+    auto mergeCjk = [&] {
+        std::string merged;
+        for (const auto& family : families) {
+            for (const char* path : family) {
+                if (!FileExists(path)) continue;
+                if (path != merged) {  // Noto CJK covers both: merge it once
+                    ImFontConfig merge;
+                    merge.MergeMode = true;
+                    io.Fonts->AddFontFromFileTTF(path, kBaseFontSize, &merge);
+                    merged = path;
+                }
+                break;
             }
-            break;
         }
-    }
+    };
+    mergeCjk();
     m.monoFont = io.Fonts->AddFontDefaultVector();
+    mergeCjk();  // Korean/Japanese in scripts and the code editor
 
     m.engine.SetRemoteCallObserver([&m](const std::string& name, const Json& args, const Json& result) { m.OnRemoteCall(name, args, result); });
     m.componentTypes = m.Call("component.types", Json(), true)["result"];
@@ -1386,6 +1372,18 @@ void NativeEditor::FocusGameView(bool focus) {
 }
 
 bool NativeEditor::GameViewFocused() const { return impl_->gameFocused; }
+
+void NativeEditor::OpenScript(const std::string& path) { impl_->OpenScript(path); }
+
+std::vector<std::string> NativeEditor::ScriptProblems(const std::string& path) const {
+    std::vector<std::string> out;
+    for (const ScriptTab& t : impl_->scripts) {
+        if (t.path != path) continue;
+        for (const ScriptDiagnostic& d : t.diagnostics) out.push_back(Format("%s %d: %s", d.error ? "error" : "warning", d.line, d.message.c_str()));
+        for (const ScriptDiagnostic& d : t.runtime) out.push_back(Format("runtime %d: %s", d.line, d.message.c_str()));
+    }
+    return out;
+}
 std::string NativeEditor::LastNotice() const { return impl_->lastNotice; }
 
 int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options& options) {

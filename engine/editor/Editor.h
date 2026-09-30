@@ -59,6 +59,10 @@ public:
     // Automation (tests, `oe editor --screenshot`).
     void Select(EntityId id);
     EntityId Selected() const;
+    // Opens a project script in the Scripts panel (code editor).
+    void OpenScript(const std::string& path);
+    // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
+    std::vector<std::string> ScriptProblems(const std::string& path) const;
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).
     void FocusGameView(bool focus);
     bool GameViewFocused() const;

@@ -342,6 +342,24 @@ Read a Lua file from the project.
 |---|---|---|---|
 | `path` | string | yes | e.g. "scripts/player.lua". |
 
+### `script.check`
+
+Check a Lua script without running it: syntax errors and suspicious globals (missing local, typos), with line numbers.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string |  | Script file, e.g. "scripts/player.lua" (also names the chunk in messages). |
+| `source` | string |  | Lua source to check instead of the file (e.g. unsaved edits). |
+
+### `script.params`
+
+Parameters a script reads from its Script component (self.params.x or default): name, type, default, options, description.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string |  | Script file, e.g. "scripts/player.lua". |
+| `source` | string |  | Lua source to analyze instead of the file. |
+
 ### `script.write`
 
 Create or overwrite a Lua file in the project (hot-reloaded if it is running).

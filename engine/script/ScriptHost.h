@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -58,6 +59,10 @@ public:
     // `self` is bound to the entity's script instance (or a plain entity
     // handle) when `entity` is given. Throws ApiError on failure.
     Json Eval(const std::string& code, EntityId entity);
+
+    // Global names a script sees in the sandbox (Lua base libraries and the
+    // engine API), for static checks. Computed once.
+    static const std::set<std::string>& SandboxGlobals(Engine& engine);
 
     const std::vector<ScriptError>& Errors() const { return errors_; }
     void ClearErrors() { errors_.clear(); }

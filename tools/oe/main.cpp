@@ -45,7 +45,7 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang"};
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -174,7 +174,7 @@ int CmdHelp() {
                  "  editor [path] [--port 7777] [--lang en|ko|ja] [--web] [--no-browser] [--window]\n"
                  "                                    Native editor window (Windows); --web (or no window/GPU) starts\n"
                  "                                    the web editor on http://127.0.0.1:7777 instead\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --script scripts/x.lua --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -355,11 +355,12 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--script") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
         if (i == 1 && a.Has("--play")) editor.FocusGameView(true);  // as after pressing Play
+        if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (!editor.DrawToImage(rt)) return Fail("render_failed", "cannot read back the editor frame");
     }
     std::string out = AbsolutePath(a.Get("--screenshot"));

@@ -32,7 +32,7 @@ Web runtime: `oe package --web` uses the prebuilt `runtime/web/oe_player.js` + `
 | 2D games | Orthographic camera + `Sprite {texture, frame, columns}` + `SpriteAnimation {clips, clip}` + `Tilemap {tileset, map: [text rows], legend, solid}` + `CharacterBody.plane2D`; Lua `tilemap.get/set/cellAt` — see [docs/2D.md](docs/2D.md) |
 | Models, textures, materials, lights | `oe import <project> <file>` then `asset.info` (gives a scale hint); `MeshRenderer {mesh:"assets/models/x.glb", texture, shading}`; PBR materials: `material.create {path:"materials/x.mat.json", values:{metallic, roughness, emissive, ...}}` then `MeshRenderer {material:"materials/x.mat.json", opacity}`, `PointLight`, `DirectionalLight.shadows`, `CameraFollow`, `debug.draw` — see [docs/RENDERING.md](docs/RENDERING.md) |
 | Ship a game | `oe package <project> [--out dist/Name]` -> `dist/Name/Name.exe` (player runtime, no console/editor/API) + `game/` (project files minus AGENTS.md, dotfiles and tools/). `--web` -> `dist/Name-web/` (`index.html`, `oe_player.js/.wasm`, `game.pak`) for any static host; test with `oe serve dist/Name-web`. Optional `project.json` `window {width,height,title,renderer:auto\|gpu\|software,renderScale,maxRenderWidth}` |
-| Gameplay code | Lua in `<project>/scripts/`, attached via the `Script` component. `script.write`, `script.eval`, `script.errors` — see [docs/SCRIPTING.md](docs/SCRIPTING.md) |
+| Gameplay code | Lua in `<project>/scripts/`, attached via the `Script` component. `script.write`, `script.check` (syntax + global warnings, no run), `script.params`, `script.eval`, `script.errors` — see [docs/SCRIPTING.md](docs/SCRIPTING.md) |
 
 All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"code","message","hint"}}`. Read the `hint` — it says how to fix the call. Entities can be referenced by id or by unique name. Full reference: [docs/API.md](docs/API.md) (regenerate with `oe api --markdown > docs/API.md`).
 
@@ -40,7 +40,7 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 
 - `engine/core` — Json (ordered, diff-friendly), Math, Log (ring buffer, stderr only), Image (PNG encoder), FileSystem.
 - `engine/scene` — reflection (`Reflect.h`), built-in components (`Components.h`), `Scene` (entities + component pools, JSON I/O), behaviour systems (`Systems.cpp`, incl. SpriteAnimation), `TileGrid` (Tilemap cells, merged solid rectangles).
-- `engine/script` — `ScriptHost`: sandboxed Lua state per play session, script instances, bindings (`scene`, `input`, `time`, `log`), hot reload, error capture.
+- `engine/script` — `ScriptHost`: sandboxed Lua state per play session, script instances, bindings (`scene`, `input`, `time`, `log`), hot reload, error capture. `ScriptCheck`: static checks (compile + bytecode walk for globals) and params inference (`script.check`, `script.params`).
 - `third_party/lua` — Lua 5.4.8, unmodified (built as C++; `third_party/lua_oe` fixes the hash seed for determinism).
 - `engine/physics` — `PhysicsWorld`: the only code that knows Jolt. Mirrors Collider/RigidBody/CharacterBody into Jolt, writes results back, produces sorted collision/trigger events, raycasts, collider wireframes.
 - `third_party/jolt` — Jolt Physics 5.6.0, unmodified; built in cross-platform deterministic mode (options in the top-level `CMakeLists.txt`).
@@ -51,7 +51,7 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - `engine/api` — command registry + all built-in commands (`Commands.cpp`), HTTP server (+ WebSocket), editor routes and viewport stream (`EditorService.cpp`), MCP server.
 - `engine/app` — `Engine` (scene, fixed-step sim, undo, main-thread job queue, remote-call observer), project templates, `ImportAssetFile`.
 - `engine/editor` — native editor (`oe editor`, library `oe_editor`, never linked into games): `NativeEditor` + `RunNativeEditor` (`Editor.cpp`: input, menus, toolbar, dock layout, prompts), panels (`EditorPanels.cpp`), Scene/Game views with ImGuizmo gizmo and picking (`EditorViewports.cpp`), `EditorMath.h`, `SokolImGui.cpp`. Edits only through `Engine::Call`. See [docs/EDITOR.md](docs/EDITOR.md).
-- `third_party/imgui`, `third_party/imguizmo` — Dear ImGui 1.92.9b (docking branch) and ImGuizmo, unmodified; `third_party/sokol/sokol_imgui.h` draws ImGui with sokol_gfx.
+- `third_party/imgui`, `third_party/imguizmo`, `third_party/imguicolortextedit` — Dear ImGui 1.92.9b (docking branch), ImGuizmo and ImGuiColorTextEdit (code editor), unmodified; `third_party/sokol/sokol_imgui.h` draws ImGui with sokol_gfx.
 - `engine/platform` — `Platform.h` interface (games use `PumpEvents` + `InputState`; tools use the window event mode: `SetEventMode`/`TakeEvents`, cursor, DPI); `win32/` (window, waveOut, `GpuD3D11.cpp`), `web/` (Emscripten canvas/DOM/WebAudio, `GpuWebGL.cpp`), `null/` (headless; `GpuEgl.cpp` or `GpuNone.cpp`), `gl/` (sokol GLES3 implementation + readback shared by web and EGL).
 - `third_party/sokol` — sokol_gfx (graphics API abstraction), unmodified.
 - `samples/Showcase` — rendering sample: textured glTF fox (player + follow camera), shadows, point lights.

@@ -18,12 +18,12 @@ When no native window or GPU is available (Linux `null` platform, `--renderer so
 ## Panels
 
 - **Hierarchy** - tree of entities (search by name, or by component with 3+ letters). Click, Ctrl+click (toggle), Shift+click (range). Drag an entity onto another to parent it, onto empty space to move it to the root; drop a prefab from Assets to instantiate it. Right-click: rename, duplicate, delete, create child, save as prefab. Double-click frames the entity.
-- **Inspector** - generated from `component.types`: sliders for ranged numbers, drag fields for vectors (one drag = one undo step via `component.set {merge}`), color pickers, enum combos, entity pickers (also accept entities dragged from the Hierarchy), multi-line JSON fields. Asset fields (mesh, texture, material, script, prefab, clip, font) have a `...` picker and accept assets dragged from the Assets panel. Right-click a component header: remove, reset to defaults, copy as JSON.
+- **Inspector** - generated from `component.types`: sliders for ranged numbers, drag fields for vectors (one drag = one undo step via `component.set {merge}`), color pickers, enum combos, entity pickers (also accept entities dragged from the Hierarchy), multi-line JSON fields. Asset fields (mesh, texture, material, script, prefab, clip, font) have a `...` picker and accept assets dragged from the Assets panel. Right-click a component header: remove, reset to defaults, copy as JSON. A Script component's **params** show as typed fields read from the script (`script.params`): numbers, checkboxes, choices, vectors, colors, scene/prefab/sound pickers. Values the entity does not set appear dimmed with the script's default; editing one sets it, **Reset** goes back to the default, keys the script never reads are flagged in amber with **Remove**. The tooltip shows the description (the comment on the line that reads it), the default and the line. **+ Add** adds a key, **JSON** switches to the raw text.
 - **Scene** - free camera, grid, selection outline, collider wireframes, markers for cameras / lights / sounds, and the transform gizmo. Click selects (software-renderer picking, identical to `render.pick`); drop assets to place them (models, prefabs, sprites from images, sounds; textures / materials / scripts onto the entity under the cursor).
 - **Game** - the scene's active camera with in-game UI, letterboxed to Free / 16:9 / 16:10 / 4:3. While playing, click it to give the game the keyboard and mouse (green frame); click elsewhere to take them back. Games that lock the mouse (`input.lockMouse`) get raw relative motion; Esc releases it.
 - **Assets** - project files by kind. Double-click: open a scene, edit a script, instantiate a prefab. Drag into the Scene, Hierarchy or Inspector. Files dropped on the window from Explorer are imported (same rules as `oe import`).
 - **Console** - the engine log with level/text filters, and a command line: `command.name {"json": "args"}` (Tab completes command names, Up/Down browse history).
-- **Scripts** - Lua editor tabs; Ctrl+S (or Save) writes through `script.write`, which hot-reloads the script, also while the game runs. Errors for the file are listed below it.
+- **Scripts** - Lua code editor tabs ([ImGuiColorTextEdit](https://github.com/goossens/ImGuiColorTextEdit)): syntax highlighting (engine API names such as `scene`, `input`, `self` in their own color), line numbers, bracket matching, auto indent, multiple cursors, undo/redo, **find / replace / replace all** (Ctrl+F; Aa = match case, [] = whole word, Ctrl+G next). While you type, the script is checked with `script.check` (0.35 s after the last key): syntax errors and warnings (a global assigned without `local`, an unknown global) are marked on the line number and underlined, with the message as a tooltip, and listed under the code - click one to jump there. Runtime errors of the running game (`script.errors`) are marked the same way. Ctrl+S (or Save) writes through `script.write`, which hot-reloads the script, also while the game runs.
 
 The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). View > Reset Layout restores the default.
 
@@ -62,6 +62,7 @@ oe editor samples/Hello --screenshot build/editor.png                 # default 
 oe editor samples/Hello --screenshot build/editor.png --select Player # inspector + gizmo on Player
 oe editor samples/Hello --screenshot build/editor.png --play --frames 60  # Game view after 1 s of play
 oe editor samples/Hello --screenshot build/editor.png --lang ja       # Japanese interface (default for screenshots: en)
+oe editor samples/FPS --screenshot build/editor.png --script scripts/target.lua  # code editor with the script's problems
 ```
 
 Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes window events (keys, mouse, text), `DrawToImage` reads the frame back (see `NativeEditorHeadless` in `tests/tests.cpp`).
@@ -72,7 +73,8 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 
 - `Editor.h` - `NativeEditor` (Init / Update / DrawToWindow / DrawToImage) and `RunNativeEditor` (main loop: posted API jobs, window events, frame, present).
 - `Editor.cpp` - window events -> Dear ImGui, command helpers, menus, toolbar, status bar, default dock layout, save prompts, preferences (`[OwnEngine][Editor]` in the .ini).
-- `EditorPanels.cpp` - Hierarchy, Inspector, Assets, Console, Scripts.
+- `EditorPanels.cpp` - Hierarchy, Inspector (including typed Script params), Assets, Console.
+- `EditorScripts.cpp` - Scripts panel: the code editor, live `script.check`, problem markers.
 - `EditorViewports.cpp` - Scene view (camera, picking, gizmo, markers, drops) and Game view (input forwarding, mouse lock).
 - `EditorText.h/.cpp` - interface languages and the translation catalog (`Tr`, `TrId`).
 - `EditorMath.h` - header-only math (Transform decomposition, editor camera, screen rays) with unit tests.

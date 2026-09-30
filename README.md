@@ -61,7 +61,9 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 - Hierarchy: 다중 선택(Ctrl/Shift), 드래그로 부모 변경, 우클릭 메뉴(이름 변경, 복제, 삭제, 자식 생성, 프리팹으로 저장)
 - Inspector: 리플렉션으로 자동 생성, 드래그 한 번 = Undo 한 단계, 에셋 필드는 선택 목록 + 드래그 앤 드롭
 - Assets: 더블클릭으로 씬 열기 / 스크립트 편집 / 프리팹 배치, 탐색기에서 파일을 창에 끌어다 놓으면 가져오기
-- Scripts: Lua 편집기(Ctrl+S 저장 → 핫리로드, 오류 표시), Console: 로그 필터 + 명령 입력(Tab 자동완성)
+- Scripts: Lua 코드 편집기 — 구문 강조, 줄 번호, 찾기/바꾸기/모두 바꾸기(Ctrl+F), 입력하는 동안 문법 오류·전역 변수 실수 표시(줄 마커 + 밑줄 + 문제 목록), 실행 오류 표시, Ctrl+S 저장 → 핫리로드
+- Inspector의 Script Params: 스크립트에서 읽는 값을 자동으로 찾아 타입별 필드(숫자·체크박스·선택지·벡터·색상·씬 선택)로 표시, 기본값은 흐리게, 초기화 버튼, 스크립트가 쓰지 않는 키 경고
+- Console: 로그 필터 + 명령 입력(Tab 자동완성)
 - AI가 API로 바꾼 내용이 알림과 계층의 표시로 실시간 반영, 저장 안 한 변경은 닫기/씬 전환 때 확인
 - 인터페이스 언어: 한국어 · English · 日本語 (OS 언어로 자동 선택, 보기 > 언어 또는 `--lang ko|en|ja`), 한글·일본어 입력/표시(시스템 폰트 자동 병합, IME), 고해상도(DPI) 대응, 인터페이스 크기 조절
 - 단축키: Ctrl+S 저장, Ctrl+Z/Y 되돌리기, Ctrl+D 복제, Del 삭제, F 포커스, F2 이름 변경, Ctrl+P 플레이/정지
@@ -103,7 +105,7 @@ third_party/lua  Lua 5.4.8 (MIT)
 third_party/jolt Jolt Physics 5.6.0 (MIT)
 third_party/stb, cgltf  이미지 디코더·인코더, glTF 디코더 (PD/MIT, MIT)
 third_party/sokol  sokol_gfx + sokol_imgui (zlib) — D3D11 / WebGL2 / GLES3 추상화
-third_party/imgui, imguizmo  Dear ImGui 1.92.9b docking, ImGuizmo (MIT) — 네이티브 에디터 전용
+third_party/imgui, imguizmo, imguicolortextedit  Dear ImGui 1.92.9b docking, ImGuizmo, ImGuiColorTextEdit (MIT) — 네이티브 에디터 전용
 templates/       `oe new` 프로젝트 템플릿
 samples/Hello    샘플 프로젝트 (템플릿으로 생성)
 samples/Showcase 렌더링 샘플 (glTF 여우 캐릭터, 텍스처, 그림자, 포인트 라이트)
