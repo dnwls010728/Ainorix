@@ -123,7 +123,7 @@ struct SpriteAnimation {
 
 struct Tilemap {
     static constexpr const char* kTypeName = "Tilemap";
-    static constexpr const char* kDoc = "Grid of tiles from a tileset image, written as text rows (map) with a legend of characters. The entity position is the top-left corner; rows go down (-Y), columns right (+X). Solid tiles collide.";
+    static constexpr const char* kDoc = "Grid of tiles written as text rows (map): each character is a tile defined by a tileset file or the legend (fixed frame, random variants or autotile that picks frames from the neighbours). The entity position is the top-left corner; rows go down (-Y), columns right (+X). Tiles can be solid, one-way or shaped (slopes) for 2D and 3D physics.";
     std::string tileset;
     int columns = 1;
     int rows = 1;
@@ -136,13 +136,13 @@ struct Tilemap {
     bool lit = false;
     bool visible = true;
     static void Reflect(FieldList& f) {
-        f.Add("tileset", &Tilemap::tileset, "Tileset image: a grid of equally sized tiles.");
-        f.Add("columns", &Tilemap::columns, "Tiles per row in the tileset image.");
-        f.Add("rows", &Tilemap::rows, "Rows of tiles in the tileset image.");
+        f.Add("tileset", &Tilemap::tileset, "Tileset: an image (grid of equally sized tiles, see columns/rows) or a *.tileset.json file (image, grid and tile rules shared by maps).");
+        f.Add("columns", &Tilemap::columns, "Tiles per row in the tileset image (ignored with a .tileset.json).");
+        f.Add("rows", &Tilemap::rows, "Rows of tiles in the tileset image (ignored with a .tileset.json).");
         f.Add("tileSize", &Tilemap::tileSize, "Size of one tile in world units.");
-        f.Add("map", &Tilemap::map, "Array of strings, one per row from the top; one character per tile. Characters not in the legend (space, '.') are empty.");
-        f.Add("legend", &Tilemap::legend, "Character -> tileset frame index, e.g. {\"#\": 0, \"=\": 1}.");
-        f.Add("solid", &Tilemap::solid, "Characters that collide (static boxes, merged along rows), e.g. \"#=\". Others are decoration only.");
+        f.Add("map", &Tilemap::map, "Array of strings, one per row from the top; one character per tile. Characters without a rule (space, '.') are empty.");
+        f.Add("legend", &Tilemap::legend, "Character -> rule; overrides the tileset file. A rule is a frame number or {frame, variants, autotile: \"sides\"|\"blob\", frames, connects, edges, collision}, e.g. {\"#\": {\"autotile\": \"blob\", \"frame\": 0, \"collision\": \"solid\"}, \"=\": {\"frame\": 47, \"collision\": \"oneway\"}}.");
+        f.Add("solid", &Tilemap::solid, "Characters that collide as full blocks, e.g. \"#=\" (shortcut for collision: \"solid\").");
         f.Add("color", &Tilemap::color, "Tint.");
         f.Add("pixelArt", &Tilemap::pixelArt, "Sharp nearest-neighbour pixels.");
         f.Add("lit", &Tilemap::lit, "Apply scene lighting.");
@@ -348,6 +348,116 @@ struct CharacterBody {
         f.Add("velocity", &CharacterBody::velocity, "Desired velocity in m/s; after each step it holds the actual velocity.");
         f.Add("grounded", &CharacterBody::grounded, "Runtime state: true while standing on walkable ground.");
         f.Add("plane2D", &CharacterBody::plane2D, "2D games: keep the character on its starting Z (velocity.z is ignored).");
+    }
+};
+
+// ----- 2D physics (simulated by Box2D, see engine/physics/Physics2D.cpp) ---------
+// Bodies live in the XY plane of their entity: position x/y, rotation around Z,
+// Transform.scale x/y scales the shape. 2D and 3D bodies do not collide with
+// each other; Tilemaps collide with both.
+
+struct Collider2D {
+    static constexpr const char* kTypeName = "Collider2D";
+    static constexpr const char* kDoc = "2D collision shape in the XY plane (Box2D). Alone it is static (walls, ground); add RigidBody2D to make it move. Shapes: box (optionally rounded), circle, capsule, polygon (any simple outline, concave is split), edge (line strip; loop closes it). isTrigger makes a sensor volume; oneWay makes a platform you can pass from below.";
+    std::string shape = "box";
+    Vec3 size{1, 1, 0};
+    float radius = 0.5f;
+    float height = 1.0f;
+    float rounding = 0.0f;
+    Vec3 center{0, 0, 0};
+    float angle = 0.0f;
+    Json points = Json::MakeArray();
+    bool loop = false;
+    bool isTrigger = false;
+    bool oneWay = false;
+    float friction = 0.6f;
+    float bounciness = 0.0f;
+    float density = 1.0f;
+    int layer = 0;
+    Json ignoreLayers = Json::MakeArray();
+    static void Reflect(FieldList& f) {
+        f.Add("shape", &Collider2D::shape, "Shape type.").options = {"box", "circle", "capsule", "polygon", "edge"};
+        f.Add("size", &Collider2D::size, "Box: width and height in local units (x, y; z is ignored), multiplied by Transform.scale.");
+        f.Add("radius", &Collider2D::radius, "Circle/capsule radius in local units.");
+        f.Add("height", &Collider2D::height, "Capsule: total height along local Y, including the rounded ends.");
+        f.Add("rounding", &Collider2D::rounding, "Box: corner radius (0 = sharp corners). Rounded boxes slide over bumps more smoothly.");
+        f.Add("center", &Collider2D::center, "Offset of the shape from the entity origin (x, y).");
+        f.Add("angle", &Collider2D::angle, "Box/capsule rotation around the shape center in degrees (added to the entity rotation).");
+        f.Add("points", &Collider2D::points, "Polygon/edge points [[x, y], ...] in local units. Polygon: outline in any winding (concave is triangulated). Edge: a line strip, two-sided.");
+        f.Add("loop", &Collider2D::loop, "Edge: close the strip into a loop (smooth one-sided outline, solid inside: good for terrain).");
+        f.Add("isTrigger", &Collider2D::isTrigger, "Sensor: reports onTriggerEnter/onTriggerExit for moving bodies and characters instead of colliding.");
+        f.Add("oneWay", &Collider2D::oneWay, "One-way platform: solid only from above (bodies and characters pass through from below and the sides).");
+        FieldInfo& fr = f.Add("friction", &Collider2D::friction, "Surface friction (0 = ice, 1 = rubber).");
+        fr.hasRange = true; fr.min = 0.0f; fr.max = 2.0f;
+        FieldInfo& b = f.Add("bounciness", &Collider2D::bounciness, "Restitution (0 = no bounce, 1 = perfectly elastic).");
+        b.hasRange = true; b.min = 0.0f; b.max = 1.0f;
+        FieldInfo& d = f.Add("density", &Collider2D::density, "Relative density when a RigidBody2D has several shapes (the body's mass is RigidBody2D.mass).");
+        d.hasRange = true; d.min = 0.0f; d.max = 1000.0f;
+        FieldInfo& l = f.Add("layer", &Collider2D::layer, "Collision layer 0-15.");
+        l.hasRange = true; l.min = 0; l.max = 15;
+        f.Add("ignoreLayers", &Collider2D::ignoreLayers, "Layers this shape does not collide with, e.g. [2, 3]. Two shapes collide unless either ignores the other's layer.");
+    }
+};
+
+struct RigidBody2D {
+    static constexpr const char* kTypeName = "RigidBody2D";
+    static constexpr const char* kDoc = "Makes a Collider2D move in the XY plane (Box2D). dynamic = gravity and collisions; kinematic = follows its Transform (moving platforms, doors) and pushes dynamic bodies. For top-down games set gravityScale 0 and some linearDamping.";
+    std::string type = "dynamic";
+    float mass = 1.0f;
+    Vec3 velocity{0, 0, 0};
+    float angularVelocity = 0.0f;
+    float gravityScale = 1.0f;
+    float linearDamping = 0.0f;
+    float angularDamping = 0.05f;
+    bool fixedRotation = false;
+    bool bullet = false;
+    static void Reflect(FieldList& f) {
+        f.Add("type", &RigidBody2D::type, "Body type.").options = {"dynamic", "kinematic"};
+        FieldInfo& m = f.Add("mass", &RigidBody2D::mass, "Mass in kg (dynamic bodies).");
+        m.hasRange = true; m.min = 0.001f; m.max = 1.0e6f;
+        f.Add("velocity", &RigidBody2D::velocity, "Linear velocity in m/s (x, y). Written by the simulation every step; set it to launch the body.");
+        f.Add("angularVelocity", &RigidBody2D::angularVelocity, "Spin in degrees/s (counter-clockwise). Written by the simulation.");
+        f.Add("gravityScale", &RigidBody2D::gravityScale, "Multiplier for gravity (0 = floats; top-down games).");
+        f.Add("linearDamping", &RigidBody2D::linearDamping, "Slows the body down over time (top-down friction).");
+        f.Add("angularDamping", &RigidBody2D::angularDamping, "Slows spinning down over time.");
+        f.Add("fixedRotation", &RigidBody2D::fixedRotation, "Never rotate (keeps it upright).");
+        f.Add("bullet", &RigidBody2D::bullet, "Continuous collision against other moving bodies too (fast projectiles). Static geometry is always continuous.");
+    }
+};
+
+struct CharacterBody2D {
+    static constexpr const char* kTypeName = "CharacterBody2D";
+    static constexpr const char* kDoc = "2D character for players/NPCs (Box2D mover): set velocity and the engine moves it, sliding along walls and slopes, standing on moving platforms, passing one-way platforms from below and pushing dynamic bodies. platformer mode applies gravity and sets grounded; topdown mode has no gravity.";
+    std::string mode = "platformer";
+    std::string shape = "capsule";
+    float radius = 0.4f;
+    float height = 1.0f;
+    Vec3 velocity{0, 0, 0};
+    float gravityScale = 1.0f;
+    float maxSlope = 50.0f;
+    float pushStrength = 1.0f;
+    bool grounded = false;
+    bool onWall = false;
+    bool onCeiling = false;
+    bool dropThrough = false;
+    int layer = 0;
+    Json ignoreLayers = Json::MakeArray();
+    static void Reflect(FieldList& f) {
+        f.Add("mode", &CharacterBody2D::mode, "platformer: gravity pulls down -Y, grounded is tracked; topdown: no gravity, velocity x/y moves freely.").options = {"platformer", "topdown"};
+        f.Add("shape", &CharacterBody2D::shape, "Shape centered on the entity origin.").options = {"capsule", "circle"};
+        f.Add("radius", &CharacterBody2D::radius, "Radius in meters.");
+        f.Add("height", &CharacterBody2D::height, "Capsule total height in meters (vertical).");
+        f.Add("velocity", &CharacterBody2D::velocity, "Desired velocity in m/s (x, y); after each step it holds the actual velocity (stopped by walls, ceilings, ground).");
+        f.Add("gravityScale", &CharacterBody2D::gravityScale, "Multiplier for gravity (platformer mode). 2-3 gives a snappy jump arc.");
+        f.Add("maxSlope", &CharacterBody2D::maxSlope, "Steepest walkable slope in degrees (steeper surfaces are walls).");
+        f.Add("pushStrength", &CharacterBody2D::pushStrength, "How hard the character pushes dynamic bodies it walks into (0 = not at all).");
+        f.Add("grounded", &CharacterBody2D::grounded, "Runtime state: standing on walkable ground (platformer mode).");
+        f.Add("onWall", &CharacterBody2D::onWall, "Runtime state: touching a wall (steeper than maxSlope) this step.");
+        f.Add("onCeiling", &CharacterBody2D::onCeiling, "Runtime state: hit a ceiling this step.");
+        f.Add("dropThrough", &CharacterBody2D::dropThrough, "Set true to fall through one-way platforms (e.g. Down + Jump); reset it when the character is below.");
+        FieldInfo& l = f.Add("layer", &CharacterBody2D::layer, "Collision layer 0-15.");
+        l.hasRange = true; l.min = 0; l.max = 15;
+        f.Add("ignoreLayers", &CharacterBody2D::ignoreLayers, "Layers the character does not collide with.");
     }
 };
 

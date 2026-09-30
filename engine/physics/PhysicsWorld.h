@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -7,10 +8,12 @@
 #include "core/Math.h"
 #include "render/Renderer.h"
 #include "scene/Reflect.h"
+#include "scene/TileGrid.h"
 
 namespace oe {
 
 class Scene;
+class Physics2D;
 
 struct PhysicsEvent {
     enum class Kind { CollisionEnter, CollisionExit, TriggerEnter, TriggerExit };
@@ -35,12 +38,15 @@ struct ContactPair {
 };
 
 // Mirrors the scene's Collider / RigidBody / CharacterBody components into a
-// Jolt PhysicsSystem and writes the simulated results back. The Jolt world
-// lives for one play session (Reset() discards it); bodies are created and
+// Jolt PhysicsSystem (3D) and Collider2D / RigidBody2D / CharacterBody2D into
+// a Box2D world (2D, engine/physics/Physics2D) and writes the simulated
+// results back. Each world is created only when the scene has bodies for it;
+// tilemaps collide in both. Events and queries merge both worlds. The worlds
+// live for one play session (Reset() discards them); bodies are created and
 // updated in entity-id order so simulations are deterministic.
 //
-// This is the only place that knows about Jolt: swapping the backend (or
-// adding a 2D one) means reimplementing this class.
+// This file is the only place that knows about Jolt, Physics2D.cpp the only
+// one that knows Box2D.
 class PhysicsWorld {
 public:
     static constexpr float kGravity = -9.81f;
@@ -64,14 +70,22 @@ public:
     Json Stats() const;
     const std::vector<std::string>& Warnings() const { return warnings_; }
 
+    // Resolves Tilemap.tileset files (*.tileset.json) for tile collision.
+    void SetTilesets(TilesetLookup lookup);
+
 private:
+    Physics2D* World2D(Scene& scene);  // created on demand, nullptr without 2D bodies
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Physics2D> world2d_;
+    TilesetLookup tilesets_;
+    std::set<std::pair<EntityId, EntityId>> prevCollisions_, prevTriggers_;
     std::vector<std::string> warnings_;
 };
 
-// Wireframes of every collider/character (green solid, yellow trigger,
-// cyan character). Computed from components, so it works without simulating.
-void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines);
+// Wireframes of every collider/character, 3D and 2D (green solid, yellow
+// trigger, cyan character, orange one-way). Computed from components, so it
+// works without simulating. `tilesets` resolves Tilemap tileset files.
+void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, const TilesetLookup* tilesets = nullptr);
 
 }  // namespace oe

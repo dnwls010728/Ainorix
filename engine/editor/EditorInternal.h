@@ -175,6 +175,25 @@ struct NativeEditor::Impl {
     Mat4 sceneViewMat, sceneProjMat;
     ImVec2 sceneImagePos{0, 0}, sceneImageSize{0, 0};
 
+    // ----- Tile painting (EditorTiles.cpp): Tiles panel + brush in the Scene view
+    bool showTiles = true;
+    bool tilePaint = false;        // Scene view clicks paint the selected Tilemap
+    char tileBrush = '#';
+    Json tileInfo;                 // tilemap.info of the selected tilemap
+    EntityId tileInfoId = kNullEntity;
+    uint64_t tileInfoRevision = ~0ull;
+    int tileSerial = 0;            // brush stroke -> undo merge group
+    enum class TileStroke { None, Paint, Erase, Rect } tileStroke = TileStroke::None;
+    int strokeCol = 0, strokeRow = 0;  // last painted cell / rectangle corner
+    bool tileHover = false;
+    int hoverCol = 0, hoverRow = 0;
+    bool TilePainting() const;     // paint mode with a Tilemap selected
+    const Json& TileInfo();
+    bool TileCellAt(float x, float y, int& col, int& row) const;  // Scene view pixel -> cell
+    void PaintCells(const std::vector<std::pair<int, int>>& cells, char c);
+    void TileSceneInput(ImDrawList* dl, bool clickedLeft, bool clickedRight);
+    void TilesPanel();
+
     // ----- Game view
     int gameAspect = 0;  // 0 free, 1 16:9, 2 16:10, 3 4:3
     bool gameFocused = false;

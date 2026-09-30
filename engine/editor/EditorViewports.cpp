@@ -69,7 +69,7 @@ void NativeEditor::Impl::SceneCameraInput(ImGuiIO& io) {
     bool active = sceneButtonActive;
     float h = std::max(1.0f, sceneImageSize.y);
     sceneLooking = false;
-    if (active && io.MouseDown[ImGuiMouseButton_Right]) {
+    if (active && io.MouseDown[ImGuiMouseButton_Right] && !TilePainting()) {  // painting: right button erases
         if (cam.mode2D) {
             cam.Pan(io.MouseDelta.x, io.MouseDelta.y, h);
         } else {
@@ -297,8 +297,9 @@ void NativeEditor::Impl::ScenePanel() {
     sceneImageSize = ImVec2(static_cast<float>(w), static_cast<float>(h));
     // ImGuizmo only grabs the mouse when no ImGui item is hovered, so while the
     // pointer is on the gizmo the view is a plain (non-interactive) item.
-    bool gizmoHot = gizmoOp != GizmoOp::None && Primary() != kNullEntity && !sceneButtonActive && (ImGuizmo::IsUsing() || ImGuizmo::IsOver());
-    bool clickedLeft = false;
+    const bool painting = TilePainting();
+    bool gizmoHot = !painting && gizmoOp != GizmoOp::None && Primary() != kNullEntity && !sceneButtonActive && (ImGuizmo::IsUsing() || ImGuizmo::IsOver());
+    bool clickedLeft = false, clickedRight = false;
     if (gizmoHot) {
         ImGui::Dummy(sceneImageSize);
         sceneHovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(pos, pos + sceneImageSize);
@@ -308,6 +309,7 @@ void NativeEditor::Impl::ScenePanel() {
         ImGui::InvisibleButton("##sceneview", sceneImageSize, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
         sceneHovered = ImGui::IsItemHovered();
         clickedLeft = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        clickedRight = ImGui::IsItemClicked(ImGuiMouseButton_Right);
         sceneButtonActive = ImGui::IsItemActive();
     }
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -324,10 +326,17 @@ void NativeEditor::Impl::ScenePanel() {
     }
 
     SceneOverlays(dl);
-    SceneGizmo();
+    if (painting) {
+        // Tile brush: clicks paint the selected tilemap instead of selecting.
+        gizmoUsing = false;
+        TileSceneInput(dl, clickedLeft && !io.KeyAlt, clickedRight);
+    } else {
+        tileStroke = TileStroke::None;
+        SceneGizmo();
+    }
 
     // Click (not drag) selects: markers first, then the pixel's entity.
-    if (clickedLeft && !io.KeyAlt && !gizmoUsing) {
+    if (clickedLeft && !io.KeyAlt && !gizmoUsing && !painting) {
         scenePressPending = true;
         scenePressMarker = markerHover;
     }
@@ -355,6 +364,13 @@ void NativeEditor::Impl::ScenePanel() {
     ImGui::SameLine(0, 3);
     bool mode2D = cam.mode2D;
     if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);
+    if (Row(Primary()) && Row(Primary())->Has("Tilemap")) {
+        ImGui::SameLine(0, 3);
+        if (OverlayToggle(Tr("Paint Tiles"), &tilePaint, Tr("Paint the selected Tilemap (brush from the Tiles panel): left paint, right erase, Shift rectangle, Ctrl pick"))) {
+            showTiles = true;
+            if (tilePaint && !cam.mode2D) cam.Set2D(true);
+        }
+    }
     // Help line (bottom-left) while flying.
     if (sceneLooking) {
         std::string text = Format(Tr("Fly: WASD / QE   Shift: faster   Wheel: speed %.1f m/s"), flySpeed);

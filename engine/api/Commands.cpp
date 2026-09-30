@@ -16,6 +16,7 @@
 #include "scene/Components.h"
 #include "scene/Prefab.h"
 #include "physics/PhysicsWorld.h"
+#include "scene/TileGrid.h"
 #include "script/ScriptCheck.h"
 #include "script/ScriptHost.h"
 
@@ -1064,6 +1065,136 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      list.push(j);
                  }
                  return list;
+             });
+
+    // ----- tilemaps ----------------------------------------------------------------
+    auto requireTilemap = [](Engine& e, const Json& a) -> Tilemap& {
+        EntityId id = RequireEntity(e, a);
+        Tilemap* tm = e.GetScene().Get<Tilemap>(id);
+        if (!tm) throw ApiError("component_missing", "entity " + std::to_string(id) + " has no Tilemap", "Add one with component.add {type: \"Tilemap\"}.");
+        return *tm;
+    };
+    auto tileChar = [](const Json& a) {
+        std::string c = a["char"].asString();
+        if (c.size() != 1) throw ApiError("invalid_argument", "char must be exactly one ASCII character", "Use \" \" to erase.");
+        return c[0];
+    };
+    Register(r, "tilemap.info",
+             "A tilemap's size and tile rules: every character with its frame (for autotiles the fully connected one), autotile mode, variants "
+             "and collision; the tileset image and grid. Use it to pick characters for tilemap.paint.",
+             Params().ReqWith("id", EntityRefSchema("Tilemap entity id or name.")), false, [requireTilemap](Engine& e, const Json& a) {
+                 Tilemap& tm = requireTilemap(e, a);
+                 TilesetLookup lookup = e.Assets().Tilesets();
+                 TileRules rules = BuildTileRules(tm, &lookup);
+                 int w = 0, h = 0;
+                 MapSize(tm, w, h);
+                 Json out = Json::MakeObject();
+                 out["width"] = w;
+                 out["height"] = h;
+                 out["tileSize"] = tm.tileSize;
+                 out["image"] = rules.image;
+                 out["columns"] = rules.columns;
+                 out["rows"] = rules.rows;
+                 Json tiles = Json::MakeArray();
+                 for (const auto& kv : rules.tiles) {
+                     const TileDef& d = kv.second;
+                     Json t = Json::MakeObject();
+                     t["char"] = std::string(1, kv.first);
+                     int frame = d.frame;
+                     if (d.autotile == AutoTile::Sides && d.autoFrames.size() == 16) frame = d.autoFrames[15];
+                     else if (d.autotile == AutoTile::Blob && d.autoFrames.size() == static_cast<size_t>(kBlobTileCount)) frame = d.autoFrames[static_cast<size_t>(BlobIndex(255))];
+                     else if (!d.variants.empty()) frame = d.variants[0];
+                     t["frame"] = frame;
+                     if (d.autotile != AutoTile::None) t["autotile"] = d.autotile == AutoTile::Sides ? "sides" : "blob";
+                     if (!d.variants.empty()) t["variants"] = static_cast<uint64_t>(d.variants.size());
+                     const char* col[] = {"none", "solid", "oneway", "shape"};
+                     t["collision"] = col[static_cast<int>(d.collision)];
+                     tiles.push(t);
+                 }
+                 out["tiles"] = tiles;
+                 if (!rules.error.empty()) out["error"] = rules.error;
+                 out["hint"] = "Paint with tilemap.paint {id, char, cells: [[col, row], ...]} or tilemap.fill; \" \" erases. Row 0 is the top row.";
+                 return out;
+             });
+    Register(r, "tilemap.paint", "Set tiles at cells (col, row from the top-left; the map grows as needed). Autotiles pick their frames from the new neighbours.",
+             Params()
+                 .ReqWith("id", EntityRefSchema("Tilemap entity id or name."))
+                 .Req("char", "string", "Tile character (see tilemap.info); \" \" erases.")
+                 .Req("cells", "array", "Cells [[col, row], ...].")
+                 .Opt("merge", "string", "Undo group key: consecutive paints with the same key become one undo step (editor brush strokes)."),
+             true, [requireTilemap, tileChar](Engine& e, const Json& a) {
+                 Tilemap& tm = requireTilemap(e, a);
+                 char c = tileChar(a);
+                 int changed = 0;
+                 for (const Json& cell : a["cells"].items()) {
+                     if (!cell.isArray() || cell.size() != 2) throw ApiError("invalid_argument", "cells must be [[col, row], ...]");
+                     int col = cell[0].asInt(-1), row = cell[1].asInt(-1);
+                     if (TileAt(tm, col, row) == c) continue;
+                     if (c == ' ' && TileAt(tm, col, row) == '\0') continue;
+                     if (!SetTile(tm, col, row, c)) throw ApiError("invalid_argument", "cell [" + std::to_string(col) + ", " + std::to_string(row) + "] is outside 0..4096");
+                     ++changed;
+                 }
+                 Json out = Json::MakeObject();
+                 out["changed"] = changed;
+                 return out;
+             });
+    Register(r, "tilemap.fill", "Fill a rectangle of cells with one tile character (\" \" erases).",
+             Params()
+                 .ReqWith("id", EntityRefSchema("Tilemap entity id or name."))
+                 .Req("char", "string", "Tile character.")
+                 .Req("col", "integer", "Left column.")
+                 .Req("row", "integer", "Top row.")
+                 .Req("width", "integer", "Columns.")
+                 .Req("height", "integer", "Rows.")
+                 .Opt("merge", "string", "Undo group key."),
+             true, [requireTilemap, tileChar](Engine& e, const Json& a) {
+                 Tilemap& tm = requireTilemap(e, a);
+                 char c = tileChar(a);
+                 int col = a["col"].asInt(), row = a["row"].asInt(), w = a["width"].asInt(), h = a["height"].asInt();
+                 if (w <= 0 || h <= 0 || col < 0 || row < 0 || col + w > 4096 || row + h > 4096) throw ApiError("invalid_argument", "rectangle must be inside 0..4096 with a positive size");
+                 int changed = 0;
+                 for (int rr = row; rr < row + h; ++rr) {
+                     for (int cc = col; cc < col + w; ++cc) {
+                         if (TileAt(tm, cc, rr) == c) continue;
+                         SetTile(tm, cc, rr, c);
+                         ++changed;
+                     }
+                 }
+                 Json out = Json::MakeObject();
+                 out["changed"] = changed;
+                 return out;
+             });
+    Register(r, "tileset.create",
+             "Create or replace a tileset file (*.tileset.json): image + grid + tile rules shared by tilemaps. Rules: frame, variants, autotile "
+             "(\"sides\" = 16 frames, \"blob\" = 47 frames), connects, edges, collision (none, solid, oneway, slope-up, slope-down, half-bottom, half-top or a polygon).",
+             Params()
+                 .Req("path", "string", "e.g. \"tilesets/terrain.tileset.json\".")
+                 .Req("image", "string", "Tileset image (PNG) path.")
+                 .Req("columns", "integer", "Tiles per row in the image.")
+                 .Req("rows", "integer", "Tile rows in the image.")
+                 .Req("tiles", "object", "Character -> rule, e.g. {\"#\": {\"autotile\": \"blob\", \"frame\": 0, \"collision\": \"solid\"}, \"=\": {\"frame\": 47, \"collision\": \"oneway\"}}.")
+                 .Opt("overwrite", "boolean", "Replace an existing file."),
+             false, [](Engine& e, const Json& a) {
+                 std::string path = a["path"].asString();
+                 if (AssetManager::KindOf(path) != "tileset") throw ApiError("invalid_path", "tileset path must end with .tileset.json", "e.g. \"tilesets/terrain.tileset.json\"");
+                 std::string full = e.ResolvePath(path);
+                 if (FileExists(full) && !a["overwrite"].asBool(false)) throw ApiError("already_exists", "'" + path + "' exists", "Pass overwrite: true to replace it.");
+                 Json j = Json::MakeObject();
+                 j["image"] = a["image"];
+                 j["columns"] = a["columns"];
+                 j["rows"] = a["rows"];
+                 j["tiles"] = a["tiles"];
+                 Tileset check;
+                 std::string err;
+                 if (!ParseTileset(j, check, &err)) throw ApiError("invalid_tileset", err, "See docs/2D.md (Tilesets) for the rule format.");
+                 CreateDirectories(ParentPath(full));
+                 if (!WriteTextFile(full, j.dump(2) + "\n")) throw ApiError("io_error", "cannot write '" + path + "'");
+                 e.Assets().Forget(path);
+                 Json out = Json::MakeObject();
+                 out["path"] = path;
+                 out["tiles"] = static_cast<uint64_t>(check.tiles.size());
+                 out["hint"] = "Use it with Tilemap {tileset: \"" + path + "\"}; the map characters are the keys of tiles.";
+                 return out;
              });
 
     // ----- physics ---------------------------------------------------------------

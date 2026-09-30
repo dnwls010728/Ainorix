@@ -8,6 +8,7 @@
 #include "core/Json.h"
 #include "render/Font.h"
 #include "render/Mesh.h"
+#include "scene/TileGrid.h"
 
 namespace oe {
 
@@ -31,6 +32,10 @@ public:
     std::shared_ptr<const Material> GetMaterial(const std::string& path, std::string* error = nullptr);
     // UI font: "default" (built-in Roboto) or a .ttf/.otf/.ttc path. nullptr + error on failure.
     std::shared_ptr<FontFace> GetFont(const std::string& path, std::string* error = nullptr);
+    // Tileset file (*.tileset.json: image, grid, tile rules). nullptr + error on failure.
+    std::shared_ptr<const Tileset> GetTileset(const std::string& path, std::string* error = nullptr);
+    // GetTileset as a TilesetLookup (for BuildTileRules, physics, overlays).
+    TilesetLookup Tilesets();
 
     // Reloads assets whose files changed; returns their paths.
     std::vector<std::string> PollChanges();
@@ -52,6 +57,7 @@ private:
     Entry<Mesh> LoadMesh(const std::string& path);
     Entry<Texture> LoadTexture(const std::string& path);
     Entry<Material> LoadMaterial(const std::string& path);
+    Entry<Tileset> LoadTileset(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
         std::string error;
@@ -63,6 +69,7 @@ private:
     std::map<std::string, Entry<Mesh>> meshes_;
     std::map<std::string, Entry<Texture>> textures_;
     std::map<std::string, Entry<Material>> materials_;
+    std::map<std::string, Entry<Tileset>> tilesets_;
     std::map<std::string, FontEntry> fonts_;
 };
 

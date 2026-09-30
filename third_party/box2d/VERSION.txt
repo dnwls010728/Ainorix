@@ -1,0 +1,4 @@
+Box2D v3.1.1 (https://github.com/erincatto/box2d, tag v3.1.1), unmodified.
+Only include/, src/*.c/*.h and LICENSE are included (no samples, tests, CMake files or natvis).
+Built by the top-level CMakeLists.txt (target oe_box2d) as C17 with -ffp-contract=off for
+cross-platform determinism; SIMD is disabled on the web build (scalar path).

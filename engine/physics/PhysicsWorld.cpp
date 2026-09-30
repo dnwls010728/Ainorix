@@ -10,6 +10,7 @@
 #include <set>
 
 #include "core/Log.h"
+#include "physics/Physics2D.h"
 #include "scene/Components.h"
 #include "scene/TileGrid.h"
 #include "scene/Scene.h"
@@ -31,6 +32,7 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
@@ -206,10 +208,12 @@ std::string ColliderKey(const Scene& s, EntityId id, JPH::Vec3 scale) {
     return key + buf;
 }
 
-// One static compound shape for the solid cells of a tilemap (merged rectangles).
-JPH::RefConst<JPH::Shape> TilemapShape(const Tilemap& tm, JPH::Vec3 scale) {
-    std::vector<TileRect> rects = SolidRects(tm);
-    if (rects.empty()) return nullptr;
+// One static compound shape for the collision of a tilemap: solid cells as
+// merged boxes, shaped cells (slopes...) as prisms. One-way tiles are 2D only.
+JPH::RefConst<JPH::Shape> TilemapShape(const Tilemap& tm, const TileRules& rules, JPH::Vec3 scale) {
+    std::vector<TileRect> rects = SolidRects(tm, rules);
+    std::vector<TileShape> shaped = ShapedCells(tm, rules);
+    if (rects.empty() && shaped.empty()) return nullptr;
     scale = scale.Abs();
     const float ts = std::max(0.001f, tm.tileSize);
     const float depth = std::max(0.5f, ts);  // generous Z thickness so 2D bodies never slip past
@@ -222,14 +226,21 @@ JPH::RefConst<JPH::Shape> TilemapShape(const Tilemap& tm, JPH::Vec3 scale) {
         float convex = std::min(JPH::cDefaultConvexRadius, 0.5f * half.ReduceMin());
         compound.AddShape(center * scale, JPH::Quat::sIdentity(), new JPH::BoxShapeSettings(half, convex));
     }
+    for (const TileShape& cell : shaped) {
+        JPH::Array<JPH::Vec3> pts;
+        for (const TilePoint& p : cell.points) {
+            for (float z : {-depth, depth}) pts.push_back(JPH::Vec3(p.x * ts * scale.GetX(), p.y * ts * scale.GetY(), z * scale.GetZ()));
+        }
+        compound.AddShape(JPH::Vec3::sZero(), JPH::Quat::sIdentity(), new JPH::ConvexHullShapeSettings(pts, 0.0f));
+    }
     std::string err;
     return Build(compound, &err);
 }
 
-std::string TilemapKey(const Tilemap& tm, JPH::Vec3 scale) {
+std::string TilemapKey(const Tilemap& tm, const TileRules& rules, JPH::Vec3 scale) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "|%.4f|%.4f,%.4f,%.4f", tm.tileSize, scale.GetX(), scale.GetY(), scale.GetZ());
-    return "tilemap|" + tm.map.dump() + "|" + tm.solid + buf;
+    return "tilemap|" + tm.map.dump() + "|" + rules.key + buf;
 }
 
 std::string CharacterKey(const CharacterBody& c) {
@@ -239,7 +250,6 @@ std::string CharacterKey(const CharacterBody& c) {
     return j.dump();
 }
 
-using EntityPair = std::pair<EntityId, EntityId>;
 EntityPair Ordered(EntityId a, EntityId b) { return a < b ? EntityPair(a, b) : EntityPair(b, a); }
 
 }  // namespace
@@ -346,7 +356,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
     }
 
     // Mirrors components into Jolt. dt == 0 means "query sync" (no motion).
-    void SyncIn(Scene& scene, float dt, std::vector<std::string>& warnings) {
+    void SyncIn(Scene& scene, float dt, std::vector<std::string>& warnings, const TilesetLookup* tilesets) {
         JPH::BodyInterface& bi = system.GetBodyInterface();
 
         // Characters.
@@ -492,9 +502,10 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 Warn(warnings, "entity " + std::to_string(id) + " has a Tilemap and a Collider/CharacterBody; the tilemap does not collide");
                 continue;
             }
-            if (kv.second.solid.empty()) continue;
+            TileRules rules = BuildTileRules(kv.second, tilesets);
+            if (!rules.error.empty()) Warn(warnings, "entity " + std::to_string(id) + " Tilemap: " + rules.error);
             WorldXf wx = WorldOf(scene, id);
-            std::string key = TilemapKey(kv.second, wx.scale);
+            std::string key = TilemapKey(kv.second, rules, wx.scale);
             auto it = bodies.find(id);
             if (it != bodies.end() && it->second.key != key) {
                 RemoveBody(id, it->second);
@@ -502,7 +513,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 it = bodies.end();
             }
             if (it == bodies.end()) {
-                JPH::RefConst<JPH::Shape> shape = TilemapShape(kv.second, wx.scale);
+                JPH::RefConst<JPH::Shape> shape = TilemapShape(kv.second, rules, wx.scale);
                 if (!shape) continue;
                 JPH::BodyCreationSettings bs(shape, wx.pos, wx.rot, JPH::EMotionType::Static, Layers::kStatic);
                 bs.mUserData = id;
@@ -671,8 +682,6 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
     std::mutex contactMutex;
     std::set<ContactKey> bodyContacts;
     std::vector<Removal> pendingRemovals;
-    std::set<EntityPair> prevCollisions;
-    std::set<EntityPair> prevTriggers;
     std::vector<std::pair<EntityId, Vec3>> pendingImpulses;
     uint64_t steps = 0;
 };
@@ -684,27 +693,48 @@ PhysicsWorld::~PhysicsWorld() = default;
 
 void PhysicsWorld::Reset() {
     impl_.reset();
+    world2d_.reset();
+    prevCollisions_.clear();
+    prevTriggers_.clear();
     warnings_.clear();
+}
+
+void PhysicsWorld::SetTilesets(TilesetLookup lookup) { tilesets_ = std::move(lookup); }
+
+Physics2D* PhysicsWorld::World2D(Scene& scene) {
+    if (!world2d_ && Physics2D::Wanted(scene)) {
+        world2d_ = std::make_unique<Physics2D>();
+        world2d_->SetTilesets(&tilesets_);
+    }
+    return world2d_.get();
 }
 
 std::vector<PhysicsEvent> PhysicsWorld::Step(Scene& scene, float dt) {
     std::vector<PhysicsEvent> events;
-    if (!impl_) {
-        // Nothing to simulate until the scene has physics components.
-        if (scene.Pool<Collider>().empty() && scene.Pool<CharacterBody>().empty()) return events;
+    // Each world exists once the scene has bodies for it.
+    if (!impl_ && (!scene.Pool<Collider>().empty() || !scene.Pool<CharacterBody>().empty())) {
         EnsureJolt();
         impl_ = std::make_unique<Impl>();
     }
-    Impl& w = *impl_;
-    w.SyncIn(scene, dt, warnings_);
-    w.UpdateCharacters(scene, dt);
-    w.system.Update(dt, 1, &w.temp, &w.jobs);
-    w.ApplyRemovals();
-    w.SyncOut(scene);
-    ++w.steps;
-
-    std::set<EntityPair> collisions = w.CurrentCollisions();
-    std::set<EntityPair> triggers = w.CurrentTriggers(scene);
+    Physics2D* w2 = World2D(scene);
+    if (!impl_ && !w2) return events;
+    std::set<EntityPair> collisions, triggers;
+    if (impl_) {
+        Impl& w = *impl_;
+        w.SyncIn(scene, dt, warnings_, &tilesets_);
+        w.UpdateCharacters(scene, dt);
+        w.system.Update(dt, 1, &w.temp, &w.jobs);
+        w.ApplyRemovals();
+        w.SyncOut(scene);
+        ++w.steps;
+        collisions = w.CurrentCollisions();
+        triggers = w.CurrentTriggers(scene);
+    }
+    if (w2) {
+        w2->Step(scene, dt, warnings_);
+        for (const EntityPair& p : w2->Collisions()) collisions.insert(p);
+        for (const EntityPair& p : w2->Triggers(scene)) triggers.insert(p);
+    }
     auto diff = [&](const std::set<EntityPair>& now, const std::set<EntityPair>& before, PhysicsEvent::Kind enter, PhysicsEvent::Kind exit) {
         for (const EntityPair& p : before) {
             if (!now.count(p)) events.push_back({exit, p.first, p.second});
@@ -713,10 +743,10 @@ std::vector<PhysicsEvent> PhysicsWorld::Step(Scene& scene, float dt) {
             if (!before.count(p)) events.push_back({enter, p.first, p.second});
         }
     };
-    diff(collisions, w.prevCollisions, PhysicsEvent::Kind::CollisionEnter, PhysicsEvent::Kind::CollisionExit);
-    diff(triggers, w.prevTriggers, PhysicsEvent::Kind::TriggerEnter, PhysicsEvent::Kind::TriggerExit);
-    w.prevCollisions = std::move(collisions);
-    w.prevTriggers = std::move(triggers);
+    diff(collisions, prevCollisions_, PhysicsEvent::Kind::CollisionEnter, PhysicsEvent::Kind::CollisionExit);
+    diff(triggers, prevTriggers_, PhysicsEvent::Kind::TriggerEnter, PhysicsEvent::Kind::TriggerExit);
+    prevCollisions_ = std::move(collisions);
+    prevTriggers_ = std::move(triggers);
     return events;
 }
 
@@ -726,19 +756,25 @@ RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& d
         EnsureJolt();
         impl_ = std::make_unique<Impl>();
     }
-    impl_->SyncIn(scene, 0.0f, warnings_);
+    impl_->SyncIn(scene, 0.0f, warnings_, &tilesets_);
     Vec3 dir = Normalize(direction);
     if (Length(dir) < 0.5f || maxDistance <= 0) return out;
     JPH::RRayCast ray{J(origin), J(dir * maxDistance)};
     JPH::RayCastResult result;
-    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result)) return out;
-    out.hit = true;
-    out.entity = impl_->EntityOf(result.mBodyID);
-    JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
-    out.point = O(point);
-    out.distance = result.mFraction * maxDistance;
-    JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), result.mBodyID);
-    if (lock.Succeeded()) out.normal = O(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point));
+    if (impl_->system.GetNarrowPhaseQuery().CastRay(ray, result)) {
+        out.hit = true;
+        out.entity = impl_->EntityOf(result.mBodyID);
+        JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
+        out.point = O(point);
+        out.distance = result.mFraction * maxDistance;
+        JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), result.mBodyID);
+        if (lock.Succeeded()) out.normal = O(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point));
+    }
+    if (Physics2D* w2 = World2D(scene)) {
+        w2->Sync(scene, warnings_);
+        RaycastHit hit2;
+        if (w2->Raycast(origin, dir, maxDistance, hit2) && (!out.hit || hit2.distance < out.distance)) out = hit2;
+    }
     return out;
 }
 
@@ -748,7 +784,7 @@ std::vector<EntityId> PhysicsWorld::OverlapSphere(Scene& scene, const Vec3& cent
         EnsureJolt();
         impl_ = std::make_unique<Impl>();
     }
-    impl_->SyncIn(scene, 0.0f, warnings_);
+    impl_->SyncIn(scene, 0.0f, warnings_, &tilesets_);
     JPH::RefConst<JPH::Shape> sphere = new JPH::SphereShape(std::max(0.001f, radius));
     JPH::CollideShapeSettings settings;
     JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
@@ -758,26 +794,30 @@ std::vector<EntityId> PhysicsWorld::OverlapSphere(Scene& scene, const Vec3& cent
         EntityId e = impl_->EntityOf(hit.mBodyID2);
         if (e != kNullEntity) ids.insert(e);
     }
+    if (Physics2D* w2 = World2D(scene)) {
+        w2->Sync(scene, warnings_);
+        for (EntityId e : w2->OverlapCircle(center, radius)) ids.insert(e);
+    }
     out.assign(ids.begin(), ids.end());
     return out;
 }
 
 std::vector<ContactPair> PhysicsWorld::Contacts() const {
     std::vector<ContactPair> out;
-    if (!impl_) return out;
-    for (const EntityPair& p : impl_->prevCollisions) out.push_back({p.first, p.second, false});
-    for (const EntityPair& p : impl_->prevTriggers) out.push_back({p.first, p.second, true});
+    for (const EntityPair& p : prevCollisions_) out.push_back({p.first, p.second, false});
+    for (const EntityPair& p : prevTriggers_) out.push_back({p.first, p.second, true});
     return out;
 }
 
 void PhysicsWorld::AddImpulse(EntityId id, const Vec3& impulse) {
     if (impl_) impl_->pendingImpulses.emplace_back(id, impulse);
+    if (world2d_) world2d_->AddImpulse(id, impulse);
 }
 
 Json PhysicsWorld::Stats() const {
     Json s = Json::MakeObject();
-    s["backend"] = "jolt 5.6.0 (cross-platform deterministic)";
-    s["active"] = impl_ != nullptr;
+    s["backend"] = "jolt 5.6.0 (3D) + box2d 3.1.1 (2D), cross-platform deterministic";
+    s["active"] = impl_ != nullptr || world2d_ != nullptr;
     s["gravity"] = Json(Json::Array{0.0, kGravity, 0.0});
     if (impl_) {
         int statics = 0, dynamics = 0, kinematics = 0;
@@ -793,6 +833,7 @@ Json PhysicsWorld::Stats() const {
         s["triggers"] = static_cast<uint64_t>(impl_->triggers.size());
         s["steps"] = static_cast<uint64_t>(impl_->steps);
     }
+    if (world2d_) world2d_->AppendStats(s);
     Json w = Json::MakeArray();
     for (const std::string& msg : warnings_) w.push(msg);
     s["warnings"] = w;
@@ -843,8 +884,8 @@ void AddCapsule(std::vector<DebugLine>& lines, const Mat4& m, Vec3 c, float r, f
 }
 }  // namespace
 
-void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines) {
-    const Color solid(0.2f, 0.95f, 0.35f), trigger(1.0f, 0.85f, 0.2f), character(0.3f, 0.85f, 1.0f);
+void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, const TilesetLookup* tilesets) {
+    const Color solid(0.2f, 0.95f, 0.35f), trigger(1.0f, 0.85f, 0.2f), character(0.3f, 0.85f, 1.0f), oneWay(1.0f, 0.55f, 0.15f);
     for (const auto& kv : scene.Pool<CharacterBody>()) {
         Vec3 scale;
         Mat4 m = RigidWorld(scene, kv.first, &scale);
@@ -877,19 +918,75 @@ void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines) {
             for (const auto& e : edges) lines.push_back({p[e[0]], p[e[1]], col});
         }
     }
-    // Tilemaps: outline of each merged solid rectangle in the tile plane.
+    // 2D shapes in the entity's XY plane (scaled like the physics shapes).
+    auto poly = [&](const Mat4& m, const std::vector<Vec3>& pts, bool closed, Color col) {
+        for (size_t i = 0; i + 1 < pts.size() || (closed && i < pts.size() && pts.size() > 2); ++i) {
+            lines.push_back({m.TransformPoint(pts[i]), m.TransformPoint(pts[(i + 1) % pts.size()]), col});
+        }
+    };
+    auto circle2 = [&](const Mat4& m, Vec3 c, float r, Color col) { AddCircle(lines, m, c, Vec3(1, 0, 0), Vec3(0, 1, 0), r, col); };
+    auto capsule2 = [&](const Mat4& m, Vec3 c, float r, float half, float angleDeg, Color col) {
+        float a = Radians(angleDeg);
+        Vec3 axis(-std::sin(a) * half, std::cos(a) * half, 0), side(std::cos(a) * r, std::sin(a) * r, 0);
+        circle2(m, c + axis, r, col);
+        circle2(m, c - axis, r, col);
+        lines.push_back({m.TransformPoint(c + axis + side), m.TransformPoint(c - axis + side), col});
+        lines.push_back({m.TransformPoint(c + axis - side), m.TransformPoint(c - axis - side), col});
+    };
+    for (const auto& kv : scene.Pool<CharacterBody2D>()) {
+        Vec3 scale;
+        Mat4 m = RigidWorld(scene, kv.first, &scale);
+        float r = std::max(0.02f, kv.second.radius);
+        float half = kv.second.shape == "circle" ? 0.0f : std::max(0.0f, 0.5f * kv.second.height - r);
+        if (half <= 0.0f) circle2(m, Vec3(), r, character);
+        else capsule2(m, Vec3(), r, half, 0.0f, character);
+    }
+    for (const auto& kv : scene.Pool<Collider2D>()) {
+        if (scene.Get<CharacterBody2D>(kv.first)) continue;
+        const Collider2D& c = kv.second;
+        Color col = c.isTrigger ? trigger : c.oneWay ? oneWay : solid;
+        Vec3 scale;
+        Mat4 m = RigidWorld(scene, kv.first, &scale);
+        Vec3 center(c.center.x * scale.x, c.center.y * scale.y, 0);
+        if (c.shape == "circle") {
+            circle2(m, center, c.radius * std::max(scale.x, scale.y), col);
+        } else if (c.shape == "capsule") {
+            float r = c.radius * scale.x;
+            float half = 0.5f * c.height * scale.y - r;
+            if (half <= 0.001f) circle2(m, center, r, col);
+            else capsule2(m, center, r, half, c.angle, col);
+        } else if (c.shape == "polygon" || c.shape == "edge") {
+            std::vector<Vec3> pts;
+            if (c.points.isArray()) {
+                for (const Json& p : c.points.items()) {
+                    if (p.isArray() && p.size() >= 2) pts.push_back(Vec3((p[0].asFloat() + c.center.x) * scale.x, (p[1].asFloat() + c.center.y) * scale.y, 0));
+                }
+            }
+            poly(m, pts, c.shape == "polygon" || c.loop, col);
+        } else {
+            float hx = 0.5f * c.size.x * scale.x, hy = 0.5f * c.size.y * scale.y, a = Radians(c.angle);
+            Vec3 ux(std::cos(a), std::sin(a), 0), uy(-std::sin(a), std::cos(a), 0);
+            poly(m, {center - ux * hx - uy * hy, center + ux * hx - uy * hy, center + ux * hx + uy * hy, center - ux * hx + uy * hy}, true, col);
+        }
+    }
+    // Tilemaps: outlines of the solid regions, one-way platforms and shaped cells in the tile plane.
     for (const auto& kv : scene.Pool<Tilemap>()) {
         const float ts = std::max(0.001f, kv.second.tileSize);
         Mat4 m = scene.WorldMatrix(kv.first);
-        for (const TileRect& r : SolidRects(kv.second)) {
-            float x0 = static_cast<float>(r.col) * ts, x1 = static_cast<float>(r.col + r.width) * ts;
-            float y0 = -static_cast<float>(r.row) * ts, y1 = -static_cast<float>(r.row + r.height) * ts;
-            Vec3 a = m.TransformPoint(Vec3(x0, y0, 0)), b = m.TransformPoint(Vec3(x1, y0, 0));
-            Vec3 c = m.TransformPoint(Vec3(x1, y1, 0)), d = m.TransformPoint(Vec3(x0, y1, 0));
-            lines.push_back({a, b, solid});
-            lines.push_back({b, c, solid});
-            lines.push_back({c, d, solid});
-            lines.push_back({d, a, solid});
+        TileRules rules = BuildTileRules(kv.second, tilesets);
+        for (const auto& loop : SolidOutlines(kv.second, rules)) {
+            std::vector<Vec3> pts;
+            for (const TilePoint& p : loop) pts.push_back(Vec3(p.x * ts, p.y * ts, 0));
+            poly(m, pts, true, solid);
+        }
+        for (const TileShape& cell : ShapedCells(kv.second, rules)) {
+            std::vector<Vec3> pts;
+            for (const TilePoint& p : cell.points) pts.push_back(Vec3(p.x * ts, p.y * ts, 0));
+            poly(m, pts, true, solid);
+        }
+        for (const TileRect& r : OneWayRuns(kv.second, rules)) {
+            float y = -static_cast<float>(r.row) * ts;
+            poly(m, {Vec3(static_cast<float>(r.col) * ts, y, 0), Vec3(static_cast<float>(r.col + r.width) * ts, y, 0)}, false, oneWay);
         }
     }
 }
