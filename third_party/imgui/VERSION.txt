@@ -1,0 +1,4 @@
+Dear ImGui v1.92.9b, docking branch, from https://github.com/ocornut/imgui
+(tag v1.92.9b-docking, commit b48d1afbe8ee8b238e2961dc363a949dd7304e23), unmodified.
+Files: imgui*.cpp/.h (without imgui_demo.cpp), imstb_*.h, imconfig.h and misc/cpp/imgui_stdlib.* (std::string InputText).
+License: MIT - see LICENSE.txt. Used only by the native editor (tools/editor), never by games.

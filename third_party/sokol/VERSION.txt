@@ -2,4 +2,6 @@ sokol_gfx.h from https://github.com/floooh/sokol (commit 2e75443dbd4940b5aa8d76a
 License: zlib/libpng - see LICENSE.
 Shaders are compiled offline with sokol-shdc (https://github.com/floooh/sokol-tools-bin, commit 11d0cf678105d614d675e6d9bd2aaf3eeff12f8c);
 see tools/shaders/compile_shaders.sh.
+util/sokol_imgui.h from the same commit, unmodified (native editor only).
+SHA-256 of sokol_imgui.h: a613011fd36be820c0635baf74e53c7f4653ce2a75c234e297759ae6b3e705a3
 SHA-256 of sokol_gfx.h: 858bc9ceb62185cde87c2308c2695482a5cf304dc622c9c1ec0fae7188d5b9c2

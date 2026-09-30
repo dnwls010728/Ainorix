@@ -8,3 +8,5 @@ out/
 # stray screenshots in the repo root (project textures are tracked)
 /*.png
 dist/
+# per-project editor layout/preferences written by the native editor
+.oe/

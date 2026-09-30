@@ -2,7 +2,7 @@
 
 ```
             ┌───────────── front-ends (all call the same registry) ─────────────┐
-            │  oe CLI (exec/script/render)   Web editor (HTTP)   MCP (stdio)     │
+            │  oe CLI   Native editor (in-process)   Web editor (HTTP)   MCP      │
             └───────────────────────────────┬────────────────────────────────────┘
                                             │ Engine::Call(name, args) -> {ok,result|error}
 ┌───────────────────────────────────────────▼──────────────────────────────────────┐
@@ -30,7 +30,7 @@
 
 ## Threading
 
-The engine is single-threaded (the GPU device lives on the main thread too). The HTTP server, each editor viewport stream (WebSocket; it JPEG-encodes frames off the main thread) and the MCP reader run on their own threads and hand work to the main thread through `Engine::PostCall` / `PostJob`; the main loop drains that queue every iteration (`tools/oe/main.cpp: MainLoop`). The CLI and tests call `Engine::Call` directly.
+The engine is single-threaded (the GPU device lives on the main thread too). The HTTP server, each editor viewport stream (WebSocket; it JPEG-encodes frames off the main thread) and the MCP reader run on their own threads and hand work to the main thread through `Engine::PostCall` / `PostJob`; the main loop drains that queue every iteration (`tools/oe/main.cpp: MainLoop`, or `RunNativeEditor` in `engine/editor/Editor.cpp` for the native editor, which also draws its Dear ImGui frame on that thread). The CLI, the native editor and tests call `Engine::Call` directly; `Engine::SetRemoteCallObserver` lets the native editor see commands that arrived through PostCall (agents).
 
 ## Scene model
 

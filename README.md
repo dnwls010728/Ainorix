@@ -1,14 +1,14 @@
 # OwnEngine
 
-AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 웹 에디터와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
+AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터(네이티브 · 웹)와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
 
-![웹 에디터 — Showcase 샘플](docs/images/editor.png)
+![네이티브 에디터 — Showcase 샘플](docs/images/native-editor.png)
 
 | 게임 화면 (`oe render samples/Showcase`) | |
 |---|---|
 | ![Showcase 렌더](docs/images/showcase.png) | glTF 여우 캐릭터(플레이어 조작 + 팔로우 카메라), 절차 생성 텍스처, 그림자, 포인트 라이트. 결정적 소프트웨어 렌더러의 출력(`oe render`)이며, 게임 창·웹·에디터 뷰포트는 같은 장면을 GPU 렌더러로 그립니다. |
 
-- 별도 설치할 의존성 없음 (MSVC + CMake만 필요, Lua·Jolt Physics·sokol_gfx·stb·cgltf는 소스 동봉). 웹 런타임도 `runtime/web/`에 미리 빌드되어 포함 — 웹 배포에 Emscripten 불필요
+- 별도 설치할 의존성 없음 (MSVC + CMake만 필요, Lua·Jolt Physics·sokol_gfx·stb·cgltf·Dear ImGui·ImGuizmo는 소스 동봉). 웹 런타임도 `runtime/web/`에 미리 빌드되어 포함 — 웹 배포에 Emscripten 불필요
 - Windows(네이티브 창, `Name.exe` 패키징) · Web(WebAssembly + WebGL2, `oe package --web`) · 헤드리스 지원. Android / iOS / macOS / 콘솔은 플랫폼 계층만 추가하면 되도록 분리 — [docs/PLATFORMS.md](docs/PLATFORMS.md)
 - 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰포트용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
 - 렌더링 기능: glTF 모델, PNG/JPEG 텍스처, 스무스/플랫 셰이딩, 포인트 라이트, 그림자, 직교/팔로우 카메라, 디버그 드로잉 — [docs/RENDERING.md](docs/RENDERING.md)
@@ -35,7 +35,8 @@ Visual Studio 2022(“C++를 사용한 데스크톱 개발”)만 있으면 됩�
 
 ```bat
 build\bin\oe.exe new MyGame                 :: 2스테이지 코인 수집 샘플 게임 프로젝트 생성
-build\bin\oe.exe editor MyGame              :: 웹 에디터 (http://127.0.0.1:7777)
+build\bin\oe.exe editor MyGame              :: 네이티브 에디터 (API/웹 에디터도 http://127.0.0.1:7777 에서 동시 제공)
+build\bin\oe.exe editor MyGame --web        :: 웹 에디터만 (브라우저)
 build\bin\oe.exe run MyGame                 :: 네이티브 창에서 플레이 (WASD / Space)
 build\bin\oe.exe render MyGame --out shot.png --frames 60
 build\bin\oe.exe exec MyGame scene.summary
@@ -49,16 +50,21 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 
 ## 에디터
 
-- 계층(Hierarchy) · 뷰포트(궤도/팬/줌, 클릭 선택, F 포커스) · 인스펙터(리플렉션으로 자동 생성) · 콘솔(API 직접 호출)
-- 뷰포트는 엔진이 GPU로 렌더링한 화면을 WebSocket으로 스트리밍(JPEG, 고해상도 디스플레이 대응). GPU가 없으면 소프트웨어 렌더러 + PNG로 자동 전환, 우측 상단 배지에 현재 렌더러 표시
-- Play / Pause / Step / Stop(씬 복원), Undo / Redo, 저장
-- 2D 뷰(타일맵이 있는 씬은 자동): 정면 보기, 드래그로 이동, 휠 확대. JSON 필드(타일맵 map 등)는 여러 줄 텍스트로 편집
-- Game 뷰에서 플레이 중 키 입력이 엔진으로 전달됨
-- 다른 도구(AI 에이전트 등)가 씬을 바꾸면 에디터에 실시간 반영 (바뀐 필드는 인스펙터에서 잠깐 강조)
-- 계층 검색(이름·컴포넌트), 접기/펼치기, 키보드 이동(↑↓←→, Del, F, F2, Ctrl+D)
-- 인스펙터: 컴포넌트 접기, 라벨·X/Y/Z 드래그로 값 조절(Shift 미세, Ctrl 크게 — 드래그 한 번 = Undo 한 단계), 범위 있는 값은 슬라이더
-- 패널 경계 드래그로 크기 조절(더블클릭 초기화), A−/A+ 로 UI 크기, 콘솔 레벨 필터(Info/Warnings/Errors)
-- 단축키: Ctrl+S 저장, Ctrl+Z/Y 되돌리기, Ctrl+P 플레이/정지
+`oe editor`는 **네이티브 에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 창이나 GPU가 없는 환경(Linux 헤드리스 등)이나 `--web`이면 **웹 에디터**가 열립니다. 둘 다 같은 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)
+
+- 도킹 패널: Hierarchy · Inspector · Scene · Game · Assets · Console · Scripts — 배치는 프로젝트별로 저장(`.oe/editor.ini`), View > Reset Layout
+- Scene 뷰: 우클릭 드래그 + WASD/QE 비행, 가운데 버튼 팬, Alt+좌클릭 궤도, 휠 줌, 클릭 선택, **이동/회전/스케일 기즈모**(Q/W/E/R, 로컬/월드, 스냅), 카메라·라이트 아이콘, 콜라이더 표시, 2D 뷰, 에셋 드래그로 배치
+- Game 뷰: 클릭하면 키보드·마우스가 게임으로(마우스 잠금 게임은 원시 마우스 이동, Esc로 해제), 화면비 고정(16:9 등)
+- Hierarchy: 다중 선택(Ctrl/Shift), 드래그로 부모 변경, 우클릭 메뉴(이름 변경, 복제, 삭제, 자식 생성, 프리팹으로 저장)
+- Inspector: 리플렉션으로 자동 생성, 드래그 한 번 = Undo 한 단계, 에셋 필드는 선택 목록 + 드래그 앤 드롭
+- Assets: 더블클릭으로 씬 열기 / 스크립트 편집 / 프리팹 배치, 탐색기에서 파일을 창에 끌어다 놓으면 가져오기
+- Scripts: Lua 편집기(Ctrl+S 저장 → 핫리로드, 오류 표시), Console: 로그 필터 + 명령 입력(Tab 자동완성)
+- AI가 API로 바꾼 내용이 알림과 계층의 표시로 실시간 반영, 저장 안 한 변경은 닫기/씬 전환 때 확인
+- 한글 입력/표시(시스템 한글 폰트 자동 병합, IME), 고해상도(DPI) 대응, 인터페이스 크기 조절
+- 단축키: Ctrl+S 저장, Ctrl+Z/Y 되돌리기, Ctrl+D 복제, Del 삭제, F 포커스, F2 이름 변경, Ctrl+P 플레이/정지
+- 에이전트용 에디터 스크린샷: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60]`
+
+웹 에디터(`--web`)는 브라우저에서 같은 기능의 핵심(계층, 뷰포트 스트리밍, 인스펙터, 콘솔, 플레이 제어)을 제공하며 원격/헤드리스 환경에서 씁니다.
 
 ## AI 연동
 
@@ -83,6 +89,7 @@ engine/assets    에셋 관리, glTF/이미지 로딩
 engine/render    IRenderer, 소프트웨어 래스터라이저, GPU 렌더러(sokol_gfx) + 셰이더, 메시, 게임 UI
 engine/api       명령 레지스트리, HTTP 서버, 에디터 라우트, MCP 서버
 engine/app       Engine (시뮬레이션, undo, 작업 큐), 프로젝트 템플릿
+engine/editor    네이티브 에디터 (Dear ImGui 패널, 기즈모, Scene/Game 뷰)
 engine/platform  Platform.h + win32(D3D11) / web(WebGL2) / null(EGL) 구현
 editor/          웹 에디터 (HTML/CSS/JS)
 tools/oe         CLI
@@ -92,7 +99,8 @@ tests/           자체 테스트
 third_party/lua  Lua 5.4.8 (MIT)
 third_party/jolt Jolt Physics 5.6.0 (MIT)
 third_party/stb, cgltf  이미지 디코더·인코더, glTF 디코더 (PD/MIT, MIT)
-third_party/sokol  sokol_gfx (zlib) — D3D11 / WebGL2 / GLES3 추상화
+third_party/sokol  sokol_gfx + sokol_imgui (zlib) — D3D11 / WebGL2 / GLES3 추상화
+third_party/imgui, imguizmo  Dear ImGui 1.92.9b docking, ImGuizmo (MIT) — 네이티브 에디터 전용
 templates/       `oe new` 프로젝트 템플릿
 samples/Hello    샘플 프로젝트 (템플릿으로 생성)
 samples/Showcase 렌더링 샘플 (glTF 여우 캐릭터, 텍스처, 그림자, 포인트 라이트)

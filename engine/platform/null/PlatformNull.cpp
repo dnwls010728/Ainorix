@@ -17,6 +17,8 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string&, int, int) { ret
 
 std::unique_ptr<AudioDevice> CreateAudioDevice(int) { return nullptr; }
 
+void PlatformEnableHighDpi() {}
+
 const char* PlatformName() { return "null"; }
 
 double PlatformTimeSeconds() {

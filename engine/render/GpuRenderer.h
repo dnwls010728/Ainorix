@@ -3,6 +3,7 @@
 #include <string>
 
 #include "render/Renderer.h"
+#include "sokol_gfx.h"
 
 namespace oe {
 
@@ -38,6 +39,12 @@ public:
     // drawn at `renderScale` (0.25..1) of the window size and upscaled; UI is
     // always drawn at full resolution. Returns false if the window is minimized.
     bool RenderToWindow(const Scene& scene, const RenderView& view, float renderScale, RenderStats* stats = nullptr);
+    // Renders into an offscreen texture kept per `slot` (resized as needed) and
+    // returns its view for sampling, e.g. as an ImGui image in the native
+    // editor. The frame is committed; nothing is read back or presented.
+    sg_view RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats = nullptr);
+    // Reads the last RenderToTexture image of `slot` back to the CPU (tests, screenshots).
+    bool ReadTexture(int slot, RenderTarget& target);
     // Size of the window swapchain (0 when headless or minimized).
     void WindowSize(int* width, int* height);
 

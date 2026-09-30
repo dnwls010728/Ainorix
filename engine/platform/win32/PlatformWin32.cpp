@@ -51,6 +51,69 @@ std::string KeyName(WPARAM vk) {
     }
 }
 
+WindowKey ToWindowKey(WPARAM vk, LPARAM lp) {
+    if (vk >= 'A' && vk <= 'Z') return static_cast<WindowKey>(static_cast<int>(WindowKey::A) + static_cast<int>(vk - 'A'));
+    if (vk >= '0' && vk <= '9') return static_cast<WindowKey>(static_cast<int>(WindowKey::Num0) + static_cast<int>(vk - '0'));
+    if (vk >= VK_F1 && vk <= VK_F12) return static_cast<WindowKey>(static_cast<int>(WindowKey::F1) + static_cast<int>(vk - VK_F1));
+    switch (vk) {
+        case VK_TAB: return WindowKey::Tab;
+        case VK_LEFT: return WindowKey::Left;
+        case VK_RIGHT: return WindowKey::Right;
+        case VK_UP: return WindowKey::Up;
+        case VK_DOWN: return WindowKey::Down;
+        case VK_PRIOR: return WindowKey::PageUp;
+        case VK_NEXT: return WindowKey::PageDown;
+        case VK_HOME: return WindowKey::Home;
+        case VK_END: return WindowKey::End;
+        case VK_INSERT: return WindowKey::Insert;
+        case VK_DELETE: return WindowKey::Delete;
+        case VK_BACK: return WindowKey::Backspace;
+        case VK_SPACE: return WindowKey::Space;
+        case VK_RETURN: return (HIWORD(lp) & KF_EXTENDED) ? WindowKey::KeypadEnter : WindowKey::Enter;
+        case VK_ESCAPE: return WindowKey::Escape;
+        case VK_SHIFT: return WindowKey::Shift;
+        case VK_CONTROL: return WindowKey::Control;
+        case VK_MENU: return WindowKey::Alt;
+        case VK_LWIN:
+        case VK_RWIN: return WindowKey::Super;
+        case VK_OEM_MINUS: return WindowKey::Minus;
+        case VK_OEM_PLUS: return WindowKey::Equal;
+        case VK_OEM_4: return WindowKey::LeftBracket;
+        case VK_OEM_6: return WindowKey::RightBracket;
+        case VK_OEM_5: return WindowKey::Backslash;
+        case VK_OEM_1: return WindowKey::Semicolon;
+        case VK_OEM_7: return WindowKey::Apostrophe;
+        case VK_OEM_COMMA: return WindowKey::Comma;
+        case VK_OEM_PERIOD: return WindowKey::Period;
+        case VK_OEM_2: return WindowKey::Slash;
+        case VK_OEM_3: return WindowKey::GraveAccent;
+        default: return WindowKey::None;
+    }
+}
+
+LPCTSTR CursorResource(WindowCursor c) {
+    switch (c) {
+        case WindowCursor::TextInput: return IDC_IBEAM;
+        case WindowCursor::ResizeAll: return IDC_SIZEALL;
+        case WindowCursor::ResizeNS: return IDC_SIZENS;
+        case WindowCursor::ResizeEW: return IDC_SIZEWE;
+        case WindowCursor::ResizeNESW: return IDC_SIZENESW;
+        case WindowCursor::ResizeNWSE: return IDC_SIZENWSE;
+        case WindowCursor::Hand: return IDC_HAND;
+        case WindowCursor::NotAllowed: return IDC_NO;
+        default: return IDC_ARROW;
+    }
+}
+
+// GetDpiForWindow exists on Windows 10 1607+; looked up at run time so the
+// exe still starts on older systems (they report 96 DPI).
+UINT WindowDpi(HWND hwnd) {
+    using Fn = UINT(WINAPI*)(HWND);
+    static Fn fn = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow")));
+    UINT dpi = fn && hwnd ? fn(hwnd) : 96;
+    return dpi ? dpi : 96;
+}
+
 class Win32Window final : public Window {
 public:
     bool Init(const std::string& title, int width, int height) {
@@ -134,7 +197,70 @@ public:
     void SetTitle(const std::string& title) override { SetWindowTextW(hwnd_, Widen(title).c_str()); }
     void* NativeHandle() const override { return hwnd_; }
 
+    void SetEventMode(bool on) override {
+        eventMode_ = on;
+        DragAcceptFiles(hwnd_, on ? TRUE : FALSE);
+    }
+    std::vector<WindowEvent> TakeEvents() override {
+        std::vector<WindowEvent> out;
+        out.swap(events_);
+        return out;
+    }
+    void SetCursor(WindowCursor cursor) override {
+        if (cursor == cursor_) return;
+        cursor_ = cursor;
+        POINT p;
+        RECT rc;
+        // Apply now when the pointer is over the client area; WM_SETCURSOR keeps it.
+        if (GetCursorPos(&p) && ScreenToClient(hwnd_, &p) && GetClientRect(hwnd_, &rc) && PtInRect(&rc, p)) ApplyCursor();
+    }
+    float DpiScale() const override { return static_cast<float>(WindowDpi(hwnd_)) / 96.0f; }
+    void Maximize() override { ShowWindow(hwnd_, SW_MAXIMIZE); }
+
 private:
+    void ApplyCursor() {
+        ::SetCursor(cursor_ == WindowCursor::Hidden ? nullptr : LoadCursor(nullptr, CursorResource(cursor_)));
+    }
+
+    void Push(WindowEvent e) {
+        if (!eventMode_) return;
+        if (e.type == WindowEvent::Type::Key || e.type == WindowEvent::Type::MouseButton) {
+            e.ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            e.shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            e.alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+            e.super = ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) != 0;
+        }
+        events_.push_back(std::move(e));
+    }
+
+    void PushText(wchar_t unit) {
+        // UTF-16 from WM_CHAR (IME results arrive the same way): join surrogate pairs.
+        uint32_t c = unit;
+        if (c >= 0xD800 && c < 0xDC00) {
+            highSurrogate_ = unit;
+            return;
+        }
+        if (c >= 0xDC00 && c < 0xE000) {
+            if (!highSurrogate_) return;
+            c = 0x10000u + ((static_cast<uint32_t>(highSurrogate_) - 0xD800u) << 10) + (c - 0xDC00u);
+        }
+        highSurrogate_ = 0;
+        if (c < 32 || c == 127) return;  // control characters come as Key events
+        WindowEvent e;
+        e.type = WindowEvent::Type::Text;
+        e.codepoint = c;
+        Push(e);
+    }
+
+    // Keeps the mouse captured while any button is held so drags continue outside the window.
+    void UpdateCapture(HWND hwnd, bool down) {
+        if (down) {
+            if (buttonsHeld_++ == 0) SetCapture(hwnd);
+        } else if (buttonsHeld_ > 0 && --buttonsHeld_ == 0) {
+            ReleaseCapture();
+        }
+    }
+
     void SetMouseLock(bool on) {
         if (on == mouseLocked_) return;
         mouseLocked_ = on;
@@ -151,8 +277,74 @@ private:
         if (self) {
             switch (msg) {
                 case WM_CLOSE:
-                    self->closed_ = true;
+                    if (self->eventMode_) {
+                        WindowEvent e;
+                        e.type = WindowEvent::Type::Close;
+                        self->Push(e);
+                    } else {
+                        self->closed_ = true;
+                    }
                     return 0;
+                case WM_SETCURSOR:
+                    if (self->eventMode_ && LOWORD(lp) == HTCLIENT && !self->mouseLocked_) {
+                        self->ApplyCursor();
+                        return TRUE;
+                    }
+                    break;
+                case WM_DPICHANGED: {
+                    const RECT* r = reinterpret_cast<const RECT*>(lp);
+                    SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+                    return 0;
+                }
+                case WM_CHAR:
+                    self->PushText(static_cast<wchar_t>(wp));
+                    return 0;
+                case WM_MOUSEWHEEL:
+                case WM_MOUSEHWHEEL: {
+                    WindowEvent e;
+                    e.type = WindowEvent::Type::MouseWheel;
+                    float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / static_cast<float>(WHEEL_DELTA);
+                    if (msg == WM_MOUSEWHEEL) e.y = notches;
+                    else e.x = -notches;
+                    self->Push(e);
+                    return 0;
+                }
+                case WM_MBUTTONDOWN:
+                case WM_MBUTTONUP: {
+                    WindowEvent e;
+                    e.type = WindowEvent::Type::MouseButton;
+                    e.button = 2;
+                    e.down = msg == WM_MBUTTONDOWN;
+                    self->Push(e);
+                    self->UpdateCapture(hwnd, e.down);
+                    return 0;
+                }
+                case WM_SETFOCUS: {
+                    WindowEvent e;
+                    e.type = WindowEvent::Type::Focus;
+                    e.down = true;
+                    self->Push(e);
+                    return 0;
+                }
+                case WM_DROPFILES: {
+                    HDROP drop = reinterpret_cast<HDROP>(wp);
+                    UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+                    for (UINT i = 0; i < count; ++i) {
+                        UINT len = DragQueryFileW(drop, i, nullptr, 0);
+                        std::wstring w(static_cast<size_t>(len) + 1, L'\0');
+                        DragQueryFileW(drop, i, w.data(), len + 1);
+                        w.resize(len);
+                        WindowEvent e;
+                        e.type = WindowEvent::Type::DropFile;
+                        e.path = Narrow(w);
+                        for (char& c : e.path) {
+                            if (c == '\\') c = '/';
+                        }
+                        self->Push(e);
+                    }
+                    DragFinish(drop);
+                    return 0;
+                }
                 case WM_SIZE:
                     self->width_ = LOWORD(lp);
                     self->height_ = HIWORD(lp);
@@ -174,6 +366,18 @@ private:
                 case WM_LBUTTONUP:
                 case WM_RBUTTONDOWN:
                 case WM_RBUTTONUP: {
+                    if (self->eventMode_) {
+                        WindowEvent e;
+                        e.x = static_cast<float>(static_cast<short>(LOWORD(lp)));
+                        e.y = static_cast<float>(static_cast<short>(HIWORD(lp)));
+                        if (msg != WM_MOUSEMOVE) {
+                            e.type = WindowEvent::Type::MouseButton;
+                            e.button = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) ? 0 : 1;
+                            e.down = msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN;
+                        }
+                        self->Push(e);
+                        if (!self->input_ && msg != WM_MOUSEMOVE) self->UpdateCapture(hwnd, e.down);
+                    }
                     if (self->input_ && self->width_ > 0 && self->height_ > 0) {
                         InputState& in = *self->input_;
                         if (!self->mouseLocked_) {
@@ -186,7 +390,7 @@ private:
                                              : (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP) ? "MouseRight" : nullptr;
                         // After Escape / focus loss, the next click captures the mouse
                         // again and is not passed to the game.
-                        if (msg == WM_LBUTTONDOWN && self->relockOnClick_ && !self->mouseLocked_) {
+                        if (msg == WM_LBUTTONDOWN && self->relockOnClick_ && !self->mouseLocked_ && !self->eventMode_) {
                             self->relockOnClick_ = false;
                             in.mouseLocked = true;
                             return 0;
@@ -195,16 +399,22 @@ private:
                             if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) {
                                 if (!in.IsDown(button)) in.pressedThisFrame.insert(button);
                                 in.down.insert(button);
-                                SetCapture(hwnd);
                             } else {
                                 in.down.erase(button);
-                                ReleaseCapture();
                             }
+                            self->UpdateCapture(hwnd, msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN);
                         }
                     }
                     return 0;
                 }
                 case WM_KILLFOCUS:
+                    if (self->eventMode_) {
+                        WindowEvent e;
+                        e.type = WindowEvent::Type::Focus;
+                        e.down = false;
+                        self->Push(e);
+                    }
+                    self->buttonsHeld_ = 0;
                     if (self->input_) {
                         self->input_->down.clear();
                         if (self->mouseLocked_) self->relockOnClick_ = true;
@@ -216,6 +426,13 @@ private:
                 case WM_SYSKEYDOWN:
                 case WM_KEYUP:
                 case WM_SYSKEYUP: {
+                    if (self->eventMode_) {
+                        WindowEvent e;
+                        e.type = WindowEvent::Type::Key;
+                        e.key = ToWindowKey(wp, lp);
+                        e.down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+                        if (e.key != WindowKey::None) self->Push(e);
+                    }
                     std::string key = KeyName(wp);
                     if (!key.empty() && self->input_) {
                         bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
@@ -226,15 +443,20 @@ private:
                             self->input_->down.erase(key);
                         }
                     }
-                    // Escape releases a locked mouse first; otherwise it closes the window.
+                    // Escape releases a locked mouse first; otherwise it closes the game window.
                     if (wp == VK_ESCAPE && msg == WM_KEYDOWN) {
                         if (self->mouseLocked_ && self->input_) {
                             self->input_->mouseLocked = false;
                             self->relockOnClick_ = true;
                             self->SetMouseLock(false);
-                        } else {
+                        } else if (!self->eventMode_) {
                             self->closed_ = true;
                         }
+                    }
+                    // Alt/F10 alone would open the (absent) window menu and stall the loop.
+                    if (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) {
+                        if (wp == VK_F4 && msg == WM_SYSKEYDOWN) break;  // Alt+F4 still closes
+                        return 0;
                     }
                     return 0;
                 }
@@ -251,6 +473,11 @@ private:
     bool relockOnClick_ = false;  // released by Escape / focus loss, not by the game
     InputState* input_ = nullptr;
     std::vector<uint32_t> bgra_;
+    bool eventMode_ = false;
+    std::vector<WindowEvent> events_;
+    WindowCursor cursor_ = WindowCursor::Arrow;
+    wchar_t highSurrogate_ = 0;
+    int buttonsHeld_ = 0;
 };
 
 // waveOut output. The engine submits one buffer per simulated frame; a few
@@ -333,6 +560,14 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string& title, int width
     auto w = std::make_unique<Win32Window>();
     if (!w->Init(title, width, height)) return nullptr;
     return w;
+}
+
+void PlatformEnableHighDpi() {
+    // SetProcessDpiAwarenessContext: Windows 10 1703+; looked up at run time.
+    using Fn = BOOL(WINAPI*)(HANDLE);
+    auto fn = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext")));
+    if (fn) fn(reinterpret_cast<HANDLE>(static_cast<intptr_t>(-4)));  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+    else SetProcessDPIAware();
 }
 
 const char* PlatformName() { return "win32"; }

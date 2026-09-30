@@ -182,7 +182,7 @@ struct Targets {
     int msaa = 1;
     bool withOutput = false;
     sg_image sceneMsaa{}, sceneDepth{}, sceneColor{}, maskColor{}, maskDepth{}, output{};
-    sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{};
+    sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
 
     bool Matches(int w, int h, bool output_) const { return width == w && height == h && withOutput == output_; }
 
@@ -212,12 +212,13 @@ struct Targets {
         if (withOutput) {
             output = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-output");
             outputAtt = ColorView(output);
+            outputTex = TextureView(output);
         }
     }
 
     void Destroy() {
         if (width == 0) return;
-        for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt}) {
+        for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex}) {
             if (v.id) sg_destroy_view(v);
         }
         for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output}) {
@@ -248,6 +249,7 @@ struct GpuRenderer::Impl {
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
     StreamBuffer lines, ui;
     Targets offscreen, window;
+    std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
 
     std::unordered_map<const Mesh*, GpuMesh> meshes;
     std::unordered_map<const Mesh*, GpuMesh> flatMeshes;
@@ -442,6 +444,8 @@ struct GpuRenderer::Impl {
         uiTextures.clear();
         offscreen.Destroy();
         window.Destroy();
+        for (auto& kv : panelTargets) kv.second.Destroy();
+        panelTargets.clear();
         lines.Destroy();
         ui.Destroy();
     }
@@ -945,6 +949,23 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
     return stats;
+}
+
+sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats) {
+    int w = std::max(1, width), h = std::max(1, height);
+    Targets& t = impl_->panelTargets[slot];
+    if (!t.Matches(w, h, true)) t.Create(w, h, impl_->settings.msaa, true);
+    RenderStats s = impl_->Frame(scene, view, t, w, h, nullptr);
+    if (stats) *stats = s;
+    return t.outputTex;
+}
+
+bool GpuRenderer::ReadTexture(int slot, RenderTarget& target) {
+    auto it = impl_->panelTargets.find(slot);
+    if (it == impl_->panelTargets.end() || it->second.width == 0) return false;
+    const Targets& t = it->second;
+    target.Resize(t.width, t.height);
+    return device_.ReadPixels(t.output, t.width, t.height, target.color.data());
 }
 
 void GpuRenderer::WindowSize(int* width, int* height) {

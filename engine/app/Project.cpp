@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 
+#include "api/Commands.h"
+#include "app/Engine.h"
+#include "assets/Assets.h"
 #include "audio/Wav.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -117,6 +121,22 @@ bool WriteGamePak(const std::string& projectDir, const std::vector<std::string>&
     }
     if (dataBytes) *dataBytes = static_cast<double>(data.size());
     return true;
+}
+
+std::string ImportAssetFile(Engine& engine, const std::string& sourcePath, const std::string& destRel) {
+    std::vector<unsigned char> bytes;
+    if (!ReadBinaryFile(sourcePath, bytes)) throw ApiError("not_found", "cannot read " + sourcePath, "Check the file path.");
+    std::string name = sourcePath.substr(sourcePath.find_last_of("/\\") + 1);
+    std::string kind = AssetManager::KindOf(name);
+    std::string folder = kind == "model" ? "assets/models/" : kind == "texture" ? "assets/textures/" : kind == "audio" ? "sounds/" : "assets/";
+    std::string rel = destRel.empty() ? folder + name : destRel;
+    std::string dest = engine.ResolvePath(rel);  // throws for paths outside the project
+    CreateDirectories(ParentPath(dest));
+    FILE* f = std::fopen(dest.c_str(), "wb");
+    bool ok = f && std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    if (f) ok = std::fclose(f) == 0 && ok;
+    if (!ok) throw ApiError("write_failed", "cannot write " + dest, "Check that the project folder is writable.");
+    return rel;
 }
 
 }  // namespace oe

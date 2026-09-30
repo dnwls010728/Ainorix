@@ -18,11 +18,15 @@
 #include "core/Image.h"
 #include "core/Json.h"
 #include "core/Log.h"
+#include "editor/EditorMath.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "script/ScriptHost.h"
+#if OE_NATIVE_EDITOR
+#include "editor/Editor.h"
+#endif
 
 using namespace oe;
 
@@ -1354,6 +1358,127 @@ TEST(WebGamePak) {
     }
     RemoveAll("build/test_web");
 }
+
+TEST(EditorMathDecompose) {
+    // Gizmo edits turn a world matrix back into Transform fields.
+    const Vec3 cases[][3] = {
+        {{1, 2, 3}, {10, 20, 30}, {1, 1, 1}},
+        {{-4, 0.5f, 7}, {-80, 135, -170}, {2, 0.5f, 3}},
+        {{0, 0, 0}, {0, 90, 0}, {1, 2, 1}},  // gimbal lock
+        {{0, 0, 0}, {45, -90, 10}, {1, 1, 1}},
+    };
+    for (const auto& c : cases) {
+        Mat4 m = Mat4::TRS(c[0], c[1], c[2]);
+        Vec3 p, r, sc;
+        DecomposeTRS(m, p, r, sc);
+        Mat4 back = Mat4::TRS(p, r, sc);
+        float worst = 0;
+        for (int i = 0; i < 16; ++i) worst = std::max(worst, std::fabs(back.m[i] - m.m[i]));
+        CHECK(worst < 1e-4f);
+        CHECK(Near(p, c[0], 1e-5f));
+        CHECK(Near(sc, c[2], 1e-4f));
+    }
+    CHECK(std::fabs(NearestAngle(-181.0f, 179.0f) - 179.0f) < 1e-4f);
+    CHECK(std::fabs(NearestAngle(350.0f, 0.0f) + 10.0f) < 1e-4f);
+}
+
+TEST(EditorCameraRays) {
+    EditorCamera cam;
+    cam.target = Vec3(1, 0, -2);
+    cam.Orbit(30, -10);
+    CHECK(Near(cam.Eye() + cam.Forward() * cam.distance, cam.target, 1e-4f));
+    RenderView v = MakeLookAtView(cam.Eye(), cam.target, cam.fov, 16.0f / 9.0f);
+    Vec3 o, d, hit;
+    ScreenRay(v.view, v.proj, 320, 180, 640, 360, o, d);  // center pixel looks at the target
+    CHECK(Length(Cross(d, cam.Forward())) < 1e-3f);
+    CHECK(RayPlane(o, d, Vec3(0, 0, 0), Vec3(0, 1, 0), hit) && Near(hit, cam.target, 1e-3f));
+    Vec3 eye = cam.Eye();
+    cam.Look(20, 5);  // fly look keeps the eye in place
+    CHECK(Near(cam.Eye(), eye, 1e-3f));
+    cam.Set2D(true);
+    CHECK(Near(cam.Forward(), Vec3(0, 0, -1), 1e-6f));
+}
+
+#if OE_NATIVE_EDITOR
+WindowEvent KeyEvent(WindowKey key, bool down, bool ctrl = false) {
+    WindowEvent e;
+    e.type = WindowEvent::Type::Key;
+    e.key = key;
+    e.down = down;
+    e.ctrl = ctrl;
+    return e;
+}
+
+std::vector<WindowEvent> CtrlChord(WindowKey key) {
+    return {KeyEvent(WindowKey::Control, true, true), KeyEvent(key, true, true), KeyEvent(key, false, true), KeyEvent(WindowKey::Control, false, false)};
+}
+
+TEST(NativeEditorHeadless) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Hello", &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    NativeEditor ed(e, nullptr, NativeEditor::Options());
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    // Events are queued: Dear ImGui applies at most one press/release of a key per frame.
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    frames(4);
+    CHECK(img.width == 1280 && img.height == 720);
+    std::set<uint32_t> colors;
+    for (size_t i = 0; i < img.color.size(); i += 101) colors.insert(img.color[i]);
+    CHECK(colors.size() > 40);  // panels, text and the rendered scene, not a blank frame
+
+    Scene& s = e.GetScene();
+    EntityId player = s.FindByName("Player");
+    ed.Select(player);
+    frames(1);
+    CHECK(ed.Selected() == player);
+    Vec3 start = s.Get<Transform>(player)->position;
+
+    // Delete goes through entity.delete, Ctrl+Z through history.undo.
+    frames(3, {KeyEvent(WindowKey::Delete, true), KeyEvent(WindowKey::Delete, false)});
+    CHECK(!s.Exists(player));
+    frames(6, CtrlChord(WindowKey::Z));
+    CHECK(s.Exists(player));
+
+    // Edits arriving through the API (an agent via HTTP/MCP) are announced.
+    auto posted = e.PostCall("component.set", Json::parse(R"J({"id": "Player", "type": "MeshRenderer", "values": {"color": [1, 0, 0]}})J"));
+    e.RunPostedJobs();
+    CHECK(posted.get()["ok"].asBool());
+    frames(1);
+    CHECK(ed.LastNotice().rfind("API: component.set Player", 0) == 0);
+
+    // Ctrl+P plays and gives the Game view the keyboard: W walks the player forward.
+    frames(6, CtrlChord(WindowKey::P));
+    CHECK(e.InPlaySession());
+    CHECK(ed.GameViewFocused());
+    frames(30, {KeyEvent(WindowKey::W, true)});
+    frames(1, {KeyEvent(WindowKey::W, false)});
+    CHECK(s.Exists(player) && s.Get<Transform>(player)->position.z < start.z - 0.5f);
+
+    // Ctrl+P again stops and restores the edit-time scene.
+    frames(6, CtrlChord(WindowKey::P));
+    CHECK(!e.InPlaySession());
+    player = s.FindByName("Player");
+    CHECK(player != kNullEntity && Near(s.Get<Transform>(player)->position, start, 1e-5f));
+    CHECK(!ed.GameViewFocused());
+
+    // Closing the window with unsaved edits asks first instead of quitting.
+    WindowEvent close;
+    close.type = WindowEvent::Type::Close;
+    frames(2, {close});
+    CHECK(!ed.QuitRequested());
+}
+#endif
 
 TEST(JpegEncoder) {
     // The editor viewport stream sends JPEG frames.
