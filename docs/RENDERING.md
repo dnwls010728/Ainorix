@@ -17,9 +17,9 @@ Shaders live in one file, `engine/render/shaders/Shaders.glsl` (sokol-shdc annot
 
 GPU limits: 4 directional lights and 16 point lights per frame (the software renderer has no limit). Meshes and textures are uploaded once and dropped when the asset manager releases them (hot reload).
 
-## Editor viewport
+## Editor views
 
-The web editor opens a WebSocket (`/api/stream`, localhost origins only) and receives each viewport frame as a JPEG rendered by the display renderer, at device-pixel resolution up to 1920 px wide with the GPU (1280 with software). One frame is in flight at a time, so a slow machine lowers the frame rate instead of queueing stale frames. Without the stream it falls back to polling `GET /api/frame.png`. Picking always uses the software renderer's entity-id buffer.
+The editor's Scene and Game views are drawn by the GPU renderer into textures (`GpuRenderer::RenderToTexture`) that the editor UI shows directly - no readback or encoding. Picking always uses the software renderer's entity-id buffer (`render.pick`).
 
 ## Assets
 

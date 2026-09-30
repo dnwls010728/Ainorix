@@ -1622,16 +1622,6 @@ TEST(NativeEditorHeadless) {
 }
 #endif
 
-TEST(JpegEncoder) {
-    // The editor viewport stream sends JPEG frames.
-    Image img;
-    img.width = 32;
-    img.height = 16;
-    img.rgba.assign(32 * 16 * 4, 200);
-    std::vector<uint8_t> jpg = EncodeJpeg(img, 85);
-    CHECK(jpg.size() > 100 && jpg[0] == 0xFF && jpg[1] == 0xD8 && jpg[jpg.size() - 2] == 0xFF && jpg.back() == 0xD9);
-}
-
 }  // namespace
 
 int main() {

@@ -20,4 +20,4 @@ Collect coins, bump "?" blocks from below, stomp slimes, avoid spikes and pits, 
   - state: `script.eval {code:"local p=self:position() return {p.x, p.y, self:grounded()}", entity:"Player"}`,
     `script.eval {code:"game.get('coins')"}`, `script.eval {code:"tilemap.get('Level', 12, 8)"}`
   - teleport for focused tests: `component.set {id:"Player", type:"Transform", values:{position:[x,y,0]}}`
-- Human: `oe run .` plays in a window; `oe editor .` opens the web editor in its 2D Scene view.
+- Human: `oe run .` plays in a window; `oe editor .` opens the editor (View > 2D Scene View for this level).

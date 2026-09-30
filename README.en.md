@@ -2,7 +2,7 @@
 
 [한국어](README.md) | **English** | [日本語](README.ja.md)
 
-A C++17 game engine designed so that AI agents can drive and verify it as easily as people can. The editors for people (native and web) and the interfaces for AI (CLI, HTTP, MCP) share **one command API**.
+A C++17 game engine designed so that AI agents can drive and verify it as easily as people can. The editor for people and the interfaces for AI (CLI, HTTP, MCP) share **one command API**.
 
 ![Native editor - Showcase sample](docs/images/native-editor.png)
 
@@ -37,9 +37,8 @@ The web runtime (for `oe package --web`) is prebuilt in `runtime/web/`. To bring
 
 ```bat
 build\bin\oe.exe new MyGame                 :: create a project (a two-level coin collecting sample game)
-build\bin\oe.exe editor MyGame              :: native editor (API + web editor also on http://127.0.0.1:7777)
+build\bin\oe.exe editor MyGame              :: editor (the API for agents is also served on http://127.0.0.1:7777)
 build\bin\oe.exe editor MyGame --lang ja    :: editor language (en / ko / ja; default: the OS language)
-build\bin\oe.exe editor MyGame --web        :: web editor only (browser)
 build\bin\oe.exe run MyGame                 :: play in a native window (WASD / Space)
 build\bin\oe.exe render MyGame --out shot.png --frames 60
 build\bin\oe.exe exec MyGame scene.summary
@@ -53,7 +52,7 @@ build\bin\oe.exe api --markdown             :: print the command reference
 
 ## Editor
 
-`oe editor` opens the **native editor** (Dear ImGui docking + ImGuizmo, drawn on the GPU in the engine process). Without a window or GPU (e.g. headless Linux), or with `--web`, the **web editor** opens instead. Both use only the command API, so an agent (`oe mcp --connect 7777`) works in the same session as the person at the same time. Details: [docs/EDITOR.md](docs/EDITOR.md)
+`oe editor` opens the **editor** (Dear ImGui docking + ImGuizmo, drawn on the GPU in the engine process). It uses only the command API, so an agent (`oe mcp --connect 7777`) works in the same session as the person at the same time. Without a window (e.g. headless Linux), `oe editor MyGame --screenshot shot.png` renders the editor to an image. Details: [docs/EDITOR.md](docs/EDITOR.md)
 
 - Docking panels: Hierarchy, Inspector, Scene, Game, Assets, Console, Scripts - the layout is saved per project (`.oe/editor.ini`), View > Reset Layout
 - Scene view: right-drag + WASD/QE to fly, middle mouse to pan, Alt + left drag to orbit, wheel to zoom, click to select, **move / rotate / scale gizmo** (Q/W/E/R, local/world, snapping), camera and light icons, collider display, 2D view, place assets by dragging them in
@@ -69,7 +68,6 @@ build\bin\oe.exe api --markdown             :: print the command reference
 - Shortcuts: Ctrl+S save, Ctrl+Z/Y undo/redo, Ctrl+D duplicate, Del delete, F frame, F2 rename, Ctrl+P play/stop
 - Editor screenshots for agents: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60] [--lang ko]`
 
-The web editor (`--web`) offers the core of the same features in a browser (hierarchy, streamed viewport, inspector, console, play controls) for remote and headless machines.
 
 ## AI integration
 
@@ -96,7 +94,6 @@ engine/api       command registry, HTTP server, editor routes, MCP server
 engine/app       Engine (simulation, undo, job queue), project templates
 engine/editor    native editor (Dear ImGui panels, gizmo, Scene/Game views, translations)
 engine/platform  Platform.h + win32 (D3D11) / web (WebGL2) / null (EGL) implementations
-editor/          web editor (HTML/CSS/JS)
 tools/oe         CLI
 tools/player     game runtime (Name.exe / web wasm) + web page template
 tools/shaders    shader regeneration scripts (sokol-shdc)

@@ -188,7 +188,7 @@ endif()
 # Native editor (`oe editor`): Dear ImGui (docking) + ImGuizmo drawn with
 # sokol_gfx next to the engine's GpuRenderer in one process. Needs a GPU
 # backend; games (oe_player) never link it. engine/editor/ uses only the
-# command API, like the web editor.
+# command API.
 # ---------------------------------------------------------------------------
 if(NOT OE_GPU_BACKEND STREQUAL "none")
   add_library(oe_imgui STATIC
@@ -237,16 +237,15 @@ if(MSVC)
 endif()
 add_dependencies(oe oe_player)
 
-# Ship the web editor, project templates and the web player page next to the
+# Ship the project templates and the web player page next to the
 # executable (runs every build so edits are picked up even when oe.exe does
 # not relink). The web runtime itself (web/oe_player.js + .wasm) is added by
 # build_web.sh / build_web.bat.
-add_custom_target(oe_editor_files ALL
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/editor ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/editor
+add_custom_target(oe_runtime_files ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/templates ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/templates
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/web
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/tools/player/web/index.html ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/web/index.html
-  COMMENT "Copying web editor, project templates and the web player page")
+  COMMENT "Copying project templates and the web player page")
 
 if(OE_BUILD_TESTS)
   add_executable(oe_tests tests/tests.cpp)

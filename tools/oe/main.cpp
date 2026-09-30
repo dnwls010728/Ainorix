@@ -14,7 +14,7 @@
 #include <thread>
 #include <vector>
 
-#include "api/EditorService.h"
+#include "api/ApiService.h"
 #include "api/HttpServer.h"
 #include "api/McpServer.h"
 #include "app/Engine.h"
@@ -156,7 +156,7 @@ void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, boo
 
 bool StartServer(HttpServer& server, Engine& engine, int port) {
     std::string err;
-    if (!StartEditorServer(server, engine, port, &err)) {
+    if (!StartApiServer(server, engine, port, &err)) {
         OE_LOG_ERROR("http", "%s", err.c_str());
         return false;
     }
@@ -171,9 +171,8 @@ int CmdHelp() {
                  "Usage: oe <command> [args]\n\n"
                  "  new <dir> [--name N]              Create a project with a sample scene\n"
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
-                 "  editor [path] [--port 7777] [--lang en|ko|ja] [--web] [--no-browser] [--window]\n"
-                 "                                    Native editor window (Windows); --web (or no window/GPU) starts\n"
-                 "                                    the web editor on http://127.0.0.1:7777 instead\n"
+                 "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
+                 "                                    Editor window; agents attach to its API on the port\n"
                  "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --script scripts/x.lua --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
@@ -183,8 +182,8 @@ int CmdHelp() {
                  "  exec [path] <command> [json] [--save]\n"
                  "                                    Run one API command, print the JSON result\n"
                  "  script [path] [--save]            Run newline-delimited {\"command\",\"args\"} from stdin\n"
-                 "  mcp [path] [--port P]             MCP server on stdio (optionally also serve the editor)\n"
-                 "  mcp --connect <port>              MCP server that drives a running editor\n"
+                 "  mcp [path] [--port P]             MCP server on stdio (optionally also serve the HTTP API)\n"
+                 "  mcp --connect <port>              MCP server that drives a running editor (or oe run/mcp --port)\n"
                  "  import <path> <file> [--to rel]   Copy a model/texture/sound into the project (prints asset.info)\n"
                  "  package [path] [--out dist/Name] [--name N] [--web]\n"
                  "                                    Build a standalone game: Name.exe + game data, or with --web\n"
@@ -192,7 +191,7 @@ int CmdHelp() {
                  "  api [--markdown]                  Print the command reference\n"
                  "  version                           Print version info as JSON\n\n"
                  "[path] = project directory (default .), project.json or *.scene.json\n"
-                 "--renderer auto|gpu|software (run, editor, mcp --port, render): auto = GPU when available.\n"
+                 "--renderer auto|gpu|software (run, mcp --port, render): auto = GPU when available.\n"
                  "  render defaults to software (deterministic hash); the others to auto.\n",
                  OE_VERSION, PlatformName());
     return 0;
@@ -382,44 +381,33 @@ int CmdEditor(const Args& a) {
     if (!OpenOrFail(engine, a, code)) return code;
 #if OE_NATIVE_EDITOR
     if (a.Has("--screenshot")) return CmdEditorScreenshot(engine, a);
-    if (!a.Has("--web")) {
-        // Native editor: one window with the panels; the API stays reachable
-        // for agents (oe mcp --connect) and the web editor on the same port.
-        PlatformEnableHighDpi();
-        std::unique_ptr<Window> window = CreatePlatformWindow("OwnEngine Editor - " + engine.ProjectName(), 1600, 900);
-        std::string gpuError;
-        if (window && a.Get("--renderer", "auto") != "software" && engine.EnableGpu(window.get(), &gpuError)) {
-            int port = a.GetInt("--port", 7777);
-            HttpServer server;
-            NativeEditor::Options options;
-            options.layoutFile = EditorLayoutFile(engine);
-            options.language = a.Get("--lang");
-            if (StartServer(server, engine, port)) options.serverInfo = "API http://127.0.0.1:" + std::to_string(port);
-            else OE_LOG_WARN("editor", "port %d is busy: agents cannot attach (pick another with --port)", port);
-            if (!a.Has("--mute")) engine.EnableAudioOutput();
-            window->Maximize();
-            OE_LOG_INFO("editor", "native editor (%s)", engine.Gpu()->Name());
-            return RunNativeEditor(engine, *window, options);
-        }
-        if (!window) OE_LOG_INFO("editor", "no native window on platform '%s': starting the web editor", PlatformName());
-        else OE_LOG_WARN("editor", "native editor needs the GPU renderer (%s): starting the web editor", gpuError.empty() ? "disabled" : gpuError.c_str());
+    // Native editor: one window with the panels; the API stays reachable
+    // for agents (oe mcp --connect) on the same port.
+    PlatformEnableHighDpi();
+    std::unique_ptr<Window> window = CreatePlatformWindow("OwnEngine Editor - " + engine.ProjectName(), 1600, 900);
+    if (!window) {
+        return Fail("no_window", std::string("platform '") + PlatformName() + "' has no native window for the editor",
+                    "Agents: `oe mcp <project>` or `oe exec`; to look at the editor headless: `oe editor <project> --screenshot shot.png`.");
     }
-#endif
+    std::string gpuError;
+    if (!engine.EnableGpu(window.get(), &gpuError)) {
+        return Fail("gpu_unavailable", "the editor needs the GPU renderer: " + gpuError, "Update the graphics driver; `oe run --renderer software` still plays the game.");
+    }
     int port = a.GetInt("--port", 7777);
     HttpServer server;
-    if (!StartServer(server, engine, port)) return Fail("server_failed", "cannot listen on port " + std::to_string(port), "Pick another port with --port.");
-    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/";
-    OE_LOG_INFO("editor", "editor ready at %s (Ctrl+C to quit)", url.c_str());
-    if (!a.Has("--no-browser")) PlatformOpenUrl(url);
+    NativeEditor::Options options;
+    options.layoutFile = EditorLayoutFile(engine);
+    options.language = a.Get("--lang");
+    if (StartServer(server, engine, port)) options.serverInfo = "API http://127.0.0.1:" + std::to_string(port);
+    else OE_LOG_WARN("editor", "port %d is busy: agents cannot attach (pick another with --port)", port);
     if (!a.Has("--mute")) engine.EnableAudioOutput();
-    std::unique_ptr<Window> window;
-    if (a.Has("--window")) window = CreatePlatformWindow("OwnEngine Game View", 960, 540);
-    // The GPU device serves the editor viewport (offscreen) and, with --window, presents the game view.
-    if (!SetupRenderer(engine, a, window.get(), code)) return code;
-    OE_LOG_INFO("editor", "viewport renderer: %s", engine.DisplayRenderer().Name());
-    std::atomic<bool> quit{false};
-    MainLoop(engine, window.get(), quit, true);
-    return 0;
+    window->Maximize();
+    OE_LOG_INFO("editor", "native editor (%s)", engine.Gpu()->Name());
+    return RunNativeEditor(engine, *window, options);
+#else
+    return Fail("no_editor", "this build has no editor (no GPU backend was found when it was configured)",
+                "Build on Windows, or on Linux install libegl-dev libgles-dev for headless editor screenshots.");
+#endif
 }
 
 int CmdMcp(const Args& a) {
