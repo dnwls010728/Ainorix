@@ -2,7 +2,18 @@
   "mcpServers": {
     "ownengine": {
       "command": "build/bin/oe.exe",
-      "args": ["mcp", "samples/Hello", "--port", "7777"]
+      "args": [
+        "mcp",
+        "samples/Hello"
+      ]
+    },
+    "ownengine_editor": {
+      "command": "build/bin/oe.exe",
+      "args": [
+        "mcp",
+        "--connect",
+        "7777"
+      ]
     }
   }
 }

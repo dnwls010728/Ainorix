@@ -9,7 +9,7 @@ build.bat            # Release build -> build/bin/oe.exe, build/bin/oe_tests.exe
 build/bin/oe_tests   # unit tests, exit code 0 = pass
 ```
 
-`build.bat` finds Visual Studio 2022 via vswhere and uses its bundled CMake + Ninja. No dependencies to install (Lua 5.4, Jolt Physics 5.6, sokol_gfx, stb_image/stb_image_write, cgltf, Dear ImGui and ImGuizmo are vendored in `third_party/`; the first build compiles Jolt and takes a few minutes).
+`build.bat` finds Visual Studio 2022 via vswhere and uses its bundled CMake + Ninja. No dependencies to install (Lua 5.4, Jolt Physics 5.6, sokol_gfx, stb_image, stb_truetype, cgltf, Dear ImGui, ImGuizmo and ImGuiColorTextEdit are vendored in `third_party/`; the first build compiles Jolt and takes a few minutes).
 
 Web runtime: `oe package --web` uses the prebuilt `runtime/web/oe_player.js` + `.wasm` (committed; no Emscripten needed). After changing engine C++ that the player uses, rebuild it: install the Emscripten SDK, `set EMSDK=C:\path\to\emsdk`, run `build_web.bat` (Linux/macOS: `./build_web.sh`) -> `build/bin/web/` and `runtime/web/`; commit the refreshed runtime and update `runtime/web/README.md`. On Linux, `cmake -S . -B build -G Ninja` builds the headless `null` platform (GPU screenshots through EGL when `libegl-dev`/`libgles-dev` are installed).
 
@@ -23,9 +23,9 @@ Web runtime: `oe package --web` uses the prebuilt `runtime/web/oe_player.js` + `
 | Many edits | pipe `{"command":..,"args":..}` lines into `oe script samples/Hello --save` |
 | See the result | `oe render samples/Hello --out build/shot.png` then read the PNG (software renderer: deterministic hash). Add `--renderer gpu` (or `render.screenshot {renderer:"gpu"}`) to see what the game window shows |
 | Simulate first | `oe render samples/Hello --frames 120 --out build/shot.png` |
-| Live session | `oe mcp samples/Hello --port 7777` (MCP on stdio + web editor for the human) |
-| Attach to a human's editor | `oe mcp --connect 7777` (the native editor `oe editor` serves the API on 7777; your edits show up there as notices) |
-| See the editor itself | `oe editor samples/Hello --screenshot build/editor.png [--select Player] [--play --frames 60]` (native editor rendered headless; needs a GPU backend) — see [docs/EDITOR.md](docs/EDITOR.md) |
+| Live session | The human runs `oe editor samples/Hello` (it serves the API on 7777); you attach with `oe mcp --connect 7777`. Alone: `oe mcp samples/Hello` (MCP on stdio; `--port 7777` also serves the HTTP API) |
+| Attach to a human's editor | `oe mcp --connect 7777` (your edits show up in the editor as notices) |
+| See the editor itself | `oe editor samples/Hello --screenshot build/editor.png [--select Player] [--play --frames 60]` (the editor rendered headless; needs a GPU backend) — see [docs/EDITOR.md](docs/EDITOR.md) |
 | Physics | `Collider` (+ `RigidBody` to move, `isTrigger` for volumes), `CharacterBody` for players. Check with `render.screenshot {colliders:true}`, `physics.contacts`, `physics.raycast` — see [docs/PHYSICS.md](docs/PHYSICS.md) |
 | Prefabs, scenes, UI, audio | `prefab.instantiate`, `game.load_scene`/`game.state`, `UIText`/`UIPanel`/`UIButton`/`UIImage`/`UISlider` + `UILayout` (nest UI under a parent UI entity), `ui.layout` (pixel rects) + `input.click {x,y}` (screenshot pixels), `audio.generate`/`audio.state`/`audio.capture` — see [docs/GAMEPLAY.md](docs/GAMEPLAY.md) |
 | UI details | TrueType fonts (`font: "assets/fonts/x.ttf"`, built-in `default`/`pixel`), anchors + stretch, rich text, wrap, outline, 9-slice, fill bars, clipping, layouts, `UICanvas` scaling, `onPointerEnter/Exit`, `onValueChanged` — see [docs/UI.md](docs/UI.md) |
@@ -38,7 +38,7 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 
 ## Code map
 
-- `engine/core` — Json (ordered, diff-friendly), Math, Log (ring buffer, stderr only), Image (PNG encoder), FileSystem.
+- `engine/core` — Json (ordered, diff-friendly), Math, Log (ring buffer, stderr only), Image (PNG encoder, Base64), FileSystem.
 - `engine/scene` — reflection (`Reflect.h`), built-in components (`Components.h`), `Scene` (entities + component pools, JSON I/O), behaviour systems (`Systems.cpp`, incl. SpriteAnimation), `TileGrid` (Tilemap cells, merged solid rectangles).
 - `engine/script` — `ScriptHost`: sandboxed Lua state per play session, script instances, bindings (`scene`, `input`, `time`, `log`), hot reload, error capture. `ScriptCheck`: static checks (compile + bytecode walk for globals) and params inference (`script.check`, `script.params`).
 - `third_party/lua` — Lua 5.4.8, unmodified (built as C++; `third_party/lua_oe` fixes the hash seed for determinism).
@@ -48,9 +48,9 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - `engine/assets` — `AssetManager` (model/texture cache + hot reload, `asset.info`), glTF loading (cgltf) and image decoding (stb_image); `ThirdPartyImpl.cpp` compiles the single-header libraries.
 - `third_party/stb`, `third_party/cgltf` — stb_image 2.30, stb_truetype 1.26, cgltf 1.15, unmodified. `third_party/fonts` — Roboto (Apache 2.0), embedded at build time as the UI font `default`.
 - `engine/render` — `IRenderer` interface; `RenderScene` (draw list + lights shared by both renderers); deterministic multi-threaded `SoftwareRenderer` (textures, smooth/flat shading, PBR metallic-roughness lighting, transparency, directional + point lights, shadow map, color + depth + entity-id buffers) — the reference for hashes, tests and picking; `GpuRenderer` (sokol_gfx: shadow pass, MSAA scene pass, selection mask, composite + UI; offscreen with readback or into a window) with shaders in `render/shaders/Shaders.glsl`; `GpuDevice.h` is what a platform provides; `Material.cpp` parses/validates `.mat.json` material files (glTF materials load into the same `Material` struct); `BuildDrawList` orders opaque/mask first, blended back to front; built-in meshes; `UI.cpp` lays out UIText/UIPanel/UIButton/UIImage/UISlider (parent rectangles, anchors, UILayout, clipping) and turns them into quads (`BuildUIQuads`: solid, textured, rounded) drawn identically by both renderers, plus hit testing; `Font.cpp` rasterizes TrueType glyphs (stb_truetype) into atlas pages and holds the 5x7 pixel font. See [docs/RENDERING.md](docs/RENDERING.md).
-- `engine/api` — command registry + all built-in commands (`Commands.cpp`), HTTP server (+ WebSocket), editor routes and viewport stream (`EditorService.cpp`), MCP server.
+- `engine/api` — command registry + all built-in commands (`Commands.cpp`), HTTP server, the HTTP API routes `/api/call` + `/api/commands` (`ApiService.cpp`), MCP server.
 - `engine/app` — `Engine` (scene, fixed-step sim, undo, main-thread job queue, remote-call observer), project templates, `ImportAssetFile`.
-- `engine/editor` — native editor (`oe editor`, library `oe_editor`, never linked into games): `NativeEditor` + `RunNativeEditor` (`Editor.cpp`: input, menus, toolbar, dock layout, prompts), panels (`EditorPanels.cpp`), Scene/Game views with ImGuizmo gizmo and picking (`EditorViewports.cpp`), `EditorMath.h`, `SokolImGui.cpp`. Edits only through `Engine::Call`. See [docs/EDITOR.md](docs/EDITOR.md).
+- `engine/editor` — the editor (`oe editor`, library `oe_editor`, never linked into games): `NativeEditor` + `RunNativeEditor` (`Editor.cpp`: input, menus, toolbar, dock layout, prompts), panels (`EditorPanels.cpp`), Scene/Game views with ImGuizmo gizmo and picking (`EditorViewports.cpp`), `EditorMath.h`, `SokolImGui.cpp`. Edits only through `Engine::Call`. See [docs/EDITOR.md](docs/EDITOR.md).
 - `third_party/imgui`, `third_party/imguizmo`, `third_party/imguicolortextedit` — Dear ImGui 1.92.9b (docking branch), ImGuizmo and ImGuiColorTextEdit (code editor), unmodified; `third_party/sokol/sokol_imgui.h` draws ImGui with sokol_gfx.
 - `engine/platform` — `Platform.h` interface (games use `PumpEvents` + `InputState`; tools use the window event mode: `SetEventMode`/`TakeEvents`, cursor, DPI); `win32/` (window, waveOut, `GpuD3D11.cpp`), `web/` (Emscripten canvas/DOM/WebAudio, `GpuWebGL.cpp`), `null/` (headless; `GpuEgl.cpp` or `GpuNone.cpp`), `gl/` (sokol GLES3 implementation + readback shared by web and EGL).
 - `third_party/sokol` — sokol_gfx (graphics API abstraction), unmodified.
@@ -58,7 +58,6 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - `samples/Platformer` — 2D side-scroller: text tilemap level with spawn markers, animated sprites, coyote time/jump buffer, slimes, `?` blocks, parallax, results screen. `tools/make_art.py` generates its pixel art.
 - `samples/FPS` — first-person shooter test game: mouse look (`input.mouseDelta`, `input.lockMouse`), hitscan pistol via `physics.raycast`, reload, moving/armoured targets, results screen.
 - `templates/default/` — what `oe new` copies (two-level coin game: scenes, prefab, Lua scripts, AGENTS.md). `samples/Hello` is generated from it.
-- `editor/` — web editor (vanilla JS), served by `oe editor --web` (and by the native editor's port). Uses only the public API.
 - `tools/oe/main.cpp` — CLI front-end. `tools/player/main.cpp` — game runtime shipped by `oe package` (desktop exe and, built with Emscripten, the web module); `tools/player/web/index.html` — the web page. `tools/shaders/` — regenerates `Shaders.glsl.h`. `tests/tests.cpp` — self tests (also run as WebAssembly: `node build-web/bin/oe_tests.js`).
 
 ## Conventions
@@ -72,5 +71,5 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - New platform: implement `engine/platform/Platform.h` and add it to `CMakeLists.txt`; see [docs/PLATFORMS.md](docs/PLATFORMS.md).
 - Engine code outside `engine/platform/*` must stay portable C++17 (no OS headers). Graphics API code goes through sokol_gfx; only `engine/platform/*` compiles a backend (`SOKOL_IMPL`).
 - Shaders: edit `engine/render/shaders/Shaders.glsl`, run `tools/shaders/compile_shaders.bat` (needs `sokol-shdc`), commit the regenerated `Shaders.glsl.h`. Lighting changes must be made in both renderers (`GpuRendererMatchesSoftware` compares them). New screen-space effects go into the composite pass of `GpuRenderer`.
-- Native editor: new UI goes in `engine/editor/` and changes the scene only through commands (`Impl::Call`), so undo, agents and the web editor stay in sync. UI text is English in code wrapped in `Tr("...")` (window/popup names `TrId`), with a Korean + Japanese row in `engine/editor/EditorText.cpp` (`EditorTranslations` test). Check it visually with `oe editor <project> --screenshot`; `NativeEditorHeadless` in `tests/tests.cpp` drives it with window events.
+- Editor: new UI goes in `engine/editor/` and changes the scene only through commands (`Impl::Call`), so undo and agents stay in sync. UI text is English in code wrapped in `Tr("...")` (window/popup names `TrId`), with a Korean + Japanese row in `engine/editor/EditorText.cpp` (`EditorTranslations` test). Check it visually with `oe editor <project> --screenshot`; `NativeEditorHeadless` in `tests/tests.cpp` drives it with window events.
 - Keep `docs/API.md` regenerated when commands or components change, and add a test in `tests/tests.cpp` for new behaviour.

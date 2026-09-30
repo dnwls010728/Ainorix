@@ -2,7 +2,7 @@
 
 **한국어** | [English](README.en.md) | [日本語](README.ja.md)
 
-AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터(네이티브 · 웹)와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
+AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
 
 ![네이티브 에디터 — Showcase 샘플](docs/images/native-editor.png)
 
@@ -12,7 +12,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 
 - 별도 설치할 의존성 없음 (MSVC + CMake만 필요, Lua·Jolt Physics·sokol_gfx·stb·cgltf·Dear ImGui·ImGuizmo는 소스 동봉). 웹 런타임도 `runtime/web/`에 미리 빌드되어 포함 — 웹 배포에 Emscripten 불필요
 - Windows(네이티브 창, `Name.exe` 패키징) · Web(WebAssembly + WebGL2, `oe package --web`) · 헤드리스 지원. Android / iOS / macOS / 콘솔은 플랫폼 계층만 추가하면 되도록 분리 — [docs/PLATFORMS.md](docs/PLATFORMS.md)
-- 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰포트용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
+- 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
 - 렌더링 기능: glTF 모델, PNG/JPEG 텍스처, 스무스/플랫 셰이딩, 포인트 라이트, 그림자, 직교/팔로우 카메라, 디버그 드로잉 — [docs/RENDERING.md](docs/RENDERING.md)
 - 머티리얼/PBR/반투명: metallic-roughness(GGX) 셰이딩, 노멀맵·AO·발광 텍스처, 반투명(뒤에서 앞으로 정렬)·마스크·양면, glTF 머티리얼 완전 로드, `.mat.json` 머티리얼 파일(`material.create`/`material.set`, 핫리로드) — [docs/RENDERING.md](docs/RENDERING.md)
 - Jolt 기반 3D 물리 (강체, 트리거, 캐릭터 컨트롤러, 결정적 시뮬레이션) — [docs/PHYSICS.md](docs/PHYSICS.md)
@@ -37,9 +37,8 @@ Visual Studio 2022(“C++를 사용한 데스크톱 개발”)만 있으면 됩�
 
 ```bat
 build\bin\oe.exe new MyGame                 :: 2스테이지 코인 수집 샘플 게임 프로젝트 생성
-build\bin\oe.exe editor MyGame              :: 네이티브 에디터 (API/웹 에디터도 http://127.0.0.1:7777 에서 동시 제공)
+build\bin\oe.exe editor MyGame              :: 에디터 (에이전트용 API도 http://127.0.0.1:7777 에서 동시 제공)
 build\bin\oe.exe editor MyGame --lang ja    :: 에디터 언어 지정 (ko / en / ja, 기본은 OS 언어)
-build\bin\oe.exe editor MyGame --web        :: 웹 에디터만 (브라우저)
 build\bin\oe.exe run MyGame                 :: 네이티브 창에서 플레이 (WASD / Space)
 build\bin\oe.exe render MyGame --out shot.png --frames 60
 build\bin\oe.exe exec MyGame scene.summary
@@ -53,7 +52,7 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 
 ## 에디터
 
-`oe editor`는 **네이티브 에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 창이나 GPU가 없는 환경(Linux 헤드리스 등)이나 `--web`이면 **웹 에디터**가 열립니다. 둘 다 같은 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)
+`oe editor`는 **에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 창이 없는 환경(Linux 헤드리스 등)에서는 `oe editor MyGame --screenshot shot.png`로 에디터 화면을 렌더링할 수 있습니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)
 
 - 도킹 패널: Hierarchy · Inspector · Scene · Game · Assets · Console · Scripts — 배치는 프로젝트별로 저장(`.oe/editor.ini`), 보기 > 레이아웃 초기화
 - Scene 뷰: 우클릭 드래그 + WASD/QE 비행, 가운데 버튼 팬, Alt+좌클릭 궤도, 휠 줌, 클릭 선택, **이동/회전/스케일 기즈모**(Q/W/E/R, 로컬/월드, 스냅), 카메라·라이트 아이콘, 콜라이더 표시, 2D 뷰, 에셋 드래그로 배치
@@ -69,7 +68,6 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 - 단축키: Ctrl+S 저장, Ctrl+Z/Y 되돌리기, Ctrl+D 복제, Del 삭제, F 포커스, F2 이름 변경, Ctrl+P 플레이/정지
 - 에이전트용 에디터 스크린샷: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60]`
 
-웹 에디터(`--web`)는 브라우저에서 같은 기능의 핵심(계층, 뷰포트 스트리밍, 인스펙터, 콘솔, 플레이 제어)을 제공하며 원격/헤드리스 환경에서 씁니다.
 
 ## AI 연동
 
@@ -96,7 +94,6 @@ engine/api       명령 레지스트리, HTTP 서버, 에디터 라우트, MCP �
 engine/app       Engine (시뮬레이션, undo, 작업 큐), 프로젝트 템플릿
 engine/editor    네이티브 에디터 (Dear ImGui 패널, 기즈모, Scene/Game 뷰)
 engine/platform  Platform.h + win32(D3D11) / web(WebGL2) / null(EGL) 구현
-editor/          웹 에디터 (HTML/CSS/JS)
 tools/oe         CLI
 tools/player     게임 런타임 (Name.exe / 웹 wasm) + 웹 페이지 템플릿
 tools/shaders    셰이더 재생성 스크립트 (sokol-shdc)

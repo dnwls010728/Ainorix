@@ -17,4 +17,4 @@ the results screen shows the time and accuracy, "Play again" restarts.
   - state: `script.eval {code:"{self.yaw, self.pitch, self.ammo}", entity:"Player"}`,
            `script.eval {code:"#scene.withTag('target')"}`, `game.get('shots')` / `game.get('hits')`
 - Scripts: `oe exec . script.errors` lists Lua errors with file:line.
-- Human:   `oe run .` plays in a window; `oe editor .` opens the web editor (Game view captures the mouse).
+- Human:   `oe run .` plays in a window; `oe editor .` opens the editor (click the Game view while playing to capture the mouse).

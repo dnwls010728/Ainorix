@@ -2,7 +2,7 @@
 
 [한국어](README.md) | [English](README.en.md) | **日本語**
 
-AI が人と同じように扱い、検証できるように設計した C++17 ゲームエンジンです。人のためのエディター (ネイティブ・Web) と AI のためのインターフェース (CLI・HTTP・MCP) が**同じコマンド API** を共有します。
+AI が人と同じように扱い、検証できるように設計した C++17 ゲームエンジンです。人のためのエディターと AI のためのインターフェース (CLI・HTTP・MCP) が**同じコマンド API** を共有します。
 
 ![ネイティブエディター - Showcase サンプル](docs/images/native-editor.png)
 
@@ -37,9 +37,8 @@ Web ランタイム (`oe package --web` 用) は `runtime/web/` にビルド済�
 
 ```bat
 build\bin\oe.exe new MyGame                 :: プロジェクトを作成 (2 ステージのコイン集めサンプルゲーム)
-build\bin\oe.exe editor MyGame              :: ネイティブエディター (API / Web エディターも http://127.0.0.1:7777 で同時に提供)
+build\bin\oe.exe editor MyGame              :: エディター (エージェント用の API も http://127.0.0.1:7777 で同時に提供)
 build\bin\oe.exe editor MyGame --lang ja    :: エディターの言語を指定 (ja / en / ko、既定は OS の言語)
-build\bin\oe.exe editor MyGame --web        :: Web エディターのみ (ブラウザー)
 build\bin\oe.exe run MyGame                 :: ネイティブウィンドウでプレイ (WASD / Space)
 build\bin\oe.exe render MyGame --out shot.png --frames 60
 build\bin\oe.exe exec MyGame scene.summary
@@ -53,7 +52,7 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 
 ## エディター
 
-`oe editor` は**ネイティブエディター** (Dear ImGui のドッキング + ImGuizmo、エンジンと同じプロセスで GPU 描画) を開きます。ウィンドウや GPU がない環境 (ヘッドレスの Linux など) や `--web` 指定時は **Web エディター**が開きます。どちらも同じコマンド API だけを使うため、エージェント (`oe mcp --connect 7777`) が人と同じセッションを同時に操作できます。詳細: [docs/EDITOR.md](docs/EDITOR.md)
+`oe editor` は**エディター** (Dear ImGui のドッキング + ImGuizmo、エンジンと同じプロセスで GPU 描画) を開きます。コマンド API だけを使うため、エージェント (`oe mcp --connect 7777`) が人と同じセッションを同時に操作できます。ウィンドウがない環境 (ヘッドレスの Linux など) では `oe editor MyGame --screenshot shot.png` でエディター画面を画像にできます。詳細: [docs/EDITOR.md](docs/EDITOR.md)
 
 - ドッキングパネル: ヒエラルキー・インスペクター・シーン・ゲーム・アセット・コンソール・スクリプト - 配置はプロジェクトごとに保存 (`.oe/editor.ini`)、表示 > レイアウトをリセット
 - シーンビュー: 右ドラッグ + WASD/QE で飛行、中ボタンでパン、Alt + 左ドラッグでオービット、ホイールでズーム、クリックで選択、**移動/回転/スケールのギズモ** (Q/W/E/R、ローカル/ワールド、スナップ)、カメラ・ライトのアイコン、コライダー表示、2D ビュー、アセットをドラッグして配置
@@ -69,7 +68,6 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 - ショートカット: Ctrl+S 保存、Ctrl+Z/Y 元に戻す/やり直し、Ctrl+D 複製、Del 削除、F フォーカス、F2 名前を変更、Ctrl+P 再生/停止
 - エージェント向けのエディタースクリーンショット: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60] [--lang ja]`
 
-Web エディター (`--web`) はブラウザーで同じ機能の中核 (ヒエラルキー、ビューポートのストリーミング、インスペクター、コンソール、再生操作) を提供し、リモートやヘッドレスの環境で使います。
 
 ## AI 連携
 
@@ -96,7 +94,6 @@ engine/api       コマンドレジストリ、HTTP サーバー、エディタ�
 engine/app       Engine (シミュレーション、undo、ジョブキュー)、プロジェクトテンプレート
 engine/editor    ネイティブエディター (Dear ImGui パネル、ギズモ、シーン/ゲームビュー、翻訳)
 engine/platform  Platform.h + win32 (D3D11) / web (WebGL2) / null (EGL) の実装
-editor/          Web エディター (HTML/CSS/JS)
 tools/oe         CLI
 tools/player     ゲームランタイム (Name.exe / Web の wasm) + Web ページのテンプレート
 tools/shaders    シェーダー再生成スクリプト (sokol-shdc)

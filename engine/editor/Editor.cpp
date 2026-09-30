@@ -98,7 +98,7 @@ void SimguiLog(const char* tag, uint32_t level, uint32_t item, const char* messa
     else if (level == 2) OE_LOG_WARN("editor", "%s item %u line %u: %s", tag, item, line, msg);
 }
 
-// Entity presets of the Create menu (same set as the web editor's add menu).
+// Entity presets of the Create menu.
 struct Preset {
     const char* key;
     const char* group;
@@ -404,7 +404,7 @@ void NativeEditor::Impl::PollLog() {
     while (log.size() > 2000) log.pop_front();
 }
 
-// Commands from HTTP / MCP (an agent, or the web editor): show edits as they land.
+// Commands from HTTP / MCP (agents): show edits as they land.
 void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args, const Json& result) {
     const Command* cmd = engine.Commands().Find(name);
     if (!cmd || !cmd->mutates || !result["ok"].asBool()) return;
@@ -1166,7 +1166,7 @@ NativeEditor::~NativeEditor() {
 bool NativeEditor::Init(std::string* error) {
     Impl& m = *impl_;
     if (!m.engine.Gpu()) {
-        if (error) *error = "the native editor needs the GPU renderer (none is available here); use `oe editor --web`";
+        if (error) *error = "the editor needs the GPU renderer (none is available here)";
         return false;
     }
     if (!m.options.layoutFile.empty()) CreateDirectories(ParentPath(m.options.layoutFile));

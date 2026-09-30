@@ -2,7 +2,7 @@
 
 ```
             ┌───────────── front-ends (all call the same registry) ─────────────┐
-            │  oe CLI   Native editor (in-process)   Web editor (HTTP)   MCP      │
+            │  oe CLI    Editor (in-process)    HTTP API    MCP (stdio)           │
             └───────────────────────────────┬────────────────────────────────────┘
                                             │ Engine::Call(name, args) -> {ok,result|error}
 ┌───────────────────────────────────────────▼──────────────────────────────────────┐
@@ -30,7 +30,7 @@
 
 ## Threading
 
-The engine is single-threaded (the GPU device lives on the main thread too). The HTTP server, each editor viewport stream (WebSocket; it JPEG-encodes frames off the main thread) and the MCP reader run on their own threads and hand work to the main thread through `Engine::PostCall` / `PostJob`; the main loop drains that queue every iteration (`tools/oe/main.cpp: MainLoop`, or `RunNativeEditor` in `engine/editor/Editor.cpp` for the native editor, which also draws its Dear ImGui frame on that thread). The CLI, the native editor and tests call `Engine::Call` directly; `Engine::SetRemoteCallObserver` lets the native editor see commands that arrived through PostCall (agents).
+The engine is single-threaded (the GPU device lives on the main thread too). The HTTP server and the MCP reader run on their own threads and hand work to the main thread through `Engine::PostCall` / `PostJob`; the main loop drains that queue every iteration (`tools/oe/main.cpp: MainLoop`, or `RunNativeEditor` in `engine/editor/Editor.cpp` for the editor, which also draws its Dear ImGui frame on that thread). The CLI, the editor and tests call `Engine::Call` directly; `Engine::SetRemoteCallObserver` lets the editor see commands that arrived through PostCall (agents).
 
 ## Scene model
 
@@ -40,7 +40,7 @@ The engine is single-threaded (the GPU device lives on the main thread too). The
 
 ## Rendering
 
-Both renderers consume the same scene description (`render/RenderScene.h`, UI quads from `render/UI.h`). `SoftwareRenderer` is the deterministic reference: clipping, culling, depth testing, textured smooth/flat Lambert shading, shadow map, an entity-id buffer for picking, editor grid and selection outline; its `RenderTarget` is presented by a window, encoded to PNG, or hashed. `GpuRenderer` draws the same thing through sokol_gfx (D3D11 / WebGL2 / GLES3) with MSAA, filtered shadows and mipmaps, straight into the window's swapchain or offscreen with readback (editor viewport, GPU screenshots). The platform supplies its `GpuDevice`. See [RENDERING.md](RENDERING.md).
+Both renderers consume the same scene description (`render/RenderScene.h`, UI quads from `render/UI.h`). `SoftwareRenderer` is the deterministic reference: clipping, culling, depth testing, textured smooth/flat Lambert shading, shadow map, an entity-id buffer for picking, editor grid and selection outline; its `RenderTarget` is presented by a window, encoded to PNG, or hashed. `GpuRenderer` draws the same thing through sokol_gfx (D3D11 / WebGL2 / GLES3) with MSAA, filtered shadows and mipmaps, straight into the window's swapchain, into textures (editor views) or offscreen with readback (GPU screenshots). The platform supplies its `GpuDevice`. See [RENDERING.md](RENDERING.md).
 
 ## Roadmap
 

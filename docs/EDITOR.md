@@ -1,19 +1,12 @@
 # Editor
 
-OwnEngine has two editors on the same command API:
+`oe editor <project>` opens the editor: Dear ImGui (docking) + ImGuizmo panels drawn with sokol_gfx in the engine process. The Scene and Game views are GpuRenderer textures, so nothing is streamed or encoded. It needs a window and a GPU backend (Windows today; a macOS/Linux desktop platform layer is enough, see [PLATFORMS.md](PLATFORMS.md)).
 
-| | Native editor (default) | Web editor |
-|---|---|---|
-| Start | `oe editor <project>` | `oe editor <project> --web` (also served by the native editor's port) |
-| Where | Windows today; any platform with a window + GPU backend | any browser, also remote / headless machines |
-| Viewport | GpuRenderer textures in the same process (no streaming) | GPU/software frames streamed over WebSocket (JPEG) |
-| UI | Dear ImGui (docking) + ImGuizmo, drawn with sokol_gfx | HTML/CSS/JS in `editor/` |
+![Editor](images/native-editor.png)
 
-![Native editor](images/native-editor.png)
+The editor only uses public commands (`Engine::Call`), so an agent attached with `oe mcp --connect 7777` sees and can do exactly what the person in the editor does. The editor keeps the HTTP API running (`--port`, default 7777): `oe mcp --connect` and `POST /api/call` work while it is open, and every edit that arrives through the API shows up as a notice (`API: component.set Player MeshRenderer`) plus a fading dot on the entity in the Hierarchy.
 
-Both only use public commands (`Engine::Call`), so an agent attached with `oe mcp --connect 7777` sees and can do exactly what the person in the editor does. The native editor keeps the HTTP server running (`--port`, default 7777): the web editor, `oe mcp --connect` and `POST /api/call` work while it is open, and every edit that arrives through the API shows up as a notice (`API: component.set Player MeshRenderer`) plus a fading dot on the entity in the Hierarchy.
-
-When no native window or GPU is available (Linux `null` platform, `--renderer software`), `oe editor` falls back to the web editor.
+Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
 
 ## Panels
 
@@ -55,7 +48,7 @@ Translations live in `engine/editor/EditorText.cpp`: UI strings are written in E
 
 ## For agents: looking at the editor
 
-The native editor can be rendered headless (needs a GPU backend: D3D11/WARP on Windows, EGL on Linux with `libegl-dev libgles-dev`):
+The editor can be rendered headless (needs a GPU backend: D3D11/WARP on Windows, EGL on Linux with `libegl-dev libgles-dev`):
 
 ```bash
 oe editor samples/Hello --screenshot build/editor.png                 # default layout, 1600x900
@@ -82,4 +75,4 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 
 Platform requirements (`engine/platform/Platform.h`): `Window::SetEventMode` / `TakeEvents` (full keyboard, text, all mouse buttons, wheel, focus, close, dropped files), `SetCursor`, `DpiScale`, `Maximize`, and `PlatformEnableHighDpi`. Win32 implements them; a macOS port needs them in its AppKit window plus a Metal `GpuDevice` (see [PLATFORMS.md](PLATFORMS.md)).
 
-Adding a panel: a method on `NativeEditor::Impl` (declared in `EditorInternal.h`), called from `NativeEditor::Update`, docked in `DockLayout`, with a toggle in the View menu. Read data with `Call("...")` when the revision changes (`Refresh`), write with commands so undo, the API and the web editor stay in sync.
+Adding a panel: a method on `NativeEditor::Impl` (declared in `EditorInternal.h`), called from `NativeEditor::Update`, docked in `DockLayout`, with a toggle in the View menu. Read data with `Call("...")` when the revision changes (`Refresh`), write with commands so undo and agents using the API stay in sync.
