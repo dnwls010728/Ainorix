@@ -2,6 +2,7 @@
 // syntax highlighting, line numbers, find/replace, and problems from
 // script.check (while typing) and script.errors (the running game).
 #include <algorithm>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -148,18 +149,23 @@ void NativeEditor::Impl::UpdateScriptMarkers(ScriptTab& tab) {
     std::vector<const ScriptDiagnostic*> all;
     for (const ScriptDiagnostic& d : tab.diagnostics) all.push_back(&d);
     for (const ScriptDiagnostic& d : tab.runtime) all.push_back(&d);
+    std::set<std::pair<int, std::string>> shown;  // the same problem from script.check and the game: once
     for (const ScriptDiagnostic* d : all) {
         if (d->line <= 0 || static_cast<size_t>(d->line) > ed.GetLineCount()) continue;
+        if (!shown.insert({d->line, d->message}).second) continue;
         size_t line = static_cast<size_t>(d->line - 1);
         ImU32 col = d->error ? kErrorColor : kWarningColor;
         std::string tip = std::string(d->error ? Tr("Error") : Tr("Warning")) + ": " + d->message;
-        ed.AddMarker(line, col, (col & 0x00FFFFFF) | 0x28000000, tip, tip);
-        // Underline the line's code (without its indentation).
+        // Underline the line's code (without its indentation). Hovering the text
+        // shows the squiggle's tooltip, so the line marker keeps its tooltip on
+        // the line number only (both would stack in one tooltip window).
         std::string text = ed.GetLineText(line);
         size_t first = 0;
         while (first < text.size() && (text[first] == ' ' || text[first] == '\t')) ++first;
         size_t glyphs = Glyphs(text);
-        if (glyphs > first) ed.AddSquiggle(TextEditor::DocPos(line, first), TextEditor::DocPos(line, glyphs), kSquiggleProblem, col, tip);
+        bool squiggle = glyphs > first;
+        ed.AddMarker(line, col, (col & 0x00FFFFFF) | 0x28000000, tip, squiggle ? std::string() : tip);
+        if (squiggle) ed.AddSquiggle(TextEditor::DocPos(line, first), TextEditor::DocPos(line, glyphs), kSquiggleProblem, col, tip);
     }
     tab.markersDirty = false;
 }
