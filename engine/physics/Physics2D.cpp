@@ -4,6 +4,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 
 #include "core/Log.h"
@@ -59,9 +60,23 @@ struct Pose2 {
     float sx = 1, sy = 1;  // signed scale in the plane
 };
 
+// World pose of an entity in the plane. Unparented entities with no X/Y
+// rotation (the usual 2D case) take position, angle and scale straight from the
+// Transform through Box2D's own cos/sin, so bodies start identically on every
+// platform (the C library's trigonometry, used for world matrices, may differ in the last bit).
 Pose2 PoseOf(const Scene& scene, EntityId id) {
-    Mat4 m = scene.WorldMatrix(id);
+    const Transform* t = scene.Get<Transform>(id);
+    const EntityRecord* rec = scene.Record(id);
     Pose2 pose;
+    if (t && (!rec || rec->parent == kNullEntity) && t->rotation.x == 0.0f && t->rotation.y == 0.0f) {
+        pose.p = b2Vec2{t->position.x, t->position.y};
+        pose.z = t->position.z;
+        pose.q = t->rotation.z == 0.0f ? b2Rot_identity : b2MakeRot(Radians(t->rotation.z));
+        pose.sx = t->scale.x;
+        pose.sy = t->scale.y;
+        return pose;
+    }
+    Mat4 m = scene.WorldMatrix(id);
     pose.p = b2Vec2{m.at(0, 3), m.at(1, 3)};
     pose.z = m.at(2, 3);
     Vec3 x(m.at(0, 0), m.at(1, 0), m.at(2, 0)), y(m.at(0, 1), m.at(1, 1), m.at(2, 1));
@@ -72,6 +87,28 @@ Pose2 PoseOf(const Scene& scene, EntityId id) {
     if (x.x * y.y - x.y * y.x < 0) pose.sy = -pose.sy;  // mirrored
     return pose;
 }
+
+// The Transform values last seen for a body, to tell a script/editor teleport
+// from the pose the simulation wrote itself (exact comparison, no round trip).
+struct Seen {
+    bool valid = false;  // unparented only
+    Vec3 p, r, s;
+};
+
+Seen SeenOf(const Scene& scene, EntityId id) {
+    Seen seen;
+    const Transform* t = scene.Get<Transform>(id);
+    const EntityRecord* rec = scene.Record(id);
+    if (t && (!rec || rec->parent == kNullEntity)) {
+        seen.valid = true;
+        seen.p = t->position;
+        seen.r = t->rotation;
+        seen.s = t->scale;
+    }
+    return seen;
+}
+
+bool SameSeen(const Seen& a, const Seen& b) { return a.p == b.p && a.r == b.r && a.s == b.s; }
 
 bool SameP(b2Vec2 a, b2Vec2 b) { return b2LengthSquared(b2Sub(a, b)) < 1e-10f; }
 bool SameQ(b2Rot a, b2Rot b) { return std::fabs(a.c - b.c) < 1e-6f && std::fabs(a.s - b.s) < 1e-6f; }
@@ -235,6 +272,7 @@ struct Physics2D::Impl {
         float lastAngular = 0;
         std::vector<b2ShapeId> triggers;
         bool tilemap = false;
+        Seen seen;
     };
     struct CharacterRec {
         b2BodyId body = b2_nullBodyId;
@@ -561,6 +599,7 @@ struct Physics2D::Impl {
                 rec.key = key;
                 rec.lastPos = pose.p;
                 rec.lastRot = pose.q;
+                rec.seen = SeenOf(scene, id);
                 if (rb) {
                     rec.lastVelocity = rb->velocity;
                     rec.lastAngular = rb->angularVelocity;
@@ -571,7 +610,9 @@ struct Physics2D::Impl {
                 continue;
             }
             BodyRec& rec = it->second;
-            bool moved = !SameP(pose.p, rec.lastPos) || !SameQ(pose.q, rec.lastRot);
+            Seen seen = SeenOf(scene, id);
+            bool moved = (seen.valid && rec.seen.valid) ? !SameSeen(seen, rec.seen) : (!SameP(pose.p, rec.lastPos) || !SameQ(pose.q, rec.lastRot));
+            rec.seen = seen;
             if (rec.kind == Kind::Kinematic && dt > 0) {
                 // Reach the Transform pose at the end of this step (pushes dynamic bodies, carries characters).
                 b2Transform cur = b2Body_GetTransform(rec.id);
@@ -751,7 +792,8 @@ struct Physics2D::Impl {
             CharacterBody2D* cb = scene.Get<CharacterBody2D>(id);
             if (!cb || !b2Body_IsValid(rec.body)) continue;
             const bool platformer = cb->mode != "topdown";
-            const float cosSlope = std::cos(Radians(Clamp(cb->maxSlope, 0.0f, 89.0f)));
+            const b2CosSin slope = b2ComputeCosSin(Radians(Clamp(cb->maxSlope, 0.0f, 89.0f)));  // deterministic everywhere
+            const float cosSlope = slope.cosine;
             const bool wasGrounded = cb->grounded && platformer;
 
             b2Vec2 v = V2(cb->velocity);
@@ -817,7 +859,7 @@ struct Physics2D::Impl {
             if (platformer) {
                 probe();
                 if (!grounded && wasGrounded && V2(cb->velocity).y <= 0.0f) {
-                    float snap = 0.05f + std::fabs(v.x) * dt * std::tan(Radians(Clamp(cb->maxSlope, 0.0f, 80.0f)));
+                    float snap = 0.05f + std::fabs(v.x) * dt * std::min(5.7f, slope.sine / std::max(0.01f, slope.cosine));
                     float f = Cast(rec, rec.pos, b2Vec2{0, -snap}, cb->dropThrough);
                     if (f < 1.0f) {
                         rec.pos.y -= f * snap;
@@ -881,7 +923,10 @@ struct Physics2D::Impl {
             if (rec.kind != Kind::Dynamic) continue;
             b2Transform xf = b2Body_GetTransform(rec.id);
             bool rotChanged = !SameQ(xf.q, rec.lastRot);
-            if (!SameP(xf.p, rec.lastPos) || rotChanged) WritePose2(scene, kv.first, xf.p, xf.q, rotChanged);
+            if (!SameP(xf.p, rec.lastPos) || rotChanged) {
+                WritePose2(scene, kv.first, xf.p, xf.q, rotChanged);
+                rec.seen = SeenOf(scene, kv.first);
+            }
             rec.lastPos = xf.p;
             rec.lastRot = xf.q;
             if (RigidBody2D* rb = scene.Get<RigidBody2D>(kv.first)) {

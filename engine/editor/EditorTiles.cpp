@@ -3,6 +3,7 @@
 // go through tilemap.paint / tilemap.fill, one undo step per stroke.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include "editor/EditorInternal.h"

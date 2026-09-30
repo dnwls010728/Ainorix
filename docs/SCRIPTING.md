@@ -81,7 +81,8 @@ end
 | `physics.raycast(origin, dir, maxDist?)` | `{entity, point, normal, distance}` or `nil` |
 | `physics.overlapSphere(center, radius)` / `physics.contacts(id)` | Entity ids |
 | `physics.addImpulse(id, {x,y,z})` | Push a dynamic body |
-| `tilemap.get(id, col, row)` / `tilemap.set(id, col, row, ch)` / `tilemap.solid(id, col, row)` | Read/change a Tilemap cell (row 0 = top); changes update graphics and collision |
+| `tilemap.get(id, col, row)` / `tilemap.set(id, col, row, ch)` / `tilemap.fill(id, col, row, w, h, ch)` | Read/change Tilemap cells (row 0 = top); changes update graphics, autotiles and collision |
+| `tilemap.solid(id, col, row)` / `tilemap.collision(id, col, row)` / `tilemap.size(id)` | Cell collides? / `"none"`, `"solid"`, `"oneway"`, `"shape"` / width, height in cells |
 | `tilemap.cellAt(id, {x,y,z})` / `tilemap.cellCenter(id, col, row)` | World point → `col, row`; cell → world position (see [2D.md](2D.md)) |
 | `scene.instantiate(path, {position, name, parent})` | Spawn a prefab, returns the root id |
 | `scene.send(id, method, ...)` / `scene.broadcast(method, ...)` | Call methods on other scripts |
@@ -94,7 +95,7 @@ end
 | `draw.line(a, b, color?, s?)` / `draw.box(c, size, color?, s?)` / `draw.sphere(c, r, color?, s?)` | Debug lines (default: this frame only) |
 | `require("lib.util")` | Loads `lib/util.lua` from the project once per session |
 
-Instance helpers (from the built-in base class): `self:get(type)`, `self:set(type, values)`, `self:add`, `self:has`, `self:remove`, `self:destroy()`, `self:position()`, `self:setPosition(x, y, z)`, `self:translate(x, y, z)`, `self:rotate(x, y, z)`, and for physics `self:grounded()`, `self:velocity()`, `self:setVelocity(x, y, z)`, `self:addImpulse(x, y, z)`, `self:contacts()`.
+Instance helpers (from the built-in base class): `self:get(type)`, `self:set(type, values)`, `self:add`, `self:has`, `self:remove`, `self:destroy()`, `self:position()`, `self:setPosition(x, y, z)`, `self:translate(x, y, z)`, `self:rotate(x, y, z)`, and for physics (CharacterBody, CharacterBody2D, RigidBody or RigidBody2D) `self:grounded()`, `self:velocity()`, `self:setVelocity(x, y, z)`, `self:addImpulse(x, y, z)`, `self:contacts()`.
 
 `scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are line-by-line Lua ports of the built-in `Rotator` and `PlayerController` components; tests check they behave identically.
 

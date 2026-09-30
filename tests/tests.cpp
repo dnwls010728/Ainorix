@@ -1030,6 +1030,59 @@ TEST(Physics2DIsDeterministic) {
     };
     std::string a = run(), b = run();
     CHECK(a == b);
+    // Compare this line between builds (native SSE2/NEON vs WebAssembly scalar): Box2D is cross-platform deterministic.
+    uint64_t h = 1469598103934665603ull;
+    for (char c : a) h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+    std::printf("  2D scene hash %016llx\n", static_cast<unsigned long long>(h));
+}
+
+TEST(DungeonSamplePlays) {
+    auto run = [](std::string* summary) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Dungeon", &err));
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        auto eval = [&](const char* code) {
+            Json a = Json::MakeObject();
+            a["code"] = code;
+            return e.Call("script.eval", a)["result"]["value"];
+        };
+        CHECK(eval("return game.get('coinsTotal')").asInt() == 8);
+        // The level reads its rules from tilesets/dungeon.tileset.json.
+        Json info = Call(e, "tilemap.info", R"J({"id": "Level"})J")["result"];
+        CHECK(info["width"].asInt() == 36 && info["height"].asInt() == 20 && !info.has("error"));
+        // Walk right, then shoot the slime east of the start twice.
+        Call(e, "component.set", R"J({"id": "Player", "type": "Transform", "values": {"position": [22.5, -3.5, 0.1]}})J");
+        Call(e, "input.key", R"J({"key": "D", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 2})J");
+        Call(e, "input.key", R"J({"key": "D", "down": false})J");
+        Call(e, "sim.step", R"J({"frames": 10})J");
+        for (int shot = 0; shot < 2; ++shot) {
+            Call(e, "input.key", R"J({"key": "Space", "down": true})J");
+            Call(e, "sim.step", R"J({"frames": 1})J");
+            Call(e, "input.key", R"J({"key": "Space", "down": false})J");
+            Call(e, "sim.step", R"J({"frames": 25})J");
+        }
+        Call(e, "sim.step", R"J({"frames": 15})J");
+        CHECK(eval("return #scene.withTag('enemy')").asInt() == 5);
+        // Coins are triggers the hero collects.
+        Call(e, "component.set", R"J({"id": "Player", "type": "Transform", "values": {"position": [29.5, -1.5, 0.1]}})J");
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        CHECK(eval("return #scene.withTag('coin')").asInt() == 7);
+        CHECK(eval("return scene.get(scene.find('CoinsText'), 'UIText').text").asString() == "COINS 1/8");
+        // The stairs refuse to end the level early.
+        Call(e, "component.set", R"J({"id": "Player", "type": "Transform", "values": {"position": [28.5, -14.5, 0.1]}})J");
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        CHECK(eval("return scene.get(scene.find('Note'), 'UIText').text").asString() == "7 COINS LEFT");
+        CHECK(e.Scripts().Errors().empty());
+        CHECK(Call(e, "physics.state", "{}")["result"]["warnings"].size() == 0);
+        Json shot = Call(e, "render.screenshot", R"J({"width": 128, "height": 72, "inline": false})J");
+        *summary = shot["result"]["hash"].asString() + e.GetScene().ToJson().dump();
+    };
+    std::string a, b;
+    run(&a);
+    run(&b);
+    CHECK(a == b);
 }
 
 // ----- assets & rendering ---------------------------------------------------------

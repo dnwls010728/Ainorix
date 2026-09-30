@@ -16,6 +16,7 @@ Without a window (Linux `null` platform, CI) the editor can still be rendered to
 - **Game** - the scene's active camera with in-game UI, letterboxed to Free / 16:9 / 16:10 / 4:3. While playing, click it to give the game the keyboard and mouse (green frame); click elsewhere to take them back. Games that lock the mouse (`input.lockMouse`) get raw relative motion; Esc releases it.
 - **Assets** - project files by kind. Double-click: open a scene, edit a script, instantiate a prefab. Drag into the Scene, Hierarchy or Inspector. Files dropped on the window from Explorer are imported (same rules as `oe import`).
 - **Console** - the engine log with level/text filters, and a command line: `command.name {"json": "args"}` (Tab completes command names, Up/Down browse history).
+- **Tiles** - palette of the selected Tilemap's tile characters, drawn from its tileset (autotiles show their fully connected frame; tooltips list collision, autotile mode and variants). Picking one turns on **Paint Tiles**: in the Scene view left drag paints, right drag erases, Shift+drag fills a rectangle, Ctrl+click picks the tile under the cursor, middle drag pans; the cell under the cursor is outlined with its column, row. Autotiles connect as you paint and each stroke is one undo step (`tilemap.paint {merge}`). See [2D.md](2D.md#tilemap).
 - **Scripts** - Lua code editor tabs ([ImGuiColorTextEdit](https://github.com/goossens/ImGuiColorTextEdit)): syntax highlighting (engine API names such as `scene`, `input`, `self` in their own color), line numbers, bracket matching, auto indent, multiple cursors, undo/redo, **find / replace / replace all** (Ctrl+F; Aa = match case, [] = whole word, Ctrl+G next). While you type, the script is checked with `script.check` (0.35 s after the last key): syntax errors and warnings (a global assigned without `local`, an unknown global) are marked on the line number and underlined, with the message as a tooltip, and listed under the code - click one to jump there. Runtime errors of the running game (`script.errors`) are marked the same way. Ctrl+S (or Save) writes through `script.write`, which hot-reloads the script, also while the game runs.
 
 The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). View > Reset Layout restores the default.
@@ -31,7 +32,8 @@ The layout (docking), panel visibility, interface size and language, gizmo/snap 
 | Scene / Hierarchy | Q / W / E / R | select / move / rotate / scale gizmo |
 | | X | gizmo local / world |
 | | Ctrl while dragging a gizmo | toggle snapping (toolbar: Snap, step sizes) |
-| | F, double-click | frame selection |
+| | F, double-click | frame selection (a whole map for a Tilemap) |
+| Scene, Paint Tiles on | Left / right drag, Shift+drag, Ctrl+click | paint / erase / fill a rectangle / pick a tile |
 | | F2, Del, Ctrl+D, Esc | rename, delete, duplicate, deselect |
 | Anywhere | Ctrl+S, Ctrl+Z, Ctrl+Y (Ctrl+Shift+Z), Ctrl+N | save, undo, redo, new scene |
 | Anywhere | Ctrl+P | play / stop (stop restores the edit-time scene) |
@@ -58,7 +60,7 @@ oe editor samples/Hello --screenshot build/editor.png --lang ja       # Japanese
 oe editor samples/FPS --screenshot build/editor.png --script scripts/target.lua  # code editor with the script's problems
 ```
 
-Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes window events (keys, mouse, text), `DrawToImage` reads the frame back (see `NativeEditorHeadless` in `tests/tests.cpp`).
+Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes window events (keys, mouse, text), `DrawToImage` reads the frame back (see `NativeEditorHeadless` and `NativeEditorTilePainting` in `tests/tests.cpp`; `SetTileBrush` and `SceneViewRect` help aim the brush).
 
 ## Code
 
@@ -69,6 +71,7 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 - `EditorPanels.cpp` - Hierarchy, Inspector (including typed Script params), Assets, Console.
 - `EditorScripts.cpp` - Scripts panel: the code editor, live `script.check`, problem markers.
 - `EditorViewports.cpp` - Scene view (camera, picking, gizmo, markers, drops) and Game view (input forwarding, mouse lock).
+- `EditorTiles.cpp` - Tiles panel and the Scene view tile brush.
 - `EditorText.h/.cpp` - interface languages and the translation catalog (`Tr`, `TrId`).
 - `EditorMath.h` - header-only math (Transform decomposition, editor camera, screen rays) with unit tests.
 - `SokolImGui.cpp` - `sokol_imgui.h` implementation for the engine's graphics API.

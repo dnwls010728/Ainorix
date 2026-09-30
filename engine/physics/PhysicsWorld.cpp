@@ -513,8 +513,14 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 it = bodies.end();
             }
             if (it == bodies.end()) {
+                auto empty = emptyTilemaps.find(id);
+                if (empty != emptyTilemaps.end() && empty->second == key) continue;  // nothing collides (decoration layer)
                 JPH::RefConst<JPH::Shape> shape = TilemapShape(kv.second, rules, wx.scale);
-                if (!shape) continue;
+                if (!shape) {
+                    emptyTilemaps[id] = key;
+                    continue;
+                }
+                emptyTilemaps.erase(id);
                 JPH::BodyCreationSettings bs(shape, wx.pos, wx.rot, JPH::EMotionType::Static, Layers::kStatic);
                 bs.mUserData = id;
                 bs.mFriction = 0.2f;
@@ -678,6 +684,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
     std::map<EntityId, BodyRec> bodies;
     std::map<EntityId, TriggerRec> triggers;
     std::map<EntityId, CharacterRec> characters;
+    std::map<EntityId, std::string> emptyTilemaps;  // tilemap -> key of a map without colliding tiles
     std::map<JPH::uint32, EntityId> bodyToEntity;
     std::mutex contactMutex;
     std::set<ContactKey> bodyContacts;

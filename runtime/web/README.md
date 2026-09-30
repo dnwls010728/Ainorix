@@ -7,8 +7,8 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 
 The runtime does not depend on the game: every project uses the same files.
 
-- Built with: Emscripten 6.0.10, Release (`build_web.bat`)
-- Engine source: commit b8a0cf6 + mouse look + 2D (Sprite, SpriteAnimation, Tilemap, plane2D) + UI overhaul (TrueType fonts, layouts, UIImage, UISlider) + PBR materials and transparency
+- Built with: Emscripten 6.0.10, Release (`build_web.sh`)
+- Engine source: commit b8a0cf6 + mouse look + 2D (Sprite, SpriteAnimation, Tilemap, plane2D) + UI overhaul (TrueType fonts, layouts, UIImage, UISlider) + PBR materials and transparency + Box2D 2D physics (Collider2D, RigidBody2D, CharacterBody2D) + tileset files and autotiling
 
 ## When to rebuild
 

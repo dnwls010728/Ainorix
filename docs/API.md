@@ -452,6 +452,56 @@ Create a copy of a prefab in the scene. Returns the new root entity.
 
 Prefab files in the project and how many instances the scene has of each.
 
+## tilemap
+
+### `tilemap.info`
+
+A tilemap's size and tile rules: every character with its frame (for autotiles the fully connected one), autotile mode, variants and collision; the tileset image and grid. Use it to pick characters for tilemap.paint.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Tilemap entity id or name. |
+
+### `tilemap.paint` *(undoable edit)*
+
+Set tiles at cells (col, row from the top-left; the map grows as needed). Autotiles pick their frames from the new neighbours.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Tilemap entity id or name. |
+| `char` | string | yes | Tile character (see tilemap.info); " " erases. |
+| `cells` | array | yes | Cells [[col, row], ...]. |
+| `merge` | string |  | Undo group key: consecutive paints with the same key become one undo step (editor brush strokes). |
+
+### `tilemap.fill` *(undoable edit)*
+
+Fill a rectangle of cells with one tile character (" " erases).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Tilemap entity id or name. |
+| `char` | string | yes | Tile character. |
+| `col` | integer | yes | Left column. |
+| `row` | integer | yes | Top row. |
+| `width` | integer | yes | Columns. |
+| `height` | integer | yes | Rows. |
+| `merge` | string |  | Undo group key. |
+
+## tileset
+
+### `tileset.create`
+
+Create or replace a tileset file (*.tileset.json): image + grid + tile rules shared by tilemaps. Rules: frame, variants, autotile ("sides" = 16 frames, "blob" = 47 frames), connects, edges, collision (none, solid, oneway, slope-up, slope-down, half-bottom, half-top or a polygon).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | e.g. "tilesets/terrain.tileset.json". |
+| `image` | string | yes | Tileset image (PNG) path. |
+| `columns` | integer | yes | Tiles per row in the image. |
+| `rows` | integer | yes | Tile rows in the image. |
+| `tiles` | object | yes | Character -> rule, e.g. {"#": {"autotile": "blob", "frame": 0, "collision": "solid"}, "=": {"frame": 47, "collision": "oneway"}}. |
+| `overwrite` | boolean |  | Replace an existing file. |
+
 ## physics
 
 ### `physics.raycast`
@@ -714,6 +764,66 @@ Physics character for players/NPCs: set velocity (x/z to walk, y to jump) and th
 | `grounded` | bool | `false` | Runtime state: true while standing on walkable ground. |
 | `plane2D` | bool | `false` | 2D games: keep the character on its starting Z (velocity.z is ignored). |
 
+### Collider2D
+
+2D collision shape in the XY plane (Box2D). Alone it is static (walls, ground); add RigidBody2D to make it move. Shapes: box (optionally rounded), circle, capsule, polygon (any simple outline, concave is split), edge (line strip; loop closes it). isTrigger makes a sensor volume; oneWay makes a platform you can pass from below.
+
+| field | type | default | description |
+|---|---|---|---|
+| `shape` | string | `"box"` | Shape type. |
+| `size` | vec3 | `[1,1,0]` | Box: width and height in local units (x, y; z is ignored), multiplied by Transform.scale. |
+| `radius` | float | `0.5` | Circle/capsule radius in local units. |
+| `height` | float | `1` | Capsule: total height along local Y, including the rounded ends. |
+| `rounding` | float | `0` | Box: corner radius (0 = sharp corners). Rounded boxes slide over bumps more smoothly. |
+| `center` | vec3 | `[0,0,0]` | Offset of the shape from the entity origin (x, y). |
+| `angle` | float | `0` | Box/capsule rotation around the shape center in degrees (added to the entity rotation). |
+| `points` | json | `[]` | Polygon/edge points [[x, y], ...] in local units. Polygon: outline in any winding (concave is triangulated). Edge: a line strip, two-sided. |
+| `loop` | bool | `false` | Edge: close the strip into a loop (smooth one-sided outline, solid inside: good for terrain). |
+| `isTrigger` | bool | `false` | Sensor: reports onTriggerEnter/onTriggerExit for moving bodies and characters instead of colliding. |
+| `oneWay` | bool | `false` | One-way platform: solid only from above (bodies and characters pass through from below and the sides). |
+| `friction` | float | `0.600000024` | Surface friction (0 = ice, 1 = rubber). |
+| `bounciness` | float | `0` | Restitution (0 = no bounce, 1 = perfectly elastic). |
+| `density` | float | `1` | Relative density when a RigidBody2D has several shapes (the body's mass is RigidBody2D.mass). |
+| `layer` | int | `0` | Collision layer 0-15. |
+| `ignoreLayers` | json | `[]` | Layers this shape does not collide with, e.g. [2, 3]. Two shapes collide unless either ignores the other's layer. |
+
+### RigidBody2D
+
+Makes a Collider2D move in the XY plane (Box2D). dynamic = gravity and collisions; kinematic = follows its Transform (moving platforms, doors) and pushes dynamic bodies. For top-down games set gravityScale 0 and some linearDamping.
+
+| field | type | default | description |
+|---|---|---|---|
+| `type` | string | `"dynamic"` | Body type. |
+| `mass` | float | `1` | Mass in kg (dynamic bodies). |
+| `velocity` | vec3 | `[0,0,0]` | Linear velocity in m/s (x, y). Written by the simulation every step; set it to launch the body. |
+| `angularVelocity` | float | `0` | Spin in degrees/s (counter-clockwise). Written by the simulation. |
+| `gravityScale` | float | `1` | Multiplier for gravity (0 = floats; top-down games). |
+| `linearDamping` | float | `0` | Slows the body down over time (top-down friction). |
+| `angularDamping` | float | `0.0500000007` | Slows spinning down over time. |
+| `fixedRotation` | bool | `false` | Never rotate (keeps it upright). |
+| `bullet` | bool | `false` | Continuous collision against other moving bodies too (fast projectiles). Static geometry is always continuous. |
+
+### CharacterBody2D
+
+2D character for players/NPCs (Box2D mover): set velocity and the engine moves it, sliding along walls and slopes, standing on moving platforms, passing one-way platforms from below and pushing dynamic bodies. platformer mode applies gravity and sets grounded; topdown mode has no gravity.
+
+| field | type | default | description |
+|---|---|---|---|
+| `mode` | string | `"platformer"` | platformer: gravity pulls down -Y, grounded is tracked; topdown: no gravity, velocity x/y moves freely. |
+| `shape` | string | `"capsule"` | Shape centered on the entity origin. |
+| `radius` | float | `0.400000006` | Radius in meters. |
+| `height` | float | `1` | Capsule total height in meters (vertical). |
+| `velocity` | vec3 | `[0,0,0]` | Desired velocity in m/s (x, y); after each step it holds the actual velocity (stopped by walls, ceilings, ground). |
+| `gravityScale` | float | `1` | Multiplier for gravity (platformer mode). 2-3 gives a snappy jump arc. |
+| `maxSlope` | float | `50` | Steepest walkable slope in degrees (steeper surfaces are walls). |
+| `pushStrength` | float | `1` | How hard the character pushes dynamic bodies it walks into (0 = not at all). |
+| `grounded` | bool | `false` | Runtime state: standing on walkable ground (platformer mode). |
+| `onWall` | bool | `false` | Runtime state: touching a wall (steeper than maxSlope) this step. |
+| `onCeiling` | bool | `false` | Runtime state: hit a ceiling this step. |
+| `dropThrough` | bool | `false` | Set true to fall through one-way platforms (e.g. Down + Jump); reset it when the character is below. |
+| `layer` | int | `0` | Collision layer 0-15. |
+| `ignoreLayers` | json | `[]` | Layers the character does not collide with. |
+
 ### Prefab
 
 Marks the root of a prefab instance and remembers which prefab file it came from.
@@ -952,17 +1062,17 @@ Plays frame sequences on the entity's Sprite. clips = {"run": {"frames": [2,3,4,
 
 ### Tilemap
 
-Grid of tiles from a tileset image, written as text rows (map) with a legend of characters. The entity position is the top-left corner; rows go down (-Y), columns right (+X). Solid tiles collide.
+Grid of tiles written as text rows (map): each character is a tile defined by a tileset file or the legend (fixed frame, random variants or autotile that picks frames from the neighbours). The entity position is the top-left corner; rows go down (-Y), columns right (+X). Tiles can be solid, one-way or shaped (slopes) for 2D and 3D physics.
 
 | field | type | default | description |
 |---|---|---|---|
-| `tileset` | string | `""` | Tileset image: a grid of equally sized tiles. |
-| `columns` | int | `1` | Tiles per row in the tileset image. |
-| `rows` | int | `1` | Rows of tiles in the tileset image. |
+| `tileset` | string | `""` | Tileset: an image (grid of equally sized tiles, see columns/rows) or a *.tileset.json file (image, grid and tile rules shared by maps). |
+| `columns` | int | `1` | Tiles per row in the tileset image (ignored with a .tileset.json). |
+| `rows` | int | `1` | Rows of tiles in the tileset image (ignored with a .tileset.json). |
 | `tileSize` | float | `1` | Size of one tile in world units. |
-| `map` | json | `[]` | Array of strings, one per row from the top; one character per tile. Characters not in the legend (space, '.') are empty. |
-| `legend` | json | `{}` | Character -> tileset frame index, e.g. {"#": 0, "=": 1}. |
-| `solid` | string | `""` | Characters that collide (static boxes, merged along rows), e.g. "#=". Others are decoration only. |
+| `map` | json | `[]` | Array of strings, one per row from the top; one character per tile. Characters without a rule (space, '.') are empty. |
+| `legend` | json | `{}` | Character -> rule; overrides the tileset file. A rule is a frame number or {frame, variants, autotile: "sides"|"blob", frames, connects, edges, collision}, e.g. {"#": {"autotile": "blob", "frame": 0, "collision": "solid"}, "=": {"frame": 47, "collision": "oneway"}}. |
+| `solid` | string | `""` | Characters that collide as full blocks, e.g. "#=" (shortcut for collision: "solid"). |
 | `color` | color | `[1,1,1]` | Tint. |
 | `pixelArt` | bool | `true` | Sharp nearest-neighbour pixels. |
 | `lit` | bool | `false` | Apply scene lighting. |

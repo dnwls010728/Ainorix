@@ -10,14 +10,14 @@ AI が人と同じように扱い、検証できるように設計した C++17 �
 |---|---|
 | ![Showcase のレンダリング](docs/images/showcase.png) | glTF のキツネキャラクター (プレイヤー操作 + 追従カメラ)、手続き生成テクスチャ、影、ポイントライト。決定的なソフトウェアレンダラーの出力 (`oe render`) で、ゲームウィンドウ・Web・エディタービューは同じシーンを GPU レンダラーで描画します。 |
 
-- 別途インストールする依存関係なし (MSVC + CMake のみ。Lua・Jolt Physics・sokol_gfx・stb・cgltf・Dear ImGui・ImGuizmo はソースを同梱)。Web ランタイムも `runtime/web/` にビルド済みで同梱 - Web 配布に Emscripten は不要
+- 別途インストールする依存関係なし (MSVC + CMake のみ。Lua・Jolt Physics・Box2D・sokol_gfx・stb・cgltf・Dear ImGui・ImGuizmo はソースを同梱)。Web ランタイムも `runtime/web/` にビルド済みで同梱 - Web 配布に Emscripten は不要
 - Windows (ネイティブウィンドウ、`Name.exe` パッケージ)・Web (WebAssembly + WebGL2、`oe package --web`)・ヘッドレスに対応。Android / iOS / macOS / コンソールはプラットフォーム層を追加するだけで済むよう分離 - [docs/PLATFORMS.md](docs/PLATFORMS.md)
 - 2 つのレンダラーが同じシーンを描画: **GPU レンダラー** (sokol_gfx - Windows は D3D11、Web は WebGL2、Linux は GLES3。4x MSAA、フィルタリングされた影、ミップマップ、シェーダーは `engine/render/shaders/Shaders.glsl` 1 つ) はゲームウィンドウ・Web・エディタービュー用、**ソフトウェアレンダラー** (マルチスレッド、決定的) はスクリーンショットのハッシュ・テスト・ピッキング用
 - レンダリング: glTF モデル、PNG/JPEG テクスチャ、スムーズ/フラットシェーディング、ポイントライト、影、平行投影/追従カメラ、デバッグ描画 - [docs/RENDERING.md](docs/RENDERING.md)
 - マテリアル / PBR / 半透明: metallic-roughness (GGX) シェーディング、法線・AO・発光マップ、半透明 (奥から手前へソート)・マスク・両面、glTF マテリアルの完全読み込み、`.mat.json` マテリアルファイル (`material.create` / `material.set`、ホットリロード) - [docs/RENDERING.md](docs/RENDERING.md)
-- Jolt による 3D 物理 (剛体、トリガー、キャラクターコントローラー、決定的シミュレーション) - [docs/PHYSICS.md](docs/PHYSICS.md)
+- Jolt による 3D 物理と Box2D による 2D 物理 (剛体、トリガー、キャラクターコントローラー、一方通行の足場・多角形・衝突レイヤー、決定的シミュレーション) - [docs/PHYSICS.md](docs/PHYSICS.md)
 - ゲーム UI: TrueType フォント (あらゆる言語、フォントファイルを追加)、アンカー・ストレッチ・親子配置、レイアウト (縦/横/グリッド、内容に合わせたサイズ)、リッチテキスト・折り返し・アウトライン・影、角丸・枠付きパネル、ボタンの状態 (ホバー/押下/無効)、画像 (9-slice、フィルバー)、スライダー/プログレスバー、クリッピング、キャンバススケール - [docs/UI.md](docs/UI.md)
-- 2D ゲーム: スプライト・スプライトシートアニメーション (ピクセルアート、透明の切り抜き)、テキストで書くタイルマップ (衝突を自動生成)、XY 平面の物理、範囲付き追従カメラ、エディターの 2D ビュー - [docs/2D.md](docs/2D.md)
+- 2D ゲーム: スプライト・スプライトシートアニメーション (ピクセルアート、透明の切り抜き)、テキストで書くタイルマップ (タイルセットファイル、16/47 パターンのオートタイル、ランダムなバリエーション、タイルごとの衝突: ソリッド・一方通行・坂)、Box2D の 2D 物理、範囲付き追従カメラ、エディターの 2D ビューとタイルブラシ - [docs/2D.md](docs/2D.md)
 - ゲームの構成要素: プレハブ、シーン切り替え + ゲームデータ、メッセージ/タイマー、ゲーム内 UI、オーディオ (決定的ミキサー、効果音の生成) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 スクリプト (サンドボックス、ホットリロード、エラーにファイル:行を表示) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - 決定的 (deterministic) なシミュレーションとソフトウェアレンダラー: 同じ入力なら同じフレームハッシュ → AI がテストオラクルとして使えます
@@ -55,7 +55,7 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 `oe editor` は**エディター** (Dear ImGui のドッキング + ImGuizmo、エンジンと同じプロセスで GPU 描画) を開きます。コマンド API だけを使うため、エージェント (`oe mcp --connect 7777`) が人と同じセッションを同時に操作できます。ウィンドウがない環境 (ヘッドレスの Linux など) では `oe editor MyGame --screenshot shot.png` でエディター画面を画像にできます。詳細: [docs/EDITOR.md](docs/EDITOR.md)
 
 - ドッキングパネル: ヒエラルキー・インスペクター・シーン・ゲーム・アセット・コンソール・スクリプト - 配置はプロジェクトごとに保存 (`.oe/editor.ini`)、表示 > レイアウトをリセット
-- シーンビュー: 右ドラッグ + WASD/QE で飛行、中ボタンでパン、Alt + 左ドラッグでオービット、ホイールでズーム、クリックで選択、**移動/回転/スケールのギズモ** (Q/W/E/R、ローカル/ワールド、スナップ)、カメラ・ライトのアイコン、コライダー表示、2D ビュー、アセットをドラッグして配置
+- シーンビュー: 右ドラッグ + WASD/QE で飛行、中ボタンでパン、Alt + 左ドラッグでオービット、ホイールでズーム、クリックで選択、**移動/回転/スケールのギズモ** (Q/W/E/R、ローカル/ワールド、スナップ)、カメラ・ライトのアイコン、コライダー表示、2D ビュー、タイルの塗装 (Tiles パネル)、アセットをドラッグして配置
 - ゲームビュー: クリックするとキーボードとマウスをゲームに渡します (マウスをロックするゲームには生のマウス移動量、Esc で解放)、アスペクト比の固定 (16:9 など)
 - ヒエラルキー: 複数選択 (Ctrl/Shift)、ドラッグで親を変更、右クリックメニュー (名前を変更、複製、削除、子を作成、プレハブとして保存)
 - インスペクター: リフレクションから自動生成、1 回のドラッグ = 元に戻す 1 段階、アセットのフィールドは選択リスト + ドラッグ＆ドロップ
@@ -86,7 +86,7 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 engine/core      Json, Math, Log, PNG, FileSystem
 engine/scene     リフレクション、コンポーネント、Scene、システム
 engine/script    Lua スクリプトホスト (ScriptHost)
-engine/physics   物理 (Jolt ラッパー、PhysicsWorld)
+engine/physics   物理 (Jolt ラッパー PhysicsWorld、Box2D ラッパー Physics2D)
 engine/audio     オーディオミキサー、WAV、効果音ジェネレーター
 engine/assets    アセット管理、glTF/画像の読み込み
 engine/render    IRenderer、ソフトウェアラスタライザー、GPU レンダラー (sokol_gfx) + シェーダー、メッシュ、ゲーム UI
@@ -100,12 +100,14 @@ tools/shaders    シェーダー再生成スクリプト (sokol-shdc)
 tests/           セルフテスト
 third_party/lua  Lua 5.4.8 (MIT)
 third_party/jolt Jolt Physics 5.6.0 (MIT)
+third_party/box2d Box2D 3.1.1 (MIT)
 third_party/stb, cgltf  画像デコーダー/エンコーダー、glTF デコーダー (PD/MIT, MIT)
 third_party/sokol  sokol_gfx + sokol_imgui (zlib) - D3D11 / WebGL2 / GLES3 の抽象化
 third_party/imgui, imguizmo, imguicolortextedit  Dear ImGui 1.92.9b docking、ImGuizmo、ImGuiColorTextEdit (MIT) - ネイティブエディター専用
 templates/       `oe new` のプロジェクトテンプレート
 samples/Hello    サンプルプロジェクト (テンプレートから生成)
 samples/Showcase レンダリングサンプル (glTF のキツネキャラクター、テクスチャ、影、ポイントライト)
+samples/Dungeon  2D 見下ろしアクション (Box2D、オートタイルのタイルセット、押せる木箱、魔法弾、スライム)
 samples/Platformer 2D 横スクロールのプラットフォーマー (テキストのタイルマップ、スプライトアニメーション、敵、? ブロック、パララックス)
 samples/FPS      一人称シューティングのテストゲーム (マウス視点、ヒットスキャンのピストル、リロード、動く標的、結果画面)
 ```
