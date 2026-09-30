@@ -15,6 +15,7 @@
 #include "sokol_imgui.h"
 
 #include "app/Engine.h"
+#include "scene/TileGrid.h"
 #include "app/Project.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -122,6 +123,13 @@ const Preset kPresets[] = {
     {"wall", "Physics", "Static Wall", "Wall", R"({"Transform":{"position":[0,1,-4],"scale":[6,2,0.5]},"MeshRenderer":{"mesh":"cube","color":[0.6,0.6,0.65]},"Collider":{}})"},
     {"sprite", "2D", "Sprite", "Sprite", R"({"Transform":{},"Sprite":{}})"},
     {"tilemap", "2D", "Tilemap", "Tilemap", R"({"Transform":{"position":[0,0,0]},"Tilemap":{"map":["","","####"],"legend":{"#":0},"solid":"#"}})"},
+    {"box2d", "2D", "2D Physics Box", "Box", R"({"Transform":{"position":[0,3,0],"scale":[1,1,0.2]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.5,0.3]},"Collider2D":{},"RigidBody2D":{}})"},
+    {"ball2d", "2D", "2D Physics Ball", "Ball",
+     R"({"Transform":{"position":[0,3,0]},"MeshRenderer":{"mesh":"sphere","color":[0.9,0.9,0.95]},"Collider2D":{"shape":"circle","bounciness":0.5},"RigidBody2D":{}})"},
+    {"platform2d", "2D", "One-way Platform", "Platform",
+     R"({"Transform":{"position":[0,1,0],"scale":[3,0.2,0.2]},"MeshRenderer":{"mesh":"cube","color":[0.55,0.45,0.35]},"Collider2D":{"oneWay":true}})"},
+    {"character2d", "2D", "2D Character", "Character",
+     R"({"Transform":{"position":[0,2,0]},"MeshRenderer":{"mesh":"cube","color":[0.3,0.6,1]},"CharacterBody2D":{"radius":0.5,"height":1}})"},
     {"camera2d", "2D", "2D Camera", "2D Camera", R"({"Transform":{"position":[0,0,20]},"Camera":{"projection":"orthographic","orthoSize":5.625,"active":false}})"},
     {"text", "UI", "UI Text", "Text", R"({"UIText":{"text":"Hello"}})"},
     {"button", "UI", "UI Button", "Button", R"({"UIButton":{}})"},
@@ -167,6 +175,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
         m->showConsole = i & 16;
         m->showAssets = i & 32;
         m->showScripts = i & 64;
+        m->showTiles = i & 128;
     } else if (std::sscanf(line, "Camera=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
         m->cam.target = Vec3(v[0], v[1], v[2]);
     } else if (std::sscanf(line, "CameraAngles=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
@@ -182,7 +191,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     NativeEditor::Impl* m = g_settingsTarget;
     if (!m) return;
     int panels = (m->showHierarchy ? 1 : 0) | (m->showInspector ? 2 : 0) | (m->showScene ? 4 : 0) | (m->showGame ? 8 : 0) |
-                 (m->showConsole ? 16 : 0) | (m->showAssets ? 32 : 0) | (m->showScripts ? 64 : 0);
+                 (m->showConsole ? 16 : 0) | (m->showAssets ? 32 : 0) | (m->showScripts ? 64 : 0) | (m->showTiles ? 128 : 0);
     buf->appendf("[%s][Editor]\n", handler->TypeName);
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
@@ -506,6 +515,14 @@ void NativeEditor::Impl::FrameSelection() {
     Vec3 p = engine.GetScene().WorldMatrix(id).TransformPoint(Vec3(0, 0, 0));
     Vec3 s = JsonVec3(selected["components"]["Transform"]["scale"], Vec3(1, 1, 1));
     float radius = std::max(0.5f, std::max(std::fabs(s.x), std::max(std::fabs(s.y), std::fabs(s.z))));
+    if (const Tilemap* tm = engine.GetScene().Get<Tilemap>(id)) {
+        // The whole map (the entity origin is its top-left corner).
+        int w = 0, h = 0;
+        MapSize(*tm, w, h);
+        float ts = std::max(0.001f, tm->tileSize);
+        p = engine.GetScene().WorldMatrix(id).TransformPoint(Vec3(0.5f * static_cast<float>(w) * ts, -0.5f * static_cast<float>(h) * ts, 0));
+        radius = std::max(radius, 0.5f * static_cast<float>(std::max(w, h)) * ts * std::max(std::fabs(s.x), std::fabs(s.y)));
+    }
     cam.Frame(p, radius);
 }
 
@@ -872,6 +889,7 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::MenuItem(Tr("Assets"), nullptr, &showAssets);
         ImGui::MenuItem(Tr("Console"), nullptr, &showConsole);
         ImGui::MenuItem(Tr("Scripts"), nullptr, &showScripts);
+        ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
         ImGui::Separator();
         ImGui::MenuItem(Tr("Grid"), "", &showGrid);
         ImGui::MenuItem(Tr("Colliders"), "", &showColliders);
@@ -1022,7 +1040,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     layoutBuilt = true;
     if (!empty && !resetLayout) return;  // restored from the .ini
     resetLayout = false;
-    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = true;
+    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = true;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockspace);
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -1032,6 +1050,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.27f, nullptr, &center);
     ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
     ImGui::DockBuilderDockWindow("###Hierarchy", left);
+    ImGui::DockBuilderDockWindow("###Tiles", right);
     ImGui::DockBuilderDockWindow("###Inspector", right);
     ImGui::DockBuilderDockWindow("###Scene", center);
     ImGui::DockBuilderDockWindow("###Game", center);
@@ -1039,6 +1058,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderFinish(dockspace);
+    if (ImGuiDockNode* r = ImGui::DockBuilderGetNode(right)) r->SelectedTabId = ImHashStr("###Inspector");  // Tiles waits behind it
     focusSceneTab = 2;  // once the windows are docked (they appear this frame)
 }
 
@@ -1283,6 +1303,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showAssets) m.AssetsPanel();
     if (m.showConsole) m.ConsolePanel();
     if (m.showScripts) m.ScriptsPanel();
+    if (m.showTiles) m.TilesPanel();
     if (m.showMetrics) ImGui::ShowMetricsWindow(&m.showMetrics);
     m.Modals();
     m.Toasts();
@@ -1359,6 +1380,20 @@ void NativeEditor::Select(EntityId id) {
 }
 
 EntityId NativeEditor::Selected() const { return impl_->Primary(); }
+
+void NativeEditor::SetTileBrush(bool paint, char brush) {
+    impl_->tilePaint = paint;
+    impl_->tileBrush = brush;
+    if (paint) {
+        impl_->showTiles = true;
+        impl_->cam.Set2D(true);
+        impl_->FrameSelection();
+    }
+}
+
+std::array<float, 4> NativeEditor::SceneViewRect() const {
+    return {impl_->sceneImagePos.x, impl_->sceneImagePos.y, impl_->sceneImageSize.x, impl_->sceneImageSize.y};
+}
 
 void NativeEditor::FocusGameView(bool focus) {
     Impl& m = *impl_;

@@ -35,6 +35,7 @@ std::string Lower(std::string s) {
 Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std::make_unique<SoftwareRenderer>(assets_.get())) {
     scripts_ = std::make_unique<ScriptHost>(*this);
     physics_ = std::make_unique<PhysicsWorld>();
+    physics_->SetTilesets(assets_->Tilesets());
     audio_ = std::make_unique<AudioSystem>(*this);
     RegisterBuiltinCommands(commands_);
     projectDir_ = AbsolutePath(".");

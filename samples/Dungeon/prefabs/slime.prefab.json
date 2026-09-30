@@ -1,0 +1,55 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Slime",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Slime",
+      "components": {
+        "Transform": {},
+        "Sprite": {
+          "texture": "assets/sprites/slime.png",
+          "columns": 3,
+          "order": 2
+        },
+        "SpriteAnimation": {
+          "clip": "idle",
+          "clips": {
+            "idle": {
+              "frames": [
+                0,
+                1
+              ],
+              "fps": 3
+            },
+            "hurt": {
+              "frames": [
+                2
+              ],
+              "fps": 1
+            }
+          }
+        },
+        "CharacterBody2D": {
+          "mode": "topdown",
+          "shape": "circle",
+          "radius": 0.38,
+          "layer": 3,
+          "pushStrength": 0.5
+        },
+        "Script": {
+          "path": "scripts/slime.lua",
+          "params": {
+            "speed": 1.8,
+            "hp": 2,
+            "sight": 6
+          }
+        },
+        "Tag": {
+          "tags": "enemy"
+        }
+      }
+    }
+  ]
+}

@@ -954,6 +954,8 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
     return stats;
 }
 
+sg_view GpuRenderer::ImageView(const std::shared_ptr<const Texture>& texture) { return impl_->UITextureFor(texture); }
+
 sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats) {
     int w = std::max(1, width), h = std::max(1, height);
     Targets& t = impl_->panelTargets[slot];

@@ -9,6 +9,7 @@ namespace oe {
 
 class AssetManager;
 class GpuDevice;
+struct Texture;
 
 // Hardware renderer on top of sokol_gfx (engine/render/shaders/Shaders.glsl).
 // Draws the same scene description as SoftwareRenderer (RenderScene.h) with
@@ -45,6 +46,8 @@ public:
     sg_view RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats = nullptr);
     // Reads the last RenderToTexture image of `slot` back to the CPU (tests, screenshots).
     bool ReadTexture(int slot, RenderTarget& target);
+    // A texture as a sampleable view (e.g. tileset thumbnails in the editor), kept while `texture` lives.
+    sg_view ImageView(const std::shared_ptr<const Texture>& texture);
     // Size of the window swapchain (0 when headless or minimized).
     void WindowSize(int* width, int* height);
 

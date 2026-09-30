@@ -1,0 +1,416 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Crypt",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            10,
+            -6,
+            20
+          ]
+        },
+        "Camera": {
+          "projection": "orthographic",
+          "orthoSize": 6.0,
+          "clearColor": [
+            0.07,
+            0.06,
+            0.1
+          ],
+          "farPlane": 100
+        },
+        "CameraFollow": {
+          "target": 3,
+          "offset": [
+            0,
+            0,
+            20
+          ],
+          "lookOffset": [
+            0,
+            0,
+            0
+          ],
+          "smoothing": 8,
+          "useBounds": true,
+          "boundsMin": [
+            10.666666666666666,
+            -14.0,
+            20
+          ],
+          "boundsMax": [
+            25.333333333333336,
+            -6.0,
+            20
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Level",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Tilemap": {
+          "tileset": "tilesets/dungeon.tileset.json",
+          "map": [
+            "####################################",
+            "#P.....#..........~~~~.......c.....#",
+            "#......#..c.......~~~~.............#",
+            "#..b...#..........~~~~....s........#",
+            "#......####..###..~~~~.......####..#",
+            "#,,........o..#.............##,,##.#",
+            "###..r.......c#....b........#,,,,#.#",
+            "#,,...........#.............#,c,,#.#",
+            "#...####......########......##,,##.#",
+            "#...#,,#..s.............s....####..#",
+            "#...#c,#...........o...............#",
+            "#...##.#......~~~~~~.........b.....#",
+            "#.............~~~~~~......######...#",
+            "#..s....b.....~~..~~..c...#,,,,#...#",
+            "#.............~~..~~......#,E,,#...#",
+            "#######..######################.####",
+            "#,,...c.......,,..........s.....,,,#",
+            "#..r.........o.........r...........#",
+            "#,.....s..............c.....b....,,#",
+            "####################################"
+          ]
+        },
+        "Script": {
+          "path": "scripts/level.lua"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [
+            1.5,
+            -1.5,
+            0.1
+          ]
+        },
+        "Tag": {
+          "tags": "player"
+        },
+        "Sprite": {
+          "texture": "assets/sprites/hero.png",
+          "columns": 6,
+          "order": 2
+        },
+        "SpriteAnimation": {
+          "clip": "down_idle",
+          "clips": {
+            "down_idle": {
+              "frames": [
+                0
+              ],
+              "fps": 1
+            },
+            "down_walk": {
+              "frames": [
+                1,
+                0
+              ],
+              "fps": 8
+            },
+            "up_idle": {
+              "frames": [
+                2
+              ],
+              "fps": 1
+            },
+            "up_walk": {
+              "frames": [
+                3,
+                2
+              ],
+              "fps": 8
+            },
+            "side_idle": {
+              "frames": [
+                4
+              ],
+              "fps": 1
+            },
+            "side_walk": {
+              "frames": [
+                5,
+                4
+              ],
+              "fps": 8
+            }
+          }
+        },
+        "CharacterBody2D": {
+          "mode": "topdown",
+          "shape": "circle",
+          "radius": 0.36,
+          "layer": 1,
+          "pushStrength": 2
+        },
+        "Script": {
+          "path": "scripts/player.lua",
+          "params": {
+            "speed": 5,
+            "accel": 45
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Game",
+      "components": {
+        "Script": {
+          "path": "scripts/game.lua"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "HUD Panel",
+      "components": {
+        "UIPanel": {
+          "anchor": "top-left",
+          "x": 16,
+          "y": 16,
+          "width": 330,
+          "height": 60,
+          "color": [
+            0,
+            0,
+            0
+          ],
+          "radius": 10,
+          "opacity": 0.45,
+          "order": -1
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Heart1",
+      "components": {
+        "UIImage": {
+          "texture": "assets/sprites/heart.png",
+          "columns": 2,
+          "frame": 0,
+          "anchor": "top-left",
+          "x": 30,
+          "y": 28,
+          "width": 36,
+          "height": 32
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Heart2",
+      "components": {
+        "UIImage": {
+          "texture": "assets/sprites/heart.png",
+          "columns": 2,
+          "frame": 0,
+          "anchor": "top-left",
+          "x": 74,
+          "y": 28,
+          "width": 36,
+          "height": 32
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Heart3",
+      "components": {
+        "UIImage": {
+          "texture": "assets/sprites/heart.png",
+          "columns": 2,
+          "frame": 0,
+          "anchor": "top-left",
+          "x": 118,
+          "y": 28,
+          "width": 36,
+          "height": 32
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "CoinsText",
+      "components": {
+        "UIText": {
+          "text": "COINS 0/0",
+          "font": "pixel",
+          "size": 28,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "anchor": "top-left",
+          "x": 170,
+          "y": 32,
+          "shadowDistance": 2
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "WASD/ARROWS move   SPACE/J shoot   R restart",
+          "font": "pixel",
+          "size": 16,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "anchor": "bottom",
+          "x": 0,
+          "y": -20,
+          "shadowDistance": 0,
+          "outlineWidth": 1,
+          "outlineColor": [
+            0.1,
+            0.1,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Note",
+      "components": {
+        "UIText": {
+          "text": "",
+          "font": "pixel",
+          "size": 28,
+          "color": [
+            1,
+            0.85,
+            0.4
+          ],
+          "anchor": "top",
+          "x": 0,
+          "y": 90,
+          "shadowDistance": 0,
+          "visible": false,
+          "outlineWidth": 2,
+          "outlineColor": [
+            0.2,
+            0.1,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Message",
+      "components": {
+        "UIText": {
+          "text": "",
+          "font": "pixel",
+          "size": 44,
+          "color": [
+            1,
+            1,
+            1
+          ],
+          "anchor": "center",
+          "x": 0,
+          "y": -50,
+          "shadowDistance": 0,
+          "visible": false,
+          "align": "center",
+          "lineSpacing": 1.3,
+          "outlineWidth": 3,
+          "outlineColor": [
+            0.35,
+            0.2,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "MessagePanel",
+      "components": {
+        "UIPanel": {
+          "anchor": "center",
+          "x": 0,
+          "y": 0,
+          "width": 760,
+          "height": 250,
+          "color": [
+            0.05,
+            0.05,
+            0.1
+          ],
+          "radius": 18,
+          "borderWidth": 3,
+          "borderColor": [
+            1,
+            0.9,
+            0.3
+          ],
+          "opacity": 0.8,
+          "visible": false,
+          "order": -1
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "PlayAgain",
+      "components": {
+        "UIButton": {
+          "text": "Play again",
+          "font": "pixel",
+          "size": 28,
+          "anchor": "center",
+          "x": 0,
+          "y": 62,
+          "width": 240,
+          "height": 64,
+          "color": [
+            0.45,
+            0.3,
+            0.8
+          ],
+          "radius": 10,
+          "borderWidth": 3,
+          "borderColor": [
+            1,
+            1,
+            1
+          ],
+          "visible": false,
+          "order": 10
+        },
+        "Script": {
+          "path": "scripts/play_again.lua"
+        }
+      }
+    }
+  ]
+}

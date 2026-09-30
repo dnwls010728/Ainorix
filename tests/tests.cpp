@@ -22,7 +22,9 @@
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/UI.h"
+#include "physics/Physics2D.h"
 #include "scene/Components.h"
+#include "scene/TileGrid.h"
 #include "script/ScriptHost.h"
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
@@ -752,6 +754,335 @@ TEST(PhysicsIsDeterministic) {
     auto a = run(), b = run();
     CHECK(a.first == b.first);
     CHECK(a.second == b.second);  // every transform and velocity identical
+}
+
+// ----- 2D physics (Box2D) & tiles --------------------------------------------------
+
+Tilemap MakeMap(std::initializer_list<const char*> rows, const char* legend, const char* solid = "") {
+    Tilemap tm;
+    tm.map = Json::MakeArray();
+    for (const char* r : rows) tm.map.push(std::string(r));
+    tm.legend = Json::parse(legend);
+    tm.solid = solid;
+    return tm;
+}
+
+int FrameAt(const TileFrames& f, int col, int row) { return f.frames[static_cast<size_t>(row * f.width + col)]; }
+
+float LoopArea(const std::vector<TilePoint>& loop) {
+    float a = 0;
+    for (size_t i = 0; i < loop.size(); ++i) a += loop[i].x * loop[(i + 1) % loop.size()].y - loop[(i + 1) % loop.size()].x * loop[i].y;
+    return 0.5f * a;
+}
+
+TEST(TileRulesAndAutotiling) {
+    // 47 blob patterns: nothing connected is the first, everything the last.
+    CHECK(BlobMasks().size() == 47);
+    CHECK(BlobIndex(0) == 0 && BlobIndex(255) == 46);
+    CHECK(BlobIndex(2) == 0);  // a lone corner without both sides does not count
+    // "sides": 4 neighbours (N=1 E=2 S=4 W=8) pick one of 16 frames; outside the map connects by default.
+    Tilemap ring = MakeMap({"###", "# #", "###"}, R"J({"#": {"autotile": "sides", "frame": 16}})J");
+    TileRules rules = BuildTileRules(ring, nullptr);
+    TileFrames f = ResolveFrames(ring, rules);
+    CHECK(f.width == 3 && f.height == 3);
+    CHECK(FrameAt(f, 1, 1) == -1);             // the hole
+    CHECK(FrameAt(f, 0, 0) == 16 + 15);        // N, W outside + E, S
+    CHECK(FrameAt(f, 1, 0) == 16 + 1 + 2 + 8); // N outside, E, W (S is the hole)
+    ring.legend = Json::parse(R"J({"#": {"autotile": "sides", "frame": 16, "edges": false}})J");
+    f = ResolveFrames(ring, BuildTileRules(ring, nullptr));
+    CHECK(FrameAt(f, 0, 0) == 16 + 2 + 4);
+    // Blob with connects: '=' counts as the same terrain.
+    Tilemap blob = MakeMap({"#=", "##"}, R"J({"#": {"autotile": "blob", "frames": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46], "connects": "=", "edges": false}, "=": 99})J");
+    f = ResolveFrames(blob, BuildTileRules(blob, nullptr));
+    CHECK(FrameAt(f, 0, 0) == BlobIndex(4 | 8 | 16));  // E ('='), SE, S
+    CHECK(FrameAt(f, 1, 0) == 99);
+    // Variants: stable per cell, and they do vary.
+    Tilemap grass = MakeMap({"..........", ".........."}, R"J({".": {"variants": [5, 6, 7]}})J");
+    TileFrames g1 = ResolveFrames(grass, BuildTileRules(grass, nullptr)), g2 = ResolveFrames(grass, BuildTileRules(grass, nullptr));
+    CHECK(g1.frames == g2.frames);
+    std::set<int> seen(g1.frames.begin(), g1.frames.end());
+    CHECK(seen.size() >= 2 && !seen.count(-1) && *seen.begin() >= 5 && *seen.rbegin() <= 7);
+    // Rule errors are reported, the rest keeps working.
+    Tilemap bad = MakeMap({"#"}, R"J({"#": {"autotile": "blob", "frames": [1, 2]}})J");
+    CHECK(BuildTileRules(bad, nullptr).error.find("47") != std::string::npos);
+
+    // Collision: solid outlines (holes wind the other way), one-way runs, shaped cells.
+    Tilemap level = MakeMap({"#####", "#   #", "#####", "  ==/", "   /#"}, R"J({"=": {"frame": 1, "collision": "oneway"}, "/": {"collision": "slope-up"}})J", "#");
+    TileRules lr = BuildTileRules(level, nullptr);
+    std::vector<std::vector<TilePoint>> loops = SolidOutlines(level, lr);
+    CHECK(loops.size() == 3);  // ring outside, ring hole, lone block
+    int outer = 0, holes = 0;
+    for (const auto& l : loops) (LoopArea(l) > 0 ? outer : holes) += 1;
+    CHECK(outer == 2 && holes == 1);
+    CHECK(loops[0].size() == 4 && std::fabs(LoopArea(loops[0]) - 15.0f) < 1e-4f);  // 5x3 block, collinear corners removed
+    std::vector<TileRect> runs = OneWayRuns(level, lr);
+    CHECK(runs.size() == 1 && runs[0].col == 2 && runs[0].row == 3 && runs[0].width == 2);
+    std::vector<TileShape> shaped = ShapedCells(level, lr);
+    CHECK(shaped.size() == 2 && shaped[0].col == 4 && shaped[0].row == 3 && shaped[0].points.size() == 3);
+    CHECK(CollisionAt(level, lr, 0, 0) == TileCollision::Solid && CollisionAt(level, lr, 2, 3) == TileCollision::OneWay);
+    CHECK(SolidRects(level, lr).size() == 5);
+
+    // Concave polygons are split into convex pieces.
+    std::vector<std::vector<TilePoint>> pieces = ConvexPieces({{0, 0}, {3, 0}, {3, 1}, {1, 1}, {1, 3}, {0, 3}});  // L shape
+    float area = 0;
+    for (const auto& piece : pieces) area += LoopArea(piece);
+    CHECK(pieces.size() == 2 && std::fabs(area - 5.0f) < 1e-4f);
+    CHECK(ConvexPieces({{0, 0}, {1, 0}, {1, 1}, {0, 1}}).size() == 1);
+}
+
+TEST(TilesetFilesAndPaintCommands) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("tilesets"), &err));
+    Call(e, "scene.new", R"J({"empty": true})J");
+    // tileset.create validates the rules.
+    Json bad = Call(e, "tileset.create", R"J({"path": "tilesets/t.tileset.json", "image": "t.png", "columns": 8, "rows": 8, "tiles": {"#": {"autotile": "sides"}}})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["code"].asString() == "invalid_tileset");
+    Json ok = Call(e, "tileset.create", R"J({"path": "tilesets/t.tileset.json", "image": "t.png", "columns": 8, "rows": 8,
+        "tiles": {"#": {"autotile": "sides", "frame": 16, "collision": "solid"}, "=": {"frame": 2, "collision": "oneway"}, ".": {"variants": [0, 1]}}})J");
+    CHECK(ok["ok"].asBool());
+    CHECK(Call(e, "asset.info", R"J({"path": "tilesets/t.tileset.json"})J")["result"]["tiles"].asString() == "#.=");
+    Call(e, "entity.create", R"J({"name": "Map", "components": {"Transform": {}, "Tilemap": {"tileset": "tilesets/t.tileset.json", "map": ["", "", ""], "legend": {"=": 3}}}})J");
+    // The component's legend overrides a rule's frame and keeps its collision.
+    Json info = Call(e, "tilemap.info", R"J({"id": "Map"})J")["result"];
+    CHECK(info["columns"].asInt() == 8 && info["image"].asString() == "t.png");
+    CHECK(info["tiles"].size() == 3);
+    CHECK(info["tiles"][2]["char"].asString() == "=" && info["tiles"][2]["frame"].asInt() == 3 && info["tiles"][2]["collision"].asString() == "oneway");
+    CHECK(info["tiles"][0]["frame"].asInt() == 31 && info["tiles"][0]["autotile"].asString() == "sides");
+
+    // Painting: one undo step per merge key.
+    size_t depth = e.UndoDepth();
+    Call(e, "tilemap.paint", R"J({"id": "Map", "char": "#", "cells": [[0, 2], [1, 2]], "merge": "stroke1"})J");
+    Call(e, "tilemap.paint", R"J({"id": "Map", "char": "#", "cells": [[2, 2], [3, 2]], "merge": "stroke1"})J");
+    Json fill = Call(e, "tilemap.fill", R"J({"id": "Map", "char": "=", "col": 1, "row": 0, "width": 2, "height": 1})J");
+    CHECK(fill["result"]["changed"].asInt() == 2);
+    const Tilemap* tm = e.GetScene().Get<Tilemap>(e.GetScene().FindByName("Map"));
+    CHECK(tm->map[0].asString() == " ==" && tm->map[2].asString() == "####");
+    CHECK(e.UndoDepth() == depth + 2);
+    Call(e, "history.undo", "{}");
+    tm = e.GetScene().Get<Tilemap>(e.GetScene().FindByName("Map"));
+    CHECK(tm->map[0].asString() == "" && tm->map[2].asString() == "####");
+    CHECK(!Call(e, "tilemap.paint", R"J({"id": "Map", "char": "##", "cells": [[0, 0]]})J")["ok"].asBool());
+
+    // Tile collision from the file: a 2D ball rests on the painted row (top at y = -2).
+    Call(e, "entity.create", R"J({"name": "Ball", "components": {"Transform": {"position": [1.5, 0, 0]}, "Collider2D": {"shape": "circle", "radius": 0.25}, "RigidBody2D": {}}})J");
+    Call(e, "sim.step", R"J({"frames": 120})J");
+    CHECK(std::fabs(PosOf(e, "Ball").y + 1.75f) < 0.02f);
+    // Lua sees the same rules.
+    Json r = Call(e, "script.eval", R"J({"code": "local w, h = tilemap.size('Map') return {tilemap.collision('Map', 0, 2), tilemap.solid('Map', 0, 1), w, h}"})J");
+    CHECK(r["result"]["value"][0].asString() == "solid" && !r["result"]["value"][1].asBool());
+    CHECK(r["result"]["value"][2].asInt() == 4 && r["result"]["value"][3].asInt() == 3);
+    CHECK(Call(e, "physics.state", "{}")["result"]["warnings"].size() == 0);
+}
+
+void Scene2D(Engine& e) {
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "entity.create", R"J({"name": "Ground", "components": {"Transform": {"position": [0, -0.5, 0], "scale": [40, 1, 1]}, "Collider2D": {}}})J");
+}
+
+TEST(Physics2DBodies) {
+    Engine e;
+    Scene2D(e);
+    Call(e, "entity.create", R"J({"name": "Box", "components": {"Transform": {"position": [0, 3, 0], "rotation": [0, 0, 30]}, "Collider2D": {}, "RigidBody2D": {}}})J");
+    Call(e, "entity.create", R"J({"name": "Ball", "components": {"Transform": {"position": [3, 2, 0], "scale": [0.5, 0.5, 0.5]}, "Collider2D": {"shape": "circle"}, "RigidBody2D": {}}})J");
+    Call(e, "entity.create", R"J({"name": "Tri", "components": {"Transform": {"position": [-3, 2, 5]}, "Collider2D": {"shape": "polygon", "points": [[-0.5, 0], [0.5, 0], [0, 1], [0, 0.5]]}, "RigidBody2D": {"fixedRotation": true}}})J");
+    Call(e, "sim.step", R"J({"frames": 240})J");
+    Vec3 box = PosOf(e, "Box");
+    const Transform* bt = e.GetScene().Get<Transform>(e.GetScene().FindByName("Box"));
+    CHECK(std::fabs(box.y - 0.5f) < 0.02f);                               // settled flat on a face
+    CHECK(std::fabs(std::fmod(std::fabs(bt->rotation.z) + 1.0f, 90.0f) - 1.0f) < 1.0f);
+    CHECK(bt->rotation.x == 0.0f && bt->rotation.y == 0.0f && box.z == 0.0f);  // only Z rotation, Z position kept
+    CHECK(std::fabs(PosOf(e, "Ball").y - 0.25f) < 0.02f);                 // radius scaled by 0.5
+    CHECK(std::fabs(PosOf(e, "Tri").y) < 0.02f && PosOf(e, "Tri").z == 5.0f);  // concave outline, z untouched
+    Json st = Call(e, "physics.state", "{}")["result"]["world2D"];
+    CHECK(st["dynamicBodies"].asInt() == 3 && st["staticBodies"].asInt() == 1);
+
+    // Velocity and impulses from scripts; queries in the plane.
+    Call(e, "component.set", R"J({"id": "Ball", "type": "RigidBody2D", "values": {"velocity": [0, 6, 0]}})J");
+    Call(e, "sim.step", R"J({"frames": 20})J");
+    CHECK(PosOf(e, "Ball").y > 1.5f);
+    Json hit = Call(e, "physics.raycast", R"J({"origin": [0, 5, 0], "direction": [0, -1, 0]})J")["result"];
+    CHECK(hit["hit"].asBool() && hit["name"].asString() == "Box" && std::fabs(hit["point"][1].asNumber() - 1.0) < 0.03);
+    CHECK(std::fabs(hit["normal"][1].asNumber() - 1.0) < 1e-3);
+    hit = Call(e, "physics.raycast", R"J({"origin": [-10, 0.5, 3], "direction": [1, 0, 0]})J")["result"];
+    CHECK(hit["name"].asString() == "Tri" && hit["point"][2].asNumber() == 3.0);  // 2D hit keeps the ray's z
+    Json over = Call(e, "physics.overlap", R"J({"center": [0, 0.5, 0], "radius": 0.2})J")["result"];
+    CHECK(over.size() == 1 && over[0]["name"].asString() == "Box");
+
+    // Layers: a body on layer 2 that ignores layer 0 falls through the ground.
+    Call(e, "entity.create", R"J({"name": "Ghost", "components": {"Transform": {"position": [8, 1, 0]}, "Collider2D": {"layer": 2, "ignoreLayers": [0]}, "RigidBody2D": {}}})J");
+    Call(e, "sim.step", R"J({"frames": 60})J");
+    CHECK(PosOf(e, "Ghost").y < -1.0f);
+}
+
+TEST(Physics2DCharacters) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("physics2d_char"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    // Floor top at y = -4, a wall at x 9..10, a one-way platform (top y = -2) and a slope rising to the right.
+    Call(e, "entity.create", R"J({"name": "Level", "components": {"Transform": {}, "Tilemap": {"map": [
+        "            ",
+        "            ",
+        "   ===      ",
+        "         /# ",
+        "############"], "legend": {"=": {"collision": "oneway"}, "/": {"collision": "slope-up"}}, "solid": "#"}}})J");
+    Call(e, "entity.create", R"J({"name": "Hero", "components": {"Transform": {"position": [1, -2, 0]}, "CharacterBody2D": {"radius": 0.3, "height": 1}}})J");
+    const CharacterBody2D* cb = [&] { return e.GetScene().Get<CharacterBody2D>(e.GetScene().FindByName("Hero")); }();
+    Call(e, "sim.step", R"J({"frames": 60})J");
+    CHECK(std::fabs(PosOf(e, "Hero").y + 3.5f) < 0.02f);  // standing on the floor
+    cb = e.GetScene().Get<CharacterBody2D>(e.GetScene().FindByName("Hero"));
+    CHECK(cb->grounded);
+
+    // Jump up through the one-way platform, land on top of it.
+    Call(e, "component.set", R"J({"id": "Hero", "type": "Transform", "values": {"position": [4, -3.5, 0]}})J");
+    Call(e, "sim.step", R"J({"frames": 2})J");
+    Call(e, "component.set", R"J({"id": "Hero", "type": "CharacterBody2D", "values": {"velocity": [0, 9, 0]}})J");
+    Call(e, "sim.step", R"J({"frames": 150})J");
+    cb = e.GetScene().Get<CharacterBody2D>(e.GetScene().FindByName("Hero"));
+    CHECK(std::fabs(PosOf(e, "Hero").y + 1.5f) < 0.03f && cb->grounded);
+    // Drop through it.
+    Call(e, "component.set", R"J({"id": "Hero", "type": "CharacterBody2D", "values": {"dropThrough": true}})J");
+    Call(e, "sim.step", R"J({"frames": 60})J");
+    CHECK(std::fabs(PosOf(e, "Hero").y + 3.5f) < 0.03f);
+    Call(e, "component.set", R"J({"id": "Hero", "type": "CharacterBody2D", "values": {"dropThrough": false}})J");
+
+    // Walk right: up the slope onto the block (top y = -3), then into... the map edge is open, so it walks off.
+    Call(e, "component.set", R"J({"id": "Hero", "type": "Transform", "values": {"position": [7, -3.5, 0]}})J");
+    bool climbed = false;
+    for (int i = 0; i < 40; ++i) {
+        Call(e, "component.set", R"J({"id": "Hero", "type": "CharacterBody2D", "values": {"velocity": [3, 0, 0]}})J");
+        Call(e, "sim.step", R"J({"frames": 2})J");
+        if (PosOf(e, "Hero").x > 10.0f && PosOf(e, "Hero").y > -2.6f) climbed = true;
+    }
+    CHECK(climbed);
+    cb = e.GetScene().Get<CharacterBody2D>(e.GetScene().FindByName("Hero"));
+    CHECK(cb->velocity.y <= 0.0f);  // never launched upward by the ramp
+
+    // A wall stops the character; top-down mode has no gravity.
+    Call(e, "entity.create", R"J({"name": "Wall", "components": {"Transform": {"position": [3, 5, 0], "scale": [1, 4, 1]}, "Collider2D": {}}})J");
+    Call(e, "entity.create", R"J({"name": "Top", "components": {"Transform": {"position": [0, 5, 0]}, "CharacterBody2D": {"mode": "topdown", "shape": "circle", "radius": 0.5}}})J");
+    for (int i = 0; i < 30; ++i) {
+        Call(e, "component.set", R"J({"id": "Top", "type": "CharacterBody2D", "values": {"velocity": [4, 0, 0]}})J");
+        Call(e, "sim.step", R"J({"frames": 2})J");
+    }
+    Vec3 top = PosOf(e, "Top");
+    CHECK(std::fabs(top.x - 2.0f) < 0.03f && std::fabs(top.y - 5.0f) < 1e-3f);
+    const CharacterBody2D* tc = e.GetScene().Get<CharacterBody2D>(e.GetScene().FindByName("Top"));
+    CHECK(tc->onWall && !tc->grounded);
+
+    // Triggers see characters; collision callbacks fire.
+    Call(e, "script.write", R"J({"path": "scripts/coin.lua", "source": "local M = {}\nfunction M:onTriggerEnter(other) coins = (coins or 0) + 1 end\nreturn M\n"})J");
+    Call(e, "entity.create", R"J({"name": "Coin", "components": {"Transform": {"position": [0, 7, 0]}, "Collider2D": {"shape": "circle", "radius": 0.3, "isTrigger": true}, "Script": {"path": "scripts/coin.lua"}}})J");
+    for (int i = 0; i < 30; ++i) {
+        Call(e, "component.set", R"J({"id": "Top", "type": "CharacterBody2D", "values": {"velocity": [-2, 2, 0]}})J");
+        Call(e, "sim.step", R"J({"frames": 2})J");
+    }
+    CHECK(Call(e, "script.eval", R"J({"code": "coins"})J")["result"]["value"].asInt() == 1);
+    CHECK(e.Scripts().Errors().empty());
+}
+
+TEST(Physics2DPlatformsAndPushing) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("physics2d_platform"), &err));
+    Scene2D(e);
+    // A kinematic platform moved by a script carries the character standing on it.
+    Call(e, "script.write", R"J({"path": "scripts/mover.lua", "source": "local M = {}\nfunction M:onUpdate(dt)\n  local p = scene.get(self.id, 'Transform').position\n  scene.set(self.id, 'Transform', {position = {x = p.x + 2 * dt, y = p.y, z = 0}})\nend\nreturn M\n"})J");
+    Call(e, "entity.create", R"J({"name": "Lift", "components": {"Transform": {"position": [-10, 2, 0], "scale": [3, 0.4, 1]}, "Collider2D": {}, "RigidBody2D": {"type": "kinematic"}, "Script": {"path": "scripts/mover.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Rider", "components": {"Transform": {"position": [-10, 3, 0]}, "CharacterBody2D": {"radius": 0.3, "height": 1}}})J");
+    Call(e, "sim.step", R"J({"frames": 30})J");
+    float x0 = PosOf(e, "Rider").x;
+    Call(e, "sim.step", R"J({"frames": 60})J");
+    CHECK(std::fabs(PosOf(e, "Rider").x - x0 - 2.0f) < 0.05f);  // moved 2 m with the lift in 1 s
+    CHECK(std::fabs(PosOf(e, "Rider").y - 2.7f) < 0.03f);
+
+    // Walking into a crate pushes it; a heavy one barely moves.
+    Call(e, "entity.create", R"J({"name": "Crate", "components": {"Transform": {"position": [3, 0.4, 0], "scale": [0.8, 0.8, 1]}, "Collider2D": {}, "RigidBody2D": {}}})J");
+    Call(e, "entity.create", R"J({"name": "Safe", "components": {"Transform": {"position": [9, 0.4, 0], "scale": [0.8, 0.8, 1]}, "Collider2D": {}, "RigidBody2D": {"mass": 500}}})J");
+    Call(e, "entity.create", R"J({"name": "Pusher", "components": {"Transform": {"position": [1, 0.5, 0]}, "CharacterBody2D": {"radius": 0.3, "height": 1}}})J");
+    for (int i = 0; i < 90; ++i) {
+        Call(e, "component.set", R"J({"id": "Pusher", "type": "CharacterBody2D", "values": {"velocity": [3, 0, 0]}})J");
+        Call(e, "sim.step", R"J({"frames": 1})J");
+    }
+    CHECK(PosOf(e, "Crate").x > 5.5f);
+    CHECK(std::fabs(PosOf(e, "Crate").y - 0.4f) < 0.03f);
+    CHECK(PosOf(e, "Safe").x < 9.3f);
+    CHECK(Call(e, "physics.contacts", R"J({"id": "Pusher"})J")["result"].size() >= 2);  // ground + a crate
+}
+
+TEST(Physics2DIsDeterministic) {
+    auto run = [] {
+        Engine e;
+        Scene2D(e);
+        Call(e, "entity.create", R"J({"name": "Slope", "components": {"Transform": {"position": [0, 0, 0]}, "Collider2D": {"shape": "edge", "points": [[-8, 6], [-2, 1], [4, 0]]}}})J");
+        for (int i = 0; i < 8; ++i) {
+            Json args = Json::parse(R"J({"components": {"Transform": {}, "Collider2D": {}, "RigidBody2D": {}}})J");
+            args["name"] = "B" + std::to_string(i);
+            args["components"]["Transform"]["position"] = Json(Json::Array{-6.0 + 0.4 * i, 7.0 + 1.1 * i, 0.0});
+            args["components"]["Transform"]["rotation"] = Json(Json::Array{0.0, 0.0, 17.0 * i});
+            if (i % 2) args["components"]["Collider2D"] = Json::parse(R"J({"shape": "circle", "radius": 0.4, "bounciness": 0.3})J");
+            e.Call("entity.create", args);
+        }
+        Call(e, "entity.create", R"J({"name": "Hero", "components": {"Transform": {"position": [6, 1, 0]}, "CharacterBody2D": {"velocity": [-3, 0, 0]}}})J");
+        Call(e, "sim.step", R"J({"frames": 300})J");
+        return e.GetScene().ToJson().dump();
+    };
+    std::string a = run(), b = run();
+    CHECK(a == b);
+    // Compare this line between builds (native SSE2/NEON vs WebAssembly scalar): Box2D is cross-platform deterministic.
+    uint64_t h = 1469598103934665603ull;
+    for (char c : a) h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+    std::printf("  2D scene hash %016llx\n", static_cast<unsigned long long>(h));
+}
+
+TEST(DungeonSamplePlays) {
+    auto run = [](std::string* summary) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Dungeon", &err));
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        auto eval = [&](const char* code) {
+            Json a = Json::MakeObject();
+            a["code"] = code;
+            return e.Call("script.eval", a)["result"]["value"];
+        };
+        CHECK(eval("return game.get('coinsTotal')").asInt() == 8);
+        // The level reads its rules from tilesets/dungeon.tileset.json.
+        Json info = Call(e, "tilemap.info", R"J({"id": "Level"})J")["result"];
+        CHECK(info["width"].asInt() == 36 && info["height"].asInt() == 20 && !info.has("error"));
+        // Walk right, then shoot the slime east of the start twice.
+        Call(e, "component.set", R"J({"id": "Player", "type": "Transform", "values": {"position": [22.5, -3.5, 0.1]}})J");
+        Call(e, "input.key", R"J({"key": "D", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 2})J");
+        Call(e, "input.key", R"J({"key": "D", "down": false})J");
+        Call(e, "sim.step", R"J({"frames": 10})J");
+        for (int shot = 0; shot < 2; ++shot) {
+            Call(e, "input.key", R"J({"key": "Space", "down": true})J");
+            Call(e, "sim.step", R"J({"frames": 1})J");
+            Call(e, "input.key", R"J({"key": "Space", "down": false})J");
+            Call(e, "sim.step", R"J({"frames": 25})J");
+        }
+        Call(e, "sim.step", R"J({"frames": 15})J");
+        CHECK(eval("return #scene.withTag('enemy')").asInt() == 5);
+        // Coins are triggers the hero collects.
+        Call(e, "component.set", R"J({"id": "Player", "type": "Transform", "values": {"position": [29.5, -1.5, 0.1]}})J");
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        CHECK(eval("return #scene.withTag('coin')").asInt() == 7);
+        CHECK(eval("return scene.get(scene.find('CoinsText'), 'UIText').text").asString() == "COINS 1/8");
+        // The stairs refuse to end the level early.
+        Call(e, "component.set", R"J({"id": "Player", "type": "Transform", "values": {"position": [28.5, -14.5, 0.1]}})J");
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        CHECK(eval("return scene.get(scene.find('Note'), 'UIText').text").asString() == "7 COINS LEFT");
+        CHECK(e.Scripts().Errors().empty());
+        CHECK(Call(e, "physics.state", "{}")["result"]["warnings"].size() == 0);
+        Json shot = Call(e, "render.screenshot", R"J({"width": 128, "height": 72, "inline": false})J");
+        *summary = shot["result"]["hash"].asString() + e.GetScene().ToJson().dump();
+    };
+    std::string a, b;
+    run(&a);
+    run(&b);
+    CHECK(a == b);
 }
 
 // ----- assets & rendering ---------------------------------------------------------
@@ -1619,6 +1950,73 @@ TEST(NativeEditorHeadless) {
     close.type = WindowEvent::Type::Close;
     frames(2, {close});
     CHECK(!ed.QuitRequested());
+}
+
+TEST(NativeEditorTilePainting) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Dungeon", &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    auto mouse = [](WindowEvent::Type type, float x, float y, int button = 0, bool down = false) {
+        WindowEvent ev;
+        ev.type = type;
+        ev.x = x;
+        ev.y = y;
+        ev.button = button;
+        ev.down = down;
+        return ev;
+    };
+    frames(3);
+    Scene& s = e.GetScene();
+    EntityId level = s.FindByName("Level");
+    ed.Select(level);
+    ed.SetTileBrush(true, '~');
+    frames(3);
+    auto count = [&](char c) {
+        int n = 0;
+        for (const Json& row : s.Get<Tilemap>(level)->map.items()) n += static_cast<int>(std::count(row.asString().begin(), row.asString().end(), c));
+        return n;
+    };
+    const int water = count('~');
+    std::array<float, 4> view = ed.SceneViewRect();
+    CHECK(view[2] > 100 && view[3] > 100);
+    float cx = view[0] + view[2] * 0.5f, cy = view[1] + view[3] * 0.5f;
+    // A left drag paints a line of cells.
+    frames(2, {mouse(WindowEvent::Type::MouseMove, cx, cy)});
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx, cy, 0, true)});
+    frames(2, {mouse(WindowEvent::Type::MouseMove, cx + 60, cy)});
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx + 60, cy, 0, false)});
+    const int painted = count('~') - water;
+    CHECK(painted >= 2);
+    const size_t undo = e.UndoDepth();
+    // A right drag erases (one more undo step).
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx, cy, 1, true)});
+    frames(2, {mouse(WindowEvent::Type::MouseButton, cx, cy, 1, false)});
+    CHECK(count('~') == water + painted - 1);
+    CHECK(e.UndoDepth() == undo + 1);
+    // Ctrl+Z undoes the erase, then the whole stroke.
+    frames(4, CtrlChord(WindowKey::Z));
+    CHECK(count('~') == water + painted);
+    frames(4, CtrlChord(WindowKey::Z));
+    CHECK(count('~') == water);
+    // Brush off: clicks select again.
+    ed.SetTileBrush(false, '~');
+    frames(2);
+    CHECK(ed.Selected() == level);
 }
 #endif
 

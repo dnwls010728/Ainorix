@@ -231,7 +231,10 @@ int CmdRender(const Args& a) {
         view.clearColor = clear;
     }
     view.drawGrid = a.Has("--grid");
-    if (a.Has("--colliders")) AppendColliderLines(engine.GetScene(), view.lines);
+    if (a.Has("--colliders")) {
+        TilesetLookup tilesets = engine.Assets().Tilesets();
+        AppendColliderLines(engine.GetScene(), view.lines, &tilesets);
+    }
     IRenderer* renderer = &engine.Renderer();
     if (a.Get("--renderer", "software") != "software") {
         if (!SetupRenderer(engine, a, nullptr, code)) return code;

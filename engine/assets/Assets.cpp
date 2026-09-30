@@ -285,6 +285,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".lua")) return "script";
     if (EndsWith(p, ".prefab.json")) return "prefab";
     if (EndsWith(p, ".mat.json")) return "material";
+    if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
 }
@@ -351,6 +352,43 @@ std::shared_ptr<const Material> AssetManager::GetMaterial(const std::string& pat
     if (it == materials_.end()) it = materials_.emplace(path, LoadMaterial(path)).first;
     if (error) *error = it->second.error;
     return it->second.asset;
+}
+
+AssetManager::Entry<Tileset> AssetManager::LoadTileset(const std::string& path) {
+    Entry<Tileset> e;
+    try {
+        std::string full = engine_.ResolvePath(path);
+        e.mtime = FileModifiedTime(full);
+        std::string text, parseError;
+        if (KindOf(path) != "tileset") e.error = "'" + path + "' is not a tileset file (*.tileset.json)";
+        else if (!ReadTextFile(full, text)) e.error = "tileset file not found: " + path;
+        else {
+            Json j = Json::parse(text, &parseError);
+            auto ts = std::make_shared<Tileset>();
+            if (!parseError.empty()) e.error = path + ": " + parseError;
+            else if (ParseTileset(j, *ts, &e.error)) {
+                ts->key = path + "@" + std::to_string(e.mtime) + ts->key;
+                e.asset = ts;
+            } else {
+                e.error = path + ": " + e.error;
+            }
+        }
+    } catch (const std::exception& ex) {
+        e.error = ex.what();
+    }
+    if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
+    return e;
+}
+
+std::shared_ptr<const Tileset> AssetManager::GetTileset(const std::string& path, std::string* error) {
+    auto it = tilesets_.find(path);
+    if (it == tilesets_.end()) it = tilesets_.emplace(path, LoadTileset(path)).first;
+    if (error) *error = it->second.error;
+    return it->second.asset;
+}
+
+TilesetLookup AssetManager::Tilesets() {
+    return [this](const std::string& path, std::string* error) { return GetTileset(path, error); };
 }
 
 AssetManager::FontEntry AssetManager::LoadFont(const std::string& path) {
@@ -430,6 +468,12 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
+    for (auto& kv : tilesets_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            kv.second = LoadTileset(kv.first);
+            changed.push_back(kv.first);
+        }
+    }
     for (const std::string& p : changed) OE_LOG_INFO("assets", "reloaded %s", p.c_str());
     return changed;
 }
@@ -439,6 +483,7 @@ void AssetManager::Forget(const std::string& path) {
     textures_.erase(path);
     materials_.erase(path);
     fonts_.erase(path);
+    tilesets_.erase(path);
 }
 
 void AssetManager::Clear() {
@@ -446,6 +491,7 @@ void AssetManager::Clear() {
     textures_.clear();
     materials_.clear();
     fonts_.clear();
+    tilesets_.clear();
 }
 
 Json AssetManager::Info(const std::string& path) {
@@ -524,6 +570,17 @@ Json AssetManager::Info(const std::string& path) {
         if (!font) throw ApiError("invalid_font", err);
         out["family"] = font->familyName;
         out["hint"] = Format("Use it with UIText/UIButton {font: \"%s\"}. Characters the font lacks fall back to the built-in font.", path.c_str());
+    } else if (kind == "tileset") {
+        std::string err;
+        auto ts = GetTileset(path, &err);
+        if (!ts) throw ApiError("invalid_tileset", err, "Format: {image, columns, rows, tiles: {\"#\": rule}}; see docs/2D.md.");
+        out["image"] = ts->image;
+        out["columns"] = ts->columns;
+        out["rows"] = ts->rows;
+        std::string chars;
+        for (const auto& kv : ts->tiles) chars += kv.first;
+        out["tiles"] = chars;
+        out["hint"] = Format("Use it with Tilemap {tileset: \"%s\"}; the map characters %s are defined by the file.", path.c_str(), chars.c_str());
     } else if (kind == "audio") {
         std::vector<unsigned char> bytes;
         ReadBinaryFile(engine_.ResolvePath(path), bytes);

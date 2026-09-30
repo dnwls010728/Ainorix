@@ -7,6 +7,7 @@
 
 #include "assets/Assets.h"
 #include "scene/Components.h"
+#include "scene/TileGrid.h"
 
 namespace oe {
 
@@ -36,21 +37,21 @@ void FrameRect(int index, int columns, int rows, const Texture* tex, float& u0, 
 std::mutex g_tileMeshMutex;
 std::map<std::string, std::shared_ptr<const Mesh>> g_tileMeshes;
 
-std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const Texture* tex) {
-    std::string key = tm.map.dump() + "|" + tm.legend.dump() + "|" + std::to_string(tm.columns) + "x" + std::to_string(tm.rows) + "|" +
-                      std::to_string(tm.tileSize) + "|" + std::to_string(tex ? tex->width : 0) + "x" + std::to_string(tex ? tex->height : 0);
+std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const TileRules& rules, const Texture* tex) {
+    std::string key = tm.map.dump() + "|" + rules.key + "|" + std::to_string(tm.tileSize) + "|" + std::to_string(tex ? tex->width : 0) + "x" +
+                      std::to_string(tex ? tex->height : 0);
     std::lock_guard<std::mutex> lock(g_tileMeshMutex);
     auto found = g_tileMeshes.find(key);
     if (found != g_tileMeshes.end()) return found->second;
     auto mesh = std::make_shared<Mesh>();
     const float ts = std::max(0.001f, tm.tileSize);
-    for (int row = 0; tm.map.isArray() && row < static_cast<int>(tm.map.size()); ++row) {
-        const std::string line = tm.map[row].asString("");
-        for (int col = 0; col < static_cast<int>(line.size()); ++col) {
-            const Json* frame = tm.legend.isObject() ? tm.legend.find(std::string(1, line[static_cast<size_t>(col)])) : nullptr;
-            if (!frame || !frame->isNumber()) continue;
+    TileFrames frames = ResolveFrames(tm, rules);
+    for (int row = 0; row < frames.height; ++row) {
+        for (int col = 0; col < frames.width; ++col) {
+            int frame = frames.frames[static_cast<size_t>(row) * static_cast<size_t>(frames.width) + static_cast<size_t>(col)];
+            if (frame < 0) continue;
             float u0, v0, du, dv;
-            FrameRect(frame->asInt(0), tm.columns, tm.rows, tex, u0, v0, du, dv);
+            FrameRect(frame, rules.columns, rules.rows, tex, u0, v0, du, dv);
             float x0 = static_cast<float>(col) * ts, x1 = x0 + ts;
             float y1 = -static_cast<float>(row) * ts, y0 = y1 - ts;
             uint32_t base = static_cast<uint32_t>(mesh->positions.size());
@@ -208,8 +209,10 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.castShadows = false;
         it.pointSample = tm.pixelArt;
         it.alphaCutoff = 0.5f;
-        if (!tm.tileset.empty() && assets) it.textureOverride = assets->GetTexture(tm.tileset);
-        it.mesh = TilemapMesh(tm, it.textureOverride.get());
+        TilesetLookup lookup = assets ? assets->Tilesets() : TilesetLookup();
+        TileRules rules = BuildTileRules(tm, &lookup);
+        if (!rules.image.empty() && assets) it.textureOverride = assets->GetTexture(rules.image);
+        it.mesh = TilemapMesh(tm, rules, it.textureOverride.get());
         if (it.mesh->indices.empty()) continue;
         it.world = scene.WorldMatrix(kv.first);
         it.normalMatrix = it.world.Inverse().Transposed();

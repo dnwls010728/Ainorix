@@ -6,6 +6,7 @@
 #include "app/Engine.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "assets/Assets.h"
 #include "audio/AudioSystem.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/Components.h"
@@ -589,12 +590,57 @@ int L_TilemapCellCenter(lua_State* L) {
     return 1;
 }
 
-// tilemap.solid(id, col, row) -> true if that cell collides
+TileRules RulesOf(lua_State* L, const Tilemap& tm) {
+    TilesetLookup lookup = Host(L).GetEngine().Assets().Tilesets();
+    return BuildTileRules(tm, &lookup);
+}
+
+// tilemap.solid(id, col, row) -> true if that cell collides (solid, one-way or shaped)
 int L_TilemapSolid(lua_State* L) {
+    return Guard(L, [&] {
+        EntityId id = CheckEntity(L, 1);
+        const Tilemap& tm = CheckTilemap(L, id);
+        TileCollision c = CollisionAt(tm, RulesOf(L, tm), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)));
+        lua_pushboolean(L, c != TileCollision::None);
+        return 1;
+    });
+}
+
+// tilemap.collision(id, col, row) -> "none" | "solid" | "oneway" | "shape"
+int L_TilemapCollision(lua_State* L) {
+    return Guard(L, [&] {
+        EntityId id = CheckEntity(L, 1);
+        const Tilemap& tm = CheckTilemap(L, id);
+        TileCollision c = CollisionAt(tm, RulesOf(L, tm), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)));
+        lua_pushstring(L, c == TileCollision::Solid ? "solid" : c == TileCollision::OneWay ? "oneway" : c == TileCollision::Shape ? "shape" : "none");
+        return 1;
+    });
+}
+
+// tilemap.fill(id, col, row, width, height, char) - fill a rectangle of cells
+int L_TilemapFill(lua_State* L) {
     EntityId id = CheckEntity(L, 1);
-    const Tilemap& tm = CheckTilemap(L, id);
-    lua_pushboolean(L, IsSolid(tm, TileAt(tm, static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)))));
+    Tilemap& tm = CheckTilemap(L, id);
+    int col = static_cast<int>(luaL_checkinteger(L, 2)), row = static_cast<int>(luaL_checkinteger(L, 3));
+    int w = static_cast<int>(luaL_checkinteger(L, 4)), h = static_cast<int>(luaL_checkinteger(L, 5));
+    size_t len = 0;
+    const char* s = luaL_checklstring(L, 6, &len);
+    bool ok = w > 0 && h > 0 && w * h <= 1 << 20;
+    for (int r = row; ok && r < row + h; ++r) {
+        for (int c = col; c < col + w; ++c) ok = SetTile(tm, c, r, len ? s[0] : ' ') && ok;
+    }
+    lua_pushboolean(L, ok);
     return 1;
+}
+
+// tilemap.size(id) -> width, height in cells
+int L_TilemapSize(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    int w = 0, h = 0;
+    MapSize(CheckTilemap(L, id), w, h);
+    lua_pushinteger(L, w);
+    lua_pushinteger(L, h);
+    return 2;
 }
 
 int L_PhysicsRaycast(lua_State* L) {
@@ -648,7 +694,9 @@ int L_PhysicsContacts(lua_State* L) {
     lua_Integer i = 0;
     for (const ContactPair& c : Host(L).GetEngine().Physics().Contacts()) {
         if (c.a != id && c.b != id) continue;
-        lua_pushinteger(L, c.a == id ? c.b : c.a);
+        EntityId other = c.a == id ? c.b : c.a;
+        if (!SceneOf(L).Exists(other)) continue;  // destroyed since the last physics step
+        lua_pushinteger(L, other);
         lua_rawseti(L, -2, ++i);
     }
     return 1;
@@ -795,18 +843,23 @@ function Script:rotate(x, y, z)
   local r = scene.get(self.id, "Transform").rotation
   scene.set(self.id, "Transform", {rotation = {x = r.x + x, y = r.y + y, z = r.z + z}})
 end
--- Physics helpers: work with CharacterBody (characters) or RigidBody (bodies).
+-- Physics helpers: work with CharacterBody/CharacterBody2D (characters) or RigidBody/RigidBody2D (bodies).
+local function bodyType(id)
+  for _, t in ipairs({"CharacterBody", "CharacterBody2D", "RigidBody2D"}) do
+    if scene.has(id, t) then return t end
+  end
+  return "RigidBody"
+end
 function Script:grounded()
-  local c = scene.get(self.id, "CharacterBody")
+  local c = scene.get(self.id, "CharacterBody") or scene.get(self.id, "CharacterBody2D")
   return c ~= nil and c.grounded
 end
 function Script:velocity()
-  local c = scene.get(self.id, "CharacterBody") or scene.get(self.id, "RigidBody")
+  local c = scene.get(self.id, bodyType(self.id))
   return c and c.velocity or {x = 0, y = 0, z = 0}
 end
 function Script:setVelocity(x, y, z)
-  local t = scene.has(self.id, "CharacterBody") and "CharacterBody" or "RigidBody"
-  scene.set(self.id, t, {velocity = {x = x, y = y, z = z}})
+  scene.set(self.id, bodyType(self.id), {velocity = {x = x, y = y, z = z or 0}})
 end
 function Script:addImpulse(x, y, z) physics.addImpulse(self.id, {x = x, y = y, z = z}) end
 function Script:contacts() return physics.contacts(self.id) end
@@ -920,7 +973,8 @@ void ScriptHost::Open() {
                                      {"addImpulse", L_PhysicsAddImpulse}, {"contacts", L_PhysicsContacts}, {nullptr, nullptr}};
     SetFuncs(L, "physics", physicsFuncs);
     const luaL_Reg tilemapFuncs[] = {{"get", L_TilemapGet}, {"set", L_TilemapSet}, {"cellAt", L_TilemapCellAt},
-                                     {"cellCenter", L_TilemapCellCenter}, {"solid", L_TilemapSolid}, {nullptr, nullptr}};
+                                     {"cellCenter", L_TilemapCellCenter}, {"solid", L_TilemapSolid}, {"collision", L_TilemapCollision},
+                                     {"fill", L_TilemapFill}, {"size", L_TilemapSize}, {nullptr, nullptr}};
     SetFuncs(L, "tilemap", tilemapFuncs);
     const luaL_Reg logFuncs[] = {{"info", L_Log<LogLevel::Info>}, {"warn", L_Log<LogLevel::Warn>}, {"error", L_Log<LogLevel::Error>}, {nullptr, nullptr}};
     SetFuncs(L, "log", logFuncs);

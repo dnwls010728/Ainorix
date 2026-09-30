@@ -15,6 +15,9 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Collider>();
     TypeRegistry::Register<RigidBody>();
     TypeRegistry::Register<CharacterBody>();
+    TypeRegistry::Register<Collider2D>();
+    TypeRegistry::Register<RigidBody2D>();
+    TypeRegistry::Register<CharacterBody2D>();
     TypeRegistry::Register<Prefab>();
     TypeRegistry::Register<UIText>();
     TypeRegistry::Register<UIPanel>();

@@ -117,7 +117,7 @@ bool FieldFromJson(const FieldInfo& field, void* c, const Json& v, std::string* 
         }
         case FieldType::Int:
             if (!v.isNumber()) return typeError("an integer");
-            At<int>(c, field.offset) = v.asInt();
+            At<int>(c, field.offset) = field.hasRange ? static_cast<int>(Clamp(static_cast<float>(v.asNumber()), field.min, field.max)) : v.asInt();
             return true;
         case FieldType::Bool:
             if (!v.isBool()) return typeError("true or false");

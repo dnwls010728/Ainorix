@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(OwnEngine VERSION 0.1.0 LANGUAGES CXX)
+project(OwnEngine VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -71,6 +71,25 @@ set(JPH_USE_MTL OFF)
 set(JPH_USE_CPU_COMPUTE OFF)
 add_subdirectory(third_party/jolt/Build ${CMAKE_BINARY_DIR}/jolt EXCLUDE_FROM_ALL)
 
+# ---------------------------------------------------------------------------
+# Box2D 3.1 (vendored, unmodified): the 2D physics backend (Collider2D,
+# RigidBody2D, CharacterBody2D). C17; no FMA contraction so results are the
+# same on every compiler/CPU (Box2D is cross-platform deterministic).
+# ---------------------------------------------------------------------------
+file(GLOB OE_BOX2D_SOURCES third_party/box2d/src/*.c)
+add_library(oe_box2d STATIC ${OE_BOX2D_SOURCES})
+target_include_directories(oe_box2d PUBLIC third_party/box2d/include)
+set_target_properties(oe_box2d PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES C_EXTENSIONS YES)
+if(MSVC)
+  target_compile_options(oe_box2d PRIVATE /W0)
+  target_compile_definitions(oe_box2d PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+  target_compile_options(oe_box2d PRIVATE -w -ffp-contract=off)
+endif()
+if(EMSCRIPTEN)
+  target_compile_definitions(oe_box2d PRIVATE BOX2D_DISABLE_SIMD)  # scalar path: no -msimd128 needed
+endif()
+
 file(GLOB OE_CORE_SOURCES CONFIGURE_DEPENDS
   engine/core/*.cpp
   engine/scene/*.cpp
@@ -127,7 +146,7 @@ message(STATUS "OwnEngine GPU backend: ${OE_GPU_BACKEND}")
 
 add_library(OwnEngine STATIC ${OE_CORE_SOURCES} ${OE_PLATFORM_SOURCES})
 target_include_directories(OwnEngine PUBLIC engine third_party/sokol)
-target_link_libraries(OwnEngine PUBLIC oe_lua Jolt)
+target_link_libraries(OwnEngine PUBLIC oe_lua Jolt oe_box2d)
 # Single-header decoders (stb_image, cgltf); implementations in engine/assets/ThirdPartyImpl.cpp.
 target_include_directories(OwnEngine PRIVATE third_party/stb third_party/cgltf)
 target_compile_definitions(OwnEngine PUBLIC
