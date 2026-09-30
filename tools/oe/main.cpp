@@ -45,7 +45,7 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select"};
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -171,10 +171,10 @@ int CmdHelp() {
                  "Usage: oe <command> [args]\n\n"
                  "  new <dir> [--name N]              Create a project with a sample scene\n"
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
-                 "  editor [path] [--port 7777] [--web] [--no-browser] [--window]\n"
+                 "  editor [path] [--port 7777] [--lang en|ko|ja] [--web] [--no-browser] [--window]\n"
                  "                                    Native editor window (Windows); --web (or no window/GPU) starts\n"
                  "                                    the web editor on http://127.0.0.1:7777 instead\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -344,6 +344,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     if (!SetupRenderer(engine, a, nullptr, code)) return code;
     if (!engine.Gpu()) return Fail("gpu_unavailable", "the native editor needs the GPU renderer", "Install a GPU backend (Linux: libegl-dev libgles-dev) or use `oe render`.");
     NativeEditor::Options options;  // no layout file: the default layout, reproducible
+    options.language = a.Get("--lang", "en");
     NativeEditor editor(engine, nullptr, options);
     std::string err;
     if (!editor.Init(&err)) return Fail("editor_failed", err);
@@ -391,6 +392,7 @@ int CmdEditor(const Args& a) {
             HttpServer server;
             NativeEditor::Options options;
             options.layoutFile = EditorLayoutFile(engine);
+            options.language = a.Get("--lang");
             if (StartServer(server, engine, port)) options.serverInfo = "API http://127.0.0.1:" + std::to_string(port);
             else OE_LOG_WARN("editor", "port %d is busy: agents cannot attach (pick another with --port)", port);
             if (!a.Has("--mute")) engine.EnableAudioOutput();

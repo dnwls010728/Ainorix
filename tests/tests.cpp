@@ -26,6 +26,7 @@
 #include "script/ScriptHost.h"
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
+#include "editor/EditorText.h"
 #endif
 
 using namespace oe;
@@ -1418,6 +1419,80 @@ std::vector<WindowEvent> CtrlChord(WindowKey key) {
     return {KeyEvent(WindowKey::Control, true, true), KeyEvent(key, true, true), KeyEvent(key, false, true), KeyEvent(WindowKey::Control, false, false)};
 }
 
+// String literals in `text`, with C escapes (\" \\ \n) resolved.
+std::vector<std::string> StringLiterals(const std::string& text) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '"') continue;
+        std::string lit;
+        for (++i; i < text.size() && text[i] != '"'; ++i) {
+            if (text[i] == '\\' && i + 1 < text.size()) {
+                ++i;
+                lit += text[i] == 'n' ? '\n' : text[i];
+            } else {
+                lit += text[i];
+            }
+        }
+        out.push_back(lit);
+    }
+    return out;
+}
+
+TEST(EditorTranslations) {
+    CHECK(EditorCatalogProblems().empty());
+    for (const std::string& p : EditorCatalogProblems()) std::printf("  catalog: %s\n", p.c_str());
+    CHECK(ParseEditorLanguage("ko-KR") == EditorLanguage::Korean);
+    CHECK(ParseEditorLanguage("ja_JP.UTF-8") == EditorLanguage::Japanese);
+    CHECK(ParseEditorLanguage("fr") == EditorLanguage::English);
+    // Every string the editor code passes to Tr()/TrId() has a translation.
+    std::set<std::string> missing;
+    for (const std::string& file : ListFiles(std::string(OE_SOURCE_DIR) + "/engine/editor", ".cpp", false)) {
+        if (file.find("EditorText.cpp") != std::string::npos) continue;
+        std::string src;
+        CHECK(ReadTextFile(file, src));
+        for (size_t at = src.find("Tr"); at != std::string::npos; at = src.find("Tr", at + 2)) {
+            bool call = src.compare(at, 3, "Tr(") == 0 || src.compare(at, 5, "TrId(") == 0;
+            if (!call || (at > 0 && (std::isalnum(static_cast<unsigned char>(src[at - 1])) || src[at - 1] == '_'))) continue;
+            // Arguments up to the matching ')', skipping string literals.
+            size_t open = src.find('(', at), end = open;
+            int depth = 0;
+            for (; end < src.size(); ++end) {
+                char c = src[end];
+                if (c == '"') {
+                    for (++end; end < src.size() && src[end] != '"'; ++end) {
+                        if (src[end] == '\\') ++end;
+                    }
+                } else if (c == '(') {
+                    ++depth;
+                } else if (c == ')' && --depth == 0) {
+                    break;
+                }
+            }
+            for (const std::string& lit : StringLiterals(src.substr(open, end - open))) {
+                if (!EditorCatalogHas(lit)) missing.insert(lit);
+            }
+        }
+        // Create menu presets: {"key", "Group", "Label", ...}
+        size_t presets = src.find("const Preset kPresets[]");
+        if (presets != std::string::npos) {
+            std::string block = src.substr(presets, src.find("};", presets) - presets);
+            for (size_t line = block.find("\n    {\""); line != std::string::npos; line = block.find("\n    {\"", line + 1)) {
+                std::vector<std::string> lits = StringLiterals(block.substr(line, block.find('\n', line + 1) - line));
+                for (size_t k = 1; k < 3 && k < lits.size(); ++k) {
+                    if (lits[k] != "2D" && lits[k] != "UI" && !EditorCatalogHas(lits[k])) missing.insert(lits[k]);
+                }
+            }
+        }
+    }
+    for (const std::string& m : missing) std::printf("  no translation: %s\n", m.c_str());
+    CHECK(missing.empty());
+    SetEditorLanguage(EditorLanguage::Korean);
+    CHECK(std::string(Tr("Save")) == "저장" && TrId("Hierarchy") == "계층###Hierarchy");
+    SetEditorLanguage(EditorLanguage::Japanese);
+    CHECK(std::string(Tr("Save")) == "保存" && std::string(Tr("not in the catalog")) == "not in the catalog");
+    SetEditorLanguage(EditorLanguage::English);
+}
+
 TEST(NativeEditorHeadless) {
     Engine e;
     std::string err;
@@ -1426,7 +1501,9 @@ TEST(NativeEditorHeadless) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;
     }
-    NativeEditor ed(e, nullptr, NativeEditor::Options());
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
     CHECK(ed.Init(&err));
     RenderTarget img;
     // Events are queued: Dear ImGui applies at most one press/release of a key per frame.

@@ -28,6 +28,9 @@ public:
     struct Options {
         std::string layoutFile;  // ImGui layout + editor preferences; empty = not persisted
         std::string serverInfo;  // shown in the status bar, e.g. "API http://127.0.0.1:7777"
+        // Interface language: "en", "ko" or "ja". Empty = the choice saved in
+        // layoutFile (View > Language), else the OS language.
+        std::string language;
     };
 
     NativeEditor(Engine& engine, Window* window, Options options);

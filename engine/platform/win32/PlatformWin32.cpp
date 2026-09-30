@@ -570,6 +570,13 @@ void PlatformEnableHighDpi() {
     else SetProcessDPIAware();
 }
 
+std::string PlatformUserLanguage() {
+    wchar_t name[LOCALE_NAME_MAX_LENGTH] = {};
+    if (GetUserDefaultLocaleName(name, LOCALE_NAME_MAX_LENGTH) <= 0) return "en";
+    std::string code = Narrow(name);  // "ko-KR"
+    return code.size() >= 2 ? code.substr(0, 2) : "en";
+}
+
 const char* PlatformName() { return "win32"; }
 
 double PlatformTimeSeconds() {

@@ -91,6 +91,9 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string& title, int width
 // to the software renderer. Only one device may exist at a time.
 std::unique_ptr<GpuDevice> CreateGpuDevice(Window* window, std::string* error);
 
+// The user's interface language as an ISO 639-1 code ("en", "ko", "ja", ...),
+// "en" when unknown.
+std::string PlatformUserLanguage();
 // Opts the process into per-monitor DPI awareness (sharp tool UI on high-DPI
 // screens). Call before creating windows; games leave it off.
 void PlatformEnableHighDpi();

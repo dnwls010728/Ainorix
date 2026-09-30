@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "editor/EditorInternal.h"
+#include "editor/EditorText.h"
 #include "imgui_internal.h"
 
 #include "app/Engine.h"
@@ -46,15 +47,15 @@ void EntityKindTag(const EntityRow& r) {
 }
 
 const char* KindLabel(const std::string& kind) {
-    if (kind == "scene") return "Scenes";
-    if (kind == "prefab") return "Prefabs";
-    if (kind == "script") return "Scripts";
-    if (kind == "model") return "Models";
-    if (kind == "texture") return "Textures";
-    if (kind == "material") return "Materials";
-    if (kind == "audio") return "Sounds";
-    if (kind == "font") return "Fonts";
-    return "Other";
+    if (kind == "scene") return Tr("Scenes");
+    if (kind == "prefab") return Tr("Prefabs");
+    if (kind == "script") return Tr("Scripts");
+    if (kind == "model") return Tr("Models");
+    if (kind == "texture") return Tr("Textures");
+    if (kind == "material") return Tr("Materials");
+    if (kind == "audio") return Tr("Sounds");
+    if (kind == "font") return Tr("Fonts");
+    return Tr("Other");
 }
 
 ImVec4 KindColor(const std::string& kind) {
@@ -104,29 +105,29 @@ bool AcceptAsset(std::string& path) {
 void NativeEditor::Impl::EntityContextMenu(const EntityRow* row) {
     if (row) {
         if (!IsSelected(row->id)) SelectOnly(row->id);
-        if (ImGui::MenuItem("Rename", "F2")) {
+        if (ImGui::MenuItem(Tr("Rename"), "F2")) {
             renaming = row->id;
             renameBuffer = row->name;
         }
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D")) DuplicateSelection();
-        if (ImGui::MenuItem("Delete", "Del")) DeleteSelection();
+        if (ImGui::MenuItem(Tr("Duplicate"), "Ctrl+D")) DuplicateSelection();
+        if (ImGui::MenuItem(Tr("Delete"), "Del")) DeleteSelection();
         ImGui::Separator();
-        if (ImGui::MenuItem("Create Empty Child")) {
+        if (ImGui::MenuItem(Tr("Create Empty Child"))) {
             Json r = Call("entity.create", ObjectOf({{"name", Json(UniqueName("Empty"))}, {"parent", Json(row->id)}, {"components", ObjectOf({{"Transform", Json::MakeObject()}})}}));
             if (Ok(r)) {
                 Refresh(true);
                 SelectOnly(static_cast<EntityId>(r["result"]["id"].asNumber(0)));
             }
         }
-        if (row->parent != kNullEntity && ImGui::MenuItem("Move to Root")) Call("entity.set_parent", ObjectOf({{"id", Json(row->id)}, {"parent", Json(0)}}));
-        if (ImGui::MenuItem("Save as Prefab...")) {
+        if (row->parent != kNullEntity && ImGui::MenuItem(Tr("Move to Root"))) Call("entity.set_parent", ObjectOf({{"id", Json(row->id)}, {"parent", Json(0)}}));
+        if (ImGui::MenuItem(Tr("Save as Prefab..."))) {
             prefabPath = "prefabs/" + row->name + ".prefab.json";
             openPrefabPrompt = true;
         }
-        if (ImGui::MenuItem("Frame in Scene View", "F")) FrameSelection();
+        if (ImGui::MenuItem(Tr("Frame in Scene View"), "F")) FrameSelection();
         ImGui::Separator();
     }
-    if (ImGui::BeginMenu("Create")) {
+    if (ImGui::BeginMenu(Tr("Create"))) {
         CreateMenuItems();
         ImGui::EndMenu();
     }
@@ -213,7 +214,7 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
                 int alpha = static_cast<int>(255.0f * (1.0f - age / 4.0f));
                 ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + ImGui::GetFrameHeight() * 0.5f), r, IM_COL32(255, 158, 26, alpha));
                 ImGui::Dummy(ImVec2(r * 2, ImGui::GetFrameHeight()));
-                HelpTooltip("Changed through the API (agent) just now");
+                HelpTooltip(Tr("Changed through the API (agent) just now"));
             }
         }
     }
@@ -228,19 +229,19 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
 }
 
 void NativeEditor::Impl::HierarchyPanel() {
-    if (!ImGui::Begin("Hierarchy", &showHierarchy)) {
+    if (!ImGui::Begin(TrId("Hierarchy").c_str(), &showHierarchy)) {
         ImGui::End();
         return;
     }
     if (ImGui::Button("+")) ImGui::OpenPopup("##create");
-    HelpTooltip("Create an entity");
+    HelpTooltip(Tr("Create an entity"));
     if (ImGui::BeginPopup("##create")) {
         CreateMenuItems();
         ImGui::EndPopup();
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##filter", "Search", &hierarchyFilter);
+    ImGui::InputTextWithHint("##filter", Tr("Search"), &hierarchyFilter);
 
     std::map<EntityId, std::vector<EntityId>> children;
     for (const EntityRow& r : rows) children[rowIndex.count(r.parent) ? r.parent : kNullEntity].push_back(r.id);
@@ -291,7 +292,7 @@ bool NativeEditor::Impl::AssetPicker(const char* popupId, const std::string& kin
                 picked = true;
             }
         };
-        item("", "(none)");
+        item("", Tr("(none)"));
         if (kind == "model") {
             for (const char* b : {"cube", "sphere", "plane", "pyramid", "quad"}) item(b, b);
             ImGui::Separator();
@@ -308,7 +309,7 @@ bool NativeEditor::Impl::AssetPicker(const char* popupId, const std::string& kin
             item(p, p.c_str());
             ++n;
         }
-        if (n == 0) ImGui::TextDisabled("No %s files in the project yet", kind.c_str());
+        if (n == 0) ImGui::TextDisabled(Tr("No %s files in the project yet"), kind.c_str());
         ImGui::EndPopup();
     }
     return picked;
@@ -378,9 +379,9 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
     } else if (oeType == "entity") {
         EntityId cur = static_cast<EntityId>(value.asNumber(0));
         const EntityRow* r = Row(cur);
-        std::string preview = cur == kNullEntity ? "(none)" : (r ? r->name : "#" + std::to_string(cur));
+        std::string preview = cur == kNullEntity ? std::string(Tr("(none)")) : (r ? r->name : "#" + std::to_string(cur));
         if (ImGui::BeginCombo(label.c_str(), preview.c_str())) {
-            if (ImGui::Selectable("(none)", cur == kNullEntity)) newValue = Json(0), changed = true;
+            if (ImGui::Selectable(Tr("(none)"), cur == kNullEntity)) newValue = Json(0), changed = true;
             for (const EntityRow& e : rows) {
                 if (e.id == id) continue;
                 ImGui::PushID(static_cast<int>(e.id));
@@ -408,7 +409,7 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
                 newValue = parsed;
                 changed = true;
             } else {
-                Notify(field + ": invalid JSON - " + err, true);
+                Notify(Format(Tr("%s: invalid JSON - %s"), field.c_str(), err.c_str()), true);
             }
         }
         ImGui::PopFont();
@@ -435,7 +436,7 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
             ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
             std::string popup = "##pick" + field;
             if (ImGui::Button(("..." + label).c_str(), ImVec2(button, 0))) ImGui::OpenPopup(popup.c_str());
-            HelpTooltip("Pick a " + kind + " from the project (or drag one from Assets)");
+            HelpTooltip(Format(Tr("Pick a %s from the project (or drag one from Assets)"), kind.c_str()));
             std::string picked;
             if (AssetPicker(popup.c_str(), kind, cur, picked)) newValue = Json(picked), changed = true;
         } else if (multiline) {
@@ -462,7 +463,7 @@ void NativeEditor::Impl::AddComponentPopup(EntityId id) {
         ImGui::SetKeyboardFocusHere();
     }
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16);
-    ImGui::InputTextWithHint("##find", "Search components", &addComponentFilter);
+    ImGui::InputTextWithHint("##find", Tr("Search components"), &addComponentFilter);
     ImGui::Separator();
     ImGui::BeginChild("##list", ImVec2(ImGui::GetFontSize() * 16, ImGui::GetFontSize() * 18));
     const Json& comps = selected["components"];
@@ -481,18 +482,18 @@ void NativeEditor::Impl::AddComponentPopup(EntityId id) {
 }
 
 void NativeEditor::Impl::InspectorPanel() {
-    if (!ImGui::Begin("Inspector", &showInspector)) {
+    if (!ImGui::Begin(TrId("Inspector").c_str(), &showInspector)) {
         ImGui::End();
         return;
     }
     EntityId id = Primary();
     if (id != kNullEntity && selectedId != id) Refresh(true);
     if (id == kNullEntity || !selected.isObject()) {
-        ImGui::TextDisabled("Select an entity in the Hierarchy or the Scene view.");
+        ImGui::TextDisabled("%s", Tr("Select an entity in the Hierarchy or the Scene view."));
         ImGui::End();
         return;
     }
-    if (selection.size() > 1) ImGui::TextDisabled("%d entities selected - showing the first", static_cast<int>(selection.size()));
+    if (selection.size() > 1) ImGui::TextDisabled(Tr("%d entities selected - showing the first"), static_cast<int>(selection.size()));
 
     // Name + id
     std::string name;
@@ -516,12 +517,12 @@ void NativeEditor::Impl::InspectorPanel() {
         bool open = ImGui::CollapsingHeader(type.c_str(), ImGuiTreeNodeFlags_AllowOverlap);
         if (typeInfo) HelpTooltip((*typeInfo)["doc"].asString(""));
         if (ImGui::BeginPopupContextItem("##compctx")) {
-            if (ImGui::MenuItem("Remove Component")) removeType = type;
-            if (ImGui::MenuItem("Reset to Defaults") && typeInfo) {
+            if (ImGui::MenuItem(Tr("Remove Component"))) removeType = type;
+            if (ImGui::MenuItem(Tr("Reset to Defaults")) && typeInfo) {
                 Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json(type)}, {"values", (*typeInfo)["defaults"]}}));
                 Refresh(true);
             }
-            if (ImGui::MenuItem("Copy as JSON")) ImGui::SetClipboardText(kv.second.dump(2).c_str());
+            if (ImGui::MenuItem(Tr("Copy as JSON"))) ImGui::SetClipboardText(kv.second.dump(2).c_str());
             ImGui::EndPopup();
         }
         // Remove button on the header's right edge.
@@ -529,11 +530,11 @@ void NativeEditor::Impl::InspectorPanel() {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
         if (ImGui::SmallButton("x")) removeType = type;
         ImGui::PopStyleColor();
-        HelpTooltip("Remove " + type);
+        HelpTooltip(Format(Tr("Remove %s"), type.c_str()));
         if (open && typeInfo) {
             if (type == "Script") {
                 std::string path = kv.second["path"].asString("");
-                if (!path.empty() && ImGui::Button("Edit Script")) OpenScript(path);
+                if (!path.empty() && ImGui::Button(Tr("Edit Script"))) OpenScript(path);
             }
             if (ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
                 ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.38f);
@@ -546,7 +547,7 @@ void NativeEditor::Impl::InspectorPanel() {
                 ImGui::EndTable();
             }
         } else if (open) {
-            ImGui::TextDisabled("Unknown component type");
+            ImGui::TextDisabled("%s", Tr("Unknown component type"));
         }
         ImGui::PopID();
     }
@@ -557,7 +558,7 @@ void NativeEditor::Impl::InspectorPanel() {
     ImGui::Spacing();
     float w = ImGui::GetFontSize() * 12;
     ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetContentRegionAvail().x - w) * 0.5f));
-    if (ImGui::Button("Add Component", ImVec2(w, 0))) ImGui::OpenPopup("##addcomp");
+    if (ImGui::Button(Tr("Add Component"), ImVec2(w, 0))) ImGui::OpenPopup("##addcomp");
     AddComponentPopup(id);
     ImGui::End();
 }
@@ -565,16 +566,16 @@ void NativeEditor::Impl::InspectorPanel() {
 // ----- Assets --------------------------------------------------------------------
 
 void NativeEditor::Impl::AssetsPanel() {
-    if (!ImGui::Begin("Assets", &showAssets)) {
+    if (!ImGui::Begin(TrId("Assets").c_str(), &showAssets)) {
         ImGui::End();
         return;
     }
-    if (ImGui::Button("Refresh")) RefreshAssets(true);
+    if (ImGui::Button(Tr("Refresh"))) RefreshAssets(true);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
-    ImGui::InputTextWithHint("##filter", "Search", &assetFilter);
+    ImGui::InputTextWithHint("##filter", Tr("Search"), &assetFilter);
     ImGui::SameLine();
-    ImGui::TextDisabled("Drop files on the window to import. Drag assets into the Scene, Hierarchy or Inspector.");
+    ImGui::TextDisabled("%s", Tr("Drop files on the window to import. Drag assets into the Scene, Hierarchy or Inspector."));
     ImGui::Separator();
     ImGui::BeginChild("##assets");
     std::map<std::string, std::vector<std::string>> byKind;
@@ -608,18 +609,19 @@ void NativeEditor::Impl::AssetsPanel() {
                     else if (kind == "prefab") Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 }
             }
-            HelpTooltip(path + (kind == "scene" ? "\nDouble-click to open" : kind == "script" ? "\nDouble-click to edit" : kind == "prefab" ? "\nDouble-click to instantiate" : ""));
+            const char* hint = kind == "scene" ? Tr("Double-click to open") : kind == "script" ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
+            HelpTooltip(hint ? path + "\n" + hint : path);
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload(kAssetPayload, path.data(), path.size());
                 ImGui::TextUnformatted(path.c_str());
                 ImGui::EndDragDropSource();
             }
             if (ImGui::BeginPopupContextItem("##assetctx")) {
-                if (kind == "scene" && ImGui::MenuItem("Open")) RequestAction({PendingAction::Kind::LoadScene, path});
-                if (kind == "script" && ImGui::MenuItem("Edit")) OpenScript(path);
-                if (kind == "prefab" && ImGui::MenuItem("Instantiate")) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
-                if (ImGui::MenuItem("Copy Path")) ImGui::SetClipboardText(path.c_str());
-                if (ImGui::MenuItem("Info")) {
+                if (kind == "scene" && ImGui::MenuItem(Tr("Open"))) RequestAction({PendingAction::Kind::LoadScene, path});
+                if (kind == "script" && ImGui::MenuItem(Tr("Edit"))) OpenScript(path);
+                if (kind == "prefab" && ImGui::MenuItem(Tr("Instantiate"))) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
+                if (ImGui::MenuItem(Tr("Copy Path"))) ImGui::SetClipboardText(path.c_str());
+                if (ImGui::MenuItem(Tr("Info"))) {
                     Json r = Call("asset.info", ObjectOf({{"path", Json(path)}}));
                     if (Ok(r)) OE_LOG_INFO("asset", "%s: %s", path.c_str(), r["result"].dump(2).c_str());
                     showConsole = true;
@@ -630,7 +632,7 @@ void NativeEditor::Impl::AssetsPanel() {
         }
         ImGui::TreePop();
     }
-    if (assets.size() == 0) ImGui::TextDisabled("The project has no assets yet.");
+    if (assets.size() == 0) ImGui::TextDisabled("%s", Tr("The project has no assets yet."));
     ImGui::EndChild();
     ImGui::End();
 }
@@ -638,26 +640,26 @@ void NativeEditor::Impl::AssetsPanel() {
 // ----- Console -------------------------------------------------------------------
 
 void NativeEditor::Impl::ConsolePanel() {
-    if (!ImGui::Begin("Console", &showConsole)) {
+    if (!ImGui::Begin(TrId("Console").c_str(), &showConsole)) {
         ImGui::End();
         return;
     }
     static const char* levels[] = {"debug", "info", "warn", "error"};
-    static const char* labels[] = {"Debug", "Info", "Warnings", "Errors"};
+    const char* labels[] = {Tr("Debug"), Tr("Info"), Tr("Warnings"), Tr("Errors")};
     for (int i = 0; i < 4; ++i) {
         ImGui::Checkbox(labels[i], &logShow[i]);
         ImGui::SameLine();
     }
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
-    ImGui::InputTextWithHint("##logfilter", "Filter", &logFilter);
+    ImGui::InputTextWithHint("##logfilter", Tr("Filter"), &logFilter);
     ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
+    if (ImGui::Button(Tr("Clear"))) {
         log.clear();
         warnCount = errorCount = 0;
         Call("script.errors", ObjectOf({{"clear", Json(true)}}), true);
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Auto-scroll", &logAutoScroll);
+    ImGui::Checkbox(Tr("Auto-scroll"), &logAutoScroll);
 
     float inputHeight = ImGui::GetFrameHeightWithSpacing();
     ImGui::BeginChild("##log", ImVec2(0, -inputHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
@@ -674,7 +676,7 @@ void NativeEditor::Impl::ConsolePanel() {
         ImGui::TextUnformatted(("[" + l.category + "] " + l.message).c_str());
         ImGui::PopStyleColor();
         if (ImGui::BeginPopupContextItem(("##l" + std::to_string(l.seq)).c_str())) {
-            if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(l.message.c_str());
+            if (ImGui::MenuItem(Tr("Copy"))) ImGui::SetClipboardText(l.message.c_str());
             ImGui::EndPopup();
         }
     }
@@ -714,7 +716,7 @@ void NativeEditor::Impl::ConsolePanel() {
     };
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGuiInputTextFlags f = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCompletion;
-    if (ImGui::InputTextWithHint("##cmd", "command.name {\"json\": \"args\"}   (Tab completes, Up/Down history)", &consoleInput, f, callback, &ctx)) {
+    if (ImGui::InputTextWithHint("##cmd", Tr("command.name {\"json\": \"args\"}   (Tab completes, Up/Down history)"), &consoleInput, f, callback, &ctx)) {
         RunConsoleCommand(consoleInput);
         consoleInput.clear();
         ImGui::SetKeyboardFocusHere(-1);
@@ -726,13 +728,13 @@ void NativeEditor::Impl::ConsolePanel() {
 
 void NativeEditor::Impl::ScriptsPanel() {
     if (focusScript >= 0) ImGui::SetNextWindowFocus();  // bring the tab to front; Begin() skips hidden tabs
-    if (!ImGui::Begin("Scripts", &showScripts)) {
+    if (!ImGui::Begin(TrId("Scripts").c_str(), &showScripts)) {
         ImGui::End();
         return;
     }
     if (scripts.empty()) {
-        ImGui::TextDisabled("Double-click a script in Assets (or use \"Edit Script\" on a Script component) to edit it here.");
-        ImGui::TextDisabled("Ctrl+S saves the script; it hot-reloads, also while the game runs.");
+        ImGui::TextDisabled("%s", Tr("Double-click a script in Assets (or use \"Edit Script\" on a Script component) to edit it here."));
+        ImGui::TextDisabled("%s", Tr("Ctrl+S saves the script; it hot-reloads, also while the game runs."));
         ImGui::End();
         return;
     }
@@ -748,12 +750,12 @@ void NativeEditor::Impl::ScriptsPanel() {
             }
             std::string label = FileName(t.path) + "###" + t.path;
             if (ImGui::BeginTabItem(label.c_str(), &t.open, flags)) {
-                bool save = ImGui::Button("Save") ||
+                bool save = ImGui::Button(Tr("Save")) ||
                             (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S));
                 ImGui::SameLine();
-                if (ImGui::Button("Revert")) t.text = t.saved;
+                if (ImGui::Button(Tr("Revert"))) t.text = t.saved;
                 ImGui::SameLine();
-                ImGui::TextDisabled("%s%s", t.path.c_str(), modified ? "  (modified)" : "");
+                ImGui::TextDisabled("%s%s", t.path.c_str(), modified ? Tr("  (modified)") : "");
                 // Errors of this file.
                 Json errs = Call("script.errors", Json(), true)["result"];
                 std::vector<std::string> mine;
@@ -769,7 +771,7 @@ void NativeEditor::Impl::ScriptsPanel() {
                 if (save) {
                     if (Ok(Call("script.write", ObjectOf({{"path", Json(t.path)}, {"source", Json(t.text)}})))) {
                         t.saved = t.text;
-                        Notify("Saved " + t.path);
+                        Notify(Format(Tr("Saved %s"), t.path.c_str()));
                     }
                 }
                 ImGui::EndTabItem();
