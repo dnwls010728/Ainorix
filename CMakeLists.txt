@@ -193,8 +193,10 @@ endif()
 if(NOT OE_GPU_BACKEND STREQUAL "none")
   add_library(oe_imgui STATIC
     third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp third_party/imgui/imgui_tables.cpp
-    third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_stdlib.cpp third_party/imguizmo/ImGuizmo.cpp)
-  target_include_directories(oe_imgui PUBLIC third_party/imgui third_party/imguizmo)
+    third_party/imgui/imgui_widgets.cpp third_party/imgui/imgui_stdlib.cpp third_party/imguizmo/ImGuizmo.cpp
+    third_party/imguicolortextedit/TextEditor.cpp)
+  # SYSTEM: no warnings from the vendored headers in engine code (MSVC /W4 included)
+  target_include_directories(oe_imgui SYSTEM PUBLIC third_party/imgui third_party/imguizmo third_party/imguicolortextedit)
   target_compile_definitions(oe_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
   if(MSVC)
     target_compile_options(oe_imgui PRIVATE /W0 /utf-8)

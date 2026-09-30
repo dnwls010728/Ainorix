@@ -61,7 +61,9 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 - ヒエラルキー: 複数選択 (Ctrl/Shift)、ドラッグで親を変更、右クリックメニュー (名前を変更、複製、削除、子を作成、プレハブとして保存)
 - インスペクター: リフレクションから自動生成、1 回のドラッグ = 元に戻す 1 段階、アセットのフィールドは選択リスト + ドラッグ＆ドロップ
 - アセット: ダブルクリックでシーンを開く / スクリプトを編集 / プレハブを配置、エクスプローラーからファイルをウィンドウにドロップしてインポート
-- スクリプト: Lua エディター (Ctrl+S で保存 → ホットリロード、エラー表示)、コンソール: ログフィルター + コマンド入力 (Tab で補完)
+- スクリプト: Lua コードエディター - シンタックスハイライト、行番号、検索 / 置換 / すべて置換 (Ctrl+F)、入力中に構文エラーやグローバル変数のミスを表示 (行マーカー + 下線 + 問題一覧)、実行時エラーも表示、Ctrl+S で保存 → ホットリロード
+- インスペクターの Script パラメーター: スクリプトが読む値を自動で見つけ、型に応じたフィールド (数値・チェックボックス・選択肢・ベクトル・色・シーン選択) で表示、既定値は薄く、リセットボタン、スクリプトが使わないキーは警告
+- コンソール: ログフィルター + コマンド入力 (Tab で補完)
 - AI が API で行った変更は通知とヒエラルキーの印でリアルタイムに反映、未保存の変更は閉じる時やシーン切り替え時に確認
 - インターフェース言語: 日本語・English・한국어 (OS の言語から自動選択、表示 > 言語 または `--lang ja|en|ko`)、日本語・韓国語の入力と表示 (システムフォントを自動で統合、IME)、高 DPI 対応、インターフェースサイズの調整
 - ショートカット: Ctrl+S 保存、Ctrl+Z/Y 元に戻す/やり直し、Ctrl+D 複製、Del 削除、F フォーカス、F2 名前を変更、Ctrl+P 再生/停止
@@ -103,7 +105,7 @@ third_party/lua  Lua 5.4.8 (MIT)
 third_party/jolt Jolt Physics 5.6.0 (MIT)
 third_party/stb, cgltf  画像デコーダー/エンコーダー、glTF デコーダー (PD/MIT, MIT)
 third_party/sokol  sokol_gfx + sokol_imgui (zlib) - D3D11 / WebGL2 / GLES3 の抽象化
-third_party/imgui, imguizmo  Dear ImGui 1.92.9b docking、ImGuizmo (MIT) - ネイティブエディター専用
+third_party/imgui, imguizmo, imguicolortextedit  Dear ImGui 1.92.9b docking、ImGuizmo、ImGuiColorTextEdit (MIT) - ネイティブエディター専用
 templates/       `oe new` のプロジェクトテンプレート
 samples/Hello    サンプルプロジェクト (テンプレートから生成)
 samples/Showcase レンダリングサンプル (glTF のキツネキャラクター、テクスチャ、影、ポイントライト)

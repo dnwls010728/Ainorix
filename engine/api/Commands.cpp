@@ -16,6 +16,7 @@
 #include "scene/Components.h"
 #include "scene/Prefab.h"
 #include "physics/PhysicsWorld.h"
+#include "script/ScriptCheck.h"
 #include "script/ScriptHost.h"
 
 namespace oe {
@@ -851,6 +852,66 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["path"] = a["path"].asString();
                  out["source"] = text;
                  return out;
+             });
+
+    // Source for script.check / script.params: `source` text, else the file at `path`.
+    auto scriptSource = [](Engine& e, const Json& a, std::string& chunk) {
+        chunk = a["path"].asString("source");
+        if (a.has("source")) return a["source"].asString("");
+        if (!a.has("path")) throw ApiError("missing_argument", "pass path or source", "e.g. {\"path\": \"scripts/player.lua\"}");
+        std::string text;
+        if (!ReadTextFile(e.ResolvePath(chunk), text)) throw ApiError("not_found", "cannot read " + chunk, "Call script.list to see script files.");
+        return text;
+    };
+
+    Register(r, "script.check", "Check a Lua script without running it: syntax errors and suspicious globals (missing local, typos), with line numbers.",
+             Params()
+                 .Opt("path", "string", "Script file, e.g. \"scripts/player.lua\" (also names the chunk in messages).")
+                 .Opt("source", "string", "Lua source to check instead of the file (e.g. unsaved edits)."),
+             false, [scriptSource](Engine& e, const Json& a) {
+                 std::string chunk;
+                 std::string source = scriptSource(e, a, chunk);
+                 Json list = Json::MakeArray();
+                 int errors = 0, warnings = 0;
+                 for (const LuaDiagnostic& d : CheckLuaSource(source, chunk, ScriptHost::SandboxGlobals(e))) {
+                     Json j = Json::MakeObject();
+                     j["line"] = d.line;
+                     j["severity"] = d.severity;
+                     j["message"] = d.message;
+                     list.push(j);
+                     (d.severity == "error" ? errors : warnings) += 1;
+                 }
+                 Json out = Json::MakeObject();
+                 out["ok"] = errors == 0;
+                 out["errors"] = errors;
+                 out["warnings"] = warnings;
+                 out["diagnostics"] = list;
+                 return out;
+             });
+
+    Register(r, "script.params", "Parameters a script reads from its Script component (self.params.x or default): name, type, default, options, description.",
+             Params()
+                 .Opt("path", "string", "Script file, e.g. \"scripts/player.lua\".")
+                 .Opt("source", "string", "Lua source to analyze instead of the file."),
+             false, [scriptSource](Engine& e, const Json& a) {
+                 std::string chunk;
+                 std::string source = scriptSource(e, a, chunk);
+                 Json list = Json::MakeArray();
+                 for (const ScriptParam& p : InferScriptParams(source)) {
+                     Json j = Json::MakeObject();
+                     j["name"] = p.name;
+                     j["type"] = p.type;
+                     j["default"] = p.defaultValue;
+                     if (!p.options.empty()) {
+                         Json opts = Json::MakeArray();
+                         for (const std::string& o : p.options) opts.push(o);
+                         j["options"] = opts;
+                     }
+                     if (!p.description.empty()) j["description"] = p.description;
+                     j["line"] = p.line;
+                     list.push(j);
+                 }
+                 return list;
              });
 
     Register(r, "script.write", "Create or overwrite a Lua file in the project (hot-reloaded if it is running).",

@@ -937,6 +937,24 @@ void ScriptHost::Open() {
     lua_sethook(L, BudgetHook, LUA_MASKCOUNT, kHookInterval);
 }
 
+const std::set<std::string>& ScriptHost::SandboxGlobals(Engine& engine) {
+    static const std::set<std::string> names = [&engine] {
+        std::set<std::string> out = {"self"};
+        ScriptHost host(engine);
+        lua_State* L = host.State();
+        lua_pushglobaltable(L);
+        lua_pushnil(L);
+        while (lua_next(L, -2)) {
+            if (lua_type(L, -2) == LUA_TSTRING) out.insert(lua_tostring(L, -2));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        out.erase("__oe_error");
+        return out;
+    }();
+    return names;
+}
+
 void ScriptHost::ResetInstances() {
     if (L_) {
         for (auto& kv : instances_) {

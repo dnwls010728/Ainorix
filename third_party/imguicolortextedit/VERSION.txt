@@ -1,0 +1,3 @@
+TextEditor.cpp/.h from https://github.com/goossens/ImGuiColorTextEdit (commit 133614b0d5e1008527a26f46a93fdb1d751ca115), unmodified.
+SHA-256 of TextEditor.cpp: 74ef90885c18edc98faa73da360ec5046f76690f351976963f2d8595d4e05ee8
+License: MIT - see LICENSE. Syntax-highlighting code editor used by the native editor's Scripts panel.

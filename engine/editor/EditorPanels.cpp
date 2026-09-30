@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -83,6 +84,27 @@ bool CommitText(const char* label, const std::string& current, std::string& resu
         return true;
     }
     return false;
+}
+
+// "jumpSpeed" -> "Jump Speed".
+std::string Humanize(const std::string& field) {
+    std::string pretty;
+    for (size_t i = 0; i < field.size(); ++i) {
+        char c = field[i];
+        if (i == 0) pretty += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        else if (c == '_') pretty += ' ';
+        else if (std::isupper(static_cast<unsigned char>(c)) && !std::isupper(static_cast<unsigned char>(field[i - 1]))) pretty += std::string(" ") + c;
+        else pretty += c;
+    }
+    return pretty;
+}
+
+bool IsHexColor(const std::string& s) {
+    if (s.size() != 7 || s[0] != '#') return false;
+    for (size_t i = 1; i < 7; ++i) {
+        if (!std::isxdigit(static_cast<unsigned char>(s[i]))) return false;
+    }
+    return true;
 }
 
 // Accepts an asset dragged from the Assets panel onto the last item.
@@ -331,14 +353,7 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
-    std::string pretty;
-    for (size_t i = 0; i < field.size(); ++i) {
-        char c = field[i];
-        if (i == 0) pretty += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        else if (std::isupper(static_cast<unsigned char>(c)) && !std::isupper(static_cast<unsigned char>(field[i - 1]))) pretty += std::string(" ") + c;
-        else pretty += c;
-    }
-    ImGui::TextUnformatted(pretty.c_str());
+    ImGui::TextUnformatted(Humanize(field).c_str());
     HelpTooltip(schema["description"].asString(""));
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -541,7 +556,8 @@ void NativeEditor::Impl::InspectorPanel() {
                 ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
                 for (const auto& f : (*typeInfo)["schema"]["properties"].members()) {
                     ImGui::PushID(f.first.c_str());
-                    FieldEditor(id, type, f.first, f.second, kv.second[f.first]);
+                    if (type == "Script" && f.first == "params") ScriptParamsRows(id, kv.second);
+                    else FieldEditor(id, type, f.first, f.second, kv.second[f.first]);
                     ImGui::PopID();
                 }
                 ImGui::EndTable();
@@ -724,64 +740,248 @@ void NativeEditor::Impl::ConsolePanel() {
     ImGui::End();
 }
 
-// ----- Scripts ---------------------------------------------------------------------
+// ----- Script params -------------------------------------------------------------------
 
-void NativeEditor::Impl::ScriptsPanel() {
-    if (focusScript >= 0) ImGui::SetNextWindowFocus();  // bring the tab to front; Begin() skips hidden tabs
-    if (!ImGui::Begin(TrId("Scripts").c_str(), &showScripts)) {
-        ImGui::End();
-        return;
+const Json& NativeEditor::Impl::ScriptParamSchema(const std::string& path) {
+    auto it = paramSchemas.find(path);
+    // Re-read now and then: the script may change on disk (hot reload, agents).
+    if (it == paramSchemas.end() || time - it->second.first > 3.0) {
+        Json r = path.empty() ? Json() : Call("script.params", ObjectOf({{"path", Json(path)}}), true);
+        paramSchemas[path] = {time, r["ok"].asBool() ? r["result"] : Json::MakeArray()};
+        it = paramSchemas.find(path);
     }
-    if (scripts.empty()) {
-        ImGui::TextDisabled("%s", Tr("Double-click a script in Assets (or use \"Edit Script\" on a Script component) to edit it here."));
-        ImGui::TextDisabled("%s", Tr("Ctrl+S saves the script; it hot-reloads, also while the game runs."));
-        ImGui::End();
-        return;
+    return it->second.second;
+}
+
+void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
+    const Json& params = script["params"];
+    std::string path = script["path"].asString("");
+    const Json& schema = ScriptParamSchema(path);
+    bool raw = rawParams.count(id) > 0 || !(params.isObject() || params.isNull());
+
+    // Header row: "Params" + view toggle + add.
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(Tr("Params"));
+    HelpTooltip(Tr("Values the script reads as self.params.<name>. Rows come from the script; dimmed values are the script's defaults."));
+    ImGui::TableSetColumnIndex(1);
+    if (ImGui::SmallButton(raw ? Tr("Fields") : "JSON")) {
+        if (raw) rawParams.erase(id);
+        else rawParams.insert(id);
     }
-    if (ImGui::BeginTabBar("##scripts", ImGuiTabBarFlags_AutoSelectNewTabs | ImGuiTabBarFlags_FittingPolicyScroll)) {
-        for (size_t i = 0; i < scripts.size(); ++i) {
-            ScriptTab& t = scripts[i];
-            if (!t.open) continue;
-            bool modified = t.text != t.saved;
-            ImGuiTabItemFlags flags = modified ? ImGuiTabItemFlags_UnsavedDocument : 0;
-            if (focusScript == static_cast<int>(i)) {
-                flags |= ImGuiTabItemFlags_SetSelected;
-                focusScript = -1;
-            }
-            std::string label = FileName(t.path) + "###" + t.path;
-            if (ImGui::BeginTabItem(label.c_str(), &t.open, flags)) {
-                bool save = ImGui::Button(Tr("Save")) ||
-                            (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S));
-                ImGui::SameLine();
-                if (ImGui::Button(Tr("Revert"))) t.text = t.saved;
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s%s", t.path.c_str(), modified ? Tr("  (modified)") : "");
-                // Errors of this file.
-                Json errs = Call("script.errors", Json(), true)["result"];
-                std::vector<std::string> mine;
-                for (const Json& e : errs.items()) {
-                    std::string msg = e["message"].asString("");
-                    if (e["script"].asString("") == t.path || msg.find(t.path) != std::string::npos) mine.push_back(msg);
-                }
-                float errH = mine.empty() ? 0 : ImGui::GetTextLineHeightWithSpacing() * static_cast<float>(std::min<size_t>(4, mine.size())) + 8;
-                ImGui::PushFont(monoFont, 0.0f);
-                ImGui::InputTextMultiline("##src", &t.text, ImVec2(-FLT_MIN, mine.empty() ? -FLT_MIN : -errH), ImGuiInputTextFlags_AllowTabInput);
-                ImGui::PopFont();
-                for (const std::string& e : mine) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "%s", e.c_str());
-                if (save) {
-                    if (Ok(Call("script.write", ObjectOf({{"path", Json(t.path)}, {"source", Json(t.text)}})))) {
-                        t.saved = t.text;
-                        Notify(Format(Tr("Saved %s"), t.path.c_str()));
-                    }
-                }
-                ImGui::EndTabItem();
-            }
+    HelpTooltip(raw ? Tr("Edit params as fields") : Tr("Edit params as JSON text"));
+    if (!raw) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(Tr("+ Add"))) {
+            newParamName.clear();
+            ImGui::OpenPopup("##addparam");
         }
-        ImGui::EndTabBar();
+        HelpTooltip(Tr("Add a param the script does not read yet"));
     }
-    scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [](const ScriptTab& t) { return !t.open && t.text == t.saved; }), scripts.end());
-    for (ScriptTab& t : scripts) t.open = true;  // closing a modified tab keeps it (unsaved work)
-    ImGui::End();
+
+    Json current = params.isObject() ? params : Json::MakeObject();
+    auto write = [&](const Json& next, const std::string& merge) {
+        Json args = ObjectOf({{"id", Json(id)}, {"type", Json("Script")}, {"values", ObjectOf({{"params", next}})}});
+        if (!merge.empty()) args["merge"] = Json(merge);
+        Call("component.set", args);
+        Refresh(true);
+    };
+    auto setKey = [&](const std::string& key, const Json& value, const std::string& merge) {
+        Json next = current;
+        next[key] = value;
+        write(next, merge);
+    };
+    auto removeKey = [&](const std::string& key) {
+        Json next = current;
+        next.erase(key);
+        write(next, "");
+    };
+
+    if (ImGui::BeginPopup("##addparam")) {
+        static const char* types[] = {"number", "boolean", "string", "vec3"};
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        bool enter = ImGui::InputTextWithHint("##name", Tr("name"), &newParamName, ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
+        ImGui::Combo("##type", &newParamType, types, 4);
+        ImGui::SameLine();
+        if ((ImGui::Button(Tr("Add")) || enter) && !newParamName.empty()) {
+            Json v = newParamType == 0 ? Json(0) : newParamType == 1 ? Json(false) : newParamType == 2 ? Json("") : Vec3Json(Vec3(0, 0, 0));
+            setKey(newParamName, v, "");
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (raw) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        std::string text;
+        std::string cur = params.dump(2);
+        float lines = static_cast<float>(std::min<size_t>(12, 2 + static_cast<size_t>(std::count(cur.begin(), cur.end(), '\n'))));
+        ImGui::PushFont(monoFont, 0.0f);
+        if (CommitText("##rawparams", cur, text, true, ImGui::GetTextLineHeight() * lines + ImGui::GetStyle().FramePadding.y * 2)) {
+            std::string err;
+            Json parsed = Json::parse(text, &err);
+            if (err.empty()) write(parsed, "");
+            else Notify(Format(Tr("%s: invalid JSON - %s"), "params", err.c_str()), true);
+        }
+        ImGui::PopFont();
+        return;
+    }
+
+    // Rows: the script's params in source order, then keys it does not read.
+    struct Row {
+        std::string name;
+        const Json* info;  // script.params entry or null
+    };
+    std::vector<Row> rowsToShow;
+    std::set<std::string> known;
+    for (const Json& p : schema.items()) {
+        rowsToShow.push_back({p["name"].asString(""), &p});
+        known.insert(p["name"].asString(""));
+    }
+    for (const auto& kv : current.members()) {
+        if (!known.count(kv.first)) rowsToShow.push_back({kv.first, nullptr});
+    }
+    if (rowsToShow.empty()) {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(1);
+        ImGui::TextDisabled("%s", Tr(path.empty() ? "Set a script path first" : "The script reads no params"));
+    }
+
+    for (const Row& row : rowsToShow) {
+        const std::string& name = row.name;
+        bool set = current.has(name);
+        Json def = row.info ? (*row.info)["default"] : Json();
+        const Json& value = set ? current[name] : def;
+        std::string type = row.info ? (*row.info)["type"].asString("any") : "any";
+        if (type == "any") {  // no default in the script: go by the value
+            type = value.isNumber() ? "number" : value.isBool() ? "boolean" : value.isString() ? "string"
+                 : (value.isArray() && value.size() == 3) ? "vec3" : (value.isArray() || value.isObject()) ? "object" : "string";
+        }
+        std::string key = std::to_string(id) + ":params:" + name;
+        std::string merge;
+        auto dragMerge = [&]() {
+            if (ImGui::IsItemActivated()) ++dragSerial[key];
+            merge = "insp:" + key + ":" + std::to_string(dragSerial[key]);
+        };
+
+        ImGui::PushID(name.c_str());
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Indent(ImGui::GetStyle().IndentSpacing * 0.6f);
+        if (!row.info) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.3f, 1));
+        ImGui::TextUnformatted(Humanize(name).c_str());
+        if (!row.info) ImGui::PopStyleColor();
+        ImGui::Unindent(ImGui::GetStyle().IndentSpacing * 0.6f);
+        {
+            std::string tip = name;
+            if (row.info) {
+                std::string desc = (*row.info)["description"].asString("");
+                if (!desc.empty()) tip += "\n" + desc;
+                if (!def.isNull()) tip += "\n" + Format(Tr("Default: %s"), def.dump().c_str());
+                tip += "\n" + Format(Tr("Read at line %d"), (*row.info)["line"].asInt(0));
+            } else {
+                tip += "\n" + std::string(Tr("The script does not read this param (typo, or an old name?)"));
+            }
+            HelpTooltip(tip);
+        }
+
+        ImGui::TableSetColumnIndex(1);
+        // Right side: reset (set values) or remove (unknown keys).
+        float button = ImGui::CalcTextSize(Tr("Reset")).x + ImGui::GetStyle().FramePadding.x * 2;
+        // Reset only when it differs from the script's default; Remove for keys the script ignores.
+        bool showButton = set && (!row.info || def.isNull() || !(value == def));
+        ImGui::SetNextItemWidth(showButton ? -(button + ImGui::GetStyle().ItemInnerSpacing.x) : -FLT_MIN);
+        // Dimmed while the script's default is in use.
+        if (!set) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.55f);
+
+        Json next;
+        bool changed = false;
+        if (type == "number") {
+            float v = value.asFloat(0);
+            float speed = std::max(0.01f, std::fabs(def.isNumber() ? def.asFloat() : v) * 0.01f);
+            changed = ImGui::DragFloat("##v", &v, speed, 0, 0, "%g");
+            dragMerge();
+            if (changed) next = Json(v);
+        } else if (type == "boolean") {
+            bool v = value.asBool(false);
+            if (ImGui::Checkbox("##v", &v)) next = Json(v), changed = true;
+        } else if (type == "vec3") {
+            Vec3 v3 = JsonVec3(value);
+            float f[3] = {v3.x, v3.y, v3.z};
+            changed = ImGui::DragFloat3("##v", f, 0.05f, 0, 0, "%g");
+            dragMerge();
+            if (changed) next = Vec3Json(Vec3(f[0], f[1], f[2]));
+        } else if (type == "string" && row.info && (*row.info)["options"].size() > 0) {
+            std::string cur = value.asString("");
+            if (ImGui::BeginCombo("##v", cur.c_str())) {
+                for (const Json& o : (*row.info)["options"].items()) {
+                    std::string opt = o.asString("");
+                    if (ImGui::Selectable(opt.empty() ? "\"\"" : opt.c_str(), opt == cur)) next = Json(opt), changed = true;
+                }
+                ImGui::EndCombo();
+            }
+        } else if (type == "string" && IsHexColor(value.asString(""))) {
+            std::string hex = value.asString("");
+            float c[3];
+            for (int k = 0; k < 3; ++k) c[k] = static_cast<float>(std::strtol(hex.substr(1 + 2 * k, 2).c_str(), nullptr, 16)) / 255.0f;
+            if (ImGui::ColorEdit3("##v", c, ImGuiColorEditFlags_DisplayHex)) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", static_cast<int>(c[0] * 255 + 0.5f), static_cast<int>(c[1] * 255 + 0.5f), static_cast<int>(c[2] * 255 + 0.5f));
+                next = Json(std::string(buf));
+                changed = true;
+            }
+            dragMerge();
+        } else if (type == "string") {
+            std::string text;
+            std::string lower;
+            for (char c : name) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            // Scene / prefab / sound params get the asset picker.
+            std::string kind = lower.find("scene") != std::string::npos ? "scene" : lower.find("prefab") != std::string::npos ? "prefab"
+                             : (lower.find("sound") != std::string::npos || lower.find("clip") != std::string::npos) ? "audio" : "";
+            if (!kind.empty()) {
+                float b = ImGui::GetFrameHeight();
+                ImGui::SetNextItemWidth(-(b + ImGui::GetStyle().ItemInnerSpacing.x + (showButton ? button + ImGui::GetStyle().ItemInnerSpacing.x : 0)));
+            }
+            if (CommitText("##v", value.asString(""), text)) next = Json(text), changed = true;
+            std::string dropped;
+            if (AcceptAsset(dropped)) next = Json(dropped), changed = true;
+            if (!kind.empty()) {
+                ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+                if (ImGui::Button("...", ImVec2(ImGui::GetFrameHeight(), 0))) ImGui::OpenPopup("##pickparam");
+                std::string picked;
+                if (AssetPicker("##pickparam", kind, value.asString(""), picked)) next = Json(picked), changed = true;
+            }
+        } else {
+            std::string text;
+            ImGui::PushFont(monoFont, 0.0f);
+            if (CommitText("##v", value.dump(), text)) {
+                std::string err;
+                Json parsed = Json::parse(text, &err);
+                if (err.empty()) next = parsed, changed = true;
+                else Notify(Format(Tr("%s: invalid JSON - %s"), name.c_str(), err.c_str()), true);
+            }
+            ImGui::PopFont();
+        }
+        if (!set) ImGui::PopStyleVar();
+
+        if (showButton) {
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+            if (ImGui::Button(row.info ? Tr("Reset") : Tr("Remove"))) {
+                removeKey(name);
+                changed = false;
+            }
+            HelpTooltip(row.info ? Tr("Back to the script's default (removes it from params)") : Tr("Remove from params"));
+        }
+        if (changed) setKey(name, next, merge);
+        ImGui::PopID();
+    }
 }
 
 }  // namespace oe
