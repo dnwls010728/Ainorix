@@ -1347,6 +1347,104 @@ TEST(GltfSkinAndAnimationLoading) {
     reject(invalid, broken, "normalized unsigned");
 }
 
+TEST(AnimationPoseInterpolation) {
+    Mesh mesh;
+    mesh.nodes.resize(2);
+    mesh.nodes[0].parent = 1;  // parents may occur after children in the source
+    mesh.nodes[0].scale = Vec3(2, 1, 1);
+    mesh.nodes[1].usesMatrix = true;
+    mesh.nodes[1].matrix = Mat4::Translation(Vec3(3, 0, 0));
+    mesh.joints.push_back({0, Mat4::Translation(Vec3(-1, 0, 0))});
+    AnimationChannel channel;
+    channel.node = 0;
+    channel.times = {0, 2};
+    channel.values = {Vec4(0,0,0,0), Vec4(4,0,0,0)};
+    AnimationClip clip;
+    clip.channels.push_back(channel);
+    auto sample = [&](float time) { return EvaluateAnimationPose(mesh, &clip, time)[0]; };
+    CHECK(Near(sample(1).TransformPoint(Vec3(1,0,0)), Vec3(5,0,0), 1e-5f));
+    CHECK(Near(sample(-8).TransformPoint(Vec3(1,0,0)), Vec3(3,0,0), 1e-5f));
+    CHECK(Near(sample(8).TransformPoint(Vec3(1,0,0)), Vec3(7,0,0), 1e-5f));
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(2,0,0), 1e-5f));  // unanimated scale retained
+    clip.channels[0].interpolation = AnimationInterpolation::Step;
+    CHECK(Near(sample(1.999f).TransformPoint(Vec3(1,0,0)), Vec3(3,0,0), 1e-5f));
+    CHECK(Near(sample(2).TransformPoint(Vec3(1,0,0)), Vec3(7,0,0), 1e-5f));
+    clip.channels[0].interpolation = AnimationInterpolation::CubicSpline;
+    clip.channels[0].values = {Vec4(), Vec4(), Vec4(2,0,0,0), Vec4(), Vec4(4,0,0,0), Vec4()};
+    CHECK(Near(sample(1).TransformPoint(Vec3(1,0,0)), Vec3(5.5f,0,0), 1e-5f));  // tangent scaled by two seconds
+    clip.channels[0].path = AnimationPath::Rotation;
+    clip.channels[0].interpolation = AnimationInterpolation::Linear;
+    clip.channels[0].values = {Vec4(0,0,0,1), Vec4(0,0,1,0)};
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(0,2,0), 1e-5f));
+    // Quaternion signs represent the same rotation; interpolation takes the shortest arc.
+    clip.channels[0].values[1] = Vec4(0,0,0,-1);
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(2,0,0), 1e-5f));
+    clip.channels[0].interpolation = AnimationInterpolation::CubicSpline;
+    clip.channels[0].values = {Vec4(), Vec4(0,0,0,1), Vec4(), Vec4(), Vec4(0,0,1,0), Vec4()};
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(0,2,0), 1e-5f));  // interpolated quaternion normalized
+    clip.channels[0].path = AnimationPath::Scale;
+    clip.channels[0].interpolation = AnimationInterpolation::Linear;
+    clip.channels[0].values = {Vec4(1,1,1,0), Vec4(3,3,3,0)};
+    CHECK(Near(sample(1).TransformDir(Vec3(0,1,0)), Vec3(0,2,0), 1e-5f));
+    CHECK(Near(EvaluateAnimationPose(mesh, nullptr, 0)[0].TransformPoint(Vec3(1,0,0)), Vec3(3,0,0), 1e-5f));
+}
+
+TEST(AnimatorCommandsAndLua) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("animator"), &err));
+    CHECK(CopyFileTo(TestSourceDir() + "/samples/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Fox","components":{"MeshRenderer":{"mesh":"assets/models/fox.glb"}}})J");
+    EntityId id = e.GetScene().FindByName("Fox");
+    CHECK(Call(e, "animation.play", R"J({"id":"Fox","clip":"missing"})J")["error"]["code"].asString() == "animation_not_found");
+    CHECK(e.GetScene().Get<Animator>(id) == nullptr);
+    CHECK(Call(e, "animation.play", R"J({"id":"Fox","clip":"Walk"})J")["ok"].asBool());
+    Json saved = e.GetScene().ToJson();
+    Scene restored;
+    CHECK(restored.FromJson(saved, &err) && restored.Get<Animator>(id)->clip == "Walk");
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Get<Animator>(id) == nullptr);
+    CHECK(Call(e, "history.redo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Get<Animator>(id)->clip == "Walk");
+    Call(e, "sim.step", R"J({"frames":12})J");
+    Json state = Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"];
+    CHECK(std::fabs(state["time"].asFloat() - 0.2f) < 1e-6f && state["validClip"].asBool());
+    CHECK(state["jointMatrices"].size() == 24 && state["jointMatrices"][0].size() == 16);
+    Json pose = state["jointMatrices"];
+    Call(e, "component.set", R"J({"id":"Fox","type":"Animator","values":{"playing":false}})J");
+    Call(e, "sim.step", R"J({"frames":10})J");
+    CHECK(Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"]["jointMatrices"] == pose);
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Walk","loop":false})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    state = Call(e, "animation.state", R"J({"id":"Fox"})J")["result"];
+    CHECK(!state["playing"].asBool() && state["time"] == state["duration"]);
+    CHECK(Call(e, "script.eval", R"J({"code":"animation.play('Fox', 'Walk', {speed=-1, loop=false})"})J")["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":60})J");
+    state = Call(e, "animation.state", R"J({"id":"Fox"})J")["result"];
+    CHECK(!state["playing"].asBool() && state["time"].asFloat() == 0);
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run","speed":-1,"loop":true})J");
+    Call(e, "component.set", R"J({"id":"Fox","type":"Animator","values":{"time":0}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    state = Call(e, "animation.state", R"J({"id":"Fox"})J")["result"];
+    CHECK(std::fabs(state["time"].asFloat() - state["duration"].asFloat() + 1.0f/60) < 1e-6f);
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run","speed":1})J");
+    Call(e, "sim.step", R"J({"frames":24})J");
+    Json first = Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"];
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run","restart":false})J");
+    CHECK(e.GetScene().Get<Animator>(id)->time == first["time"].asFloat());
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run"})J");
+    Call(e, "sim.step", R"J({"frames":24})J");
+    CHECK(Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"] == first);
+    CHECK(Call(e, "script.eval", R"J({"code":"local ok = pcall(animation.play, 'Fox', 'invalid'); assert(not ok)"})J")["ok"].asBool());
+    // self:play follows the same command path from a real script instance.
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "scripts/animate.lua"), "return {onStart=function(self) self:play('Survey', {speed=0}) end}"));
+    Call(e, "component.add", R"J({"id":"Fox","type":"Script","values":{"path":"scripts/animate.lua"}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.GetScene().Get<Animator>(id)->clip == "Survey" && e.GetScene().Get<Animator>(id)->time == 0);
+    CHECK(e.Scripts().Errors().empty());
+}
+
 TEST(ShadingShadowsAndLights) {
     Engine e;
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));

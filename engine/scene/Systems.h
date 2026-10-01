@@ -7,6 +7,15 @@
 
 namespace oe {
 
+class AssetManager;
+struct Mesh;
+struct AnimationClip;
+
+// Exact named clip lookup; nullptr means the model's default pose.
+const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name);
+// Evaluates an immutable model's joint palette in model space, clamping channel times.
+std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time);
+
 // Logical key state. Key names: "W","A","S","D","Up","Down","Left","Right",
 // "Space","Shift","Escape", letters "A".."Z", digits "0".."9".
 // Platforms feed it from real devices; the API can inject keys so agents can
@@ -44,7 +53,7 @@ struct InputState {
 };
 
 // Advances all behavior components by dt seconds (before physics).
-void UpdateSystems(Scene& scene, InputState& input, float dt);
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr);
 // Runs after physics: CameraFollow.
 void UpdateLateSystems(Scene& scene, float dt);
 

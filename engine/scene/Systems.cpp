@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "assets/Assets.h"
 #include "scene/Components.h"
 
 namespace oe {
@@ -13,7 +14,121 @@ float WrapDegrees(float d) {
     if (d < 0) d += 360.0f;
     return d;
 }
+
+float QuaternionDot(const Vec4& a, const Vec4& b) { return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w; }
+
+Vec4 NormalizeQuaternion(const Vec4& q) {
+    float length = std::sqrt(QuaternionDot(q, q));
+    return length > 1e-8f ? q * (1.0f / length) : Vec4(0, 0, 0, 1);
+}
+
+Mat4 QuaternionMatrix(Vec4 q) {
+    q = NormalizeQuaternion(q);
+    Mat4 m;
+    m.at(0,0) = 1 - 2*(q.y*q.y + q.z*q.z);
+    m.at(0,1) = 2*(q.x*q.y - q.z*q.w);
+    m.at(0,2) = 2*(q.x*q.z + q.y*q.w);
+    m.at(1,0) = 2*(q.x*q.y + q.z*q.w);
+    m.at(1,1) = 1 - 2*(q.x*q.x + q.z*q.z);
+    m.at(1,2) = 2*(q.y*q.z - q.x*q.w);
+    m.at(2,0) = 2*(q.x*q.z - q.y*q.w);
+    m.at(2,1) = 2*(q.y*q.z + q.x*q.w);
+    m.at(2,2) = 1 - 2*(q.x*q.x + q.y*q.y);
+    return m;
+}
+
+Vec4 SampleChannel(const AnimationChannel& c, float time) {
+    const bool cubic = c.interpolation == AnimationInterpolation::CubicSpline;
+    auto keyValue = [&](size_t key) { return c.values[cubic ? key * 3 + 1 : key]; };
+    if (time <= c.times.front()) return keyValue(0);
+    if (time >= c.times.back()) return keyValue(c.times.size() - 1);
+    size_t next = static_cast<size_t>(std::upper_bound(c.times.begin(), c.times.end(), time) - c.times.begin());
+    size_t prev = next - 1;
+    Vec4 a = keyValue(prev), b = keyValue(next);
+    if (c.interpolation == AnimationInterpolation::Step) return a;
+    float interval = c.times[next] - c.times[prev];
+    float t = (time - c.times[prev]) / interval;
+    if (cubic) {
+        // glTF tangents are derivatives per second, scaled by this key interval.
+        float t2 = t*t, t3 = t2*t;
+        Vec4 value = a * (2*t3 - 3*t2 + 1) + c.values[prev*3 + 2] * ((t3 - 2*t2 + t)*interval) +
+                     b * (-2*t3 + 3*t2) + c.values[next*3] * ((t3 - t2)*interval);
+        return c.path == AnimationPath::Rotation ? NormalizeQuaternion(value) : value;
+    }
+    if (c.path != AnimationPath::Rotation) return a * (1 - t) + b * t;
+    a = NormalizeQuaternion(a);
+    b = NormalizeQuaternion(b);
+    float dot = QuaternionDot(a, b);
+    if (dot < 0) { b = b * -1; dot = -dot; }
+    if (dot > 0.9995f) return NormalizeQuaternion(a * (1 - t) + b * t);
+    float angle = std::acos(Clamp(dot, -1, 1));
+    float denominator = std::sin(angle);
+    return NormalizeQuaternion(a * (std::sin((1 - t)*angle) / denominator) + b * (std::sin(t*angle) / denominator));
+}
+
+void UpdateAnimators(Scene& scene, AssetManager& assets, float dt) {
+    for (auto& kv : scene.Pool<Animator>()) {
+        Animator& a = kv.second;
+        const MeshRenderer* renderer = scene.Get<MeshRenderer>(kv.first);
+        if (!renderer || !a.playing || !std::isfinite(a.time) || !std::isfinite(a.speed)) continue;
+        std::shared_ptr<const Mesh> mesh = assets.GetMesh(renderer->mesh);
+        const AnimationClip* clip = mesh ? FindAnimationClip(*mesh, a.clip) : nullptr;
+        if (!clip) continue;
+        if (clip->duration <= 0) { a.time = 0; if (!a.loop) a.playing = false; continue; }
+        double next = static_cast<double>(a.time) + static_cast<double>(dt) * a.speed;
+        if (a.loop) {
+            next = std::fmod(next, static_cast<double>(clip->duration));
+            if (next < 0) next += clip->duration;
+        } else {
+            if ((a.speed > 0 && next >= clip->duration) || (a.speed < 0 && next <= 0)) a.playing = false;
+            next = std::max(0.0, std::min(next, static_cast<double>(clip->duration)));
+        }
+        a.time = static_cast<float>(next);
+    }
+}
 }  // namespace
+
+const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name) {
+    for (const AnimationClip& clip : mesh.clips) if (clip.name == name) return &clip;
+    return nullptr;
+}
+
+std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time) {
+    std::vector<ModelNode> nodes = mesh.nodes;
+    if (clip && std::isfinite(time)) {
+        for (const AnimationChannel& channel : clip->channels) {
+            ModelNode& node = nodes[static_cast<size_t>(channel.node)];
+            Vec4 value = SampleChannel(channel, time);
+            if (channel.path == AnimationPath::Translation) node.translation = value.xyz();
+            else if (channel.path == AnimationPath::Scale) node.scale = value.xyz();
+            else node.rotation = value;
+        }
+    }
+    std::vector<Mat4> world(nodes.size());
+    std::vector<bool> evaluated(nodes.size(), false);
+    std::vector<size_t> chain;
+    // Source node order need not put parents first. Iterative chains avoid recursion depth limits.
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        int index = static_cast<int>(i);
+        while (index >= 0 && !evaluated[static_cast<size_t>(index)]) {
+            chain.push_back(static_cast<size_t>(index));
+            index = nodes[static_cast<size_t>(index)].parent;
+        }
+        while (!chain.empty()) {
+            size_t current = chain.back();
+            chain.pop_back();
+            const ModelNode& node = nodes[current];
+            Mat4 local = node.usesMatrix ? node.matrix :
+                Mat4::Translation(node.translation) * QuaternionMatrix(node.rotation) * Mat4::Scale(node.scale);
+            world[current] = node.parent < 0 ? local : world[static_cast<size_t>(node.parent)] * local;
+            evaluated[current] = true;
+        }
+    }
+    std::vector<Mat4> palette;
+    palette.reserve(mesh.joints.size());
+    for (const ModelJoint& joint : mesh.joints) palette.push_back(world[static_cast<size_t>(joint.node)] * joint.inverseBind);
+    return palette;
+}
 
 void UpdateLateSystems(Scene& scene, float dt) {
     for (auto& kv : scene.Pool<CameraFollow>()) {
@@ -65,7 +180,8 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
     }
 }
 
-void UpdateSystems(Scene& scene, InputState& input, float dt) {
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets) {
+    if (assets) UpdateAnimators(scene, *assets, dt);
     UpdateSpriteAnimations(scene, dt);
     for (auto& kv : scene.Pool<Rotator>()) {
         if (Transform* t = scene.Get<Transform>(kv.first)) {

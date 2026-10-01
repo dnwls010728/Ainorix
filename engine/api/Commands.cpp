@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 
 #include "app/Engine.h"
 #include "assets/Assets.h"
@@ -294,6 +295,59 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    auto animatorState = [](Engine& e, EntityId id, bool includePose) {
+        const Animator* animator = e.GetScene().Get<Animator>(id);
+        if (!animator) throw ApiError("missing_component", "entity has no Animator", "Call animation.play or component.add with type Animator.");
+        Json out = Json::MakeObject();
+        out["id"] = id;
+        out["clip"] = animator->clip;
+        out["speed"] = animator->speed;
+        out["loop"] = animator->loop;
+        out["playing"] = animator->playing;
+        out["time"] = animator->time;
+        const MeshRenderer* renderer = e.GetScene().Get<MeshRenderer>(id);
+        std::shared_ptr<const Mesh> mesh = renderer ? e.Assets().GetMesh(renderer->mesh) : nullptr;
+        const AnimationClip* clip = mesh ? FindAnimationClip(*mesh, animator->clip) : nullptr;
+        out["validClip"] = clip != nullptr;
+        out["duration"] = clip ? clip->duration : 0;
+        if (includePose) {
+            out["jointMatrices"] = Json::MakeArray();
+            if (mesh) for (const Mat4& matrix : EvaluateAnimationPose(*mesh, clip, animator->time)) {
+                Json values = Json::MakeArray();
+                for (float value : matrix.m) values.push(value);
+                out["jointMatrices"].push(values);
+            }
+        }
+        return out;
+    };
+    Register(r, "animation.state", "Animator playback state and optional model-space joint matrices (column-major).",
+             Params().ReqWith("id", EntityRefSchema("Entity with an Animator.")).Opt("pose", "boolean", "Include evaluated jointMatrices."),
+             false, [animatorState](Engine& e, const Json& a) { return animatorState(e, RequireEntity(e, a), a["pose"].asBool()); });
+    Register(r, "animation.play", "Play a named model clip; add Animator if needed. Defaults to restarting at the beginning (end for reverse playback).",
+             Params().ReqWith("id", EntityRefSchema("Entity with a MeshRenderer.")).Req("clip", "string", "Exact clip name from asset.info.")
+                 .Opt("speed", "number", "Playback multiplier; negative = reverse. Keeps existing speed when omitted.")
+                 .Opt("loop", "boolean", "Repeat the clip. Keeps existing loop setting when omitted.")
+                 .Opt("restart", "boolean", "Reset time (default true); false preserves time."),
+             true, [animatorState](Engine& e, const Json& a) {
+                 EntityId id = RequireEntity(e, a);
+                 const MeshRenderer* renderer = e.GetScene().Get<MeshRenderer>(id);
+                 if (!renderer) throw ApiError("missing_component", "entity has no MeshRenderer", "Add MeshRenderer with a glTF model first.");
+                 std::string error;
+                 std::shared_ptr<const Mesh> mesh = e.Assets().GetMesh(renderer->mesh, &error);
+                 if (!mesh) throw ApiError("asset_error", error, "Check MeshRenderer.mesh with asset.info.");
+                 const AnimationClip* clip = FindAnimationClip(*mesh, a["clip"].asString());
+                 if (!clip) throw ApiError("animation_not_found", "model has no clip '" + a["clip"].asString() + "'", "Call asset.info to list clips.");
+                 const Animator* existing = e.GetScene().Get<Animator>(id);
+                 Animator next = existing ? *existing : Animator{};
+                 next.clip = clip->name;
+                 if (a.has("speed")) next.speed = a["speed"].asFloat();
+                 if (!std::isfinite(next.speed)) throw ApiError("invalid_argument", "speed must be finite", "Use a finite playback multiplier.");
+                 if (a.has("loop")) next.loop = a["loop"].asBool();
+                 if (a["restart"].asBool(true)) next.time = next.speed < 0 ? clip->duration : 0;
+                 next.playing = true;
+                 e.GetScene().Add<Animator>(id) = next;
+                 return animatorState(e, id, false);
+             });
     // ----- engine / api ----------------------------------------------------
     Register(r, "engine.info", "Engine version, platform, project, scene and simulation status.", Params(), false, [](Engine& e, const Json&) {
         Json info = Json::MakeObject();
@@ -1356,7 +1410,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return list;
              });
 
-    Register(r, "asset.info", "Details of a project file: model vertices/triangles/materials/textures/bounds (+ a scale hint), image size, sound length.",
+    Register(r, "asset.info", "Details of a project file: model vertices/triangles/materials/textures/bounds, joints and clips (+ a scale hint), image size, sound length.",
              Params().Req("path", "string", "Project-relative path, or a built-in mesh name."), false,
              [](Engine& e, const Json& a) { return e.Assets().Info(a["path"].asString()); });
 
