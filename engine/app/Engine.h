@@ -5,6 +5,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -145,6 +146,8 @@ private:
     };
     // Pointer hover/press/click and slider drags for this frame's input.
     std::vector<UIEvent> UpdateUI();
+    // UIButton.key: buttons held by the mouse or any finger hold their key down.
+    void UpdateButtonKeys();
     void BeginSessionIfNeeded();
     void ResetRuntime();
     void ApplySceneChange();
@@ -182,6 +185,8 @@ private:
     std::string runtimeScene_;
     EntityId uiHovered_ = kNullEntity;
     EntityId uiPressed_ = kNullEntity;
+    std::set<EntityId> heldButtons_;    // UIButtons with a key, held this frame
+    std::set<std::string> heldKeys_;    // keys those buttons hold down
     double simTime_ = 0.0;
     double accumulator_ = 0.0;
 

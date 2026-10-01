@@ -706,6 +706,46 @@ TEST(UIRenderingAndClicks) {
     CHECK(Call(e, "script.eval", R"J({"code": "clicks"})J")["result"]["value"].asInt() == 1);
 }
 
+TEST(MultiTouchButtonKeys) {
+    // On-screen controls: UIButton.key holds a key while any finger (or the mouse) is on the button.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("touch"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "script.write", R"J({"path": "scripts/pad.lua", "source": "local M = {}\nfunction M:onUpdate()\n  if input.pressed('Space') then jumps = (jumps or 0) + 1 end\n  left = input.down('Left')\n  fingers = #input.touches()\n  local t = input.touches()[1]\n  firstBegan = t and t.began or false\nend\nreturn M\n"})J");
+    Call(e, "entity.create", R"J({"name": "Pad", "components": {"Script": {"path": "scripts/pad.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "LeftBtn", "components": {"UIButton": {"anchor": "bottom-left", "x": 10, "y": -10, "width": 100, "height": 100, "key": "Left"}}})J");
+    Call(e, "entity.create", R"J({"name": "JumpBtn", "components": {"UIButton": {"anchor": "bottom-right", "x": -10, "y": -10, "width": 100, "height": 100, "key": "Space"}}})J");
+    auto eval = [&](const char* code) { return Call(e, "script.eval", (std::string(R"J({"code": ")J") + code + "\"}").c_str())["result"]["value"]; };
+    // Finger 1 holds Left, finger 2 taps Jump at the same time (1280x720 view).
+    CHECK(Call(e, "input.touch", R"J({"id": 1, "x": 60, "y": 660, "width": 1280, "height": 720})J")["ok"].asBool());
+    Call(e, "input.touch", R"J({"id": 2, "x": 1220, "y": 660, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(eval("left").asBool() && eval("jumps").asInt() == 1 && eval("fingers").asInt() == 2 && eval("firstBegan").asBool());
+    CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("JumpBtn"))->pressed);
+    Call(e, "sim.step", R"J({"frames": 3})J");
+    CHECK(eval("jumps").asInt() == 1 && !eval("firstBegan").asBool());  // held: pressed only once
+    Call(e, "input.touch", R"J({"id": 2, "down": false})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    Call(e, "input.touch", R"J({"id": 2, "x": 1220, "y": 660, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(eval("jumps").asInt() == 2 && eval("left").asBool());
+    // Sliding finger 1 off the button releases Left; lifting everything clears the keys.
+    Call(e, "input.touch", R"J({"id": 1, "x": 640, "y": 300, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(!eval("left").asBool());
+    Call(e, "input.touch", R"J({"id": 1, "down": false})J");
+    Call(e, "input.touch", R"J({"id": 2, "down": false})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(eval("fingers").asInt() == 0 && !e.Input().IsDown("Space") && !e.Input().IsDown("Left"));
+    // The mouse works the same way (desktop, editor Game view).
+    Call(e, "input.mouse", R"J({"x": 60, "y": 660, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(eval("left").asBool());
+    CHECK(!Call(e, "input.touch", R"J({"id": 9})J")["ok"].asBool());  // a new finger needs a position
+    CHECK(e.Scripts().Errors().empty());
+}
+
 TEST(AudioMixingIsCapturable) {
     Engine e;
     std::string err;

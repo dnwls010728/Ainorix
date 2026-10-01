@@ -1,6 +1,7 @@
 #pragma once
 #include <set>
 #include <string>
+#include <vector>
 
 #include "scene/Scene.h"
 
@@ -29,6 +30,17 @@ struct InputState {
     // view so only relative motion matters. Platforms clear it when the player
     // presses Escape or the window loses focus.
     bool mouseLocked = false;
+    // Touch screens: every finger on the view, in the order they went down.
+    // Positions are normalized like the mouse; `began` is set on the step the
+    // finger went down. Platforms also report the first finger as the mouse
+    // (MouseLeft), so taps work like clicks. The API injects them with input.touch.
+    struct Touch {
+        int id = 0;
+        float x = 0.5f;
+        float y = 0.5f;
+        bool began = false;
+    };
+    std::vector<Touch> touches;
 };
 
 // Advances all behavior components by dt seconds (before physics).

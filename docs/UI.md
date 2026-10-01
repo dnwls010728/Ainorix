@@ -93,6 +93,22 @@ position (disabled while the mouse is locked for mouse look):
 Panels, images and text never block clicks. A `UIPanel {clip: true}` cuts its children off at its edges; clipped
 parts cannot be clicked.
 
+### On-screen controls (touch screens)
+
+`UIButton {key: "Left"}` turns a button into a virtual key: while the mouse or **any finger** is on it,
+the key is down (`input.down`, one `input.pressed` edge, built-in `CharacterBody` controls), and the
+button shows its pressed look. Several fingers hold several buttons at once, so a phone game can be
+steered with the same code as the keyboard version:
+
+```json
+{"name": "BtnLeft",  "components": {"UIButton": {"text": "<", "anchor": "bottom-left",  "x": 24,  "y": -24, "width": 120, "height": 120, "key": "Left"}}}
+{"name": "BtnRight", "components": {"UIButton": {"text": ">", "anchor": "bottom-left",  "x": 168, "y": -24, "width": 120, "height": 120, "key": "Right"}}}
+{"name": "BtnJump",  "components": {"UIButton": {"text": "A", "anchor": "bottom-right", "x": -24, "y": -24, "width": 140, "height": 140, "key": "Space"}}}
+```
+
+Raw fingers are in `input.touches()` (Lua); tools put fingers down with `input.touch {id, x, y}` and lift
+them with `input.touch {id, down: false}`. Hide the buttons on desktop builds from a script if needed.
+
 Health bar: a `UISlider {interactable: false, handle: false}` or a `UIImage {fill, fillOrigin}` (with a
 texture, e.g. a gradient). Set the value from Lua: `scene.set(scene.find("HP"), "UISlider", {value = hp})`.
 

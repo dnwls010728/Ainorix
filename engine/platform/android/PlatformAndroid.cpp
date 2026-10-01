@@ -41,9 +41,10 @@ class AndroidAudioDevice;
 
 // Input collected by the glue callbacks, applied in PumpEvents.
 struct Event {
-    enum Kind { Down, Up, Move, Clear, Delta } kind;
+    enum Kind { Down, Up, Move, Clear, Delta, TouchDown, TouchMove, TouchUp } kind;
     std::string key;
     float x = 0, y = 0;
+    int id = 0;  // Touch*: pointer id
 };
 
 struct State {
@@ -293,6 +294,17 @@ void Push(Event::Kind kind, const char* key, float x = 0, float y = 0) {
     S().events.push_back({kind, key ? std::string(key) : std::string(), x, y});
 }
 
+// Every finger (InputState::touches), normalized to the window.
+void PushTouch(Event::Kind kind, const AInputEvent* event, size_t i) {
+    State& s = S();
+    if (!s.window) return;
+    float w = static_cast<float>(ANativeWindow_getWidth(s.window)), h = static_cast<float>(ANativeWindow_getHeight(s.window));
+    if (w <= 0 || h <= 0) return;
+    Event e{kind, std::string(), AMotionEvent_getX(event, i) / w, AMotionEvent_getY(event, i) / h};
+    e.id = AMotionEvent_getPointerId(event, i);
+    s.events.push_back(e);
+}
+
 void PushMove(float px, float py) {
     State& s = S();
     if (!s.window) return;
@@ -324,6 +336,22 @@ int32_t OnMotion(const AInputEvent* event) {
     const int32_t action = raw & AMOTION_EVENT_ACTION_MASK;
     const size_t index = static_cast<size_t>((raw & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
     const bool mouse = (source & AINPUT_SOURCE_MOUSE) == AINPUT_SOURCE_MOUSE;
+    if (!mouse) {
+        // Multi-touch: all fingers, besides the first one acting as the mouse below.
+        switch (action) {
+            case AMOTION_EVENT_ACTION_DOWN: PushTouch(Event::TouchDown, event, 0); break;
+            case AMOTION_EVENT_ACTION_POINTER_DOWN: PushTouch(Event::TouchDown, event, index); break;
+            case AMOTION_EVENT_ACTION_MOVE:
+                for (size_t i = 0, n = AMotionEvent_getPointerCount(event); i < n; ++i) PushTouch(Event::TouchMove, event, i);
+                break;
+            case AMOTION_EVENT_ACTION_POINTER_UP: PushTouch(Event::TouchUp, event, index); break;
+            case AMOTION_EVENT_ACTION_UP:
+            case AMOTION_EVENT_ACTION_CANCEL:
+                for (size_t i = 0, n = AMotionEvent_getPointerCount(event); i < n; ++i) PushTouch(Event::TouchUp, event, i);
+                break;
+            default: break;
+        }
+    }
     const char* button = mouse && (AMotionEvent_getButtonState(event) & AMOTION_EVENT_BUTTON_SECONDARY) ? "MouseRight" : "MouseLeft";
 
     auto track = [&](size_t i) {
@@ -461,10 +489,32 @@ public:
                     input.mouseX = e.x;
                     input.mouseY = e.y;
                     break;
-                case Event::Clear: input.down.clear(); break;
+                case Event::Clear:
+                    input.down.clear();
+                    input.touches.clear();
+                    break;
                 case Event::Delta:
                     input.mouseDX += e.x;
                     input.mouseDY += e.y;
+                    break;
+                case Event::TouchDown:
+                case Event::TouchMove: {
+                    auto it = std::find_if(input.touches.begin(), input.touches.end(), [&](const InputState::Touch& t) { return t.id == e.id; });
+                    if (it == input.touches.end()) {
+                        if (e.kind == Event::TouchMove) break;  // lifted already
+                        InputState::Touch t;
+                        t.id = e.id;
+                        t.began = true;
+                        input.touches.push_back(t);
+                        it = input.touches.end() - 1;
+                    }
+                    it->x = e.x;
+                    it->y = e.y;
+                    break;
+                }
+                case Event::TouchUp:
+                    input.touches.erase(std::remove_if(input.touches.begin(), input.touches.end(), [&](const InputState::Touch& t) { return t.id == e.id; }),
+                                        input.touches.end());
                     break;
             }
         }

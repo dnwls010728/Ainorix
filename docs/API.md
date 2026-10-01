@@ -248,6 +248,19 @@ Where every visible UI element is on a screen of the given size (pixels, top-lef
 
 ## input
 
+### `input.touch`
+
+Put a finger on the game view, move it or lift it (multi-touch). Scripts read fingers with input.touches(); UIButtons with a `key` hold that key while touched. Unlike a real device, this does not move the mouse.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer |  | Finger id (default 0); use different ids for several fingers. |
+| `x` | number |  | Pixel x (required to put a finger down). |
+| `y` | number |  | Pixel y. |
+| `down` | boolean |  | true = touch / move (default), false = lift the finger. |
+| `width` | integer |  | Width of the image the coordinates refer to (default 640). |
+| `height` | integer |  | Height of that image (default 360). |
+
 ### `input.mouse`
 
 Move the mouse over the game view, add relative motion (mouse look) and optionally press/release a button.
@@ -905,6 +918,7 @@ Clickable screen-space button. A click calls onClick(self) on the entity's Scrip
 | `hoverBrightness` | float | `1.14999998` | Background brightness while the pointer is over the button. |
 | `pressedBrightness` | float | `0.850000024` | Background brightness while pressed. |
 | `interactable` | bool | `true` | Disabled buttons are drawn faded and ignore clicks. |
+| `key` | string | `""` | On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, CharacterBody controls), e.g. "Left", "Space". Several fingers hold several buttons at once. Empty = none. |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
 | `order` | int | `10` | Draw order among siblings (higher on top). |

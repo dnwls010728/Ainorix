@@ -131,7 +131,8 @@ committed and pushed on the branch.
 - [ ] Test on a device / emulator: start, touch → UI buttons, rotation, Home + return (surface recreation), Back = Escape, audio, logcat
 - [ ] Run `oe_tests` on a device (would need test data paths that do not use `OE_SOURCE_DIR`)
 - [x] Immersive mode: `oe_ANativeActivity_onCreate` (manifest `android.app.func_name`) hooks a pipe into the UI thread's looper; JNI `setSystemUiVisibility` + `layoutInDisplayCutoutMode` run there
-- [ ] Multi-touch: `InputState.touches`, Lua `input.touches()`, API `input.touch`, `UIButton.key` (held by any finger/mouse = key down), Android fills every pointer
+- [x] Multi-touch: `InputState.touches`, Lua `input.touches()`, API `input.touch`, `UIButton.key` (held by any finger/mouse = key down), Android fills every pointer
+- [ ] Rebuild the web runtime (`build_web.bat`): the committed one predates `UIButton.key`, so web builds of scenes that use it fail to load until then. The web platform could also fill `input.touches` (Emscripten touch events list every finger)
 - [ ] `.aab` (`oe package --android --aab`): proto manifest + `resources.pb` + `BundleConfig.pb`, jarsigner; validated with bundletool (`bundletool validate`, `build-apks --mode=universal`)
 
 ## Not done yet
