@@ -607,7 +607,20 @@ bool RunTool(const std::vector<std::string>& argv, const std::string& logPath, s
     std::string text;
     ReadTextFile(logPath, text);
     RemoveAll(logPath);
-    if (output) *output = text;
+    if (output) {
+        // Keep the message, drop JVM notices and stack frames.
+        output->clear();
+        size_t start = 0;
+        while (start < text.size()) {
+            size_t end = text.find('\n', start);
+            std::string line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            start = end == std::string::npos ? text.size() : end + 1;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty() || line.rfind("Picked up ", 0) == 0 || line.rfind("\tat ", 0) == 0 || line.rfind("\t... ", 0) == 0) continue;
+            *output += (output->empty() ? "" : "\n") + line;
+        }
+        if (output->size() > 2000) *output = output->substr(0, 2000) + "...";
+    }
     return rc == 0;
 }
 
