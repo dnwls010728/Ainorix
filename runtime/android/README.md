@@ -8,16 +8,14 @@ needs Java.
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
 - Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
-- Source: `03acd81` (P2 skeletal animation; sample/demo docs finalized separately).
-  Includes glTF rig/clip loading, Animator/API/Lua playback, deterministic TRS
-  interpolation and software/GPU skinning for scene/shadow/selection passes.
-  Both ABIs built without new warnings; no adb device was connected for this feature.
+- Source: 95d45c1 (direct integration of P1 saves, P2 skeletal animation and
+  the P3 particle simulation milestone). Includes player saves, Animator/API/Lua
+  playback, software/GPU skinning and deterministic particle simulation/bursts.
+  Both ABIs rebuilt successfully. Device verification of this combined runtime
+  remains pending; no Android device execution was performed for this integration.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).
-- P1 refresh (source after aad02f2): JSON save slots and player storage under
-  `internalDataPath/saves/<gameName>/`. Both ABI players rebuilt; Android
-  save/restart verification remains pending because no adb device was connected.
 
 ## When to rebuild
 

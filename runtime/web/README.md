@@ -8,11 +8,13 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 The runtime does not depend on the game: every project uses the same files.
 
 - Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
-- Engine source: commit 03acd81 (P2 skeletal animation; sample/demo docs finalized
-  separately). Includes glTF rig/clip loading, Animator and Lua playback,
-  deterministic TRS interpolation, software/GPU scene/shadow/selection skinning.
-  The WebAssembly/Node suite passed 63 tests (GPU execution skips without a canvas);
-  packaged Showcase was checked in the browser with WebGL2 animation and shadows.
+- Engine source: commit 95d45c1 (direct integration of P1 saves, P2 skeletal
+  animation and the P3 particle simulation milestone). Includes persistent player
+  storage, glTF rig/clip loading, Animator/API/Lua playback, shared software/GPU
+  skinning and deterministic particle simulation/API/Lua bursts. The combined
+  Windows build passed 72 tests; Node/WASM passed 68 (GPU execution skips
+  without a canvas). Browser verification of this combined runtime
+  remains pending; earlier P1/P2 checks are recorded in their feature work logs.
 - On this Windows host Binaryen's parallel optimizer crashed; the successful
   rebuild used `BINARYEN_CORES=1`.
 
