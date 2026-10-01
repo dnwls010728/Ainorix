@@ -41,5 +41,9 @@ std::vector<std::string> GameFiles(const std::string& projectDir);
 // tools/player/web/index.html unpacks it into /game before the engine starts.
 bool WriteGamePak(const std::string& projectDir, const std::vector<std::string>& files, const std::string& outPath,
                   std::string* error, double* dataBytes = nullptr);
+// Writes every file of a game.pak (WriteGamePak) below `dir` (the Android
+// player unpacks assets/game.pak into its data folder). Rejects paths that
+// would leave `dir`.
+bool ExtractGamePak(const std::vector<unsigned char>& pak, const std::string& dir, std::string* error);
 
 }  // namespace oe

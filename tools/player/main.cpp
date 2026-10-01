@@ -1,10 +1,12 @@
-// OwnEngine player: the runtime that `oe package` ships as <Game>.exe, and
-// (built with Emscripten) as the WebAssembly module of `oe package --web`.
+// OwnEngine player: the runtime that `oe package` ships as <Game>.exe,
+// (built with Emscripten) as the WebAssembly module of `oe package --web`,
+// and (built with the Android NDK) as liboe_player.so of `oe package --android`.
 //
 // Plays the project in `game/` next to the executable (or the path given as
-// the first argument) in a native window / the page's canvas. It has no
-// editor, no API server and no console window; errors are shown in a
-// message box (desktop) or on the page (web).
+// the first argument) in a native window / the page's canvas / the Android
+// activity. It has no editor, no API server and no console window; errors
+// are shown in a message box (desktop), on the page (web) or in logcat
+// (Android).
 //
 // Optional project.json settings:
 //   "window": {
@@ -17,9 +19,16 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <vector>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#endif
+#ifdef __ANDROID__
+#include <android_native_app_glue.h>
+
+#include "app/Project.h"
+#include "platform/android/AndroidApp.h"
 #endif
 
 #include "app/Engine.h"
@@ -81,15 +90,9 @@ void WebFrame(void* arg) {
 }
 #endif
 
-}  // namespace
-
-int main(int argc, char** argv) {
-#ifdef __EMSCRIPTEN__
-    std::string dir = argc > 1 ? argv[1] : "/game";  // the page loader unpacks game.pak there
-#else
-    std::string dir = argc > 1 ? argv[1] : JoinPath(ExecutableDirectory(), "game");
-#endif
-
+// Plays the game in `dir` until the window closes (web: starts the browser
+// loop and returns). Returns the process exit code.
+int RunPlayer(const std::string& dir) {
     Json project;
     std::string text, err;
     if (ReadTextFile(JoinPath(dir, "project.json"), text)) project = Json::parse(text, &err);
@@ -139,3 +142,52 @@ int main(int argc, char** argv) {
     return 0;
 #endif
 }
+
+#ifdef __ANDROID__
+// The APK carries the game as assets/game.pak plus assets/game.id (a stamp
+// that changes with every package). The pak is unpacked into the app's data
+// folder on the first start after an install or update.
+bool PrepareAndroidGame(std::string& dir, std::string& err) {
+    dir = JoinPath(AndroidDataDir(), "game");
+    std::vector<unsigned char> id, pak;
+    if (!AndroidReadAsset("game.id", id)) {
+        err = "the APK has no assets/game.id (package the game with `oe package --android`)";
+        return false;
+    }
+    const std::string stamp(id.begin(), id.end()), stampFile = JoinPath(dir, ".oe-pak-id");
+    std::string have;
+    if (ReadTextFile(stampFile, have) && have == stamp && FileExists(JoinPath(dir, "project.json"))) return true;
+    if (!AndroidReadAsset("game.pak", pak)) {
+        err = "the APK has no assets/game.pak (package the game with `oe package --android`)";
+        return false;
+    }
+    RemoveAll(dir);
+    if (!ExtractGamePak(pak, dir, &err)) return false;
+    WriteTextFile(stampFile, stamp);
+    OE_LOG_INFO("player", "unpacked game data (%zu bytes) into %s", pak.size(), dir.c_str());
+    return true;
+}
+#endif
+
+}  // namespace
+
+#ifdef __ANDROID__
+// NativeActivity entry point (android_native_app_glue), on its own thread.
+void android_main(android_app* app) {
+    AndroidSetApp(app);
+    std::string dir, err;
+    if (PrepareAndroidGame(dir, err)) RunPlayer(dir);
+    else PlatformShowError("OwnEngine", "Cannot start the game.\n\n" + err);
+    // Close the activity (and wait for it) instead of leaving a frozen window.
+    AndroidFinish();
+}
+#else
+int main(int argc, char** argv) {
+#ifdef __EMSCRIPTEN__
+    std::string dir = argc > 1 ? argv[1] : "/game";  // the page loader unpacks game.pak there
+#else
+    std::string dir = argc > 1 ? argv[1] : JoinPath(ExecutableDirectory(), "game");
+#endif
+    return RunPlayer(dir);
+}
+#endif
