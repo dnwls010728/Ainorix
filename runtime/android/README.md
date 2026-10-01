@@ -8,11 +8,11 @@ needs Java.
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
 - Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
-- Source: 95d45c1 (direct integration of P1 saves, P2 skeletal animation and
-  the P3 particle simulation milestone). Includes player saves, Animator/API/Lua
-  playback, software/GPU skinning and deterministic particle simulation/bursts.
-  Both ABIs rebuilt successfully. Device verification of this combined runtime
-  remains pending; no Android device execution was performed for this integration.
+- Source: 59775cd (P4.1 logical gamepad axes on integrated main). Both ABIs
+  rebuilt without new warnings. Includes shared raw-axis/dead-zone handling,
+  API injection, Lua reads and stop reset, alongside P1 saves, P2 animation and
+  P3.1 particle simulation. Android physical analog/button mapping remains P4.2;
+  this milestone does not claim real-controller verification.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).
