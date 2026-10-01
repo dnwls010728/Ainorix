@@ -89,7 +89,7 @@ C++ 재빌드 없이 게임 로직을 작성/수정할 수 있어야 이후 모�
 
 1. ~~Web (Emscripten)~~ ✅ WebGL2 + WebAudio, `oe package --web`
 2. macOS → iOS (Metal)
-3. Android (NDK, 터치 입력)
+3. ~~Android (NDK, 터치 입력)~~ ✅ NativeActivity + GLES3 + AAudio, `oe package --android` (APK 생성·서명) — 실기기 검증 남음, [ANDROID.md](ANDROID.md)
 4. Linux 데스크톱
 5. 콘솔 (Switch / PlayStation) — SDK 확보 후
 

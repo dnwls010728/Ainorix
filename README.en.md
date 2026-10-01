@@ -11,7 +11,7 @@ A C++17 game engine designed so that AI agents can drive and verify it as easily
 | ![Showcase render](docs/images/showcase.png) | A glTF fox character (player controls + follow camera), procedural textures, shadows and point lights. This is the deterministic software renderer's output (`oe render`); the game window, the web build and the editor views draw the same scene with the GPU renderer. |
 
 - Nothing to install (only MSVC + CMake; Lua, Jolt Physics, Box2D, sokol_gfx, stb, cgltf, Dear ImGui and ImGuizmo are vendored). The web runtime is prebuilt in `runtime/web/`, so web builds need no Emscripten
-- Windows (native window, `Name.exe` packaging), Web (WebAssembly + WebGL2, `oe package --web`) and headless. Android / iOS / macOS / consoles only need a platform layer - [docs/PLATFORMS.md](docs/PLATFORMS.md)
+- Windows (native window, `Name.exe` packaging), Web (WebAssembly + WebGL2, `oe package --web`), Android (APK, `oe package --android` - [docs/ANDROID.md](docs/ANDROID.md)) and headless. iOS / macOS / consoles only need a platform layer - [docs/PLATFORMS.md](docs/PLATFORMS.md)
 - Two renderers draw the same scene: the **GPU renderer** (sokol_gfx - D3D11 on Windows, WebGL2 on the web, GLES3 on Linux; 4x MSAA, filtered shadows, mipmaps, one shader file `engine/render/shaders/Shaders.glsl`) for the game window, web and editor views, and the **software renderer** (multithreaded, deterministic) for screenshot hashes, tests and picking
 - Rendering: glTF models, PNG/JPEG textures, smooth/flat shading, point lights, shadows, orthographic/follow cameras, debug drawing - [docs/RENDERING.md](docs/RENDERING.md)
 - Materials / PBR / transparency: metallic-roughness (GGX) shading, normal/AO/emissive maps, transparency (sorted back to front), mask, double-sided, full glTF materials, `.mat.json` material files (`material.create` / `material.set`, hot reload) - [docs/RENDERING.md](docs/RENDERING.md)
@@ -47,6 +47,7 @@ build\bin\oe.exe import MyGame model.glb     :: copy an external model/texture/s
 build\bin\oe.exe package MyGame             :: standalone game in dist\MyGame\ (MyGame.exe + game\)
 build\bin\oe.exe package MyGame --web       :: web build in dist\MyGame-web\ (index.html + wasm, any static host)
 build\bin\oe.exe serve dist\MyGame-web      :: run the web build locally (http://127.0.0.1:8080)
+build\bin\oe.exe package MyGame --android   :: Android APK dist\MyGame-android\MyGame.apk (build_android.bat first; --install puts it on the phone)
 build\bin\oe.exe api --markdown             :: print the command reference
 ```
 
@@ -93,9 +94,9 @@ engine/render    IRenderer, software rasterizer, GPU renderer (sokol_gfx) + shad
 engine/api       command registry, HTTP server, editor routes, MCP server
 engine/app       Engine (simulation, undo, job queue), project templates
 engine/editor    native editor (Dear ImGui panels, gizmo, Scene/Game views, translations)
-engine/platform  Platform.h + win32 (D3D11) / web (WebGL2) / null (EGL) implementations
+engine/platform  Platform.h + win32 (D3D11) / web (WebGL2) / android (GLES3) / null (EGL) implementations
 tools/oe         CLI
-tools/player     game runtime (Name.exe / web wasm) + web page template
+tools/player     game runtime (Name.exe / web wasm / Android .so) + web page template
 tools/shaders    shader regeneration scripts (sokol-shdc)
 tests/           self tests
 third_party/lua  Lua 5.4.8 (MIT)

@@ -13,11 +13,14 @@ option(OE_BUILD_TESTS "Build the engine test executable" ON)
 
 # ---------------------------------------------------------------------------
 # Platform selection. Every platform implements engine/platform/Platform.h.
-# Win32 (desktop), Web (Emscripten, see build_web.sh) and Null (headless);
-# the others are planned and listed in docs/PLATFORMS.md.
+# Win32 (desktop), Web (Emscripten, see build_web.sh), Android (NDK, see
+# build_android.sh) and Null (headless); the others are planned and listed
+# in docs/PLATFORMS.md.
 # ---------------------------------------------------------------------------
 if(EMSCRIPTEN)
   set(OE_PLATFORM "web")
+elseif(ANDROID)
+  set(OE_PLATFORM "android")
 elseif(WIN32)
   set(OE_PLATFORM "win32")
 else()
@@ -41,6 +44,11 @@ if(MSVC)
   target_compile_definitions(oe_lua PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
   target_compile_options(oe_lua PRIVATE -w -x c++)
+endif()
+if(ANDROID)
+  # ARM compilers fuse a*b+c into FMA by default, which changes results:
+  # keep the simulation bit-identical to the other platforms.
+  target_compile_options(oe_lua PRIVATE -ffp-contract=off)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -116,7 +124,7 @@ endif()
 list(APPEND OE_CORE_SOURCES ${OE_FONT_CPP})
 
 # GPU backend (sokol_gfx, vendored in third_party/sokol): D3D11 on Windows,
-# WebGL2 on the web, OpenGL ES 3 over EGL on Linux when the EGL/GLES
+# WebGL2 on the web, OpenGL ES 3 on Android, OpenGL ES 3 over EGL on Linux when the EGL/GLES
 # development files are installed (headless: editor viewport and GPU
 # screenshots). Without one the engine uses the software renderer only.
 option(OE_GPU "Build the GPU renderer backend where available" ON)
@@ -127,6 +135,13 @@ if(OE_PLATFORM STREQUAL "win32")
 elseif(OE_PLATFORM STREQUAL "web")
   set(OE_PLATFORM_SOURCES engine/platform/web/PlatformWeb.cpp engine/platform/web/GpuWebGL.cpp engine/platform/gl/SokolGL.cpp)
   set(OE_GPU_BACKEND "webgl2")
+elseif(OE_PLATFORM STREQUAL "android")
+  set(OE_PLATFORM_SOURCES engine/platform/android/PlatformAndroid.cpp engine/platform/android/GpuAndroid.cpp engine/platform/gl/SokolGL.cpp)
+  set(OE_GPU_BACKEND "gles3-android")
+  # NativeActivity glue from the NDK (android_main runs on its own thread).
+  add_library(oe_android_glue STATIC ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c)
+  target_include_directories(oe_android_glue PUBLIC ${ANDROID_NDK}/sources/android/native_app_glue)
+  target_compile_options(oe_android_glue PRIVATE -w)
 else()
   set(OE_PLATFORM_SOURCES engine/platform/null/PlatformNull.cpp)
   if(OE_GPU)
@@ -165,6 +180,10 @@ if(WIN32)
   target_link_libraries(OwnEngine PUBLIC ws2_32 user32 gdi32 shell32 winmm d3d11 dxgi)
 elseif(EMSCRIPTEN)
   # Single-threaded WebAssembly: no pthreads (works on any static host).
+elseif(ANDROID)
+  # Threads are part of bionic's libc.
+  target_link_libraries(OwnEngine PUBLIC oe_android_glue android log EGL GLESv3 aaudio)
+  target_compile_options(OwnEngine PUBLIC -ffp-contract=off)  # see oe_lua
 else()
   find_package(Threads REQUIRED)
   target_link_libraries(OwnEngine PUBLIC Threads::Threads)
@@ -199,6 +218,26 @@ if(EMSCRIPTEN)
     add_executable(oe_tests tests/tests.cpp)
     target_link_libraries(oe_tests PRIVATE OwnEngine)
     target_link_options(oe_tests PRIVATE -fwasm-exceptions -sENVIRONMENT=node -sNODERAWFS=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=4MB -sEXIT_RUNTIME=1)
+  endif()
+  return()
+endif()
+
+if(ANDROID)
+  # ---------------------------------------------------------------------------
+  # Android build (build_android.sh / build_android.bat): only the player
+  # runtime, as liboe_player.so for one ABI (NativeActivity loads it by the
+  # name in AndroidManifest.xml). `oe package --android` puts it into an APK
+  # with the game data. Static libc++ (ANDROID_STL=c++_static): one .so per ABI.
+  # ---------------------------------------------------------------------------
+  add_library(oe_player SHARED tools/player/main.cpp)
+  target_link_libraries(oe_player PRIVATE OwnEngine)
+  set_target_properties(oe_player PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+  target_link_options(oe_player PRIVATE
+    -u ANativeActivity_onCreate   # keep the glue's entry point (only the system calls it)
+    -Wl,-z,max-page-size=16384    # loads on devices with 16 KB pages (Android 15+)
+    -Wl,--gc-sections)
+  if(CMAKE_BUILD_TYPE STREQUAL "Release" AND CMAKE_STRIP)
+    add_custom_command(TARGET oe_player POST_BUILD COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:oe_player>)
   endif()
   return()
 endif()

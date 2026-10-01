@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "app/AndroidPackage.h"
 #include "app/Engine.h"
 #include "app/Project.h"
 #include "assets/Assets.h"
@@ -18,6 +19,7 @@
 #include "core/Image.h"
 #include "core/Json.h"
 #include "core/Log.h"
+#include "core/Zip.h"
 #include "editor/EditorMath.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
@@ -1694,6 +1696,126 @@ TEST(WebGamePak) {
         CHECK(at + original.size() <= bytes.size() && std::equal(original.begin(), original.end(), bytes.begin() + static_cast<std::ptrdiff_t>(at)));
     }
     RemoveAll("build/test_web");
+}
+
+TEST(AndroidGamePakExtract) {
+    // The Android player unpacks assets/game.pak into its data folder.
+    std::string dir = std::string(OE_SOURCE_DIR) + "/samples/Hello";
+    std::vector<std::string> files = GameFiles(dir);
+    std::string err;
+    CHECK(WriteGamePak(dir, files, "build/test_android/game.pak", &err));
+    std::vector<unsigned char> pak;
+    CHECK(ReadBinaryFile("build/test_android/game.pak", pak));
+    CHECK(ExtractGamePak(pak, "build/test_android/game", &err));
+    for (const std::string& f : files) {
+        std::vector<unsigned char> a, b;
+        CHECK(ReadBinaryFile(dir + "/" + f, a) && ReadBinaryFile("build/test_android/game/" + f, b) && a == b);
+    }
+    Engine e;
+    CHECK(e.Open("build/test_android/game", &err));
+    // Paths that would leave the folder are refused.
+    auto pakWith = [](const std::string& path) {
+        std::string index = "{\"files\":[{\"path\":\"" + path + "\",\"offset\":0,\"size\":1}]}";
+        std::vector<unsigned char> p = {'O', 'E', 'P', 'A', 'K', '0', '0', '1'};
+        for (int i = 0; i < 4; ++i) p.push_back(static_cast<unsigned char>((index.size() >> (8 * i)) & 0xFF));
+        p.insert(p.end(), index.begin(), index.end());
+        p.push_back('x');
+        return p;
+    };
+    CHECK(ExtractGamePak(pakWith("ok/file.txt"), "build/test_android/x", &err));
+    for (const char* bad : {"../evil.txt", "a/../../evil.txt", "/abs.txt", "c:/evil.txt", ".."}) {
+        CHECK(!ExtractGamePak(pakWith(bad), "build/test_android/x", &err));
+    }
+    CHECK(!ExtractGamePak(std::vector<unsigned char>{'n', 'o', 'p', 'e'}, "build/test_android/x", &err));
+    RemoveAll("build/test_android");
+}
+
+TEST(ZipWriterAlignment) {
+    // APK rules: stored entries 4-byte aligned, native libraries page aligned.
+    ZipWriter zip;
+    const std::string a = "hello", b(1000, 'b');
+    zip.AddStored("a.txt", reinterpret_cast<const unsigned char*>(a.data()), a.size(), 4);
+    zip.AddStored("lib/arm64-v8a/libx.so", reinterpret_cast<const unsigned char*>(b.data()), b.size(), 16384);
+    zip.AddStored("empty", nullptr, 0, 4);
+    std::vector<unsigned char> bytes = zip.Finish();
+    std::vector<ZipEntry> entries;
+    std::string err;
+    CHECK(ReadZip(bytes, entries, &err) && entries.size() == 3);
+    if (entries.size() == 3) {
+        CHECK(entries[0].name == "a.txt" && std::string(entries[0].data.begin(), entries[0].data.end()) == a);
+        CHECK(entries[0].crc == Crc32(reinterpret_cast<const unsigned char*>(a.data()), a.size()));
+        CHECK(entries[1].size == b.size() && entries[2].data.empty());
+        // Data offsets: find each entry's bytes in the archive.
+        auto offsetOf = [&](const ZipEntry& e) {
+            auto it = std::search(bytes.begin(), bytes.end(), e.data.begin(), e.data.end());
+            return static_cast<size_t>(it - bytes.begin());
+        };
+        CHECK(offsetOf(entries[0]) % 4 == 0);
+        CHECK(offsetOf(entries[1]) % 16384 == 0);
+        // Raw copies keep the data (as when merging archives).
+        ZipWriter copy;
+        for (const ZipEntry& e : entries) copy.AddRaw(e);
+        std::vector<ZipEntry> again;
+        CHECK(ReadZip(copy.Finish(), again, &err) && again.size() == 3 && again[1].data == entries[1].data);
+    }
+    CHECK(Crc32(reinterpret_cast<const unsigned char*>("123456789"), 9) == 0xCBF43926u);
+    CHECK(!ReadZip(std::vector<unsigned char>(30, 0), entries, &err));
+}
+
+TEST(AndroidApk) {
+    CHECK(IsValidAndroidPackageName("com.example.game") && IsValidAndroidPackageName("a.b_2"));
+    CHECK(!IsValidAndroidPackageName("game") && !IsValidAndroidPackageName("com.1game") && !IsValidAndroidPackageName("com..x") &&
+          !IsValidAndroidPackageName("com.my-game") && !IsValidAndroidPackageName("com.x."));
+    CHECK(DefaultAndroidPackageName("My Game!") == "com.ownengine.mygame");
+    CHECK(DefaultAndroidPackageName("2048") == "com.ownengine.game2048");
+    CHECK(IsValidAndroidPackageName(DefaultAndroidPackageName("한글")));
+
+    AndroidAppInfo app;
+    app.packageName = "com.example.hello";
+    app.label = "Hello \xEC\x95\x88\xEB\x85\x95";  // UTF-8 label -> UTF-16 in the string pool
+    app.orientation = "portrait";
+    app.hasIcon = true;
+    std::vector<unsigned char> manifest = BuildAndroidManifest(app);
+    CHECK(manifest.size() > 8 && manifest[0] == 0x03 && manifest[1] == 0x00);  // RES_XML_TYPE
+    CHECK((static_cast<size_t>(manifest[4]) | (static_cast<size_t>(manifest[5]) << 8) | (static_cast<size_t>(manifest[6]) << 16) |
+           (static_cast<size_t>(manifest[7]) << 24)) == manifest.size());
+    auto hasUtf16 = [](const std::vector<unsigned char>& data, const std::u16string& text) {
+        std::vector<unsigned char> needle;
+        for (char16_t c : text) {
+            needle.push_back(static_cast<unsigned char>(c & 0xFF));
+            needle.push_back(static_cast<unsigned char>(c >> 8));
+        }
+        return std::search(data.begin(), data.end(), needle.begin(), needle.end()) != data.end();
+    };
+    CHECK(hasUtf16(manifest, u"android.app.NativeActivity") && hasUtf16(manifest, u"oe_player") && hasUtf16(manifest, u"com.example.hello"));
+    CHECK(hasUtf16(manifest, u"Hello \uC548\uB155"));
+    std::vector<unsigned char> arsc = BuildAndroidResources(app.packageName);
+    CHECK(arsc.size() > 12 && arsc[0] == 0x02 && hasUtf16(arsc, u"res/drawable/icon.png"));
+
+    // A complete (unsigned) APK with a stand-in library.
+    std::string err;
+    std::vector<unsigned char> so(5000, 0x7f);
+    CreateDirectories("build/test_apk/arm64-v8a");
+    FILE* f = std::fopen("build/test_apk/arm64-v8a/liboe_player.so", "wb");
+    CHECK(f && std::fwrite(so.data(), 1, so.size(), f) == so.size());
+    if (f) std::fclose(f);
+    ApkContents contents;
+    contents.app = app;
+    contents.nativeLibs = {{"arm64-v8a", "build/test_apk/arm64-v8a/liboe_player.so"}};
+    contents.gamePak = {'O', 'E', 'P', 'A', 'K', '0', '0', '1', 0, 0, 0, 0};
+    CHECK(WriteUnsignedApk(contents, "build/test_apk/out.apk", &err));
+    std::vector<unsigned char> apk;
+    std::vector<ZipEntry> entries;
+    CHECK(ReadBinaryFile("build/test_apk/out.apk", apk) && ReadZip(apk, entries, &err));
+    std::set<std::string> names;
+    for (const ZipEntry& e : entries) names.insert(e.name);
+    for (const char* n : {"AndroidManifest.xml", "resources.arsc", "res/drawable/icon.png", "lib/arm64-v8a/liboe_player.so", "assets/game.pak", "assets/game.id"}) {
+        CHECK(names.count(n) == 1);
+    }
+    CHECK(entries.size() >= 4 && entries[3].data == so);
+    contents.app.packageName = "nope";
+    CHECK(!WriteUnsignedApk(contents, "build/test_apk/bad.apk", &err));
+    RemoveAll("build/test_apk");
 }
 
 TEST(ScriptCheckAndParams) {

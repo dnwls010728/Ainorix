@@ -11,7 +11,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 | ![Showcase 렌더](docs/images/showcase.png) | glTF 여우 캐릭터(플레이어 조작 + 팔로우 카메라), 절차 생성 텍스처, 그림자, 포인트 라이트. 결정적 소프트웨어 렌더러의 출력(`oe render`)이며, 게임 창·웹·에디터 뷰포트는 같은 장면을 GPU 렌더러로 그립니다. |
 
 - 별도 설치할 의존성 없음 (MSVC + CMake만 필요, Lua·Jolt Physics·Box2D·sokol_gfx·stb·cgltf·Dear ImGui·ImGuizmo는 소스 동봉). 웹 런타임도 `runtime/web/`에 미리 빌드되어 포함 — 웹 배포에 Emscripten 불필요
-- Windows(네이티브 창, `Name.exe` 패키징) · Web(WebAssembly + WebGL2, `oe package --web`) · 헤드리스 지원. Android / iOS / macOS / 콘솔은 플랫폼 계층만 추가하면 되도록 분리 — [docs/PLATFORMS.md](docs/PLATFORMS.md)
+- Windows(네이티브 창, `Name.exe` 패키징) · Web(WebAssembly + WebGL2, `oe package --web`) · Android(APK, `oe package --android` — [docs/ANDROID.md](docs/ANDROID.md)) · 헤드리스 지원. iOS / macOS / 콘솔은 플랫폼 계층만 추가하면 되도록 분리 — [docs/PLATFORMS.md](docs/PLATFORMS.md)
 - 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
 - 렌더링 기능: glTF 모델, PNG/JPEG 텍스처, 스무스/플랫 셰이딩, 포인트 라이트, 그림자, 직교/팔로우 카메라, 디버그 드로잉 — [docs/RENDERING.md](docs/RENDERING.md)
 - 머티리얼/PBR/반투명: metallic-roughness(GGX) 셰이딩, 노멀맵·AO·발광 텍스처, 반투명(뒤에서 앞으로 정렬)·마스크·양면, glTF 머티리얼 완전 로드, `.mat.json` 머티리얼 파일(`material.create`/`material.set`, 핫리로드) — [docs/RENDERING.md](docs/RENDERING.md)
@@ -47,6 +47,7 @@ build\bin\oe.exe import MyGame model.glb     :: 외부 모델/텍스처/사운�
 build\bin\oe.exe package MyGame             :: 배포용 폴더 dist\MyGame\ 생성 (MyGame.exe + game\)
 build\bin\oe.exe package MyGame --web       :: 웹 배포 폴더 dist\MyGame-web\ (index.html + wasm, 정적 호스팅 어디든)
 build\bin\oe.exe serve dist\MyGame-web      :: 웹 빌드를 로컬에서 실행 (http://127.0.0.1:8080)
+build\bin\oe.exe package MyGame --android   :: 안드로이드 APK dist\MyGame-android\MyGame.apk (먼저 build_android.bat, --install 로 폰에 설치)
 build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 ```
 
@@ -93,9 +94,9 @@ engine/render    IRenderer, 소프트웨어 래스터라이저, GPU 렌더러(so
 engine/api       명령 레지스트리, HTTP 서버, 에디터 라우트, MCP 서버
 engine/app       Engine (시뮬레이션, undo, 작업 큐), 프로젝트 템플릿
 engine/editor    네이티브 에디터 (Dear ImGui 패널, 기즈모, Scene/Game 뷰)
-engine/platform  Platform.h + win32(D3D11) / web(WebGL2) / null(EGL) 구현
+engine/platform  Platform.h + win32(D3D11) / web(WebGL2) / android(GLES3) / null(EGL) 구현
 tools/oe         CLI
-tools/player     게임 런타임 (Name.exe / 웹 wasm) + 웹 페이지 템플릿
+tools/player     게임 런타임 (Name.exe / 웹 wasm / 안드로이드 .so) + 웹 페이지 템플릿
 tools/shaders    셰이더 재생성 스크립트 (sokol-shdc)
 tests/           자체 테스트
 third_party/lua  Lua 5.4.8 (MIT)

@@ -23,5 +23,7 @@ std::string AbsolutePath(const std::string& path);
 // Relative to `base` when possible, always with forward slashes.
 std::string RelativePath(const std::string& path, const std::string& base);
 std::vector<std::string> ListFiles(const std::string& dir, const std::string& extension, bool recursive);
+// Names (not paths) of the folders directly inside `dir`, sorted.
+std::vector<std::string> ListDirectories(const std::string& dir);
 
 }  // namespace oe

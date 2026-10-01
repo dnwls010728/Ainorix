@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include "api/Commands.h"
 #include "app/Engine.h"
@@ -120,6 +121,38 @@ bool WriteGamePak(const std::string& projectDir, const std::vector<std::string>&
         return false;
     }
     if (dataBytes) *dataBytes = static_cast<double>(data.size());
+    return true;
+}
+
+bool ExtractGamePak(const std::vector<unsigned char>& pak, const std::string& dir, std::string* error) {
+    auto fail = [&](const std::string& message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (pak.size() < 12 || std::memcmp(pak.data(), "OEPAK001", 8) != 0) return fail("not an OwnEngine game.pak");
+    const size_t indexSize = static_cast<size_t>(pak[8]) | (static_cast<size_t>(pak[9]) << 8) | (static_cast<size_t>(pak[10]) << 16) |
+                             (static_cast<size_t>(pak[11]) << 24);
+    if (12 + indexSize > pak.size()) return fail("damaged game.pak (index)");
+    std::string err;
+    Json index = Json::parse(std::string(reinterpret_cast<const char*>(pak.data()) + 12, indexSize), &err);
+    if (!err.empty()) return fail("damaged game.pak: " + err);
+    const size_t base = 12 + indexSize;
+    for (const Json& f : index["files"].items()) {
+        std::string rel = f["path"].asString();
+        const double offset = f["offset"].asNumber(-1), size = f["size"].asNumber(-1);
+        bool unsafe = rel.empty() || rel[0] == '/' || rel.find('\\') != std::string::npos || rel.find(':') != std::string::npos ||
+                      rel == ".." || rel.rfind("../", 0) == 0 || rel.find("/../") != std::string::npos ||
+                      (rel.size() >= 3 && rel.compare(rel.size() - 3, 3, "/..") == 0);
+        if (unsafe) return fail("game.pak: invalid path '" + rel + "'");
+        if (offset < 0 || size < 0 || base + offset + size > static_cast<double>(pak.size())) return fail("game.pak: damaged entry " + rel);
+        std::string path = JoinPath(dir, rel);
+        CreateDirectories(ParentPath(path));
+        FILE* out = std::fopen(path.c_str(), "wb");
+        const unsigned char* data = pak.data() + base + static_cast<size_t>(offset);
+        bool ok = out && (size == 0 || std::fwrite(data, 1, static_cast<size_t>(size), out) == static_cast<size_t>(size));
+        if (out) ok = std::fclose(out) == 0 && ok;
+        if (!ok) return fail("cannot write " + path);
+    }
     return true;
 }
 

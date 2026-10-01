@@ -4,7 +4,9 @@
 // stderr) and returns a non-zero exit code on failure, so AI agents and
 // scripts can drive the engine without a UI.
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +19,7 @@
 #include "api/ApiService.h"
 #include "api/HttpServer.h"
 #include "api/McpServer.h"
+#include "app/AndroidPackage.h"
 #include "app/Engine.h"
 #include "app/Project.h"
 #include "assets/Assets.h"
@@ -45,7 +48,8 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script"};
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script",
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -188,6 +192,8 @@ int CmdHelp() {
                  "  package [path] [--out dist/Name] [--name N] [--web]\n"
                  "                                    Build a standalone game: Name.exe + game data, or with --web\n"
                  "                                    an HTML5/WebGL2 folder (index.html + wasm) for any web host\n"
+                 "  package [path] --android [--package com.x.y] [--install] [--keystore f --ks-pass P --key-alias A]\n"
+                 "                                    Build a signed Android APK (debug key unless --keystore); see docs/ANDROID.md\n"
                  "  api [--markdown]                  Print the command reference\n"
                  "  version                           Print version info as JSON\n\n"
                  "[path] = project directory (default .), project.json or *.scene.json\n"
@@ -555,9 +561,351 @@ std::string HtmlEscape(const std::string& s) {
     return out;
 }
 
+// ----- oe package --android ---------------------------------------------------
+
+std::string Env(const char* name) {
+    const char* v = std::getenv(name);
+    return v ? std::string(v) : std::string();
+}
+
+std::string HomeDir() {
+#ifdef _WIN32
+    return Env("USERPROFILE");
+#else
+    return Env("HOME");
+#endif
+}
+
+#ifdef _WIN32
+const char* kExe = ".exe";
+#else
+const char* kExe = "";
+#endif
+
+std::string QuoteArg(const std::string& s) {
+#ifdef _WIN32
+    std::string q = "\"";
+    for (char c : s) q += c == '"' ? std::string("\\\"") : std::string(1, c);
+    return q + "\"";
+#else
+    std::string q = "'";
+    for (char c : s) q += c == '\'' ? std::string("'\\''") : std::string(1, c);
+    return q + "'";
+#endif
+}
+
+// Runs an external tool (java, keytool, adb) and captures its output.
+// Returns true when it exited with code 0.
+bool RunTool(const std::vector<std::string>& argv, const std::string& logPath, std::string* output) {
+    std::string cmd;
+    for (const std::string& a : argv) cmd += (cmd.empty() ? "" : " ") + QuoteArg(a);
+    cmd += " > " + QuoteArg(logPath) + " 2>&1";
+#ifdef _WIN32
+    cmd = "\"" + cmd + "\"";  // cmd.exe /c strips the outer quotes
+#endif
+    std::fflush(stdout);
+    int rc = std::system(cmd.c_str());
+    std::string text;
+    ReadTextFile(logPath, text);
+    RemoveAll(logPath);
+    if (output) {
+        // Keep the message, drop JVM notices and stack frames.
+        output->clear();
+        size_t start = 0;
+        while (start < text.size()) {
+            size_t end = text.find('\n', start);
+            std::string line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            start = end == std::string::npos ? text.size() : end + 1;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty() || line.rfind("Picked up ", 0) == 0 || line.rfind("\tat ", 0) == 0 || line.rfind("\t... ", 0) == 0) continue;
+            *output += (output->empty() ? "" : "\n") + line;
+        }
+        if (output->size() > 2000) *output = output->substr(0, 2000) + "...";
+    }
+    return rc == 0;
+}
+
+// Version-ordered compare of folder names like "34.0.0" / "35.0.0-rc1".
+bool VersionLess(const std::string& a, const std::string& b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        if (std::isdigit(static_cast<unsigned char>(a[i])) && std::isdigit(static_cast<unsigned char>(b[j]))) {
+            long x = std::strtol(a.c_str() + i, nullptr, 10), y = std::strtol(b.c_str() + j, nullptr, 10);
+            if (x != y) return x < y;
+            while (i < a.size() && std::isdigit(static_cast<unsigned char>(a[i]))) ++i;
+            while (j < b.size() && std::isdigit(static_cast<unsigned char>(b[j]))) ++j;
+        } else {
+            if (a[i] != b[j]) return a[i] < b[j];
+            ++i;
+            ++j;
+        }
+    }
+    return a.size() - i < b.size() - j;
+}
+
+// The Android SDK: --sdk, ANDROID_HOME, ANDROID_SDK_ROOT, then where Android
+// Studio installs it. "" when none is found.
+std::string FindAndroidSdk(const Args& a) {
+    std::vector<std::string> candidates = {a.Get("--sdk"), Env("ANDROID_HOME"), Env("ANDROID_SDK_ROOT")};
+#ifdef _WIN32
+    candidates.push_back(JoinPath(Env("LOCALAPPDATA"), "Android/Sdk"));
+#else
+    candidates.push_back(JoinPath(HomeDir(), "Android/Sdk"));
+    candidates.push_back(JoinPath(HomeDir(), "Library/Android/sdk"));
+    candidates.push_back("/usr/lib/android-sdk");  // Debian/Ubuntu packages (apksigner)
+#endif
+    for (const std::string& c : candidates) {
+        if (!c.empty() && IsDirectory(JoinPath(c, "build-tools"))) return c;
+    }
+    return "";
+}
+
+// apksigner.jar of the newest build-tools.
+std::string FindApksigner(const std::string& sdk) {
+    if (sdk.empty()) return "";
+    std::vector<std::string> versions = ListDirectories(JoinPath(sdk, "build-tools"));
+    std::sort(versions.begin(), versions.end(), VersionLess);
+    for (auto it = versions.rbegin(); it != versions.rend(); ++it) {
+        for (const char* rel : {"lib/apksigner.jar", "apksigner.jar"}) {
+            std::string jar = JoinPath(JoinPath(JoinPath(sdk, "build-tools"), *it), rel);
+            if (FileExists(jar)) return jar;
+        }
+    }
+    return "";
+}
+
+// Folder with java + keytool: JAVA_HOME, Android Studio's bundled JDK, else
+// "" meaning "on the PATH" (checked by running java).
+bool FindJava(std::string& binDir, const std::string& logPath) {
+    std::vector<std::string> homes = {Env("JAVA_HOME")};
+#ifdef _WIN32
+    for (const char* pf : {"ProgramFiles", "ProgramW6432", "LOCALAPPDATA"}) {
+        std::string root = Env(pf);
+        if (root.empty()) continue;
+        homes.push_back(JoinPath(root, "Android/Android Studio/jbr"));
+        homes.push_back(JoinPath(root, "Programs/Android Studio/jbr"));
+    }
+#elif defined(__APPLE__)
+    homes.push_back("/Applications/Android Studio.app/Contents/jbr/Contents/Home");
+#else
+    homes.push_back("/opt/android-studio/jbr");
+    homes.push_back(JoinPath(HomeDir(), "android-studio/jbr"));
+#endif
+    for (const std::string& h : homes) {
+        if (!h.empty() && FileExists(JoinPath(h, std::string("bin/java") + kExe))) {
+            binDir = JoinPath(h, "bin");
+            return true;
+        }
+    }
+    binDir.clear();
+    return RunTool({"java", "-version"}, logPath, nullptr);
+}
+
+std::string JavaTool(const std::string& binDir, const char* name) {
+    return binDir.empty() ? std::string(name) : JoinPath(binDir, std::string(name) + kExe);
+}
+
+// Folder with <abi>/liboe_player.so: a local build_android.sh/.bat result
+// first, then the prebuilt runtime/android/.
+std::string FindAndroidRuntime(std::vector<std::string>& abis) {
+    std::string candidates[] = {JoinPath(ExecutableDirectory(), "android"), JoinPath(OE_SOURCE_DIR, "build/bin/android"),
+                                JoinPath(OE_SOURCE_DIR, "runtime/android")};
+    for (const std::string& c : candidates) {
+        abis.clear();
+        for (const char* abi : {"arm64-v8a", "armeabi-v7a", "x86_64", "x86"}) {
+            if (FileExists(JoinPath(JoinPath(c, abi), "liboe_player.so"))) abis.push_back(abi);
+        }
+        if (!abis.empty()) return c;
+    }
+    return "";
+}
+
+// apksigner password arguments: "pass:...", "env:VAR", "file:path" or a plain password.
+std::string PassArg(const std::string& v) {
+    for (const char* p : {"pass:", "env:", "file:"}) {
+        if (v.rfind(p, 0) == 0) return v;
+    }
+    return "pass:" + v;
+}
+
+//   --android: <out>/<Name>.apk (signed; debug key unless --keystore), installable with adb or by copying it to a phone
+int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::string& name, const std::vector<std::string>& files,
+                      const Json& fileList) {
+    Json project;
+    std::string text, err;
+    if (ReadTextFile(JoinPath(projectDir, "project.json"), text)) project = Json::parse(text);
+    const Json& android = project["android"];
+
+    std::vector<std::string> abis;
+    std::string runtime = FindAndroidRuntime(abis);
+    if (runtime.empty()) {
+        return Fail("android_runtime_missing", "the Android runtime (android/<abi>/liboe_player.so) has not been built",
+                    "Build it once with build_android.bat (Windows) or ./build_android.sh, which need the Android NDK "
+                    "(Android Studio > SDK Manager > SDK Tools > NDK).");
+    }
+    if (a.Has("--abi")) {
+        std::vector<std::string> wanted;
+        std::string list = a.Get("--abi") + ",";
+        for (size_t p = 0, q; (q = list.find(',', p)) != std::string::npos; p = q + 1) {
+            std::string abi = list.substr(p, q - p);
+            if (abi.empty()) continue;
+            if (std::find(abis.begin(), abis.end(), abi) == abis.end()) {
+                return Fail("android_runtime_missing", "no " + abi + " build of the Android runtime in " + runtime,
+                            "Build it with build_android.bat Release \"" + abi + "\" (or ./build_android.sh Release " + abi + ").");
+            }
+            wanted.push_back(abi);
+        }
+        abis = wanted;
+    }
+
+    AndroidAppInfo app;
+    app.label = project["window"]["title"].asString(project["name"].asString(name));
+    app.packageName = a.Get("--package", android["package"].asString(DefaultAndroidPackageName(name)));
+    if (!IsValidAndroidPackageName(app.packageName)) {
+        return Fail("invalid_package", "'" + app.packageName + "' is not a valid Android application id",
+                    "Use --package com.yourname.game (lowercase letters, digits and _, at least two parts separated by dots), "
+                    "or set \"android\": {\"package\": ...} in project.json.");
+    }
+    app.versionCode = a.GetInt("--version-code", android["versionCode"].asInt(1));
+    app.versionName = a.Get("--version-name", android["versionName"].asString("1.0"));
+    const Json& win = project["window"];
+    std::string defOrientation = win["height"].asInt(720) > win["width"].asInt(1280) ? "portrait" : "landscape";
+    app.orientation = a.Get("--orientation", android["orientation"].asString(defOrientation));
+    if (app.orientation != "landscape" && app.orientation != "portrait" && app.orientation != "auto") {
+        return Fail("invalid_argument", "orientation must be landscape, portrait or auto", "Use --orientation landscape.");
+    }
+    app.debuggable = a.Has("--debuggable");
+    if (app.versionCode < 1) return Fail("invalid_argument", "versionCode must be a positive integer", "Use --version-code 1.");
+
+    ApkContents apk;
+    apk.app = app;
+    for (const std::string& abi : abis) apk.nativeLibs.push_back({abi, JoinPath(JoinPath(runtime, abi), "liboe_player.so")});
+    std::string icon = android["icon"].asString();
+    if (!icon.empty()) {
+        std::vector<unsigned char> png;
+        if (!ReadBinaryFile(JoinPath(projectDir, icon), png) || png.size() < 8 || png[1] != 'P' || png[2] != 'N' || png[3] != 'G') {
+            return Fail("invalid_icon", "android.icon '" + icon + "' is not a PNG file in the project", "Use a square PNG, e.g. 192x192 or 512x512.");
+        }
+        apk.iconPng = png;
+    }
+
+    std::string out = AbsolutePath(a.Get("--out", "dist/" + name + "-android"));
+    const std::string projectAbs = AbsolutePath(projectDir);
+    if (out == projectAbs || out.rfind(projectAbs + "/", 0) == 0) {
+        return Fail("invalid_output", "the output folder must be outside the project", "Use --out dist/" + name + "-android.");
+    }
+    if (IsDirectory(out) && !ListFiles(out, "", false).empty() && ListFiles(out, ".apk", false).empty()) {
+        return Fail("output_not_empty", out + " exists and is not an OwnEngine Android package", "Pick another --out folder or empty it.");
+    }
+    CreateDirectories(out);
+    const std::string pak = JoinPath(out, ".game.pak.tmp");
+    double bytes = 0;
+    if (!WriteGamePak(projectDir, files, pak, &err, &bytes)) return Fail("write_failed", err);
+    ReadBinaryFile(pak, apk.gamePak);
+    RemoveAll(pak);
+
+    const std::string apkPath = JoinPath(out, name + ".apk");
+    const std::string unsignedPath = JoinPath(out, name + "-unsigned.apk");
+    const std::string log = JoinPath(out, ".oe-tool.log");
+    if (!WriteUnsignedApk(apk, unsignedPath, &err)) return Fail("write_failed", err);
+
+    Json res = Json::MakeObject();
+    res["ok"] = true;
+    res["result"]["package"] = app.packageName;
+    res["result"]["versionCode"] = app.versionCode;
+    res["result"]["versionName"] = app.versionName;
+    res["result"]["orientation"] = app.orientation;
+    Json abiList = Json::MakeArray();
+    for (const std::string& abi : abis) abiList.push(abi);
+    res["result"]["abis"] = abiList;
+    res["result"]["androidRuntime"] = runtime;
+    res["result"]["files"] = fileList;
+    res["result"]["dataBytes"] = bytes;
+
+    if (a.Has("--unsigned")) {
+        RemoveAll(apkPath);
+        res["result"]["apk"] = unsignedPath;
+        res["result"]["signedWith"] = "none";
+        res["result"]["next"] = "Sign it with apksigner (Android SDK build-tools) before installing it.";
+        PrintJson(res);
+        return 0;
+    }
+
+    // Signing: apksigner (SDK build-tools) runs on Java.
+    const std::string sdk = FindAndroidSdk(a);
+    const std::string apksigner = FindApksigner(sdk);
+    if (apksigner.empty()) {
+        return Fail("android_sdk_missing", "apksigner (Android SDK build-tools) was not found" + (sdk.empty() ? std::string() : " in " + sdk),
+                    "Install Android Studio (or the SDK command-line tools + build-tools), set ANDROID_HOME, or pass --sdk <folder>. "
+                    "The unsigned APK is at " + unsignedPath + " (--unsigned skips signing).");
+    }
+    std::string javaBin;
+    if (!FindJava(javaBin, log)) {
+        return Fail("java_missing", "Java was not found (apksigner needs it)",
+                    "Install Android Studio (it bundles a JDK) or a JDK 17+, or set JAVA_HOME.");
+    }
+    std::string keystore = a.Get("--keystore"), ksPass = a.Get("--ks-pass"), alias = a.Get("--key-alias"), keyPass = a.Get("--key-pass");
+    std::string signedWith = "release";
+    if (keystore.empty()) {
+        // The debug key Android Studio uses (~/.android/debug.keystore): fine for
+        // testing and sideloading, not for Google Play.
+        signedWith = "debug";
+        keystore = JoinPath(HomeDir(), ".android/debug.keystore");
+        ksPass = keyPass = "android";
+        alias = "androiddebugkey";
+        if (!FileExists(keystore)) {
+            CreateDirectories(ParentPath(keystore));
+            std::string output;
+            if (!RunTool({JavaTool(javaBin, "keytool"), "-genkeypair", "-keystore", keystore, "-storepass", "android", "-alias", alias,
+                          "-keypass", "android", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000", "-dname",
+                          "CN=Android Debug,O=Android,C=US"},
+                         log, &output)) {
+                return Fail("sign_failed", "cannot create the debug keystore " + keystore + ": " + output, "Check that keytool (JDK) works.");
+            }
+        }
+    } else {
+        if (ksPass.empty()) return Fail("missing_argument", "--keystore needs --ks-pass", "Pass --ks-pass env:MY_PASSWORD (or pass:..., file:...).");
+        if (alias.empty()) return Fail("missing_argument", "--keystore needs --key-alias", "Pass the alias of the key in the keystore.");
+        keystore = AbsolutePath(keystore);
+    }
+    std::vector<std::string> sign = {JavaTool(javaBin, "java"), "-jar", apksigner, "sign", "--ks", keystore, "--ks-pass", PassArg(ksPass),
+                                     "--ks-key-alias", alias};
+    if (!keyPass.empty()) {
+        sign.push_back("--key-pass");
+        sign.push_back(PassArg(keyPass));
+    }
+    sign.insert(sign.end(), {"--out", apkPath, unsignedPath});
+    std::string output;
+    if (!RunTool(sign, log, &output)) {
+        return Fail("sign_failed", "apksigner failed: " + output, "Check the keystore, its passwords and the key alias.");
+    }
+    RemoveAll(unsignedPath);
+    RemoveAll(apkPath + ".idsig");  // v4 signature (only for incremental adb installs)
+    res["result"]["apk"] = apkPath;
+    res["result"]["signedWith"] = signedWith;
+    res["result"]["keystore"] = keystore;
+    res["result"]["next"] = "Install it with `adb install -r " + apkPath + "` (or rerun with --install), or copy it to the phone and open it. " +
+                            (signedWith == "debug" ? "For Google Play, sign with your own key: --keystore my.jks --ks-pass env:PASS --key-alias key." : "");
+
+    if (a.Has("--install")) {
+        std::string adb = "adb";
+        if (!sdk.empty() && FileExists(JoinPath(sdk, std::string("platform-tools/adb") + kExe))) adb = JoinPath(sdk, std::string("platform-tools/adb") + kExe);
+        if (!RunTool({adb, "install", "-r", apkPath}, log, &output)) {
+            return Fail("install_failed", "adb install failed: " + output,
+                        "Connect a phone with USB debugging enabled (or start an emulator) and check `adb devices`.");
+        }
+        RunTool({adb, "shell", "am", "start", "-n", app.packageName + "/android.app.NativeActivity"}, log, &output);
+        res["result"]["installed"] = true;
+        res["result"]["next"] = "Running on the device. Engine logs: `adb logcat -s OwnEngine`.";
+    }
+    PrintJson(res);
+    return 0;
+}
+
 // Builds a standalone game folder:
 //   desktop: <out>/<Name>.exe (the player runtime) + <out>/game/ (project files)
 //   --web:   <out>/index.html + oe_player.js + oe_player.wasm + game.pak, for any static web host
+//   --android: see CmdPackageAndroid
 int CmdPackage(const Args& a) {
     Engine engine;
     int code = 0;
@@ -579,6 +927,7 @@ int CmdPackage(const Args& a) {
     std::vector<std::string> files = GameFiles(projectDir);
     Json fileList = Json::MakeArray();
     for (const std::string& f : files) fileList.push(f);
+    if (a.Has("--android")) return CmdPackageAndroid(a, projectDir, name, files, fileList);
 
     if (web) {
         std::string runtime = FindWebRuntime();
