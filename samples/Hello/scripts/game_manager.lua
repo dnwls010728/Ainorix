@@ -7,6 +7,7 @@ local Game = {}
 function Game:onStart()
   self.total = #scene.withTag("coin")
   self.collected = 0
+  self.best = save.get("highScore", 0)
   self.score = scene.find("Score")
   self.message = scene.find("Message")
   self.playAgain = scene.find("Play Again")
@@ -31,12 +32,20 @@ function Game:refresh()
   local text = string.format("Coins: %d/%d", self.collected, self.total)
   local total = game.get("total") or 0
   if total > 0 then text = text .. string.format("\nTotal: %d", total) end
+  if self.best > 0 then text = text .. string.format("\nBest: %d", self.best) end
   scene.set(self.score, "UIText", { text = text })
 end
 
 function Game:onCoinCollected(coin)
   self.collected = self.collected + 1
   game.set("total", (game.get("total") or 0) + 1)
+  local total = game.get("total")
+  if total > self.best then
+    self.best = total
+    save.set("highScore", self.best)
+    local ok, error = pcall(save.flush)
+    if not ok then log.warn("Could not save the high score:", error) end
+  end
   self:refresh()
   if self.collected < self.total then return end
 

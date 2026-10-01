@@ -426,9 +426,22 @@ void ValidateSaveLua(lua_State* L, int index, int depth = 0) {
     }
 }
 
+std::string CheckSaveKey(lua_State* L) {
+    size_t size = 0;
+    const char* key = luaL_checklstring(L, 1, &size);
+    if (!size || std::memchr(key, '\0', size)) luaL_error(L, "save key must be nonempty and contain no NUL");
+    return std::string(key, size);
+}
+
+std::string CheckSaveSlot(lua_State* L, int index) {
+    size_t size = 0;
+    const char* slot = luaL_optlstring(L, index, "default", &size);
+    return std::string(slot, size);
+}
+
 int L_SaveGet(lua_State* L) {
     return Guard(L, [&] {
-        std::string key = luaL_checkstring(L, 1), slot = luaL_optstring(L, 3, "default");
+        std::string key = CheckSaveKey(L), slot = CheckSaveSlot(L, 3);
         Json state = Host(L).GetEngine().Saves().State(slot);
         const Json* value = state["data"].find(key);
         if (value) PushJson(L, *value);
@@ -440,7 +453,7 @@ int L_SaveGet(lua_State* L) {
 
 int L_SaveSet(lua_State* L) {
     return Guard(L, [&] {
-        std::string key = luaL_checkstring(L, 1), slot = luaL_optstring(L, 3, "default");
+        std::string key = CheckSaveKey(L), slot = CheckSaveSlot(L, 3);
         luaL_checkany(L, 2);
         ValidateSaveLua(L, 2);
         Host(L).GetEngine().Saves().Set(key, ToJson(L, 2), slot);
@@ -450,16 +463,15 @@ int L_SaveSet(lua_State* L) {
 
 int L_SaveDelete(lua_State* L) {
     return Guard(L, [&] {
-        std::string key = luaL_checkstring(L, 1);
-        if (key.empty()) return luaL_error(L, "save.delete requires a nonempty key");
-        Host(L).GetEngine().Saves().Clear(key, luaL_optstring(L, 2, "default"));
+        std::string key = CheckSaveKey(L);
+        Host(L).GetEngine().Saves().Clear(key, CheckSaveSlot(L, 2));
         return 0;
     });
 }
 
 int L_SaveFlush(lua_State* L) {
     return Guard(L, [&] {
-        Host(L).GetEngine().Saves().Flush(luaL_optstring(L, 1, "default"));
+        Host(L).GetEngine().Saves().Flush(CheckSaveSlot(L, 1));
         return 0;
     });
 }

@@ -263,6 +263,11 @@ TEST(SaveSlotsPersistAndRecover) {
         CHECK(!FileExists(JoinPath(directory, "slot-default.json.tmp")));
         CHECK(Call(e, "save.set", R"J({"key":"score","value":42})J")["ok"].asBool());
         CHECK(Call(e, "save.flush", "{}")["ok"].asBool());  // replacement, not only first write
+        Json deep = 7;
+        for (int depth = 0; depth < 32; ++depth) { Json array = Json::MakeArray(); array.push(deep); deep = std::move(array); }
+        Json args = Json::MakeObject(); args["key"] = "deep"; args["value"] = deep;
+        CHECK(e.Call("save.set", args)["ok"].asBool());
+        CHECK(Call(e, "save.flush", "{}")["ok"].asBool());
         CHECK(e.UndoDepth() == 0);
     }
     {
@@ -270,6 +275,7 @@ TEST(SaveSlotsPersistAndRecover) {
         CHECK(e.Open(project, &error));
         e.Saves().Configure(directory);
         CHECK(Call(e, "save.state", "{}")["result"]["data"]["score"].asInt() == 42);
+        CHECK(Call(e, "save.state", "{}")["result"]["data"]["deep"].isArray());
         CHECK(Call(e, "save.state", R"J({"slot":"second"})J")["result"]["data"]["score"]["n"].asInt() == 9);
         CHECK(!Call(e, "save.state", R"J({"slot":"../escape"})J")["ok"].asBool());
         CHECK(!Call(e, "save.set", R"J({"key":"","value":1})J")["ok"].asBool());
@@ -303,6 +309,8 @@ TEST(SaveMemoryAndLuaValidation) {
     CHECK(Call(e, "script.eval", R"J({"code":"return save.get('null', 8)"})J")["result"]["value"].isNull());
     CHECK(Call(e, "save.state", R"J({"slot":"second"})J")["result"]["data"]["other"].size() == 3);
     for (const char* code : {"save.set('bad', function() end)", "save.set('bad', 0/0)",
+                             "save.get('', 0)", "save.set('bad' .. string.char(0), 1)",
+                             "save.set('bad', 1, 'default' .. string.char(0))",
                              "local t = {} t.self = t save.set('bad', t)",
                              "save.set('bad', {[1] = 1, named = 2})", "save.set('bad', {[3] = 1})"}) {
         Json args = Json::MakeObject(); args["code"] = code;
@@ -708,6 +716,7 @@ TEST(TemplateGamePlaythrough) {
     EntityId button = e.GetScene().FindByName("Play Again");
     CHECK(e.GetScene().Get<UIButton>(button)->visible);
     CHECK(Call(e, "game.state", "{}")["result"]["data"]["total"].asInt() == 7);
+    CHECK(Call(e, "save.state", "{}")["result"]["data"]["highScore"].asInt() == 7);
 
     // The button is centered, 60 reference px below the middle: (320, 210) in a 640x360 shot.
     Json click = Call(e, "input.click", R"J({"x": 320, "y": 210})J");
@@ -715,6 +724,7 @@ TEST(TemplateGamePlaythrough) {
     Call(e, "sim.step", R"J({"frames": 2})J");
     CHECK(e.GetScene().name == "Level 1");
     CHECK(Call(e, "game.state", "{}")["result"]["data"]["total"].asInt() == 0);
+    CHECK(TextOf(e, "Score")->text.find("Best: 7") != std::string::npos);
     CHECK(e.Scripts().Errors().empty());
 
     // Walking off the edge respawns the player at the level start.
@@ -729,6 +739,7 @@ TEST(TemplateGamePlaythrough) {
 
     Call(e, "sim.stop", "{}");
     CHECK(e.GetScene().name == "Level 1" && e.GetScene().FindByName("Coin 1") != kNullEntity);
+    CHECK(Call(e, "save.state", "{}")["result"]["data"]["highScore"].asInt() == 7);
 }
 
 TEST(PrefabsCreateAndInstantiate) {

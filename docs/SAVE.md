@@ -19,8 +19,12 @@ arbitrary file paths through commands or Lua. Slots are independent objects.
       restores 0/1 then 1/2 (visible HUD and Lua logs). Windows tests pass;
       WebAssembly and Android arm64-v8a/x86_64 Release players build. Null
       backend passes a Clang C++17 syntax/warnings check using the NDK toolchain.
-- [ ] P1.3: User documentation, regenerated API, optional template high score,
+- [x] P1.3: User documentation, regenerated API, optional template high score,
       refreshed prebuilt runtimes where toolchains exist; record remaining checks.
+      Template/sample records survive Play Again and sim.stop; the HUD was
+      inspected after collecting three coins (Best: 3). Windows 65 tests pass;
+      WebAssembly/Node 61 tests pass (GPU comparisons skip without a canvas).
+      The web and both Android prebuilt runtimes are refreshed.
 - [ ] Android save/restart on a device: no adb device was connected. Install a
       save-probe APK, force-stop/relaunch, and check the internal slot JSON.
 - [ ] Native Linux full build/runtime: only the null source syntax check ran.
@@ -37,6 +41,9 @@ access/quota errors are reported; pending writes remain dirty and can be retried
 
 There is no implicit flush on shutdown: call `save.flush` at checkpoints. Browser
 tabs and mobile processes can disappear without a normal shutdown callback.
+The default coin-game template saves `highScore` whenever the cross-scene total
+sets a new record and shows `Best` in its HUD. Play Again resets session total
+while retaining the record. Failed flushes log a warning and gameplay continues.
 
 ## Contract
 

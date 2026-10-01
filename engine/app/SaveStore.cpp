@@ -67,7 +67,10 @@ SaveStore::Slot& SaveStore::Load(const std::string& slot) {
             if (read) data = Json::parse(text, &error);
             else if (error.empty()) error = "cannot read file";
             if (error.empty() && data.isObject()) {
-                try { ValidateValue(data); result.data = std::move(data); }
+                try {
+                    for (const auto& member : data.members()) { ValidateKey(member.first); ValidateValue(member.second); }
+                    result.data = std::move(data);
+                }
                 catch (const ApiError& e) { error = e.what(); }
             } else if (error.empty()) error = "expected a JSON object";
             if (!error.empty()) OE_LOG_WARN("save", "Ignoring invalid save %s: %s", path.c_str(), error.c_str());

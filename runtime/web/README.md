@@ -18,6 +18,8 @@ The runtime does not depend on the game: every project uses the same files.
 - P1 refresh: JSON save slots, strict Lua value validation, explicit tool save
   directories and player localStorage. Browser reload restores saved counters
   (0/1 then 1/2) on the save-probe HUD. Source: P1 branch after aad02f2.
+  The refreshed WebAssembly/Node suite passes 61 tests; GPU comparisons skip
+  without a browser canvas.
 
 ## When to rebuild
 

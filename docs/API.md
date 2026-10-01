@@ -399,7 +399,7 @@ Set a JSON save value. Use save.flush to persist it; independent of scene undo.
 | arg | type | required | description |
 |---|---|---|---|
 | `key` | string | yes | Nonempty key. |
-| `value` | any | yes | Finite JSON value. |
+| `value` |  | yes | Finite JSON value. |
 | `slot` | string |  | Slot name; default is default. |
 
 ### `save.clear`

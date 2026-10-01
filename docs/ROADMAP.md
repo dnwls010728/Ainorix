@@ -103,7 +103,14 @@ C++ 재빌드 없이 게임 로직을 작성/수정할 수 있어야 이후 모�
 
 **에이전트 규칙**: 아래 목록에서 **체크되지 않은 첫 항목**부터 시작한다. 시작 전에 [DESIGN.md](DESIGN.md)(불변 조건, 완료 기준, 인계 §5)를 읽는다. 항목마다 해당 기능 문서(없으면 새로 만들기)에 `Implementation status (work log)` 체크리스트를 먼저 만들고(예: [ANDROID.md](ANDROID.md)), 마일스톤마다 커밋·푸시하며 그 줄을 체크한다. 항목 하나 = 브랜치/PR 하나. 끝나면 이 목록의 `[ ]`를 `[x]`로 바꾸고, 하지 못한 검증은 줄을 새로 만들어 남긴다. 순서를 바꿔야 하면 이유를 이 문서에 적는다.
 
-### P1. 세이브 데이터 영구 저장 — [ ]
+### P1. 세이브 데이터 영구 저장 — [x]
+
+- Implementation and verification: [SAVE.md](SAVE.md), PR #15. Memory/directory
+  slots, Lua/command APIs, player platform storage and template high scores are
+  implemented. Windows and WebAssembly tests pass; web reload and Windows
+  restart restore saved values. Web/Android prebuilt runtimes are refreshed.
+- [ ] Android save/restart on a device; no adb device was connected.
+- [ ] Full native Linux build/runtime; null backend syntax check passed.
 
 - **왜**: `game.get/set`은 플레이 세션 동안만 유지된다(`Engine::GameData()`, `engine/app/Engine.h`). 종료하면 사라져 출시 게임이 진행 상황을 저장할 수 없다. 작고 독립적이며 이후 모든 플랫폼에 영향을 주므로 가장 먼저 한다.
 - **요구**: 스크립트 API `save.get(key, default)`, `save.set(key, value)`, `save.delete(key)`, `save.flush()`(또는 `game.save`/`game.load`처럼 기존 이름과 일관되게 정하고 `docs/SCRIPTING.md`에 문서화). 값은 JSON 직렬화 가능한 것만. 별도 슬롯 지원(`slot` 이름).

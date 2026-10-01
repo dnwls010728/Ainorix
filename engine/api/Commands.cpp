@@ -972,11 +972,13 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              });
 
     // ----- game runtime ------------------------------------------------------------
+    Json saveValueSchema = Json::MakeObject();
+    saveValueSchema["description"] = "Finite JSON value.";
     Register(r, "save.state", "Read a save slot (memory-only unless persistence was explicitly enabled).",
              Params().Opt("slot", "string", "Slot name; default is default."), false,
              [](Engine& e, const Json& a) { return e.Saves().State(a["slot"].asString("default")); });
     Register(r, "save.set", "Set a JSON save value. Use save.flush to persist it; independent of scene undo.",
-             Params().Req("key", "string", "Nonempty key.").Req("value", "any", "Finite JSON value.")
+             Params().Req("key", "string", "Nonempty key.").ReqWith("value", saveValueSchema)
                      .Opt("slot", "string", "Slot name; default is default."), false,
              [](Engine& e, const Json& a) {
                  std::string slot = a["slot"].asString("default");
