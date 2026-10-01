@@ -1853,8 +1853,27 @@ TEST(AndroidApk) {
         CHECK(names.count(n) == 1);
     }
     CHECK(entries.size() >= 4 && entries[3].data == so);
+    // The same contents as an app bundle (Google Play): proto manifest + resources in base/.
+    CHECK(WriteUnsignedAppBundle(contents, "build/test_apk/out.aab", &err));
+    std::vector<unsigned char> aab;
+    CHECK(ReadBinaryFile("build/test_apk/out.aab", aab) && ReadZip(aab, entries, &err));
+    names.clear();
+    for (const ZipEntry& e : entries) names.insert(e.name);
+    for (const char* n : {"BundleConfig.pb", "base/manifest/AndroidManifest.xml", "base/resources.pb", "base/res/drawable/icon.png",
+                          "base/lib/arm64-v8a/liboe_player.so", "base/assets/game.pak", "base/assets/game.id"}) {
+        CHECK(names.count(n) == 1);
+    }
+    auto has = [](const std::vector<unsigned char>& data, const std::string& text) {
+        return std::search(data.begin(), data.end(), text.begin(), text.end(),
+                           [](unsigned char x, char y) { return x == static_cast<unsigned char>(y); }) != data.end();
+    };
+    std::vector<unsigned char> proto = BuildAndroidManifestProto(app);
+    CHECK(proto.size() > 2 && proto[0] == 0x0A);  // XmlNode.element, length-delimited
+    CHECK(has(proto, "android.app.NativeActivity") && has(proto, "oe_ANativeActivity_onCreate") && has(proto, app.label));
+    CHECK(has(BuildAndroidResourcesProto(app.packageName), "res/drawable/icon.png"));
     contents.app.packageName = "nope";
     CHECK(!WriteUnsignedApk(contents, "build/test_apk/bad.apk", &err));
+    CHECK(!WriteUnsignedAppBundle(contents, "build/test_apk/bad.aab", &err));
     RemoveAll("build/test_apk");
 }
 

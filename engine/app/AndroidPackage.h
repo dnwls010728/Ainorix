@@ -32,6 +32,9 @@ std::vector<unsigned char> BuildAndroidManifest(const AndroidAppInfo& app);
 // Compiled resource table with one resource, drawable/icon (0x7f010000) =
 // res/drawable/icon.png (the launcher icon).
 std::vector<unsigned char> BuildAndroidResources(const std::string& packageName);
+// The same manifest and resource table in aapt2's protobuf format (app bundles).
+std::vector<unsigned char> BuildAndroidManifestProto(const AndroidAppInfo& app);
+std::vector<unsigned char> BuildAndroidResourcesProto(const std::string& packageName);
 
 struct ApkContents {
     AndroidAppInfo app;
@@ -43,5 +46,9 @@ struct ApkContents {
 // Writes an unsigned APK (manifest, resources, libs page-aligned and
 // uncompressed, assets/game.pak + assets/game.id). Sign it before installing.
 bool WriteUnsignedApk(const ApkContents& contents, const std::string& outPath, std::string* error);
+// Writes an unsigned Android App Bundle (.aab, the format Google Play takes):
+// BundleConfig.pb + base/ module (proto manifest, resources.pb, res/, lib/,
+// assets/). Sign it with jarsigner before uploading.
+bool WriteUnsignedAppBundle(const ApkContents& contents, const std::string& outPath, std::string* error);
 
 }  // namespace oe
