@@ -22,6 +22,7 @@
 #include "core/Log.h"
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
+#include "platform/GamepadInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/UI.h"
@@ -404,6 +405,51 @@ TEST(ScriptEvalAndSandbox) {
     CHECK(t->position.y == 3.0f && t->position.z == 2.0f);  // partial update keeps x/z
     CHECK(Call(e, "history.undo", "{}")["ok"].asBool());    // eval edits are undoable
     CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.y == 0.5f);
+}
+
+TEST(GamepadDeviceLifecycle) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gamepad_device"), &err));
+    GamepadInput device;
+    Call(e, "input.axis", R"J({"name":"LeftX","value":0.7})J");
+    Call(e, "input.key", R"J({"key":"GamepadB","down":true})J");
+    Call(e, "input.key", R"J({"key":"W","down":true})J");
+    device.Apply(e.Input(), GamepadSnapshot{});
+    CHECK(e.Input().axes["LeftX"] == 0.7f && e.Input().IsDown("GamepadB") && e.Input().IsDown("W"));
+    GamepadSnapshot snapshot;
+    snapshot.connected = true;
+    snapshot.device = 0;
+    snapshot.axes = {0.575f, 1, -1, 0, 0.5f, 1};
+    snapshot.buttons.fill(true);
+    device.Apply(e.Input(), snapshot);
+    for (const char* name : GamepadInput::kButtonNames) CHECK(e.Input().IsDown(name));
+    CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f);
+    e.Input().pressedThisFrame.clear();
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().pressedThisFrame.empty());  // holds are not repeated edges
+    snapshot.device = 1;
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().pressedThisFrame.count("GamepadA") == 1);  // another controller begins a new press
+    snapshot.buttons.fill(false);
+    device.Apply(e.Input(), snapshot);
+    for (const char* name : GamepadInput::kButtonNames) CHECK(!e.Input().IsDown(name));
+    CHECK(e.Input().pressedThisFrame.empty());  // a release cancels an unconsumed edge
+    snapshot.buttons[0] = true;
+    device.Apply(e.Input(), snapshot);
+    device.Reset(e.Input());  // focus loss
+    CHECK(!e.Input().IsDown("GamepadA") && e.Input().pressedThisFrame.empty() && e.Input().IsDown("W"));
+    for (const char* name : InputState::kAxisNames) CHECK(e.Input().Axis(name) == 0);
+    snapshot.axes[0] = 2;
+    snapshot.axes[4] = -1;
+    snapshot.axes[5] = std::nanf("");
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().Axis("LeftX") == 1 && e.Input().Axis("LT") == 0 && e.Input().Axis("RT") == 0);
+    device.Apply(e.Input(), GamepadSnapshot{});  // disconnect
+    CHECK(!e.Input().IsDown("GamepadA") && e.Input().Axis("LeftX") == 0 && e.Input().IsDown("W"));
+    Call(e, "input.axis", R"J({"name":"RightX","value":0.9})J");
+    device.Apply(e.Input(), GamepadSnapshot{});
+    CHECK(e.Input().axes["RightX"] == 0.9f);  // inactive polling still preserves tool input
 }
 
 TEST(GamepadAxesAndButtons) {

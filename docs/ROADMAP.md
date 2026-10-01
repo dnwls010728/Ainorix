@@ -152,8 +152,9 @@ effects remain unfinished; see [PARTICLES.md](PARTICLES.md) for the next milesto
 ### P4. 게임패드 입력 일반화 — [ ]
 
 - Implementation status: [INPUT.md](INPUT.md). Portable axes, shared dead zone,
-  API injection and Lua reads are implemented; Windows 73 and Node/WASM 69 tests
-  pass. Physical Windows/web/Android adapters and sample controls are next.
+  API injection and Lua reads are implemented. Windows/web/Android physical
+  adapters now build, with Windows 74 and Node/WASM 70 tests passing. Gameplay sample controls,
+  native editor Game-view forwarding and physical-controller checks remain.
 
 - **왜**: Android에만 게임패드가 있고(`ANDROID.md`: D-pad/왼 스틱 = 방향키) 데스크톱·웹에는 없다. 아날로그 축도 없다.
 - **요구**: `InputState`에 축(`axes`: `LeftX/LeftY/RightX/RightY/LT/RT`)과 버튼 이름(`GamepadA/B/X/Y/LB/RB/Start/Back/DPadUp...`)을 추가하고 Lua `input.axis(name)`, 기존 `input.key`로도 버튼 접근. API `input.axis {name, value}`로 테스트 주입(`input.touch`처럼). 데드존 처리는 엔진에서(기본 0.15, 문서화).

@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <shellapi.h>
+#include <xinput.h>
 
 #include <fcntl.h>
 #include <io.h>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "platform/Platform.h"
+#include "platform/GamepadInput.h"
 
 namespace oe {
 
@@ -114,6 +116,44 @@ UINT WindowDpi(HWND hwnd) {
     return dpi ? dpi : 96;
 }
 
+GamepadSnapshot PollXInput() {
+    using GetState = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+    // System-only lookup avoids an XInput import dependency and DLL search-path hijacking.
+    static GetState getState = [] {
+        wchar_t directory[MAX_PATH];
+        UINT length = GetSystemDirectoryW(directory, MAX_PATH);
+        if (!length || length >= MAX_PATH) return static_cast<GetState>(nullptr);
+        for (const wchar_t* name : {L"xinput1_4.dll", L"xinput1_3.dll", L"xinput9_1_0.dll"}) {
+            std::wstring path = std::wstring(directory) + L"\\" + name;
+            HMODULE module = LoadLibraryW(path.c_str());
+            if (!module) continue;
+            auto function = reinterpret_cast<GetState>(reinterpret_cast<void*>(GetProcAddress(module, "XInputGetState")));
+            if (function) return function;  // retained for process lifetime
+            FreeLibrary(module);
+        }
+        return static_cast<GetState>(nullptr);
+    }();
+    GamepadSnapshot result;
+    if (!getState) return result;
+    for (DWORD index = 0; index < XUSER_MAX_COUNT; ++index) {
+        XINPUT_STATE state{};
+        if (getState(index, &state) != ERROR_SUCCESS) continue;
+        const XINPUT_GAMEPAD& pad = state.Gamepad;
+        auto stick = [](SHORT value) { return static_cast<float>(value) / (value < 0 ? 32768.0f : 32767.0f); };
+        result.connected = true;
+        result.device = static_cast<int>(index);
+        result.axes = {stick(pad.sThumbLX), stick(pad.sThumbLY), stick(pad.sThumbRX), stick(pad.sThumbRY),
+                       static_cast<float>(pad.bLeftTrigger) / 255, static_cast<float>(pad.bRightTrigger) / 255};
+        const WORD masks[] = {XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
+                              XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_START,
+                              XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB,
+                              XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT};
+        for (size_t i = 0; i < result.buttons.size(); ++i) result.buttons[i] = (pad.wButtons & masks[i]) != 0;
+        break;  // one logical controller: lowest connected index
+    }
+    return result;
+}
+
 class Win32Window final : public Window {
 public:
     bool Init(const std::string& title, int width, int height) {
@@ -157,6 +197,8 @@ public:
             DispatchMessageW(&msg);
         }
         input_ = nullptr;
+        if (GetForegroundWindow() == hwnd_) gamepad_.Apply(input, PollXInput());
+        else gamepad_.Reset(input);
         // Mouse lock requested by the game: hidden cursor kept inside the
         // client area (only while this window is in front).
         if (!input.mouseLocked && mouseLocked_) relockOnClick_ = false;  // the game released it
@@ -416,7 +458,10 @@ private:
                     }
                     self->buttonsHeld_ = 0;
                     if (self->input_) {
+                        self->gamepad_.Reset(*self->input_);
                         self->input_->down.clear();
+                        self->input_->axes.clear();
+                        self->input_->pressedThisFrame.clear();
                         if (self->mouseLocked_) self->relockOnClick_ = true;
                         self->input_->mouseLocked = false;
                     }
@@ -472,6 +517,7 @@ private:
     bool mouseLocked_ = false;
     bool relockOnClick_ = false;  // released by Escape / focus loss, not by the game
     InputState* input_ = nullptr;
+    GamepadInput gamepad_;
     std::vector<uint32_t> bgra_;
     bool eventMode_ = false;
     std::vector<WindowEvent> events_;
