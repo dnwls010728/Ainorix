@@ -117,4 +117,14 @@ std::vector<std::string> ListFiles(const std::string& dir, const std::string& ex
     return out;
 }
 
+std::vector<std::string> ListDirectories(const std::string& dir) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(U8Path(dir), ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        if (it->is_directory(ec)) out.push_back(ToU8(it->path().filename()));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 }  // namespace oe

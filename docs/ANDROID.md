@@ -15,7 +15,7 @@ committed and pushed on the branch.
 - [x] `CMakeLists.txt` Android branch (`liboe_player.so`) + `build_android.sh` / `build_android.bat`
 - [x] Player entry point `android_main` (game data extracted from `assets/game.pak`)
 - [x] `ExtractGamePak` (C++), `engine/core/Zip` (APK writer); tests pending
-- [ ] `oe package --android`: manifest, APK zip writer (aligned), aapt2 link, apksigner, debug keystore, `--install`
+- [x] `oe package --android`: binary manifest + resources.arsc written by oe (no aapt2), aligned APK, apksigner (debug keystore or `--keystore`), `--install`. Verified here with apksigner verify + aapt dump (stand-in .so)
 - [ ] Tests (APK writer, pak round trip) + docs (PLATFORMS.md, CLAUDE.md, READMEs)
 - [ ] Prebuilt runtime `runtime/android/arm64-v8a/liboe_player.so` (needs the NDK; not available in the cloud session that wrote this)
 - [ ] Tested on a device / emulator
