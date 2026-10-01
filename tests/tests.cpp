@@ -1877,6 +1877,14 @@ TEST(AndroidApk) {
     RemoveAll("build/test_apk");
 }
 
+TEST(AgentInstructionsInSync) {
+    // AGENTS.md (read by most coding agents) and CLAUDE.md must say the same thing (docs/DESIGN.md).
+    std::string agents, claude;
+    CHECK(ReadTextFile(std::string(OE_SOURCE_DIR) + "/AGENTS.md", agents) && ReadTextFile(std::string(OE_SOURCE_DIR) + "/CLAUDE.md", claude));
+    CHECK(!agents.empty() && agents == claude);
+    CHECK(claude.find("docs/DESIGN.md") != std::string::npos);
+}
+
 TEST(ScriptCheckAndParams) {
     Engine e;
     std::string err;

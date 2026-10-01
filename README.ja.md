@@ -79,7 +79,7 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 | CLI / スクリプト | `oe exec`、`oe script` (JSON の入出力、失敗時は終了コード 1) |
 | HTTP | `POST /api/call {"command": "...", "args": {...}}` |
 
-このリポジトリの [.mcp.json](.mcp.json) は Claude Code で `samples/Hello` プロジェクトを MCP サーバーとして接続します (先にビルドが必要)。エージェント向けの作業ガイドは [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md)、API 全体は [docs/API.md](docs/API.md)、構成は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) にあります。
+このリポジトリの [.mcp.json](.mcp.json) は Claude Code で `samples/Hello` プロジェクトを MCP サーバーとして接続します (先にビルドが必要)。エージェント向けの作業ガイドは [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md)、API 全体は [docs/API.md](docs/API.md)、構成は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、コードを変更するときの設計方針 (人間・AI エージェント共通) は [docs/DESIGN.md](docs/DESIGN.md) にあります。
 
 ## 構成
 
