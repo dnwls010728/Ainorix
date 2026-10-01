@@ -247,6 +247,105 @@ bool Near(const Vec3& a, const Vec3& b, float eps) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
 }
 
+TEST(SaveSlotsPersistAndRecover) {
+    const std::string project = TempProject("save_slots");
+    const std::string directory = JoinPath(project, "saves");
+    std::string error;
+    {
+        Engine e;
+        CHECK(e.Open(project, &error));
+        e.Saves().Configure(directory);
+        CHECK(Call(e, "save.set", R"J({"key":"score","value":17})J")["ok"].asBool());
+        CHECK(Call(e, "save.set", R"J({"key":"score","value":{"n":9,"items":[true,null,"한글"]},"slot":"second"})J")["ok"].asBool());
+        CHECK(!FileExists(directory));  // lazy I/O; no directory before flush
+        CHECK(Call(e, "save.flush", "{}")["ok"].asBool());
+        CHECK(Call(e, "save.flush", R"J({"slot":"second"})J")["ok"].asBool());
+        CHECK(!FileExists(JoinPath(directory, "slot-default.json.tmp")));
+        CHECK(Call(e, "save.set", R"J({"key":"score","value":42})J")["ok"].asBool());
+        CHECK(Call(e, "save.flush", "{}")["ok"].asBool());  // replacement, not only first write
+        Json deep = 7;
+        for (int depth = 0; depth < 32; ++depth) { Json array = Json::MakeArray(); array.push(deep); deep = std::move(array); }
+        Json args = Json::MakeObject(); args["key"] = "deep"; args["value"] = deep;
+        CHECK(e.Call("save.set", args)["ok"].asBool());
+        CHECK(Call(e, "save.flush", "{}")["ok"].asBool());
+        CHECK(e.UndoDepth() == 0);
+    }
+    {
+        Engine e;
+        CHECK(e.Open(project, &error));
+        e.Saves().Configure(directory);
+        CHECK(Call(e, "save.state", "{}")["result"]["data"]["score"].asInt() == 42);
+        CHECK(Call(e, "save.state", "{}")["result"]["data"]["deep"].isArray());
+        CHECK(Call(e, "save.state", R"J({"slot":"second"})J")["result"]["data"]["score"]["n"].asInt() == 9);
+        CHECK(!Call(e, "save.state", R"J({"slot":"../escape"})J")["ok"].asBool());
+        CHECK(!Call(e, "save.set", R"J({"key":"","value":1})J")["ok"].asBool());
+        Call(e, "save.clear", R"J({"key":"score"})J");
+        Call(e, "save.flush", "{}");
+        e.Saves().Configure(directory);
+        CHECK(!Call(e, "save.state", "{}")["result"]["data"].has("score"));
+        CHECK(WriteTextFile(JoinPath(directory, "slot-default.json"), "{broken"));
+        e.Saves().Configure(directory);
+        CHECK(Call(e, "save.state", "{}")["result"]["data"].size() == 0);
+        CHECK(WriteTextFile(JoinPath(directory, "slot-default.json"), "[1,2]"));
+        e.Saves().Configure(directory);
+        CHECK(Call(e, "save.state", "{}")["result"]["data"].size() == 0);
+        CHECK(Call(e, "save.set", R"J({"key":"recovered","value":true})J")["ok"].asBool());
+        CHECK(Call(e, "save.flush", "{}")["ok"].asBool());
+        e.Saves().Configure(directory);
+        CHECK(Call(e, "save.state", "{}")["result"]["data"]["recovered"].asBool());
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(SaveMemoryAndLuaValidation) {
+    const std::string project = TempProject("save_memory");
+    Engine e;
+    std::string error;
+    CHECK(e.Open(project, &error));
+    const auto before = ListFiles(project, "", true);
+    CHECK(Call(e, "save.state", "{}")["result"]["mode"].asString() == "memory");
+    CHECK(Call(e, "script.eval", R"J({"code":"save.set('score', 5) save.set('other', {1, 'two', false}, 'second') save.set('null', nil) save.flush() return save.get('score', 0)"})J")["result"]["value"].asInt() == 5);
+    CHECK(Call(e, "script.eval", R"J({"code":"return save.get('absent', 8)"})J")["result"]["value"].asInt() == 8);
+    CHECK(Call(e, "script.eval", R"J({"code":"return save.get('null', 8)"})J")["result"]["value"].isNull());
+    CHECK(Call(e, "save.state", R"J({"slot":"second"})J")["result"]["data"]["other"].size() == 3);
+    for (const char* code : {"save.set('bad', function() end)", "save.set('bad', 0/0)",
+                             "save.get('', 0)", "save.set('bad' .. string.char(0), 1)",
+                             "save.set('bad', 1, 'default' .. string.char(0))",
+                             "local t = {} t.self = t save.set('bad', t)",
+                             "save.set('bad', {[1] = 1, named = 2})", "save.set('bad', {[3] = 1})"}) {
+        Json args = Json::MakeObject(); args["code"] = code;
+        CHECK(!e.Call("script.eval", args)["ok"].asBool());
+    }
+    CHECK(!Call(e, "save.state", "{}")["result"]["data"].has("bad"));
+    e.Step(1);
+    e.Stop();
+    CHECK(Call(e, "save.state", "{}")["result"]["data"]["score"].asInt() == 5);
+    CHECK(Call(e, "script.eval", R"J({"code":"save.delete('score') save.flush()"})J")["ok"].asBool());
+    CHECK(!Call(e, "save.state", "{}")["result"]["data"].has("score"));
+    CHECK(ListFiles(project, "", true) == before);
+    CHECK(RemoveAll(project));
+}
+
+TEST(SaveFailedFlushPreservesData) {
+    const std::string project = TempProject("save_failure");
+    const std::string directory = JoinPath(project, "saves");
+    Engine e;
+    e.Saves().Configure(directory);
+    Call(e, "save.set", R"J({"key":"score","value":7})J");
+    CHECK(Call(e, "save.flush", "{}")["ok"].asBool());
+    std::string original;
+    CHECK(ReadTextFile(JoinPath(directory, "slot-default.json"), original));
+    // A directory where the temporary file belongs forces a deterministic write failure.
+    CHECK(CreateDirectories(JoinPath(directory, "slot-default.json.tmp")));
+    Call(e, "save.set", R"J({"key":"score","value":8})J");
+    CHECK(Call(e, "save.flush", "{}")["error"]["code"].asString() == "save_write_failed");
+    std::string after;
+    CHECK(ReadTextFile(JoinPath(directory, "slot-default.json"), after));
+    CHECK(after == original);
+    CHECK(Call(e, "save.state", "{}")["result"]["dirty"].asBool());
+    CHECK(RemoveAll(project));
+}
+
 TEST(LuaRotatorMatchesNative) {
     Engine e;
     std::string err;
@@ -617,6 +716,7 @@ TEST(TemplateGamePlaythrough) {
     EntityId button = e.GetScene().FindByName("Play Again");
     CHECK(e.GetScene().Get<UIButton>(button)->visible);
     CHECK(Call(e, "game.state", "{}")["result"]["data"]["total"].asInt() == 7);
+    CHECK(Call(e, "save.state", "{}")["result"]["data"]["highScore"].asInt() == 7);
 
     // The button is centered, 60 reference px below the middle: (320, 210) in a 640x360 shot.
     Json click = Call(e, "input.click", R"J({"x": 320, "y": 210})J");
@@ -624,6 +724,7 @@ TEST(TemplateGamePlaythrough) {
     Call(e, "sim.step", R"J({"frames": 2})J");
     CHECK(e.GetScene().name == "Level 1");
     CHECK(Call(e, "game.state", "{}")["result"]["data"]["total"].asInt() == 0);
+    CHECK(TextOf(e, "Score")->text.find("Best: 7") != std::string::npos);
     CHECK(e.Scripts().Errors().empty());
 
     // Walking off the edge respawns the player at the level start.
@@ -638,6 +739,7 @@ TEST(TemplateGamePlaythrough) {
 
     Call(e, "sim.stop", "{}");
     CHECK(e.GetScene().name == "Level 1" && e.GetScene().FindByName("Coin 1") != kNullEntity);
+    CHECK(Call(e, "save.state", "{}")["result"]["data"]["highScore"].asInt() == 7);
 }
 
 TEST(PrefabsCreateAndInstantiate) {

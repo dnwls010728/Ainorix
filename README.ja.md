@@ -72,6 +72,10 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 
 ## AI 連携
 
+Lua `save.get/set/delete/flush` または `save.*` コマンドで進行状況を保存します。
+ツールは既定でメモリを使用し、`--save-dir <dir>` で JSON スロットの永続保存を
+有効にできます。詳細: [docs/SAVE.md](docs/SAVE.md)。
+
 | 方法 | コマンド |
 |---|---|
 | MCP (Claude Code など) | `oe mcp <project> [--port 7777]` - すべてのコマンドが MCP ツール、スクリーンショットは画像で返ります。`--port` を指定すると人が同じセッションをエディターで見られます |

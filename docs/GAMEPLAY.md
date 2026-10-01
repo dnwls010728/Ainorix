@@ -21,6 +21,11 @@ Game data is a JSON object for cross-scene state (score, lives, unlocked levels)
 
 ## Messages and timers
 
+Progress between launches uses `save.get/set/delete/flush`, independently of game
+session data and scene undo. Tool sessions default to memory; `--save-dir <dir>`
+opts into JSON files. Slots, corruption handling and implementation status:
+[SAVE.md](SAVE.md).
+
 ```lua
 scene.send(id, "takeDamage", 10)      -- calls takeDamage(self, 10) on that entity's script, returns its result
 scene.broadcast("onCoinCollected", coinId)   -- every script that has the method; returns how many were called

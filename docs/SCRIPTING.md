@@ -88,6 +88,8 @@ end
 | `scene.send(id, method, ...)` / `scene.broadcast(method, ...)` | Call methods on other scripts |
 | `timer.after(s, fn)` / `timer.every(s, fn)` / `timer.cancel(id)` | Timers on simulated time |
 | `game.set(k, v)` / `game.get(k)` / `game.loadScene(path)` / `game.scene()` | Cross-scene data and scene changes |
+| `save.get(key, default?, slot?)` / `save.set(key, value, slot?)` | Save slots; finite JSON values only. Default slot is `default` |
+| `save.delete(key, slot?)` / `save.flush(slot?)` | Remove a key / persist pending changes. Tools default to memory; `--save-dir` enables files ([SAVE.md](SAVE.md)) |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |
 | `input.mouse()` | Mouse position in the game view (0..1) |
 | `input.touches()` | Every finger on a touch screen: `{ {id=, x=, y=, began=}, ... }` (`x, y` normalized like `input.mouse()`, `began` = put down this step). The first finger also acts as the mouse. `UIButton.key` turns buttons into on-screen keys (docs/UI.md) |

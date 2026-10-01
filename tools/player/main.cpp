@@ -17,6 +17,7 @@
 //   }
 
 #include <algorithm>
+#include <exception>
 #include <memory>
 #include <string>
 #include <vector>
@@ -105,6 +106,12 @@ int RunPlayer(const std::string& dir) {
     Engine& engine = player->engine;
     if (!engine.Open(dir, &err)) {
         PlatformShowError(title, "Cannot start the game.\n\n" + err + "\n\nExpected the game data in:\n" + dir);
+        return 1;
+    }
+    try { engine.Saves().ConfigurePlayer(engine.ProjectName()); }
+    catch (const std::exception& e) {
+        PlatformShowError(title, std::string("Cannot open save storage.\n\n") + e.what());
+        delete player;
         return 1;
     }
     player->window = CreatePlatformWindow(title, win["width"].asInt(1280), win["height"].asInt(720));

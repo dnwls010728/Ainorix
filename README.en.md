@@ -72,6 +72,10 @@ build\bin\oe.exe api --markdown             :: print the command reference
 
 ## AI integration
 
+Save progress with Lua `save.get/set/delete/flush` or the `save.*` commands. Tools
+use memory by default; `--save-dir <dir>` enables persistent JSON slots. See
+[docs/SAVE.md](docs/SAVE.md).
+
 | Method | Command |
 |---|---|
 | MCP (Claude Code etc.) | `oe mcp <project> [--port 7777]` - every command is an MCP tool, screenshots come back as images. With `--port` a person watches the same session in the editor |

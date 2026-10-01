@@ -7,6 +7,8 @@
 #include <emscripten/html5.h>
 
 #include <cstdio>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -331,5 +333,55 @@ void PlatformShowError(const std::string& title, const std::string& message) {
 }
 
 void PlatformSetBinaryStdio() {}
+
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error) {
+    if (std::rename(from.c_str(), to.c_str()) == 0) return true;
+    if (error) *error = "cannot replace save file: " + std::string(std::strerror(errno));
+    return false;
+}
+
+// Allocated strings are freed by C++. Storage exceptions (blocked cookies,
+// private mode/quota) become API errors instead of escaping the WASM frame.
+EM_JS(char*, oe_web_save_read, (const char* key, int* failed), {
+    var text;
+    try { text = localStorage.getItem(UTF8ToString(key)) || ""; HEAP32[failed >> 2] = 0; }
+    catch (e) { text = String(e); HEAP32[failed >> 2] = 1; }
+    var size = lengthBytesUTF8(text) + 1, result = _malloc(size);
+    if (result) stringToUTF8(text, result, size);
+    return result;
+});
+
+EM_JS(char*, oe_web_save_write, (const char* key, const char* text, int* failed), {
+    try { localStorage.setItem(UTF8ToString(key), UTF8ToString(text)); HEAP32[failed >> 2] = 0; return 0; }
+    catch (e) {
+        HEAP32[failed >> 2] = 1;
+        var message = String(e), size = lengthBytesUTF8(message) + 1, result = _malloc(size);
+        if (result) stringToUTF8(message, result, size);
+        return result;
+    }
+});
+
+SaveStorage PlatformSaveStorage(const std::string& gameName) {
+    const std::string prefix = "ownengine.save:" + gameName + ":";
+    SaveStorage storage;
+    storage.read = [prefix](const std::string& slot, std::string& text, std::string* error) {
+        int failed = 0;
+        char* result = oe_web_save_read((prefix + slot).c_str(), &failed);
+        if (!result) { if (error) *error = "cannot allocate browser save data"; return false; }
+        text = result;
+        std::free(result);
+        if (failed && error) *error = text;
+        return failed == 0;
+    };
+    storage.write = [prefix](const std::string& slot, const std::string& text, std::string* error) {
+        int failed = 0;
+        char* result = oe_web_save_write((prefix + slot).c_str(), text.c_str(), &failed);
+        if (!failed) return true;
+        if (error) *error = result ? result : "browser save write failed";
+        std::free(result);
+        return false;
+    };
+    return storage;
+}
 
 }  // namespace oe

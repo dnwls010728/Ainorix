@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -103,6 +104,17 @@ double PlatformTimeSeconds();
 void PlatformSleep(double seconds);
 bool PlatformOpenUrl(const std::string& url);
 std::string ExecutableDirectory();
+// Atomically renames a file over its destination (both on the same filesystem).
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error);
+// Player save backend: native directory or browser key/value callbacks.
+// Read returns empty text for a missing slot, false and an error on I/O failure.
+struct SaveStorage {
+    std::string directory;
+    std::function<bool(const std::string&, std::string&, std::string*)> read;
+    std::function<bool(const std::string&, const std::string&, std::string*)> write;
+};
+// gameName is a safe single path component supplied by SaveStore.
+SaveStorage PlatformSaveStorage(const std::string& gameName);
 // Tells the user about a fatal error (message box on desktop, stderr otherwise).
 void PlatformShowError(const std::string& title, const std::string& message);
 // Puts stdin/stdout in binary mode (needed for MCP's newline-delimited JSON).

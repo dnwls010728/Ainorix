@@ -41,7 +41,7 @@
     {"id": 9, "name": "Game Manager", "components": {
       "Script": {"path": "scripts/game_manager.lua", "params": {"nextScene": "scenes/level2.scene.json"}}}},
     {"id": 10, "name": "Score Panel", "components": {
-      "UIPanel": {"x": 16, "y": 16, "width": 300, "height": 88}}},
+      "UIPanel": {"x": 16, "y": 16, "width": 300, "height": 128}}},
     {"id": 11, "name": "Score", "components": {
       "UIText": {"text": "Coins: 0/3", "x": 32, "y": 30, "size": 32}}},
     {"id": 12, "name": "Message", "components": {

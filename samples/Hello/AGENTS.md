@@ -12,6 +12,7 @@ A two-level coin collecting game: walk into the coins (W/A/S/D, Space jumps), cl
 - Play-test headless: pipe commands into `oe script .`, e.g. input.key {key:"W"}, sim.step {frames:120},
            game.state (scene + score), audio.state (sounds played), render.screenshot, input.click {x,y}.
 - Scripts: `oe exec . script.errors` lists Lua errors with file:line. Try code live with script.eval.
+- Saves: `save.state` shows the high score. Lua `save.get/set/flush` keeps the best total across Play Again; tools use memory unless `--save-dir <dir>` is supplied, packaged players use platform storage.
 - Sounds:  `oe exec . audio.generate '{"path":"sounds/jump.wav","preset":"jump"}'` synthesizes effects.
 - Live:    `oe mcp .` exposes every command as an MCP tool (screenshots come back as images).
 - Human:   `oe editor .` opens the editor (it serves the same API on http://127.0.0.1:7777; attach with `oe mcp --connect 7777`); `oe run .` plays in a window.

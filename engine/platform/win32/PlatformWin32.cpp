@@ -612,4 +612,20 @@ void PlatformSetBinaryStdio() {
     _setmode(_fileno(stdout), _O_BINARY);
 }
 
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error) {
+    if (MoveFileExW(Widen(from).c_str(), Widen(to).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
+    if (error) *error = "cannot replace save file (Windows error " + std::to_string(GetLastError()) + ")";
+    return false;
+}
+
+SaveStorage PlatformSaveStorage(const std::string& gameName) {
+    DWORD length = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+    if (!length) return {};
+    std::wstring directory(length, L'\0');
+    DWORD copied = GetEnvironmentVariableW(L"APPDATA", directory.data(), length);
+    if (!copied || copied >= length) return {};
+    directory.resize(copied);
+    return {Narrow(directory) + "/" + gameName, {}, {}};
+}
+
 }  // namespace oe

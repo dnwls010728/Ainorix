@@ -49,7 +49,7 @@ struct Args {
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
 const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script",
-                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation"};
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -84,6 +84,7 @@ int Fail(const std::string& code, const std::string& message, const std::string&
 }
 
 bool OpenOrFail(Engine& engine, const Args& a, int& exitCode) {
+    if (a.Has("--save-dir")) engine.Saves().Configure(a.Get("--save-dir"));
     std::string path = a.positional.empty() ? "." : a.positional[0];
     std::string err;
     if (!engine.Open(path, &err)) {
@@ -199,7 +200,8 @@ int CmdHelp() {
                  "  version                           Print version info as JSON\n\n"
                  "[path] = project directory (default .), project.json or *.scene.json\n"
                  "--renderer auto|gpu|software (run, mcp --port, render): auto = GPU when available.\n"
-                 "  render defaults to software (deterministic hash); the others to auto.\n",
+                 "  render defaults to software (deterministic hash); the others to auto.\n"
+                 "--save-dir <dir>: opt into persistent save slots; otherwise saves stay in memory.\n",
                  OE_VERSION, PlatformName());
     return 0;
 }
@@ -280,6 +282,7 @@ int CmdExec(const Args& a) {
     }
     Engine engine;
     Args openArgs;
+    openArgs.flags = a.flags;
     openArgs.positional.push_back(path);
     int code = 0;
     if (!OpenOrFail(engine, openArgs, code)) return code;

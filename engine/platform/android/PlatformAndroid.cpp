@@ -733,4 +733,16 @@ void PlatformShowError(const std::string& title, const std::string& message) {
 
 void PlatformSetBinaryStdio() {}
 
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error) {
+    if (std::rename(from.c_str(), to.c_str()) == 0) return true;
+    if (error) *error = "cannot replace save file " + to;
+    return false;
+}
+
+SaveStorage PlatformSaveStorage(const std::string& gameName) {
+    State& s = S();
+    if (!s.app || !s.app->activity || !s.app->activity->internalDataPath) return {};
+    return {std::string(s.app->activity->internalDataPath) + "/saves/" + gameName, {}, {}};
+}
+
 }  // namespace oe

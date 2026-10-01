@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "api/Commands.h"
+#include "app/SaveStore.h"
 #include "core/Json.h"
 #include "render/Renderer.h"
 #include "scene/Scene.h"
@@ -76,6 +77,8 @@ public:
     // Data that survives scene changes (score, lives...). Reset when the
     // session ends. Scripts use game.get/game.set; tools read game.state.
     Json& GameData() { return gameData_; }
+    // Save slots survive sim.stop and scene transitions; memory-only by default.
+    SaveStore& Saves() { return saves_; }
     // Loads another scene at the end of the current frame, keeping the Lua
     // state and game data. sim.stop still restores the edit-time scene.
     void RequestSceneChange(const std::string& path) { pendingScene_ = path; }
@@ -176,6 +179,7 @@ private:
     uint64_t frame_ = 0;
     uint64_t revision_ = 1;
     Json gameData_ = Json::MakeObject();
+    SaveStore saves_;
     struct TimedLine {
         DebugLine line;
         double expires;  // sim time; < 0 = never

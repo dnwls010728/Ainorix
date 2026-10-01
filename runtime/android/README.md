@@ -6,7 +6,7 @@ no NDK. APK signing still needs SDK build-tools and Java; App Bundle signing
 needs Java.
 
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
-- Built on 2026-10-01 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
+- Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
 - Source: `adc8dc0` plus the Android runtime verification changes (skip the
   unused game selection pass; reliable Lua reload after API writes; portable
@@ -14,6 +14,9 @@ needs Java.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).
+- P1 refresh (source after aad02f2): JSON save slots and player storage under
+  `internalDataPath/saves/<gameName>/`. Both ABI players rebuilt; Android
+  save/restart verification remains pending because no adb device was connected.
 
 ## When to rebuild
 

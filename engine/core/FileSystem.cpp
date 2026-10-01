@@ -5,6 +5,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "platform/Platform.h"
+
 namespace fs = std::filesystem;
 
 namespace oe {
@@ -34,6 +36,32 @@ bool WriteTextFile(const std::string& path, const std::string& text) {
     if (!f) return false;
     f << text;
     return static_cast<bool>(f);
+}
+
+bool WriteTextFileAtomic(const std::string& path, const std::string& text, std::string* error) {
+    std::error_code ec;
+    fs::path destination = U8Path(path);
+    if (destination.has_parent_path()) fs::create_directories(destination.parent_path(), ec);
+    if (ec) {
+        if (error) *error = "cannot create save directory: " + ec.message();
+        return false;
+    }
+    const std::string temporary = path + ".tmp";
+    std::ofstream file(U8Path(temporary), std::ios::binary | std::ios::trunc);
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    file.flush();
+    bool written = static_cast<bool>(file);
+    file.close();
+    if (!written || file.fail()) {
+        fs::remove(U8Path(temporary), ec);
+        if (error) *error = "cannot write temporary save file " + temporary;
+        return false;
+    }
+    if (!PlatformReplaceFile(temporary, path, error)) {
+        fs::remove(U8Path(temporary), ec);
+        return false;
+    }
+    return true;
 }
 
 bool ReadBinaryFile(const std::string& path, std::vector<unsigned char>& out) {
