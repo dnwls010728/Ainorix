@@ -6,11 +6,12 @@ no NDK. APK signing still needs SDK build-tools and Java; App Bundle signing
 needs Java.
 
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
-- Built on 2026-10-01 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
+- Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
-- Source: `adc8dc0` plus the Android runtime verification changes (skip the
-  unused game selection pass; reliable Lua reload after API writes; portable
-  Windows drive-path handling for the WebAssembly test host).
+- Source: `03acd81` (P2 skeletal animation; sample/demo docs finalized separately).
+  Includes glTF rig/clip loading, Animator/API/Lua playback, deterministic TRS
+  interpolation and software/GPU skinning for scene/shadow/selection passes.
+  Both ABIs built without new warnings; no adb device was connected for this feature.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).

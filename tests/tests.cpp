@@ -1547,6 +1547,39 @@ TEST(ShowcaseFoxModel) {
     CHECK(single.Hash() == rt.Hash());
 }
 
+TEST(ShowcaseAnimationControls) {
+    auto play = []() {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+        EntityId fox = e.GetScene().FindByName("Fox");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Survey");
+        Call(e, "input.key", R"J({"key":"W","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Walk");
+        float walkTime = e.GetScene().Get<Animator>(fox)->time;
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->time > walkTime);  // no restart each update
+        Call(e, "input.key", R"J({"key":"Shift","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Run");
+        RenderTarget rt;
+        rt.Resize(320,180);
+        e.RenderGameView(rt);
+        uint64_t runHash = rt.Hash();
+        Call(e, "input.key", R"J({"key":"W","down":false})J");
+        Call(e, "input.key", R"J({"key":"Shift","down":false})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Survey");
+        CHECK(e.Scripts().Errors().empty());
+        return runHash;
+    };
+    uint64_t first = play();
+    CHECK(first == play());
+    std::printf("  animated Showcase hash %016llx\n", static_cast<unsigned long long>(first));
+}
+
 TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;

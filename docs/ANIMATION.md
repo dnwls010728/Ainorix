@@ -28,8 +28,22 @@ latest main so the features remain separate PRs; it does not depend on save data
       thread determinism, GPU cache stability and selection outlines. Walking
       software/GPU screenshots inspected; poses and shadows agree. GLSL ES 3.0
       and desktop GLSL generated alongside HLSL5; web/Android execution remains P2.4.
-- [ ] P2.4: Fox Survey/Walk/Run demo, image/hash and GPU comparison tests, docs and
+- [x] P2.4: Fox Survey/Walk/Run demo, image/hash and GPU comparison tests, docs and
       API refresh, web/Android prebuilt runtimes and available platform checks.
+      Showcase uses Survey while idle, Walk while moving and Run with Shift
+      (1.6x movement speed). ShowcaseAnimationControls verifies transitions and
+      matching hashes in independent sessions. Windows 67 tests and Node/WASM
+      63 tests pass (Node skips GPU execution); real CLI Walk screenshots inspected.
+      The animated control sequence produces c2490f29d87c6e87 on Windows and WASM.
+      WebGL2 packaged Showcase runs in the in-app browser with animated Fox and
+      shadows. Web plus Android arm64-v8a/x86_64 runtimes rebuilt without new warnings.
+      Offline HLSL compilation reports the same 18 existing X3570 shadow-sampling
+      loop warnings as the pre-skinning shader; vertex skinning adds no warning.
+- [ ] Android physical-device animation/rendering: adb lists no device. Install
+      the packaged Showcase APK and check idle/walk/run poses and shadows.
+- [ ] Full Linux/EGL runtime execution is not available on this Windows host.
+      Build the null/EGL backend and run oe_tests on Linux, including the animated
+      software/GPU comparison. Android cross-compilation checks portable engine code.
 
 ## Model contract
 
@@ -53,8 +67,8 @@ bytes/shorts. Missing inverse bind matrices use identity. Duplicate clip names
 receive stable numeric suffixes; unnamed clips use their source index.
 
 Skin deformation is connected to both renderers, including GPU shadow and
-selection passes. Web/Android runtime rebuilds and platform verification remain
-part of P2.4.
+selection passes. Web/Android prebuilts include it; physical-device and Linux
+execution limitations are recorded above.
 
 ## Rendering contract
 

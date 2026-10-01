@@ -62,11 +62,9 @@
           "rotation": [0, 0, 0],
           "scale": [1, 1, 1]
         },
-        "PlayerController": {
-          "speed": 3.5,
-          "jumpSpeed": 5,
-          "gravity": 12,
-          "verticalVelocity": 0
+        "Script": {
+          "path": "scripts/player_controller.lua",
+          "params": {"speed": 3.5}
         },
         "Tag": {
           "tags": "player"
@@ -89,6 +87,9 @@
       "name": "Fox",
       "parent": 3,
       "components": {
+        "Animator": {
+          "clip": "Survey"
+        },
         "Transform": {
           "position": [0, -0.600000024, 0],
           "rotation": [0, 180, 0],
@@ -435,7 +436,7 @@
           "scale": [1, 1, 1]
         },
         "UIText": {
-          "text": "WASD / arrows: move the fox   Space: jump",
+          "text": "WASD / arrows: move   Shift: run   Space: jump",
           "font": "default",
           "size": 20,
           "color": [0.850000024, 0.870000005, 0.920000017],

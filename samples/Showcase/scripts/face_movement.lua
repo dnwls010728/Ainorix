@@ -5,6 +5,7 @@ local Face = {}
 function Face:onStart()
   self.body = scene.parent(self.id)
   self.yaw = self:get("Transform").rotation.y
+  self:play("Survey")
 end
 
 function Face:onUpdate(dt)
@@ -12,7 +13,10 @@ function Face:onUpdate(dt)
   local v = scene.get(self.body, "CharacterBody")
   if not v then return end
   v = v.velocity
-  if v.x * v.x + v.z * v.z < 0.01 then return end
+  local moving = v.x * v.x + v.z * v.z >= 0.01
+  local clip = moving and (input.down("Shift") and "Run" or "Walk") or "Survey"
+  if self:get("Animator").clip ~= clip then self:play(clip) end
+  if not moving then return end
   -- Models face +Z; yaw 0 means looking down +Z.
   local target = math.deg(math.atan(v.x, v.z)) + (self.params.yawOffset or 0)
   local diff = (target - self.yaw + 540) % 360 - 180

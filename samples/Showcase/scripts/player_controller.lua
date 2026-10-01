@@ -26,8 +26,9 @@ function Player:onUpdate(dt)
   if self:has("CharacterBody") then
     local vx, vz = 0, 0
     if len > 0 then
-      vx = mx / len * self.speed
-      vz = mz / len * self.speed
+      local speed = self.speed * (input.down("Shift") and 1.6 or 1)
+      vx = mx / len * speed
+      vz = mz / len * speed
     end
     local vy = self:velocity().y
     if self:grounded() and (input.pressed("Space") or input.down("Space")) then vy = self.jumpSpeed end
