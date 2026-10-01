@@ -612,7 +612,7 @@ struct GpuRenderer::Impl {
         auto start = std::chrono::steady_clock::now();
         RenderStats stats;
         Evict();
-        std::vector<RenderItem> items = GatherRenderItems(scene, assets);
+        std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
         RenderLights lights = GatherRenderLights(scene);
         const std::vector<DrawCall> draws = BuildDrawList(items, view.eye);
         std::vector<const GpuMesh*> gpuMeshes;
