@@ -5,6 +5,7 @@ namespace oe {
 void RegisterBuiltinComponents() {
     TypeRegistry::Register<Transform>();
     TypeRegistry::Register<MeshRenderer>();
+    TypeRegistry::Register<ParticleEmitter>();
     TypeRegistry::Register<Camera>();
     TypeRegistry::Register<DirectionalLight>();
     TypeRegistry::Register<Rotator>();

@@ -67,6 +67,7 @@ end
 | Function | Description |
 |---|---|
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
+| `particles.burst(id, count)` | Emit up to 0..10000 particles immediately on ParticleEmitter; returns accepted births, respecting capacity even while paused. Attached scripts can use `self:burst(count)`. See [PARTICLES.md](PARTICLES.md) |
 | `scene.set(id, type, values)` | Partial update: `scene.set(id, "Transform", {position = {y = 2}})` keeps x and z |
 | `scene.add(id, type, values?)` / `scene.remove(id, type)` / `scene.has(id, type)` | Component management |
 | `scene.create(name?, components?)` | New entity id. `components` like the `entity.create` command |

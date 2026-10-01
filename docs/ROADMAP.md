@@ -123,6 +123,10 @@ C++ 재빌드 없이 게임 로직을 작성/수정할 수 있어야 이후 모�
 
 ### P3. 파티클 시스템 — [ ]
 
+P1 and P2 are implemented in PRs #15 and #16, pending review. P3 starts from
+main independently because it does not depend on saves or skeletal animation;
+this keeps one feature per PR. P3 milestones: [PARTICLES.md](PARTICLES.md).
+
 - **왜**: 코드에 파티클이 전혀 없다. 이펙트(폭발, 먼지, 코인 반짝임)가 없어 게임 느낌이 약하다.
 - **요구**: 컴포넌트 `ParticleEmitter {rate, burst, lifetime, speed, spread, gravity, startSize/endSize, startColor/endColor, texture/frame, space(local|world), maxParticles, loop, playing}`. 2D(스프라이트 빌보드)와 3D 모두. 스크립트 `emitter:burst(n)`.
 - **결정성(핵심)**: 난수는 엔티티 id + 고정 시드의 자체 PRNG(시뮬레이션 프레임 기준)로 한다. `std::rand`, 시간, 포인터 순서 금지. 같은 씬 + 같은 입력 = 같은 프레임 해시.

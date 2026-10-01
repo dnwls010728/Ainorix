@@ -7,6 +7,13 @@
 
 namespace oe {
 
+struct ParticleEmitter;
+// Rejects non-finite birth settings before they enter simulation/rendering.
+bool ParticleSettingsValid(const ParticleEmitter& emitter);
+
+// Emits up to the configured capacity immediately; returns accepted births.
+int BurstParticles(Scene& scene, EntityId id, int count);
+
 // Logical key state. Key names: "W","A","S","D","Up","Down","Left","Right",
 // "Space","Shift","Escape", letters "A".."Z", digits "0".."9".
 // Platforms feed it from real devices; the API can inject keys so agents can

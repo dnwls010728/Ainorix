@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/Log.h"
 #include "scene/Components.h"
 
 namespace oe {
@@ -13,7 +14,111 @@ float WrapDegrees(float d) {
     if (d < 0) d += 360.0f;
     return d;
 }
+
+float ParticleRandom(ParticleEmitter& emitter, EntityId id) {
+    uint32_t& state = emitter.randomState;
+    if (state == 0) {
+        state = static_cast<uint32_t>(emitter.seed) ^ (id * 0x9e3779b9u) ^ 0x85ebca6bu;
+        if (state == 0) state = 0x6d2b79f5u;
+    }
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return static_cast<float>(state >> 8) * (1.0f / 16777216.0f);
+}
+
+Vec3 ParticleDirection(ParticleEmitter& emitter, EntityId id) {
+    Vec3 direction = emitter.direction;
+    if (emitter.dimensions == 2) direction.z = 0;
+    float largest = std::max(std::fabs(direction.x), std::max(std::fabs(direction.y), std::fabs(direction.z)));
+    if (largest > 0) direction = direction / largest;  // avoid length overflow for large finite vectors
+    direction = Normalize(direction);
+    if (Length(direction) < 1e-8f) direction = Vec3(0,1,0);
+    float spread = Radians(Clamp(emitter.spread, 0, 180));
+    if (emitter.dimensions == 2) {
+        float angle = (ParticleRandom(emitter, id) * 2 - 1) * spread;
+        float c = std::cos(angle), s = std::sin(angle);
+        return Vec3(direction.x*c - direction.y*s, direction.x*s + direction.y*c, 0);
+    }
+    float z = 1 - ParticleRandom(emitter, id) * (1 - std::cos(spread));
+    float radius = std::sqrt(std::max(0.0f, 1 - z*z));
+    float angle = ParticleRandom(emitter, id) * (2*kPi);
+    Vec3 axis = std::fabs(direction.y) < 0.9f ? Vec3(0,1,0) : Vec3(1,0,0);
+    Vec3 right = Normalize(Cross(direction, axis));
+    Vec3 up = Cross(right, direction);
+    return direction*z + right*(radius*std::cos(angle)) + up*(radius*std::sin(angle));
+}
+
+void UpdateParticles(Scene& scene, float dt) {
+    for (auto& kv : scene.Pool<ParticleEmitter>()) {
+        ParticleEmitter& emitter = kv.second;
+        size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
+        if (emitter.particles.size() > limit) emitter.particles.resize(limit);
+        for (Particle& particle : emitter.particles) {
+            particle.age += dt;
+            particle.velocity += particle.gravity * dt;
+            particle.position += particle.velocity * dt;
+        }
+        emitter.particles.erase(std::remove_if(emitter.particles.begin(), emitter.particles.end(),
+            [](const Particle& particle) { return particle.age >= particle.lifetime; }), emitter.particles.end());
+        if (!emitter.playing) continue;
+        if (!emitter.initialBurstEmitted) {
+            emitter.initialBurstEmitted = true;
+            BurstParticles(scene, kv.first, emitter.burst);
+        }
+        if (!emitter.loop || !std::isfinite(emitter.rate)) continue;
+        emitter.carry += static_cast<double>(Clamp(emitter.rate, 0, 10000)) * dt;
+        int births = static_cast<int>(std::floor(emitter.carry));
+        emitter.carry -= births;
+        BurstParticles(scene, kv.first, births);
+    }
+}
 }  // namespace
+
+bool ParticleSettingsValid(const ParticleEmitter& emitter) {
+    auto finiteVector = [](const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+    auto finiteColor = [](const Color& c) { return std::isfinite(c.r) && std::isfinite(c.g) && std::isfinite(c.b); };
+    return std::isfinite(emitter.rate) && std::isfinite(emitter.lifetime) && std::isfinite(emitter.speed) &&
+           std::isfinite(emitter.spread) && std::isfinite(emitter.startSize) && std::isfinite(emitter.endSize) &&
+           std::isfinite(emitter.startOpacity) && std::isfinite(emitter.endOpacity) && finiteVector(emitter.direction) &&
+           finiteVector(emitter.gravity) && finiteColor(emitter.startColor) && finiteColor(emitter.endColor);
+}
+
+int BurstParticles(Scene& scene, EntityId id, int count) {
+    ParticleEmitter* emitter = scene.Get<ParticleEmitter>(id);
+    if (!emitter || count <= 0) return 0;
+    if (!ParticleSettingsValid(*emitter)) {
+        if (!emitter->invalidSettingsReported) OE_LOG_WARN("particles", "entity %u: emission skipped; particle settings must be finite", id);
+        emitter->invalidSettingsReported = true;
+        return 0;
+    }
+    emitter->invalidSettingsReported = false;
+    const size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter->maxParticles)));
+    const size_t available = emitter->particles.size() < limit ? limit - emitter->particles.size() : 0;
+    count = static_cast<int>(std::min(available, static_cast<size_t>(count)));
+    Mat4 world = scene.WorldMatrix(id);
+    for (int i = 0; i < count; ++i) {
+        Particle particle;
+        particle.velocity = ParticleDirection(*emitter, id) * emitter->speed;
+        particle.gravity = emitter->gravity;
+        if (emitter->dimensions == 2) particle.gravity.z = 0;
+        particle.lifetime = Clamp(emitter->lifetime, 0.001f, 600);
+        particle.startSize = emitter->startSize;
+        particle.endSize = emitter->endSize;
+        particle.startColor = emitter->startColor;
+        particle.endColor = emitter->endColor;
+        particle.startOpacity = emitter->startOpacity;
+        particle.endOpacity = emitter->endOpacity;
+        particle.worldSpace = emitter->space == "world";
+        if (particle.worldSpace) {
+            particle.position = world.TransformPoint(Vec3());
+            particle.velocity = world.TransformDir(particle.velocity);
+        }
+        emitter->particles.push_back(particle);
+    }
+    emitter->emitted += static_cast<uint64_t>(count);
+    return count;
+}
 
 void UpdateLateSystems(Scene& scene, float dt) {
     for (auto& kv : scene.Pool<CameraFollow>()) {
@@ -66,6 +171,7 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
 }
 
 void UpdateSystems(Scene& scene, InputState& input, float dt) {
+    UpdateParticles(scene, dt);
     UpdateSpriteAnimations(scene, dt);
     for (auto& kv : scene.Pool<Rotator>()) {
         if (Transform* t = scene.Get<Transform>(kv.first)) {
