@@ -7,6 +7,8 @@ namespace oe {
 
 bool ReadTextFile(const std::string& path, std::string& out);
 bool WriteTextFile(const std::string& path, const std::string& text);
+// Writes a sibling temporary file, then replaces the destination atomically.
+bool WriteTextFileAtomic(const std::string& path, const std::string& text, std::string* error);
 bool ReadBinaryFile(const std::string& path, std::vector<unsigned char>& out);
 bool FileExists(const std::string& path);
 // Last write time as an opaque tick count (0 if the file does not exist).

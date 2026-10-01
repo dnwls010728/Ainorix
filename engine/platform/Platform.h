@@ -103,6 +103,8 @@ double PlatformTimeSeconds();
 void PlatformSleep(double seconds);
 bool PlatformOpenUrl(const std::string& url);
 std::string ExecutableDirectory();
+// Atomically renames a file over its destination (both on the same filesystem).
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error);
 // Tells the user about a fatal error (message box on desktop, stderr otherwise).
 void PlatformShowError(const std::string& title, const std::string& message);
 // Puts stdin/stdout in binary mode (needed for MCP's newline-delimited JSON).

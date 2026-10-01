@@ -399,6 +399,71 @@ int L_SceneBroadcast(lua_State* L) {
 
 // ----- game.* ---------------------------------------------------------------------
 
+void ValidateSaveLua(lua_State* L, int index, int depth = 0) {
+    index = lua_absindex(L, index);
+    if (depth > 32) luaL_error(L, "save value is cyclic or exceeds 32 nested levels");
+    int type = lua_type(L, index);
+    if (type == LUA_TTABLE) {
+        luaL_checkstack(L, 4, "save table too deep");
+        lua_Integer count = 0, length = static_cast<lua_Integer>(lua_rawlen(L, index));
+        bool array = true, object = true;
+        lua_pushnil(L);
+        while (lua_next(L, index)) {
+            ++count;
+            array = array && lua_isinteger(L, -2) && lua_tointeger(L, -2) > 0 && lua_tointeger(L, -2) <= length;
+            object = object && lua_type(L, -2) == LUA_TSTRING;
+            if (lua_type(L, -2) == LUA_TSTRING) {
+                size_t size = 0;
+                const char* key = lua_tolstring(L, -2, &size);
+                if (std::memchr(key, '\0', size)) luaL_error(L, "save object keys must contain no NUL");
+            }
+            ValidateSaveLua(L, -1, depth + 1);
+            lua_pop(L, 1);
+        }
+        if (!object && !(array && count == length)) luaL_error(L, "save tables must be dense arrays or string-keyed objects");
+    } else if (type != LUA_TNIL && type != LUA_TBOOLEAN && type != LUA_TNUMBER && type != LUA_TSTRING) {
+        luaL_error(L, "save value must be JSON serializable (got %s)", lua_typename(L, type));
+    }
+}
+
+int L_SaveGet(lua_State* L) {
+    return Guard(L, [&] {
+        std::string key = luaL_checkstring(L, 1), slot = luaL_optstring(L, 3, "default");
+        Json state = Host(L).GetEngine().Saves().State(slot);
+        const Json* value = state["data"].find(key);
+        if (value) PushJson(L, *value);
+        else if (lua_gettop(L) >= 2) lua_pushvalue(L, 2);
+        else lua_pushnil(L);
+        return 1;
+    });
+}
+
+int L_SaveSet(lua_State* L) {
+    return Guard(L, [&] {
+        std::string key = luaL_checkstring(L, 1), slot = luaL_optstring(L, 3, "default");
+        luaL_checkany(L, 2);
+        ValidateSaveLua(L, 2);
+        Host(L).GetEngine().Saves().Set(key, ToJson(L, 2), slot);
+        return 0;
+    });
+}
+
+int L_SaveDelete(lua_State* L) {
+    return Guard(L, [&] {
+        std::string key = luaL_checkstring(L, 1);
+        if (key.empty()) return luaL_error(L, "save.delete requires a nonempty key");
+        Host(L).GetEngine().Saves().Clear(key, luaL_optstring(L, 2, "default"));
+        return 0;
+    });
+}
+
+int L_SaveFlush(lua_State* L) {
+    return Guard(L, [&] {
+        Host(L).GetEngine().Saves().Flush(luaL_optstring(L, 1, "default"));
+        return 0;
+    });
+}
+
 int L_GameGet(lua_State* L) {
     const Json& data = Host(L).GetEngine().GameData();
     if (lua_isnoneornil(L, 1)) {
@@ -989,6 +1054,8 @@ void ScriptHost::Open() {
     SetFuncs(L, "audio", audioFuncs);
     const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
+    const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
+    SetFuncs(L, "save", saveFuncs);
     lua_register(L, "__oe_error", L_ReportError);
     const luaL_Reg physicsFuncs[] = {{"raycast", L_PhysicsRaycast}, {"overlapSphere", L_PhysicsOverlapSphere},
                                      {"addImpulse", L_PhysicsAddImpulse}, {"contacts", L_PhysicsContacts}, {nullptr, nullptr}};

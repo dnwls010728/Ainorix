@@ -382,6 +382,43 @@ Create or overwrite a Lua file in the project (hot-reloaded if it is running).
 | `path` | string | yes | Must end with .lua, e.g. "scripts/enemy.lua". |
 | `source` | string | yes | Lua source code. |
 
+## save
+
+### `save.state`
+
+Read a save slot (memory-only unless persistence was explicitly enabled).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `slot` | string |  | Slot name; default is default. |
+
+### `save.set`
+
+Set a JSON save value. Use save.flush to persist it; independent of scene undo.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `key` | string | yes | Nonempty key. |
+| `value` | any | yes | Finite JSON value. |
+| `slot` | string |  | Slot name; default is default. |
+
+### `save.clear`
+
+Delete a save key, or clear the slot when key is omitted. Use save.flush to persist.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `key` | string |  | Key to delete; omit for the whole slot. |
+| `slot` | string |  | Slot name; default is default. |
+
+### `save.flush`
+
+Flush one save slot; memory mode never touches the filesystem.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `slot` | string |  | Slot name; default is default. |
+
 ## game
 
 ### `game.state`

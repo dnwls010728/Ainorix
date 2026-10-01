@@ -70,7 +70,12 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 - 에이전트용 에디터 스크린샷: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60]`
 
 
+
 ## AI 연동
+
+Lua `save.get/set/delete/flush` 또는 `save.*` 명령으로 진행 상황을 저장합니다.
+도구 세션은 기본적으로 메모리를 사용하며, `--save-dir <dir>`로 JSON 슬롯을
+영구 저장할 수 있습니다. 자세한 내용: [docs/SAVE.md](docs/SAVE.md).
 
 | 방식 | 명령 |
 |---|---|

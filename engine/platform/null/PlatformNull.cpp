@@ -2,6 +2,8 @@
 // backend is not written yet. All engine features except the native game
 // window work (API, MCP, editor server, software rendering to PNG).
 #include <chrono>
+#include <cerrno>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -61,5 +63,11 @@ void PlatformShowError(const std::string& title, const std::string& message) {
 }
 
 void PlatformSetBinaryStdio() {}
+
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error) {
+    if (std::rename(from.c_str(), to.c_str()) == 0) return true;
+    if (error) *error = "cannot replace save file: " + std::string(std::strerror(errno));
+    return false;
+}
 
 }  // namespace oe

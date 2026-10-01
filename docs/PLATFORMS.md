@@ -7,6 +7,10 @@ The engine is split so that only two small layers touch a platform:
 
 Everything else (`core`, `scene`, `api`, `app`, `render`) is portable C++17 with no OS headers. Sockets are the one exception: `HttpServer.cpp` has Winsock and POSIX branches.
 
+`PlatformReplaceFile` atomically replaces a file in the same filesystem (Win32
+`MoveFileExW`, POSIX `rename`). Save slots use it after closing a temporary file;
+failed writes preserve the previous save. See [SAVE.md](SAVE.md).
+
 | Platform | Status | Platform layer | Renderer | Notes |
 |---|---|---|---|---|
 | Windows (x64) | **Working** | `win32/PlatformWin32.cpp` (Win32 window, waveOut, editor event mode: text/IME, cursors, per-monitor DPI, file drops) + `win32/GpuD3D11.cpp` | Direct3D 11 (WARP fallback), software fallback | Built with MSVC via `build.bat`; `oe package` ships `Name.exe`; native editor ([EDITOR.md](EDITOR.md)) |

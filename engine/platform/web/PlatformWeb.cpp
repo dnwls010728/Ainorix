@@ -7,6 +7,7 @@
 #include <emscripten/html5.h>
 
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -331,5 +332,11 @@ void PlatformShowError(const std::string& title, const std::string& message) {
 }
 
 void PlatformSetBinaryStdio() {}
+
+bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error) {
+    if (std::rename(from.c_str(), to.c_str()) == 0) return true;
+    if (error) *error = "cannot replace save file: " + std::string(std::strerror(errno));
+    return false;
+}
 
 }  // namespace oe
