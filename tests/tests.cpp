@@ -1216,6 +1216,137 @@ TEST(TexturesAndGltfModels) {
     CHECK(Call(e, "asset.list", R"J({"kind": "model"})J")["result"].size() == 1);
 }
 
+TEST(GltfSkinAndAnimationLoading) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("animation_loader"), &err));
+    Json source = Json::parse(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[1]}],
+      "nodes":[{"mesh":0,"skin":0},{"translation":[3,0,0],"children":[0,2]},{"translation":[0,2,0]}],
+      "skins":[{"joints":[1,2]}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+      "animations":[{"name":"Move","samplers":[{"input":3,"output":4,"interpolation":"STEP"}],
+        "channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]},
+        {"name":"Turn","samplers":[{"input":3,"output":5}],"channels":[{"sampler":0,"target":{"node":2,"path":"rotation"}}]},
+        {"name":"Move","samplers":[{"input":3,"output":6,"interpolation":"CUBICSPLINE"}],
+        "channels":[{"sampler":0,"target":{"node":2,"path":"scale"}}]}],"bufferViews":[],"accessors":[]})J");
+    std::vector<uint8_t> bin;
+    auto floats = [&](std::initializer_list<float> values) {
+        std::vector<uint8_t> bytes;
+        for (float value : values) {
+            uint8_t encoded[4];
+            std::memcpy(encoded, &value, 4);
+            bytes.insert(bytes.end(), encoded, encoded + 4);
+        }
+        return bytes;
+    };
+    auto accessor = [&](const std::vector<uint8_t>& bytes, int component, int count, const char* type, bool normalized = false) {
+        while (bin.size() % 4) bin.push_back(0);
+        Json view = Json::MakeObject();
+        view["buffer"] = 0;
+        view["byteOffset"] = static_cast<uint64_t>(bin.size());
+        view["byteLength"] = static_cast<uint64_t>(bytes.size());
+        Json a = Json::MakeObject();
+        a["bufferView"] = static_cast<uint64_t>(source["bufferViews"].size());
+        a["componentType"] = component;
+        a["count"] = count;
+        a["type"] = type;
+        if (normalized) a["normalized"] = true;
+        source["bufferViews"].push(view);
+        source["accessors"].push(a);
+        bin.insert(bin.end(), bytes.begin(), bytes.end());
+    };
+    accessor(floats({0,0,0, 1,0,0, 0,1,0}), 5126, 3, "VEC3");
+    source["accessors"][0]["min"] = Json::parse("[0,0,0]");
+    source["accessors"][0]["max"] = Json::parse("[1,1,0]");
+    accessor({0,1,0,0, 1,0,0,0, 0,0,0,0}, 5121, 3, "VEC4");
+    accessor(floats({2,2,0,0, 1,0,0,0, 0,0,0,0}), 5126, 3, "VEC4");
+    accessor(floats({0,2}), 5126, 2, "SCALAR");
+    source["accessors"][3]["min"] = Json::parse("[0]");
+    source["accessors"][3]["max"] = Json::parse("[2]");
+    accessor(floats({3,0,0, 5,0,0}), 5126, 2, "VEC3");
+    accessor({0,0,0,127, 0,0,127,0}, 5120, 2, "VEC4", true);
+    accessor(floats({0,0,0, 1,1,1, 0,0,0, 0,0,0, 2,2,2, 0,0,0}), 5126, 6, "VEC3");
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.gltf");
+    auto write = [&](Json model, const std::vector<uint8_t>& bytes) {
+        Json buffer = Json::MakeObject();
+        buffer["byteLength"] = static_cast<uint64_t>(bytes.size());
+        buffer["uri"] = "data:application/octet-stream;base64," + Base64Encode(bytes);
+        model["buffers"] = Json::MakeArray();
+        model["buffers"].push(buffer);
+        CHECK(WriteTextFile(path, model.dump()));
+    };
+    write(source, bin);
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/rig.gltf"})J")["result"];
+    CHECK(info["joints"].asInt() == 2 && info["clips"].size() == 3);
+    CHECK(info["clips"][0]["name"].asString() == "Move" && info["clips"][2]["name"].asString() == "Move_1");
+    CHECK(info["clips"][0]["duration"].asFloat() == 2 && info["clips"][0]["channels"].asInt() == 1);
+    Mesh mesh;
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.nodes.size() == 3 && mesh.nodes[2].parent == 1 && mesh.joints[1].node == 2);
+    CHECK(mesh.positions[0].x == 0 && mesh.skin[0].weights[0] == 0.5f && mesh.skin[0].weights[1] == 0.5f);
+    CHECK(mesh.skin[2].weights[0] == 0 && mesh.joints[0].inverseBind.m[0] == 1);
+    CHECK(mesh.clips[0].channels[0].interpolation == AnimationInterpolation::Step);
+    CHECK(mesh.clips[1].channels[0].values[1].z == 1);
+    CHECK(mesh.clips[2].channels[0].interpolation == AnimationInterpolation::CubicSpline);
+
+    auto reject = [&](Json model, std::vector<uint8_t> bytes, const char* message) {
+        write(model, bytes);
+        CHECK(!LoadModelFile(path, mesh, &err));
+        CHECK(err.find(message) != std::string::npos);
+    };
+    std::vector<uint8_t> broken = bin;
+    broken[static_cast<size_t>(source["bufferViews"][1]["byteOffset"].asInt())] = 2;
+    reject(source, broken, "joint index is outside");
+    broken = bin;
+    size_t times = static_cast<size_t>(source["bufferViews"][3]["byteOffset"].asInt());
+    std::fill(broken.begin() + times + 4, broken.begin() + times + 8, uint8_t{0});
+    reject(source, broken, "strictly increasing");
+    broken = bin;
+    float negative = -1;
+    std::memcpy(broken.data() + source["bufferViews"][2]["byteOffset"].asInt(), &negative, 4);
+    reject(source, broken, "finite and nonnegative");
+    Json invalid = source;
+    invalid["animations"][0]["channels"].push(invalid["animations"][0]["channels"][0]);
+    reject(invalid, bin, "duplicate channels");
+    invalid = source;
+    invalid["meshes"][0]["primitives"][0]["attributes"]["JOINTS_1"] = 1;
+    reject(invalid, bin, "four influences");
+    invalid = source;
+    invalid["skins"][0]["joints"] = Json::MakeArray();
+    for (int i = 0; i < 65; ++i) invalid["skins"][0]["joints"].push(1);
+    reject(invalid, bin, "64-entry");
+    // Rigid child geometry is baked once, then receives a one-joint animation binding.
+    invalid = source;
+    invalid["nodes"][0].erase("skin");
+    invalid["meshes"][0]["primitives"][0]["attributes"].erase("JOINTS_0");
+    invalid["meshes"][0]["primitives"][0]["attributes"].erase("WEIGHTS_0");
+    write(invalid, bin);
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.joints.size() == 1 && mesh.joints[0].node == 0 && mesh.positions[0].x == 3);
+    CHECK(mesh.skin[0].weights[0] == 1 && mesh.joints[0].inverseBind.m[12] == -3);
+    // Explicit inverse bind matrices survive loading, including their translations.
+    accessor(floats({1,0,0,0, 0,1,0,0, 0,0,1,0, -3,0,0,1,
+                     1,0,0,0, 0,1,0,0, 0,0,1,0, -3,-2,0,1}), 5126, 2, "MAT4");
+    source["skins"][0]["inverseBindMatrices"] = 7;
+    write(source, bin);
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.joints[1].inverseBind.m[12] == -3 && mesh.joints[1].inverseBind.m[13] == -2);
+    invalid = source;
+    invalid["accessors"][7]["count"] = 1;
+    reject(invalid, bin, "inverse bind matrices");
+    // Quantized unsigned skin weights decode and normalize in exactly the same path.
+    invalid = source;
+    invalid["accessors"][2]["componentType"] = 5121;
+    invalid["accessors"][2]["normalized"] = true;
+    broken = bin;
+    size_t weightOffset = static_cast<size_t>(source["bufferViews"][2]["byteOffset"].asInt());
+    for (size_t i = 0; i < 12; ++i) broken[weightOffset + i] = i % 4 < 2 ? 127 : 0;
+    write(invalid, broken);
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.skin[0].weights[0] == 0.5f && mesh.skin[0].weights[1] == 0.5f);
+    invalid["accessors"][2]["normalized"] = false;
+    reject(invalid, broken, "normalized unsigned");
+}
+
 TEST(ShadingShadowsAndLights) {
     Engine e;
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
@@ -1293,6 +1424,10 @@ TEST(ShowcaseFoxModel) {
     CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
     Json info = Call(e, "asset.info", R"J({"path": "assets/models/fox.glb"})J")["result"];
     CHECK(info["triangles"].asInt() == 576 && info["textures"][0][0].asInt() == 1024);
+    CHECK(info["joints"].asInt() == 24 && info["clips"].size() == 3);
+    CHECK(info["clips"][0]["name"].asString() == "Survey" && info["clips"][1]["name"].asString() == "Walk" &&
+          info["clips"][2]["name"].asString() == "Run");
+    CHECK(info["clips"][1]["duration"].asFloat() > 0.7f && info["clips"][1]["channels"].asInt() == 21);
     RenderTarget rt;
     rt.Resize(320, 180);
     e.RenderGameView(rt);

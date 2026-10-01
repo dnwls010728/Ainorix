@@ -29,7 +29,7 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 |---|---|
 | `oe import <project> <file> [--to path]` | Copy an external model/texture/sound into the project (CLI only — the API stays sandboxed to the project) and print its `asset.info` |
 | `asset.list {kind?}` | Files by kind: model, texture, material, font, audio, script, prefab, scene |
-| `asset.info {path}` | Model: vertices, triangles, submeshes (each with a `material` index), a `materials` array, bounds, size **and a scale hint**. Material: its values + alphaMode. Texture: size. Sound: length |
+| `asset.info {path}` | Model: vertices, triangles, submeshes (each with a `material` index), a `materials` array, bounds, size **and a scale hint**, joint count and animation `clips` (name, duration in seconds, channel count). Material: its values + alphaMode. Texture: size. Sound: length |
 | `asset.generate_texture {path, pattern, size?, cells?, color1?, color2?}` | Procedural PNG: checker, grid, bricks, gradient, noise |
 | `asset.reload` | Drop cached models/textures |
 | `render.meshes` | Values accepted by `MeshRenderer.mesh` |
