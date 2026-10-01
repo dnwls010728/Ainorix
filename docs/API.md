@@ -804,6 +804,16 @@ Camera looking down its local -Z axis. The first active camera renders the game 
 | `clearColor` | color | `[0.119999997,0.140000001,0.180000007]` | Background color. |
 | `active` | bool | `true` | Only the first active camera (lowest entity id) is used. |
 
+### PostProcess
+
+Optional screen effects on the active Camera. Defaults preserve existing frames; UI and selection outlines are unaffected.
+
+| field | type | default | description |
+|---|---|---|---|
+| `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
+| `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
+| `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |
+
 ### DirectionalLight
 
 Sun-like light. Direction comes from the entity's rotation (local -Z).

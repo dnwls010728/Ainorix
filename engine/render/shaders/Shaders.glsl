@@ -398,6 +398,7 @@ void main() {
 layout(binding=0) uniform composite_params {
     vec4 target;         // xy: output size in pixels
     vec4 outline_color;  // rgb; a > 0 enables the outline
+    vec4 vignette;       // x: strength, y: radius, z: softness; zero strength leaves color unchanged
 };
 
 layout(binding=0) uniform texture2D scene_tex;
@@ -410,6 +411,10 @@ out vec4 frag_color;
 void main() {
     vec2 uv = gl_FragCoord.xy / target.xy;
     vec3 c = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
+    if (vignette.x > 0.0) {
+        float t = clamp((length(uv * 2.0 - 1.0) - vignette.y) / vignette.z, 0.0, 1.0);
+        c *= 1.0 - vignette.x * t * t * (3.0 - 2.0 * t);
+    }
     if (outline_color.a > 0.0) {
         ivec2 size = textureSize(sampler2D(mask_tex, mask_smp), 0);
         ivec2 p = ivec2(uv * vec2(size));

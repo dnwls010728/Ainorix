@@ -2119,6 +2119,81 @@ TEST(UIGpuMatchesSoftware) {
     CHECK(mean < 0.5 && outliers < 50);
 }
 
+TEST(CameraPostProcessing) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("postprocess"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[1,1,1]}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,0,0],"opacity":1}}})J");
+    RenderView view;
+    CHECK(MakeSceneView(e.GetScene(), 128.0f / 72, view));
+    RenderTarget original, neutral, effect;
+    for (RenderTarget* target : {&original, &neutral, &effect}) target->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, original);
+    Call(e, "component.add", R"J({"id":"Camera","type":"PostProcess"})J");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, neutral);
+    CHECK(original.Hash() == neutral.Hash());  // merely adding default settings never changes an existing frame
+    Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"vignette":0.8,"vignetteRadius":0.3,"vignetteSoftness":0.5}})J");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, effect);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, neutral);
+    SetMaxRenderThreads(16);
+    CHECK(effect.Hash() == neutral.Hash() && effect.Hash() != original.Hash());
+    CHECK((effect.color.back() & 255) < 60);  // edges darken, the center and overlaid UI retain their colors
+    CHECK(effect.color[36 * 128 + 64] == original.color[36 * 128 + 64]);
+    CHECK(effect.color[10 * 128 + 10] == original.color[10 * 128 + 10]);  // opaque UI retains its own color
+    CHECK((effect.color[10 * 128 + 10] & 255) == 255);
+    CHECK(effect.ids == original.ids && effect.depth == original.depth);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    CHECK(restored.Get<PostProcess>(restored.FindByName("Camera"))->vignette == 0.8f);
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, neutral);
+    CHECK(neutral.Hash() == original.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    if (e.EnableGpu(nullptr, &err)) {
+        RenderTarget gpu;
+        gpu.Resize(128, 72);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double error = 0;
+        for (size_t i = 0; i < effect.color.size(); ++i) for (int shift : {0, 8, 16}) {
+            int a = static_cast<int>((effect.color[i] >> shift) & 255);
+            int b = static_cast<int>((gpu.color[i] >> shift) & 255);
+            error += std::abs(a - b);
+        }
+        double mean = error / static_cast<double>(effect.color.size() * 3);
+        std::printf("  vignette software/GPU mean difference %.4f\n", mean);
+        CHECK(mean < 1);
+    } else std::printf("  SKIP postprocess GPU comparison (%s)\n", err.c_str());
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"position":[-4,3,0]},"MeshRenderer":{"unlit":true,"color":[0.2,0.4,0.6]}}})J");
+    view.highlight = e.GetScene().FindByName("Cube");
+    view.postProcess.vignette = 0;
+    e.Renderer().Render(e.GetScene(), view, original);
+    view.postProcess.vignette = 0.8f;
+    e.Renderer().Render(e.GetScene(), view, effect);
+    int outlinePixels = 0;
+    for (size_t i = 0; i < original.color.size(); ++i) {
+        uint32_t c = original.color[i];
+        if ((c & 255) == 255 && ((c >> 8) & 255) == 158 && ((c >> 16) & 255) == 26) {
+            ++outlinePixels;
+            CHECK(effect.color[i] == c);  // the vignette never darkens editor selection feedback
+        }
+    }
+    CHECK(outlinePixels > 0);
+    // Reusing a view for another camera must not carry over the first camera's effects.
+    Call(e, "component.set", R"J({"id":"Camera","type":"Camera","values":{"active":false}})J");
+    Call(e, "entity.create", R"J({"name":"OtherCamera","components":{"Camera":{}}})J");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    CHECK(view.postProcess.vignette == 0);
+    CHECK(MakeLookAtView(Vec3(0,0,10), Vec3(0,0,0), 60, 1).postProcess.vignette == 0);
+}
+
 TEST(GpuRendererMatchesSoftware) {
     Engine e;
     std::string err;

@@ -162,6 +162,16 @@ effects remain unfinished; see [PARTICLES.md](PARTICLES.md) for the next milesto
 
 ### P6. GPU 효과 (셰이더 머티리얼, 포스트 프로세싱) — [ ]
 
+P3 rendering, P4 and P5 are implemented in independent PRs #18, #19 and #20.
+P6 proceeds from main as required by the branch rule; those pending merges
+do not block this feature and their changes are not repeated on this branch.
+
+- Implementation status: [POSTPROCESS.md](POSTPROCESS.md). The first milestone
+  adds a reflected camera PostProcess component and optional vignette in both
+  renderers. Windows 73 and Node/WASM 69 tests pass; software/D3D11 comparison
+  and Showcase off/on screenshots checked. Shaders and players are refreshed.
+  Tone mapping/bloom, FXAA, custom materials and additional GPU execution remain.
+
 - composite 패스(`GpuRenderer`)가 연결 지점. 톤매핑, 블룸, FXAA, 비네트를 켜고 끄는 컴포넌트/카메라 설정부터. **소프트웨어 렌더러는 기준**이므로 효과가 해시에 영향을 주면 안 되게 기본값은 꺼짐으로 두거나, 양쪽 모두 구현한다(`CLAUDE.md` 규칙). 커스텀 셰이더 머티리얼은 sokol-shdc 의존이 커서 이 항목의 후반부로 둔다.
 
 ### P7. 에디터 보강 — [ ]

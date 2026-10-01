@@ -149,6 +149,16 @@ glTF models load their full materials: base color factor including alpha, base c
 - `Camera.projection`: `perspective` (`fov`) or `orthographic` (`orthoSize` = half the visible height in meters, for 2D/isometric views).
 - `CameraFollow {target, offset, lookOffset, smoothing, useBounds, boundsMin, boundsMax}`: after physics each frame the entity moves to target + offset and looks at target + lookOffset. `smoothing` is a catch-up rate per second (0 = snap). With `useBounds` the position is clamped to the box and the rotation is left alone (2D side-scrollers).
 
+## Camera post-processing
+
+`PostProcess` on the active Camera provides optional screen effects. The first
+milestone implements `vignette` (strength 0..1), `vignetteRadius` and
+`vignetteSoftness` in both software and GPU renderers, before UI and selection
+outlines. Defaults leave existing frames unchanged; picking and depth buffers
+are unaffected. Free/editor Scene cameras do not inherit game-camera effects.
+Tone mapping, bloom, FXAA and custom shader materials remain later P6 milestones;
+see [POSTPROCESS.md](POSTPROCESS.md) for controls and verification.
+
 ## Debug drawing
 
 Lines visible in every view and screenshot, for marking points, paths and areas while debugging:

@@ -254,6 +254,22 @@ struct Camera {
     }
 };
 
+struct PostProcess {
+    static constexpr const char* kTypeName = "PostProcess";
+    static constexpr const char* kDoc = "Optional screen effects on the active Camera. Defaults preserve existing frames; UI and selection outlines are unaffected.";
+    float vignette = 0.0f;          // edge darkening strength; zero disables the effect
+    float vignetteRadius = 0.75f;   // normalized distance from screen center
+    float vignetteSoftness = 0.5f;  // smooth transition width
+    static void Reflect(FieldList& f) {
+        FieldInfo& strength = f.Add("vignette", &PostProcess::vignette, "Edge darkening strength: 0 disables, 1 is fully dark outside the transition.");
+        strength.hasRange = true; strength.min = 0; strength.max = 1;
+        FieldInfo& radius = f.Add("vignetteRadius", &PostProcess::vignetteRadius, "Normalized radius: center 0, edge midpoint 1, corner sqrt(2).");
+        radius.hasRange = true; radius.min = 0; radius.max = 1.5f;
+        FieldInfo& softness = f.Add("vignetteSoftness", &PostProcess::vignetteSoftness, "Smooth transition width in normalized screen coordinates (minimum 0.01).");
+        softness.hasRange = true; softness.min = 0.01f; softness.max = 2;
+    }
+};
+
 struct DirectionalLight {
     static constexpr const char* kTypeName = "DirectionalLight";
     static constexpr const char* kDoc = "Sun-like light. Direction comes from the entity's rotation (local -Z).";

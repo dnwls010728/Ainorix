@@ -9,6 +9,7 @@
 #include "core/Log.h"
 #include "render/GpuDevice.h"
 #include "render/RenderScene.h"
+#include "render/PostProcess.h"
 #include "render/UI.h"
 #include "render/shaders/Shaders.glsl.h"
 #include "scene/Components.h"
@@ -900,6 +901,8 @@ struct GpuRenderer::Impl {
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
+            PostProcess post = NormalizePostProcess(view.postProcess);
+            Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
             b.views[VIEW_oe_scene_tex] = t.sceneTex;

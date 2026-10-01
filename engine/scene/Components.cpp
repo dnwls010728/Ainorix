@@ -8,6 +8,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Animator>();
     TypeRegistry::Register<ParticleEmitter>();
     TypeRegistry::Register<Camera>();
+    TypeRegistry::Register<PostProcess>();
     TypeRegistry::Register<DirectionalLight>();
     TypeRegistry::Register<Rotator>();
     TypeRegistry::Register<Velocity>();

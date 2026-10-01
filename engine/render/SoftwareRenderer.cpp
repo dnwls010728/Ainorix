@@ -7,6 +7,7 @@
 
 #include "assets/Assets.h"
 #include "render/Mesh.h"
+#include "render/PostProcess.h"
 #include "render/RenderScene.h"
 #include "render/Renderer.h"
 #include "render/UI.h"
@@ -557,6 +558,20 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     }
     for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
 
+    PostProcess post = NormalizePostProcess(view.postProcess);
+    if (post.vignette > 0) {
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x);
+                uint32_t c = target.color[pixel];
+                float factor = VignetteFactor(post, (static_cast<float>(x) + 0.5f) / static_cast<float>(target.width),
+                                                   (static_cast<float>(y) + 0.5f) / static_cast<float>(target.height));
+                target.color[pixel] = Pack(Color(static_cast<float>(c & 255) / 255 * factor,
+                                                static_cast<float>((c >> 8) & 255) / 255 * factor,
+                                                static_cast<float>((c >> 16) & 255) / 255 * factor));
+            }
+        });
+    }
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);
     if (view.drawUI) DrawUI(scene, target, assets_);
 
@@ -578,6 +593,8 @@ bool MakeSceneView(const Scene& scene, float aspect, RenderView& out) {
         out.eye = eye;
         out.clearColor = cam.clearColor;
         out.cameraEntity = kv.first;
+        const PostProcess* post = scene.Get<PostProcess>(kv.first);
+        out.postProcess = post ? *post : PostProcess{};
         return true;
     }
     out = MakeLookAtView(Vec3(6, 5, 8), Vec3(0, 0, 0), 60.0f, aspect);
