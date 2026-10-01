@@ -22,6 +22,7 @@
 #include "core/Log.h"
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
+#include "platform/TouchInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/UI.h"
@@ -820,6 +821,52 @@ TEST(UIRenderingAndClicks) {
     Call(e, "input.click", R"J({"x": 100, "y": 650, "width": 1280, "height": 720})J");
     Call(e, "sim.step", R"J({"frames": 1})J");
     CHECK(Call(e, "script.eval", R"J({"code": "clicks"})J")["result"]["value"].asInt() == 1);
+}
+
+TEST(WebTouchLifecycle) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("web_touch"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"LeftBtn","components":{"UIButton":{"anchor":"bottom-left","x":10,"y":-10,"width":100,"height":100,"key":"Left"}}})J");
+    Call(e, "entity.create", R"J({"name":"JumpBtn","components":{"UIButton":{"anchor":"bottom-right","x":-10,"y":-10,"width":100,"height":100,"key":"Space"}}})J");
+    auto eval = [&](const char* code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    TouchInput touch;
+    using Kind = TouchInput::Kind;
+    touch.Apply(e.Input(), Kind::Begin, 54, 60.0f / 1280, 660.0f / 720);
+    touch.Apply(e.Input(), Kind::Begin, 7, 1220.0f / 1280, 660.0f / 720);
+    CHECK(e.Input().touches.size() == 2 && e.Input().touches[0].id == 54 && e.Input().touches[1].id == 7);
+    CHECK(e.Input().IsDown("MouseLeft") && e.Input().mouseX < 0.1f);
+    CHECK(eval("local t=input.touches(); return t[1].began and t[2].began").asBool());
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.Input().IsDown("Left") && e.Input().IsDown("Space"));
+    CHECK(!e.Input().touches[0].began && !e.Input().touches[1].began);
+    touch.Apply(e.Input(), Kind::Move, 7, 0.5f, 0.5f);
+    touch.Apply(e.Input(), Kind::Move, 99, 0.2f, 0.2f);  // unknown moves never invent fingers
+    CHECK(e.Input().touches.size() == 2 && e.Input().mouseX < 0.1f);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.Input().IsDown("Left") && !e.Input().IsDown("Space"));
+    touch.Apply(e.Input(), Kind::End, 7, 0.5f, 0.5f);  // secondary end must not release the mouse
+    CHECK(e.Input().IsDown("MouseLeft") && e.Input().touches.size() == 1);
+    touch.Apply(e.Input(), Kind::Begin, 7, 0.95f, 0.92f);
+    touch.Apply(e.Input(), Kind::Begin, 7, 0.95f, 0.92f);  // duplicate begin retains order
+    CHECK(e.Input().touches.size() == 2 && e.Input().touches[1].began);
+    touch.Apply(e.Input(), Kind::End, 54, 0.05f, 0.92f);  // primary end/cancel leaves the other finger
+    CHECK(!e.Input().IsDown("MouseLeft") && e.Input().touches.size() == 1 && e.Input().touches[0].id == 7);
+    touch.Apply(e.Input(), Kind::Move, 7, 0.9f, 0.9f);
+    CHECK(!e.Input().IsDown("MouseLeft"));  // no synthetic second click from a held finger
+    touch.Apply(e.Input(), Kind::End, 7, 0.9f, 0.9f);
+    touch.Apply(e.Input(), Kind::Begin, 54, 0.4f, 0.3f);  // IDs may be reused in another gesture
+    CHECK(e.Input().IsDown("MouseLeft") && e.Input().mouseX == 0.4f);
+    touch.Reset(e.Input());
+    CHECK(e.Input().touches.empty() && !e.Input().IsDown("MouseLeft") && !e.Input().pressedThisFrame.count("MouseLeft"));
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(!e.Input().IsDown("Left") && !e.Input().IsDown("Space"));
+    CHECK(e.Scripts().Errors().empty());
 }
 
 TEST(MultiTouchButtonKeys) {
