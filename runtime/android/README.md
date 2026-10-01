@@ -8,11 +8,11 @@ needs Java.
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
 - Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
-- Source: 95d45c1 (direct integration of P1 saves, P2 skeletal animation and
-  the P3 particle simulation milestone). Includes player saves, Animator/API/Lua
-  playback, software/GPU skinning and deterministic particle simulation/bursts.
-  Both ABIs rebuilt successfully. Device verification of this combined runtime
-  remains pending; no Android device execution was performed for this integration.
+- Source: 91fd4d5 (P3.2 particle billboards, on combined P1/P2/P3.1). Includes
+  persistent saves, skeletal animation and shared 2D/3D camera-facing particles
+  with lifetime size/color/opacity, texture sheet frames and transparent ordering.
+  Both ABIs rebuilt successfully without new warnings. Android device execution
+  of this milestone remains unverified.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).
