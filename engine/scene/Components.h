@@ -612,6 +612,7 @@ struct UIButton {
     float hoverBrightness = 1.15f;
     float pressedBrightness = 0.85f;
     bool interactable = true;
+    std::string key;
     float opacity = 1.0f;
     bool visible = true;
     int order = 10;
@@ -631,6 +632,9 @@ struct UIButton {
         f.Add("hoverBrightness", &UIButton::hoverBrightness, "Background brightness while the pointer is over the button.");
         f.Add("pressedBrightness", &UIButton::pressedBrightness, "Background brightness while pressed.");
         f.Add("interactable", &UIButton::interactable, "Disabled buttons are drawn faded and ignore clicks.");
+        f.Add("key", &UIButton::key,
+              "On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, "
+              "CharacterBody controls), e.g. \"Left\", \"Space\". Several fingers hold several buttons at once. Empty = none.");
         ReflectUICommon<UIButton>(f);
     }
 };

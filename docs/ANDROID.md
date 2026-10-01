@@ -10,6 +10,8 @@ touches act as the mouse. Android 8.0 (API 26) or newer.
 build_android.bat                                   :: once: liboe_player.so for arm64-v8a + x86_64 (needs the NDK)
 build\bin\oe.exe package MyGame --android           :: dist\MyGame-android\MyGame.apk (debug key)
 build\bin\oe.exe package MyGame --android --install :: + adb install and start on the connected phone / emulator
+build\bin\oe.exe package MyGame --android --aab --keystore my.jks --ks-pass env:KS_PASS --key-alias mygame
+                                                    :: dist\MyGame-android\MyGame.aab for Google Play
 adb logcat -s OwnEngine                             :: engine logs and Lua errors from the device
 ```
 
@@ -18,7 +20,7 @@ adb logcat -s OwnEngine                             :: engine logs and Lua error
 | For | Needs | Where from |
 |---|---|---|
 | Building the runtime (`build_android.bat` / `./build_android.sh`), once and after engine C++ changes | Android NDK, CMake + Ninja | Android Studio > SDK Manager > SDK Tools > *NDK (Side by side)*; CMake/Ninja from Visual Studio (like `build.bat`) or *CMake* in the same SDK Manager list |
-| Signing (`oe package --android`) | `apksigner` (SDK build-tools) and Java | Android Studio (bundles both; `oe` finds its JDK) or the SDK command-line tools + `sdkmanager "build-tools;35.0.0"` and JDK 17+ |
+| Signing (`oe package --android`) | APK: `apksigner` (SDK build-tools) and Java; `.aab`: only Java (`jarsigner` is part of the JDK) | Android Studio (bundles both; `oe` finds its JDK) or the SDK command-line tools + `sdkmanager "build-tools;35.0.0"` and JDK 17+ |
 | `--install` | `adb` (SDK platform-tools) + USB debugging on the phone, or an emulator | Android Studio |
 
 oe writes the APK itself (binary `AndroidManifest.xml`, `resources.arsc`,
@@ -57,7 +59,18 @@ Command line (overrides project.json): `--package com.x.y`, `--version-code N`,
 `--version-name S`, `--orientation landscape|portrait|auto`, `--abi a,b`,
 `--out dist/Name-android`, `--sdk <folder>`, `--debuggable` (lets
 `adb shell run-as <package>` read the app's files), `--unsigned` (skip signing,
-writes `Name-unsigned.apk`), `--install` (adb install -r + start).
+writes `Name-unsigned.apk`), `--install` (adb install -r + start), `--aab` (App Bundle instead of an APK).
+
+### Google Play: App Bundles
+
+`--aab` writes `Name.aab`: the same game in the bundle format Play requires for new apps
+(`BundleConfig.pb` + a `base/` module whose manifest and resource table are in aapt2's protobuf
+format, written by oe like the APK's binary files). It is signed with `jarsigner` using your
+**upload key** (`--keystore ... --key-alias ...`); Play App Signing then signs the APKs it delivers to
+phones. Without `--keystore` the bundle gets the debug key, which Play rejects — fine for checking it
+with [bundletool](https://developer.android.com/tools/bundletool):
+`bundletool build-apks --bundle=MyGame.aab --output=MyGame.apks --mode=universal` then
+`bundletool install-apks --apks=MyGame.apks`. Raise `versionCode` for every upload.
 
 ### Signing
 
@@ -75,8 +88,8 @@ build\bin\oe.exe package MyGame --android --keystore my-release.jks --ks-pass en
 `--ks-pass` / `--key-pass` accept `env:VAR`, `file:path`, `pass:text` or plain
 text (apksigner's formats). Keep the keystore and its password safe: updates
 of a published app must be signed with the same key. Google Play takes new
-apps only as Android App Bundles (.aab), which oe does not build yet (see
-*Not done yet*); APKs are for sideloading, other stores and testing.
+apps only as App Bundles (`--aab`, below); APKs are for sideloading, other
+stores and testing.
 
 ## How the game runs on the device
 
@@ -84,14 +97,17 @@ apps only as Android App Bundles (.aab), which oe does not build yet (see
   app's private files folder on the first start after each install/update
   (`assets/game.id` changes with the data), then the engine opens it like a
   desktop project folder.
-- **Input**: the first finger is `MouseLeft` at `mouseX/mouseY` (so `UIButton`,
-  `onClick`, `input.click` and pointer events work with touch); while the game
-  calls `input.lockMouse`, dragging produces `mouseDX/mouseDY` (touch look).
+- **Input**: every finger is in `input.touches()`; the first one is also
+  `MouseLeft` at `mouseX/mouseY` (so `UIButton`, `onClick` and pointer events
+  work with touch). On-screen controls: `UIButton {key: "Left"}` holds that key
+  while any finger is on it, several buttons at once ([UI.md](UI.md)). While
+  the game calls `input.lockMouse`, dragging produces `mouseDX/mouseDY` (touch look).
   The Back button is `Escape` (the activity does not close by itself).
   Keyboards use the usual key names; gamepads: D-pad / left stick = arrows,
   A = `Space`, B = `Escape`, X = `Shift`, Y = `Control`, Start = `Enter`.
-  Games for phones need on-screen controls (UI buttons) for anything beyond taps.
-- **Screen**: fullscreen, kept on while the game runs; rotation and resizing
+  Games for phones need on-screen controls (`UIButton.key`) for anything beyond taps.
+- **Screen**: immersive fullscreen (status and navigation bars hidden; a swipe
+  from the edge shows them briefly), drawn into the display cutout, kept on while the game runs; rotation and resizing
   (split screen, foldables) do not restart the game. `window.renderScale`
   lowers the 3D resolution on slow GPUs, as on desktop. `window.renderer:
   "software"` draws with the CPU renderer instead (slow, for testing).
@@ -130,11 +146,14 @@ committed and pushed on the branch.
 - [ ] Commit the prebuilt runtime `runtime/android/<abi>/liboe_player.so` (+ a `runtime/android/README.md` like `runtime/web/README.md`) so packaging needs no NDK
 - [ ] Test on a device / emulator: start, touch → UI buttons, rotation, Home + return (surface recreation), Back = Escape, audio, logcat
 - [ ] Run `oe_tests` on a device (would need test data paths that do not use `OE_SOURCE_DIR`)
+- [x] Immersive mode: `oe_ANativeActivity_onCreate` (manifest `android.app.func_name`) hooks a pipe into the UI thread's looper; JNI `setSystemUiVisibility` + `layoutInDisplayCutoutMode` run there
+- [x] Multi-touch: `InputState.touches`, Lua `input.touches()`, API `input.touch`, `UIButton.key` (held by any finger/mouse = key down), Android fills every pointer
+- [ ] Rebuild the web runtime (`build_web.bat`): the committed one predates `UIButton.key`, so web builds of scenes that use it fail to load until then. The web platform could also fill `input.touches` (Emscripten touch events list every finger)
+- [x] `.aab` (`oe package --android --aab`): proto manifest + `resources.pb` + `BundleConfig.pb`, jarsigner; validated with bundletool (`bundletool validate`, `build-apks --mode=universal`)
 
 ## Not done yet
 
-- Android App Bundle (`.aab`) for new Google Play apps — needs `bundletool`; the APK layout here is the base module.
-- Multi-touch (only the first finger is the pointer), an on-screen joystick component.
-- Immersive mode (hiding the navigation bar needs a Java call on the UI thread), display cutout settings.
+- An analog on-screen joystick component (buttons with `key` cover digital controls).
+- Options for the immersive mode / cutout (always on) and per-ABI bundle splits tuning.
 - Adaptive icons (`mipmap-anydpi` foreground/background), splash screen.
 - Compressed APK entries (everything is stored; game data that is already PNG/OGG gains little).

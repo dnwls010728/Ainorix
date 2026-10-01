@@ -117,6 +117,7 @@ void UpdateSystems(Scene& scene, InputState& input, float dt) {
 
     input.pressedThisFrame.clear();
     input.mouseDX = input.mouseDY = 0.0f;
+    for (InputState::Touch& t : input.touches) t.began = false;
 }
 
 }  // namespace oe

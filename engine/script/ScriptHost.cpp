@@ -737,6 +737,27 @@ int L_InputLockMouse(lua_State* L) {
     return 0;
 }
 
+// input.touches() -> { {id, x, y, began}, ... }: every finger on the screen
+// (x, y normalized like input.mouse(); began = it went down this step).
+int L_InputTouches(lua_State* L) {
+    const InputState& in = Host(L).GetEngine().Input();
+    lua_createtable(L, static_cast<int>(in.touches.size()), 0);
+    int i = 0;
+    for (const InputState::Touch& t : in.touches) {
+        lua_createtable(L, 0, 4);
+        lua_pushinteger(L, t.id);
+        lua_setfield(L, -2, "id");
+        lua_pushnumber(L, t.x);
+        lua_setfield(L, -2, "x");
+        lua_pushnumber(L, t.y);
+        lua_setfield(L, -2, "y");
+        lua_pushboolean(L, t.began);
+        lua_setfield(L, -2, "began");
+        lua_rawseti(L, -2, ++i);
+    }
+    return 1;
+}
+
 int L_InputMouseLocked(lua_State* L) {
     lua_pushboolean(L, Host(L).GetEngine().Input().mouseLocked);
     return 1;
@@ -958,7 +979,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg inputFuncs[] = {{"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"lockMouse", L_InputLockMouse},
-                                  {"mouseLocked", L_InputMouseLocked}, {nullptr, nullptr}};
+                                  {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
     const luaL_Reg timeFuncs[] = {{"frame", L_TimeFrame}, {"now", L_TimeNow}, {"dt", L_TimeDt}, {nullptr, nullptr}};
     SetFuncs(L, "time", timeFuncs);

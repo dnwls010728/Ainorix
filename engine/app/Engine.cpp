@@ -248,6 +248,9 @@ void Engine::Stop() {
     }
     ResetRuntime();
     uiHovered_ = uiPressed_ = kNullEntity;
+    heldButtons_.clear();
+    heldKeys_.clear();
+    input_.touches.clear();
     input_.down.clear();
     input_.pressedThisFrame.clear();
     input_.mouseDX = input_.mouseDY = 0.0f;
@@ -300,6 +303,7 @@ void Engine::SimulateFrame() {
                       debugLines_.end());
     // Scripts run first so they see this frame's edge-triggered input.
     const float dt = static_cast<float>(kFixedDt);
+    UpdateButtonKeys();
     scripts_->Update(dt);
     std::vector<UIEvent> uiEvents = UpdateUI();
     UpdateSystems(scene_, input_, dt);
@@ -317,6 +321,37 @@ void Engine::SimulateFrame() {
     audio_->Render();
     ++frame_;
     simTime_ += kFixedDt;
+}
+
+void Engine::UpdateButtonKeys() {
+    std::set<EntityId> held;
+    bool any = false;
+    for (auto& kv : scene_.Pool<UIButton>()) any = any || !kv.second.key.empty();
+    const int w = input_.viewWidth, h = input_.viewHeight;
+    if (any && w > 0 && h > 0) {
+        std::vector<std::pair<float, float>> pointers;
+        if (!input_.mouseLocked && input_.IsDown("MouseLeft")) pointers.push_back({input_.mouseX, input_.mouseY});
+        for (const InputState::Touch& t : input_.touches) pointers.push_back({t.x, t.y});
+        std::vector<UIRect> rects;
+        if (!pointers.empty()) rects = LayoutUI(scene_, w, h, assets_.get());
+        for (const auto& p : pointers) {
+            const UIRect* hit = HitTestUI(rects, p.first * static_cast<float>(w), p.second * static_cast<float>(h));
+            const UIButton* b = hit && hit->kind == UIRect::Kind::Button ? scene_.Get<UIButton>(hit->entity) : nullptr;
+            if (b && b->interactable && !b->key.empty()) held.insert(hit->entity);
+        }
+    }
+    std::set<std::string> keys;
+    for (EntityId id : held) keys.insert(scene_.Get<UIButton>(id)->key);
+    for (const std::string& k : keys) {
+        if (heldKeys_.count(k)) continue;
+        if (!input_.IsDown(k)) input_.pressedThisFrame.insert(k);
+        input_.down.insert(k);
+    }
+    for (const std::string& k : heldKeys_) {
+        if (!keys.count(k)) input_.down.erase(k);
+    }
+    heldKeys_ = std::move(keys);
+    heldButtons_ = std::move(held);
 }
 
 std::vector<Engine::UIEvent> Engine::UpdateUI() {
@@ -355,7 +390,7 @@ std::vector<Engine::UIEvent> Engine::UpdateUI() {
     }
     for (auto& kv : scene_.Pool<UIButton>()) {
         kv.second.hovered = kv.first == uiHovered_;
-        kv.second.pressed = kv.first == uiPressed_;
+        kv.second.pressed = kv.first == uiPressed_ || heldButtons_.count(kv.first) > 0;
     }
     for (auto& kv : scene_.Pool<UISlider>()) {
         kv.second.hovered = kv.first == uiHovered_;

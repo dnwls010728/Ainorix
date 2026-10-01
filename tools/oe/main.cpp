@@ -192,8 +192,9 @@ int CmdHelp() {
                  "  package [path] [--out dist/Name] [--name N] [--web]\n"
                  "                                    Build a standalone game: Name.exe + game data, or with --web\n"
                  "                                    an HTML5/WebGL2 folder (index.html + wasm) for any web host\n"
-                 "  package [path] --android [--package com.x.y] [--install] [--keystore f --ks-pass P --key-alias A]\n"
-                 "                                    Build a signed Android APK (debug key unless --keystore); see docs/ANDROID.md\n"
+                 "  package [path] --android [--aab] [--package com.x.y] [--install] [--keystore f --ks-pass P --key-alias A]\n"
+                 "                                    Build a signed Android APK, or with --aab an App Bundle for Google Play\n"
+                 "                                    (debug key unless --keystore); see docs/ANDROID.md\n"
                  "  api [--markdown]                  Print the command reference\n"
                  "  version                           Print version info as JSON\n\n"
                  "[path] = project directory (default .), project.json or *.scene.json\n"
@@ -794,7 +795,7 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     if (out == projectAbs || out.rfind(projectAbs + "/", 0) == 0) {
         return Fail("invalid_output", "the output folder must be outside the project", "Use --out dist/" + name + "-android.");
     }
-    if (IsDirectory(out) && !ListFiles(out, "", false).empty() && ListFiles(out, ".apk", false).empty()) {
+    if (IsDirectory(out) && !ListFiles(out, "", false).empty() && ListFiles(out, ".apk", false).empty() && ListFiles(out, ".aab", false).empty()) {
         return Fail("output_not_empty", out + " exists and is not an OwnEngine Android package", "Pick another --out folder or empty it.");
     }
     CreateDirectories(out);
@@ -804,10 +805,17 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     ReadBinaryFile(pak, apk.gamePak);
     RemoveAll(pak);
 
-    const std::string apkPath = JoinPath(out, name + ".apk");
-    const std::string unsignedPath = JoinPath(out, name + "-unsigned.apk");
+    // --aab: Android App Bundle for Google Play instead of an installable APK.
+    const bool aab = a.Has("--aab");
+    const std::string ext = aab ? ".aab" : ".apk";
+    if (aab && a.Has("--install")) {
+        return Fail("invalid_argument", "--install needs an APK; an .aab is for uploading to Google Play",
+                    "Drop --aab to test on a device, or turn the bundle into APKs with bundletool (build-apks / install-apks).");
+    }
+    const std::string apkPath = JoinPath(out, name + ext);
+    const std::string unsignedPath = JoinPath(out, name + "-unsigned" + ext);
     const std::string log = JoinPath(out, ".oe-tool.log");
-    if (!WriteUnsignedApk(apk, unsignedPath, &err)) return Fail("write_failed", err);
+    if (!(aab ? WriteUnsignedAppBundle(apk, unsignedPath, &err) : WriteUnsignedApk(apk, unsignedPath, &err))) return Fail("write_failed", err);
 
     Json res = Json::MakeObject();
     res["ok"] = true;
@@ -826,22 +834,22 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
         RemoveAll(apkPath);
         res["result"]["apk"] = unsignedPath;
         res["result"]["signedWith"] = "none";
-        res["result"]["next"] = "Sign it with apksigner (Android SDK build-tools) before installing it.";
+        res["result"]["next"] = aab ? "Sign it with jarsigner (JDK) before uploading it." : "Sign it with apksigner (Android SDK build-tools) before installing it.";
         PrintJson(res);
         return 0;
     }
 
-    // Signing: apksigner (SDK build-tools) runs on Java.
+    // Signing: apksigner (SDK build-tools, runs on Java) for APKs, jarsigner (JDK) for bundles.
     const std::string sdk = FindAndroidSdk(a);
-    const std::string apksigner = FindApksigner(sdk);
-    if (apksigner.empty()) {
+    const std::string apksigner = aab ? std::string() : FindApksigner(sdk);
+    if (!aab && apksigner.empty()) {
         return Fail("android_sdk_missing", "apksigner (Android SDK build-tools) was not found" + (sdk.empty() ? std::string() : " in " + sdk),
                     "Install Android Studio (or the SDK command-line tools + build-tools), set ANDROID_HOME, or pass --sdk <folder>. "
                     "The unsigned APK is at " + unsignedPath + " (--unsigned skips signing).");
     }
     std::string javaBin;
     if (!FindJava(javaBin, log)) {
-        return Fail("java_missing", "Java was not found (apksigner needs it)",
+        return Fail("java_missing", std::string("Java was not found (") + (aab ? "jarsigner" : "apksigner") + " needs it)",
                     "Install Android Studio (it bundles a JDK) or a JDK 17+, or set JAVA_HOME.");
     }
     std::string keystore = a.Get("--keystore"), ksPass = a.Get("--ks-pass"), alias = a.Get("--key-alias"), keyPass = a.Get("--key-pass");
@@ -868,16 +876,30 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
         if (alias.empty()) return Fail("missing_argument", "--keystore needs --key-alias", "Pass the alias of the key in the keystore.");
         keystore = AbsolutePath(keystore);
     }
-    std::vector<std::string> sign = {JavaTool(javaBin, "java"), "-jar", apksigner, "sign", "--ks", keystore, "--ks-pass", PassArg(ksPass),
-                                     "--ks-key-alias", alias};
-    if (!keyPass.empty()) {
-        sign.push_back("--key-pass");
-        sign.push_back(PassArg(keyPass));
+    std::vector<std::string> sign;
+    if (aab) {
+        // jarsigner takes -storepass x / -storepass:env VAR / -storepass:file path.
+        auto jarPass = [&](const char* flag, const std::string& v) {
+            std::string p = PassArg(v);
+            if (p.rfind("env:", 0) == 0) sign.insert(sign.end(), {std::string(flag) + ":env", p.substr(4)});
+            else if (p.rfind("file:", 0) == 0) sign.insert(sign.end(), {std::string(flag) + ":file", p.substr(5)});
+            else sign.insert(sign.end(), {flag, p.substr(5)});
+        };
+        sign = {JavaTool(javaBin, "jarsigner"), "-keystore", keystore};
+        jarPass("-storepass", ksPass);
+        if (!keyPass.empty()) jarPass("-keypass", keyPass);
+        sign.insert(sign.end(), {"-sigalg", "SHA256withRSA", "-digestalg", "SHA-256", "-signedjar", apkPath, unsignedPath, alias});
+    } else {
+        sign = {JavaTool(javaBin, "java"), "-jar", apksigner, "sign", "--ks", keystore, "--ks-pass", PassArg(ksPass), "--ks-key-alias", alias};
+        if (!keyPass.empty()) {
+            sign.push_back("--key-pass");
+            sign.push_back(PassArg(keyPass));
+        }
+        sign.insert(sign.end(), {"--out", apkPath, unsignedPath});
     }
-    sign.insert(sign.end(), {"--out", apkPath, unsignedPath});
     std::string output;
     if (!RunTool(sign, log, &output)) {
-        return Fail("sign_failed", "apksigner failed: " + output, "Check the keystore, its passwords and the key alias.");
+        return Fail("sign_failed", std::string(aab ? "jarsigner" : "apksigner") + " failed: " + output, "Check the keystore, its passwords and the key alias.");
     }
     RemoveAll(unsignedPath);
     RemoveAll(apkPath + ".idsig");  // v4 signature (only for incremental adb installs)
@@ -886,6 +908,13 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     res["result"]["keystore"] = keystore;
     res["result"]["next"] = "Install it with `adb install -r " + apkPath + "` (or rerun with --install), or copy it to the phone and open it. " +
                             (signedWith == "debug" ? "For Google Play, sign with your own key: --keystore my.jks --ks-pass env:PASS --key-alias key." : "");
+    if (aab) {
+        res["result"]["aab"] = apkPath;
+        res["result"].erase("apk");
+        res["result"]["next"] = signedWith == "debug"
+                                    ? "Signed with the debug key, which Google Play rejects: sign with your upload key (--keystore my.jks --ks-pass env:PASS --key-alias key). Test it with bundletool build-apks."
+                                    : "Upload " + apkPath + " in the Google Play Console (Play App Signing signs the APKs it delivers).";
+    }
 
     if (a.Has("--install")) {
         std::string adb = "adb";

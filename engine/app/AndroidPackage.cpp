@@ -108,7 +108,8 @@ XmlAttr Str(const char* name, uint32_t id, const std::string& text) { return {na
 XmlAttr Int(const char* name, uint32_t id, int v) { return {name, id, kTypeIntDec, static_cast<uint32_t>(v), ""}; }
 XmlAttr Hex(const char* name, uint32_t id, uint32_t v) { return {name, id, kTypeIntHex, v, ""}; }
 XmlAttr Bool(const char* name, uint32_t id, bool v) { return {name, id, kTypeBool, v ? 0xFFFFFFFFu : 0u, ""}; }
-XmlAttr Ref(const char* name, uint32_t id, uint32_t target) { return {name, id, kTypeReference, target, ""}; }
+// `text` is the source form ("@drawable/icon"), kept in app bundle manifests.
+XmlAttr Ref(const char* name, uint32_t id, uint32_t target, const char* text) { return {name, id, kTypeReference, target, text}; }
 
 class XmlEncoder {
 public:
@@ -278,7 +279,9 @@ std::string DefaultAndroidPackageName(const std::string& projectName) {
     return "com.ownengine." + id;
 }
 
-std::vector<unsigned char> BuildAndroidManifest(const AndroidAppInfo& app) {
+namespace {
+
+XmlElement ManifestTree(const AndroidAppInfo& app) {
     // ActivityInfo.screenOrientation: sensorLandscape 6, sensorPortrait 7, unspecified -1.
     int orientation = app.orientation == "portrait" ? 7 : app.orientation == "auto" ? -1 : 6;
     // Handle rotation, resizing, keyboards etc. in the running game instead of
@@ -291,16 +294,18 @@ std::vector<unsigned char> BuildAndroidManifest(const AndroidAppInfo& app) {
                          Int("launchMode", kAttrLaunchMode, 2 /* singleTask */), Int("screenOrientation", kAttrScreenOrientation, orientation),
                          Hex("configChanges", kAttrConfigChanges, configChanges)},
                         {XmlElement{"meta-data", {Str("name", kAttrName, "android.app.lib_name"), Str("value", kAttrValue, "oe_player")}, {}},
+                         // Wraps the glue's ANativeActivity_onCreate (immersive mode, platform/android).
+                         XmlElement{"meta-data", {Str("name", kAttrName, "android.app.func_name"), Str("value", kAttrValue, "oe_ANativeActivity_onCreate")}, {}},
                          XmlElement{"intent-filter",
                                     {},
                                     {XmlElement{"action", {Str("name", kAttrName, "android.intent.action.MAIN")}, {}},
                                      XmlElement{"category", {Str("name", kAttrName, "android.intent.category.LAUNCHER")}, {}}}}}};
     XmlElement application{"application",
-                           {Str("label", kAttrLabel, app.label), Ref("theme", kAttrTheme, kThemeBlackNoTitleBarFullscreen),
+                           {Str("label", kAttrLabel, app.label), Ref("theme", kAttrTheme, kThemeBlackNoTitleBarFullscreen, "@android:style/Theme.Black.NoTitleBar.Fullscreen"),
                             Bool("hasCode", kAttrHasCode, false), Bool("extractNativeLibs", kAttrExtractNativeLibs, false),
                             Bool("isGame", kAttrIsGame, true)},
                            {activity}};
-    if (app.hasIcon) application.attrs.push_back(Ref("icon", kAttrIcon, kIconResource));
+    if (app.hasIcon) application.attrs.push_back(Ref("icon", kAttrIcon, kIconResource, "@drawable/icon"));
     if (app.debuggable) application.attrs.push_back(Bool("debuggable", kAttrDebuggable, true));
     XmlElement manifest{"manifest",
                         {Int("versionCode", kAttrVersionCode, app.versionCode), Str("versionName", kAttrVersionName, app.versionName),
@@ -308,7 +313,114 @@ std::vector<unsigned char> BuildAndroidManifest(const AndroidAppInfo& app) {
                         {XmlElement{"uses-sdk", {Int("minSdkVersion", kAttrMinSdkVersion, app.minSdk), Int("targetSdkVersion", kAttrTargetSdkVersion, app.targetSdk)}, {}},
                          XmlElement{"uses-feature", {Hex("glEsVersion", kAttrGlEsVersion, 0x00030000), Bool("required", kAttrRequired, true)}, {}},
                          application}};
-    return XmlEncoder().Encode(manifest);
+    return manifest;
+}
+
+// ----- Protocol buffers (app bundles) ---------------------------------------------------
+// App bundles hold the manifest and resource table in aapt2's protobuf
+// format (frameworks/base/tools/aapt2/Resources.proto); bundletool / Google
+// Play compile them for each device. Only the few messages used here.
+
+class Pb {
+public:
+    Pb& Uint(int field, uint64_t v) {
+        Key(field, 0);
+        Varint(v);
+        return *this;
+    }
+    Pb& Int(int field, int32_t v) { return Uint(field, static_cast<uint64_t>(static_cast<int64_t>(v))); }  // int32: sign-extended
+    Pb& Str(int field, const std::string& s) {
+        Key(field, 2);
+        Varint(s.size());
+        bytes_.insert(bytes_.end(), s.begin(), s.end());
+        return *this;
+    }
+    Pb& Msg(int field, const Pb& m) {
+        Key(field, 2);
+        Varint(m.bytes_.size());
+        Append(bytes_, m.bytes_);
+        return *this;
+    }
+    const Bytes& bytes() const { return bytes_; }
+
+private:
+    void Key(int field, int wire) { Varint(static_cast<uint64_t>(field) << 3 | static_cast<uint64_t>(wire)); }
+    void Varint(uint64_t v) {
+        do {
+            unsigned char b = static_cast<unsigned char>(v & 0x7F);
+            v >>= 7;
+            bytes_.push_back(v ? static_cast<unsigned char>(b | 0x80) : b);
+        } while (v);
+    }
+    Bytes bytes_;
+};
+
+const char* kAndroidUri = "http://schemas.android.com/apk/res/android";
+
+// aapt.pb.XmlNode { element = 1 } / XmlElement { namespace_declaration = 1,
+// name = 3, attribute = 4, child = 5 } / XmlAttribute { namespace_uri = 1,
+// name = 2, value = 3, resource_id = 5, compiled_item = 6 }.
+Pb ProtoXml(const XmlElement& e, bool root) {
+    Pb el;
+    if (root) el.Msg(1, Pb().Str(1, "android").Str(2, kAndroidUri));
+    el.Str(3, e.name);
+    std::vector<XmlAttr> attrs = e.attrs;
+    std::stable_sort(attrs.begin(), attrs.end(), [](const XmlAttr& a, const XmlAttr& b) { return a.resId < b.resId; });
+    for (const XmlAttr& a : attrs) {
+        Pb attr;
+        if (a.resId) attr.Str(1, kAndroidUri);
+        attr.Str(2, a.name);
+        // Item { ref = 1 (Reference { id = 2 }), prim = 7 (Primitive { int_decimal_value = 6,
+        // int_hexadecimal_value = 7, boolean_value = 8 }) }; plain strings have no compiled item.
+        Pb item;
+        char text[32];
+        switch (a.type) {
+            case kTypeString: attr.Str(3, a.text); break;
+            case kTypeIntDec:
+                std::snprintf(text, sizeof(text), "%d", static_cast<int32_t>(a.data));
+                attr.Str(3, text);
+                item.Msg(7, Pb().Int(6, static_cast<int32_t>(a.data)));
+                break;
+            case kTypeIntHex:
+                std::snprintf(text, sizeof(text), "0x%08x", a.data);
+                attr.Str(3, text);
+                item.Msg(7, Pb().Uint(7, a.data));
+                break;
+            case kTypeBool:
+                attr.Str(3, a.data ? "true" : "false");
+                item.Msg(7, Pb().Uint(8, a.data ? 1 : 0));
+                break;
+            case kTypeReference:
+                attr.Str(3, a.text);
+                item.Msg(1, Pb().Uint(2, a.data));
+                break;
+            default: break;
+        }
+        if (a.resId) attr.Uint(5, a.resId);
+        if (a.type != kTypeString) attr.Msg(6, item);
+        el.Msg(4, attr);
+    }
+    for (const XmlElement& c : e.children) el.Msg(5, ProtoXml(c, false));
+    return Pb().Msg(1, el);
+}
+
+}  // namespace
+
+std::vector<unsigned char> BuildAndroidManifest(const AndroidAppInfo& app) { return XmlEncoder().Encode(ManifestTree(app)); }
+
+std::vector<unsigned char> BuildAndroidManifestProto(const AndroidAppInfo& app) { return ProtoXml(ManifestTree(app), true).bytes(); }
+
+std::vector<unsigned char> BuildAndroidResourcesProto(const std::string& packageName) {
+    // ResourceTable { package = 2 } / Package { package_id = 1, package_name = 2, type = 3 } /
+    // Type { type_id = 1, name = 2, entry = 3 } / Entry { entry_id = 1, name = 2, config_value = 6 } /
+    // ConfigValue { config = 1, value = 2 } / Value { item = 4 } / Item { file = 5 } /
+    // FileReference { path = 1, type = 2 (PNG = 1) }.
+    Pb file = Pb().Str(1, "res/drawable/icon.png").Uint(2, 1);
+    Pb value = Pb().Msg(4, Pb().Msg(5, file));
+    Pb entry = Pb().Msg(1, Pb()).Str(2, "icon").Msg(6, Pb().Msg(1, Pb()).Msg(2, value));  // entry id 0, default configuration
+    Pb type = Pb().Msg(1, Pb().Uint(1, 1)).Str(2, "drawable").Msg(3, entry);
+    Pb package = Pb().Msg(1, Pb().Uint(1, 0x7f)).Str(2, packageName).Msg(3, type);
+    return Pb().Msg(2, package).bytes();
 }
 
 std::vector<unsigned char> BuildAndroidResources(const std::string& packageName) {
@@ -376,45 +488,70 @@ std::vector<unsigned char> BuildAndroidResources(const std::string& packageName)
     return out;
 }
 
+namespace {
+
+bool Fail(std::string* error, const std::string& message) {
+    if (error) *error = message;
+    return false;
+}
+
+// Icon, native libraries and game data, below `prefix` ("" in an APK, "base/" in a bundle).
+bool AddPayload(ZipWriter& zip, const ApkContents& contents, const std::string& prefix, std::string* error) {
+    if (!IsValidAndroidPackageName(contents.app.packageName)) return Fail(error, "invalid Android package name '" + contents.app.packageName + "'");
+    if (contents.nativeLibs.empty()) return Fail(error, "no native library (liboe_player.so) to package");
+    const Bytes icon = contents.iconPng.empty() ? DefaultIcon() : contents.iconPng;
+    zip.AddStored(prefix + "res/drawable/icon.png", icon.data(), icon.size());
+    for (const auto& lib : contents.nativeLibs) {
+        Bytes so;
+        if (!ReadBinaryFile(lib.second, so)) return Fail(error, "cannot read " + lib.second);
+        // extractNativeLibs=false: loaded straight from the APK, so stored and
+        // aligned to 16 KB pages (works on 4 KB and 16 KB page devices).
+        zip.AddStored(prefix + "lib/" + lib.first + "/liboe_player.so", so.data(), so.size(), 16384);
+    }
+    // game.id changes whenever the data changes: the player unpacks game.pak again.
+    const uint64_t hash = Fnv1a64(contents.gamePak.data(), contents.gamePak.size());
+    char id[17];
+    std::snprintf(id, sizeof(id), "%016llx", static_cast<unsigned long long>(hash));
+    zip.AddStored(prefix + "assets/game.id", reinterpret_cast<const unsigned char*>(id), 16);
+    zip.AddStored(prefix + "assets/game.pak", contents.gamePak.data(), contents.gamePak.size());
+    return true;
+}
+
+bool WriteZip(ZipWriter& zip, const std::string& outPath, std::string* error) {
+    const Bytes& bytes = zip.Finish();
+    CreateDirectories(ParentPath(outPath));
+    FILE* f = std::fopen(outPath.c_str(), "wb");
+    bool ok = f && std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    if (f) ok = std::fclose(f) == 0 && ok;
+    return ok || Fail(error, "cannot write " + outPath);
+}
+
+}  // namespace
+
 bool WriteUnsignedApk(const ApkContents& contents, const std::string& outPath, std::string* error) {
-    auto fail = [&](const std::string& message) {
-        if (error) *error = message;
-        return false;
-    };
-    if (!IsValidAndroidPackageName(contents.app.packageName)) return fail("invalid Android package name '" + contents.app.packageName + "'");
-    if (contents.nativeLibs.empty()) return fail("no native library (liboe_player.so) to package");
     AndroidAppInfo app = contents.app;
     app.hasIcon = true;
-    const Bytes icon = contents.iconPng.empty() ? DefaultIcon() : contents.iconPng;
-
     ZipWriter zip;
     const Bytes manifest = BuildAndroidManifest(app);
     zip.AddStored("AndroidManifest.xml", manifest.data(), manifest.size());
     // Uncompressed and 4-byte aligned, as Android 11+ requires (targetSdk >= 30).
     const Bytes resources = BuildAndroidResources(app.packageName);
     zip.AddStored("resources.arsc", resources.data(), resources.size());
-    zip.AddStored("res/drawable/icon.png", icon.data(), icon.size());
-    for (const auto& lib : contents.nativeLibs) {
-        Bytes so;
-        if (!ReadBinaryFile(lib.second, so)) return fail("cannot read " + lib.second);
-        // extractNativeLibs=false: loaded straight from the APK, so stored and
-        // aligned to 16 KB pages (works on 4 KB and 16 KB page devices).
-        zip.AddStored("lib/" + lib.first + "/liboe_player.so", so.data(), so.size(), 16384);
-    }
-    // game.id changes whenever the data changes: the player unpacks game.pak again.
-    const uint64_t hash = Fnv1a64(contents.gamePak.data(), contents.gamePak.size());
-    char id[17];
-    std::snprintf(id, sizeof(id), "%016llx", static_cast<unsigned long long>(hash));
-    zip.AddStored("assets/game.id", reinterpret_cast<const unsigned char*>(id), 16);
-    zip.AddStored("assets/game.pak", contents.gamePak.data(), contents.gamePak.size());
+    return AddPayload(zip, contents, "", error) && WriteZip(zip, outPath, error);
+}
 
-    const Bytes& apk = zip.Finish();
-    CreateDirectories(ParentPath(outPath));
-    FILE* f = std::fopen(outPath.c_str(), "wb");
-    bool ok = f && std::fwrite(apk.data(), 1, apk.size(), f) == apk.size();
-    if (f) ok = std::fclose(f) == 0 && ok;
-    if (!ok) return fail("cannot write " + outPath);
-    return true;
+bool WriteUnsignedAppBundle(const ApkContents& contents, const std::string& outPath, std::string* error) {
+    AndroidAppInfo app = contents.app;
+    app.hasIcon = true;
+    ZipWriter zip;
+    // BundleConfig { bundletool = 1 (Bundletool { version = 2 }) }: the bundle format version it follows.
+    const Bytes config = Pb().Msg(1, Pb().Str(2, "1.17.2")).bytes();
+    zip.AddStored("BundleConfig.pb", config.data(), config.size());
+    const Bytes manifest = BuildAndroidManifestProto(app);
+    zip.AddStored("base/manifest/AndroidManifest.xml", manifest.data(), manifest.size());
+    const Bytes resources = BuildAndroidResourcesProto(app.packageName);
+    zip.AddStored("base/resources.pb", resources.data(), resources.size());
+    return AddPayload(zip, contents, "base/", error) && WriteZip(zip, outPath, error);
 }
 
 }  // namespace oe

@@ -666,6 +666,44 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return out;
              });
 
+    Register(r, "input.touch", "Put a finger on the game view, move it or lift it (multi-touch). Scripts read fingers with input.touches(); UIButtons with a `key` hold that key while touched. Unlike a real device, this does not move the mouse.",
+             Params()
+                 .Opt("id", "integer", "Finger id (default 0); use different ids for several fingers.")
+                 .Opt("x", "number", "Pixel x (required to put a finger down).")
+                 .Opt("y", "number", "Pixel y.")
+                 .Opt("down", "boolean", "true = touch / move (default), false = lift the finger.")
+                 .Opt("width", "integer", "Width of the image the coordinates refer to (default 640).")
+                 .Opt("height", "integer", "Height of that image (default 360)."),
+             false, [](Engine& e, const Json& a) {
+                 InputState& in = e.Input();
+                 const int id = a["id"].asInt(0);
+                 auto it = std::find_if(in.touches.begin(), in.touches.end(), [&](const InputState::Touch& t) { return t.id == id; });
+                 if (!a["down"].asBool(true)) {
+                     if (it != in.touches.end()) in.touches.erase(it);
+                 } else {
+                     if (!a.has("x") || !a.has("y")) {
+                         if (it == in.touches.end()) throw ApiError("missing_argument", "x and y are needed to put a finger down", "Pass {id, x, y} in screenshot pixels.");
+                     }
+                     int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
+                     if (it == in.touches.end()) {
+                         InputState::Touch t;
+                         t.id = id;
+                         t.began = true;
+                         in.touches.push_back(t);
+                         it = in.touches.end() - 1;
+                     }
+                     it->x = a["x"].asFloat(it->x * static_cast<float>(w)) / static_cast<float>(w);
+                     it->y = a["y"].asFloat(it->y * static_cast<float>(h)) / static_cast<float>(h);
+                     in.viewWidth = w;
+                     in.viewHeight = h;
+                 }
+                 Json out = SimState(e);
+                 Json list = Json::MakeArray();
+                 for (const InputState::Touch& t : in.touches) list.push(t.id);
+                 out["touches"] = list;
+                 return out;
+             });
+
     Register(r, "input.mouse", "Move the mouse over the game view, add relative motion (mouse look) and optionally press/release a button.",
              Params()
                  .Opt("x", "number", "Pixel x (keeps the current position when omitted).")
