@@ -88,7 +88,7 @@ C++ 재빌드 없이 게임 로직을 작성/수정할 수 있어야 이후 모�
 기능이 어느 정도 갖춰진 뒤 진행. 비용 낮은 순서:
 
 1. ~~Web (Emscripten)~~ ✅ WebGL2 + WebAudio, `oe package --web`
-2. macOS → iOS (Metal)
+2. macOS → iOS (Metal) — 계획 및 작업 로그: [APPLE.md](APPLE.md) (Mac 없이 GitHub Actions macOS 러너 + rcodesign으로 진행)
 3. ~~Android (NDK, 터치 입력)~~ ✅ NativeActivity + GLES3 + AAudio, `oe package --android` (APK 생성·서명) — 실기기 검증 남음, [ANDROID.md](ANDROID.md)
 4. Linux 데스크톱
 5. 콘솔 (Switch / PlayStation) — SDK 확보 후
