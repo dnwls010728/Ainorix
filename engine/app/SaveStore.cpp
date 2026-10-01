@@ -27,8 +27,25 @@ void ValidateKey(const std::string& key) {
 }  // namespace
 
 void SaveStore::Configure(const std::string& directory) {
+    storage_ = {};
     directory_ = directory.empty() ? "" : AbsolutePath(directory);
     slots_.clear();
+}
+
+void SaveStore::ConfigurePlayer(const std::string& gameName) {
+    std::string safe;
+    const char* hex = "0123456789abcdef";
+    for (unsigned char c : gameName) {
+        if (c >= 32 && c != '<' && c != '>' && c != ':' && c != '"' && c != '/' && c != '\\' &&
+            c != '|' && c != '?' && c != '*' && c != '%' && c != '.' && c != ' ') safe += static_cast<char>(c);
+        else { safe += '%'; safe += hex[c >> 4]; safe += hex[c & 15]; }
+    }
+    if (safe.empty()) safe = "OwnEngine";
+    Configure("");
+    storage_ = PlatformSaveStorage(safe);
+    directory_ = storage_.directory;
+    if (directory_.empty() && (!storage_.read || !storage_.write))
+        throw ApiError("save_unavailable", "platform save storage is unavailable", "Check the user's data directory configuration.");
 }
 
 SaveStore::Slot& SaveStore::Load(const std::string& slot) {
@@ -40,13 +57,15 @@ SaveStore::Slot& SaveStore::Load(const std::string& slot) {
                               "Use 1-64 lowercase ASCII letters, digits, underscores or hyphens.");
     auto inserted = slots_.emplace(slot, Slot{});
     Slot& result = inserted.first->second;
-    if (inserted.second && !directory_.empty()) {
+    if (inserted.second && (!directory_.empty() || storage_.read)) {
         std::string path = JoinPath(directory_, "slot-" + slot + ".json"), text;
-        if (FileExists(path)) {
+        if (storage_.read || FileExists(path)) {
             std::string error;
             Json data;
-            if (ReadTextFile(path, text)) data = Json::parse(text, &error);
-            else error = "cannot read file";
+            bool read = storage_.read ? storage_.read(slot, text, &error) : ReadTextFile(path, text);
+            if (read && storage_.read && text.empty()) return result;
+            if (read) data = Json::parse(text, &error);
+            else if (error.empty()) error = "cannot read file";
             if (error.empty() && data.isObject()) {
                 try { ValidateValue(data); result.data = std::move(data); }
                 catch (const ApiError& e) { error = e.what(); }
@@ -60,7 +79,7 @@ SaveStore::Slot& SaveStore::Load(const std::string& slot) {
 Json SaveStore::State(const std::string& slot) {
     Slot& value = Load(slot);
     Json out = Json::MakeObject();
-    out["mode"] = directory_.empty() ? "memory" : "directory";
+    out["mode"] = storage_.read ? "localStorage" : directory_.empty() ? "memory" : "directory";
     out["slot"] = slot;
     out["data"] = value.data;
     out["dirty"] = value.dirty;
@@ -94,9 +113,11 @@ void SaveStore::Clear(const std::string& key, const std::string& slot) {
 void SaveStore::Flush(const std::string& slot) {
     Slot& value = Load(slot);
     if (!value.dirty) return;
-    if (!directory_.empty()) {
+    if (!directory_.empty() || storage_.write) {
         std::string path = JoinPath(directory_, "slot-" + slot + ".json"), error;
-        if (!WriteTextFileAtomic(path, value.data.dump(2) + "\n", &error))
+        std::string text = value.data.dump(2) + "\n";
+        bool written = storage_.write ? storage_.write(slot, text, &error) : WriteTextFileAtomic(path, text, &error);
+        if (!written)
             throw ApiError("save_write_failed", error, "Check the save directory permissions and available space; retry save.flush.");
     }
     value.dirty = false;

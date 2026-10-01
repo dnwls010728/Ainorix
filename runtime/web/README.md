@@ -7,7 +7,7 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 
 The runtime does not depend on the game: every project uses the same files.
 
-- Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-01.
+- Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
 - Engine source: commit adc8dc0 plus Android runtime verification changes.
   Includes multi-touch simulation, `UIButton.key`, App Bundle support, the
   unused game selection pass optimization, reliable Lua reload after API writes
@@ -15,6 +15,9 @@ The runtime does not depend on the game: every project uses the same files.
   (GPU tests skip without a browser canvas).
 - On this Windows host Binaryen's parallel optimizer crashed; the successful
   rebuild used `BINARYEN_CORES=1`.
+- P1 refresh: JSON save slots, strict Lua value validation, explicit tool save
+  directories and player localStorage. Browser reload restores saved counters
+  (0/1 then 1/2) on the save-probe HUD. Source: P1 branch after aad02f2.
 
 ## When to rebuild
 

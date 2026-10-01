@@ -739,4 +739,10 @@ bool PlatformReplaceFile(const std::string& from, const std::string& to, std::st
     return false;
 }
 
+SaveStorage PlatformSaveStorage(const std::string& gameName) {
+    State& s = S();
+    if (!s.app || !s.app->activity || !s.app->activity->internalDataPath) return {};
+    return {std::string(s.app->activity->internalDataPath) + "/saves/" + gameName, {}, {}};
+}
+
 }  // namespace oe

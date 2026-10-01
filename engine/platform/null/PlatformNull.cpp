@@ -70,4 +70,11 @@ bool PlatformReplaceFile(const std::string& from, const std::string& to, std::st
     return false;
 }
 
+SaveStorage PlatformSaveStorage(const std::string& gameName) {
+    const char* data = std::getenv("XDG_DATA_HOME");
+    if (data && *data) return {std::string(data) + "/" + gameName, {}, {}};
+    const char* home = std::getenv("HOME");
+    return home && *home ? SaveStorage{std::string(home) + "/.local/share/" + gameName, {}, {}} : SaveStorage{};
+}
+
 }  // namespace oe

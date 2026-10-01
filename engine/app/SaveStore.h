@@ -3,6 +3,7 @@
 #include <string>
 
 #include "core/Json.h"
+#include "platform/Platform.h"
 
 namespace oe {
 
@@ -12,6 +13,8 @@ class SaveStore {
 public:
     // Starts a fresh store. Empty directory means memory only.
     void Configure(const std::string& directory);
+    // Enables this platform's player storage; must be called before scripts start.
+    void ConfigurePlayer(const std::string& gameName);
     // Slot inspection lazily loads its file; malformed files log a warning.
     Json State(const std::string& slot = "default");
     // Missing keys return the supplied default; null is a stored value.
@@ -27,6 +30,7 @@ private:
     struct Slot { Json data = Json::MakeObject(); bool dirty = false; };
     Slot& Load(const std::string& slot);
     std::string directory_;
+    SaveStorage storage_;
     std::map<std::string, Slot> slots_;
 };
 

@@ -13,10 +13,30 @@ arbitrary file paths through commands or Lua. Slots are independent objects.
       and TemplateGamePlaythrough. CLI script/exec across processes restores
       score 123; default exec remains empty in memory mode. Existing editor
       C4458 warnings remain. Non-Windows build checks follow in P1.2.
-- [ ] P1.2: Player defaults: Windows user data, Android internal data, browser
+- [x] P1.2: Player defaults: Windows user data, Android internal data, browser
       localStorage; platform build and runtime verification.
+      Windows player launches restore counters 0/1 then 1/2. Browser reload
+      restores 0/1 then 1/2 (visible HUD and Lua logs). Windows tests pass;
+      WebAssembly and Android arm64-v8a/x86_64 Release players build. Null
+      backend passes a Clang C++17 syntax/warnings check using the NDK toolchain.
 - [ ] P1.3: User documentation, regenerated API, optional template high score,
       refreshed prebuilt runtimes where toolchains exist; record remaining checks.
+- [ ] Android save/restart on a device: no adb device was connected. Install a
+      save-probe APK, force-stop/relaunch, and check the internal slot JSON.
+- [ ] Native Linux full build/runtime: only the null source syntax check ran.
+
+## Player defaults
+
+Packaged players enable persistence before scripts start. Windows stores files in
+`%APPDATA%/<gameName>/`; Android uses `internalDataPath/saves/<gameName>/`; the null
+backend uses `$XDG_DATA_HOME/<gameName>/` or `$HOME/.local/share/<gameName>/`. Unsafe
+path characters in the project name are percent-encoded. Web saves use the
+origin's localStorage with key `ownengine.save:<gameName>:<slot>`. Games sharing
+an origin must use distinct project names for separate save namespaces. Storage
+access/quota errors are reported; pending writes remain dirty and can be retried.
+
+There is no implicit flush on shutdown: call `save.flush` at checkpoints. Browser
+tabs and mobile processes can disappear without a normal shutdown callback.
 
 ## Contract
 

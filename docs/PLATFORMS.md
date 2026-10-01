@@ -10,6 +10,8 @@ Everything else (`core`, `scene`, `api`, `app`, `render`) is portable C++17 with
 `PlatformReplaceFile` atomically replaces a file in the same filesystem (Win32
 `MoveFileExW`, POSIX `rename`). Save slots use it after closing a temporary file;
 failed writes preserve the previous save. See [SAVE.md](SAVE.md).
+`PlatformSaveStorage` supplies a player data directory on native platforms and
+read/write localStorage callbacks on the web; engine code contains no OS calls.
 
 | Platform | Status | Platform layer | Renderer | Notes |
 |---|---|---|---|---|

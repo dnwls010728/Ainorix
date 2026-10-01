@@ -618,4 +618,14 @@ bool PlatformReplaceFile(const std::string& from, const std::string& to, std::st
     return false;
 }
 
+SaveStorage PlatformSaveStorage(const std::string& gameName) {
+    DWORD length = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+    if (!length) return {};
+    std::wstring directory(length, L'\0');
+    DWORD copied = GetEnvironmentVariableW(L"APPDATA", directory.data(), length);
+    if (!copied || copied >= length) return {};
+    directory.resize(copied);
+    return {Narrow(directory) + "/" + gameName, {}, {}};
+}
+
 }  // namespace oe
