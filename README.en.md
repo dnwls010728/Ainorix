@@ -79,7 +79,7 @@ build\bin\oe.exe api --markdown             :: print the command reference
 | CLI / scripts | `oe exec`, `oe script` (JSON in and out, exit code 1 on failure) |
 | HTTP | `POST /api/call {"command": "...", "args": {...}}` |
 
-This repository's [.mcp.json](.mcp.json) connects the `samples/Hello` project to Claude Code as an MCP server (build first). The working guide for agents is in [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md), the full API in [docs/API.md](docs/API.md) and the architecture in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+This repository's [.mcp.json](.mcp.json) connects the `samples/Hello` project to Claude Code as an MCP server (build first). The working guide for agents is in [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md), the full API in [docs/API.md](docs/API.md) the architecture in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the design rules every contributor (human or AI agent) follows in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Layout
 

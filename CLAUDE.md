@@ -2,6 +2,8 @@
 
 OwnEngine is a small C++17 game engine designed to be driven and verified by AI agents as easily as by humans. Everything the editor can do is a command in one registry, reachable from the CLI, HTTP and MCP.
 
+**Before changing code, read [docs/DESIGN.md](docs/DESIGN.md)**: the invariants, where code goes, code style, the definition of done and how to hand work over between sessions/agents. This file is also `AGENTS.md` (read by other agents); keep the two identical (the `AgentInstructionsInSync` test checks it).
+
 ## Build & test (Windows)
 
 ```bash
@@ -77,3 +79,4 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - Shaders: edit `engine/render/shaders/Shaders.glsl`, run `tools/shaders/compile_shaders.bat` (needs `sokol-shdc`), commit the regenerated `Shaders.glsl.h`. Lighting changes must be made in both renderers (`GpuRendererMatchesSoftware` compares them). New screen-space effects go into the composite pass of `GpuRenderer`.
 - Editor: new UI goes in `engine/editor/` and changes the scene only through commands (`Impl::Call`), so undo and agents stay in sync. UI text is English in code wrapped in `Tr("...")` (window/popup names `TrId`), with a Korean + Japanese row in `engine/editor/EditorText.cpp` (`EditorTranslations` test). Check it visually with `oe editor <project> --screenshot`; `NativeEditorHeadless` in `tests/tests.cpp` drives it with window events.
 - Keep `docs/API.md` regenerated when commands or components change, and add a test in `tests/tests.cpp` for new behaviour.
+- Long features keep a work-log checklist in their doc and are committed per milestone (docs/DESIGN.md §5), so any agent can continue them.
