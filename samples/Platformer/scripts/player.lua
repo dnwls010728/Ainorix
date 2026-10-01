@@ -119,6 +119,7 @@ function Player:die()
   if not self.controls then return end
   self.controls = false
   self.hurtTimer = 0.6
+  require("scripts.effects").spawn(self:position(), "hit")
   audio.play("sounds/hurt.wav", { volume = 0.6 })
   scene.broadcast("onPlayerDied")
 end

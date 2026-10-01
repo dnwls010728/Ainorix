@@ -58,6 +58,7 @@ end
 -- From a bolt: `dir` is the bolt's velocity.
 function Slime:hit(dir)
   if self.dead then return end
+  require("scripts.effects").spawn(self:position(), "hit")
   self.hp = self.hp - 1
   local len = math.max(0.01, math.sqrt(dir.x * dir.x + dir.y * dir.y))
   self.knock = { x = dir.x / len * 7, y = dir.y / len * 7 }

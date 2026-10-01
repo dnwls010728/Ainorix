@@ -3,7 +3,7 @@
 ## Implementation status (work log)
 
 P1, P2 and P3.1 were integrated into main directly at the user's request.
-P3.2 continues from that combined main; sample gameplay effects remain P3.3.
+P3.2 and P3.3 continue from that combined main.
 
 - [x] P3.1: Reflected ParticleEmitter, bounded deterministic fixed-step simulation,
       explicit state/burst/clear commands, Lua burst helpers and simulation tests.
@@ -21,13 +21,24 @@ P3.2 continues from that combined main; sample gameplay effects remain P3.3.
       single/multi-thread equality and D3D11 comparison (mean channel difference
       0.118/0.180 of 255; fully covered interiors differ by less than 2 of 255).
       Software/GPU PNGs were inspected. Both Android ABI players rebuilt;
-      browser and Android device execution of this milestone remain unverified.
+      browser execution is covered below; Android device execution remains unverified.
       Node/WASM passes 70 tests, including the same fixed particle frame hashes
       as Windows (2D eeb1529ca41029c9; 3D 4ea73d9e1b71d479). GPU tests skip
       in Node because there is no browser canvas. CLI script screenshots also
       verified a world-space colored burst in software and D3D11.
-- [ ] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
-      Android runtimes rebuilt, available platform verification and final PR.
+- [x] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
+      Android runtimes rebuilt and available platform verification. Windows passes
+      75 tests and Node/WASM passes 71. SampleParticleEffects drives real coin
+      trigger collection in both samples, enemy/player hit callbacks, visible
+      orthographic particles, cleanup and repeatable scene/frame output.
+      Native PNGs were inspected. Packaged Platformer ran with WebGL2 and no
+      console errors; an ignored copy used a helper to move coins onto the player,
+      exercising the actual collection callback and displaying its particle burst.
+      The helper is not part of either sample. P3.2 runtimes are current because
+      this milestone changes only Lua, documentation and tests.
+- [ ] Hardware follow-up: run packaged samples on an Android device and verify
+      coin/hit bursts and expiry; run the rendering suite on Linux/EGL. No Android
+      device or Linux execution was available for this feature.
 
 ## Simulation contract
 
@@ -66,7 +77,17 @@ Burst/clear change transient simulation state, like audio playback, and do not
 participate in scene undo. Reflected emitter settings serialize normally and
 component edits participate in undo. Particle coordinate snapshots, colors,
 sizes, opacity and gravity are captured at birth; world-space velocities include
-the spawn transform's scale/rotation. Sample gameplay verification remains P3.3.
+the spawn transform's scale/rotation.
+
+## Sample gameplay effects
+
+Both samples expose scripts/effects.lua as require("scripts.effects").spawn(position,
+kind), with kind "coin" for gold sparkles or "hit" for red sparks. Coin collection,
+enemy hits and player damage call it; Platformer bonus blocks also produce sparkles.
+Each effect is a separate world-space emitter, so destroying the coin or enemy
+does not remove the burst. There are 12 coin particles or 16 hit particles, with
+0.5-second lifetimes and a 16-particle cap. The attached effects script destroys
+the effect entity after 0.65 seconds, avoiding an accumulation of empty emitters.
 
 ## Rendering contract
 

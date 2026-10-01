@@ -15,7 +15,7 @@ AI が人と同じように扱い、検証できるように設計した C++17 �
 - 2 つのレンダラーが同じシーンを描画: **GPU レンダラー** (sokol_gfx - Windows は D3D11、Web は WebGL2、Linux は GLES3。4x MSAA、フィルタリングされた影、ミップマップ、シェーダーは `engine/render/shaders/Shaders.glsl` 1 つ) はゲームウィンドウ・Web・エディタービュー用、**ソフトウェアレンダラー** (マルチスレッド、決定的) はスクリーンショットのハッシュ・テスト・ピッキング用
 - レンダリング: glTF モデル、PNG/JPEG テクスチャ、スムーズ/フラットシェーディング、ポイントライト、影、平行投影/追従カメラ、デバッグ描画 - [docs/RENDERING.md](docs/RENDERING.md)
 - スケルタルアニメーション: glTF TRS・スキン、LINEAR/STEP/CUBICSPLINE、Animator/API/Lua 再生、ソフトウェア/GPU スキニング（最大64ジョイント）。Showcase のキツネは停止・移動・Shift ダッシュで Survey/Walk/Run を切り替えます - [docs/ANIMATION.md](docs/ANIMATION.md)
-- パーティクル: 決定的な2D/3D放出、ローカル/ワールド空間、API/Lua burst、両レンダラーのカメラビルボード、寿命に応じたサイズ・色・透明度とシートフレーム - [docs/PARTICLES.md](docs/PARTICLES.md)
+- パーティクル: 決定的な2D/3D放出、ローカル/ワールド空間、API/Lua burst、両レンダラーのカメラビルボード、寿命に応じたサイズ・色・透明度とシートフレーム。Platformer・Dungeonにコイン・被弾エフェクト - [docs/PARTICLES.md](docs/PARTICLES.md)
 - マテリアル / PBR / 半透明: metallic-roughness (GGX) シェーディング、法線・AO・発光マップ、半透明 (奥から手前へソート)・マスク・両面、glTF マテリアルの完全読み込み、`.mat.json` マテリアルファイル (`material.create` / `material.set`、ホットリロード) - [docs/RENDERING.md](docs/RENDERING.md)
 - Jolt による 3D 物理と Box2D による 2D 物理 (剛体、トリガー、キャラクターコントローラー、一方通行の足場・多角形・衝突レイヤー、決定的シミュレーション) - [docs/PHYSICS.md](docs/PHYSICS.md)
 - ゲーム UI: TrueType フォント (あらゆる言語、フォントファイルを追加)、アンカー・ストレッチ・親子配置、レイアウト (縦/横/グリッド、内容に合わせたサイズ)、リッチテキスト・折り返し・アウトライン・影、角丸・枠付きパネル、ボタンの状態 (ホバー/押下/無効)、画像 (9-slice、フィルバー)、スライダー/プログレスバー、クリッピング、キャンバススケール - [docs/UI.md](docs/UI.md)

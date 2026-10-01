@@ -43,7 +43,9 @@ function Slime:onUpdate(dt)
 end
 
 function Slime:squash()
+  if self.dead then return end
   self.dead = true
+  require("scripts.effects").spawn(self:position(), "hit")
   audio.play("sounds/stomp.wav", { volume = 0.7 })
   self:remove("CharacterBody")
   self:set("SpriteAnimation", { clip = "squash" })

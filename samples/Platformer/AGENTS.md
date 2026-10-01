@@ -12,6 +12,9 @@ Collect coins, bump "?" blocks from below, stomp slimes, avoid spikes and pits, 
   bumps), `slime.lua` (patrol, stomp), `game.lua` (lives, coins, clock, end screens), `level.lua`,
   `coin.lua`, `pop.lua`, `goal.lua`, `parallax.lua` (background layers tagged `parallax hills/clouds`).
 - Prefabs: `prefabs/coin.prefab.json`, `prefabs/slime.prefab.json`.
+- Effects: `scripts/effects.lua` exports `spawn(position, "coin"|"hit")` for coin,
+  bonus-block, player-damage and stomp bursts. Separate world-space emitters use
+  0.5-second particles and destroy their effect entities after 0.65 seconds.
 - Art: `tools/make_art.py` generates `assets/sprites/*.png` (player 9 frames, tiles 8x2, coin 4, slime 3,
   hills, cloud). Edit and rerun `python tools/make_art.py`; `tools/` is not packaged.
 - Verify:  `oe render . --frames 60 --out shot.png` (1280x720 recommended) and look at the PNG.
