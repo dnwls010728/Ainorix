@@ -1970,6 +1970,79 @@ TEST(GpuRendererMatchesSoftware) {
     CHECK(!Call(e, "render.screenshot", R"J({"renderer": "vulkan", "inline": false})J")["ok"].asBool());
 }
 
+TEST(AnimatedSkinRenderers) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("skin_renderers"), &err));
+    CHECK(CopyFileTo(TestSourceDir() + "/samples/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Fox","components":{"Transform":{"scale":[0.012,0.012,0.012]},"MeshRenderer":{"mesh":"assets/models/fox.glb","color":[1,1,1]},"Animator":{"clip":"Walk","playing":false}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-65,25,0]},"DirectionalLight":{"shadowStrength":0.8}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[8,1,8],"position":[0,-0.01,0]},"MeshRenderer":{"mesh":"plane","color":[0.5,0.5,0.5]}}})J");
+    EntityId fox = e.GetScene().FindByName("Fox");
+    RenderView view = MakeLookAtView(Vec3(2,1.5f,2), Vec3(0,0.45f,0), 45, 320.0f/180);
+    view.drawUI = false;
+    RenderTarget sw, again, gpu;
+    sw.Resize(320,180);
+    again.Resize(320,180);
+    gpu.Resize(320,180);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    uint64_t start = sw.Hash();
+    Call(e, "component.set", R"J({"id":"Fox","type":"Animator","values":{"time":0.25}})J");
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    SetMaxRenderThreads(16);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(sw.Hash() != start && sw.Hash() == again.Hash() && CountId(sw, fox) > 500);
+    CHECK(WritePng("build/animated-walk-software.png", sw.ToImage(), true));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    for (const char* clip : {"Survey", "Walk", "Run"}) {
+        Json args = Json::parse(R"J({"id":"Fox","type":"Animator","values":{"time":0.25,"playing":false}})J");
+        args["values"]["clip"] = clip;
+        e.Call("component.set", args);
+        for (const char* shading : {"smooth", "flat"}) {
+            Json material = Json::parse(R"J({"id":"Fox","type":"MeshRenderer","values":{}})J");
+            material["values"]["shading"] = shading;
+            e.Call("component.set", material);
+            e.Renderer().Render(e.GetScene(), view, sw);
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double total = 0, interior = 0;
+            int interiorCount = 0, outliers = 0;
+            for (int y = 1; y < 179; ++y) for (int x = 1; x < 319; ++x) {
+                size_t i = static_cast<size_t>(y)*320 + static_cast<size_t>(x);
+                bool inside = sw.ids[i] == fox && sw.ids[i-1] == fox && sw.ids[i+1] == fox &&
+                              sw.ids[i-320] == fox && sw.ids[i+320] == fox;
+                int worst = 0;
+                for (int ch = 0; ch < 3; ++ch) {
+                    int diff = std::abs(static_cast<int>((sw.color[i] >> (8*ch)) & 255) - static_cast<int>((gpu.color[i] >> (8*ch)) & 255));
+                    total += diff;
+                    if (inside) interior += diff;
+                    worst = std::max(worst, diff);
+                }
+                interiorCount += inside;
+                outliers += worst > 64;
+            }
+            double mean = total / (sw.color.size()*3.0);
+            double foxMean = interiorCount ? interior / (interiorCount*3.0) : 255;
+            std::printf("  skin %s/%s: mean %.2f, Fox interior %.2f, outliers %d\n", clip, shading, mean, foxMean, outliers);
+            CHECK(mean < 2 && foxMean < 8 && outliers < static_cast<int>(sw.color.size())/100);
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == gpu.Hash());
+            if (std::string(clip) == "Walk" && std::string(shading) == "smooth")
+                CHECK(WritePng("build/animated-walk-gpu.png", gpu.ToImage(), true));
+        }
+    }
+    view.highlight = fox;
+    e.Renderer().Render(e.GetScene(), view, sw);
+    e.Gpu()->Render(e.GetScene(), view, gpu);
+    auto orange = [](uint32_t c) { return (c & 255) > 230 && ((c >> 8) & 255) > 140 && ((c >> 8) & 255) < 175 && ((c >> 16) & 255) < 50; };
+    CHECK(std::count_if(sw.color.begin(), sw.color.end(), orange) > 30);
+    CHECK(std::count_if(gpu.color.begin(), gpu.color.end(), orange) > 30);
+}
+
 TEST(WebGamePak) {
     // `oe package --web` data: the page unpacks game.pak into /game.
     std::string dir = TestSourceDir() + "/samples/Hello";

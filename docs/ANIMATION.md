@@ -21,8 +21,13 @@ latest main so the features remain separate PRs; it does not depend on save data
       Windows Release build and all 65 tests pass, covering known interpolation
       values, inverse binds, parent ordering, serialization/undo, seeking, pause,
       endpoints, reverse loops, Lua errors and identical poses after replay.
-- [ ] P2.3: Shared RenderScene palette; software vertex skinning and GPU vertex
+- [x] P2.3: Shared RenderScene palette; software vertex skinning and GPU vertex
       shader skinning for scene, shadow and selection passes; regenerated shaders.
+      Windows/D3D11 build and all 66 tests pass. AnimatedSkinRenderers compares
+      Survey/Walk/Run in smooth and flat shading, checks changed pose hashes,
+      thread determinism, GPU cache stability and selection outlines. Walking
+      software/GPU screenshots inspected; poses and shadows agree. GLSL ES 3.0
+      and desktop GLSL generated alongside HLSL5; web/Android execution remains P2.4.
 - [ ] P2.4: Fox Survey/Walk/Run demo, image/hash and GPU comparison tests, docs and
       API refresh, web/Android prebuilt runtimes and available platform checks.
 
@@ -47,9 +52,24 @@ translation and scale use FLOAT. Skin weights accept FLOAT or normalized unsigne
 bytes/shorts. Missing inverse bind matrices use identity. Duplicate clip names
 receive stable numeric suffixes; unnamed clips use their source index.
 
-Skin deformation is not connected to rendering yet (P2.3). Playback and pose
-queries work; this milestone preserves the existing rendered appearance.
-Web/Android runtime rebuilds and platform verification remain part of P2.4.
+Skin deformation is connected to both renderers, including GPU shadow and
+selection passes. Web/Android runtime rebuilds and platform verification remain
+part of P2.4.
+
+## Rendering contract
+
+RenderScene evaluates one palette per entity without modifying cached models.
+Both renderers blend four joint matrices using the normalized vertex weights,
+then transform positions/tangents with that matrix and normals with its inverse
+transpose. Zero-weight vertices use identity. Flat normals follow deformed
+triangles (GPU fragment derivatives); smooth normals are normalized per vertex.
+Pose bounds are recomputed for shadow fitting and transparent draw ordering.
+GPU vertex uniforms contain at most 64 matrices, including rigid node bindings.
+
+Shaders were regenerated using the official sokol-tools-bin Windows compiler
+(SHA256 BD616287F9EA689D53C6D260E443EE733E61AE1B73A9B37ADC482EAD0364D561)
+through tools/shaders/compile_shaders.bat. The compiler is an ignored build tool;
+normal builds use the committed generated header without downloading it.
 
 ## Playback controls
 

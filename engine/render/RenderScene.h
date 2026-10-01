@@ -18,6 +18,8 @@ struct RenderItem {
     std::shared_ptr<const Mesh> mesh;  // built-in meshes use a non-owning pointer (use_count 0)
     Mat4 world;
     Mat4 normalMatrix;
+    std::vector<Mat4> joints;  // model-space pose palette, shared with GPU uniforms
+    Vec3 boundsMin, boundsMax;  // model-space bounds of the current pose
     Color tint;
     std::shared_ptr<const Texture> textureOverride;    // MeshRenderer.texture; null = the material's own
     std::shared_ptr<const Material> materialOverride;  // MeshRenderer.material; null = the mesh's materials
@@ -38,6 +40,8 @@ struct RenderItem {
     // Material of a submesh with this item's overrides applied (tint, texture,
     // opacity, unlit, sprite cutoff and sampling).
     Material SubmeshMaterial(const Submesh& sub) const;
+    // Four normalized influences; static/zero-weight vertices use identity.
+    Mat4 VertexSkinMatrix(size_t vertex) const;
 };
 
 // One submesh to draw. Opaque and cut-out surfaces first (item order), then

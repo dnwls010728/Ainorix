@@ -7,6 +7,7 @@
 
 #include "assets/Assets.h"
 #include "scene/Components.h"
+#include "scene/Systems.h"
 #include "scene/TileGrid.h"
 
 namespace oe {
@@ -91,12 +92,28 @@ Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
     return m;
 }
 
+Mat4 RenderItem::VertexSkinMatrix(size_t vertex) const {
+    if (joints.empty() || vertex >= mesh->skin.size()) return Mat4{};
+    const SkinVertex& skin = mesh->skin[vertex];
+    float total = 0;
+    Mat4 matrix;
+    for (float& value : matrix.m) value = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        float weight = skin.weights[k];
+        if (weight == 0) continue;
+        const Mat4& joint = joints[skin.joints[k]];
+        for (size_t j = 0; j < 16; ++j) matrix.m[j] += joint.m[j] * weight;
+        total += weight;
+    }
+    return total > 0 ? matrix : Mat4{};
+}
+
 std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye) {
     std::vector<DrawCall> opaque, blended;
     std::vector<float> distance;
     for (size_t i = 0; i < items.size(); ++i) {
         const RenderItem& it = items[i];
-        Vec3 center = it.world.TransformPoint((it.mesh->boundsMin + it.mesh->boundsMax) * 0.5f);
+        Vec3 center = it.world.TransformPoint((it.boundsMin + it.boundsMax) * 0.5f);
         float d = Length(center - eye);
         for (size_t s = 0; s < it.mesh->submeshes.size(); ++s) {
             if (it.mesh->submeshes[s].indexCount == 0) continue;
@@ -155,6 +172,11 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             }
         }
         if (!mr.texture.empty() && assets && !it.error) it.textureOverride = assets->GetTexture(mr.texture);
+        if (!it.mesh->joints.empty()) {
+            const Animator* animator = scene.Get<Animator>(kv.first);
+            const AnimationClip* clip = animator ? FindAnimationClip(*it.mesh, animator->clip) : nullptr;
+            it.joints = EvaluateAnimationPose(*it.mesh, clip, animator ? animator->time : 0);
+        }
         items.push_back(std::move(it));
     }
 
@@ -219,6 +241,18 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         items.push_back(std::move(it));
     }
     std::stable_sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) { return a.id < b.id; });
+    for (RenderItem& item : items) {
+        item.boundsMin = item.mesh->boundsMin;
+        item.boundsMax = item.mesh->boundsMax;
+        if (item.joints.empty()) continue;
+        item.boundsMin = Vec3(1e30f, 1e30f, 1e30f);
+        item.boundsMax = Vec3(-1e30f, -1e30f, -1e30f);
+        for (size_t i = 0; i < item.mesh->positions.size(); ++i) {
+            Vec3 p = item.VertexSkinMatrix(i).TransformPoint(item.mesh->positions[i]);
+            item.boundsMin = Vec3(std::min(item.boundsMin.x, p.x), std::min(item.boundsMin.y, p.y), std::min(item.boundsMin.z, p.z));
+            item.boundsMax = Vec3(std::max(item.boundsMax.x, p.x), std::max(item.boundsMax.y, p.y), std::max(item.boundsMax.z, p.z));
+        }
+    }
     return items;
 }
 

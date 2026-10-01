@@ -28,6 +28,8 @@ struct MeshVertex {
     float nrm[3];
     float uv[2];
     float tan[4];
+    float joints[4];
+    float weights[4];
 };
 
 struct ColorVertex {
@@ -289,6 +291,8 @@ struct GpuRenderer::Impl {
                 d.layout.attrs[ATTR_oe_mesh_normal] = {0, offsetof(MeshVertex, nrm), SG_VERTEXFORMAT_FLOAT3};
                 d.layout.attrs[ATTR_oe_mesh_texcoord] = {0, offsetof(MeshVertex, uv), SG_VERTEXFORMAT_FLOAT2};
                 d.layout.attrs[ATTR_oe_mesh_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
+                d.layout.attrs[ATTR_oe_mesh_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
+                d.layout.attrs[ATTR_oe_mesh_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
                 d.index_type = SG_INDEXTYPE_UINT32;
                 d.depth.pixel_format = kDepthFormat;
                 d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
@@ -302,10 +306,12 @@ struct GpuRenderer::Impl {
                 meshPips[blend][twoSided] = sg_make_pipeline(&d);
             }
         }
-        // Position-only pipelines read the first 12 bytes of MeshVertex.
+        // Shadow and selection passes use the same skin influences as the scene.
         auto positionOnly = [](sg_pipeline_desc& d) {
             d.layout.buffers[0].stride = sizeof(MeshVertex);
             d.layout.attrs[0] = {0, 0, SG_VERTEXFORMAT_FLOAT3};
+            d.layout.attrs[ATTR_oe_shadow_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_shadow_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
             d.index_type = SG_INDEXTYPE_UINT32;
             d.face_winding = SG_FACEWINDING_CCW;
             d.depth.pixel_format = kDepthFormat;
@@ -516,6 +522,10 @@ struct GpuRenderer::Impl {
             v.tan[1] = t.y;
             v.tan[2] = t.z;
             v.tan[3] = t.w;
+            if (i < m.skin.size()) for (size_t k = 0; k < 4; ++k) {
+                v.joints[k] = static_cast<float>(m.skin[i].joints[k]);
+                v.weights[k] = m.skin[i].weights[k];
+            }
             const Vec3& p = m.positions[i];
             v.pos[0] = p.x;
             v.pos[1] = p.y;
@@ -622,8 +632,8 @@ struct GpuRenderer::Impl {
             for (const RenderItem& it : items) {
                 if (it.unlit) continue;
                 anyCaster = anyCaster || it.castShadows;
-                const Vec3& a = it.mesh->boundsMin;
-                const Vec3& b = it.mesh->boundsMax;
+                const Vec3& a = it.boundsMin;
+                const Vec3& b = it.boundsMax;
                 for (int c = 0; c < 8; ++c) {
                     Vec3 p = it.world.TransformPoint(Vec3(c & 1 ? b.x : a.x, c & 2 ? b.y : a.y, c & 4 ? b.z : a.z));
                     lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
@@ -654,6 +664,7 @@ struct GpuRenderer::Impl {
                 }
                 oe_pos_vs_params_t u{};
                 Put(u.mvp, fit.viewProj * it.world);
+                for (size_t j = 0; j < it.joints.size(); ++j) Put(u.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
                 sg_bindings b{};
                 b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
@@ -753,6 +764,7 @@ struct GpuRenderer::Impl {
                 Put(vu.view_proj, viewProj);
                 Put(vu.model, it.world);
                 Put(vu.normal_mat, it.normalMatrix);
+                for (size_t j = 0; j < it.joints.size(); ++j) Put(vu.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
                 sg_view base = TextureFor(m.baseTexture);
                 sg_view normal = m.unlit ? sg_view{} : TextureFor(m.normalTexture);
@@ -767,7 +779,7 @@ struct GpuRenderer::Impl {
                 Put(mu.uv_rect, it.uvOffset[0], it.uvOffset[1], it.uvScale[0], it.uvScale[1]);
                 Put(mu.uv_tiling, m.tiling[0], m.tiling[1], m.offset[0], m.offset[1]);
                 Put(mu.pbr, m.metallic, m.roughness, m.normalScale, m.occlusionStrength);
-                Put(mu.emissive, em.r, em.g, em.b, 0);
+                Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
@@ -826,6 +838,7 @@ struct GpuRenderer::Impl {
                         if (stage == 1 && items[i].id != view.highlight) continue;
                         oe_pos_vs_params_t u{};
                         Put(u.mvp, viewProj * items[i].world);
+                        for (size_t j = 0; j < items[i].joints.size(); ++j) Put(u.joint_palette[j], items[i].joints[j]);
                         sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
                         sg_bindings b{};
                         b.vertex_buffers[0] = gpuMeshes[i]->vbuf;

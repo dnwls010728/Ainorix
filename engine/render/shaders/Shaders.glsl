@@ -25,12 +25,15 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 view_proj;
     mat4 model;
     mat4 normal_mat;
+    mat4 joint_palette[64];
 };
 
 in vec3 position;
 in vec3 normal;
 in vec2 texcoord;
 in vec4 tangent;
+in vec4 joint_indices;
+in vec4 joint_weights;
 
 out vec3 v_wpos;
 out vec3 v_nrm;
@@ -38,10 +41,19 @@ out vec4 v_tan;
 centroid out vec2 v_uv;
 
 void main() {
-    vec4 wp = model * vec4(position, 1.0);
+    mat4 skin = mat4(1.0);
+    if (dot(joint_weights, vec4(1.0)) > 0.0) {
+        skin = joint_palette[int(joint_indices.x)] * joint_weights.x +
+               joint_palette[int(joint_indices.y)] * joint_weights.y +
+               joint_palette[int(joint_indices.z)] * joint_weights.z +
+               joint_palette[int(joint_indices.w)] * joint_weights.w;
+    }
+    // Treat the blended xyz as a point, matching CPU TransformPoint even when float weights sum imperfectly.
+    vec4 wp = model * vec4((skin * vec4(position, 1.0)).xyz, 1.0);
     v_wpos = wp.xyz;
-    v_nrm = (normal_mat * vec4(normal, 0.0)).xyz;
-    v_tan = vec4((model * vec4(tangent.xyz, 0.0)).xyz, tangent.w);
+    mat4 skin_normal = abs(determinant(skin)) < 1e-12 ? mat4(1.0) : transpose(inverse(skin));
+    v_nrm = normalize((normal_mat * skin_normal * vec4(normal, 0.0)).xyz);
+    v_tan = vec4(normalize((model * skin * vec4(tangent.xyz, 0.0)).xyz), tangent.w);
     v_uv = texcoord;
     gl_Position = view_proj * wp;
 }
@@ -56,7 +68,7 @@ layout(binding=1) uniform mesh_material {
     vec4 uv_rect;     // item uv rect: uv * zw + xy (sprite sheet frame, flips)
     vec4 uv_tiling;   // material: uv * xy + zw
     vec4 pbr;         // x: metallic, y: roughness, z: normal scale, w: occlusion strength
-    vec4 emissive;    // rgb: emissive * intensity
+    vec4 emissive;    // rgb: emissive * intensity, w: flat shading
     vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
 };
 
@@ -147,6 +159,10 @@ void main() {
     vec3 color = base;
     if (flags.x < 0.5) {
         vec3 ng = normalize(v_nrm);
+        if (emissive.w > 0.5) {
+            vec3 face = normalize(cross(dFdx(v_wpos), dFdy(v_wpos)));
+            ng = dot(face, ng) < 0.0 ? -face : face;
+        }
         if (flags.w > 0.5 && !gl_FrontFacing) {
             ng = -ng;
         }
@@ -227,12 +243,22 @@ void main() {
 @hlsl_options fixup_clipspace
 layout(binding=0) uniform pos_vs_params {
     mat4 mvp;
+    mat4 joint_palette[64];
 };
 
 in vec3 position;
+in vec4 joint_indices;
+in vec4 joint_weights;
 
 void main() {
-    gl_Position = mvp * vec4(position, 1.0);
+    mat4 skin = mat4(1.0);
+    if (dot(joint_weights, vec4(1.0)) > 0.0) {
+        skin = joint_palette[int(joint_indices.x)] * joint_weights.x +
+               joint_palette[int(joint_indices.y)] * joint_weights.y +
+               joint_palette[int(joint_indices.z)] * joint_weights.z +
+               joint_palette[int(joint_indices.w)] * joint_weights.w;
+    }
+    gl_Position = mvp * vec4((skin * vec4(position, 1.0)).xyz, 1.0);
 }
 @end
 
