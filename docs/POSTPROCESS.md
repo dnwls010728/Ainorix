@@ -17,7 +17,7 @@ remain in independent PRs; none is a prerequisite for screen effects.
       Real Showcase CLI screenshots were inspected: off f41d641b55beb483,
       software vignette cac0b279d7c910b7, D3D11 c516b61d9ed5c27e.
       Shaders regenerated with sokol-shdc; web and both Android ABI players
-      rebuilt. WebGL2/Android GPU execution of the effect remains pending.
+      rebuilt. WebGL2 vignette and Android GPU execution remain pending.
 - [ ] P6.2: Exposure/tone mapping and bloom, including required color-buffer
       precision, documented color-space behavior and available backend checks.
       - [x] P6.2a: Preserve HDR lighting and emissive values through scene blending;
@@ -27,8 +27,12 @@ remain in independent PRs; none is a prerequisite for screen effects.
             neutral/HDR target transitions, GPU interior colors, UI separation,
             worker determinism, API serialization and undo/redo. CLI screenshots
             inspected: off f729ad6fed6de3b7, software 28784ac8a8dd0ddc,
-            D3D11 959887780e35a43c. Shader/API regeneration completed; player
-            refresh and actual WebGL2 HDR execution are recorded below when done.
+            D3D11 959887780e35a43c. Shader/API regeneration completed; web and
+            both Android ABI players rebuilt from 4650059. Browser WebGL2
+            execution confirms Reinhard color, switching back to neutral HDR-off
+            output, black scene at zero exposure with a readable white HUD,
+            and restoring Reinhard after zero exposure. Android device and
+            Linux/EGL execution remain unchecked.
       - [ ] P6.2b: Extract and blur highlights before tone mapping for optional bloom.
 - [ ] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
       resolution changes and separation from UI/selection overlays.

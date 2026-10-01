@@ -172,8 +172,9 @@ do not block this feature and their changes are not repeated on this branch.
   and Showcase off/on screenshots checked. Shaders and players are refreshed.
   Exposure/HDR Reinhard tone mapping is also implemented: Windows 74 and
   Node/WASM 70 tests pass, including preservation of bright emissive values
-  through alpha blending and a software/D3D11 comparison. Bloom, FXAA,
-  custom materials and additional GPU execution remain.
+  through alpha blending and a software/D3D11 comparison. WebGL2 HDR transitions
+  and zero exposure/HUD separation are checked; web and both Android ABI
+  runtimes are refreshed. Bloom, FXAA, custom materials and hardware follow-ups remain.
 
 - composite 패스(`GpuRenderer`)가 연결 지점. 톤매핑, 블룸, FXAA, 비네트를 켜고 끄는 컴포넌트/카메라 설정부터. **소프트웨어 렌더러는 기준**이므로 효과가 해시에 영향을 주면 안 되게 기본값은 꺼짐으로 두거나, 양쪽 모두 구현한다(`CLAUDE.md` 규칙). 커스텀 셰이더 머티리얼은 sokol-shdc 의존이 커서 이 항목의 후반부로 둔다.
 
