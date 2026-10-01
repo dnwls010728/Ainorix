@@ -8,11 +8,11 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 The runtime does not depend on the game: every project uses the same files.
 
 - Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
-- Engine source: commit 59775cd (P4.1 logical gamepad input on integrated main).
-  Includes raw stick/trigger axes, shared 0.15 dead zone, input.axis injection,
-  sim.state inspection, Lua input.axis and play-session input reset. Physical
-  Gamepad API polling remains P4.2; this runtime currently supports injected axes.
-  Windows passed 73 tests and Node/WASM passed 69. P1 saves, P2 skeletal animation
+- Engine source: commit b1f5f9e (P4.2 platform gamepads on integrated main).
+  Includes standard-mapping Gamepad API polling, stick/trigger axes, named
+  buttons, shared 0.15 dead zone, input.axis injection, sim.state inspection,
+  Lua input.axis and focus/disconnect reset. Physical controllers remain
+  unverified. Windows passed 74 tests and Node/WASM passed 70. P1 saves, P2 skeletal animation
   and P3.1 particle simulation remain included. P3 rendering is a separate PR.
 - On this Windows host Binaryen's parallel optimizer crashed; the successful
   rebuild used `BINARYEN_CORES=1`.

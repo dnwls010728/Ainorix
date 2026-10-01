@@ -8,11 +8,12 @@ needs Java.
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
 - Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
-- Source: 59775cd (P4.1 logical gamepad axes on integrated main). Both ABIs
-  rebuilt without new warnings. Includes shared raw-axis/dead-zone handling,
-  API injection, Lua reads and stop reset, alongside P1 saves, P2 animation and
-  P3.1 particle simulation. Android physical analog/button mapping remains P4.2;
-  this milestone does not claim real-controller verification.
+- Source: b1f5f9e (P4.2 platform gamepads on integrated main). Both ABIs
+  rebuilt without new warnings. Includes Android analog stick/trigger axes,
+  named buttons, legacy key aliases, disconnect/focus reset, shared dead zone,
+  API injection and Lua reads, alongside P1 saves, P2 animation and P3.1 particle
+  simulation. Windows passes 74 tests and Node/WASM 70; Android physical
+  controllers remain unverified.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).
