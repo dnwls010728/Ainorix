@@ -43,8 +43,10 @@ public:
     // loaded modules). Used when a game changes scene.
     void ResetInstances();
     // Reloads modules whose files changed on disk. Existing instances keep
-    // their state and pick up the new functions. Returns reloaded paths.
-    std::vector<std::string> PollHotReload();
+    // their state and pick up the new functions. changedPath forces a known
+    // project-relative API write to reload even if its timestamp is unchanged.
+    // Returns reloaded paths.
+    std::vector<std::string> PollHotReload(const std::string& changedPath = {});
     // Calls onCollisionEnter/Exit and onTriggerEnter/Exit(self, otherId) on
     // both entities of every event.
     void DispatchPhysicsEvents(const std::vector<PhysicsEvent>& events);

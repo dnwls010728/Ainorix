@@ -47,7 +47,7 @@ build\bin\oe.exe import MyGame model.glb     :: 외부 모델/텍스처/사운�
 build\bin\oe.exe package MyGame             :: 배포용 폴더 dist\MyGame\ 생성 (MyGame.exe + game\)
 build\bin\oe.exe package MyGame --web       :: 웹 배포 폴더 dist\MyGame-web\ (index.html + wasm, 정적 호스팅 어디든)
 build\bin\oe.exe serve dist\MyGame-web      :: 웹 빌드를 로컬에서 실행 (http://127.0.0.1:8080)
-build\bin\oe.exe package MyGame --android   :: 안드로이드 APK dist\MyGame-android\MyGame.apk (먼저 build_android.bat, --install 로 폰에 설치)
+build\bin\oe.exe package MyGame --android   :: 안드로이드 APK dist\MyGame-android\MyGame.apk (NDK 불필요; SDK build-tools + Java 필요, --install 로 폰에 설치)
 build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 ```
 

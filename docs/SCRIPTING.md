@@ -130,6 +130,7 @@ Errors are syntax errors (the file does not compile). Warnings come from the com
 ## Hot reload
 
 Saving a script file while simulating reloads it within half a second (and before every `sim.step`). Running instances keep their `self` state and pick up the new functions; a faulted script resumes. `script.reload` forces a reload.
+`script.write` forces the written module to reload immediately, even when consecutive writes have the same filesystem timestamp.
 
 ## Commands for agents
 

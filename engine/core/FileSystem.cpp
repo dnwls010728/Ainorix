@@ -87,6 +87,9 @@ std::string ParentPath(const std::string& path) { return ToU8(U8Path(path).paren
 
 std::string AbsolutePath(const std::string& path) {
     std::error_code ec;
+    // Node's NODERAWFS exposes Windows drive paths to a POSIX libc++ build.
+    // Those are already absolute; fs::absolute would prepend the working directory.
+    if (path.size() > 2 && path[1] == ':' && (path[2] == '/' || path[2] == '\\')) return ToU8(U8Path(path).lexically_normal());
     fs::path p = fs::absolute(U8Path(path), ec);
     return ToU8(p.lexically_normal());
 }
@@ -94,7 +97,8 @@ std::string AbsolutePath(const std::string& path) {
 std::string RelativePath(const std::string& path, const std::string& base) {
     std::error_code ec;
     fs::path rel = fs::relative(U8Path(path), U8Path(base), ec);
-    if (ec || rel.empty()) return ToU8(U8Path(path));
+    if (ec || rel.empty()) rel = U8Path(path).lexically_normal().lexically_relative(U8Path(base).lexically_normal());
+    if (rel.empty()) return ToU8(U8Path(path));
     return ToU8(rel);
 }
 
