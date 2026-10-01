@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -56,7 +57,46 @@ struct Submesh {
     int material = -1;  // index into Mesh::materials; -1 = the default material
 };
 
+// Immutable glTF hierarchy; rotations use quaternion x/y/z/w, not Euler angles.
+struct ModelNode {
+    int parent = -1;
+    Vec3 translation;
+    Vec4 rotation{0, 0, 0, 1};
+    Vec3 scale{1, 1, 1};
+    Mat4 matrix;
+    bool usesMatrix = false;
+};
+
+// One palette entry maps a node's current world transform to model coordinates.
+struct ModelJoint {
+    int node = -1;
+    Mat4 inverseBind;
+};
+
+struct SkinVertex {
+    std::array<uint16_t, 4> joints{};
+    std::array<float, 4> weights{};  // normalized; zero total means identity
+};
+
+enum class AnimationPath { Translation, Rotation, Scale };
+enum class AnimationInterpolation { Linear, Step, CubicSpline };
+
+struct AnimationChannel {
+    int node = -1;
+    AnimationPath path = AnimationPath::Translation;
+    AnimationInterpolation interpolation = AnimationInterpolation::Linear;
+    std::vector<float> times;  // strictly increasing seconds
+    std::vector<Vec4> values;  // cubic: in tangent, value, out tangent per key
+};
+
+struct AnimationClip {
+    std::string name;
+    float duration = 0;
+    std::vector<AnimationChannel> channels;
+};
+
 struct Mesh {
+    static constexpr size_t kMaxJoints = 64;
     std::vector<Vec3> positions;
     std::vector<Vec3> normals;      // one per position
     std::vector<float> uvs;         // two per position
@@ -66,6 +106,10 @@ struct Mesh {
     std::vector<Material> materials;
     std::vector<std::shared_ptr<const Texture>> textures;  // images embedded in / referenced by the model
     Vec3 boundsMin, boundsMax;
+    std::vector<ModelNode> nodes;      // glTF source order, including joint ancestors
+    std::vector<ModelJoint> joints;    // flattened skins and rigid animated nodes
+    std::vector<SkinVertex> skin;      // one per position for models with a palette
+    std::vector<AnimationClip> clips;
 
     size_t TriangleCount() const { return indices.size() / 3; }
     void ComputeBounds();

@@ -29,14 +29,14 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 |---|---|
 | `oe import <project> <file> [--to path]` | Copy an external model/texture/sound into the project (CLI only — the API stays sandboxed to the project) and print its `asset.info` |
 | `asset.list {kind?}` | Files by kind: model, texture, material, font, audio, script, prefab, scene |
-| `asset.info {path}` | Model: vertices, triangles, submeshes (each with a `material` index), a `materials` array, bounds, size **and a scale hint**. Material: its values + alphaMode. Texture: size. Sound: length |
+| `asset.info {path}` | Model: vertices, triangles, submeshes (each with a `material` index), a `materials` array, bounds, size **and a scale hint**, joint count and animation `clips` (name, duration in seconds, channel count). Material: its values + alphaMode. Texture: size. Sound: length |
 | `asset.generate_texture {path, pattern, size?, cells?, color1?, color2?}` | Procedural PNG: checker, grid, bricks, gradient, noise |
 | `asset.reload` | Drop cached models/textures |
 | `render.meshes` | Values accepted by `MeshRenderer.mesh` |
 
 Models and textures are cached and **hot-reloaded** when their files change (checked twice a second while playing and before every `sim.step`).
 
-Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); node transforms are baked in. Skinned models are shown in their bind pose (skeletal animation is on the roadmap).
+Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
 
 ## MeshRenderer
 

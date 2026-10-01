@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <map>
+#include <set>
+#include <stdexcept>
 
 #include "app/Engine.h"
 #include "audio/Wav.h"
@@ -94,6 +97,127 @@ struct Loader {
     std::map<const cgltf_image*, int> textureIndex;
     std::string warnings;
     std::map<const cgltf_material*, int> materialIndex;
+    const cgltf_data* data = nullptr;
+    std::map<const cgltf_skin*, uint16_t> skinBases;
+    std::map<int, uint16_t> rigidBindings;
+    std::set<int> animatedNodes;
+
+    void Require(bool condition, const char* message) const {
+        if (!condition) throw std::runtime_error(message);
+    }
+
+    int NodeIndex(const cgltf_node* node) const { return node ? static_cast<int>(node - data->nodes) : -1; }
+
+    void Init(const cgltf_data* source) {
+        data = source;
+        Require(data->nodes_count <= 65536, "model exceeds 65536 nodes");
+        for (cgltf_size i = 0; i < data->nodes_count; ++i) {
+            const cgltf_node& src = data->nodes[i];
+            ModelNode node;
+            node.parent = NodeIndex(src.parent);
+            if (src.has_translation) node.translation = Vec3(src.translation[0], src.translation[1], src.translation[2]);
+            if (src.has_rotation) node.rotation = Vec4(src.rotation[0], src.rotation[1], src.rotation[2], src.rotation[3]);
+            if (src.has_scale) node.scale = Vec3(src.scale[0], src.scale[1], src.scale[2]);
+            node.usesMatrix = src.has_matrix;
+            cgltf_node_transform_local(&src, node.matrix.m);
+            for (float value : node.matrix.m) Require(std::isfinite(value), "node transform contains non-finite values");
+            const cgltf_node* parent = &src;
+            cgltf_size depth = 0;
+            while (parent) { Require(++depth <= data->nodes_count, "node hierarchy contains a cycle"); parent = parent->parent; }
+            mesh.nodes.push_back(node);
+        }
+        for (cgltf_size i = 0; i < data->animations_count; ++i) {
+            const cgltf_animation& src = data->animations[i];
+            AnimationClip clip;
+            const std::string base = src.name && *src.name ? src.name : "clip" + std::to_string(i);
+            clip.name = base;
+            int suffix = 1;
+            auto duplicate = [&] {
+                return std::any_of(mesh.clips.begin(), mesh.clips.end(), [&](const AnimationClip& c) { return c.name == clip.name; });
+            };
+            while (duplicate()) clip.name = base + "_" + std::to_string(suffix++);
+            std::set<std::pair<int, AnimationPath>> targets;
+            for (cgltf_size j = 0; j < src.channels_count; ++j) {
+                const cgltf_animation_channel& channel = src.channels[j];
+                if (!channel.target_node) continue;  // extension channels with no core node target
+                if (channel.target_path == cgltf_animation_path_type_weights) {
+                    warnings += "morph-target animation is not supported; ";
+                    continue;
+                }
+                const cgltf_animation_sampler& sampler = *channel.sampler;
+                Require(sampler.input && sampler.output, "animation sampler has no input/output accessor");
+                Require(!channel.target_node->has_matrix, "animated nodes must use TRS, not a matrix");
+                Require(sampler.input->type == cgltf_type_scalar && sampler.input->component_type == cgltf_component_type_r_32f,
+                        "animation times must be FLOAT SCALAR");
+                AnimationChannel out;
+                out.node = NodeIndex(channel.target_node);
+                if (channel.target_path == cgltf_animation_path_type_rotation) out.path = AnimationPath::Rotation;
+                else if (channel.target_path == cgltf_animation_path_type_scale) out.path = AnimationPath::Scale;
+                else Require(channel.target_path == cgltf_animation_path_type_translation, "unsupported animation channel path");
+                Require(targets.emplace(out.node, out.path).second, "animation has duplicate channels for one node/path");
+                if (sampler.interpolation == cgltf_interpolation_type_step) out.interpolation = AnimationInterpolation::Step;
+                else if (sampler.interpolation == cgltf_interpolation_type_cubic_spline) out.interpolation = AnimationInterpolation::CubicSpline;
+                else Require(sampler.interpolation == cgltf_interpolation_type_linear, "unsupported animation interpolation");
+                const size_t count = sampler.input->count;
+                Require(count > 0, "animation sampler contains no keys");
+                const size_t multiplier = out.interpolation == AnimationInterpolation::CubicSpline ? 3 : 1;
+                Require(multiplier == 1 || count >= 2, "CUBICSPLINE requires at least two keys");
+                Require(sampler.output->count == count * multiplier, "animation input/output key counts do not match");
+                const size_t width = out.path == AnimationPath::Rotation ? 4 : 3;
+                const auto component = sampler.output->component_type;
+                const bool normalizedRotation = width == 4 && sampler.output->normalized &&
+                    (component == cgltf_component_type_r_8 || component == cgltf_component_type_r_8u ||
+                     component == cgltf_component_type_r_16 || component == cgltf_component_type_r_16u);
+                Require(sampler.output->type == (width == 4 ? cgltf_type_vec4 : cgltf_type_vec3) &&
+                        (component == cgltf_component_type_r_32f || normalizedRotation),
+                        "animation values must be FLOAT VEC3/VEC4 or normalized integer rotations");
+                for (size_t key = 0; key < count; ++key) {
+                    float time = 0;
+                    Require(cgltf_accessor_read_float(sampler.input, key, &time, 1), "cannot read animation time");
+                    Require(std::isfinite(time) && time >= 0 && (key == 0 || time > out.times.back()),
+                            "animation times must be finite, nonnegative and strictly increasing");
+                    out.times.push_back(time);
+                }
+                for (size_t key = 0; key < count * multiplier; ++key) {
+                    float value[4]{};
+                    Require(cgltf_accessor_read_float(sampler.output, key, value, width), "cannot read animation value");
+                    for (float v : value) Require(std::isfinite(v), "animation value contains non-finite numbers");
+                    if (width == 4 && (multiplier == 1 || key % 3 == 1)) {
+                        float length = value[0] * value[0] + value[1] * value[1] + value[2] * value[2] + value[3] * value[3];
+                        Require(length > 1e-12f, "animation contains a zero quaternion");
+                    }
+                    out.values.emplace_back(value[0], value[1], value[2], value[3]);
+                }
+                clip.duration = std::max(clip.duration, out.times.back());
+                animatedNodes.insert(out.node);
+                clip.channels.push_back(std::move(out));
+            }
+            mesh.clips.push_back(std::move(clip));
+        }
+    }
+
+    uint16_t SkinBase(const cgltf_skin* skin) {
+        auto found = skinBases.find(skin);
+        if (found != skinBases.end()) return found->second;
+        Require(skin->joints_count > 0 && mesh.joints.size() + skin->joints_count <= Mesh::kMaxJoints,
+                "model exceeds the 64-entry skin palette limit");
+        uint16_t base = static_cast<uint16_t>(mesh.joints.size());
+        if (skin->inverse_bind_matrices)
+            Require(skin->inverse_bind_matrices->type == cgltf_type_mat4 &&
+                    skin->inverse_bind_matrices->component_type == cgltf_component_type_r_32f &&
+                    skin->inverse_bind_matrices->count >= skin->joints_count, "inverse bind matrices must be FLOAT MAT4 per joint");
+        for (cgltf_size i = 0; i < skin->joints_count; ++i) {
+            ModelJoint joint;
+            joint.node = NodeIndex(skin->joints[i]);
+            Require(joint.node >= 0, "skin has a missing joint node");
+            if (skin->inverse_bind_matrices)
+                Require(cgltf_accessor_read_float(skin->inverse_bind_matrices, i, joint.inverseBind.m, 16), "cannot read inverse bind matrix");
+            for (float value : joint.inverseBind.m) Require(std::isfinite(value), "inverse bind matrix contains non-finite values");
+            mesh.joints.push_back(joint);
+        }
+        skinBases[skin] = base;
+        return base;
+    }
 
     std::shared_ptr<const Texture> Tex(const cgltf_texture_view& view) {
         int i = TextureFor(view);
@@ -156,18 +280,54 @@ struct Loader {
         return index;
     }
 
-    void AddPrimitive(const cgltf_primitive& prim, const Mat4& world) {
+    void AddPrimitive(const cgltf_primitive& prim, const Mat4& world, const cgltf_node* node) {
         if (prim.type != cgltf_primitive_type_triangles) return;
         const cgltf_accessor* pos = nullptr;
         const cgltf_accessor* nor = nullptr;
         const cgltf_accessor* uv = nullptr;
+        const cgltf_accessor* joints = nullptr;
+        const cgltf_accessor* weights = nullptr;
         for (cgltf_size i = 0; i < prim.attributes_count; ++i) {
             const cgltf_attribute& a = prim.attributes[i];
             if (a.type == cgltf_attribute_type_position) pos = a.data;
             else if (a.type == cgltf_attribute_type_normal) nor = a.data;
             else if (a.type == cgltf_attribute_type_texcoord && a.index == 0) uv = a.data;
+            else if (a.type == cgltf_attribute_type_joints && a.index == 0) joints = a.data;
+            else if (a.type == cgltf_attribute_type_weights && a.index == 0) weights = a.data;
+            else if (a.type == cgltf_attribute_type_joints || a.type == cgltf_attribute_type_weights)
+                throw std::runtime_error("only JOINTS_0/WEIGHTS_0 (four influences) are supported");
         }
         if (!pos) return;
+        uint16_t skinBase = 0;
+        int rigidJoint = -1;
+        if (node->skin) {
+            Require(joints && weights && joints->count == pos->count && weights->count == pos->count &&
+                    joints->type == cgltf_type_vec4 && weights->type == cgltf_type_vec4,
+                    "skinned primitive needs matching JOINTS_0/WEIGHTS_0 VEC4 accessors");
+            Require(joints->component_type == cgltf_component_type_r_8u || joints->component_type == cgltf_component_type_r_16u,
+                    "joint indices must be unsigned bytes or shorts");
+            Require(!joints->normalized, "joint indices must not be normalized");
+            Require(weights->component_type == cgltf_component_type_r_32f ||
+                    (weights->normalized && (weights->component_type == cgltf_component_type_r_8u ||
+                                            weights->component_type == cgltf_component_type_r_16u)),
+                    "skin weights must be FLOAT or normalized unsigned bytes/shorts");
+            skinBase = SkinBase(node->skin);
+        } else {
+            bool animated = false;
+            for (const cgltf_node* ancestor = node; ancestor; ancestor = ancestor->parent)
+                animated = animated || animatedNodes.count(NodeIndex(ancestor)) != 0;
+            if (animated) {
+                int index = NodeIndex(node);
+                auto found = rigidBindings.find(index);
+                if (found == rigidBindings.end()) {
+                    Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 64-entry skin palette limit");
+                    uint16_t binding = static_cast<uint16_t>(mesh.joints.size());
+                    mesh.joints.push_back({index, world.Inverse()});
+                    found = rigidBindings.emplace(index, binding).first;
+                }
+                rigidJoint = found->second;
+            }
+        }
         uint32_t base = static_cast<uint32_t>(mesh.positions.size());
         Mat4 normalMatrix = world.Inverse().Transposed();
         for (cgltf_size i = 0; i < pos->count; ++i) {
@@ -179,6 +339,25 @@ struct Loader {
             mesh.normals.push_back(Normalize(normalMatrix.TransformDir(Vec3(n[0], n[1], n[2]))));
             mesh.uvs.push_back(t[0]);
             mesh.uvs.push_back(t[1]);
+            SkinVertex influence;
+            if (node->skin) {
+                cgltf_uint indices[4]{};
+                Require(cgltf_accessor_read_uint(joints, i, indices, 4), "cannot read joint indices");
+                Require(cgltf_accessor_read_float(weights, i, influence.weights.data(), 4), "cannot read skin weights");
+                float total = 0;
+                for (size_t k = 0; k < 4; ++k) {
+                    Require(indices[k] < node->skin->joints_count, "joint index is outside the skin");
+                    Require(std::isfinite(influence.weights[k]) && influence.weights[k] >= 0, "skin weights must be finite and nonnegative");
+                    influence.joints[k] = static_cast<uint16_t>(skinBase + indices[k]);
+                    total += influence.weights[k];
+                }
+                Require(std::isfinite(total), "skin weight total is non-finite");
+                if (total > 0) for (float& weight : influence.weights) weight /= total;
+            } else if (rigidJoint >= 0) {
+                influence.joints[0] = static_cast<uint16_t>(rigidJoint);
+                influence.weights[0] = 1;
+            }
+            mesh.skin.push_back(influence);
         }
         Submesh sub;
         sub.firstIndex = static_cast<uint32_t>(mesh.indices.size());
@@ -214,14 +393,14 @@ struct Loader {
 
     void AddNode(const cgltf_node* node) {
         if (node->mesh) {
-            // Skinned meshes ignore their node transform (glTF spec); we show the bind pose.
+            // Skin matrices apply the joint hierarchy; a skinned mesh node's transform is ignored.
             Mat4 world;
             if (!node->skin) {
                 float m[16];
                 cgltf_node_transform_world(node, m);
                 std::memcpy(world.m, m, sizeof(m));  // both column-major
             }
-            for (cgltf_size i = 0; i < node->mesh->primitives_count; ++i) AddPrimitive(node->mesh->primitives[i], world);
+            for (cgltf_size i = 0; i < node->mesh->primitives_count; ++i) AddPrimitive(node->mesh->primitives[i], world, node);
         }
         for (cgltf_size i = 0; i < node->children_count; ++i) AddNode(node->children[i]);
     }
@@ -249,19 +428,28 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
     cgltf_data* data = nullptr;
     cgltf_result r = cgltf_parse_file(&options, path.c_str(), &data);
     if (r == cgltf_result_success) r = cgltf_load_buffers(&options, data, path.c_str());
+    if (r == cgltf_result_success) r = cgltf_validate(data);
     if (r != cgltf_result_success) {
         if (error) *error = CgltfError(r);
         if (data) cgltf_free(data);
         return false;
     }
-    Loader loader{out, ParentPath(path), {}, {}, {}};
-    if (data->scenes_count > 0) {
-        const cgltf_scene* scene = data->scene ? data->scene : &data->scenes[0];
-        for (cgltf_size i = 0; i < scene->nodes_count; ++i) loader.AddNode(scene->nodes[i]);
-    } else {
-        for (cgltf_size i = 0; i < data->nodes_count; ++i) {
-            if (!data->nodes[i].parent) loader.AddNode(&data->nodes[i]);
+    out = Mesh{};
+    Loader loader{out, ParentPath(path), {}, {}, {}, nullptr, {}, {}, {}};
+    try {
+        loader.Init(data);
+        if (data->scenes_count > 0) {
+            const cgltf_scene* scene = data->scene ? data->scene : &data->scenes[0];
+            for (cgltf_size i = 0; i < scene->nodes_count; ++i) loader.AddNode(scene->nodes[i]);
+        } else {
+            for (cgltf_size i = 0; i < data->nodes_count; ++i) {
+                if (!data->nodes[i].parent) loader.AddNode(&data->nodes[i]);
+            }
         }
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        cgltf_free(data);
+        return false;
     }
     cgltf_free(data);
     if (out.indices.empty()) {
@@ -270,6 +458,7 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
     }
     out.ComputeBounds();
     out.ComputeTangents();
+    if (out.joints.empty()) out.skin.clear();
     if (!loader.warnings.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), loader.warnings.c_str());
     return true;
 }
@@ -521,6 +710,16 @@ Json AssetManager::Info(const std::string& path) {
             subs.push(j);
         }
         out["submeshes"] = subs;
+        out["joints"] = static_cast<uint64_t>(mesh->joints.size());
+        Json clips = Json::MakeArray();
+        for (const AnimationClip& clip : mesh->clips) {
+            Json value = Json::MakeObject();
+            value["name"] = clip.name;
+            value["duration"] = clip.duration;
+            value["channels"] = static_cast<uint64_t>(clip.channels.size());
+            clips.push(std::move(value));
+        }
+        out["clips"] = std::move(clips);
         Json mats = Json::MakeArray();
         for (const Material& m : mesh->materials) {
             Json j = Json::MakeObject();

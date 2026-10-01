@@ -1,6 +1,9 @@
 # Working on this OwnEngine project (for AI agents)
 
-A two-level coin collecting game: walk into the coins (W/A/S/D, Space jumps), clear level 1 to reach level 2, then "Play again".
+A rendering and skeletal animation sample: W/A/S/D or arrows move the Fox,
+Space jumps, and Shift sprints. The child Fox turns towards movement and plays
+Survey while idle, Walk while moving, and Run while sprinting. Parent movement
+uses scripts/player_controller.lua; child animation uses scripts/face_movement.lua.
 
 - Scenes are plain JSON in `scenes/`, prefabs in `prefabs/`, Lua in `scripts/`, sounds in `sounds/`.
   You may edit files directly, but prefer the engine API so values are validated.

@@ -53,6 +53,23 @@ struct MeshRenderer {
     }
 };
 
+struct Animator {
+    static constexpr const char* kTypeName = "Animator";
+    static constexpr const char* kDoc = "Fixed-step glTF TRS animation on the entity's MeshRenderer; clips are listed by asset.info.";
+    std::string clip;
+    float speed = 1.0f;
+    bool loop = true;
+    bool playing = true;
+    float time = 0.0f;
+    static void Reflect(FieldList& f) {
+        f.Add("clip", &Animator::clip, "Exact model clip name; empty = default pose. animation.play changes clips and restarts by default.");
+        f.Add("speed", &Animator::speed, "Playback multiplier; negative plays backwards, zero holds the pose.");
+        f.Add("loop", &Animator::loop, "Wrap time at the clip duration; otherwise clamp and stop at either endpoint.");
+        f.Add("playing", &Animator::playing, "Advance time while true; false holds the current pose.");
+        f.Add("time", &Animator::time, "Seconds into the clip; set to seek. Direct clip edits preserve time.");
+    }
+};
+
 // ----- 2D --------------------------------------------------------------------------
 
 struct Sprite {

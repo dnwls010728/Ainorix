@@ -67,6 +67,7 @@ end
 | Function | Description |
 |---|---|
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
+| `animation.play(id, clip, options?)` | Play a glTF clip on MeshRenderer; add Animator if needed. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
 | `scene.set(id, type, values)` | Partial update: `scene.set(id, "Transform", {position = {y = 2}})` keeps x and z |
 | `scene.add(id, type, values?)` / `scene.remove(id, type)` / `scene.has(id, type)` | Component management |
 | `scene.create(name?, components?)` | New entity id. `components` like the `entity.create` command |

@@ -405,10 +405,12 @@ Transformed TransformItem(const RenderItem& item) {
     t.nrm.resize(m.positions.size());
     t.tan.resize(m.positions.size(), Vec4(1, 0, 0, 1));
     for (size_t i = 0; i < m.positions.size(); ++i) {
-        t.wpos[i] = item.world.TransformPoint(m.positions[i]);
-        t.nrm[i] = i < m.normals.size() ? Normalize(item.normalMatrix.TransformDir(m.normals[i])) : Vec3(0, 1, 0);
+        Mat4 skin = item.VertexSkinMatrix(i);
+        Mat4 skinNormal = item.joints.empty() ? Mat4{} : skin.Inverse().Transposed();
+        t.wpos[i] = item.world.TransformPoint(skin.TransformPoint(m.positions[i]));
+        t.nrm[i] = i < m.normals.size() ? Normalize(item.normalMatrix.TransformDir(skinNormal.TransformDir(m.normals[i]))) : Vec3(0, 1, 0);
         if (i < m.tangents.size()) {
-            Vec3 tw = Normalize(item.world.TransformDir(Vec3(m.tangents[i].x, m.tangents[i].y, m.tangents[i].z)));
+            Vec3 tw = Normalize(item.world.TransformDir(skin.TransformDir(m.tangents[i].xyz())));
             t.tan[i] = Vec4(tw.x, tw.y, tw.z, m.tangents[i].w);
         }
     }

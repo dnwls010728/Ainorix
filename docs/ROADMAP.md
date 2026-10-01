@@ -120,7 +120,17 @@ C++ 재빌드 없이 게임 로직을 작성/수정할 수 있어야 이후 모�
 - **테스트**: 쓰기→재시작→읽기, 손상된 파일, 슬롯, 메모리 모드에서 디스크 무접촉, `TemplateGamePlaythrough` 유지. 템플릿에 최고 점수 저장을 하나 넣으면 좋다(템플릿 변경 시 `samples/Hello` 재생성).
 - **검증하지 못할 수 있는 것**: 웹 localStorage는 `node build-web/bin/oe_tests.js`로 못 보면 브라우저(Playwright)로 확인하고, 웹 런타임 재빌드(`runtime/web/`)는 Emscripten이 있을 때만.
 
-### P2. 스켈레탈 애니메이션 (glTF) — [ ]
+P1 is implemented in PR #15, pending review. P2 is developed independently from
+main in PR #16 because it has no save-data dependency; this preserves one feature
+per PR while P1 awaits review. P1's checkbox remains on its own feature branch.
+
+### P2. 스켈레탈 애니메이션 (glTF) — [x]
+
+- Implementation and verification: [ANIMATION.md](ANIMATION.md). Windows 67 tests,
+  Node/WASM 63 tests, D3D11/software animated comparison and browser WebGL2 checked;
+  web and both Android ABI runtimes refreshed.
+- [ ] Android physical-device and full Linux/EGL execution remain unverified;
+  see the feature work log for the exact follow-up steps.
 
 - **왜**: 스킨 모델은 지금 bind pose로만 나온다(`docs/RENDERING.md`, `engine/assets/Assets.cpp`의 `node->skin` 처리). 3D 캐릭터가 움직이지 못하는 가장 큰 공백이다.
 - **요구**: glTF `skins`(joints, inverseBindMatrices, JOINTS_0/WEIGHTS_0)와 `animations`(translation/rotation/scale 채널, LINEAR/STEP, 가능하면 CUBICSPLINE) 로딩. 컴포넌트 `Animator {clip, speed, loop, playing, time}`(리플렉션 → 직렬화/API/인스펙터 자동). 스크립트 `entity:play(clip)` 류와 클립 목록 조회(`asset.info`에 `clips`). 크로스페이드는 2차(선택).

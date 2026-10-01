@@ -1318,6 +1318,235 @@ TEST(TexturesAndGltfModels) {
     CHECK(Call(e, "asset.list", R"J({"kind": "model"})J")["result"].size() == 1);
 }
 
+TEST(GltfSkinAndAnimationLoading) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("animation_loader"), &err));
+    Json source = Json::parse(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[1]}],
+      "nodes":[{"mesh":0,"skin":0},{"translation":[3,0,0],"children":[0,2]},{"translation":[0,2,0]}],
+      "skins":[{"joints":[1,2]}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+      "animations":[{"name":"Move","samplers":[{"input":3,"output":4,"interpolation":"STEP"}],
+        "channels":[{"sampler":0,"target":{"node":1,"path":"translation"}}]},
+        {"name":"Turn","samplers":[{"input":3,"output":5}],"channels":[{"sampler":0,"target":{"node":2,"path":"rotation"}}]},
+        {"name":"Move","samplers":[{"input":3,"output":6,"interpolation":"CUBICSPLINE"}],
+        "channels":[{"sampler":0,"target":{"node":2,"path":"scale"}}]}],"bufferViews":[],"accessors":[]})J");
+    std::vector<uint8_t> bin;
+    auto floats = [&](std::initializer_list<float> values) {
+        std::vector<uint8_t> bytes;
+        for (float value : values) {
+            uint8_t encoded[4];
+            std::memcpy(encoded, &value, 4);
+            bytes.insert(bytes.end(), encoded, encoded + 4);
+        }
+        return bytes;
+    };
+    auto accessor = [&](const std::vector<uint8_t>& bytes, int component, int count, const char* type, bool normalized = false) {
+        while (bin.size() % 4) bin.push_back(0);
+        Json view = Json::MakeObject();
+        view["buffer"] = 0;
+        view["byteOffset"] = static_cast<uint64_t>(bin.size());
+        view["byteLength"] = static_cast<uint64_t>(bytes.size());
+        Json a = Json::MakeObject();
+        a["bufferView"] = static_cast<uint64_t>(source["bufferViews"].size());
+        a["componentType"] = component;
+        a["count"] = count;
+        a["type"] = type;
+        if (normalized) a["normalized"] = true;
+        source["bufferViews"].push(view);
+        source["accessors"].push(a);
+        bin.insert(bin.end(), bytes.begin(), bytes.end());
+    };
+    accessor(floats({0,0,0, 1,0,0, 0,1,0}), 5126, 3, "VEC3");
+    source["accessors"][0]["min"] = Json::parse("[0,0,0]");
+    source["accessors"][0]["max"] = Json::parse("[1,1,0]");
+    accessor({0,1,0,0, 1,0,0,0, 0,0,0,0}, 5121, 3, "VEC4");
+    accessor(floats({2,2,0,0, 1,0,0,0, 0,0,0,0}), 5126, 3, "VEC4");
+    accessor(floats({0,2}), 5126, 2, "SCALAR");
+    source["accessors"][3]["min"] = Json::parse("[0]");
+    source["accessors"][3]["max"] = Json::parse("[2]");
+    accessor(floats({3,0,0, 5,0,0}), 5126, 2, "VEC3");
+    accessor({0,0,0,127, 0,0,127,0}, 5120, 2, "VEC4", true);
+    accessor(floats({0,0,0, 1,1,1, 0,0,0, 0,0,0, 2,2,2, 0,0,0}), 5126, 6, "VEC3");
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.gltf");
+    auto write = [&](Json model, const std::vector<uint8_t>& bytes) {
+        Json buffer = Json::MakeObject();
+        buffer["byteLength"] = static_cast<uint64_t>(bytes.size());
+        buffer["uri"] = "data:application/octet-stream;base64," + Base64Encode(bytes);
+        model["buffers"] = Json::MakeArray();
+        model["buffers"].push(buffer);
+        CHECK(WriteTextFile(path, model.dump()));
+    };
+    write(source, bin);
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/rig.gltf"})J")["result"];
+    CHECK(info["joints"].asInt() == 2 && info["clips"].size() == 3);
+    CHECK(info["clips"][0]["name"].asString() == "Move" && info["clips"][2]["name"].asString() == "Move_1");
+    CHECK(info["clips"][0]["duration"].asFloat() == 2 && info["clips"][0]["channels"].asInt() == 1);
+    Mesh mesh;
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.nodes.size() == 3 && mesh.nodes[2].parent == 1 && mesh.joints[1].node == 2);
+    CHECK(mesh.positions[0].x == 0 && mesh.skin[0].weights[0] == 0.5f && mesh.skin[0].weights[1] == 0.5f);
+    CHECK(mesh.skin[2].weights[0] == 0 && mesh.joints[0].inverseBind.m[0] == 1);
+    CHECK(mesh.clips[0].channels[0].interpolation == AnimationInterpolation::Step);
+    CHECK(mesh.clips[1].channels[0].values[1].z == 1);
+    CHECK(mesh.clips[2].channels[0].interpolation == AnimationInterpolation::CubicSpline);
+
+    auto reject = [&](Json model, std::vector<uint8_t> bytes, const char* message) {
+        write(model, bytes);
+        CHECK(!LoadModelFile(path, mesh, &err));
+        CHECK(err.find(message) != std::string::npos);
+    };
+    std::vector<uint8_t> broken = bin;
+    broken[static_cast<size_t>(source["bufferViews"][1]["byteOffset"].asInt())] = 2;
+    reject(source, broken, "joint index is outside");
+    broken = bin;
+    size_t times = static_cast<size_t>(source["bufferViews"][3]["byteOffset"].asInt());
+    std::fill(broken.begin() + times + 4, broken.begin() + times + 8, uint8_t{0});
+    reject(source, broken, "strictly increasing");
+    broken = bin;
+    float negative = -1;
+    std::memcpy(broken.data() + source["bufferViews"][2]["byteOffset"].asInt(), &negative, 4);
+    reject(source, broken, "finite and nonnegative");
+    Json invalid = source;
+    invalid["animations"][0]["channels"].push(invalid["animations"][0]["channels"][0]);
+    reject(invalid, bin, "duplicate channels");
+    invalid = source;
+    invalid["meshes"][0]["primitives"][0]["attributes"]["JOINTS_1"] = 1;
+    reject(invalid, bin, "four influences");
+    invalid = source;
+    invalid["skins"][0]["joints"] = Json::MakeArray();
+    for (int i = 0; i < 65; ++i) invalid["skins"][0]["joints"].push(1);
+    reject(invalid, bin, "64-entry");
+    // Rigid child geometry is baked once, then receives a one-joint animation binding.
+    invalid = source;
+    invalid["nodes"][0].erase("skin");
+    invalid["meshes"][0]["primitives"][0]["attributes"].erase("JOINTS_0");
+    invalid["meshes"][0]["primitives"][0]["attributes"].erase("WEIGHTS_0");
+    write(invalid, bin);
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.joints.size() == 1 && mesh.joints[0].node == 0 && mesh.positions[0].x == 3);
+    CHECK(mesh.skin[0].weights[0] == 1 && mesh.joints[0].inverseBind.m[12] == -3);
+    // Explicit inverse bind matrices survive loading, including their translations.
+    accessor(floats({1,0,0,0, 0,1,0,0, 0,0,1,0, -3,0,0,1,
+                     1,0,0,0, 0,1,0,0, 0,0,1,0, -3,-2,0,1}), 5126, 2, "MAT4");
+    source["skins"][0]["inverseBindMatrices"] = 7;
+    write(source, bin);
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.joints[1].inverseBind.m[12] == -3 && mesh.joints[1].inverseBind.m[13] == -2);
+    invalid = source;
+    invalid["accessors"][7]["count"] = 1;
+    reject(invalid, bin, "inverse bind matrices");
+    // Quantized unsigned skin weights decode and normalize in exactly the same path.
+    invalid = source;
+    invalid["accessors"][2]["componentType"] = 5121;
+    invalid["accessors"][2]["normalized"] = true;
+    broken = bin;
+    size_t weightOffset = static_cast<size_t>(source["bufferViews"][2]["byteOffset"].asInt());
+    for (size_t i = 0; i < 12; ++i) broken[weightOffset + i] = i % 4 < 2 ? 127 : 0;
+    write(invalid, broken);
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.skin[0].weights[0] == 0.5f && mesh.skin[0].weights[1] == 0.5f);
+    invalid["accessors"][2]["normalized"] = false;
+    reject(invalid, broken, "normalized unsigned");
+}
+
+TEST(AnimationPoseInterpolation) {
+    Mesh mesh;
+    mesh.nodes.resize(2);
+    mesh.nodes[0].parent = 1;  // parents may occur after children in the source
+    mesh.nodes[0].scale = Vec3(2, 1, 1);
+    mesh.nodes[1].usesMatrix = true;
+    mesh.nodes[1].matrix = Mat4::Translation(Vec3(3, 0, 0));
+    mesh.joints.push_back({0, Mat4::Translation(Vec3(-1, 0, 0))});
+    AnimationChannel channel;
+    channel.node = 0;
+    channel.times = {0, 2};
+    channel.values = {Vec4(0,0,0,0), Vec4(4,0,0,0)};
+    AnimationClip clip;
+    clip.channels.push_back(channel);
+    auto sample = [&](float time) { return EvaluateAnimationPose(mesh, &clip, time)[0]; };
+    CHECK(Near(sample(1).TransformPoint(Vec3(1,0,0)), Vec3(5,0,0), 1e-5f));
+    CHECK(Near(sample(-8).TransformPoint(Vec3(1,0,0)), Vec3(3,0,0), 1e-5f));
+    CHECK(Near(sample(8).TransformPoint(Vec3(1,0,0)), Vec3(7,0,0), 1e-5f));
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(2,0,0), 1e-5f));  // unanimated scale retained
+    clip.channels[0].interpolation = AnimationInterpolation::Step;
+    CHECK(Near(sample(1.999f).TransformPoint(Vec3(1,0,0)), Vec3(3,0,0), 1e-5f));
+    CHECK(Near(sample(2).TransformPoint(Vec3(1,0,0)), Vec3(7,0,0), 1e-5f));
+    clip.channels[0].interpolation = AnimationInterpolation::CubicSpline;
+    clip.channels[0].values = {Vec4(), Vec4(), Vec4(2,0,0,0), Vec4(), Vec4(4,0,0,0), Vec4()};
+    CHECK(Near(sample(1).TransformPoint(Vec3(1,0,0)), Vec3(5.5f,0,0), 1e-5f));  // tangent scaled by two seconds
+    clip.channels[0].path = AnimationPath::Rotation;
+    clip.channels[0].interpolation = AnimationInterpolation::Linear;
+    clip.channels[0].values = {Vec4(0,0,0,1), Vec4(0,0,1,0)};
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(0,2,0), 1e-5f));
+    // Quaternion signs represent the same rotation; interpolation takes the shortest arc.
+    clip.channels[0].values[1] = Vec4(0,0,0,-1);
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(2,0,0), 1e-5f));
+    clip.channels[0].interpolation = AnimationInterpolation::CubicSpline;
+    clip.channels[0].values = {Vec4(), Vec4(0,0,0,1), Vec4(), Vec4(), Vec4(0,0,1,0), Vec4()};
+    CHECK(Near(sample(1).TransformDir(Vec3(1,0,0)), Vec3(0,2,0), 1e-5f));  // interpolated quaternion normalized
+    clip.channels[0].path = AnimationPath::Scale;
+    clip.channels[0].interpolation = AnimationInterpolation::Linear;
+    clip.channels[0].values = {Vec4(1,1,1,0), Vec4(3,3,3,0)};
+    CHECK(Near(sample(1).TransformDir(Vec3(0,1,0)), Vec3(0,2,0), 1e-5f));
+    CHECK(Near(EvaluateAnimationPose(mesh, nullptr, 0)[0].TransformPoint(Vec3(1,0,0)), Vec3(3,0,0), 1e-5f));
+}
+
+TEST(AnimatorCommandsAndLua) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("animator"), &err));
+    CHECK(CopyFileTo(TestSourceDir() + "/samples/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Fox","components":{"MeshRenderer":{"mesh":"assets/models/fox.glb"}}})J");
+    EntityId id = e.GetScene().FindByName("Fox");
+    CHECK(Call(e, "animation.play", R"J({"id":"Fox","clip":"missing"})J")["error"]["code"].asString() == "animation_not_found");
+    CHECK(e.GetScene().Get<Animator>(id) == nullptr);
+    CHECK(Call(e, "animation.play", R"J({"id":"Fox","clip":"Walk"})J")["ok"].asBool());
+    Json saved = e.GetScene().ToJson();
+    Scene restored;
+    CHECK(restored.FromJson(saved, &err) && restored.Get<Animator>(id)->clip == "Walk");
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Get<Animator>(id) == nullptr);
+    CHECK(Call(e, "history.redo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Get<Animator>(id)->clip == "Walk");
+    Call(e, "sim.step", R"J({"frames":12})J");
+    Json state = Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"];
+    CHECK(std::fabs(state["time"].asFloat() - 0.2f) < 1e-6f && state["validClip"].asBool());
+    CHECK(state["jointMatrices"].size() == 24 && state["jointMatrices"][0].size() == 16);
+    Json pose = state["jointMatrices"];
+    Call(e, "component.set", R"J({"id":"Fox","type":"Animator","values":{"playing":false}})J");
+    Call(e, "sim.step", R"J({"frames":10})J");
+    CHECK(Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"]["jointMatrices"] == pose);
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Walk","loop":false})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    state = Call(e, "animation.state", R"J({"id":"Fox"})J")["result"];
+    CHECK(!state["playing"].asBool() && state["time"] == state["duration"]);
+    CHECK(Call(e, "script.eval", R"J({"code":"animation.play('Fox', 'Walk', {speed=-1, loop=false})"})J")["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":60})J");
+    state = Call(e, "animation.state", R"J({"id":"Fox"})J")["result"];
+    CHECK(!state["playing"].asBool() && state["time"].asFloat() == 0);
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run","speed":-1,"loop":true})J");
+    Call(e, "component.set", R"J({"id":"Fox","type":"Animator","values":{"time":0}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    state = Call(e, "animation.state", R"J({"id":"Fox"})J")["result"];
+    CHECK(std::fabs(state["time"].asFloat() - state["duration"].asFloat() + 1.0f/60) < 1e-6f);
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run","speed":1})J");
+    Call(e, "sim.step", R"J({"frames":24})J");
+    Json first = Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"];
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run","restart":false})J");
+    CHECK(e.GetScene().Get<Animator>(id)->time == first["time"].asFloat());
+    Call(e, "animation.play", R"J({"id":"Fox","clip":"Run"})J");
+    Call(e, "sim.step", R"J({"frames":24})J");
+    CHECK(Call(e, "animation.state", R"J({"id":"Fox","pose":true})J")["result"] == first);
+    CHECK(Call(e, "script.eval", R"J({"code":"local ok = pcall(animation.play, 'Fox', 'invalid'); assert(not ok)"})J")["ok"].asBool());
+    // self:play follows the same command path from a real script instance.
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "scripts/animate.lua"), "return {onStart=function(self) self:play('Survey', {speed=0}) end}"));
+    Call(e, "component.add", R"J({"id":"Fox","type":"Script","values":{"path":"scripts/animate.lua"}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.GetScene().Get<Animator>(id)->clip == "Survey" && e.GetScene().Get<Animator>(id)->time == 0);
+    CHECK(e.Scripts().Errors().empty());
+}
+
 TEST(ShadingShadowsAndLights) {
     Engine e;
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
@@ -1395,6 +1624,10 @@ TEST(ShowcaseFoxModel) {
     CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
     Json info = Call(e, "asset.info", R"J({"path": "assets/models/fox.glb"})J")["result"];
     CHECK(info["triangles"].asInt() == 576 && info["textures"][0][0].asInt() == 1024);
+    CHECK(info["joints"].asInt() == 24 && info["clips"].size() == 3);
+    CHECK(info["clips"][0]["name"].asString() == "Survey" && info["clips"][1]["name"].asString() == "Walk" &&
+          info["clips"][2]["name"].asString() == "Run");
+    CHECK(info["clips"][1]["duration"].asFloat() > 0.7f && info["clips"][1]["channels"].asInt() == 21);
     RenderTarget rt;
     rt.Resize(320, 180);
     e.RenderGameView(rt);
@@ -1414,6 +1647,39 @@ TEST(ShowcaseFoxModel) {
     e.RenderGameView(single);
     SetMaxRenderThreads(16);
     CHECK(single.Hash() == rt.Hash());
+}
+
+TEST(ShowcaseAnimationControls) {
+    auto play = []() {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+        EntityId fox = e.GetScene().FindByName("Fox");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Survey");
+        Call(e, "input.key", R"J({"key":"W","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Walk");
+        float walkTime = e.GetScene().Get<Animator>(fox)->time;
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->time > walkTime);  // no restart each update
+        Call(e, "input.key", R"J({"key":"Shift","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Run");
+        RenderTarget rt;
+        rt.Resize(320,180);
+        e.RenderGameView(rt);
+        uint64_t runHash = rt.Hash();
+        Call(e, "input.key", R"J({"key":"W","down":false})J");
+        Call(e, "input.key", R"J({"key":"Shift","down":false})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<Animator>(fox)->clip == "Survey");
+        CHECK(e.Scripts().Errors().empty());
+        return runHash;
+    };
+    uint64_t first = play();
+    CHECK(first == play());
+    std::printf("  animated Showcase hash %016llx\n", static_cast<unsigned long long>(first));
 }
 
 TEST(UIQuadsAreWhatSoftwareDraws) {
@@ -1837,6 +2103,79 @@ TEST(GpuRendererMatchesSoftware) {
     Json shot = Call(e, "render.screenshot", R"J({"renderer": "gpu", "width": 64, "height": 36, "inline": false})J");
     CHECK(shot["ok"].asBool() && shot["result"]["renderer"].asString() == e.Gpu()->Name());
     CHECK(!Call(e, "render.screenshot", R"J({"renderer": "vulkan", "inline": false})J")["ok"].asBool());
+}
+
+TEST(AnimatedSkinRenderers) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("skin_renderers"), &err));
+    CHECK(CopyFileTo(TestSourceDir() + "/samples/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Fox","components":{"Transform":{"scale":[0.012,0.012,0.012]},"MeshRenderer":{"mesh":"assets/models/fox.glb","color":[1,1,1]},"Animator":{"clip":"Walk","playing":false}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-65,25,0]},"DirectionalLight":{"shadowStrength":0.8}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[8,1,8],"position":[0,-0.01,0]},"MeshRenderer":{"mesh":"plane","color":[0.5,0.5,0.5]}}})J");
+    EntityId fox = e.GetScene().FindByName("Fox");
+    RenderView view = MakeLookAtView(Vec3(2,1.5f,2), Vec3(0,0.45f,0), 45, 320.0f/180);
+    view.drawUI = false;
+    RenderTarget sw, again, gpu;
+    sw.Resize(320,180);
+    again.Resize(320,180);
+    gpu.Resize(320,180);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    uint64_t start = sw.Hash();
+    Call(e, "component.set", R"J({"id":"Fox","type":"Animator","values":{"time":0.25}})J");
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    SetMaxRenderThreads(16);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(sw.Hash() != start && sw.Hash() == again.Hash() && CountId(sw, fox) > 500);
+    CHECK(WritePng("build/animated-walk-software.png", sw.ToImage(), true));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    for (const char* clip : {"Survey", "Walk", "Run"}) {
+        Json args = Json::parse(R"J({"id":"Fox","type":"Animator","values":{"time":0.25,"playing":false}})J");
+        args["values"]["clip"] = clip;
+        e.Call("component.set", args);
+        for (const char* shading : {"smooth", "flat"}) {
+            Json material = Json::parse(R"J({"id":"Fox","type":"MeshRenderer","values":{}})J");
+            material["values"]["shading"] = shading;
+            e.Call("component.set", material);
+            e.Renderer().Render(e.GetScene(), view, sw);
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double total = 0, interior = 0;
+            int interiorCount = 0, outliers = 0;
+            for (int y = 1; y < 179; ++y) for (int x = 1; x < 319; ++x) {
+                size_t i = static_cast<size_t>(y)*320 + static_cast<size_t>(x);
+                bool inside = sw.ids[i] == fox && sw.ids[i-1] == fox && sw.ids[i+1] == fox &&
+                              sw.ids[i-320] == fox && sw.ids[i+320] == fox;
+                int worst = 0;
+                for (int ch = 0; ch < 3; ++ch) {
+                    int diff = std::abs(static_cast<int>((sw.color[i] >> (8*ch)) & 255) - static_cast<int>((gpu.color[i] >> (8*ch)) & 255));
+                    total += diff;
+                    if (inside) interior += diff;
+                    worst = std::max(worst, diff);
+                }
+                interiorCount += inside;
+                outliers += worst > 64;
+            }
+            double mean = total / (sw.color.size()*3.0);
+            double foxMean = interiorCount ? interior / (interiorCount*3.0) : 255;
+            std::printf("  skin %s/%s: mean %.2f, Fox interior %.2f, outliers %d\n", clip, shading, mean, foxMean, outliers);
+            CHECK(mean < 2 && foxMean < 8 && outliers < static_cast<int>(sw.color.size())/100);
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == gpu.Hash());
+            if (std::string(clip) == "Walk" && std::string(shading) == "smooth")
+                CHECK(WritePng("build/animated-walk-gpu.png", gpu.ToImage(), true));
+        }
+    }
+    view.highlight = fox;
+    e.Renderer().Render(e.GetScene(), view, sw);
+    e.Gpu()->Render(e.GetScene(), view, gpu);
+    auto orange = [](uint32_t c) { return (c & 255) > 230 && ((c >> 8) & 255) > 140 && ((c >> 8) & 255) < 175 && ((c >> 16) & 255) < 50; };
+    CHECK(std::count_if(sw.color.begin(), sw.color.end(), orange) > 30);
+    CHECK(std::count_if(gpu.color.begin(), gpu.color.end(), orange) > 30);
 }
 
 TEST(WebGamePak) {
