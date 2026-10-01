@@ -3,6 +3,7 @@
 "Crypt of Coins": a top-down 2D action game on Box2D physics. WASD/arrows walk, Space/J shoots a magic bolt
 the way the hero faces, R restarts. Collect every coin, then take the stairs (E). Slimes chase you when they can
 see you and take two bolts; touching one costs a heart (3 hearts).
+Gamepad: left stick/D-pad moves, A shoots, Start restarts.
 
 - The level is the `Tilemap` on the `Level` entity (`scenes/main.scene.json`): one string per row, row 0 at the
   top, 1 tile = 1 unit. Its tile rules live in `tilesets/dungeon.tileset.json`: `#` wall (autotile `blob`,

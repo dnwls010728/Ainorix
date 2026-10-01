@@ -1342,6 +1342,57 @@ TEST(DungeonSamplePlays) {
     CHECK(a == b);
 }
 
+TEST(SampleGamepadControls) {
+    auto run = [](const char* sample) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+        Call(e, "sim.step", R"J({"frames":60})J");
+        float initialX = e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x;
+        auto velocity = [&] {
+            EntityId player = e.GetScene().FindByName("Player");
+            if (auto* body = e.GetScene().Get<CharacterBody2D>(player)) return body->velocity;
+            return e.GetScene().Get<CharacterBody>(player)->velocity;
+        };
+        const bool platformer = std::string(sample) == "Platformer";
+        const float speed = platformer ? 7.0f : 5.0f;
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0.575})J");
+        // Android's legacy arrow alias must not turn a partial stick into full speed.
+        Call(e, "input.key", R"J({"key":"Right","down":true})J");
+        Call(e, "sim.step", R"J({"frames":8})J");
+        CHECK(std::fabs(velocity().x - speed * 0.5f) < 0.02f);
+        Call(e, "input.key", R"J({"key":"Right","down":false})J");
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0.1})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(std::fabs(velocity().x) < 0.02f);
+        Call(e, "input.key", R"J({"key":"GamepadDPadRight","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(std::fabs(velocity().x - speed) < 0.02f);
+        Call(e, "input.key", R"J({"key":"GamepadDPadRight","down":false})J");
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        if (platformer) CHECK(velocity().y > 10);  // gamepad jump uses the real character mover
+        else CHECK(e.GetScene().FindByName("Bolt") != kNullEntity);
+        Call(e, "sim.step", R"J({"frames":3})J");
+        if (platformer) CHECK(velocity().y > 8);  // held A preserves a high jump
+        Call(e, "input.key", R"J({"key":"GamepadA","down":false})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        if (platformer) CHECK(velocity().y < 8);  // releasing A cuts the jump
+        CHECK(e.Scripts().Errors().empty());
+        std::string state = e.GetScene().ToJson().dump();
+        Call(e, "input.key", R"J({"key":"GamepadStart","down":true})J");
+        Call(e, "sim.step", R"J({"frames":2})J");
+        CHECK(e.GetScene().FindByName("Player") != kNullEntity);
+        CHECK(std::fabs(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x - initialX) < 0.01f);
+        Call(e, "input.key", R"J({"key":"GamepadStart","down":false})J");
+        CHECK(e.Scripts().Errors().empty());
+        return state;
+    };
+    for (const char* sample : {"Platformer", "Dungeon"}) CHECK(run(sample) == run(sample));
+}
+
 // ----- assets & rendering ---------------------------------------------------------
 
 size_t CountId(const RenderTarget& rt, EntityId id) {
@@ -2760,9 +2811,34 @@ TEST(NativeEditorHeadless) {
     frames(6, CtrlChord(WindowKey::P));
     CHECK(e.InPlaySession());
     CHECK(ed.GameViewFocused());
+    ed.WindowInput().SetAxis("LeftX", 0.575f);
+    ed.WindowInput().down.insert("GamepadA");
+    frames(1);
+    CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f && e.Input().IsDown("GamepadA"));
+    ed.WindowInput().SetAxis("LeftX", 0);
+    ed.WindowInput().down.erase("GamepadA");
+    frames(1);
+    CHECK(e.Input().Axis("LeftX") == 0 && !e.Input().IsDown("GamepadA"));
     frames(30, {KeyEvent(WindowKey::W, true)});
     frames(1, {KeyEvent(WindowKey::W, false)});
     CHECK(s.Exists(player) && s.Get<Transform>(player)->position.z < start.z - 0.5f);
+
+    ed.WindowInput().SetAxis("RT", 1);
+    ed.WindowInput().down.insert("GamepadB");
+    frames(1);
+    CHECK(e.Input().Axis("RT") == 1 && e.Input().IsDown("GamepadB"));
+    WindowEvent focus;
+    focus.type = WindowEvent::Type::Focus;
+    focus.down = false;
+    frames(1, {focus});
+    CHECK(!ed.GameViewFocused() && e.Input().Axis("RT") == 0 && !e.Input().IsDown("GamepadB"));
+    // A stale window snapshot cannot re-press buttons while the Game view is unfocused.
+    frames(1);
+    CHECK(!e.Input().IsDown("GamepadB"));
+    ed.WindowInput().axes.clear();
+    ed.WindowInput().down.clear();
+    focus.down = true;
+    frames(2, {focus});
 
     // Ctrl+P again stops and restores the edit-time scene.
     frames(6, CtrlChord(WindowKey::P));

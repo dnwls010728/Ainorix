@@ -761,7 +761,7 @@ void NativeEditor::Impl::ApplyEvents(const std::vector<WindowEvent>& events) {
                 break;
             case WindowEvent::Type::Focus:
                 io.AddFocusEvent(e.down);
-                if (!e.down) ReleaseGameInput();
+                if (!e.down) { ReleaseGameInput(); gameFocused = false; }
                 break;
             case WindowEvent::Type::Close: RequestAction({PendingAction::Kind::Quit, ""}); break;
             case WindowEvent::Type::DropFile: droppedFiles.push_back(e.path); break;

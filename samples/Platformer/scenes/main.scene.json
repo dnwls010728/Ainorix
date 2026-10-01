@@ -805,7 +805,7 @@
       "name": "Hint",
       "components": {
         "UIText": {
-          "text": "ARROWS/AD move   SPACE/W jump   R restart",
+          "text": "KEYS/PAD move   SPACE/A jump   R/START restart",
           "font": "pixel",
           "size": 16,
           "color": [1, 1, 1],

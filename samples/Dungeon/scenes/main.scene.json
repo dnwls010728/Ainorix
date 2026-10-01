@@ -274,7 +274,7 @@
       "name": "Hint",
       "components": {
         "UIText": {
-          "text": "WASD/ARROWS move   SPACE/J shoot   R restart",
+          "text": "KEYS/PAD move   SPACE/A shoot   R/START restart",
           "font": "pixel",
           "size": 16,
           "color": [

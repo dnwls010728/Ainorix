@@ -9,7 +9,7 @@ function Game:onStart()
 end
 
 function Game:onUpdate(dt)
-  if input.pressed("R") then return game.loadScene(game.scene()) end
+  if input.pressed("R") or input.pressed("GamepadStart") then return game.loadScene(game.scene()) end
   if self.over then return end
   self.time = self.time + dt
   if self.noteTimer then

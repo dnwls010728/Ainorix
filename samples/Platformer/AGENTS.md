@@ -1,6 +1,7 @@
 # Working on this OwnEngine project (for AI agents)
 
 "Pixel Meadow": a 2D side-scrolling platformer. Arrows/A-D move, Space/W jump (hold for higher), R restarts.
+Gamepad: left stick/D-pad moves, A jumps (hold for higher), Start restarts.
 Collect coins, bump "?" blocks from below, stomp slimes, avoid spikes and pits, reach the flag. 3 lives.
 
 - The level is the `Tilemap` on the `Level` entity (`scenes/main.scene.json`): one string per row, row 0 at

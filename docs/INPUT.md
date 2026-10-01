@@ -22,9 +22,17 @@ their separate follow-up PR; gamepad input does not depend on that feature.
       and preservation of injected input while no physical device is active.
       Web and both Android ABI players rebuilt without new warnings; runtime
       refresh is recorded in runtime/web/README.md and runtime/android/README.md.
-- [ ] P4.3: Gameplay sample controls, documentation/three READMEs and available
-      end-to-end verification. Record physical-controller checks separately.
-      Route physical input from the native editor window to the focused Game view.
+- [x] P4.3: Platformer/Dungeon stick, D-pad, A and Start controls; focused native
+      editor Game-view forwarding through commands, with axes/buttons released
+      on focus loss. Windows passes 75 tests; Node/WASM passes 71.
+      SampleGamepadControls checks partial-stick speed despite Android aliases,
+      dead-zone rest, D-pad speed, jump hold/release, firing, restart and repeated
+      scene determinism. NativeEditorHeadless checks forwarding and focus reset.
+      CLI-injected samples were rendered and inspected (Platformer hash
+      34e10cc120feae25, Dungeon d0a265a1f2245fb1); the D3D11 editor screenshot
+      confirmed the translated Game input hint and sample control instructions.
+      Three READMEs and sample guides updated. Only editor C++/Lua/sample data
+      changed after P4.2, so player runtime binaries remain current.
 - [ ] Hardware follow-up: verify sticks, triggers, buttons and disconnect on a
       real controller on Windows, web and Android; no device is assumed available.
 
@@ -79,3 +87,19 @@ polling does not erase API-injected input. While a device is active its sampled
 axes overwrite injected axes; injection is intended for headless tools/tests.
 Physical polling has been compiled on all three platforms; actual controller
 behavior still needs the hardware checks listed above.
+
+## Sample and editor controls
+
+Platformer uses left stick X or the D-pad to move, A to jump (hold for higher)
+and Start to restart. Dungeon uses left stick X/Y or the D-pad to move, A to
+shoot and Start to restart. Keyboard and on-screen key controls remain usable.
+An active stick takes precedence over digital directions so Android's legacy
+arrow aliases cannot turn partial analog movement into full speed. Dungeon
+caps vectors longer than one to prevent faster diagonal movement, while smaller
+stick vectors preserve their analog magnitude.
+
+The native editor forwards window gamepad input only while a play session's
+Game view has focus. Forwarding uses input.axis/input.key commands, sends button
+state changes without repeating held presses, and releases only forwarded input
+when focus is lost. A window with no sampled axes leaves agent-injected axes
+alone. Click the Game view to resume forwarding after losing window focus.
