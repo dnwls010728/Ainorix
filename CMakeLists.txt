@@ -233,7 +233,7 @@ if(ANDROID)
   target_link_libraries(oe_player PRIVATE OwnEngine)
   set_target_properties(oe_player PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
   target_link_options(oe_player PRIVATE
-    -u ANativeActivity_onCreate   # keep the glue's entry point (only the system calls it)
+    -u oe_ANativeActivity_onCreate  # entry point named in the manifest (only the system calls it)
     -Wl,-z,max-page-size=16384    # loads on devices with 16 KB pages (Android 15+)
     -Wl,--gc-sections)
   if(CMAKE_BUILD_TYPE STREQUAL "Release" AND CMAKE_STRIP)

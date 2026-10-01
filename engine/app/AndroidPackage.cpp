@@ -291,6 +291,8 @@ std::vector<unsigned char> BuildAndroidManifest(const AndroidAppInfo& app) {
                          Int("launchMode", kAttrLaunchMode, 2 /* singleTask */), Int("screenOrientation", kAttrScreenOrientation, orientation),
                          Hex("configChanges", kAttrConfigChanges, configChanges)},
                         {XmlElement{"meta-data", {Str("name", kAttrName, "android.app.lib_name"), Str("value", kAttrValue, "oe_player")}, {}},
+                         // Wraps the glue's ANativeActivity_onCreate (immersive mode, platform/android).
+                         XmlElement{"meta-data", {Str("name", kAttrName, "android.app.func_name"), Str("value", kAttrValue, "oe_ANativeActivity_onCreate")}, {}},
                          XmlElement{"intent-filter",
                                     {},
                                     {XmlElement{"action", {Str("name", kAttrName, "android.intent.action.MAIN")}, {}},

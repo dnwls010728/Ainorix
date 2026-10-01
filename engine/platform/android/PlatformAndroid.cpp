@@ -12,6 +12,7 @@
 #include <android/looper.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
+#include <fcntl.h>
 #include <android/window.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
@@ -20,6 +21,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -175,6 +177,89 @@ private:
     double retryAt_ = 0;
 };
 
+// ----- Immersive mode (UI thread) ----------------------------------------------------
+
+// Hiding the navigation bar is a View call that must run on the activity's
+// UI thread, while the game runs on the glue's thread and there is no Java
+// code to post a Runnable. oe_ANativeActivity_onCreate (the entry point named
+// in the manifest, on the UI thread) adds a pipe to the UI thread's looper;
+// the game thread writes a byte and the callback below runs on the UI thread.
+struct UiThread {
+    ANativeActivity* activity = nullptr;  // only touched on the UI thread
+    ALooper* looper = nullptr;
+    int readFd = -1;
+    std::atomic<int> writeFd{-1};
+    void (*gluedOnDestroy)(ANativeActivity*) = nullptr;
+};
+
+UiThread& Ui() {
+    static UiThread u;
+    return u;
+}
+
+void RequestImmersive() {
+    int fd = Ui().writeFd.load();
+    if (fd >= 0) {
+        const char one = 1;
+        (void)!write(fd, &one, 1);
+    }
+}
+
+// On the UI thread: fullscreen with the navigation bar hidden (it comes back
+// with a swipe from the edge and hides again), drawing into the display cutout.
+void ApplyImmersive(ANativeActivity* activity) {
+    JNIEnv* env = activity->env;
+    jobject act = activity->clazz;
+    jclass activityClass = env->GetObjectClass(act);
+    jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+    jobject window = getWindow ? env->CallObjectMethod(act, getWindow) : nullptr;
+    if (window && !env->ExceptionCheck()) {
+        jclass windowClass = env->GetObjectClass(window);
+        jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
+        jobject decor = getDecorView ? env->CallObjectMethod(window, getDecorView) : nullptr;
+        if (decor && !env->ExceptionCheck()) {
+            jmethodID setVisibility = env->GetMethodID(env->GetObjectClass(decor), "setSystemUiVisibility", "(I)V");
+            // LAYOUT_STABLE | LAYOUT_HIDE_NAVIGATION | LAYOUT_FULLSCREEN | HIDE_NAVIGATION | FULLSCREEN | IMMERSIVE_STICKY
+            if (setVisibility) env->CallVoidMethod(decor, setVisibility, static_cast<jint>(0x100 | 0x200 | 0x400 | 0x2 | 0x4 | 0x1000));
+        }
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        // WindowManager.LayoutParams.layoutInDisplayCutoutMode = SHORT_EDGES (API 28+;
+        // older devices have no such field and keep the default).
+        jmethodID getAttributes = env->GetMethodID(windowClass, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;");
+        jmethodID setAttributes = env->GetMethodID(windowClass, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V");
+        jobject params = getAttributes ? env->CallObjectMethod(window, getAttributes) : nullptr;
+        if (params && setAttributes && !env->ExceptionCheck()) {
+            jfieldID cutout = env->GetFieldID(env->GetObjectClass(params), "layoutInDisplayCutoutMode", "I");
+            if (cutout && !env->ExceptionCheck()) {
+                if (env->GetIntField(params, cutout) != 1) {
+                    env->SetIntField(params, cutout, 1);
+                    env->CallVoidMethod(window, setAttributes, params);
+                }
+            }
+        }
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+int OnUiPipe(int fd, int, void*) {
+    char buf[64];
+    while (read(fd, buf, sizeof(buf)) > 0) {}
+    if (Ui().activity) ApplyImmersive(Ui().activity);
+    return 1;  // keep the callback
+}
+
+void OnUiDestroy(ANativeActivity* activity) {
+    UiThread& u = Ui();
+    int fd = u.writeFd.exchange(-1);
+    if (u.looper && u.readFd >= 0) ALooper_removeFd(u.looper, u.readFd);
+    if (u.readFd >= 0) close(u.readFd);
+    if (fd >= 0) close(fd);
+    u.readFd = -1;
+    u.looper = nullptr;
+    u.activity = nullptr;
+    if (u.gluedOnDestroy) u.gluedOnDestroy(activity);
+}
+
 // ----- Input -------------------------------------------------------------------------
 
 // Key names match the other platforms (scene/Systems.h). Gamepads: D-pad =
@@ -308,6 +393,7 @@ void OnCommand(android_app* app, int32_t cmd) {
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
             s.window = app->window;
+            RequestImmersive();
             // Games keep the screen on and use the whole display.
             ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN, 0);
             break;
@@ -315,6 +401,9 @@ void OnCommand(android_app* app, int32_t cmd) {
             // The window dies when this handler returns: release the EGL surface now.
             if (s.surfaceLost) s.surfaceLost();
             s.window = nullptr;
+            break;
+        case APP_CMD_GAINED_FOCUS:
+            RequestImmersive();  // the system shows the bars again after dialogs, the notification shade, ...
             break;
         case APP_CMD_LOST_FOCUS:
             s.events.push_back({Event::Clear, std::string(), 0, 0});
@@ -450,6 +539,29 @@ bool WithJni(F body) {
 }
 
 }  // namespace
+
+// ----- Entry point ---------------------------------------------------------------------
+
+// NativeActivity calls this (manifest meta-data android.app.func_name) on the UI
+// thread; it prepares the UI-thread pipe and hands over to the glue, which
+// starts android_main on its own thread.
+extern "C" JNIEXPORT void oe_ANativeActivity_onCreate(ANativeActivity* activity, void* savedState, size_t savedStateSize) {
+    UiThread& u = Ui();
+    u.activity = activity;
+    u.looper = ALooper_forThread();
+    int fds[2];
+    if (u.looper && pipe(fds) == 0) {
+        fcntl(fds[0], F_SETFL, O_NONBLOCK);
+        fcntl(fds[1], F_SETFL, O_NONBLOCK);
+        u.readFd = fds[0];
+        u.writeFd.store(fds[1]);
+        ALooper_addFd(u.looper, fds[0], ALOOPER_POLL_CALLBACK, ALOOPER_EVENT_INPUT, OnUiPipe, nullptr);
+    }
+    ANativeActivity_onCreate(activity, savedState, savedStateSize);
+    // After the glue installed its callbacks: release the pipe when the activity goes away.
+    u.gluedOnDestroy = activity->callbacks->onDestroy;
+    activity->callbacks->onDestroy = OnUiDestroy;
+}
 
 // ----- AndroidApp.h --------------------------------------------------------------------
 
