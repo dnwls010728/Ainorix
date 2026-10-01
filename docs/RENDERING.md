@@ -156,7 +156,9 @@ milestone implements `vignette` (strength 0..1), `vignetteRadius` and
 `vignetteSoftness` in both software and GPU renderers, before UI and selection
 outlines. Defaults leave existing frames unchanged; picking and depth buffers
 are unaffected. Free/editor Scene cameras do not inherit game-camera effects.
-Tone mapping, bloom, FXAA and custom shader materials remain later P6 milestones;
+Exposure and optional Reinhard tone mapping preserve HDR lighting/emissive values
+before conversion to display color in both renderers. Neutral settings retain
+the original frame hashes. Bloom, FXAA and custom shader materials remain later P6 milestones;
 see [POSTPROCESS.md](POSTPROCESS.md) for controls and verification.
 
 ## Debug drawing

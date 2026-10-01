@@ -2194,6 +2194,79 @@ TEST(CameraPostProcessing) {
     CHECK(MakeLookAtView(Vec3(0,0,10), Vec3(0,0,0), 60, 1).postProcess.vignette == 0);
 }
 
+TEST(HdrCameraToneMapping) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("hdr_postprocess"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"bright.mat.json","values":{"baseColor":[0,0,0],"unlit":true,"emissive":[1,0.5,0.25],"emissiveIntensity":8}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[0,0,0]},"PostProcess":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Bright","components":{"Transform":{"scale":[4,4,4]},"MeshRenderer":{"material":"bright.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,0,0],"opacity":1}}})J");
+    RenderView view;
+    RenderTarget legacy, exposed, mapped, again;
+    for (RenderTarget* t : {&legacy, &exposed, &mapped, &again}) t->Resize(128, 72);
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, legacy);
+    const size_t center = 36 * 128 + 64;
+    CHECK((legacy.color[center] & 0xFFFFFF) == 0xFFFFFF);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"exposure":0.25}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, exposed);
+    CHECK((exposed.color[center] & 255) == 255);
+    CHECK(((exposed.color[center] >> 16) & 255) == 128);  // emissive 2 * .25, not clipped 1 * .25
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"toneMapping":"reinhard"}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, mapped);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(mapped.Hash() == again.Hash());
+    CHECK((mapped.color[center] & 255) == 170);
+    CHECK(((mapped.color[center] >> 8) & 255) == 128);
+    CHECK(((mapped.color[center] >> 16) & 255) == 85);
+    CHECK(mapped.ids == legacy.ids && mapped.depth == legacy.depth);
+    CHECK(mapped.color[10 * 128 + 10] == legacy.color[10 * 128 + 10]);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    const PostProcess* saved = restored.Get<PostProcess>(restored.FindByName("Camera"));
+    CHECK(saved && saved->exposure == 0.25f && saved->toneMapping == "reinhard");
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == exposed.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    if (e.EnableGpu(nullptr, &err)) {
+        for (const auto& settings : {std::pair<float, std::string>{0.25f, "none"}, {0.25f, "reinhard"}, {1.0f, "none"}}) {
+            view.postProcess.exposure = settings.first;
+            view.postProcess.toneMapping = settings.second;
+            e.Renderer().Render(e.GetScene(), view, again);
+            e.Gpu()->Render(e.GetScene(), view, mapped);
+            for (int shift : {0, 8, 16}) {
+                CHECK(std::abs(static_cast<int>((mapped.color[center] >> shift) & 255) -
+                               static_cast<int>((again.color[center] >> shift) & 255)) <= 1);
+            }
+            CHECK(mapped.color[10 * 128 + 10] == legacy.color[10 * 128 + 10]);
+        }
+    } else std::printf("  SKIP HDR GPU comparison (%s)\n", err.c_str());
+    // Alpha blending must preserve radiance too, before tone mapping.
+    CHECK(Call(e, "material.create", R"J({"path":"blend.mat.json","values":{"baseColor":[0,0,0],"unlit":true,"emissive":[1,0.5,0.25],"emissiveIntensity":8,"opacity":0.5,"alphaMode":"blend"}})J")["ok"].asBool());
+    Call(e, "component.set", R"J({"id":"Bright","type":"MeshRenderer","values":{"material":"blend.mat.json"}})J");
+    view.postProcess.exposure = 0.25f;
+    view.postProcess.toneMapping = "reinhard";
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK((again.color[center] & 255) == 128);
+    CHECK(((again.color[center] >> 8) & 255) == 85);
+    CHECK(((again.color[center] >> 16) & 255) == 51);
+    if (e.Gpu()) {
+        e.Gpu()->Render(e.GetScene(), view, mapped);
+        for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((mapped.color[center] >> shift) & 255) -
+                                                  static_cast<int>((again.color[center] >> shift) & 255)) <= 1);
+    }
+}
+
 TEST(GpuRendererMatchesSoftware) {
     Engine e;
     std::string err;

@@ -70,6 +70,7 @@ layout(binding=1) uniform mesh_material {
     vec4 pbr;         // x: metallic, y: roughness, z: normal scale, w: occlusion strength
     vec4 emissive;    // rgb: emissive * intensity, w: flat shading
     vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
+    vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets
 };
 
 layout(binding=2) uniform mesh_lights {
@@ -231,7 +232,7 @@ void main() {
     if (maps.z > 0.5) {
         em *= texture(sampler2D(emissive_tex, base_smp), uv).rgb;
     }
-    frag_color = vec4(clamp(color + em, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
+    frag_color = vec4(clamp(color + em, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
 }
 @end
 
@@ -399,6 +400,7 @@ layout(binding=0) uniform composite_params {
     vec4 target;         // xy: output size in pixels
     vec4 outline_color;  // rgb; a > 0 enables the outline
     vec4 vignette;       // x: strength, y: radius, z: softness; zero strength leaves color unchanged
+    vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 0 = disabled
 };
 
 layout(binding=0) uniform texture2D scene_tex;
@@ -411,6 +413,9 @@ out vec4 frag_color;
 void main() {
     vec2 uv = gl_FragCoord.xy / target.xy;
     vec3 c = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
+    c *= tone_mapping.x;
+    if (tone_mapping.y > 0.5) c = c / (vec3(1.0) + c);
+    c = clamp(c, 0.0, 1.0);
     if (vignette.x > 0.0) {
         float t = clamp((length(uv * 2.0 - 1.0) - vignette.y) / vignette.z, 0.0, 1.0);
         c *= 1.0 - vignette.x * t * t * (3.0 - 2.0 * t);

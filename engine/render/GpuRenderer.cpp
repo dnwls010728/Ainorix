@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <unordered_map>
 
 #include "core/Log.h"
@@ -19,6 +20,7 @@ namespace oe {
 namespace {
 
 constexpr sg_pixel_format kColorFormat = SG_PIXELFORMAT_RGBA8;
+constexpr sg_pixel_format kHdrFormat = SG_PIXELFORMAT_RGBA16F;
 constexpr sg_pixel_format kDepthFormat = SG_PIXELFORMAT_DEPTH;
 constexpr int kMaxDirLights = 4;
 constexpr int kMaxPointLights = 16;
@@ -184,24 +186,29 @@ struct Targets {
     int width = 0, height = 0;
     int msaa = 1;
     bool withOutput = false;
+    bool hdr = false;
     sg_image sceneMsaa{}, sceneDepth{}, sceneColor{}, maskColor{}, maskDepth{}, output{};
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
 
-    bool Matches(int w, int h, bool output_) const { return width == w && height == h && withOutput == output_; }
+    bool Matches(int w, int h, bool output_, bool hdr_) const {
+        return width == w && height == h && withOutput == output_ && hdr == hdr_;
+    }
 
-    void Create(int w, int h, int samples, bool output_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_) {
         Destroy();
         width = w;
         height = h;
         msaa = samples;
         withOutput = output_;
+        hdr = hdr_;
+        const sg_pixel_format sceneFormat = hdr ? kHdrFormat : kColorFormat;
         if (msaa > 1) {
-            sceneMsaa = MakeAttachmentImage(w, h, kColorFormat, msaa, false, false, "oe-scene-msaa");
+            sceneMsaa = MakeAttachmentImage(w, h, sceneFormat, msaa, false, false, "oe-scene-msaa");
             sceneMsaaAtt = ColorView(sceneMsaa);
-            sceneColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, true, "oe-scene");
+            sceneColor = MakeAttachmentImage(w, h, sceneFormat, 1, false, true, "oe-scene");
             sceneColorAtt = ResolveView(sceneColor);
         } else {
-            sceneColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-scene");
+            sceneColor = MakeAttachmentImage(w, h, sceneFormat, 1, false, false, "oe-scene");
             sceneColorAtt = ColorView(sceneColor);
         }
         sceneDepth = MakeAttachmentImage(w, h, kDepthFormat, msaa, true, false, "oe-scene-depth");
@@ -245,6 +252,10 @@ struct GpuRenderer::Impl {
     Settings settings;
 
     sg_pipeline meshPips[2][2]{};  // [blend][double sided]
+    sg_pipeline hdrMeshPips[2][2]{};
+    sg_pipeline hdrLinePip{};
+    int hdrSamples = 1;
+    bool hdrSupported = false;
     sg_pipeline shadowPip{}, shadowPipTwoSided{}, maskDepthPip{}, maskDrawPip{}, linePip{}, compositePip{}, uiPip{};
     sg_shader meshShd{}, shadowShd{}, solidShd{}, lineShd{}, compositeShd{}, uiShd{};
     sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
@@ -271,6 +282,9 @@ struct GpuRenderer::Impl {
         uiShd = sg_make_shader(oe_ui_shader_desc(backend));
 
         const int msaa = settings.msaa;
+        const sg_pixelformat_info hdrInfo = sg_query_pixelformat(kHdrFormat);
+        hdrSupported = hdrInfo.render && hdrInfo.blend && hdrInfo.filter;
+        hdrSamples = hdrInfo.msaa ? msaa : 1;
         auto alphaBlend = [](sg_color_target_state& c) {
             c.pixel_format = kColorFormat;
             c.blend.enabled = true;
@@ -305,6 +319,12 @@ struct GpuRenderer::Impl {
                 d.sample_count = msaa;
                 d.label = blend ? "oe-mesh-blend" : "oe-mesh";
                 meshPips[blend][twoSided] = sg_make_pipeline(&d);
+                if (hdrSupported) {
+                    d.colors[0].pixel_format = kHdrFormat;
+                    d.sample_count = hdrSamples;
+                    d.label = blend ? "oe-hdr-mesh-blend" : "oe-hdr-mesh";
+                    hdrMeshPips[blend][twoSided] = sg_make_pipeline(&d);
+                }
             }
         }
         // Shadow and selection passes use the same skin influences as the scene.
@@ -362,6 +382,12 @@ struct GpuRenderer::Impl {
             d.sample_count = msaa;
             d.label = "oe-lines";
             linePip = sg_make_pipeline(&d);
+            if (hdrSupported) {
+                d.colors[0].pixel_format = kHdrFormat;
+                d.sample_count = hdrSamples;
+                d.label = "oe-hdr-lines";
+                hdrLinePip = sg_make_pipeline(&d);
+            }
         }
         {
             sg_pipeline_desc d{};
@@ -458,6 +484,14 @@ struct GpuRenderer::Impl {
         panelTargets.clear();
         lines.Destroy();
         ui.Destroy();
+    }
+
+    void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view) {
+        const bool hdr = UsesHdr(NormalizePostProcess(view.postProcess));
+        if (hdr && !hdrSupported) {
+            throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
+        }
+        if (!t.Matches(w, h, output, hdr)) t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -717,7 +751,8 @@ struct GpuRenderer::Impl {
         {
             sg_pass pass{};
             pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
-            pass.action.colors[0].clear_value = {view.clearColor.r, view.clearColor.g, view.clearColor.b, 1.0f};
+            const Color clear = t.hdr ? ClampHdr(view.clearColor) : view.clearColor;
+            pass.action.colors[0].clear_value = {clear.r, clear.g, clear.b, 1.0f};
             pass.action.colors[0].store_action = t.msaa > 1 ? SG_STOREACTION_DONTCARE : SG_STOREACTION_STORE;
             pass.action.depth.load_action = SG_LOADACTION_CLEAR;
             pass.action.depth.clear_value = 1.0f;
@@ -755,7 +790,8 @@ struct GpuRenderer::Impl {
             for (const DrawCall& dc : draws) {
                 const RenderItem& it = items[dc.item];
                 const Material& m = dc.material;
-                sg_pipeline pip = meshPips[dc.blend ? 1 : 0][m.doubleSided ? 1 : 0];
+                sg_pipeline pip = t.hdr ? hdrMeshPips[dc.blend ? 1 : 0][m.doubleSided ? 1 : 0]
+                                        : meshPips[dc.blend ? 1 : 0][m.doubleSided ? 1 : 0];
                 if (pip.id != current.id) {
                     sg_apply_pipeline(pip);
                     sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
@@ -782,6 +818,7 @@ struct GpuRenderer::Impl {
                 Put(mu.pbr, m.metallic, m.roughness, m.normalScale, m.occlusionStrength);
                 Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
+                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, 0, 0);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
                 b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
@@ -800,7 +837,7 @@ struct GpuRenderer::Impl {
             }
 
             if (haveLines) {
-                sg_apply_pipeline(linePip);
+                sg_apply_pipeline(t.hdr ? hdrLinePip : linePip);
                 oe_line_params_t u{};
                 Put(u.view_proj, viewProj);
                 sg_apply_uniforms(UB_oe_line_params, SG_RANGE(u));
@@ -902,6 +939,7 @@ struct GpuRenderer::Impl {
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
             PostProcess post = NormalizePostProcess(view.postProcess);
+            Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
@@ -963,7 +1001,7 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
     int w = std::max(1, target.width), h = std::max(1, target.height);
     if (target.color.size() != static_cast<size_t>(w) * static_cast<size_t>(h)) target.Resize(w, h);
     Targets& t = impl_->offscreen;
-    if (!t.Matches(w, h, true)) t.Create(w, h, impl_->settings.msaa, true);
+    impl_->PrepareTargets(t, w, h, true, view);
     RenderStats stats = impl_->Frame(scene, view, t, w, h, nullptr);
     if (!device_.ReadPixels(t.output, w, h, target.color.data())) OE_LOG_ERROR("gpu", "reading back the frame failed");
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
@@ -976,7 +1014,7 @@ sg_view GpuRenderer::ImageView(const std::shared_ptr<const Texture>& texture) { 
 sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats) {
     int w = std::max(1, width), h = std::max(1, height);
     Targets& t = impl_->panelTargets[slot];
-    if (!t.Matches(w, h, true)) t.Create(w, h, impl_->settings.msaa, true);
+    impl_->PrepareTargets(t, w, h, true, view);
     RenderStats s = impl_->Frame(scene, view, t, w, h, nullptr);
     if (stats) *stats = s;
     return t.outputTex;
@@ -1003,7 +1041,7 @@ bool GpuRenderer::RenderToWindow(const Scene& scene, const RenderView& view, flo
     int w = std::max(1, static_cast<int>(std::lround(static_cast<float>(sc.width) * scale)));
     int h = std::max(1, static_cast<int>(std::lround(static_cast<float>(sc.height) * scale)));
     Targets& t = impl_->window;
-    if (!t.Matches(w, h, false)) t.Create(w, h, impl_->settings.msaa, false);
+    impl_->PrepareTargets(t, w, h, false, view);
     RenderStats s = impl_->Frame(scene, view, t, sc.width, sc.height, &sc);
     device_.Present();
     if (stats) *stats = s;

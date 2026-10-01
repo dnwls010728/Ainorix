@@ -21,7 +21,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 - 2D 게임: 스프라이트·스프라이트 시트 애니메이션(픽셀 아트, 투명 컷아웃), 텍스트로 쓰는 타일맵(타일셋 파일, 자동 연결 16/47 패턴, 변형 타일, 슬로프·원웨이 등 타일별 충돌), Box2D 2D 물리, 경계 있는 카메라 추적, 에디터 2D 뷰와 타일 브러시 — [docs/2D.md](docs/2D.md)
 - 게임 구성 요소: 프리팹, 씬 전환 + 게임 데이터, 메시지/타이머, 게임 내 UI, 오디오(결정적 믹서, 효과음 생성) — [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 스크립팅 (샌드박스, 핫리로드, 에러에 파일:줄 표시) — [docs/SCRIPTING.md](docs/SCRIPTING.md)
-- 카메라 후처리: 소프트웨어·GPU 비네트 지원, UI와 선택 윤곽선 유지. 톤매핑·블룸·FXAA·커스텀 머티리얼은 진행 중 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- 카메라 후처리: 소프트웨어·GPU 노출·HDR Reinhard 톤매핑·비네트 지원, UI와 선택 윤곽선 유지. 블룸·FXAA·커스텀 머티리얼은 진행 중 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - 결정적(deterministic) 시뮬레이션과 소프트웨어 렌더러: 같은 입력이면 같은 프레임 해시 → AI가 테스트 오라클로 사용 가능
 
 ## 빌드

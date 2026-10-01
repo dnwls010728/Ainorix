@@ -7,10 +7,30 @@ namespace oe {
 
 // Render callers may construct settings directly, bypassing reflection's range clamping.
 inline PostProcess NormalizePostProcess(PostProcess settings) {
+    settings.exposure = std::isfinite(settings.exposure) ? Clamp(settings.exposure, 0, 32) : 1;
+    if (settings.toneMapping != "reinhard") settings.toneMapping = "none";
     settings.vignette = std::isfinite(settings.vignette) ? Clamp(settings.vignette, 0, 1) : 0;
     settings.vignetteRadius = std::isfinite(settings.vignetteRadius) ? Clamp(settings.vignetteRadius, 0, 1.5f) : 0.75f;
     settings.vignetteSoftness = std::isfinite(settings.vignetteSoftness) ? Clamp(settings.vignetteSoftness, 0.01f, 2) : 0.5f;
     return settings;
+}
+
+// HDR is allocated only for effects that need unquantized scene lighting.
+inline bool UsesHdr(const PostProcess& settings) {
+    return settings.exposure != 1 || settings.toneMapping != "none";
+}
+
+// Float16's largest finite value is the shared HDR bound on CPU and GPU.
+inline Color ClampHdr(Color c) {
+    return Color(Clamp(c.r, 0, 65504), Clamp(c.g, 0, 65504), Clamp(c.b, 0, 65504));
+}
+
+inline Color ToneMap(Color c, const PostProcess& settings) {
+    c = ClampHdr(c) * settings.exposure;
+    if (settings.toneMapping == "reinhard") {
+        c = Color(c.r / (1 + c.r), c.g / (1 + c.g), c.b / (1 + c.b));
+    }
+    return Color(Clamp(c.r, 0, 1), Clamp(c.g, 0, 1), Clamp(c.b, 0, 1));
 }
 
 // Must match composite_fs: normalized pixel-center UV, cubic smoothstep, no aspect correction.
