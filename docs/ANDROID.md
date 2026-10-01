@@ -130,6 +130,9 @@ committed and pushed on the branch.
 - [ ] Commit the prebuilt runtime `runtime/android/<abi>/liboe_player.so` (+ a `runtime/android/README.md` like `runtime/web/README.md`) so packaging needs no NDK
 - [ ] Test on a device / emulator: start, touch → UI buttons, rotation, Home + return (surface recreation), Back = Escape, audio, logcat
 - [ ] Run `oe_tests` on a device (would need test data paths that do not use `OE_SOURCE_DIR`)
+- [ ] Immersive mode: `oe_ANativeActivity_onCreate` (manifest `android.app.func_name`) hooks a pipe into the UI thread's looper; JNI `setSystemUiVisibility` + `layoutInDisplayCutoutMode` run there
+- [ ] Multi-touch: `InputState.touches`, Lua `input.touches()`, API `input.touch`, `UIButton.key` (held by any finger/mouse = key down), Android fills every pointer
+- [ ] `.aab` (`oe package --android --aab`): proto manifest + `resources.pb` + `BundleConfig.pb`, jarsigner; validated with bundletool (`bundletool validate`, `build-apks --mode=universal`)
 
 ## Not done yet
 
