@@ -11,7 +11,7 @@ AI が人と同じように扱い、検証できるように設計した C++17 �
 | ![Showcase のレンダリング](docs/images/showcase.png) | glTF のキツネキャラクター (プレイヤー操作 + 追従カメラ)、手続き生成テクスチャ、影、ポイントライト。決定的なソフトウェアレンダラーの出力 (`oe render`) で、ゲームウィンドウ・Web・エディタービューは同じシーンを GPU レンダラーで描画します。 |
 
 - 別途インストールする依存関係なし (MSVC + CMake のみ。Lua・Jolt Physics・Box2D・sokol_gfx・stb・cgltf・Dear ImGui・ImGuizmo はソースを同梱)。Web ランタイムも `runtime/web/` にビルド済みで同梱 - Web 配布に Emscripten は不要
-- Windows (ネイティブウィンドウ、`Name.exe` パッケージ)・Web (WebAssembly + WebGL2、`oe package --web`)・ヘッドレスに対応。Android / iOS / macOS / コンソールはプラットフォーム層を追加するだけで済むよう分離 - [docs/PLATFORMS.md](docs/PLATFORMS.md)
+- Windows (ネイティブウィンドウ、`Name.exe` パッケージ)・Web (WebAssembly + WebGL2、`oe package --web`)・Android (APK、`oe package --android` - [docs/ANDROID.md](docs/ANDROID.md))・ヘッドレスに対応。iOS / macOS / コンソールはプラットフォーム層を追加するだけで済むよう分離 - [docs/PLATFORMS.md](docs/PLATFORMS.md)
 - 2 つのレンダラーが同じシーンを描画: **GPU レンダラー** (sokol_gfx - Windows は D3D11、Web は WebGL2、Linux は GLES3。4x MSAA、フィルタリングされた影、ミップマップ、シェーダーは `engine/render/shaders/Shaders.glsl` 1 つ) はゲームウィンドウ・Web・エディタービュー用、**ソフトウェアレンダラー** (マルチスレッド、決定的) はスクリーンショットのハッシュ・テスト・ピッキング用
 - レンダリング: glTF モデル、PNG/JPEG テクスチャ、スムーズ/フラットシェーディング、ポイントライト、影、平行投影/追従カメラ、デバッグ描画 - [docs/RENDERING.md](docs/RENDERING.md)
 - マテリアル / PBR / 半透明: metallic-roughness (GGX) シェーディング、法線・AO・発光マップ、半透明 (奥から手前へソート)・マスク・両面、glTF マテリアルの完全読み込み、`.mat.json` マテリアルファイル (`material.create` / `material.set`、ホットリロード) - [docs/RENDERING.md](docs/RENDERING.md)
@@ -47,6 +47,7 @@ build\bin\oe.exe import MyGame model.glb     :: 外部のモデル/テクスチ�
 build\bin\oe.exe package MyGame             :: 配布用フォルダー dist\MyGame\ を作成 (MyGame.exe + game\)
 build\bin\oe.exe package MyGame --web       :: Web 配布フォルダー dist\MyGame-web\ (index.html + wasm、どの静的ホスティングでも可)
 build\bin\oe.exe serve dist\MyGame-web      :: Web ビルドをローカルで実行 (http://127.0.0.1:8080)
+build\bin\oe.exe package MyGame --android   :: Android APK dist\MyGame-android\MyGame.apk (先に build_android.bat、--install でスマホにインストール)
 build\bin\oe.exe api --markdown             :: コマンドリファレンスを出力
 ```
 
@@ -93,9 +94,9 @@ engine/render    IRenderer、ソフトウェアラスタライザー、GPU レ�
 engine/api       コマンドレジストリ、HTTP サーバー、エディター用ルート、MCP サーバー
 engine/app       Engine (シミュレーション、undo、ジョブキュー)、プロジェクトテンプレート
 engine/editor    ネイティブエディター (Dear ImGui パネル、ギズモ、シーン/ゲームビュー、翻訳)
-engine/platform  Platform.h + win32 (D3D11) / web (WebGL2) / null (EGL) の実装
+engine/platform  Platform.h + win32 (D3D11) / web (WebGL2) / android (GLES3) / null (EGL) の実装
 tools/oe         CLI
-tools/player     ゲームランタイム (Name.exe / Web の wasm) + Web ページのテンプレート
+tools/player     ゲームランタイム (Name.exe / Web の wasm / Android の .so) + Web ページのテンプレート
 tools/shaders    シェーダー再生成スクリプト (sokol-shdc)
 tests/           セルフテスト
 third_party/lua  Lua 5.4.8 (MIT)
