@@ -78,6 +78,7 @@ end
 | `scene.all(type?)` | Array of entity ids (optionally only those with a component) |
 | `scene.withTag(tag)` | Array of entity ids whose `Tag` contains `tag` |
 | `input.down(key)` / `input.pressed(key)` | Key held / pressed this frame (`"W"`, `"Space"`, `"Left"`, …) |
+| `input.axis(name)` | Gamepad stick LeftX/LeftY/RightX/RightY (-1..1; +Y up) or LT/RT (0..1), with a 0.15 scalar dead zone rescaled to full range. Buttons use `input.down/pressed("GamepadA")` etc.; see [INPUT.md](INPUT.md) |
 | `time.dt()`, `time.frame()`, `time.now()` | Step length, frame number, simulated seconds |
 | `log.info(...)`, `log.warn(...)`, `log.error(...)`, `print(...)` | Engine log (`log.get`) |
 | `physics.raycast(origin, dir, maxDist?)` | `{entity, point, normal, distance}` or `nil` |

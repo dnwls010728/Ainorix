@@ -81,3 +81,5 @@ All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"cod
 - Keep `docs/API.md` regenerated when commands or components change, and add a test in `tests/tests.cpp` for new behaviour.
 - Long features keep a work-log checklist in their doc and are committed per milestone (docs/DESIGN.md §5), so any agent can continue them.
 - Save slots: `save.state/set/clear/flush`, Lua `save.get/set/delete/flush`; tool sessions are memory-only unless `--save-dir <dir>` is supplied. See [docs/SAVE.md](docs/SAVE.md) for implementation status and platform follow-ups.
+
+- Gamepad axes: `input.axis {name,value}` injects LeftX/LeftY/RightX/RightY/LT/RT; Lua `input.axis(name)` applies the shared 0.15 dead zone. Gamepad buttons use `input.key` and `input.down/pressed`. See docs/INPUT.md for platform implementation status.

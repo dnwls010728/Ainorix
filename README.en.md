@@ -21,6 +21,7 @@ A C++17 game engine designed so that AI agents can drive and verify it as easily
 - 2D games: sprites and sprite sheet animation (pixel art, transparent cut-out), tilemaps written as text (tileset files, autotiling with 16/47 patterns, random variants, per-tile collision: solid, one-way, slopes), Box2D physics, bounded follow camera, 2D editor view with a tile brush - [docs/2D.md](docs/2D.md)
 - Gameplay building blocks: prefabs, scene changes + game data, messages/timers, in-game UI, audio (deterministic mixer, generated sound effects) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 scripting (sandboxed, hot reload, errors with file:line) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
+- Gamepad input foundation: six injectable axes, Lua `input.axis` and a shared 0.15 dead zone. Physical device adapters are in progress - [docs/INPUT.md](docs/INPUT.md)
 - Deterministic simulation and software renderer: same inputs give the same frame hash, so an AI can use it as a test oracle
 
 ## Build

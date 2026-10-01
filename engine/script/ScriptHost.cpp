@@ -810,6 +810,17 @@ int L_PhysicsContacts(lua_State* L) {
 
 // ----- input.*, time.*, log.* --------------------------------------------------
 
+int L_InputAxis(lua_State* L) {
+    return Guard(L, [&] {
+        const char* name = luaL_checkstring(L, 1);
+        bool known = false;
+        for (const char* axis : InputState::kAxisNames) if (std::strcmp(name, axis) == 0) known = true;
+        if (!known) return luaL_error(L, "unknown gamepad axis; use LeftX, LeftY, RightX, RightY, LT or RT");
+        lua_pushnumber(L, Host(L).GetEngine().Input().Axis(name));
+        return 1;
+    });
+}
+
 int L_InputDown(lua_State* L) {
     lua_pushboolean(L, Host(L).GetEngine().Input().IsDown(luaL_checkstring(L, 1)));
     return 1;
@@ -1089,7 +1100,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
-    const luaL_Reg inputFuncs[] = {{"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
+    const luaL_Reg inputFuncs[] = {{"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"lockMouse", L_InputLockMouse},
                                   {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);

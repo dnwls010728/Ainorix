@@ -406,6 +406,59 @@ TEST(ScriptEvalAndSandbox) {
     CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.y == 0.5f);
 }
 
+TEST(GamepadAxesAndButtons) {
+    auto run = [] {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TempProject("gamepad_axes"), &err));
+        Call(e, "scene.new", R"J({"empty":true})J");
+        Call(e, "script.write", R"J({"path":"scripts/pad.lua","source":"local Pad={}\nfunction Pad:onUpdate(dt)\n local p=self:position()\n self:setPosition(p.x+input.axis('LeftX')*6*dt,p.y,0)\n self.presses=(self.presses or 0)+(input.pressed('GamepadA') and 1 or 0)\nend\nreturn Pad\n"})J");
+        Call(e, "entity.create", R"J({"name":"Actor","components":{"Transform":{},"Script":{"path":"scripts/pad.lua"}}})J");
+        Json initial = Call(e, "sim.state", "{}")["result"];
+        CHECK(initial["axes"].size() == 6 && initial["rawAxes"].size() == 6);
+        CHECK(initial["axes"]["LT"].asFloat() == 0);
+        size_t undo = e.UndoDepth();
+        Json state = Call(e, "input.axis", R"J({"name":"LeftX","value":0.15})J")["result"];
+        CHECK(state["axes"]["LeftX"].asFloat() == 0 && state["rawAxes"]["LeftX"].asFloat() == 0.15f);
+        state = Call(e, "input.axis", R"J({"name":"LeftX","value":0.575})J")["result"];
+        CHECK(std::fabs(state["axes"]["LeftX"].asFloat() - 0.5f) < 1e-6f);
+        Call(e, "input.axis", R"J({"name":"LeftY","value":-1})J");
+        Call(e, "input.axis", R"J({"name":"RightX","value":1})J");
+        Call(e, "input.axis", R"J({"name":"RightY","value":-0.575})J");
+        Call(e, "input.axis", R"J({"name":"LT","value":0.15})J");
+        Call(e, "input.axis", R"J({"name":"RT","value":1})J");
+        CHECK(e.Input().Axis("LeftY") == -1 && e.Input().Axis("RightX") == 1 && e.Input().Axis("RT") == 1);
+        CHECK(std::fabs(e.Input().Axis("RightY") + 0.5f) < 1e-6f && e.Input().Axis("LT") == 0);
+        for (const char* invalid : {R"J({"name":"Unknown","value":0})J", R"J({"name":"LeftX","value":1.01})J",
+                                    R"J({"name":"LeftX","value":-1.01})J", R"J({"name":"LT","value":-0.01})J",
+                                    R"J({"name":"RT","value":1e100})J"}) {
+            CHECK(!Call(e, "input.axis", invalid)["ok"].asBool());
+        }
+        CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f);  // invalid calls preserve the previous value
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        CHECK(e.UndoDepth() == undo);
+        Call(e, "sim.step", R"J({"frames":60})J");
+        EntityId actor = e.GetScene().FindByName("Actor");
+        CHECK(std::fabs(e.GetScene().Get<Transform>(actor)->position.x - 3.0f) < 1e-4f);
+        Json eval = Call(e, "script.eval", R"J({"entity":"Actor","code":"return {self.presses,input.down('GamepadA'),input.axis('RT'),pcall(input.axis,'Unknown')}"})J")["result"]["value"];
+        CHECK(eval[0].asInt() == 1 && eval[1].asBool() && eval[2].asFloat() == 1 && !eval[3].asBool());
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(Call(e, "script.eval", R"J({"entity":"Actor","code":"return self.presses"})J")["result"]["value"].asInt() == 1);
+        Call(e, "input.key", R"J({"key":"GamepadA","down":false})J");
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(Call(e, "script.eval", R"J({"entity":"Actor","code":"return self.presses"})J")["result"]["value"].asInt() == 2);
+        CHECK(e.Scripts().Errors().empty());
+        std::string result = e.GetScene().ToJson().dump();
+        Call(e, "sim.stop", "{}");
+        CHECK(e.Input().axes.empty() && !e.Input().IsDown("GamepadA") && e.Input().Axis("LeftX") == 0);
+        return result;
+    };
+    std::string first = run();
+    CHECK(first == run());
+}
+
 TEST(MouseLookInput) {
     // Relative mouse motion reaches scripts for exactly one step; the lock flag
     // is set by scripts, visible to tools and released by input.mouse / sim.stop.
