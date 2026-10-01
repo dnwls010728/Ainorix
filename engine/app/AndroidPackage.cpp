@@ -228,12 +228,13 @@ constexpr uint32_t kIconResource = 0x7f010000;
 // Launcher icon when the project has none: a rounded play button.
 Bytes DefaultIcon() {
     const int size = 192;
+    const float fsize = static_cast<float>(size);
     Image img;
     img.width = img.height = size;
     img.rgba.assign(static_cast<size_t>(size) * size * 4, 0);
     for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
-            float fx = (static_cast<float>(x) + 0.5f) / size, fy = (static_cast<float>(y) + 0.5f) / size;
+            float fx = (static_cast<float>(x) + 0.5f) / fsize, fy = (static_cast<float>(y) + 0.5f) / fsize;
             float dx = std::max(std::abs(fx - 0.5f) - 0.3f, 0.0f), dy = std::max(std::abs(fy - 0.5f) - 0.3f, 0.0f);
             if (dx * dx + dy * dy > 0.15f * 0.15f) continue;  // rounded square
             uint32_t r = static_cast<uint32_t>(40 + 40 * fy), g = static_cast<uint32_t>(90 + 50 * fy), b = static_cast<uint32_t>(200 + 40 * fy);

@@ -1777,7 +1777,8 @@ TEST(AndroidApk) {
     app.hasIcon = true;
     std::vector<unsigned char> manifest = BuildAndroidManifest(app);
     CHECK(manifest.size() > 8 && manifest[0] == 0x03 && manifest[1] == 0x00);  // RES_XML_TYPE
-    CHECK(manifest[4] + (manifest[5] << 8) + (manifest[6] << 16) + (static_cast<size_t>(manifest[7]) << 24) == manifest.size());
+    CHECK((static_cast<size_t>(manifest[4]) | (static_cast<size_t>(manifest[5]) << 8) | (static_cast<size_t>(manifest[6]) << 16) |
+           (static_cast<size_t>(manifest[7]) << 24)) == manifest.size());
     auto hasUtf16 = [](const std::vector<unsigned char>& data, const std::u16string& text) {
         std::vector<unsigned char> needle;
         for (char16_t c : text) {
