@@ -47,7 +47,7 @@ build\bin\oe.exe import MyGame model.glb     :: 外部のモデル/テクスチ�
 build\bin\oe.exe package MyGame             :: 配布用フォルダー dist\MyGame\ を作成 (MyGame.exe + game\)
 build\bin\oe.exe package MyGame --web       :: Web 配布フォルダー dist\MyGame-web\ (index.html + wasm、どの静的ホスティングでも可)
 build\bin\oe.exe serve dist\MyGame-web      :: Web ビルドをローカルで実行 (http://127.0.0.1:8080)
-build\bin\oe.exe package MyGame --android   :: Android APK dist\MyGame-android\MyGame.apk (先に build_android.bat、--install でスマホにインストール)
+build\bin\oe.exe package MyGame --android   :: Android APK dist\MyGame-android\MyGame.apk (NDK 不要。SDK build-tools + Java が必要。--install でスマホにインストール)
 build\bin\oe.exe api --markdown             :: コマンドリファレンスを出力
 ```
 

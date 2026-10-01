@@ -254,7 +254,7 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
         if (data) cgltf_free(data);
         return false;
     }
-    Loader loader{out, ParentPath(path), {}, {}};
+    Loader loader{out, ParentPath(path), {}, {}, {}};
     if (data->scenes_count > 0) {
         const cgltf_scene* scene = data->scene ? data->scene : &data->scenes[0];
         for (cgltf_size i = 0; i < scene->nodes_count; ++i) loader.AddNode(scene->nodes[i]);

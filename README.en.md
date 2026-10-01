@@ -47,7 +47,7 @@ build\bin\oe.exe import MyGame model.glb     :: copy an external model/texture/s
 build\bin\oe.exe package MyGame             :: standalone game in dist\MyGame\ (MyGame.exe + game\)
 build\bin\oe.exe package MyGame --web       :: web build in dist\MyGame-web\ (index.html + wasm, any static host)
 build\bin\oe.exe serve dist\MyGame-web      :: run the web build locally (http://127.0.0.1:8080)
-build\bin\oe.exe package MyGame --android   :: Android APK dist\MyGame-android\MyGame.apk (build_android.bat first; --install puts it on the phone)
+build\bin\oe.exe package MyGame --android   :: Android APK dist\MyGame-android\MyGame.apk (no NDK; needs SDK build-tools + Java; --install puts it on the phone)
 build\bin\oe.exe api --markdown             :: print the command reference
 ```
 

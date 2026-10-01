@@ -239,6 +239,12 @@ if(ANDROID)
   if(CMAKE_BUILD_TYPE STREQUAL "Release" AND CMAKE_STRIP)
     add_custom_command(TARGET oe_player POST_BUILD COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:oe_player>)
   endif()
+  if(OE_BUILD_TESTS)
+    # Run through adb shell with source fixtures staged on the device.
+    # GPU tests skip without a NativeActivity window; simulation tests still run.
+    add_executable(oe_tests tests/tests.cpp)
+    target_link_libraries(oe_tests PRIVATE OwnEngine)
+  endif()
   return()
 endif()
 

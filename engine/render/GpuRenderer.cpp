@@ -804,8 +804,9 @@ struct GpuRenderer::Impl {
         if (view.highlight != kNullEntity) {
             for (const RenderItem& it : items) outline = outline || it.id == view.highlight;
         }
-        {
-            // Always cleared: the composite shader samples the mask even without a selection.
+        if (outline) {
+            // Games have no selection. Avoid the unused depth pass and its GLES
+            // framebuffer transition from multisampled to single-sampled attachments.
             sg_pass pass{};
             pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
             pass.action.colors[0].clear_value = {0, 0, 0, 0};
@@ -889,7 +890,7 @@ struct GpuRenderer::Impl {
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
             b.views[VIEW_oe_scene_tex] = t.sceneTex;
-            b.views[VIEW_oe_mask_tex] = t.maskTex;
+            b.views[VIEW_oe_mask_tex] = outline ? t.maskTex : whiteTex;
             b.samplers[SMP_oe_scene_smp] = linearClamp;
             b.samplers[SMP_oe_mask_smp] = nearestClamp;
             sg_apply_bindings(&b);

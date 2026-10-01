@@ -966,7 +966,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  Json out = Json::MakeObject();
                  out["path"] = rel;
                  Json reloaded = Json::MakeArray();
-                 for (const std::string& p : e.Scripts().PollHotReload()) reloaded.push(p);
+                 for (const std::string& p : e.Scripts().PollHotReload(rel)) reloaded.push(p);
                  out["reloaded"] = reloaded;
                  return out;
              });

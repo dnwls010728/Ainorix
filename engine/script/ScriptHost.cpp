@@ -1146,7 +1146,7 @@ int ScriptHost::GetModule(const std::string& path) {
     return m.ref;
 }
 
-std::vector<std::string> ScriptHost::PollHotReload() {
+std::vector<std::string> ScriptHost::PollHotReload(const std::string& changedPath) {
     std::vector<std::string> reloaded;
     if (!L_) return reloaded;
     for (auto& kv : modules_) {
@@ -1155,7 +1155,9 @@ std::vector<std::string> ScriptHost::PollHotReload() {
             mtime = FileModifiedTime(engine_.ResolvePath(kv.first));
         } catch (const std::exception&) {
         }
-        if (mtime == kv.second.mtime) continue;
+        // API writes know which file changed even when the filesystem gives
+        // consecutive writes the same timestamp (observed on Android).
+        if (mtime == kv.second.mtime && kv.first != changedPath) continue;
         if (ReloadModule(kv.first, kv.second)) {
             reloaded.push_back(kv.first);
             OE_LOG_INFO("script", "reloaded %s", kv.first.c_str());

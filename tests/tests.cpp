@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -36,6 +37,13 @@
 using namespace oe;
 
 namespace {
+
+// Android test binaries cannot read the build host's source directory.
+// Set OE_TEST_SOURCE_DIR to the staged fixtures; other platforms use the source tree.
+std::string TestSourceDir() {
+    const char* dir = std::getenv("OE_TEST_SOURCE_DIR");
+    return dir && *dir ? dir : OE_SOURCE_DIR;
+}
 
 int g_failures = 0;
 std::string g_current;
@@ -163,6 +171,8 @@ TEST(FileCopyAndRemove) {
     CHECK(!CopyFileTo(root + "/missing.bin", root + "/out/m.bin"));
     CHECK(RemoveAll(root));
     CHECK(!FileExists(root + "/src/a.bin"));
+    CHECK(AbsolutePath("C:/ownengine/game/../assets") == "C:/ownengine/assets");
+    CHECK(RelativePath("C:/ownengine/assets/model.glb", "C:/ownengine") == "assets/model.glb");
 }
 
 TEST(SimulationDeterminismAndInput) {
@@ -219,12 +229,15 @@ TEST(PathSandbox) {
 // Fresh project (with the template scripts) in a temp directory.
 std::string TempProject(const char* name) {
     namespace fs = std::filesystem;
-    fs::path dir = fs::temp_directory_path() / (std::string("oe_tests_") + name);
+    // Keep fixtures under the staged source tree: Android shell and Node on
+    // Windows do not necessarily have a writable POSIX /tmp directory.
+    fs::path dir = fs::path(TestSourceDir()) / "build/test_projects" / (std::string("oe_tests_") + name);
     std::error_code ec;
     fs::remove_all(dir, ec);
     std::string d = dir.generic_string();
     std::string err;
-    CreateProject(d, name, &err);
+    CHECK(CreateProject(d, name, &err));
+    if (!err.empty()) std::printf("  project fixture: %s\n", err.c_str());
     return d;
 }
 
@@ -406,7 +419,8 @@ TEST(ScriptErrorsAndHotReload) {
     CHECK(errors[0]["entity"].asInt() == static_cast<int>(e.GetScene().FindByName("Counter")));
 
     // Fix the script: the running instance keeps its state (count = 5) and continues.
-    Call(e, "script.write", R"J({"path": "scripts/counter.lua", "source": "local M = {}\nfunction M:onStart() self.count = 0 end\nfunction M:onUpdate(dt) self.count = self.count + 100 end\nreturn M\n"})J");
+    Json rewritten = Call(e, "script.write", R"J({"path": "scripts/counter.lua", "source": "local M = {}\nfunction M:onStart() self.count = 0 end\nfunction M:onUpdate(dt) self.count = self.count + 100 end\nreturn M\n"})J");
+    CHECK(rewritten["result"]["reloaded"].size() == 1);
     Call(e, "sim.step", R"J({"frames": 1})J");
     Json r = Call(e, "script.eval", R"J({"code": "self.count", "entity": "Counter"})J");
     CHECK(r["result"]["value"].asInt() == 105);
@@ -1082,7 +1096,7 @@ TEST(DungeonSamplePlays) {
     auto run = [](std::string* summary) {
         Engine e;
         std::string err;
-        CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Dungeon", &err));
+        CHECK(e.Open(TestSourceDir() + "/samples/Dungeon", &err));
         Call(e, "sim.step", R"J({"frames": 5})J");
         auto eval = [&](const char* code) {
             Json a = Json::MakeObject();
@@ -1276,7 +1290,7 @@ TEST(ShowcaseFoxModel) {
     // Completion check for rendering: the external glTF character (samples/Showcase) is drawn with its texture.
     Engine e;
     std::string err;
-    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
     Json info = Call(e, "asset.info", R"J({"path": "assets/models/fox.glb"})J")["result"];
     CHECK(info["triangles"].asInt() == 576 && info["textures"][0][0].asInt() == 1024);
     RenderTarget rt;
@@ -1304,7 +1318,7 @@ TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;
     std::string err;
-    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
     std::vector<UIQuad> quads = BuildUIQuads(e.GetScene(), 640, 360, &e.Assets());
     CHECK(quads.size() > 50);  // one textured quad per glyph
     RenderTarget rt;
@@ -1348,7 +1362,7 @@ TEST(UITextFontsAndRichText) {
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
     // A font file in the project (the embedded Roboto written out).
     CreateDirectories(JoinPath(e.ProjectDir(), "assets/fonts"));
-    CHECK(CopyFileTo(std::string(OE_SOURCE_DIR) + "/third_party/fonts/Roboto-Regular.ttf", JoinPath(e.ProjectDir(), "assets/fonts/body.ttf")));
+    CHECK(CopyFileTo(TestSourceDir() + "/third_party/fonts/Roboto-Regular.ttf", JoinPath(e.ProjectDir(), "assets/fonts/body.ttf")));
     Json info = Call(e, "asset.info", R"J({"path": "assets/fonts/body.ttf"})J")["result"];
     CHECK(info["kind"].asString() == "font" && info["family"].asString() == "Roboto");
     Call(e, "entity.create", R"J({"name": "Red", "components": {"UIText": {"text": "<color=#ff0000>WW</color>WW", "font": "assets/fonts/body.ttf", "x": 0, "y": 0, "size": 72}}})J");
@@ -1667,7 +1681,7 @@ TEST(UIGpuMatchesSoftware) {
 TEST(GpuRendererMatchesSoftware) {
     Engine e;
     std::string err;
-    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
     if (!e.EnableGpu(nullptr, &err)) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;
@@ -1707,6 +1721,16 @@ TEST(GpuRendererMatchesSoftware) {
     again.Resize(w, h);
     e.Gpu()->Render(e.GetScene(), view, again);
     CHECK(again.Hash() == gpu.Hash());
+    // Clear and restore selection on reused targets: no stale outline in game frames.
+    EntityId highlight = view.highlight;
+    view.highlight = kNullEntity;
+    e.Gpu()->Render(e.GetScene(), view, again);
+    int orangeWithoutSelection = 0;
+    for (uint32_t c : again.color) orangeWithoutSelection += orange(c);
+    CHECK(orangeWithoutSelection < orangeGpu);
+    view.highlight = highlight;
+    e.Gpu()->Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == gpu.Hash());
     // render.screenshot {renderer: gpu} goes through the same renderer.
     Json shot = Call(e, "render.screenshot", R"J({"renderer": "gpu", "width": 64, "height": 36, "inline": false})J");
     CHECK(shot["ok"].asBool() && shot["result"]["renderer"].asString() == e.Gpu()->Name());
@@ -1715,7 +1739,7 @@ TEST(GpuRendererMatchesSoftware) {
 
 TEST(WebGamePak) {
     // `oe package --web` data: the page unpacks game.pak into /game.
-    std::string dir = std::string(OE_SOURCE_DIR) + "/samples/Hello";
+    std::string dir = TestSourceDir() + "/samples/Hello";
     std::vector<std::string> files = GameFiles(dir);
     CHECK(std::find(files.begin(), files.end(), "project.json") != files.end());
     CHECK(std::find(files.begin(), files.end(), "AGENTS.md") == files.end());
@@ -1740,7 +1764,7 @@ TEST(WebGamePak) {
 
 TEST(AndroidGamePakExtract) {
     // The Android player unpacks assets/game.pak into its data folder.
-    std::string dir = std::string(OE_SOURCE_DIR) + "/samples/Hello";
+    std::string dir = TestSourceDir() + "/samples/Hello";
     std::vector<std::string> files = GameFiles(dir);
     std::string err;
     CHECK(WriteGamePak(dir, files, "build/test_android/game.pak", &err));
@@ -1880,7 +1904,7 @@ TEST(AndroidApk) {
 TEST(AgentInstructionsInSync) {
     // AGENTS.md (read by most coding agents) and CLAUDE.md must say the same thing (docs/DESIGN.md).
     std::string agents, claude;
-    CHECK(ReadTextFile(std::string(OE_SOURCE_DIR) + "/AGENTS.md", agents) && ReadTextFile(std::string(OE_SOURCE_DIR) + "/CLAUDE.md", claude));
+    CHECK(ReadTextFile(TestSourceDir() + "/AGENTS.md", agents) && ReadTextFile(TestSourceDir() + "/CLAUDE.md", claude));
     CHECK(!agents.empty() && agents == claude);
     CHECK(claude.find("docs/DESIGN.md") != std::string::npos);
 }
@@ -1888,7 +1912,7 @@ TEST(AgentInstructionsInSync) {
 TEST(ScriptCheckAndParams) {
     Engine e;
     std::string err;
-    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/FPS", &err));
+    CHECK(e.Open(TestSourceDir() + "/samples/FPS", &err));
     // Syntax error: line and message, nothing runs.
     Json r = e.Call("script.check", Json::parse(R"J({"path": "scripts/bad.lua", "source": "local T = {}\nfunction T:onUpdate()\n  print(1\nend\nreturn T"})J"));
     CHECK(r["ok"].asBool() && !r["result"]["ok"].asBool());
@@ -1995,7 +2019,7 @@ TEST(EditorTranslations) {
     CHECK(ParseEditorLanguage("fr") == EditorLanguage::English);
     // Every string the editor code passes to Tr()/TrId() has a translation.
     std::set<std::string> missing;
-    for (const std::string& file : ListFiles(std::string(OE_SOURCE_DIR) + "/engine/editor", ".cpp", false)) {
+    for (const std::string& file : ListFiles(TestSourceDir() + "/engine/editor", ".cpp", false)) {
         if (file.find("EditorText.cpp") != std::string::npos) continue;
         std::string src;
         CHECK(ReadTextFile(file, src));
@@ -2076,7 +2100,7 @@ TEST(NativeEditorScriptProblems) {
 TEST(NativeEditorHeadless) {
     Engine e;
     std::string err;
-    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Hello", &err));
+    CHECK(e.Open(TestSourceDir() + "/samples/Hello", &err));
     if (!e.EnableGpu(nullptr, &err)) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;
@@ -2144,7 +2168,7 @@ TEST(NativeEditorHeadless) {
 TEST(NativeEditorTilePainting) {
     Engine e;
     std::string err;
-    CHECK(e.Open(std::string(OE_SOURCE_DIR) + "/samples/Dungeon", &err));
+    CHECK(e.Open(TestSourceDir() + "/samples/Dungeon", &err));
     if (!e.EnableGpu(nullptr, &err)) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;

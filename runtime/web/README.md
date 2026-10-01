@@ -7,8 +7,14 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 
 The runtime does not depend on the game: every project uses the same files.
 
-- Built with: Emscripten 6.0.10, Release (`build_web.sh`)
-- Engine source: commit b8a0cf6 + mouse look + 2D (Sprite, SpriteAnimation, Tilemap, plane2D) + UI overhaul (TrueType fonts, layouts, UIImage, UISlider) + PBR materials and transparency + Box2D 2D physics (Collider2D, RigidBody2D, CharacterBody2D) + tileset files and autotiling
+- Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-01.
+- Engine source: commit adc8dc0 plus Android runtime verification changes.
+  Includes multi-touch simulation, `UIButton.key`, App Bundle support, the
+  unused game selection pass optimization, reliable Lua reload after API writes
+  and Windows drive-path handling. The WebAssembly/Node suite passed 58 tests
+  (GPU tests skip without a browser canvas).
+- On this Windows host Binaryen's parallel optimizer crashed; the successful
+  rebuild used `BINARYEN_CORES=1`.
 
 ## When to rebuild
 

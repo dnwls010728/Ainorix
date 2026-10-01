@@ -142,14 +142,69 @@ committed and pushed on the branch.
 - [x] `ExtractGamePak` (C++), `engine/core/Zip` (APK writer)
 - [x] `oe package --android`: binary manifest + resources.arsc written by oe (no aapt2), aligned APK, apksigner (debug keystore or `--keystore`), `--install`. Verified with `apksigner verify` + `aapt dump badging/xmltree/resources` using a stand-in .so
 - [x] Tests (`AndroidGamePakExtract`, `ZipWriterAlignment`, `AndroidApk`) + docs
-- [ ] **Compile the runtime with the real NDK** (`build_android.bat`). The cloud session that wrote this had no NDK (its download was blocked), so the Android C++ files were only syntax-checked against the NDK's `android/*.h` headers with stand-ins for `native_window.h`, `AAudio.h` and `android_native_app_glue.h`. Small compile fixes may be needed there.
-- [ ] Commit the prebuilt runtime `runtime/android/<abi>/liboe_player.so` (+ a `runtime/android/README.md` like `runtime/web/README.md`) so packaging needs no NDK
-- [ ] Test on a device / emulator: start, touch → UI buttons, rotation, Home + return (surface recreation), Back = Escape, audio, logcat
-- [ ] Run `oe_tests` on a device (would need test data paths that do not use `OE_SOURCE_DIR`)
+- [x] **Compile the runtime with the real NDK** (`build_android.bat`): NDK r28c (28.2.13676358), Release, API 26, `arm64-v8a` and `x86_64`. Fixed two existing Clang warnings; checked exported NativeActivity entry point and 16 KB ELF load-segment alignment.
+- [x] Prebuilt `runtime/android/<abi>/liboe_player.so` for both ABIs and `runtime/android/README.md`, so packaging needs no NDK. Real-library APK signing/alignment and AAB signing verified.
+- [x] Android 15 x86_64 emulator with WHPX and `-gpu host`: start, touch, `UIButton.key` press/release and `onClick`, portrait/landscape rotation, Home + return (same PID and script state), Back = Escape, logcat. AAudio opened at 48 kHz stereo; AudioFlinger showed an active track and pause/resume.
+- [ ] Physical-device checks: arm64 hardware, simultaneous fingers, speaker/headphone playback and reconnect, 16 KB device execution. The emulator's host audio driver could not initialize, so audible output is unverified.
+- [x] Android `oe_tests`: 58 tests passed on the emulator. CMake now builds the Android test executable with `OE_BUILD_TESTS=ON`; `OE_TEST_SOURCE_DIR` points at staged fixtures. Two GPU tests skip without a NativeActivity window; four native editor tests are not built on Android.
 - [x] Immersive mode: `oe_ANativeActivity_onCreate` (manifest `android.app.func_name`) hooks a pipe into the UI thread's looper; JNI `setSystemUiVisibility` + `layoutInDisplayCutoutMode` run there
 - [x] Multi-touch: `InputState.touches`, Lua `input.touches()`, API `input.touch`, `UIButton.key` (held by any finger/mouse = key down), Android fills every pointer
-- [ ] Rebuild the web runtime (`build_web.bat`): the committed one predates `UIButton.key`, so web builds of scenes that use it fail to load until then. The web platform could also fill `input.touches` (Emscripten touch events list every finger)
+- [x] Rebuild `runtime/web/` with Emscripten 6.0.10, including `UIButton.key` and the runtime fixes. `BINARYEN_CORES=1` avoids an optimizer crash on this Windows host.
+- [ ] Fill `input.touches` on the web platform (the current web touch handler only maps the first finger to the mouse).
 - [x] `.aab` (`oe package --android --aab`): proto manifest + `resources.pb` + `BundleConfig.pb`, jarsigner; validated with bundletool (`bundletool validate`, `build-apks --mode=universal`)
+
+### Verification notes (2026-10-01)
+
+The SDK and NDK were downloaded from Google's official repository and their
+archive SHA-1 checksums verified. Build-tools 35.0.0 and emulator 37.3.2 were
+used with the AOSP API 35 x86_64 image (revision 2). Local toolchains, images,
+test projects and signing keys stay in ignored build folders.
+
+`samples/Hello` was packaged with both real ABIs. `apksigner verify --verbose`,
+`aapt dump badging`, `zipalign -c -P 16 -v 4` and `jarsigner -verify` passed.
+The test signing certificate is self-signed; this is not a Play upload test.
+
+A temporary template game with a Lua probe and `UIButton {key: "Left"}`
+confirmed `input.touches`, `onClick`, held/released keys and Escape through
+logcat. Its tick counter stopped while Home was active, resumed without
+`onStart` running again, and survived rotation and window surface recreation.
+Landscape and portrait screenshots were inspected. AAudio pause/resume was
+also visible in AudioFlinger's track history.
+
+The unused selection mask pass produced GLES framebuffer errors after the
+MSAA scene pass. Games now skip that pass when there is no highlighted entity;
+the composite binds a valid fallback texture. The GPU regression test checks
+selection removal and restoration on reused render targets.
+
+Android testing also exposed consecutive Lua API writes with identical file
+timestamps. `script.write` now forces the changed module to reload while
+preserving instance state. Test fixtures can use a device source directory
+and no longer require a writable POSIX `/tmp`. Windows-hosted WebAssembly
+tests also required drive-path handling and a lexical relative-path fallback.
+Final suites passed: Windows 62 tests, Android 58 tests, and WebAssembly/Node
+58 tests. Packaging with the local Android runtime temporarily set aside
+confirmed the committed `runtime/android/` fallback signs, installs and starts.
+Final suites passed: Windows 62 tests, Android 58 tests, and WebAssembly/Node
+58 tests. Packaging with the local Android runtime temporarily set aside
+confirmed the committed `runtime/android/` fallback signs, installs and starts.
+
+- [ ] Investigate emulator SwiftShader/SwiftShader indirect black output.
+  These modes started without Lua/GPU errors after the mask change but still
+  captured black screenshots. Use `-gpu host` for the verified emulator path.
+
+To repeat the Android test suite, configure an NDK build with
+`-DOE_BUILD_TESTS=ON`, build `oe_tests`, then stage the fixtures:
+
+```sh
+adb shell mkdir -p /data/local/tmp/oe-tests/third_party
+adb push build-android/x86_64/bin/oe_tests samples templates AGENTS.md CLAUDE.md /data/local/tmp/oe-tests/
+adb push third_party/fonts /data/local/tmp/oe-tests/third_party/
+adb shell 'cd /data/local/tmp/oe-tests && chmod +x oe_tests && OE_TEST_SOURCE_DIR=/data/local/tmp/oe-tests ./oe_tests'
+```
+
+Run from the repository root. Keep the working directory at the staged root
+so the engine can find `templates/`; test output is written beneath its
+`build/` folder. Add `adb -s <serial>` to select a device when several are connected.
 
 ## Not done yet
 
