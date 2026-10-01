@@ -15,6 +15,12 @@ struct AnimationClip;
 const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name);
 // Evaluates an immutable model's joint palette in model space, clamping channel times.
 std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time);
+struct ParticleEmitter;
+// Rejects non-finite birth settings before they enter simulation/rendering.
+bool ParticleSettingsValid(const ParticleEmitter& emitter);
+
+// Emits up to the configured capacity immediately; returns accepted births.
+int BurstParticles(Scene& scene, EntityId id, int count);
 
 // Logical key state. Key names: "W","A","S","D","Up","Down","Left","Right",
 // "Space","Shift","Escape", letters "A".."Z", digits "0".."9".

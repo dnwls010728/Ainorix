@@ -70,6 +70,71 @@ struct Animator {
     }
 };
 
+// Runtime particle values are snapshots of the emitter settings at birth.
+struct Particle {
+    Vec3 position, velocity, gravity;
+    float age = 0, lifetime = 1;
+    float startSize = 0.1f, endSize = 0;
+    Color startColor, endColor;
+    float startOpacity = 1, endOpacity = 0;
+    bool worldSpace = false;
+};
+
+struct ParticleEmitter {
+    static constexpr const char* kTypeName = "ParticleEmitter";
+    static constexpr const char* kDoc = "Deterministic 2D/3D billboard particles; initial burst and continuous rate, bounded per emitter.";
+    float rate = 10;
+    int burst = 0;
+    float lifetime = 1;
+    float speed = 1;
+    float spread = 30;
+    Vec3 direction{0, 1, 0};
+    Vec3 gravity{0, -9.8f, 0};
+    float startSize = 0.1f, endSize = 0;
+    Color startColor{1, 1, 1}, endColor{1, 1, 1};
+    float startOpacity = 1, endOpacity = 0;
+    std::string texture;
+    int frame = 0, columns = 1, rows = 1;
+    std::string space = "local";
+    int dimensions = 3;
+    int seed = 1;
+    int maxParticles = 256;
+    bool loop = true;
+    bool playing = true;
+    std::vector<Particle> particles;  // runtime, not serialized
+    uint32_t randomState = 0;        // runtime xorshift stream; zero = uninitialized
+    double carry = 0;               // fractional rate births, bounded to [0,1)
+    bool initialBurstEmitted = false;
+    uint64_t emitted = 0;            // accepted births since creation/clear
+    bool invalidSettingsReported = false;  // suppress repeated runtime error logs
+    static void Reflect(FieldList& f) {
+        auto range = [](FieldInfo& field, float lo, float hi) { field.hasRange = true; field.min = lo; field.max = hi; };
+        range(f.Add("rate", &ParticleEmitter::rate, "Automatic particles per second while loop and playing are true."), 0, 10000);
+        range(f.Add("burst", &ParticleEmitter::burst, "Automatic initial burst on the first playing step."), 0, 10000);
+        range(f.Add("lifetime", &ParticleEmitter::lifetime, "Lifetime in seconds, captured at birth."), 0.001f, 600);
+        range(f.Add("speed", &ParticleEmitter::speed, "Initial speed in emitter coordinates, captured at birth."), 0, 10000);
+        range(f.Add("spread", &ParticleEmitter::spread, "Cone half-angle in degrees around direction; planar fan in 2D."), 0, 180);
+        f.Add("direction", &ParticleEmitter::direction, "Emission direction; zero falls back to +Y. 2D uses XY only.");
+        f.Add("gravity", &ParticleEmitter::gravity, "Acceleration in particle coordinates (world or local), captured at birth.");
+        range(f.Add("startSize", &ParticleEmitter::startSize, "Billboard size in meters at birth."), 0, 10000);
+        range(f.Add("endSize", &ParticleEmitter::endSize, "Billboard size at expiry."), 0, 10000);
+        f.Add("startColor", &ParticleEmitter::startColor, "RGB tint at birth.");
+        f.Add("endColor", &ParticleEmitter::endColor, "RGB tint at expiry.");
+        range(f.Add("startOpacity", &ParticleEmitter::startOpacity, "Opacity at birth."), 0, 1);
+        range(f.Add("endOpacity", &ParticleEmitter::endOpacity, "Opacity at expiry."), 0, 1);
+        f.Add("texture", &ParticleEmitter::texture, "Optional texture/sprite sheet; empty uses solid quads.");
+        range(f.Add("frame", &ParticleEmitter::frame, "Sprite sheet frame, row-major."), 0, 1000000);
+        range(f.Add("columns", &ParticleEmitter::columns, "Sprite sheet columns."), 1, 4096);
+        range(f.Add("rows", &ParticleEmitter::rows, "Sprite sheet rows."), 1, 4096);
+        f.Add("space", &ParticleEmitter::space, "Local particles follow the emitter; world particles remain where spawned.").options = {"local", "world"};
+        range(f.Add("dimensions", &ParticleEmitter::dimensions, "2 = XY fan/planar motion; 3 = cone in 3D."), 2, 3);
+        f.Add("seed", &ParticleEmitter::seed, "Fixed seed mixed with entity id; changes take effect after particles.clear.");
+        range(f.Add("maxParticles", &ParticleEmitter::maxParticles, "Maximum live particles per emitter; excess births are dropped."), 0, 10000);
+        f.Add("loop", &ParticleEmitter::loop, "Enable continuous rate births; false emits only the initial burst.");
+        f.Add("playing", &ParticleEmitter::playing, "Automatic emission switch; existing particles continue to age while false.");
+    }
+};
+
 // ----- 2D --------------------------------------------------------------------------
 
 struct Sprite {

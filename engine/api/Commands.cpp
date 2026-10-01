@@ -348,6 +348,62 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
              });
+    auto requireEmitter = [](Engine& e, const Json& args) -> ParticleEmitter& {
+        EntityId id = RequireEntity(e, args);
+        ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(id);
+        if (!emitter) throw ApiError("missing_component", "entity has no ParticleEmitter", "Add ParticleEmitter with component.add first.");
+        return *emitter;
+    };
+    Register(r, "particles.state", "Live particle count, accepted births and optional particle snapshots in their local/world coordinates.",
+             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include age, lifetime, position, velocity and worldSpace."),
+             false, [requireEmitter](Engine& e, const Json& a) {
+                 const ParticleEmitter& emitter = requireEmitter(e, a);
+                 Json out = Json::MakeObject();
+                 out["count"] = static_cast<uint64_t>(emitter.particles.size());
+                 out["emitted"] = emitter.emitted;
+                 out["playing"] = emitter.playing;
+                 out["loop"] = emitter.loop;
+                 out["maxParticles"] = emitter.maxParticles;
+                 if (a["particles"].asBool()) {
+                     out["particles"] = Json::MakeArray();
+                     for (const Particle& particle : emitter.particles) {
+                         Json p = Json::MakeObject();
+                         p["age"] = particle.age;
+                         p["lifetime"] = particle.lifetime;
+                         p["position"] = Json(Json::Array{particle.position.x, particle.position.y, particle.position.z});
+                         p["velocity"] = Json(Json::Array{particle.velocity.x, particle.velocity.y, particle.velocity.z});
+                         p["worldSpace"] = particle.worldSpace;
+                         out["particles"].push(p);
+                     }
+                 }
+                 return out;
+             });
+    Register(r, "particles.burst", "Emit particles immediately, including on paused emitters. Excess births are dropped at capacity; runtime only.",
+             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Req("count", "integer", "Number to emit, 0..10000."),
+             false, [requireEmitter](Engine& e, const Json& a) {
+                 const ParticleEmitter& emitter = requireEmitter(e, a);
+                 if (!ParticleSettingsValid(emitter))
+                     throw ApiError("invalid_emitter", "particle settings must be finite", "Correct direction/gravity/colors and numeric fields with component.set.");
+                 double requested = a["count"].asNumber();
+                 if (requested < 0 || requested > 10000) throw ApiError("invalid_argument", "count must be 0..10000", "Use a bounded burst; maxParticles also limits accepted births.");
+                 int count = static_cast<int>(requested);
+                 Json out = Json::MakeObject();
+                 out["accepted"] = BurstParticles(e.GetScene(), RequireEntity(e, a), count);
+                 return out;
+             });
+    Register(r, "particles.clear", "Clear live particles and reset the random stream/counters. Optionally re-arm the initial burst; runtime only.",
+             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("restart", "boolean", "Re-arm initial burst for next playing step (default false)."),
+             false, [requireEmitter](Engine& e, const Json& a) {
+                 ParticleEmitter& emitter = requireEmitter(e, a);
+                 emitter.particles.clear();
+                 emitter.randomState = 0;
+                 emitter.carry = 0;
+                 emitter.emitted = 0;
+                 emitter.initialBurstEmitted = !a["restart"].asBool(false);
+                 Json out = Json::MakeObject();
+                 out["count"] = 0;
+                 return out;
+             });
     // ----- engine / api ----------------------------------------------------
     Register(r, "engine.info", "Engine version, platform, project, scene and simulation status.", Params(), false, [](Engine& e, const Json&) {
         Json info = Json::MakeObject();

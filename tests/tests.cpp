@@ -1547,6 +1547,79 @@ TEST(AnimatorCommandsAndLua) {
     CHECK(e.Scripts().Errors().empty());
 }
 
+TEST(ParticleSimulationAndCommands) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("particles"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[3,4,0]},"ParticleEmitter":{"rate":0,"burst":2,"lifetime":0.5,"speed":2,"spread":0,"gravity":[0,-2,0],"maxParticles":3,"dimensions":2,"loop":false}}})J")["ok"].asBool());
+    EntityId id = e.GetScene().FindByName("Effect");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    Json state = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    CHECK(state["count"].asInt() == 2 && state["emitted"].asInt() == 2);
+    CHECK(state["particles"][0]["age"].asFloat() == 0 && state["particles"][0]["position"][1].asFloat() == 0);
+    CHECK(state["particles"][0]["velocity"][1].asFloat() == 2 && state["particles"][0]["velocity"][2].asFloat() == 0);
+    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":10})J")["result"]["accepted"].asInt() == 1);
+    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["result"]["accepted"].asInt() == 0);
+    CHECK(!Call(e, "particles.burst", R"J({"id":"Effect","count":10001})J")["ok"].asBool());
+    CHECK(!Call(e, "particles.burst", R"J({"id":"Effect","count":-1})J")["ok"].asBool());
+    CHECK(!Call(e, "particles.burst", R"J({"id":"Effect","count":1.5})J")["ok"].asBool());
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"playing":false}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    state = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    CHECK(std::fabs(state["particles"][0]["age"].asFloat() - 1.0f/60) < 1e-6f);
+    CHECK(std::fabs(state["particles"][0]["velocity"][1].asFloat() - (2 - 2.0f/60)) < 1e-6f);
+    CHECK(state["particles"][0]["position"][1].asFloat() > 0);
+    Call(e, "sim.step", R"J({"frames":31})J");
+    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 0);
+    Call(e, "particles.clear", R"J({"id":"Effect","restart":true})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"space":"world","playing":true}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    state = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    CHECK(state["particles"][0]["worldSpace"].asBool() && state["particles"][0]["position"][0].asFloat() == 3);
+    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[8,4,0]}})J");
+    CHECK(e.GetScene().Get<ParticleEmitter>(id)->particles[0].position.x == 3);
+    Json serialized = e.GetScene().ToJson();
+    Scene restored;
+    CHECK(restored.FromJson(serialized, &err));
+    CHECK(restored.Get<ParticleEmitter>(id)->particles.empty() && restored.Get<ParticleEmitter>(id)->burst == 2);
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":10,"loop":true,"rate":6,"lifetime":10}})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 6);
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":1}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1);
+    CHECK(Call(e, "script.eval", R"J({"code":"assert(particles.burst('Effect', 5) == 0); assert(not pcall(particles.burst, 'Effect', -1))"})J")["ok"].asBool());
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "scripts/burst.lua"), "return {onStart=function(self) assert(self:burst(1) == 1) end}"));
+    Call(e, "component.add", R"J({"id":"Effect","type":"Script","values":{"path":"scripts/burst.lua"}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1 && e.Scripts().Errors().empty());
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"gravity":[0,1e100,0]}})J");
+    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["code"].asString() == "invalid_emitter");
+}
+
+TEST(ParticleRandomStreamIsDeterministic) {
+    auto simulate = [](int seed) {
+        Engine e;
+        Call(e, "scene.new", R"J({"empty":true})J");
+        Json args = Json::parse(R"J({"name":"Effect","components":{"ParticleEmitter":{"rate":0,"burst":10,"loop":false,"spread":90,"gravity":[0,0,0],"lifetime":10}}})J");
+        args["components"]["ParticleEmitter"]["seed"] = seed;
+        e.Call("entity.create", args);
+        Call(e, "sim.step", R"J({"frames":15})J");
+        return Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    };
+    Json first = simulate(7);
+    CHECK(first == simulate(7) && first != simulate(8));
+    CHECK(first["count"].asInt() == 10);
+    for (const Json& particle : first["particles"].items()) {
+        const Json& v = particle["velocity"];
+        float length = std::sqrt(v[0].asFloat()*v[0].asFloat() + v[1].asFloat()*v[1].asFloat() + v[2].asFloat()*v[2].asFloat());
+        CHECK(std::fabs(length - 1) < 1e-5f && v[1].asFloat() >= -1e-6f);
+    }
+}
+
 TEST(ShadingShadowsAndLights) {
     Engine e;
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));

@@ -120,9 +120,8 @@ C++ 재빌드 없이 게임 로직을 작성/수정할 수 있어야 이후 모�
 - **테스트**: 쓰기→재시작→읽기, 손상된 파일, 슬롯, 메모리 모드에서 디스크 무접촉, `TemplateGamePlaythrough` 유지. 템플릿에 최고 점수 저장을 하나 넣으면 좋다(템플릿 변경 시 `samples/Hello` 재생성).
 - **검증하지 못할 수 있는 것**: 웹 localStorage는 `node build-web/bin/oe_tests.js`로 못 보면 브라우저(Playwright)로 확인하고, 웹 런타임 재빌드(`runtime/web/`)는 Emscripten이 있을 때만.
 
-P1 is implemented in PR #15, pending review. P2 is developed independently from
-main in PR #16 because it has no save-data dependency; this preserves one feature
-per PR while P1 awaits review. P1's checkbox remains on its own feature branch.
+P1 and P2 are integrated into main directly from their local feature branches.
+The previous PR #15 merge commit was replaced at the user's request.
 
 ### P2. 스켈레탈 애니메이션 (glTF) — [x]
 
@@ -139,6 +138,10 @@ per PR while P1 awaits review. P1's checkbox remains on its own feature branch.
 - **주의**: 성능(스킨 정점 수 × 소프트웨어 렌더러) 때문에 테스트 장면은 작게. 멀티스레드 렌더러의 결정성을 깨지 말 것.
 
 ### P3. 파티클 시스템 — [ ]
+
+P3's simulation milestone is integrated into main alongside P1 and P2.
+The combined Windows build passed 72 tests. Particle rendering and sample
+effects remain unfinished; see [PARTICLES.md](PARTICLES.md) for the next milestone.
 
 - **왜**: 코드에 파티클이 전혀 없다. 이펙트(폭발, 먼지, 코인 반짝임)가 없어 게임 느낌이 약하다.
 - **요구**: 컴포넌트 `ParticleEmitter {rate, burst, lifetime, speed, spread, gravity, startSize/endSize, startColor/endColor, texture/frame, space(local|world), maxParticles, loop, playing}`. 2D(스프라이트 빌보드)와 3D 모두. 스크립트 `emitter:burst(n)`.
