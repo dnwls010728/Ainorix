@@ -24,6 +24,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 - Lua 5.4 스크립팅 (샌드박스, 핫리로드, 에러에 파일:줄 표시) — [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - 카메라 후처리: 소프트웨어·GPU 노출·HDR Reinhard 톤매핑·비네트 지원, UI와 선택 윤곽선 유지. 블룸·FXAA·커스텀 머티리얼은 진행 중 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - 게임패드 입력: 축 6개 API 주입과 Lua `input.axis`, 공통 0.15 데드존, Windows XInput·웹 Gamepad API·Android 매핑, 에디터 Game 뷰와 Platformer/Dungeon 조작. 실제 컨트롤러 검증은 남음 — [docs/INPUT.md](docs/INPUT.md)
+- 웹 멀티터치: Lua `input.touches()`에 모든 손가락 전달, 화면 버튼 동시 조작, 첫 손가락 마우스 호환. 브라우저 합성 이벤트 검증 완료, 모바일 실기기 검증은 남음 — [docs/TOUCH.md](docs/TOUCH.md)
 - 결정적(deterministic) 시뮬레이션과 소프트웨어 렌더러: 같은 입력이면 같은 프레임 해시 → AI가 테스트 오라클로 사용 가능
 
 ## 빌드

@@ -24,6 +24,7 @@ A C++17 game engine designed so that AI agents can drive and verify it as easily
 - Lua 5.4 scripting (sandboxed, hot reload, errors with file:line) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - Camera post-processing: exposure, HDR Reinhard tone mapping and vignette in software/GPU renderers, with UI and selection outlines preserved. Bloom, FXAA and custom materials are in progress - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - Gamepad input: six injectable axes, Lua `input.axis`, a shared 0.15 dead zone, Windows XInput/web Gamepad API/Android adapters, editor Game-view forwarding and Platformer/Dungeon controls. Physical-controller checks remain - [docs/INPUT.md](docs/INPUT.md)
+- Web multi-touch: every finger in Lua `input.touches()`, simultaneous on-screen keys and first-finger mouse compatibility; synthetic browser events verified, mobile hardware checks remain - [docs/TOUCH.md](docs/TOUCH.md)
 - Deterministic simulation and software renderer: same inputs give the same frame hash, so an AI can use it as a test oracle
 
 ## Build

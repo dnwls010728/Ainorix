@@ -15,6 +15,7 @@
 
 #include "platform/Platform.h"
 #include "platform/GamepadInput.h"
+#include "platform/TouchInput.h"
 
 namespace oe {
 
@@ -156,7 +157,8 @@ public:
         emscripten_set_touchend_callback(kCanvas, this, true, &WebWindow::OnTouch);
         emscripten_set_touchmove_callback(kCanvas, this, true, &WebWindow::OnTouch);
         emscripten_set_touchcancel_callback(kCanvas, this, true, &WebWindow::OnTouch);
-        emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, &WebWindow::OnBlur);
+        // Element blur does not bubble: capture would mistake canvas/button focus changes for window blur.
+        emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, &WebWindow::OnBlur);
         emscripten_set_pointerlockchange_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebWindow::OnPointerLock);
         emscripten_set_pointerlockerror_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebWindow::OnPointerLockError);
         return true;
@@ -178,10 +180,14 @@ public:
                     break;
                 case Event::Clear:
                     gamepad_.Reset(input);
+                    touch_.Reset(input);
                     input.down.clear();
                     input.pressedThisFrame.clear();
                     input.axes.clear();
                     break;
+                case Event::TouchBegin: touch_.Apply(input, TouchInput::Kind::Begin, e.id, e.x, e.y); break;
+                case Event::TouchMove: touch_.Apply(input, TouchInput::Kind::Move, e.id, e.x, e.y); break;
+                case Event::TouchEnd: touch_.Apply(input, TouchInput::Kind::End, e.id, e.x, e.y); break;
                 case Event::Delta:
                     input.mouseDX += e.x;
                     input.mouseDY += e.y;
@@ -216,9 +222,10 @@ public:
 
 private:
     struct Event {
-        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock } kind;
+        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock, TouchBegin, TouchMove, TouchEnd } kind;
         std::string key;
         float x = 0, y = 0;
+        int id = 0;
     };
 
     // The drawing buffer follows the canvas' CSS size times the device pixel ratio.
@@ -273,12 +280,18 @@ private:
         return type == EMSCRIPTEN_EVENT_MOUSEDOWN;
     }
 
-    // The first touch acts as the left mouse button.
+    // Emscripten includes unchanged held points alongside changed/ended points.
+    // Queue only changed points so ending one finger cannot release another.
     static bool OnTouch(int type, const EmscriptenTouchEvent* e, void* user) {
         auto* self = static_cast<WebWindow*>(user);
-        if (e->numTouches > 0) self->Move(static_cast<double>(e->touches[0].targetX), static_cast<double>(e->touches[0].targetY));
-        if (type == EMSCRIPTEN_EVENT_TOUCHSTART) self->Push(Event::Down, "MouseLeft");
-        if (type == EMSCRIPTEN_EVENT_TOUCHEND || type == EMSCRIPTEN_EVENT_TOUCHCANCEL) self->Push(Event::Up, "MouseLeft");
+        Event::Kind kind = type == EMSCRIPTEN_EVENT_TOUCHSTART ? Event::TouchBegin :
+                           type == EMSCRIPTEN_EVENT_TOUCHMOVE ? Event::TouchMove : Event::TouchEnd;
+        for (int i = 0; i < e->numTouches; ++i) {
+            const EmscriptenTouchPoint& point = e->touches[i];
+            if (!point.isChanged) continue;
+            self->events_.push_back({kind, std::string(), static_cast<float>(point.targetX / self->cssW_),
+                                    static_cast<float>(point.targetY / self->cssH_), point.identifier});
+        }
         return true;
     }
 
@@ -314,6 +327,7 @@ private:
 
     std::vector<Event> events_;
     GamepadInput gamepad_;
+    TouchInput touch_;
     bool wantLock_ = false;
     bool pointerLocked_ = false;
     bool relockOnClick_ = false;  // released by Escape, not by the game

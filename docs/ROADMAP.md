@@ -166,7 +166,15 @@ Android hardware and Linux/EGL follow-ups remain in [PARTICLES.md](PARTICLES.md)
 - **플랫폼**: Windows = XInput(동적 로드, 없으면 무시), 웹 = Gamepad API(`navigator.getGamepads`), Android는 기존 매핑에 축 추가. 새 플랫폼 파일에는 OS 코드를 넣고 엔진 코드는 이식 가능하게 유지.
 - **검증**: 입력 주입 테스트, `PlatformNull`로 컴파일 확인. 실제 컨트롤러는 장치가 있어야 하므로 못 하면 체크리스트에 남긴다.
 
-### P5. 웹 멀티터치 `input.touches` — [ ]
+### P5. 웹 멀티터치 `input.touches` — [x]
+
+- Implementation and verification: [TOUCH.md](TOUCH.md). All changed web touch
+  points reach Lua/UI with stable IDs, press order and one-step began flags;
+  first-finger mouse compatibility, cancellation and window-focus reset are
+  covered. Windows 73 and Node/WASM 69 tests pass. Synthetic DOM events through
+  a packaged WebGL2 player verified simultaneous controls, move/end/cancel/blur
+  and CSS-coordinate normalization. The prebuilt web player is refreshed.
+- [ ] Real mobile-browser multi-touch, outside-canvas drags and app switching.
 
 - `engine/platform/web/PlatformWeb.cpp`의 `OnTouch`가 첫 손가락만 마우스로 매핑한다. 모든 `EmscriptenTouchPoint`를 `InputState.touches`에 채운다(`began` 포함, 첫 손가락은 계속 마우스로). 웹 런타임 재빌드 필요(Emscripten SDK 있을 때), 없으면 소스만 고치고 미검증으로 남긴다. 작은 작업이라 P1~P4 사이에 끼워도 된다.
 
