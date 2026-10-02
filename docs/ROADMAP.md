@@ -200,8 +200,24 @@ from the combined source, preserving all four PRs' features.
   web and both Android ABI runtimes are refreshed. Optional directional FXAA
   and Showcase 1-6 effect presets are implemented. Windows 84 and Node/WASM
   80 tests pass; CLI images and packaged WebGL2 FXAA/All/Off transitions,
-  sharp HUD and resize/restore are inspected. Custom materials
-  and hardware follow-ups remain.
+  sharp HUD and resize/restore are inspected. PR #22 adds portable shader graphs,
+  strict material binding/hot reload and CPU/GPU execution, including graph alpha
+  in shadow/selection passes. Windows 88 and Node/WASM 84 tests pass, covering
+  instruction families, texture/time inputs, HDR emission and alpha blending.
+  P6 remains unchecked until the follow-ups below are completed.
+
+Remaining work after PR #22 (merge requested by the user before P6 completion):
+
+- [ ] Verify varying-alpha shadow masks and mixed-material selection occlusion;
+  continue P6.4b in [POSTPROCESS.md](POSTPROCESS.md).
+- [ ] Add a procedural material sample and verify its CPU/GPU images, hot reload,
+  packaging and WebGL2 execution (P6.4c).
+- [ ] Rebuild web and both Android ABI player runtimes with shader graphs.
+  Committed runtimes currently use source `0ea84f2` and do not support graphs.
+- [ ] Resolve the neutral white-emitter browser capture discrepancy by comparing
+  exported canvas images and another capture path; no engine failure is proven.
+- [ ] Verify effects on Android hardware and a full Linux/EGL runtime.
+- [ ] Complete P7 below after the remaining P6 work. P7 implementation has not started.
 
 - composite 패스(`GpuRenderer`)가 연결 지점. 톤매핑, 블룸, FXAA, 비네트를 켜고 끄는 컴포넌트/카메라 설정부터. **소프트웨어 렌더러는 기준**이므로 효과가 해시에 영향을 주면 안 되게 기본값은 꺼짐으로 두거나, 양쪽 모두 구현한다(`CLAUDE.md` 규칙). 커스텀 셰이더 머티리얼은 sokol-shdc 의존이 커서 이 항목의 후반부로 둔다.
 

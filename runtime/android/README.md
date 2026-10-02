@@ -22,6 +22,12 @@ needs Java.
 
 ## When to rebuild
 
+Pending after PR #22: rebuild both ABIs with portable surface shader graphs,
+material binding and graph-aware shadow/selection passes. Committed players still
+use `0ea84f2` and cannot render graph materials. Packaged execution on Android
+hardware remains unverified; see P6.4c in
+[POSTPROCESS.md](../../docs/POSTPROCESS.md).
+
 Rebuild after changing engine C++ used by the player. The runtime is shared
 by every game, so it does not need rebuilding for scene, Lua or asset edits.
 

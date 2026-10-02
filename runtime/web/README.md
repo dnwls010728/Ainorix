@@ -27,6 +27,12 @@ The runtime does not depend on the game: every project uses the same files.
 
 ## When to rebuild
 
+Pending after PR #22: rebuild this runtime with the portable surface shader graph
+compiler, material binding and graph-aware shadow/selection passes. The committed
+player still uses `0ea84f2` and cannot render graph materials. Verify a packaged
+procedural material in WebGL2 after rebuilding; see P6.4c in
+[POSTPROCESS.md](../../docs/POSTPROCESS.md).
+
 Rebuild after changing engine C++ code that the player uses (scene format,
 components, systems, scripting, physics, rendering, platform/web). Otherwise
 web builds keep running the old engine code.
