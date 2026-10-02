@@ -821,6 +821,9 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 |---|---|---|---|
 | `exposure` | float | `1` | Scene brightness multiplier before tone mapping. 1 preserves brightness. |
 | `toneMapping` | string | `"none"` | none (disabled) or reinhard (compress HDR channels as c / (1 + c)). |
+| `bloom` | float | `0` | Blurred highlight strength before exposure/tone mapping. 0 disables bloom. |
+| `bloomThreshold` | float | `1` | Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue. |
+| `bloomRadius` | int | `8` | Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional. |
 | `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
 | `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
 | `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |

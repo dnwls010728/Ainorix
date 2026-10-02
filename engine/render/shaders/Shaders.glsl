@@ -401,18 +401,25 @@ layout(binding=0) uniform composite_params {
     vec4 outline_color;  // rgb; a > 0 enables the outline
     vec4 vignette;       // x: strength, y: radius, z: softness; zero strength leaves color unchanged
     vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 0 = disabled
+    vec4 bloom_strength; // x: blurred HDR highlight strength, before exposure
 };
 
 layout(binding=0) uniform texture2D scene_tex;
 layout(binding=0) uniform sampler scene_smp;
 layout(binding=1) uniform texture2D mask_tex;
 layout(binding=1) uniform sampler mask_smp;
+layout(binding=2) uniform texture2D bloom_tex;
+layout(binding=2) uniform sampler bloom_smp;
 
 out vec4 frag_color;
 
 void main() {
     vec2 uv = gl_FragCoord.xy / target.xy;
     vec3 c = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
+    if (bloom_strength.x > 0.0) {
+        c += texture(sampler2D(bloom_tex, bloom_smp), uv).rgb * bloom_strength.x;
+        c = clamp(c, 0.0, 65504.0);
+    }
     c *= tone_mapping.x;
     if (tone_mapping.y > 0.5) c = c / (vec3(1.0) + c);
     c = clamp(c, 0.0, 1.0);
@@ -441,3 +448,37 @@ void main() {
 @end
 
 @program composite fsq_vs composite_fs
+
+// Full-resolution separable tent filter. Must match SoftwareRenderer's bloom
+// passes: brightest-channel extraction preserves hue, integer weights and
+// clamped texel coordinates preserve constant highlights at screen borders.
+@fs bloom_fs
+layout(binding=0) uniform bloom_params {
+    vec4 bloom_filter; // x: radius (1..32), y: threshold, z: 0 horizontal/extract, 1 vertical
+};
+layout(binding=0) uniform texture2D bloom_source_tex;
+layout(binding=0) uniform sampler bloom_source_smp;
+out vec4 frag_color;
+
+void main() {
+    int radius = int(bloom_filter.x);
+    ivec2 size = textureSize(sampler2D(bloom_source_tex, bloom_source_smp), 0);
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    vec3 sum = vec3(0.0);
+    for (int delta = -32; delta <= 32; ++delta) {
+        if (abs(delta) <= radius) {
+            ivec2 q = p + (bloom_filter.z < 0.5 ? ivec2(delta, 0) : ivec2(0, delta));
+            q = clamp(q, ivec2(0), size - ivec2(1));
+            vec3 c = texelFetch(sampler2D(bloom_source_tex, bloom_source_smp), q, 0).rgb;
+            if (bloom_filter.z < 0.5) {
+                float peak = max(max(c.r, c.g), c.b);
+                c = peak > bloom_filter.y ? c * ((peak - bloom_filter.y) / peak) : vec3(0.0);
+            }
+            sum += c * float(radius + 1 - abs(delta));
+        }
+    }
+    frag_color = vec4(sum / float((radius + 1) * (radius + 1)), 1.0);
+}
+@end
+
+@program bloom fsq_vs bloom_fs

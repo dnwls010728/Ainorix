@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
 
 #include "scene/Components.h"
@@ -9,6 +10,9 @@ namespace oe {
 inline PostProcess NormalizePostProcess(PostProcess settings) {
     settings.exposure = std::isfinite(settings.exposure) ? Clamp(settings.exposure, 0, 32) : 1;
     if (settings.toneMapping != "reinhard") settings.toneMapping = "none";
+    settings.bloom = std::isfinite(settings.bloom) ? Clamp(settings.bloom, 0, 4) : 0;
+    settings.bloomThreshold = std::isfinite(settings.bloomThreshold) ? Clamp(settings.bloomThreshold, 0, 32) : 1;
+    settings.bloomRadius = std::clamp(settings.bloomRadius, 1, 32);
     settings.vignette = std::isfinite(settings.vignette) ? Clamp(settings.vignette, 0, 1) : 0;
     settings.vignetteRadius = std::isfinite(settings.vignetteRadius) ? Clamp(settings.vignetteRadius, 0, 1.5f) : 0.75f;
     settings.vignetteSoftness = std::isfinite(settings.vignetteSoftness) ? Clamp(settings.vignetteSoftness, 0.01f, 2) : 0.5f;
@@ -17,7 +21,13 @@ inline PostProcess NormalizePostProcess(PostProcess settings) {
 
 // HDR is allocated only for effects that need unquantized scene lighting.
 inline bool UsesHdr(const PostProcess& settings) {
-    return settings.exposure != 1 || settings.toneMapping != "none";
+    return settings.exposure != 1 || settings.toneMapping != "none" || settings.bloom > 0;
+}
+
+// Extract radiance above the brightest-channel threshold without shifting hue.
+inline Color BloomHighlight(Color c, float threshold) {
+    const float peak = std::max({c.r, c.g, c.b});
+    return peak > threshold ? c * ((peak - threshold) / peak) : Color(0, 0, 0);
 }
 
 // Float16's largest finite value is the shared HDR bound on CPU and GPU.

@@ -41,7 +41,20 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             output, black scene at zero exposure with a readable white HUD,
             and restoring Reinhard after zero exposure. Android device and
             Linux/EGL execution remain unchecked.
-      - [ ] P6.2b: Extract and blur highlights before tone mapping for optional bloom.
+      - [x] P6.2b: Extract and blur highlights before tone mapping for optional bloom.
+            Use a bounded separable tent filter in scene pixels with identical
+            CPU/GPU extraction and edge clamping. Default strength zero preserves
+            existing hashes. Check bright/dim thresholds, hue, HUD/outline,
+            worker determinism, resize/toggle, D3D11 and packaged WebGL2 output;
+            regenerate shaders/API and refresh web/Android players.
+            Windows passes 82 tests; Node/WASM passes 78. CameraBloom covers
+            visible colored halos, below-threshold rejection, opaque UI/outline
+            separation, unchanged depth/IDs, worker determinism, serialization,
+            undo/redo, zero exposure, constant edge energy and GPU resize/toggle.
+            D3D11 mean channel difference stays below 0.60 of 255 for radii
+            1/8/32 at 128x72 and 97x55. CLI PNGs inspected: off b5ae0f043da78cdc,
+            software 789f48d2d9240334, D3D11 7d9d678c81fcfdac. Shaders/API
+            regenerated. Player refresh and WebGL2 verification follow below.
 - [ ] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
       resolution changes and separation from UI/selection overlays.
 - [ ] P6.4: Custom shader materials through commands/assets, validation and
@@ -89,11 +102,12 @@ Zero exposure makes scene color black while leaving UI and selection visible.
 {"command":"component.set","args":{"id":"Camera","type":"PostProcess","values":{"exposure":0.25,"toneMapping":"reinhard"}}}
 ```
 
-An exposure other than 1 or enabled tone mapping selects an HDR scene buffer:
+An exposure other than 1, enabled tone mapping or nonzero bloom selects an HDR scene buffer:
 float32 RGB in software and RGBA16F on the GPU. Lighting and emissive channels
 remain above 1 through opaque draws and alpha blending, bounded to the largest
 finite float16 value (65504) before blending. Exposure is applied after scene
-rendering, followed by tone mapping, clamping to 0..1, vignette and then overlays.
+rendering and bloom addition, followed by tone mapping, clamping to 0..1,
+vignette and then overlays.
 Only the final display image is quantized to RGBA8. With exposure 0.25, emissive
 RGB (8,4,2) becomes (2,1,0.5), or (2/3,1/2,1/3) with Reinhard enabled; clipping
 the scene to RGBA8 first would lose that distinction.
@@ -110,4 +124,36 @@ GPU HDR requires renderable, blendable, linearly filterable RGBA16F targets
 devices report an error when HDR is requested; use software rendering or neutral
 settings. HDR disables MSAA if that format does not support multisampling.
 Switching effects or output size recreates the correct scene targets; output,
-UI and selection-mask formats remain RGBA8. Bloom is the next milestone.
+UI and selection-mask formats remain RGBA8.
+
+## Bloom
+
+PostProcess.bloom controls highlight strength (0..4, default 0). The threshold
+is bloomThreshold (0..32, default 1), measured before exposure in the engine's
+numeric scene RGB convention. bloomRadius is an integer radius in scene pixels
+(1..32, default 8); when renderScale is used this refers to the smaller scene
+buffer, not the final window/UI resolution.
+
+```json
+{"command":"component.set","args":{"id":"Camera","type":"PostProcess","values":{"bloom":1.5,"bloomThreshold":1,"bloomRadius":24,"exposure":0.25,"toneMapping":"reinhard"}}}
+```
+
+For each scene color c, let p be its largest channel. Highlight extraction is
+zero when p <= threshold, otherwise c * (p - threshold) / p. This preserves
+highlight hue. Extraction is fused into a horizontal tent filter, followed by
+a vertical tent filter. Each axis uses weights radius + 1 - abs(offset) for
+offsets -radius..radius, normalized by (radius + 1)^2. Sampling clamps to the
+nearest border texel, preserving constant highlights at screen edges.
+
+The blurred highlight multiplied by bloom is added to scene color, bounded to
+65504, and then exposed/tone mapped. Opaque UI and selection outlines are drawn
+afterward and never seed the blur. Software uses float32 intermediates; GPU
+uses two full-resolution RGBA16F targets, giving small precision/MSAA differences.
+Depth and picking IDs are unchanged. Strength zero skips both passes and extra
+buffers; neutral settings preserve old frame hashes. Activating bloom selects
+HDR scene blending even when the threshold rejects all highlights.
+
+This bounded two-pass filter has no automatic exposure, mip-chain downsampling
+or screen-size-independent radius. Cost and memory grow with scene resolution
+and radius; it is intended as an optional, directly testable effect. Increase
+radius for a broader halo or lower threshold for dimmer light sources.

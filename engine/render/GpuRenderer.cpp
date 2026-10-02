@@ -187,20 +187,24 @@ struct Targets {
     int msaa = 1;
     bool withOutput = false;
     bool hdr = false;
+    bool bloom = false;
     sg_image sceneMsaa{}, sceneDepth{}, sceneColor{}, maskColor{}, maskDepth{}, output{};
+    sg_image bloomHorizontal{}, bloomVertical{};
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
+    sg_view bloomHorizontalAtt{}, bloomHorizontalTex{}, bloomVerticalAtt{}, bloomVerticalTex{};
 
-    bool Matches(int w, int h, bool output_, bool hdr_) const {
-        return width == w && height == h && withOutput == output_ && hdr == hdr_;
+    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_) const {
+        return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_;
     }
 
-    void Create(int w, int h, int samples, bool output_, bool hdr_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_) {
         Destroy();
         width = w;
         height = h;
         msaa = samples;
         withOutput = output_;
         hdr = hdr_;
+        bloom = bloom_;
         const sg_pixel_format sceneFormat = hdr ? kHdrFormat : kColorFormat;
         if (msaa > 1) {
             sceneMsaa = MakeAttachmentImage(w, h, sceneFormat, msaa, false, false, "oe-scene-msaa");
@@ -214,6 +218,14 @@ struct Targets {
         sceneDepth = MakeAttachmentImage(w, h, kDepthFormat, msaa, true, false, "oe-scene-depth");
         sceneDepthAtt = DepthView(sceneDepth);
         sceneTex = TextureView(sceneColor);
+        if (bloom) {
+            bloomHorizontal = MakeAttachmentImage(w, h, kHdrFormat, 1, false, false, "oe-bloom-horizontal");
+            bloomHorizontalAtt = ColorView(bloomHorizontal);
+            bloomHorizontalTex = TextureView(bloomHorizontal);
+            bloomVertical = MakeAttachmentImage(w, h, kHdrFormat, 1, false, false, "oe-bloom-vertical");
+            bloomVerticalAtt = ColorView(bloomVertical);
+            bloomVerticalTex = TextureView(bloomVertical);
+        }
         maskColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-mask");
         maskAtt = ColorView(maskColor);
         maskTex = TextureView(maskColor);
@@ -228,10 +240,11 @@ struct Targets {
 
     void Destroy() {
         if (width == 0) return;
-        for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex}) {
+        for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex,
+                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex}) {
             if (v.id) sg_destroy_view(v);
         }
-        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output}) {
+        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical}) {
             if (i.id) sg_destroy_image(i);
         }
         *this = Targets();
@@ -254,6 +267,8 @@ struct GpuRenderer::Impl {
     sg_pipeline meshPips[2][2]{};  // [blend][double sided]
     sg_pipeline hdrMeshPips[2][2]{};
     sg_pipeline hdrLinePip{};
+    sg_pipeline bloomPip{};
+    sg_shader bloomShd{};
     int hdrSamples = 1;
     bool hdrSupported = false;
     sg_pipeline shadowPip{}, shadowPipTwoSided{}, maskDepthPip{}, maskDrawPip{}, linePip{}, compositePip{}, uiPip{};
@@ -280,11 +295,21 @@ struct GpuRenderer::Impl {
         lineShd = sg_make_shader(oe_line_shader_desc(backend));
         compositeShd = sg_make_shader(oe_composite_shader_desc(backend));
         uiShd = sg_make_shader(oe_ui_shader_desc(backend));
+        bloomShd = sg_make_shader(oe_bloom_shader_desc(backend));
 
         const int msaa = settings.msaa;
         const sg_pixelformat_info hdrInfo = sg_query_pixelformat(kHdrFormat);
         hdrSupported = hdrInfo.render && hdrInfo.blend && hdrInfo.filter;
         hdrSamples = hdrInfo.msaa ? msaa : 1;
+        if (hdrSupported) {
+            sg_pipeline_desc d{};
+            d.shader = bloomShd;
+            d.depth.pixel_format = SG_PIXELFORMAT_NONE;
+            d.colors[0].pixel_format = kHdrFormat;
+            d.sample_count = 1;
+            d.label = "oe-bloom";
+            bloomPip = sg_make_pipeline(&d);
+        }
         auto alphaBlend = [](sg_color_target_state& c) {
             c.pixel_format = kColorFormat;
             c.blend.enabled = true;
@@ -487,11 +512,12 @@ struct GpuRenderer::Impl {
     }
 
     void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view) {
-        const bool hdr = UsesHdr(NormalizePostProcess(view.postProcess));
+        const PostProcess post = NormalizePostProcess(view.postProcess);
+        const bool hdr = UsesHdr(post), bloom = post.bloom > 0;
         if (hdr && !hdrSupported) {
             throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
         }
-        if (!t.Matches(w, h, output, hdr)) t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr);
+        if (!t.Matches(w, h, output, hdr, bloom)) t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -926,6 +952,27 @@ struct GpuRenderer::Impl {
         }
         bool haveUI = ui.Write(uiVerts.data(), uiVerts.size() * sizeof(UIVertex));
 
+        const PostProcess post = NormalizePostProcess(view.postProcess);
+        // Two separable passes: horizontal highlight extraction/blur, then vertical
+        // blur. UI and the selection mask are never sampled for bloom.
+        if (t.bloom) for (int stage = 0; stage < 2; ++stage) {
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
+            pass.attachments.colors[0] = stage == 0 ? t.bloomHorizontalAtt : t.bloomVerticalAtt;
+            pass.label = stage == 0 ? "oe-bloom-horizontal" : "oe-bloom-vertical";
+            sg_begin_pass(&pass);
+            sg_apply_pipeline(bloomPip);
+            oe_bloom_params_t bu{};
+            Put(bu.bloom_filter, static_cast<float>(post.bloomRadius), post.bloomThreshold, static_cast<float>(stage), 0);
+            sg_apply_uniforms(UB_oe_bloom_params, SG_RANGE(bu));
+            sg_bindings b{};
+            b.views[VIEW_oe_bloom_source_tex] = stage == 0 ? t.sceneTex : t.bloomHorizontalTex;
+            b.samplers[SMP_oe_bloom_source_smp] = nearestClamp;
+            sg_apply_bindings(&b);
+            sg_draw(0, 3, 1);
+            sg_end_pass();
+        }
+
         // ----- Composite + UI into the output
         {
             sg_pass pass{};
@@ -938,15 +985,17 @@ struct GpuRenderer::Impl {
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
-            PostProcess post = NormalizePostProcess(view.postProcess);
+            Put(cu.bloom_strength, post.bloom, 0, 0, 0);
             Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
             b.views[VIEW_oe_scene_tex] = t.sceneTex;
             b.views[VIEW_oe_mask_tex] = outline ? t.maskTex : whiteTex;
+            b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
             b.samplers[SMP_oe_scene_smp] = linearClamp;
             b.samplers[SMP_oe_mask_smp] = nearestClamp;
+            b.samplers[SMP_oe_bloom_smp] = linearClamp;
             sg_apply_bindings(&b);
             sg_draw(0, 3, 1);
             if (haveUI) {

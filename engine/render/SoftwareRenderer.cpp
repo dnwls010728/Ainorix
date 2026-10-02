@@ -569,6 +569,37 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     }
     for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
 
+    std::vector<Color> bloom;
+    if (post.bloom > 0) {
+        const int radius = post.bloomRadius;
+        const float normalization = static_cast<float>((radius + 1) * (radius + 1));
+        std::vector<Color> horizontal(hdr.size());
+        bloom.resize(hdr.size());
+        // Fuse extraction into the horizontal pass, matching bloom_fs. Edge pixels
+        // are repeated (clamp), so a constant highlight keeps its energy at borders.
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                Color sum(0, 0, 0);
+                for (int delta = -radius; delta <= radius; ++delta) {
+                    const size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(target.width) +
+                                         static_cast<size_t>(std::clamp(x + delta, 0, target.width - 1));
+                    sum = sum + BloomHighlight(hdr[pixel], post.bloomThreshold) * static_cast<float>(radius + 1 - std::abs(delta));
+                }
+                horizontal[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] = sum * (1 / normalization);
+            }
+        });
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                Color sum(0, 0, 0);
+                for (int delta = -radius; delta <= radius; ++delta) {
+                    const size_t pixel = static_cast<size_t>(std::clamp(y + delta, 0, target.height - 1)) *
+                                         static_cast<size_t>(target.width) + static_cast<size_t>(x);
+                    sum = sum + horizontal[pixel] * static_cast<float>(radius + 1 - std::abs(delta));
+                }
+                bloom[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] = sum * (1 / normalization);
+            }
+        });
+    }
     if (!hdr.empty() || post.vignette > 0) {
         ParallelBands(target.height, [&](int, int y0, int y1) {
             for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
@@ -578,7 +609,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                                                    (static_cast<float>(y) + 0.5f) / static_cast<float>(target.height));
                 Color display = hdr.empty() ? Color(static_cast<float>(c & 255) / 255,
                                                      static_cast<float>((c >> 8) & 255) / 255,
-                                                     static_cast<float>((c >> 16) & 255) / 255) : ToneMap(hdr[pixel], post);
+                                                     static_cast<float>((c >> 16) & 255) / 255) :
+                                ToneMap(hdr[pixel] + (bloom.empty() ? Color(0, 0, 0) : bloom[pixel] * post.bloom), post);
                 target.color[pixel] = Pack(display * factor);
             }
         });

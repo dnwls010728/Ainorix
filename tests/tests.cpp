@@ -2665,6 +2665,113 @@ TEST(ParticleRenderers) {
     CHECK((again.color[90 * 320 + 160] & 255) > 250 && ((again.color[90 * 320 + 160] >> 8) & 255) == 0);
 }
 
+TEST(CameraBloom) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("camera_bloom"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"bright.mat.json","values":{"baseColor":[0,0,0],"unlit":true,"emissive":[1,0.5,0.25],"emissiveIntensity":8}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[0,0,0]},"PostProcess":{"exposure":0.25,"toneMapping":"reinhard"}}})J");
+    Call(e, "entity.create", R"J({"name":"Bright","components":{"MeshRenderer":{"material":"bright.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,1,1],"opacity":1}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    RenderTarget original, effect, again;
+    for (RenderTarget* t : {&original, &effect, &again}) t->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, original);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"bloom":1,"bloomThreshold":1,"bloomRadius":8}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, effect);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(effect.Hash() == again.Hash() && effect.Hash() != original.Hash());
+    CHECK(effect.ids == original.ids && effect.depth == original.depth);
+    CHECK(effect.color[10 * 128 + 10] == original.color[10 * 128 + 10]);
+    CHECK((effect.color[21 * 128 + 21] & 0xFFFFFF) == 0);  // white UI never seeds a glow
+    int glow = 0;
+    for (size_t i = 0; i < original.color.size(); ++i) {
+        if ((original.color[i] & 0xFFFFFF) == 0 && (effect.color[i] & 255) > 0) {
+            ++glow;
+            const uint32_t c = effect.color[i];
+            CHECK((c & 255) >= ((c >> 8) & 255) && ((c >> 8) & 255) >= ((c >> 16) & 255));
+        }
+    }
+    CHECK(glow > 50);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    const PostProcess* saved = restored.Get<PostProcess>(restored.FindByName("Camera"));
+    CHECK(saved && saved->bloom == 1 && saved->bloomThreshold == 1 && saved->bloomRadius == 8);
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == original.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    view.postProcess.bloomThreshold = 32;
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == original.Hash());  // dim scene lies completely below the threshold
+    view.postProcess.bloomThreshold = 1;
+    const bool gpu = e.EnableGpu(nullptr, &err);
+    if (!gpu) std::printf("  SKIP bloom GPU comparison (%s)\n", err.c_str());
+    for (int radius : {1, 8, 32}) for (int width : {128, 97}) {
+        view.postProcess.bloomRadius = radius;
+        effect.Resize(width, width == 128 ? 72 : 55);
+        again.Resize(effect.width, effect.height);
+        e.Renderer().Render(e.GetScene(), view, effect);
+        if (gpu) {
+            e.Gpu()->Render(e.GetScene(), view, again);
+            double error = 0;
+            for (size_t i = 0; i < effect.color.size(); ++i) for (int shift : {0, 8, 16})
+                error += std::abs(static_cast<int>((effect.color[i] >> shift) & 255) - static_cast<int>((again.color[i] >> shift) & 255));
+            const double mean = error / static_cast<double>(effect.color.size() * 3);
+            std::printf("  bloom radius %d width %d software/GPU mean difference %.4f\n", radius, width, mean);
+            CHECK(mean < 1.5);
+            // Toggling bloom on a reused size must not leave a stale glow texture.
+            view.postProcess.bloom = 0;
+            e.Renderer().Render(e.GetScene(), view, effect);
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK((effect.color.back() & 0xFFFFFF) == 0 && (again.color.back() & 0xFFFFFF) == 0);
+            view.postProcess.bloom = 1;
+        }
+    }
+    view.highlight = e.GetScene().FindByName("Bright");
+    view.postProcess.bloom = 0;
+    original.Resize(128, 72);
+    effect.Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, original);
+    view.postProcess.bloom = 1;
+    e.Renderer().Render(e.GetScene(), view, effect);
+    int outline = 0;
+    for (size_t i = 0; i < original.color.size(); ++i) if ((original.color[i] & 0xFFFFFF) == 0x1A9EFF) {
+        ++outline;
+        CHECK(effect.color[i] == original.color[i]);
+    }
+    CHECK(outline > 0);
+    view.highlight = kNullEntity;
+    view.postProcess.exposure = 0;
+    e.Renderer().Render(e.GetScene(), view, effect);
+    CHECK((effect.color[36 * 128 + 64] & 0xFFFFFF) == 0);
+    CHECK((effect.color[10 * 128 + 10] & 0xFFFFFF) == 0xFFFFFF);
+    view.postProcess.exposure = 0.25f;
+    // A constant HDR background keeps its brightness at clamped borders.
+    Call(e, "entity.destroy", R"J({"id":"Bright"})J");
+    view.clearColor = Color(8, 4, 2);
+    view.postProcess.bloomRadius = 32;
+    for (RenderTarget* t : {&effect, &again}) t->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, effect);
+    CHECK((effect.color.back() & 0xFFFFFF) == (effect.color[36 * 128 + 64] & 0xFFFFFF));
+    CHECK((effect.color.back() & 255) == 201);  // (8 + (8 - 1)) * .25, then Reinhard
+    CHECK(((effect.color.back() >> 8) & 255) == 166);
+    CHECK(((effect.color.back() >> 16) & 255) == 123);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(), view, again);
+        for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((effect.color.back() >> shift) & 255) -
+                                                  static_cast<int>((again.color.back() >> shift) & 255)) <= 1);
+    }
+}
+
 TEST(GpuRendererMatchesSoftware) {
     Engine e;
     std::string err;
