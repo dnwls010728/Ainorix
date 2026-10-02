@@ -21,12 +21,16 @@ end
 function Player:onUpdate(dt)
   local mx, my = 0, 0
   if self.controls then
-    if input.down("A") or input.down("Left") then mx = mx - 1 end
-    if input.down("D") or input.down("Right") then mx = mx + 1 end
-    if input.down("W") or input.down("Up") then my = my + 1 end
-    if input.down("S") or input.down("Down") then my = my - 1 end
+    mx, my = input.axis("LeftX"), input.axis("LeftY")
+    if mx == 0 and my == 0 then
+      if input.down("A") or input.down("Left") or input.down("GamepadDPadLeft") then mx = mx - 1 end
+      if input.down("D") or input.down("Right") or input.down("GamepadDPadRight") then mx = mx + 1 end
+      if input.down("W") or input.down("Up") or input.down("GamepadDPadUp") then my = my + 1 end
+      if input.down("S") or input.down("Down") or input.down("GamepadDPadDown") then my = my - 1 end
+    end
   end
-  if mx ~= 0 and my ~= 0 then mx, my = mx * 0.7071, my * 0.7071 end
+  local length = math.sqrt(mx * mx + my * my)
+  if length > 1 then mx, my = mx / length, my / length end
   if mx ~= 0 or my ~= 0 then self.face = { x = mx, y = my } end
 
   local v = self:velocity()
@@ -34,7 +38,7 @@ function Player:onUpdate(dt)
   self:setVelocity(approach(v.x, mx * self.speed, step), approach(v.y, my * self.speed, step))
 
   self.cooldown = math.max(0, self.cooldown - dt)
-  if self.controls and self.cooldown <= 0 and (input.pressed("Space") or input.pressed("J")) then self:shoot() end
+  if self.controls and self.cooldown <= 0 and (input.pressed("Space") or input.pressed("J") or input.pressed("GamepadA")) then self:shoot() end
 
   self.hurtTimer = math.max(0, self.hurtTimer - dt)
   if self.hurtTimer <= 0 then
@@ -62,6 +66,7 @@ end
 function Player:hurt(enemy)
   if not self.controls then return end
   self.hurtTimer = 1.0
+  require("scripts.effects").spawn(self:position(), "hit")
   local p, e = self:position(), scene.get(enemy, "Transform").position
   local dx, dy = p.x - e.x, p.y - e.y
   local len = math.max(0.01, math.sqrt(dx * dx + dy * dy))

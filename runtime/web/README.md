@@ -8,13 +8,16 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 The runtime does not depend on the game: every project uses the same files.
 
 - Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
-- Engine source: commit 95d45c1 (direct integration of P1 saves, P2 skeletal
-  animation and the P3 particle simulation milestone). Includes persistent player
-  storage, glTF rig/clip loading, Animator/API/Lua playback, shared software/GPU
-  skinning and deterministic particle simulation/API/Lua bursts. The combined
-  Windows build passed 72 tests; Node/WASM passed 68 (GPU execution skips
-  without a canvas). Browser verification of this combined runtime
-  remains pending; earlier P1/P2 checks are recorded in their feature work logs.
+- Engine source: commit 6d76ac9 (combined PRs #18-#21).
+  Includes PostProcess settings, optional vignette, HDR scene buffers, exposure
+  and Reinhard tone mapping in both renderers, UI/selection separation and
+  neutral default behavior, particle billboards/sample effects, gamepad input
+  and web multi-touch. Combined Windows tests pass 81 cases; Node/WASM passes 77.
+  D3D11/software comparison and real CLI screenshots were checked.
+  Browser WebGL2 verifies Reinhard, neutral/HDR transitions and zero exposure
+  with HUD separation. WebGL2 vignette execution remains pending.
+  P1 saves, P2 skeletal animation and P3.1 particle simulation remain included.
+  P3 rendering, P4 gamepads and P5 touch adapters are included in this runtime.
 - On this Windows host Binaryen's parallel optimizer crashed; the successful
   rebuild used `BINARYEN_CORES=1`.
 

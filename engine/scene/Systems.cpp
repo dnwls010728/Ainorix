@@ -9,6 +9,24 @@
 
 namespace oe {
 
+bool InputState::SetAxis(const std::string& name, float value) {
+    bool known = false;
+    for (const char* axis : kAxisNames) if (name == axis) known = true;
+    if (!known || !std::isfinite(value)) return false;
+    axes[name] = Clamp(value, name == "LT" || name == "RT" ? 0.0f : -1.0f, 1.0f);
+    return true;
+}
+
+float InputState::Axis(const std::string& name) const {
+    auto found = axes.find(name);
+    if (found == axes.end() || !std::isfinite(found->second)) return 0;
+    float value = Clamp(found->second, name == "LT" || name == "RT" ? 0.0f : -1.0f, 1.0f);
+    float magnitude = std::fabs(value);
+    if (magnitude <= kGamepadDeadZone) return 0;
+    float output = (magnitude - kGamepadDeadZone) / (1 - kGamepadDeadZone);
+    return value < 0 ? -output : output;
+}
+
 namespace {
 float WrapDegrees(float d) {
     d = std::fmod(d, 360.0f);

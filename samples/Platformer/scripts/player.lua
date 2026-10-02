@@ -25,11 +25,11 @@ function Player:onStart()
 end
 
 function Player:jumpPressed()
-  return input.pressed("Space") or input.pressed("W") or input.pressed("Up")
+  return input.pressed("Space") or input.pressed("W") or input.pressed("Up") or input.pressed("GamepadA")
 end
 
 function Player:jumpHeld()
-  return input.down("Space") or input.down("W") or input.down("Up")
+  return input.down("Space") or input.down("W") or input.down("Up") or input.down("GamepadA")
 end
 
 function Player:onUpdate(dt)
@@ -42,8 +42,11 @@ function Player:onUpdate(dt)
 
   local move = 0
   if self.controls and self.hurtTimer <= 0 then
-    if input.down("Left") or input.down("A") then move = move - 1 end
-    if input.down("Right") or input.down("D") then move = move + 1 end
+    move = input.axis("LeftX")
+    if move == 0 then
+      if input.down("Left") or input.down("A") or input.down("GamepadDPadLeft") then move = move - 1 end
+      if input.down("Right") or input.down("D") or input.down("GamepadDPadRight") then move = move + 1 end
+    end
   end
   local accel = grounded and self.accel or self.airAccel
   local vx = approach(v.x, move * self.speed, accel * dt)
@@ -119,6 +122,7 @@ function Player:die()
   if not self.controls then return end
   self.controls = false
   self.hurtTimer = 0.6
+  require("scripts.effects").spawn(self:position(), "hit")
   audio.play("sounds/hurt.wav", { volume = 0.6 })
   scene.broadcast("onPlayerDied")
 end

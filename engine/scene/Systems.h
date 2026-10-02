@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -27,12 +28,20 @@ int BurstParticles(Scene& scene, EntityId id, int count);
 // Platforms feed it from real devices; the API can inject keys so agents can
 // play-test without a window.
 struct InputState {
+    static constexpr float kGamepadDeadZone = 0.15f;
+    inline static constexpr const char* kAxisNames[] = {"LeftX", "LeftY", "RightX", "RightY", "LT", "RT"};
+    std::map<std::string, float> axes;  // raw sticks [-1,1], triggers [0,1]; +X right, +Y up
+    // Updates a known raw axis, clamped to its device range; false for unknown/non-finite input.
+    bool SetAxis(const std::string& name, float value);
+    // Reads a scalar dead zone, rescaled to full range; absent/unknown axes return zero.
+    float Axis(const std::string& name) const;
     std::set<std::string> down;
     bool IsDown(const std::string& key) const { return down.count(key) > 0; }
     std::set<std::string> pressedThisFrame;  // edge-triggered, cleared each tick
     // Mouse/touch: position normalized to the game view (0..1, origin top-left)
     // plus the view size in pixels so UI hit tests match what was rendered.
-    // Buttons use the key names "MouseLeft" / "MouseRight".
+    // Buttons use MouseLeft/MouseRight or GamepadA/B/X/Y/LB/RB/Start/Back,
+    // GamepadLeftStick/RightStick and GamepadDPadUp/Down/Left/Right.
     float mouseX = 0.5f;
     float mouseY = 0.5f;
     int viewWidth = 1280;

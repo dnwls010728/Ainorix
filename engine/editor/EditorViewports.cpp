@@ -15,6 +15,7 @@
 #include "assets/Assets.h"
 #include "core/Log.h"
 #include "physics/PhysicsWorld.h"
+#include "platform/GamepadInput.h"
 #include "render/GpuRenderer.h"
 
 namespace oe {
@@ -393,6 +394,9 @@ void NativeEditor::Impl::ScenePanel() {
 void NativeEditor::Impl::ReleaseGameInput() {
     for (const std::string& k : gameKeysDown) Call("input.key", ObjectOf({{"key", Json(k)}, {"down", Json(false)}}), true);
     gameKeysDown.clear();
+    for (const std::string& name : gameAxesForwarded)
+        Call("input.axis", ObjectOf({{"name", Json(name)}, {"value", Json(0)}}), true);
+    gameAxesForwarded.clear();
     for (int b = 0; b < 2; ++b) {
         if (!gameMouseDown[b]) continue;
         Call("input.mouse", ObjectOf({{"button", Json(b == 0 ? "MouseLeft" : "MouseRight")}, {"down", Json(false)}}), true);
@@ -416,6 +420,23 @@ void NativeEditor::Impl::GameInput() {
         gameWantsLock = false;
     }
     bool want = gameFocused && session && engine.Input().mouseLocked;
+    if (gameFocused && session) {
+        for (const char* name : InputState::kAxisNames) {
+            auto axis = windowInput.axes.find(name);
+            if (axis == windowInput.axes.end()) continue;  // no device: retain agent-injected input
+            auto previous = engine.Input().axes.find(name);
+            if (previous == engine.Input().axes.end() || previous->second != axis->second)
+                Call("input.axis", ObjectOf({{"name", Json(name)}, {"value", Json(axis->second)}}), true);
+            gameAxesForwarded.insert(name);
+        }
+        for (const char* name : GamepadInput::kButtonNames) {
+            bool down = windowInput.IsDown(name);
+            if (down == (gameKeysDown.count(name) != 0)) continue;
+            Call("input.key", ObjectOf({{"key", Json(name)}, {"down", Json(down)}}), true);
+            if (down) gameKeysDown.insert(name);
+            else gameKeysDown.erase(name);
+        }
+    }
     if (want && (windowInput.mouseDX != 0 || windowInput.mouseDY != 0)) {
         Call("input.mouse", ObjectOf({{"dx", Json(windowInput.mouseDX)}, {"dy", Json(windowInput.mouseDY)}}), true);
     }
@@ -456,7 +477,7 @@ void NativeEditor::Impl::GamePanel() {
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("%s", Tr(!session ? "Press Play (Ctrl+P) to run the game here"
-                                 : gameFocused ? (windowInput.mouseLocked ? "Game has the mouse - Esc releases it" : "Game has keyboard and mouse - click outside to give them back")
+                                 : gameFocused ? (windowInput.mouseLocked ? "Game has the mouse - Esc releases it" : "Game has keyboard, mouse and gamepad - click outside to release")
                                                : "Click the view to play"));
     ImGui::SetCursorScreenPos(ImVec2(barEnd.x - 6, barEnd.y + 3));
     avail = ImGui::GetContentRegionAvail();

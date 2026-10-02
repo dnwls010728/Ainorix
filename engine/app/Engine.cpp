@@ -252,6 +252,7 @@ void Engine::Stop() {
     heldKeys_.clear();
     input_.touches.clear();
     input_.down.clear();
+    input_.axes.clear();
     input_.pressedThisFrame.clear();
     input_.mouseDX = input_.mouseDY = 0.0f;
     input_.mouseLocked = false;

@@ -6,6 +6,7 @@
 #include "core/Image.h"
 #include "core/Math.h"
 #include "scene/Scene.h"
+#include "scene/Components.h"
 
 namespace oe {
 
@@ -36,6 +37,7 @@ struct RenderView {
     Vec3 eye;
     Color clearColor{0.12f, 0.14f, 0.18f};
     EntityId cameraEntity = kNullEntity;
+    PostProcess postProcess;  // selected camera's effects; defaults leave scene color unchanged
     // Editor overlays.
     bool drawGrid = false;
     EntityId highlight = kNullEntity;

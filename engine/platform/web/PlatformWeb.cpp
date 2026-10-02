@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "platform/Platform.h"
+#include "platform/GamepadInput.h"
+#include "platform/TouchInput.h"
 
 namespace oe {
 
@@ -40,6 +42,8 @@ EM_JS(void, oe_web_show_error, (const char* title, const char* message), {
 });
 
 EM_JS(void, oe_web_open_url, (const char* url), { window.open(UTF8ToString(url), "_blank"); });
+
+EM_JS(int, oe_web_input_focused, (), { return !document.hidden && document.hasFocus() ? 1 : 0; });
 
 // Software-renderer fallback (no WebGL2): RGBA pixels -> 2D canvas, stretched to the canvas size.
 EM_JS(void, oe_web_present_rgba, (const uint8_t* pixels, int width, int height), {
@@ -118,6 +122,27 @@ std::string KeyName(const EmscriptenKeyboardEvent* e) {
     return std::string();
 }
 
+GamepadSnapshot PollWebGamepad() {
+    GamepadSnapshot result;
+    if (!oe_web_input_focused() || emscripten_sample_gamepad_data() != EMSCRIPTEN_RESULT_SUCCESS) return result;
+    for (int index = 0, count = emscripten_get_num_gamepads(); index < count; ++index) {
+        EmscriptenGamepadEvent pad{};
+        if (emscripten_get_gamepad_status(index, &pad) != EMSCRIPTEN_RESULT_SUCCESS || !pad.connected ||
+            std::strcmp(pad.mapping, "standard") != 0) continue;
+        result.connected = true;
+        result.device = index;
+        for (int axis = 0; axis < 4 && axis < pad.numAxes; ++axis)
+            result.axes[static_cast<size_t>(axis)] = static_cast<float>(pad.axis[axis]) * (axis % 2 ? -1.0f : 1.0f);
+        if (pad.numButtons > 6) result.axes[4] = static_cast<float>(pad.analogButton[6]);
+        if (pad.numButtons > 7) result.axes[5] = static_cast<float>(pad.analogButton[7]);
+        const int buttons[] = {0, 1, 2, 3, 4, 5, 9, 8, 10, 11, 12, 13, 14, 15};
+        for (size_t i = 0; i < result.buttons.size(); ++i)
+            result.buttons[i] = buttons[i] < pad.numButtons && pad.digitalButton[buttons[i]];
+        break;  // lowest connected standard-mapping index
+    }
+    return result;
+}
+
 class WebWindow final : public Window {
 public:
     bool Init(const std::string& title) {
@@ -132,7 +157,8 @@ public:
         emscripten_set_touchend_callback(kCanvas, this, true, &WebWindow::OnTouch);
         emscripten_set_touchmove_callback(kCanvas, this, true, &WebWindow::OnTouch);
         emscripten_set_touchcancel_callback(kCanvas, this, true, &WebWindow::OnTouch);
-        emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, true, &WebWindow::OnBlur);
+        // Element blur does not bubble: capture would mistake canvas/button focus changes for window blur.
+        emscripten_set_blur_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, this, false, &WebWindow::OnBlur);
         emscripten_set_pointerlockchange_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebWindow::OnPointerLock);
         emscripten_set_pointerlockerror_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, this, true, &WebWindow::OnPointerLockError);
         return true;
@@ -152,7 +178,16 @@ public:
                     input.mouseX = e.x;
                     input.mouseY = e.y;
                     break;
-                case Event::Clear: input.down.clear(); break;
+                case Event::Clear:
+                    gamepad_.Reset(input);
+                    touch_.Reset(input);
+                    input.down.clear();
+                    input.pressedThisFrame.clear();
+                    input.axes.clear();
+                    break;
+                case Event::TouchBegin: touch_.Apply(input, TouchInput::Kind::Begin, e.id, e.x, e.y); break;
+                case Event::TouchMove: touch_.Apply(input, TouchInput::Kind::Move, e.id, e.x, e.y); break;
+                case Event::TouchEnd: touch_.Apply(input, TouchInput::Kind::End, e.id, e.x, e.y); break;
                 case Event::Delta:
                     input.mouseDX += e.x;
                     input.mouseDY += e.y;
@@ -162,6 +197,7 @@ public:
             }
         }
         events_.clear();
+        gamepad_.Apply(input, PollWebGamepad());
         // Pointer lock can only be requested from a user gesture: OnMouse asks
         // for it on the next click while the game wants the mouse locked.
         wantLock_ = input.mouseLocked;
@@ -186,9 +222,10 @@ public:
 
 private:
     struct Event {
-        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock } kind;
+        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock, TouchBegin, TouchMove, TouchEnd } kind;
         std::string key;
         float x = 0, y = 0;
+        int id = 0;
     };
 
     // The drawing buffer follows the canvas' CSS size times the device pixel ratio.
@@ -243,12 +280,18 @@ private:
         return type == EMSCRIPTEN_EVENT_MOUSEDOWN;
     }
 
-    // The first touch acts as the left mouse button.
+    // Emscripten includes unchanged held points alongside changed/ended points.
+    // Queue only changed points so ending one finger cannot release another.
     static bool OnTouch(int type, const EmscriptenTouchEvent* e, void* user) {
         auto* self = static_cast<WebWindow*>(user);
-        if (e->numTouches > 0) self->Move(static_cast<double>(e->touches[0].targetX), static_cast<double>(e->touches[0].targetY));
-        if (type == EMSCRIPTEN_EVENT_TOUCHSTART) self->Push(Event::Down, "MouseLeft");
-        if (type == EMSCRIPTEN_EVENT_TOUCHEND || type == EMSCRIPTEN_EVENT_TOUCHCANCEL) self->Push(Event::Up, "MouseLeft");
+        Event::Kind kind = type == EMSCRIPTEN_EVENT_TOUCHSTART ? Event::TouchBegin :
+                           type == EMSCRIPTEN_EVENT_TOUCHMOVE ? Event::TouchMove : Event::TouchEnd;
+        for (int i = 0; i < e->numTouches; ++i) {
+            const EmscriptenTouchPoint& point = e->touches[i];
+            if (!point.isChanged) continue;
+            self->events_.push_back({kind, std::string(), static_cast<float>(point.targetX / self->cssW_),
+                                    static_cast<float>(point.targetY / self->cssH_), point.identifier});
+        }
         return true;
     }
 
@@ -283,6 +326,8 @@ private:
     }
 
     std::vector<Event> events_;
+    GamepadInput gamepad_;
+    TouchInput touch_;
     bool wantLock_ = false;
     bool pointerLocked_ = false;
     bool relockOnClick_ = false;  // released by Escape, not by the game

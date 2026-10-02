@@ -200,6 +200,7 @@ struct NativeEditor::Impl {
     bool gameHovered = false;
     ImVec2 gameImagePos{0, 0}, gameImageSize{0, 0};
     std::set<std::string> gameKeysDown;
+    std::set<std::string> gameAxesForwarded;  // only these axes are released when Game loses focus
     bool gameMouseDown[2] = {false, false};
     float lastGameMouse[2] = {-1, -1};
     bool gameWantsLock = false;

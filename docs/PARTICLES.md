@@ -2,9 +2,8 @@
 
 ## Implementation status (work log)
 
-P1 and P2 are implemented in PRs #15 and #16, pending review. P3 starts from
-latest main independently because emission does not depend on saves or skeletal
-animation. Its changes remain in one feature PR.
+P1, P2 and P3.1 were integrated into main directly at the user's request.
+P3.2 and P3.3 continue from that combined main.
 
 - [x] P3.1: Reflected ParticleEmitter, bounded deterministic fixed-step simulation,
       explicit state/burst/clear commands, Lua burst helpers and simulation tests.
@@ -13,11 +12,33 @@ animation. Its changes remain in one feature PR.
       world-space spawn positions, runtime serialization exclusion, fractional
       rate, API errors and Lua/global/instance bursts. ParticleRandomStreamIsDeterministic
       checks repeated seeds, changed seeds and cone/speed constraints.
-- [ ] P3.2: Shared 2D/3D billboard draw items, lifetime size/color interpolation,
+- [x] P3.2: Shared 2D/3D billboard draw items, lifetime size/color interpolation,
       texture sheet frames and transparent ordering in both renderers; visual,
-      hash, thread-determinism and software/GPU comparison tests.
-- [ ] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
-      Android runtimes rebuilt, available platform verification and final PR.
+      hash, thread-determinism and software/GPU comparison tests. Windows Release
+      passes 74 tests. ParticleBillboardDrawItems checks camera orientation,
+      interpolation, local/world positions, sheet UVs, sorting and expiry.
+      ParticleRenderers covers solid/textured quads, 2D/3D seeded frame hashes,
+      single/multi-thread equality and D3D11 comparison (mean channel difference
+      0.118/0.180 of 255; fully covered interiors differ by less than 2 of 255).
+      Software/GPU PNGs were inspected. Both Android ABI players rebuilt;
+      browser execution is covered below; Android device execution remains unverified.
+      Node/WASM passes 70 tests, including the same fixed particle frame hashes
+      as Windows (2D eeb1529ca41029c9; 3D 4ea73d9e1b71d479). GPU tests skip
+      in Node because there is no browser canvas. CLI script screenshots also
+      verified a world-space colored burst in software and D3D11.
+- [x] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
+      Android runtimes rebuilt and available platform verification. Windows passes
+      75 tests and Node/WASM passes 71. SampleParticleEffects drives real coin
+      trigger collection in both samples, enemy/player hit callbacks, visible
+      orthographic particles, cleanup and repeatable scene/frame output.
+      Native PNGs were inspected. Packaged Platformer ran with WebGL2 and no
+      console errors; an ignored copy used a helper to move coins onto the player,
+      exercising the actual collection callback and displaying its particle burst.
+      The helper is not part of either sample. P3.2 runtimes are current because
+      this milestone changes only Lua, documentation and tests.
+- [ ] Hardware follow-up: run packaged samples on an Android device and verify
+      coin/hit bursts and expiry; run the rendering suite on Linux/EGL. No Android
+      device or Linux execution was available for this feature.
 
 ## Simulation contract
 
@@ -56,5 +77,34 @@ Burst/clear change transient simulation state, like audio playback, and do not
 participate in scene undo. Reflected emitter settings serialize normally and
 component edits participate in undo. Particle coordinate snapshots, colors,
 sizes, opacity and gravity are captured at birth; world-space velocities include
-the spawn transform's scale/rotation. Billboard rendering remains P3.2; runtime
-rebuilds and visual/sample verification remain P3.3.
+the spawn transform's scale/rotation.
+
+## Sample gameplay effects
+
+Both samples expose scripts/effects.lua as require("scripts.effects").spawn(position,
+kind), with kind "coin" for gold sparkles or "hit" for red sparks. Coin collection,
+enemy hits and player damage call it; Platformer bonus blocks also produce sparkles.
+Each effect is a separate world-space emitter, so destroying the coin or enemy
+does not remove the burst. There are 12 coin particles or 16 hit particles, with
+0.5-second lifetimes and a 16-particle cap. The attached effects script destroys
+the effect entity after 0.65 seconds, avoiding an accumulation of empty emitters.
+
+## Rendering contract
+
+Both renderers consume the same camera-facing unit quads from GatherRenderItems
+and the same transparent BuildDrawList. Each live particle uses a shared static
+quad, so the GPU mesh cache does not grow with births. Dimensions selects planar
+or cone emission; both modes face the current camera, including orthographic
+and editor views. Particle quads are unlit and do not cast shadows.
+
+Size, RGB tint and opacity interpolate linearly between their birth snapshots
+over age/lifetime. Size is the square billboard width/height in world meters;
+emitter scale affects local centers and world-space spawn velocity, but does not
+stretch billboards. Zero size/opacity and invalid positions are omitted.
+
+Texture/frame/columns/rows are live emitter settings; they apply to all existing
+particles. Frames wrap in row-major order, with nearest sampling and a small UV
+inset to avoid neighbouring-frame bleed. Empty texture gives a solid quad;
+missing textures give magenta quads. Texture alpha multiplies particle opacity.
+Opaque geometry precedes particles; blended draws sort back to front by bounds
+center distance. Entity id breaks ties, then stable birth order within an emitter.

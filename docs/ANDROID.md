@@ -105,6 +105,9 @@ stores and testing.
   The Back button is `Escape` (the activity does not close by itself).
   Keyboards use the usual key names; gamepads: D-pad / left stick = arrows,
   A = `Space`, B = `Escape`, X = `Shift`, Y = `Control`, Start = `Enter`.
+  They also expose the portable `Gamepad*` button names and six analog axes
+  through `input.axis`, with a shared 0.15 dead zone and disconnect/focus reset
+  ([INPUT.md](INPUT.md)); physical-controller verification remains outstanding.
   Games for phones need on-screen controls (`UIButton.key`) for anything beyond taps.
 - **Screen**: immersive fullscreen (status and navigation bars hidden; a swipe
   from the edge shows them briefly), drawn into the display cutout, kept on while the game runs; rotation and resizing

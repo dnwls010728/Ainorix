@@ -137,11 +137,13 @@ The previous PR #15 merge commit was replaced at the user's request.
 - **검증**: `GpuRendererMatchesSoftware`가 스킨 모델로도 통과, 같은 시간에서 프레임 해시 고정, `render.screenshot`로 걷는 샘플 확인. `samples/Showcase`의 여우(Fox)에 Survey/Walk/Run 클립을 연결해 데모로 쓴다.
 - **주의**: 성능(스킨 정점 수 × 소프트웨어 렌더러) 때문에 테스트 장면은 작게. 멀티스레드 렌더러의 결정성을 깨지 말 것.
 
-### P3. 파티클 시스템 — [ ]
+### P3. 파티클 시스템 — [x]
 
-P3's simulation milestone is integrated into main alongside P1 and P2.
-The combined Windows build passed 72 tests. Particle rendering and sample
-effects remain unfinished; see [PARTICLES.md](PARTICLES.md) for the next milestone.
+P3's simulation milestone is integrated into main alongside P1 and P2. Shared
+billboards and Platformer/Dungeon coin/hit effects are implemented in the follow-up
+branch. Windows passes 75 tests, Node/WASM passes 71, and D3D11/software images
+and packaged WebGL2 coin effects were inspected. Web/Android runtimes are refreshed.
+Android hardware and Linux/EGL follow-ups remain in [PARTICLES.md](PARTICLES.md).
 
 - **왜**: 코드에 파티클이 전혀 없다. 이펙트(폭발, 먼지, 코인 반짝임)가 없어 게임 느낌이 약하다.
 - **요구**: 컴포넌트 `ParticleEmitter {rate, burst, lifetime, speed, spread, gravity, startSize/endSize, startColor/endColor, texture/frame, space(local|world), maxParticles, loop, playing}`. 2D(스프라이트 빌보드)와 3D 모두. 스크립트 `emitter:burst(n)`.
@@ -149,18 +151,50 @@ effects remain unfinished; see [PARTICLES.md](PARTICLES.md) for the next milesto
 - **구현 위치**: 시뮬레이션 `Systems.cpp`, 그리기는 `BuildDrawList`가 빌보드 쿼드를 만들어 양쪽 렌더러가 동일하게 그리게(투명 정렬 규칙 따르기). 에디터에서 재생/정지 미리보기는 2차.
 - **검증**: `render.screenshot --frames N` 해시 테스트, 입자 수 상한 테스트, `samples/Platformer`/`Dungeon`에 코인·피격 이펙트 적용.
 
-### P4. 게임패드 입력 일반화 — [ ]
+### P4. 게임패드 입력 일반화 — [x]
+
+- Implementation status: [INPUT.md](INPUT.md). Portable axes, shared dead zone,
+  API injection and Lua reads are implemented. Windows/web/Android physical
+  adapters, Platformer/Dungeon controls and native editor Game-view forwarding
+  are implemented. Windows 75 and Node/WASM 71 tests pass; CLI sample renders
+  and a D3D11 editor screenshot were inspected. Prebuilt players are refreshed.
+- [ ] Real-controller verification on Windows, web and Android, and a full
+  Linux runtime check; exact follow-ups are recorded in [INPUT.md](INPUT.md).
 
 - **왜**: Android에만 게임패드가 있고(`ANDROID.md`: D-pad/왼 스틱 = 방향키) 데스크톱·웹에는 없다. 아날로그 축도 없다.
 - **요구**: `InputState`에 축(`axes`: `LeftX/LeftY/RightX/RightY/LT/RT`)과 버튼 이름(`GamepadA/B/X/Y/LB/RB/Start/Back/DPadUp...`)을 추가하고 Lua `input.axis(name)`, 기존 `input.key`로도 버튼 접근. API `input.axis {name, value}`로 테스트 주입(`input.touch`처럼). 데드존 처리는 엔진에서(기본 0.15, 문서화).
 - **플랫폼**: Windows = XInput(동적 로드, 없으면 무시), 웹 = Gamepad API(`navigator.getGamepads`), Android는 기존 매핑에 축 추가. 새 플랫폼 파일에는 OS 코드를 넣고 엔진 코드는 이식 가능하게 유지.
 - **검증**: 입력 주입 테스트, `PlatformNull`로 컴파일 확인. 실제 컨트롤러는 장치가 있어야 하므로 못 하면 체크리스트에 남긴다.
 
-### P5. 웹 멀티터치 `input.touches` — [ ]
+### P5. 웹 멀티터치 `input.touches` — [x]
+
+- Implementation and verification: [TOUCH.md](TOUCH.md). All changed web touch
+  points reach Lua/UI with stable IDs, press order and one-step began flags;
+  first-finger mouse compatibility, cancellation and window-focus reset are
+  covered. Windows 73 and Node/WASM 69 tests pass. Synthetic DOM events through
+  a packaged WebGL2 player verified simultaneous controls, move/end/cancel/blur
+  and CSS-coordinate normalization. The prebuilt web player is refreshed.
+- [ ] Real mobile-browser multi-touch, outside-canvas drags and app switching.
 
 - `engine/platform/web/PlatformWeb.cpp`의 `OnTouch`가 첫 손가락만 마우스로 매핑한다. 모든 `EmscriptenTouchPoint`를 `InputState.touches`에 채운다(`began` 포함, 첫 손가락은 계속 마우스로). 웹 런타임 재빌드 필요(Emscripten SDK 있을 때), 없으면 소스만 고치고 미검증으로 남긴다. 작은 작업이라 P1~P4 사이에 끼워도 된다.
 
 ### P6. GPU 효과 (셰이더 머티리얼, 포스트 프로세싱) — [ ]
+
+P3 rendering, P4, P5 and the completed P6 vignette/HDR milestones are integrated
+at the user's request through PRs #18-#21. P6 remains incomplete: bloom, FXAA
+and custom shader materials continue on a new branch from the updated main.
+Combined Windows 81 and Node/WASM 77 tests pass; prebuilt players are refreshed
+from the combined source, preserving all four PRs' features.
+
+- Implementation status: [POSTPROCESS.md](POSTPROCESS.md). The first milestone
+  adds a reflected camera PostProcess component and optional vignette in both
+  renderers. Windows 73 and Node/WASM 69 tests pass; software/D3D11 comparison
+  and Showcase off/on screenshots checked. Shaders and players are refreshed.
+  Exposure/HDR Reinhard tone mapping is also implemented: Windows 74 and
+  Node/WASM 70 tests pass, including preservation of bright emissive values
+  through alpha blending and a software/D3D11 comparison. WebGL2 HDR transitions
+  and zero exposure/HUD separation are checked; web and both Android ABI
+  runtimes are refreshed. Bloom, FXAA, custom materials and hardware follow-ups remain.
 
 - composite 패스(`GpuRenderer`)가 연결 지점. 톤매핑, 블룸, FXAA, 비네트를 켜고 끄는 컴포넌트/카메라 설정부터. **소프트웨어 렌더러는 기준**이므로 효과가 해시에 영향을 주면 안 되게 기본값은 꺼짐으로 두거나, 양쪽 모두 구현한다(`CLAUDE.md` 규칙). 커스텀 셰이더 머티리얼은 sokol-shdc 의존이 커서 이 항목의 후반부로 둔다.
 

@@ -16,7 +16,7 @@ function Game:respawn()
 end
 
 function Game:onUpdate(dt)
-  if input.pressed("R") then return game.loadScene(game.scene()) end
+  if input.pressed("R") or input.pressed("GamepadStart") then return game.loadScene(game.scene()) end
   if self.over then return end
   self.time = self.time + dt
   scene.set(scene.find("TimeText"), "UIText", { text = string.format("%.1f", self.time) })
@@ -27,6 +27,7 @@ function Game:onCoin(pos)
   self.coins = self.coins + 1
   game.set("coins", self.coins)
   if pos then
+    require("scripts.effects").spawn(pos, "coin")
     scene.create("Coin Pop", {
       Transform = { position = { pos.x, pos.y, 0.1 } },
       Sprite = { texture = "assets/sprites/coin.png", columns = 4, order = 4 },

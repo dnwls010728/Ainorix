@@ -15,12 +15,16 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 - 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
 - 렌더링 기능: glTF 모델, PNG/JPEG 텍스처, 스무스/플랫 셰이딩, 포인트 라이트, 그림자, 직교/팔로우 카메라, 디버그 드로잉 — [docs/RENDERING.md](docs/RENDERING.md)
 - 스켈레탈 애니메이션: glTF TRS·스킨, LINEAR/STEP/CUBICSPLINE, Animator·API·Lua 재생, 소프트웨어/GPU 스키닝(조인트 최대 64개). Showcase 여우는 정지/이동/Shift 달리기로 Survey/Walk/Run 전환 — [docs/ANIMATION.md](docs/ANIMATION.md)
+- 파티클: 결정적 2D/3D 방출, 로컬/월드 공간, API·Lua burst, 두 렌더러의 카메라 빌보드, 수명에 따른 크기·색·투명도 변화와 시트 프레임. Platformer·Dungeon에 코인·피격 효과 적용 — [docs/PARTICLES.md](docs/PARTICLES.md)
 - 머티리얼/PBR/반투명: metallic-roughness(GGX) 셰이딩, 노멀맵·AO·발광 텍스처, 반투명(뒤에서 앞으로 정렬)·마스크·양면, glTF 머티리얼 완전 로드, `.mat.json` 머티리얼 파일(`material.create`/`material.set`, 핫리로드) — [docs/RENDERING.md](docs/RENDERING.md)
 - Jolt 기반 3D 물리와 Box2D 기반 2D 물리 (강체, 트리거, 캐릭터 컨트롤러, 원웨이 플랫폼·다각형·충돌 레이어, 결정적 시뮬레이션) — [docs/PHYSICS.md](docs/PHYSICS.md)
 - 게임 UI: TrueType 폰트(한글 등 모든 언어, 폰트 파일 추가), 앵커·스트레치·부모-자식 배치, 레이아웃(세로/가로/그리드, 크기 맞춤), 리치 텍스트·줄바꿈·외곽선·그림자, 둥근 모서리·테두리 패널, 버튼 상태(호버/눌림/비활성), 이미지(9-slice, 채우기 바), 슬라이더/진행 바, 클리핑, 캔버스 스케일 — [docs/UI.md](docs/UI.md)
 - 2D 게임: 스프라이트·스프라이트 시트 애니메이션(픽셀 아트, 투명 컷아웃), 텍스트로 쓰는 타일맵(타일셋 파일, 자동 연결 16/47 패턴, 변형 타일, 슬로프·원웨이 등 타일별 충돌), Box2D 2D 물리, 경계 있는 카메라 추적, 에디터 2D 뷰와 타일 브러시 — [docs/2D.md](docs/2D.md)
 - 게임 구성 요소: 프리팹, 씬 전환 + 게임 데이터, 메시지/타이머, 게임 내 UI, 오디오(결정적 믹서, 효과음 생성) — [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 스크립팅 (샌드박스, 핫리로드, 에러에 파일:줄 표시) — [docs/SCRIPTING.md](docs/SCRIPTING.md)
+- 카메라 후처리: 소프트웨어·GPU 노출·HDR Reinhard 톤매핑·비네트 지원, UI와 선택 윤곽선 유지. 블룸·FXAA·커스텀 머티리얼은 진행 중 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- 게임패드 입력: 축 6개 API 주입과 Lua `input.axis`, 공통 0.15 데드존, Windows XInput·웹 Gamepad API·Android 매핑, 에디터 Game 뷰와 Platformer/Dungeon 조작. 실제 컨트롤러 검증은 남음 — [docs/INPUT.md](docs/INPUT.md)
+- 웹 멀티터치: Lua `input.touches()`에 모든 손가락 전달, 화면 버튼 동시 조작, 첫 손가락 마우스 호환. 브라우저 합성 이벤트 검증 완료, 모바일 실기기 검증은 남음 — [docs/TOUCH.md](docs/TOUCH.md)
 - 결정적(deterministic) 시뮬레이션과 소프트웨어 렌더러: 같은 입력이면 같은 프레임 해시 → AI가 테스트 오라클로 사용 가능
 
 ## 빌드

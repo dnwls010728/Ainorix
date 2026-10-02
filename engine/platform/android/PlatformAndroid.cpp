@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "platform/Platform.h"
+#include "platform/GamepadInput.h"
 #include "platform/android/AndroidApp.h"
 
 namespace oe {
@@ -58,14 +59,18 @@ struct State {
     int primaryPointer = -1;
     float lastX = 0, lastY = 0;
     bool mouseLocked = false;  // the game asked for input.lockMouse: drags become mouseDX/DY
-    // Gamepad stick / hat as arrow keys.
-    bool stick[4] = {false, false, false, false};  // Left, Right, Up, Down
+    GamepadSnapshot gamepad;
+    std::array<bool, 4> dpadKeys{}, hat{};  // Up, Down, Left, Right
+    std::array<bool, 2> triggerKeys{}, analogTriggerSeen{};
+    std::set<std::string> gamepadLegacy;
 };
 
 State& S() {
     static State s;
     return s;
 }
+
+bool AndroidGamepadPresent(int device);
 
 // ----- Logcat ------------------------------------------------------------------------
 
@@ -294,6 +299,56 @@ void Push(Event::Kind kind, const char* key, float x = 0, float y = 0) {
     S().events.push_back({kind, key ? std::string(key) : std::string(), x, y});
 }
 
+void UpdateGamepadLegacy() {
+    State& s = S();
+    std::set<std::string> keys;
+    const char* names[] = {"Space", "Escape", "Shift", "Control"};
+    for (size_t i = 0; i < 4; ++i) if (s.gamepad.buttons[i]) keys.insert(names[i]);
+    if (s.gamepad.buttons[6]) keys.insert("Enter");
+    const char* directions[] = {"Up", "Down", "Left", "Right"};
+    const bool stick[] = {s.gamepad.axes[1] > 0.5f, s.gamepad.axes[1] < -0.5f,
+                          s.gamepad.axes[0] < -0.5f, s.gamepad.axes[0] > 0.5f};
+    for (size_t i = 0; i < 4; ++i) {
+        s.gamepad.buttons[10 + i] = s.dpadKeys[i] || s.hat[i];
+        if (stick[i] || s.gamepad.buttons[10 + i]) keys.insert(directions[i]);
+    }
+    for (const std::string& key : s.gamepadLegacy) if (!keys.count(key)) Push(Event::Up, key.c_str());
+    for (const std::string& key : keys) if (!s.gamepadLegacy.count(key)) Push(Event::Down, key.c_str());
+    s.gamepadLegacy = std::move(keys);
+}
+
+void ReleaseAndroidGamepad() {
+    State& s = S();
+    for (const std::string& key : s.gamepadLegacy) Push(Event::Up, key.c_str());
+    s.gamepadLegacy.clear();
+    s.gamepad = GamepadSnapshot{};
+    s.dpadKeys.fill(false);
+    s.hat.fill(false);
+    s.triggerKeys.fill(false);
+    s.analogTriggerSeen.fill(false);
+}
+
+bool SelectAndroidGamepad(const AInputEvent* event) {
+    State& s = S();
+    int device = AInputEvent_getDeviceId(event);
+    if (s.gamepad.connected && s.gamepad.device != device) {
+        if (AndroidGamepadPresent(s.gamepad.device)) return false;
+        ReleaseAndroidGamepad();
+    }
+    s.gamepad.connected = true;
+    s.gamepad.device = device;
+    return true;
+}
+
+int GamepadKeyIndex(int32_t key) {
+    const int32_t codes[] = {AKEYCODE_BUTTON_A, AKEYCODE_BUTTON_B, AKEYCODE_BUTTON_X, AKEYCODE_BUTTON_Y,
+        AKEYCODE_BUTTON_L1, AKEYCODE_BUTTON_R1, AKEYCODE_BUTTON_START, AKEYCODE_BUTTON_SELECT,
+        AKEYCODE_BUTTON_THUMBL, AKEYCODE_BUTTON_THUMBR, AKEYCODE_DPAD_UP, AKEYCODE_DPAD_DOWN,
+        AKEYCODE_DPAD_LEFT, AKEYCODE_DPAD_RIGHT};
+    for (int i = 0; i < 14; ++i) if (key == codes[i]) return i;
+    return -1;
+}
+
 // Every finger (InputState::touches), normalized to the window.
 void PushTouch(Event::Kind kind, const AInputEvent* event, size_t i) {
     State& s = S();
@@ -315,16 +370,27 @@ void PushMove(float px, float py) {
 
 int32_t OnJoystick(const AInputEvent* event) {
     State& s = S();
-    float x = AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_X, 0);
-    float y = AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_Y, 0);
+    if ((AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK) == AMOTION_EVENT_ACTION_CANCEL) {
+        ReleaseAndroidGamepad();
+        return 1;
+    }
+    if (!SelectAndroidGamepad(event)) return 1;
+    s.gamepad.axes[0] = AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_X, 0);
+    s.gamepad.axes[1] = -AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_Y, 0);
+    s.gamepad.axes[2] = AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_Z, 0);
+    s.gamepad.axes[3] = -AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_RZ, 0);
+    const float triggers[] = {
+        std::max(AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_LTRIGGER, 0), AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_BRAKE, 0)),
+        std::max(AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_RTRIGGER, 0), AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_GAS, 0))
+    };
+    for (size_t i = 0; i < 2; ++i) {
+        if (triggers[i] > 0) s.analogTriggerSeen[i] = true;
+        s.gamepad.axes[4 + i] = s.analogTriggerSeen[i] ? triggers[i] : (s.triggerKeys[i] ? 1.0f : 0.0f);
+    }
     float hx = AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_HAT_X, 0);
     float hy = AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_HAT_Y, 0);
-    const bool now[4] = {x < -0.5f || hx < -0.5f, x > 0.5f || hx > 0.5f, y < -0.5f || hy < -0.5f, y > 0.5f || hy > 0.5f};
-    static const char* names[4] = {"Left", "Right", "Up", "Down"};
-    for (int i = 0; i < 4; ++i) {
-        if (now[i] != s.stick[i]) Push(now[i] ? Event::Down : Event::Up, names[i]);
-        s.stick[i] = now[i];
-    }
+    s.hat = {hy < -0.5f, hy > 0.5f, hx < -0.5f, hx > 0.5f};
+    UpdateGamepadLegacy();
     return 1;
 }
 
@@ -408,9 +474,29 @@ int32_t OnInput(android_app*, AInputEvent* event) {
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) return OnMotion(event);
     if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_KEY) return 0;
     const int32_t code = AKeyEvent_getKeyCode(event);
+    const int32_t action = AKeyEvent_getAction(event);
+    const int32_t source = AInputEvent_getSource(event);
+    int button = GamepadKeyIndex(code);
+    bool padSource = (source & AINPUT_SOURCE_GAMEPAD) == AINPUT_SOURCE_GAMEPAD ||
+                     (source & AINPUT_SOURCE_JOYSTICK) == AINPUT_SOURCE_JOYSTICK ||
+                     (source & AINPUT_SOURCE_DPAD) == AINPUT_SOURCE_DPAD;
+    if ((button >= 0 && (padSource || code >= AKEYCODE_BUTTON_A)) || code == AKEYCODE_BUTTON_L2 || code == AKEYCODE_BUTTON_R2) {
+        if (!SelectAndroidGamepad(event)) return 1;
+        if (action != AKEY_EVENT_ACTION_DOWN && action != AKEY_EVENT_ACTION_UP) return 1;
+        bool down = action == AKEY_EVENT_ACTION_DOWN;
+        State& s = S();
+        if (button >= 10) s.dpadKeys[static_cast<size_t>(button - 10)] = down;
+        else if (button >= 0) s.gamepad.buttons[static_cast<size_t>(button)] = down;
+        else {
+            size_t trigger = code == AKEYCODE_BUTTON_L2 ? 0 : 1;
+            s.triggerKeys[trigger] = down;
+            if (!s.analogTriggerSeen[trigger]) s.gamepad.axes[4 + trigger] = down ? 1.0f : 0.0f;
+        }
+        UpdateGamepadLegacy();
+        return 1;
+    }
     const char* key = KeyName(code);
     if (!key) return 0;  // volume, home, ...: the system handles them
-    const int32_t action = AKeyEvent_getAction(event);
     if (action == AKEY_EVENT_ACTION_DOWN && AKeyEvent_getRepeatCount(event) == 0) Push(Event::Down, key);
     if (action == AKEY_EVENT_ACTION_UP) Push(Event::Up, key);
     return 1;  // Back goes to the game as Escape instead of closing the activity
@@ -426,6 +512,7 @@ void OnCommand(android_app* app, int32_t cmd) {
             ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN, 0);
             break;
         case APP_CMD_TERM_WINDOW:
+            ReleaseAndroidGamepad();
             // The window dies when this handler returns: release the EGL surface now.
             if (s.surfaceLost) s.surfaceLost();
             s.window = nullptr;
@@ -434,6 +521,7 @@ void OnCommand(android_app* app, int32_t cmd) {
             RequestImmersive();  // the system shows the bars again after dialogs, the notification shade, ...
             break;
         case APP_CMD_LOST_FOCUS:
+            ReleaseAndroidGamepad();
             s.events.push_back({Event::Clear, std::string(), 0, 0});
             s.primaryPointer = -1;
             break;
@@ -442,6 +530,7 @@ void OnCommand(android_app* app, int32_t cmd) {
             if (s.audio) s.audio->SetPaused(false);
             break;
         case APP_CMD_PAUSE:
+            ReleaseAndroidGamepad();
             s.resumed = false;
             s.events.push_back({Event::Clear, std::string(), 0, 0});
             s.primaryPointer = -1;
@@ -478,6 +567,7 @@ public:
         State& s = S();
         s.mouseLocked = input.mouseLocked;
         if (!Poll(true)) return false;
+        if (s.gamepad.connected && !AndroidGamepadPresent(s.gamepad.device)) ReleaseAndroidGamepad();
         for (const Event& e : s.events) {
             switch (e.kind) {
                 case Event::Down:
@@ -490,7 +580,10 @@ public:
                     input.mouseY = e.y;
                     break;
                 case Event::Clear:
+                    gamepad_.Reset(input);
                     input.down.clear();
+                    input.axes.clear();
+                    input.pressedThisFrame.clear();
                     input.touches.clear();
                     break;
                 case Event::Delta:
@@ -519,6 +612,7 @@ public:
             }
         }
         s.events.clear();
+        gamepad_.Apply(input, s.gamepad);
         if (input.mouseLocked) input.mouseX = input.mouseY = 0.5f;  // UI taps hit the crosshair, like the other platforms
         input.viewWidth = Width();
         input.viewHeight = Height();
@@ -560,6 +654,7 @@ public:
 
 private:
     mutable int width_ = 1280, height_ = 720;  // last known size while there is no window
+    GamepadInput gamepad_;
     ANativeWindow* geometryWindow_ = nullptr;
     int geometryW_ = 0, geometryH_ = 0;
 };
@@ -586,6 +681,22 @@ bool WithJni(F body) {
     }
     if (attached) vm->DetachCurrentThread();
     return ok;
+}
+
+bool AndroidGamepadPresent(int device) {
+    bool present = true;
+    bool queried = WithJni([&](JNIEnv* env, jobject) {
+        jclass cls = env->FindClass("android/view/InputDevice");
+        if (!cls) return false;
+        jmethodID getDevice = env->GetStaticMethodID(cls, "getDevice", "(I)Landroid/view/InputDevice;");
+        if (!getDevice) { env->DeleteLocalRef(cls); return false; }
+        jobject value = env->CallStaticObjectMethod(cls, getDevice, device);
+        present = value != nullptr;
+        if (value) env->DeleteLocalRef(value);
+        env->DeleteLocalRef(cls);
+        return true;
+    });
+    return queried ? present : true;  // unavailable JNI must not fabricate a disconnect
 }
 
 }  // namespace

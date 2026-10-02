@@ -22,8 +22,11 @@
 #include "core/Log.h"
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
+#include "platform/GamepadInput.h"
+#include "platform/TouchInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
+#include "render/RenderScene.h"
 #include "render/UI.h"
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
@@ -404,6 +407,104 @@ TEST(ScriptEvalAndSandbox) {
     CHECK(t->position.y == 3.0f && t->position.z == 2.0f);  // partial update keeps x/z
     CHECK(Call(e, "history.undo", "{}")["ok"].asBool());    // eval edits are undoable
     CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.y == 0.5f);
+}
+
+TEST(GamepadDeviceLifecycle) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gamepad_device"), &err));
+    GamepadInput device;
+    Call(e, "input.axis", R"J({"name":"LeftX","value":0.7})J");
+    Call(e, "input.key", R"J({"key":"GamepadB","down":true})J");
+    Call(e, "input.key", R"J({"key":"W","down":true})J");
+    device.Apply(e.Input(), GamepadSnapshot{});
+    CHECK(e.Input().axes["LeftX"] == 0.7f && e.Input().IsDown("GamepadB") && e.Input().IsDown("W"));
+    GamepadSnapshot snapshot;
+    snapshot.connected = true;
+    snapshot.device = 0;
+    snapshot.axes = {0.575f, 1, -1, 0, 0.5f, 1};
+    snapshot.buttons.fill(true);
+    device.Apply(e.Input(), snapshot);
+    for (const char* name : GamepadInput::kButtonNames) CHECK(e.Input().IsDown(name));
+    CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f);
+    e.Input().pressedThisFrame.clear();
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().pressedThisFrame.empty());  // holds are not repeated edges
+    snapshot.device = 1;
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().pressedThisFrame.count("GamepadA") == 1);  // another controller begins a new press
+    snapshot.buttons.fill(false);
+    device.Apply(e.Input(), snapshot);
+    for (const char* name : GamepadInput::kButtonNames) CHECK(!e.Input().IsDown(name));
+    CHECK(e.Input().pressedThisFrame.empty());  // a release cancels an unconsumed edge
+    snapshot.buttons[0] = true;
+    device.Apply(e.Input(), snapshot);
+    device.Reset(e.Input());  // focus loss
+    CHECK(!e.Input().IsDown("GamepadA") && e.Input().pressedThisFrame.empty() && e.Input().IsDown("W"));
+    for (const char* name : InputState::kAxisNames) CHECK(e.Input().Axis(name) == 0);
+    snapshot.axes[0] = 2;
+    snapshot.axes[4] = -1;
+    snapshot.axes[5] = std::nanf("");
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().Axis("LeftX") == 1 && e.Input().Axis("LT") == 0 && e.Input().Axis("RT") == 0);
+    device.Apply(e.Input(), GamepadSnapshot{});  // disconnect
+    CHECK(!e.Input().IsDown("GamepadA") && e.Input().Axis("LeftX") == 0 && e.Input().IsDown("W"));
+    Call(e, "input.axis", R"J({"name":"RightX","value":0.9})J");
+    device.Apply(e.Input(), GamepadSnapshot{});
+    CHECK(e.Input().axes["RightX"] == 0.9f);  // inactive polling still preserves tool input
+}
+
+TEST(GamepadAxesAndButtons) {
+    auto run = [] {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TempProject("gamepad_axes"), &err));
+        Call(e, "scene.new", R"J({"empty":true})J");
+        Call(e, "script.write", R"J({"path":"scripts/pad.lua","source":"local Pad={}\nfunction Pad:onUpdate(dt)\n local p=self:position()\n self:setPosition(p.x+input.axis('LeftX')*6*dt,p.y,0)\n self.presses=(self.presses or 0)+(input.pressed('GamepadA') and 1 or 0)\nend\nreturn Pad\n"})J");
+        Call(e, "entity.create", R"J({"name":"Actor","components":{"Transform":{},"Script":{"path":"scripts/pad.lua"}}})J");
+        Json initial = Call(e, "sim.state", "{}")["result"];
+        CHECK(initial["axes"].size() == 6 && initial["rawAxes"].size() == 6);
+        CHECK(initial["axes"]["LT"].asFloat() == 0);
+        size_t undo = e.UndoDepth();
+        Json state = Call(e, "input.axis", R"J({"name":"LeftX","value":0.15})J")["result"];
+        CHECK(state["axes"]["LeftX"].asFloat() == 0 && state["rawAxes"]["LeftX"].asFloat() == 0.15f);
+        state = Call(e, "input.axis", R"J({"name":"LeftX","value":0.575})J")["result"];
+        CHECK(std::fabs(state["axes"]["LeftX"].asFloat() - 0.5f) < 1e-6f);
+        Call(e, "input.axis", R"J({"name":"LeftY","value":-1})J");
+        Call(e, "input.axis", R"J({"name":"RightX","value":1})J");
+        Call(e, "input.axis", R"J({"name":"RightY","value":-0.575})J");
+        Call(e, "input.axis", R"J({"name":"LT","value":0.15})J");
+        Call(e, "input.axis", R"J({"name":"RT","value":1})J");
+        CHECK(e.Input().Axis("LeftY") == -1 && e.Input().Axis("RightX") == 1 && e.Input().Axis("RT") == 1);
+        CHECK(std::fabs(e.Input().Axis("RightY") + 0.5f) < 1e-6f && e.Input().Axis("LT") == 0);
+        for (const char* invalid : {R"J({"name":"Unknown","value":0})J", R"J({"name":"LeftX","value":1.01})J",
+                                    R"J({"name":"LeftX","value":-1.01})J", R"J({"name":"LT","value":-0.01})J",
+                                    R"J({"name":"RT","value":1e100})J"}) {
+            CHECK(!Call(e, "input.axis", invalid)["ok"].asBool());
+        }
+        CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f);  // invalid calls preserve the previous value
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        CHECK(e.UndoDepth() == undo);
+        Call(e, "sim.step", R"J({"frames":60})J");
+        EntityId actor = e.GetScene().FindByName("Actor");
+        CHECK(std::fabs(e.GetScene().Get<Transform>(actor)->position.x - 3.0f) < 1e-4f);
+        Json eval = Call(e, "script.eval", R"J({"entity":"Actor","code":"return {self.presses,input.down('GamepadA'),input.axis('RT'),pcall(input.axis,'Unknown')}"})J")["result"]["value"];
+        CHECK(eval[0].asInt() == 1 && eval[1].asBool() && eval[2].asFloat() == 1 && !eval[3].asBool());
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(Call(e, "script.eval", R"J({"entity":"Actor","code":"return self.presses"})J")["result"]["value"].asInt() == 1);
+        Call(e, "input.key", R"J({"key":"GamepadA","down":false})J");
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(Call(e, "script.eval", R"J({"entity":"Actor","code":"return self.presses"})J")["result"]["value"].asInt() == 2);
+        CHECK(e.Scripts().Errors().empty());
+        std::string result = e.GetScene().ToJson().dump();
+        Call(e, "sim.stop", "{}");
+        CHECK(e.Input().axes.empty() && !e.Input().IsDown("GamepadA") && e.Input().Axis("LeftX") == 0);
+        return result;
+    };
+    std::string first = run();
+    CHECK(first == run());
 }
 
 TEST(MouseLookInput) {
@@ -820,6 +921,52 @@ TEST(UIRenderingAndClicks) {
     Call(e, "input.click", R"J({"x": 100, "y": 650, "width": 1280, "height": 720})J");
     Call(e, "sim.step", R"J({"frames": 1})J");
     CHECK(Call(e, "script.eval", R"J({"code": "clicks"})J")["result"]["value"].asInt() == 1);
+}
+
+TEST(WebTouchLifecycle) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("web_touch"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"LeftBtn","components":{"UIButton":{"anchor":"bottom-left","x":10,"y":-10,"width":100,"height":100,"key":"Left"}}})J");
+    Call(e, "entity.create", R"J({"name":"JumpBtn","components":{"UIButton":{"anchor":"bottom-right","x":-10,"y":-10,"width":100,"height":100,"key":"Space"}}})J");
+    auto eval = [&](const char* code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    TouchInput touch;
+    using Kind = TouchInput::Kind;
+    touch.Apply(e.Input(), Kind::Begin, 54, 60.0f / 1280, 660.0f / 720);
+    touch.Apply(e.Input(), Kind::Begin, 7, 1220.0f / 1280, 660.0f / 720);
+    CHECK(e.Input().touches.size() == 2 && e.Input().touches[0].id == 54 && e.Input().touches[1].id == 7);
+    CHECK(e.Input().IsDown("MouseLeft") && e.Input().mouseX < 0.1f);
+    CHECK(eval("local t=input.touches(); return t[1].began and t[2].began").asBool());
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.Input().IsDown("Left") && e.Input().IsDown("Space"));
+    CHECK(!e.Input().touches[0].began && !e.Input().touches[1].began);
+    touch.Apply(e.Input(), Kind::Move, 7, 0.5f, 0.5f);
+    touch.Apply(e.Input(), Kind::Move, 99, 0.2f, 0.2f);  // unknown moves never invent fingers
+    CHECK(e.Input().touches.size() == 2 && e.Input().mouseX < 0.1f);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.Input().IsDown("Left") && !e.Input().IsDown("Space"));
+    touch.Apply(e.Input(), Kind::End, 7, 0.5f, 0.5f);  // secondary end must not release the mouse
+    CHECK(e.Input().IsDown("MouseLeft") && e.Input().touches.size() == 1);
+    touch.Apply(e.Input(), Kind::Begin, 7, 0.95f, 0.92f);
+    touch.Apply(e.Input(), Kind::Begin, 7, 0.95f, 0.92f);  // duplicate begin retains order
+    CHECK(e.Input().touches.size() == 2 && e.Input().touches[1].began);
+    touch.Apply(e.Input(), Kind::End, 54, 0.05f, 0.92f);  // primary end/cancel leaves the other finger
+    CHECK(!e.Input().IsDown("MouseLeft") && e.Input().touches.size() == 1 && e.Input().touches[0].id == 7);
+    touch.Apply(e.Input(), Kind::Move, 7, 0.9f, 0.9f);
+    CHECK(!e.Input().IsDown("MouseLeft"));  // no synthetic second click from a held finger
+    touch.Apply(e.Input(), Kind::End, 7, 0.9f, 0.9f);
+    touch.Apply(e.Input(), Kind::Begin, 54, 0.4f, 0.3f);  // IDs may be reused in another gesture
+    CHECK(e.Input().IsDown("MouseLeft") && e.Input().mouseX == 0.4f);
+    touch.Reset(e.Input());
+    CHECK(e.Input().touches.empty() && !e.Input().IsDown("MouseLeft") && !e.Input().pressedThisFrame.count("MouseLeft"));
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(!e.Input().IsDown("Left") && !e.Input().IsDown("Space"));
+    CHECK(e.Scripts().Errors().empty());
 }
 
 TEST(MultiTouchButtonKeys) {
@@ -1243,6 +1390,57 @@ TEST(DungeonSamplePlays) {
     CHECK(a == b);
 }
 
+TEST(SampleGamepadControls) {
+    auto run = [](const char* sample) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+        Call(e, "sim.step", R"J({"frames":60})J");
+        float initialX = e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x;
+        auto velocity = [&] {
+            EntityId player = e.GetScene().FindByName("Player");
+            if (auto* body = e.GetScene().Get<CharacterBody2D>(player)) return body->velocity;
+            return e.GetScene().Get<CharacterBody>(player)->velocity;
+        };
+        const bool platformer = std::string(sample) == "Platformer";
+        const float speed = platformer ? 7.0f : 5.0f;
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0.575})J");
+        // Android's legacy arrow alias must not turn a partial stick into full speed.
+        Call(e, "input.key", R"J({"key":"Right","down":true})J");
+        Call(e, "sim.step", R"J({"frames":8})J");
+        CHECK(std::fabs(velocity().x - speed * 0.5f) < 0.02f);
+        Call(e, "input.key", R"J({"key":"Right","down":false})J");
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0.1})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(std::fabs(velocity().x) < 0.02f);
+        Call(e, "input.key", R"J({"key":"GamepadDPadRight","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(std::fabs(velocity().x - speed) < 0.02f);
+        Call(e, "input.key", R"J({"key":"GamepadDPadRight","down":false})J");
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        if (platformer) CHECK(velocity().y > 10);  // gamepad jump uses the real character mover
+        else CHECK(e.GetScene().FindByName("Bolt") != kNullEntity);
+        Call(e, "sim.step", R"J({"frames":3})J");
+        if (platformer) CHECK(velocity().y > 8);  // held A preserves a high jump
+        Call(e, "input.key", R"J({"key":"GamepadA","down":false})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        if (platformer) CHECK(velocity().y < 8);  // releasing A cuts the jump
+        CHECK(e.Scripts().Errors().empty());
+        std::string state = e.GetScene().ToJson().dump();
+        Call(e, "input.key", R"J({"key":"GamepadStart","down":true})J");
+        Call(e, "sim.step", R"J({"frames":2})J");
+        CHECK(e.GetScene().FindByName("Player") != kNullEntity);
+        CHECK(std::fabs(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x - initialX) < 0.01f);
+        Call(e, "input.key", R"J({"key":"GamepadStart","down":false})J");
+        CHECK(e.Scripts().Errors().empty());
+        return state;
+    };
+    for (const char* sample : {"Platformer", "Dungeon"}) CHECK(run(sample) == run(sample));
+}
+
 // ----- assets & rendering ---------------------------------------------------------
 
 size_t CountId(const RenderTarget& rt, EntityId id) {
@@ -1255,6 +1453,68 @@ double MeanLuma(const RenderTarget& rt) {
     double sum = 0;
     for (uint32_t c : rt.color) sum += (c & 0xFF) + ((c >> 8) & 0xFF) + ((c >> 16) & 0xFF);
     return sum / (3.0 * static_cast<double>(rt.color.size()));
+}
+
+TEST(SampleParticleEffects) {
+    for (const char* sample : {"Platformer", "Dungeon"}) {
+        auto run = [&](bool writeImage) {
+            Engine e;
+            std::string err;
+            CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+            Call(e, "sim.step", R"J({"frames":2})J");
+            Json eval = Call(e, "script.eval", R"J({"code":"return scene.withTag('coin')[1]"})J");
+            EntityId coin = static_cast<EntityId>(eval["result"]["value"].asInt());
+            CHECK(coin != kNullEntity);
+            Vec3 position = e.GetScene().Get<Transform>(coin)->position;
+            Json teleport = Json::parse(R"J({"id":"Player","type":"Transform","values":{}})J");
+            teleport["values"]["position"] = Json(Json::Array{position.x, position.y, 0.1});
+            CHECK(e.Call("component.set", teleport)["ok"].asBool());
+            Call(e, "sim.step", R"J({"frames":2})J");
+            CHECK(!e.GetScene().Exists(coin));
+            CHECK(!e.GetScene().Pool<ParticleEmitter>().empty());
+            std::vector<EntityId> effects;
+            for (const auto& kv : e.GetScene().Pool<ParticleEmitter>()) {
+                effects.push_back(kv.first);
+                CHECK(kv.second.space == "world" && kv.second.dimensions == 2 && !kv.second.loop);
+                CHECK(kv.second.emitted == 12 && kv.second.particles.size() == 12);
+            }
+            Call(e, "sim.step", R"J({"frames":6})J");
+            // Focus the active orthographic camera without waiting for its smoothing.
+            for (const auto& kv : e.GetScene().Pool<CameraFollow>()) {
+                Json cameraArgs = Json::parse(R"J({"type":"CameraFollow","values":{"smoothing":0}})J");
+                cameraArgs["id"] = kv.first;
+                CHECK(e.Call("component.set", cameraArgs)["ok"].asBool());
+            }
+            Call(e, "sim.step", R"J({"frames":1})J");
+            RenderTarget shot;
+            shot.Resize(640,360);
+            e.RenderGameView(shot);
+            size_t visible = 0;
+            for (EntityId effect : effects) visible += CountId(shot, effect);
+            CHECK(visible > 10);
+            if (writeImage) CHECK(WritePng(std::string("build/particle-") + sample + ".png", shot.ToImage(), true));
+            std::string summary = e.GetScene().ToJson().dump() + std::to_string(shot.Hash());
+            std::string hit = std::string(sample) == "Dungeon" ?
+                "local id=scene.withTag('enemy')[1]; scene.send(id,'hit',{x=1,y=0}); scene.send(scene.find('Player'),'hurt',id)" :
+                "scene.send(scene.withTag('enemy')[1],'squash'); scene.send(scene.find('Player'),'die')";
+            Json hitArgs = Json::MakeObject();
+            hitArgs["code"] = hit;
+            CHECK(e.Call("script.eval", hitArgs)["ok"].asBool());
+            int hitEffects = 0;
+            for (const auto& kv : e.GetScene().Pool<ParticleEmitter>()) {
+                if (kv.second.emitted == 16) { ++hitEffects; effects.push_back(kv.first); }
+            }
+            CHECK(hitEffects == 2);
+            Call(e, "sim.step", R"J({"frames":45})J");
+            for (EntityId effect : effects) CHECK(!e.GetScene().Exists(effect));
+            CHECK(e.Scripts().Errors().empty());
+            Json checked = Call(e, "script.check", R"J({"path":"scripts/effects.lua"})J");
+            CHECK(checked["ok"].asBool() && checked["result"]["errors"].asInt() == 0 && checked["result"]["warnings"].asInt() == 0);
+            return summary;
+        };
+        std::string first = run(true);
+        CHECK(first == run(false));
+    }
 }
 
 RenderTarget RenderLook(Engine& e, Vec3 eye, Vec3 target, int w = 160, int h = 90) {
@@ -2119,6 +2379,292 @@ TEST(UIGpuMatchesSoftware) {
     CHECK(mean < 0.5 && outliers < 50);
 }
 
+TEST(CameraPostProcessing) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("postprocess"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[1,1,1]}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,0,0],"opacity":1}}})J");
+    RenderView view;
+    CHECK(MakeSceneView(e.GetScene(), 128.0f / 72, view));
+    RenderTarget original, neutral, effect;
+    for (RenderTarget* target : {&original, &neutral, &effect}) target->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, original);
+    Call(e, "component.add", R"J({"id":"Camera","type":"PostProcess"})J");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, neutral);
+    CHECK(original.Hash() == neutral.Hash());  // merely adding default settings never changes an existing frame
+    Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"vignette":0.8,"vignetteRadius":0.3,"vignetteSoftness":0.5}})J");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, effect);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, neutral);
+    SetMaxRenderThreads(16);
+    CHECK(effect.Hash() == neutral.Hash() && effect.Hash() != original.Hash());
+    CHECK((effect.color.back() & 255) < 60);  // edges darken, the center and overlaid UI retain their colors
+    CHECK(effect.color[36 * 128 + 64] == original.color[36 * 128 + 64]);
+    CHECK(effect.color[10 * 128 + 10] == original.color[10 * 128 + 10]);  // opaque UI retains its own color
+    CHECK((effect.color[10 * 128 + 10] & 255) == 255);
+    CHECK(effect.ids == original.ids && effect.depth == original.depth);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    CHECK(restored.Get<PostProcess>(restored.FindByName("Camera"))->vignette == 0.8f);
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, neutral);
+    CHECK(neutral.Hash() == original.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    if (e.EnableGpu(nullptr, &err)) {
+        RenderTarget gpu;
+        gpu.Resize(128, 72);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double error = 0;
+        for (size_t i = 0; i < effect.color.size(); ++i) for (int shift : {0, 8, 16}) {
+            int a = static_cast<int>((effect.color[i] >> shift) & 255);
+            int b = static_cast<int>((gpu.color[i] >> shift) & 255);
+            error += std::abs(a - b);
+        }
+        double mean = error / static_cast<double>(effect.color.size() * 3);
+        std::printf("  vignette software/GPU mean difference %.4f\n", mean);
+        CHECK(mean < 1);
+    } else std::printf("  SKIP postprocess GPU comparison (%s)\n", err.c_str());
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"position":[-4,3,0]},"MeshRenderer":{"unlit":true,"color":[0.2,0.4,0.6]}}})J");
+    view.highlight = e.GetScene().FindByName("Cube");
+    view.postProcess.vignette = 0;
+    e.Renderer().Render(e.GetScene(), view, original);
+    view.postProcess.vignette = 0.8f;
+    e.Renderer().Render(e.GetScene(), view, effect);
+    int outlinePixels = 0;
+    for (size_t i = 0; i < original.color.size(); ++i) {
+        uint32_t c = original.color[i];
+        if ((c & 255) == 255 && ((c >> 8) & 255) == 158 && ((c >> 16) & 255) == 26) {
+            ++outlinePixels;
+            CHECK(effect.color[i] == c);  // the vignette never darkens editor selection feedback
+        }
+    }
+    CHECK(outlinePixels > 0);
+    // Reusing a view for another camera must not carry over the first camera's effects.
+    Call(e, "component.set", R"J({"id":"Camera","type":"Camera","values":{"active":false}})J");
+    Call(e, "entity.create", R"J({"name":"OtherCamera","components":{"Camera":{}}})J");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    CHECK(view.postProcess.vignette == 0);
+    CHECK(MakeLookAtView(Vec3(0,0,10), Vec3(0,0,0), 60, 1).postProcess.vignette == 0);
+}
+
+TEST(HdrCameraToneMapping) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("hdr_postprocess"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"bright.mat.json","values":{"baseColor":[0,0,0],"unlit":true,"emissive":[1,0.5,0.25],"emissiveIntensity":8}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[0,0,0]},"PostProcess":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Bright","components":{"Transform":{"scale":[4,4,4]},"MeshRenderer":{"material":"bright.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,0,0],"opacity":1}}})J");
+    RenderView view;
+    RenderTarget legacy, exposed, mapped, again;
+    for (RenderTarget* t : {&legacy, &exposed, &mapped, &again}) t->Resize(128, 72);
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, legacy);
+    const size_t center = 36 * 128 + 64;
+    CHECK((legacy.color[center] & 0xFFFFFF) == 0xFFFFFF);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"exposure":0.25}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, exposed);
+    CHECK((exposed.color[center] & 255) == 255);
+    CHECK(((exposed.color[center] >> 16) & 255) == 128);  // emissive 2 * .25, not clipped 1 * .25
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"toneMapping":"reinhard"}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, mapped);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(mapped.Hash() == again.Hash());
+    CHECK((mapped.color[center] & 255) == 170);
+    CHECK(((mapped.color[center] >> 8) & 255) == 128);
+    CHECK(((mapped.color[center] >> 16) & 255) == 85);
+    CHECK(mapped.ids == legacy.ids && mapped.depth == legacy.depth);
+    CHECK(mapped.color[10 * 128 + 10] == legacy.color[10 * 128 + 10]);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    const PostProcess* saved = restored.Get<PostProcess>(restored.FindByName("Camera"));
+    CHECK(saved && saved->exposure == 0.25f && saved->toneMapping == "reinhard");
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == exposed.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    if (e.EnableGpu(nullptr, &err)) {
+        for (const auto& settings : {std::pair<float, std::string>{0.25f, "none"}, {0.25f, "reinhard"}, {1.0f, "none"}}) {
+            view.postProcess.exposure = settings.first;
+            view.postProcess.toneMapping = settings.second;
+            e.Renderer().Render(e.GetScene(), view, again);
+            e.Gpu()->Render(e.GetScene(), view, mapped);
+            for (int shift : {0, 8, 16}) {
+                CHECK(std::abs(static_cast<int>((mapped.color[center] >> shift) & 255) -
+                               static_cast<int>((again.color[center] >> shift) & 255)) <= 1);
+            }
+            CHECK(mapped.color[10 * 128 + 10] == legacy.color[10 * 128 + 10]);
+        }
+    } else std::printf("  SKIP HDR GPU comparison (%s)\n", err.c_str());
+    // Alpha blending must preserve radiance too, before tone mapping.
+    CHECK(Call(e, "material.create", R"J({"path":"blend.mat.json","values":{"baseColor":[0,0,0],"unlit":true,"emissive":[1,0.5,0.25],"emissiveIntensity":8,"opacity":0.5,"alphaMode":"blend"}})J")["ok"].asBool());
+    Call(e, "component.set", R"J({"id":"Bright","type":"MeshRenderer","values":{"material":"blend.mat.json"}})J");
+    view.postProcess.exposure = 0.25f;
+    view.postProcess.toneMapping = "reinhard";
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK((again.color[center] & 255) == 128);
+    CHECK(((again.color[center] >> 8) & 255) == 85);
+    CHECK(((again.color[center] >> 16) & 255) == 51);
+    if (e.Gpu()) {
+        e.Gpu()->Render(e.GetScene(), view, mapped);
+        for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((mapped.color[center] >> shift) & 255) -
+                                                  static_cast<int>((again.color[center] >> shift) & 255)) <= 1);
+    }
+}
+
+TEST(ParticleBillboardDrawItems) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("particle_items"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[1,2,3],"scale":[2,3,4]},"ParticleEmitter":{"rate":0,"speed":0,"gravity":[0,0,0],"lifetime":2,"startSize":2,"endSize":0,"startColor":[1,0,0],"endColor":[0,0,1],"startOpacity":1,"endOpacity":0,"columns":2,"frame":1}}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":2})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    EntityId id = e.GetScene().FindByName("Effect");
+    RenderView view = MakeLookAtView(Vec3(7,5,8), Vec3(1,2,3), 45, 1);
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(items.size() == 2);
+    const RenderItem& item = items.front();
+    CHECK(item.id == id && item.blend && item.unlit && !item.castShadows && item.pointSample);
+    CHECK(Length(item.world.TransformPoint(Vec3()) - Vec3(1,2,3)) < 1e-5f);
+    CHECK(std::fabs(Length(item.world.TransformDir(Vec3(1,0,0))) - 1) < 1e-4f);
+    CHECK(std::fabs(item.tint.r - 0.5f) < 1e-4f && std::fabs(item.tint.b - 0.5f) < 1e-4f);
+    CHECK(std::fabs(item.opacity - 0.5f) < 1e-4f);
+    CHECK(item.uvOffset[0] == 0.5f && item.uvScale[0] == 0.5f);
+    Vec3 horizontal = view.view.TransformDir(item.world.TransformDir(Vec3(1,0,0)));
+    Vec3 vertical = view.view.TransformDir(item.world.TransformDir(Vec3(0,1,0)));
+    CHECK(std::fabs(horizontal.y) < 1e-5f && std::fabs(horizontal.z) < 1e-5f && horizontal.x > 0);
+    CHECK(std::fabs(vertical.x) < 1e-5f && std::fabs(vertical.z) < 1e-5f && vertical.y > 0);
+    auto draws = BuildDrawList(items, view.eye);
+    CHECK(draws.size() == 2 && draws[0].item == 0 && draws[1].item == 1);  // equal distance: birth order
+    items[1].world = Mat4::Translation(Vec3(-10,2,3));
+    draws = BuildDrawList(items, view.eye);
+    CHECK(draws[0].item == 1 && draws[1].item == 0);
+    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[5,2,3]}})J");
+    items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(Length(items[0].world.TransformPoint(Vec3()) - Vec3(5,2,3)) < 1e-5f);
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"space":"world"}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[9,2,3]}})J");
+    items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(Length(items[0].world.TransformPoint(Vec3()) - Vec3(5,2,3)) < 1e-5f);
+    Call(e, "sim.step", R"J({"frames":121})J");
+    CHECK(GatherRenderItems(e.GetScene(), &e.Assets(), view.view).empty());
+}
+
+TEST(ParticleRenderers) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("particle_renderers"), &err));
+    Image sheet;
+    sheet.width = 8;
+    sheet.height = 4;
+    sheet.rgba.resize(8 * 4 * 4);
+    for (int y = 0; y < 4; ++y) for (int x = 0; x < 8; ++x) {
+        size_t offset = static_cast<size_t>((y * 8 + x) * 4);
+        sheet.rgba[offset] = x < 4 ? 255 : 0;
+        sheet.rgba[offset + 1] = x < 4 ? 0 : 255;
+        sheet.rgba[offset + 2] = 0;
+        sheet.rgba[offset + 3] = 192;
+    }
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "sheet.png"), sheet, true));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{},"ParticleEmitter":{"rate":0,"lifetime":2,"speed":2,"spread":160,"gravity":[0,0,0],"startSize":0.4,"endSize":0.2,"startColor":[1,1,1],"endColor":[0.5,1,0.5],"startOpacity":0.8,"endOpacity":0.4,"seed":23,"texture":"sheet.png","columns":2,"frame":1}}})J");
+    EntityId id = e.GetScene().FindByName("Effect");
+    bool hasGpu = e.EnableGpu(nullptr, &err);
+    if (!hasGpu) std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+    RenderView view = MakeLookAtView(Vec3(3,2,5), Vec3(), 45, 320.0f / 180);
+    view.clearColor = Color(0,0,0);
+    view.drawUI = false;
+    RenderTarget sw, again, gpu;
+    sw.Resize(320,180);
+    again.Resize(320,180);
+    gpu.Resize(320,180);
+    for (int dimensions : {2, 3}) {
+        Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
+        args["values"]["dimensions"] = dimensions;
+        CHECK(e.Call("component.set", args)["ok"].asBool());
+        Call(e, "particles.clear", R"J({"id":"Effect"})J");
+        Call(e, "particles.burst", R"J({"id":"Effect","count":24})J");
+        Call(e, "sim.step", R"J({"frames":30})J");
+        SetMaxRenderThreads(1);
+        e.Renderer().Render(e.GetScene(), view, sw);
+        SetMaxRenderThreads(16);
+        e.Renderer().Render(e.GetScene(), view, again);
+        CHECK(sw.Hash() == again.Hash() && CountId(sw, id) > 300);
+        CHECK(sw.Hash() == (dimensions == 2 ? 0xeeb1529ca41029c9ull : 0x4ea73d9e1b71d479ull));
+        // The second sheet frame is green with alpha: no red-frame bleed or opaque quads.
+        size_t greenPixels = 0;
+        for (uint32_t color : sw.color) {
+            CHECK((color & 0xFF) == 0 && ((color >> 16) & 0xFF) == 0);
+            greenPixels += ((color >> 8) & 0xFF) > 10;
+        }
+        CHECK(greenPixels > 300);
+        CHECK(WritePng("build/particles-software.png", sw.ToImage(), true));
+        if (hasGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double total = 0;
+            int outliers = 0;
+            double interiorTotal = 0;
+            size_t interiorPixels = 0;
+            for (size_t i = 0; i < sw.color.size(); ++i) {
+                int worst = 0;
+                for (int channel = 0; channel < 3; ++channel) {
+                    int difference = std::abs(static_cast<int>((sw.color[i] >> (8 * channel)) & 255) -
+                                              static_cast<int>((gpu.color[i] >> (8 * channel)) & 255));
+                    total += difference;
+                    worst = std::max(worst, difference);
+                }
+                outliers += worst > 32;
+                int x = static_cast<int>(i % 320), y = static_cast<int>(i / 320);
+                if (x > 0 && x < 319 && y > 0 && y < 179 && sw.color[i] != 0xFF000000u &&
+                    sw.color[i] == sw.color[i - 1] && sw.color[i] == sw.color[i + 1] &&
+                    sw.color[i] == sw.color[i - 320] && sw.color[i] == sw.color[i + 320]) {
+                    interiorTotal += std::abs(static_cast<int>((sw.color[i] >> 8) & 255) -
+                                              static_cast<int>((gpu.color[i] >> 8) & 255));
+                    ++interiorPixels;
+                }
+            }
+            double mean = total / (static_cast<double>(sw.color.size()) * 3);
+            std::printf("  %dD particles: mean %.3f, outliers %d, software hash %016llx\n", dimensions,
+                        mean, outliers, static_cast<unsigned long long>(sw.Hash()));
+            // MSAA differs at many overlapping quad edges; fully covered interiors must agree.
+            CHECK(mean < 1.0 && outliers < static_cast<int>(sw.color.size()) / 75);
+            CHECK(interiorPixels > 200 && interiorTotal / static_cast<double>(interiorPixels) < 2.0);
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == gpu.Hash());
+            CHECK(WritePng("build/particles-gpu.png", gpu.ToImage(), true));
+        }
+        uint64_t hash = sw.Hash();
+        Call(e, "particles.clear", R"J({"id":"Effect"})J");
+        Call(e, "particles.burst", R"J({"id":"Effect","count":24})J");
+        Call(e, "sim.step", R"J({"frames":30})J");
+        e.Renderer().Render(e.GetScene(), view, again);
+        CHECK(again.Hash() == hash);
+    }
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"texture":"","startColor":[1,0,0],"endColor":[1,0,0],"speed":0,"startSize":1,"startOpacity":1}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK((again.color[90 * 320 + 160] & 255) > 250 && ((again.color[90 * 320 + 160] >> 8) & 255) == 0);
+}
+
 TEST(GpuRendererMatchesSoftware) {
     Engine e;
     std::string err;
@@ -2661,9 +3207,34 @@ TEST(NativeEditorHeadless) {
     frames(6, CtrlChord(WindowKey::P));
     CHECK(e.InPlaySession());
     CHECK(ed.GameViewFocused());
+    ed.WindowInput().SetAxis("LeftX", 0.575f);
+    ed.WindowInput().down.insert("GamepadA");
+    frames(1);
+    CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f && e.Input().IsDown("GamepadA"));
+    ed.WindowInput().SetAxis("LeftX", 0);
+    ed.WindowInput().down.erase("GamepadA");
+    frames(1);
+    CHECK(e.Input().Axis("LeftX") == 0 && !e.Input().IsDown("GamepadA"));
     frames(30, {KeyEvent(WindowKey::W, true)});
     frames(1, {KeyEvent(WindowKey::W, false)});
     CHECK(s.Exists(player) && s.Get<Transform>(player)->position.z < start.z - 0.5f);
+
+    ed.WindowInput().SetAxis("RT", 1);
+    ed.WindowInput().down.insert("GamepadB");
+    frames(1);
+    CHECK(e.Input().Axis("RT") == 1 && e.Input().IsDown("GamepadB"));
+    WindowEvent focus;
+    focus.type = WindowEvent::Type::Focus;
+    focus.down = false;
+    frames(1, {focus});
+    CHECK(!ed.GameViewFocused() && e.Input().Axis("RT") == 0 && !e.Input().IsDown("GamepadB"));
+    // A stale window snapshot cannot re-press buttons while the Game view is unfocused.
+    frames(1);
+    CHECK(!e.Input().IsDown("GamepadB"));
+    ed.WindowInput().axes.clear();
+    ed.WindowInput().down.clear();
+    focus.down = true;
+    frames(2, {focus});
 
     // Ctrl+P again stops and restores the edit-time scene.
     frames(6, CtrlChord(WindowKey::P));

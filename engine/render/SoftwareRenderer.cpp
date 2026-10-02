@@ -7,6 +7,7 @@
 
 #include "assets/Assets.h"
 #include "render/Mesh.h"
+#include "render/PostProcess.h"
 #include "render/RenderScene.h"
 #include "render/Renderer.h"
 #include "render/UI.h"
@@ -184,8 +185,8 @@ struct Screen {
 // triangles in the same order, so the image is identical to a single thread.
 class Rasterizer {
 public:
-    Rasterizer(int width, int height, float* depth, uint32_t* color, EntityId* ids, int yMin = 0, int yMax = -1)
-        : w_(width), h_(height), yMin_(yMin), yMax_(yMax < 0 ? height : yMax), depth_(depth), color_(color), ids_(ids) {}
+    Rasterizer(int width, int height, float* depth, uint32_t* color, EntityId* ids, int yMin = 0, int yMax = -1, Color* hdr = nullptr)
+        : w_(width), h_(height), yMin_(yMin), yMax_(yMax < 0 ? height : yMax), depth_(depth), color_(color), ids_(ids), hdr_(hdr) {}
 
     // Clips against the near plane, then rasterizes. `lighting` null = depth only.
     int Draw(const Vtx in[3], const RasterMaterial& mat, const Lighting* lighting, Cull cull) {
@@ -221,7 +222,10 @@ public:
             if (x < 0 || y < yMin_ || x >= w_ || y >= yMax_) continue;
             float z = s0.z + (s1.z - s0.z) * t;
             size_t idx = static_cast<size_t>(y) * static_cast<size_t>(w_) + static_cast<size_t>(x);
-            if (z <= depth_[idx] + 1e-4f) color_[idx] = Blend(color_[idx], color, alpha);
+            if (z <= depth_[idx] + 1e-4f) {
+                if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(color) * alpha);
+                else color_[idx] = Blend(color_[idx], color, alpha);
+            }
         }
     }
 
@@ -332,10 +336,12 @@ private:
                 out = out + em;
                 if (mat.blend) {
                     alpha = Clamp(alpha, 0.0f, 1.0f);
-                    color_[idx] = Blend(color_[idx], out, alpha);
+                    if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(out) * alpha);
+                    else color_[idx] = Blend(color_[idx], out, alpha);
                     if (alpha >= 0.5f) ids_[idx] = mat.id;
                 } else {
-                    color_[idx] = Pack(out);
+                    if (hdr_) hdr_[idx] = ClampHdr(out);
+                    else color_[idx] = Pack(out);
                     ids_[idx] = mat.id;
                 }
             }
@@ -347,6 +353,7 @@ private:
     float* depth_;
     uint32_t* color_;
     EntityId* ids_;
+    Color* hdr_;  // optional scene buffer; never used for depth-only shadow draws
 };
 
 int g_maxRenderThreads = 16;
@@ -424,11 +431,14 @@ void SetMaxRenderThreads(int threads) { g_maxRenderThreads = threads; }
 RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view, RenderTarget& target) {
     auto start = std::chrono::steady_clock::now();
     RenderStats stats;
+    const PostProcess post = NormalizePostProcess(view.postProcess);
+    std::vector<Color> hdr;
+    if (UsesHdr(post)) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
     std::fill(target.color.begin(), target.color.end(), Pack(view.clearColor));
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
-    std::vector<RenderItem> items = GatherRenderItems(scene, assets_);
+    std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view);
     RenderLights gathered = GatherRenderLights(scene);
     Lighting lighting;
     lighting.ambient = gathered.ambient;
@@ -500,7 +510,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     }
     int bandTriangles = 0;
     ParallelBands(target.height, [&](int band, int y0, int y1) {
-      Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), y0, y1);
+      Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), y0, y1,
+                        hdr.empty() ? nullptr : hdr.data());
       int drawn = 0;
       for (const DrawCall& dc : draws) {
         const size_t i = dc.item;
@@ -540,7 +551,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     stats.drawnEntities = static_cast<int>(items.size());
 
     // ----- Overlays
-    Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data());
+    Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), 0, -1,
+                      hdr.empty() ? nullptr : hdr.data());
     auto line = [&](const Vec3& a, const Vec3& b, const Color& c, float alpha) {
         raster.Line(viewProj * Vec4(a, 1.0f), viewProj * Vec4(b, 1.0f), c, alpha);
     };
@@ -557,6 +569,20 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     }
     for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
 
+    if (!hdr.empty() || post.vignette > 0) {
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x);
+                uint32_t c = target.color[pixel];
+                float factor = VignetteFactor(post, (static_cast<float>(x) + 0.5f) / static_cast<float>(target.width),
+                                                   (static_cast<float>(y) + 0.5f) / static_cast<float>(target.height));
+                Color display = hdr.empty() ? Color(static_cast<float>(c & 255) / 255,
+                                                     static_cast<float>((c >> 8) & 255) / 255,
+                                                     static_cast<float>((c >> 16) & 255) / 255) : ToneMap(hdr[pixel], post);
+                target.color[pixel] = Pack(display * factor);
+            }
+        });
+    }
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);
     if (view.drawUI) DrawUI(scene, target, assets_);
 
@@ -578,6 +604,8 @@ bool MakeSceneView(const Scene& scene, float aspect, RenderView& out) {
         out.eye = eye;
         out.clearColor = cam.clearColor;
         out.cameraEntity = kv.first;
+        const PostProcess* post = scene.Get<PostProcess>(kv.first);
+        out.postProcess = post ? *post : PostProcess{};
         return true;
     }
     out = MakeLookAtView(Vec3(6, 5, 8), Vec3(0, 0, 0), 60.0f, aspect);

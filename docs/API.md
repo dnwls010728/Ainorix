@@ -266,9 +266,18 @@ Advance the simulation by N fixed 1/60 s frames (deterministic).
 
 ## input
 
+### `input.axis`
+
+Inject a raw gamepad axis. Reads use a 0.15 scalar dead zone, rescaled to full range.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `name` | string | yes | Logical gamepad axis; positive X right, positive Y up, LT/RT nonnegative. |
+| `value` | number | yes | Raw stick [-1,1] or trigger [0,1] value. |
+
 ### `input.key`
 
-Press or release a key ("W", "A", "S", "D", "Space", "Left", ...).
+Press or release a key ("W", "A", "Space", "Left", ...) or logical Gamepad button.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -803,6 +812,18 @@ Camera looking down its local -Z axis. The first active camera renders the game 
 | `farPlane` | float | `500` | Far clip distance in meters. |
 | `clearColor` | color | `[0.119999997,0.140000001,0.180000007]` | Background color. |
 | `active` | bool | `true` | Only the first active camera (lowest entity id) is used. |
+
+### PostProcess
+
+Optional screen effects on the active Camera. Defaults preserve existing frames; UI and selection outlines are unaffected.
+
+| field | type | default | description |
+|---|---|---|---|
+| `exposure` | float | `1` | Scene brightness multiplier before tone mapping. 1 preserves brightness. |
+| `toneMapping` | string | `"none"` | none (disabled) or reinhard (compress HDR channels as c / (1 + c)). |
+| `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
+| `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
+| `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |
 
 ### DirectionalLight
 

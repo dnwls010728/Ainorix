@@ -108,6 +108,11 @@ steered with the same code as the keyboard version:
 
 Raw fingers are in `input.touches()` (Lua); tools put fingers down with `input.touch {id, x, y}` and lift
 them with `input.touch {id, down: false}`. Hide the buttons on desktop builds from a script if needed.
+Android and web players report every active finger. Web fingers retain DOM
+identifiers and press order, and `began` is true only for their first simulation
+step. The first finger also acts as MouseLeft; releasing another finger cannot
+release that mouse press. See [TOUCH.md](TOUCH.md) for cancellation/focus rules
+and the browser verification work log.
 
 Health bar: a `UISlider {interactable: false, handle: false}` or a `UIImage {fill, fillOrigin}` (with a
 texture, e.g. a gradient). Set the value from Lua: `scene.set(scene.find("HP"), "UISlider", {value = hp})`.

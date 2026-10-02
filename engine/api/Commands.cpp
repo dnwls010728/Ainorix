@@ -204,6 +204,13 @@ Json SimState(Engine& e) {
     Json keys = Json::MakeArray();
     for (const std::string& k : e.Input().down) keys.push(k);
     s["keysDown"] = keys;
+    s["axes"] = Json::MakeObject();
+    s["rawAxes"] = Json::MakeObject();
+    for (const char* name : InputState::kAxisNames) {
+        s["axes"][name] = e.Input().Axis(name);
+        auto raw = e.Input().axes.find(name);
+        s["rawAxes"][name] = raw == e.Input().axes.end() ? 0.0f : raw->second;
+    }
     s["mouseLocked"] = e.Input().mouseLocked;
     s["scriptErrors"] = static_cast<uint64_t>(e.Scripts().Errors().size());
     s["sceneName"] = e.GetScene().name;
@@ -709,7 +716,26 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return SimState(e);
              });
 
-    Register(r, "input.key", "Press or release a key (\"W\", \"A\", \"S\", \"D\", \"Space\", \"Left\", ...).",
+    Json axisNameSchema = Json::MakeObject();
+    axisNameSchema["type"] = "string";
+    axisNameSchema["enum"] = Json::MakeArray();
+    for (const char* name : InputState::kAxisNames) axisNameSchema["enum"].push(name);
+    axisNameSchema["description"] = "Logical gamepad axis; positive X right, positive Y up, LT/RT nonnegative.";
+    Register(r, "input.axis", "Inject a raw gamepad axis. Reads use a 0.15 scalar dead zone, rescaled to full range.",
+             Params().ReqWith("name", axisNameSchema).Req("value", "number", "Raw stick [-1,1] or trigger [0,1] value."), false,
+             [](Engine& e, const Json& a) {
+                 std::string name = a["name"].asString();
+                 double value = a["value"].asNumber();
+                 double minimum = name == "LT" || name == "RT" ? 0 : -1;
+                 if (!std::isfinite(value) || value < minimum || value > 1)
+                     throw ApiError("invalid_argument", "axis value is outside its finite range",
+                                    "Use -1..1 for sticks and 0..1 for LT/RT; input.axis reads apply the 0.15 dead zone.");
+                 if (!e.Input().SetAxis(name, static_cast<float>(value)))
+                     throw ApiError("invalid_argument", "unknown gamepad axis", "Use LeftX, LeftY, RightX, RightY, LT or RT.");
+                 return SimState(e);
+             });
+
+    Register(r, "input.key", "Press or release a key (\"W\", \"A\", \"Space\", \"Left\", ...) or logical Gamepad button.",
              Params().Req("key", "string", "Key name.").Opt("down", "boolean", "true = press (default), false = release."), false,
              [](Engine& e, const Json& a) {
                  std::string key = a["key"].asString();
