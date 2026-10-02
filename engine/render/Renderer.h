@@ -38,6 +38,7 @@ struct RenderView {
     Color clearColor{0.12f, 0.14f, 0.18f};
     EntityId cameraEntity = kNullEntity;
     PostProcess postProcess;  // selected camera's effects; defaults leave scene color unchanged
+    float shaderTime = 0;     // fixed simulation seconds supplied by the engine/tools
     // Editor overlays.
     bool drawGrid = false;
     EntityId highlight = kNullEntity;

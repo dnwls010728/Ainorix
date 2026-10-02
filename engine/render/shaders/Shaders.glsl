@@ -71,6 +71,10 @@ layout(binding=1) uniform mesh_material {
     vec4 emissive;    // rgb: emissive * intensity, w: flat shading
     vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
     vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets
+    vec4 graph_control; // node count, color output, emissive output (-1 absent), simulation seconds
+    vec4 graph_code[32]; // opcode and three prior-register indices
+    vec4 graph_value[32];
+    vec4 graph_uniform[8];
 };
 
 layout(binding=2) uniform mesh_lights {
@@ -145,6 +149,64 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
     return (diffuse + F * spec) * ndl;
 }
 
+// Instruction numbering and finite semantics match ShaderGraph.cpp.
+vec4 GraphFinite(vec4 value) {
+    for (int channel = 0; channel < 4; ++channel) {
+        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
+    }
+    return value;
+}
+
+void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission) {
+    emission = vec3(0.0);
+    if (graph_control.x < 0.5) return;
+    vec4 registers[32];
+    for (int i = 0; i < 32; ++i) registers[i] = vec4(0.0);
+    for (int i = 0; i < 32; ++i) {
+        if (i >= int(graph_control.x)) break;
+        ivec4 code = ivec4(graph_code[i]);
+        vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
+        vec4 value = vec4(0.0);
+        if (code.x == 0) value = graph_value[i];
+        else if (code.x == 1) value = graph_uniform[int(graph_value[i].x)];
+        else if (code.x == 2) value = vec4(uv,0.0,0.0);
+        else if (code.x == 3) value = vec4(v_wpos,1.0);
+        else if (code.x == 4) value = vec4(normal,0.0);
+        else if (code.x == 5) value = vec4(graph_control.w);
+        else if (code.x == 6) value = vec4(base,alpha);
+        // Explicit level zero matches the software texture sampler and avoids
+        // undefined implicit derivatives in data-dependent instruction flow.
+        else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
+        else if (code.x == 8) value = a+b;
+        else if (code.x == 9) value = a-b;
+        else if (code.x == 10) value = a*b;
+        else if (code.x == 11) {
+            for (int k = 0; k < 4; ++k) value[k] = b[k] == 0.0 ? 0.0 : a[k]/b[k];
+        }
+        else if (code.x == 12) value = min(a,b);
+        else if (code.x == 13) value = max(a,b);
+        else if (code.x == 14) value = sin(a);
+        else if (code.x == 15) value = cos(a);
+        else if (code.x == 16) value = floor(a);
+        else if (code.x == 17) value = fract(a);
+        else if (code.x == 18) value = abs(a);
+        else if (code.x == 19) value = min(max(a,b),c);
+        else if (code.x == 20) value = a*(1.0-c)+b*c;
+        else if (code.x == 21) value = step(a,b);
+        else if (code.x == 22) value = vec4(dot(a,b));
+        else if (code.x == 23) value = length(a) > 1e-8 ? a/length(a) : vec4(0.0);
+        else if (code.x == 24) {
+            ivec4 channels = ivec4(graph_value[i]);
+            value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
+        }
+        registers[i] = GraphFinite(value);
+    }
+    vec4 result = registers[int(graph_control.y)];
+    base = max(result.rgb,vec3(0.0));
+    alpha = clamp(result.a,0.0,1.0);
+    if (graph_control.z >= 0.0) emission = registers[int(graph_control.z)].rgb;
+}
+
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
     vec3 base = base_color.rgb;
@@ -154,6 +216,14 @@ void main() {
         base *= texel.rgb;
         alpha *= texel.a;
     }
+    vec3 graphNormal = normalize(v_nrm);
+    if (graph_control.x > 0.5 && emissive.w > 0.5) {
+        vec3 face = normalize(cross(dFdx(v_wpos),dFdy(v_wpos)));
+        graphNormal = dot(face,graphNormal) < 0.0 ? -face : face;
+    }
+    if (flags.w > 0.5 && !gl_FrontFacing) graphNormal = -graphNormal;
+    vec3 graphEmission;
+    SurfaceGraph(uv,graphNormal,base,alpha,graphEmission);
     if (alpha < flags.z) {
         discard;
     }
@@ -232,7 +302,7 @@ void main() {
     if (maps.z > 0.5) {
         em *= texture(sampler2D(emissive_tex, base_smp), uv).rgb;
     }
-    frag_color = vec4(clamp(color + em, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
+    frag_color = vec4(clamp(color + em + graphEmission, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
 }
 @end
 

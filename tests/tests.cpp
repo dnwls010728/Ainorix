@@ -2797,6 +2797,76 @@ TEST(CameraBloom) {
     }
 }
 
+TEST(ShaderMaterialRendering) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_material"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/stripes.shader.json","graph":{"uniforms":{"frequency":4},
+      "nodes":[{"op":"uv"},{"op":"swizzle","args":[0],"value":[0,0,0,0]},
+      {"op":"uniform","name":"frequency"},{"op":"multiply","args":[1,2]},{"op":"fract","args":[3]},
+      {"op":"constant","value":0.5},{"op":"step","args":[5,4]},
+      {"op":"constant","value":[1,0,0,1]},{"op":"constant","value":[0,0,1,1]},
+      {"op":"mix","args":[7,8,6]}],"color":9}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"stripes.mat.json","values":{"unlit":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"scale":[4,4,1]},
+      "MeshRenderer":{"material":"stripes.mat.json"}}})J");
+    RenderTarget original, stripes, again;
+    for (RenderTarget* target : {&original,&stripes,&again}) target->Resize(128,72);
+    e.RenderGameView(original);
+    CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{
+      "shaderUniforms":{"frequency":4},"shader":"materials/stripes.shader.json"}})J")["ok"].asBool());
+    SetMaxRenderThreads(1);
+    e.RenderGameView(stripes);
+    SetMaxRenderThreads(4);
+    e.RenderGameView(again);
+    SetMaxRenderThreads(16);
+    CHECK(stripes.Hash() != original.Hash() && stripes.Hash() == again.Hash());
+    CHECK(stripes.ids == original.ids && stripes.depth == original.depth);
+    int red = 0, blue = 0;
+    for (uint32_t color : stripes.color) {
+        red += (color & 0xFFFFFF) == 0x0000FF;
+        blue += (color & 0xFFFFFF) == 0xFF0000;
+    }
+    CHECK(red > 100 && blue > 100);
+    RenderView view;
+    MakeSceneView(e.GetScene(),128.0f/72,view);
+    if (e.EnableGpu(nullptr,&error)) {
+        e.Gpu()->Render(e.GetScene(),view,again);
+        double difference = 0;
+        for (size_t i = 0; i < stripes.color.size(); ++i) for (int shift : {0,8,16})
+            difference += std::abs(static_cast<int>((stripes.color[i] >> shift) & 255) -
+                                   static_cast<int>((again.color[i] >> shift) & 255));
+        const double mean = difference / static_cast<double>(stripes.color.size()*3);
+        std::printf("  surface graph software/GPU mean difference %.4f\n",mean);
+        CHECK(mean < 3);
+    } else std::printf("  SKIP surface graph GPU comparison (%s)\n",error.c_str());
+    CHECK(!Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shaderUniforms":{"typo":2}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() == stripes.Hash());
+    CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shaderUniforms":{"frequency":2}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() != stripes.Hash());
+    const auto oldGraph = e.Assets().GetShader("materials/stripes.shader.json");
+    std::string source;
+    CHECK(ReadTextFile(JoinPath(e.ProjectDir(),"materials/stripes.shader.json"),source));
+    Json changed = Json::parse(source);
+    changed["nodes"][7]["value"] = Json(Json::Array{0,1,0,1});
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(),"materials/stripes.shader.json"),changed.dump(2)));
+    const auto path = std::filesystem::path(JoinPath(e.ProjectDir(),"materials/stripes.shader.json"));
+    std::filesystem::last_write_time(path,std::filesystem::last_write_time(path)+std::chrono::seconds(2));
+    CHECK(!e.Assets().PollChanges().empty());
+    CHECK(e.Assets().GetShader("materials/stripes.shader.json") != oldGraph);
+    e.RenderGameView(stripes);
+    CHECK(stripes.Hash() != again.Hash());
+    CHECK(Call(e, "asset.info", R"J({"path":"materials/stripes.shader.json"})J")["result"]["nodes"].asInt() == 10);
+    CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shader":"","shaderUniforms":{}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() == original.Hash());
+}
+
 TEST(ShaderGraphValidationAndReference) {
     Engine e;
     std::string error;

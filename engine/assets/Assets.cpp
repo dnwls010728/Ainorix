@@ -527,7 +527,8 @@ AssetManager::Entry<Material> AssetManager::LoadMaterial(const std::string& path
             auto mat = std::make_shared<Material>();
             TextureLoader load = [this](const std::string& p, std::string* err) { return GetTexture(p, err); };
             if (!parseError.empty()) e.error = path + ": " + parseError;
-            else if (MaterialFromJson(j, load, *mat, &e.error)) e.asset = mat;
+              else if (MaterialFromJson(j, load, *mat, &e.error,
+                  [this](const std::string& p, std::string* err) { return GetShader(p, err); })) e.asset = mat;
             else e.error = path + ": " + e.error;
         }
     } catch (const std::exception& ex) {
@@ -535,6 +536,32 @@ AssetManager::Entry<Material> AssetManager::LoadMaterial(const std::string& path
     }
     if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
     return e;
+}
+
+AssetManager::Entry<ShaderGraph> AssetManager::LoadShader(const std::string& path) {
+    Entry<ShaderGraph> entry;
+    try {
+        const std::string full = engine_.ResolvePath(path);
+        entry.mtime = FileModifiedTime(full);
+        std::string text, parseError;
+        if (KindOf(path) != "shader") entry.error = "shader path must end with .shader.json";
+        else if (!ReadTextFile(full, text)) entry.error = "shader file not found: " + path;
+        else {
+            const Json json = Json::parse(text, &parseError);
+            auto graph = std::make_shared<ShaderGraph>();
+            if (!parseError.empty()) entry.error = parseError;
+            else if (CompileShaderGraph(json, *graph, &entry.error)) entry.asset = graph;
+        }
+    } catch (const std::exception& ex) { entry.error = ex.what(); }
+    if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), entry.error.c_str());
+    return entry;
+}
+
+std::shared_ptr<const ShaderGraph> AssetManager::GetShader(const std::string& path, std::string* error) {
+    auto it = shaders_.find(path);
+    if (it == shaders_.end()) it = shaders_.emplace(path, LoadShader(path)).first;
+    if (error) *error = it->second.error;
+    return it->second.asset;
 }
 
 std::shared_ptr<const Material> AssetManager::GetMaterial(const std::string& path, std::string* error) {
@@ -643,7 +670,13 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
-    // Materials reload when their file changes or a texture was reloaded (they hold the old one).
+    for (auto& kv : shaders_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            kv.second = LoadShader(kv.first);
+            changed.push_back(kv.first);
+        }
+    }
+    // Materials hold texture/graph pointers, so dependency changes reload them too.
     bool texturesChanged = !changed.empty();
     for (auto& kv : materials_) {
         if (texturesChanged || mtimeOf(kv.first) != kv.second.mtime) {
@@ -669,6 +702,10 @@ std::vector<std::string> AssetManager::PollChanges() {
 }
 
 void AssetManager::Forget(const std::string& path) {
+    if (KindOf(path) == "shader") {
+        shaders_.erase(path);
+        materials_.clear();
+    }
     meshes_.erase(path);
     textures_.erase(path);
     materials_.erase(path);
@@ -677,6 +714,7 @@ void AssetManager::Forget(const std::string& path) {
 }
 
 void AssetManager::Clear() {
+    shaders_.clear();
     meshes_.clear();
     textures_.clear();
     materials_.clear();
@@ -764,6 +802,15 @@ Json AssetManager::Info(const std::string& path) {
         ReadTextFile(engine_.ResolvePath(path), text);
         out["values"] = Json::parse(text);
         out["alphaMode"] = ToString(mat->alphaMode);
+    } else if (kind == "shader") {
+        std::string error;
+        auto graph = GetShader(path, &error);
+        if (!graph) throw ApiError("invalid_shader", error, "Validate it with shader.check.");
+        out["nodes"] = static_cast<int>(graph->instructions.size());
+        out["color"] = graph->color;
+        out["emissive"] = graph->emissive;
+        out["uniforms"] = Json::MakeArray();
+        for (const std::string& name : graph->uniformNames) out["uniforms"].push(name);
     } else if (kind == "font") {
         std::string err;
         auto font = GetFont(path, &err);

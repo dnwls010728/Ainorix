@@ -20,10 +20,12 @@ namespace oe {
 constexpr const char* kMaterialFormat = "ownengine.material";
 
 using TextureLoader = std::function<std::shared_ptr<const Texture>(const std::string& path, std::string* error)>;
+using ShaderLoader = std::function<std::shared_ptr<const ShaderGraph>(const std::string& path, std::string* error)>;
 
 // Reads a material description. Unknown fields and wrong types are errors
 // (with the field name); textures that fail to load are errors too.
-bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Material& out, std::string* error);
+bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Material& out, std::string* error,
+                      const ShaderLoader& loadShader = {});
 
 // The default material as JSON (every field), for new material files.
 Json DefaultMaterialJson();

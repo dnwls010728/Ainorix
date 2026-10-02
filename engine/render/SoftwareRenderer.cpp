@@ -172,6 +172,7 @@ struct RasterMaterial {
     EntityId id = kNullEntity;
     float uvOffset[2] = {0, 0};  // item uv rect (sprite frames) applied before the material tiling
     float uvScale[2] = {1, 1};
+    float shaderTime = 0;
 };
 
 enum class Cull { Back, Front, None };
@@ -303,6 +304,26 @@ private:
                     base = base * m.baseTexture->Sample(u, v, m.pixelArt, &ta);
                     alpha *= ta;
                 }
+                Color shaderEmissive(0, 0, 0);
+                if (m.shader) {
+                    ShaderInputs input;
+                    input.uv = Vec4(u, v, 0, 0);
+                    input.position = Vec4(a.wpos * p0 + b.wpos * p1 + c.wpos * p2, 1);
+                    Vec3 normal = mat.flat ? faceN : Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
+                    if (backFace) normal = -normal;
+                    input.normal = Vec4(normal, 0);
+                    input.baseColor = Vec4(base.r, base.g, base.b, alpha);
+                    input.time = mat.shaderTime;
+                    input.texture = [&m](float x, float y) {
+                        float ta = 1;
+                        const Color color = m.baseTexture ? m.baseTexture->Sample(x, y, m.pixelArt, &ta) : Color(1, 1, 1);
+                        return Vec4(color.r, color.g, color.b, ta);
+                    };
+                    const ShaderSurface surface = EvaluateShaderGraph(*m.shader, input, m.shaderUniforms);
+                    base = Color(std::max(0.0f, surface.color.x), std::max(0.0f, surface.color.y), std::max(0.0f, surface.color.z));
+                    alpha = Clamp(surface.color.w, 0, 1);
+                    shaderEmissive = Color(surface.emissive.x, surface.emissive.y, surface.emissive.z);
+                }
                 if (m.alphaMode == AlphaMode::Mask && alpha < m.alphaCutoff) continue;  // cut out: no depth, color or id
                 if (!mat.blend) depth_[idx] = z;
                 Color out = base;
@@ -334,7 +355,7 @@ private:
                 }
                 Color em = m.emissive * m.emissiveIntensity;
                 if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr);
-                out = out + em;
+                out = out + em + shaderEmissive;
                 if (mat.blend) {
                     alpha = Clamp(alpha, 0.0f, 1.0f);
                     if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(out) * alpha);
@@ -522,6 +543,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         const Submesh& sub = m.submeshes[dc.submesh];
         RasterMaterial mat;
         mat.m = &dc.material;
+        mat.shaderTime = view.shaderTime;
         mat.flat = it.flat;
         mat.blend = dc.blend;
         mat.id = it.id;

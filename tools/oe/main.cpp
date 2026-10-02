@@ -240,6 +240,7 @@ int CmdRender(const Args& a) {
         view.clearColor = clear;
     }
     view.drawGrid = a.Has("--grid");
+    view.shaderTime = static_cast<float>(engine.SimTime());
     if (a.Has("--colliders")) {
         TilesetLookup tilesets = engine.Assets().Tilesets();
         AppendColliderLines(engine.GetScene(), view.lines, &tilesets);

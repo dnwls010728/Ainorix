@@ -242,6 +242,7 @@ ViewRequest ParseView(Engine& e, const Json& args) {
         MakeSceneView(e.GetScene(), aspect, r.view);
     }
     r.view.drawGrid = args["grid"].asBool(false);
+    r.view.shaderTime = static_cast<float>(e.SimTime());
     if (args["colliders"].asBool(false)) {
         TilesetLookup tilesets = e.Assets().Tilesets();
         AppendColliderLines(e.GetScene(), r.view.lines, &tilesets);
@@ -1484,6 +1485,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      throw ApiError("invalid_shader", error, "Use ordered nodes with prior-node args and a valid color output; see docs/POSTPROCESS.md.");
                  CreateDirectories(ParentPath(full));
                  if (!WriteTextFile(full, a["graph"].dump(2) + "\n")) throw ApiError("io_error", "cannot write " + path);
+                 e.Assets().Forget(path);
                  Json result = shaderInfo(graph);
                  result["path"] = path;
                  return result;
@@ -1523,7 +1525,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Material check;
         std::string err;
         TextureLoader load = [&e](const std::string& p, std::string* er) { return e.Assets().GetTexture(p, er); };
-        if (!MaterialFromJson(j, load, check, &err)) {
+        if (!MaterialFromJson(j, load, check, &err,
+            [&e](const std::string& p, std::string* er) { return e.Assets().GetShader(p, er); })) {
             Json docs = MaterialFieldDocs();
             std::string names;
             for (const auto& kv : docs.members()) names += (names.empty() ? "" : ", ") + kv.first;

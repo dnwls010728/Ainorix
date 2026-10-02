@@ -855,6 +855,20 @@ struct GpuRenderer::Impl {
                 Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
                 Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, 0, 0);
+                if (m.shader) {
+                    Put(mu.graph_control, static_cast<float>(m.shader->instructions.size()),
+                        static_cast<float>(m.shader->color), static_cast<float>(m.shader->emissive), view.shaderTime);
+                    for (size_t node = 0; node < m.shader->instructions.size(); ++node) {
+                        const ShaderInstruction& instruction = m.shader->instructions[node];
+                        Put(mu.graph_code[node], static_cast<float>(instruction.op), static_cast<float>(instruction.args[0]),
+                            static_cast<float>(instruction.args[1]), static_cast<float>(instruction.args[2]));
+                        Put(mu.graph_value[node], instruction.value.x, instruction.value.y, instruction.value.z, instruction.value.w);
+                    }
+                    for (size_t slot = 0; slot < m.shaderUniforms.size(); ++slot) {
+                        const Vec4& value = m.shaderUniforms[slot];
+                        Put(mu.graph_uniform[slot], value.x, value.y, value.z, value.w);
+                    }
+                }
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
                 b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;

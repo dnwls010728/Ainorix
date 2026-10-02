@@ -104,6 +104,21 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
       - [ ] P6.4b: Load graph assets from materials, apply per-material uniforms,
             integrate fragment evaluation in both renderers, generate portable
             backend shaders with sokol-shdc and preserve default materials.
+            - [x] Main fragment pass: cached graph assets, strict material
+                  shader/shaderUniforms fields, dependency hot reload, CPU/GPU
+                  vector instruction execution and fixed simulation time in
+                  CLI/API/player/editor views. Shaders regenerated.
+                  Windows passes 86 tests; Node/WASM passes 82.
+                  ShaderMaterialRendering verifies red/blue UV stripes,
+                  worker determinism, unchanged opaque depth/IDs, uniform
+                  edits, rejection without overwrite, graph hot reload,
+                  asset.info and exact standard-material restoration.
+                  Software/D3D11 mean channel difference is 0.5606 of 255.
+                  CLI images inspected: software c67b46e7be2ac459,
+                  D3D11 66d23d1087649f31.
+            - [ ] Verify all instruction families with GPU comparisons,
+                  textured/HDR/time-driven surfaces and alpha behavior;
+                  extend graph alpha to shadow/selection passes as needed.
       - [ ] P6.4c: Sample procedural material, CPU/GPU image comparison,
             hot reload/packaging, WebGL execution, docs and refreshed players.
 - [ ] Hardware follow-up: Android device and full Linux/EGL effect execution.
@@ -245,7 +260,9 @@ GLSL. The graph is a programmable fragment surface calculation, not a list of
 built-in visual presets. Ordered four-vector instructions form an acyclic
 program; the CPU reference evaluates the same instructions that the generated
 GPU evaluator will execute. Existing sokol-shdc generation remains the backend
-compiler. Material binding and GPU execution are not implemented yet.
+compiler. Material binding and main fragment execution are implemented on CPU
+and GPU; alpha in auxiliary passes and full instruction-family verification
+remain open.
 
 Create a graph with shader.create {path, graph, overwrite?}; validate an existing
 file with shader.check {path}. Both commands validate every field and identify
@@ -302,6 +319,20 @@ Operations and argument counts:
 | normalize | 1 | Four-vector length; length <=1e-8 gives zero |
 | swizzle | 1 | value contains four channel indices 0..3 |
 
-Shader graphs currently provide creation/validation and a CPU reference only.
-Rendering, material binding/hot reload, portable GPU evaluator generation,
-sample demonstration and packaged-player verification remain unchecked above.
+Material files accept shader (a project-relative graph path) and shaderUniforms
+(named scalar/four-vector overrides). The graph's color RGBA replaces the
+texture-multiplied base color/opacity before ordinary PBR lighting or unlit
+output; its emissive RGB adds to the material's existing emissive contribution.
+Negative base RGB clamps to zero and alpha clamps to 0..1. Standard materials
+keep their previous output when shader is empty. Clearing a graph with
+material.set also requires clearing its overrides with shaderUniforms:{}.
+Graph texture nodes sample the base image at explicit mip level zero on GPU,
+matching the CPU reference; they use the material's pixelArt filtering choice.
+UV includes sprite frame transforms and material tiling/offset. Position and
+normal are world-space, with geometric normals before normal-map modification.
+
+Graph files and their dependents reload through AssetManager.PollChanges;
+shader.create overwrite invalidates the graph/material caches immediately.
+Graph validation also appears through asset.info. Invalid material edits are
+validated before disk replacement. Shipped players still predate this binding
+milestone; refresh and packaged execution remain part of P6.4c.
