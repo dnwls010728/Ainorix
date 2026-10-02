@@ -7,6 +7,7 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <sstream>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -46,6 +47,7 @@
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #include "editor/EditorText.h"
+#include "imgui_internal.h"
 #endif
 
 using namespace oe;
@@ -5505,6 +5507,57 @@ TEST(NativeEditorScriptProblems) {
     CHECK(broken.size() == 1 && broken[0].rfind("error 4:", 0) == 0);
 }
 
+
+
+TEST(NativeEditorNetworkVisibilityAndLegacyLayout) {
+    std::string project = TempProject("network_panel_legacy"), error;
+    Engine engine; CHECK(engine.Open(project, &error)); CHECK(!engine.NetworkEnabled());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    const uint64_t sessions = Session::InstancesCreated(), sockets = PlatformNetSocketsCreated();
+    NativeEditor::Options options; options.language = "en";
+    options.layoutFile = JoinPath(project, ".oe/editor.ini");
+    RenderTarget image; std::string settings;
+    auto draw = [&](NativeEditor& editor, int count) {
+        for (int i = 0; i < count; ++i) {
+            editor.Update({}, 1280, 720, 1.0f, Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        }
+    };
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); draw(editor, 4);
+        ImGuiWindow* network = ImGui::FindWindowByName("###Network"); CHECK(network && network->Active);
+        editor.FocusNetworkPanel(); draw(editor, 2);
+        CHECK(network && network->DockTabIsVisible);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/network-panel-disabled.png"), image.ToImage()));
+    }
+    CHECK(ReadTextFile(options.layoutFile, settings));
+    // Reproduce a pre-M7 layout: no Network window/key and the original 255-bit panel mask.
+    std::string legacy; bool skipWindow = false;
+    std::istringstream input(settings);
+    for (std::string line; std::getline(input, line);) {
+        if (line.compare(0, 1, "[") == 0) skipWindow = line.compare(0, 8, "[Window]") == 0 && line.find("###Network") != std::string::npos;
+        if (skipWindow || line.compare(0, 13, "NetworkPanel=") == 0) continue;
+        legacy += line.compare(0, 7, "Panels=") == 0 ? "Panels=255\n" : line + "\n";
+    }
+    CHECK(WriteTextFile(options.layoutFile, legacy));
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); draw(editor, 4);
+        ImGuiWindow* network = ImGui::FindWindowByName("###Network");
+        ImGuiWindow* inspector = ImGui::FindWindowByName("###Inspector");
+        CHECK(network && network->Active && inspector && network->DockId == inspector->DockId);
+        editor.FocusNetworkPanel(); draw(editor, 2); CHECK(network && network->DockTabIsVisible);
+    }
+    CHECK(ReadTextFile(options.layoutFile, settings)); CHECK(settings.find("NetworkPanel=1") != std::string::npos);
+    size_t flag = settings.find("NetworkPanel=1"); if (flag != std::string::npos) settings.replace(flag, 14, "NetworkPanel=0");
+    CHECK(WriteTextFile(options.layoutFile, settings));
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); draw(editor, 4);
+        ImGuiWindow* network = ImGui::FindWindowByName("###Network"); CHECK(!network || !network->Active);
+        editor.FocusNetworkPanel(); draw(editor, 2);
+        network = ImGui::FindWindowByName("###Network"); CHECK(network && network->Active && network->DockTabIsVisible);
+    }
+    CHECK(Session::InstancesCreated() == sessions && PlatformNetSocketsCreated() == sockets);
+    RemoveAll(project);
+}
 
 TEST(NativeEditorNetworkPreviewInputAndStop) {
     std::string project = SyncProject("editor_network", "tcp"), error;

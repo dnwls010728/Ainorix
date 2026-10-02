@@ -166,6 +166,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "GizmoLocal=%d", &i) == 1) m->gizmoLocal = i != 0;
     else if (std::sscanf(line, "GameAspect=%d", &i) == 1) m->gameAspect = std::max(0, std::min(3, i));
     else if (std::sscanf(line, "NetworkPlayers=%d", &i) == 1) m->networkPlayers = std::max(1, std::min(8, i));
+    else if (std::sscanf(line, "NetworkPanel=%d", &i) == 1) m->showNetwork = i != 0;
     else if (std::sscanf(line, "NetworkLatency=%d", &i) == 1) m->networkLatency = std::max(0, std::min(30, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
     else if (std::strncmp(line, "Language=", 9) == 0 && !m->forceLanguage) SetEditorLanguage(ParseEditorLanguage(line + 9));
@@ -178,7 +179,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
         m->showAssets = i & 32;
         m->showScripts = i & 64;
         m->showTiles = i & 128;
-        m->showNetwork = i & 256;
+        // Legacy panel masks predate Network. Only NetworkPanel explicitly hides it.
     } else if (std::sscanf(line, "Camera=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
         m->cam.target = Vec3(v[0], v[1], v[2]);
     } else if (std::sscanf(line, "CameraAngles=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
@@ -198,7 +199,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("[%s][Editor]\n", handler->TypeName);
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
-    buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\n", m->networkPlayers, m->networkLatency);
+    buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("GameAspect=%d\nFlySpeed=%.2f\nPanels=%d\nLanguage=%s\n", m->gameAspect, m->flySpeed, panels, EditorLanguageCode(GetEditorLanguage()));
     buf->appendf("Camera=%.4f,%.4f,%.4f\nCameraAngles=%.3f,%.3f,%.4f\nCamera2D=%d\n\n", m->cam.target.x, m->cam.target.y, m->cam.target.z, m->cam.yaw,
                  m->cam.pitch, m->cam.distance, m->cam.mode2D);
@@ -926,7 +927,7 @@ void NativeEditor::Impl::MainMenu() {
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem(Tr("Reset Layout"))) resetLayout = true;
-        ImGui::MenuItem(Tr("Network"), nullptr, &showNetwork);
+        if (ImGui::MenuItem(Tr("Network"), nullptr, &showNetwork) && showNetwork) requestNetworkFocus = true;
         ImGui::MenuItem(Tr("ImGui Metrics"), nullptr, &showMetrics);
         ImGui::EndMenu();
     }
@@ -1068,9 +1069,16 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     bool empty = !node || (node->IsLeafNode() && node->Windows.Size == 0);
     if (layoutBuilt && !resetLayout) return;
     layoutBuilt = true;
-    if (!empty && !resetLayout) return;  // restored from the .ini
+    if (!empty && !resetLayout) {
+        // Add the new tab to an old layout without resetting the person's other panels.
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Network"))) {
+            ImGuiWindowSettings* inspector = ImGui::FindWindowSettingsByID(ImHashStr("###Inspector"));
+            if (inspector && inspector->DockId) ImGui::DockBuilderDockWindow("###Network", inspector->DockId);
+        }
+        return;
+    }
     resetLayout = false;
-    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = true;
+    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = true;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockspace);
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);

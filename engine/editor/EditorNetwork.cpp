@@ -8,11 +8,17 @@ Engine& NativeEditor::Impl::GameEngine() {
     return peer ? *peer : engine;
 }
 void NativeEditor::Impl::NetworkPanel() {
-    if (!engine.NetworkEnabled()) return;
-    Json state = engine.NetworkCall("state", Json::MakeObject());
-    if (state["mode"].asString() == "none") return;
     if (requestNetworkFocus) { ImGui::SetNextWindowFocus(); requestNetworkFocus = false; }
     if (!ImGui::Begin(TrId("Network").c_str(), &showNetwork)) { ImGui::End(); return; }
+    if (!engine.NetworkEnabled()) {
+        ImGui::TextWrapped("%s", Tr("Networking is disabled for this project."));
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", Tr("Add a network section to project.json and reopen the project to enable multiplayer."));
+        ImGui::Spacing();
+        ImGui::TextWrapped("%s", "\"network\": {\"mode\": \"authoritative\", \"transport\": \"tcp\", \"maxPlayers\": 4}");
+        ImGui::End(); return;
+    }
+    Json state = engine.NetworkCall("state", Json::MakeObject());
     ImGui::Text("%s / %s / %s", state["mode"].asString().c_str(), state["transport"].asString().c_str(), state["state"].asString().c_str());
     if (!state["error"].asString().empty()) ImGui::TextWrapped("%s", state["error"].asString().c_str());
     Json players = Call("net.players", Json(), true)["result"];

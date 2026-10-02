@@ -87,6 +87,8 @@ input.player(id)、同期ずれレポート、実験的な履歴再実行ロー�
 
 専用サーバー: `oe serve-game <project> --min-players 1` またはパッケージの `Game.exe --server`。ウィンドウ/GPU/音声デバイスを作成しません。TCP/UDP とネイティブ WebSocket サーバーに対応。エディターの Players で最大8人の Loopback テスト、Game Player で表示・入力先を選択、Network で遅延・統計を確認。コマンド: `net.spawn_local_peers`, `net.peer_call`, `net.local_peers`, `net.simulate`。使用方法とプラットフォーム検証範囲: [docs/NETWORK.md](docs/NETWORK.md)。
 
+Network パネルは「表示 > ネットワーク」から開けます。ネットワーク未設定のプロジェクトにも設定案内を表示し、既存のエディターレイアウトに新しいタブを自動追加します。
+
 ## AI 連携
 
 Lua `save.get/set/delete/flush` または `save.*` コマンドで進行状況を保存します。

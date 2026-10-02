@@ -794,3 +794,12 @@ WebSocket clients, owned input/replication/correction, optional HTTP API, bounde
 shutdown and packaged `--server`. It needs the Release binaries and Node >=22.
 `node tests/network_web_test.js` checks the existing browser callback bridge. Actual
 Wasm/browser, Android and POSIX execution and rebuilt prebuilt players remain unchecked.
+
+
+M7 editor visibility follow-up: Network is discoverable under View > Network for all
+projects. A disabled project displays configuration guidance without starting a session
+or changing project.json. Legacy panel masks no longer hide the new tab; old layouts
+add it beside Inspector, new layouts use an explicit NetworkPanel visibility setting,
+and reopening the panel focuses its tab. Windows regression tests cover disabled
+projects, migrated docking, deliberate hidden-state persistence and zero socket/session
+creation. Only editor code changes; prebuilt game players need no additional rebuild.

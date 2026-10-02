@@ -88,6 +88,8 @@ input.player(id), 비동기화 보고, 실험적 이력 재실행 롤백을 지�
 
 전용 서버: `oe serve-game <project> --min-players 1` 또는 패키지 `Game.exe --server` (창/GPU/오디오 장치 없이 실행). TCP/UDP 및 네이티브 WebSocket 서버 지원. 에디터 Players 선택으로 최대 8명 Loopback 테스트, Game Player 선택으로 피어별 입력, Network 패널에서 지연/통계 확인. 명령: `net.spawn_local_peers`, `net.peer_call`, `net.local_peers`, `net.simulate`. 자세한 사용법·플랫폼 검증 범위: [docs/NETWORK.md](docs/NETWORK.md).
 
+Network 창은 `보기 > 네트워크`에서 열 수 있습니다. 네트워크 미설정 프로젝트에도 설정 안내가 표시되며, 이전 에디터 레이아웃은 새 탭을 자동으로 추가합니다.
+
 ## AI 연동
 
 Lua `save.get/set/delete/flush` 또는 `save.*` 명령으로 진행 상황을 저장합니다.

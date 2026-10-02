@@ -86,6 +86,8 @@ need a compatible WebSocket server and rebuilt runtime. See [docs/NETWORK.md](do
 
 Dedicated server: `oe serve-game <project> --min-players 1` or packaged `Game.exe --server`, without window/GPU/speaker devices. TCP/UDP and native WebSocket hosting. Editor Players previews up to 8 loopback players; Game Player selects the view/input peer and Network displays latency/stats. Commands: `net.spawn_local_peers`, `net.peer_call`, `net.local_peers`, `net.simulate`. Usage and platform verification limits: [docs/NETWORK.md](docs/NETWORK.md).
 
+Open the Network panel through View > Network. Projects without networking show setup guidance; existing editor layouts automatically add the new tab.
+
 ## AI integration
 
 Save progress with Lua `save.get/set/delete/flush` or the `save.*` commands. Tools
