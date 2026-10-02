@@ -2872,6 +2872,128 @@ TEST(ShaderMaterialAlphaAndShadow) {
     }
 }
 
+TEST(ShaderMaterialInstructionFamilies) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_instruction_families"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Surface","components":{"Transform":{"scale":[4,4,1]},
+      "MeshRenderer":{"material":"program.mat.json"}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(),128.0f/72,view);
+    RenderTarget cpu, gpu;
+    cpu.Resize(128,72);
+    gpu.Resize(128,72);
+    const bool hasGpu = e.EnableGpu(nullptr,&error);
+    if (!hasGpu) std::printf("  SKIP graph instruction GPU comparison (%s)\n",error.c_str());
+    struct Case { const char* op; const char* args; Vec3 expected; };
+    // Independent numeric expectations catch matching mistakes in both evaluators.
+    const Case cases[] = {
+        {"add", "[0,1]", {0.4f,0.2f,0.7f}},
+        {"subtract", "[0,1]", {0,0.2f,0.5f}},
+        {"multiply", "[0,1]", {0.03f,0,0.06f}},
+        {"divide", "[0,1]", {1.0f/3,0,1}},
+        {"min", "[0,1]", {0.1f,0,0.1f}},
+        {"max", "[0,1]", {0.3f,0.2f,0.6f}},
+        {"sin", "[0]", {std::sin(0.1f),std::sin(0.2f),std::sin(0.6f)}},
+        {"cos", "[0]", {std::cos(0.1f),std::cos(0.2f),std::cos(0.6f)}},
+        {"floor", "[2]", {0,0,1}},
+        {"fract", "[2]", {0,0.25f,0.75f}},
+        {"abs", "[2]", {1,0.75f,1}},
+        {"clamp", "[2,0,1]", {0.1f,0,0.1f}},
+        {"mix", "[0,1,2]", {0,0.35f,0}},
+        {"step", "[0,1]", {1,0,0}},
+        {"dot", "[0,1]", {0.34f,0.34f,0.34f}},
+        {"normalize", "[0]", {0.1f/std::sqrt(0.66f),0.2f/std::sqrt(0.66f),0.6f/std::sqrt(0.66f)}},
+        {"swizzle", "[0]", {0.5f,0.6f,0.2f}}
+    };
+    double worstMean = 0;
+    auto render = [&]() {
+        e.Renderer().Render(e.GetScene(),view,cpu);
+        if (!hasGpu) return;
+        e.Gpu()->Render(e.GetScene(),view,gpu);
+        double difference = 0;
+        for (size_t i = 0; i < cpu.color.size(); ++i) for (int shift : {0,8,16})
+            difference += std::abs(static_cast<int>((cpu.color[i] >> shift) & 255) -
+                                   static_cast<int>((gpu.color[i] >> shift) & 255));
+        const double mean = difference/static_cast<double>(cpu.color.size()*3);
+        worstMean = std::max(worstMean,mean);
+        CHECK(mean < 2);
+    };
+    auto install = [&](const Json& graph) {
+        Json args = Json::MakeObject();
+        args["path"] = "program.shader.json";
+        args["graph"] = graph;
+        args["overwrite"] = true;
+        CHECK(e.Call("shader.create",args)["ok"].asBool());
+        CHECK(Call(e, "material.create", R"J({"path":"program.mat.json","overwrite":true,
+          "values":{"shader":"program.shader.json","unlit":true,"pixelArt":true}})J")["ok"].asBool());
+    };
+    for (const Case& item : cases) {
+        Json graph = Json::parse(R"J({"nodes":[{"op":"constant","value":[0.1,0.2,0.6,0.5]},
+          {"op":"constant","value":[0.3,0,0.1,0.5]},{"op":"constant","value":[-1,-0.75,1.75,0]}],"color":3})J");
+        Json node = Json::MakeObject();
+        node["op"] = item.op;
+        node["args"] = Json::parse(item.args);
+        if (std::string(item.op) == "swizzle") node["value"] = Json(Json::Array{3,2,1,0});
+        graph["nodes"].push(node);
+        install(graph);
+        render();
+        const float expected[] = {item.expected.x,item.expected.y,item.expected.z};
+        for (int channel = 0; channel < 3; ++channel) {
+            const int value = static_cast<int>((cpu.color[36*128+64] >> (channel*8)) & 255);
+            if (std::abs(value-static_cast<int>(expected[channel]*255+0.5f)) > 1)
+                std::printf("  graph %s channel %d: got %d, expected %.4f\n",item.op,channel,value,expected[channel]*255);
+            CHECK(std::abs(value-static_cast<int>(expected[channel]*255+0.5f)) <= 1);
+        }
+    }
+    Image texture;
+    texture.width = texture.height = 2;
+    texture.rgba = {255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255};
+    CHECK(WritePng(JoinPath(e.ProjectDir(),"graph.png"),texture,true));
+    for (const char* input : {"uv","position","normal","baseColor","time","texture"}) {
+        Json graph = Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"constant","value":0.25}],"color":2})J");
+        Json node = Json::MakeObject();
+        node["op"] = input;
+        if (std::string(input) == "texture") node["args"] = Json(Json::Array{0});
+        graph["nodes"].push(node);
+        install(graph);
+        CHECK(Call(e, "material.set", R"J({"path":"program.mat.json","values":{"baseTexture":"graph.png",
+          "baseColor":[0.5,0.25,0.75]}})J")["ok"].asBool());
+        view.shaderTime = 0.25f;
+        render();
+        if (std::string(input) == "texture") {
+            for (uint32_t expected : {0x0000FFu,0x00FF00u,0xFF0000u,0x00FFFFu}) {
+                int pixels = 0;
+                for (uint32_t color : cpu.color) pixels += (color & 0xFFFFFF) == expected;
+                CHECK(pixels > 20);
+            }
+        }
+        if (std::string(input) == "normal") CHECK((cpu.color[36*128+64] & 0xFFFFFF) == 0xFF0000);
+        if (std::string(input) == "time") {
+            CHECK((cpu.color[36*128+64] & 0xFFFFFF) == 0x404040);
+            const uint64_t first = cpu.Hash();
+            view.shaderTime = 0.75f;
+            render();
+            CHECK(cpu.Hash() != first && (cpu.color[36*128+64] & 0xFFFFFF) == 0xBFBFBF);
+        }
+    }
+    install(Json::parse(R"J({"nodes":[{"op":"constant","value":[4,1,0.5,1]}],"color":0,"emissive":0})J"));
+    view.postProcess.exposure = 0.25f;
+    view.postProcess.toneMapping = "reinhard";
+    render();
+    CHECK((cpu.color[36*128+64] & 0xFFFFFF) == 0x3355AA);  // (base + emission) before exposure/Reinhard
+    install(Json::parse(R"J({"nodes":[{"op":"constant","value":[4,1,0.5,0.25]}],"color":0,"emissive":0})J"));
+    CHECK(Call(e, "material.set", R"J({"path":"program.mat.json","values":{"alphaMode":"blend","opacity":0}})J")["ok"].asBool());
+    render();
+    const uint32_t blended = cpu.color[36*128+64];
+    CHECK((blended & 0xFFFFFF) == 0x0F1C55);  // graph replaces zero input opacity; blend happens in HDR
+    CHECK(cpu.ids[36*128+64] == kNullEntity);  // alpha below 0.5 does not take picking ownership
+    std::printf("  graph instruction/input/HDR worst software/GPU mean difference %.4f\n",worstMean);
+}
+
 TEST(ShaderMaterialRendering) {
     Engine e;
     std::string error;

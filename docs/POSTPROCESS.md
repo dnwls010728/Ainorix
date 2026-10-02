@@ -133,8 +133,19 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
                         that ground shadow. CPU/D3D11 mean difference is 1.2367.
                         CLI masked stripes/selection PNGs inspected: software
                         7004187b216e5ce6, D3D11 e492f9db4088e1b0.
-                  - [ ] Remaining GPU instruction families, varying-alpha
-                        shadows, HDR/texture/time surfaces and blend behavior.
+                  - [x] ShaderMaterialInstructionFamilies covers all arithmetic
+                        operations with independent numeric expectations and
+                        software/D3D11 image comparisons. UV, world position,
+                        normal, base color, explicit texture sampling and fixed
+                        time inputs are compared, including a four-color texture
+                        and changes in time. Graph base/emissive values above 1
+                        and alpha blending are checked before exposure/Reinhard;
+                        graph alpha replaces even zero input opacity and keeps
+                        sub-0.5 fragments out of picking. Worst CPU/D3D11 mean
+                        difference is 1.4719 of 255. Windows passes 88 tests;
+                        Node/WASM passes 84 tests.
+                  - [ ] Varying-alpha shadow masks and selection occlusion with
+                        mixed materials; packaged WebGL checks are P6.4c.
                   - [x] Recover D3D compiler diagnostics with D3DCompile using
                         the generated HLSL and engine compiler flags. Replacing
                         indexed vector division with explicit channel expressions
@@ -283,8 +294,9 @@ built-in visual presets. Ordered four-vector instructions form an acyclic
 program; the CPU reference evaluates the same instructions that the generated
 GPU evaluator will execute. Existing sokol-shdc generation remains the backend
 compiler. Material binding and main fragment execution are implemented on CPU
-and GPU. Graph alpha also reaches shadow/selection passes; full instruction
-families, varying-alpha shadows and blend verification remain open.
+and GPU. Graph alpha also reaches shadow/selection passes. Instruction families,
+texture/time inputs, HDR emission and blending are verified; varying-alpha
+shadows and mixed-material selection verification remain open.
 
 Create a graph with shader.create {path, graph, overwrite?}; validate an existing
 file with shader.check {path}. Both commands validate every field and identify
