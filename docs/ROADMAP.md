@@ -181,8 +181,8 @@ Android hardware and Linux/EGL follow-ups remain in [PARTICLES.md](PARTICLES.md)
 ### P6. GPU 효과 (셰이더 머티리얼, 포스트 프로세싱) — [ ]
 
 P3 rendering, P4, P5 and the completed P6 vignette/HDR milestones are integrated
-at the user's request through PRs #18-#21. P6 remains incomplete: bloom, FXAA
-and custom shader materials continue on a new branch from the updated main.
+at the user's request through PRs #18-#21. P6 remains incomplete: custom shader materials
+continue on a new branch from the updated main.
 Combined Windows 81 and Node/WASM 77 tests pass; prebuilt players are refreshed
 from the combined source, preserving all four PRs' features.
 
@@ -197,7 +197,10 @@ from the combined source, preserving all four PRs' features.
   runtimes are refreshed. Bloom is implemented in the P6 follow-up: Windows 82
   and Node/WASM 78 tests pass, with deterministic hue-preserving halos and
   D3D11 comparison. WebGL2 bloom/vignette switching and resizing are verified;
-  web and both Android ABI runtimes are refreshed. FXAA, custom materials
+  web and both Android ABI runtimes are refreshed. Optional directional FXAA
+  and Showcase 1-6 effect presets are implemented. Windows 84 and Node/WASM
+  80 tests pass; CLI images and packaged WebGL2 FXAA/All/Off transitions,
+  sharp HUD and resize/restore are inspected. Custom materials
   and hardware follow-ups remain.
 
 - composite 패스(`GpuRenderer`)가 연결 지점. 톤매핑, 블룸, FXAA, 비네트를 켜고 끄는 컴포넌트/카메라 설정부터. **소프트웨어 렌더러는 기준**이므로 효과가 해시에 영향을 주면 안 되게 기본값은 꺼짐으로 두거나, 양쪽 모두 구현한다(`CLAUDE.md` 규칙). 커스텀 셰이더 머티리얼은 sokol-shdc 의존이 커서 이 항목의 후반부로 둔다.

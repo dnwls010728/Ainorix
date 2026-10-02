@@ -185,3 +185,8 @@ Software: the main pass and the shadow pass are split into horizontal bands rend
 ## Sample
 
 `samples/Showcase`: the Khronos "Fox" glTF (CC0 model, CC-BY rig — see `assets/models/CREDITS.md`) as a player-controlled character with a follow camera, procedural textures, a shadowing sun and two colored point lights.
+
+Camera effect presets use keys 1 Off, 2 Tone, 3 Bloom, 4 Vignette, 5 FXAA,
+6 All. Startup stays neutral; the HUD shows the selected mode. Presets use
+the reflected PostProcess component through Lua scene commands; see
+[POSTPROCESS.md](POSTPROCESS.md) for settings and verification.

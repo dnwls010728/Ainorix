@@ -61,7 +61,7 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             640x360 to 320x180 and back, and switches to vignette/neutral modes.
             This also closes the WebGL2 vignette check from P6.1. Android device
             and full Linux/EGL execution remain unchecked.
-- [ ] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
+- [x] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
       resolution changes and separation from UI/selection overlays.
       - [x] P6.3a: CPU/GPU directional FXAA on post-processed RGBA8 scene color,
             neutral-frame identity, diagonal edges, flat regions, UI/outline,
@@ -74,8 +74,18 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             c86ccc033505d8dc, D3D11 c21a168cde9909e4. Shaders/API regenerated.
             Web and both Android ABI players rebuilt from 0ea84f2.
             Packaged WebGL2 verification and sample controls remain in P6.3b.
-      - [ ] P6.3b: Sample effect controls, real CLI/WebGL2 verification and
+      - [x] P6.3b: Sample effect controls, real CLI/WebGL2 verification and
             refreshed player runtimes.
+            Showcase camera presets: 1 Off, 2 Tone, 3 Bloom, 4 Vignette,
+            5 FXAA, 6 All. Complete settings are applied through Lua scene
+            commands, preserving neutral startup and restoring Off after All.
+            Windows passes 84 tests; Node/WASM passes 80. The sample script
+            passes script.check with zero errors/warnings. CLI PNGs inspected:
+            Off 07a6a4d1eba5c930, All 4d4ae159d978eb9b. Packaged WebGL2
+            execution verifies FXAA/All/Off, sharp HUD, 640x360 to 320x180 and
+            back, and matching live canvas/exported frame appearance. Player
+            binaries were refreshed from 0ea84f2; sample-only changes do not
+            require another engine rebuild. Device follow-ups remain open.
 - [ ] P6.4: Custom shader materials through commands/assets, validation and
       portable backend shader generation. Document the software reference
       behavior and demonstrate a material in a sample.
@@ -200,3 +210,13 @@ window rendering keeps HUD and editor outlines at output resolution.
 Disabling FXAA avoids its intermediate allocation/pass and preserves previous
 frame hashes. Depth and entity IDs are never filtered. Sampling across small
 features may soften them; pixel-art cameras should leave it disabled.
+
+## Showcase presets
+
+Run `oe run samples/Showcase`, or package it with `oe package samples/Showcase
+--web`. Press 1 for neutral output, 2 for exposure/Reinhard, 3 for bloom,
+4 for vignette, 5 for FXAA, or 6 for all effects. The HUD displays the selected
+preset; movement and animation controls remain available. Presets replace all
+effect settings so switching back to Off cannot retain bloom or HDR targets.
+The initial scene keeps all effects neutral. Adjust preset values in
+`samples/Showcase/scripts/post_process.lua`; no engine rebuild is needed.

@@ -22,7 +22,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 - 2D 게임: 스프라이트·스프라이트 시트 애니메이션(픽셀 아트, 투명 컷아웃), 텍스트로 쓰는 타일맵(타일셋 파일, 자동 연결 16/47 패턴, 변형 타일, 슬로프·원웨이 등 타일별 충돌), Box2D 2D 물리, 경계 있는 카메라 추적, 에디터 2D 뷰와 타일 브러시 — [docs/2D.md](docs/2D.md)
 - 게임 구성 요소: 프리팹, 씬 전환 + 게임 데이터, 메시지/타이머, 게임 내 UI, 오디오(결정적 믹서, 효과음 생성) — [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 스크립팅 (샌드박스, 핫리로드, 에러에 파일:줄 표시) — [docs/SCRIPTING.md](docs/SCRIPTING.md)
-- 카메라 후처리: 소프트웨어·GPU 노출·HDR Reinhard 톤매핑·블룸·비네트·FXAA 지원, UI와 선택 윤곽선 유지. 커스텀 머티리얼과 FXAA 샘플 검증은 진행 중 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- 카메라 후처리: 소프트웨어·GPU 노출·HDR Reinhard 톤매핑·블룸·비네트·FXAA 지원, UI와 선택 윤곽선 유지. Showcase 1~6 키로 Off·톤매핑·블룸·비네트·FXAA·전체 효과 선택. 커스텀 머티리얼은 진행 중 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - 게임패드 입력: 축 6개 API 주입과 Lua `input.axis`, 공통 0.15 데드존, Windows XInput·웹 Gamepad API·Android 매핑, 에디터 Game 뷰와 Platformer/Dungeon 조작. 실제 컨트롤러 검증은 남음 — [docs/INPUT.md](docs/INPUT.md)
 - 웹 멀티터치: Lua `input.touches()`에 모든 손가락 전달, 화면 버튼 동시 조작, 첫 손가락 마우스 호환. 브라우저 합성 이벤트 검증 완료, 모바일 실기기 검증은 남음 — [docs/TOUCH.md](docs/TOUCH.md)
 - 결정적(deterministic) 시뮬레이션과 소프트웨어 렌더러: 같은 입력이면 같은 프레임 해시 → AI가 테스트 오라클로 사용 가능

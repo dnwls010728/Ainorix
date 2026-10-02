@@ -2015,6 +2015,30 @@ TEST(ShowcaseAnimationControls) {
     std::printf("  animated Showcase hash %016llx\n", static_cast<unsigned long long>(first));
 }
 
+TEST(ShowcasePostProcessControls) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+    const EntityId camera = e.GetScene().FindByName("Main Camera");
+    CHECK(!e.GetScene().Get<PostProcess>(camera)->fxaa);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    for (int mode : {2, 3, 4, 5, 6, 1}) {
+        const std::string key = std::to_string(mode);
+        CHECK(e.Call("input.key", Json::parse("{\"key\":\"" + key + "\",\"down\":true}"))["ok"].asBool());
+        Call(e, "sim.step", R"J({"frames":1})J");
+        const PostProcess& p = *e.GetScene().Get<PostProcess>(camera);
+        const bool hdr = mode == 2 || mode == 3 || mode == 6;
+        CHECK(p.exposure == (hdr ? 0.75f : 1) && p.toneMapping == (hdr ? "reinhard" : "none"));
+        CHECK((p.bloom > 0) == (mode == 3 || mode == 6));
+        CHECK((p.vignette > 0) == (mode == 4 || mode == 6));
+        CHECK(p.fxaa == (mode == 5 || mode == 6));
+        CHECK(e.Call("input.key", Json::parse("{\"key\":\"" + key + "\",\"down\":false}"))["ok"].asBool());
+        Call(e, "sim.step", R"J({"frames":1})J");
+    }
+    CHECK(e.GetScene().Get<UIText>(e.GetScene().FindByName("Hint"))->text.find("All: Off") != std::string::npos);
+    CHECK(e.Scripts().Errors().empty());
+}
+
 TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;
