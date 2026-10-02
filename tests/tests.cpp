@@ -27,6 +27,7 @@
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/RenderScene.h"
+#include "render/ShaderGraph.h"
 #include "render/UI.h"
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
@@ -2794,6 +2795,74 @@ TEST(CameraBloom) {
         for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((effect.color.back() >> shift) & 255) -
                                                   static_cast<int>((again.color.back() >> shift) & 255)) <= 1);
     }
+}
+
+TEST(ShaderGraphValidationAndReference) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_graph"), &error));
+    const Json graphJson = Json::parse(R"J({"format":"ownengine.shader","uniforms":{"frequency":4},
+        "nodes":[{"op":"uv"},{"op":"uniform","name":"frequency"},{"op":"multiply","args":[0,1]},
+        {"op":"fract","args":[2]},{"op":"constant","value":[0.5,0.5,0.5,0.5]},
+        {"op":"step","args":[4,3]},{"op":"constant","value":[1,0.25,0.125,1]},
+        {"op":"multiply","args":[5,6]}],"color":7,"emissive":6})J");
+    Json create = Json::MakeObject();
+    create["path"] = "materials/stripes.shader.json";
+    create["graph"] = graphJson;
+    CHECK(e.Call("shader.create", create)["ok"].asBool());
+    CHECK(Call(e, "shader.check", R"J({"path":"materials/stripes.shader.json"})J")["result"]["nodes"].asInt() == 8);
+    CHECK(!e.Call("shader.create", create)["ok"].asBool());
+    CHECK(Call(e, "asset.list", R"J({"kind":"shader"})J")["result"].size() == 1);
+    ShaderGraph graph;
+    CHECK(CompileShaderGraph(graphJson, graph, &error));
+    ShaderInputs inputs;
+    inputs.uv = Vec4(0.2f,0.4f,0,1);
+    auto surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(surface.color.x == 1 && surface.color.y == 0.25f && surface.color.z == 0);
+    CHECK(surface.emissive.x == 1 && surface.emissive.y == 0.25f);
+    std::array<Vec4, ShaderGraph::kMaxUniforms> uniforms;
+    CHECK(ShaderUniforms(graph, Json::parse(R"J({"frequency":2})J"), uniforms, &error));
+    surface = EvaluateShaderGraph(graph, inputs, uniforms);
+    CHECK(surface.color.x == 0 && surface.color.y == 0.25f);
+    CHECK(!ShaderUniforms(graph, Json::parse(R"J({"typo":2})J"), uniforms, &error));
+    CHECK(error.find("typo") != std::string::npos);
+    const std::vector<std::string> invalid = {
+        R"J({"nodes":[{"op":"add","args":[0,0]}],"color":0})J",
+        R"J({"nodes":[{"op":"constant","value":[1,2,3]}],"color":0})J",
+        R"J({"nodes":[{"op":"uniform","name":"missing"}],"color":0})J",
+        R"J({"nodes":[{"op":"constant","value":1}],"color":0.5})J",
+        R"J({"nodes":[{"op":"constant","value":1,"typo":true}],"color":0})J",
+        R"J({"nodes":[{"op":"constant","value":1},{"op":"swizzle","args":[0],"value":[4,0,0,0]}],"color":1})J"
+    };
+    for (const std::string& text : invalid) {
+        create["graph"] = Json::parse(text);
+        create["overwrite"] = true;
+        CHECK(e.Call("shader.create", create)["error"]["code"].asString() == "invalid_shader");
+        CHECK(Call(e, "shader.check", R"J({"path":"materials/stripes.shader.json"})J")["result"]["nodes"].asInt() == 8);
+    }
+    create["path"] = "../outside.shader.json";
+    create["graph"] = graphJson;
+    CHECK(!e.Call("shader.create", create)["ok"].asBool());
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"constant","value":65504},{"op":"constant","value":0},
+        {"op":"divide","args":[0,1]},{"op":"multiply","args":[0,0]}],"color":2,"emissive":3})J"), graph, &error));
+    surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(surface.color.x == 0 && surface.emissive.x == 65504);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"texture","args":[0]},
+        {"op":"swizzle","args":[1],"value":[2,1,0,3]}],"color":2})J"), graph, &error));
+    inputs.texture = [](float u, float v) { return Vec4(u,v,0.75f,0.5f); };
+    surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(surface.color.x == 0.75f && surface.color.y == 0.4f && surface.color.z == 0.2f && surface.color.w == 0.5f);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"time"},{"op":"sin"}],"color":1})J"), graph, &error) == false);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"time"},{"op":"sin","args":[0]}],"color":1})J"), graph, &error));
+    inputs.time = 0.5f;
+    surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(std::fabs(surface.color.x - 0.47942554f) < 1e-6f);
+    Json oversized = Json::MakeObject();
+    oversized["nodes"] = Json::MakeArray();
+    for (int i = 0; i < 33; ++i) oversized["nodes"].push(Json::parse(R"J({"op":"constant","value":1})J"));
+    oversized["color"] = 0;
+    CHECK(!CompileShaderGraph(oversized, graph, &error));
+    CHECK(error.find("1..32") != std::string::npos);
 }
 
 TEST(CameraFxaa) {

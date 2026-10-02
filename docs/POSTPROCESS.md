@@ -89,6 +89,23 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
 - [ ] P6.4: Custom shader materials through commands/assets, validation and
       portable backend shader generation. Document the software reference
       behavior and demonstrate a material in a sample.
+      - [x] P6.4a: Validate a project-authored surface shader graph, compile
+            bounded vector instructions and evaluate a CPU reference. Expose
+            graph creation/checking through commands with precise diagnostics.
+            shader.create/shader.check and asset.list kind shader are available.
+            Windows passes 85 tests; Node/WASM passes 81. Real CLI create/check
+            and asset.list commands succeed. ShaderGraphValidationAndReference covers
+            procedural UV stripes, uniform overrides, emissive output,
+            invalid references/cycles/types/outputs/swizzles, path containment,
+            overwrite rejection, invalid-write preservation, division by zero
+            finite saturation, texture/swizzle, fixed-time sine and instruction limits.
+            Material/GPU integration remains P6.4b. Player refresh is deferred
+            to P6.4c; shipped players still use source 0ea84f2.
+      - [ ] P6.4b: Load graph assets from materials, apply per-material uniforms,
+            integrate fragment evaluation in both renderers, generate portable
+            backend shaders with sokol-shdc and preserve default materials.
+      - [ ] P6.4c: Sample procedural material, CPU/GPU image comparison,
+            hot reload/packaging, WebGL execution, docs and refreshed players.
 - [ ] Hardware follow-up: Android device and full Linux/EGL effect execution.
 - [ ] Browser capture follow-up: the in-app whole-page capture omits the small
       pure-white emitter in the neutral-mode fixture, although scene resolve,
@@ -220,3 +237,71 @@ preset; movement and animation controls remain available. Presets replace all
 effect settings so switching back to Off cannot retain bloom or HDR targets.
 The initial scene keeps all effects neutral. Adjust preset values in
 `samples/Showcase/scripts/post_process.lua`; no engine rebuild is needed.
+
+## Portable surface shader graphs (P6.4 in progress)
+
+A project authors a *.shader.json graph rather than platform-specific HLSL or
+GLSL. The graph is a programmable fragment surface calculation, not a list of
+built-in visual presets. Ordered four-vector instructions form an acyclic
+program; the CPU reference evaluates the same instructions that the generated
+GPU evaluator will execute. Existing sokol-shdc generation remains the backend
+compiler. Material binding and GPU execution are not implemented yet.
+
+Create a graph with shader.create {path, graph, overwrite?}; validate an existing
+file with shader.check {path}. Both commands validate every field and identify
+the failing node. Invalid creation never replaces an existing valid file.
+asset.list {kind:"shader"} lists these files. Paths remain inside the project.
+
+Example graph (place this object in shader.create.graph):
+
+```json
+{
+  "format": "ownengine.shader",
+  "uniforms": {"frequency": 4},
+  "nodes": [
+    {"op": "uv"},
+    {"op": "uniform", "name": "frequency"},
+    {"op": "multiply", "args": [0, 1]},
+    {"op": "fract", "args": [2]},
+    {"op": "constant", "value": 0.5},
+    {"op": "step", "args": [4, 3]}
+  ],
+  "color": 5
+}
+```
+
+Each node's args contains indices of earlier nodes; cycles and forward references
+are rejected. color references the RGBA output, and optional emissive references
+an RGB output. All registers are four-vectors. Scalar constants/uniform defaults
+broadcast to all channels; vector values must have exactly four finite numbers
+in -65504..65504. Up to 32 nodes and 8 named uniform defaults are supported.
+Per-material overrides must name declared uniforms and preserve unspecified
+values. Node outputs saturate to -65504..65504; NaN becomes zero. Division by
+zero returns zero for that channel. This gives the GPU a finite bounded program
+and keeps the CPU reference independent of platform compiler behavior.
+
+Inputs: uv, world position, world normal, fixed simulation time (broadcast),
+baseColor RGBA, and texture(args UV) for the material's base texture. Missing
+textures sample white. The integration milestone will supply these interpolated
+fragment inputs; the reference evaluator already accepts them.
+
+Operations and argument counts:
+
+| Operation | Args | Behavior |
+|---|---:|---|
+| constant / uniform | 0 | value scalar/vector, or name declared uniform |
+| uv / position / normal / time / baseColor | 0 | Fragment input |
+| texture | 1 | Sample base texture using input vector xy |
+| add / subtract / multiply / divide | 2 | Component-wise arithmetic |
+| min / max | 2 | Component-wise minimum/maximum |
+| sin / cos / floor / fract / abs | 1 | Component-wise function |
+| clamp | 3 | min(max(a,b),c), including reversed bounds |
+| mix | 3 | a*(1-c)+b*c; c is not clamped |
+| step | 2 | b<a ? 0 : 1, component-wise |
+| dot | 2 | Four-channel dot product, broadcast |
+| normalize | 1 | Four-vector length; length <=1e-8 gives zero |
+| swizzle | 1 | value contains four channel indices 0..3 |
+
+Shader graphs currently provide creation/validation and a CPU reference only.
+Rendering, material binding/hot reload, portable GPU evaluator generation,
+sample demonstration and packaged-player verification remain unchecked above.

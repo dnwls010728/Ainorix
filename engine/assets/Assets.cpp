@@ -474,6 +474,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".lua")) return "script";
     if (EndsWith(p, ".prefab.json")) return "prefab";
     if (EndsWith(p, ".mat.json")) return "material";
+    if (EndsWith(p, ".shader.json")) return "shader";
     if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";

@@ -646,6 +646,26 @@ Pairs touching after the last simulation step (collisions and trigger overlaps).
 
 Physics backend, gravity, body counts and warnings (e.g. invalid shapes).
 
+## shader
+
+### `shader.create`
+
+Create a validated portable surface shader graph (*.shader.json).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project-relative .shader.json file. |
+| `graph` | object | yes | Ordered nodes, color output, optional emissive output and named uniform defaults. |
+| `overwrite` | boolean |  | Replace an existing graph. |
+
+### `shader.check`
+
+Validate a surface shader graph and list its instructions/outputs/uniform names.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project-relative .shader.json file. |
+
 ## material
 
 ### `material.create`
@@ -671,7 +691,7 @@ Change fields of a material file (other fields keep their values). Every mesh us
 
 ### `asset.list`
 
-Project files by kind (model, texture, material, audio, font, script, prefab, scene).
+Project files by kind (model, texture, material, shader, audio, font, script, prefab, scene).
 
 | arg | type | required | description |
 |---|---|---|---|
