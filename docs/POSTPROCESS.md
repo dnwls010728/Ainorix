@@ -67,6 +67,13 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
       portable backend shader generation. Document the software reference
       behavior and demonstrate a material in a sample.
 - [ ] Hardware follow-up: Android device and full Linux/EGL effect execution.
+- [ ] Browser capture follow-up: the in-app whole-page capture omits the small
+      pure-white emitter in the neutral-mode fixture, although scene resolve,
+      composite, UI and 30 consecutive frame-end WebGL readbacks all report
+      RGBA (255,255,255,255) at its center with GL error 0. Bloom/tone/vignette
+      images show it normally. CSS filter is none and blend mode normal.
+      Compare exported canvas images and another browser capture path before
+      attributing this discrepancy to rendering; no engine failure is proven.
 
 ## Initial contract
 
