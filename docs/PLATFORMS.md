@@ -33,6 +33,32 @@ read/write localStorage callbacks on the web; engine code contains no OS calls.
 5. Desktop platforms that should run the native editor (`engine/editor`): implement the tool side of `Window` — `SetEventMode` / `TakeEvents` (every key as `WindowKey`, UTF-32 text including IME results, all mouse buttons in client pixels, wheel, focus, close request, dropped files), `SetCursor`, `DpiScale`, `Maximize` — and `PlatformEnableHighDpi`. Map the backend in `CMakeLists.txt` so `sokol_imgui.h` gets the matching `SOKOL_<API>` define. `win32/PlatformWin32.cpp` is the reference.
 6. Run `oe_tests` on the device or simulator. Frame hashes come from the software renderer and must match every other platform; `GpuRendererMatchesSoftware` checks the GPU backend against it with a tolerance.
 
+## Networking sockets
+
+`Platform.h` includes `platform/Network.h`: RAII non-blocking socket creation, numeric IPv4
+endpoints, stream/datagram I/O and browser binary WebSockets. Networking is initialized only by
+explicit factories. `Engine` construction and simulation do not open sockets or start network workers.
+Native bindings default to `127.0.0.1`; a different bind address must be explicitly provided.
+Native DNS and IPv6 are not implemented in M3. Browser URL resolution is handled by WebSocket.
+
+| Backend | Implementation | Verification |
+|---|---|---|
+| Win32 | `platform/net/NativeSockets.cpp`: WinSock, non-blocking I/O, zero-timeout WSAPoll for connect, NODELAY | Windows Release; localhost UDP/TCP, 64 KiB channel messages, source/truncation checks, malformed frames, queue bounds, disconnect and UDP-to-TCP fallback |
+| POSIX (null/macOS/Android) | Same file: BSD sockets, fcntl, zero-timeout poll, NODELAY, SIGPIPE suppression | Implemented but not compiled/run in the current Windows environment; no installed WSL distribution or NDK |
+| Web | `platform/web/NetworkWeb.cpp`: binary WebSocket client, bounded JS-to-Wasm copying, callback queues | JS bridge bounds/cleanup tested with Node mocks; no Emscripten SDK or real browser/Wasm connection validation |
+
+`net/SocketTransports.h` keeps framing, per-peer queues and lifecycle events portable. UDP peers
+must be registered explicitly; TCP accept assigns transport ids and exposes the accepted source
+address for M4 session validation. Browser callbacks never modify the scene. The browser client
+requires a WebSocket server endpoint; the native TCP length-framing port is not a WebSocket server.
+Session handshake/cookies, game server integration and Android manifest `INTERNET` permission for
+enabled network projects remain follow-ups in the networking work log. Run `node tests/network_web_test.js`
+for JS bridge checks; native socket tests in `oe_tests` are skipped under Emscripten.
+
+MSVC/Ninja configuration probes the compiler's raw `/showIncludes` prefix to avoid broken header
+dependency tracking when localized compiler output is decoded using the wrong code page. This
+keeps incremental builds consistent after public transport structs change.
+
 ## Consoles
 
 Console SDKs are under NDA, so their code cannot live in this public tree. The layout that keeps them out:

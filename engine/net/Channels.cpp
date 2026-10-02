@@ -330,6 +330,21 @@ bool ChannelEndpoint::Poll(uint64_t frame, std::vector<ChannelEvent>& events) {
     }
     for (const auto& packet : packets) {
         auto it = peers_.find(packet.peer);
+        if (packet.type == TransportEvent::Type::Connected) continue;  // M4 registers authenticated sessions
+        if (packet.type == TransportEvent::Type::Disconnected) {
+            if (it != peers_.end() && !it->second.failed) {
+                Peer& peer = it->second;
+                peer.failed = true;
+                peer.stats.lostPackets += peer.sentFrames.size();
+                peer.sentFrames.clear();
+                peer.outgoing.clear();
+                peer.assemblies.clear();
+                peer.messageAcks.clear();
+                peer.sendBytes = peer.receiveBytes = 0;
+                events.push_back({ChannelEvent::Type::Disconnected, packet.peer, NetChannel::ReliableOrdered, 0, {}, packet.error});
+            }
+            continue;
+        }
         if (it == peers_.end()) { ++rejected_; continue; }
         Peer& peer = it->second;
         ++peer.stats.packetsReceived;

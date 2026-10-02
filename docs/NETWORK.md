@@ -5,7 +5,8 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M2 foundations implemented.** No session, sockets or gameplay integration yet.
+Status: **M1–M3 foundations implemented.** Native UDP/TCP and browser WebSocket transport code
+is present; no session or gameplay integration yet. Platform verification limits are recorded below.
 Progress is tracked in §11.
 
 ## 1. Goals and non-goals
@@ -219,7 +220,7 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
 - [x] M1 — `engine/net`: `ITransport`, `LoopbackTransport` (seeded latency/loss/reorder),
       bounds-checked byte reader/writer, zero-cost pin test
 - [x] M2 — packet layer + channels (reliable/unreliable, fragmentation, acks, RTT/loss stats)
-- [ ] M3 — platform UDP + TCP sockets (`Platform.h`: Win32 + POSIX), `UdpTransport`,
+- [x] M3 — platform UDP + TCP sockets (`Platform.h`: Win32 + POSIX), `UdpTransport`,
       `TcpTransport` (length-prefixed frames, NODELAY, UDP→TCP fallback), WebSocket transport for
       web (Emscripten); tests on loopback and real localhost sockets
 - [ ] M4 — session layer (host/join/lobby/player ids/handshake/version/seed), `net.*` commands,
@@ -322,3 +323,62 @@ Open questions / unverified:
   not found; `build_android.bat` reports Android NDK not found. No real sockets or devices
   tested in M2; committed runtimes were not rebuilt. Run the SDK commands noted above when
   available. Public-network handshake/authentication and congestion control remain later work.
+
+### M3 implementation notes
+
+- `platform/Network.h` (included by `Platform.h`) exposes RAII non-blocking UDP/TCP sockets,
+  numeric IPv4 addresses and browser binary WebSockets. OS calls stay in
+  `platform/net/NativeSockets.cpp` (WinSock/POSIX); browser callbacks in `platform/web/NetworkWeb.cpp`.
+  Bind defaults to loopback; other addresses require explicit caller data. No DNS, socket or thread
+  is started by `Engine` construction/ticks. Native TCP creation and accepted streams set NODELAY.
+  Native socket send/receive buffers are configured to 256 KiB. SIGPIPE is suppressed on POSIX.
+  TCP exposes the accepted source endpoint for session validation; EOF in a partial frame is diagnosed.
+- `net/SocketTransports.h`: explicitly registered UDP endpoints (1200-byte datagrams), bounded
+  TCP length framing (uint32 little-endian, at most 64 KiB), partial reads/writes and lifecycle
+  events. `TcpFrameReader` accepts split/coalesced frames and rejects oversized lengths before
+  allocating. WebSockets use native binary message boundaries with the same channel interface.
+- TCP/WebSocket limits: 64 peers, 256 queued frames/4 MiB per peer; 16 I/O operations per peer
+  per frame; 128 received messages per peer per frame. Connect timeout is 300 explicit frames.
+  Native accept processes at most eight connections per frame; UDP drains at most 256 datagrams
+  total and 128 per registered peer. Same-frame polls do no work. Unknown/oversized UDP packets
+  are dropped without peer allocation or replies. Malformed/over-rate streams are disconnected.
+- Browser JS validates binary size (64 KiB) before copying into Wasm. Callbacks buffer at most
+  128 messages/4 MiB, drained only by transport Poll. Browser send buffering is capped at 4 MiB.
+  Destruction removes event handlers before releasing the C++ callback owner.
+- `net/FallbackTransport.h`: initially send over established TCP while known UDP addresses
+  exchange bounded echo probes. A successful challenge enables UDP; periodic fresh challenges
+  detect a later outage. Probe failure switches permanently to TCP, with incoming TCP data still
+  accepted during/after route changes. At most one probe response per peer per frame. Nonzero
+  connection-specific challenge seeds are supplied by M4; probes are not authentication.
+- Disconnected transport events release channel buffers and produce one `Disconnected` event;
+  connected transport events do not automatically register/authenticate channel peers.
+- [x] Windows Release clean build and incremental build; 106 `oe_tests`, zero failed checks.
+  Coverage: `NetworkTcpFramingAndBounds`, `NetworkUdpTcpFallbackReachability`,
+  `NetworkNativeUdpSourcesAndTruncation`, `NetworkNativeTcpMalformedAndClose`,
+  `NetworkChannelsOverLocalhostSockets`, `NetworkNativeFallbackAndChannelDisconnect`,
+  `NetworkNativeTcpQueueAndLargeFrames`. Tests deliver 64 KiB messages over real localhost
+  UDP/TCP, exercise split/coalesced stream frames, queue bytes/count limits, unknown/oversized
+  UDP datagrams, malformed TCP lengths, resource cleanup, UDP outage/blackhole fallback and
+  channel disconnect cleanup. Existing seeded loopback tests remain green. The inactive pin
+  now also checks that native/browser socket creation and live-object counters stay unchanged.
+- [x] `node tests/network_web_test.js`: shipped JS bridge tested with mock WebSockets for
+  binary-size rejection before Wasm allocation, send buffering, empty messages, callback cleanup,
+  closed/unsupported sockets and handle exhaustion. This is not a real browser/SDK test.
+  CLI `oe exec samples/Hello sim.step '{"frames":120}'`: `ok: true`, frame 120, zero script errors.
+- [x] Repair localized MSVC/Ninja header dependency detection: CMake probes raw `/showIncludes`
+  bytes without code-page conversion. Verified with a fresh build-directory configure and recorded
+  dependencies for `LoopbackTransport.cpp`; the old cache had zero dependencies and stale objects.
+  No new compiler warnings; clean build exposed pre-existing editor C4458 warnings in
+  `EditorTiles.cpp` and `Editor.cpp`, outside this milestone.
+- [ ] POSIX native build/test: no installed WSL/Linux toolchain in this environment. Run
+  `cmake -S . -B build -G Ninja -DOE_GPU=OFF`, build, and `build/bin/oe_tests` on Linux/macOS.
+- [ ] Real browser/Wasm compilation and integration: `build_web.bat` reports Emscripten not
+  found. Build with the SDK, run Node-compatible tests and connect a browser client to a binary
+  WebSocket test server. The native framed TCP listener is not a WebSocket server.
+- [ ] Android compiler/device validation and runtime rebuild: `build_android.bat` reports NDK
+  not found. `runtime/web/` and `runtime/android/` were not rebuilt. When network project/session
+  integration is enabled, add Android manifest `INTERNET` permission for enabled projects.
+- M4 must supply session/cookie validation and connection-incarnation isolation before registering
+  game peers. Reachability probes do not authenticate endpoints. IPv6, asynchronous native DNS and
+  public-network congestion control are follow-ups. No commands/components changed in M3, so
+  `docs/API.md` and user-facing READMEs remain unchanged.

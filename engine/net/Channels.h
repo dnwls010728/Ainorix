@@ -31,12 +31,13 @@ struct ChannelStats {
 
 // Delivered message or terminal reliable-send timeout. Session code decides leave/kick policy.
 struct ChannelEvent {
-    enum class Type { Message, TimedOut };
+    enum class Type { Message, TimedOut, Disconnected };
     Type type = Type::Message;
     PeerId peer = 0;
     NetChannel channel = NetChannel::ReliableOrdered;
     uint64_t sequence = 0;
     std::vector<uint8_t> bytes;
+    std::string error;  // transport disconnect reason; timeout policy remains session-owned
 };
 
 // Explicitly constructed protocol endpoint; owns no sockets, threads or Engine state.

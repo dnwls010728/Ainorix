@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "render/Renderer.h"
+#include "platform/Network.h"
 #include "scene/Systems.h"
 
 namespace oe {

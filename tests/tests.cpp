@@ -25,7 +25,10 @@
 #include "editor/EditorMath.h"
 #include "net/Bytes.h"
 #include "net/Channels.h"
+#include "net/FallbackTransport.h"
 #include "net/LoopbackTransport.h"
+#include "net/SocketTransports.h"
+#include "platform/Platform.h"
 #include "platform/GamepadInput.h"
 #include "platform/TouchInput.h"
 #include "render/Font.h"
@@ -700,6 +703,285 @@ TEST(NetworkChannelsUnreliableAndBackpressure) {
     CHECK(blocked.PendingMessages(2) == 0 && blocked.Stats(2)->packetsSent == 0);
 }
 
+TEST(NetworkTcpFramingAndBounds) {
+    ByteWriter writer(100);
+    const uint8_t body[] = {7, 0, 9};
+    CHECK(writer.WriteBlob(body, 3) && writer.WriteBlob(nullptr, 0) && writer.WriteBlob(body, 3));
+    for (size_t split = 0; split <= writer.Data().size(); ++split) {
+        TcpFrameReader reader;
+        std::vector<std::vector<uint8_t>> frames;
+        CHECK(reader.Feed(writer.Data().data(), split, frames));
+        CHECK(reader.Feed(writer.Data().data() + split, writer.Data().size() - split, frames));
+        CHECK(frames.size() == 3 && reader.BufferedBytes() == 0);
+        if (frames.size() == 3) CHECK(frames[0] == std::vector<uint8_t>(body, body + 3) && frames[1].empty() && frames[2] == frames[0]);
+    }
+    TcpFrameReader bytewise;
+    std::vector<std::vector<uint8_t>> frames;
+    for (uint8_t byte : writer.Data()) CHECK(bytewise.Feed(&byte, 1, frames));
+    CHECK(frames.size() == 3);
+    const uint8_t huge[] = {1, 0, 1, 0};  // 65537, one byte above the hard maximum
+    TcpFrameReader invalid;
+    frames.clear();
+    CHECK(!invalid.Feed(huge, 4, frames) && invalid.BufferedBytes() == 0 && !invalid.Ok());
+    CHECK(!invalid.Feed(body, 3, frames) && frames.empty());
+    TcpFrameReader flood;
+    std::vector<uint8_t> zeroFrames(4 * 129, 0);
+    CHECK(!flood.Feed(zeroFrames.data(), zeroFrames.size(), frames) && frames.size() == 128);
+    CHECK(ValidNetAddress({"127.0.0.1", 1}));
+    CHECK(!ValidNetAddress({"localhost", 1}) && !ValidNetAddress({"127.00.0.1", 1}));
+    CHECK(!ValidNetAddress({"256.0.0.1", 1}) && !ValidNetAddress({"127.0.0.1.", 1}));
+    CHECK(!ValidNetAddress({"127.0.0.1", 0}) && ValidNetAddress({"127.0.0.1", 0}, true));
+}
+
+class NetworkDropTransport final : public ITransport {
+public:
+    explicit NetworkDropTransport(ITransport& transport) : transport_(transport) {}
+    bool drop = false;
+    bool Send(PeerId peer, const uint8_t* bytes, size_t size) override { return drop || transport_.Send(peer, bytes, size); }
+    bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override { return transport_.Poll(frame, events); }
+private:
+    ITransport& transport_;
+};
+
+TEST(NetworkUdpTcpFallbackReachability) {
+    LoopbackConfig faults;
+    faults.latencyFrames = 2;
+    faults.jitterFrames = 1;
+    faults.duplicatePermille = 100;
+    auto udp = std::make_shared<LoopbackNetwork>(faults), tcp = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport ua(udp, 1), ub(udp, 2), ta(tcp, 1), tb(tcp, 2);
+    NetworkDropTransport da(ua), db(ub);
+    FallbackTransport a(da, ta), b(db, tb);
+    CHECK(a.AddPeer(2, 100) && b.AddPeer(1, 200));
+    CHECK(!a.AddPeer(2, 101) && !a.AddPeer(3, 0));
+    const uint8_t byte = 7;
+    CHECK(a.Send(2, &byte, 1));
+    size_t received = 0;
+    auto advance = [&](uint64_t first, uint64_t last) {
+        for (uint64_t frame = first; frame < last; ++frame) {
+            std::vector<TransportEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            CHECK(ea.empty());
+            for (const auto& event : eb) {
+                CHECK(event.bytes == std::vector<uint8_t>{7});
+                ++received;
+            }
+        }
+    };
+    advance(0, 20);
+    CHECK(received == 1 && a.Selected(2) == FallbackTransport::Route::Udp && b.Selected(1) == FallbackTransport::Route::Udp);
+    CHECK(a.Send(2, &byte, 1));
+    advance(20, 30);
+    CHECK(received >= 2);  // UDP may duplicate; the channel layer owns logical duplicate rejection.
+    da.drop = db.drop = true;
+    advance(30, 100);
+    CHECK(a.Selected(2) == FallbackTransport::Route::Tcp && b.Selected(1) == FallbackTransport::Route::Tcp);
+    const size_t before = received;
+    CHECK(a.Send(2, &byte, 1));
+    advance(100, 103);
+    CHECK(received == before + 1);
+    std::vector<TransportEvent> events;
+    CHECK(!a.Poll(99, events) && a.Poll(102, events));
+}
+
+#ifndef __EMSCRIPTEN__
+TEST(NetworkNativeUdpSourcesAndTruncation) {
+    const uint64_t live = PlatformNetSocketsLive();
+    {
+        UdpTransport a, b;
+        std::string error;
+        CHECK(a.Bind({}, &error) && b.Bind({}, &error));
+        CHECK(a.LocalAddress().host == "127.0.0.1" && a.LocalAddress().port != 0);
+        CHECK(a.AddPeer(2, b.LocalAddress()) && b.AddPeer(1, a.LocalAddress()));
+        CHECK(!b.AddPeer(3, a.LocalAddress()) && !a.Bind({}, &error));
+        const uint8_t byte = 7;
+        CHECK(a.Send(2, &byte, 1) && a.Send(2, nullptr, 0));
+        CHECK(!a.Send(2, &byte, 1201) && !a.Send(99, &byte, 1));
+        auto stranger = CreateNetSocket(SocketKind::Udp, &error);
+        CHECK(stranger != nullptr);
+        if (!stranger) return;
+        CHECK(stranger->Bind({}, &error));
+        CHECK(stranger->SendTo(b.LocalAddress(), &byte, 1) == SocketIo::Progress);
+        auto raw = CreateNetSocket(SocketKind::Udp, &error);
+        CHECK(raw != nullptr);
+        if (!raw) return;
+        CHECK(raw->Bind({}, &error) && b.AddPeer(3, raw->LocalAddress()));
+        std::vector<uint8_t> oversized(1500, 1);
+        CHECK(raw->SendTo(b.LocalAddress(), oversized.data(), oversized.size()) == SocketIo::Progress);
+        std::vector<TransportEvent> events;
+        for (uint64_t frame = 0; frame < 100 && (events.size() < 2 || b.DroppedPackets() < 2); ++frame) {
+            CHECK(b.Poll(frame, events));
+            PlatformSleep(0.001);
+        }
+        CHECK(events.size() == 2 && b.DroppedPackets() == 2);
+        if (events.size() == 2) CHECK(events[0].peer == 1 && events[0].bytes == std::vector<uint8_t>{7} && events[1].bytes.empty());
+        CHECK(b.RemovePeer(1) && !b.RemovePeer(1));
+    }
+    CHECK(PlatformNetSocketsLive() == live);
+}
+
+TEST(NetworkNativeTcpMalformedAndClose) {
+    TcpTransport server;
+    std::string error;
+    CHECK(server.Listen({}, &error));
+    auto client = CreateNetSocket(SocketKind::Tcp, &error);
+    CHECK(client != nullptr);
+    if (!client) return;
+    CHECK(client->Connect(server.LocalAddress(), &error));
+    uint64_t frame = 0;
+    std::vector<TransportEvent> events;
+    for (; frame < 100 && events.empty(); ++frame) {
+        CHECK(server.Poll(frame, events));
+        client->State();
+        PlatformSleep(0.001);
+    }
+    CHECK(events.size() == 1 && events[0].type == TransportEvent::Type::Connected && events[0].peer == 1);
+    CHECK(server.PeerAddress(1).host == "127.0.0.1" && server.PeerAddress(1).port == client->LocalAddress().port);
+    auto sendAll = [&](const uint8_t* bytes, size_t size) {
+        size_t offset = 0;
+        for (int attempt = 0; attempt < 100 && offset < size; ++attempt) {
+            size_t sent = 0;
+            SocketIo result = client->Send(bytes + offset, size - offset, sent);
+            CHECK(result == SocketIo::Progress || result == SocketIo::WouldBlock);
+            offset += sent;
+            PlatformSleep(0.001);
+        }
+        CHECK(offset == size);
+    };
+    ByteWriter writer(7);
+    const uint8_t body[] = {1, 2, 3};
+    CHECK(writer.WriteBlob(body, 3));
+    events.clear();
+    sendAll(writer.Data().data(), 2);
+    CHECK(server.Poll(frame++, events) && events.empty());
+    sendAll(writer.Data().data() + 2, 5);
+    for (int i = 0; i < 100 && events.empty(); ++i) { CHECK(server.Poll(frame++, events)); PlatformSleep(0.001); }
+    CHECK(events.size() == 1 && events[0].bytes == std::vector<uint8_t>(body, body + 3));
+    events.clear();
+    const uint8_t invalid[] = {255, 255, 255, 255};
+    sendAll(invalid, 4);
+    for (int i = 0; i < 100 && events.empty(); ++i) { CHECK(server.Poll(frame++, events)); PlatformSleep(0.001); }
+    CHECK(events.size() == 1 && events[0].type == TransportEvent::Type::Disconnected && !events[0].error.empty());
+    CHECK(!server.Send(1, body, 3));
+    CHECK(server.PeerAddress(1).port == 0);
+    WebSocketTransport web;
+    CHECK(!web.Connect(1, "ws://127.0.0.1:1234", &error) && !error.empty());
+}
+
+TEST(NetworkChannelsOverLocalhostSockets) {
+    auto run = [](ITransport& ta, ITransport& tb) {
+        ChannelEndpoint a(ta), b(tb);
+        CHECK(a.AddPeer(1) && b.AddPeer(1));
+        std::vector<uint8_t> large(65536, 42);
+        const uint8_t small[] = {9, 0, 8};
+        CHECK(a.Send(1, NetChannel::ReliableOrdered, large.data(), large.size()));
+        CHECK(a.Send(1, NetChannel::ReliableOrdered, small, sizeof(small)));
+        CHECK(a.Send(1, NetChannel::ReliableUnordered, nullptr, 0));
+        CHECK(b.Send(1, NetChannel::ReliableOrdered, small, sizeof(small)));
+        size_t replies = 0;
+        std::vector<ChannelEvent> received;
+        for (uint64_t frame = 0; frame < 600; ++frame) {
+            std::vector<ChannelEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            for (const auto& event : ea) {
+                CHECK(event.type == ChannelEvent::Type::Message && event.bytes == std::vector<uint8_t>(small, small + 3));
+                ++replies;
+            }
+            received.insert(received.end(), eb.begin(), eb.end());
+            if (received.size() == 3 && replies == 1 && a.PendingMessages(1) == 0 && b.PendingMessages(1) == 0) break;
+            PlatformSleep(0.001);
+        }
+        CHECK(received.size() == 3 && replies == 1 && a.PendingMessages(1) == 0 && b.PendingMessages(1) == 0);
+        uint64_t ordered = 1;
+        for (const auto& event : received) {
+            CHECK(event.type == ChannelEvent::Type::Message);
+            if (event.channel == NetChannel::ReliableOrdered) {
+                CHECK(event.sequence == ordered++);
+                CHECK(event.sequence == 1 ? event.bytes == large : event.bytes == std::vector<uint8_t>(small, small + 3));
+            } else CHECK(event.channel == NetChannel::ReliableUnordered && event.bytes.empty());
+        }
+        CHECK(a.Stats(1)->invalidPackets == 0 && b.Stats(1)->invalidPackets == 0);
+    };
+    const uint64_t live = PlatformNetSocketsLive();
+    {
+        UdpTransport ua, ub;
+        std::string error;
+        CHECK(ua.Bind({}, &error) && ub.Bind({}, &error));
+        CHECK(ua.AddPeer(1, ub.LocalAddress()) && ub.AddPeer(1, ua.LocalAddress()));
+        run(ua, ub);
+    }
+    {
+        TcpTransport ta, tb;
+        std::string error;
+        CHECK(tb.Listen({}, &error) && ta.Connect(1, tb.LocalAddress(), &error));
+        run(ta, tb);
+        CHECK(ta.Disconnect(1));
+        std::vector<TransportEvent> events;
+        for (uint64_t frame = 700; frame < 750 && events.empty(); ++frame) { CHECK(tb.Poll(frame, events)); PlatformSleep(0.001); }
+        CHECK(events.size() == 1 && events[0].type == TransportEvent::Type::Disconnected);
+    }
+    CHECK(PlatformNetSocketsLive() == live);
+}
+
+TEST(NetworkNativeFallbackAndChannelDisconnect) {
+    TcpTransport ta, tb;
+    UdpTransport ua, ub, blackhole;
+    std::string error;
+    CHECK(tb.Listen({}, &error) && ta.Connect(1, tb.LocalAddress(), &error));
+    CHECK(ua.Bind({}, &error) && ub.Bind({}, &error) && blackhole.Bind({}, &error));
+    CHECK(ua.AddPeer(1, blackhole.LocalAddress()) && ub.AddPeer(1, ua.LocalAddress()));
+    FallbackTransport fa(ua, ta, 10), fb(ub, tb, 10);
+    CHECK(fa.AddPeer(1, 1) && fb.AddPeer(1, 2));
+    ChannelEndpoint a(fa), b(fb);
+    CHECK(a.AddPeer(1) && b.AddPeer(1));
+    const uint8_t byte = 7;
+    CHECK(a.Send(1, NetChannel::ReliableOrdered, &byte, 1));
+    size_t received = 0;
+    uint64_t frame = 0;
+    for (; frame < 30; ++frame) {
+        std::vector<ChannelEvent> ea, eb;
+        CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+        CHECK(ea.empty());
+        for (const auto& event : eb) { CHECK(event.bytes == std::vector<uint8_t>{7}); ++received; }
+        PlatformSleep(0.001);
+    }
+    CHECK(fa.Selected(1) == FallbackTransport::Route::Tcp && fb.Selected(1) == FallbackTransport::Route::Tcp);
+    CHECK(received == 1 && a.PendingMessages(1) == 0);
+    CHECK(b.Send(1, NetChannel::ReliableOrdered, &byte, 1));
+    CHECK(ta.Disconnect(1));
+    std::vector<ChannelEvent> ea, eb;
+    for (; frame < 80 && eb.empty(); ++frame) { CHECK(a.Poll(frame, ea) && b.Poll(frame, eb)); PlatformSleep(0.001); }
+    CHECK(ea.size() == 1 && ea[0].type == ChannelEvent::Type::Disconnected);
+    CHECK(eb.size() == 1 && eb[0].type == ChannelEvent::Type::Disconnected);
+    CHECK(a.PendingMessages(1) == 0 && b.PendingMessages(1) == 0);
+    CHECK(!b.Send(1, NetChannel::ReliableOrdered, &byte, 1));
+}
+
+TEST(NetworkNativeTcpQueueAndLargeFrames) {
+    TcpTransport client, server;
+    std::string error;
+    CHECK(server.Listen({}, &error) && client.Connect(1, server.LocalAddress(), &error));
+    std::vector<uint8_t> body(65536, 42);
+    for (int i = 0; i < 63; ++i) CHECK(client.Send(1, body.data(), body.size()));
+    CHECK(!client.Send(1, body.data(), body.size()));
+    CHECK(client.QueuedBytes(1) == 63 * (body.size() + 4));
+    size_t received = 0;
+    for (uint64_t frame = 0; frame < 500 && (received < 63 || client.QueuedBytes(1) != 0); ++frame) {
+        std::vector<TransportEvent> ea, eb;
+        CHECK(client.Poll(frame, ea) && server.Poll(frame, eb));
+        for (const auto& event : eb) {
+            if (event.type == TransportEvent::Type::Data) { CHECK(event.bytes == body); ++received; }
+            else CHECK(event.type == TransportEvent::Type::Connected);
+        }
+        PlatformSleep(0.001);
+    }
+    CHECK(received == 63 && client.QueuedBytes(1) == 0);
+    for (size_t i = 0; i < TcpTransport::kMaxQueuedFrames; ++i) CHECK(client.Send(1, nullptr, 0));
+    CHECK(!client.Send(1, nullptr, 0));
+    CHECK(client.Disconnect(1) && client.QueuedBytes(1) == 0);
+}
+#endif
+
 TEST(SceneRoundTrip) {
     Json sceneJson = MakeSampleScene("Test");
     Scene s;
@@ -856,6 +1138,7 @@ TEST(NetworkInactiveZeroCost) {
     const uint64_t polls = LoopbackNetwork::PollCalls();
     const uint64_t channelInstances = ChannelEndpoint::InstancesCreated();
     const uint64_t channelPolls = ChannelEndpoint::PollCalls();
+    const uint64_t socketsCreated = PlatformNetSocketsCreated(), socketsLive = PlatformNetSocketsLive();
     const std::string project = TempProject("network_inactive");
     std::string text;
     CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
@@ -887,6 +1170,7 @@ TEST(NetworkInactiveZeroCost) {
     CHECK(LoopbackNetwork::PollCalls() == polls);
     CHECK(ChannelEndpoint::InstancesCreated() == channelInstances);
     CHECK(ChannelEndpoint::PollCalls() == channelPolls);
+    CHECK(PlatformNetSocketsCreated() == socketsCreated && PlatformNetSocketsLive() == socketsLive);
     CHECK(RemoveAll(project));
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace oe {
@@ -12,6 +13,9 @@ using PeerId = uint32_t;
 struct TransportEvent {
     PeerId peer = 0;
     std::vector<uint8_t> bytes;
+    enum class Type { Data, Connected, Disconnected };
+    Type type = Type::Data;
+    std::string error;  // disconnect reason, empty for a graceful close
 };
 
 // Single-threaded, non-blocking byte transport, independent of the sync model.
