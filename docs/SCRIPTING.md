@@ -105,11 +105,60 @@ Instance helpers (from the built-in base class): `self:get(type)`, `self:set(typ
 
 `scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are line-by-line Lua ports of the built-in `Rotator` and `PlayerController` components; tests check they behave identically.
 
+## Network lobbies and RPC (M4)
+
+`net` is available in every script. Without enabled networking, `net.isServer()` is true,
+`net.isHost()`/`net.isClient()` false, `net.localPlayer()` is 1 and `net.players()` is `{1}`.
+`net.rpc` calls its registered handler immediately in this mode (`others` has no recipient).
+No session, socket or network polling is initialized. With networking enabled, M4 supplies
+the lobby/RPC surface; synchronized simulation is M5/M6. See [NETWORK.md](NETWORK.md).
+
+| Lua | Contract |
+|---|---|
+| `net.state()` / `net.stats()` | Session role/state/error and bounded peer diagnostics |
+| `net.isHost()` / `net.isServer()` / `net.isClient()` | Host role, server role and client role |
+| `net.localPlayer()` / `net.players()` | Local id (0 before join); sorted array of lobby player ids |
+| `net.host({name?, seed?, room?})` | Explicitly host using project settings; seed default 1; loopback room defaults to gameId |
+| `net.join({name?, address?, port?})` | Async join: numeric IPv4, browser ws/wss URL or in-process loopback room |
+| `net.leave()` / `net.kick({player, reason?})` | Graceful bounded leave or host-only removal |
+| `net.ready({ready=true})` | Lobby readiness; does not start synchronized simulation |
+| `net.on(name, fn)` / `net.on(name, nil)` | Register/replace or remove a handler (at most 64 names) |
+| `net.rpc(target, name, ...)` | Reliable RPC: target `server`, `all`, `others`, or player id (number/string); `owner` requires M6 |
+| `net.sender()` | Sender player id inside an RPC handler; 0 outside it |
+
+```lua
+function Game:onStart()
+  net.on("chat", function(text)
+    log.info("player " .. net.sender() .. ": " .. text)
+  end)
+end
+function Game:onPlayerJoined(id) end
+function Game:onPlayerLeft(id) end
+function Game:onNetState(state) end -- connecting/lobby/leaving/offline/error
+-- Works in single-player too:
+net.rpc("all", "chat", "hello")
+```
+
+Networking is polled at the beginning of each fixed frame. Network callbacks/RPC run after
+script updates and before built-in systems, in player/sequence order. Polling continues through
+`sim.step`; a paused editor does not advance timeouts/handshakes. Scripts can run while joining;
+the host seed is applied when Welcome arrives. M4 does not align execution frames across peers.
+The host forwards client RPCs with their verified player id; games must validate sender/arguments
+before modifying state. v1 cookies isolate connections; they do not authenticate player identity
+or encrypt data. Browser clients need a compatible WebSocket endpoint.
+
+RPCs accept at most 16 JSON-compatible arguments, depth <=8, strings <=1024 bytes,
+collections <=64 entries, total serialized size <=8192 bytes (Lua traversal <=512 nodes).
+Cycles, nonfinite numbers and functions/userdata are rejected. Local nested RPC is limited to
+eight callbacks and shares its instruction budget. Each Lua state holds one handler per name;
+scene changes preserve handlers, so replace/remove callbacks that capture old entities.
+`sim.stop` clears handlers and networking. None mode has no join/state notifications.
+
 ## Sandbox and determinism
 
 - Available libraries: base, `string`, `table`, `math`, `utf8`, `coroutine`. Not available: `io`, `os`, `debug`, `package`, `load`, `loadfile`, `dofile`.
 - Every callback has an instruction budget (20M instructions). An infinite loop becomes a script error instead of freezing the engine.
-- `math.random` is seeded with 0 and string hashing uses a fixed seed, so `pairs()` order and random numbers are the same on every run. The Lua state is recreated for every play session (`sim.stop` discards it).
+- `math.random` is seeded with 0 in single-player or the negotiated host seed in a network lobby; string hashing uses a fixed seed. The Lua state is recreated for every play session (`sim.stop` discards it).
 
 ## Errors
 

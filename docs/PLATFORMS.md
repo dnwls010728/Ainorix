@@ -37,7 +37,8 @@ read/write localStorage callbacks on the web; engine code contains no OS calls.
 
 `Platform.h` includes `platform/Network.h`: RAII non-blocking socket creation, numeric IPv4
 endpoints, stream/datagram I/O and browser binary WebSockets. Networking is initialized only by
-explicit factories. `Engine` construction and simulation do not open sockets or start network workers.
+explicit `net.host`/`net.join` calls. Inactive `Engine` construction and simulation do not open
+sockets or start network workers; active sessions poll once at the fixed frame boundary.
 Native bindings default to `127.0.0.1`; a different bind address must be explicitly provided.
 Native DNS and IPv6 are not implemented in M3. Browser URL resolution is handled by WebSocket.
 
@@ -51,8 +52,10 @@ Native DNS and IPv6 are not implemented in M3. Browser URL resolution is handled
 must be registered explicitly; TCP accept assigns transport ids and exposes the accepted source
 address for M4 session validation. Browser callbacks never modify the scene. The browser client
 requires a WebSocket server endpoint; the native TCP length-framing port is not a WebSocket server.
-Session handshake/cookies, game server integration and Android manifest `INTERNET` permission for
-enabled network projects remain follow-ups in the networking work log. Run `node tests/network_web_test.js`
+M4 sessions validate version/game/mode/tick settings and per-connection cookies. Entropy uses
+BCrypt on Windows, `/dev/urandom` on POSIX, and browser `crypto.getRandomValues`; it never enters
+simulation RNG. APK/AAB manifests add `INTERNET` only for enabled networking. Dedicated game
+server and WebSocket-server integration remain M7. Run `node tests/network_web_test.js`
 for JS bridge checks; native socket tests in `oe_tests` are skipped under Emscripten.
 
 MSVC/Ninja configuration probes the compiler's raw `/showIncludes` prefix to avoid broken header

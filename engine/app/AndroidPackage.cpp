@@ -313,6 +313,7 @@ XmlElement ManifestTree(const AndroidAppInfo& app) {
                         {XmlElement{"uses-sdk", {Int("minSdkVersion", kAttrMinSdkVersion, app.minSdk), Int("targetSdkVersion", kAttrTargetSdkVersion, app.targetSdk)}, {}},
                          XmlElement{"uses-feature", {Hex("glEsVersion", kAttrGlEsVersion, 0x00030000), Bool("required", kAttrRequired, true)}, {}},
                          application}};
+    if (app.network) manifest.children.push_back(XmlElement{"uses-permission", {Str("name", kAttrName, "android.permission.INTERNET")}, {}});
     return manifest;
 }
 

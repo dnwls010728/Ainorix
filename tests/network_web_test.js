@@ -41,7 +41,13 @@ for (const match of source.matchAll(/EM_JS\(\w+, (\w+), \(([^)]*)\), \{([\s\S]*?
     vm.runInContext(`function ${match[1]}(${parameters}) { ${match[3]} }`, sandbox);
     ++functions;
 }
-assert.equal(functions, 3);
+assert.equal(functions, 4);
+assert.equal(sandbox.WebNetworkRandom(32, 16), 0);
+sandbox.crypto = {getRandomValues: bytes => bytes.fill(77)};
+assert.equal(sandbox.WebNetworkRandom(32, 16), 1);
+assert.deepEqual(Array.from(heap.slice(32, 48)), Array(16).fill(77));
+sandbox.crypto = {getRandomValues: () => {throw new Error('entropy unavailable');}};
+assert.equal(sandbox.WebNetworkRandom(32, 16), 0);
 const id = sandbox.OpenWebSocket('ws://localhost:1234', 7);
 assert.ok(id > 0);
 const socket = sockets.at(-1);

@@ -38,7 +38,7 @@ struct NetPacket {
 };
 
 // Fixed MTU avoids platform fragmentation; larger messages split into at most 64 parts.
-constexpr size_t kNetPacketBytes = 1200;
+constexpr size_t kNetPacketBytes = 1176;  // reserve 24 bytes for the M4 connection-cookie envelope
 constexpr size_t kNetHeaderBytes = 52;
 constexpr size_t kNetFragmentBytes = kNetPacketBytes - kNetHeaderBytes;
 constexpr size_t kNetMaxMessageBytes = 64 * 1024;

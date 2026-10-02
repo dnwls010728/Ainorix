@@ -5,8 +5,9 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M3 foundations implemented.** Native UDP/TCP and browser WebSocket transport code
-is present; no session or gameplay integration yet. Platform verification limits are recorded below.
+Status: **M1–M4 implemented.** Opt-in host/join lobbies, player ids/readiness, session-cookie
+handshakes, commands and Lua RPC are available. Simulation synchronization remains M5/M6;
+M4 sessions advance independent local worlds. Platform verification limits are recorded below.
 Progress is tracked in §11.
 
 ## 1. Goals and non-goals
@@ -223,7 +224,7 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
 - [x] M3 — platform UDP + TCP sockets (`Platform.h`: Win32 + POSIX), `UdpTransport`,
       `TcpTransport` (length-prefixed frames, NODELAY, UDP→TCP fallback), WebSocket transport for
       web (Emscripten); tests on loopback and real localhost sockets
-- [ ] M4 — session layer (host/join/lobby/player ids/handshake/version/seed), `net.*` commands,
+- [x] M4 — session layer (host/join/lobby/player ids/handshake/version/seed), `net.*` commands,
       Lua `net` basics (`isServer`, `localPlayer`, `rpc`, `on`), `mode: none` semantics
 - [ ] M5 — lockstep (input merge, frame gating, desync hash, `input.player(id)`); then
       `Engine::SaveState/LoadState` and rollback
@@ -377,8 +378,93 @@ Open questions / unverified:
   WebSocket test server. The native framed TCP listener is not a WebSocket server.
 - [ ] Android compiler/device validation and runtime rebuild: `build_android.bat` reports NDK
   not found. `runtime/web/` and `runtime/android/` were not rebuilt. When network project/session
-  integration is enabled, add Android manifest `INTERNET` permission for enabled projects.
+  integration is enabled, add Android manifest `INTERNET` permission for enabled projects (implemented in M4).
 - M4 must supply session/cookie validation and connection-incarnation isolation before registering
   game peers. Reachability probes do not authenticate endpoints. IPv6, asynchronous native DNS and
   public-network congestion control are follow-ups. No commands/components changed in M3, so
   `docs/API.md` and user-facing READMEs remain unchanged.
+
+### M4 implementation notes
+
+- `net/Session.h/.cpp` owns the lobby and a transport-independent cookie gate before channels.
+  `app/EngineNetwork.cpp` implements the shared command/Lua surface. No session is created by
+  project loading or by a project with absent/`none` networking; enabled projects open sockets
+  only on explicit `net.host`/`net.join`. Networking advances once at the beginning of
+  `SimulateFrame`; events are sorted by player id then RPC sequence and dispatched after script
+  updates, before built-in systems. A scene change through `game.loadScene` preserves the lobby;
+  `sim.stop`, edit-time scene loads and project changes destroy it.
+- Configuration accepts `lockstep`/`authoritative` for M4 lobbies only (`syncImplemented:false`).
+  `rollback` is rejected until state snapshots exist. Tick rate is exactly 60; max players 1..64;
+  port 0..65535; numeric IPv4 bind defaults to loopback. `gameId` defaults to the project name,
+  with a 1..64 printable-byte limit. Different game ids, modes, tick rates or session protocol
+  versions fail the join with an explicit mismatch error. Future input/snapshot settings are
+  reserved for M5/M6. No entity replication, frame gating or player input merge exists yet.
+- Native host listens on TCP; `transport:udp` additionally binds UDP on the same numeric port.
+  TCP exchanges Hello, Challenge, Response, Welcome and confirmation (session protocol v1).
+  The host assigns monotonic player ids (host=1, no reuse within an incarnation), readiness and
+  a uint32 seed (`net.host {seed}`, default 1). Lua RNG uses that seed and is reseeded when a
+  joining client receives Welcome. Scripts may run while connecting; M4 does not guarantee
+  world convergence or synchronized RPC execution frames.
+- Cookies are two uint64 values from platform cryptographic entropy (Win32 BCrypt, POSIX
+  `/dev/urandom`, browser `crypto.getRandomValues`). No simulation uses OS randomness.
+  Only bounded TCP accepted connections or explicit in-process loopback endpoints can handshake;
+  channels and UDP registration happen only after the cookie response. UDP endpoints use the
+  TCP peer IP plus negotiated UDP port. TCP always carries handshake/control traffic; UDP control
+  packets are rejected. UDP reachability failure keeps authenticated channel traffic on TCP.
+- Every channel datagram is inside a 24-byte magic/cookie/blob envelope, validated before packet
+  decoding/reassembly. `kNetPacketBytes` is now 1176 (1124-byte fragment payload) so the complete
+  UDP datagram stays within 1200 bytes. Fresh cookies reject old packets after reconnect, even
+  when a transport id is reused. Channel ACK/replay windows and monotonic RPC sequences reject
+  duplicates within a connection. Cookie possession is **not identity authentication**; v1 is
+  unencrypted and is not protected against an on-path attacker. No cookies are reported/logged.
+- Bounds: 64 accepted/pending peers, project max-player admission, eight incoming control messages
+  per peer/frame, 1024-byte controls, 300-frame handshake/connect timeout, 600-frame inactivity
+  timeout and 60-frame keepalive. Reliable channel limits still apply. Graceful leave/kick drains
+  acknowledgements for at most 30 frames; terminal states release listeners, sockets, peers and
+  queues. Slow roster queues close their peer rather than stall other players.
+- Commands: `net.state`, `net.host`, `net.join`, `net.leave`, `net.players`, `net.ready`, `net.kick`,
+  `net.stats`, `net.rpc`. They do not participate in scene undo. Tools must keep a session alive
+  (`oe script`, MCP/editor or HTTP) and advance both engines with `sim.step`; a one-shot `oe exec`
+  host exits immediately. `state`, `players`, `stats` are safe to read with networking disabled.
+  `net.simulate`, local-peer spawning and dedicated/editor tools remain M7; desync reports M5.
+- Lua provides the same operations plus role queries, `net.localPlayer()`, sorted id array
+  `net.players()`, `net.on(name, fn)` and `net.sender()` within a handler. RPC targets are
+  `server`, `all`, `others`, or a decimal player id; `owner` needs M6. Arguments: at most 16 finite
+  JSON values, depth <=8, strings <=1024 bytes, collections <=64 items and <=8192 serialized
+  bytes; Lua conversion also bounds traversal at 512 nodes. At most 64 handlers; `net.on(name,nil)`
+  removes one. Local recursive RPC is limited to eight callbacks and shares its instruction budget.
+  Session observer queues hold at most 256 events; overflow is dropped/counted without blocking.
+  Games must revalidate RPCs; routing does not grant clients authority over scene state.
+- None mode: server=true, client/host=false, local player=1, Lua players={1}; RPC calls the local
+  handler immediately (except `others`, which has no recipient). `owner`/missing players are errors.
+  Host/join are refused with a project-setting hint; no sockets, sessions or network polls occur.
+  Shared API integer validation rejects nonfinite/out-of-range values before integer conversion;
+  oversized or nonfinite seed arguments cannot trigger undefined casts.
+  Loopback rooms are scoped to one process, created only by hosts, and removed on host shutdown.
+  Late joins map their private frame counter to the room wire clock; reconnect does not wait to
+  catch up with an existing host. `net.spawn_local_peers` and fault controls remain M7.
+- Android APK/AAB manifests request `android.permission.INTERNET` only for enabled network
+  projects. Default/none manifests retain their previous permissions.
+- [x] Windows Release build; 112 tests, zero failed checks. New coverage:
+  `NetworkNoneLuaRpcAndLimits`, `NetworkEngineLoopbackLobbyAndRpc`,
+  `NetworkSessionConfigValidation`, `NetworkSessionHandshakeLossVersionAndTimeout`,
+  `NetworkSessionCookieReplayBoundsAndReconnect`, `NetworkEngineNativeSessionTcpUdp`.
+  Covers real TCP/UDP host/join/RPC, 3-player roster/readiness/kick/leave/reconnect, callbacks,
+  reproducible loss/duplication/reordering, version rejection, timeout, malformed/replayed cookies,
+  RPC bounds and inactive session/socket/poll counters. Android manifest checks cover opt-in
+  INTERNET permission in binary XML and protobuf. Existing determinism/editor tests remain green.
+- [x] Node JS bridge mocks, including entropy availability/failure, size guards and callback cleanup.
+  API reference regenerated and persistent CLI script smoke checks passed (see validation commands below).
+- [ ] POSIX build, real browser/Wasm connection and Android device verification: no WSL/Linux
+  toolchain, Emscripten SDK or Android NDK installed. Run the M3 SDK commands when available;
+  rebuild `runtime/web/` and `runtime/android/` before distributing these new APIs. Committed
+  runtimes remain unchanged. Web clients require an external binary WebSocket endpoint that
+  speaks the session protocol; the native TCP listener does not implement WebSocket upgrades.
+
+M4 validation commands:
+```text
+build.bat
+build/bin/oe_tests.exe
+node tests/network_web_test.js
+oe api --markdown > docs/API.md
+```

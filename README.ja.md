@@ -58,6 +58,14 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 
 ## エディター
 
+ネットワークのロビー/RPC: `project.json` に
+`"network":{"mode":"lockstep","transport":"tcp","port":7778}` を設定し、
+継続して動作するツールセッションまたは Lua から `net.host`/`net.join` を呼びます。
+`net.players`、`net.ready`、`net.stats`、`net.rpc`、`net.on` でロビーとメッセージを扱います。
+設定なし/`none` は従来のシングルプレイヤーとローカル RPC です。
+フレーム同期と複製は M5/M6 で実装予定です。ブラウザーには対応 WebSocket サーバーと
+再ビルド済みランタイムが必要です。[docs/NETWORK.md](docs/NETWORK.md) を参照。
+
 `oe editor` は**エディター** (Dear ImGui のドッキング + ImGuizmo、エンジンと同じプロセスで GPU 描画) を開きます。コマンド API だけを使うため、エージェント (`oe mcp --connect 7777`) が人と同じセッションを同時に操作できます。ウィンドウがない環境 (ヘッドレスの Linux など) では `oe editor MyGame --screenshot shot.png` でエディター画面を画像にできます。詳細: [docs/EDITOR.md](docs/EDITOR.md)
 
 - ドッキングパネル: ヒエラルキー・インスペクター・シーン・ゲーム・アセット・コンソール・スクリプト - 配置はプロジェクトごとに保存 (`.oe/editor.ini`)、表示 > レイアウトをリセット

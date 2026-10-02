@@ -12,6 +12,7 @@
 #include "api/Commands.h"
 #include "app/SaveStore.h"
 #include "core/Json.h"
+#include "net/Session.h"
 #include "render/Renderer.h"
 #include "scene/Scene.h"
 #include "scene/Systems.h"
@@ -94,6 +95,9 @@ public:
 
     // ----- Scripting -------------------------------------------------------
     ScriptHost& Scripts() { return *scripts_; }
+    // Shared command/Lua session surface; absent/none projects allocate no session.
+    Json NetworkCall(const std::string& command, const Json& args);
+    Session* Network() const { return network_.get(); }
     PhysicsWorld& Physics() { return *physics_; }
     AudioSystem& Audio() { return *audio_; }
     AssetManager& Assets() { return *assets_; }
@@ -167,6 +171,9 @@ private:
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;
     std::unique_ptr<AudioSystem> audio_;
+    SessionConfig networkConfig_;
+    std::unique_ptr<Session> network_;
+    uint64_t networkFrame_ = 0;
     double hotReloadTimer_ = 0.0;
 
     std::string projectDir_;

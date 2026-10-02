@@ -41,6 +41,11 @@ finds (`--abi arm64-v8a` limits it). ABIs: `arm64-v8a` (phones and tablets),
 
 ## Options
 
+Enabled `project.json` networking (`network.mode` other than `none`) adds
+`android.permission.INTERNET` to both APK and App Bundle manifests. Single-player/none
+projects keep their previous permissions. M4 lobbies/RPC require a rebuilt Android runtime;
+device networking is unverified without the NDK/device. See [NETWORK.md](NETWORK.md).
+
 `project.json` (all optional):
 
 ```json

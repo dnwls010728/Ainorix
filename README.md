@@ -58,6 +58,14 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 
 ## 에디터
 
+네트워크 로비/RPC: `project.json`에
+`"network":{"mode":"lockstep","transport":"tcp","port":7778}`을 설정한 뒤,
+계속 실행되는 도구 세션이나 Lua에서 `net.host`/`net.join`을 호출합니다.
+`net.players`, `net.ready`, `net.stats`, `net.rpc`, `net.on`으로 로비와 메시지를 처리합니다.
+설정이 없거나 `none`이면 기존 단일 플레이와 로컬 RPC로 동작합니다.
+프레임 동기화·복제는 M5/M6 예정입니다. 웹 클라이언트는 호환 WebSocket 서버와
+재빌드한 런타임이 필요합니다. [docs/NETWORK.md](docs/NETWORK.md) 참고.
+
 `oe editor`는 **에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 창이 없는 환경(Linux 헤드리스 등)에서는 `oe editor MyGame --screenshot shot.png`로 에디터 화면을 렌더링할 수 있습니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)
 
 - 도킹 패널: Hierarchy · Inspector · Scene · Game · Assets · Console · Scripts — 배치는 프로젝트별로 저장(`.oe/editor.ini`), 보기 > 레이아웃 초기화

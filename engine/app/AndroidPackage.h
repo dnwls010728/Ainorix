@@ -19,6 +19,7 @@ struct AndroidAppInfo {
     std::string orientation = "landscape";  // landscape | portrait | auto
     bool hasIcon = false;     // res/drawable/icon.png is in the APK
     bool debuggable = false;  // lets `adb shell run-as` read the app's files
+    bool network = false;     // opt-in INTERNET permission for enabled network projects
 };
 
 // "com.example.game": two or more segments of [A-Za-z][A-Za-z0-9_]*.

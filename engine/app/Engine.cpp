@@ -64,6 +64,9 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
             if (error) *error = projectFile + ": " + parseError;
             return false;
         }
+        SessionConfig config;
+        if (!SessionConfig::Parse(project, config, error)) return false;
+        network_.reset(); networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
         projectName_ = project["name"].asString("Untitled");
         std::string start = project["startScene"].asString("");
@@ -75,6 +78,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
     }
 
     // A bare scene file: use the nearest enclosing project if there is one.
+    network_.reset(); networkFrame_ = 0; networkConfig_ = SessionConfig{};
     std::string dir = ParentPath(path);
     projectDir_ = dir;
     for (std::string d = dir; !d.empty(); d = ParentPath(d)) {
@@ -82,7 +86,9 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
             projectDir_ = d;
             std::string text;
             ReadTextFile(JoinPath(d, "project.json"), text);
-            projectName_ = Json::parse(text)["name"].asString("Untitled");
+            Json project = Json::parse(text);
+            if (!SessionConfig::Parse(project, networkConfig_, error)) return false;
+            projectName_ = project["name"].asString("Untitled");
             break;
         }
         if (ParentPath(d) == d) break;
@@ -107,6 +113,7 @@ bool Engine::LoadScene(const std::string& path, std::string* error) {
         return false;
     }
     playing_ = false;
+    network_.reset(); networkFrame_ = 0;
     playSnapshot_.reset();
     ResetRuntime();
     frame_ = 0;
@@ -132,6 +139,7 @@ bool Engine::SaveScene(const std::string& path, std::string* error) {
 }
 
 void Engine::NewScene(const std::string& name) {
+    network_.reset(); networkFrame_ = 0;
     scene_.Clear();
     scene_.name = name;
     playing_ = false;
@@ -240,6 +248,7 @@ void Engine::Pause() {
 }
 
 void Engine::Stop() {
+    network_.reset(); networkFrame_ = 0;
     playing_ = false;
     if (playSnapshot_) {
         std::string err;
@@ -299,6 +308,11 @@ void Engine::AppendDebugLines(std::vector<DebugLine>& out) const {
 }
 
 void Engine::SimulateFrame() {
+    if (network_) {
+        uint32_t seed = network_->Seed();
+        network_->Advance(networkFrame_++);
+        if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
+    }
     // Expire debug lines whose time is up (0-second lines live for one frame).
     debugLines_.erase(std::remove_if(debugLines_.begin(), debugLines_.end(), [&](const TimedLine& t) { return t.expires >= 0 && t.expires <= simTime_; }),
                       debugLines_.end());
@@ -306,6 +320,7 @@ void Engine::SimulateFrame() {
     const float dt = static_cast<float>(kFixedDt);
     UpdateButtonKeys();
     scripts_->Update(dt);
+    if (network_) scripts_->DispatchNetwork(network_->DrainEvents());
     std::vector<UIEvent> uiEvents = UpdateUI();
     UpdateSystems(scene_, input_, dt, assets_.get());
     std::vector<PhysicsEvent> events = physics_->Step(scene_, dt);

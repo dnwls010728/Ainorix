@@ -83,6 +83,7 @@ bool UdpTransport::Poll(uint64_t frame, std::vector<TransportEvent>& events) {
         auto peer = std::find_if(peers_.begin(), peers_.end(), [&](const auto& entry) { return entry.second == from; });
         if (peer == peers_.end() || ++counts[peer->first] > kMaxReceiveFrames) { ++dropped_; continue; }
         events.push_back({peer->first, std::vector<uint8_t>(bytes.begin(), bytes.begin() + static_cast<ptrdiff_t>(size))});
+        events.back().datagram = true;
     }
     return true;
 }

@@ -764,6 +764,7 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     }
 
     AndroidAppInfo app;
+    app.network = project["network"].isObject() && project["network"]["mode"].asString("none") != "none";
     app.label = project["window"]["title"].asString(project["name"].asString(name));
     app.packageName = a.Get("--package", android["package"].asString(DefaultAndroidPackageName(name)));
     if (!IsValidAndroidPackageName(app.packageName)) {

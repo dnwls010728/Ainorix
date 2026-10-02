@@ -25,8 +25,8 @@ bool ReadProbe(const std::vector<uint8_t>& bytes, uint8_t& kind, uint64_t& chall
            reader.ReadU8(kind) && (kind == 1 || kind == 2) && reader.ReadU64(challenge) && challenge != 0;
 }
 }
-FallbackTransport::FallbackTransport(ITransport& udp, ITransport& tcp, uint32_t probeFrames)
-    : udp_(udp), tcp_(tcp), probeFrames_(probeFrames) {
+FallbackTransport::FallbackTransport(ITransport& udp, ITransport& tcp, uint32_t probeFrames, bool forwardControl)
+    : udp_(udp), tcp_(tcp), probeFrames_(probeFrames), forwardControl_(forwardControl) {
     if (probeFrames == 0 || probeFrames > 3600) throw std::invalid_argument("invalid UDP probe timeout");
 }
 bool FallbackTransport::AddPeer(PeerId id, uint64_t challengeSeed) {
@@ -57,7 +57,7 @@ bool FallbackTransport::Poll(uint64_t frame, std::vector<TransportEvent>& events
     frame_ = frame;
     polled_ = true;
     for (auto& event : tcpEvents) {
-        if (!peers_.count(event.peer)) continue;
+        if (!peers_.count(event.peer) && !forwardControl_) continue;
         if (event.type == TransportEvent::Type::Disconnected) peers_.erase(event.peer);
         events.push_back(std::move(event));
     }
@@ -77,7 +77,10 @@ bool FallbackTransport::Poll(uint64_t frame, std::vector<TransportEvent>& events
                 peer.probing = false;
                 peer.lastConfirmed = frame;
             }
-        } else if (event.type == TransportEvent::Type::Data && peer.route == Route::Udp) events.push_back(std::move(event));
+        } else if (event.type == TransportEvent::Type::Data && peer.route == Route::Udp) {
+            event.datagram = true;
+            events.push_back(std::move(event));
+        }
     }
     for (auto& entry : peers_) {
         Peer& peer = entry.second;

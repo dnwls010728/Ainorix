@@ -61,5 +61,7 @@ std::unique_ptr<PlatformWebSocket> CreatePlatformWebSocket(const std::string& ur
 // Monotonic creation/live-object counters for the single-player zero-cost pin and resource tests.
 uint64_t PlatformNetSocketsCreated();
 uint64_t PlatformNetSocketsLive();
+// Cryptographic OS/browser entropy for connection cookies, never used by simulation RNG.
+bool NetworkRandom(uint8_t* bytes, size_t size);
 
 }  // namespace oe

@@ -6,6 +6,16 @@
 #include <emscripten.h>
 
 namespace oe {
+EM_JS(int, WebNetworkRandom, (uint8_t* bytes, size_t size), {
+    try {
+        if (typeof crypto === 'undefined' || !crypto.getRandomValues) return 0;
+        crypto.getRandomValues(HEAPU8.subarray(bytes, bytes + size));
+        return 1;
+    } catch (e) { return 0; }
+});
+bool NetworkRandom(uint8_t* bytes, size_t size) {
+    return bytes && size > 0 && size <= 256 && WebNetworkRandom(bytes, size) != 0;
+}
 namespace {
 // Check JS binary lengths before copying to the Wasm heap. Browser callbacks never touch Engine state.
 EM_JS(int, OpenWebSocket, (const char* url, void* owner), {

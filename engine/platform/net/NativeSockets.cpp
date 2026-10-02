@@ -6,6 +6,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
 #else
 #include <arpa/inet.h>
 #include <cerrno>
@@ -17,6 +18,23 @@
 #endif
 
 namespace oe {
+bool NetworkRandom(uint8_t* bytes, size_t size) {
+    if (!bytes || size == 0 || size > 256) return false;
+#ifdef _WIN32
+    return BCryptGenRandom(nullptr, bytes, static_cast<ULONG>(size), BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+#else
+    int fd = open("/dev/urandom", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return false;
+    size_t offset = 0;
+    while (offset < size) {
+        ssize_t count = read(fd, bytes + offset, size - offset);
+        if (count <= 0) { close(fd); return false; }
+        offset += static_cast<size_t>(count);
+    }
+    close(fd);
+    return true;
+#endif
+}
 namespace {
 #ifdef _WIN32
 using Handle = SOCKET;

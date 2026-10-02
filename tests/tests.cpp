@@ -8,6 +8,7 @@
 #include <set>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <string>
 #include <stdexcept>
 #include <vector>
@@ -1134,6 +1135,7 @@ std::string TempProject(const char* name) {
 Json Call(Engine& e, const char* cmd, const char* args) { return e.Call(cmd, Json::parse(args)); }
 
 TEST(NetworkInactiveZeroCost) {
+    const uint64_t sessionInstances = Session::InstancesCreated(), sessionPolls = Session::PollCalls();
     const uint64_t instances = LoopbackNetwork::InstancesCreated();
     const uint64_t polls = LoopbackNetwork::PollCalls();
     const uint64_t channelInstances = ChannelEndpoint::InstancesCreated();
@@ -1148,6 +1150,11 @@ TEST(NetworkInactiveZeroCost) {
         Engine e;
         std::string error;
         CHECK(e.Open(project, &error));
+        CHECK(Call(e, "net.state", "{}")["result"]["state"].asString() == "none");
+        CHECK(Call(e, "net.players", "{}")["result"].size() == 1);
+        CHECK(Call(e, "net.stats", "{}")["result"]["peers"].size() == 0);
+        CHECK(!Call(e, "net.host", "{}")["ok"].asBool());
+        CHECK(Call(e, "net.leave", "{}")["ok"].asBool());
         std::vector<std::string> hashes;
         for (int step = 0; step < 4; ++step) {
             CHECK(Call(e, "input.key", step % 2 == 0 ? R"({"key":"W","down":true})" :
@@ -1171,8 +1178,257 @@ TEST(NetworkInactiveZeroCost) {
     CHECK(ChannelEndpoint::InstancesCreated() == channelInstances);
     CHECK(ChannelEndpoint::PollCalls() == channelPolls);
     CHECK(PlatformNetSocketsCreated() == socketsCreated && PlatformNetSocketsLive() == socketsLive);
+    CHECK(Session::InstancesCreated() == sessionInstances && Session::PollCalls() == sessionPolls);
     CHECK(RemoveAll(project));
 }
+
+Json NetworkEval(Engine& engine, const std::string& code, EntityId entity = 0) {
+    return engine.Scripts().Eval(code, entity)["value"];
+}
+TEST(NetworkNoneLuaRpcAndLimits) {
+    Engine e;
+    const uint64_t sockets = PlatformNetSocketsCreated(), sessions = Session::InstancesCreated();
+    CHECK(NetworkEval(e, "return {net.isServer(), net.isClient(), net.isHost(), net.localPlayer(), net.players()}", 0) ==
+          Json::parse("[true,false,false,1,[1]]"));
+    CHECK(NetworkEval(e, "got=0; net.on('add',function(n) got=got+n; sender=net.sender() end); net.rpc('server','add',3); return {got,sender}", 0) ==
+          Json::parse("[3,1]"));
+    CHECK(Call(e, "net.rpc", R"({"target":"all","name":"add","args":[4]})")["ok"].asBool());
+    CHECK(NetworkEval(e, "return got", 0).asInt() == 7);
+    CHECK(Call(e, "net.rpc", R"({"target":"others","name":"add","args":[100]})")["ok"].asBool());
+    CHECK(NetworkEval(e, "return got", 0).asInt() == 7);
+    CHECK(!Call(e, "net.rpc", R"({"target":"owner","name":"add"})")["ok"].asBool());
+    CHECK(!Call(e, "net.rpc", R"({"name":"","args":[]})")["ok"].asBool());
+    CHECK(!Call(e, "net.rpc", R"({"name":"add","args":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]})")["ok"].asBool());
+    Json invalid = Json::MakeObject(); invalid["seed"] = std::numeric_limits<double>::infinity();
+    CHECK(e.Call("net.host", invalid)["error"]["code"].asString() == "invalid_argument");
+    invalid["seed"] = 1e100;
+    CHECK(e.Call("net.host", invalid)["error"]["code"].asString() == "invalid_argument");
+    CHECK(NetworkEval(e, "net.on('add',nil); net.rpc('server','add',9); return got", 0).asInt() == 7);
+    CHECK(NetworkEval(e, "local ok=pcall(function() for i=1,65 do net.on('h'..i,function() end) end end); return ok", 0).asBool() == false);
+    CHECK(PlatformNetSocketsCreated() == sockets && Session::InstancesCreated() == sessions);
+    CHECK(!NetworkEval(e, "local t={}; t.self=t; return pcall(function() net.rpc('all','bad',t) end)")[0].asBool());
+}
+
+std::string NetworkProject(const char* name, const char* transport, int maxPlayers = 4) {
+    std::string project = TempProject(name), text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json settings = Json::parse(text);
+    settings["network"] = Json::parse(R"({"mode":"lockstep","port":0,"gameId":"test-game"})");
+    settings["network"]["transport"] = transport;
+    settings["network"]["maxPlayers"] = maxPlayers;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), settings.dump(2)));
+    return project;
+}
+void NetworkReceiver(Engine& e) {
+    CHECK(Call(e, "script.write", R"({"path":"scripts/net_test.lua","source":"local M={}\nfunction M:onStart() received={} joined={} left={} states={} net.on('ping',function(n) received[#received+1]={net.sender(),n} end) end\nfunction M:onPlayerJoined(id) joined[#joined+1]=id end\nfunction M:onPlayerLeft(id) left[#left+1]=id end\nfunction M:onNetState(s) states[#states+1]=s end\nreturn M"})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"NetTest","components":{"Script":{"path":"scripts/net_test.lua"}}})")["ok"].asBool());
+}
+void NetworkSteps(Engine& a, Engine& b, int count, Engine* c = nullptr) {
+    for (int frame = 0; frame < count; ++frame) {
+        a.Step(1); b.Step(1); if (c) c->Step(1);
+    }
+}
+
+TEST(NetworkEngineLoopbackLobbyAndRpc) {
+    std::string project = NetworkProject("network_lobby", "loopback", 3), error;
+    {
+        Engine host, a, b;
+        CHECK(host.Open(project, &error) && a.Open(project, &error) && b.Open(project, &error));
+        NetworkReceiver(host); NetworkReceiver(a); NetworkReceiver(b);
+        CHECK(Call(host, "net.host", R"({"room":"lobby-test","seed":42,"name":"Host"})")["ok"].asBool());
+        CHECK(Call(a, "net.join", R"({"address":"lobby-test","name":"A"})")["ok"].asBool());
+        CHECK(Call(b, "net.join", R"({"address":"lobby-test","name":"B"})")["ok"].asBool());
+        NetworkSteps(host, a, 40, &b);
+        CHECK(host.Network()->Players().size() == 3 && a.Network()->Players().size() == 3 && b.Network()->Players().size() == 3);
+        CHECK(a.Network()->LocalPlayer() == 2 && b.Network()->LocalPlayer() == 3);
+        CHECK(a.Network()->Seed() == 42 && b.Network()->Seed() == 42);
+        CHECK(NetworkEval(a, "return joined", 0) == Json::parse("[1,2,3]"));
+        CHECK(NetworkEval(a, "return net.players()", 0) == Json::parse("[1,2,3]"));
+        // All Lua states are seeded at the same lobby transition, independently of wall time.
+        host.Scripts().SetNetworkSeed(42); a.Scripts().SetNetworkSeed(42); b.Scripts().SetNetworkSeed(42);
+        CHECK(NetworkEval(host, "return math.random()", 0) == NetworkEval(a, "return math.random()", 0));
+        CHECK(Call(a, "net.ready", R"({"ready":true})")["ok"].asBool());
+        CHECK(Call(b, "net.rpc", R"({"name":"ping","target":"all","args":[30]})")["ok"].asBool());
+        CHECK(Call(a, "net.rpc", R"({"name":"ping","target":"server","args":[20]})")["ok"].asBool());
+        NetworkSteps(host, a, 20, &b);
+        CHECK(NetworkEval(host, "return received", 0) == Json::parse("[[2,20],[3,30]]"));
+        CHECK(NetworkEval(a, "return received", 0) == Json::parse("[[3,30]]"));
+        CHECK(NetworkEval(b, "return received", 0) == Json::parse("[[3,30]]"));
+        CHECK(host.Network()->Players()[1]["ready"].asBool());
+        CHECK(Call(a, "net.kick", R"({"player":3})")["ok"].asBool() == false);
+        CHECK(Call(host, "net.kick", R"({"player":3})")["ok"].asBool());
+        NetworkSteps(host, a, 40, &b);
+        CHECK(b.Network()->Status() == "offline" && host.Network()->Players().size() == 2 && a.Network()->Players().size() == 2);
+        CHECK(NetworkEval(a, "return left", 0) == Json::parse("[3]"));
+        CHECK(Call(a, "net.leave", "{}")["ok"].asBool());
+        NetworkSteps(host, a, 40);
+        CHECK(a.Network()->Status() == "offline" && host.Network()->Players().size() == 1);
+        CHECK(Call(b, "net.join", R"({"address":"lobby-test"})")["ok"].asBool());
+        NetworkSteps(host, b, 40);
+        CHECK(b.Network()->LocalPlayer() == 4);  // ids never reused within a host incarnation
+        host.Stop();
+        CHECK(host.Network() == nullptr);
+        CHECK(!Call(a, "net.join", R"({"address":"lobby-test"})")["ok"].asBool());
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NetworkSessionConfigValidation) {
+    SessionConfig config; std::string error;
+    CHECK(SessionConfig::Parse(Json::parse(R"({"network":{"mode":"none","port":"ignored"}})"), config, &error));
+    for (const char* json : {R"({"network":true})", R"({"network":{"mode":"rollback"}})",
+         R"({"network":{"mode":"lockstep","tickRate":30}})", R"({"network":{"mode":"lockstep","maxPlayers":65}})",
+         R"({"network":{"mode":"lockstep","port":-1}})", R"({"network":{"mode":"lockstep","bind":"0.00.0.0"}})",
+         R"({"network":{"mode":"lockstep","transport":"bad"}})"})
+        CHECK(!SessionConfig::Parse(Json::parse(json), config, &error) && !error.empty());
+    CHECK(SessionConfig::Parse(Json::parse(R"({"name":"Game","network":{"mode":"authoritative","bind":"0.0.0.0"}})"), config, &error));
+    CHECK(config.bind == "0.0.0.0" && config.tickRate == 60);
+}
+
+class SessionRecordedWire final : public ITransport {
+public:
+    SessionRecordedWire(std::shared_ptr<LoopbackNetwork> network, PeerId peer) : wire_(std::move(network), peer) {}
+    std::vector<std::vector<uint8_t>> sent;
+    bool Send(PeerId peer, const uint8_t* bytes, size_t size) override {
+        if (sent.size() < 1024) sent.emplace_back(bytes, bytes + size);
+        return wire_.Send(peer, bytes, size);
+    }
+    bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override { return wire_.Poll(frame, events); }
+private:
+    LoopbackTransport wire_;
+};
+Session::Random SessionTestRandom(uint64_t first) {
+    auto counter = std::make_shared<uint64_t>(first);
+    return [counter](uint8_t* bytes, size_t size) {
+        if (size != 8) return false;
+        uint64_t value = ++*counter;
+        for (size_t i = 0; i < size; ++i) bytes[i] = static_cast<uint8_t>(value >> (8 * i));
+        return true;
+    };
+}
+TEST(NetworkSessionHandshakeLossVersionAndTimeout) {
+    auto run = [] {
+        LoopbackConfig faults; faults.seed = 91; faults.lossPermille = 150;
+        faults.duplicatePermille = 200; faults.reorderFrames = 3; faults.latencyFrames = 1;
+        auto wire = std::make_shared<LoopbackNetwork>(faults);
+        SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
+        Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 55, SessionTestRandom(100));
+        Session client(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Client", 0, SessionTestRandom(200));
+        std::vector<std::string> trace;
+        bool sent = false;
+        for (uint64_t frame = 0; frame < 500; ++frame) {
+            CHECK(host.Advance(frame) && client.Advance(frame));
+            for (auto* session : {&host, &client}) for (const auto& event : session->DrainEvents()) {
+                trace.push_back(std::to_string(frame) + ":" + std::to_string(event.player) + ":" + event.name);
+            }
+            if (!sent && host.Players().size() == 2 && client.Players().size() == 2) {
+                std::string error;
+                CHECK(client.Rpc("server", "ping", Json::parse("[5]"), &error)); sent = true;
+            }
+        }
+        CHECK(sent && client.Connected() && client.Seed() == 55);
+        CHECK(std::count_if(trace.begin(), trace.end(), [](const std::string& row) { return row.find(":ping") != std::string::npos; }) == 1);
+        CHECK(!client.Advance(10));
+        return trace;
+    };
+    CHECK(run() == run());
+    auto wire = std::make_shared<LoopbackNetwork>();
+    SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
+    Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 1, SessionTestRandom(100));
+    config.version = 2;
+    Session bad(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Old", 0, SessionTestRandom(200));
+    for (uint64_t frame = 0; frame < 20; ++frame) { CHECK(host.Advance(frame) && bad.Advance(frame)); }
+    CHECK(bad.Status() == "error" && bad.State()["error"].asString().find("mismatch") != std::string::npos);
+    CHECK(host.Players().size() == 1);
+    Session lonely(config, std::make_unique<LoopbackTransport>(wire, 3), false, 9, "Alone", 0, SessionTestRandom(300));
+    for (uint64_t frame = 0; frame < 310; ++frame) CHECK(lonely.Advance(frame));
+    CHECK(lonely.Status() == "error" && lonely.LocalPlayer() == 0);
+    Session noEntropy(config, std::make_unique<LoopbackTransport>(wire, 4), false, 1, "NoEntropy", 0,
+                      [](uint8_t*, size_t) { return false; });
+    CHECK(noEntropy.Status() == "error" && noEntropy.State()["error"].asString().find("entropy") != std::string::npos);
+    CHECK(noEntropy.Advance(0));
+    auto limitedWire = std::make_shared<LoopbackNetwork>();
+    config.version = 1; config.maxPlayers = 2;
+    Session limited(config, std::make_unique<LoopbackTransport>(limitedWire, 1), true, 1, "Host", 1, SessionTestRandom(400));
+    Session first(config, std::make_unique<LoopbackTransport>(limitedWire, 2), false, 1, "First", 0, SessionTestRandom(500));
+    Session full(config, std::make_unique<LoopbackTransport>(limitedWire, 3), false, 1, "Full", 0, SessionTestRandom(600));
+    for (uint64_t frame = 0; frame < 310; ++frame) { limited.Advance(frame); first.Advance(frame); full.Advance(frame); }
+    CHECK(first.Connected() && limited.Players().size() == 2 && full.Status() == "error");
+}
+
+TEST(NetworkSessionCookieReplayBoundsAndReconnect) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
+    Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 1, SessionTestRandom(100));
+    std::vector<uint8_t> oldEnvelope;
+    {
+        auto transport = std::make_unique<SessionRecordedWire>(wire, 2); auto* recorded = transport.get();
+        Session client(config, std::move(transport), false, 1, "Client", 0, SessionTestRandom(200));
+        for (uint64_t frame = 0; frame < 30; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+        std::string error;
+        CHECK(client.Rpc("server", "old", Json::MakeArray(), &error));
+        for (uint64_t frame = 30; frame < 50; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+        for (const auto& bytes : recorded->sent) {
+            ByteReader reader(bytes.data(), bytes.size()); uint32_t magic = 0;
+            if (reader.ReadU32(magic) && magic == 0x5344454f) { oldEnvelope = bytes; break; }
+        }
+        CHECK(!oldEnvelope.empty());
+        client.Leave();
+        for (uint64_t frame = 50; frame < 90; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+        CHECK(host.Players().size() == 1);
+    }
+    auto transport = std::make_unique<SessionRecordedWire>(wire, 2); auto* recorded = transport.get();
+    Session client(config, std::move(transport), false, 1, "New", 0, SessionTestRandom(300));
+    for (uint64_t frame = 90; frame < 120; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+    CHECK(client.LocalPlayer() == 3 && host.Players().size() == 2);
+    uint64_t rejected = static_cast<uint64_t>(host.Stats()["rejected"].asNumber());
+    CHECK(recorded->Send(1, oldEnvelope.data(), oldEnvelope.size()));
+    std::vector<uint8_t> malicious(300, 0);
+    for (int i = 0; i < 200; ++i) CHECK(recorded->Send(1, malicious.data(), malicious.size()));
+    for (uint64_t frame = 120; frame < 125; ++frame) { host.Advance(frame); client.Advance(frame); }
+    CHECK(host.Stats()["rejected"].asNumber() >= static_cast<double>(rejected + 201));
+    CHECK(host.Players().size() == 2 && client.Connected());
+    std::string error;
+    CHECK(client.Rpc("server", "new", Json::parse("[9]"), &error));
+    int received = 0;
+    for (uint64_t frame = 125; frame < 145; ++frame) {
+        host.Advance(frame); client.Advance(frame);
+        for (const auto& event : host.DrainEvents()) if (event.type == SessionEvent::Type::Rpc) { ++received; CHECK(event.player == 3 && event.name == "new"); }
+    }
+    CHECK(received == 1);
+    for (int i = 0; i < 300; ++i) host.Rpc("1", "queue", Json::MakeArray(), &error);
+    CHECK(host.DrainEvents().size() <= 256);
+}
+
+#ifndef __EMSCRIPTEN__
+TEST(NetworkEngineNativeSessionTcpUdp) {
+    for (const char* transport : {"tcp", "udp"}) {
+        std::string project = NetworkProject(transport, transport), error;
+        uint64_t sockets = PlatformNetSocketsLive();
+        {
+            Engine host, client;
+            CHECK(host.Open(project, &error) && client.Open(project, &error));
+            NetworkReceiver(host); NetworkReceiver(client);
+            Json hosted = Call(host, "net.host", R"({"seed":99})");
+            CHECK(hosted["ok"].asBool());
+            Json args = Json::MakeObject(); args["port"] = hosted["result"]["port"];
+            CHECK(client.Call("net.join", args)["ok"].asBool());
+            NetworkSteps(host, client, 180);
+            CHECK(client.Network()->Connected() && client.Network()->Seed() == 99 && host.Network()->Players().size() == 2);
+            CHECK(Call(client, "net.rpc", R"({"target":"server","name":"ping","args":[123]})")["ok"].asBool());
+            NetworkSteps(host, client, 80);
+            CHECK(NetworkEval(host, "return received", 0) == Json::parse("[[2,123]]"));
+            if (std::string(transport) == "udp") CHECK(host.Network()->Stats()["peers"][0]["route"].asString() == "udp");
+            CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty());
+            host.Stop(); NetworkSteps(host, client, 40);
+            CHECK(client.Network()->Status() == "error");
+            client.Stop();
+        }
+        CHECK(PlatformNetSocketsLive() == sockets);
+        CHECK(RemoveAll(project));
+    }
+}
+#endif
 
 bool Near(const Vec3& a, const Vec3& b, float eps) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
@@ -4429,6 +4685,11 @@ TEST(AndroidApk) {
     CHECK(proto.size() > 2 && proto[0] == 0x0A);  // XmlNode.element, length-delimited
     CHECK(has(proto, "android.app.NativeActivity") && has(proto, "oe_ANativeActivity_onCreate") && has(proto, app.label));
     CHECK(has(BuildAndroidResourcesProto(app.packageName), "res/drawable/icon.png"));
+    CHECK(!has(proto, "android.permission.INTERNET"));
+    CHECK(!hasUtf16(BuildAndroidManifest(app), u"android.permission.INTERNET"));
+    app.network = true;
+    CHECK(has(BuildAndroidManifestProto(app), "android.permission.INTERNET"));
+    CHECK(hasUtf16(BuildAndroidManifest(app), u"android.permission.INTERNET"));
     contents.app.packageName = "nope";
     CHECK(!WriteUnsignedApk(contents, "build/test_apk/bad.apk", &err));
     CHECK(!WriteUnsignedAppBundle(contents, "build/test_apk/bad.aab", &err));
