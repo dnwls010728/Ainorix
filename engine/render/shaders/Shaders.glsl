@@ -61,7 +61,7 @@ void main() {
 
 // Metallic-roughness shading. Must match Lighting::Shade and the pixel loop
 // in SoftwareRenderer.cpp (GpuRendererMatchesSoftware compares them).
-@fs mesh_fs
+@block surface_material
 layout(binding=1) uniform mesh_material {
     vec4 base_color;  // rgb, a: opacity
     vec4 flags;       // x: unlit, y: base texture, z: alpha cutoff (mask; 0 = off), w: double sided
@@ -76,6 +76,72 @@ layout(binding=1) uniform mesh_material {
     vec4 graph_value[32];
     vec4 graph_uniform[8];
 };
+@end
+
+@block surface_graph
+// Instruction numbering and finite semantics match ShaderGraph.cpp.
+vec4 GraphFinite(vec4 value) {
+    for (int channel = 0; channel < 4; ++channel) {
+        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
+    }
+    return value;
+}
+
+void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission) {
+    emission = vec3(0.0);
+    if (graph_control.x < 0.5) return;
+    vec4 registers[32];
+    for (int i = 0; i < 32; ++i) registers[i] = vec4(0.0);
+    for (int i = 0; i < 32; ++i) {
+        if (i >= int(graph_control.x)) break;
+        ivec4 code = ivec4(graph_code[i]);
+        vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
+        vec4 value = vec4(0.0);
+        if (code.x == 0) value = graph_value[i];
+        else if (code.x == 1) value = graph_uniform[int(graph_value[i].x)];
+        else if (code.x == 2) value = vec4(uv,0.0,0.0);
+        else if (code.x == 3) value = vec4(v_wpos,1.0);
+        else if (code.x == 4) value = vec4(normal,0.0);
+        else if (code.x == 5) value = vec4(graph_control.w);
+        else if (code.x == 6) value = vec4(base,alpha);
+        // Explicit level zero matches the software texture sampler and avoids
+        // undefined implicit derivatives in data-dependent instruction flow.
+        else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
+        else if (code.x == 8) value = a+b;
+        else if (code.x == 9) value = a-b;
+        else if (code.x == 10) value = a*b;
+        else if (code.x == 11) {
+            value = vec4(b.x == 0.0 ? 0.0 : a.x/b.x, b.y == 0.0 ? 0.0 : a.y/b.y,
+                         b.z == 0.0 ? 0.0 : a.z/b.z, b.w == 0.0 ? 0.0 : a.w/b.w);
+        }
+        else if (code.x == 12) value = min(a,b);
+        else if (code.x == 13) value = max(a,b);
+        else if (code.x == 14) value = sin(a);
+        else if (code.x == 15) value = cos(a);
+        else if (code.x == 16) value = floor(a);
+        else if (code.x == 17) value = fract(a);
+        else if (code.x == 18) value = abs(a);
+        else if (code.x == 19) value = min(max(a,b),c);
+        else if (code.x == 20) value = a*(1.0-c)+b*c;
+        else if (code.x == 21) value = step(a,b);
+        else if (code.x == 22) value = vec4(dot(a,b));
+        else if (code.x == 23) value = length(a) > 1e-8 ? a/length(a) : vec4(0.0);
+        else if (code.x == 24) {
+            ivec4 channels = ivec4(graph_value[i]);
+            value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
+        }
+        registers[i] = GraphFinite(value);
+    }
+    vec4 result = registers[int(graph_control.y)];
+    base = max(result.rgb,vec3(0.0));
+    alpha = clamp(result.a,0.0,1.0);
+    if (graph_control.z >= 0.0) emission = registers[int(graph_control.z)].rgb;
+}
+
+@end
+
+@fs mesh_fs
+@include_block surface_material
 
 layout(binding=2) uniform mesh_lights {
     mat4 shadow_vp;
@@ -149,63 +215,7 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
     return (diffuse + F * spec) * ndl;
 }
 
-// Instruction numbering and finite semantics match ShaderGraph.cpp.
-vec4 GraphFinite(vec4 value) {
-    for (int channel = 0; channel < 4; ++channel) {
-        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
-    }
-    return value;
-}
-
-void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission) {
-    emission = vec3(0.0);
-    if (graph_control.x < 0.5) return;
-    vec4 registers[32];
-    for (int i = 0; i < 32; ++i) registers[i] = vec4(0.0);
-    for (int i = 0; i < 32; ++i) {
-        if (i >= int(graph_control.x)) break;
-        ivec4 code = ivec4(graph_code[i]);
-        vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
-        vec4 value = vec4(0.0);
-        if (code.x == 0) value = graph_value[i];
-        else if (code.x == 1) value = graph_uniform[int(graph_value[i].x)];
-        else if (code.x == 2) value = vec4(uv,0.0,0.0);
-        else if (code.x == 3) value = vec4(v_wpos,1.0);
-        else if (code.x == 4) value = vec4(normal,0.0);
-        else if (code.x == 5) value = vec4(graph_control.w);
-        else if (code.x == 6) value = vec4(base,alpha);
-        // Explicit level zero matches the software texture sampler and avoids
-        // undefined implicit derivatives in data-dependent instruction flow.
-        else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
-        else if (code.x == 8) value = a+b;
-        else if (code.x == 9) value = a-b;
-        else if (code.x == 10) value = a*b;
-        else if (code.x == 11) {
-            for (int k = 0; k < 4; ++k) value[k] = b[k] == 0.0 ? 0.0 : a[k]/b[k];
-        }
-        else if (code.x == 12) value = min(a,b);
-        else if (code.x == 13) value = max(a,b);
-        else if (code.x == 14) value = sin(a);
-        else if (code.x == 15) value = cos(a);
-        else if (code.x == 16) value = floor(a);
-        else if (code.x == 17) value = fract(a);
-        else if (code.x == 18) value = abs(a);
-        else if (code.x == 19) value = min(max(a,b),c);
-        else if (code.x == 20) value = a*(1.0-c)+b*c;
-        else if (code.x == 21) value = step(a,b);
-        else if (code.x == 22) value = vec4(dot(a,b));
-        else if (code.x == 23) value = length(a) > 1e-8 ? a/length(a) : vec4(0.0);
-        else if (code.x == 24) {
-            ivec4 channels = ivec4(graph_value[i]);
-            value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
-        }
-        registers[i] = GraphFinite(value);
-    }
-    vec4 result = registers[int(graph_control.y)];
-    base = max(result.rgb,vec3(0.0));
-    alpha = clamp(result.a,0.0,1.0);
-    if (graph_control.z >= 0.0) emission = registers[int(graph_control.z)].rgb;
-}
+@include_block surface_graph
 
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
@@ -352,6 +362,39 @@ void main() {
 
 @program shadow pos_vs depth_fs
 @program solid pos_vs solid_fs
+
+@fs surface_aux_fs
+@include_block surface_material
+layout(binding=0) uniform texture2D base_tex;
+layout(binding=0) uniform sampler base_smp;
+in vec3 v_wpos;
+in vec3 v_nrm;
+in vec4 v_tan;
+in vec2 v_uv;
+out vec4 frag_color;
+@include_block surface_graph
+void main() {
+    vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
+    vec3 base = base_color.rgb;
+    float alpha = base_color.a;
+    if (flags.y > 0.5) {
+        vec4 texel = textureLod(sampler2D(base_tex,base_smp),uv,0.0);
+        base *= texel.rgb;
+        alpha *= texel.a;
+    }
+    vec3 normal = normalize(v_nrm);
+    if (emissive.w > 0.5) {
+        vec3 face = normalize(cross(dFdx(v_wpos),dFdy(v_wpos)));
+        normal = dot(face,normal) < 0.0 ? -face : face;
+    }
+    if (!gl_FrontFacing) normal = -normal;
+    vec3 emission;
+    SurfaceGraph(uv,normal,base,alpha,emission);
+    if (alpha < flags.z) discard;
+    frag_color = vec4(1.0);
+}
+@end
+@program surface_aux mesh_vs surface_aux_fs
 
 // ----- Vertex-colored lines (grid, colliders, debug.draw) and screen-space UI -----
 

@@ -119,6 +119,28 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             - [ ] Verify all instruction families with GPU comparisons,
                   textured/HDR/time-driven surfaces and alpha behavior;
                   extend graph alpha to shadow/selection passes as needed.
+                  - [x] Graph alpha in CPU shadow depth and GPU shadow/selection
+                        passes. Shared shader blocks keep auxiliary evaluation
+                        identical to main shading. Procedural masks remain
+                        enabled without a base texture; graph programs are
+                        retained even when their input opacity is zero.
+                        Windows passes 87 tests; Node/WASM passes 83.
+                        ShaderMaterialAlphaAndShadow
+                        verifies that alpha zero matches an absent object in
+                        color, CPU depth/IDs and GPU selection output; alpha one
+                        restores the object, outline and a visible ground
+                        shadow in both renderers. Disabling castShadows removes
+                        that ground shadow. CPU/D3D11 mean difference is 1.2367.
+                        CLI masked stripes/selection PNGs inspected: software
+                        7004187b216e5ce6, D3D11 e492f9db4088e1b0.
+                  - [ ] Remaining GPU instruction families, varying-alpha
+                        shadows, HDR/texture/time surfaces and blend behavior.
+                  - [x] Recover D3D compiler diagnostics with D3DCompile using
+                        the generated HLSL and engine compiler flags. Replacing
+                        indexed vector division with explicit channel expressions
+                        removes X3550 from both programs. The auxiliary program
+                        compiles without warnings; the main program retains the
+                        existing X3570 shadow-comparison derivative warning.
       - [ ] P6.4c: Sample procedural material, CPU/GPU image comparison,
             hot reload/packaging, WebGL execution, docs and refreshed players.
 - [ ] Hardware follow-up: Android device and full Linux/EGL effect execution.
@@ -261,8 +283,8 @@ built-in visual presets. Ordered four-vector instructions form an acyclic
 program; the CPU reference evaluates the same instructions that the generated
 GPU evaluator will execute. Existing sokol-shdc generation remains the backend
 compiler. Material binding and main fragment execution are implemented on CPU
-and GPU; alpha in auxiliary passes and full instruction-family verification
-remain open.
+and GPU. Graph alpha also reaches shadow/selection passes; full instruction
+families, varying-alpha shadows and blend verification remain open.
 
 Create a graph with shader.create {path, graph, overwrite?}; validate an existing
 file with shader.check {path}. Both commands validate every field and identify
@@ -299,8 +321,8 @@ and keeps the CPU reference independent of platform compiler behavior.
 
 Inputs: uv, world position, world normal, fixed simulation time (broadcast),
 baseColor RGBA, and texture(args UV) for the material's base texture. Missing
-textures sample white. The integration milestone will supply these interpolated
-fragment inputs; the reference evaluator already accepts them.
+textures sample white. Both renderers supply these interpolated fragment inputs
+to the shared graph contract.
 
 Operations and argument counts:
 

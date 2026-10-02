@@ -2797,6 +2797,81 @@ TEST(CameraBloom) {
     }
 }
 
+TEST(ShaderMaterialAlphaAndShadow) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_alpha_shadow"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"alpha.shader.json","graph":{"uniforms":{"surface":[0.2,0.5,1,0]},
+      "nodes":[{"op":"uniform","name":"surface"}],"color":0}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"alpha.mat.json","values":{"shader":"alpha.shader.json",
+      "alphaMode":"mask","alphaCutoff":0.5,"doubleSided":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,7,10],"rotation":[-35,0,0]},
+      "Camera":{"clearColor":[0.1,0.1,0.1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-30,65,0]},
+      "DirectionalLight":{"shadows":true,"ambient":[0.2,0.2,0.2]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},
+      "MeshRenderer":{"mesh":"plane","color":[0.7,0.7,0.7]}}})J");
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"position":[0,1,0],"scale":[2,2,2]},
+      "MeshRenderer":{"material":"alpha.mat.json","visible":false}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(),160.0f/90,view);
+    RenderTarget absent, transparent, opaque, gpuAbsent, gpuTransparent, gpuOpaque;
+    for (RenderTarget* target : {&absent,&transparent,&opaque,&gpuAbsent,&gpuTransparent,&gpuOpaque}) target->Resize(160,90);
+    e.Renderer().Render(e.GetScene(),view,absent);
+    const bool gpu = e.EnableGpu(nullptr,&error);
+    if (gpu) e.Gpu()->Render(e.GetScene(),view,gpuAbsent);
+    CHECK(Call(e, "component.set", R"J({"id":"Cube","type":"MeshRenderer","values":{"visible":true}})J")["ok"].asBool());
+    view.highlight = e.GetScene().FindByName("Cube");
+    e.Renderer().Render(e.GetScene(),view,transparent);
+    CHECK(transparent.Hash() == absent.Hash());
+    CHECK(transparent.ids == absent.ids && transparent.depth == absent.depth);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(),view,gpuTransparent);
+        CHECK(gpuTransparent.Hash() == gpuAbsent.Hash());
+    }
+    CHECK(Call(e, "material.set", R"J({"path":"alpha.mat.json","values":{"shaderUniforms":{"surface":[0.2,0.5,1,1]}}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,opaque);
+    CHECK(opaque.Hash() != transparent.Hash());
+    int orange = 0, cubePixels = 0;
+    for (size_t i = 0; i < opaque.color.size(); ++i) {
+        orange += (opaque.color[i] & 0xFFFFFF) == 0x1A9EFF;
+        cubePixels += opaque.ids[i] == view.highlight;
+    }
+    CHECK(orange > 20 && cubePixels > 100);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(),view,gpuOpaque);
+        CHECK(gpuOpaque.Hash() != gpuTransparent.Hash());
+        int gpuOrange = 0;
+        double difference = 0;
+        for (size_t i = 0; i < opaque.color.size(); ++i) {
+            const uint32_t color = gpuOpaque.color[i];
+            gpuOrange += (color & 255) > 230 && ((color >> 8) & 255) > 140 &&
+                         ((color >> 8) & 255) < 175 && ((color >> 16) & 255) < 50;
+            for (int shift : {0,8,16})
+                difference += std::abs(static_cast<int>((opaque.color[i] >> shift) & 255) -
+                                       static_cast<int>((gpuOpaque.color[i] >> shift) & 255));
+        }
+        const double mean = difference/static_cast<double>(opaque.color.size()*3);
+        std::printf("  graph alpha/shadow/outline software/GPU mean difference %.4f\n",mean);
+        CHECK(gpuOrange > 20 && mean < 6);
+    }
+    CHECK(Call(e, "component.set", R"J({"id":"Cube","type":"MeshRenderer","values":{"castShadows":false}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,transparent);
+    int shadowPixels = 0;
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    for (size_t i = 0; i < opaque.color.size(); ++i)
+        shadowPixels += opaque.ids[i] == ground && transparent.ids[i] == ground && opaque.color[i] != transparent.color[i];
+    CHECK(shadowPixels > 20);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(),view,gpuTransparent);
+        int changed = 0;
+        for (size_t i = 0; i < opaque.color.size(); ++i)
+            changed += opaque.ids[i] == ground && transparent.ids[i] == ground && gpuOpaque.color[i] != gpuTransparent.color[i];
+        CHECK(changed > 20);
+    }
+}
+
 TEST(ShaderMaterialRendering) {
     Engine e;
     std::string error;

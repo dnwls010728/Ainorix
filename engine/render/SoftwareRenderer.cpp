@@ -284,7 +284,7 @@ private:
                 float z = w0 * s0.z + w1 * s1.z + w2 * s2.z;
                 size_t idx = row + static_cast<size_t>(x);
                 if (z < 0.0f || z >= depth_[idx]) continue;
-                if (!lighting) {
+                if (!lighting && !(mat.m && mat.m->shader && mat.m->alphaMode == AlphaMode::Mask)) {
                     depth_[idx] = z;
                     continue;
                 }
@@ -325,6 +325,10 @@ private:
                     shaderEmissive = Color(surface.emissive.x, surface.emissive.y, surface.emissive.z);
                 }
                 if (m.alphaMode == AlphaMode::Mask && alpha < m.alphaCutoff) continue;  // cut out: no depth, color or id
+                if (!lighting) {
+                    depth_[idx] = z;
+                    continue;
+                }
                 if (!mat.blend) depth_[idx] = z;
                 Color out = base;
                 if (!m.unlit) {
@@ -511,12 +515,34 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                     if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
                     const Mesh& m = *items[dc.item].mesh;
                     const Submesh& sub = m.submeshes[dc.submesh];
+                    const RenderItem& item = items[dc.item];
+                    const bool surfaceAlpha = dc.material.shader && dc.material.alphaMode == AlphaMode::Mask;
+                    RasterMaterial material;
+                    material.m = &dc.material;
+                    material.flat = item.flat;
+                    material.shaderTime = view.shaderTime;
+                    material.uvOffset[0] = item.uvOffset[0];
+                    material.uvOffset[1] = item.uvOffset[1];
+                    material.uvScale[0] = item.uvScale[0];
+                    material.uvScale[1] = item.uvScale[1];
                     for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
                         Vtx v[3];
-                        for (int j = 0; j < 3; ++j) v[j].clip = lightClip[dc.item][m.indices[k + static_cast<uint32_t>(j)]];
+                        for (int j = 0; j < 3; ++j) {
+                            const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
+                            v[j].clip = lightClip[dc.item][vertex];
+                            if (surfaceAlpha) {
+                                v[j].wpos = transformed[dc.item].wpos[vertex];
+                                v[j].nrm = transformed[dc.item].nrm[vertex];
+                                if (vertex * 2 + 1 < m.uvs.size()) {
+                                    v[j].u = m.uvs[vertex * 2];
+                                    v[j].v = m.uvs[vertex * 2 + 1];
+                                }
+                            }
+                        }
                         // Back faces into the shadow map: avoids self-shadowing acne on lit faces
                         // (double-sided surfaces put both sides in).
-                        shadowRaster.Draw(v, none, nullptr, dc.material.doubleSided ? Cull::None : Cull::Front);
+                        shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
+                                          dc.material.doubleSided ? Cull::None : Cull::Front);
                     }
                 }
             });
