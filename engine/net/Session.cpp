@@ -147,7 +147,7 @@ void Session::CloseTransport() {
     connections_.clear();
     for (const auto& item : players_) Emit({SessionEvent::Type::Left, item.first});
     players_.clear(); localPlayer_ = 0;
-    fallback_.reset(); udp_.reset(); wire_.reset(); tcp_ = nullptr; web_ = nullptr;
+    fallback_.reset(); udp_.reset(); wire_.reset(); loopback_.reset(); tcp_ = nullptr; web_ = nullptr; webServer_ = nullptr;
     if (host_ && !room_.empty()) { g_rooms.erase(room_); room_.clear(); }
 }
 uint64_t Session::InstancesCreated() { return g_created.load(); }
@@ -163,9 +163,8 @@ std::unique_ptr<Session> Session::Host(const SessionConfig& config, const std::s
                                      const std::string& room, std::string* error) {
     auto fail = [&](const std::string& message) -> std::unique_ptr<Session> { if (error) *error = message; return nullptr; };
     if (!Text(name, 64)) return fail("player name must contain 1..64 printable bytes");
-    if (config.transport == "websocket") return fail("browser WebSockets are clients; host with native TCP/UDP or loopback");
     std::unique_ptr<ITransport> wire;
-    TcpTransport* tcp = nullptr;
+    TcpTransport* tcp = nullptr; WebSocketServerTransport* webServer = nullptr;
     if (config.transport == "loopback") {
         if (!Text(room, 64)) return fail("loopback room must contain 1..64 printable bytes");
         for (auto it = g_rooms.begin(); it != g_rooms.end();) {
@@ -176,6 +175,10 @@ std::unique_ptr<Session> Session::Host(const SessionConfig& config, const std::s
         auto clock = std::make_shared<uint64_t>(0);
         wire = std::make_unique<RoomTransport>(network, 1, clock);
         g_rooms[room] = {network, clock, 2};
+    } else if (config.transport == "websocket") {
+        auto transport = std::make_unique<WebSocketServerTransport>();
+        if (!transport->Listen({config.bind, config.port}, error)) return nullptr;
+        webServer = transport.get(); wire = std::move(transport);
     } else {
         auto transport = std::make_unique<TcpTransport>();
         if (!transport->Listen({config.bind, config.port}, error)) return nullptr;
@@ -183,7 +186,8 @@ std::unique_ptr<Session> Session::Host(const SessionConfig& config, const std::s
         wire = std::move(transport);
     }
     auto session = std::make_unique<Session>(config, std::move(wire), true, 1, name, seed, NetworkRandom);
-    session->tcp_ = tcp;
+    if (config.transport == "loopback") session->loopback_ = g_rooms.at(room).wire.lock();
+    session->tcp_ = tcp; session->webServer_ = webServer;
     session->room_ = config.transport == "loopback" ? room : "";
     if (config.transport == "udp") {
         session->udp_ = std::make_unique<UdpTransport>();
@@ -223,6 +227,7 @@ std::unique_ptr<Session> Session::Join(const SessionConfig& config, const std::s
         wire = std::move(transport);
     }
     auto session = std::make_unique<Session>(config, std::move(wire), false, 1, name, 0, NetworkRandom);
+    if (config.transport == "loopback") session->loopback_ = g_rooms.at(address).wire.lock();
     session->tcp_ = tcp;
     session->web_ = web;
     if (session->state_ == "error") { if (error) *error = session->error_; return nullptr; }
@@ -363,7 +368,7 @@ bool Session::Poll(uint64_t frame, std::vector<TransportEvent>& events) {
     for (const auto& event : incoming) {
         if (event.type == TransportEvent::Type::Connected) {
             if (host_) {
-                if (connections_.size() >= config_.maxPlayers - 1 || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); continue; }
+                if (connections_.size() >= config_.maxPlayers - 1 || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); if (webServer_) webServer_->Disconnect(event.peer); continue; }
                 Connection connection; connection.started = frame_; connection.received = frame_;
                 connections_.emplace(event.peer, connection);
             }
@@ -400,6 +405,7 @@ void Session::Drop(PeerId peer, const std::string& reason) {
     if (fallback_) fallback_->RemovePeer(peer);
     if (tcp_) tcp_->Disconnect(peer);
     if (web_) web_->Disconnect(peer);
+    if (webServer_) webServer_->Disconnect(peer);
     connections_.erase(it);
     if (!host_) {
         for (const auto& item : players_) Emit({SessionEvent::Type::Left, item.first});
@@ -579,9 +585,22 @@ Json Session::State() const {
     Json state = Json::MakeObject(); state["mode"] = config_.mode; state["state"] = state_; state["transport"] = config_.transport;
     state["isHost"] = host_; state["isServer"] = host_; state["isClient"] = !host_; state["localPlayer"] = localPlayer_;
     state["seed"] = seed_; state["tickRate"] = config_.tickRate; state["maxPlayers"] = config_.maxPlayers;
-    state["port"] = tcp_ ? tcp_->LocalAddress().port : 0; state["room"] = room_; state["error"] = error_;
+    state["port"] = tcp_ ? tcp_->LocalAddress().port : webServer_ ? webServer_->LocalAddress().port : 0; state["room"] = room_; state["error"] = error_;
     state["syncImplemented"] = config_.mode == "lockstep" || config_.mode == "rollback";
     return state;
+}
+bool Session::Simulate(const LoopbackConfig& config, std::string* error) {
+    if (!loopback_) { if (error) *error = "fault injection requires an active loopback room"; return false; }
+    loopback_->Configure(config); return true;
+}
+Json Session::Simulation() const {
+    Json out = Json::MakeObject(); out["enabled"] = loopback_ != nullptr;
+    if (!loopback_) return out;
+    const auto& c = loopback_->Configuration();
+    out["seed"] = c.seed; out["latencyFrames"] = c.latencyFrames; out["jitterFrames"] = c.jitterFrames;
+    out["lossPermille"] = c.lossPermille; out["duplicatePermille"] = c.duplicatePermille; out["reorderFrames"] = c.reorderFrames;
+    out["pendingMessages"] = static_cast<uint64_t>(loopback_->PendingMessages());
+    out["pendingBytes"] = static_cast<uint64_t>(loopback_->PendingBytes()); out["dropped"] = loopback_->DroppedMessages(); return out;
 }
 Json Session::Stats() const {
     Json stats = Json::MakeObject(), peers = Json::MakeArray(); stats["rejected"] = rejected_;
@@ -596,7 +615,7 @@ Json Session::Stats() const {
         if (config_.transport == "loopback" || config_.transport == "websocket") peer["route"] = config_.transport;
         peers.push(std::move(peer));
     }
-    stats["peers"] = std::move(peers); return stats;
+    stats["peers"] = std::move(peers); stats["simulation"] = Simulation(); return stats;
 }
 void Session::Leave() {
     if (state_ == "offline" || state_ == "leaving") return;

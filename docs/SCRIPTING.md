@@ -149,7 +149,7 @@ script updates and before built-in systems, in player/sequence order. Polling co
 the host seed is applied when Welcome arrives. Execution in the lobby is independent; net.start aligns the game at frame zero.
 The host forwards client RPCs with their verified player id; games must validate sender/arguments
 before modifying state. v2 cookies isolate connections; they do not authenticate player identity
-or encrypt data. Browser clients need a compatible WebSocket endpoint.
+or encrypt data. Browser clients connect to native `oe serve-game` with transport websocket, or a compatible binary WebSocket endpoint.
 
 RPCs accept at most 16 JSON-compatible arguments, depth <=8, strings <=1024 bytes,
 collections <=64 entries, total serialized size <=8192 bytes (Lua traversal <=512 nodes).
@@ -242,3 +242,10 @@ The handler receives the routing entity argument too: `net.on("notice", function
 ... end)`. Entity ids are local; use `net.entities()` when mapping a received server entity id to
 this peer's entity. Owner-only fields filter network transmission, not packaged resource contents.
 See NETWORK.md for limits, relevance, snapshot rates and platform verification.
+
+
+Dedicated servers started by `oe serve-game` or a packaged `--server` reserve player
+id 1 as an empty protocol input stream; `net.isServer()` is true and `net.isHost()`
+is false. No playerPrefab is instantiated for that reserved slot. Use isServer for
+server-authority gameplay. `net.simulate`, `net.spawn_local_peers`, `net.peer_call`
+and `net.serve` are tool commands; they do not add Lua callbacks or bindings.

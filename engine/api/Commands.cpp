@@ -317,12 +317,38 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Register(r, full.c_str(), query.summary, Params(), false,
                  [command](Engine& e, const Json& a) { return e.NetworkCall(command, a); });
     }
+    Register(r, "net.simulate", "Inspect or change shared loopback faults; future sends use the supplied seeded configuration.",
+             Params().Opt("seed", "integer", "Fault RNG seed: 0..4294967295.")
+                     .Opt("latencyFrames", "integer", "One-way delay: 0..3600 frames.")
+                     .Opt("jitterFrames", "integer", "Uniform +/- jitter: 0..3600 frames.")
+                     .Opt("lossPermille", "integer", "Loss: 0..1000 parts per thousand.")
+                     .Opt("duplicatePermille", "integer", "Duplication: 0..1000 parts per thousand.")
+                     .Opt("reorderFrames", "integer", "Extra random delay: 0..3600 frames."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("simulate", a); });
+    Register(r, "net.spawn_local_peers", "Play an idle network project with additional in-process loopback peers; host stepping drives the group and auto-starts when ready.",
+             Params().Req("count", "integer", "Additional peers: 1..7; host also occupies a player slot.")
+                     .Opt("seed", "integer", "Session seed; default 1."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("spawn_local_peers", a); });
+    Register(r, "net.local_peers", "Read preview peer indices, frames, states, stats and desync reports.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("local_peers", a); });
+    Register(r, "net.peer_call", "Route input or diagnostic commands to a preview peer; returns that command's JSON envelope.",
+             Params().Req("peer", "integer", "Preview index: 0 host, 1..7 additional peers.")
+                     .Req("command", "string", "input.*, state/diagnostic query or render.screenshot.")
+                     .Opt("args", "object", "Command arguments."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("peer_call", a); });
+    Register(r, "net.serve", "Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically.",
+             Params().Opt("name", "string", "Server name; default Player.")
+                     .Opt("port", "integer", "Listen port: 0..65535; zero chooses an available port.")
+                     .Opt("seed", "integer", "Session seed; default 1.")
+                     .Opt("minPlayers", "integer", "Minimum ready remote players: 1..63; default 1."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("serve", a); });
     Register(r, "net.entities", "Inspect authoritative network entity ids, local ids, owners and received replication fields.", Params(), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("entities", a); });
     Register(r, "net.host", "Host a lobby; net.start begins lockstep, rollback or authoritative simulation.",
              Params().Opt("name", "string", "Player name: 1..64 printable bytes.")
                      .Opt("seed", "integer", "Session seed: 0..4294967295; default 1.")
-                     .Opt("room", "string", "Loopback room in this process; default gameId."), false,
+                     .Opt("room", "string", "Loopback room in this process; default gameId.")
+                     .Opt("port", "integer", "Listen port override: 0..65535; zero chooses an available port."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("host", a); });
     Register(r, "net.join", "Asynchronously join a lobby; advance both engines with sim.step until lobby.",
              Params().Opt("name", "string", "Player name: 1..64 printable bytes.")

@@ -20,6 +20,53 @@ Read peer RTT in milliseconds, loss, channel bytes, pending messages and selecte
 
 Leave the session gracefully within 30 simulated frames; none mode is unchanged.
 
+### `net.simulate`
+
+Inspect or change shared loopback faults; future sends use the supplied seeded configuration.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `seed` | integer |  | Fault RNG seed: 0..4294967295. |
+| `latencyFrames` | integer |  | One-way delay: 0..3600 frames. |
+| `jitterFrames` | integer |  | Uniform +/- jitter: 0..3600 frames. |
+| `lossPermille` | integer |  | Loss: 0..1000 parts per thousand. |
+| `duplicatePermille` | integer |  | Duplication: 0..1000 parts per thousand. |
+| `reorderFrames` | integer |  | Extra random delay: 0..3600 frames. |
+
+### `net.spawn_local_peers`
+
+Play an idle network project with additional in-process loopback peers; host stepping drives the group and auto-starts when ready.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `count` | integer | yes | Additional peers: 1..7; host also occupies a player slot. |
+| `seed` | integer |  | Session seed; default 1. |
+
+### `net.local_peers`
+
+Read preview peer indices, frames, states, stats and desync reports.
+
+### `net.peer_call`
+
+Route input or diagnostic commands to a preview peer; returns that command's JSON envelope.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `peer` | integer | yes | Preview index: 0 host, 1..7 additional peers. |
+| `command` | string | yes | input.*, state/diagnostic query or render.screenshot. |
+| `args` | object |  | Command arguments. |
+
+### `net.serve`
+
+Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `name` | string |  | Server name; default Player. |
+| `port` | integer |  | Listen port: 0..65535; zero chooses an available port. |
+| `seed` | integer |  | Session seed; default 1. |
+| `minPlayers` | integer |  | Minimum ready remote players: 1..63; default 1. |
+
 ### `net.entities`
 
 Inspect authoritative network entity ids, local ids, owners and received replication fields.
@@ -33,6 +80,7 @@ Host a lobby; net.start begins lockstep, rollback or authoritative simulation.
 | `name` | string |  | Player name: 1..64 printable bytes. |
 | `seed` | integer |  | Session seed: 0..4294967295; default 1. |
 | `room` | string |  | Loopback room in this process; default gameId. |
+| `port` | integer |  | Listen port override: 0..65535; zero chooses an available port. |
 
 ### `net.join`
 

@@ -55,7 +55,7 @@ requires a WebSocket server endpoint; the native TCP length-framing port is not 
 M4 sessions validate version/game/mode/tick settings and per-connection cookies. Entropy uses
 BCrypt on Windows, `/dev/urandom` on POSIX, and browser `crypto.getRandomValues`; it never enters
 simulation RNG. APK/AAB manifests add `INTERNET` only for enabled networking. Dedicated game
-server and WebSocket-server integration remain M7. Run `node tests/network_web_test.js`
+server and native WebSocket-server integration are implemented in M7. Run `node tests/network_web_test.js`
 for JS bridge checks; native socket tests in `oe_tests` are skipped under Emscripten.
 
 MSVC/Ninja configuration probes the compiler's raw `/showIncludes` prefix to avoid broken header
@@ -81,3 +81,12 @@ wait for input; protocol v2 clients must match rebuilt native/Web runtimes. The 
 TCP/UDP tests each run 10000 game frames. POSIX, real Wasm/WebSocket and Android execution remain
 unverified, and the committed prebuilt runtimes have not been refreshed for M5. See NETWORK.md
 for the reference replay backend and the remaining fast native snapshot requirement.
+
+
+Dedicated game servers (`oe serve-game`, packaged `--server`) use the native
+nonblocking network platform at fixed 60 Hz without creating a window, GPU or
+speaker device. Native WebSocket hosting uses the same portable NetSocket interface.
+`PlatformAttachParentConsole` lets Windows GUI players in --server mode attach to an
+existing parent console while preserving redirected stdout/stderr; it never creates
+a console. It is a no-op on other platforms. Windows Release execution is verified;
+POSIX/Android server execution and refreshed web/Android runtimes still need toolchains.

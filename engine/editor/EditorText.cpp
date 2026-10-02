@@ -17,6 +17,14 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Player %u / frame %llu / %s", "플레이어 %u / 프레임 %llu / %s", "プレイヤー %u / フレーム %llu / %s"},
+    {"RTT %.1f ms / loss %u/1000\nSent %llu B / received %llu B\nPending %u", "RTT %.1f ms / 손실 %u/1000\n송신 %llu B / 수신 %llu B\n대기 %u", "RTT %.1f ms / 損失 %u/1000\n送信 %llu B / 受信 %llu B\n待機 %u"},
+    {"Network", "네트워크", "ネットワーク"},
+    {"Players", "플레이어 수", "プレイヤー数"},
+    {"Player", "플레이어", "プレイヤー"},
+    {"Ready", "준비", "準備完了"},
+    {"Waiting", "대기", "待機中"},
+    {"Latency (frames)", "지연 (프레임)", "遅延 (フレーム)"},
     // ----- Panels
     {"Hierarchy", "계층", "ヒエラルキー"},
     {"Inspector", "인스펙터", "インスペクター"},

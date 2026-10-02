@@ -52,3 +52,9 @@ one in this folder, and reports which one it used (`webRuntime`).
 Networking M5c/M6 source adds session protocol v3, native rollback and authoritative replication.
 This committed runtime was not rebuilt (required SDK unavailable); rebuild before packaging games
 using these APIs. Native Windows Release and unit tests do not verify this platform runtime.
+
+Networking M7 source adds dedicated servers, native WebSocket hosting, loopback previews
+and seeded fault controls. These committed binaries have not been refreshed: rebuild
+with the relevant Emscripten/Android SDK before testing the updated player on devices.
+Native Windows server/wire/editor execution is verified; Wasm, Android and POSIX
+execution remains unverified in this environment. See docs/NETWORK.md.

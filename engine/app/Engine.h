@@ -112,6 +112,10 @@ public:
     ScriptHost& Scripts() { return *scripts_; }
     // Shared command/Lua session surface; absent/none projects allocate no session.
     Json NetworkCall(const std::string& command, const Json& args);
+    // Preview peer index 0 is this engine; 1..7 are explicitly created local peers.
+    Engine* LocalPeer(size_t index) { return index == 0 ? this : index <= localPeers_.size() ? localPeers_[index - 1].get() : nullptr; }
+    // Cheap opt-in check: editor UI skips network queries in single-player projects.
+    bool NetworkEnabled() const { return networkConfig_.mode != "none"; }
     Session* Network() const { return network_.get(); }
     bool PredictEntity(EntityId id) const;
     PhysicsWorld& Physics() { return *physics_; }
@@ -161,6 +165,10 @@ public:
 
 private:
     void SimulateFrame();
+    void ResetLocalPeers();
+    void AdvanceLocalPeers();
+    void AutoStartNetwork();
+    Json LocalPeersState();
     void SimulateWorld();
     void EnsureSync(bool refresh = false);
     bool PollSync();
@@ -209,6 +217,10 @@ private:
     SessionConfig networkConfig_;
     std::unique_ptr<Session> network_;
     uint64_t networkFrame_ = 0;
+    std::vector<std::unique_ptr<Engine>> localPeers_;
+    std::string previewTransport_;
+    bool dedicated_ = false, autoStart_ = false;
+    uint32_t minimumPlayers_ = 1;
     std::unique_ptr<FrameSync> sync_;
     std::unique_ptr<Authority> authority_;
     std::map<EntityId, uint32_t> authorityIds_;

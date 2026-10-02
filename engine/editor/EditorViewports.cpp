@@ -420,13 +420,13 @@ void NativeEditor::Impl::GameInput() {
         Call("input.mouse", ObjectOf({{"locked", Json(false)}}), true);
         gameWantsLock = false;
     }
-    bool want = gameFocused && session && engine.Input().mouseLocked;
+    bool want = gameFocused && session && GameEngine().Input().mouseLocked;
     if (gameFocused && session) {
         for (const char* name : InputState::kAxisNames) {
             auto axis = windowInput.axes.find(name);
             if (axis == windowInput.axes.end()) continue;  // no device: retain agent-injected input
-            auto previous = engine.Input().axes.find(name);
-            if (previous == engine.Input().axes.end() || previous->second != axis->second)
+            auto previous = GameEngine().Input().axes.find(name);
+            if (previous == GameEngine().Input().axes.end() || previous->second != axis->second)
                 Call("input.axis", ObjectOf({{"name", Json(name)}, {"value", Json(axis->second)}}), true);
             gameAxesForwarded.insert(name);
         }
@@ -474,6 +474,20 @@ void NativeEditor::Impl::GamePanel() {
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7);
     ImGui::Combo("##aspect", &gameAspect, aspectNames, 4);
     HelpTooltip(Tr("Game view aspect ratio"));
+    Json peers; if (engine.NetworkEnabled()) peers = engine.NetworkCall("local_peers", Json::MakeObject());
+    if (peers.size() > 1) {
+        ImGui::SameLine(); ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7);
+        std::string label = std::string(Tr("Player")) + " " + std::to_string(gamePeer + 1);
+        if (ImGui::BeginCombo("##gamePeer", label.c_str())) {
+            for (size_t i = 0; i < peers.size(); ++i) {
+                std::string peerLabel = std::string(Tr("Player")) + " " + std::to_string(i + 1);
+                if (ImGui::Selectable(peerLabel.c_str(), static_cast<size_t>(gamePeer) == i)) {
+                    ReleaseGameInput(); gamePeer = static_cast<int>(i); gameFocused = false;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    } else gamePeer = 0;
     ImVec2 barEnd = ImGui::GetCursorScreenPos();
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
@@ -498,12 +512,12 @@ void NativeEditor::Impl::GamePanel() {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 pos(std::floor(origin.x + (avail.x - size.x) * 0.5f), std::floor(origin.y + (avail.y - size.y) * 0.5f));
     int w = std::max(1, static_cast<int>(size.x)), h = std::max(1, static_cast<int>(size.y));
-    Scene& scene = engine.GetScene();
+    Scene& scene = GameEngine().GetScene();
     RenderView view;
     bool hasCamera = MakeSceneView(scene, static_cast<float>(w) / static_cast<float>(h), view);
-    view.shaderTime = static_cast<float>(engine.SimTime());
+    view.shaderTime = static_cast<float>(GameEngine().SimTime());
     view.drawUI = true;
-    engine.AppendDebugLines(view.lines);
+    GameEngine().AppendDebugLines(view.lines);
     sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kGameSlot);
     gameImagePos = pos;
     gameImageSize = ImVec2(static_cast<float>(w), static_cast<float>(h));

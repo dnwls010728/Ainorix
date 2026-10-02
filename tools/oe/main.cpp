@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include "api/McpServer.h"
 #include "app/AndroidPackage.h"
 #include "app/Engine.h"
+#include "app/DedicatedServer.h"
 #include "app/Project.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
@@ -49,7 +51,7 @@ struct Args {
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
 const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script",
-                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir"};
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--seed", "--api-port", "--players"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -178,10 +180,12 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --script scripts/x.lua --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --players N --script scripts/x.lua --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
+                 "  serve-game [path] [--port P --min-players N --seed S --frames N --api-port P]\n"
+                 "                                    Dedicated 60 Hz game server, no window/audio (Ctrl+C stops)\n"
                  "  serve <dir> [--port 8080] [--no-browser]\n"
                  "                                    Serve a web package (oe package --web) on http://127.0.0.1\n"
                  "  exec [path] <command> [json] [--save]\n"
@@ -366,13 +370,24 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         if (!r["ok"].asBool()) return Fail("not_found", "no entity " + a.Get("--select"));
         editor.Select(static_cast<EntityId>(r["result"]["id"].asNumber(0)));
     }
+    if (a.Has("--players")) {
+        int players = a.GetInt("--players", 1);
+        editor.SetNetworkPlayers(players);
+        if (players < 1 || players > 8) return Fail("invalid_argument", "--players requires 1..8 players");
+        if (players > 1) {
+            Json args = Json::MakeObject(); args["count"] = players - 1;
+            Json result = engine.Call("net.spawn_local_peers", args);
+            if (!result["ok"].asBool()) { PrintJson(result); return 1; }
+        }
+    }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(a.Has("--script") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--script") || a.Has("--players") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
         if (i == 1 && a.Has("--play")) editor.FocusGameView(true);  // as after pressing Play
+        if (i == 3 && a.Has("--players")) editor.FocusNetworkPanel();
         if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (!editor.DrawToImage(rt)) return Fail("render_failed", "cannot read back the editor frame");
     }
@@ -1046,8 +1061,32 @@ int CmdPackage(const Args& a) {
     return 0;
 }
 
-// Serves a folder (a web package) on http://127.0.0.1:<port> so the browser
-// can load WebAssembly; file:// pages cannot.
+// Runs an opt-in fixed-step game server without creating display/audio devices.
+int CmdServeGame(const Args& a) {
+    Engine engine; int code = 0;
+    if (!OpenOrFail(engine, a, code)) return code;
+    Json args = Json::MakeObject();
+    for (const auto& flag : std::vector<std::pair<const char*, const char*>>{
+             {"--port", "port"}, {"--min-players", "minPlayers"}, {"--seed", "seed"}}) {
+        if (!a.Has(flag.first)) continue;
+        std::string error; Json value = Json::parse(a.Get(flag.first), &error);
+        if (!error.empty() || !value.isNumber()) return Fail("invalid_argument", std::string(flag.first) + " requires an integer");
+        args[flag.second] = value;
+    }
+    uint64_t ticks = 0;
+    if (a.Has("--frames")) {
+        std::string error; Json value = Json::parse(a.Get("--frames"), &error); double n = value.asNumber(-1);
+        if (!error.empty() || !value.isNumber() || !std::isfinite(n) || n < 1 || n > 2147483647 || std::floor(n) != n)
+            return Fail("invalid_argument", "--frames requires 1..2147483647 I/O ticks");
+        ticks = static_cast<uint64_t>(n);
+    }
+    HttpServer api;
+    if (a.Has("--api-port") && !StartServer(api, engine, a.GetInt("--api-port", 7777))) return Fail("server_failed", "cannot start API server");
+    Json result = RunDedicatedServer(engine, args, ticks, [](const Json& state) { PrintJson(state); });
+    PrintJson(result); return result["ok"].asBool() ? 0 : 1;
+}
+
+// Serves a static web package; the game socket server is a separate process.
 int CmdServe(const Args& a) {
     std::string dir = AbsolutePath(a.positional.empty() ? "." : a.positional[0]);
     if (!FileExists(JoinPath(dir, "index.html"))) {
@@ -1112,6 +1151,7 @@ int main(int argc, char** argv) {
     if (cmd == "api") return CmdApi(a);
     if (cmd == "import") return CmdImport(a);
     if (cmd == "package") return CmdPackage(a);
+    if (cmd == "serve-game") return CmdServeGame(a);
     if (cmd == "serve") return CmdServe(a);
     return Fail("unknown_command", "unknown command '" + cmd + "'", "Run `oe help`.");
 }

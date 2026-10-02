@@ -5,7 +5,7 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M6 implemented.** Opt-in lobbies, RPC, lockstep and native rollback are available.
+Status: **M1–M7 implemented.** Opt-in lobbies, RPC, lockstep and native rollback are available.
 Authoritative replication, relevance, interpolation and owned prediction are available.
 Platform verification limits are recorded below.
 Progress is tracked in §11.
@@ -183,8 +183,8 @@ Lua (documented in `docs/SCRIPTING.md` when added): `net.isHost()`, `net.isServe
 written against this API runs unchanged as a single-player game or a network game.
 
 Topologies (same code, different roles): **listen host** (a player is also the server),
-**dedicated server** (`oe serve-game <project>` / player exe `--server`: headless `null` platform,
-no window or audio output), **peer-to-peer** (lockstep/rollback; one peer coordinates join/lobby),
+**dedicated server** (`oe serve-game <project>` / player exe `--server`: headless fixed-step loop using the native networking platform,
+no window, GPU or speaker device), **peer-to-peer** (lockstep/rollback; one peer coordinates join/lobby),
 and an optional **relay/lobby** server later for NAT traversal and room codes.
 
 Editor/tooling: a *Players: 1..N* dropdown for Play (N in-process peers over loopback, latency
@@ -238,7 +238,7 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
   - [x] M5c — fast native Lua/Jolt/Box2D snapshots; restore cost bounded by rollback window,
         benchmarked against the 1/60 s game budget (reference replay is not this backend)
 - [x] M6 — authoritative: `NetSync`, snapshots/deltas, interpolation, prediction, relevance
-- [ ] M7 — headless dedicated server (`oe serve-game`, `--server`), editor Players×N play +
+- [x] M7 — headless dedicated server (`oe serve-game`, `--server`), editor Players×N play +
       Network panel, `net.simulate`
 - [ ] M8 — networked sample games, docs (`API.md`, `SCRIPTING.md`, `PLATFORMS.md`), web and Android
       verification, optional relay/lobby
@@ -246,7 +246,7 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
 Open questions / unverified:
 - `SaveState` cost for Jolt/Box2D/Lua (decides how many rollback frames are affordable) and
   whether restoring Jolt/Box2D bodies is bit-exact (needs a determinism test).
-- Web hosting of a WebSocket game server (needs `oe serve-game`).
+- WebSocket hosting is available on a native `oe serve-game` process; browser/Wasm end-to-end execution remains unverified.
 - When (if ever) a platform backend such as IOCP/epoll is worth adding (§6): measure first.
 
 ### M1 implementation notes
@@ -435,7 +435,7 @@ Open questions / unverified:
   `net.stats`, `net.rpc`. They do not participate in scene undo. Tools must keep a session alive
   (`oe script`, MCP/editor or HTTP) and advance both engines with `sim.step`; a one-shot `oe exec`
   host exits immediately. `state`, `players`, `stats` are safe to read with networking disabled.
-  `net.simulate`, local-peer spawning and dedicated/editor tools remain M7; desync reports M5.
+  `net.simulate`, local-peer spawning and dedicated/editor tools are implemented in M7; desync reports in M5.
 - Lua provides the same operations plus role queries, `net.localPlayer()`, sorted id array
   `net.players()`, `net.on(name, fn)` and `net.sender()` within a handler. RPC targets are
   `server`, `all`, `others`, or a decimal player id; `owner` needs M6. Arguments: at most 16 finite
@@ -451,7 +451,7 @@ Open questions / unverified:
   oversized or nonfinite seed arguments cannot trigger undefined casts.
   Loopback rooms are scoped to one process, created only by hosts, and removed on host shutdown.
   Late joins map their private frame counter to the room wire clock; reconnect does not wait to
-  catch up with an existing host. `net.spawn_local_peers` and fault controls remain M7.
+  catch up with an existing host. `net.spawn_local_peers` and fault controls are implemented in M7.
 - Android APK/AAB manifests request `android.permission.INTERNET` only for enabled network
   projects. Default/none manifests retain their previous permissions.
 - [x] Windows Release build; 112 tests, zero failed checks. New coverage:
@@ -681,8 +681,8 @@ PCM until acknowledged and preserves confirmed output across corrections. Save w
 deferred as in rollback. Hot reload and external scene/Lua edits are disabled during the match.
 
 This milestone uses a frozen scene/roster: late join and synchronized scene transitions require
-leaving/stopping, opening the same scene and starting another ready barrier. M7's dedicated server,
-editor Players×N/Network panel and network fault commands, and M8 samples/platform verification,
+leaving/stopping, opening the same scene and starting another ready barrier. M7 adds the dedicated server,
+editor Players×N/Network panel and network fault commands; M8 samples/platform verification
 remain unchecked. Neither absence of SDKs nor source portability is a device/browser execution test.
 
 Validation:
@@ -703,3 +703,94 @@ Validation:
 - [x] API regenerated; scripting, code map, READMEs and runtime rebuild notes updated.
 - [ ] POSIX, real browser/Wasm and Android builds/device execution: required toolchains absent.
       Committed Web/Android runtimes are unchanged and do not contain these M5c/M6 features.
+
+
+### M7 implementation status (work log)
+
+- [x] Dedicated headless runner: `net.serve`, `oe serve-game`, packaged player `--server`; ready barrier, bounded test run and shutdown.
+- [x] Deterministic `net.simulate` fault controls on shared loopback rooms.
+- [x] `net.spawn_local_peers`, peer inspection/input routing and deterministic group stepping/cleanup.
+- [x] Editor Players selector, peer Game view/input, Network diagnostics and latency controls.
+- [x] Windows Release build; 133 tests, zero failed checks, no new compiler warnings. Real TCP/UDP/WebSocket server/client CLI smoke, actual packaged --server, editor screenshot and API/reference updates pass.
+- [ ] Web/Wasm player, Android and POSIX execution and refreshed prebuilt runtimes require unavailable SDKs/toolchains. Native WebSocket wire is verified with a standard Node WebSocket client.
+
+
+#### M7 dedicated servers and local previews
+
+`oe serve-game <project> [--port P --min-players N --seed S --frames N --api-port P]`
+starts an explicit `net.serve` session. The packaged desktop player accepts
+`Game.exe [project] --server [--port P --min-players N --seed S --frames N]` (default
+project: `game/` next to the executable). Neither runner creates a window, GPU or
+speaker device. The Windows GUI player attaches to an existing parent console without
+creating one and preserves redirected streams. Ctrl+C/SIGTERM requests shutdown;
+`--frames` bounds **I/O ticks**, including lobby waiting, rather than game frames.
+The CLI prints startup and final JSON envelopes; the player prints its final envelope.
+The optional HTTP API still binds only to 127.0.0.1 and accepts MCP attachments.
+
+The ready barrier starts automatically once at least `minPlayers` remote peers have
+joined **and every joined peer is ready**. The match has a frozen roster; participant
+loss stops it rather than silently changing ownership or spawning replacement players.
+`sim.stop`/`net.leave` ends the runner; reopening/restarting creates a new lobby.
+Dedicated servers reserve participant id **1** as an always-empty input stream; it
+counts toward `maxPlayers`, so 4 slots permit 3 remote players (maximum 63 remotes).
+`net.isServer()` is true, `net.isHost()` is false, and `net.localPlayer()` remains 1
+for protocol compatibility. The server does not instantiate the playerPrefab for
+slot 1; normal listen hosts still instantiate their own player. Server-authority
+gameplay should use `net.isServer()`, not `net.isHost()`.
+
+TCP and UDP listeners use the project transport and bind address; `--port 0` chooses
+an available port. Set `network.transport` to `websocket` for a native RFC 6455
+listener. Browser clients use `net.join {address:"ws://127.0.0.1:7778/game"}` with
+matching mode, gameId, input schema and resources. The listener supports masked binary
+messages, continuation frames, ping/pong and close; 8 KiB HTTP headers, 64 KiB assembled
+messages, 64 endpoints, bounded transmit/receive queues and a 300-tick upgrade timeout.
+Text/extension frames are rejected. TLS (`wss://`) requires a reverse proxy. No
+browser can host sockets, and static hosting cannot replace this server process.
+
+`net.spawn_local_peers {count:2,seed:71}` creates **two additional** preview engines
+plus the invoking host, copies the current unsaved edit-time scene, switches only the
+active sessions to loopback, readies the lobby and starts it automatically. Count is
+1..7 and must fit the project's maxPlayers. Use it before a play session, after
+`sim.stop`; projects with absent/none networking reject it. `sim.step` on the host
+and ordinary editor Play ticks drive every peer once in stable index order. Preview
+peers have independent Lua/physics/audio/save state and never open sockets, GPUs or
+speaker devices. Stop, leave, scene load or project reopen destroys them and restores
+the original transport. Save writes remain deferred during synchronized matches.
+
+`net.local_peers` lists indices, frames, states, stats and desync reports; index 0
+is the host. `net.peer_call` routes input/diagnostic commands and returns their full
+envelope, for example:
+
+```json
+{"command":"net.peer_call","args":{"peer":1,"command":"input.key","args":{"key":"W","down":true}}}
+```
+
+Allowed calls: `input.*`, `sim.state`, `net.state/players/stats/entities/desync_report`,
+`entity.get`, `scene.get`, `game.state`, `script.errors`, `render.screenshot`. Arbitrary
+scene edits, peer stepping/stopping and recursive network controls are rejected.
+These preview/fault/server controls are tools, not Lua gameplay bindings.
+
+`net.simulate {seed:45,latencyFrames:2,jitterFrames:1,lossPermille:50,
+duplicatePermille:100,reorderFrames:1}` configures the shared loopback wire. Delays
+are fixed 60 Hz **one-way frames** (0..3600); loss/duplication are parts per thousand
+(0..1000). Missing settings retain previous values. Each update resets the seeded
+fault RNG for future sends; already queued packets retain their original deadlines.
+No arguments reads settings. TCP/UDP/WebSocket fault mutation is rejected. RTT,
+channel byte/loss counters and shared queued/dropped-wire counters appear in net.stats.
+
+The editor adds Players 1..min(8,maxPlayers) beside Play for enabled projects. Players
+1 preserves normal Play; larger values use the same spawn command. Game's Player
+selector renders any peer through the existing GPU and routes keyboard/mouse/gamepad
+commands to that peer. Switching peers or losing focus releases held input. View >
+Network shows roster readiness, peer frames/state, RTT/loss/bytes/pending messages,
+desync reports and a latency slider. `oe editor <project> --players 3 --play --frames
+100 --screenshot build/network-editor.png` makes a reproducible preview screenshot.
+
+Verification: Windows Release `oe_tests` covers fault-driven lockstep/rollback groups,
+authoritative prefab previews, ready-gated dedicated TCP hosting and socket cleanup,
+WebSocket handshake/framing/bounds/native listener, and editor peer input/Stop/PNG.
+`python tests/network_server_test.py` exercises independent real TCP/UDP and standard Node
+WebSocket clients, owned input/replication/correction, optional HTTP API, bounded CLI
+shutdown and packaged `--server`. It needs the Release binaries and Node >=22.
+`node tests/network_web_test.js` checks the existing browser callback bridge. Actual
+Wasm/browser, Android and POSIX execution and rebuilt prebuilt players remain unchecked.

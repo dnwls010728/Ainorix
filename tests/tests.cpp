@@ -30,6 +30,7 @@
 #include "net/FallbackTransport.h"
 #include "net/LoopbackTransport.h"
 #include "net/SocketTransports.h"
+#include "net/WebSocketServer.h"
 #include "platform/Platform.h"
 #include "platform/GamepadInput.h"
 #include "platform/TouchInput.h"
@@ -1482,6 +1483,155 @@ TEST(NetworkAuthoritativeSeededSessionsTenThousandFrames) {
     Json world=Json::MakeObject();world["1"]=Json::MakeObject();world["1"]["Transform.position"]=Json::parse("[0,0,0]");world["1"]["Transform.position"][0]=total;host.Snapshot(frames,{{2,world}});
     for(int n=0;n<500;++n,++tick) {server.Advance(tick);client.Advance(tick);for(const auto& msg:server.DrainSync())host.Receive(msg.first,msg.second);for(const auto& msg:client.DrainSync())guest.Receive(msg.first,msg.second);for(const auto& update:guest.DrainUpdates())last=update.world;}
     CHECK(last==world);
+}
+
+
+TEST(NetworkLoopbackFaultReconfiguration) {
+    auto wire = std::make_shared<LoopbackNetwork>(); LoopbackTransport a(wire, 1), b(wire, 2);
+    LoopbackConfig config; config.latencyFrames = 3; config.seed = 45; wire->Configure(config);
+    uint8_t old = 1, fresh = 2; CHECK(a.Send(2, &old, 1));
+    config.latencyFrames = 0; wire->Configure(config); CHECK(a.Send(2, &fresh, 1));
+    std::vector<TransportEvent> events; CHECK(b.Poll(0, events)); CHECK(events.size() == 1 && events[0].bytes[0] == fresh);
+    events.clear(); CHECK(b.Poll(2, events)); CHECK(events.empty()); CHECK(wire->PendingMessages() == 1);
+    CHECK(b.Poll(3, events)); CHECK(events.size() == 1 && events[0].bytes[0] == old);
+    config.lossPermille = 1001;
+    bool refused = false; try { wire->Configure(config); } catch (const std::invalid_argument&) { refused = true; }
+    CHECK(refused && wire->Configuration().lossPermille == 0);
+}
+
+TEST(NetworkLocalPreviewAndFaultControls) {
+    uint64_t sockets = PlatformNetSocketsCreated();
+    for (bool rollback : {false, true}) {
+        std::string project = SyncProject(rollback ? "preview_rollback" : "preview_lockstep", "tcp", rollback), error;
+        Engine host; CHECK(host.Open(project, &error)); host.GetScene().Clear();
+        CHECK(Call(host, "entity.create", R"({"name":"Counter","components":{"Transform":{},"Script":{"path":"scripts/sync_test.lua"}}})")["ok"].asBool());
+        Json edit = host.GetScene().ToJson();
+        CHECK(!Call(host, "net.spawn_local_peers", R"({"count":4})")["ok"].asBool());
+        CHECK(!Call(host, "net.spawn_local_peers", R"({"count":1.5})")["ok"].asBool());
+        CHECK(Call(host, "net.spawn_local_peers", R"({"count":2,"seed":71})")["ok"].asBool());
+        CHECK(Call(host, "net.simulate", R"({"seed":45,"latencyFrames":1,"jitterFrames":1,"lossPermille":50,"duplicatePermille":100,"reorderFrames":1})")["ok"].asBool());
+        CHECK(!Call(host, "net.simulate", R"({"latencyFrames":3601})")["ok"].asBool());
+        host.Step(160);
+        Json peers = Call(host, "net.local_peers")["result"]; CHECK(peers.size() == 3);
+        for (const Json& peer : peers.items()) CHECK(peer["state"]["sync"]["state"].asString() == "running");
+        CHECK(!Call(host, "net.peer_call", R"({"peer":1,"command":"sim.stop"})")["ok"].asBool());
+        CHECK(Call(host, "net.peer_call", R"({"peer":1,"command":"input.key","args":{"key":"W","down":true}})")["result"]["ok"].asBool());
+        host.Step(120);
+        CHECK(host.GameData()["total"].asNumber() > 30);
+        CHECK(Call(host, "net.peer_call", R"({"peer":1,"command":"input.key","args":{"key":"W","down":false}})")["result"]["ok"].asBool());
+        // Drain old deadlines before asserting steady held-input agreement.
+        CHECK(Call(host, "net.simulate", R"({"latencyFrames":0,"jitterFrames":0,"lossPermille":0,"duplicatePermille":0,"reorderFrames":0})")["ok"].asBool());
+        host.Step(160);
+        for (size_t i = 1; i < 3; ++i) {
+            CHECK(host.LocalPeer(i)->GameData().dump() == host.GameData().dump());
+            CHECK(Call(*host.LocalPeer(i), "net.desync_report")["result"].size() == 0);
+        }
+        CHECK(Call(host, "net.stats")["result"]["simulation"]["dropped"].asNumber() > 0);
+        host.Stop(); CHECK(!host.LocalPeer(1)); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+        CHECK(Call(host, "net.state")["result"]["transport"].asString() == "tcp");
+        CHECK(Call(host, "net.spawn_local_peers", R"({"count":1})")["ok"].asBool());
+        host.Step(100); CHECK(host.LocalPeer(1)); CHECK(host.Open(project, &error)); CHECK(!host.LocalPeer(1));
+        RemoveAll(project);
+    }
+    CHECK(PlatformNetSocketsCreated() == sockets);
+    std::string project = AuthorityProject("preview_authority", "tcp", true), error;
+    Engine host; CHECK(host.Open(project, &error)); host.GetScene().Clear();
+    CHECK(Call(host, "net.spawn_local_peers", R"({"count":1})")["ok"].asBool()); host.Step(100);
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
+    CHECK(host.LocalPeer(1)->GetScene().Pool<NetPlayer>().size() == 2);
+    host.Stop(); RemoveAll(project);
+}
+
+TEST(NetworkDedicatedReadyBarrierAndCleanup) {
+    std::string project = AuthorityProject("dedicated", "tcp", true), error;
+    uint64_t live = PlatformNetSocketsLive();
+    Engine server, client; CHECK(server.Open(project, &error)); CHECK(client.Open(project, &error));
+    for (Engine* engine : {&server, &client}) engine->GetScene().Clear();
+    CHECK(Call(server, "net.serve", R"({"port":0,"seed":71})")["ok"].asBool());
+    CHECK(!server.Gpu()); CHECK(Call(server, "net.state")["result"]["dedicated"].asBool());
+    CHECK(!Call(server, "net.state")["result"]["isHost"].asBool()); CHECK(Call(server, "net.state")["result"]["isServer"].asBool());
+    server.Step(10); CHECK(server.Frame() == 0);
+    Json join = Json::MakeObject(); join["port"] = server.Network()->State()["port"];
+    CHECK(client.Call("net.join", join)["ok"].asBool()); NetworkSteps(server, client, 40);
+    CHECK(server.Frame() == 0); CHECK(Call(server, "net.state")["result"]["sync"]["state"].asString() == "idle");
+    CHECK(Call(client, "net.ready", R"({"ready":true})")["ok"].asBool()); NetworkSteps(server, client, 120);
+    CHECK(server.Frame() > 50); CHECK(Call(server, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(server.GetScene().Pool<NetPlayer>().size() == 1); CHECK(client.GetScene().Pool<NetPlayer>().size() == 1);
+    CHECK(server.GetScene().Pool<NetPlayer>().begin()->second.player == 2);
+    CHECK(!Call(server, "net.simulate", R"({"lossPermille":10})")["ok"].asBool());
+    server.Stop(); client.Stop(); CHECK(PlatformNetSocketsLive() == live); RemoveAll(project);
+}
+
+std::vector<uint8_t> MaskedWebFrame(uint8_t opcode, bool fin, const std::vector<uint8_t>& payload) {
+    auto frame = WebSocketServerReader::Encode(opcode, payload.data(), payload.size());
+    if (!fin) frame[0] &= 0x7f;
+    size_t header = payload.size() < 126 ? 2 : payload.size() <= 65535 ? 4 : 10;
+    frame[1] |= 0x80;
+    frame.insert(frame.begin() + static_cast<ptrdiff_t>(header), {1, 2, 3, 4});
+    for (size_t i = 0; i < payload.size(); ++i) frame[header + 4 + i] ^= static_cast<uint8_t>(1 + i % 4);
+    return frame;
+}
+const std::string kWebUpgrade = "GET /game HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+TEST(NetworkWebSocketServerFramingAndBounds) {
+    WebSocketServerReader reader; std::vector<WebSocketServerReader::Frame> frames;
+    for (char c : kWebUpgrade) CHECK(reader.Feed(reinterpret_cast<const uint8_t*>(&c), 1, frames));
+    CHECK(reader.Ready()); CHECK(reader.TakeUpgrade().find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos);
+    auto first = MaskedWebFrame(2, false, {1, 2}), ping = MaskedWebFrame(9, true, {9}), last = MaskedWebFrame(0, true, {3, 4});
+    first.insert(first.end(), ping.begin(), ping.end()); first.insert(first.end(), last.begin(), last.end());
+    for (uint8_t b : first) CHECK(reader.Feed(&b, 1, frames));
+    CHECK(frames.size() == 2); CHECK(frames[0].opcode == 9); CHECK(frames[1].bytes == std::vector<uint8_t>({1,2,3,4}));
+    std::vector<uint8_t> large(65536, 42); auto packet = MaskedWebFrame(2, true, large); frames.clear();
+    for (size_t offset = 0; offset < packet.size(); offset += 16384)
+        CHECK(reader.Feed(packet.data() + offset, std::min<size_t>(16384, packet.size() - offset), frames));
+    CHECK(frames.size() == 1 && frames[0].bytes == large);
+    auto invalid = WebSocketServerReader::Encode(2, large.data(), 1);
+    CHECK(!reader.Feed(invalid.data(), invalid.size(), frames)); CHECK(!reader.Feed(nullptr, 0, frames));
+    for (auto bad : {MaskedWebFrame(1, true, {1}), MaskedWebFrame(0, true, {1}), MaskedWebFrame(9, false, {1}), MaskedWebFrame(8, true, {1}), MaskedWebFrame(8, true, {3, 237}), MaskedWebFrame(8, true, {3, 232, 0xc0, 0x80})}) {
+        WebSocketServerReader test; CHECK(test.Feed(reinterpret_cast<const uint8_t*>(kWebUpgrade.data()), kWebUpgrade.size(), frames));
+        CHECK(!test.Feed(bad.data(), bad.size(), frames));
+    }
+    WebSocketServerReader overflow; std::vector<uint8_t> headers(8193, 'a');
+    CHECK(!overflow.Feed(headers.data(), headers.size(), frames));
+    WebSocketServerReader badKey; std::string request = kWebUpgrade; request.replace(request.find("dGhl"), 24, "XXXXXXXXXXXXXXXXXXXXXXXX");
+    CHECK(!badKey.Feed(reinterpret_cast<const uint8_t*>(request.data()), request.size(), frames));
+}
+
+TEST(NetworkWebSocketNativeListener) {
+    uint64_t live = PlatformNetSocketsLive();
+    {
+        WebSocketServerTransport server; std::string error; CHECK(server.Listen({}, &error));
+        auto client = CreateNetSocket(SocketKind::Tcp, &error); CHECK(client != nullptr);
+        CHECK(client->Connect(server.LocalAddress(), &error));
+        std::vector<uint8_t> send(kWebUpgrade.begin(), kWebUpgrade.end());
+        auto message = MaskedWebFrame(2, true, {4, 5, 6}), ping = MaskedWebFrame(9, true, {7});
+        send.insert(send.end(), message.begin(), message.end()); send.insert(send.end(), ping.begin(), ping.end());
+        size_t offset = 0; std::vector<uint8_t> received; PeerId peer = 0; bool delivered = false;
+        for (uint64_t tick = 0; tick < 100; ++tick) {
+            if (client->State() == SocketState::Open && offset < send.size()) {
+                size_t n = 0; auto result = client->Send(send.data() + offset, send.size() - offset, n);
+                CHECK(result == SocketIo::Progress || result == SocketIo::WouldBlock); offset += n;
+            }
+            std::vector<TransportEvent> events; CHECK(server.Poll(tick, events));
+            for (const auto& event : events) {
+                if (event.type == TransportEvent::Type::Connected) peer = event.peer;
+                if (event.type == TransportEvent::Type::Data) { delivered = event.bytes == std::vector<uint8_t>({4,5,6}); CHECK(server.Send(event.peer, event.bytes.data(), event.bytes.size())); }
+            }
+            for (size_t i = 0; i < 4; ++i) {
+                uint8_t bytes[1024]; size_t n = 0; auto result = client->Receive(bytes, sizeof(bytes), n);
+                if (result == SocketIo::WouldBlock) break; CHECK(result == SocketIo::Progress); received.insert(received.end(), bytes, bytes + n);
+            }
+            if (delivered && received.size() > kWebUpgrade.size()) break;
+        }
+        CHECK(peer != 0 && delivered);
+        std::string text(received.begin(), received.end()); CHECK(text.find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos);
+        auto pong = WebSocketServerReader::Encode(10, std::vector<uint8_t>{7}.data(), 1);
+        auto echo = WebSocketServerReader::Encode(2, std::vector<uint8_t>{4, 5, 6}.data(), 3);
+        CHECK(std::search(received.begin(), received.end(), pong.begin(), pong.end()) != received.end());
+        CHECK(std::search(received.begin(), received.end(), echo.begin(), echo.end()) != received.end());
+        CHECK(server.Disconnect(peer)); CHECK(!server.Send(peer, send.data(), 1));
+    }
+    CHECK(PlatformNetSocketsLive() == live);
 }
 
 TEST(NetworkLockstepEngineGatesAndDesync) {
@@ -5353,6 +5503,41 @@ TEST(NativeEditorScriptProblems) {
     CHECK(warn.size() == 2 && warn[0].rfind("warning 3:", 0) == 0 && warn[1].rfind("warning 4:", 0) == 0);
     std::vector<std::string> broken = ed.ScriptProblems("scripts/broken.lua");
     CHECK(broken.size() == 1 && broken[0].rfind("error 4:", 0) == 0);
+}
+
+
+TEST(NativeEditorNetworkPreviewInputAndStop) {
+    std::string project = SyncProject("editor_network", "tcp"), error;
+    Engine engine; CHECK(engine.Open(project, &error)); engine.GetScene().Clear();
+    CHECK(Call(engine, "entity.create", R"({"name":"Counter","components":{"Transform":{},"Script":{"path":"scripts/sync_test.lua"}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Camera","components":{"Transform":{"position":[0,3,8],"rotation":[-15,0,0]},"Camera":{}}})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); CHECK(editor.SetNetworkPlayers(3));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames(4); frames(50, CtrlChord(WindowKey::P));
+        CHECK(engine.LocalPeer(2)); CHECK(Call(engine, "net.state")["result"]["sync"]["state"].asString() == "running");
+        CHECK(editor.SetGamePeer(1)); editor.FocusGameView(true);
+        frames(30, {KeyEvent(WindowKey::W, true)});
+        CHECK(engine.LocalPeer(1)->Input().IsDown("W")); CHECK(!engine.Input().IsDown("W"));
+        CHECK(editor.SetGamePeer(2)); CHECK(!engine.LocalPeer(1)->Input().IsDown("W")); editor.FocusGameView(true);
+        editor.WindowInput().SetAxis("LeftX", 0.575f); editor.WindowInput().down.insert("GamepadA"); frames(2);
+        CHECK(engine.LocalPeer(2)->Input().IsDown("GamepadA")); CHECK(!engine.LocalPeer(1)->Input().IsDown("GamepadA"));
+        editor.FocusGameView(false); CHECK(!engine.LocalPeer(2)->Input().IsDown("GamepadA"));
+        CHECK(engine.GameData()["total"].asNumber() > 10);
+        CHECK(Call(engine, "net.simulate", R"({"latencyFrames":2})")["ok"].asBool());
+        editor.FocusNetworkPanel(); frames(2);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/m7-editor-test.png"), image.ToImage()));
+        frames(6, CtrlChord(WindowKey::P)); CHECK(!engine.InPlaySession()); CHECK(!engine.LocalPeer(1));
+    }
+    RemoveAll(project);
 }
 
 TEST(NativeEditorHeadless) {

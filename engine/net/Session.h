@@ -5,8 +5,10 @@
 
 #include "core/Json.h"
 #include "net/Channels.h"
+#include "net/LoopbackTransport.h"
 #include "net/sync/FrameSync.h"
 #include "net/SocketTransports.h"
+#include "net/WebSocketServer.h"
 #include "net/FallbackTransport.h"
 
 namespace oe {
@@ -54,6 +56,9 @@ public:
     Json State() const;
     Json Players() const;
     Json Stats() const;
+    // Fault controls are shared by all endpoints in an explicit loopback room.
+    bool Simulate(const LoopbackConfig& config, std::string* error);
+    Json Simulation() const;
     bool IsHost() const { return host_; }
     bool Connected() const { return state_ == "lobby"; }
     uint32_t LocalPlayer() const { return localPlayer_; }
@@ -94,7 +99,9 @@ private:
     void CloseTransport();  // releases listeners/endpoints as soon as the terminal state is observed
     SessionConfig config_;
     std::unique_ptr<ITransport> wire_;
+    std::shared_ptr<LoopbackNetwork> loopback_;
     TcpTransport* tcp_ = nullptr;
+    WebSocketServerTransport* webServer_ = nullptr;
     WebSocketTransport* web_ = nullptr;
     std::unique_ptr<UdpTransport> udp_;
     std::unique_ptr<FallbackTransport> fallback_;

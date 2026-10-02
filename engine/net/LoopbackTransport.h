@@ -22,6 +22,9 @@ class LoopbackNetwork {
 public:
     // Invalid local configuration throws std::invalid_argument before creating peers.
     explicit LoopbackNetwork(const LoopbackConfig& config = {});
+    // Changes future sends only; preserves queued deadlines and resets the seeded fault RNG.
+    void Configure(const LoopbackConfig& config);
+    const LoopbackConfig& Configuration() const { return config_; }
     static constexpr size_t kMaxPeers = 64;
     static constexpr size_t kMaxQueuedMessages = 1024;
     static constexpr size_t kMaxQueuedBytes = 4 * 1024 * 1024;

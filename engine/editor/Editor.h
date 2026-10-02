@@ -67,6 +67,12 @@ public:
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).
     void FocusGameView(bool focus);
     bool GameViewFocused() const;
+    // Select preview player/view and release held input on the previous peer.
+    bool SetGamePeer(size_t peer);
+    // Configure the next Play action (1..8 total players, bounded by project maxPlayers).
+    bool SetNetworkPlayers(int players);
+    // Bring Network diagnostics to the front for automated screenshots.
+    void FocusNetworkPanel();
     // Tile painting: the Scene view brush on/off and its tile character (Tiles
     // panel); turning it on switches to the 2D view framed on the selection.
     void SetTileBrush(bool paint, char brush);

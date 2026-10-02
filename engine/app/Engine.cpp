@@ -67,7 +67,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
         SessionConfig config;
         if (!SessionConfig::Parse(project, config, error)) return false;
         ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    network_.reset(); networkFrame_ = 0; networkConfig_ = config;
+        ResetLocalPeers(); network_.reset(); networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
         projectName_ = project["name"].asString("Untitled");
         std::string start = project["startScene"].asString("");
@@ -80,7 +80,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
 
     // A bare scene file: use the nearest enclosing project if there is one.
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    network_.reset(); networkFrame_ = 0; networkConfig_ = SessionConfig{};
+    ResetLocalPeers(); network_.reset(); networkFrame_ = 0; networkConfig_ = SessionConfig{};
     std::string dir = ParentPath(path);
     projectDir_ = dir;
     for (std::string d = dir; !d.empty(); d = ParentPath(d)) {
@@ -116,7 +116,7 @@ bool Engine::LoadScene(const std::string& path, std::string* error) {
     }
     playing_ = false;
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    network_.reset(); networkFrame_ = 0;
+    ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
     playSnapshot_.reset();
     ResetRuntime();
     frame_ = 0;
@@ -143,7 +143,7 @@ bool Engine::SaveScene(const std::string& path, std::string* error) {
 
 void Engine::NewScene(const std::string& name) {
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    network_.reset(); networkFrame_ = 0;
+    ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
     scene_.Clear();
     scene_.name = name;
     playing_ = false;
@@ -254,7 +254,7 @@ void Engine::Pause() {
 
 void Engine::Stop() {
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    network_.reset(); networkFrame_ = 0;
+    ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
     playing_ = false;
     if (playSnapshot_) {
         std::string err;
@@ -313,12 +313,16 @@ void Engine::AppendDebugLines(std::vector<DebugLine>& out) const {
 }
 
 void Engine::SimulateFrame() {
+    if (!localPeers_.empty()) AdvanceLocalPeers();
     if (network_) {
         uint32_t seed = network_->Seed();
         network_->Advance(networkFrame_++);
         if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
     }
+    if (dedicated_) input_ = deviceInput_ = InputState{};
+    AutoStartNetwork();
     if (!PollAuthority() || !PollSync()) return;
+    if (autoStart_ && (!authority_ || !authority_->Running()) && (!sync_ || !sync_->Running())) return;
     CaptureCheckpoint();
     if (journal_ && sync_ && sync_->Running()) journal_->frames.push_back({input_, frameInputs_});
     SimulateWorld();

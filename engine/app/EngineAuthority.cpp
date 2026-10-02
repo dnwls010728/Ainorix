@@ -248,6 +248,7 @@ bool Engine::PollAuthority() {
             saves_.FreezeReads(true); saves_.DeferFlush(true);
             if (network_->IsHost()) {
                 for (uint32_t player : authority_->Players()) {
+                    if (dedicated_ && player == 1) continue;
                     EntityId id = 0; for (const auto& entry : scene_.Pool<NetPlayer>()) if (static_cast<uint32_t>(entry.second.player) == player) { id = entry.first; break; }
                     if (!id && !networkConfig_.playerPrefab.empty()) { id = InstantiatePrefabFile(networkConfig_.playerPrefab, 0); scene_.Add<NetSync>(id).prefab = networkConfig_.playerPrefab; }
                     if (id) { scene_.Add<NetPlayer>(id).player = static_cast<int>(player); scene_.Add<NetSync>(id).owner = static_cast<int>(player); }

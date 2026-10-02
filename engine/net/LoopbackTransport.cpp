@@ -14,10 +14,14 @@ constexpr uint32_t kMaxDelayFrames = 3600;
 }
 
 LoopbackNetwork::LoopbackNetwork(const LoopbackConfig& config) : config_(config), random_(config.seed ? config.seed : 1) {
+    Configure(config);
+    ++g_instancesCreated;
+}
+void LoopbackNetwork::Configure(const LoopbackConfig& config) {
     if (config.lossPermille > 1000 || config.duplicatePermille > 1000 ||
         config.latencyFrames > kMaxDelayFrames || config.jitterFrames > kMaxDelayFrames ||
         config.reorderFrames > kMaxDelayFrames) throw std::invalid_argument("invalid loopback fault configuration");
-    ++g_instancesCreated;
+    config_ = config; random_ = config.seed ? config.seed : 1;
 }
 uint64_t LoopbackNetwork::InstancesCreated() { return g_instancesCreated.load(); }
 uint64_t LoopbackNetwork::PollCalls() { return g_pollCalls.load(); }
