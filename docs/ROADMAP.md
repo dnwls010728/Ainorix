@@ -180,9 +180,11 @@ Android hardware and Linux/EGL follow-ups remain in [PARTICLES.md](PARTICLES.md)
 
 ### P6. GPU 효과 (셰이더 머티리얼, 포스트 프로세싱) — [ ]
 
-P3 rendering, P4 and P5 are implemented in independent PRs #18, #19 and #20.
-P6 proceeds from main as required by the branch rule; those pending merges
-do not block this feature and their changes are not repeated on this branch.
+P3 rendering, P4, P5 and the completed P6 vignette/HDR milestones are integrated
+at the user's request through PRs #18-#21. P6 remains incomplete: bloom, FXAA
+and custom shader materials continue on a new branch from the updated main.
+Combined Windows 81 and Node/WASM 77 tests pass; prebuilt players are refreshed
+from the combined source, preserving all four PRs' features.
 
 - Implementation status: [POSTPROCESS.md](POSTPROCESS.md). The first milestone
   adds a reflected camera PostProcess component and optional vignette in both

@@ -2,8 +2,16 @@
 
 ## Implementation status (work log)
 
-P6 starts from integrated main. P3 rendering, P4 gamepads and P5 touch input
-remain in independent PRs; none is a prerequisite for screen effects.
+P6 started from integrated main. At the user's request, the completed P3-P5
+branches and P6 vignette/HDR milestones are combined through PRs #18-#21.
+The remaining P6 milestones continue on a new branch from the updated main;
+merging the completed work does not mark the full P6 feature complete.
+Combined verification passes 81 Windows tests and 77 Node/WASM tests. The web
+focus-reset merge preserves both touch and gamepad cleanup. Player runtimes
+are rebuilt from combined source 6d76ac9; device follow-ups remain open.
+The combined WebGL2 player also rechecks two simultaneous touch controls,
+secondary move/release with primary mouse held, and clearing all fingers/keys
+on window blur. This verifies the merged touch/gamepad focus-reset code.
 
 - [x] P6.1: Reflected PostProcess camera component and optional vignette in both
       renderers. Preserve default frame hashes, picking/depth, UI and selection
