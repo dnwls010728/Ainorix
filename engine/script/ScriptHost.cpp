@@ -810,6 +810,29 @@ int L_PhysicsContacts(lua_State* L) {
 
 // ----- input.*, time.*, log.* --------------------------------------------------
 
+int L_PlayerInputQuery(lua_State* L) {
+    return Guard(L, [&] {
+        uint32_t player = static_cast<uint32_t>(lua_tointeger(L, lua_upvalueindex(1)));
+        int kind = static_cast<int>(lua_tointeger(L, lua_upvalueindex(2)));
+        const auto& input = Host(L).GetEngine().PlayerInput(player);
+        const char* name = luaL_checkstring(L, lua_istable(L, 1) ? 2 : 1);
+        if (kind == 2) lua_pushnumber(L, input.Axis(name));
+        else lua_pushboolean(L, kind == 0 ? input.IsDown(name) : input.pressedThisFrame.count(name) != 0);
+        return 1;
+    });
+}
+int L_InputPlayer(lua_State* L) {
+    return Guard(L, [&] {
+        lua_Integer player = luaL_checkinteger(L, 1);
+        if (player < 1 || player >= 0xfffffffeLL) return luaL_error(L, "player id must be 1..4294967293");
+        lua_newtable(L); const char* names[] = {"down", "pressed", "axis"};
+        for (int i = 0; i < 3; ++i) {
+            lua_pushinteger(L, player); lua_pushinteger(L, i); lua_pushcclosure(L, L_PlayerInputQuery, 2); lua_setfield(L, -2, names[i]);
+        }
+        return 1;
+    });
+}
+
 int L_InputAxis(lua_State* L) {
     return Guard(L, [&] {
         const char* name = luaL_checkstring(L, 1);
@@ -1130,6 +1153,8 @@ int L_NetJoin(lua_State* L) { return L_NetOperation(L, "join"); }
 int L_NetLeave(lua_State* L) { return L_NetOperation(L, "leave"); }
 int L_NetReady(lua_State* L) { return L_NetOperation(L, "ready"); }
 int L_NetKick(lua_State* L) { return L_NetOperation(L, "kick"); }
+int L_NetStart(lua_State* L) { return L_NetOperation(L, "start"); }
+int L_NetDesyncReport(lua_State* L) { return L_NetOperation(L, "desync_report"); }
 int L_NetStats(lua_State* L) { return L_NetOperation(L, "stats"); }
 
 std::string PopMessage(lua_State* L) {
@@ -1188,7 +1213,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
-    const luaL_Reg inputFuncs[] = {{"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
+    const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"lockMouse", L_InputLockMouse},
                                   {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
@@ -1205,7 +1230,7 @@ void ScriptHost::Open() {
     const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
         {"localPlayer", L_NetLocalPlayer}, {"players", L_NetPlayers}, {"state", L_NetState}, {"rpc", L_NetRpc},
         {"on", L_NetOn}, {"sender", L_NetSender}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave},
-        {"ready", L_NetReady}, {"kick", L_NetKick}, {"stats", L_NetStats}, {nullptr, nullptr}};
+        {"start", L_NetStart}, {"desync_report", L_NetDesyncReport}, {"ready", L_NetReady}, {"kick", L_NetKick}, {"stats", L_NetStats}, {nullptr, nullptr}};
     SetFuncs(L, "net", netFuncs);
     lua_register(L, "__oe_error", L_ReportError);
     const luaL_Reg physicsFuncs[] = {{"raycast", L_PhysicsRaycast}, {"overlapSphere", L_PhysicsOverlapSphere},

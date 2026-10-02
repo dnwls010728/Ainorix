@@ -123,6 +123,7 @@ file(GLOB OE_CORE_SOURCES CONFIGURE_DEPENDS
   engine/physics/*.cpp
   engine/audio/*.cpp
   engine/net/*.cpp
+  engine/net/sync/*.cpp
   engine/assets/*.cpp
   engine/render/*.cpp
   engine/api/*.cpp

@@ -105,13 +105,13 @@ Instance helpers (from the built-in base class): `self:get(type)`, `self:set(typ
 
 `scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are line-by-line Lua ports of the built-in `Rotator` and `PlayerController` components; tests check they behave identically.
 
-## Network lobbies and RPC (M4)
+## Networking (M4/M5)
 
 `net` is available in every script. Without enabled networking, `net.isServer()` is true,
 `net.isHost()`/`net.isClient()` false, `net.localPlayer()` is 1 and `net.players()` is `{1}`.
 `net.rpc` calls its registered handler immediately in this mode (`others` has no recipient).
 No session, socket or network polling is initialized. With networking enabled, M4 supplies
-the lobby/RPC surface; synchronized simulation is M5/M6. See [NETWORK.md](NETWORK.md).
+lobbies/RPC and M5 supplies lockstep/reference rollback; authoritative replication remains M6. See [NETWORK.md](NETWORK.md).
 
 | Lua | Contract |
 |---|---|
@@ -122,6 +122,9 @@ the lobby/RPC surface; synchronized simulation is M5/M6. See [NETWORK.md](NETWOR
 | `net.join({name?, address?, port?})` | Async join: numeric IPv4, browser ws/wss URL or in-process loopback room |
 | `net.leave()` / `net.kick({player, reason?})` | Graceful bounded leave or host-only removal |
 | `net.ready({ready=true})` | Lobby readiness; does not start synchronized simulation |
+| `net.start()` | Ready host begins a lockstep/reference rollback match; all peers reset at the ready barrier |
+| `net.desync_report()` | First confirmed mismatch with bounded diagnostic scene JSON texts |
+| `input.player(id)` | `{down(key), pressed(key), axis(name)}` closures for the merged player input; supports dot/colon calls. Unknown players are neutral; none/player 1 is local |
 | `net.on(name, fn)` / `net.on(name, nil)` | Register/replace or remove a handler (at most 64 names) |
 | `net.rpc(target, name, ...)` | Reliable RPC: target `server`, `all`, `others`, or player id (number/string); `owner` requires M6 |
 | `net.sender()` | Sender player id inside an RPC handler; 0 outside it |
@@ -142,9 +145,9 @@ net.rpc("all", "chat", "hello")
 Networking is polled at the beginning of each fixed frame. Network callbacks/RPC run after
 script updates and before built-in systems, in player/sequence order. Polling continues through
 `sim.step`; a paused editor does not advance timeouts/handshakes. Scripts can run while joining;
-the host seed is applied when Welcome arrives. M4 does not align execution frames across peers.
+the host seed is applied when Welcome arrives. Execution in the lobby is independent; net.start aligns the game at frame zero.
 The host forwards client RPCs with their verified player id; games must validate sender/arguments
-before modifying state. v1 cookies isolate connections; they do not authenticate player identity
+before modifying state. v2 cookies isolate connections; they do not authenticate player identity
 or encrypt data. Browser clients need a compatible WebSocket endpoint.
 
 RPCs accept at most 16 JSON-compatible arguments, depth <=8, strings <=1024 bytes,
@@ -200,3 +203,21 @@ Saving a script file while simulating reloads it within half a second (and befor
 | `script.reload` | Reload all modules |
 
 Typical loop: `script.write` → `script.check` → `component.add Script` → `sim.step {frames: 60}` → `script.errors` → `render.screenshot` → fix → repeat.
+
+
+During a match, use declared actions/axes and iterate `net.players()` in its sorted order:
+```lua
+function Game:onUpdate()
+  for _, id in ipairs(net.players()) do
+    local player = input.player(id)
+    if player.down("W") then -- advance the world entity controlled by id
+    end
+  end
+end
+```
+Lobby RPC and player callbacks are withheld during matches. `net.on("net.desync", function(report)
+... end)` and `onNetState("desync")` run once after a terminal mismatch. Input frame waits still
+poll the transport but do not call onUpdate/timers/physics/audio. Plain input sees the quantized
+local player; mouse/touch coordinates are not synchronized. Reference rollback replays opaque
+closures, timers and physics history from frame zero, caps at 12000 frames, and is experimental;
+fast native snapshots remain M5c. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.

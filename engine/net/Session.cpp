@@ -94,8 +94,8 @@ bool SessionConfig::Parse(const Json& project, SessionConfig& out, std::string* 
     if (json.has("mode") && !json["mode"].isString()) return fail("network.mode must be a string");
     config.mode = json["mode"].asString("none");
     if (config.mode == "none") { out = config; return true; }
-    if (config.mode == "rollback") return fail("rollback is unavailable until SaveState/LoadState; use lockstep for the M4 lobby");
-    if (config.mode != "lockstep" && config.mode != "authoritative") return fail("network.mode must be none, lockstep or authoritative");
+    if (config.mode != "lockstep" && config.mode != "rollback" && config.mode != "authoritative") return fail("network.mode must be none, lockstep, rollback or authoritative");
+    if (!SyncConfig::Parse(json, config.sync, error)) return false;
     for (const char* key : {"transport", "bind", "gameId", "controlTransport"})
         if (json.has(key) && !json[key].isString()) return fail("network transport/bind/gameId/controlTransport must be strings");
     config.transport = json["transport"].asString("tcp");
@@ -274,7 +274,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         ++rejected_;
         if (!host_) SetState("error", "session protocol/game/mode/tick mismatch; use matching project settings and engine builds");
         else {
-            if (!connections_.count(peer) && config_.transport == "loopback" && kind == 1 && connections_.size() < config_.maxPlayers - 1) {
+            if (!connections_.count(peer) && config_.transport == "loopback" && !sealed_ && kind == 1 && connections_.size() < config_.maxPlayers - 1) {
                 Connection connection; connection.started = frame_; connections_[peer] = connection;
             }
             if (!connections_.count(peer)) return;
@@ -290,7 +290,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         auto it = connections_.find(peer);
         if (it == connections_.end()) {
             // Native peer ids are allocated by bounded TCP accept, never by UDP packets.
-            if (config_.transport != "loopback" || connections_.size() >= config_.maxPlayers - 1) { ++rejected_; return; }
+            if (sealed_ || config_.transport != "loopback" || connections_.size() >= config_.maxPlayers - 1) { ++rejected_; return; }
             it = connections_.emplace(peer, Connection{}).first;
             it->second.started = frame_;
         }
@@ -354,7 +354,7 @@ bool Session::Poll(uint64_t frame, std::vector<TransportEvent>& events) {
     for (const auto& event : incoming) {
         if (event.type == TransportEvent::Type::Connected) {
             if (host_) {
-                if (connections_.size() >= config_.maxPlayers - 1 || state_ != "lobby") { if (tcp_) tcp_->Disconnect(event.peer); continue; }
+                if (connections_.size() >= config_.maxPlayers - 1 || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); continue; }
                 Connection connection; connection.started = frame_; connection.received = frame_;
                 connections_.emplace(event.peer, connection);
             }
@@ -439,6 +439,13 @@ void Session::ApplyMessage(const ChannelEvent& event) {
     auto it = connections_.find(event.peer);
     if (it == connections_.end()) return;
     if (event.type != ChannelEvent::Type::Message) { Drop(event.peer, "channel disconnected or reliable send timed out"); return; }
+    if (!event.bytes.empty() && event.bytes[0] == 7) {
+        if (it->second.phase != "active" || event.bytes.size() > 60001 || syncMessages_.size() >= 256 ||
+            syncBytes_ + event.bytes.size() > 4 * 1024 * 1024) { ++rejected_; return; }
+        uint32_t sender = host_ ? it->second.player : 1;
+        syncMessages_.emplace_back(sender, std::vector<uint8_t>(event.bytes.begin() + 1, event.bytes.end()));
+        syncBytes_ += event.bytes.size(); return;
+    }
     ByteReader reader(event.bytes.data(), event.bytes.size());
     uint8_t kind = 0; uint32_t origin = 0, target = 0; uint64_t sequence = 0;
     std::string name, text, parseError;
@@ -449,6 +456,7 @@ void Session::ApplyMessage(const ChannelEvent& event) {
     Connection& connection = it->second;
     if (connection.phase != "active" && kind != 5) { ++rejected_; return; }
     if (kind == 1) {
+        if (sealed_) { ++rejected_; return; }
         if (!ValidRpc(name, args) || !sequence || (target != 0 && target != kAll && target != kOthers && !players_.count(target))) { ++rejected_; return; }
         if (host_) {
             if (origin != connection.player || sequence <= connection.rpcSequence || !RouteRpc(origin, target, sequence, name, args)) { ++rejected_; }
@@ -474,13 +482,26 @@ void Session::ApplyMessage(const ChannelEvent& event) {
         for (auto sequenceIt = rpcSequences_.begin(); sequenceIt != rpcSequences_.end();) {
             if (!players_.count(sequenceIt->first)) sequenceIt = rpcSequences_.erase(sequenceIt); else ++sequenceIt;
         }
-    } else if (kind == 3 && host_ && args.isBool()) {
+    } else if (kind == 3 && host_ && !sealed_ && args.isBool()) {
         players_.at(connection.player).ready = args.asBool(); BroadcastRoster();
     } else if (kind == 4 && host_) {
         std::string ignored; Kick(connection.player, "left", &ignored);
     } else if (kind == 5 && !host_) {
         SetState("leaving"); Drop(event.peer, name);
     } else if (kind != 6) ++rejected_;
+}
+
+bool Session::SendSync(uint32_t player, const std::vector<uint8_t>& bytes) {
+    if (!Connected() || bytes.empty() || bytes.size() > 60000 || player == localPlayer_) return false;
+    for (const auto& connection : connections_) {
+        if (connection.second.phase != "active" || (host_ ? connection.second.player != player : player != 1)) continue;
+        std::vector<uint8_t> payload{7}; payload.insert(payload.end(), bytes.begin(), bytes.end());
+        return channels_.Send(connection.first, NetChannel::ReliableOrdered, payload.data(), payload.size());
+    }
+    return false;
+}
+std::vector<std::pair<uint32_t, std::vector<uint8_t>>> Session::DrainSync() {
+    auto messages = std::move(syncMessages_); syncMessages_.clear(); syncBytes_ = 0; return messages;
 }
 
 bool Session::Advance(uint64_t frame) {
@@ -550,7 +571,7 @@ Json Session::State() const {
     state["isHost"] = host_; state["isServer"] = host_; state["isClient"] = !host_; state["localPlayer"] = localPlayer_;
     state["seed"] = seed_; state["tickRate"] = config_.tickRate; state["maxPlayers"] = config_.maxPlayers;
     state["port"] = tcp_ ? tcp_->LocalAddress().port : 0; state["room"] = room_; state["error"] = error_;
-    state["syncImplemented"] = false;
+    state["syncImplemented"] = config_.mode == "lockstep" || config_.mode == "rollback";
     return state;
 }
 Json Session::Stats() const {
@@ -589,7 +610,7 @@ bool Session::Kick(uint32_t player, const std::string& reason, std::string* erro
     players_.erase(player); Emit({SessionEvent::Type::Left, player}); BroadcastRoster(); return true;
 }
 bool Session::Ready(bool ready, std::string* error) {
-    if (!Connected()) { if (error) *error = "join a lobby first"; return false; }
+    if (!Connected() || sealed_) { if (error) *error = "join an unsealed lobby first"; return false; }
     if (host_) { players_.at(1).ready = ready; BroadcastRoster(); return true; }
     if (SendMessage(server_, 3, localPlayer_, 0, 0, "", Json(ready))) return true;
     if (error) *error = "peer send queue is full";
@@ -597,7 +618,7 @@ bool Session::Ready(bool ready, std::string* error) {
 }
 bool Session::Rpc(const std::string& target, const std::string& name, const Json& args, std::string* error) {
     auto fail = [&](const char* message) { if (error) *error = message; return false; };
-    if (!Connected()) return fail("join a lobby first");
+    if (!Connected() || sealed_) return fail("RPC requires an unsealed lobby; use synchronized input during matches");
     if (!ValidRpc(name, args)) return fail("RPC requires a name of 1..64 bytes and at most 16 bounded JSON arguments (8 KiB)");
     uint32_t destination = 0;
     if (target == "all") destination = kAll;

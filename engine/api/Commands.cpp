@@ -317,7 +317,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Register(r, full.c_str(), query.summary, Params(), false,
                  [command](Engine& e, const Json& a) { return e.NetworkCall(command, a); });
     }
-    Register(r, "net.host", "Host a lobby (M4: players/RPC; synchronized simulation is M5/M6).",
+    Register(r, "net.host", "Host a lobby; net.start begins lockstep/rollback, authoritative replication arrives in M6.",
              Params().Opt("name", "string", "Player name: 1..64 printable bytes.")
                      .Opt("seed", "integer", "Session seed: 0..4294967295; default 1.")
                      .Opt("room", "string", "Loopback room in this process; default gameId."), false,
@@ -338,6 +338,29 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      .Opt("target", "string", "server/all/others or decimal player id; default server. owner requires M6.")
                      .Opt("args", "array", "At most 16 bounded JSON arguments, depth <=8, <=8192 serialized bytes."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("rpc", a); });
+    Register(r, "net.start", "Host starts a ready lockstep/rollback match with a frozen roster and frame-zero barrier.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("start", a); });
+    Register(r, "net.desync_report", "First confirmed hash mismatch: frame, player, hashes and bounded host/peer scene JSON.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("desync_report", a); });
+    Register(r, "input.player", "Inspect synchronized declared actions and raw quantized axes for one player.",
+             Params().Req("player", "integer", "Player id."), false, [](Engine& e, const Json& a) {
+                 double player = a["player"].asNumber();
+                 if (player < 1 || player >= 4294967294.0 || std::floor(player) != player) throw ApiError("invalid_argument", "invalid player id");
+                 const auto& input = e.PlayerInput(static_cast<uint32_t>(player)); Json out = Json::MakeObject();
+                 out["down"] = Json::MakeArray(); out["pressed"] = Json::MakeArray(); out["axes"] = Json::MakeObject();
+                 for (const auto& key : input.down) out["down"].push(key);
+                 for (const auto& key : input.pressedThisFrame) out["pressed"].push(key);
+                 for (const auto& axis : input.axes) out["axes"][axis.first] = axis.second;
+                 return out;
+             });
+    Register(r, "sim.record_state", "Enable exact reference replay recording before frame zero (12000-frame bound).", Params(), false,
+             [](Engine& e, const Json& a) { return e.SnapshotCall("record", a); });
+    Register(r, "sim.save_state", "Save a full recorded simulation in one of eight in-memory slots.",
+             Params().Opt("slot", "string", "Slot name, default default."), false,
+             [](Engine& e, const Json& a) { return e.SnapshotCall("save", a); });
+    Register(r, "sim.load_state", "Restore Lua, physics and audio by replay; refuses changed project resources or an active match.",
+             Params().Opt("slot", "string", "Previously saved slot."), false,
+             [](Engine& e, const Json& a) { return e.SnapshotCall("load", a); });
     auto animatorState = [](Engine& e, EntityId id, bool includePose) {
         const Animator* animator = e.GetScene().Get<Animator>(id);
         if (!animator) throw ApiError("missing_component", "entity has no Animator", "Call animation.play or component.add with type Animator.");

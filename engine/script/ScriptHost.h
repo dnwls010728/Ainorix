@@ -76,6 +76,8 @@ public:
 
     const std::vector<ScriptError>& Errors() const { return errors_; }
     void ClearErrors() { errors_.clear(); }
+    // Restores observer errors independently of replayed Lua execution.
+    void RestoreErrors(const std::vector<ScriptError>& errors) { errors_ = errors; }
     Json Status() const;
 
     // ----- used by the Lua bindings --------------------------------------

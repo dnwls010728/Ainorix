@@ -29,7 +29,7 @@ void ValidateKey(const std::string& key) {
 void SaveStore::Configure(const std::string& directory) {
     storage_ = {};
     directory_ = directory.empty() ? "" : AbsolutePath(directory);
-    slots_.clear();
+    slots_.clear(); frozenReads_ = deferFlush_ = false;
 }
 
 void SaveStore::ConfigurePlayer(const std::string& gameName) {
@@ -57,7 +57,7 @@ SaveStore::Slot& SaveStore::Load(const std::string& slot) {
                               "Use 1-64 lowercase ASCII letters, digits, underscores or hyphens.");
     auto inserted = slots_.emplace(slot, Slot{});
     Slot& result = inserted.first->second;
-    if (inserted.second && (!directory_.empty() || storage_.read)) {
+    if (inserted.second && !frozenReads_ && (!directory_.empty() || storage_.read)) {
         std::string path = JoinPath(directory_, "slot-" + slot + ".json"), text;
         if (storage_.read || FileExists(path)) {
             std::string error;
@@ -113,7 +113,20 @@ void SaveStore::Clear(const std::string& key, const std::string& slot) {
     } else if (target.data.erase(key)) target.dirty = true;
 }
 
+void SaveStore::FreezeReads(bool freeze) {
+    if (freeze && !frozenReads_ && !directory_.empty()) {
+        for (const auto& path : ListFiles(directory_, ".json", false)) {
+            std::string name = RelativePath(path, directory_);
+            if (name.size() <= 10 || name.compare(0, 5, "slot-") != 0) continue;
+            try { Load(name.substr(5, name.size() - 10)); }
+            catch (const ApiError& error) { OE_LOG_WARN("save", "Ignoring snapshot slot %s: %s", name.c_str(), error.what()); }
+        }
+    }
+    frozenReads_ = freeze;
+}
+
 void SaveStore::Flush(const std::string& slot) {
+    if (deferFlush_) { Load(slot); return; }
     Slot& value = Load(slot);
     if (!value.dirty) return;
     if (!directory_.empty() || storage_.write) {

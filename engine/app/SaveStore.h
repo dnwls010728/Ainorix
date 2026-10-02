@@ -25,6 +25,11 @@ public:
     void Clear(const std::string& key, const std::string& slot = "default");
     // Writes one dirty slot, atomically replacing its previous file. Throws on failure.
     void Flush(const std::string& slot = "default");
+    // Replay/match persistence stays in memory; tools can flush after stopping.
+    void DeferFlush(bool defer) { deferFlush_ = defer; }
+    // Capture existing directory slots, then prevent new external reads during replay.
+    // Browser stores must preload needed slots through State/Get before freezing.
+    void FreezeReads(bool freeze);
 
 private:
     struct Slot { Json data = Json::MakeObject(); bool dirty = false; };
@@ -32,6 +37,7 @@ private:
     std::string directory_;
     SaveStorage storage_;
     std::map<std::string, Slot> slots_;
+    bool deferFlush_ = false, frozenReads_ = false;
 };
 
 }  // namespace oe

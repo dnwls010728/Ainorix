@@ -15,16 +15,34 @@ uint32_t Number(const Json& args, const char* key, uint32_t fallback, uint32_t l
 }
 
 Json Engine::NetworkCall(const std::string& command, const Json& args) {
+    if (sync_ && sync_->Active() && inWorld_ &&
+        (command == "host" || command == "join" || command == "leave" || command == "kick" || command == "ready" || command == "start"))
+        throw ApiError("match_control", "session controls cannot run in a synchronized game callback", "Control the lobby/session from tools; keep match updates deterministic.");
     auto state = [&] {
-        if (network_) return network_->State();
+        if (network_) { Json out = network_->State(); out["syncImplemented"] = networkConfig_.mode != "authoritative";
+            if (sync_) { out["sync"] = sync_->State(); if (replaying_) out["sync"]["frame"] = frame_; } return out; }
         Json out = Json::MakeObject(); out["mode"] = networkConfig_.mode;
         out["state"] = networkConfig_.mode == "none" ? "none" : "idle";
         out["isHost"] = false; out["isServer"] = networkConfig_.mode == "none"; out["isClient"] = false;
         out["localPlayer"] = networkConfig_.mode == "none" ? 1 : 0; out["seed"] = 0;
-        out["transport"] = networkConfig_.transport; out["syncImplemented"] = false; out["error"] = "";
+        out["transport"] = networkConfig_.transport; out["syncImplemented"] = networkConfig_.mode == "lockstep" || networkConfig_.mode == "rollback"; out["error"] = "";
         return out;
     };
     if (command == "state") return state();
+    if (command == "desync_report") return sync_ ? sync_->Report() : Json::MakeObject();
+    if (command == "start") {
+        if (!network_ || !network_->Connected() || !network_->IsHost() || networkConfig_.mode == "authoritative")
+            throw ApiError("network_start", "start requires a lockstep/rollback host lobby", "Host, join, and ready all players first.");
+        std::vector<uint32_t> roster;
+        Json players = network_->Players();
+        for (const Json& player : players.items()) {
+            if (!player["ready"].asBool()) throw ApiError("network_not_ready", "all players must be ready", "Call net.ready on every peer.");
+            roster.push_back(static_cast<uint32_t>(player["id"].asNumber()));
+        }
+        BeginSessionIfNeeded(); EnsureSync(true); std::string error;
+        if (!sync_->Start(roster, &error)) throw ApiError("network_start", error);
+        network_->Seal(); return state();
+    }
     if (command == "players") {
         if (network_) return network_->Players();
         Json players = Json::MakeArray();
@@ -35,14 +53,16 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         return players;
     }
     if (command == "stats") {
-        if (network_) return network_->Stats();
+        if (network_) { Json stats = network_->Stats(); stats["replayMilliseconds"] = replayMilliseconds_; if (sync_) stats["sync"] = sync_->State(); return stats; }
         Json stats = Json::MakeObject(); stats["rejected"] = 0; stats["peers"] = Json::MakeArray(); return stats;
     }
     if (command == "host" || command == "join") {
         if (networkConfig_.mode == "none") throw ApiError("network_disabled", "this project has no enabled network mode",
-            "Set project.json network.mode to lockstep or authoritative and reopen. M4 supplies lobbies/RPC; synchronization arrives in M5/M6.");
+            "Set project.json network.mode to lockstep, rollback (reference replay), or authoritative and reopen.");
         if (network_ && network_->Status() != "offline" && network_->Status() != "error")
             throw ApiError("network_active", "a session is already active", "Use net.leave and advance sim.step until offline, or sim.stop first.");
+        sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
+        audio_->SetOutputMode(false, false); audio_->DiscardPending(); saves_.DeferFlush(false); saves_.FreezeReads(false);
         network_.reset(); networkFrame_ = 0;
         std::string error, name = args["name"].asString("Player");
         if (command == "host") {

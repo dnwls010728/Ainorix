@@ -66,7 +66,8 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
         }
         SessionConfig config;
         if (!SessionConfig::Parse(project, config, error)) return false;
-        network_.reset(); networkFrame_ = 0; networkConfig_ = config;
+        sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
+    network_.reset(); networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
         projectName_ = project["name"].asString("Untitled");
         std::string start = project["startScene"].asString("");
@@ -78,6 +79,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
     }
 
     // A bare scene file: use the nearest enclosing project if there is one.
+    sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0; networkConfig_ = SessionConfig{};
     std::string dir = ParentPath(path);
     projectDir_ = dir;
@@ -113,6 +115,7 @@ bool Engine::LoadScene(const std::string& path, std::string* error) {
         return false;
     }
     playing_ = false;
+    sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0;
     playSnapshot_.reset();
     ResetRuntime();
@@ -139,6 +142,7 @@ bool Engine::SaveScene(const std::string& path, std::string* error) {
 }
 
 void Engine::NewScene(const std::string& name) {
+    sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0;
     scene_.Clear();
     scene_.name = name;
@@ -214,6 +218,7 @@ void Engine::ResetRuntime() {
     physics_->Reset();
     audio_->Reset();
     pendingScene_.clear();
+    audio_->SetOutputMode(false, false); saves_.DeferFlush(false); saves_.FreezeReads(false);
 }
 
 void Engine::ApplySceneChange() {
@@ -248,6 +253,7 @@ void Engine::Pause() {
 }
 
 void Engine::Stop() {
+    sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0;
     playing_ = false;
     if (playSnapshot_) {
@@ -274,8 +280,7 @@ void Engine::Stop() {
 
 void Engine::Step(int frames) {
     BeginSessionIfNeeded();
-    scripts_->PollHotReload();  // pick up script / asset files edited since the last step
-    assets_->PollChanges();
+    if (!journal_ && (!sync_ || !sync_->Active())) { scripts_->PollHotReload(); assets_->PollChanges(); }
     for (int i = 0; i < frames; ++i) SimulateFrame();
     if (frames > 0) Touch();
 }
@@ -283,7 +288,7 @@ void Engine::Step(int frames) {
 void Engine::Tick(double realDt) {
     if (!playing_) return;
     hotReloadTimer_ += realDt;
-    if (hotReloadTimer_ >= 0.5) {
+    if (hotReloadTimer_ >= 0.5 && !journal_ && (!sync_ || !sync_->Active())) {
         hotReloadTimer_ = 0.0;
         scripts_->PollHotReload();
         assets_->PollChanges();
@@ -313,6 +318,15 @@ void Engine::SimulateFrame() {
         network_->Advance(networkFrame_++);
         if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
     }
+    if (!PollSync()) return;
+    if (journal_ && journal_->frames.size() >= FrameSync::kHistoryFrames) throw ApiError("state_history_full", "reference recording reached 12000 frames", "Stop recording or restart the match.");
+    if (journal_) journal_->frames.push_back({input_, frameInputs_});
+    SimulateWorld();
+    if (sync_ && sync_->Running()) input_ = deviceInput_;
+}
+
+void Engine::SimulateWorld() {
+    inWorld_ = true;
     // Expire debug lines whose time is up (0-second lines live for one frame).
     debugLines_.erase(std::remove_if(debugLines_.begin(), debugLines_.end(), [&](const TimedLine& t) { return t.expires >= 0 && t.expires <= simTime_; }),
                       debugLines_.end());
@@ -320,7 +334,7 @@ void Engine::SimulateFrame() {
     const float dt = static_cast<float>(kFixedDt);
     UpdateButtonKeys();
     scripts_->Update(dt);
-    if (network_) scripts_->DispatchNetwork(network_->DrainEvents());
+    if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents());
     std::vector<UIEvent> uiEvents = UpdateUI();
     UpdateSystems(scene_, input_, dt, assets_.get());
     std::vector<PhysicsEvent> events = physics_->Step(scene_, dt);
@@ -337,6 +351,13 @@ void Engine::SimulateFrame() {
     audio_->Render();
     ++frame_;
     simTime_ += kFixedDt;
+    inWorld_ = false;
+    if (sync_ && sync_->Running() && !replaying_) {
+        sync_->Applied(frameInputs_);
+        if (frame_ % sync_->Config().hashInterval == 0) syncHashes_[frame_] = SyncWorld();
+        audio_->Confirm(std::min(frame_, sync_->Confirmed()));
+        outputConfirmed_ = std::min(frame_, sync_->Confirmed());
+    }
 }
 
 void Engine::UpdateButtonKeys() {
@@ -499,6 +520,20 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
         }
         Json args = rawArgs.isNull() ? Json::MakeObject() : rawArgs;
         ValidateArgs(*cmd, args);
+        if (sync_ && sync_->Active() && !inWorld_ && !replaying_ && (name == "script.eval" || (cmd->mutates && name.compare(0, 6, "input.") != 0 && name.compare(0, 4, "sim.") != 0)))
+            throw ApiError("match_active", "external gameplay edits are disabled during a match", "Put deterministic gameplay logic in scripts before net.start.");
+        if (journal_ && !inWorld_ && !replaying_ && cmd->mutates && name != "script.eval" &&
+            name.compare(0, 6, "input.") != 0 && name.compare(0, 4, "sim.") != 0)
+            throw ApiError("state_recording", "external scene edits are disabled while recording", "Use scripted deterministic edits, or sim.stop before editing.");
+        if (journal_ && !inWorld_ && !replaying_ && name == "script.eval") {
+            if (sync_ && sync_->Active()) throw ApiError("match_active", "external Lua evaluation can desynchronize a match", "Put gameplay logic in scripts before net.start.");
+            size_t total = 0; for (const auto& entries : journal_->commands) total += entries.second.size();
+            if (total >= 512 || args.dump().size() > 65536) throw ApiError("state_limit", "replay supports 512 external evaluations of at most 64 KiB");
+            journal_->commands[frame_].emplace_back(name, args);
+        }
+        if ((journal_ || (sync_ && sync_->Active())) && !inWorld_ && !replaying_ &&
+            (name == "audio.play" || name == "audio.stop" || name == "game.load_scene" || name == "save.set" || name == "save.clear" || name == "save.flush" || name == "script.write" || name == "script.reload"))
+            throw ApiError("state_recording", "external side effects are disabled while recording", "Use deterministic Lua gameplay or stop recording before edits.");
         const bool record = cmd->mutates && !playSnapshot_;
         Json before = record ? scene_.ToJson() : Json();
         Json result = cmd->run(*this, args);

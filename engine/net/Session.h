@@ -5,17 +5,19 @@
 
 #include "core/Json.h"
 #include "net/Channels.h"
+#include "net/sync/FrameSync.h"
 #include "net/SocketTransports.h"
 #include "net/FallbackTransport.h"
 
 namespace oe {
 
-// M4 establishes a lobby; frame synchronization/replication are separate M5/M6 layers.
+// Authenticated lobby/RPC and match payload transport; FrameSync owns M5 synchronization.
 struct SessionConfig {
     std::string mode = "none", transport = "tcp", bind = "127.0.0.1", gameId;
-    uint16_t port = 7778, version = 1;
+    uint16_t port = 7778, version = 2;
+    SyncConfig sync;
     uint32_t maxPlayers = 4, tickRate = 60;
-    // Validates all supplied settings, including unsupported rollback and fixed tick rate.
+    // Validates all supplied settings, including the bounded input schema and fixed tick rate.
     static bool Parse(const Json& project, SessionConfig& out, std::string* error);
 };
 
@@ -43,6 +45,10 @@ public:
     ~Session() override;
     // Poll owns the transport, applies bounded messages and orders events by player/sequence.
     bool Advance(uint64_t frame);
+    // Authenticated bounded match payloads; only host/client links are permitted.
+    bool SendSync(uint32_t player, const std::vector<uint8_t>& bytes);
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> DrainSync();
+    void Seal() { sealed_ = true; }
     std::vector<SessionEvent> DrainEvents();
     Json State() const;
     Json Players() const;
@@ -101,7 +107,9 @@ private:
     PeerId server_ = 1;
     uint32_t localPlayer_ = 0, nextPlayer_ = 2, seed_ = 0;
     uint64_t frame_ = 0, sequence_ = 0, rejected_ = 0, started_ = 0;
-    bool host_ = false, polled_ = false;
+    bool host_ = false, polled_ = false, sealed_ = false;
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> syncMessages_;
+    size_t syncBytes_ = 0;
 };
 
 // Bounded JSON values for RPC: 16 arguments, depth 8, finite numbers, 8 KiB serialized.

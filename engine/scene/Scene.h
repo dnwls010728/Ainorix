@@ -28,6 +28,9 @@ public:
     Scene& operator=(const Scene&) = delete;
 
     void Clear();
+    // Replay must preserve allocation gaps from entities deleted before frame zero.
+    EntityId AllocationCursor() const { return nextId_; }
+    void RestoreAllocationCursor(EntityId cursor) { if (cursor >= nextId_) nextId_ = cursor; }
 
     // `forcedId` != 0 creates the entity with that id (used when loading).
     EntityId Create(const std::string& name, EntityId parent = kNullEntity, EntityId forcedId = kNullEntity);

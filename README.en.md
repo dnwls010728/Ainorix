@@ -62,7 +62,9 @@ Opt-in network lobbies/RPC: set `project.json` `network` to
 `{"mode":"lockstep","transport":"tcp","port":7778}`, then use `net.host`/`net.join`
 in persistent tool sessions or Lua. `net.players`, `net.ready`, `net.stats`, `net.rpc` and
 `net.on` support lobby/game messages; absent/`none` networking stays single-player with
-local RPC. Frame synchronization and replication are planned for M5/M6. Browser clients
+local RPC. Declare network.actions/axes, ready every player, then net.start for lockstep.
+input.player(id), desync reports and experimental reference rollback are available; fast native
+rollback snapshots remain M5c and authoritative replication M6. Browser clients
 need a compatible WebSocket server and rebuilt runtime. See [docs/NETWORK.md](docs/NETWORK.md).
 
 `oe editor` opens the **editor** (Dear ImGui docking + ImGuizmo, drawn on the GPU in the engine process). It uses only the command API, so an agent (`oe mcp --connect 7777`) works in the same session as the person at the same time. Without a window (e.g. headless Linux), `oe editor MyGame --screenshot shot.png` renders the editor to an image. Details: [docs/EDITOR.md](docs/EDITOR.md)

@@ -33,7 +33,7 @@ Non-goals (for now)
    gameplay needs it, a Lua binding. No network feature is editor-only or agent-only.
 3. **Determinism is untouched.** Network data never brings wall-clock time, arrival order or thread
    timing into the simulation. It enters only at a fixed frame boundary in a defined order
-   (player id, then sequence). `Engine::SimulateFrame` stays the single place the world advances.
+   (player id, then sequence). `Engine::SimulateWorld` is shared by normal advancement and deterministic replay.
 4. **Transport ≠ sync model.** What carries bytes (UDP/TCP/WebSocket/loopback) and how state is
    kept in sync (lockstep/rollback/authoritative) are independent layers, each replaceable.
 5. **Portable C++17 outside `engine/platform/*`.** `engine/net/` has no OS headers; sockets live
@@ -139,9 +139,11 @@ established.
 - **Desync detection:** every K frames peers exchange the world hash (`Fnv1a64`, the frame hash
   machinery that already exists). A mismatch raises `net.desync`; `net.desync_report` dumps both
   scene JSONs for diffing.
-- **Rollback** needs `Engine::SaveState()/LoadState()` — an in-memory snapshot of scene, Jolt and
-  Box2D bodies, Lua state, audio events and RNG, fast enough to restore up to `rollbackFrames`
-  frames per tick. Until it exists, `mode: "rollback"` is rejected with an `ApiError` + hint.
+- **Rollback** uses `Engine::SaveState()/LoadState()` semantics for scene, Jolt/Box2D, Lua,
+  audio and RNG. M5 currently provides an exact reference backend that rebuilds these states by
+  replaying their input journal. `mode: "rollback"` enables this experimental backend; it is
+  bounded to 12000 frames and restores in O(match history), not O(rollbackFrames).
+  Fast native snapshots that meet a real-time frame budget remain an unchecked M5 requirement.
 - The host picks the session seed and sends it in the handshake; Lua `math.random` is seeded from it.
 
 ### 7.2 Authoritative server
@@ -226,8 +228,11 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
       web (Emscripten); tests on loopback and real localhost sockets
 - [x] M4 — session layer (host/join/lobby/player ids/handshake/version/seed), `net.*` commands,
       Lua `net` basics (`isServer`, `localPlayer`, `rpc`, `on`), `mode: none` semantics
-- [ ] M5 — lockstep (input merge, frame gating, desync hash, `input.player(id)`); then
-      `Engine::SaveState/LoadState` and rollback
+- [ ] M5 — lockstep and full-state rollback
+  - [x] M5a — input merge, frame gating, ready barrier, desync reports, `input.player(id)`
+  - [x] M5b — exact reference `Engine::SaveState/LoadState` and prediction/correction by replay
+  - [ ] M5c — fast native Lua/Jolt/Box2D snapshots; restore cost bounded by rollback window,
+        benchmarked against the 1/60 s game budget (reference replay is not this backend)
 - [ ] M6 — authoritative: `NetSync`, snapshots/deltas, interpolation, prediction, relevance
 - [ ] M7 — headless dedicated server (`oe serve-game`, `--server`), editor Players×N play +
       Network panel, `net.simulate`
@@ -468,3 +473,107 @@ build/bin/oe_tests.exe
 node tests/network_web_test.js
 oe api --markdown > docs/API.md
 ```
+
+
+### M5a/M5b — lockstep and reference rollback (2026-10-02)
+
+Lockstep is implemented; full-state replay and correction are implemented as an experimental
+reference backend. M5 remains unchecked because fast native snapshots have not been implemented.
+The reference backend preserves correctness for opaque Lua closures/timers and physics solver
+history without pretending that scene JSON alone is a snapshot. It also restores allocation gaps,
+save memory and audio voice ids, mixer position, event history and captured PCM.
+
+Configuration (in `project.json`):
+```json
+"network": {
+  "mode": "lockstep",
+  "transport": "udp",
+  "port": 7778,
+  "actions": ["W", "A", "S", "D", "Space"],
+  "axes": ["LeftX", "LeftY"],
+  "inputDelay": 2,
+  "hashInterval": 60,
+  "waitFrames": 300,
+  "dropPolicy": "kick",
+  "rollbackFrames": 8
+}
+```
+
+- `actions` declares literal key names, at most 64 unique printable ASCII names of 1..32 bytes;
+  `axes` declares up to six standard gamepad axes. Held and pressed bitfields are independent.
+  Raw axes are quantized to signed 16-bit values; Lua applies the existing dead zone after decoding.
+  Missing actions/axes default to empty arrays. Pointer coordinates/deltas, touch ids and viewport
+  dimensions are not encoded: use declared actions/axes for this backend. Plain `input.*` sees the
+  synchronized local input; each `input.player(id)` sees the same sorted merged frame on every peer.
+- After host/join and readiness on every player, the host calls `net.start`. Begin/ready/go verify
+  the input schema, seed and initial scene/resource fingerprint, freeze the roster, and reset all
+  peers to the scene captured when play began, at frame zero. The first `inputDelay` frames are
+  neutral. Lobby callbacks/RPC run before the barrier; match scripts initialize after the barrier.
+- `sim.step` advances I/O attempts, so `Engine::Frame()` may advance fewer times while waiting.
+  Real-time ticking also continues transport polling while the game is gated. `net.state.sync`
+  contains frame, confirmed count, waiting, predicted count, correction count and terminal error.
+  `net.stats.replayMilliseconds` measures the most recent complete reference restoration.
+- `inputDelay` is 0..8, `rollbackFrames` 1..8, `hashInterval` 1..600, and `waitFrames` 30..600.
+  `dropPolicy: "kick"` kicks missing remote inputs and stops the frozen match after the I/O timeout;
+  `empty` substitutes neutral input and continues. A disconnect stops the match. Stop/leave and
+  host/join establish another lobby. Arbitrary RPC, readiness changes, late joins and external
+  gameplay edits/evaluation are disabled during matches to keep arrival time out of simulation.
+  Session controls also refuse synchronized Lua game callbacks, so speculative/replayed frames
+  cannot emit leave/kick side effects. Use game frame/time for gameplay; RTT, confirmation and
+  correction diagnostics are observer data, not deterministic simulation inputs.
+- Authenticated match messages use the existing bounded reliable ordered channel over any
+  transport. This deliberately retains head-of-line blocking. There is no input packet exposure
+  before the M4 cookie gate. Match messages cap at 60000 bytes; sync queues cap at 256 messages/
+  4 MiB, future input at 32 frames, and retained coordinator history at 32 frames. Protocol version
+  is now 2; v1 clients are rejected rather than silently disagreeing about synchronization.
+- Confirmed periodic Fnv1a64 diagnostics cover reflected scene state plus game data and audio
+  voices/events, excluding device/capture preferences and local transport counters. The first
+  mismatch stops all peers, emits `onNetState("desync")` and `net.on("net.desync", handler)`, and
+  exposes `net.desync_report`: frame, player, decimal hash strings, hostScene and peerScene.
+  Diagnostic scene JSON includes a `runtime` object with game/audio data. Each scene text caps at
+  24000 bytes; larger scenes omit the texts and set `scenesOmitted`, but hashes are still checked.
+  Opaque Lua upvalues and native solver internals are restored by replay, not directly hashed.
+- Set `mode: "rollback"` to predict missing remote held/axis input (pressed is never repeated),
+  at most `rollbackFrames` ahead of confirmation. A differing authoritative frame replaces the
+  journal from the earliest mismatch; one shared world routine reconstructs all execution from
+  frame zero. Only confirmed audio blocks reach speakers/capture; already submitted audio is
+  preserved through corrections. Hot reload is disabled while a match/recording is active.
+  Reference matches stop at 12000 game frames; lockstep matches have no such lifetime cap.
+- Packaged resource fingerprints cover sorted project files except project.json, AGENTS.md,
+  CLAUDE.md, tools and dotfiles, at most 4096 files. Keep these files immutable. Automatic replay
+  refuses changed resources; manual state loading also checks before altering the world.
+  All simulation-affecting settings/resources and initial save values must match peers.
+
+Standalone full-state recording is explicit, so ordinary single-player execution allocates no
+journal and no FrameSync. Call `sim.record_state` before simulation or Lua evaluation, then
+`sim.save_state {slot}` / `sim.load_state {slot}`. Slots are in-memory (eight slots, names 1..32
+bytes), not portable save files. Each journal caps at 12000 frames and 512 external Lua evaluations
+of at most 64 KiB. Evaluation calls after recording are themselves replayed; arbitrary C++ scene
+mutation or direct `ScriptHost::Eval` outside `Engine::Call` is outside the recording contract.
+Runtime components/closures created before recording are also outside that contract. Editor undo
+is independent. Directory save slots are frozen at recording; browser localStorage games must
+preload needed slots before recording. Save flushes stay in memory until recording/match stops.
+Speaker output is suppressed during restoration and captured output is restored exactly.
+
+Validation:
+- [x] Windows Release build; 120 tests, zero failed checks, no new compiler warnings.
+- [x] 2- and 4-player authenticated sessions each merge 10000 frames with seeded loss,
+      duplication and reordering; summed deterministic worlds agree.
+- [x] Two real localhost engine peers over TCP and UDP each reach 10000 game frames with
+      confirmed hashes agreeing; no mock socket substitution.
+- [x] Frame waiting/recovery, forced prediction correction, complete small-scene mismatch reports,
+      large-world hash checks, schema mismatch, malformed/future input, kick and empty timeout policies.
+- [x] Snapshot tests replay Lua closures/timers/RNG, Jolt and Box2D bodies, dynamic entity creation/
+      deletion, allocation gaps, scene changes, audio mixer state and exact PCM; changed-resource loading is refused.
+- [x] Inactive mode still pins identical frame hashes, no FrameSync/session/channel/socket creation
+      or networking polls. Existing rendering, editor, gameplay and save tests pass.
+- [x] API regenerated; persistent CLI barrier and snapshot smoke tests and JS bridge mocks.
+- Reference benchmark (Windows Release, default template game, one restoration per sample):
+  2000 recorded frames restored in 110.56 ms; 5000 in 267.64 ms. These are fixture measurements,
+  not worst-case bounds, and exceed the 16.67 ms frame budget. M5 is therefore not marked complete.
+- [ ] M5c: replace O(history) reference restoration with complete native snapshots (Lua closures,
+      timers, RNG, Jolt/Box2D solver/contact history, scene runtime pools and audio). Add a measured
+      worst-case restoration budget for representative games and remove the reference history cap.
+- [ ] POSIX, real browser/Wasm and Android device execution and refreshed prebuilt runtimes:
+      Emscripten, NDK and Linux toolchains remain unavailable. Rebuild and run on each platform
+      before shipping M5 networking there; existing committed runtimes do not contain M5 APIs.

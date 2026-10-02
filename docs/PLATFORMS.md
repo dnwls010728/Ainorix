@@ -75,3 +75,9 @@ Console SDKs are under NDA, so their code cannot live in this public tree. The l
 - Identical pixels on every OS and in CI, which makes frame hashes usable as test oracles for AI agents.
 - No GPU or driver needed to verify a change (`oe render` works over SSH, in containers, in CI).
 - Trivial to bring up on a new platform: present a CPU buffer and the platform is playable.
+
+M5 lockstep/reference rollback shares this transport layer. I/O ticks continue while game frames
+wait for input; protocol v2 clients must match rebuilt native/Web runtimes. The Windows localhost
+TCP/UDP tests each run 10000 game frames. POSIX, real Wasm/WebSocket and Android execution remain
+unverified, and the committed prebuilt runtimes have not been refreshed for M5. See NETWORK.md
+for the reference replay backend and the remaining fast native snapshot requirement.

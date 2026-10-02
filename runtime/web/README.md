@@ -48,3 +48,6 @@ lines above.
 
 `oe package --web` prefers a runtime built locally (`build/bin/web/`) over the
 one in this folder, and reports which one it used (`webRuntime`).
+
+Networking M5 source adds protocol v2, lockstep and reference rollback APIs. This committed runtime
+was not rebuilt for M5 (required SDK unavailable); rebuild before packaging games using them.

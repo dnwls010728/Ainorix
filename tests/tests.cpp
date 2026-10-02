@@ -1132,9 +1132,10 @@ std::string TempProject(const char* name) {
     return d;
 }
 
-Json Call(Engine& e, const char* cmd, const char* args) { return e.Call(cmd, Json::parse(args)); }
+Json Call(Engine& e, const char* cmd, const char* args = "{}") { return e.Call(cmd, Json::parse(args)); }
 
 TEST(NetworkInactiveZeroCost) {
+    const uint64_t syncInstances = FrameSync::InstancesCreated();
     const uint64_t sessionInstances = Session::InstancesCreated(), sessionPolls = Session::PollCalls();
     const uint64_t instances = LoopbackNetwork::InstancesCreated();
     const uint64_t polls = LoopbackNetwork::PollCalls();
@@ -1178,6 +1179,7 @@ TEST(NetworkInactiveZeroCost) {
     CHECK(ChannelEndpoint::InstancesCreated() == channelInstances);
     CHECK(ChannelEndpoint::PollCalls() == channelPolls);
     CHECK(PlatformNetSocketsCreated() == socketsCreated && PlatformNetSocketsLive() == socketsLive);
+    CHECK(FrameSync::InstancesCreated() == syncInstances);
     CHECK(Session::InstancesCreated() == sessionInstances && Session::PollCalls() == sessionPolls);
     CHECK(RemoveAll(project));
 }
@@ -1229,6 +1231,218 @@ void NetworkSteps(Engine& a, Engine& b, int count, Engine* c = nullptr) {
     }
 }
 
+
+Session::Random SessionTestRandom(uint64_t seed);
+std::string SyncProject(const char* name, const char* transport, bool rollback = false) {
+    std::string project = NetworkProject(name, transport), text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text)); Json config = Json::parse(text);
+    config["network"]["mode"] = rollback ? "rollback" : "lockstep";
+    config["network"]["actions"] = Json::parse("[\"W\",\"Space\"]");
+    config["network"]["axes"] = Json::parse("[\"LeftX\"]");
+    config["network"]["hashInterval"] = 10;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/sync_test.lua"), R"(
+local M={}
+function M:onStart() self.n=0; game.set('total',0) end
+function M:onUpdate()
+ local total=game.get('total',0)
+ for _,id in ipairs(net.players()) do
+  local p=input.player(id)
+  if p.down('W') then total=total+id end
+  if p.pressed('Space') then total=total+10 end
+  total=total+p.axis('LeftX')
+ end
+ game.set('total',total); self.n=self.n+1
+ self:set('Transform',{position={total,0,0}})
+end
+return M
+)"));
+    return project;
+}
+void SyncPrepare(Engine& host, Engine& client, const std::string& project, const char* transport) {
+    std::string error; CHECK(host.Open(project, &error)); CHECK(client.Open(project, &error));
+    for (Engine* engine : {&host, &client}) {
+        engine->GetScene().Clear();
+        CHECK(Call(*engine, "entity.create", R"({"name":"Counter","components":{"Transform":{},"Script":{"path":"scripts/sync_test.lua"}}})")["ok"].asBool());
+    }
+    CHECK(Call(host, "net.host", R"({"seed":71,"room":"sync-room"})")["ok"].asBool());
+    Json join=Json::MakeObject(); join["address"]=std::string(transport)=="loopback"?"sync-room":"127.0.0.1";
+    if (std::string(transport)!="loopback") join["port"]=host.Network()->State()["port"];
+    CHECK(client.Call("net.join",join)["ok"].asBool());
+    NetworkSteps(host,client,30);
+    CHECK(Call(host,"net.ready",R"({"ready":true})")["ok"].asBool());
+    CHECK(Call(client,"net.ready",R"({"ready":true})")["ok"].asBool());
+    NetworkSteps(host,client,20);
+    CHECK(Call(host,"net.start")["ok"].asBool());
+}
+TEST(NetworkLockstepEngineGatesAndDesync) {
+    std::string project=SyncProject("sync_lockstep","loopback");
+    Engine host,client; SyncPrepare(host,client,project,"loopback");
+    host.Input().down.insert("W"); client.Input().down.insert("W"); client.Input().pressedThisFrame.insert("Space");
+    NetworkSteps(host,client,100);
+    CHECK(host.Frame()>20 && client.Frame()>20);
+    CHECK(host.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    uint64_t held=host.Frame(); host.Step(20); CHECK(host.Frame() <= held+3);
+    NetworkSteps(host,client,40);
+    CHECK(host.NetworkCall("desync_report",Json()).size()==0);
+    CHECK(Call(host,"input.player",R"({"player":2})")["result"]["down"].size()==1);
+    CHECK(!Call(host,"script.eval",R"({"code":"1"})")["ok"].asBool() || !host.InPlaySession());
+    host.GetScene().Pool<Transform>().begin()->second.scale.y=100;
+    NetworkSteps(host,client,400);
+    Json report=host.NetworkCall("desync_report",Json());
+    CHECK(report.has("frame") && !report["hostScene"].asString().empty() && !report["peerScene"].asString().empty());
+    CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="desync");
+    RemoveAll(project);
+}
+TEST(NetworkRollbackCorrectsPredictions) {
+    std::string project=SyncProject("sync_rollback","loopback",true);
+    Engine host,client; SyncPrepare(host,client,project,"loopback");
+    host.Input().down.insert("W"); client.Input().down.insert("W");
+    host.Audio().StartCapture(); client.Audio().StartCapture();
+    NetworkSteps(host,client,30);
+    uint64_t before=host.Frame(); host.Step(6); CHECK(host.Frame()>before);
+    client.Input().down.erase("W"); client.Input().pressedThisFrame.insert("Space");
+    NetworkSteps(host,client,100);
+    Json hs=host.NetworkCall("state",Json())["sync"], cs=client.NetworkCall("state",Json())["sync"];
+    CHECK(hs["state"].asString()=="running" && cs["state"].asString()=="running");
+    CHECK(hs["rollbacks"].asNumber()+cs["rollbacks"].asNumber()>0);
+    CHECK(host.Audio().SaveState()->capture.size()==static_cast<size_t>(std::min(host.Frame(),static_cast<uint64_t>(hs["confirmed"].asNumber())))*1600);
+    CHECK(client.Audio().SaveState()->capture.size()==static_cast<size_t>(std::min(client.Frame(),static_cast<uint64_t>(cs["confirmed"].asNumber())))*1600);
+    CHECK(host.NetworkCall("desync_report",Json()).size()==0);
+    RemoveAll(project);
+}
+TEST(SimulationReferenceSnapshotRestoresClosuresPhysicsAndAudio) {
+    std::string project=TempProject("state_replay"),error;
+    Engine e; CHECK(e.Open(project,&error)); e.GetScene().Clear();
+    CHECK(Call(e,"entity.create",R"({"name":"Body","components":{"Transform":{"position":[0,3,0]},"Collider":{},"RigidBody":{}}})")["ok"].asBool());
+    CHECK(Call(e,"audio.generate",R"({"path":"assets/test.wav","preset":"coin"})")["ok"].asBool());
+    EntityId deleted=e.GetScene().Create("Deleted"); e.GetScene().Destroy(deleted);
+    CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(Call(e,"script.eval",R"J({"code":"local n=0; timer.every(0.02,function() n=n+math.random(1,5); game.set('n',n) end); audio.play('assets/test.wav', {loop=true})"})J")["ok"].asBool());
+    CHECK(Call(e,"script.eval",R"J({"code":"timer.after(0.1,function() local id=scene.create('Dynamic',{Transform={position={2,2,0}},Collider2D={},RigidBody2D={}}); timer.after(0.15,function() scene.destroy(id) end) end); timer.after(0.35,function() scene.create('Persist',{Transform={position={2,2,0}},Collider2D={},RigidBody2D={}}) end)"})J")["ok"].asBool());
+    e.Audio().StartCapture(); e.Step(120); CHECK(e.Scripts().Errors().empty());
+    auto snapshot=e.SaveState(); Json scene=e.GetScene().ToJson(),data=e.GameData(),audio=e.Audio().State();
+    e.Step(20); Json future=e.GetScene().ToJson(),futureData=e.GameData(); auto futureAudio=e.Audio().SaveState();
+    e.LoadState(*snapshot);
+    CHECK(e.Frame()==120 && e.GetScene().ToJson()==scene && e.GameData()==data && e.Audio().State()==audio);
+    e.Step(20); CHECK(e.GetScene().ToJson()==future && e.GameData()==futureData);
+    CHECK(e.Audio().SaveState()->capture==futureAudio->capture);
+    CHECK(Call(e,"sim.save_state",R"({"slot":"one"})")["ok"].asBool()); e.Step(2);
+    CHECK(Call(e,"sim.load_state",R"({"slot":"one"})")["ok"].asBool()); CHECK(e.Frame()==140);
+    CHECK(WriteTextFile(JoinPath(project,"scripts/changed.lua"),"return {}"));
+    bool refused=false; try {e.LoadState(*snapshot);} catch(const ApiError& err) {refused=err.code=="state_resource";} CHECK(refused);
+    RemoveAll(project);
+}
+
+TEST(SimulationReferenceSnapshotAcrossSceneChanges) {
+    std::string project=TempProject("state_scene_change"),error;
+    Scene second; second.name="Second"; second.Add<Transform>(second.Create("Marker")).position={1,2,3};
+    CHECK(WriteTextFile(JoinPath(project,"scenes/second.scene.json"),second.ToJson().dump()));
+    Engine e; CHECK(e.Open(project,&error)); e.GetScene().Clear();
+    CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(Call(e,"script.eval",R"J({"code":"local n=0; timer.every(0.02,function() n=n+1; game.set('n',n) end); timer.after(0.1,function() game.loadScene('scenes/second.scene.json') end)"})J")["ok"].asBool());
+    e.Step(30); auto snapshot=e.SaveState(); Json scene=e.GetScene().ToJson(),data=e.GameData();
+    CHECK(e.RuntimeScene()=="scenes/second.scene.json" && e.Scripts().Errors().empty());
+    e.Step(20); Json futureData=e.GameData(); e.LoadState(*snapshot);
+    CHECK(e.GetScene().ToJson()==scene && e.GameData()==data && e.RuntimeScene()=="scenes/second.scene.json");
+    e.Step(20); CHECK(e.GameData()==futureData); RemoveAll(project);
+}
+TEST(NetworkFrameSyncSeededTenThousandFrames) {
+    for (int count : {2,4}) {
+        LoopbackConfig faults; faults.seed=193; faults.lossPermille=80; faults.latencyFrames=1; faults.reorderFrames=2;
+        faults.duplicatePermille=100;
+        auto wire=std::make_shared<LoopbackNetwork>(faults);
+        SessionConfig config; config.mode="lockstep"; config.transport="loopback"; config.gameId="sync-faults";
+        config.sync.keys={"W"}; config.sync.hashInterval=60;
+        std::vector<std::unique_ptr<Session>> sessions;
+        for(int i=0;i<count;++i) sessions.push_back(std::make_unique<Session>(config,std::make_unique<LoopbackTransport>(wire,static_cast<PeerId>(i+1)),i==0,1,"Player",71,SessionTestRandom(static_cast<uint64_t>(i+300))));
+        uint64_t tick=0;
+        for(;tick<250;++tick) for(auto& session:sessions) session->Advance(tick);
+        std::vector<std::unique_ptr<FrameSync>> sync;
+        std::vector<uint64_t> totals(static_cast<size_t>(count),0);
+        std::vector<uint32_t> roster;
+        for(int i=0;i<count;++i) roster.push_back(static_cast<uint32_t>(i+1));
+        for(int i=0;i<count;++i) {
+            Session* session=sessions[static_cast<size_t>(i)].get(); CHECK(session->Players().size()==static_cast<size_t>(count));
+            sync.push_back(std::make_unique<FrameSync>(config.sync,i==0,session->LocalPlayer(),99,
+                [session](uint32_t player,const std::vector<uint8_t>& bytes){return session->SendSync(player,bytes);}));
+        }
+        std::string error; CHECK(sync[0]->Start(roster,&error));
+        bool done=false;
+        for(;tick<250000 && !done;++tick) {
+            for(int i=0;i<count;++i) {
+                auto index=static_cast<size_t>(i); sessions[index]->Advance(tick);
+                for(const auto& message:sessions[index]->DrainSync()) sync[index]->Receive(message.first,message.second);
+                sync[index]->Tick(tick); sync[index]->TakeStart();
+                if(sync[index]->NeedsInput()) {FrameInput input; input.down=(sync[index]->Frame()/7+index)%2; sync[index]->Submit(input);}
+                sync[index]->Tick(tick);
+                if(sync[index]->Frame()<10000) if(auto inputs=sync[index]->Next()) {
+                    for(const auto& input:*inputs) totals[index]+=input.first*(input.second.down+1);
+                    sync[index]->Applied(*inputs); sync[index]->Hash(sync[index]->Frame(),totals[index],std::to_string(totals[index]));
+                }
+            }
+            done=std::all_of(sync.begin(),sync.end(),[](const auto& item){return item->Frame()==10000;});
+            if(std::any_of(sync.begin(),sync.end(),[](const auto& item){return item->State()["state"].asString()=="stopped" || item->State()["state"].asString()=="desync";})) break;
+        }
+        CHECK(done); for(size_t i=1;i<totals.size();++i) CHECK(totals[i]==totals[0]);
+        CHECK(wire->DroppedMessages()>0); CHECK(sync[0]->Report().size()==0);
+    }
+}
+TEST(NetworkLockstepNativeTcpUdp) {
+#ifndef __EMSCRIPTEN__
+    for(const char* transport:{"tcp","udp"}) {
+        std::string project=SyncProject(transport,transport); Engine host,client;
+        SyncPrepare(host,client,project,transport);
+        host.Input().down.insert("W"); client.Input().down.insert("W");
+        for (int tick=0; tick<100000 && (host.Frame()<10000 || client.Frame()<10000); ++tick) NetworkSteps(host,client,1);
+        CHECK(host.Frame()>=10000 && client.Frame()>=10000);
+        CHECK(host.Frame()>20 && client.Frame()>20);
+        CHECK(host.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+        CHECK(host.NetworkCall("desync_report",Json()).size()==0); RemoveAll(project);
+    }
+#endif
+}
+
+TEST(NetworkFrameSyncBoundsTimeoutAndEmptyPolicy) {
+    SyncConfig config; config.keys={"W"}; config.delay=0; config.waitFrames=30;
+    FrameSync host(config,true,1,1,[](uint32_t,const std::vector<uint8_t>&){return true;});
+    std::string error; CHECK(host.Start({1,2},&error));
+    ByteWriter ready(32); ready.WriteU8(2); ready.WriteU64(1); host.Receive(2,ready.Data()); host.Tick(1); CHECK(host.TakeStart());
+    FrameInput invalid; invalid.down=2; CHECK(!host.Submit(invalid)); CHECK(host.Submit(FrameInput{}));
+    ByteWriter future(128); future.WriteU8(4); future.WriteU64(1); future.WriteU64(1000000);
+    for(int i=0;i<1000;++i) host.Receive(2,future.Data());
+    CHECK(host.State()["rejected"].asNumber()==1000); CHECK(!host.Next());
+    host.Tick(31); CHECK(host.State()["state"].asString()=="stopped" && host.TakeDropped()==std::vector<uint32_t>{2});
+    config.emptyOnTimeout=true;
+    FrameSync empty(config,true,1,1,[](uint32_t,const std::vector<uint8_t>&){return true;});
+    CHECK(empty.Start({1,2},&error)); empty.Receive(2,ready.Data()); empty.Tick(1); empty.TakeStart();
+    CHECK(empty.Submit(FrameInput{})); empty.Tick(31); auto inputs=empty.Next();
+    CHECK(inputs && inputs->size()==2 && inputs->at(2)==FrameInput{} && empty.Running());
+    SyncConfig parsed;
+    for(const char* bad:{R"({"actions":["W","W"]})",R"({"axes":["LeftX","Invalid"]})",R"({"inputDelay":9})",R"({"rollbackFrames":0})",R"({"waitFrames":2})",R"({"dropPolicy":"ignore"})"})
+        CHECK(!SyncConfig::Parse(Json::parse(bad),parsed,&error));
+}
+TEST(NetworkFrameSyncMismatchBarrierAndLargeWorldHash) {
+    SyncConfig config; config.delay=0; config.hashInterval=1;
+    std::vector<std::pair<uint32_t,std::vector<uint8_t>>> messages;
+    FrameSync host(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& bytes){messages.emplace_back(player,bytes);return true;});
+    FrameSync client(config,false,2,100,[](uint32_t,const std::vector<uint8_t>&){return true;});
+    std::string error; CHECK(host.Start({1,2},&error)); host.Tick(1);
+    for(const auto& message:messages) client.Receive(1,message.second);
+    CHECK(client.State()["state"].asString()=="stopped" && client.State()["error"].asString().find("mismatch")!=std::string::npos);
+    messages.clear(); FrameSync good(config,false,2,99,[&](uint32_t player,const std::vector<uint8_t>& bytes){messages.emplace_back(player,bytes);return true;});
+    // A fresh matching barrier, then a hash with a diagnostic larger than its scene budget.
+    FrameSync large(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& bytes){messages.emplace_back(player,bytes);return true;});
+    CHECK(large.Start({1,2},&error)); large.Tick(1); auto begin=messages; messages.clear();
+    for(const auto& message:begin) good.Receive(1,message.second); good.Tick(2); auto ready=messages; messages.clear();
+    for(const auto& message:ready) large.Receive(2,message.second); large.Tick(3); auto go=messages; messages.clear();
+    for(const auto& message:go) good.Receive(1,message.second); good.Tick(4); large.TakeStart(); good.TakeStart();
+    large.Hash(0,5,std::string(30000,'a')); good.Hash(0,7,std::string(30000,'b')); good.Tick(5);
+    auto hashes=messages; messages.clear(); for(const auto& message:hashes) large.Receive(2,message.second);
+    CHECK(large.Report()["scenesOmitted"].asBool() && large.State()["state"].asString()=="desync");
+    large.Tick(6); for(const auto& message:messages) good.Receive(1,message.second);
+    CHECK(good.State()["state"].asString()=="desync");
+}
 TEST(NetworkEngineLoopbackLobbyAndRpc) {
     std::string project = NetworkProject("network_lobby", "loopback", 3), error;
     {
@@ -1276,7 +1490,7 @@ TEST(NetworkEngineLoopbackLobbyAndRpc) {
 TEST(NetworkSessionConfigValidation) {
     SessionConfig config; std::string error;
     CHECK(SessionConfig::Parse(Json::parse(R"({"network":{"mode":"none","port":"ignored"}})"), config, &error));
-    for (const char* json : {R"({"network":true})", R"({"network":{"mode":"rollback"}})",
+    for (const char* json : {R"({"network":true})", R"({"network":{"mode":"invalid"}})",
          R"({"network":{"mode":"lockstep","tickRate":30}})", R"({"network":{"mode":"lockstep","maxPlayers":65}})",
          R"({"network":{"mode":"lockstep","port":-1}})", R"({"network":{"mode":"lockstep","bind":"0.00.0.0"}})",
          R"({"network":{"mode":"lockstep","transport":"bad"}})"})
@@ -1335,7 +1549,7 @@ TEST(NetworkSessionHandshakeLossVersionAndTimeout) {
     auto wire = std::make_shared<LoopbackNetwork>();
     SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
     Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 1, SessionTestRandom(100));
-    config.version = 2;
+    config.version = 3;
     Session bad(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Old", 0, SessionTestRandom(200));
     for (uint64_t frame = 0; frame < 20; ++frame) { CHECK(host.Advance(frame) && bad.Advance(frame)); }
     CHECK(bad.Status() == "error" && bad.State()["error"].asString().find("mismatch") != std::string::npos);

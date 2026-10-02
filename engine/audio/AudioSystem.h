@@ -35,6 +35,17 @@ public:
     // Per simulated frame: AudioSource components, then mixing.
     void Update(Scene& scene);
     void Render();
+    // Replay mixes silently; rollback submits each confirmed block once.
+    void SetOutputMode(bool silent, bool deferred) { silent_ = silent; deferred_ = deferred; }
+    void Confirm(uint64_t frames);
+    void DiscardPending() { pending_.clear(); }
+    void ResetTimeline() { nextVoice_ = 1; capture_.clear(); pending_.clear(); }
+    struct Snapshot;
+    struct OutputState { std::vector<float> capture; bool capturing; };
+    OutputState TakeOutput() { return {std::move(capture_), capturing_}; }
+    void RestoreOutput(OutputState state) { capture_ = std::move(state.capture); capturing_ = state.capturing; }
+    std::shared_ptr<const Snapshot> SaveState() const;
+    void LoadState(const Snapshot& state);
     // Called when a game switches scene: stops sounds owned by entities.
     void OnSceneChanged();
     // End of a play session: stops everything, forgets clips.
@@ -69,6 +80,14 @@ private:
     };
     std::shared_ptr<const AudioClip> Load(const std::string& path);
 
+public:
+    struct Snapshot {
+        std::map<std::string, std::shared_ptr<const AudioClip>> clips;
+        std::vector<Voice> voices; std::vector<Event> events; std::set<EntityId> started;
+        int nextVoice; std::vector<float> mix, capture; bool capturing;
+    };
+private:
+    void Output(const std::vector<float>& block);
     Engine& engine_;
     std::map<std::string, std::shared_ptr<const AudioClip>> clips_;
     std::vector<Voice> voices_;
@@ -79,6 +98,8 @@ private:
     std::unique_ptr<AudioDevice> device_;
     bool capturing_ = false;
     std::vector<float> capture_;
+    bool silent_ = false, deferred_ = false;
+    std::map<uint64_t, std::vector<float>> pending_;
 };
 
 }  // namespace oe

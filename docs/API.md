@@ -22,7 +22,7 @@ Leave the session gracefully within 30 simulated frames; none mode is unchanged.
 
 ### `net.host`
 
-Host a lobby (M4: players/RPC; synchronized simulation is M5/M6).
+Host a lobby; net.start begins lockstep/rollback, authoritative replication arrives in M6.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -66,6 +66,46 @@ Send a bounded reliable RPC, or call its Lua handler locally in none mode.
 | `name` | string | yes | Handler name: 1..64 printable bytes. |
 | `target` | string |  | server/all/others or decimal player id; default server. owner requires M6. |
 | `args` | array |  | At most 16 bounded JSON arguments, depth <=8, <=8192 serialized bytes. |
+
+### `net.start`
+
+Host starts a ready lockstep/rollback match with a frozen roster and frame-zero barrier.
+
+### `net.desync_report`
+
+First confirmed hash mismatch: frame, player, hashes and bounded host/peer scene JSON.
+
+## input
+
+### `input.player`
+
+Inspect synchronized declared actions and raw quantized axes for one player.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `player` | integer | yes | Player id. |
+
+## sim
+
+### `sim.record_state`
+
+Enable exact reference replay recording before frame zero (12000-frame bound).
+
+### `sim.save_state`
+
+Save a full recorded simulation in one of eight in-memory slots.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `slot` | string |  | Slot name, default default. |
+
+### `sim.load_state`
+
+Restore Lua, physics and audio by replay; refuses changed project resources or an active match.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `slot` | string |  | Previously saved slot. |
 
 ## animation
 

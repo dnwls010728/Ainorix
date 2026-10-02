@@ -11,11 +11,13 @@
 
 #include "api/Commands.h"
 #include "app/SaveStore.h"
+#include "audio/AudioSystem.h"
 #include "core/Json.h"
 #include "net/Session.h"
 #include "render/Renderer.h"
 #include "scene/Scene.h"
 #include "scene/Systems.h"
+#include "script/ScriptHost.h"
 
 namespace oe {
 
@@ -63,6 +65,14 @@ public:
     void Pause();
     void Stop();  // restores the scene captured when play started
     void Step(int frames);
+    // Reference full-state snapshots rebuild Lua/physics by deterministic replay.
+    // Explicit recording avoids any journal work in ordinary single-player games.
+    struct SimulationState;
+    void RecordState();
+    std::shared_ptr<const SimulationState> SaveState() const;
+    void LoadState(const SimulationState& state);
+    Json SnapshotCall(const std::string& operation, const Json& args);
+    const InputState& PlayerInput(uint32_t player) const;
     // Advances the simulation by real elapsed time while playing (fixed steps).
     void Tick(double realDt);
     bool Playing() const { return playing_; }
@@ -145,6 +155,13 @@ public:
 
 private:
     void SimulateFrame();
+    void SimulateWorld();
+    void EnsureSync(bool refresh = false);
+    bool PollSync();
+    void ApplyInputs(const FrameInputs& inputs);
+    uint64_t ContentHash() const;
+    std::string SyncWorld() const;
+    void RestoreJournal(size_t count);
     struct UIEvent {
         EntityId id;
         const char* method;
@@ -174,6 +191,32 @@ private:
     SessionConfig networkConfig_;
     std::unique_ptr<Session> network_;
     uint64_t networkFrame_ = 0;
+    std::unique_ptr<FrameSync> sync_;
+    std::map<uint32_t, InputState> playerInputs_;
+    FrameInputs frameInputs_;
+    InputState deviceInput_;
+    struct JournalFrame { InputState input; FrameInputs players; };
+public:
+    struct SimulationState {
+        Json baseline, gameData, scene;
+        std::string runtimeScene;
+        std::vector<JournalFrame> frames;
+        std::map<uint64_t, std::vector<std::pair<std::string, Json>>> commands;
+        std::shared_ptr<const AudioSystem::Snapshot> baselineAudio, audio;
+        SaveStore baselineSaves, saves;
+        InputState input;
+        std::vector<ScriptError> errors;
+        uint64_t content = 0; uint32_t seed = 0; EntityId allocationCursor = 1;
+        bool playing = false; double accumulator = 0;
+    };
+private:
+    std::unique_ptr<SimulationState> journal_;
+    std::map<std::string, std::shared_ptr<const SimulationState>> snapshots_;
+    bool replaying_ = false, inWorld_ = false;
+    uint64_t outputConfirmed_ = 0;
+    bool desyncNotified_ = false;
+    double replayMilliseconds_ = 0;
+    std::map<uint64_t, std::string> syncHashes_;
     double hotReloadTimer_ = 0.0;
 
     std::string projectDir_;
