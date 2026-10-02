@@ -681,8 +681,11 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         for (uint32_t n = 0; n < 65536; ++n) {
             uint32_t serial = bodySerial++;
             JPH::BodyID id(serial % 65536, static_cast<JPH::uint8>(serial / 65536));
-            JPH::BodyLockRead lock(system.GetBodyLockInterface(), id);
-            if (!lock.Succeeded()) return id;
+            if (serial < 65536) return id;
+            bool used = false;
+            for (const auto& item : bodies) if (item.second.id.GetIndex() == id.GetIndex()) { used = true; break; }
+            if (!used) for (const auto& item : characters) if (item.second.ch && item.second.ch->GetInnerBodyID().GetIndex() == id.GetIndex()) { used = true; break; }
+            if (!used) return id;
         }
         return JPH::BodyID();
     }
@@ -727,6 +730,8 @@ void PhysicsWorld::Reset() {
     prevTriggers_.clear();
     warnings_.clear();
 }
+
+void PhysicsWorld::RebuildSolvers() { impl_.reset(); world2d_.reset(); }
 
 void PhysicsWorld::SetTilesets(TilesetLookup lookup) { tilesets_ = std::move(lookup); }
 

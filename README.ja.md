@@ -65,7 +65,7 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 設定なし/`none` は従来のシングルプレイヤーとローカル RPC です。
 network.actions/axes を宣言し、全員が ready になったら net.start でロックステップを開始します。
 input.player(id)、同期ずれレポート、実験的な履歴再実行ロールバックを利用できます。高速な
-ネイティブスナップショットは M5c、サーバー複製は M6 に残っています。ブラウザーには対応 WebSocket サーバーと
+ネイティブロールバック（M5c）とサーバー複製（M6）を実装。NetSync/NetPlayer、差分、補間、所有者予測に対応。ブラウザーには対応 WebSocket サーバーと
 再ビルド済みランタイムが必要です。[docs/NETWORK.md](docs/NETWORK.md) を参照。
 
 `oe editor` は**エディター** (Dear ImGui のドッキング + ImGuizmo、エンジンと同じプロセスで GPU 描画) を開きます。コマンド API だけを使うため、エージェント (`oe mcp --connect 7777`) が人と同じセッションを同時に操作できます。ウィンドウがない環境 (ヘッドレスの Linux など) では `oe editor MyGame --screenshot shot.png` でエディター画面を画像にできます。詳細: [docs/EDITOR.md](docs/EDITOR.md)
@@ -131,5 +131,3 @@ samples/Dungeon  2D 見下ろしアクション (Box2D、オートタイルの�
 samples/Platformer 2D 横スクロールのプラットフォーマー (テキストのタイルマップ、スプライトアニメーション、敵、? ブロック、パララックス)
 samples/FPS      一人称シューティングのテストゲーム (マウス視点、ヒットスキャンのピストル、リロード、動く標的、結果画面)
 ```
-
-ネイティブロールバックスナップショット（M5c）は Lua/Jolt/Box2D の状態を保存し、最大8フレームを再実行します。docs/NETWORK.md を参照。

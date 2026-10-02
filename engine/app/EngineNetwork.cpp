@@ -15,32 +15,51 @@ uint32_t Number(const Json& args, const char* key, uint32_t fallback, uint32_t l
 }
 
 Json Engine::NetworkCall(const std::string& command, const Json& args) {
-    if (sync_ && sync_->Active() && inWorld_ &&
+    if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && inWorld_ &&
         (command == "host" || command == "join" || command == "leave" || command == "kick" || command == "ready" || command == "start"))
         throw ApiError("match_control", "session controls cannot run in a synchronized game callback", "Control the lobby/session from tools; keep match updates deterministic.");
     auto state = [&] {
-        if (network_) { Json out = network_->State(); out["syncImplemented"] = networkConfig_.mode != "authoritative";
+        if (network_) { Json out = network_->State(); out["syncImplemented"] = true;
+            if (authority_) out["sync"] = authority_->State();
             if (sync_) { out["sync"] = sync_->State(); if (replaying_) out["sync"]["frame"] = frame_; } return out; }
         Json out = Json::MakeObject(); out["mode"] = networkConfig_.mode;
         out["state"] = networkConfig_.mode == "none" ? "none" : "idle";
         out["isHost"] = false; out["isServer"] = networkConfig_.mode == "none"; out["isClient"] = false;
         out["localPlayer"] = networkConfig_.mode == "none" ? 1 : 0; out["seed"] = 0;
-        out["transport"] = networkConfig_.transport; out["syncImplemented"] = networkConfig_.mode == "lockstep" || networkConfig_.mode == "rollback"; out["error"] = "";
+        out["transport"] = networkConfig_.transport; out["syncImplemented"] = networkConfig_.mode != "none"; out["error"] = "";
         return out;
     };
     if (command == "state") return state();
+    if (command == "entities") {
+        Json out = Json::MakeArray(); if (!authority_ || !authority_->Running()) return out;
+        if (network_->IsHost()) {
+            for (const auto& item : authorityIds_) {
+                Json entity = Json::MakeObject(); entity["netId"] = item.second; entity["id"] = item.first;
+                if (const auto* policy = scene_.Get<NetSync>(item.first)) entity["owner"] = policy->owner;
+                out.push(entity);
+            }
+        } else for (const auto& item : replicatedEntities_) {
+            Json entity = Json::MakeObject(); entity["netId"] = item.first; entity["id"] = item.second;
+            if (const auto* policy = scene_.Get<NetSync>(item.second)) entity["owner"] = policy->owner;
+            if (!authorityWorlds_.empty()) entity["fields"] = authorityWorlds_.back().world[std::to_string(item.first)];
+            out.push(entity);
+        }
+        return out;
+    }
     if (command == "desync_report") return sync_ ? sync_->Report() : Json::MakeObject();
     if (command == "start") {
-        if (!network_ || !network_->Connected() || !network_->IsHost() || networkConfig_.mode == "authoritative")
-            throw ApiError("network_start", "start requires a lockstep/rollback host lobby", "Host, join, and ready all players first.");
+        if (!network_ || !network_->Connected() || !network_->IsHost())
+            throw ApiError("network_start", "start requires a ready host lobby", "Host, join, and ready all players first.");
         std::vector<uint32_t> roster;
         Json players = network_->Players();
         for (const Json& player : players.items()) {
             if (!player["ready"].asBool()) throw ApiError("network_not_ready", "all players must be ready", "Call net.ready on every peer.");
             roster.push_back(static_cast<uint32_t>(player["id"].asNumber()));
         }
-        BeginSessionIfNeeded(); EnsureSync(true); std::string error;
-        if (!sync_->Start(roster, &error)) throw ApiError("network_start", error);
+        BeginSessionIfNeeded(); std::string error;
+        if (networkConfig_.mode == "authoritative") {
+            EnsureAuthority(true); if (!authority_->Start(roster, &error)) throw ApiError("network_start", error);
+        } else { EnsureSync(true); if (!sync_->Start(roster, &error)) throw ApiError("network_start", error); }
         network_->Seal(); return state();
     }
     if (command == "players") {
@@ -53,15 +72,16 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         return players;
     }
     if (command == "stats") {
-        if (network_) { Json stats = network_->Stats(); stats["replayMilliseconds"] = replayMilliseconds_; if (sync_) stats["sync"] = sync_->State(); return stats; }
+        if (network_) { Json stats = network_->Stats(); stats["replayMilliseconds"] = replayMilliseconds_; if (sync_) stats["sync"] = sync_->State();
+            if (authority_) { stats["sync"] = authority_->State(); stats["corrections"] = authorityCorrections_; stats["replicatedEntities"] = static_cast<uint64_t>(replicatedEntities_.size()); } return stats; }
         Json stats = Json::MakeObject(); stats["rejected"] = 0; stats["peers"] = Json::MakeArray(); return stats;
     }
     if (command == "host" || command == "join") {
         if (networkConfig_.mode == "none") throw ApiError("network_disabled", "this project has no enabled network mode",
-            "Set project.json network.mode to lockstep, rollback (reference replay), or authoritative and reopen.");
+            "Set project.json network.mode to lockstep, rollback, or authoritative and reopen.");
         if (network_ && network_->Status() != "offline" && network_->Status() != "error")
             throw ApiError("network_active", "a session is already active", "Use net.leave and advance sim.step until offline, or sim.stop first.");
-        sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
+        ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
         audio_->SetOutputMode(false, false); audio_->DiscardPending(); saves_.DeferFlush(false); saves_.FreezeReads(false);
         network_.reset(); networkFrame_ = 0;
         std::string error, name = args["name"].asString("Player");
@@ -80,9 +100,21 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
     if (command == "leave") { if (network_) network_->Leave(); return state(); }
     std::string error;
     if (command == "rpc") {
+        if (authority_ && authority_->Running() && replaying_) {
+            Json out = Json::MakeObject(); out["queued"] = false; out["replayed"] = true; return out;
+        }
         const Json& values = args["args"];
         Json arguments = values.isNull() ? Json::MakeArray() : values;
         std::string target = args["target"].asString("server"), name = args["name"].asString();
+        if (target == "owner") {
+            EntityId entity = 0;
+            const Json& id = args.has("entity") ? args["entity"] : (arguments.size() ? arguments[0] : Json());
+            if (id.isString()) entity = scene_.FindByName(id.asString());
+            else if (id.isNumber() && id.asNumber() >= 1 && id.asNumber() <= UINT32_MAX && std::floor(id.asNumber()) == id.asNumber()) entity = static_cast<EntityId>(id.asNumber());
+            const auto* sync = scene_.Get<NetSync>(entity);
+            if (!scene_.Exists(entity) || !sync) throw ApiError("network_owner", "owner target requires an entity with NetSync", "Pass entity in net.rpc, or the entity id/name as the first Lua RPC argument.");
+            target = sync->owner ? std::to_string(sync->owner) : "server";
+        }
         if (!ValidRpc(name, arguments)) throw ApiError("invalid_rpc", "RPC name/arguments exceed their bounds",
             "Use a 1..64 byte name, an array of at most 16 JSON arguments, depth <=8, and serialized size <=8192 bytes.");
         if (networkConfig_.mode == "none") {

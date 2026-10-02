@@ -14,9 +14,10 @@ namespace oe {
 // Authenticated lobby/RPC and match payload transport; FrameSync owns M5 synchronization.
 struct SessionConfig {
     std::string mode = "none", transport = "tcp", bind = "127.0.0.1", gameId;
-    uint16_t port = 7778, version = 2;
+    uint16_t port = 7778, version = 3;
     SyncConfig sync;
-    uint32_t maxPlayers = 4, tickRate = 60;
+    uint32_t maxPlayers = 4, tickRate = 60, snapshotRate = 20, interpolationFrames = 6, predictionFrames = 32;
+    std::string playerPrefab;
     // Validates all supplied settings, including the bounded input schema and fixed tick rate.
     static bool Parse(const Json& project, SessionConfig& out, std::string* error);
 };
@@ -62,7 +63,7 @@ public:
     void Leave();
     bool Kick(uint32_t player, const std::string& reason, std::string* error);
     bool Ready(bool ready, std::string* error);
-    // Targets: server/all/others or decimal player id; owner requires M6 and is rejected.
+    // Targets: server/all/others or decimal player id; owner is resolved by Engine from NetSync before routing.
     bool Rpc(const std::string& target, const std::string& name, const Json& args, std::string* error);
     static uint64_t InstancesCreated();
     static uint64_t PollCalls();

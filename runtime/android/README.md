@@ -44,5 +44,6 @@ build in `build/bin/android/` and falls back to this folder.
 Physical arm64 hardware, audible output and 16 KB device execution remain
 unverified; ELF/APK alignment was checked, which is not a device test.
 
-Networking M5 source adds protocol v2, lockstep and reference rollback APIs. This committed runtime
-was not rebuilt for M5 (required SDK unavailable); rebuild before packaging games using them.
+Networking M5c/M6 source adds session protocol v3, native rollback and authoritative replication.
+This committed runtime was not rebuilt (required SDK unavailable); rebuild before packaging games
+using these APIs. Native Windows Release and unit tests do not verify this platform runtime.

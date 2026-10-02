@@ -20,9 +20,13 @@ Read peer RTT in milliseconds, loss, channel bytes, pending messages and selecte
 
 Leave the session gracefully within 30 simulated frames; none mode is unchanged.
 
+### `net.entities`
+
+Inspect authoritative network entity ids, local ids, owners and received replication fields.
+
 ### `net.host`
 
-Host a lobby; net.start begins lockstep/rollback, authoritative replication arrives in M6.
+Host a lobby; net.start begins lockstep, rollback or authoritative simulation.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -64,12 +68,13 @@ Send a bounded reliable RPC, or call its Lua handler locally in none mode.
 | arg | type | required | description |
 |---|---|---|---|
 | `name` | string | yes | Handler name: 1..64 printable bytes. |
-| `target` | string |  | server/all/others or decimal player id; default server. owner requires M6. |
+| `target` | string |  | server/owner/all/others or decimal player id; default server. |
 | `args` | array |  | At most 16 bounded JSON arguments, depth <=8, <=8192 serialized bytes. |
+| `entity` | integer \| string |  | Entity id/name for target owner; alternatively pass id/name as first argument. |
 
 ### `net.start`
 
-Host starts a ready lockstep/rollback match with a frozen roster and frame-zero barrier.
+Host starts a ready lockstep, rollback or authoritative match with a frozen roster and frame-zero barrier.
 
 ### `net.desync_report`
 
@@ -1372,4 +1377,27 @@ Grid of tiles written as text rows (map): each character is a tile defined by a 
 | `pixelArt` | bool | `true` | Sharp nearest-neighbour pixels. |
 | `lit` | bool | `false` | Apply scene lighting. |
 | `visible` | bool | `true` | Whether the tiles are drawn (they still collide). |
+
+### NetSync
+
+Server-owned replication policy. Fields use Component.field keys; clients cannot write authority.
+
+| field | type | default | description |
+|---|---|---|---|
+| `owner` | int | `0` | Controlling player id; 0 means server. |
+| `fields` | json | `{"Transform.position":{"onChange":true},"Transform.rotation":{"onChange":true}}` | Component.field -> {always,onChange,ownerOnly,quantize}; at most 64 fields. |
+| `prefab` | string | `""` | Optional project-relative prefab path for reliable spawn. |
+| `distance` | float | `0` | Relevance distance from receiver's NetPlayer (0 = unlimited). |
+| `team` | int | `0` | Relevance team. |
+| `teamOnly` | bool | `false` | Show only to matching team, or owner. |
+| `predict` | bool | `true` | Client predicts its owned entity; others are interpolated. |
+
+### NetPlayer
+
+Player entity assigned by the authoritative server; network.playerPrefab spawns one per ready participant.
+
+| field | type | default | description |
+|---|---|---|---|
+| `player` | int | `0` | Authenticated player id assigned by the server. |
+| `team` | int | `0` | Player's relevance team. |
 

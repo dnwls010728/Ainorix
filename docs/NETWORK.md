@@ -5,8 +5,9 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M5 implemented.** Opt-in lobbies, RPC, lockstep and native rollback are available.
-Authoritative replication is the next milestone (M6). Platform verification limits are recorded below.
+Status: **M1–M6 implemented.** Opt-in lobbies, RPC, lockstep and native rollback are available.
+Authoritative replication, relevance, interpolation and owned prediction are available.
+Platform verification limits are recorded below.
 Progress is tracked in §11.
 
 ## 1. Goals and non-goals
@@ -61,6 +62,9 @@ Non-goals (for now)
   "inputDelay": 2,
   "rollbackFrames": 8,
   "snapshotRate": 20,
+  "interpolationFrames": 6,
+  "predictionFrames": 32,
+  "playerPrefab": "prefabs/player.prefab.json",
   "bind": "127.0.0.1",
   "port": 7778
 }
@@ -233,7 +237,7 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
   - [x] M5b — exact reference `Engine::SaveState/LoadState` and prediction/correction by replay
   - [x] M5c — fast native Lua/Jolt/Box2D snapshots; restore cost bounded by rollback window,
         benchmarked against the 1/60 s game budget (reference replay is not this backend)
-- [ ] M6 — authoritative: `NetSync`, snapshots/deltas, interpolation, prediction, relevance
+- [x] M6 — authoritative: `NetSync`, snapshots/deltas, interpolation, prediction, relevance
 - [ ] M7 — headless dedicated server (`oe serve-game`, `--server`), editor Players×N play +
       Network panel, `net.simulate`
 - [ ] M8 — networked sample games, docs (`API.md`, `SCRIPTING.md`, `PLATFORMS.md`), web and Android
@@ -570,8 +574,8 @@ Validation:
 - [x] API regenerated; persistent CLI barrier and snapshot smoke tests and JS bridge mocks.
 - Reference benchmark (Windows Release, default template game, one restoration per sample):
   2000 recorded frames restored in 110.56 ms; 5000 in 267.64 ms. These are fixture measurements,
-  not worst-case bounds, and exceed the 16.67 ms frame budget. M5 is therefore not marked complete.
-- [ ] M5c: replace O(history) reference restoration with complete native snapshots (Lua closures,
+  not worst-case bounds, and exceeded the 16.67 ms frame budget at M5b. M5c below supersedes that backend.
+- [x] M5c: replaced O(history) reference restoration with complete native snapshots (Lua closures,
       timers, RNG, Jolt/Box2D solver/contact history, scene runtime pools and audio). Add a measured
       worst-case restoration budget for representative games and remove the reference history cap.
 - [ ] POSIX, real browser/Wasm and Android device execution and refreshed prebuilt runtimes:
@@ -607,3 +611,95 @@ speaker/capture output. These images are version-specific and never accepted fro
       an arbitrary-world worst-case guarantee. 13000-frame history restores without replay.
 - [ ] Browser/Wasm, Android and POSIX native execution remain unverified; rebuild committed
       player runtimes using their SDKs before shipping these APIs on those platforms.
+
+### M6 — authoritative replication and owned prediction (2026-10-02)
+
+The session protocol is now **v3**; older native/prebuilt players fail the version handshake.
+`net.start` uses a frozen ready roster and validates the initial scene, project content, input
+schema and seed before a frame-zero barrier. The barrier times out after `waitFrames` (default
+300 I/O ticks), including lobbies that have already waited longer than that before starting.
+The server advances without waiting for client input: each remote stream consumes at most one
+contiguous authenticated client frame per server step, otherwise holding keys/axes without
+repeating pulses. Clients never send entity state or choose another player's input identity.
+Unexpected kinds, spoofed identities, duplicates, old/future frames and invalid axes/actions are
+rejected before simulation. Authoritative player ids fit signed 32-bit component fields and are
+separate from entity references, so prefab instantiation cannot remap `owner`/`player` ids.
+
+`NetSync` fields:
+- `owner`: controlling player id, or 0 for server ownership. It must belong to the ready roster.
+- `fields`: up to 64 `Component.field` keys using reflection. Each value is an object with
+  `onChange` (default true), `always`, `ownerOnly` and nonnegative numeric `quantize` (step size).
+  Default fields are Transform.position and Transform.rotation. `always` overrides delta omission;
+  `onChange:false` also sends unchanged values. Include velocity fields for physics prediction.
+- `prefab`: optional project-relative prefab path. An existing Prefab.path is the fallback.
+- `distance`: relevance radius from the receiver's NetPlayer; 0 means unlimited.
+- `team`, `teamOnly`: require the receiver's NetPlayer.team to match. Owners bypass both filters.
+- `predict`: default true; owned entities predict, others interpolate.
+
+`NetPlayer {player,team}` identifies the observer/controller. `network.playerPrefab` optionally
+creates one root per ready participant at match start; preplaced NetPlayers are reused. Dynamic
+prefab instantiation and destruction during server simulation produce reliable spawn/despawn
+records in snapshots. Server-assigned network ids are monotonic within the match. Clients retain
+netId/local-id mappings and translate replicated entity references in two passes. Mark replicated
+parents with NetSync too; if a parent is irrelevant its descendants are also omitted. Prefab-local
+unreplicated children instantiate with their root. Initially replicated scene entities are hidden
+until relevant and can be restored from the shared initial blueprint without a prefab path.
+
+Snapshots use the last acknowledged per-client world as their delta baseline. Baselines retain
+16 snapshots; an evicted baseline falls back to a full image. Spawn, update and despawn records
+share Session's reliable ordered channel on TCP/UDP/WebSocket; ordering and delivery are guaranteed,
+but this first backend retains reliable-channel head-of-line delay under packet loss. It does not
+claim unreliable snapshot delivery. `snapshotRate` accepts 1..60 Hz (default 20), with fractional
+rates distributed over fixed 60 Hz frames. At most 1024 entities, 64 selected fields/entity and
+56000 serialized payload bytes are allowed; oversized worlds stop with an explicit diagnostic.
+Field values are finite, depth <=8, at most 256 children/value and 8192 bytes/string. Queues,
+retained baselines, unread updates and input histories are bounded. Policy errors or invalid
+snapshot images stop the match before invalid state is simulated.
+
+`ownerOnly` filters the transmitted fields; it does not hide constants already distributed in
+scene/prefab/resource files or erase knowledge a previous owner had. Do not put secrets in shipped
+project resources. Server RPC handlers must validate `net.sender()` according to the game's rules.
+
+Clients retain local native checkpoints and input history for `predictionFrames` (8..64,
+default 32). An acknowledged snapshot restores that checkpoint, applies server fields and replays
+only remaining local inputs. Multiple snapshots in one poll reconcile the newest image while
+retaining all interpolation samples. The input window pauses simulation rather than growing
+without bounds. Local/unreplicated scripts and owned prediction run on clients; remote replicated
+scripts are suppressed. Remote rigid bodies are kinematic and remote characters provide colliders.
+Physics correction rebuilds solvers with corrected poses while preserving collision event history.
+Author gameplay outside replicated entities with `net.isServer()` guards; local UI/camera scripts
+can run normally. Remote float/Vec3/Color fields interpolate at `interpolationFrames` (0..30,
+default 6, about 100 ms). Integer, boolean, string and entity-reference fields do not interpolate.
+
+`net.entities` / Lua `net.entities()` expose network ids, local ids, owners and received fields.
+`net.state` and `net.stats` include snapshot/input sequence, pending input count, correction count
+and replication count. `net.rpc {target:"owner",entity:<id-or-name>,name,args}` resolves NetSync.owner;
+Lua can use `net.rpc("owner",name,entityIdOrName,...)`, whose first argument remains in the payload.
+RPCs remain available during authoritative matches. Prediction replay suppresses repeated sends
+and journals incoming callbacks within a bounded 256-event window. Client audio defers speculative
+PCM until acknowledged and preserves confirmed output across corrections. Save writes remain
+deferred as in rollback. Hot reload and external scene/Lua edits are disabled during the match.
+
+This milestone uses a frozen scene/roster: late join and synchronized scene transitions require
+leaving/stopping, opening the same scene and starting another ready barrier. M7's dedicated server,
+editor Players×N/Network panel and network fault commands, and M8 samples/platform verification,
+remain unchecked. Neither absence of SDKs nor source portability is a device/browser execution test.
+
+Validation:
+- [x] Windows Release build; 127 tests, zero failed checks; no new compiler warnings.
+- [x] Authenticated seeded Session/Authority runs for 10000 server frames with packet loss,
+      duplication and reordering; the final reconstructed client world matches the server.
+- [x] ACK-based deltas, unchanged/always fields, spawn/despawn, owner-only transmission, relevance,
+      interpolation, bounded prediction/stall recovery, ownership spoof/future/malformed input,
+      schema/version bounds and independent player/entity id namespaces are covered.
+- [x] Real native TCP and UDP engine pairs exercise automatic player prefabs, replication and
+      owned correction; a Box2D player predicts movement and reconciles to the stopped server pose.
+- [x] Owner RPC routes both ways and does not repeat/vanish during prediction replay.
+- [x] Two independent CLI processes over real TCP pass host/join/ready/start, input injection,
+      automatic player spawning, net.entities and correction inspection; JS bridge mocks pass.
+- [x] Native snapshot regression additionally covers Jolt body/character spawn/despawn with forced
+      Lua garbage collection across multiple branches. Inactive networking still creates no
+      Authority/FrameSync/session/channel/socket and keeps reference frame hashes unchanged.
+- [x] API regenerated; scripting, code map, READMEs and runtime rebuild notes updated.
+- [ ] POSIX, real browser/Wasm and Android builds/device execution: required toolchains absent.
+      Committed Web/Android runtimes are unchanged and do not contain these M5c/M6 features.

@@ -303,7 +303,7 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
     }
 }
 
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets) {
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets, const std::function<const InputState*(EntityId)>& playerInput) {
     if (assets) UpdateAnimators(scene, *assets, dt);
     UpdateParticles(scene, dt);
     UpdateSpriteAnimations(scene, dt);
@@ -319,29 +319,32 @@ void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* asse
     }
 
     for (auto& kv : scene.Pool<PlayerController>()) {
+        const InputState* selected = playerInput ? playerInput(kv.first) : &input;
+        if (!selected) continue;
+        const auto& controls = *selected;
         Transform* t = scene.Get<Transform>(kv.first);
         if (!t) continue;
         PlayerController& pc = kv.second;
         CharacterBody* body = scene.Get<CharacterBody>(kv.first);
         Vec3 move(0, 0, 0);
-        if (input.IsDown("W") || input.IsDown("Up")) move.z -= 1;
-        if (input.IsDown("S") || input.IsDown("Down")) move.z += 1;
-        if (input.IsDown("A") || input.IsDown("Left")) move.x -= 1;
-        if (input.IsDown("D") || input.IsDown("Right")) move.x += 1;
+        if (controls.IsDown("W") || controls.IsDown("Up")) move.z -= 1;
+        if (controls.IsDown("S") || controls.IsDown("Down")) move.z += 1;
+        if (controls.IsDown("A") || controls.IsDown("Left")) move.x -= 1;
+        if (controls.IsDown("D") || controls.IsDown("Right")) move.x += 1;
         if (body) {
             // Physics path: express intent as velocity; the physics step moves
             // the character, handles walls, slopes, gravity and landing.
             Vec3 v = Length(move) > 0 ? Normalize(move) * pc.speed : Vec3(0, 0, 0);
             body->velocity.x = v.x;
             body->velocity.z = v.z;
-            if (body->grounded && (input.pressedThisFrame.count("Space") || input.IsDown("Space"))) body->velocity.y = pc.jumpSpeed;
+            if (body->grounded && (controls.pressedThisFrame.count("Space") || controls.IsDown("Space"))) body->velocity.y = pc.jumpSpeed;
             continue;
         }
         if (Length(move) > 0) t->position += Normalize(move) * (pc.speed * dt);
 
         float groundY = 0.5f * t->scale.y;
         bool grounded = t->position.y <= groundY + 1e-4f;
-        if (grounded && (input.pressedThisFrame.count("Space") || input.IsDown("Space")) && pc.verticalVelocity <= 0) {
+        if (grounded && (controls.pressedThisFrame.count("Space") || controls.IsDown("Space")) && pc.verticalVelocity <= 0) {
             pc.verticalVelocity = pc.jumpSpeed;
             grounded = false;
         }

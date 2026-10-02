@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -68,7 +69,7 @@ struct InputState {
 };
 
 // Advances all behavior components by dt seconds (before physics).
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr);
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr, const std::function<const InputState*(EntityId)>& playerInput = {});
 // Runs after physics: CameraFollow.
 void UpdateLateSystems(Scene& scene, float dt);
 

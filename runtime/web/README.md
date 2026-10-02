@@ -49,7 +49,6 @@ lines above.
 `oe package --web` prefers a runtime built locally (`build/bin/web/`) over the
 one in this folder, and reports which one it used (`webRuntime`).
 
-Networking M5 source adds protocol v2, lockstep and reference rollback APIs. This committed runtime
-was not rebuilt for M5 (required SDK unavailable); rebuild before packaging games using them.
-
-M5c native snapshots are also source-only until the Web runtime is rebuilt.
+Networking M5c/M6 source adds session protocol v3, native rollback and authoritative replication.
+This committed runtime was not rebuilt (required SDK unavailable); rebuild before packaging games
+using these APIs. Native Windows Release and unit tests do not verify this platform runtime.

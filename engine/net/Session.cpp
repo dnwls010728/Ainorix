@@ -96,6 +96,15 @@ bool SessionConfig::Parse(const Json& project, SessionConfig& out, std::string* 
     if (config.mode == "none") { out = config; return true; }
     if (config.mode != "lockstep" && config.mode != "rollback" && config.mode != "authoritative") return fail("network.mode must be none, lockstep, rollback or authoritative");
     if (!SyncConfig::Parse(json, config.sync, error)) return false;
+    if (!Integer(json, "snapshotRate", 20, 1, 60, config.snapshotRate) ||
+        !Integer(json, "interpolationFrames", 6, 0, 30, config.interpolationFrames) ||
+        !Integer(json, "predictionFrames", 32, 8, 64, config.predictionFrames))
+        return fail("snapshotRate must be 1..60, interpolationFrames 0..30, predictionFrames 8..64");
+    if (json.has("playerPrefab") && !json["playerPrefab"].isString()) return fail("playerPrefab must be a project-relative path");
+    config.playerPrefab = json["playerPrefab"].asString();
+    if (config.playerPrefab.size() > 256 || config.playerPrefab.find("..") != std::string::npos ||
+        config.playerPrefab.find(':') != std::string::npos || (!config.playerPrefab.empty() && (config.playerPrefab[0] == '/' || config.playerPrefab[0] == '\\')))
+        return fail("playerPrefab must stay inside the project");
     for (const char* key : {"transport", "bind", "gameId", "controlTransport"})
         if (json.has(key) && !json[key].isString()) return fail("network transport/bind/gameId/controlTransport must be strings");
     config.transport = json["transport"].asString("tcp");
@@ -313,7 +322,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         SendControl(peer, 3, connection);
     } else if (cookieA != connection.cookieA || cookieB != connection.cookieB) { ++rejected_; }
     else if (host_ && kind == 3 && connection.phase == "challenge") {
-        if (nextPlayer_ >= kOthers) { Drop(peer, "player ids exhausted; restart host"); return; }
+        if (nextPlayer_ >= kOthers || (config_.mode == "authoritative" && nextPlayer_ > static_cast<uint32_t>(INT32_MAX))) { Drop(peer, "player ids exhausted; restart host"); return; }
         connection.player = nextPlayer_++;
         connection.phase = "welcome"; connection.hasSent = false;
         RegisterPeer(peer, connection);
@@ -456,7 +465,7 @@ void Session::ApplyMessage(const ChannelEvent& event) {
     Connection& connection = it->second;
     if (connection.phase != "active" && kind != 5) { ++rejected_; return; }
     if (kind == 1) {
-        if (sealed_) { ++rejected_; return; }
+        if (sealed_ && config_.mode != "authoritative") { ++rejected_; return; }
         if (!ValidRpc(name, args) || !sequence || (target != 0 && target != kAll && target != kOthers && !players_.count(target))) { ++rejected_; return; }
         if (host_) {
             if (origin != connection.player || sequence <= connection.rpcSequence || !RouteRpc(origin, target, sequence, name, args)) { ++rejected_; }
@@ -618,15 +627,15 @@ bool Session::Ready(bool ready, std::string* error) {
 }
 bool Session::Rpc(const std::string& target, const std::string& name, const Json& args, std::string* error) {
     auto fail = [&](const char* message) { if (error) *error = message; return false; };
-    if (!Connected() || sealed_) return fail("RPC requires an unsealed lobby; use synchronized input during matches");
+    if (!Connected() || (sealed_ && config_.mode != "authoritative")) return fail("RPC requires a lobby or authoritative match; use synchronized input during lockstep/rollback matches");
     if (!ValidRpc(name, args)) return fail("RPC requires a name of 1..64 bytes and at most 16 bounded JSON arguments (8 KiB)");
     uint32_t destination = 0;
     if (target == "all") destination = kAll;
     else if (target == "others") destination = kOthers;
     else if (target != "server") {
         uint64_t value = 0;
-        if (target.empty() || target.size() > 10) return fail("target must be server, all, others or an existing player id; owner requires M6");
-        for (char c : target) { if (c < '0' || c > '9') return fail("target must be server, all, others or an existing player id; owner requires M6"); value = value * 10 + static_cast<unsigned>(c - '0'); }
+        if (target.empty() || target.size() > 10) return fail("target must be server, all, others or an existing player id; Engine resolves owner entities");
+        for (char c : target) { if (c < '0' || c > '9') return fail("target must be server, all, others or an existing player id; Engine resolves owner entities"); value = value * 10 + static_cast<unsigned>(c - '0'); }
         if (value >= kOthers || !players_.count(static_cast<uint32_t>(value))) return fail("target player is not in this lobby");
         destination = static_cast<uint32_t>(value);
     }

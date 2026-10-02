@@ -105,13 +105,13 @@ Instance helpers (from the built-in base class): `self:get(type)`, `self:set(typ
 
 `scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are line-by-line Lua ports of the built-in `Rotator` and `PlayerController` components; tests check they behave identically.
 
-## Networking (M4/M5)
+## Networking (M4–M6)
 
 `net` is available in every script. Without enabled networking, `net.isServer()` is true,
 `net.isHost()`/`net.isClient()` false, `net.localPlayer()` is 1 and `net.players()` is `{1}`.
 `net.rpc` calls its registered handler immediately in this mode (`others` has no recipient).
 No session, socket or network polling is initialized. With networking enabled, M4 supplies
-lobbies/RPC and M5 supplies lockstep/native rollback; authoritative replication remains M6. See [NETWORK.md](NETWORK.md).
+lobbies/RPC, M5 supplies lockstep/native rollback and M6 supplies authoritative replication. See [NETWORK.md](NETWORK.md).
 
 | Lua | Contract |
 |---|---|
@@ -122,11 +122,12 @@ lobbies/RPC and M5 supplies lockstep/native rollback; authoritative replication 
 | `net.join({name?, address?, port?})` | Async join: numeric IPv4, browser ws/wss URL or in-process loopback room |
 | `net.leave()` / `net.kick({player, reason?})` | Graceful bounded leave or host-only removal |
 | `net.ready({ready=true})` | Lobby readiness; does not start synchronized simulation |
-| `net.start()` | Ready host begins a lockstep/native rollback match; all peers reset at the ready barrier |
+| `net.start()` | Ready host begins a lockstep/native rollback/authoritative match; all peers reset at the ready barrier |
+| `net.entities()` | Authoritative netId/local-id/owner mappings and received replication fields |
 | `net.desync_report()` | First confirmed mismatch with bounded diagnostic scene JSON texts |
 | `input.player(id)` | `{down(key), pressed(key), axis(name)}` closures for the merged player input; supports dot/colon calls. Unknown players are neutral; none/player 1 is local |
 | `net.on(name, fn)` / `net.on(name, nil)` | Register/replace or remove a handler (at most 64 names) |
-| `net.rpc(target, name, ...)` | Reliable RPC: target `server`, `all`, `others`, or player id (number/string); `owner` requires M6 |
+| `net.rpc(target, name, ...)` | Reliable RPC: target `server`, `all`, `others`, player id (number/string), or `owner` with an entity id/name as the first payload argument |
 | `net.sender()` | Sender player id inside an RPC handler; 0 outside it |
 
 ```lua
@@ -220,3 +221,24 @@ Lobby RPC and player callbacks are withheld during matches. `net.on("net.desync"
 poll the transport but do not call onUpdate/timers/physics/audio. Plain input sees the quantized
 local player; mouse/touch coordinates are not synchronized. Native rollback preserves opaque closures, timers and physics solver history in bounded
 checkpoints and replays at most eight frames. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.
+
+### Authoritative gameplay
+
+With `network.mode: "authoritative"`, put `NetSync` on replicated entities and `NetPlayer` on
+controlled entities. `network.playerPrefab` can spawn one per ready player automatically.
+The server owns state; a client's frame-tagged inputs only enter its authenticated player stream.
+For example, a player script reads `input.player(self:get("NetPlayer").player)`. The built-in
+PlayerController also uses that player's input instead of the host's local controls.
+
+Clients predict their owned entities, interpolate remote replicated entities and continue running
+local/unreplicated scripts (UI/cameras). Guard server-only level/spawn/score logic with
+`if net.isServer() then ... end`. Select the physics velocity fields as well as Transform fields
+in NetSync.fields for physical players. Corrections preserve Lua state and replay only unacknowledged
+inputs; RPC callbacks are journaled, repeated sends suppressed and speculative audio deferred.
+Authoritative scene transitions and late join require a new ready barrier after leaving/stopping.
+
+`net.rpc("owner", "notice", self.id, "Hit!")` routes to the entity's NetSync.owner (0 means server).
+The handler receives the routing entity argument too: `net.on("notice", function(entityId, text)
+... end)`. Entity ids are local; use `net.entities()` when mapping a received server entity id to
+this peer's entity. Owner-only fields filter network transmission, not packaged resource contents.
+See NETWORK.md for limits, relevance, snapshot rates and platform verification.

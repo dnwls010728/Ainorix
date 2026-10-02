@@ -317,7 +317,9 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Register(r, full.c_str(), query.summary, Params(), false,
                  [command](Engine& e, const Json& a) { return e.NetworkCall(command, a); });
     }
-    Register(r, "net.host", "Host a lobby; net.start begins lockstep/rollback, authoritative replication arrives in M6.",
+    Register(r, "net.entities", "Inspect authoritative network entity ids, local ids, owners and received replication fields.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("entities", a); });
+    Register(r, "net.host", "Host a lobby; net.start begins lockstep, rollback or authoritative simulation.",
              Params().Opt("name", "string", "Player name: 1..64 printable bytes.")
                      .Opt("seed", "integer", "Session seed: 0..4294967295; default 1.")
                      .Opt("room", "string", "Loopback room in this process; default gameId."), false,
@@ -335,10 +337,11 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json& a) { return e.NetworkCall("kick", a); });
     Register(r, "net.rpc", "Send a bounded reliable RPC, or call its Lua handler locally in none mode.",
              Params().Req("name", "string", "Handler name: 1..64 printable bytes.")
-                     .Opt("target", "string", "server/all/others or decimal player id; default server. owner requires M6.")
-                     .Opt("args", "array", "At most 16 bounded JSON arguments, depth <=8, <=8192 serialized bytes."), false,
+                     .Opt("target", "string", "server/owner/all/others or decimal player id; default server.")
+                     .Opt("args", "array", "At most 16 bounded JSON arguments, depth <=8, <=8192 serialized bytes.")
+                     .OptWith("entity", EntityRefSchema("Entity id/name for target owner; alternatively pass id/name as first argument.")), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("rpc", a); });
-    Register(r, "net.start", "Host starts a ready lockstep/rollback match with a frozen roster and frame-zero barrier.", Params(), false,
+    Register(r, "net.start", "Host starts a ready lockstep, rollback or authoritative match with a frozen roster and frame-zero barrier.", Params(), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("start", a); });
     Register(r, "net.desync_report", "First confirmed hash mismatch: frame, player, hashes and bounded host/peer scene JSON.", Params(), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("desync_report", a); });

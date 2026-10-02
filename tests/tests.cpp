@@ -1136,7 +1136,7 @@ std::string TempProject(const char* name) {
 Json Call(Engine& e, const char* cmd, const char* args = "{}") { return e.Call(cmd, Json::parse(args)); }
 
 TEST(NetworkInactiveZeroCost) {
-    const uint64_t syncInstances = FrameSync::InstancesCreated();
+    const uint64_t syncInstances = FrameSync::InstancesCreated(), authorityInstances = Authority::InstancesCreated();
     const uint64_t sessionInstances = Session::InstancesCreated(), sessionPolls = Session::PollCalls();
     const uint64_t instances = LoopbackNetwork::InstancesCreated();
     const uint64_t polls = LoopbackNetwork::PollCalls();
@@ -1181,6 +1181,7 @@ TEST(NetworkInactiveZeroCost) {
     CHECK(ChannelEndpoint::PollCalls() == channelPolls);
     CHECK(PlatformNetSocketsCreated() == socketsCreated && PlatformNetSocketsLive() == socketsLive);
     CHECK(FrameSync::InstancesCreated() == syncInstances);
+    CHECK(Authority::InstancesCreated() == authorityInstances);
     CHECK(Session::InstancesCreated() == sessionInstances && Session::PollCalls() == sessionPolls);
     CHECK(RemoveAll(project));
 }
@@ -1276,6 +1277,213 @@ void SyncPrepare(Engine& host, Engine& client, const std::string& project, const
     NetworkSteps(host,client,20);
     CHECK(Call(host,"net.start")["ok"].asBool());
 }
+std::string AuthorityProject(const char* name, const char* transport, bool prefab = false) {
+    std::string project = SyncProject(name, transport), text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text)); Json config = Json::parse(text);
+    config["network"]["mode"] = "authoritative"; config["network"]["snapshotRate"] = 20;
+    if (prefab) config["network"]["playerPrefab"] = "prefabs/network_player.prefab.json";
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/authority.lua"), R"(
+local M={}
+function M:onStart()
+ net.on('owner-message',function(id,n) game.set('owner-message',(game.get('owner-message') or 0)+n) end)
+ if net.isServer() and self.name=='P2' then
+  timer.after(0.3,function() scene.create('Spawned',{Transform={position={3,0,0}},NetSync={fields={['Transform.position']={onChange=true}}}}) end)
+  timer.after(0.8,function() local id=scene.find('Spawned'); if id then scene.destroy(id) end end)
+ end
+end
+function M:onUpdate()
+ local n=self:get('NetPlayer'); local p=input.player(n.player); local t=self:get('Transform')
+ if p.down('W') then t.position.x=t.position.x+1 end
+ if p.pressed('Space') then t.position.y=t.position.y+1 end
+ self:set('Transform',t)
+end
+return M
+)"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/authority_physics.lua"), R"(
+local M={}
+function M:onUpdate()
+ local p=input.player(self:get('NetPlayer').player)
+ self:set('RigidBody2D',{velocity={x=p.down('W') and 6 or 0,y=0,z=0}})
+end
+return M
+)"));
+    Json player = Json::parse(R"({"format":"ownengine.prefab","version":1,"name":"NetworkPlayer","entities":[{"id":1,"name":"Player","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{},"NetSync":{"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret"}}}]})");
+    CHECK(WriteTextFile(JoinPath(project,"prefabs/network_player.prefab.json"),player.dump())); return project;
+}
+void AuthorityPrepare(Engine& host, Engine& client, const std::string& project, const char* transport, bool prefab = false, bool physics = false) {
+    std::string error; CHECK(host.Open(project,&error)); CHECK(client.Open(project,&error));
+    for (Engine* e : {&host,&client}) {
+        e->GetScene().Clear();
+        if (!prefab) {
+            CHECK(Call(*e,"entity.create",R"({"name":"P1","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":1,"team":1},"NetSync":{"owner":1,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-host"}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"P2","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":2,"team":2},"NetSync":{"owner":2,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-client"}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Remote","components":{"Transform":{},"Velocity":{"linear":[1,0,0]},"NetSync":{"fields":{"Transform.position":{"onChange":true,"quantize":0.1}}}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Far","components":{"Transform":{"position":[5000,0,0]},"NetSync":{"distance":10}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Team1","components":{"Transform":{},"NetSync":{"teamOnly":true,"team":1}}})")["ok"].asBool());
+        }
+    }
+    if (physics) {
+        for (Engine* e : {&host,&client}) {
+            for (const char* name : {"P1","P2"}) {
+                Json collider=Json::MakeObject();collider["id"]=name;collider["type"]="Collider2D"; CHECK(e->Call("component.add",collider)["ok"].asBool());
+                Json body=Json::MakeObject();body["id"]=name;body["type"]="RigidBody2D";body["values"]=Json::parse(R"({"gravityScale":0,"fixedRotation":true})");CHECK(e->Call("component.add",body)["ok"].asBool());
+                Json script=Json::MakeObject();script["id"]=name;script["type"]="Script";script["values"]=Json::parse(R"({"path":"scripts/authority_physics.lua"})");CHECK(e->Call("component.set",script)["ok"].asBool());
+                Json fields=Json::MakeObject();fields["id"]=name;fields["type"]="NetSync";fields["values"]=Json::parse(R"({"fields":{"Transform.position":{"onChange":true},"RigidBody2D.velocity":{"onChange":true}}})");CHECK(e->Call("component.set",fields)["ok"].asBool());
+            }
+            e->GetScene().Get<Transform>(e->GetScene().FindByName("P1"))->position.y=10;
+        }
+    }
+    CHECK(Call(host,"net.host",R"({"seed":71,"room":"authority-room"})")["ok"].asBool());
+    Json join = Json::MakeObject(); join["address"] = std::string(transport)=="loopback"?"authority-room":"127.0.0.1";
+    if (std::string(transport)!="loopback") join["port"] = host.Network()->State()["port"];
+    CHECK(client.Call("net.join",join)["ok"].asBool()); NetworkSteps(host,client,30);
+    CHECK(Call(host,"net.ready",R"({"ready":true})")["ok"].asBool()); CHECK(Call(client,"net.ready",R"({"ready":true})")["ok"].asBool()); NetworkSteps(host,client,20);
+    NetworkSteps(host,client,320);
+    CHECK(Call(host,"net.start")["ok"].asBool()); NetworkSteps(host,client,10);
+}
+TEST(NetworkAuthoritativeOwnershipPredictionAndRelevance) {
+    std::string project = AuthorityProject("authority","loopback"); Engine host,client;
+    AuthorityPrepare(host,client,project,"loopback");
+    CHECK(host.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    EntityId host1=host.GetScene().FindByName("P1"),host2=host.GetScene().FindByName("P2");
+    host.Input().down.insert("W"); client.Input().down.insert("W"); client.Input().pressedThisFrame.insert("Space");
+    client.Audio().StartCapture(); NetworkSteps(host,client,24);
+    CHECK(host.GetScene().Get<Transform>(host1)->position.x>10 && host.GetScene().Get<Transform>(host2)->position.x>10);
+    CHECK(host.GetScene().Get<Transform>(host1)->position.y==0 && host.GetScene().Get<Transform>(host2)->position.y==1);
+    EntityId own=client.GetScene().FindByName("P2"); CHECK(own!=0);
+    Json replicated=Call(client,"net.entities")["result"];
+    for (const auto& entity:replicated.items()) {
+        if (entity["fields"]["name"].asString()=="P1") CHECK(!entity["fields"].has("Tag.tags"));
+        if (entity["fields"]["name"].asString()=="P2") CHECK(entity["fields"]["Tag.tags"].asString()=="secret-client");
+        if (entity["fields"]["name"].asString()=="Remote") {
+            float x=client.GetScene().Get<Transform>(static_cast<EntityId>(entity["id"].asNumber()))->position.x;
+            CHECK(x<=entity["fields"]["Transform.position"][0].asNumber()+0.001);
+        }
+    }
+    CHECK(client.GetScene().Get<Transform>(own)->position.y==1);
+    CHECK(client.NetworkCall("stats",Json())["corrections"].asNumber()>0);
+    CHECK(Call(host,"net.rpc",R"({"target":"owner","entity":"P2","name":"owner-message","args":[2,7]})")["ok"].asBool());
+    NetworkSteps(host,client,3);
+    CHECK(client.GameData()["owner-message"].asNumber()==7);
+    CHECK(host.GameData()["owner-message"].isNull());
+    CHECK(Call(client,"net.rpc",R"({"target":"owner","entity":"P1","name":"owner-message","args":[1,5]})")["ok"].asBool());
+    NetworkSteps(host,client,3); CHECK(host.GameData()["owner-message"].asNumber()==5);
+    CHECK(!Call(client,"component.set",R"({"id":"P1","type":"Transform","values":{"position":[999,0,0]}})")["ok"].asBool());
+    CHECK(!Call(host,"script.eval",R"({"code":"1"})")["ok"].asBool());
+    // Client holds prediction input while the server is temporarily not advancing.
+    uint64_t before=client.Frame(); client.Step(100); CHECK(client.Frame()<=before+32);
+    NetworkSteps(host,client,50); CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    CHECK(client.GetScene().FindByName("Far")==0 && client.GetScene().FindByName("Team1")==0);
+    CHECK(host.GetScene().FindByName("Spawned")==0 && client.GetScene().FindByName("Spawned")==0);
+    CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty());
+    uint64_t ack=static_cast<uint64_t>(client.NetworkCall("state",Json())["sync"]["acknowledgedInput"].asNumber());
+    CHECK(client.Audio().SaveState()->capture.size()<=ack*1600);
+    // Built-in controller uses the controlling authenticated player's input.
+    host.Stop(); client.Stop(); RemoveAll(project);
+}
+TEST(NetworkAuthoritativePrefabAndNativeTcpUdp) {
+#ifndef __EMSCRIPTEN__
+    for (const char* transport : {"tcp","udp"}) {
+        std::string project=AuthorityProject(transport,transport,true); Engine host,client;
+        Engine namespaceCheck; std::string namespaceError; CHECK(namespaceCheck.Open(project,&namespaceError));
+        namespaceCheck.GetScene().Clear(); namespaceCheck.GetScene().Create("Existing");
+        CHECK(WriteTextFile(JoinPath(project,"prefabs/namespace.prefab.json"),R"({"format":"ownengine.prefab","version":1,"entities":[{"id":1,"name":"Owned","components":{"Transform":{},"NetSync":{"owner":2},"NetPlayer":{"player":2}}},{"id":2,"name":"Child","parent":1,"components":{"Transform":{}}}]})"));
+        EntityId root=namespaceCheck.InstantiatePrefabFile("prefabs/namespace.prefab.json",0);
+        CHECK(namespaceCheck.GetScene().Get<NetSync>(root)->owner==2 && namespaceCheck.GetScene().Get<NetPlayer>(root)->player==2);
+
+        AuthorityPrepare(host,client,project,transport,true); client.Input().down.insert("W");
+        NetworkSteps(host,client,150);
+        CHECK(host.GetScene().Pool<NetPlayer>().size()==2 && client.GetScene().Pool<NetPlayer>().size()==2);
+        CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+        CHECK(client.NetworkCall("stats",Json())["corrections"].asNumber()>10);
+        for (const auto& player:host.GetScene().Pool<NetPlayer>()) if(player.second.player==2) CHECK(host.GetScene().Get<Transform>(player.first)->position.x>50);
+        CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty()); RemoveAll(project);
+    }
+#endif
+}
+
+TEST(NetworkAuthoritativePhysicsPrediction) {
+    std::string project=AuthorityProject("authority_physics","loopback"); Engine host,client;
+    AuthorityPrepare(host,client,project,"loopback",false,true); client.Input().down.insert("W");
+    NetworkSteps(host,client,150); client.Input().down.erase("W"); NetworkSteps(host,client,40);
+    EntityId serverPlayer=host.GetScene().FindByName("P2"),localPlayer=client.GetScene().FindByName("P2");
+    CHECK(serverPlayer && localPlayer);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(serverPlayer)->position.x-client.GetScene().Get<Transform>(localPlayer)->position.x)<0.01f);
+    CHECK(host.GetScene().Get<Transform>(serverPlayer)->position.x>10);
+    CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+std::vector<uint8_t> AuthorityPacket(uint8_t kind, const Json& body, uint64_t epoch = 1) {
+    std::string text=body.dump(); ByteWriter writer(60000); writer.WriteU8(kind); writer.WriteU64(epoch);
+    writer.WriteBlob(reinterpret_cast<const uint8_t*>(text.data()),text.size()); return writer.Data();
+}
+TEST(NetworkAuthoritativeDeltaAckAndBounds) {
+    SessionConfig config; config.mode="authoritative"; config.sync.keys={"W"};
+    std::vector<std::vector<uint8_t>> outbound, replies;
+    Authority host(config,true,1,77,[&](uint32_t,const std::vector<uint8_t>& bytes){outbound.push_back(bytes);return true;});
+    Authority client(config,false,2,77,[&](uint32_t,const std::vector<uint8_t>& bytes){replies.push_back(bytes);return true;});
+    auto exchange=[&] {
+        for(int n=0;n<4;++n) {
+            auto sent=std::move(outbound); outbound.clear(); for(const auto& bytes:sent) client.Receive(1,bytes);
+            auto returned=std::move(replies); replies.clear(); for(const auto& bytes:returned) host.Receive(2,bytes);
+        }
+    };
+    std::string error; CHECK(host.Start({1,2},&error)); exchange(); CHECK(host.TakeStart() && client.TakeStart());
+    FrameInput held; held.down=1; CHECK(client.Submit(held)==1); exchange(); auto inputs=host.Consume(FrameInput{});
+    CHECK(inputs.at(1).down==0 && inputs.at(2).down==1);
+    Json world=Json::parse(R"({"1":{"source":1,"owner":2,"name":"Player","parent":0,"predict":true,"prefab":"","always":["Transform.rotation"],"Transform.position":[1,0,0],"Transform.rotation":[0,0,0],"Tag.tags":"secret"}})");
+    host.Snapshot(1,{{2,world}}); exchange(); auto updates=client.DrainUpdates();
+    CHECK(updates.size()==1 && updates.back().world==world && updates.back().acknowledged==1);
+    world["1"]["Transform.position"]=Json::parse("[2,0,0]"); host.Snapshot(2,{{2,world}});
+    CHECK(outbound.size()==1);
+    ByteReader reader(outbound[0].data(),outbound[0].size()); uint8_t kind; uint64_t epoch; std::vector<uint8_t> blob;
+    CHECK(reader.ReadU8(kind) && reader.ReadU64(epoch) && reader.ReadBlob(blob,56000));
+    Json delta=Json::parse(std::string(blob.begin(),blob.end()));
+    CHECK(delta["base"].asNumber()==1 && delta["delta"]["set"]["1"].has("Transform.position") && delta["delta"]["set"]["1"].has("Transform.rotation"));
+    CHECK(!delta["delta"]["set"]["1"].has("Tag.tags")); exchange(); updates=client.DrainUpdates(); CHECK(updates.size()==1 && updates.back().world==world);
+    host.Snapshot(3,{{2,Json::MakeObject()}}); exchange(); CHECK(client.DrainUpdates().back().world.size()==0);
+    Json spoof=Json::parse(R"({"frame":2,"player":1,"input":{"down":"1","pulse":"0","axes":[0,0,0,0,0,0]}})");
+    host.Receive(2,AuthorityPacket(35,spoof)); spoof.erase("player"); spoof["frame"]=1000; host.Receive(2,AuthorityPacket(35,spoof));
+    spoof["frame"]=2; spoof["input"]["down"]="2"; host.Receive(2,AuthorityPacket(35,spoof));
+    host.Receive(2,AuthorityPacket(36,Json::MakeObject())); host.Receive(99,AuthorityPacket(35,spoof));
+    CHECK(host.State()["rejected"].asNumber()==5);
+    client.Receive(2,AuthorityPacket(36,Json::MakeObject()));
+    std::vector<uint8_t> deep(17,'['); deep.insert(deep.end(),17,']'); ByteWriter malformed(100); malformed.WriteU8(36); malformed.WriteU64(1); malformed.WriteBlob(deep.data(),deep.size()); client.Receive(1,malformed.Data());
+    CHECK(client.State()["rejected"].asNumber()==2);
+    SessionConfig bad; for(const char* value:{R"({"network":{"mode":"authoritative","snapshotRate":0}})",R"({"network":{"mode":"authoritative","predictionFrames":65}})",R"({"network":{"mode":"authoritative","interpolationFrames":31}})",R"({"network":{"mode":"authoritative","playerPrefab":"../escape.json"}})"}) CHECK(!SessionConfig::Parse(Json::parse(value),bad,&error));
+}
+TEST(NetworkAuthoritativeSeededSessionsTenThousandFrames) {
+    LoopbackConfig faults; faults.seed=931; faults.lossPermille=60; faults.duplicatePermille=80; faults.latencyFrames=1; faults.reorderFrames=2;
+    auto wire=std::make_shared<LoopbackNetwork>(faults); SessionConfig config; config.mode="authoritative"; config.transport="loopback"; config.sync.keys={"W"};
+    Session server(config,std::make_unique<LoopbackTransport>(wire,1),true,1,"Server",71,SessionTestRandom(810));
+    Session client(config,std::make_unique<LoopbackTransport>(wire,2),false,1,"Client",0,SessionTestRandom(811));
+    uint64_t tick=0; for(;tick<200;++tick) {server.Advance(tick);client.Advance(tick);}
+    CHECK(server.Connected() && client.Connected());
+    Authority host(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& b){return server.SendSync(player,b);});
+    Authority guest(config,false,2,99,[&](uint32_t player,const std::vector<uint8_t>& b){return client.SendSync(player,b);});
+    std::string error; CHECK(host.Start({1,2},&error)); uint64_t total=0,frames=0; Json last;
+    for(;tick<200000 && frames<10000;++tick) {
+        server.Advance(tick);client.Advance(tick);
+        for(const auto& msg:server.DrainSync()) host.Receive(msg.first,msg.second);
+        for(const auto& msg:client.DrainSync()) guest.Receive(msg.first,msg.second);
+        host.TakeStart();guest.TakeStart();
+        if(guest.Running() && guest.CanPredict()) {FrameInput input;input.down=(tick/7)%2;guest.Submit(input);}
+        if(host.Running()) {
+            auto inputs=host.Consume(FrameInput{});total+=inputs[2].down; ++frames;
+            if(frames%3==0) {Json world=Json::MakeObject();world["1"]=Json::MakeObject();world["1"]["Transform.position"]=Json::parse("[0,0,0]");world["1"]["Transform.position"][0]=total;host.Snapshot(frames,{{2,world}});}
+        }
+        for(const auto& update:guest.DrainUpdates()) last=update.world;
+        if(host.State()["state"].asString()=="stopped" || guest.State()["state"].asString()=="stopped") break;
+    }
+    CHECK(frames==10000 && host.Running() && guest.Running() && wire->DroppedMessages()>0 && last.size()==1);
+    Json world=Json::MakeObject();world["1"]=Json::MakeObject();world["1"]["Transform.position"]=Json::parse("[0,0,0]");world["1"]["Transform.position"][0]=total;host.Snapshot(frames,{{2,world}});
+    for(int n=0;n<500;++n,++tick) {server.Advance(tick);client.Advance(tick);for(const auto& msg:server.DrainSync())host.Receive(msg.first,msg.second);for(const auto& msg:client.DrainSync())guest.Receive(msg.first,msg.second);for(const auto& update:guest.DrainUpdates())last=update.world;}
+    CHECK(last==world);
+}
+
 TEST(NetworkLockstepEngineGatesAndDesync) {
     std::string project=SyncProject("sync_lockstep","loopback");
     Engine host,client; SyncPrepare(host,client,project,"loopback");
@@ -1377,6 +1585,15 @@ TEST(SimulationNativeSnapshotBudgetAndBranching) {
     CHECK(other.Open(project, &error)); other.RecordState();
     try { other.LoadState(*state); } catch (const ApiError& e) { refused = e.code == "state_invalid"; }
     CHECK(refused); RemoveAll(project);
+}
+
+TEST(SimulationNativeSnapshotDynamicJoltCharactersAndGc) {
+    std::string project=TempProject("native_dynamic_jolt"),error; Engine e;
+    CHECK(e.Open(project,&error)); e.GetScene().Clear(); e.RecordState();
+    CHECK(Call(e,"script.eval",R"J({"code":"local n=0; timer.every(0.05,function() n=n+1; local id=scene.create('B'..n,{Transform={position={0,3,0}},Collider={},RigidBody={}}); local ch=scene.create('C'..n,{Transform={position={3,3,0}},CharacterBody={}}); timer.after(0.12,function() scene.destroy(id);scene.destroy(ch) end); game.set('n',n); collectgarbage('collect') end)"})J")["ok"].asBool());
+    e.Step(60); auto state=e.SaveState(); e.Step(30); Json future=e.GetScene().ToJson(),data=e.GameData();
+    for(int n=0;n<4;++n) { e.LoadState(*state); e.Step(30); CHECK(e.GetScene().ToJson()==future && e.GameData()==data); }
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
 }
 
 TEST(NetworkFrameSyncSeededTenThousandFrames) {
@@ -1581,7 +1798,7 @@ TEST(NetworkSessionHandshakeLossVersionAndTimeout) {
     auto wire = std::make_shared<LoopbackNetwork>();
     SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
     Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 1, SessionTestRandom(100));
-    config.version = 3;
+    ++config.version;
     Session bad(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Old", 0, SessionTestRandom(200));
     for (uint64_t frame = 0; frame < 20; ++frame) { CHECK(host.Advance(frame) && bad.Advance(frame)); }
     CHECK(bad.Status() == "error" && bad.State()["error"].asString().find("mismatch") != std::string::npos);

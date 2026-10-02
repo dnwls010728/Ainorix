@@ -14,6 +14,7 @@
 #include "audio/AudioSystem.h"
 #include "core/Json.h"
 #include "net/Session.h"
+#include "net/sync/Authority.h"
 #include "render/Renderer.h"
 #include "scene/Scene.h"
 #include "scene/Systems.h"
@@ -93,7 +94,10 @@ public:
     SaveStore& Saves() { return saves_; }
     // Loads another scene at the end of the current frame, keeping the Lua
     // state and game data. sim.stop still restores the edit-time scene.
-    void RequestSceneChange(const std::string& path) { pendingScene_ = path; }
+    void RequestSceneChange(const std::string& path) {
+        if (authority_ && authority_->Active()) throw ApiError("match_scene", "authoritative scene transitions require restarting the match", "Leave/stop, load the same scene on each peer, then start a new ready barrier.");
+        pendingScene_ = path;
+    }
     const std::string& RuntimeScene() const { return runtimeScene_; }
 
     // ----- Debug drawing -----------------------------------------------------
@@ -109,6 +113,7 @@ public:
     // Shared command/Lua session surface; absent/none projects allocate no session.
     Json NetworkCall(const std::string& command, const Json& args);
     Session* Network() const { return network_.get(); }
+    bool PredictEntity(EntityId id) const;
     PhysicsWorld& Physics() { return *physics_; }
     AudioSystem& Audio() { return *audio_; }
     AssetManager& Assets() { return *assets_; }
@@ -166,6 +171,15 @@ private:
     std::shared_ptr<const NativeState> CaptureNative(bool output) const;
     void RestoreNative(const NativeState& state);
     void CaptureCheckpoint();
+    void EnsureAuthority(bool refresh = false);
+    bool PollAuthority();
+    void AuthorityApplied();
+    std::vector<PhysicsEvent> StepAuthorityPhysics(float dt);
+    Json ReplicatedWorld(uint32_t player);
+    void ValidateReplicatedWorld(const Json& world) const;
+    void ApplyReplicatedWorld(const Json& world, bool owned, bool remotes);
+    void InterpolateAuthority();
+    void ResetAuthority();
     struct UIEvent {
         EntityId id;
         const char* method;
@@ -196,6 +210,15 @@ private:
     std::unique_ptr<Session> network_;
     uint64_t networkFrame_ = 0;
     std::unique_ptr<FrameSync> sync_;
+    std::unique_ptr<Authority> authority_;
+    std::map<EntityId, uint32_t> authorityIds_;
+    std::map<uint32_t, EntityId> replicatedEntities_;
+    std::map<EntityId, Json> initialAuthorityEntities_;
+    uint32_t nextAuthorityId_ = 1;
+    std::map<uint64_t, std::shared_ptr<const NativeState>> predictionStates_;
+    std::deque<Authority::Update> authorityWorlds_;
+    std::map<uint64_t, std::vector<SessionEvent>> authorityEvents_;
+    uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0;
     std::map<uint32_t, InputState> playerInputs_;
     FrameInputs frameInputs_;
     InputState deviceInput_;

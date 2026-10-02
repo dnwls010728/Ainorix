@@ -65,7 +65,7 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 설정이 없거나 `none`이면 기존 단일 플레이와 로컬 RPC로 동작합니다.
 network.actions/axes 선언 후 모두 준비되면 net.start로 락스텝을 시작합니다.
 input.player(id), 비동기화 보고, 실험적 이력 재실행 롤백을 지원합니다. 빠른 네이티브
-네이티브 롤백 스냅샷(M5c) 구현 완료. 권위 서버 복제는 M6에 남아 있습니다. 웹 클라이언트는 호환 WebSocket 서버와
+네이티브 롤백(M5c)과 권위 서버 복제(M6) 구현 완료: NetSync/NetPlayer, 델타, 보간, 소유자 예측 지원. 웹 클라이언트는 호환 WebSocket 서버와
 재빌드한 런타임이 필요합니다. [docs/NETWORK.md](docs/NETWORK.md) 참고.
 
 `oe editor`는 **에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 창이 없는 환경(Linux 헤드리스 등)에서는 `oe editor MyGame --screenshot shot.png`로 에디터 화면을 렌더링할 수 있습니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)

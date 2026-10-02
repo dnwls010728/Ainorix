@@ -66,7 +66,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
         }
         SessionConfig config;
         if (!SessionConfig::Parse(project, config, error)) return false;
-        sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
+        ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
         projectName_ = project["name"].asString("Untitled");
@@ -79,7 +79,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
     }
 
     // A bare scene file: use the nearest enclosing project if there is one.
-    sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
+    ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0; networkConfig_ = SessionConfig{};
     std::string dir = ParentPath(path);
     projectDir_ = dir;
@@ -115,7 +115,7 @@ bool Engine::LoadScene(const std::string& path, std::string* error) {
         return false;
     }
     playing_ = false;
-    sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
+    ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0;
     playSnapshot_.reset();
     ResetRuntime();
@@ -142,7 +142,7 @@ bool Engine::SaveScene(const std::string& path, std::string* error) {
 }
 
 void Engine::NewScene(const std::string& name) {
-    sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
+    ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0;
     scene_.Clear();
     scene_.name = name;
@@ -253,7 +253,7 @@ void Engine::Pause() {
 }
 
 void Engine::Stop() {
-    sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
+    ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
     network_.reset(); networkFrame_ = 0;
     playing_ = false;
     if (playSnapshot_) {
@@ -280,7 +280,7 @@ void Engine::Stop() {
 
 void Engine::Step(int frames) {
     BeginSessionIfNeeded();
-    if (!journal_ && (!sync_ || !sync_->Active())) { scripts_->PollHotReload(); assets_->PollChanges(); }
+    if (!journal_ && (!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) { scripts_->PollHotReload(); assets_->PollChanges(); }
     for (int i = 0; i < frames; ++i) SimulateFrame();
     if (frames > 0) Touch();
 }
@@ -288,7 +288,7 @@ void Engine::Step(int frames) {
 void Engine::Tick(double realDt) {
     if (!playing_) return;
     hotReloadTimer_ += realDt;
-    if (hotReloadTimer_ >= 0.5 && !journal_ && (!sync_ || !sync_->Active())) {
+    if (hotReloadTimer_ >= 0.5 && !journal_ && (!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) {
         hotReloadTimer_ = 0.0;
         scripts_->PollHotReload();
         assets_->PollChanges();
@@ -318,11 +318,12 @@ void Engine::SimulateFrame() {
         network_->Advance(networkFrame_++);
         if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
     }
-    if (!PollSync()) return;
+    if (!PollAuthority() || !PollSync()) return;
     CaptureCheckpoint();
     if (journal_ && sync_ && sync_->Running()) journal_->frames.push_back({input_, frameInputs_});
     SimulateWorld();
-    if (sync_ && sync_->Running()) input_ = deviceInput_;
+    AuthorityApplied();
+    if ((sync_ && sync_->Running()) || (authority_ && authority_->Running())) input_ = deviceInput_;
 }
 
 void Engine::SimulateWorld() {
@@ -334,10 +335,28 @@ void Engine::SimulateWorld() {
     const float dt = static_cast<float>(kFixedDt);
     UpdateButtonKeys();
     scripts_->Update(dt);
-    if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents());
+    if (network_ && authority_ && authority_->Running() && !network_->IsHost()) {
+        if (replaying_) {
+            auto it = authorityEvents_.find(frame_); if (it != authorityEvents_.end()) scripts_->DispatchNetwork(it->second);
+        } else {
+            auto events = network_->DrainEvents();
+            if (!events.empty()) {
+                size_t count = events.size(); for (const auto& batch : authorityEvents_) count += batch.second.size();
+                if (count > 256) throw ApiError("network_limit", "prediction RPC event window is full");
+                authorityEvents_[frame_] = events; scripts_->DispatchNetwork(events);
+            }
+        }
+    } else if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents());
     std::vector<UIEvent> uiEvents = UpdateUI();
-    UpdateSystems(scene_, input_, dt, assets_.get());
-    std::vector<PhysicsEvent> events = physics_->Step(scene_, dt);
+    std::function<const InputState*(EntityId)> playerInput;
+    if (authority_ && authority_->Running()) playerInput = [this](EntityId id) -> const InputState* {
+        if (!PredictEntity(id)) return nullptr;
+        if (const auto* player = scene_.Get<NetPlayer>(id)) return &PlayerInput(static_cast<uint32_t>(player->player));
+        if (const auto* sync = scene_.Get<NetSync>(id)) return &PlayerInput(static_cast<uint32_t>(sync->owner));
+        return &input_;
+    };
+    UpdateSystems(scene_, input_, dt, assets_.get(), playerInput);
+    std::vector<PhysicsEvent> events = authority_ && authority_->Running() && !network_->IsHost() ? StepAuthorityPhysics(dt) : physics_->Step(scene_, dt);
     UpdateLateSystems(scene_, dt);
     scripts_->DispatchPhysicsEvents(events);
     for (const UIEvent& ev : uiEvents) {
@@ -520,18 +539,18 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
         }
         Json args = rawArgs.isNull() ? Json::MakeObject() : rawArgs;
         ValidateArgs(*cmd, args);
-        if (sync_ && sync_->Active() && !inWorld_ && !replaying_ && (name == "script.eval" || (cmd->mutates && name.compare(0, 6, "input.") != 0 && name.compare(0, 4, "sim.") != 0)))
+        if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && !inWorld_ && !replaying_ && (name == "script.eval" || (cmd->mutates && name.compare(0, 6, "input.") != 0 && name.compare(0, 4, "sim.") != 0)))
             throw ApiError("match_active", "external gameplay edits are disabled during a match", "Put deterministic gameplay logic in scripts before net.start.");
         if (journal_ && !inWorld_ && !replaying_ && cmd->mutates && name != "script.eval" &&
             name.compare(0, 6, "input.") != 0 && name.compare(0, 4, "sim.") != 0)
             throw ApiError("state_recording", "external scene edits are disabled while recording", "Use scripted deterministic edits, or sim.stop before editing.");
         if (journal_ && !inWorld_ && !replaying_ && name == "script.eval") {
-            if (sync_ && sync_->Active()) throw ApiError("match_active", "external Lua evaluation can desynchronize a match", "Put gameplay logic in scripts before net.start.");
+            if ((sync_ && sync_->Active()) || (authority_ && authority_->Active())) throw ApiError("match_active", "external Lua evaluation can desynchronize a match", "Put gameplay logic in scripts before net.start.");
             size_t total = 0; for (const auto& entries : journal_->commands) total += entries.second.size();
             if (total >= 512 || args.dump().size() > 65536) throw ApiError("state_limit", "replay supports 512 external evaluations of at most 64 KiB");
             journal_->commands[frame_].emplace_back(name, args);
         }
-        if ((journal_ || (sync_ && sync_->Active())) && !inWorld_ && !replaying_ &&
+        if ((journal_ || (sync_ && sync_->Active()) || (authority_ && authority_->Active())) && !inWorld_ && !replaying_ &&
             (name == "audio.play" || name == "audio.stop" || name == "game.load_scene" || name == "save.set" || name == "save.clear" || name == "save.flush" || name == "script.write" || name == "script.reload"))
             throw ApiError("state_recording", "external side effects are disabled while recording", "Use deterministic Lua gameplay or stop recording before edits.");
         const bool record = cmd->mutates && !playSnapshot_;

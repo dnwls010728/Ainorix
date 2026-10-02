@@ -63,8 +63,8 @@ Opt-in network lobbies/RPC: set `project.json` `network` to
 in persistent tool sessions or Lua. `net.players`, `net.ready`, `net.stats`, `net.rpc` and
 `net.on` support lobby/game messages; absent/`none` networking stays single-player with
 local RPC. Declare network.actions/axes, ready every player, then net.start for lockstep.
-input.player(id), desync reports and experimental reference rollback are available; fast native
-rollback snapshots remain M5c and authoritative replication M6. Browser clients
+input.player(id), desync reports and native rollback (M5c) are available. Authoritative replication
+(M6) adds NetSync/NetPlayer, acknowledged deltas, relevance, interpolation and owned prediction. Browser clients
 need a compatible WebSocket server and rebuilt runtime. See [docs/NETWORK.md](docs/NETWORK.md).
 
 `oe editor` opens the **editor** (Dear ImGui docking + ImGuizmo, drawn on the GPU in the engine process). It uses only the command API, so an agent (`oe mcp --connect 7777`) works in the same session as the person at the same time. Without a window (e.g. headless Linux), `oe editor MyGame --screenshot shot.png` renders the editor to an image. Details: [docs/EDITOR.md](docs/EDITOR.md)
@@ -130,5 +130,3 @@ samples/Dungeon  2D top-down action (Box2D, autotiled tileset, pushable crates, 
 samples/Platformer 2D side-scroller (text tilemap, sprite animation, enemies, ? blocks, parallax)
 samples/FPS      first-person shooter test game (mouse look, hitscan pistol, reload, moving targets, results screen)
 ```
-
-Native rollback snapshots (M5c) now preserve Lua/Jolt/Box2D state and replay at most eight frames. See docs/NETWORK.md.

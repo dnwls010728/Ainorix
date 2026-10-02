@@ -33,6 +33,7 @@ struct Engine::NativeState {
     InputState input;
     FrameInputs frameInputs;
     std::map<uint32_t, InputState> playerInputs;
+    std::map<uint32_t, EntityId> replicatedEntities;
     std::vector<TimedLine> lines;
     std::string runtimeScene, pendingScene;
     std::set<EntityId> buttons;
@@ -45,7 +46,7 @@ std::shared_ptr<const Engine::NativeState> Engine::CaptureNative(bool output) co
     auto s = std::make_shared<NativeState>(); s->owner = this;
     s->scene = scene_; s->scripts = scripts_->SaveState(); s->physics = physics_->SaveState();
     s->audio = audio_->SaveState(output); s->saves = saves_; s->data = gameData_;
-    s->input = input_; s->frameInputs = frameInputs_; s->playerInputs = playerInputs_;
+    s->input = input_; s->frameInputs = frameInputs_; s->playerInputs = playerInputs_; s->replicatedEntities = replicatedEntities_;
     s->lines = debugLines_; s->runtimeScene = runtimeScene_; s->pendingScene = pendingScene_;
     s->buttons = heldButtons_; s->keys = heldKeys_; s->hover = uiHovered_; s->press = uiPressed_;
     s->frame = frame_; s->time = simTime_; return s;
@@ -54,7 +55,7 @@ void Engine::RestoreNative(const NativeState& s) {
     if (s.owner != this) throw ApiError("state_invalid", "snapshots belong to their originating engine");
     scene_ = s.scene; scripts_->LoadState(*s.scripts); physics_->LoadState(*s.physics);
     audio_->LoadState(*s.audio); saves_ = s.saves; gameData_ = s.data;
-    input_ = s.input; frameInputs_ = s.frameInputs; playerInputs_ = s.playerInputs;
+    input_ = s.input; frameInputs_ = s.frameInputs; playerInputs_ = s.playerInputs; replicatedEntities_ = s.replicatedEntities;
     debugLines_ = s.lines; runtimeScene_ = s.runtimeScene; pendingScene_ = s.pendingScene;
     heldButtons_ = s.buttons; heldKeys_ = s.keys; uiHovered_ = s.hover; uiPressed_ = s.press;
     frame_ = s.frame; simTime_ = s.time;
@@ -96,6 +97,7 @@ void Engine::EnsureSync(bool refresh) {
     uint64_t blueprint = HashText(playSnapshot_->dump() + ":" + std::to_string(ContentHash()) + ":" + std::to_string(network_->Seed()));
     sync_ = std::make_unique<FrameSync>(networkConfig_.sync, network_->IsHost(), network_->LocalPlayer(), blueprint,
         [this](uint32_t player, const std::vector<uint8_t>& bytes) { return network_ && network_->SendSync(player, bytes); });
+    sync_->Tick(networkFrame_);
 }
 const InputState& Engine::PlayerInput(uint32_t player) const {
     auto it = playerInputs_.find(player);
@@ -106,11 +108,11 @@ const InputState& Engine::PlayerInput(uint32_t player) const {
 }
 void Engine::ApplyInputs(const FrameInputs& inputs) {
     frameInputs_ = inputs; playerInputs_.clear();
-    for (const auto& player : inputs) playerInputs_[player.first] = Decode(player.second, sync_->Config());
+    for (const auto& player : inputs) playerInputs_[player.first] = Decode(player.second, (sync_ ? sync_->Config() : networkConfig_.sync));
     input_ = PlayerInput(network_->LocalPlayer());
 }
 bool Engine::PollSync() {
-    if (!network_) return true;
+    if (!network_ || networkConfig_.mode == "authoritative") return true;
     EnsureSync();
     if (!sync_) return true;
     for (const auto& message : network_->DrainSync()) {
@@ -192,10 +194,11 @@ bool Engine::PollSync() {
 }
 void Engine::RecordState() {
     if (journal_) return;
-    if (network_ && (!sync_ || !sync_->Running())) throw ApiError("state_recording", "manual recording requires an offline simulation", "Leave/stop networking before sim.record_state.");
+    if (network_ && (!sync_ || !sync_->Running()) && (!authority_ || !authority_->Running())) throw ApiError("state_recording", "manual recording requires an offline simulation", "Leave/stop networking before sim.record_state.");
     BeginSessionIfNeeded();
     if (frame_ != 0) throw ApiError("state_recording", "recording must begin before the first simulation frame", "Use sim.stop, then sim.record_state before sim.step.");
-    scripts_->EnableSnapshots(); physics_->EnableSnapshots();
+    if (!physics_->EnableSnapshots()) throw ApiError("state_recording", "native recording must precede physics world creation", "Call sim.stop, then sim.record_state before physics queries.");
+    scripts_->EnableSnapshots();
     saves_.FreezeReads(true); saves_.DeferFlush(true);
     journal_ = std::make_unique<SimulationState>();
     journal_->allocationCursor = scene_.AllocationCursor(); journal_->baseline = scene_.ToJson(); journal_->runtimeScene = runtimeScene_;
@@ -210,7 +213,7 @@ std::shared_ptr<const Engine::SimulationState> Engine::SaveState() const {
     state->scene = scene_.ToJson(); state->gameData = gameData_; state->errors = scripts_->Errors(); state->playing = playing_; state->accumulator = accumulator_; return state;
 }
 void Engine::LoadState(const SimulationState& state) {
-    if (sync_ && sync_->Active()) throw ApiError("match_active", "manual state loading is disabled during a match", "Automatic rollback restores its own journal.");
+    if ((sync_ && sync_->Active()) || (authority_ && authority_->Active())) throw ApiError("match_active", "manual state loading is disabled during a match", "Automatic rollback restores its own journal.");
     if (!state.audio || !state.baselineAudio) throw ApiError("state_invalid", "invalid snapshot");
     if (ContentHash() != state.content) throw ApiError("state_resource", "project resources changed since recording", "Restore the original resources before loading state.");
     if (!state.native || state.native->owner != this) throw ApiError("state_invalid", "snapshots belong to their originating engine");

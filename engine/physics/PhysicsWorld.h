@@ -60,8 +60,10 @@ public:
     // (sorted, deterministic) that happened during the step.
     std::vector<PhysicsEvent> Step(Scene& scene, float dt);
     void Reset();
+    // Reconcile corrected poses without repeating collision-enter callbacks.
+    void RebuildSolvers();
     struct Snapshot;
-    void EnableSnapshots() { snapshotsEnabled_ = true; }
+    bool EnableSnapshots() { if (!snapshotsEnabled_ && (impl_ || world2d_)) return false; snapshotsEnabled_ = true; return true; }
     std::shared_ptr<const Snapshot> SaveState() const;
     void LoadState(const Snapshot& state);
 

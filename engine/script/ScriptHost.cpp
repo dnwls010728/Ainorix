@@ -497,9 +497,11 @@ int L_GameSet(lua_State* L) {
 }
 
 int L_GameLoadScene(lua_State* L) {
-    std::string path = luaL_checkstring(L, 1);
-    Host(L).GetEngine().RequestSceneChange(path);
-    return 0;
+    return Guard(L, [&] {
+        std::string path = luaL_checkstring(L, 1);
+        Host(L).GetEngine().RequestSceneChange(path);
+        return 0;
+    });
 }
 
 int L_GameScene(lua_State* L) {
@@ -1112,6 +1114,9 @@ void CheckNetValue(lua_State* L, int index, unsigned depth, size_t& nodes, size_
         }
     } else if (type != LUA_TNIL && type != LUA_TNUMBER && type != LUA_TBOOLEAN) luaL_error(L, "RPC values must be JSON-compatible");
 }
+int L_NetEntities(lua_State* L) {
+    return Guard(L, [&] { PushJson(L, Host(L).GetEngine().NetworkCall("entities", Json::MakeObject())); return 1; });
+}
 int L_NetRpc(lua_State* L) {
     return Guard(L, [&] {
         Json args = Json::MakeObject();
@@ -1231,7 +1236,7 @@ void ScriptHost::Open() {
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
     SetFuncs(L, "save", saveFuncs);
     const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
-        {"localPlayer", L_NetLocalPlayer}, {"players", L_NetPlayers}, {"state", L_NetState}, {"rpc", L_NetRpc},
+        {"entities", L_NetEntities}, {"localPlayer", L_NetLocalPlayer}, {"players", L_NetPlayers}, {"state", L_NetState}, {"rpc", L_NetRpc},
         {"on", L_NetOn}, {"sender", L_NetSender}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave},
         {"start", L_NetStart}, {"desync_report", L_NetDesyncReport}, {"ready", L_NetReady}, {"kick", L_NetKick}, {"stats", L_NetStats}, {nullptr, nullptr}};
     SetFuncs(L, "net", netFuncs);
@@ -1486,6 +1491,7 @@ std::vector<std::string> ScriptHost::ReloadAll() {
 }
 
 bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other) {
+    if (!engine_.PredictEntity(id)) return true;
     lua_State* L = State();
     int top = lua_gettop(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, inst.ref);
@@ -1584,7 +1590,7 @@ void ScriptHost::Update(float dt) {
 
     for (EntityId id : ids) {
         const Script* sc = scene.Get<Script>(id);  // scripts may destroy entities
-        if (!sc || !sc->enabled || sc->path.empty()) continue;
+        if (!sc || !sc->enabled || sc->path.empty() || !engine_.PredictEntity(id)) continue;
         std::string params = sc->params.dump();
         auto it = instances_.find(id);
         if (it != instances_.end() && (it->second.path != sc->path || it->second.params != params)) {
