@@ -377,6 +377,8 @@ void PlatformShowError(const std::string& title, const std::string& message) {
     oe_web_show_error(title.c_str(), message.c_str());
 }
 
+void PlatformAttachParentConsole() {}
+
 void PlatformSetBinaryStdio() {}
 
 bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error) {

@@ -58,6 +58,16 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 
 ## エディター
 
+ネットワークのロビー/RPC: `project.json` に
+`"network":{"mode":"lockstep","transport":"tcp","port":7778}` を設定し、
+継続して動作するツールセッションまたは Lua から `net.host`/`net.join` を呼びます。
+`net.players`、`net.ready`、`net.stats`、`net.rpc`、`net.on` でロビーとメッセージを扱います。
+設定なし/`none` は従来のシングルプレイヤーとローカル RPC です。
+network.actions/axes を宣言し、全員が ready になったら net.start でロックステップを開始します。
+input.player(id)、同期ずれレポート、実験的な履歴再実行ロールバックを利用できます。高速な
+ネイティブロールバック（M5c）とサーバー複製（M6）を実装。NetSync/NetPlayer、差分、補間、所有者予測に対応。ブラウザーには対応 WebSocket サーバーと
+再ビルド済みランタイムが必要です。[docs/NETWORK.md](docs/NETWORK.md) を参照。
+
 `oe editor` は**エディター** (Dear ImGui のドッキング + ImGuizmo、エンジンと同じプロセスで GPU 描画) を開きます。コマンド API だけを使うため、エージェント (`oe mcp --connect 7777`) が人と同じセッションを同時に操作できます。ウィンドウがない環境 (ヘッドレスの Linux など) では `oe editor MyGame --screenshot shot.png` でエディター画面を画像にできます。詳細: [docs/EDITOR.md](docs/EDITOR.md)
 
 - ドッキングパネル: ヒエラルキー・インスペクター・シーン・ゲーム・アセット・コンソール・スクリプト - 配置はプロジェクトごとに保存 (`.oe/editor.ini`)、表示 > レイアウトをリセット
@@ -74,6 +84,10 @@ build\bin\oe.exe api --markdown             :: コマンドリファレンスを
 - ショートカット: Ctrl+S 保存、Ctrl+Z/Y 元に戻す/やり直し、Ctrl+D 複製、Del 削除、F フォーカス、F2 名前を変更、Ctrl+P 再生/停止
 - エージェント向けのエディタースクリーンショット: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60] [--lang ja]`
 
+
+専用サーバー: `oe serve-game <project> --min-players 1` またはパッケージの `Game.exe --server`。ウィンドウ/GPU/音声デバイスを作成しません。TCP/UDP とネイティブ WebSocket サーバーに対応。エディターの Players で最大8人の Loopback テスト、Game Player で表示・入力先を選択、Network で遅延・統計を確認。コマンド: `net.spawn_local_peers`, `net.peer_call`, `net.local_peers`, `net.simulate`。使用方法とプラットフォーム検証範囲: [docs/NETWORK.md](docs/NETWORK.md)。
+
+Network パネルは「表示 > ネットワーク」から開けます。ネットワーク未設定のプロジェクトにも設定案内を表示し、既存のエディターレイアウトに新しいタブを自動追加します。
 
 ## AI 連携
 
@@ -121,3 +135,5 @@ samples/Dungeon  2D 見下ろしアクション (Box2D、オートタイルの�
 samples/Platformer 2D 横スクロールのプラットフォーマー (テキストのタイルマップ、スプライトアニメーション、敵、? ブロック、パララックス)
 samples/FPS      一人称シューティングのテストゲーム (マウス視点、ヒットスキャンのピストル、リロード、動く標的、結果画面)
 ```
+
+ネットワークサンプル: `samples/NetCoop`（lockstep 協力）、`samples/NetDuel`（rollback 対戦）、`samples/NetArena`（サーバー権限対戦）。エディターの Players 2、またはゲーム内 Host/Join/Ready/Start で開始。キーボード・ゲームパッド・タッチボタンに対応。起動・WebSocket・Android 検証: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md)。

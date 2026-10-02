@@ -58,6 +58,16 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 
 ## 에디터
 
+네트워크 로비/RPC: `project.json`에
+`"network":{"mode":"lockstep","transport":"tcp","port":7778}`을 설정한 뒤,
+계속 실행되는 도구 세션이나 Lua에서 `net.host`/`net.join`을 호출합니다.
+`net.players`, `net.ready`, `net.stats`, `net.rpc`, `net.on`으로 로비와 메시지를 처리합니다.
+설정이 없거나 `none`이면 기존 단일 플레이와 로컬 RPC로 동작합니다.
+network.actions/axes 선언 후 모두 준비되면 net.start로 락스텝을 시작합니다.
+input.player(id), 비동기화 보고, 실험적 이력 재실행 롤백을 지원합니다. 빠른 네이티브
+네이티브 롤백(M5c)과 권위 서버 복제(M6) 구현 완료: NetSync/NetPlayer, 델타, 보간, 소유자 예측 지원. 웹 클라이언트는 호환 WebSocket 서버와
+재빌드한 런타임이 필요합니다. [docs/NETWORK.md](docs/NETWORK.md) 참고.
+
 `oe editor`는 **에디터**(Dear ImGui 도킹 + ImGuizmo, 엔진과 같은 프로세스에서 GPU로 그림)를 엽니다. 명령 API만 쓰므로 에이전트(`oe mcp --connect 7777`)가 사람과 같은 세션을 동시에 다룹니다. 창이 없는 환경(Linux 헤드리스 등)에서는 `oe editor MyGame --screenshot shot.png`로 에디터 화면을 렌더링할 수 있습니다. 자세한 내용: [docs/EDITOR.md](docs/EDITOR.md)
 
 - 도킹 패널: Hierarchy · Inspector · Scene · Game · Assets · Console · Scripts — 배치는 프로젝트별로 저장(`.oe/editor.ini`), 보기 > 레이아웃 초기화
@@ -75,6 +85,10 @@ build\bin\oe.exe api --markdown             :: 명령 레퍼런스 출력
 - 에이전트용 에디터 스크린샷: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60]`
 
 
+
+전용 서버: `oe serve-game <project> --min-players 1` 또는 패키지 `Game.exe --server` (창/GPU/오디오 장치 없이 실행). TCP/UDP 및 네이티브 WebSocket 서버 지원. 에디터 Players 선택으로 최대 8명 Loopback 테스트, Game Player 선택으로 피어별 입력, Network 패널에서 지연/통계 확인. 명령: `net.spawn_local_peers`, `net.peer_call`, `net.local_peers`, `net.simulate`. 자세한 사용법·플랫폼 검증 범위: [docs/NETWORK.md](docs/NETWORK.md).
+
+Network 창은 `보기 > 네트워크`에서 열 수 있습니다. 네트워크 미설정 프로젝트에도 설정 안내가 표시되며, 이전 에디터 레이아웃은 새 탭을 자동으로 추가합니다.
 
 ## AI 연동
 
@@ -122,3 +136,5 @@ samples/Dungeon  2D 탑뷰 액션 (Box2D, 자동 연결 타일셋, 밀 수 있�
 samples/Platformer 2D 횡스크롤 플랫포머 (텍스트 타일맵, 스프라이트 애니메이션, 적, ? 블록, 패럴랙스)
 samples/FPS      1인칭 슈팅 테스트 게임 (마우스 시점, 히트스캔 권총, 재장전, 움직이는 표적, 결과 화면)
 ```
+
+네트워크 샘플: `samples/NetCoop`(lockstep 협동), `samples/NetDuel`(rollback 대전), `samples/NetArena`(서버 권한 대전). 에디터 Players 2로 즉시 실행하거나 게임 내 Host/Join/Ready/Start 버튼 사용. WASD·게임패드·터치 버튼 지원. 실행·WebSocket·Android 검증 가이드: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).

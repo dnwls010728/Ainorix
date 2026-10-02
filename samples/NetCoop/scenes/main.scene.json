@@ -1,0 +1,400 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "NetCoop",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            9,
+            9
+          ],
+          "rotation": [
+            -45,
+            0,
+            0
+          ]
+        },
+        "Camera": {
+          "projection": "orthographic",
+          "orthoSize": 7
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Light",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -60,
+            30,
+            0
+          ]
+        },
+        "DirectionalLight": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "scale": [
+            12,
+            1,
+            9
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [
+            0.09,
+            0.13,
+            0.22
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Target",
+      "components": {
+        "Transform": {
+          "position": [
+            -2,
+            0.5,
+            0
+          ],
+          "scale": [
+            0.65,
+            0.65,
+            0.65
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            1,
+            0.8,
+            0.15
+          ]
+        },
+        "NetSync": {
+          "fields": {
+            "Transform.position": {
+              "onChange": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Game",
+      "components": {
+        "Script": {
+          "path": "scripts/game.lua",
+          "params": {
+            "versus": false
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Canvas",
+      "components": {
+        "UICanvas": {}
+      }
+    },
+    {
+      "id": 7,
+      "name": "Title",
+      "components": {
+        "UIText": {
+          "text": "NetCoop | LOCKSTEP",
+          "x": 32,
+          "y": 24,
+          "size": 32,
+          "color": [
+            0.4,
+            0.8,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Score",
+      "components": {
+        "UIText": {
+          "text": "Host or join, ready every player, then start.",
+          "x": 32,
+          "y": 70,
+          "size": 24
+        },
+        "NetSync": {
+          "fields": {
+            "UIText.text": {
+              "onChange": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Status",
+      "components": {
+        "UIText": {
+          "text": "Offline practice available. Join address: 127.0.0.1:7778",
+          "x": 32,
+          "y": 110,
+          "size": 20
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "status"
+          }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Host",
+      "components": {
+        "UIButton": {
+          "text": "Host",
+          "anchor": "top-left",
+          "x": 32,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "host",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Join",
+      "components": {
+        "UIButton": {
+          "text": "Join",
+          "anchor": "top-left",
+          "x": 177,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "join",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Ready",
+      "components": {
+        "UIButton": {
+          "text": "Ready",
+          "anchor": "top-left",
+          "x": 322,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "ready",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Start",
+      "components": {
+        "UIButton": {
+          "text": "Start",
+          "anchor": "top-left",
+          "x": 467,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "start",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "WASD / left stick: move | Space: collect nearby crystal | R: reset round",
+          "anchor": "bottom",
+          "y": -25,
+          "size": 20
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Touch W",
+      "components": {
+        "UIButton": {
+          "text": "W",
+          "key": "W",
+          "anchor": "bottom-left",
+          "x": 100,
+          "y": -155,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Touch A",
+      "components": {
+        "UIButton": {
+          "text": "A",
+          "key": "A",
+          "anchor": "bottom-left",
+          "x": 32,
+          "y": -85,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Touch S",
+      "components": {
+        "UIButton": {
+          "text": "S",
+          "key": "S",
+          "anchor": "bottom-left",
+          "x": 100,
+          "y": -85,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Touch D",
+      "components": {
+        "UIButton": {
+          "text": "D",
+          "key": "D",
+          "anchor": "bottom-left",
+          "x": 168,
+          "y": -85,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Touch Space",
+      "components": {
+        "UIButton": {
+          "text": "Collect",
+          "key": "Space",
+          "anchor": "bottom-left",
+          "x": 1050,
+          "y": -85,
+          "width": 150,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Touch R",
+      "components": {
+        "UIButton": {
+          "text": "Reset",
+          "key": "R",
+          "anchor": "bottom-left",
+          "x": 1050,
+          "y": -155,
+          "width": 150,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    }
+  ]
+}

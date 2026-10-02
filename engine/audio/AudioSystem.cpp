@@ -113,10 +113,28 @@ void AudioSystem::Render() {
     voices_.erase(std::remove_if(voices_.begin(), voices_.end(), [](const Voice& v) { return !v.loop && v.position >= static_cast<double>(v.clip->Frames()); }),
                   voices_.end());
     for (float& s : mix_) s = Clamp(s, -1.0f, 1.0f);
+    if (silent_) return;
+    if (deferred_) { pending_[engine_.Frame()] = mix_; return; }
+    Output(mix_);
+}
+
+void AudioSystem::Output(const std::vector<float>& block) {
     if (capturing_ && static_cast<double>(capture_.size()) / 2.0 / kAudioSampleRate < kMaxCaptureSeconds) {
-        capture_.insert(capture_.end(), mix_.begin(), mix_.end());
+        capture_.insert(capture_.end(), block.begin(), block.end());
     }
-    if (device_) device_->Submit(mix_.data(), kFramesPerStep);
+    if (device_) device_->Submit(block.data(), kFramesPerStep);
+}
+
+void AudioSystem::Confirm(uint64_t frames) {
+    while (!pending_.empty() && pending_.begin()->first < frames) { Output(pending_.begin()->second); pending_.erase(pending_.begin()); }
+}
+std::shared_ptr<const AudioSystem::Snapshot> AudioSystem::SaveState(bool output) const {
+    return std::make_shared<Snapshot>(Snapshot{clips_, voices_, events_, started_, nextVoice_, mix_, output ? capture_ : std::vector<float>{}, capturing_, pending_});
+}
+void AudioSystem::LoadState(const Snapshot& state) {
+    clips_ = state.clips; voices_ = state.voices; events_ = state.events; started_ = state.started;
+    nextVoice_ = state.nextVoice; mix_ = state.mix; capture_ = state.capture; capturing_ = state.capturing;
+    pending_ = state.pending;
 }
 
 void AudioSystem::OnSceneChanged() {

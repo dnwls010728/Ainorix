@@ -33,6 +33,35 @@ read/write localStorage callbacks on the web; engine code contains no OS calls.
 5. Desktop platforms that should run the native editor (`engine/editor`): implement the tool side of `Window` — `SetEventMode` / `TakeEvents` (every key as `WindowKey`, UTF-32 text including IME results, all mouse buttons in client pixels, wheel, focus, close request, dropped files), `SetCursor`, `DpiScale`, `Maximize` — and `PlatformEnableHighDpi`. Map the backend in `CMakeLists.txt` so `sokol_imgui.h` gets the matching `SOKOL_<API>` define. `win32/PlatformWin32.cpp` is the reference.
 6. Run `oe_tests` on the device or simulator. Frame hashes come from the software renderer and must match every other platform; `GpuRendererMatchesSoftware` checks the GPU backend against it with a tolerance.
 
+## Networking sockets
+
+`Platform.h` includes `platform/Network.h`: RAII non-blocking socket creation, numeric IPv4
+endpoints, stream/datagram I/O and browser binary WebSockets. Networking is initialized only by
+explicit `net.host`/`net.join` calls. Inactive `Engine` construction and simulation do not open
+sockets or start network workers; active sessions poll once at the fixed frame boundary.
+Native bindings default to `127.0.0.1`; a different bind address must be explicitly provided.
+Native DNS and IPv6 are not implemented in M3. Browser URL resolution is handled by WebSocket.
+
+| Backend | Implementation | Verification |
+|---|---|---|
+| Win32 | `platform/net/NativeSockets.cpp`: WinSock, non-blocking I/O, zero-timeout WSAPoll for connect, NODELAY | Windows Release; localhost UDP/TCP, 64 KiB channel messages, source/truncation checks, malformed frames, queue bounds, disconnect and UDP-to-TCP fallback |
+| POSIX (null/macOS/Android) | Same file: BSD sockets, fcntl, zero-timeout poll, NODELAY, SIGPIPE suppression | Implemented but not compiled/run in the current Windows environment; no installed WSL distribution or NDK |
+| Web | `platform/web/NetworkWeb.cpp`: binary WebSocket client, bounded JS-to-Wasm copying, callback queues | Emscripten 6.0.10 Release build; Wasm/Node suite (123 tests) and a real packaged NetArena browser/native-WebSocket match, plus JS bridge bounds/cleanup |
+
+`net/SocketTransports.h` keeps framing, per-peer queues and lifecycle events portable. UDP peers
+must be registered explicitly; TCP accept assigns transport ids and exposes the accepted source
+address for M4 session validation. Browser callbacks never modify the scene. The browser client
+requires a WebSocket server endpoint; the native TCP length-framing port is not a WebSocket server.
+M4 sessions validate version/game/mode/tick settings and per-connection cookies. Entropy uses
+BCrypt on Windows, `/dev/urandom` on POSIX, and browser `crypto.getRandomValues`; it never enters
+simulation RNG. APK/AAB manifests add `INTERNET` only for enabled networking. Dedicated game
+server and native WebSocket-server integration are implemented in M7. Run `node tests/network_web_test.js`
+for JS bridge checks; native socket tests in `oe_tests` are skipped under Emscripten.
+
+MSVC/Ninja configuration probes the compiler's raw `/showIncludes` prefix to avoid broken header
+dependency tracking when localized compiler output is decoded using the wrong code page. This
+keeps incremental builds consistent after public transport structs change.
+
 ## Consoles
 
 Console SDKs are under NDA, so their code cannot live in this public tree. The layout that keeps them out:
@@ -46,3 +75,24 @@ Console SDKs are under NDA, so their code cannot live in this public tree. The l
 - Identical pixels on every OS and in CI, which makes frame hashes usable as test oracles for AI agents.
 - No GPU or driver needed to verify a change (`oe render` works over SSH, in containers, in CI).
 - Trivial to bring up on a new platform: present a CPU buffer and the platform is playable.
+
+M5 lockstep/native rollback and M6 authoritative replication share this transport layer.
+I/O ticks continue while game frames wait for input; protocol v3 clients require the refreshed
+runtime/web player. Windows localhost TCP/UDP tests each run 10000 frames. M8 verifies Wasm
+loopback/sample/snapshot tests and a real WebGL2 NetArena browser client against a native
+WebSocket dedicated server (join/ready, movement, touch Collect/Reset, replicated score/HUD).
+The browser cannot host sockets or join raw TCP/UDP. Native WebSocket clients remain unsupported;
+use a WebSocket server for browsers and TCP/UDP for native/Android clients.
+POSIX/Android execution remains unverified. See [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md)
+for launch and platform reproduction steps. On-screen keys are sampled into declared actions
+before sync input capture; pointer coordinates remain local and are not replayed.
+
+
+Dedicated game servers (`oe serve-game`, packaged `--server`) use the native
+nonblocking network platform at fixed 60 Hz without creating a window, GPU or
+speaker device. Native WebSocket hosting uses the same portable NetSocket interface.
+`PlatformAttachParentConsole` lets Windows GUI players in --server mode attach to an
+existing parent console while preserving redirected stdout/stderr; it never creates
+a console. It is a no-op on other platforms. Windows Release execution is verified.
+The web runtime is refreshed for M8; POSIX/Android server execution and Android runtime
+rebuild/device validation still need toolchains/devices.

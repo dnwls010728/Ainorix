@@ -58,6 +58,15 @@ build\bin\oe.exe api --markdown             :: print the command reference
 
 ## Editor
 
+Opt-in network lobbies/RPC: set `project.json` `network` to
+`{"mode":"lockstep","transport":"tcp","port":7778}`, then use `net.host`/`net.join`
+in persistent tool sessions or Lua. `net.players`, `net.ready`, `net.stats`, `net.rpc` and
+`net.on` support lobby/game messages; absent/`none` networking stays single-player with
+local RPC. Declare network.actions/axes, ready every player, then net.start for lockstep.
+input.player(id), desync reports and native rollback (M5c) are available. Authoritative replication
+(M6) adds NetSync/NetPlayer, acknowledged deltas, relevance, interpolation and owned prediction. Browser clients
+need a compatible WebSocket server and rebuilt runtime. See [docs/NETWORK.md](docs/NETWORK.md).
+
 `oe editor` opens the **editor** (Dear ImGui docking + ImGuizmo, drawn on the GPU in the engine process). It uses only the command API, so an agent (`oe mcp --connect 7777`) works in the same session as the person at the same time. Without a window (e.g. headless Linux), `oe editor MyGame --screenshot shot.png` renders the editor to an image. Details: [docs/EDITOR.md](docs/EDITOR.md)
 
 - Docking panels: Hierarchy, Inspector, Scene, Game, Assets, Console, Scripts - the layout is saved per project (`.oe/editor.ini`), View > Reset Layout
@@ -74,6 +83,10 @@ build\bin\oe.exe api --markdown             :: print the command reference
 - Shortcuts: Ctrl+S save, Ctrl+Z/Y undo/redo, Ctrl+D duplicate, Del delete, F frame, F2 rename, Ctrl+P play/stop
 - Editor screenshots for agents: `oe editor MyGame --screenshot shot.png [--select Player] [--play --frames 60] [--lang ko]`
 
+
+Dedicated server: `oe serve-game <project> --min-players 1` or packaged `Game.exe --server`, without window/GPU/speaker devices. TCP/UDP and native WebSocket hosting. Editor Players previews up to 8 loopback players; Game Player selects the view/input peer and Network displays latency/stats. Commands: `net.spawn_local_peers`, `net.peer_call`, `net.local_peers`, `net.simulate`. Usage and platform verification limits: [docs/NETWORK.md](docs/NETWORK.md).
+
+Open the Network panel through View > Network. Projects without networking show setup guidance; existing editor layouts automatically add the new tab.
 
 ## AI integration
 
@@ -121,3 +134,5 @@ samples/Dungeon  2D top-down action (Box2D, autotiled tileset, pushable crates, 
 samples/Platformer 2D side-scroller (text tilemap, sprite animation, enemies, ? blocks, parallax)
 samples/FPS      first-person shooter test game (mouse look, hitscan pistol, reload, moving targets, results screen)
 ```
+
+Network samples: `samples/NetCoop` (lockstep co-op), `samples/NetDuel` (rollback versus), `samples/NetArena` (authoritative versus). Choose editor Players 2 or use the in-game Host/Join/Ready/Start lobby. Keyboard, gamepad and touch buttons share declared actions. Launch, WebSocket and Android verification guide: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).

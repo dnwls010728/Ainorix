@@ -11,10 +11,15 @@
 
 #include "api/Commands.h"
 #include "app/SaveStore.h"
+#include "audio/AudioSystem.h"
 #include "core/Json.h"
+#include "net/Session.h"
+#include "net/sync/Authority.h"
 #include "render/Renderer.h"
 #include "scene/Scene.h"
 #include "scene/Systems.h"
+#include "script/ScriptHost.h"
+#include "physics/PhysicsWorld.h"
 
 namespace oe {
 
@@ -62,6 +67,14 @@ public:
     void Pause();
     void Stop();  // restores the scene captured when play started
     void Step(int frames);
+    // Native full-state snapshots preserve Lua allocations and physics solver state.
+    // Explicit recording avoids any journal work in ordinary single-player games.
+    struct SimulationState;
+    void RecordState();
+    std::shared_ptr<const SimulationState> SaveState() const;
+    void LoadState(const SimulationState& state);
+    Json SnapshotCall(const std::string& operation, const Json& args);
+    const InputState& PlayerInput(uint32_t player) const;
     // Advances the simulation by real elapsed time while playing (fixed steps).
     void Tick(double realDt);
     bool Playing() const { return playing_; }
@@ -81,7 +94,10 @@ public:
     SaveStore& Saves() { return saves_; }
     // Loads another scene at the end of the current frame, keeping the Lua
     // state and game data. sim.stop still restores the edit-time scene.
-    void RequestSceneChange(const std::string& path) { pendingScene_ = path; }
+    void RequestSceneChange(const std::string& path) {
+        if (authority_ && authority_->Active()) throw ApiError("match_scene", "authoritative scene transitions require restarting the match", "Leave/stop, load the same scene on each peer, then start a new ready barrier.");
+        pendingScene_ = path;
+    }
     const std::string& RuntimeScene() const { return runtimeScene_; }
 
     // ----- Debug drawing -----------------------------------------------------
@@ -94,6 +110,14 @@ public:
 
     // ----- Scripting -------------------------------------------------------
     ScriptHost& Scripts() { return *scripts_; }
+    // Shared command/Lua session surface; absent/none projects allocate no session.
+    Json NetworkCall(const std::string& command, const Json& args);
+    // Preview peer index 0 is this engine; 1..7 are explicitly created local peers.
+    Engine* LocalPeer(size_t index) { return index == 0 ? this : index <= localPeers_.size() ? localPeers_[index - 1].get() : nullptr; }
+    // Cheap opt-in check: editor UI skips network queries in single-player projects.
+    bool NetworkEnabled() const { return networkConfig_.mode != "none"; }
+    Session* Network() const { return network_.get(); }
+    bool PredictEntity(EntityId id) const;
     PhysicsWorld& Physics() { return *physics_; }
     AudioSystem& Audio() { return *audio_; }
     AssetManager& Assets() { return *assets_; }
@@ -141,6 +165,29 @@ public:
 
 private:
     void SimulateFrame();
+    void ResetLocalPeers();
+    void AdvanceLocalPeers();
+    void AutoStartNetwork();
+    Json LocalPeersState();
+    void SimulateWorld();
+    void EnsureSync(bool refresh = false);
+    bool PollSync();
+    void ApplyInputs(const FrameInputs& inputs);
+    uint64_t ContentHash() const;
+    std::string SyncWorld() const;
+    struct NativeState;
+    std::shared_ptr<const NativeState> CaptureNative(bool output) const;
+    void RestoreNative(const NativeState& state);
+    void CaptureCheckpoint();
+    void EnsureAuthority(bool refresh = false);
+    bool PollAuthority();
+    void AuthorityApplied();
+    std::vector<PhysicsEvent> StepAuthorityPhysics(float dt);
+    Json ReplicatedWorld(uint32_t player);
+    void ValidateReplicatedWorld(const Json& world) const;
+    void ApplyReplicatedWorld(const Json& world, bool owned, bool remotes);
+    void InterpolateAuthority();
+    void ResetAuthority();
     struct UIEvent {
         EntityId id;
         const char* method;
@@ -150,6 +197,8 @@ private:
     // Pointer hover/press/click and slider drags for this frame's input.
     std::vector<UIEvent> UpdateUI();
     // UIButton.key: buttons held by the mouse or any finger hold their key down.
+    std::set<EntityId> HeldInputButtons(const InputState& input, bool includeClick);
+    InputState SampleNetworkInput();
     void UpdateButtonKeys();
     void BeginSessionIfNeeded();
     void ResetRuntime();
@@ -167,6 +216,52 @@ private:
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;
     std::unique_ptr<AudioSystem> audio_;
+    SessionConfig networkConfig_;
+    std::unique_ptr<Session> network_;
+    uint64_t networkFrame_ = 0;
+    std::vector<std::unique_ptr<Engine>> localPeers_;
+    std::string previewTransport_;
+    bool dedicated_ = false, autoStart_ = false;
+    uint32_t minimumPlayers_ = 1;
+    std::unique_ptr<FrameSync> sync_;
+    std::unique_ptr<Authority> authority_;
+    std::map<EntityId, uint32_t> authorityIds_;
+    std::map<uint32_t, EntityId> replicatedEntities_;
+    std::map<EntityId, Json> initialAuthorityEntities_;
+    uint32_t nextAuthorityId_ = 1;
+    std::map<uint64_t, std::shared_ptr<const NativeState>> predictionStates_;
+    std::deque<Authority::Update> authorityWorlds_;
+    std::map<uint64_t, std::vector<SessionEvent>> authorityEvents_;
+    uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0;
+    std::map<uint32_t, InputState> playerInputs_;
+    FrameInputs frameInputs_;
+    std::set<std::string> networkButtonKeys_;  // device button edges, outside replay checkpoints
+    InputState deviceInput_;
+    struct JournalFrame { InputState input; FrameInputs players; };
+public:
+    struct SimulationState {
+        std::shared_ptr<const NativeState> native;
+        uint64_t firstFrame = 0;
+        Json baseline, gameData, scene;
+        std::string runtimeScene;
+        std::vector<JournalFrame> frames;
+        std::map<uint64_t, std::vector<std::pair<std::string, Json>>> commands;
+        std::shared_ptr<const AudioSystem::Snapshot> baselineAudio, audio;
+        SaveStore baselineSaves, saves;
+        InputState input;
+        std::vector<ScriptError> errors;
+        uint64_t content = 0; uint32_t seed = 0; EntityId allocationCursor = 1;
+        bool playing = false; double accumulator = 0;
+    };
+private:
+    std::map<uint64_t, std::shared_ptr<const NativeState>> checkpoints_;
+    std::unique_ptr<SimulationState> journal_;
+    std::map<std::string, std::shared_ptr<const SimulationState>> snapshots_;
+    bool replaying_ = false, inWorld_ = false;
+    uint64_t outputConfirmed_ = 0;
+    bool desyncNotified_ = false;
+    double replayMilliseconds_ = 0;
+    std::map<uint64_t, std::string> syncHashes_;
     double hotReloadTimer_ = 0.0;
 
     std::string projectDir_;

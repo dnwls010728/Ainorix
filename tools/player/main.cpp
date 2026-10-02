@@ -18,6 +18,8 @@
 
 #include <algorithm>
 #include <exception>
+#include <cstdio>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -33,6 +35,7 @@
 #endif
 
 #include "app/Engine.h"
+#include "app/DedicatedServer.h"
 #include "core/FileSystem.h"
 #include "core/Json.h"
 #include "core/Log.h"
@@ -193,7 +196,32 @@ int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
     std::string dir = argc > 1 ? argv[1] : "/game";  // the page loader unpacks game.pak there
 #else
-    std::string dir = argc > 1 ? argv[1] : JoinPath(ExecutableDirectory(), "game");
+    std::string dir = JoinPath(ExecutableDirectory(), "game");
+    bool server = false; Json arguments = Json::MakeObject(); uint64_t ticks = 0; std::string argumentError;
+    for (int i = 1; i < argc; ++i) {
+        std::string flag = argv[i];
+        if (flag == "--server") server = true;
+        else if (flag == "--port" || flag == "--min-players" || flag == "--seed" || flag == "--frames") {
+            if (++i >= argc) { argumentError = flag + " needs a value"; break; }
+            std::string error; Json value = Json::parse(argv[i], &error); double n = value.asNumber(-1);
+            if (!error.empty() || !value.isNumber() || !std::isfinite(n) || n < 0 || n > UINT32_MAX || std::floor(n) != n) {
+                argumentError = flag + " needs a nonnegative integer"; break;
+            }
+            if (flag == "--frames") { if (n < 1 || n > 2147483647) argumentError = "--frames requires 1..2147483647 ticks"; ticks = static_cast<uint64_t>(n); }
+            else arguments[flag == "--port" ? "port" : flag == "--seed" ? "seed" : "minPlayers"] = value;
+        } else if (flag.compare(0, 2, "--") == 0) argumentError = "unknown argument: " + flag;
+        else dir = flag;
+    }
+    if (server || !argumentError.empty()) {
+        PlatformAttachParentConsole();
+        Engine engine; std::string error; Json result;
+        if (!argumentError.empty() || !engine.Open(dir, &error)) {
+            result["ok"] = false; result["error"]["code"] = "player_server";
+            result["error"]["message"] = argumentError.empty() ? error : argumentError;
+        } else result = RunDedicatedServer(engine, arguments, ticks);
+        std::string text = result.dump(); std::fputs(text.c_str(), stdout); std::fputc('\n', stdout); std::fflush(stdout);
+        return result["ok"].asBool() ? 0 : 1;
+    }
 #endif
     return RunPlayer(dir);
 }

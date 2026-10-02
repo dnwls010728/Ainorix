@@ -5,6 +5,15 @@
 #include "scene/Components.h"
 
 namespace oe {
+Scene::Scene(const Scene& other) { *this = other; }
+Scene& Scene::operator=(const Scene& other) {
+    if (this == &other) return *this;
+    std::vector<std::unique_ptr<IComponentPool>> pools;
+    for (const auto& pool : other.pools_) pools.push_back(pool->Clone());
+    pools_ = std::move(pools); entities_ = other.entities_; nextId_ = other.nextId_; name = other.name;
+    return *this;
+}
+
 
 Scene::Scene() {
     RegisterBuiltinComponents();

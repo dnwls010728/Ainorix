@@ -653,6 +653,15 @@ void PlatformShowError(const std::string& title, const std::string& message) {
     MessageBoxW(nullptr, Widen(message).c_str(), Widen(title).c_str(), MB_OK | MB_ICONERROR);
 }
 
+void PlatformAttachParentConsole() {
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE), err = GetStdHandle(STD_ERROR_HANDLE);
+    bool keepOut = out && out != INVALID_HANDLE_VALUE && GetFileType(out) != FILE_TYPE_UNKNOWN;
+    bool keepErr = err && err != INVALID_HANDLE_VALUE && GetFileType(err) != FILE_TYPE_UNKNOWN;
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    FILE* stream = nullptr;
+    if (!keepOut) freopen_s(&stream, "CONOUT$", "w", stdout);
+    if (!keepErr) freopen_s(&stream, "CONOUT$", "w", stderr);
+}
 void PlatformSetBinaryStdio() {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "render/Renderer.h"
+#include "platform/Network.h"
 #include "scene/Systems.h"
 
 namespace oe {
@@ -117,6 +118,9 @@ struct SaveStorage {
 SaveStorage PlatformSaveStorage(const std::string& gameName);
 // Tells the user about a fatal error (message box on desktop, stderr otherwise).
 void PlatformShowError(const std::string& title, const std::string& message);
+// Attaches a GUI player in --server mode to an existing parent console; never creates a console/window.
+// Redirected streams are preserved; platforms without this distinction do nothing.
+void PlatformAttachParentConsole();
 // Puts stdin/stdout in binary mode (needed for MCP's newline-delimited JSON).
 void PlatformSetBinaryStdio();
 

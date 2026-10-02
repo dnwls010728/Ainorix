@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 
 #include "core/Log.h"
 #include "physics/Physics2D.h"
@@ -38,6 +39,7 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
 #include <Jolt/RegisterTypes.h>
 
 namespace oe {
@@ -274,10 +276,11 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         JPH::Ref<JPH::CharacterVirtual> ch;
         std::string key;
         JPH::Vec3 lastPos;
+        JPH::Ref<JPH::CharacterVirtualSettings> settings;
         float planeZ = 0.0f;  // CharacterBody.plane2D keeps the character on this Z
     };
 
-    Impl() : temp(16 * 1024 * 1024), jobs(JPH::cMaxPhysicsJobs) {
+    explicit Impl(bool snapshots = false) : temp(16 * 1024 * 1024), jobs(JPH::cMaxPhysicsJobs), nativeIds(snapshots) {
         system.Init(65536, 0, 65536, 10240, bpLayers, objVsBp, pairFilter);
         system.SetGravity(JPH::Vec3(0, kGravity, 0));
         system.SetContactListener(this);
@@ -370,6 +373,8 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 RemoveCharacter(rec);
                 float support = 0;
                 JPH::Ref<JPH::CharacterVirtualSettings> cs = new JPH::CharacterVirtualSettings();
+                if (nativeIds) { cs->mInnerBodyIDOverride = NextBodyId(); cs->mID = JPH::CharacterID(id); }
+                rec.settings = cs;
                 cs->mShape = CharacterShape(kv.second, &support);
                 cs->mInnerBodyShape = cs->mShape;
                 cs->mInnerBodyLayer = Layers::kMoving;
@@ -455,7 +460,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                         bs.mMassPropertiesOverride.mMass = std::max(0.001f, rb->mass);
                     }
                 }
-                rec.id = bi.CreateAndAddBody(bs, rec.kind == Kind::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+                rec.id = CreateBody(bs, rec.kind == Kind::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
                 if (rec.id.IsInvalid()) {
                     Warn(warnings, "physics body limit reached");
                     continue;
@@ -525,7 +530,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 bs.mFriction = 0.2f;
                 BodyRec rec;
                 rec.kind = Kind::Static;
-                rec.id = bi.CreateAndAddBody(bs, JPH::EActivation::DontActivate);
+                rec.id = CreateBody(bs, JPH::EActivation::DontActivate);
                 if (rec.id.IsInvalid()) {
                     Warn(warnings, "physics body limit reached");
                     continue;
@@ -672,6 +677,25 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         return out;
     }
 
+    JPH::BodyID NextBodyId() {
+        for (uint32_t n = 0; n < 65536; ++n) {
+            uint32_t serial = bodySerial++;
+            JPH::BodyID id(serial % 65536, static_cast<JPH::uint8>(serial / 65536));
+            if (serial < 65536) return id;
+            bool used = false;
+            for (const auto& item : bodies) if (item.second.id.GetIndex() == id.GetIndex()) { used = true; break; }
+            if (!used) for (const auto& item : characters) if (item.second.ch && item.second.ch->GetInnerBodyID().GetIndex() == id.GetIndex()) { used = true; break; }
+            if (!used) return id;
+        }
+        return JPH::BodyID();
+    }
+    JPH::BodyID CreateBody(const JPH::BodyCreationSettings& settings, JPH::EActivation activation) {
+        auto& bi = system.GetBodyInterface();
+        if (!nativeIds) return bi.CreateAndAddBody(settings, activation);
+        auto id = NextBodyId(); if (id.IsInvalid() || !bi.CreateBodyWithID(id, settings)) return JPH::BodyID();
+        bi.AddBody(id, activation); return id;
+    }
+
     // Declaration order matters: the filters must outlive the PhysicsSystem.
     BroadPhaseLayers bpLayers;
     ObjectVsBroadPhase objVsBp;
@@ -690,6 +714,8 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
     std::vector<Removal> pendingRemovals;
     std::vector<std::pair<EntityId, Vec3>> pendingImpulses;
     uint64_t steps = 0;
+    bool nativeIds = false;
+    uint32_t bodySerial = 0;
 };
 
 // ----- PhysicsWorld -------------------------------------------------------------
@@ -705,11 +731,13 @@ void PhysicsWorld::Reset() {
     warnings_.clear();
 }
 
+void PhysicsWorld::RebuildSolvers() { impl_.reset(); world2d_.reset(); }
+
 void PhysicsWorld::SetTilesets(TilesetLookup lookup) { tilesets_ = std::move(lookup); }
 
 Physics2D* PhysicsWorld::World2D(Scene& scene) {
     if (!world2d_ && Physics2D::Wanted(scene)) {
-        world2d_ = std::make_unique<Physics2D>();
+        world2d_ = std::make_unique<Physics2D>(snapshotsEnabled_);
         world2d_->SetTilesets(&tilesets_);
     }
     return world2d_.get();
@@ -720,7 +748,7 @@ std::vector<PhysicsEvent> PhysicsWorld::Step(Scene& scene, float dt) {
     // Each world exists once the scene has bodies for it.
     if (!impl_ && (!scene.Pool<Collider>().empty() || !scene.Pool<CharacterBody>().empty())) {
         EnsureJolt();
-        impl_ = std::make_unique<Impl>();
+        impl_ = std::make_unique<Impl>(snapshotsEnabled_);
     }
     Physics2D* w2 = World2D(scene);
     if (!impl_ && !w2) return events;
@@ -760,7 +788,7 @@ RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& d
     RaycastHit out;
     if (!impl_) {
         EnsureJolt();
-        impl_ = std::make_unique<Impl>();
+        impl_ = std::make_unique<Impl>(snapshotsEnabled_);
     }
     impl_->SyncIn(scene, 0.0f, warnings_, &tilesets_);
     Vec3 dir = Normalize(direction);
@@ -788,7 +816,7 @@ std::vector<EntityId> PhysicsWorld::OverlapSphere(Scene& scene, const Vec3& cent
     std::vector<EntityId> out;
     if (!impl_) {
         EnsureJolt();
-        impl_ = std::make_unique<Impl>();
+        impl_ = std::make_unique<Impl>(snapshotsEnabled_);
     }
     impl_->SyncIn(scene, 0.0f, warnings_, &tilesets_);
     JPH::RefConst<JPH::Shape> sphere = new JPH::SphereShape(std::max(0.001f, radius));
@@ -1001,6 +1029,72 @@ void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, cons
             poly(m, {Vec3(static_cast<float>(r.col) * ts, y, 0), Vec3(static_cast<float>(r.col + r.width) * ts, y, 0)}, false, oneWay);
         }
     }
+}
+
+struct PhysicsWorld::Snapshot {
+    bool jolt = false;
+    std::shared_ptr<const Physics2D::Snapshot> box2d;
+    std::string system;
+    std::map<EntityId, Impl::BodyRec> bodies;
+    std::map<EntityId, JPH::BodyCreationSettings> settings;
+    std::map<EntityId, Impl::TriggerRec> triggers;
+    std::map<EntityId, Impl::CharacterRec> characters;
+    std::map<EntityId, std::string> characterStates, emptyTilemaps;
+    std::map<JPH::uint32, EntityId> bodyToEntity;
+    std::set<Impl::ContactKey> contacts;
+    std::vector<Impl::Removal> removals;
+    std::vector<std::pair<EntityId, Vec3>> impulses;
+    std::set<std::pair<EntityId, EntityId>> collisions, triggerPairs;
+    std::vector<std::string> warnings;
+    uint64_t steps = 0; uint32_t serial = 0;
+};
+std::shared_ptr<const PhysicsWorld::Snapshot> PhysicsWorld::SaveState() const {
+    auto s = std::make_shared<Snapshot>();
+    s->collisions = prevCollisions_; s->triggerPairs = prevTriggers_; s->warnings = warnings_;
+    if (world2d_) s->box2d = world2d_->SaveState();
+    if (!impl_) return s;
+    const auto& w = *impl_; s->jolt = true;
+    JPH::StateRecorderImpl recorder; w.system.SaveState(recorder); s->system = recorder.GetData();
+    s->bodies = w.bodies; s->triggers = w.triggers; s->characters = w.characters;
+    for (auto& item : s->characters) {
+        JPH::StateRecorderImpl character; item.second.ch->SaveState(character);
+        s->characterStates[item.first] = character.GetData(); item.second.ch = nullptr;
+    }
+    for (const auto& item : w.bodies) {
+        JPH::BodyLockRead lock(w.system.GetBodyLockInterface(), item.second.id);
+        if (lock.Succeeded()) s->settings[item.first] = lock.GetBody().GetBodyCreationSettings();
+    }
+    s->emptyTilemaps = w.emptyTilemaps; s->bodyToEntity = w.bodyToEntity; s->contacts = w.bodyContacts;
+    s->removals = w.pendingRemovals; s->impulses = w.pendingImpulses; s->steps = w.steps; s->serial = w.bodySerial;
+    return s;
+}
+void PhysicsWorld::LoadState(const Snapshot& s) {
+    impl_.reset();
+    if (s.jolt) {
+        EnsureJolt(); impl_ = std::make_unique<Impl>(true); auto& w = *impl_; auto& bi = w.system.GetBodyInterface();
+        for (const auto& item : s.settings) {
+            auto id = s.bodies.at(item.first).id;
+            if (!bi.CreateBodyWithID(id, item.second)) throw std::runtime_error("cannot restore Jolt body id");
+            bi.AddBody(id, JPH::EActivation::DontActivate);
+        }
+        w.characters = s.characters;
+        for (auto& item : w.characters) {
+            auto& c = item.second;
+            c.ch = new JPH::CharacterVirtual(c.settings, c.lastPos, JPH::Quat::sIdentity(), item.first, &w.system);
+            JPH::StateRecorderImpl recorder; const auto& bytes = s.characterStates.at(item.first);
+            recorder.WriteBytes(bytes.data(), bytes.size()); recorder.Rewind(); c.ch->RestoreState(recorder);
+        }
+        JPH::StateRecorderImpl recorder; recorder.WriteBytes(s.system.data(), s.system.size()); recorder.Rewind();
+        if (!w.system.RestoreState(recorder)) throw std::runtime_error("cannot restore Jolt state");
+        w.bodies = s.bodies; w.triggers = s.triggers; w.emptyTilemaps = s.emptyTilemaps;
+        w.bodyToEntity = s.bodyToEntity; w.bodyContacts = s.contacts; w.pendingRemovals = s.removals;
+        w.pendingImpulses = s.impulses; w.steps = s.steps; w.bodySerial = s.serial;
+    }
+    if (s.box2d) {
+        if (!world2d_) world2d_ = std::make_unique<Physics2D>(true);
+        world2d_->LoadState(*s.box2d); world2d_->SetTilesets(&tilesets_);
+    } else world2d_.reset();
+    prevCollisions_ = s.collisions; prevTriggers_ = s.triggerPairs; warnings_ = s.warnings;
 }
 
 }  // namespace oe

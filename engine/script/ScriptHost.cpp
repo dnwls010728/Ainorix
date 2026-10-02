@@ -497,9 +497,11 @@ int L_GameSet(lua_State* L) {
 }
 
 int L_GameLoadScene(lua_State* L) {
-    std::string path = luaL_checkstring(L, 1);
-    Host(L).GetEngine().RequestSceneChange(path);
-    return 0;
+    return Guard(L, [&] {
+        std::string path = luaL_checkstring(L, 1);
+        Host(L).GetEngine().RequestSceneChange(path);
+        return 0;
+    });
 }
 
 int L_GameScene(lua_State* L) {
@@ -810,6 +812,29 @@ int L_PhysicsContacts(lua_State* L) {
 
 // ----- input.*, time.*, log.* --------------------------------------------------
 
+int L_PlayerInputQuery(lua_State* L) {
+    return Guard(L, [&] {
+        uint32_t player = static_cast<uint32_t>(lua_tointeger(L, lua_upvalueindex(1)));
+        int kind = static_cast<int>(lua_tointeger(L, lua_upvalueindex(2)));
+        const auto& input = Host(L).GetEngine().PlayerInput(player);
+        const char* name = luaL_checkstring(L, lua_istable(L, 1) ? 2 : 1);
+        if (kind == 2) lua_pushnumber(L, input.Axis(name));
+        else lua_pushboolean(L, kind == 0 ? input.IsDown(name) : input.pressedThisFrame.count(name) != 0);
+        return 1;
+    });
+}
+int L_InputPlayer(lua_State* L) {
+    return Guard(L, [&] {
+        lua_Integer player = luaL_checkinteger(L, 1);
+        if (player < 1 || player >= 0xfffffffeLL) return luaL_error(L, "player id must be 1..4294967293");
+        lua_newtable(L); const char* names[] = {"down", "pressed", "axis"};
+        for (int i = 0; i < 3; ++i) {
+            lua_pushinteger(L, player); lua_pushinteger(L, i); lua_pushcclosure(L, L_PlayerInputQuery, 2); lua_setfield(L, -2, names[i]);
+        }
+        return 1;
+    });
+}
+
 int L_InputAxis(lua_State* L) {
     return Guard(L, [&] {
         const char* name = luaL_checkstring(L, 1);
@@ -1044,6 +1069,99 @@ void SetFuncs(lua_State* L, const char* table, const luaL_Reg* funcs) {
     lua_setglobal(L, table);
 }
 
+int L_NetFlag(lua_State* L, const char* key) {
+    return Guard(L, [&] { lua_pushboolean(L, Host(L).GetEngine().NetworkCall("state", Json::MakeObject())[key].asBool()); return 1; });
+}
+int L_NetIsHost(lua_State* L) { return L_NetFlag(L, "isHost"); }
+int L_NetIsServer(lua_State* L) { return L_NetFlag(L, "isServer"); }
+int L_NetIsClient(lua_State* L) { return L_NetFlag(L, "isClient"); }
+int L_NetLocalPlayer(lua_State* L) {
+    return Guard(L, [&] {
+        lua_pushinteger(L, static_cast<lua_Integer>(Host(L).GetEngine().NetworkCall("state", Json::MakeObject())["localPlayer"].asNumber()));
+        return 1;
+    });
+}
+int L_NetState(lua_State* L) {
+    return Guard(L, [&] { PushJson(L, Host(L).GetEngine().NetworkCall("state", Json::MakeObject())); return 1; });
+}
+int L_NetPlayers(lua_State* L) {
+    return Guard(L, [&] {
+        Json players = Host(L).GetEngine().NetworkCall("players", Json::MakeObject()), ids = Json::MakeArray();
+        for (const auto& player : players.items()) ids.push(player["id"]);
+        PushJson(L, ids); return 1;
+    });
+}
+void CheckNetValue(lua_State* L, int index, unsigned depth, size_t& nodes, size_t& bytes) {
+    index = lua_absindex(L, index);
+    if (depth > 8 || ++nodes > 512) luaL_error(L, "RPC values exceed depth/node bounds");
+    int type = lua_type(L, index);
+    if (type == LUA_TSTRING) {
+        size_t size = 0; lua_tolstring(L, index, &size);
+        bytes += size;
+        if (size > 1024 || bytes > 8192) luaL_error(L, "RPC strings exceed byte bounds");
+    } else if (type == LUA_TTABLE) {
+        luaL_checkstack(L, 4, "RPC table too deep");
+        size_t entries = 0;
+        lua_pushnil(L);
+        while (lua_next(L, index)) {
+            if (++entries > 64) luaL_error(L, "RPC table exceeds 64 entries");
+            if (lua_type(L, -2) == LUA_TSTRING) {
+                size_t size = 0; const char* key = lua_tolstring(L, -2, &size);
+                if (size == 0 || size > 64 || std::memchr(key, 0, size)) luaL_error(L, "invalid RPC object key");
+            } else if (!lua_isinteger(L, -2)) luaL_error(L, "RPC keys must be strings or integers");
+            CheckNetValue(L, -1, depth + 1, nodes, bytes);
+            lua_pop(L, 1);
+        }
+    } else if (type != LUA_TNIL && type != LUA_TNUMBER && type != LUA_TBOOLEAN) luaL_error(L, "RPC values must be JSON-compatible");
+}
+int L_NetEntities(lua_State* L) {
+    return Guard(L, [&] { PushJson(L, Host(L).GetEngine().NetworkCall("entities", Json::MakeObject())); return 1; });
+}
+int L_NetRpc(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["target"] = lua_type(L, 1) == LUA_TNUMBER ? std::to_string(luaL_checkinteger(L, 1)) : luaL_checkstring(L, 1);
+        args["name"] = luaL_checkstring(L, 2);
+        Json values = Json::MakeArray();
+        if (lua_gettop(L) > 18) return luaL_error(L, "RPC accepts at most 16 arguments");
+        size_t nodes = 0, bytes = 0;
+        for (int i = 3; i <= lua_gettop(L); ++i) { CheckNetValue(L, i, 1, nodes, bytes); values.push(ToJson(L, i)); }
+        args["args"] = values;
+        Host(L).GetEngine().NetworkCall("rpc", args); lua_pushboolean(L, true); return 1;
+    });
+}
+int L_NetOn(lua_State* L) {
+    return Guard(L, [&] {
+        std::string name = luaL_checkstring(L, 1);
+        if (!ValidRpc(name, Json::MakeArray())) return luaL_error(L, "invalid RPC handler name");
+        if (!lua_isnoneornil(L, 2)) luaL_checktype(L, 2, LUA_TFUNCTION);
+        int ref = LUA_NOREF;
+        if (!lua_isnoneornil(L, 2)) { lua_pushvalue(L, 2); ref = luaL_ref(L, LUA_REGISTRYINDEX); }
+        if (!Host(L).SetNetHandler(name, ref)) {
+            if (ref >= 0) luaL_unref(L, LUA_REGISTRYINDEX, ref);
+            return luaL_error(L, "at most 64 RPC handlers may be registered");
+        }
+        return 0;
+    });
+}
+int L_NetSender(lua_State* L) { lua_pushinteger(L, Host(L).NetSender()); return 1; }
+int L_NetOperation(lua_State* L, const char* operation) {
+    return Guard(L, [&] {
+        Json args = lua_isnoneornil(L, 1) ? Json::MakeObject() : ToJson(L, 1);
+        Json response = Host(L).GetEngine().Call(std::string("net.") + operation, args);
+        if (!response["ok"].asBool()) return luaL_error(L, "%s", response["error"]["message"].asString().c_str());
+        PushJson(L, response["result"]); return 1;
+    });
+}
+int L_NetHost(lua_State* L) { return L_NetOperation(L, "host"); }
+int L_NetJoin(lua_State* L) { return L_NetOperation(L, "join"); }
+int L_NetLeave(lua_State* L) { return L_NetOperation(L, "leave"); }
+int L_NetReady(lua_State* L) { return L_NetOperation(L, "ready"); }
+int L_NetKick(lua_State* L) { return L_NetOperation(L, "kick"); }
+int L_NetStart(lua_State* L) { return L_NetOperation(L, "start"); }
+int L_NetDesyncReport(lua_State* L) { return L_NetOperation(L, "desync_report"); }
+int L_NetStats(lua_State* L) { return L_NetOperation(L, "stats"); }
+
 std::string PopMessage(lua_State* L) {
     const char* s = lua_tostring(L, -1);
     std::string msg = s ? s : "(error object is not a string)";
@@ -1067,7 +1185,10 @@ lua_State* ScriptHost::State() {
 }
 
 void ScriptHost::Open() {
-    L_ = luaL_newstate();
+    if (heap_) L_ = lua_newstate([](void* context, void* ptr, size_t, size_t size) -> void* {
+        try { return static_cast<SnapshotHeap*>(context)->Reallocate(ptr, size); } catch (...) { return nullptr; }
+    }, heap_.get());
+    else L_ = luaL_newstate();
     lua_State* L = L_;
     *static_cast<ScriptHost**>(lua_getextraspace(L)) = this;
 
@@ -1085,7 +1206,7 @@ void ScriptHost::Open() {
     // Deterministic random numbers.
     lua_getglobal(L, "math");
     lua_getfield(L, -1, "randomseed");
-    lua_pushinteger(L, 0);
+    lua_pushinteger(L, engine_.Network() ? engine_.Network()->Seed() : 0);
     lua_call(L, 1, 0);
     lua_pop(L, 1);
 
@@ -1100,7 +1221,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
-    const luaL_Reg inputFuncs[] = {{"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
+    const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"lockMouse", L_InputLockMouse},
                                   {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
@@ -1114,6 +1235,11 @@ void ScriptHost::Open() {
     SetFuncs(L, "game", gameFuncs);
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
     SetFuncs(L, "save", saveFuncs);
+    const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
+        {"entities", L_NetEntities}, {"localPlayer", L_NetLocalPlayer}, {"players", L_NetPlayers}, {"state", L_NetState}, {"rpc", L_NetRpc},
+        {"on", L_NetOn}, {"sender", L_NetSender}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave},
+        {"start", L_NetStart}, {"desync_report", L_NetDesyncReport}, {"ready", L_NetReady}, {"kick", L_NetKick}, {"stats", L_NetStats}, {nullptr, nullptr}};
+    SetFuncs(L, "net", netFuncs);
     lua_register(L, "__oe_error", L_ReportError);
     const luaL_Reg physicsFuncs[] = {{"raycast", L_PhysicsRaycast}, {"overlapSphere", L_PhysicsOverlapSphere},
                                      {"addImpulse", L_PhysicsAddImpulse}, {"contacts", L_PhysicsContacts}, {nullptr, nullptr}};
@@ -1190,6 +1316,63 @@ void ScriptHost::Reset() {
     }
     modules_.clear();
     instances_.clear();
+    netHandlers_.clear(); netSender_ = 0; netDepth_ = 0;
+    if (heap_) heap_ = std::make_shared<SnapshotHeap>();
+}
+
+bool ScriptHost::SetNetHandler(const std::string& name, int ref) {
+    auto it = netHandlers_.find(name);
+    if (it == netHandlers_.end() && ref >= 0 && netHandlers_.size() >= 64) return false;
+    if (it != netHandlers_.end()) { luaL_unref(L_, LUA_REGISTRYINDEX, it->second); netHandlers_.erase(it); }
+    if (ref >= 0) netHandlers_[name] = ref;
+    return true;
+}
+
+void ScriptHost::SetNetworkSeed(uint32_t seed) {
+    if (!L_) return;
+    int top = lua_gettop(L_);
+    lua_getglobal(L_, "math"); lua_getfield(L_, -1, "randomseed"); lua_pushinteger(L_, seed);
+    ArmBudget();
+    if (lua_pcall(L_, 1, 0, 0) != LUA_OK) RecordError("", kNullEntity, "network seed: " + PopMessage(L_));
+    lua_settop(L_, top);
+}
+
+void ScriptHost::DispatchRpc(uint32_t sender, const std::string& name, const Json& args) {
+    auto it = netHandlers_.find(name);
+    if (!L_ || it == netHandlers_.end()) return;
+    if (netDepth_ >= 8) { RecordError("", kNullEntity, "RPC recursion exceeds 8 callbacks"); return; }
+    int top = lua_gettop(L_);
+    uint32_t previous = netSender_;
+    netSender_ = sender; ++netDepth_;
+    lua_rawgeti(L_, LUA_REGISTRYINDEX, it->second);
+    for (const Json& value : args.items()) PushJson(L_, value);
+    // Nested local RPCs share the outer instruction budget; recursion cannot renew it.
+    if (netDepth_ == 1) ArmBudget();
+    if (lua_pcall(L_, static_cast<int>(args.size()), 0, 0) != LUA_OK) RecordError("", kNullEntity, "RPC " + name + ": " + PopMessage(L_));
+    --netDepth_; netSender_ = previous; lua_settop(L_, top);
+}
+
+void ScriptHost::DispatchNetwork(const std::vector<SessionEvent>& events) {
+    if (!L_) return;
+    for (const auto& event : events) {
+        if (event.type == SessionEvent::Type::Rpc) { DispatchRpc(event.player, event.name, event.args); continue; }
+        const char* method = event.type == SessionEvent::Type::Joined ? "onPlayerJoined" :
+            event.type == SessionEvent::Type::Left ? "onPlayerLeft" : "onNetState";
+        for (EntityId id : InstanceIds()) {
+            auto it = instances_.find(id);
+            if (it == instances_.end() || it->second.faulted || !engine_.GetScene().Exists(id)) continue;
+            int top = lua_gettop(L_);
+            lua_rawgeti(L_, LUA_REGISTRYINDEX, it->second.ref); lua_getfield(L_, -1, method);
+            if (lua_isfunction(L_, -1)) {
+                lua_pushvalue(L_, -2);
+                if (event.type == SessionEvent::Type::State) lua_pushlstring(L_, event.name.data(), event.name.size());
+                else lua_pushinteger(L_, event.player);
+                ArmBudget();
+                if (lua_pcall(L_, 2, 0, 0) != LUA_OK) FaultInstance(id, std::string(method) + ": " + PopMessage(L_));
+            }
+            lua_settop(L_, top);
+        }
+    }
 }
 
 bool ScriptHost::LoadFile(const std::string& path) {
@@ -1308,6 +1491,7 @@ std::vector<std::string> ScriptHost::ReloadAll() {
 }
 
 bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other) {
+    if (!engine_.PredictEntity(id)) return true;
     lua_State* L = State();
     int top = lua_gettop(L);
     lua_rawgeti(L, LUA_REGISTRYINDEX, inst.ref);
@@ -1406,7 +1590,7 @@ void ScriptHost::Update(float dt) {
 
     for (EntityId id : ids) {
         const Script* sc = scene.Get<Script>(id);  // scripts may destroy entities
-        if (!sc || !sc->enabled || sc->path.empty()) continue;
+        if (!sc || !sc->enabled || sc->path.empty() || !engine_.PredictEntity(id)) continue;
         std::string params = sc->params.dump();
         auto it = instances_.find(id);
         if (it != instances_.end() && (it->second.path != sc->path || it->second.params != params)) {
@@ -1541,6 +1725,41 @@ Json ScriptHost::Status() const {
     out["errors"] = static_cast<uint64_t>(errors_.size());
     out["sessionActive"] = L_ != nullptr;
     return out;
+}
+
+struct ScriptHost::Snapshot {
+    std::shared_ptr<SnapshotHeap> heap;
+    SnapshotHeap::Image image;
+    lua_State* state = nullptr;
+    std::map<std::string, Module> modules;
+    std::map<EntityId, Instance> instances;
+    std::vector<ScriptError> errors;
+    std::map<std::string, int> handlers;
+    uint32_t sender = 0;
+    int budget = 0;
+    float dt = 0;
+};
+void ScriptHost::EnableSnapshots() {
+    if (heap_) return;
+    if (L_) throw ApiError("state_recording", "native recording must begin before Lua execution");
+    heap_ = std::make_shared<SnapshotHeap>();
+}
+std::shared_ptr<const ScriptHost::Snapshot> ScriptHost::SaveState() const {
+    auto snapshot = std::make_shared<Snapshot>();
+    snapshot->heap = heap_; snapshot->state = L_;
+    if (heap_) snapshot->image = heap_->Capture();
+    snapshot->modules = modules_; snapshot->instances = instances_; snapshot->errors = errors_;
+    snapshot->handlers = netHandlers_; snapshot->sender = netSender_; snapshot->budget = budgetTicks; snapshot->dt = currentDt;
+    return snapshot;
+}
+void ScriptHost::LoadState(const Snapshot& state) {
+    if (!state.heap) throw ApiError("state_invalid", "Lua snapshot allocator is missing");
+    // Do not lua_close a discarded speculative branch: finalizers can have effects.
+    // Its blocks are released by the heap when restoring the captured live set.
+    heap_ = state.heap; heap_->Restore(state.image); L_ = state.state;
+    modules_ = state.modules; instances_ = state.instances; errors_ = state.errors;
+    netHandlers_ = state.handlers; netSender_ = state.sender; netDepth_ = 0;
+    budgetTicks = state.budget; currentDt = state.dt;
 }
 
 }  // namespace oe

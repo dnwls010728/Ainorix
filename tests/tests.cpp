@@ -1,14 +1,18 @@
 // Engine self tests. Run: build/bin/oe_tests  (exit code 0 = all passed)
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
+#include <sstream>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 #include "app/AndroidPackage.h"
@@ -22,6 +26,13 @@
 #include "core/Log.h"
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
+#include "net/Bytes.h"
+#include "net/Channels.h"
+#include "net/FallbackTransport.h"
+#include "net/LoopbackTransport.h"
+#include "net/SocketTransports.h"
+#include "net/WebSocketServer.h"
+#include "platform/Platform.h"
 #include "platform/GamepadInput.h"
 #include "platform/TouchInput.h"
 #include "render/Font.h"
@@ -36,6 +47,7 @@
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #include "editor/EditorText.h"
+#include "imgui_internal.h"
 #endif
 
 using namespace oe;
@@ -95,6 +107,885 @@ TEST(JsonRoundTrip) {
     CHECK(!err.empty());
     CHECK(err.find("line 1") != std::string::npos);
 }
+
+TEST(NetworkBytesBoundsAndEndian) {
+    ByteWriter writer(64);
+    CHECK(writer.WriteU8(0x12));
+    CHECK(writer.WriteU16(0x3456));
+    CHECK(writer.WriteU32(0x789abcde));
+    CHECK(writer.WriteU64(UINT64_C(0xfedcba9876543210)));
+    const uint8_t payload[] = {1, 0, 255};
+    CHECK(writer.WriteBlob(payload, sizeof(payload)));
+    CHECK(writer.WriteBlob(nullptr, 0));
+    CHECK(writer.Data()[1] == 0x56 && writer.Data()[2] == 0x34);
+    CHECK(writer.Data()[3] == 0xde && writer.Data()[14] == 0xfe);
+    ByteReader reader(writer.Data().data(), writer.Data().size());
+    uint8_t u8 = 0;
+    uint16_t u16 = 0;
+    uint32_t u32 = 0;
+    uint64_t u64 = 0;
+    std::vector<uint8_t> blob;
+    CHECK(reader.ReadU8(u8) && u8 == 0x12);
+    CHECK(reader.ReadU16(u16) && u16 == 0x3456);
+    CHECK(reader.ReadU32(u32) && u32 == 0x789abcde);
+    CHECK(reader.ReadU64(u64) && u64 == UINT64_C(0xfedcba9876543210));
+    CHECK(reader.ReadBlob(blob, 3) && blob == std::vector<uint8_t>(payload, payload + 3));
+    CHECK(reader.ReadBlob(blob, 0) && blob.empty());
+    CHECK(reader.Ok() && reader.Remaining() == 0);
+    u8 = 77;
+    CHECK(!reader.ReadU8(u8) && u8 == 77 && !reader.Ok());
+
+    // Every truncated scalar leaves the caller's value and cursor untouched.
+    for (size_t size = 0; size < 8; ++size) {
+        ByteReader shortReader(writer.Data().data(), size);
+        u64 = 99;
+        CHECK(!shortReader.ReadU64(u64) && u64 == 99 && shortReader.Remaining() == size);
+    }
+    const uint8_t oversized[] = {255, 255, 255, 255};
+    ByteReader large(oversized, 4);
+    blob = {42};
+    CHECK(!large.ReadBlob(blob, 64) && blob == std::vector<uint8_t>{42} && large.Remaining() == 4);
+    const uint8_t truncated[] = {3, 0, 0, 0, 1, 2};
+    ByteReader shortBlob(truncated, sizeof(truncated));
+    CHECK(!shortBlob.ReadBlob(blob, 3) && blob[0] == 42 && shortBlob.Remaining() == sizeof(truncated));
+    ByteReader nullReader(nullptr, 1);
+    CHECK(!nullReader.Ok() && !nullReader.ReadU8(u8));
+    ByteReader emptyReader(nullptr, 0);
+    CHECK(emptyReader.Ok() && !emptyReader.ReadU8(u8));
+    ByteWriter small(5);
+    CHECK(small.WriteU8(9));
+    CHECK(!small.WriteBlob(payload, 3) && small.Data() == std::vector<uint8_t>{9});
+    CHECK(!small.WriteU8(1));
+    ByteWriter nullWriter(8);
+    CHECK(!nullWriter.WriteBlob(nullptr, 1) && nullWriter.Data().empty());
+    ByteWriter zeroWriter(0);
+    CHECK(!zeroWriter.WriteU64(1) && zeroWriter.Data().empty());
+    ByteWriter exact(7);
+    CHECK(exact.WriteBlob(payload, 3) && exact.Data().size() == 7);
+    ByteReader limited(exact.Data().data(), exact.Data().size());
+    CHECK(!limited.ReadBlob(blob, 2) && limited.Remaining() == 7);
+
+    // Deterministic malformed corpus: arbitrary prefixes and lengths never escape the limit.
+    uint32_t seed = 123;
+    for (size_t i = 0; i < 2000; ++i) {
+        std::vector<uint8_t> bytes(i % 65);
+        for (auto& byte : bytes) { seed = seed * 1664525u + 1013904223u; byte = static_cast<uint8_t>(seed >> 24); }
+        ByteReader fuzz(bytes.data(), bytes.size());
+        blob = {42};
+        bool ok = fuzz.ReadBlob(blob, 32);
+        CHECK(blob.size() <= 32 && fuzz.Remaining() <= bytes.size());
+        if (!ok) CHECK(blob == std::vector<uint8_t>{42} && fuzz.Remaining() == bytes.size());
+    }
+}
+
+TEST(NetworkLoopbackDeliveryAndLimits) {
+    LoopbackConfig config;
+    config.latencyFrames = 3;
+    auto wire = std::make_shared<LoopbackNetwork>(config);
+    LoopbackTransport sender(wire, 1), receiver(wire, 2);
+    ITransport& transport = sender;
+    uint8_t byte = 7;
+    CHECK(transport.Send(2, &byte, 1));
+    byte = 9;  // Send owns a copy, never the caller's memory.
+    std::vector<TransportEvent> events;
+    CHECK(receiver.Poll(2, events) && events.empty());
+    CHECK(receiver.Poll(3, events) && events.size() == 1);
+    CHECK(events[0].peer == 1 && events[0].bytes == std::vector<uint8_t>{7});
+    CHECK(!receiver.Poll(2, events) && events.size() == 1);
+    CHECK(wire->PendingMessages() == 0 && wire->PendingBytes() == 0);
+    CHECK(!sender.Send(99, &byte, 1));
+    CHECK(!sender.Send(2, nullptr, 1));
+    CHECK(!sender.Send(2, &byte, ITransport::kMaxMessageBytes + 1));
+    CHECK(wire->DroppedMessages() == 3);
+
+    for (size_t i = 0; i < LoopbackNetwork::kMaxQueuedMessages; ++i) CHECK(sender.Send(2, nullptr, 0));
+    CHECK(!sender.Send(2, nullptr, 0));
+    CHECK(wire->PendingMessages() == LoopbackNetwork::kMaxQueuedMessages);
+    events.clear();
+    CHECK(receiver.Poll(4, events) && events.size() == LoopbackNetwork::kMaxQueuedMessages);
+    std::vector<uint8_t> large(ITransport::kMaxMessageBytes, 1);
+    for (size_t i = 0; i < LoopbackNetwork::kMaxQueuedBytes / large.size(); ++i)
+        CHECK(sender.Send(2, large.data(), large.size()));
+    CHECK(!sender.Send(2, &byte, 1));
+    CHECK(wire->PendingBytes() == LoopbackNetwork::kMaxQueuedBytes);
+    {
+        LoopbackTransport temporary(wire, 3);
+        CHECK(temporary.Send(2, nullptr, 0));
+    }
+    CHECK(wire->PendingMessages() == LoopbackNetwork::kMaxQueuedBytes / large.size());
+    events.clear();
+    CHECK(receiver.Poll(5, events));
+    CHECK(wire->PendingBytes() == 0);
+    {
+        LoopbackTransport temporary(wire, 3);
+        CHECK(sender.Send(3, &byte, 1));
+        CHECK(temporary.Send(2, &byte, 1));
+    }
+    CHECK(wire->PendingMessages() == 0 && wire->PendingBytes() == 0);
+    CHECK(sender.Poll(UINT64_MAX, events));
+    CHECK(!sender.Send(2, &byte, 1) && wire->PendingMessages() == 0);
+
+    bool rejected = false;
+    try { LoopbackTransport duplicate(wire, 1); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    rejected = false;
+    try { LoopbackTransport invalid(wire, 0); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    std::vector<std::unique_ptr<LoopbackTransport>> peers;
+    for (PeerId id = 3; id <= LoopbackNetwork::kMaxPeers; ++id)
+        peers.push_back(std::make_unique<LoopbackTransport>(wire, id));
+    rejected = false;
+    try { LoopbackTransport extra(wire, 65); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    config.lossPermille = 1001;
+    rejected = false;
+    try { LoopbackNetwork invalid(config); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+}
+
+TEST(NetworkLoopbackSeededFaults) {
+    auto run = [](uint32_t seed) {
+        LoopbackConfig config;
+        config.seed = seed;
+        config.latencyFrames = 4;
+        config.jitterFrames = 3;
+        config.lossPermille = 250;
+        config.duplicatePermille = 300;
+        config.reorderFrames = 8;
+        auto wire = std::make_shared<LoopbackNetwork>(config);
+        LoopbackTransport a(wire, 1), b(wire, 2), c(wire, 3);
+        std::vector<uint64_t> trace;
+        for (uint64_t frame = 0; frame < 150; ++frame) {
+            std::vector<TransportEvent> events;
+            CHECK(a.Poll(frame, events));
+            CHECK(b.Poll(frame, events));
+            CHECK(c.Poll(frame, events));
+            for (const auto& event : events) {
+                CHECK(event.bytes.size() == 1);
+                CHECK(frame >= static_cast<uint64_t>(event.bytes[0]) + 1);
+                CHECK(frame <= static_cast<uint64_t>(event.bytes[0]) + 15);
+                trace.push_back((frame << 32) | (static_cast<uint64_t>(event.peer) << 16) | event.bytes[0]);
+            }
+            if (frame < 100) {
+                const uint8_t value = static_cast<uint8_t>(frame);
+                CHECK(a.Send(2, &value, 1));
+                CHECK(b.Send(3, &value, 1));
+                CHECK(c.Send(1, &value, 1));
+            }
+        }
+        CHECK(wire->PendingMessages() == 0 && wire->PendingBytes() == 0);
+        CHECK(wire->DroppedMessages() > 0);
+        return trace;
+    };
+    auto trace = run(42);
+    CHECK(trace == run(42));
+    CHECK(trace != run(43));
+    std::set<uint32_t> seen;
+    bool duplicate = false, reordered = false;
+    std::map<PeerId, uint8_t> previous;
+    for (uint64_t entry : trace) {
+        const uint32_t message = static_cast<uint32_t>(entry);
+        duplicate |= !seen.insert(message).second;
+        const PeerId peer = (message >> 16) & 255;
+        const uint8_t value = static_cast<uint8_t>(message);
+        if (previous.count(peer)) reordered |= value < previous[peer];
+        previous[peer] = value;
+    }
+    CHECK(duplicate && reordered);
+    LoopbackConfig config;
+    config.lossPermille = 1000;
+    auto wire = std::make_shared<LoopbackNetwork>(config);
+    LoopbackTransport a(wire, 1), b(wire, 2);
+    CHECK(a.Send(2, nullptr, 0));
+    std::vector<TransportEvent> events;
+    CHECK(b.Poll(100, events) && events.empty() && wire->DroppedMessages() == 1);
+
+    config.lossPermille = 0;
+    config.duplicatePermille = 1000;
+    auto duplicates = std::make_shared<LoopbackNetwork>(config);
+    LoopbackTransport c(duplicates, 1), d(duplicates, 2);
+    // Fewer than two payloads fit: reject without enqueuing either duplicate.
+    std::vector<uint8_t> payload(65535, 1);
+    for (int i = 0; i < 32; ++i) CHECK(c.Send(2, payload.data(), payload.size()));
+    CHECK(duplicates->PendingBytes() == 4194240);
+    CHECK(!c.Send(2, payload.data(), 33));
+    CHECK(duplicates->PendingBytes() == 4194240 && duplicates->PendingMessages() == 64);
+    CHECK(d.Poll(0, events) && events.size() == 64);
+    CHECK(duplicates->PendingBytes() == 0);
+}
+
+TEST(NetworkPacketCodecAndAckWindow) {
+    AckWindow window;
+    CHECK(!window.Accept(0));
+    CHECK(window.Accept(1) && window.Mask() == 1);
+    CHECK(window.Accept(3) && window.Mask() == 5);
+    CHECK(window.Accept(2) && window.Mask() == 7);
+    CHECK(!window.Accept(2));
+    CHECK(window.Accept(64) && window.Contains(1));
+    CHECK(window.Accept(65) && !window.Contains(1) && window.Contains(2));
+    CHECK(!window.Accept(1));
+    CHECK(window.Accept(129) && window.Mask() == 1);
+    CHECK(window.Accept(128) && window.Mask() == 3);
+    CHECK(window.Accept(UINT64_MAX) && window.Mask() == 1);
+    CHECK(!window.Accept(UINT64_MAX) && !window.Accept(UINT64_MAX - 64));
+
+    NetPacket packet;
+    packet.sequence = 1;
+    packet.message = 2;
+    packet.fragments = 1;
+    packet.totalBytes = 3;
+    packet.payload = {1, 2, 3};
+    packet.ack = 3;
+    packet.ackMask = 5;
+    std::vector<uint8_t> bytes;
+    CHECK(EncodePacket(packet, bytes) && bytes.size() == kNetHeaderBytes + 3);
+    CHECK(bytes[0] == 'O' && bytes[1] == 'E' && bytes[2] == 'N' && bytes[3] == 'P');
+    CHECK(bytes[4] == 1 && bytes[8] == 1 && bytes[16] == 3 && bytes[24] == 5 && bytes[32] == 2);
+    NetPacket decoded;
+    CHECK(DecodePacket(bytes.data(), bytes.size(), decoded));
+    CHECK(decoded.sequence == 1 && decoded.message == 2 && decoded.payload == packet.payload && decoded.ackMask == 5);
+    decoded.message = 99;
+    for (size_t length = 0; length < bytes.size(); ++length) {
+        CHECK(!DecodePacket(bytes.data(), length, decoded));
+        CHECK(decoded.message == 99);
+    }
+    // Header fields must be validated before any reassembly allocation.
+    for (size_t offset : {size_t(0), size_t(4), size_t(5), size_t(6), size_t(7), size_t(40), size_t(42), size_t(44), size_t(48)}) {
+        auto corrupt = bytes;
+        corrupt[offset] = 255;
+        CHECK(!DecodePacket(corrupt.data(), corrupt.size(), decoded) && decoded.message == 99);
+    }
+    auto extra = bytes;
+    extra.push_back(0);
+    CHECK(!DecodePacket(extra.data(), extra.size(), decoded));
+    CHECK(!DecodePacket(nullptr, kNetHeaderBytes, decoded));
+    packet.ackMask = 8;
+    auto unchanged = bytes;
+    CHECK(!EncodePacket(packet, bytes) && bytes == unchanged);
+    packet.ackMask = 1;
+    packet.fragment = 1;
+    CHECK(!EncodePacket(packet, bytes));
+
+    uint32_t seed = 17;
+    for (size_t trial = 0; trial < 3000; ++trial) {
+        std::vector<uint8_t> noise(trial % 1250);
+        for (uint8_t& byte : noise) { seed = seed * 1664525u + 1013904223u; byte = static_cast<uint8_t>(seed >> 24); }
+        decoded.message = 99;
+        const bool ok = DecodePacket(noise.data(), noise.size(), decoded);
+        CHECK(ok ? decoded.payload.size() <= kNetFragmentBytes : decoded.message == 99);
+    }
+}
+
+// Raw packet injection isolates channel order, replay and malformed-packet behavior.
+std::vector<uint8_t> NetworkDataPacket(NetChannel channel, uint64_t message, uint64_t sequence,
+                                      const std::vector<uint8_t>& payload, uint16_t fragment = 0,
+                                      uint32_t total = 0) {
+    NetPacket packet;
+    packet.channel = channel;
+    packet.message = message;
+    packet.sequence = sequence;
+    packet.totalBytes = total ? total : static_cast<uint32_t>(payload.size());
+    packet.fragment = fragment;
+    packet.fragments = static_cast<uint16_t>(std::max<size_t>(1, (packet.totalBytes + kNetFragmentBytes - 1) / kNetFragmentBytes));
+    packet.payload = payload;
+    std::vector<uint8_t> bytes;
+    CHECK(EncodePacket(packet, bytes));
+    return bytes;
+}
+
+TEST(NetworkChannelOrderingAndReplay) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport sender(wire, 1), receiver(wire, 2);
+    ChannelEndpoint endpoint(receiver);
+    CHECK(endpoint.AddPeer(1));
+    CHECK(!endpoint.AddPeer(1) && !endpoint.AddPeer(0));
+    uint64_t sequence = 1;
+    auto send = [&](NetChannel channel, uint64_t message, uint8_t value) {
+        auto bytes = NetworkDataPacket(channel, message, sequence++, {value});
+        CHECK(sender.Send(2, bytes.data(), bytes.size()));
+    };
+    std::vector<ChannelEvent> events;
+    send(NetChannel::ReliableOrdered, 2, 22);
+    CHECK(endpoint.Poll(0, events) && events.empty() && endpoint.BufferedBytes(1) == 1);
+    send(NetChannel::ReliableOrdered, 1, 11);
+    CHECK(endpoint.Poll(1, events) && events.size() == 2);
+    CHECK(events[0].sequence == 1 && events[1].sequence == 2);
+    CHECK(events[0].bytes == std::vector<uint8_t>{11} && events[1].bytes == std::vector<uint8_t>{22});
+    CHECK(endpoint.BufferedBytes(1) == 0);
+    events.clear();
+    send(NetChannel::ReliableUnordered, 2, 22);
+    CHECK(endpoint.Poll(2, events) && events.size() == 1 && events[0].sequence == 2);
+    send(NetChannel::ReliableUnordered, 1, 11);
+    CHECK(endpoint.Poll(3, events) && events.size() == 2 && events[1].sequence == 1);
+    events.clear();
+    send(NetChannel::Sequenced, 2, 22);
+    send(NetChannel::Sequenced, 1, 11);
+    CHECK(endpoint.Poll(4, events) && events.size() == 1 && events[0].sequence == 2);
+    events.clear();
+    send(NetChannel::Unreliable, 2, 22);
+    send(NetChannel::Unreliable, 1, 11);
+    CHECK(endpoint.Poll(5, events) && events.size() == 2 && events[0].sequence == 2 && events[1].sequence == 1);
+    events.clear();
+    send(NetChannel::ReliableOrdered, 1, 11);
+    send(NetChannel::ReliableUnordered, 2, 22);
+    send(NetChannel::Unreliable, 2, 22);
+    CHECK(endpoint.Poll(6, events) && events.empty());
+    CHECK(endpoint.Stats(1)->duplicatePackets == 3);
+    CHECK(!endpoint.Poll(5, events) && endpoint.Poll(6, events) && events.empty());
+    CHECK(endpoint.RemovePeer(1) && !endpoint.RemovePeer(1));
+    CHECK(endpoint.Stats(1) == nullptr && endpoint.BufferedBytes(1) == 0);
+}
+
+TEST(NetworkChannelFragmentValidationAndExpiry) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport sender(wire, 1), receiver(wire, 2), stranger(wire, 3);
+    ChannelConfig config;
+    config.assemblyFrames = 3;
+    ChannelEndpoint endpoint(receiver, config);
+    CHECK(endpoint.AddPeer(1));
+    std::vector<uint8_t> body(kNetFragmentBytes, 7);
+    auto partial = NetworkDataPacket(NetChannel::Unreliable, 1, 1, body, 0,
+                                     static_cast<uint32_t>(kNetFragmentBytes + 1));
+    CHECK(sender.Send(2, partial.data(), partial.size()));
+    std::vector<ChannelEvent> events;
+    CHECK(endpoint.Poll(0, events) && events.empty());
+    CHECK(endpoint.BufferedBytes(1) == kNetFragmentBytes + 1);
+    // Conflicting total size for an existing assembly is rejected without touching its payload.
+    auto conflict = NetworkDataPacket(NetChannel::Unreliable, 1, 2, body, 0,
+                                      static_cast<uint32_t>(kNetFragmentBytes + 2));
+    CHECK(sender.Send(2, conflict.data(), conflict.size()));
+    CHECK(endpoint.Poll(1, events) && endpoint.RejectedPackets() == 1);
+    CHECK(endpoint.BufferedBytes(1) == kNetFragmentBytes + 1);
+    CHECK(endpoint.Poll(3, events) && endpoint.BufferedBytes(1) == 0);
+    CHECK(endpoint.Stats(1)->droppedPackets == 1);
+    auto bytes = NetworkDataPacket(NetChannel::Unreliable, 2, 3, {8});
+    CHECK(stranger.Send(2, bytes.data(), bytes.size()));
+    CHECK(sender.Send(2, nullptr, 0));
+    CHECK(endpoint.Poll(4, events) && events.empty() && endpoint.RejectedPackets() == 3);
+    // Incomplete assemblies consume slots independently of the byte budget.
+    for (uint64_t message = 3; message < 3 + ChannelEndpoint::kMaxAssemblies; ++message) {
+        auto fragment = NetworkDataPacket(NetChannel::Unreliable, message, message + 1, body, 0,
+                                         static_cast<uint32_t>(kNetFragmentBytes + 1));
+        CHECK(sender.Send(2, fragment.data(), fragment.size()));
+    }
+    auto overflow = NetworkDataPacket(NetChannel::Unreliable, 100, 100, body, 0,
+                                     static_cast<uint32_t>(kNetFragmentBytes + 1));
+    CHECK(sender.Send(2, overflow.data(), overflow.size()));
+    CHECK(endpoint.Poll(5, events));
+    CHECK(endpoint.BufferedBytes(1) == ChannelEndpoint::kMaxAssemblies * (kNetFragmentBytes + 1));
+    CHECK(endpoint.Poll(8, events) && endpoint.BufferedBytes(1) == 0);
+    for (int i = 0; i < 200; ++i) CHECK(sender.Send(2, bytes.data(), bytes.size()));
+    CHECK(endpoint.Poll(9, events));
+    CHECK(endpoint.RejectedPackets() == 3 + 200 - ChannelEndpoint::kIncomingPerFrame);
+    events.clear();
+    auto first = NetworkDataPacket(NetChannel::Unreliable, 200, 200, body, 0,
+                                   static_cast<uint32_t>(kNetFragmentBytes + 1));
+    auto last = NetworkDataPacket(NetChannel::Unreliable, 200, 201, {9}, 1,
+                                  static_cast<uint32_t>(kNetFragmentBytes + 1));
+    CHECK(sender.Send(2, first.data(), first.size()));
+    CHECK(endpoint.Poll(10, events) && events.empty());
+    CHECK(sender.Send(2, last.data(), last.size()));
+    // Expiry precedes incoming fragments even when both occur on the same poll.
+    CHECK(endpoint.Poll(13, events) && events.empty() && endpoint.BufferedBytes(1) == kNetFragmentBytes + 1);
+    CHECK(endpoint.Poll(16, events) && endpoint.BufferedBytes(1) == 0);
+}
+
+TEST(NetworkChannelsReliableUnderLoss) {
+    auto run = [](uint32_t seed) {
+        LoopbackConfig faults;
+        faults.seed = seed;
+        faults.latencyFrames = 3;
+        faults.jitterFrames = 2;
+        faults.lossPermille = 250;
+        faults.duplicatePermille = 200;
+        faults.reorderFrames = 6;
+        auto wire = std::make_shared<LoopbackNetwork>(faults);
+        LoopbackTransport ta(wire, 1), tb(wire, 2);
+        ChannelConfig config;
+        config.timeoutFrames = 6000;
+        ChannelEndpoint a(ta, config), b(tb, config);
+        CHECK(a.AddPeer(2) && b.AddPeer(1));
+        std::map<std::pair<NetChannel, uint64_t>, std::vector<uint8_t>> expected;
+        std::map<std::pair<NetChannel, uint64_t>, std::vector<uint8_t>> received;
+        for (NetChannel channel : {NetChannel::ReliableOrdered, NetChannel::ReliableUnordered}) {
+            for (uint64_t message = 1; message <= 24; ++message) {
+                size_t size = message == 24 ? kNetMaxMessageBytes : static_cast<size_t>(message * 153);
+                std::vector<uint8_t> payload(size, static_cast<uint8_t>(message));
+                if (message == 1) payload.clear();
+                expected[{channel, message}] = payload;
+                CHECK(a.Send(2, channel, payload.data(), payload.size()));
+            }
+        }
+        const uint8_t reply[] = {9, 8, 7};
+        CHECK(b.Send(1, NetChannel::ReliableOrdered, reply, sizeof(reply)));
+        std::vector<uint64_t> trace;
+        uint64_t ordered = 1;
+        size_t replyCount = 0;
+        for (uint64_t frame = 0; frame < 6000; ++frame) {
+            std::vector<ChannelEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            for (const auto& event : ea) {
+                CHECK(event.type == ChannelEvent::Type::Message && event.bytes == std::vector<uint8_t>(reply, reply + 3));
+                ++replyCount;
+            }
+            for (const auto& event : eb) {
+                CHECK(event.type == ChannelEvent::Type::Message);
+                const auto key = std::make_pair(event.channel, event.sequence);
+                CHECK(received.emplace(key, event.bytes).second);
+                if (event.channel == NetChannel::ReliableOrdered) CHECK(event.sequence == ordered++);
+                trace.push_back((frame << 16) | (static_cast<uint64_t>(event.channel) << 8) | event.sequence);
+            }
+            if (received.size() == expected.size() && replyCount == 1 && a.PendingMessages(2) == 0 && b.PendingMessages(1) == 0)
+                break;
+        }
+        CHECK(received == expected && replyCount == 1);
+        CHECK(a.PendingMessages(2) == 0 && b.PendingMessages(1) == 0);
+        CHECK(a.BufferedBytes(2) == 0 && b.BufferedBytes(1) == 0);
+        CHECK(a.Stats(2)->retransmittedPackets > 0 && a.Stats(2)->lostPackets > 0);
+        CHECK(a.Stats(2)->rttFrames > 0 && a.Stats(2)->jitterFrames > 0);
+        CHECK(a.Stats(2)->LossPermille() > 0 && a.Stats(2)->LossPermille() < 1000);
+        CHECK(a.Stats(2)->invalidPackets == 0 && b.Stats(1)->invalidPackets == 0);
+        return trace;
+    };
+    CHECK(run(45) == run(45));
+    CHECK(run(46) != run(45));
+}
+
+TEST(NetworkChannelQueueBudgetAndTimeout) {
+    LoopbackConfig faults;
+    faults.lossPermille = 1000;
+    auto wire = std::make_shared<LoopbackNetwork>(faults);
+    LoopbackTransport ta(wire, 1), tb(wire, 2);
+    ChannelConfig config;
+    config.retryFrames = 2;
+    config.timeoutFrames = 6;
+    ChannelEndpoint a(ta, config);
+    CHECK(a.AddPeer(2));
+    const uint8_t byte = 1;
+    CHECK(!a.Send(3, NetChannel::Unreliable, &byte, 1));
+    CHECK(!a.Send(2, static_cast<NetChannel>(4), &byte, 1));
+    CHECK(!a.Send(2, NetChannel::Unreliable, nullptr, 1));
+    CHECK(!a.Send(2, NetChannel::Unreliable, &byte, kNetMaxMessageBytes + 1));
+    for (size_t i = 0; i < ChannelEndpoint::kMaxQueuedMessages; ++i)
+        CHECK(a.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    CHECK(!a.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    std::vector<ChannelEvent> events;
+    CHECK(a.Poll(0, events) && a.Stats(2)->packetsSent == ChannelEndpoint::kPacketsPerFrame);
+    CHECK(a.Poll(0, events) && a.Stats(2)->packetsSent == ChannelEndpoint::kPacketsPerFrame);
+    for (uint64_t frame = 1; frame <= 6; ++frame) CHECK(a.Poll(frame, events));
+    CHECK(events.size() == 1 && events[0].type == ChannelEvent::Type::TimedOut && events[0].peer == 2);
+    CHECK(a.PendingMessages(2) == 0 && a.BufferedBytes(2) == 0);
+    CHECK(!a.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    CHECK(a.Poll(7, events) && events.size() == 1);
+    CHECK(a.Stats(2)->LossPermille() == 1000);
+    CHECK(a.RemovePeer(2) && a.AddPeer(2));
+    for (PeerId id = 3; id <= 65; ++id) CHECK(a.AddPeer(id));
+    CHECK(!a.AddPeer(66));
+}
+
+// Target individual protocol failures independently of the seeded random wire.
+class NetworkFaultTransport final : public ITransport {
+public:
+    explicit NetworkFaultTransport(ITransport& transport) : transport_(transport) {}
+    bool blocked = false;
+    std::function<bool(const NetPacket&)> drop;
+    uint64_t accepted = 0;
+    bool Send(PeerId peer, const uint8_t* bytes, size_t size) override {
+        if (blocked) return false;
+        NetPacket packet;
+        CHECK(DecodePacket(bytes, size, packet));
+        CHECK(size <= kNetPacketBytes);
+        ++accepted;
+        if (drop && drop(packet)) return true;
+        return transport_.Send(peer, bytes, size);
+    }
+    bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override { return transport_.Poll(frame, events); }
+private:
+    ITransport& transport_;
+};
+
+TEST(NetworkChannelsAckLossAndAssemblyRecovery) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport ta(wire, 1), tb(wire, 2);
+    NetworkFaultTransport fa(ta), fb(tb);
+    bool fragmentDropped = false, ackDropped = false;
+    fa.drop = [&](const NetPacket& packet) {
+        if (packet.kind == PacketKind::Data && packet.message == 1 && packet.fragment == 1 && !fragmentDropped) {
+            fragmentDropped = true;
+            return true;
+        }
+        return false;
+    };
+    fb.drop = [&](const NetPacket& packet) {
+        if (packet.kind == PacketKind::Ack && packet.message == 1 && !ackDropped) {
+            ackDropped = true;
+            return true;
+        }
+        return false;
+    };
+    ChannelConfig config;
+    config.retryFrames = 6;
+    config.assemblyFrames = 2;
+    ChannelEndpoint a(fa, config), b(fb, config);
+    CHECK(a.AddPeer(2) && b.AddPeer(1));
+    std::vector<uint8_t> body(kNetFragmentBytes + 7, 123);
+    const uint8_t next = 2;
+    CHECK(a.Send(2, NetChannel::ReliableOrdered, body.data(), body.size()));
+    for (int i = 0; i < 63; ++i) CHECK(a.Send(2, NetChannel::ReliableOrdered, &next, 1));
+    std::vector<ChannelEvent> received;
+    for (uint64_t frame = 0; frame < 40; ++frame) {
+        std::vector<ChannelEvent> ea, eb;
+        CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+        CHECK(ea.empty());
+        received.insert(received.end(), eb.begin(), eb.end());
+        // The first reliable window is complete except for its oldest message. ACKed ordered
+        // payloads must survive expiry; the second window must not overtake the unacknowledged gap.
+        if (frame == 3) CHECK(b.BufferedBytes(1) == 31 && received.empty());
+    }
+    CHECK(fragmentDropped && ackDropped);
+    CHECK(received.size() == 64);
+    if (received.size() == 64) {
+        CHECK(received[0].sequence == 1 && received[0].bytes == body);
+        for (size_t i = 1; i < received.size(); ++i)
+            CHECK(received[i].sequence == i + 1 && received[i].bytes == std::vector<uint8_t>{2});
+    }
+    CHECK(a.PendingMessages(2) == 0 && b.BufferedBytes(1) == 0);
+    CHECK(a.Stats(2)->retransmittedPackets >= 4 && b.Stats(1)->messagesReceived == 64);
+    CHECK(b.Stats(1)->duplicatePackets >= 2);
+}
+
+TEST(NetworkChannelsUnreliableAndBackpressure) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport ta(wire, 1), tb(wire, 2);
+    NetworkFaultTransport fa(ta);
+    fa.blocked = true;
+    ChannelEndpoint a(fa), b(tb);
+    CHECK(a.AddPeer(2) && b.AddPeer(1));
+    const uint8_t byte = 7;
+    CHECK(a.Send(2, NetChannel::Unreliable, &byte, 1));
+    std::vector<ChannelEvent> events;
+    CHECK(a.Poll(0, events) && a.PendingMessages(2) == 1 && a.Stats(2)->packetsSent == 0);
+    CHECK(b.Poll(0, events) && events.empty());
+    fa.blocked = false;
+    CHECK(a.Poll(1, events) && a.PendingMessages(2) == 0);
+    CHECK(b.Poll(1, events) && events.size() == 1 && events[0].sequence == 1);
+    events.clear();
+    fa.drop = [](const NetPacket& packet) { return packet.kind == PacketKind::Data; };
+    CHECK(a.Send(2, NetChannel::Unreliable, &byte, 1));
+    CHECK(a.Send(2, NetChannel::Sequenced, &byte, 1));
+    for (uint64_t frame = 2; frame < 70; ++frame) CHECK(a.Poll(frame, events) && b.Poll(frame, events));
+    CHECK(events.empty() && a.PendingMessages(2) == 0);
+    CHECK(a.Stats(2)->packetsSent == 3 && a.Stats(2)->retransmittedPackets == 0);
+    CHECK(a.Stats(2)->ackedPackets == 1 && a.Stats(2)->lostPackets == 2);
+    CHECK(a.Stats(2)->LossPermille() == 666);
+
+    // Sequenced completion discards an older partial message's reserved storage.
+    fa.drop = {};
+    std::vector<uint8_t> first(kNetFragmentBytes, 1);
+    auto old = NetworkDataPacket(NetChannel::Sequenced, 2, 100, first, 0,
+                                 static_cast<uint32_t>(kNetFragmentBytes + 1));
+    auto newest = NetworkDataPacket(NetChannel::Sequenced, 3, 101, {3});
+    CHECK(ta.Send(2, old.data(), old.size()));
+    CHECK(ta.Send(2, newest.data(), newest.size()));
+    CHECK(b.Poll(70, events) && events.size() == 1 && events[0].sequence == 3);
+    CHECK(b.BufferedBytes(1) == 0);
+    CHECK(a.RemovePeer(2) && a.AddPeer(2));
+    std::vector<uint8_t> max(kNetMaxMessageBytes, 1);
+    for (size_t i = 0; i < 64; ++i) CHECK(a.Send(2, NetChannel::Unreliable, max.data(), max.size()));
+    CHECK(a.BufferedBytes(2) == ChannelEndpoint::kMaxBufferedBytes);
+    CHECK(!a.Send(2, NetChannel::Unreliable, &byte, 1));
+    CHECK(a.RemovePeer(2) && a.BufferedBytes(2) == 0);
+    fa.blocked = true;
+    ChannelConfig timing;
+    timing.retryFrames = 2;
+    timing.timeoutFrames = 6;
+    ChannelEndpoint blocked(fa, timing);
+    CHECK(blocked.AddPeer(2) && blocked.Poll(70, events));
+    events.clear();
+    CHECK(blocked.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    for (uint64_t frame = 71; frame <= 76; ++frame) CHECK(blocked.Poll(frame, events));
+    CHECK(events.size() == 1 && events[0].type == ChannelEvent::Type::TimedOut);
+    CHECK(blocked.PendingMessages(2) == 0 && blocked.Stats(2)->packetsSent == 0);
+}
+
+TEST(NetworkTcpFramingAndBounds) {
+    ByteWriter writer(100);
+    const uint8_t body[] = {7, 0, 9};
+    CHECK(writer.WriteBlob(body, 3) && writer.WriteBlob(nullptr, 0) && writer.WriteBlob(body, 3));
+    for (size_t split = 0; split <= writer.Data().size(); ++split) {
+        TcpFrameReader reader;
+        std::vector<std::vector<uint8_t>> frames;
+        CHECK(reader.Feed(writer.Data().data(), split, frames));
+        CHECK(reader.Feed(writer.Data().data() + split, writer.Data().size() - split, frames));
+        CHECK(frames.size() == 3 && reader.BufferedBytes() == 0);
+        if (frames.size() == 3) CHECK(frames[0] == std::vector<uint8_t>(body, body + 3) && frames[1].empty() && frames[2] == frames[0]);
+    }
+    TcpFrameReader bytewise;
+    std::vector<std::vector<uint8_t>> frames;
+    for (uint8_t byte : writer.Data()) CHECK(bytewise.Feed(&byte, 1, frames));
+    CHECK(frames.size() == 3);
+    const uint8_t huge[] = {1, 0, 1, 0};  // 65537, one byte above the hard maximum
+    TcpFrameReader invalid;
+    frames.clear();
+    CHECK(!invalid.Feed(huge, 4, frames) && invalid.BufferedBytes() == 0 && !invalid.Ok());
+    CHECK(!invalid.Feed(body, 3, frames) && frames.empty());
+    TcpFrameReader flood;
+    std::vector<uint8_t> zeroFrames(4 * 129, 0);
+    CHECK(!flood.Feed(zeroFrames.data(), zeroFrames.size(), frames) && frames.size() == 128);
+    CHECK(ValidNetAddress({"127.0.0.1", 1}));
+    CHECK(!ValidNetAddress({"localhost", 1}) && !ValidNetAddress({"127.00.0.1", 1}));
+    CHECK(!ValidNetAddress({"256.0.0.1", 1}) && !ValidNetAddress({"127.0.0.1.", 1}));
+    CHECK(!ValidNetAddress({"127.0.0.1", 0}) && ValidNetAddress({"127.0.0.1", 0}, true));
+}
+
+class NetworkDropTransport final : public ITransport {
+public:
+    explicit NetworkDropTransport(ITransport& transport) : transport_(transport) {}
+    bool drop = false;
+    bool Send(PeerId peer, const uint8_t* bytes, size_t size) override { return drop || transport_.Send(peer, bytes, size); }
+    bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override { return transport_.Poll(frame, events); }
+private:
+    ITransport& transport_;
+};
+
+TEST(NetworkUdpTcpFallbackReachability) {
+    LoopbackConfig faults;
+    faults.latencyFrames = 2;
+    faults.jitterFrames = 1;
+    faults.duplicatePermille = 100;
+    auto udp = std::make_shared<LoopbackNetwork>(faults), tcp = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport ua(udp, 1), ub(udp, 2), ta(tcp, 1), tb(tcp, 2);
+    NetworkDropTransport da(ua), db(ub);
+    FallbackTransport a(da, ta), b(db, tb);
+    CHECK(a.AddPeer(2, 100) && b.AddPeer(1, 200));
+    CHECK(!a.AddPeer(2, 101) && !a.AddPeer(3, 0));
+    const uint8_t byte = 7;
+    CHECK(a.Send(2, &byte, 1));
+    size_t received = 0;
+    auto advance = [&](uint64_t first, uint64_t last) {
+        for (uint64_t frame = first; frame < last; ++frame) {
+            std::vector<TransportEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            CHECK(ea.empty());
+            for (const auto& event : eb) {
+                CHECK(event.bytes == std::vector<uint8_t>{7});
+                ++received;
+            }
+        }
+    };
+    advance(0, 20);
+    CHECK(received == 1 && a.Selected(2) == FallbackTransport::Route::Udp && b.Selected(1) == FallbackTransport::Route::Udp);
+    CHECK(a.Send(2, &byte, 1));
+    advance(20, 30);
+    CHECK(received >= 2);  // UDP may duplicate; the channel layer owns logical duplicate rejection.
+    da.drop = db.drop = true;
+    advance(30, 100);
+    CHECK(a.Selected(2) == FallbackTransport::Route::Tcp && b.Selected(1) == FallbackTransport::Route::Tcp);
+    const size_t before = received;
+    CHECK(a.Send(2, &byte, 1));
+    advance(100, 103);
+    CHECK(received == before + 1);
+    std::vector<TransportEvent> events;
+    CHECK(!a.Poll(99, events) && a.Poll(102, events));
+}
+
+#ifndef __EMSCRIPTEN__
+TEST(NetworkNativeUdpSourcesAndTruncation) {
+    const uint64_t live = PlatformNetSocketsLive();
+    {
+        UdpTransport a, b;
+        std::string error;
+        CHECK(a.Bind({}, &error) && b.Bind({}, &error));
+        CHECK(a.LocalAddress().host == "127.0.0.1" && a.LocalAddress().port != 0);
+        CHECK(a.AddPeer(2, b.LocalAddress()) && b.AddPeer(1, a.LocalAddress()));
+        CHECK(!b.AddPeer(3, a.LocalAddress()) && !a.Bind({}, &error));
+        const uint8_t byte = 7;
+        CHECK(a.Send(2, &byte, 1) && a.Send(2, nullptr, 0));
+        CHECK(!a.Send(2, &byte, 1201) && !a.Send(99, &byte, 1));
+        auto stranger = CreateNetSocket(SocketKind::Udp, &error);
+        CHECK(stranger != nullptr);
+        if (!stranger) return;
+        CHECK(stranger->Bind({}, &error));
+        CHECK(stranger->SendTo(b.LocalAddress(), &byte, 1) == SocketIo::Progress);
+        auto raw = CreateNetSocket(SocketKind::Udp, &error);
+        CHECK(raw != nullptr);
+        if (!raw) return;
+        CHECK(raw->Bind({}, &error) && b.AddPeer(3, raw->LocalAddress()));
+        std::vector<uint8_t> oversized(1500, 1);
+        CHECK(raw->SendTo(b.LocalAddress(), oversized.data(), oversized.size()) == SocketIo::Progress);
+        std::vector<TransportEvent> events;
+        for (uint64_t frame = 0; frame < 100 && (events.size() < 2 || b.DroppedPackets() < 2); ++frame) {
+            CHECK(b.Poll(frame, events));
+            PlatformSleep(0.001);
+        }
+        CHECK(events.size() == 2 && b.DroppedPackets() == 2);
+        if (events.size() == 2) CHECK(events[0].peer == 1 && events[0].bytes == std::vector<uint8_t>{7} && events[1].bytes.empty());
+        CHECK(b.RemovePeer(1) && !b.RemovePeer(1));
+    }
+    CHECK(PlatformNetSocketsLive() == live);
+}
+
+TEST(NetworkNativeTcpMalformedAndClose) {
+    TcpTransport server;
+    std::string error;
+    CHECK(server.Listen({}, &error));
+    auto client = CreateNetSocket(SocketKind::Tcp, &error);
+    CHECK(client != nullptr);
+    if (!client) return;
+    CHECK(client->Connect(server.LocalAddress(), &error));
+    uint64_t frame = 0;
+    std::vector<TransportEvent> events;
+    for (; frame < 100 && events.empty(); ++frame) {
+        CHECK(server.Poll(frame, events));
+        client->State();
+        PlatformSleep(0.001);
+    }
+    CHECK(events.size() == 1 && events[0].type == TransportEvent::Type::Connected && events[0].peer == 1);
+    CHECK(server.PeerAddress(1).host == "127.0.0.1" && server.PeerAddress(1).port == client->LocalAddress().port);
+    auto sendAll = [&](const uint8_t* bytes, size_t size) {
+        size_t offset = 0;
+        for (int attempt = 0; attempt < 100 && offset < size; ++attempt) {
+            size_t sent = 0;
+            SocketIo result = client->Send(bytes + offset, size - offset, sent);
+            CHECK(result == SocketIo::Progress || result == SocketIo::WouldBlock);
+            offset += sent;
+            PlatformSleep(0.001);
+        }
+        CHECK(offset == size);
+    };
+    ByteWriter writer(7);
+    const uint8_t body[] = {1, 2, 3};
+    CHECK(writer.WriteBlob(body, 3));
+    events.clear();
+    sendAll(writer.Data().data(), 2);
+    CHECK(server.Poll(frame++, events) && events.empty());
+    sendAll(writer.Data().data() + 2, 5);
+    for (int i = 0; i < 100 && events.empty(); ++i) { CHECK(server.Poll(frame++, events)); PlatformSleep(0.001); }
+    CHECK(events.size() == 1 && events[0].bytes == std::vector<uint8_t>(body, body + 3));
+    events.clear();
+    const uint8_t invalid[] = {255, 255, 255, 255};
+    sendAll(invalid, 4);
+    for (int i = 0; i < 100 && events.empty(); ++i) { CHECK(server.Poll(frame++, events)); PlatformSleep(0.001); }
+    CHECK(events.size() == 1 && events[0].type == TransportEvent::Type::Disconnected && !events[0].error.empty());
+    CHECK(!server.Send(1, body, 3));
+    CHECK(server.PeerAddress(1).port == 0);
+    WebSocketTransport web;
+    CHECK(!web.Connect(1, "ws://127.0.0.1:1234", &error) && !error.empty());
+}
+
+TEST(NetworkChannelsOverLocalhostSockets) {
+    auto run = [](ITransport& ta, ITransport& tb) {
+        ChannelEndpoint a(ta), b(tb);
+        CHECK(a.AddPeer(1) && b.AddPeer(1));
+        std::vector<uint8_t> large(65536, 42);
+        const uint8_t small[] = {9, 0, 8};
+        CHECK(a.Send(1, NetChannel::ReliableOrdered, large.data(), large.size()));
+        CHECK(a.Send(1, NetChannel::ReliableOrdered, small, sizeof(small)));
+        CHECK(a.Send(1, NetChannel::ReliableUnordered, nullptr, 0));
+        CHECK(b.Send(1, NetChannel::ReliableOrdered, small, sizeof(small)));
+        size_t replies = 0;
+        std::vector<ChannelEvent> received;
+        for (uint64_t frame = 0; frame < 600; ++frame) {
+            std::vector<ChannelEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            for (const auto& event : ea) {
+                CHECK(event.type == ChannelEvent::Type::Message && event.bytes == std::vector<uint8_t>(small, small + 3));
+                ++replies;
+            }
+            received.insert(received.end(), eb.begin(), eb.end());
+            if (received.size() == 3 && replies == 1 && a.PendingMessages(1) == 0 && b.PendingMessages(1) == 0) break;
+            PlatformSleep(0.001);
+        }
+        CHECK(received.size() == 3 && replies == 1 && a.PendingMessages(1) == 0 && b.PendingMessages(1) == 0);
+        uint64_t ordered = 1;
+        for (const auto& event : received) {
+            CHECK(event.type == ChannelEvent::Type::Message);
+            if (event.channel == NetChannel::ReliableOrdered) {
+                CHECK(event.sequence == ordered++);
+                CHECK(event.sequence == 1 ? event.bytes == large : event.bytes == std::vector<uint8_t>(small, small + 3));
+            } else CHECK(event.channel == NetChannel::ReliableUnordered && event.bytes.empty());
+        }
+        CHECK(a.Stats(1)->invalidPackets == 0 && b.Stats(1)->invalidPackets == 0);
+    };
+    const uint64_t live = PlatformNetSocketsLive();
+    {
+        UdpTransport ua, ub;
+        std::string error;
+        CHECK(ua.Bind({}, &error) && ub.Bind({}, &error));
+        CHECK(ua.AddPeer(1, ub.LocalAddress()) && ub.AddPeer(1, ua.LocalAddress()));
+        run(ua, ub);
+    }
+    {
+        TcpTransport ta, tb;
+        std::string error;
+        CHECK(tb.Listen({}, &error) && ta.Connect(1, tb.LocalAddress(), &error));
+        run(ta, tb);
+        CHECK(ta.Disconnect(1));
+        std::vector<TransportEvent> events;
+        for (uint64_t frame = 700; frame < 750 && events.empty(); ++frame) { CHECK(tb.Poll(frame, events)); PlatformSleep(0.001); }
+        CHECK(events.size() == 1 && events[0].type == TransportEvent::Type::Disconnected);
+    }
+    CHECK(PlatformNetSocketsLive() == live);
+}
+
+TEST(NetworkNativeFallbackAndChannelDisconnect) {
+    TcpTransport ta, tb;
+    UdpTransport ua, ub, blackhole;
+    std::string error;
+    CHECK(tb.Listen({}, &error) && ta.Connect(1, tb.LocalAddress(), &error));
+    CHECK(ua.Bind({}, &error) && ub.Bind({}, &error) && blackhole.Bind({}, &error));
+    CHECK(ua.AddPeer(1, blackhole.LocalAddress()) && ub.AddPeer(1, ua.LocalAddress()));
+    FallbackTransport fa(ua, ta, 10), fb(ub, tb, 10);
+    CHECK(fa.AddPeer(1, 1) && fb.AddPeer(1, 2));
+    ChannelEndpoint a(fa), b(fb);
+    CHECK(a.AddPeer(1) && b.AddPeer(1));
+    const uint8_t byte = 7;
+    CHECK(a.Send(1, NetChannel::ReliableOrdered, &byte, 1));
+    size_t received = 0;
+    uint64_t frame = 0;
+    for (; frame < 30; ++frame) {
+        std::vector<ChannelEvent> ea, eb;
+        CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+        CHECK(ea.empty());
+        for (const auto& event : eb) { CHECK(event.bytes == std::vector<uint8_t>{7}); ++received; }
+        PlatformSleep(0.001);
+    }
+    CHECK(fa.Selected(1) == FallbackTransport::Route::Tcp && fb.Selected(1) == FallbackTransport::Route::Tcp);
+    CHECK(received == 1 && a.PendingMessages(1) == 0);
+    CHECK(b.Send(1, NetChannel::ReliableOrdered, &byte, 1));
+    CHECK(ta.Disconnect(1));
+    std::vector<ChannelEvent> ea, eb;
+    for (; frame < 80 && eb.empty(); ++frame) { CHECK(a.Poll(frame, ea) && b.Poll(frame, eb)); PlatformSleep(0.001); }
+    CHECK(ea.size() == 1 && ea[0].type == ChannelEvent::Type::Disconnected);
+    CHECK(eb.size() == 1 && eb[0].type == ChannelEvent::Type::Disconnected);
+    CHECK(a.PendingMessages(1) == 0 && b.PendingMessages(1) == 0);
+    CHECK(!b.Send(1, NetChannel::ReliableOrdered, &byte, 1));
+}
+
+TEST(NetworkNativeTcpQueueAndLargeFrames) {
+    TcpTransport client, server;
+    std::string error;
+    CHECK(server.Listen({}, &error) && client.Connect(1, server.LocalAddress(), &error));
+    std::vector<uint8_t> body(65536, 42);
+    for (int i = 0; i < 63; ++i) CHECK(client.Send(1, body.data(), body.size()));
+    CHECK(!client.Send(1, body.data(), body.size()));
+    CHECK(client.QueuedBytes(1) == 63 * (body.size() + 4));
+    size_t received = 0;
+    for (uint64_t frame = 0; frame < 500 && (received < 63 || client.QueuedBytes(1) != 0); ++frame) {
+        std::vector<TransportEvent> ea, eb;
+        CHECK(client.Poll(frame, ea) && server.Poll(frame, eb));
+        for (const auto& event : eb) {
+            if (event.type == TransportEvent::Type::Data) { CHECK(event.bytes == body); ++received; }
+            else CHECK(event.type == TransportEvent::Type::Connected);
+        }
+        PlatformSleep(0.001);
+    }
+    CHECK(received == 63 && client.QueuedBytes(1) == 0);
+    for (size_t i = 0; i < TcpTransport::kMaxQueuedFrames; ++i) CHECK(client.Send(1, nullptr, 0));
+    CHECK(!client.Send(1, nullptr, 0));
+    CHECK(client.Disconnect(1) && client.QueuedBytes(1) == 0);
+}
+#endif
 
 TEST(SceneRoundTrip) {
     Json sceneJson = MakeSampleScene("Test");
@@ -245,7 +1136,981 @@ std::string TempProject(const char* name) {
     return d;
 }
 
-Json Call(Engine& e, const char* cmd, const char* args) { return e.Call(cmd, Json::parse(args)); }
+Json Call(Engine& e, const char* cmd, const char* args = "{}") { return e.Call(cmd, Json::parse(args)); }
+
+TEST(NetworkInactiveZeroCost) {
+    const uint64_t syncInstances = FrameSync::InstancesCreated(), authorityInstances = Authority::InstancesCreated();
+    const uint64_t sessionInstances = Session::InstancesCreated(), sessionPolls = Session::PollCalls();
+    const uint64_t instances = LoopbackNetwork::InstancesCreated();
+    const uint64_t polls = LoopbackNetwork::PollCalls();
+    const uint64_t channelInstances = ChannelEndpoint::InstancesCreated();
+    const uint64_t channelPolls = ChannelEndpoint::PollCalls();
+    const uint64_t socketsCreated = PlatformNetSocketsCreated(), socketsLive = PlatformNetSocketsLive();
+    const std::string project = TempProject("network_inactive");
+    std::string text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json settings = Json::parse(text);
+    CHECK(settings["network"].isNull());
+    auto run = [&]() {
+        Engine e;
+        std::string error;
+        CHECK(e.Open(project, &error));
+        CHECK(Call(e, "net.state", "{}")["result"]["state"].asString() == "none");
+        CHECK(Call(e, "net.players", "{}")["result"].size() == 1);
+        CHECK(Call(e, "net.stats", "{}")["result"]["peers"].size() == 0);
+        CHECK(!Call(e, "net.host", "{}")["ok"].asBool());
+        CHECK(Call(e, "net.leave", "{}")["ok"].asBool());
+        std::vector<std::string> hashes;
+        for (int step = 0; step < 4; ++step) {
+            CHECK(Call(e, "input.key", step % 2 == 0 ? R"({"key":"W","down":true})" :
+                                                     R"({"key":"W","down":false})")["ok"].asBool());
+            CHECK(Call(e, "sim.step", R"({"frames":30})")["ok"].asBool());
+            Json shot = Call(e, "render.screenshot", R"({"width":64,"height":36,"inline":false})");
+            CHECK(shot["ok"].asBool());
+            hashes.push_back(shot["result"]["hash"].asString());
+            hashes.push_back(e.GetScene().ToJson().dump());
+        }
+        CHECK(Call(e, "sim.stop", "{}")["ok"].asBool());
+        return hashes;
+    };
+    const auto absent = run();
+    CHECK(absent == run());
+    settings["network"] = Json::parse(R"({"mode":"none"})");
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), settings.dump(2)));
+    CHECK(absent == run());
+    CHECK(LoopbackNetwork::InstancesCreated() == instances);
+    CHECK(LoopbackNetwork::PollCalls() == polls);
+    CHECK(ChannelEndpoint::InstancesCreated() == channelInstances);
+    CHECK(ChannelEndpoint::PollCalls() == channelPolls);
+    CHECK(PlatformNetSocketsCreated() == socketsCreated && PlatformNetSocketsLive() == socketsLive);
+    CHECK(FrameSync::InstancesCreated() == syncInstances);
+    CHECK(Authority::InstancesCreated() == authorityInstances);
+    CHECK(Session::InstancesCreated() == sessionInstances && Session::PollCalls() == sessionPolls);
+    CHECK(RemoveAll(project));
+}
+
+Json NetworkEval(Engine& engine, const std::string& code, EntityId entity = 0) {
+    return engine.Scripts().Eval(code, entity)["value"];
+}
+TEST(NetworkNoneLuaRpcAndLimits) {
+    Engine e;
+    const uint64_t sockets = PlatformNetSocketsCreated(), sessions = Session::InstancesCreated();
+    CHECK(NetworkEval(e, "return {net.isServer(), net.isClient(), net.isHost(), net.localPlayer(), net.players()}", 0) ==
+          Json::parse("[true,false,false,1,[1]]"));
+    CHECK(NetworkEval(e, "got=0; net.on('add',function(n) got=got+n; sender=net.sender() end); net.rpc('server','add',3); return {got,sender}", 0) ==
+          Json::parse("[3,1]"));
+    CHECK(Call(e, "net.rpc", R"({"target":"all","name":"add","args":[4]})")["ok"].asBool());
+    CHECK(NetworkEval(e, "return got", 0).asInt() == 7);
+    CHECK(Call(e, "net.rpc", R"({"target":"others","name":"add","args":[100]})")["ok"].asBool());
+    CHECK(NetworkEval(e, "return got", 0).asInt() == 7);
+    CHECK(!Call(e, "net.rpc", R"({"target":"owner","name":"add"})")["ok"].asBool());
+    CHECK(!Call(e, "net.rpc", R"({"name":"","args":[]})")["ok"].asBool());
+    CHECK(!Call(e, "net.rpc", R"({"name":"add","args":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]})")["ok"].asBool());
+    Json invalid = Json::MakeObject(); invalid["seed"] = std::numeric_limits<double>::infinity();
+    CHECK(e.Call("net.host", invalid)["error"]["code"].asString() == "invalid_argument");
+    invalid["seed"] = 1e100;
+    CHECK(e.Call("net.host", invalid)["error"]["code"].asString() == "invalid_argument");
+    CHECK(NetworkEval(e, "net.on('add',nil); net.rpc('server','add',9); return got", 0).asInt() == 7);
+    CHECK(NetworkEval(e, "local ok=pcall(function() for i=1,65 do net.on('h'..i,function() end) end end); return ok", 0).asBool() == false);
+    CHECK(PlatformNetSocketsCreated() == sockets && Session::InstancesCreated() == sessions);
+    CHECK(!NetworkEval(e, "local t={}; t.self=t; return pcall(function() net.rpc('all','bad',t) end)")[0].asBool());
+}
+
+std::string NetworkProject(const char* name, const char* transport, int maxPlayers = 4) {
+    std::string project = TempProject(name), text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json settings = Json::parse(text);
+    settings["network"] = Json::parse(R"({"mode":"lockstep","port":0,"gameId":"test-game"})");
+    settings["network"]["transport"] = transport;
+    settings["network"]["maxPlayers"] = maxPlayers;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), settings.dump(2)));
+    return project;
+}
+void NetworkReceiver(Engine& e) {
+    CHECK(Call(e, "script.write", R"({"path":"scripts/net_test.lua","source":"local M={}\nfunction M:onStart() received={} joined={} left={} states={} net.on('ping',function(n) received[#received+1]={net.sender(),n} end) end\nfunction M:onPlayerJoined(id) joined[#joined+1]=id end\nfunction M:onPlayerLeft(id) left[#left+1]=id end\nfunction M:onNetState(s) states[#states+1]=s end\nreturn M"})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"NetTest","components":{"Script":{"path":"scripts/net_test.lua"}}})")["ok"].asBool());
+}
+void NetworkSteps(Engine& a, Engine& b, int count, Engine* c = nullptr) {
+    for (int frame = 0; frame < count; ++frame) {
+        a.Step(1); b.Step(1); if (c) c->Step(1);
+    }
+}
+
+
+Session::Random SessionTestRandom(uint64_t seed);
+std::string SyncProject(const char* name, const char* transport, bool rollback = false) {
+    std::string project = NetworkProject(name, transport), text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text)); Json config = Json::parse(text);
+    config["network"]["mode"] = rollback ? "rollback" : "lockstep";
+    config["network"]["actions"] = Json::parse("[\"W\",\"Space\"]");
+    config["network"]["axes"] = Json::parse("[\"LeftX\"]");
+    config["network"]["hashInterval"] = 10;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/sync_test.lua"), R"(
+local M={}
+function M:onStart() self.n=0; game.set('total',0) end
+function M:onUpdate()
+ local total=game.get('total',0)
+ for _,id in ipairs(net.players()) do
+  local p=input.player(id)
+  if p.down('W') then total=total+id end
+  if p.pressed('Space') then total=total+10 end
+  total=total+p.axis('LeftX')
+ end
+ game.set('total',total); self.n=self.n+1
+ self:set('Transform',{position={total,0,0}})
+end
+return M
+)"));
+    return project;
+}
+void SyncPrepare(Engine& host, Engine& client, const std::string& project, const char* transport) {
+    std::string error; CHECK(host.Open(project, &error)); CHECK(client.Open(project, &error));
+    for (Engine* engine : {&host, &client}) {
+        engine->GetScene().Clear();
+        CHECK(Call(*engine, "entity.create", R"({"name":"Counter","components":{"Transform":{},"Script":{"path":"scripts/sync_test.lua"}}})")["ok"].asBool());
+    }
+    CHECK(Call(host, "net.host", R"({"seed":71,"room":"sync-room"})")["ok"].asBool());
+    Json join=Json::MakeObject(); join["address"]=std::string(transport)=="loopback"?"sync-room":"127.0.0.1";
+    if (std::string(transport)!="loopback") join["port"]=host.Network()->State()["port"];
+    CHECK(client.Call("net.join",join)["ok"].asBool());
+    NetworkSteps(host,client,30);
+    CHECK(Call(host,"net.ready",R"({"ready":true})")["ok"].asBool());
+    CHECK(Call(client,"net.ready",R"({"ready":true})")["ok"].asBool());
+    NetworkSteps(host,client,20);
+    CHECK(Call(host,"net.start")["ok"].asBool());
+}
+std::string AuthorityProject(const char* name, const char* transport, bool prefab = false) {
+    std::string project = SyncProject(name, transport), text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text)); Json config = Json::parse(text);
+    config["network"]["mode"] = "authoritative"; config["network"]["snapshotRate"] = 20;
+    if (prefab) config["network"]["playerPrefab"] = "prefabs/network_player.prefab.json";
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/authority.lua"), R"(
+local M={}
+function M:onStart()
+ net.on('owner-message',function(id,n) game.set('owner-message',(game.get('owner-message') or 0)+n) end)
+ if net.isServer() and self.name=='P2' then
+  timer.after(0.3,function() scene.create('Spawned',{Transform={position={3,0,0}},NetSync={fields={['Transform.position']={onChange=true}}}}) end)
+  timer.after(0.8,function() local id=scene.find('Spawned'); if id then scene.destroy(id) end end)
+ end
+end
+function M:onUpdate()
+ local n=self:get('NetPlayer'); local p=input.player(n.player); local t=self:get('Transform')
+ if p.down('W') then t.position.x=t.position.x+1 end
+ if p.pressed('Space') then t.position.y=t.position.y+1 end
+ self:set('Transform',t)
+end
+return M
+)"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/authority_physics.lua"), R"(
+local M={}
+function M:onUpdate()
+ local p=input.player(self:get('NetPlayer').player)
+ self:set('RigidBody2D',{velocity={x=p.down('W') and 6 or 0,y=0,z=0}})
+end
+return M
+)"));
+    Json player = Json::parse(R"({"format":"ownengine.prefab","version":1,"name":"NetworkPlayer","entities":[{"id":1,"name":"Player","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{},"NetSync":{"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret"}}}]})");
+    CHECK(WriteTextFile(JoinPath(project,"prefabs/network_player.prefab.json"),player.dump())); return project;
+}
+void AuthorityPrepare(Engine& host, Engine& client, const std::string& project, const char* transport, bool prefab = false, bool physics = false) {
+    std::string error; CHECK(host.Open(project,&error)); CHECK(client.Open(project,&error));
+    for (Engine* e : {&host,&client}) {
+        e->GetScene().Clear();
+        if (!prefab) {
+            CHECK(Call(*e,"entity.create",R"({"name":"P1","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":1,"team":1},"NetSync":{"owner":1,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-host"}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"P2","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":2,"team":2},"NetSync":{"owner":2,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-client"}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Remote","components":{"Transform":{},"Velocity":{"linear":[1,0,0]},"NetSync":{"fields":{"Transform.position":{"onChange":true,"quantize":0.1}}}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Far","components":{"Transform":{"position":[5000,0,0]},"NetSync":{"distance":10}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Team1","components":{"Transform":{},"NetSync":{"teamOnly":true,"team":1}}})")["ok"].asBool());
+        }
+    }
+    if (physics) {
+        for (Engine* e : {&host,&client}) {
+            for (const char* name : {"P1","P2"}) {
+                Json collider=Json::MakeObject();collider["id"]=name;collider["type"]="Collider2D"; CHECK(e->Call("component.add",collider)["ok"].asBool());
+                Json body=Json::MakeObject();body["id"]=name;body["type"]="RigidBody2D";body["values"]=Json::parse(R"({"gravityScale":0,"fixedRotation":true})");CHECK(e->Call("component.add",body)["ok"].asBool());
+                Json script=Json::MakeObject();script["id"]=name;script["type"]="Script";script["values"]=Json::parse(R"({"path":"scripts/authority_physics.lua"})");CHECK(e->Call("component.set",script)["ok"].asBool());
+                Json fields=Json::MakeObject();fields["id"]=name;fields["type"]="NetSync";fields["values"]=Json::parse(R"({"fields":{"Transform.position":{"onChange":true},"RigidBody2D.velocity":{"onChange":true}}})");CHECK(e->Call("component.set",fields)["ok"].asBool());
+            }
+            e->GetScene().Get<Transform>(e->GetScene().FindByName("P1"))->position.y=10;
+        }
+    }
+    CHECK(Call(host,"net.host",R"({"seed":71,"room":"authority-room"})")["ok"].asBool());
+    Json join = Json::MakeObject(); join["address"] = std::string(transport)=="loopback"?"authority-room":"127.0.0.1";
+    if (std::string(transport)!="loopback") join["port"] = host.Network()->State()["port"];
+    CHECK(client.Call("net.join",join)["ok"].asBool()); NetworkSteps(host,client,30);
+    CHECK(Call(host,"net.ready",R"({"ready":true})")["ok"].asBool()); CHECK(Call(client,"net.ready",R"({"ready":true})")["ok"].asBool()); NetworkSteps(host,client,20);
+    NetworkSteps(host,client,320);
+    CHECK(Call(host,"net.start")["ok"].asBool()); NetworkSteps(host,client,10);
+}
+TEST(NetworkAuthoritativeOwnershipPredictionAndRelevance) {
+    std::string project = AuthorityProject("authority","loopback"); Engine host,client;
+    AuthorityPrepare(host,client,project,"loopback");
+    CHECK(host.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    EntityId host1=host.GetScene().FindByName("P1"),host2=host.GetScene().FindByName("P2");
+    host.Input().down.insert("W"); client.Input().down.insert("W"); client.Input().pressedThisFrame.insert("Space");
+    client.Audio().StartCapture(); NetworkSteps(host,client,24);
+    CHECK(host.GetScene().Get<Transform>(host1)->position.x>10 && host.GetScene().Get<Transform>(host2)->position.x>10);
+    CHECK(host.GetScene().Get<Transform>(host1)->position.y==0 && host.GetScene().Get<Transform>(host2)->position.y==1);
+    EntityId own=client.GetScene().FindByName("P2"); CHECK(own!=0);
+    Json replicated=Call(client,"net.entities")["result"];
+    for (const auto& entity:replicated.items()) {
+        if (entity["fields"]["name"].asString()=="P1") CHECK(!entity["fields"].has("Tag.tags"));
+        if (entity["fields"]["name"].asString()=="P2") CHECK(entity["fields"]["Tag.tags"].asString()=="secret-client");
+        if (entity["fields"]["name"].asString()=="Remote") {
+            float x=client.GetScene().Get<Transform>(static_cast<EntityId>(entity["id"].asNumber()))->position.x;
+            CHECK(x<=entity["fields"]["Transform.position"][0].asNumber()+0.001);
+        }
+    }
+    CHECK(client.GetScene().Get<Transform>(own)->position.y==1);
+    CHECK(client.NetworkCall("stats",Json())["corrections"].asNumber()>0);
+    CHECK(Call(host,"net.rpc",R"({"target":"owner","entity":"P2","name":"owner-message","args":[2,7]})")["ok"].asBool());
+    NetworkSteps(host,client,3);
+    CHECK(client.GameData()["owner-message"].asNumber()==7);
+    CHECK(host.GameData()["owner-message"].isNull());
+    CHECK(Call(client,"net.rpc",R"({"target":"owner","entity":"P1","name":"owner-message","args":[1,5]})")["ok"].asBool());
+    NetworkSteps(host,client,3); CHECK(host.GameData()["owner-message"].asNumber()==5);
+    CHECK(!Call(client,"component.set",R"({"id":"P1","type":"Transform","values":{"position":[999,0,0]}})")["ok"].asBool());
+    CHECK(!Call(host,"script.eval",R"({"code":"1"})")["ok"].asBool());
+    // Client holds prediction input while the server is temporarily not advancing.
+    uint64_t before=client.Frame(); client.Step(100); CHECK(client.Frame()<=before+32);
+    NetworkSteps(host,client,50); CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    CHECK(client.GetScene().FindByName("Far")==0 && client.GetScene().FindByName("Team1")==0);
+    CHECK(host.GetScene().FindByName("Spawned")==0 && client.GetScene().FindByName("Spawned")==0);
+    CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty());
+    uint64_t ack=static_cast<uint64_t>(client.NetworkCall("state",Json())["sync"]["acknowledgedInput"].asNumber());
+    CHECK(client.Audio().SaveState()->capture.size()<=ack*1600);
+    // Built-in controller uses the controlling authenticated player's input.
+    host.Stop(); client.Stop(); RemoveAll(project);
+}
+TEST(NetworkAuthoritativePrefabAndNativeTcpUdp) {
+#ifndef __EMSCRIPTEN__
+    for (const char* transport : {"tcp","udp"}) {
+        std::string project=AuthorityProject(transport,transport,true); Engine host,client;
+        Engine namespaceCheck; std::string namespaceError; CHECK(namespaceCheck.Open(project,&namespaceError));
+        namespaceCheck.GetScene().Clear(); namespaceCheck.GetScene().Create("Existing");
+        CHECK(WriteTextFile(JoinPath(project,"prefabs/namespace.prefab.json"),R"({"format":"ownengine.prefab","version":1,"entities":[{"id":1,"name":"Owned","components":{"Transform":{},"NetSync":{"owner":2},"NetPlayer":{"player":2}}},{"id":2,"name":"Child","parent":1,"components":{"Transform":{}}}]})"));
+        EntityId root=namespaceCheck.InstantiatePrefabFile("prefabs/namespace.prefab.json",0);
+        CHECK(namespaceCheck.GetScene().Get<NetSync>(root)->owner==2 && namespaceCheck.GetScene().Get<NetPlayer>(root)->player==2);
+
+        AuthorityPrepare(host,client,project,transport,true); client.Input().down.insert("W");
+        NetworkSteps(host,client,150);
+        CHECK(host.GetScene().Pool<NetPlayer>().size()==2 && client.GetScene().Pool<NetPlayer>().size()==2);
+        CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+        CHECK(client.NetworkCall("stats",Json())["corrections"].asNumber()>10);
+        for (const auto& player:host.GetScene().Pool<NetPlayer>()) if(player.second.player==2) CHECK(host.GetScene().Get<Transform>(player.first)->position.x>50);
+        CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty()); RemoveAll(project);
+    }
+#endif
+}
+
+TEST(NetworkAuthoritativePhysicsPrediction) {
+    std::string project=AuthorityProject("authority_physics","loopback"); Engine host,client;
+    AuthorityPrepare(host,client,project,"loopback",false,true); client.Input().down.insert("W");
+    NetworkSteps(host,client,150); client.Input().down.erase("W"); NetworkSteps(host,client,40);
+    EntityId serverPlayer=host.GetScene().FindByName("P2"),localPlayer=client.GetScene().FindByName("P2");
+    CHECK(serverPlayer && localPlayer);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(serverPlayer)->position.x-client.GetScene().Get<Transform>(localPlayer)->position.x)<0.01f);
+    CHECK(host.GetScene().Get<Transform>(serverPlayer)->position.x>10);
+    CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+std::vector<uint8_t> AuthorityPacket(uint8_t kind, const Json& body, uint64_t epoch = 1) {
+    std::string text=body.dump(); ByteWriter writer(60000); writer.WriteU8(kind); writer.WriteU64(epoch);
+    writer.WriteBlob(reinterpret_cast<const uint8_t*>(text.data()),text.size()); return writer.Data();
+}
+TEST(NetworkAuthoritativeDeltaAckAndBounds) {
+    SessionConfig config; config.mode="authoritative"; config.sync.keys={"W"};
+    std::vector<std::vector<uint8_t>> outbound, replies;
+    Authority host(config,true,1,77,[&](uint32_t,const std::vector<uint8_t>& bytes){outbound.push_back(bytes);return true;});
+    Authority client(config,false,2,77,[&](uint32_t,const std::vector<uint8_t>& bytes){replies.push_back(bytes);return true;});
+    auto exchange=[&] {
+        for(int n=0;n<4;++n) {
+            auto sent=std::move(outbound); outbound.clear(); for(const auto& bytes:sent) client.Receive(1,bytes);
+            auto returned=std::move(replies); replies.clear(); for(const auto& bytes:returned) host.Receive(2,bytes);
+        }
+    };
+    std::string error; CHECK(host.Start({1,2},&error)); exchange(); CHECK(host.TakeStart() && client.TakeStart());
+    FrameInput held; held.down=1; CHECK(client.Submit(held)==1); exchange(); auto inputs=host.Consume(FrameInput{});
+    CHECK(inputs.at(1).down==0 && inputs.at(2).down==1);
+    Json world=Json::parse(R"({"1":{"source":1,"owner":2,"name":"Player","parent":0,"predict":true,"prefab":"","always":["Transform.rotation"],"Transform.position":[1,0,0],"Transform.rotation":[0,0,0],"Tag.tags":"secret"}})");
+    host.Snapshot(1,{{2,world}}); exchange(); auto updates=client.DrainUpdates();
+    CHECK(updates.size()==1 && updates.back().world==world && updates.back().acknowledged==1);
+    world["1"]["Transform.position"]=Json::parse("[2,0,0]"); host.Snapshot(2,{{2,world}});
+    CHECK(outbound.size()==1);
+    ByteReader reader(outbound[0].data(),outbound[0].size()); uint8_t kind; uint64_t epoch; std::vector<uint8_t> blob;
+    CHECK(reader.ReadU8(kind) && reader.ReadU64(epoch) && reader.ReadBlob(blob,56000));
+    Json delta=Json::parse(std::string(blob.begin(),blob.end()));
+    CHECK(delta["base"].asNumber()==1 && delta["delta"]["set"]["1"].has("Transform.position") && delta["delta"]["set"]["1"].has("Transform.rotation"));
+    CHECK(!delta["delta"]["set"]["1"].has("Tag.tags")); exchange(); updates=client.DrainUpdates(); CHECK(updates.size()==1 && updates.back().world==world);
+    host.Snapshot(3,{{2,Json::MakeObject()}}); exchange(); CHECK(client.DrainUpdates().back().world.size()==0);
+    Json spoof=Json::parse(R"({"frame":2,"player":1,"input":{"down":"1","pulse":"0","axes":[0,0,0,0,0,0]}})");
+    host.Receive(2,AuthorityPacket(35,spoof)); spoof.erase("player"); spoof["frame"]=1000; host.Receive(2,AuthorityPacket(35,spoof));
+    spoof["frame"]=2; spoof["input"]["down"]="2"; host.Receive(2,AuthorityPacket(35,spoof));
+    host.Receive(2,AuthorityPacket(36,Json::MakeObject())); host.Receive(99,AuthorityPacket(35,spoof));
+    CHECK(host.State()["rejected"].asNumber()==5);
+    client.Receive(2,AuthorityPacket(36,Json::MakeObject()));
+    std::vector<uint8_t> deep(17,'['); deep.insert(deep.end(),17,']'); ByteWriter malformed(100); malformed.WriteU8(36); malformed.WriteU64(1); malformed.WriteBlob(deep.data(),deep.size()); client.Receive(1,malformed.Data());
+    CHECK(client.State()["rejected"].asNumber()==2);
+    SessionConfig bad; for(const char* value:{R"({"network":{"mode":"authoritative","snapshotRate":0}})",R"({"network":{"mode":"authoritative","predictionFrames":65}})",R"({"network":{"mode":"authoritative","interpolationFrames":31}})",R"({"network":{"mode":"authoritative","playerPrefab":"../escape.json"}})"}) CHECK(!SessionConfig::Parse(Json::parse(value),bad,&error));
+}
+TEST(NetworkAuthoritativeSeededSessionsTenThousandFrames) {
+    LoopbackConfig faults; faults.seed=931; faults.lossPermille=60; faults.duplicatePermille=80; faults.latencyFrames=1; faults.reorderFrames=2;
+    auto wire=std::make_shared<LoopbackNetwork>(faults); SessionConfig config; config.mode="authoritative"; config.transport="loopback"; config.sync.keys={"W"};
+    Session server(config,std::make_unique<LoopbackTransport>(wire,1),true,1,"Server",71,SessionTestRandom(810));
+    Session client(config,std::make_unique<LoopbackTransport>(wire,2),false,1,"Client",0,SessionTestRandom(811));
+    uint64_t tick=0; for(;tick<200;++tick) {server.Advance(tick);client.Advance(tick);}
+    CHECK(server.Connected() && client.Connected());
+    Authority host(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& b){return server.SendSync(player,b);});
+    Authority guest(config,false,2,99,[&](uint32_t player,const std::vector<uint8_t>& b){return client.SendSync(player,b);});
+    std::string error; CHECK(host.Start({1,2},&error)); uint64_t total=0,frames=0; Json last;
+    for(;tick<200000 && frames<10000;++tick) {
+        server.Advance(tick);client.Advance(tick);
+        for(const auto& msg:server.DrainSync()) host.Receive(msg.first,msg.second);
+        for(const auto& msg:client.DrainSync()) guest.Receive(msg.first,msg.second);
+        host.TakeStart();guest.TakeStart();
+        if(guest.Running() && guest.CanPredict()) {FrameInput input;input.down=(tick/7)%2;guest.Submit(input);}
+        if(host.Running()) {
+            auto inputs=host.Consume(FrameInput{});total+=inputs[2].down; ++frames;
+            if(frames%3==0) {Json world=Json::MakeObject();world["1"]=Json::MakeObject();world["1"]["Transform.position"]=Json::parse("[0,0,0]");world["1"]["Transform.position"][0]=total;host.Snapshot(frames,{{2,world}});}
+        }
+        for(const auto& update:guest.DrainUpdates()) last=update.world;
+        if(host.State()["state"].asString()=="stopped" || guest.State()["state"].asString()=="stopped") break;
+    }
+    CHECK(frames==10000 && host.Running() && guest.Running() && wire->DroppedMessages()>0 && last.size()==1);
+    Json world=Json::MakeObject();world["1"]=Json::MakeObject();world["1"]["Transform.position"]=Json::parse("[0,0,0]");world["1"]["Transform.position"][0]=total;host.Snapshot(frames,{{2,world}});
+    for(int n=0;n<500;++n,++tick) {server.Advance(tick);client.Advance(tick);for(const auto& msg:server.DrainSync())host.Receive(msg.first,msg.second);for(const auto& msg:client.DrainSync())guest.Receive(msg.first,msg.second);for(const auto& update:guest.DrainUpdates())last=update.world;}
+    CHECK(last==world);
+}
+
+
+TEST(NetworkLoopbackFaultReconfiguration) {
+    auto wire = std::make_shared<LoopbackNetwork>(); LoopbackTransport a(wire, 1), b(wire, 2);
+    LoopbackConfig config; config.latencyFrames = 3; config.seed = 45; wire->Configure(config);
+    uint8_t old = 1, fresh = 2; CHECK(a.Send(2, &old, 1));
+    config.latencyFrames = 0; wire->Configure(config); CHECK(a.Send(2, &fresh, 1));
+    std::vector<TransportEvent> events; CHECK(b.Poll(0, events)); CHECK(events.size() == 1 && events[0].bytes[0] == fresh);
+    events.clear(); CHECK(b.Poll(2, events)); CHECK(events.empty()); CHECK(wire->PendingMessages() == 1);
+    CHECK(b.Poll(3, events)); CHECK(events.size() == 1 && events[0].bytes[0] == old);
+    config.lossPermille = 1001;
+    bool refused = false; try { wire->Configure(config); } catch (const std::invalid_argument&) { refused = true; }
+    CHECK(refused && wire->Configuration().lossPermille == 0);
+}
+
+TEST(NetworkLocalPreviewAndFaultControls) {
+    uint64_t sockets = PlatformNetSocketsCreated();
+    for (bool rollback : {false, true}) {
+        std::string project = SyncProject(rollback ? "preview_rollback" : "preview_lockstep", "tcp", rollback), error;
+        Engine host; CHECK(host.Open(project, &error)); host.GetScene().Clear();
+        CHECK(Call(host, "entity.create", R"({"name":"Counter","components":{"Transform":{},"Script":{"path":"scripts/sync_test.lua"}}})")["ok"].asBool());
+        Json edit = host.GetScene().ToJson();
+        CHECK(!Call(host, "net.spawn_local_peers", R"({"count":4})")["ok"].asBool());
+        CHECK(!Call(host, "net.spawn_local_peers", R"({"count":1.5})")["ok"].asBool());
+        CHECK(Call(host, "net.spawn_local_peers", R"({"count":2,"seed":71})")["ok"].asBool());
+        CHECK(Call(host, "net.simulate", R"({"seed":45,"latencyFrames":1,"jitterFrames":1,"lossPermille":50,"duplicatePermille":100,"reorderFrames":1})")["ok"].asBool());
+        CHECK(!Call(host, "net.simulate", R"({"latencyFrames":3601})")["ok"].asBool());
+        host.Step(160);
+        Json peers = Call(host, "net.local_peers")["result"]; CHECK(peers.size() == 3);
+        for (const Json& peer : peers.items()) CHECK(peer["state"]["sync"]["state"].asString() == "running");
+        CHECK(!Call(host, "net.peer_call", R"({"peer":1,"command":"sim.stop"})")["ok"].asBool());
+        CHECK(Call(host, "net.peer_call", R"({"peer":1,"command":"input.key","args":{"key":"W","down":true}})")["result"]["ok"].asBool());
+        host.Step(120);
+        CHECK(host.GameData()["total"].asNumber() > 30);
+        CHECK(Call(host, "net.peer_call", R"({"peer":1,"command":"input.key","args":{"key":"W","down":false}})")["result"]["ok"].asBool());
+        // Drain old deadlines before asserting steady held-input agreement.
+        CHECK(Call(host, "net.simulate", R"({"latencyFrames":0,"jitterFrames":0,"lossPermille":0,"duplicatePermille":0,"reorderFrames":0})")["ok"].asBool());
+        host.Step(160);
+        for (size_t i = 1; i < 3; ++i) {
+            CHECK(host.LocalPeer(i)->GameData().dump() == host.GameData().dump());
+            CHECK(Call(*host.LocalPeer(i), "net.desync_report")["result"].size() == 0);
+        }
+        CHECK(Call(host, "net.stats")["result"]["simulation"]["dropped"].asNumber() > 0);
+        host.Stop(); CHECK(!host.LocalPeer(1)); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+        CHECK(Call(host, "net.state")["result"]["transport"].asString() == "tcp");
+        CHECK(Call(host, "net.spawn_local_peers", R"({"count":1})")["ok"].asBool());
+        host.Step(100); CHECK(host.LocalPeer(1)); CHECK(host.Open(project, &error)); CHECK(!host.LocalPeer(1));
+        RemoveAll(project);
+    }
+    CHECK(PlatformNetSocketsCreated() == sockets);
+    std::string project = AuthorityProject("preview_authority", "tcp", true), error;
+    Engine host; CHECK(host.Open(project, &error)); host.GetScene().Clear();
+    CHECK(Call(host, "net.spawn_local_peers", R"({"count":1})")["ok"].asBool()); host.Step(100);
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
+    CHECK(host.LocalPeer(1)->GetScene().Pool<NetPlayer>().size() == 2);
+    host.Stop(); RemoveAll(project);
+}
+
+
+TEST(NetworkSampleGamesOfflineAndMultiplayer) {
+    for (const char* name : {"NetCoop", "NetDuel", "NetArena"}) {
+        std::string project = JoinPath(TestSourceDir(), std::string("samples/") + name), error;
+        Engine host; CHECK(host.Open(project, &error));
+        Json edit = host.GetScene().ToJson();
+        // The packaged player uses the same ordinary play path for offline practice.
+        CHECK(Call(host, "sim.step", R"({"frames":2})")["ok"].asBool());
+        CHECK(host.GetScene().Pool<NetPlayer>().size() == 1);
+        CHECK(Call(host, "script.errors")["result"].size() == 0);
+        for (int crystal = 0; crystal < 5; ++crystal) {
+            EntityId id = host.GetScene().Pool<NetPlayer>().begin()->first;
+            for (int tick = 0; tick < 150; ++tick) {
+                Vec3 p = host.GetScene().Get<Transform>(id)->position;
+                Vec3 t = host.GetScene().Get<Transform>(host.GetScene().FindByName("Target"))->position;
+                if (Length(p - t) < 0.8f) break;
+                for (const auto& key : std::vector<std::pair<const char*, bool>>{
+                         {"W", p.z > t.z + 0.1f}, {"S", p.z < t.z - 0.1f},
+                         {"A", p.x > t.x + 0.1f}, {"D", p.x < t.x - 0.1f}}) {
+                    Json input = Json::MakeObject(); input["key"] = key.first; input["down"] = key.second;
+                    CHECK(host.Call("input.key", input)["ok"].asBool());
+                }
+                host.Step(1);
+            }
+            for (const char* key : {"W", "A", "S", "D"}) {
+                Json release = Json::MakeObject(); release["key"] = key; release["down"] = false;
+                CHECK(host.Call("input.key", release)["ok"].asBool());
+            }
+            CHECK(Call(host, "input.key", R"({"key":"Space","down":true})")["ok"].asBool()); host.Step(1);
+            CHECK(Call(host, "input.key", R"({"key":"Space","down":false})")["ok"].asBool()); host.Step(1);
+        }
+        CHECK(host.GameData()["winner"].asString() == (std::string(name) == "NetCoop" ? "team" : "1"));
+        host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+        CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
+        host.Step(180);
+        Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) continue;
+        CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+        CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
+        CHECK(client->GetScene().Pool<NetPlayer>().size() == 2);
+        CHECK(Call(host, "script.errors")["result"].size() == 0);
+        CHECK(Call(*client, "script.errors")["result"].size() == 0);
+        CHECK(!host.GetScene().Get<UIButton>(host.GetScene().FindByName("Host"))->visible);
+        // Player 1 starts at (-2,2), walks to the first target and collects it.
+        CHECK(Call(host, "input.touch", R"({"id":1,"x":132,"y":533,"width":1280,"height":720})")["ok"].asBool()); host.Step(30);
+        CHECK(Call(host, "input.touch", R"({"id":1,"down":false})")["ok"].asBool()); host.Step(30);
+        CHECK(Call(host, "input.click", R"({"x":1125,"y":603,"width":1280,"height":720})")["ok"].asBool()); host.Step(8);
+        CHECK(Call(host, "input.key", R"({"key":"Space","down":false})")["ok"].asBool()); host.Step(100);
+        CHECK(host.GameData()["scores"][std::string(name) == "NetCoop" ? "team" : "1"].asNumber() == 1);
+        CHECK(host.GetScene().Get<Transform>(host.GetScene().FindByName("Target"))->position.x == 2);
+        // A remote input resets the round; authority sends the result through UIText.text.
+        CHECK(Call(*client, "input.touch", R"({"id":2,"x":1125,"y":533,"width":1280,"height":720})")["ok"].asBool()); host.Step(8);
+        CHECK(Call(*client, "input.touch", R"({"id":2,"down":false})")["ok"].asBool()); host.Step(100);
+        CHECK(host.GameData()["scores"].size() == 0);
+        CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Score"))->text ==
+              client->GetScene().Get<UIText>(client->GetScene().FindByName("Score"))->text);
+        for (Engine* peer : {&host, client}) {
+            CHECK(Call(*peer, "script.errors")["result"].size() == 0);
+            CHECK(Call(*peer, "net.desync_report")["result"].size() == 0);
+        }
+        host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+    }
+}
+
+TEST(NetworkDedicatedReadyBarrierAndCleanup) {
+#ifndef __EMSCRIPTEN__
+    std::string project = AuthorityProject("dedicated", "tcp", true), error;
+    uint64_t live = PlatformNetSocketsLive();
+    Engine server, client; CHECK(server.Open(project, &error)); CHECK(client.Open(project, &error));
+    for (Engine* engine : {&server, &client}) engine->GetScene().Clear();
+    CHECK(Call(server, "net.serve", R"({"port":0,"seed":71})")["ok"].asBool());
+    CHECK(!server.Gpu()); CHECK(Call(server, "net.state")["result"]["dedicated"].asBool());
+    CHECK(!Call(server, "net.state")["result"]["isHost"].asBool()); CHECK(Call(server, "net.state")["result"]["isServer"].asBool());
+    server.Step(10); CHECK(server.Frame() == 0);
+    Json join = Json::MakeObject(); join["port"] = server.Network()->State()["port"];
+    CHECK(client.Call("net.join", join)["ok"].asBool()); NetworkSteps(server, client, 40);
+    CHECK(server.Frame() == 0); CHECK(Call(server, "net.state")["result"]["sync"]["state"].asString() == "idle");
+    CHECK(Call(client, "net.ready", R"({"ready":true})")["ok"].asBool()); NetworkSteps(server, client, 120);
+    CHECK(server.Frame() > 50); CHECK(Call(server, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(server.GetScene().Pool<NetPlayer>().size() == 1); CHECK(client.GetScene().Pool<NetPlayer>().size() == 1);
+    CHECK(server.GetScene().Pool<NetPlayer>().begin()->second.player == 2);
+    CHECK(!Call(server, "net.simulate", R"({"lossPermille":10})")["ok"].asBool());
+    server.Stop(); client.Stop(); CHECK(PlatformNetSocketsLive() == live); RemoveAll(project);
+#endif
+}
+
+std::vector<uint8_t> MaskedWebFrame(uint8_t opcode, bool fin, const std::vector<uint8_t>& payload) {
+    auto frame = WebSocketServerReader::Encode(opcode, payload.data(), payload.size());
+    if (!fin) frame[0] &= 0x7f;
+    size_t header = payload.size() < 126 ? 2 : payload.size() <= 65535 ? 4 : 10;
+    frame[1] |= 0x80;
+    frame.insert(frame.begin() + static_cast<ptrdiff_t>(header), {1, 2, 3, 4});
+    for (size_t i = 0; i < payload.size(); ++i) frame[header + 4 + i] ^= static_cast<uint8_t>(1 + i % 4);
+    return frame;
+}
+const std::string kWebUpgrade = "GET /game HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+TEST(NetworkWebSocketServerFramingAndBounds) {
+    WebSocketServerReader reader; std::vector<WebSocketServerReader::Frame> frames;
+    for (char c : kWebUpgrade) CHECK(reader.Feed(reinterpret_cast<const uint8_t*>(&c), 1, frames));
+    CHECK(reader.Ready()); CHECK(reader.TakeUpgrade().find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos);
+    auto first = MaskedWebFrame(2, false, {1, 2}), ping = MaskedWebFrame(9, true, {9}), last = MaskedWebFrame(0, true, {3, 4});
+    first.insert(first.end(), ping.begin(), ping.end()); first.insert(first.end(), last.begin(), last.end());
+    for (uint8_t b : first) CHECK(reader.Feed(&b, 1, frames));
+    CHECK(frames.size() == 2); CHECK(frames[0].opcode == 9); CHECK(frames[1].bytes == std::vector<uint8_t>({1,2,3,4}));
+    std::vector<uint8_t> large(65536, 42); auto packet = MaskedWebFrame(2, true, large); frames.clear();
+    for (size_t offset = 0; offset < packet.size(); offset += 16384)
+        CHECK(reader.Feed(packet.data() + offset, std::min<size_t>(16384, packet.size() - offset), frames));
+    CHECK(frames.size() == 1 && frames[0].bytes == large);
+    auto invalid = WebSocketServerReader::Encode(2, large.data(), 1);
+    CHECK(!reader.Feed(invalid.data(), invalid.size(), frames)); CHECK(!reader.Feed(nullptr, 0, frames));
+    for (auto bad : {MaskedWebFrame(1, true, {1}), MaskedWebFrame(0, true, {1}), MaskedWebFrame(9, false, {1}), MaskedWebFrame(8, true, {1}), MaskedWebFrame(8, true, {3, 237}), MaskedWebFrame(8, true, {3, 232, 0xc0, 0x80})}) {
+        WebSocketServerReader test; CHECK(test.Feed(reinterpret_cast<const uint8_t*>(kWebUpgrade.data()), kWebUpgrade.size(), frames));
+        CHECK(!test.Feed(bad.data(), bad.size(), frames));
+    }
+    WebSocketServerReader overflow; std::vector<uint8_t> headers(8193, 'a');
+    CHECK(!overflow.Feed(headers.data(), headers.size(), frames));
+    WebSocketServerReader badKey; std::string request = kWebUpgrade; request.replace(request.find("dGhl"), 24, "XXXXXXXXXXXXXXXXXXXXXXXX");
+    CHECK(!badKey.Feed(reinterpret_cast<const uint8_t*>(request.data()), request.size(), frames));
+}
+
+TEST(NetworkWebSocketNativeListener) {
+#ifndef __EMSCRIPTEN__
+    uint64_t live = PlatformNetSocketsLive();
+    {
+        WebSocketServerTransport server; std::string error; CHECK(server.Listen({}, &error));
+        auto client = CreateNetSocket(SocketKind::Tcp, &error); CHECK(client != nullptr);
+        CHECK(client->Connect(server.LocalAddress(), &error));
+        std::vector<uint8_t> send(kWebUpgrade.begin(), kWebUpgrade.end());
+        auto message = MaskedWebFrame(2, true, {4, 5, 6}), ping = MaskedWebFrame(9, true, {7});
+        send.insert(send.end(), message.begin(), message.end()); send.insert(send.end(), ping.begin(), ping.end());
+        size_t offset = 0; std::vector<uint8_t> received; PeerId peer = 0; bool delivered = false;
+        for (uint64_t tick = 0; tick < 100; ++tick) {
+            if (client->State() == SocketState::Open && offset < send.size()) {
+                size_t n = 0; auto result = client->Send(send.data() + offset, send.size() - offset, n);
+                CHECK(result == SocketIo::Progress || result == SocketIo::WouldBlock); offset += n;
+            }
+            std::vector<TransportEvent> events; CHECK(server.Poll(tick, events));
+            for (const auto& event : events) {
+                if (event.type == TransportEvent::Type::Connected) peer = event.peer;
+                if (event.type == TransportEvent::Type::Data) { delivered = event.bytes == std::vector<uint8_t>({4,5,6}); CHECK(server.Send(event.peer, event.bytes.data(), event.bytes.size())); }
+            }
+            for (size_t i = 0; i < 4; ++i) {
+                uint8_t bytes[1024]; size_t n = 0; auto result = client->Receive(bytes, sizeof(bytes), n);
+                if (result == SocketIo::WouldBlock) break; CHECK(result == SocketIo::Progress); received.insert(received.end(), bytes, bytes + n);
+            }
+            if (delivered && received.size() > kWebUpgrade.size()) break;
+        }
+        CHECK(peer != 0 && delivered);
+        std::string text(received.begin(), received.end()); CHECK(text.find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos);
+        auto pong = WebSocketServerReader::Encode(10, std::vector<uint8_t>{7}.data(), 1);
+        auto echo = WebSocketServerReader::Encode(2, std::vector<uint8_t>{4, 5, 6}.data(), 3);
+        CHECK(std::search(received.begin(), received.end(), pong.begin(), pong.end()) != received.end());
+        CHECK(std::search(received.begin(), received.end(), echo.begin(), echo.end()) != received.end());
+        CHECK(server.Disconnect(peer)); CHECK(!server.Send(peer, send.data(), 1));
+    }
+    CHECK(PlatformNetSocketsLive() == live);
+#endif
+}
+
+TEST(NetworkLockstepEngineGatesAndDesync) {
+    std::string project=SyncProject("sync_lockstep","loopback");
+    Engine host,client; SyncPrepare(host,client,project,"loopback");
+    host.Input().down.insert("W"); client.Input().down.insert("W"); client.Input().pressedThisFrame.insert("Space");
+    NetworkSteps(host,client,100);
+    CHECK(host.Frame()>20 && client.Frame()>20);
+    CHECK(host.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+    uint64_t held=host.Frame(); host.Step(20); CHECK(host.Frame() <= held+3);
+    NetworkSteps(host,client,40);
+    CHECK(host.NetworkCall("desync_report",Json()).size()==0);
+    CHECK(Call(host,"input.player",R"({"player":2})")["result"]["down"].size()==1);
+    CHECK(!Call(host,"script.eval",R"({"code":"1"})")["ok"].asBool() || !host.InPlaySession());
+    host.GetScene().Pool<Transform>().begin()->second.scale.y=100;
+    NetworkSteps(host,client,400);
+    Json report=host.NetworkCall("desync_report",Json());
+    CHECK(report.has("frame") && !report["hostScene"].asString().empty() && !report["peerScene"].asString().empty());
+    CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="desync");
+    RemoveAll(project);
+}
+TEST(NetworkRollbackCorrectsPredictions) {
+    std::string project=SyncProject("sync_rollback","loopback",true);
+    Engine host,client; SyncPrepare(host,client,project,"loopback");
+    host.Input().down.insert("W"); client.Input().down.insert("W");
+    host.Audio().StartCapture(); client.Audio().StartCapture();
+    NetworkSteps(host,client,30);
+    uint64_t before=host.Frame(); host.Step(6); CHECK(host.Frame()>before);
+    client.Input().down.erase("W"); client.Input().pressedThisFrame.insert("Space");
+    NetworkSteps(host,client,100);
+    Json hs=host.NetworkCall("state",Json())["sync"], cs=client.NetworkCall("state",Json())["sync"];
+    CHECK(hs["state"].asString()=="running" && cs["state"].asString()=="running");
+    CHECK(hs["rollbacks"].asNumber()+cs["rollbacks"].asNumber()>0);
+    CHECK(host.Audio().SaveState()->capture.size()==static_cast<size_t>(std::min(host.Frame(),static_cast<uint64_t>(hs["confirmed"].asNumber())))*1600);
+    CHECK(client.Audio().SaveState()->capture.size()==static_cast<size_t>(std::min(client.Frame(),static_cast<uint64_t>(cs["confirmed"].asNumber())))*1600);
+    CHECK(host.NetworkCall("desync_report",Json()).size()==0);
+    RemoveAll(project);
+}
+TEST(SimulationReferenceSnapshotRestoresClosuresPhysicsAndAudio) {
+    std::string project=TempProject("state_replay"),error;
+    Engine e; CHECK(e.Open(project,&error)); e.GetScene().Clear();
+    CHECK(Call(e,"entity.create",R"({"name":"Body","components":{"Transform":{"position":[0,3,0]},"Collider":{},"RigidBody":{}}})")["ok"].asBool());
+    CHECK(Call(e,"audio.generate",R"({"path":"assets/test.wav","preset":"coin"})")["ok"].asBool());
+    EntityId deleted=e.GetScene().Create("Deleted"); e.GetScene().Destroy(deleted);
+    CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(Call(e,"script.eval",R"J({"code":"local n=0; timer.every(0.02,function() n=n+math.random(1,5); game.set('n',n) end); audio.play('assets/test.wav', {loop=true})"})J")["ok"].asBool());
+    CHECK(Call(e,"script.eval",R"J({"code":"timer.after(0.1,function() local id=scene.create('Dynamic',{Transform={position={2,2,0}},Collider2D={},RigidBody2D={}}); timer.after(0.15,function() scene.destroy(id) end) end); timer.after(0.35,function() scene.create('Persist',{Transform={position={2,2,0}},Collider2D={},RigidBody2D={}}) end)"})J")["ok"].asBool());
+    e.Audio().StartCapture(); e.Step(120); CHECK(e.Scripts().Errors().empty());
+    auto snapshot=e.SaveState(); Json scene=e.GetScene().ToJson(),data=e.GameData(),audio=e.Audio().State();
+    e.Step(20); Json future=e.GetScene().ToJson(),futureData=e.GameData(); auto futureAudio=e.Audio().SaveState();
+    e.LoadState(*snapshot);
+    CHECK(e.Frame()==120 && e.GetScene().ToJson()==scene && e.GameData()==data && e.Audio().State()==audio);
+    e.Step(20); CHECK(e.GetScene().ToJson()==future && e.GameData()==futureData);
+    CHECK(e.Audio().SaveState()->capture==futureAudio->capture);
+    CHECK(Call(e,"sim.save_state",R"({"slot":"one"})")["ok"].asBool()); e.Step(2);
+    CHECK(Call(e,"sim.load_state",R"({"slot":"one"})")["ok"].asBool()); CHECK(e.Frame()==140);
+    CHECK(WriteTextFile(JoinPath(project,"scripts/changed.lua"),"return {}"));
+    bool refused=false; try {e.LoadState(*snapshot);} catch(const ApiError& err) {refused=err.code=="state_resource";} CHECK(refused);
+    RemoveAll(project);
+}
+
+TEST(SimulationReferenceSnapshotAcrossSceneChanges) {
+    std::string project=TempProject("state_scene_change"),error;
+    Scene second; second.name="Second"; second.Add<Transform>(second.Create("Marker")).position={1,2,3};
+    CHECK(WriteTextFile(JoinPath(project,"scenes/second.scene.json"),second.ToJson().dump()));
+    Engine e; CHECK(e.Open(project,&error)); e.GetScene().Clear();
+    CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(Call(e,"script.eval",R"J({"code":"local n=0; timer.every(0.02,function() n=n+1; game.set('n',n) end); timer.after(0.1,function() game.loadScene('scenes/second.scene.json') end)"})J")["ok"].asBool());
+    e.Step(30); auto snapshot=e.SaveState(); Json scene=e.GetScene().ToJson(),data=e.GameData();
+    CHECK(e.RuntimeScene()=="scenes/second.scene.json" && e.Scripts().Errors().empty());
+    e.Step(20); Json futureData=e.GameData(); e.LoadState(*snapshot);
+    CHECK(e.GetScene().ToJson()==scene && e.GameData()==data && e.RuntimeScene()=="scenes/second.scene.json");
+    e.Step(20); CHECK(e.GameData()==futureData); RemoveAll(project);
+}
+TEST(SimulationNativeSnapshotBudgetAndBranching) {
+    double worst = 0;
+    for (const char* sample : {"Hello", "Dungeon", "Platformer", "FPS"}) {
+        Engine engine; std::string error;
+        CHECK(engine.Open(TestSourceDir() + "/samples/" + sample, &error));
+        engine.RecordState(); engine.Step(2000);
+        auto state = engine.SaveState(); engine.Step(8);
+        Json future = engine.GetScene().ToJson(), data = engine.GameData();
+        for (int n = 0; n < 5; ++n) {
+            auto start = std::chrono::steady_clock::now(); engine.LoadState(*state);
+            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            worst = std::max(worst, ms); engine.Step(8);
+            CHECK(engine.GetScene().ToJson() == future && engine.GameData() == data);
+        }
+        CHECK(engine.Scripts().Errors().empty());
+    }
+    std::printf("  Native snapshot worst: %.3f ms (20 restores, four samples)\n", worst);
+#ifndef __EMSCRIPTEN__
+    CHECK(worst < 16.67);
+#endif
+    std::string project = TempProject("native_long"), error; Engine engine;
+    CHECK(engine.Open(project, &error)); engine.GetScene().Clear(); engine.RecordState();
+    CHECK(Call(engine, "script.eval", R"J({"code":"local n=0; timer.every(0.02,function() n=n+math.random(1,3); game.set('n',n) end)"})J")["ok"].asBool());
+    engine.Step(13000); auto state = engine.SaveState(); engine.Step(8); Json future = engine.GameData();
+    engine.LoadState(*state); CHECK(engine.Frame() == 13000); engine.Step(8); CHECK(engine.GameData() == future);
+    Engine other; bool refused = false;
+    CHECK(other.Open(project, &error)); other.RecordState();
+    try { other.LoadState(*state); } catch (const ApiError& e) { refused = e.code == "state_invalid"; }
+    CHECK(refused); RemoveAll(project);
+}
+
+TEST(SimulationNativeSnapshotDynamicJoltCharactersAndGc) {
+    std::string project=TempProject("native_dynamic_jolt"),error; Engine e;
+    CHECK(e.Open(project,&error)); e.GetScene().Clear(); e.RecordState();
+    CHECK(Call(e,"script.eval",R"J({"code":"local n=0; timer.every(0.05,function() n=n+1; local id=scene.create('B'..n,{Transform={position={0,3,0}},Collider={},RigidBody={}}); local ch=scene.create('C'..n,{Transform={position={3,3,0}},CharacterBody={}}); timer.after(0.12,function() scene.destroy(id);scene.destroy(ch) end); game.set('n',n); collectgarbage('collect') end)"})J")["ok"].asBool());
+    e.Step(60); auto state=e.SaveState(); e.Step(30); Json future=e.GetScene().ToJson(),data=e.GameData();
+    for(int n=0;n<4;++n) { e.LoadState(*state); e.Step(30); CHECK(e.GetScene().ToJson()==future && e.GameData()==data); }
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(NetworkFrameSyncSeededTenThousandFrames) {
+    for (int count : {2,4}) {
+        LoopbackConfig faults; faults.seed=193; faults.lossPermille=80; faults.latencyFrames=1; faults.reorderFrames=2;
+        faults.duplicatePermille=100;
+        auto wire=std::make_shared<LoopbackNetwork>(faults);
+        SessionConfig config; config.mode="lockstep"; config.transport="loopback"; config.gameId="sync-faults";
+        config.sync.keys={"W"}; config.sync.hashInterval=60;
+        std::vector<std::unique_ptr<Session>> sessions;
+        for(int i=0;i<count;++i) sessions.push_back(std::make_unique<Session>(config,std::make_unique<LoopbackTransport>(wire,static_cast<PeerId>(i+1)),i==0,1,"Player",71,SessionTestRandom(static_cast<uint64_t>(i+300))));
+        uint64_t tick=0;
+        for(;tick<250;++tick) for(auto& session:sessions) session->Advance(tick);
+        std::vector<std::unique_ptr<FrameSync>> sync;
+        std::vector<uint64_t> totals(static_cast<size_t>(count),0);
+        std::vector<uint32_t> roster;
+        for(int i=0;i<count;++i) roster.push_back(static_cast<uint32_t>(i+1));
+        for(int i=0;i<count;++i) {
+            Session* session=sessions[static_cast<size_t>(i)].get(); CHECK(session->Players().size()==static_cast<size_t>(count));
+            sync.push_back(std::make_unique<FrameSync>(config.sync,i==0,session->LocalPlayer(),99,
+                [session](uint32_t player,const std::vector<uint8_t>& bytes){return session->SendSync(player,bytes);}));
+        }
+        std::string error; CHECK(sync[0]->Start(roster,&error));
+        bool done=false;
+        for(;tick<250000 && !done;++tick) {
+            for(int i=0;i<count;++i) {
+                auto index=static_cast<size_t>(i); sessions[index]->Advance(tick);
+                for(const auto& message:sessions[index]->DrainSync()) sync[index]->Receive(message.first,message.second);
+                sync[index]->Tick(tick); sync[index]->TakeStart();
+                if(sync[index]->NeedsInput()) {FrameInput input; input.down=(sync[index]->Frame()/7+index)%2; sync[index]->Submit(input);}
+                sync[index]->Tick(tick);
+                if(sync[index]->Frame()<10000) if(auto inputs=sync[index]->Next()) {
+                    for(const auto& input:*inputs) totals[index]+=input.first*(input.second.down+1);
+                    sync[index]->Applied(*inputs); sync[index]->Hash(sync[index]->Frame(),totals[index],std::to_string(totals[index]));
+                }
+            }
+            done=std::all_of(sync.begin(),sync.end(),[](const auto& item){return item->Frame()==10000;});
+            if(std::any_of(sync.begin(),sync.end(),[](const auto& item){return item->State()["state"].asString()=="stopped" || item->State()["state"].asString()=="desync";})) break;
+        }
+        CHECK(done); for(size_t i=1;i<totals.size();++i) CHECK(totals[i]==totals[0]);
+        CHECK(wire->DroppedMessages()>0); CHECK(sync[0]->Report().size()==0);
+    }
+}
+TEST(NetworkLockstepNativeTcpUdp) {
+#ifndef __EMSCRIPTEN__
+    for(const char* transport:{"tcp","udp"}) {
+        std::string project=SyncProject(transport,transport); Engine host,client;
+        SyncPrepare(host,client,project,transport);
+        host.Input().down.insert("W"); client.Input().down.insert("W");
+        for (int tick=0; tick<100000 && (host.Frame()<10000 || client.Frame()<10000); ++tick) NetworkSteps(host,client,1);
+        CHECK(host.Frame()>=10000 && client.Frame()>=10000);
+        CHECK(host.Frame()>20 && client.Frame()>20);
+        CHECK(host.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
+        CHECK(host.NetworkCall("desync_report",Json()).size()==0); RemoveAll(project);
+    }
+#endif
+}
+
+TEST(NetworkFrameSyncBoundsTimeoutAndEmptyPolicy) {
+    SyncConfig config; config.keys={"W"}; config.delay=0; config.waitFrames=30;
+    FrameSync host(config,true,1,1,[](uint32_t,const std::vector<uint8_t>&){return true;});
+    std::string error; CHECK(host.Start({1,2},&error));
+    ByteWriter ready(32); ready.WriteU8(2); ready.WriteU64(1); host.Receive(2,ready.Data()); host.Tick(1); CHECK(host.TakeStart());
+    FrameInput invalid; invalid.down=2; CHECK(!host.Submit(invalid)); CHECK(host.Submit(FrameInput{}));
+    ByteWriter future(128); future.WriteU8(4); future.WriteU64(1); future.WriteU64(1000000);
+    for(int i=0;i<1000;++i) host.Receive(2,future.Data());
+    CHECK(host.State()["rejected"].asNumber()==1000); CHECK(!host.Next());
+    host.Tick(31); CHECK(host.State()["state"].asString()=="stopped" && host.TakeDropped()==std::vector<uint32_t>{2});
+    config.emptyOnTimeout=true;
+    FrameSync empty(config,true,1,1,[](uint32_t,const std::vector<uint8_t>&){return true;});
+    CHECK(empty.Start({1,2},&error)); empty.Receive(2,ready.Data()); empty.Tick(1); empty.TakeStart();
+    CHECK(empty.Submit(FrameInput{})); empty.Tick(31); auto inputs=empty.Next();
+    CHECK(inputs && inputs->size()==2 && inputs->at(2)==FrameInput{} && empty.Running());
+    SyncConfig parsed;
+    for(const char* bad:{R"({"actions":["W","W"]})",R"({"axes":["LeftX","Invalid"]})",R"({"inputDelay":9})",R"({"rollbackFrames":0})",R"({"waitFrames":2})",R"({"dropPolicy":"ignore"})"})
+        CHECK(!SyncConfig::Parse(Json::parse(bad),parsed,&error));
+}
+TEST(NetworkFrameSyncMismatchBarrierAndLargeWorldHash) {
+    SyncConfig config; config.delay=0; config.hashInterval=1;
+    std::vector<std::pair<uint32_t,std::vector<uint8_t>>> messages;
+    FrameSync host(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& bytes){messages.emplace_back(player,bytes);return true;});
+    FrameSync client(config,false,2,100,[](uint32_t,const std::vector<uint8_t>&){return true;});
+    std::string error; CHECK(host.Start({1,2},&error)); host.Tick(1);
+    for(const auto& message:messages) client.Receive(1,message.second);
+    CHECK(client.State()["state"].asString()=="stopped" && client.State()["error"].asString().find("mismatch")!=std::string::npos);
+    messages.clear(); FrameSync good(config,false,2,99,[&](uint32_t player,const std::vector<uint8_t>& bytes){messages.emplace_back(player,bytes);return true;});
+    // A fresh matching barrier, then a hash with a diagnostic larger than its scene budget.
+    FrameSync large(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& bytes){messages.emplace_back(player,bytes);return true;});
+    CHECK(large.Start({1,2},&error)); large.Tick(1); auto begin=messages; messages.clear();
+    for(const auto& message:begin) good.Receive(1,message.second); good.Tick(2); auto ready=messages; messages.clear();
+    for(const auto& message:ready) large.Receive(2,message.second); large.Tick(3); auto go=messages; messages.clear();
+    for(const auto& message:go) good.Receive(1,message.second); good.Tick(4); large.TakeStart(); good.TakeStart();
+    large.Hash(0,5,std::string(30000,'a')); good.Hash(0,7,std::string(30000,'b')); good.Tick(5);
+    auto hashes=messages; messages.clear(); for(const auto& message:hashes) large.Receive(2,message.second);
+    CHECK(large.Report()["scenesOmitted"].asBool() && large.State()["state"].asString()=="desync");
+    large.Tick(6); for(const auto& message:messages) good.Receive(1,message.second);
+    CHECK(good.State()["state"].asString()=="desync");
+}
+TEST(NetworkEngineLoopbackLobbyAndRpc) {
+    std::string project = NetworkProject("network_lobby", "loopback", 3), error;
+    {
+        Engine host, a, b;
+        CHECK(host.Open(project, &error) && a.Open(project, &error) && b.Open(project, &error));
+        NetworkReceiver(host); NetworkReceiver(a); NetworkReceiver(b);
+        CHECK(Call(host, "net.host", R"({"room":"lobby-test","seed":42,"name":"Host"})")["ok"].asBool());
+        CHECK(Call(a, "net.join", R"({"address":"lobby-test","name":"A"})")["ok"].asBool());
+        CHECK(Call(b, "net.join", R"({"address":"lobby-test","name":"B"})")["ok"].asBool());
+        NetworkSteps(host, a, 40, &b);
+        CHECK(host.Network()->Players().size() == 3 && a.Network()->Players().size() == 3 && b.Network()->Players().size() == 3);
+        CHECK(a.Network()->LocalPlayer() == 2 && b.Network()->LocalPlayer() == 3);
+        CHECK(a.Network()->Seed() == 42 && b.Network()->Seed() == 42);
+        CHECK(NetworkEval(a, "return joined", 0) == Json::parse("[1,2,3]"));
+        CHECK(NetworkEval(a, "return net.players()", 0) == Json::parse("[1,2,3]"));
+        // All Lua states are seeded at the same lobby transition, independently of wall time.
+        host.Scripts().SetNetworkSeed(42); a.Scripts().SetNetworkSeed(42); b.Scripts().SetNetworkSeed(42);
+        CHECK(NetworkEval(host, "return math.random()", 0) == NetworkEval(a, "return math.random()", 0));
+        CHECK(Call(a, "net.ready", R"({"ready":true})")["ok"].asBool());
+        CHECK(Call(b, "net.rpc", R"({"name":"ping","target":"all","args":[30]})")["ok"].asBool());
+        CHECK(Call(a, "net.rpc", R"({"name":"ping","target":"server","args":[20]})")["ok"].asBool());
+        NetworkSteps(host, a, 20, &b);
+        CHECK(NetworkEval(host, "return received", 0) == Json::parse("[[2,20],[3,30]]"));
+        CHECK(NetworkEval(a, "return received", 0) == Json::parse("[[3,30]]"));
+        CHECK(NetworkEval(b, "return received", 0) == Json::parse("[[3,30]]"));
+        CHECK(host.Network()->Players()[1]["ready"].asBool());
+        CHECK(Call(a, "net.kick", R"({"player":3})")["ok"].asBool() == false);
+        CHECK(Call(host, "net.kick", R"({"player":3})")["ok"].asBool());
+        NetworkSteps(host, a, 40, &b);
+        CHECK(b.Network()->Status() == "offline" && host.Network()->Players().size() == 2 && a.Network()->Players().size() == 2);
+        CHECK(NetworkEval(a, "return left", 0) == Json::parse("[3]"));
+        CHECK(Call(a, "net.leave", "{}")["ok"].asBool());
+        NetworkSteps(host, a, 40);
+        CHECK(a.Network()->Status() == "offline" && host.Network()->Players().size() == 1);
+        CHECK(Call(b, "net.join", R"({"address":"lobby-test"})")["ok"].asBool());
+        NetworkSteps(host, b, 40);
+        CHECK(b.Network()->LocalPlayer() == 4);  // ids never reused within a host incarnation
+        host.Stop();
+        CHECK(host.Network() == nullptr);
+        CHECK(!Call(a, "net.join", R"({"address":"lobby-test"})")["ok"].asBool());
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NetworkSessionConfigValidation) {
+    SessionConfig config; std::string error;
+    CHECK(SessionConfig::Parse(Json::parse(R"({"network":{"mode":"none","port":"ignored"}})"), config, &error));
+    for (const char* json : {R"({"network":true})", R"({"network":{"mode":"invalid"}})",
+         R"({"network":{"mode":"lockstep","tickRate":30}})", R"({"network":{"mode":"lockstep","maxPlayers":65}})",
+         R"({"network":{"mode":"lockstep","port":-1}})", R"({"network":{"mode":"lockstep","bind":"0.00.0.0"}})",
+         R"({"network":{"mode":"lockstep","transport":"bad"}})"})
+        CHECK(!SessionConfig::Parse(Json::parse(json), config, &error) && !error.empty());
+    CHECK(SessionConfig::Parse(Json::parse(R"({"name":"Game","network":{"mode":"authoritative","bind":"0.0.0.0"}})"), config, &error));
+    CHECK(config.bind == "0.0.0.0" && config.tickRate == 60);
+}
+
+class SessionRecordedWire final : public ITransport {
+public:
+    SessionRecordedWire(std::shared_ptr<LoopbackNetwork> network, PeerId peer) : wire_(std::move(network), peer) {}
+    std::vector<std::vector<uint8_t>> sent;
+    bool Send(PeerId peer, const uint8_t* bytes, size_t size) override {
+        if (sent.size() < 1024) sent.emplace_back(bytes, bytes + size);
+        return wire_.Send(peer, bytes, size);
+    }
+    bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override { return wire_.Poll(frame, events); }
+private:
+    LoopbackTransport wire_;
+};
+Session::Random SessionTestRandom(uint64_t first) {
+    auto counter = std::make_shared<uint64_t>(first);
+    return [counter](uint8_t* bytes, size_t size) {
+        if (size != 8) return false;
+        uint64_t value = ++*counter;
+        for (size_t i = 0; i < size; ++i) bytes[i] = static_cast<uint8_t>(value >> (8 * i));
+        return true;
+    };
+}
+TEST(NetworkSessionHandshakeLossVersionAndTimeout) {
+    auto run = [] {
+        LoopbackConfig faults; faults.seed = 91; faults.lossPermille = 150;
+        faults.duplicatePermille = 200; faults.reorderFrames = 3; faults.latencyFrames = 1;
+        auto wire = std::make_shared<LoopbackNetwork>(faults);
+        SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
+        Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 55, SessionTestRandom(100));
+        Session client(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Client", 0, SessionTestRandom(200));
+        std::vector<std::string> trace;
+        bool sent = false;
+        for (uint64_t frame = 0; frame < 500; ++frame) {
+            CHECK(host.Advance(frame) && client.Advance(frame));
+            for (auto* session : {&host, &client}) for (const auto& event : session->DrainEvents()) {
+                trace.push_back(std::to_string(frame) + ":" + std::to_string(event.player) + ":" + event.name);
+            }
+            if (!sent && host.Players().size() == 2 && client.Players().size() == 2) {
+                std::string error;
+                CHECK(client.Rpc("server", "ping", Json::parse("[5]"), &error)); sent = true;
+            }
+        }
+        CHECK(sent && client.Connected() && client.Seed() == 55);
+        CHECK(std::count_if(trace.begin(), trace.end(), [](const std::string& row) { return row.find(":ping") != std::string::npos; }) == 1);
+        CHECK(!client.Advance(10));
+        return trace;
+    };
+    CHECK(run() == run());
+    auto wire = std::make_shared<LoopbackNetwork>();
+    SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
+    Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 1, SessionTestRandom(100));
+    ++config.version;
+    Session bad(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Old", 0, SessionTestRandom(200));
+    for (uint64_t frame = 0; frame < 20; ++frame) { CHECK(host.Advance(frame) && bad.Advance(frame)); }
+    CHECK(bad.Status() == "error" && bad.State()["error"].asString().find("mismatch") != std::string::npos);
+    CHECK(host.Players().size() == 1);
+    Session lonely(config, std::make_unique<LoopbackTransport>(wire, 3), false, 9, "Alone", 0, SessionTestRandom(300));
+    for (uint64_t frame = 0; frame < 310; ++frame) CHECK(lonely.Advance(frame));
+    CHECK(lonely.Status() == "error" && lonely.LocalPlayer() == 0);
+    Session noEntropy(config, std::make_unique<LoopbackTransport>(wire, 4), false, 1, "NoEntropy", 0,
+                      [](uint8_t*, size_t) { return false; });
+    CHECK(noEntropy.Status() == "error" && noEntropy.State()["error"].asString().find("entropy") != std::string::npos);
+    CHECK(noEntropy.Advance(0));
+    auto limitedWire = std::make_shared<LoopbackNetwork>();
+    config.version = 1; config.maxPlayers = 2;
+    Session limited(config, std::make_unique<LoopbackTransport>(limitedWire, 1), true, 1, "Host", 1, SessionTestRandom(400));
+    Session first(config, std::make_unique<LoopbackTransport>(limitedWire, 2), false, 1, "First", 0, SessionTestRandom(500));
+    Session full(config, std::make_unique<LoopbackTransport>(limitedWire, 3), false, 1, "Full", 0, SessionTestRandom(600));
+    for (uint64_t frame = 0; frame < 310; ++frame) { limited.Advance(frame); first.Advance(frame); full.Advance(frame); }
+    CHECK(first.Connected() && limited.Players().size() == 2 && full.Status() == "error");
+}
+
+TEST(NetworkSessionCookieReplayBoundsAndReconnect) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "game";
+    Session host(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Host", 1, SessionTestRandom(100));
+    std::vector<uint8_t> oldEnvelope;
+    {
+        auto transport = std::make_unique<SessionRecordedWire>(wire, 2); auto* recorded = transport.get();
+        Session client(config, std::move(transport), false, 1, "Client", 0, SessionTestRandom(200));
+        for (uint64_t frame = 0; frame < 30; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+        std::string error;
+        CHECK(client.Rpc("server", "old", Json::MakeArray(), &error));
+        for (uint64_t frame = 30; frame < 50; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+        for (const auto& bytes : recorded->sent) {
+            ByteReader reader(bytes.data(), bytes.size()); uint32_t magic = 0;
+            if (reader.ReadU32(magic) && magic == 0x5344454f) { oldEnvelope = bytes; break; }
+        }
+        CHECK(!oldEnvelope.empty());
+        client.Leave();
+        for (uint64_t frame = 50; frame < 90; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+        CHECK(host.Players().size() == 1);
+    }
+    auto transport = std::make_unique<SessionRecordedWire>(wire, 2); auto* recorded = transport.get();
+    Session client(config, std::move(transport), false, 1, "New", 0, SessionTestRandom(300));
+    for (uint64_t frame = 90; frame < 120; ++frame) { host.Advance(frame); client.Advance(frame); host.DrainEvents(); client.DrainEvents(); }
+    CHECK(client.LocalPlayer() == 3 && host.Players().size() == 2);
+    uint64_t rejected = static_cast<uint64_t>(host.Stats()["rejected"].asNumber());
+    CHECK(recorded->Send(1, oldEnvelope.data(), oldEnvelope.size()));
+    std::vector<uint8_t> malicious(300, 0);
+    for (int i = 0; i < 200; ++i) CHECK(recorded->Send(1, malicious.data(), malicious.size()));
+    for (uint64_t frame = 120; frame < 125; ++frame) { host.Advance(frame); client.Advance(frame); }
+    CHECK(host.Stats()["rejected"].asNumber() >= static_cast<double>(rejected + 201));
+    CHECK(host.Players().size() == 2 && client.Connected());
+    std::string error;
+    CHECK(client.Rpc("server", "new", Json::parse("[9]"), &error));
+    int received = 0;
+    for (uint64_t frame = 125; frame < 145; ++frame) {
+        host.Advance(frame); client.Advance(frame);
+        for (const auto& event : host.DrainEvents()) if (event.type == SessionEvent::Type::Rpc) { ++received; CHECK(event.player == 3 && event.name == "new"); }
+    }
+    CHECK(received == 1);
+    for (int i = 0; i < 300; ++i) host.Rpc("1", "queue", Json::MakeArray(), &error);
+    CHECK(host.DrainEvents().size() <= 256);
+}
+
+#ifndef __EMSCRIPTEN__
+TEST(NetworkEngineNativeSessionTcpUdp) {
+    for (const char* transport : {"tcp", "udp"}) {
+        std::string project = NetworkProject(transport, transport), error;
+        uint64_t sockets = PlatformNetSocketsLive();
+        {
+            Engine host, client;
+            CHECK(host.Open(project, &error) && client.Open(project, &error));
+            NetworkReceiver(host); NetworkReceiver(client);
+            Json hosted = Call(host, "net.host", R"({"seed":99})");
+            CHECK(hosted["ok"].asBool());
+            Json args = Json::MakeObject(); args["port"] = hosted["result"]["port"];
+            CHECK(client.Call("net.join", args)["ok"].asBool());
+            NetworkSteps(host, client, 180);
+            CHECK(client.Network()->Connected() && client.Network()->Seed() == 99 && host.Network()->Players().size() == 2);
+            CHECK(Call(client, "net.rpc", R"({"target":"server","name":"ping","args":[123]})")["ok"].asBool());
+            NetworkSteps(host, client, 80);
+            CHECK(NetworkEval(host, "return received", 0) == Json::parse("[[2,123]]"));
+            if (std::string(transport) == "udp") CHECK(host.Network()->Stats()["peers"][0]["route"].asString() == "udp");
+            CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty());
+            host.Stop(); NetworkSteps(host, client, 40);
+            CHECK(client.Network()->Status() == "error");
+            client.Stop();
+        }
+        CHECK(PlatformNetSocketsLive() == sockets);
+        CHECK(RemoveAll(project));
+    }
+}
+#endif
 
 bool Near(const Vec3& a, const Vec3& b, float eps) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
@@ -3502,6 +5367,11 @@ TEST(AndroidApk) {
     CHECK(proto.size() > 2 && proto[0] == 0x0A);  // XmlNode.element, length-delimited
     CHECK(has(proto, "android.app.NativeActivity") && has(proto, "oe_ANativeActivity_onCreate") && has(proto, app.label));
     CHECK(has(BuildAndroidResourcesProto(app.packageName), "res/drawable/icon.png"));
+    CHECK(!has(proto, "android.permission.INTERNET"));
+    CHECK(!hasUtf16(BuildAndroidManifest(app), u"android.permission.INTERNET"));
+    app.network = true;
+    CHECK(has(BuildAndroidManifestProto(app), "android.permission.INTERNET"));
+    CHECK(hasUtf16(BuildAndroidManifest(app), u"android.permission.INTERNET"));
     contents.app.packageName = "nope";
     CHECK(!WriteUnsignedApk(contents, "build/test_apk/bad.apk", &err));
     CHECK(!WriteUnsignedAppBundle(contents, "build/test_apk/bad.aab", &err));
@@ -3704,6 +5574,92 @@ TEST(NativeEditorScriptProblems) {
     CHECK(broken.size() == 1 && broken[0].rfind("error 4:", 0) == 0);
 }
 
+
+
+TEST(NativeEditorNetworkVisibilityAndLegacyLayout) {
+    std::string project = TempProject("network_panel_legacy"), error;
+    Engine engine; CHECK(engine.Open(project, &error)); CHECK(!engine.NetworkEnabled());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    const uint64_t sessions = Session::InstancesCreated(), sockets = PlatformNetSocketsCreated();
+    NativeEditor::Options options; options.language = "en";
+    options.layoutFile = JoinPath(project, ".oe/editor.ini");
+    RenderTarget image; std::string settings;
+    auto draw = [&](NativeEditor& editor, int count) {
+        for (int i = 0; i < count; ++i) {
+            editor.Update({}, 1280, 720, 1.0f, Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        }
+    };
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); draw(editor, 4);
+        ImGuiWindow* network = ImGui::FindWindowByName("###Network"); CHECK(network && network->Active);
+        editor.FocusNetworkPanel(); draw(editor, 2);
+        CHECK(network && network->DockTabIsVisible);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/network-panel-disabled.png"), image.ToImage()));
+    }
+    CHECK(ReadTextFile(options.layoutFile, settings));
+    // Reproduce a pre-M7 layout: no Network window/key and the original 255-bit panel mask.
+    std::string legacy; bool skipWindow = false;
+    std::istringstream input(settings);
+    for (std::string line; std::getline(input, line);) {
+        if (line.compare(0, 1, "[") == 0) skipWindow = line.compare(0, 8, "[Window]") == 0 && line.find("###Network") != std::string::npos;
+        if (skipWindow || line.compare(0, 13, "NetworkPanel=") == 0) continue;
+        legacy += line.compare(0, 7, "Panels=") == 0 ? "Panels=255\n" : line + "\n";
+    }
+    CHECK(WriteTextFile(options.layoutFile, legacy));
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); draw(editor, 4);
+        ImGuiWindow* network = ImGui::FindWindowByName("###Network");
+        ImGuiWindow* inspector = ImGui::FindWindowByName("###Inspector");
+        CHECK(network && network->Active && inspector && network->DockId == inspector->DockId);
+        editor.FocusNetworkPanel(); draw(editor, 2); CHECK(network && network->DockTabIsVisible);
+    }
+    CHECK(ReadTextFile(options.layoutFile, settings)); CHECK(settings.find("NetworkPanel=1") != std::string::npos);
+    size_t flag = settings.find("NetworkPanel=1"); if (flag != std::string::npos) settings.replace(flag, 14, "NetworkPanel=0");
+    CHECK(WriteTextFile(options.layoutFile, settings));
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); draw(editor, 4);
+        ImGuiWindow* network = ImGui::FindWindowByName("###Network"); CHECK(!network || !network->Active);
+        editor.FocusNetworkPanel(); draw(editor, 2);
+        network = ImGui::FindWindowByName("###Network"); CHECK(network && network->Active && network->DockTabIsVisible);
+    }
+    CHECK(Session::InstancesCreated() == sessions && PlatformNetSocketsCreated() == sockets);
+    RemoveAll(project);
+}
+
+TEST(NativeEditorNetworkPreviewInputAndStop) {
+    std::string project = SyncProject("editor_network", "tcp"), error;
+    Engine engine; CHECK(engine.Open(project, &error)); engine.GetScene().Clear();
+    CHECK(Call(engine, "entity.create", R"({"name":"Counter","components":{"Transform":{},"Script":{"path":"scripts/sync_test.lua"}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Camera","components":{"Transform":{"position":[0,3,8],"rotation":[-15,0,0]},"Camera":{}}})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); CHECK(editor.SetNetworkPlayers(3));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames(4); frames(50, CtrlChord(WindowKey::P));
+        CHECK(engine.LocalPeer(2)); CHECK(Call(engine, "net.state")["result"]["sync"]["state"].asString() == "running");
+        CHECK(editor.SetGamePeer(1)); editor.FocusGameView(true);
+        frames(30, {KeyEvent(WindowKey::W, true)});
+        CHECK(engine.LocalPeer(1)->Input().IsDown("W")); CHECK(!engine.Input().IsDown("W"));
+        CHECK(editor.SetGamePeer(2)); CHECK(!engine.LocalPeer(1)->Input().IsDown("W")); editor.FocusGameView(true);
+        editor.WindowInput().SetAxis("LeftX", 0.575f); editor.WindowInput().down.insert("GamepadA"); frames(2);
+        CHECK(engine.LocalPeer(2)->Input().IsDown("GamepadA")); CHECK(!engine.LocalPeer(1)->Input().IsDown("GamepadA"));
+        editor.FocusGameView(false); CHECK(!engine.LocalPeer(2)->Input().IsDown("GamepadA"));
+        CHECK(engine.GameData()["total"].asNumber() > 10);
+        CHECK(Call(engine, "net.simulate", R"({"latencyFrames":2})")["ok"].asBool());
+        editor.FocusNetworkPanel(); frames(2);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/m7-editor-test.png"), image.ToImage()));
+        frames(6, CtrlChord(WindowKey::P)); CHECK(!engine.InPlaySession()); CHECK(!engine.LocalPeer(1));
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorHeadless) {
     Engine e;
     std::string err;
@@ -3869,6 +5825,7 @@ TEST(NativeEditorTilePainting) {
 
 int main() {
     Log::SetEcho(false);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     for (const TestCase& t : Tests()) {
         int before = g_failures;
         t.fn();

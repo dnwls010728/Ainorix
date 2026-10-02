@@ -105,11 +105,64 @@ Instance helpers (from the built-in base class): `self:get(type)`, `self:set(typ
 
 `scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are line-by-line Lua ports of the built-in `Rotator` and `PlayerController` components; tests check they behave identically.
 
+## Networking (M4–M6)
+
+`net` is available in every script. Without enabled networking, `net.isServer()` is true,
+`net.isHost()`/`net.isClient()` false, `net.localPlayer()` is 1 and `net.players()` is `{1}`.
+`net.rpc` calls its registered handler immediately in this mode (`others` has no recipient).
+No session, socket or network polling is initialized. With networking enabled, M4 supplies
+lobbies/RPC, M5 supplies lockstep/native rollback and M6 supplies authoritative replication. See [NETWORK.md](NETWORK.md).
+
+| Lua | Contract |
+|---|---|
+| `net.state()` / `net.stats()` | Session role/state/error and bounded peer diagnostics |
+| `net.isHost()` / `net.isServer()` / `net.isClient()` | Host role, server role and client role |
+| `net.localPlayer()` / `net.players()` | Local id (0 before join); sorted array of lobby player ids |
+| `net.host({name?, seed?, room?})` | Explicitly host using project settings; seed default 1; loopback room defaults to gameId |
+| `net.join({name?, address?, port?})` | Async join: numeric IPv4, browser ws/wss URL or in-process loopback room |
+| `net.leave()` / `net.kick({player, reason?})` | Graceful bounded leave or host-only removal |
+| `net.ready({ready=true})` | Lobby readiness; does not start synchronized simulation |
+| `net.start()` | Ready host begins a lockstep/native rollback/authoritative match; all peers reset at the ready barrier |
+| `net.entities()` | Authoritative netId/local-id/owner mappings and received replication fields |
+| `net.desync_report()` | First confirmed mismatch with bounded diagnostic scene JSON texts |
+| `input.player(id)` | `{down(key), pressed(key), axis(name)}` closures for the merged player input; supports dot/colon calls. Unknown players are neutral; none/player 1 is local |
+| `net.on(name, fn)` / `net.on(name, nil)` | Register/replace or remove a handler (at most 64 names) |
+| `net.rpc(target, name, ...)` | Reliable RPC: target `server`, `all`, `others`, player id (number/string), or `owner` with an entity id/name as the first payload argument |
+| `net.sender()` | Sender player id inside an RPC handler; 0 outside it |
+
+```lua
+function Game:onStart()
+  net.on("chat", function(text)
+    log.info("player " .. net.sender() .. ": " .. text)
+  end)
+end
+function Game:onPlayerJoined(id) end
+function Game:onPlayerLeft(id) end
+function Game:onNetState(state) end -- connecting/lobby/leaving/offline/error
+-- Works in single-player too:
+net.rpc("all", "chat", "hello")
+```
+
+Networking is polled at the beginning of each fixed frame. Network callbacks/RPC run after
+script updates and before built-in systems, in player/sequence order. Polling continues through
+`sim.step`; a paused editor does not advance timeouts/handshakes. Scripts can run while joining;
+the host seed is applied when Welcome arrives. Execution in the lobby is independent; net.start aligns the game at frame zero.
+The host forwards client RPCs with their verified player id; games must validate sender/arguments
+before modifying state. v2 cookies isolate connections; they do not authenticate player identity
+or encrypt data. Browser clients connect to native `oe serve-game` with transport websocket, or a compatible binary WebSocket endpoint.
+
+RPCs accept at most 16 JSON-compatible arguments, depth <=8, strings <=1024 bytes,
+collections <=64 entries, total serialized size <=8192 bytes (Lua traversal <=512 nodes).
+Cycles, nonfinite numbers and functions/userdata are rejected. Local nested RPC is limited to
+eight callbacks and shares its instruction budget. Each Lua state holds one handler per name;
+scene changes preserve handlers, so replace/remove callbacks that capture old entities.
+`sim.stop` clears handlers and networking. None mode has no join/state notifications.
+
 ## Sandbox and determinism
 
 - Available libraries: base, `string`, `table`, `math`, `utf8`, `coroutine`. Not available: `io`, `os`, `debug`, `package`, `load`, `loadfile`, `dofile`.
 - Every callback has an instruction budget (20M instructions). An infinite loop becomes a script error instead of freezing the engine.
-- `math.random` is seeded with 0 and string hashing uses a fixed seed, so `pairs()` order and random numbers are the same on every run. The Lua state is recreated for every play session (`sim.stop` discards it).
+- `math.random` is seeded with 0 in single-player or the negotiated host seed in a network lobby; string hashing uses a fixed seed. The Lua state is recreated for every play session (`sim.stop` discards it).
 
 ## Errors
 
@@ -151,3 +204,65 @@ Saving a script file while simulating reloads it within half a second (and befor
 | `script.reload` | Reload all modules |
 
 Typical loop: `script.write` → `script.check` → `component.add Script` → `sim.step {frames: 60}` → `script.errors` → `render.screenshot` → fix → repeat.
+
+
+During a match, use declared actions/axes and iterate `net.players()` in its sorted order:
+```lua
+function Game:onUpdate()
+  for _, id in ipairs(net.players()) do
+    local player = input.player(id)
+    if player.down("W") then -- advance the world entity controlled by id
+    end
+  end
+end
+```
+Lobby RPC and player callbacks are withheld during matches. `net.on("net.desync", function(report)
+... end)` and `onNetState("desync")` run once after a terminal mismatch. Input frame waits still
+poll the transport but do not call onUpdate/timers/physics/audio. Plain input sees the quantized
+local player; mouse/touch coordinates are not synchronized. Native rollback preserves opaque closures, timers and physics solver history in bounded
+checkpoints and replays at most eight frames. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.
+
+### Authoritative gameplay
+
+With `network.mode: "authoritative"`, put `NetSync` on replicated entities and `NetPlayer` on
+controlled entities. `network.playerPrefab` can spawn one per ready player automatically.
+The server owns state; a client's frame-tagged inputs only enter its authenticated player stream.
+For example, a player script reads `input.player(self:get("NetPlayer").player)`. The built-in
+PlayerController also uses that player's input instead of the host's local controls.
+
+Clients predict their owned entities, interpolate remote replicated entities and continue running
+local/unreplicated scripts (UI/cameras). Guard server-only level/spawn/score logic with
+`if net.isServer() then ... end`. Select the physics velocity fields as well as Transform fields
+in NetSync.fields for physical players. Corrections preserve Lua state and replay only unacknowledged
+inputs; RPC callbacks are journaled, repeated sends suppressed and speculative audio deferred.
+Authoritative scene transitions and late join require a new ready barrier after leaving/stopping.
+
+`net.rpc("owner", "notice", self.id, "Hit!")` routes to the entity's NetSync.owner (0 means server).
+The handler receives the routing entity argument too: `net.on("notice", function(entityId, text)
+... end)`. Entity ids are local; use `net.entities()` when mapping a received server entity id to
+this peer's entity. Owner-only fields filter network transmission, not packaged resource contents.
+See NETWORK.md for limits, relevance, snapshot rates and platform verification.
+
+
+Dedicated servers started by `oe serve-game` or a packaged `--server` reserve player
+id 1 as an empty protocol input stream; `net.isServer()` is true and `net.isHost()`
+is false. No playerPrefab is instantiated for that reserved slot. Use isServer for
+server-authority gameplay. `net.simulate`, `net.spawn_local_peers`, `net.peer_call`
+and `net.serve` are tool commands; they do not add Lua callbacks or bindings.
+
+
+### Playable network examples
+
+See `samples/NetCoop/scripts/game.lua` for a shared lockstep score, NetDuel for rollback
+competition, and NetArena for server-only scoring with NetSync HUD/target fields. Their
+player scripts read declared `input.player(id)` actions; offline practice uses ordinary input.
+Lobby buttons call net.host/join/ready/start before the match. Start restores the shared
+edit-time world, so local lobby messages never enter the deterministic match hash. During
+a match, gameplay uses synchronized reset actions rather than a local session control.
+
+UIButton.key mouse/touch gestures are converted to declared actions before network input
+sampling, including short click pulses. Coordinates and gestures are local device state;
+rollback/prediction replays only the recorded actions. NetPlayer/NetSync fields are reserved
+replication metadata and must not be included in NetSync.fields. Ordinary reflected fields
+such as Transform.position, MeshRenderer.color and UIText.text may be selected.
+See [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md) for host/client/device setup.

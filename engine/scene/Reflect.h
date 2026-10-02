@@ -67,6 +67,7 @@ public:
     virtual void* Get(EntityId id) = 0;
     virtual const void* Get(EntityId id) const = 0;
     virtual bool Remove(EntityId id) = 0;
+    virtual std::unique_ptr<IComponentPool> Clone() const = 0;
     virtual void Clear() = 0;
     virtual size_t Size() const = 0;
 };
@@ -84,6 +85,7 @@ public:
         return it == data.end() ? nullptr : &it->second;
     }
     bool Remove(EntityId id) override { return data.erase(id) > 0; }
+    std::unique_ptr<IComponentPool> Clone() const override { return std::make_unique<ComponentPool<T>>(*this); }
     void Clear() override { data.clear(); }
     size_t Size() const override { return data.size(); }
     std::map<EntityId, T> data;

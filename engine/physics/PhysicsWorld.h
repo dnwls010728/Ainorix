@@ -60,6 +60,12 @@ public:
     // (sorted, deterministic) that happened during the step.
     std::vector<PhysicsEvent> Step(Scene& scene, float dt);
     void Reset();
+    // Reconcile corrected poses without repeating collision-enter callbacks.
+    void RebuildSolvers();
+    struct Snapshot;
+    bool EnableSnapshots() { if (!snapshotsEnabled_ && (impl_ || world2d_)) return false; snapshotsEnabled_ = true; return true; }
+    std::shared_ptr<const Snapshot> SaveState() const;
+    void LoadState(const Snapshot& state);
 
     // Queries (also valid outside simulation: the world is synced first).
     RaycastHit Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance);
@@ -75,6 +81,7 @@ public:
 
 private:
     Physics2D* World2D(Scene& scene);  // created on demand, nullptr without 2D bodies
+    bool snapshotsEnabled_ = false;
     struct Impl;
     std::unique_ptr<Impl> impl_;
     std::unique_ptr<Physics2D> world2d_;

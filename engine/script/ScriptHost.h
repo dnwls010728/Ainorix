@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "core/Json.h"
+#include "core/SnapshotHeap.h"
+#include <memory>
 #include "scene/Reflect.h"
 
 struct lua_State;
@@ -14,6 +16,7 @@ namespace oe {
 
 class Engine;
 struct PhysicsEvent;
+struct SessionEvent;
 
 struct ScriptError {
     std::string script;  // project-relative path ("" for script.eval)
@@ -39,6 +42,10 @@ public:
     void Update(float dt);
     // Destroys every script instance and the Lua state.
     void Reset();
+    struct Snapshot;
+    void EnableSnapshots();
+    std::shared_ptr<const Snapshot> SaveState() const;
+    void LoadState(const Snapshot& state);
     // Destroys the instances but keeps the Lua state (globals, timers,
     // loaded modules). Used when a game changes scene.
     void ResetInstances();
@@ -54,6 +61,13 @@ public:
     void Notify(EntityId id, const char* method);
     // Same with a number argument: `method(self, value)`.
     void Notify(EntityId id, const char* method, float value);
+    // Ordered session notifications and bounded RPC handlers at the fixed frame boundary.
+    void DispatchNetwork(const std::vector<SessionEvent>& events);
+    void DispatchRpc(uint32_t sender, const std::string& name, const Json& args);
+    void SetNetworkSeed(uint32_t seed);
+    // Takes ownership of a Lua registry reference (-1 removes); at most 64 names.
+    bool SetNetHandler(const std::string& name, int ref);
+    uint32_t NetSender() const { return netSender_; }
     // Reloads every loaded module regardless of timestamps.
     std::vector<std::string> ReloadAll();
 
@@ -68,6 +82,8 @@ public:
 
     const std::vector<ScriptError>& Errors() const { return errors_; }
     void ClearErrors() { errors_.clear(); }
+    // Restores observer errors independently of replayed Lua execution.
+    void RestoreErrors(const std::vector<ScriptError>& errors) { errors_ = errors; }
     Json Status() const;
 
     // ----- used by the Lua bindings --------------------------------------
@@ -106,10 +122,14 @@ private:
 
     Engine& engine_;
     lua_State* L_ = nullptr;
+    std::shared_ptr<SnapshotHeap> heap_;
     std::map<std::string, Module> modules_;
     std::map<EntityId, Instance> instances_;
     std::vector<ScriptError> errors_;
     std::vector<std::string>* output_ = nullptr;
+    std::map<std::string, int> netHandlers_;
+    uint32_t netSender_ = 0;
+    unsigned netDepth_ = 0;
 };
 
 }  // namespace oe

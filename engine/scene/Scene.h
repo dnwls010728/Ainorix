@@ -24,10 +24,13 @@ public:
     static constexpr int kVersion = 1;
 
     Scene();
-    Scene(const Scene&) = delete;
-    Scene& operator=(const Scene&) = delete;
+    Scene(const Scene&);
+    Scene& operator=(const Scene&);
 
     void Clear();
+    // Replay must preserve allocation gaps from entities deleted before frame zero.
+    EntityId AllocationCursor() const { return nextId_; }
+    void RestoreAllocationCursor(EntityId cursor) { if (cursor >= nextId_) nextId_ = cursor; }
 
     // `forcedId` != 0 creates the entity with that id (used when loading).
     EntityId Create(const std::string& name, EntityId parent = kNullEntity, EntityId forcedId = kNullEntity);

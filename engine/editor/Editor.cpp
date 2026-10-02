@@ -165,6 +165,9 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "SnapScale=%f", &f) == 1) m->snapScale = f;
     else if (std::sscanf(line, "GizmoLocal=%d", &i) == 1) m->gizmoLocal = i != 0;
     else if (std::sscanf(line, "GameAspect=%d", &i) == 1) m->gameAspect = std::max(0, std::min(3, i));
+    else if (std::sscanf(line, "NetworkPlayers=%d", &i) == 1) m->networkPlayers = std::max(1, std::min(8, i));
+    else if (std::sscanf(line, "NetworkPanel=%d", &i) == 1) m->showNetwork = i != 0;
+    else if (std::sscanf(line, "NetworkLatency=%d", &i) == 1) m->networkLatency = std::max(0, std::min(30, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
     else if (std::strncmp(line, "Language=", 9) == 0 && !m->forceLanguage) SetEditorLanguage(ParseEditorLanguage(line + 9));
     else if (std::sscanf(line, "Panels=%d", &i) == 1) {
@@ -176,6 +179,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
         m->showAssets = i & 32;
         m->showScripts = i & 64;
         m->showTiles = i & 128;
+        // Legacy panel masks predate Network. Only NetworkPanel explicitly hides it.
     } else if (std::sscanf(line, "Camera=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
         m->cam.target = Vec3(v[0], v[1], v[2]);
     } else if (std::sscanf(line, "CameraAngles=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
@@ -191,10 +195,11 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     NativeEditor::Impl* m = g_settingsTarget;
     if (!m) return;
     int panels = (m->showHierarchy ? 1 : 0) | (m->showInspector ? 2 : 0) | (m->showScene ? 4 : 0) | (m->showGame ? 8 : 0) |
-                 (m->showConsole ? 16 : 0) | (m->showAssets ? 32 : 0) | (m->showScripts ? 64 : 0) | (m->showTiles ? 128 : 0);
+                 (m->showConsole ? 16 : 0) | (m->showAssets ? 32 : 0) | (m->showScripts ? 64 : 0) | (m->showTiles ? 128 : 0) | (m->showNetwork ? 256 : 0);
     buf->appendf("[%s][Editor]\n", handler->TypeName);
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
+    buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("GameAspect=%d\nFlySpeed=%.2f\nPanels=%d\nLanguage=%s\n", m->gameAspect, m->flySpeed, panels, EditorLanguageCode(GetEditorLanguage()));
     buf->appendf("Camera=%.4f,%.4f,%.4f\nCameraAngles=%.3f,%.3f,%.4f\nCamera2D=%d\n\n", m->cam.target.x, m->cam.target.y, m->cam.target.z, m->cam.yaw,
                  m->cam.pitch, m->cam.distance, m->cam.mode2D);
@@ -291,7 +296,12 @@ std::string AssetKindForField(const std::string& type, const std::string& field)
 }
 
 Json NativeEditor::Impl::Call(const std::string& name, const Json& args, bool quiet) {
-    Json r = engine.Call(name, args.isNull() ? Json::MakeObject() : args);
+    Json r;
+    if (gamePeer > 0 && name.compare(0, 6, "input.") == 0) {
+        Json route = Json::MakeObject(); route["peer"] = gamePeer; route["command"] = name;
+        route["args"] = args.isNull() ? Json::MakeObject() : args;
+        r = engine.Call("net.peer_call", route); if (r["ok"].asBool()) r = r["result"];
+    } else r = engine.Call(name, args.isNull() ? Json::MakeObject() : args);
     if (!r["ok"].asBool() && !quiet) {
         const Json& e = r["error"];
         std::string text = name + ": " + e["message"].asString("failed");
@@ -454,11 +464,16 @@ void NativeEditor::Impl::Save() {
 
 void NativeEditor::Impl::TogglePlay() {
     if (InPlaySession()) {
-        Call("sim.stop", Json());
         ReleaseGameInput();
+        Call("sim.stop", Json());
+        gamePeer = 0;
         gameFocused = false;
     } else {
-        Call("sim.play", Json());
+        if (networkPlayers > 1) {
+            Json result = Call("net.spawn_local_peers", ObjectOf({{"count", Json(networkPlayers - 1)}}));
+            if (!Ok(result)) return;
+            if (networkLatency) Call("net.simulate", ObjectOf({{"latencyFrames", Json(networkLatency)}}));
+        } else Call("sim.play", Json());
         requestGameFocus = true;
     }
     Refresh(true);
@@ -912,6 +927,7 @@ void NativeEditor::Impl::MainMenu() {
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem(Tr("Reset Layout"))) resetLayout = true;
+        if (ImGui::MenuItem(Tr("Network"), nullptr, &showNetwork) && showNetwork) requestNetworkFocus = true;
         ImGui::MenuItem(Tr("ImGui Metrics"), nullptr, &showMetrics);
         ImGui::EndMenu();
     }
@@ -983,6 +999,21 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
         ImGui::SameLine(0, 2);
         if (IconButton("##step", Icon::Step, false, Tr("Step one frame (1/60 s)"), session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
 
+        if (engine.NetworkEnabled()) {
+            Json network = engine.NetworkCall("state", Json::MakeObject());
+            ImGui::SameLine(); ImGui::BeginDisabled(session);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 7);
+            int maximum = std::min(8, network["maxPlayers"].asInt(4));
+            networkPlayers = std::max(1, std::min(maximum, networkPlayers));
+            std::string preview = std::string(Tr("Players")) + ": " + std::to_string(networkPlayers);
+            if (ImGui::BeginCombo("##networkPlayers", preview.c_str())) {
+                for (int n = 1; n <= maximum; ++n)
+                    if (ImGui::Selectable(std::to_string(n).c_str(), n == networkPlayers)) networkPlayers = n;
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
+        }
+
         // Scene name + save on the right.
         std::string title = (sceneName.empty() ? std::string(Tr("(unsaved scene)")) : sceneName) + (Dirty() && !session ? " *" : "");
         float w = ImGui::CalcTextSize(title.c_str()).x + ImGui::CalcTextSize(Tr("Save")).x + ImGui::GetStyle().FramePadding.x * 2 + 24;
@@ -1038,9 +1069,16 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     bool empty = !node || (node->IsLeafNode() && node->Windows.Size == 0);
     if (layoutBuilt && !resetLayout) return;
     layoutBuilt = true;
-    if (!empty && !resetLayout) return;  // restored from the .ini
+    if (!empty && !resetLayout) {
+        // Add the new tab to an old layout without resetting the person's other panels.
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Network"))) {
+            ImGuiWindowSettings* inspector = ImGui::FindWindowSettingsByID(ImHashStr("###Inspector"));
+            if (inspector && inspector->DockId) ImGui::DockBuilderDockWindow("###Network", inspector->DockId);
+        }
+        return;
+    }
     resetLayout = false;
-    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = true;
+    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = true;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockspace);
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -1052,6 +1090,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Hierarchy", left);
     ImGui::DockBuilderDockWindow("###Tiles", right);
     ImGui::DockBuilderDockWindow("###Inspector", right);
+    ImGui::DockBuilderDockWindow("###Network", right);
     ImGui::DockBuilderDockWindow("###Scene", center);
     ImGui::DockBuilderDockWindow("###Game", center);
     ImGui::DockBuilderDockWindow("###Scripts", center);
@@ -1304,6 +1343,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showConsole) m.ConsolePanel();
     if (m.showScripts) m.ScriptsPanel();
     if (m.showTiles) m.TilesPanel();
+    if (m.showNetwork) m.NetworkPanel();
     if (m.showMetrics) ImGui::ShowMetricsWindow(&m.showMetrics);
     m.Modals();
     m.Toasts();
@@ -1406,6 +1446,18 @@ void NativeEditor::FocusGameView(bool focus) {
     }
 }
 
+void NativeEditor::FocusNetworkPanel() { impl_->showNetwork = impl_->requestNetworkFocus = true; }
+bool NativeEditor::SetGamePeer(size_t peer) {
+    if (peer > 7 || !impl_->engine.LocalPeer(peer)) return false;
+    if (impl_->gamePeer == static_cast<int>(peer)) return true;
+    impl_->ReleaseGameInput(); impl_->gamePeer = static_cast<int>(peer); impl_->gameFocused = false; return true;
+}
+bool NativeEditor::SetNetworkPlayers(int players) {
+    Json state = impl_->engine.NetworkCall("state", Json::MakeObject());
+    if (impl_->InPlaySession() || players < 1 || players > 8 ||
+        (players > 1 && (state["mode"].asString() == "none" || players > state["maxPlayers"].asInt()))) return false;
+    impl_->networkPlayers = players; return true;
+}
 bool NativeEditor::GameViewFocused() const { return impl_->gameFocused; }
 
 void NativeEditor::OpenScript(const std::string& path) { impl_->OpenScript(path); }

@@ -35,6 +35,8 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Sprite>();
     TypeRegistry::Register<SpriteAnimation>();
     TypeRegistry::Register<Tilemap>();
+    TypeRegistry::Register<NetSync>();
+    TypeRegistry::Register<NetPlayer>();
 }
 
 }  // namespace oe

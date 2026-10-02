@@ -75,7 +75,8 @@ Params& Params::ReqWith(const char* name, Json schema) {
 namespace {
 
 bool TypeMatches(const Json& v, const std::string& type) {
-    if (type == "integer") return v.isNumber() && v.asNumber() == static_cast<double>(static_cast<int64_t>(v.asNumber()));
+    if (type == "integer") return v.isNumber() && std::isfinite(v.asNumber()) &&
+        v.asNumber() >= -9223372036854775808.0 && v.asNumber() < 9223372036854775808.0 && std::floor(v.asNumber()) == v.asNumber();
     if (type == "number") return v.isNumber();
     if (type == "string") return v.isString();
     if (type == "boolean") return v.isBool();
@@ -304,6 +305,91 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    const struct { const char* name; const char* summary; } netQueries[] = {
+        {"state", "Read network configuration, role, lobby state and connection error; none mode starts no networking."},
+        {"players", "List lobby players in id order, or the local player in none mode."},
+        {"stats", "Read peer RTT in milliseconds, loss, channel bytes, pending messages and selected transport route."},
+        {"leave", "Leave the session gracefully within 30 simulated frames; none mode is unchanged."}
+    };
+    for (const auto& query : netQueries) {
+        std::string command = query.name;
+        std::string full = "net." + command;
+        Register(r, full.c_str(), query.summary, Params(), false,
+                 [command](Engine& e, const Json& a) { return e.NetworkCall(command, a); });
+    }
+    Register(r, "net.simulate", "Inspect or change shared loopback faults; future sends use the supplied seeded configuration.",
+             Params().Opt("seed", "integer", "Fault RNG seed: 0..4294967295.")
+                     .Opt("latencyFrames", "integer", "One-way delay: 0..3600 frames.")
+                     .Opt("jitterFrames", "integer", "Uniform +/- jitter: 0..3600 frames.")
+                     .Opt("lossPermille", "integer", "Loss: 0..1000 parts per thousand.")
+                     .Opt("duplicatePermille", "integer", "Duplication: 0..1000 parts per thousand.")
+                     .Opt("reorderFrames", "integer", "Extra random delay: 0..3600 frames."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("simulate", a); });
+    Register(r, "net.spawn_local_peers", "Play an idle network project with additional in-process loopback peers; host stepping drives the group and auto-starts when ready.",
+             Params().Req("count", "integer", "Additional peers: 1..7; host also occupies a player slot.")
+                     .Opt("seed", "integer", "Session seed; default 1."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("spawn_local_peers", a); });
+    Register(r, "net.local_peers", "Read preview peer indices, frames, states, stats and desync reports.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("local_peers", a); });
+    Register(r, "net.peer_call", "Route input or diagnostic commands to a preview peer; returns that command's JSON envelope.",
+             Params().Req("peer", "integer", "Preview index: 0 host, 1..7 additional peers.")
+                     .Req("command", "string", "input.*, state/diagnostic query or render.screenshot.")
+                     .Opt("args", "object", "Command arguments."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("peer_call", a); });
+    Register(r, "net.serve", "Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically.",
+             Params().Opt("name", "string", "Server name; default Player.")
+                     .Opt("port", "integer", "Listen port: 0..65535; zero chooses an available port.")
+                     .Opt("seed", "integer", "Session seed; default 1.")
+                     .Opt("minPlayers", "integer", "Minimum ready remote players: 1..63; default 1."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("serve", a); });
+    Register(r, "net.entities", "Inspect authoritative network entity ids, local ids, owners and received replication fields.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("entities", a); });
+    Register(r, "net.host", "Host a lobby; net.start begins lockstep, rollback or authoritative simulation.",
+             Params().Opt("name", "string", "Player name: 1..64 printable bytes.")
+                     .Opt("seed", "integer", "Session seed: 0..4294967295; default 1.")
+                     .Opt("room", "string", "Loopback room in this process; default gameId.")
+                     .Opt("port", "integer", "Listen port override: 0..65535; zero chooses an available port."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("host", a); });
+    Register(r, "net.join", "Asynchronously join a lobby; advance both engines with sim.step until lobby.",
+             Params().Opt("name", "string", "Player name: 1..64 printable bytes.")
+                     .Opt("address", "string", "Numeric host IPv4, ws/wss URL, or loopback room name.")
+                     .Opt("port", "integer", "TCP/UDP host port: 1..65535; default project network.port."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("join", a); });
+    Register(r, "net.ready", "Set local lobby readiness; does not start synchronized simulation.",
+             Params().Req("ready", "boolean", "Local player readiness."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("ready", a); });
+    Register(r, "net.kick", "Host removes a remote player with a bounded graceful close.",
+             Params().Req("player", "integer", "Remote player id from net.players.").Opt("reason", "string", "1..64 printable bytes; default kicked."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("kick", a); });
+    Register(r, "net.rpc", "Send a bounded reliable RPC, or call its Lua handler locally in none mode.",
+             Params().Req("name", "string", "Handler name: 1..64 printable bytes.")
+                     .Opt("target", "string", "server/owner/all/others or decimal player id; default server.")
+                     .Opt("args", "array", "At most 16 bounded JSON arguments, depth <=8, <=8192 serialized bytes.")
+                     .OptWith("entity", EntityRefSchema("Entity id/name for target owner; alternatively pass id/name as first argument.")), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("rpc", a); });
+    Register(r, "net.start", "Host starts a ready lockstep, rollback or authoritative match with a frozen roster and frame-zero barrier.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("start", a); });
+    Register(r, "net.desync_report", "First confirmed hash mismatch: frame, player, hashes and bounded host/peer scene JSON.", Params(), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("desync_report", a); });
+    Register(r, "input.player", "Inspect synchronized declared actions and raw quantized axes for one player.",
+             Params().Req("player", "integer", "Player id."), false, [](Engine& e, const Json& a) {
+                 double player = a["player"].asNumber();
+                 if (player < 1 || player >= 4294967294.0 || std::floor(player) != player) throw ApiError("invalid_argument", "invalid player id");
+                 const auto& input = e.PlayerInput(static_cast<uint32_t>(player)); Json out = Json::MakeObject();
+                 out["down"] = Json::MakeArray(); out["pressed"] = Json::MakeArray(); out["axes"] = Json::MakeObject();
+                 for (const auto& key : input.down) out["down"].push(key);
+                 for (const auto& key : input.pressedThisFrame) out["pressed"].push(key);
+                 for (const auto& axis : input.axes) out["axes"][axis.first] = axis.second;
+                 return out;
+             });
+    Register(r, "sim.record_state", "Enable native full-state snapshots before frame zero; project resources must stay immutable.", Params(), false,
+             [](Engine& e, const Json& a) { return e.SnapshotCall("record", a); });
+    Register(r, "sim.save_state", "Save a full recorded simulation in one of eight in-memory slots.",
+             Params().Opt("slot", "string", "Slot name, default default."), false,
+             [](Engine& e, const Json& a) { return e.SnapshotCall("save", a); });
+    Register(r, "sim.load_state", "Restore native Lua, physics and audio state; refuses changed resources or an active match.",
+             Params().Opt("slot", "string", "Previously saved slot."), false,
+             [](Engine& e, const Json& a) { return e.SnapshotCall("load", a); });
     auto animatorState = [](Engine& e, EntityId id, bool includePose) {
         const Animator* animator = e.GetScene().Get<Animator>(id);
         if (!animator) throw ApiError("missing_component", "entity has no Animator", "Call animation.play or component.add with type Animator.");

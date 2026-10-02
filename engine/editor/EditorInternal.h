@@ -135,6 +135,10 @@ struct NativeEditor::Impl {
     // ----- Panels
     bool showHierarchy = true, showInspector = true, showScene = true, showGame = true;
     bool showConsole = true, showAssets = true, showScripts = true, showMetrics = false;
+    bool showNetwork = true, requestNetworkFocus = false;
+    int networkPlayers = 1, networkLatency = 0, gamePeer = 0;
+    void NetworkPanel();
+    Engine& GameEngine();
     bool layoutBuilt = false;
     bool resetLayout = false;
     int focusSceneTab = 0;  // frames until the Scene tab is brought to front

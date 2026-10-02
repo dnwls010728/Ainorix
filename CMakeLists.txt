@@ -9,6 +9,24 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Static C/C++ runtime: packaged games run on PCs without the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# Ninja must match the compiler's actual /showIncludes bytes. Localized MSVC output
+# can be incorrectly decoded during CMake's compiler detection, silently losing
+# header dependencies and mixing incompatible objects after a public struct changes.
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
+  set(OE_INCLUDES_PROBE ${CMAKE_BINARY_DIR}/generated/OwnEngineShowIncludes.cpp)
+  file(WRITE ${CMAKE_BINARY_DIR}/generated/OwnEngineShowIncludes.h "#pragma once\n")
+  file(WRITE ${OE_INCLUDES_PROBE} "#include \"OwnEngineShowIncludes.h\"\n")
+  execute_process(COMMAND ${CMAKE_CXX_COMPILER} /nologo /showIncludes /Zs ${OE_INCLUDES_PROBE}
+    OUTPUT_VARIABLE OE_INCLUDES_OUTPUT ERROR_VARIABLE OE_INCLUDES_ERROR
+    RESULT_VARIABLE OE_INCLUDES_RESULT ENCODING NONE TIMEOUT 10)
+  if(OE_INCLUDES_RESULT EQUAL 0)
+    string(REGEX MATCH "[^\r\n]*OwnEngineShowIncludes\\.h" OE_INCLUDES_LINE "${OE_INCLUDES_OUTPUT}${OE_INCLUDES_ERROR}")
+    if(OE_INCLUDES_LINE MATCHES "[A-Za-z]:[/\\\\]")
+      string(REGEX REPLACE "[A-Za-z]:[/\\\\].*$" "" CMAKE_CL_SHOWINCLUDES_PREFIX "${OE_INCLUDES_LINE}")
+    endif()
+  endif()
+endif()
+
 option(OE_BUILD_TESTS "Build the engine test executable" ON)
 
 # ---------------------------------------------------------------------------
@@ -104,6 +122,8 @@ file(GLOB OE_CORE_SOURCES CONFIGURE_DEPENDS
   engine/script/*.cpp
   engine/physics/*.cpp
   engine/audio/*.cpp
+  engine/net/*.cpp
+  engine/net/sync/*.cpp
   engine/assets/*.cpp
   engine/render/*.cpp
   engine/api/*.cpp
@@ -159,6 +179,13 @@ else()
 endif()
 message(STATUS "OwnEngine GPU backend: ${OE_GPU_BACKEND}")
 
+list(APPEND OE_PLATFORM_SOURCES engine/platform/Network.cpp)
+if(EMSCRIPTEN)
+  list(APPEND OE_PLATFORM_SOURCES engine/platform/web/NetworkWeb.cpp)
+else()
+  list(APPEND OE_PLATFORM_SOURCES engine/platform/net/NativeSockets.cpp)
+endif()
+
 add_library(OwnEngine STATIC ${OE_CORE_SOURCES} ${OE_PLATFORM_SOURCES})
 target_include_directories(OwnEngine PUBLIC engine third_party/sokol)
 target_link_libraries(OwnEngine PUBLIC oe_lua Jolt oe_box2d)
@@ -177,9 +204,11 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(OwnEngine PUBLIC ws2_32 user32 gdi32 shell32 winmm d3d11 dxgi)
+  target_link_libraries(OwnEngine PUBLIC ws2_32 bcrypt user32 gdi32 shell32 winmm d3d11 dxgi)
 elseif(EMSCRIPTEN)
   # Single-threaded WebAssembly: no pthreads (works on any static host).
+  # Bounded WebSocket JS callbacks copy at most 64 KiB through explicitly exported allocation functions.
+  target_link_options(OwnEngine PUBLIC "-sEXPORTED_FUNCTIONS=['_main','_malloc','_free']")
 elseif(ANDROID)
   # Threads are part of bionic's libc.
   target_link_libraries(OwnEngine PUBLIC oe_android_glue android log EGL GLESv3 aaudio)

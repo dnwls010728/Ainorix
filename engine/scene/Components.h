@@ -901,6 +901,38 @@ struct AudioSource {
     }
 };
 
+// ----- Authoritative replication ---------------------------------------------------
+struct NetSync {
+    static constexpr const char* kTypeName = "NetSync";
+    static constexpr const char* kDoc = "Server-owned replication policy. Fields use Component.field keys; clients cannot write authority.";
+    int owner = 0;
+    Json fields = Json::parse(R"({"Transform.position":{"onChange":true},"Transform.rotation":{"onChange":true}})");
+    std::string prefab;
+    float distance = 0;
+    int team = 0;
+    bool teamOnly = false;
+    bool predict = true;
+    static void Reflect(FieldList& f) {
+        f.Add("owner", &NetSync::owner, "Controlling player id; 0 means server.");
+        f.Add("fields", &NetSync::fields, "Component.field -> {always,onChange,ownerOnly,quantize}; at most 64 fields.");
+        f.Add("prefab", &NetSync::prefab, "Optional project-relative prefab path for reliable spawn.");
+        f.Add("distance", &NetSync::distance, "Relevance distance from receiver's NetPlayer (0 = unlimited).");
+        f.Add("team", &NetSync::team, "Relevance team.");
+        f.Add("teamOnly", &NetSync::teamOnly, "Show only to matching team, or owner.");
+        f.Add("predict", &NetSync::predict, "Client predicts its owned entity; others are interpolated.");
+    }
+};
+struct NetPlayer {
+    static constexpr const char* kTypeName = "NetPlayer";
+    static constexpr const char* kDoc = "Player entity assigned by the authoritative server; network.playerPrefab spawns one per ready participant.";
+    int player = 0;
+    int team = 0;
+    static void Reflect(FieldList& f) {
+        f.Add("player", &NetPlayer::player, "Authenticated player id assigned by the server.");
+        f.Add("team", &NetPlayer::team, "Player's relevance team.");
+    }
+};
+
 void RegisterBuiltinComponents();
 
 }  // namespace oe
