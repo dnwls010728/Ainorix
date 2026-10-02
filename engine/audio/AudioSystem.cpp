@@ -128,13 +128,13 @@ void AudioSystem::Output(const std::vector<float>& block) {
 void AudioSystem::Confirm(uint64_t frames) {
     while (!pending_.empty() && pending_.begin()->first < frames) { Output(pending_.begin()->second); pending_.erase(pending_.begin()); }
 }
-std::shared_ptr<const AudioSystem::Snapshot> AudioSystem::SaveState() const {
-    return std::make_shared<Snapshot>(Snapshot{clips_, voices_, events_, started_, nextVoice_, mix_, capture_, capturing_});
+std::shared_ptr<const AudioSystem::Snapshot> AudioSystem::SaveState(bool output) const {
+    return std::make_shared<Snapshot>(Snapshot{clips_, voices_, events_, started_, nextVoice_, mix_, output ? capture_ : std::vector<float>{}, capturing_, pending_});
 }
 void AudioSystem::LoadState(const Snapshot& state) {
     clips_ = state.clips; voices_ = state.voices; events_ = state.events; started_ = state.started;
     nextVoice_ = state.nextVoice; mix_ = state.mix; capture_ = state.capture; capturing_ = state.capturing;
-    pending_.clear();
+    pending_ = state.pending;
 }
 
 void AudioSystem::OnSceneChanged() {

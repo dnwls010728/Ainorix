@@ -5,9 +5,8 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M4 implemented.** Opt-in host/join lobbies, player ids/readiness, session-cookie
-handshakes, commands and Lua RPC are available. Simulation synchronization remains M5/M6;
-M4 sessions advance independent local worlds. Platform verification limits are recorded below.
+Status: **M1–M5 implemented.** Opt-in lobbies, RPC, lockstep and native rollback are available.
+Authoritative replication is the next milestone (M6). Platform verification limits are recorded below.
 Progress is tracked in §11.
 
 ## 1. Goals and non-goals
@@ -140,10 +139,11 @@ established.
   machinery that already exists). A mismatch raises `net.desync`; `net.desync_report` dumps both
   scene JSONs for diffing.
 - **Rollback** uses `Engine::SaveState()/LoadState()` semantics for scene, Jolt/Box2D, Lua,
-  audio and RNG. M5 currently provides an exact reference backend that rebuilds these states by
-  replaying their input journal. `mode: "rollback"` enables this experimental backend; it is
-  bounded to 12000 frames and restores in O(match history), not O(rollbackFrames).
-  Fast native snapshots that meet a real-time frame budget remain an unchecked M5 requirement.
+  audio and RNG. Native snapshots retain Lua closure/upvalue/coroutine allocations, deep-copy
+  runtime component pools, save Jolt solver/character state and capture Box2D world allocations.
+  Correction restores the earliest affected checkpoint and replays at most `rollbackFrames`
+  (1..8), independent of match history. Standalone snapshots include captured PCM; rollback
+  checkpoints only retain mixer state and unconfirmed output.
 - The host picks the session seed and sends it in the handshake; Lua `math.random` is seeded from it.
 
 ### 7.2 Authoritative server
@@ -228,10 +228,10 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
       web (Emscripten); tests on loopback and real localhost sockets
 - [x] M4 — session layer (host/join/lobby/player ids/handshake/version/seed), `net.*` commands,
       Lua `net` basics (`isServer`, `localPlayer`, `rpc`, `on`), `mode: none` semantics
-- [ ] M5 — lockstep and full-state rollback
+- [x] M5 — lockstep and full-state rollback
   - [x] M5a — input merge, frame gating, ready barrier, desync reports, `input.player(id)`
   - [x] M5b — exact reference `Engine::SaveState/LoadState` and prediction/correction by replay
-  - [ ] M5c — fast native Lua/Jolt/Box2D snapshots; restore cost bounded by rollback window,
+  - [x] M5c — fast native Lua/Jolt/Box2D snapshots; restore cost bounded by rollback window,
         benchmarked against the 1/60 s game budget (reference replay is not this backend)
 - [ ] M6 — authoritative: `NetSync`, snapshots/deltas, interpolation, prediction, relevance
 - [ ] M7 — headless dedicated server (`oe serve-game`, `--server`), editor Players×N play +
@@ -577,3 +577,33 @@ Validation:
 - [ ] POSIX, real browser/Wasm and Android device execution and refreshed prebuilt runtimes:
       Emscripten, NDK and Linux toolchains remain unavailable. Rebuild and run on each platform
       before shipping M5 networking there; existing committed runtimes do not contain M5 APIs.
+
+### M5c — native bounded restoration (2026-10-02)
+
+This supersedes the M5b reference replay backend and its 12000-frame cap. `sim.record_state`
+remains explicit and must precede frame zero and any Lua execution. Snapshots are in-process,
+owned by their originating Engine; they are not a portable save format. Project resources stay
+immutable, hot reload is disabled during recording, and restoring changed resources is refused.
+
+Lua uses an address-stable allocator only when recording is enabled. An image retains the live
+blocks and their bytes, preserving closures, timers, coroutines, GC state and RNG without running
+Lua during restore. Discarded speculative branches do not invoke finalizers. Scene images clone
+all component pools, including hidden runtime values, and entity allocation cursors. Jolt saves
+its full state plus body creation settings/ids and CharacterVirtual state; deterministic native
+body ids allow creation/deletion across branches. Box2D's unmodified 3.1.1 adapter captures the
+world struct and its tracked allocation graph, including broadphase, contacts and warm starts.
+Its global allocator callbacks are scoped and serialized; each snapshot retains its world slot.
+Audio mixer/voice state, pending unconfirmed PCM, UI state, scene changes, game data and save
+slots are captured. Confirmed PCM is preserved across automatic corrections without duplicate
+speaker/capture output. These images are version-specific and never accepted from network data.
+
+- [x] Native rollback checkpoint ring contains at most rollbackFrames + 1 images; input journal
+      retains only that window plus boundary inputs. Match history has no restoration cap.
+- [x] Existing closure/timer/RNG, scene change, dynamic 2D/3D entities, exact future-state/PCM,
+      input correction and zero-network-cost tests pass.
+- [x] Windows Release: 121 tests, zero failures. Four representative samples (Hello, Dungeon,
+      Platformer, FPS), 2000-frame history, 20 restores: measured maximum **5.301 ms** including
+      resource validation, below 16.67 ms. This fixture budget is asserted in native tests, not
+      an arbitrary-world worst-case guarantee. 13000-frame history restores without replay.
+- [ ] Browser/Wasm, Android and POSIX native execution remain unverified; rebuild committed
+      player runtimes using their SDKs before shipping these APIs on those platforms.

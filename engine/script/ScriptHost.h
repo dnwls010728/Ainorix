@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "core/Json.h"
+#include "core/SnapshotHeap.h"
+#include <memory>
 #include "scene/Reflect.h"
 
 struct lua_State;
@@ -40,6 +42,10 @@ public:
     void Update(float dt);
     // Destroys every script instance and the Lua state.
     void Reset();
+    struct Snapshot;
+    void EnableSnapshots();
+    std::shared_ptr<const Snapshot> SaveState() const;
+    void LoadState(const Snapshot& state);
     // Destroys the instances but keeps the Lua state (globals, timers,
     // loaded modules). Used when a game changes scene.
     void ResetInstances();
@@ -116,6 +122,7 @@ private:
 
     Engine& engine_;
     lua_State* L_ = nullptr;
+    std::shared_ptr<SnapshotHeap> heap_;
     std::map<std::string, Module> modules_;
     std::map<EntityId, Instance> instances_;
     std::vector<ScriptError> errors_;

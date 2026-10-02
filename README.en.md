@@ -130,3 +130,5 @@ samples/Dungeon  2D top-down action (Box2D, autotiled tileset, pushable crates, 
 samples/Platformer 2D side-scroller (text tilemap, sprite animation, enemies, ? blocks, parallax)
 samples/FPS      first-person shooter test game (mouse look, hitscan pistol, reload, moving targets, results screen)
 ```
+
+Native rollback snapshots (M5c) now preserve Lua/Jolt/Box2D state and replay at most eight frames. See docs/NETWORK.md.

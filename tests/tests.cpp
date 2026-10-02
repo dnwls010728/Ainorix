@@ -1,6 +1,7 @@
 // Engine self tests. Run: build/bin/oe_tests  (exit code 0 = all passed)
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1347,6 +1348,37 @@ TEST(SimulationReferenceSnapshotAcrossSceneChanges) {
     CHECK(e.GetScene().ToJson()==scene && e.GameData()==data && e.RuntimeScene()=="scenes/second.scene.json");
     e.Step(20); CHECK(e.GameData()==futureData); RemoveAll(project);
 }
+TEST(SimulationNativeSnapshotBudgetAndBranching) {
+    double worst = 0;
+    for (const char* sample : {"Hello", "Dungeon", "Platformer", "FPS"}) {
+        Engine engine; std::string error;
+        CHECK(engine.Open(TestSourceDir() + "/samples/" + sample, &error));
+        engine.RecordState(); engine.Step(2000);
+        auto state = engine.SaveState(); engine.Step(8);
+        Json future = engine.GetScene().ToJson(), data = engine.GameData();
+        for (int n = 0; n < 5; ++n) {
+            auto start = std::chrono::steady_clock::now(); engine.LoadState(*state);
+            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            worst = std::max(worst, ms); engine.Step(8);
+            CHECK(engine.GetScene().ToJson() == future && engine.GameData() == data);
+        }
+        CHECK(engine.Scripts().Errors().empty());
+    }
+    std::printf("  Native snapshot worst: %.3f ms (20 restores, four samples)\n", worst);
+#ifndef __EMSCRIPTEN__
+    CHECK(worst < 16.67);
+#endif
+    std::string project = TempProject("native_long"), error; Engine engine;
+    CHECK(engine.Open(project, &error)); engine.GetScene().Clear(); engine.RecordState();
+    CHECK(Call(engine, "script.eval", R"J({"code":"local n=0; timer.every(0.02,function() n=n+math.random(1,3); game.set('n',n) end)"})J")["ok"].asBool());
+    engine.Step(13000); auto state = engine.SaveState(); engine.Step(8); Json future = engine.GameData();
+    engine.LoadState(*state); CHECK(engine.Frame() == 13000); engine.Step(8); CHECK(engine.GameData() == future);
+    Engine other; bool refused = false;
+    CHECK(other.Open(project, &error)); other.RecordState();
+    try { other.LoadState(*state); } catch (const ApiError& e) { refused = e.code == "state_invalid"; }
+    CHECK(refused); RemoveAll(project);
+}
+
 TEST(NetworkFrameSyncSeededTenThousandFrames) {
     for (int count : {2,4}) {
         LoopbackConfig faults; faults.seed=193; faults.lossPermille=80; faults.latencyFrames=1; faults.reorderFrames=2;

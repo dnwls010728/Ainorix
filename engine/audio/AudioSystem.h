@@ -38,13 +38,14 @@ public:
     // Replay mixes silently; rollback submits each confirmed block once.
     void SetOutputMode(bool silent, bool deferred) { silent_ = silent; deferred_ = deferred; }
     void Confirm(uint64_t frames);
+    void DropPendingBefore(uint64_t frame) { pending_.erase(pending_.begin(), pending_.lower_bound(frame)); }
     void DiscardPending() { pending_.clear(); }
     void ResetTimeline() { nextVoice_ = 1; capture_.clear(); pending_.clear(); }
     struct Snapshot;
     struct OutputState { std::vector<float> capture; bool capturing; };
     OutputState TakeOutput() { return {std::move(capture_), capturing_}; }
     void RestoreOutput(OutputState state) { capture_ = std::move(state.capture); capturing_ = state.capturing; }
-    std::shared_ptr<const Snapshot> SaveState() const;
+    std::shared_ptr<const Snapshot> SaveState(bool output = true) const;
     void LoadState(const Snapshot& state);
     // Called when a game switches scene: stops sounds owned by entities.
     void OnSceneChanged();
@@ -85,6 +86,7 @@ public:
         std::map<std::string, std::shared_ptr<const AudioClip>> clips;
         std::vector<Voice> voices; std::vector<Event> events; std::set<EntityId> started;
         int nextVoice; std::vector<float> mix, capture; bool capturing;
+        std::map<uint64_t, std::vector<float>> pending;
     };
 private:
     void Output(const std::vector<float>& block);

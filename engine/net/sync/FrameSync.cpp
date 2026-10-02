@@ -193,7 +193,7 @@ void FrameSync::Tick(uint64_t tick) {
     while (hashes_.size() > 16) hashes_.erase(hashes_.begin());
 }
 bool FrameSync::TakeStart() { bool value = startPending_; startPending_ = false; return value; }
-bool FrameSync::NeedsInput() const { return Running() && (!config_.rollback || gameFrame_ + config_.delay < kHistoryFrames) && !localInputs_.count(gameFrame_ + config_.delay); }
+bool FrameSync::NeedsInput() const { return Running() && !localInputs_.count(gameFrame_ + config_.delay); }
 bool FrameSync::Submit(const FrameInput& input) {
     if (!NeedsInput() || !Valid(input)) return false;
     uint64_t frame = gameFrame_ + config_.delay; localInputs_[frame] = input;
@@ -211,7 +211,6 @@ FrameInputs FrameSync::ReplayInputs(uint64_t frame, const FrameInputs& previous,
 }
 std::optional<FrameInputs> FrameSync::Next() {
     if (!Running()) return std::nullopt;
-    if (config_.rollback && gameFrame_ >= kHistoryFrames) { Stop("match reached the 12000-frame reference history limit"); return std::nullopt; }
     auto actual = merged_.find(gameFrame_); if (actual != merged_.end()) return actual->second;
     if (!config_.rollback || gameFrame_ >= confirmed_ + config_.rollbackFrames) return std::nullopt;
     FrameInputs previous; auto it = used_.find(gameFrame_ == 0 ? 0 : gameFrame_ - 1); if (it != used_.end()) previous = it->second;

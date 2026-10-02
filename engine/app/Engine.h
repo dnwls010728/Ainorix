@@ -18,6 +18,7 @@
 #include "scene/Scene.h"
 #include "scene/Systems.h"
 #include "script/ScriptHost.h"
+#include "physics/PhysicsWorld.h"
 
 namespace oe {
 
@@ -65,7 +66,7 @@ public:
     void Pause();
     void Stop();  // restores the scene captured when play started
     void Step(int frames);
-    // Reference full-state snapshots rebuild Lua/physics by deterministic replay.
+    // Native full-state snapshots preserve Lua allocations and physics solver state.
     // Explicit recording avoids any journal work in ordinary single-player games.
     struct SimulationState;
     void RecordState();
@@ -161,7 +162,10 @@ private:
     void ApplyInputs(const FrameInputs& inputs);
     uint64_t ContentHash() const;
     std::string SyncWorld() const;
-    void RestoreJournal(size_t count);
+    struct NativeState;
+    std::shared_ptr<const NativeState> CaptureNative(bool output) const;
+    void RestoreNative(const NativeState& state);
+    void CaptureCheckpoint();
     struct UIEvent {
         EntityId id;
         const char* method;
@@ -198,6 +202,8 @@ private:
     struct JournalFrame { InputState input; FrameInputs players; };
 public:
     struct SimulationState {
+        std::shared_ptr<const NativeState> native;
+        uint64_t firstFrame = 0;
         Json baseline, gameData, scene;
         std::string runtimeScene;
         std::vector<JournalFrame> frames;
@@ -210,6 +216,7 @@ public:
         bool playing = false; double accumulator = 0;
     };
 private:
+    std::map<uint64_t, std::shared_ptr<const NativeState>> checkpoints_;
     std::unique_ptr<SimulationState> journal_;
     std::map<std::string, std::shared_ptr<const SimulationState>> snapshots_;
     bool replaying_ = false, inWorld_ = false;

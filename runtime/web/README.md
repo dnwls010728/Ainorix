@@ -51,3 +51,5 @@ one in this folder, and reports which one it used (`webRuntime`).
 
 Networking M5 source adds protocol v2, lockstep and reference rollback APIs. This committed runtime
 was not rebuilt for M5 (required SDK unavailable); rebuild before packaging games using them.
+
+M5c native snapshots are also source-only until the Web runtime is rebuilt.

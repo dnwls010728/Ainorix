@@ -111,7 +111,7 @@ Instance helpers (from the built-in base class): `self:get(type)`, `self:set(typ
 `net.isHost()`/`net.isClient()` false, `net.localPlayer()` is 1 and `net.players()` is `{1}`.
 `net.rpc` calls its registered handler immediately in this mode (`others` has no recipient).
 No session, socket or network polling is initialized. With networking enabled, M4 supplies
-lobbies/RPC and M5 supplies lockstep/reference rollback; authoritative replication remains M6. See [NETWORK.md](NETWORK.md).
+lobbies/RPC and M5 supplies lockstep/native rollback; authoritative replication remains M6. See [NETWORK.md](NETWORK.md).
 
 | Lua | Contract |
 |---|---|
@@ -122,7 +122,7 @@ lobbies/RPC and M5 supplies lockstep/reference rollback; authoritative replicati
 | `net.join({name?, address?, port?})` | Async join: numeric IPv4, browser ws/wss URL or in-process loopback room |
 | `net.leave()` / `net.kick({player, reason?})` | Graceful bounded leave or host-only removal |
 | `net.ready({ready=true})` | Lobby readiness; does not start synchronized simulation |
-| `net.start()` | Ready host begins a lockstep/reference rollback match; all peers reset at the ready barrier |
+| `net.start()` | Ready host begins a lockstep/native rollback match; all peers reset at the ready barrier |
 | `net.desync_report()` | First confirmed mismatch with bounded diagnostic scene JSON texts |
 | `input.player(id)` | `{down(key), pressed(key), axis(name)}` closures for the merged player input; supports dot/colon calls. Unknown players are neutral; none/player 1 is local |
 | `net.on(name, fn)` / `net.on(name, nil)` | Register/replace or remove a handler (at most 64 names) |
@@ -218,6 +218,5 @@ end
 Lobby RPC and player callbacks are withheld during matches. `net.on("net.desync", function(report)
 ... end)` and `onNetState("desync")` run once after a terminal mismatch. Input frame waits still
 poll the transport but do not call onUpdate/timers/physics/audio. Plain input sees the quantized
-local player; mouse/touch coordinates are not synchronized. Reference rollback replays opaque
-closures, timers and physics history from frame zero, caps at 12000 frames, and is experimental;
-fast native snapshots remain M5c. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.
+local player; mouse/touch coordinates are not synchronized. Native rollback preserves opaque closures, timers and physics solver history in bounded
+checkpoints and replays at most eight frames. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.

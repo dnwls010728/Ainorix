@@ -25,7 +25,10 @@ using EntityPair = std::pair<EntityId, EntityId>;
 // in entity-id order, so simulations are deterministic.
 class Physics2D {
 public:
-    Physics2D();
+    explicit Physics2D(bool snapshots = false);
+    struct Snapshot;
+    std::shared_ptr<const Snapshot> SaveState() const;
+    void LoadState(const Snapshot& state);
     ~Physics2D();
     Physics2D(const Physics2D&) = delete;
     Physics2D& operator=(const Physics2D&) = delete;
@@ -53,7 +56,7 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::shared_ptr<Impl> impl_;
     const TilesetLookup* tilesets_ = nullptr;
 };
 

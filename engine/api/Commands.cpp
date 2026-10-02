@@ -353,12 +353,12 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  for (const auto& axis : input.axes) out["axes"][axis.first] = axis.second;
                  return out;
              });
-    Register(r, "sim.record_state", "Enable exact reference replay recording before frame zero (12000-frame bound).", Params(), false,
+    Register(r, "sim.record_state", "Enable native full-state snapshots before frame zero; project resources must stay immutable.", Params(), false,
              [](Engine& e, const Json& a) { return e.SnapshotCall("record", a); });
     Register(r, "sim.save_state", "Save a full recorded simulation in one of eight in-memory slots.",
              Params().Opt("slot", "string", "Slot name, default default."), false,
              [](Engine& e, const Json& a) { return e.SnapshotCall("save", a); });
-    Register(r, "sim.load_state", "Restore Lua, physics and audio by replay; refuses changed project resources or an active match.",
+    Register(r, "sim.load_state", "Restore native Lua, physics and audio state; refuses changed resources or an active match.",
              Params().Opt("slot", "string", "Previously saved slot."), false,
              [](Engine& e, const Json& a) { return e.SnapshotCall("load", a); });
     auto animatorState = [](Engine& e, EntityId id, bool includePose) {

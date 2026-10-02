@@ -22,6 +22,52 @@ InputState Decode(const FrameInput& value, const SyncConfig& config) {
     return input;
 }
 }
+struct Engine::NativeState {
+    const Engine* owner = nullptr;
+    Scene scene;
+    std::shared_ptr<const ScriptHost::Snapshot> scripts;
+    std::shared_ptr<const PhysicsWorld::Snapshot> physics;
+    std::shared_ptr<const AudioSystem::Snapshot> audio;
+    SaveStore saves;
+    Json data;
+    InputState input;
+    FrameInputs frameInputs;
+    std::map<uint32_t, InputState> playerInputs;
+    std::vector<TimedLine> lines;
+    std::string runtimeScene, pendingScene;
+    std::set<EntityId> buttons;
+    std::set<std::string> keys;
+    EntityId hover = 0, press = 0;
+    uint64_t frame = 0;
+    double time = 0;
+};
+std::shared_ptr<const Engine::NativeState> Engine::CaptureNative(bool output) const {
+    auto s = std::make_shared<NativeState>(); s->owner = this;
+    s->scene = scene_; s->scripts = scripts_->SaveState(); s->physics = physics_->SaveState();
+    s->audio = audio_->SaveState(output); s->saves = saves_; s->data = gameData_;
+    s->input = input_; s->frameInputs = frameInputs_; s->playerInputs = playerInputs_;
+    s->lines = debugLines_; s->runtimeScene = runtimeScene_; s->pendingScene = pendingScene_;
+    s->buttons = heldButtons_; s->keys = heldKeys_; s->hover = uiHovered_; s->press = uiPressed_;
+    s->frame = frame_; s->time = simTime_; return s;
+}
+void Engine::RestoreNative(const NativeState& s) {
+    if (s.owner != this) throw ApiError("state_invalid", "snapshots belong to their originating engine");
+    scene_ = s.scene; scripts_->LoadState(*s.scripts); physics_->LoadState(*s.physics);
+    audio_->LoadState(*s.audio); saves_ = s.saves; gameData_ = s.data;
+    input_ = s.input; frameInputs_ = s.frameInputs; playerInputs_ = s.playerInputs;
+    debugLines_ = s.lines; runtimeScene_ = s.runtimeScene; pendingScene_ = s.pendingScene;
+    heldButtons_ = s.buttons; heldKeys_ = s.keys; uiHovered_ = s.hover; uiPressed_ = s.press;
+    frame_ = s.frame; simTime_ = s.time;
+}
+void Engine::CaptureCheckpoint() {
+    if (!sync_ || !sync_->Running() || !sync_->Config().rollback) return;
+    checkpoints_[frame_] = CaptureNative(false);
+    while (checkpoints_.size() > sync_->Config().rollbackFrames + 1) checkpoints_.erase(checkpoints_.begin());
+    // Only the window can be corrected. No history or PCM growth per checkpoint.
+    while (!replaying_ && journal_->frames.size() > sync_->Config().rollbackFrames + 1) {
+        journal_->frames.erase(journal_->frames.begin()); ++journal_->firstFrame;
+    }
+}
 uint64_t Engine::ContentHash() const {
     std::string manifest;
     auto files = ListFiles(projectDir_, "", true); std::sort(files.begin(), files.end());
@@ -84,7 +130,7 @@ bool Engine::PollSync() {
         frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject();
         runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
         uiHovered_ = uiPressed_ = kNullEntity; heldButtons_.clear(); heldKeys_.clear();
-        journal_.reset(); snapshots_.clear(); syncHashes_.clear(); outputConfirmed_ = 0; desyncNotified_ = false;
+        checkpoints_.clear(); journal_.reset(); snapshots_.clear(); syncHashes_.clear(); outputConfirmed_ = 0; desyncNotified_ = false;
         if (sync_->Config().rollback) RecordState();
         saves_.FreezeReads(true); saves_.DeferFlush(true);
     }
@@ -98,15 +144,26 @@ bool Engine::PollSync() {
     }
     if (!sync_->Running()) return false;
     if (auto rollback = sync_->TakeRollback()) {
-        if (!journal_ || *rollback >= journal_->frames.size()) { sync_->Stop("missing replay journal"); return false; }
-        FrameInputs previous = *rollback ? journal_->frames[static_cast<size_t>(*rollback - 1)].players : FrameInputs{};
-        for (size_t i = static_cast<size_t>(*rollback); i < journal_->frames.size(); ++i) {
-            auto& frame = journal_->frames[i]; frame.players = sync_->ReplayInputs(i, previous, frame.players);
-            frame.input = Decode(frame.players.at(network_->LocalPlayer()), sync_->Config()); previous = frame.players;
-            sync_->Replayed(i, frame.players);
+        auto checkpoint = checkpoints_.find(*rollback);
+        if (!journal_ || checkpoint == checkpoints_.end() || *rollback < journal_->firstFrame) {
+            sync_->Stop("missing rollback checkpoint"); return false;
         }
-        if (ContentHash() != journal_->content) { sync_->Stop("project resources changed during rollback"); return false; }
-        auto started = std::chrono::steady_clock::now(); RestoreJournal(journal_->frames.size());
+        uint64_t end = frame_; InputState raw = input_; auto output = audio_->TakeOutput();
+        auto started = std::chrono::steady_clock::now();
+        RestoreNative(*checkpoint->second); audio_->DropPendingBefore(outputConfirmed_);
+        checkpoints_.erase(checkpoints_.lower_bound(*rollback), checkpoints_.end());
+        syncHashes_.erase(syncHashes_.upper_bound(*rollback), syncHashes_.end());
+        FrameInputs previous = *rollback > journal_->firstFrame ? journal_->frames.at(static_cast<size_t>(*rollback - journal_->firstFrame - 1)).players : FrameInputs{}; replaying_ = true;
+        for (uint64_t i = *rollback; i < end; ++i) {
+            auto& frame = journal_->frames.at(static_cast<size_t>(i - journal_->firstFrame));
+            frame.players = sync_->ReplayInputs(i, previous, frame.players);
+            frame.input = Decode(frame.players.at(network_->LocalPlayer()), sync_->Config());
+            previous = frame.players; sync_->Replayed(i, frame.players);
+            CaptureCheckpoint(); ApplyInputs(frame.players);
+            audio_->SetOutputMode(i < outputConfirmed_, true); SimulateWorld();
+            if (frame_ > outputConfirmed_ && frame_ % sync_->Config().hashInterval == 0) syncHashes_[frame_] = SyncWorld();
+        }
+        replaying_ = false; input_ = raw; audio_->RestoreOutput(std::move(output));
         replayMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     }
     for (auto it = syncHashes_.begin(); it != syncHashes_.end() && it->first <= sync_->Confirmed();) {
@@ -138,6 +195,7 @@ void Engine::RecordState() {
     if (network_ && (!sync_ || !sync_->Running())) throw ApiError("state_recording", "manual recording requires an offline simulation", "Leave/stop networking before sim.record_state.");
     BeginSessionIfNeeded();
     if (frame_ != 0) throw ApiError("state_recording", "recording must begin before the first simulation frame", "Use sim.stop, then sim.record_state before sim.step.");
+    scripts_->EnableSnapshots(); physics_->EnableSnapshots();
     saves_.FreezeReads(true); saves_.DeferFlush(true);
     journal_ = std::make_unique<SimulationState>();
     journal_->allocationCursor = scene_.AllocationCursor(); journal_->baseline = scene_.ToJson(); journal_->runtimeScene = runtimeScene_;
@@ -147,38 +205,19 @@ void Engine::RecordState() {
 std::shared_ptr<const Engine::SimulationState> Engine::SaveState() const {
     if (!journal_ || inWorld_) throw ApiError("state_recording", "no completed recorded state", "Call sim.record_state before sim.step.");
     auto state = std::make_shared<SimulationState>(*journal_);
+    state->native = CaptureNative(true);
     state->audio = audio_->SaveState(); state->saves = saves_; state->input = input_;
     state->scene = scene_.ToJson(); state->gameData = gameData_; state->errors = scripts_->Errors(); state->playing = playing_; state->accumulator = accumulator_; return state;
 }
-void Engine::RestoreJournal(size_t count) {
-    InputState raw = input_; auto output = audio_->TakeOutput();
-    // Reset and replay preserves opaque Lua closures, timers and physics solver caches.
-    std::string error; scene_.FromJson(journal_->baseline, &error); scene_.RestoreAllocationCursor(journal_->allocationCursor);
-    ResetRuntime(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(journal_->seed);
-    audio_->LoadState(*journal_->baselineAudio); saves_ = journal_->baselineSaves; saves_.DeferFlush(true);
-    frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = journal_->runtimeScene;
-    uiHovered_ = uiPressed_ = kNullEntity; heldButtons_.clear(); heldKeys_.clear();
-    syncHashes_.clear(); replaying_ = true;
-    for (size_t i = 0; i <= count; ++i) {
-        auto commands = journal_->commands.find(i);
-        if (commands != journal_->commands.end()) for (const auto& command : commands->second) Call(command.first, command.second);
-        if (i == count) break;
-        const auto& frame = journal_->frames[i];
-        if (sync_) ApplyInputs(frame.players); else input_ = frame.input;
-        audio_->SetOutputMode(!(sync_ && i >= outputConfirmed_), sync_ != nullptr);
-        SimulateWorld();
-        if (sync_ && i + 1 > outputConfirmed_ && (i + 1) % sync_->Config().hashInterval == 0) syncHashes_[i + 1] = SyncWorld();
-    }
-    audio_->RestoreOutput(std::move(output));
-    replaying_ = false; input_ = raw; audio_->SetOutputMode(false, sync_ && sync_->Config().rollback);
-    saves_.DeferFlush(journal_ != nullptr || (sync_ && sync_->Active()));
-}
 void Engine::LoadState(const SimulationState& state) {
     if (sync_ && sync_->Active()) throw ApiError("match_active", "manual state loading is disabled during a match", "Automatic rollback restores its own journal.");
-    if (!state.audio || !state.baselineAudio || state.frames.size() > FrameSync::kHistoryFrames) throw ApiError("state_invalid", "invalid snapshot");
+    if (!state.audio || !state.baselineAudio) throw ApiError("state_invalid", "invalid snapshot");
     if (ContentHash() != state.content) throw ApiError("state_resource", "project resources changed since recording", "Restore the original resources before loading state.");
+    if (!state.native || state.native->owner != this) throw ApiError("state_invalid", "snapshots belong to their originating engine");
     journal_ = std::make_unique<SimulationState>(state);
-    auto started = std::chrono::steady_clock::now(); RestoreJournal(state.frames.size());
+    auto started = std::chrono::steady_clock::now();
+    if (!state.native) throw ApiError("state_invalid", "native snapshot is missing");
+    RestoreNative(*state.native);
     replayMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
     audio_->LoadState(*state.audio); saves_ = state.saves; input_ = state.input; scripts_->RestoreErrors(state.errors); playing_ = state.playing; accumulator_ = state.accumulator;
     if (scene_.ToJson() != state.scene || gameData_ != state.gameData)

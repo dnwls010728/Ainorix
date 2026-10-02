@@ -89,7 +89,7 @@ Inspect synchronized declared actions and raw quantized axes for one player.
 
 ### `sim.record_state`
 
-Enable exact reference replay recording before frame zero (12000-frame bound).
+Enable native full-state snapshots before frame zero; project resources must stay immutable.
 
 ### `sim.save_state`
 
@@ -101,7 +101,7 @@ Save a full recorded simulation in one of eight in-memory slots.
 
 ### `sim.load_state`
 
-Restore Lua, physics and audio by replay; refuses changed project resources or an active match.
+Restore native Lua, physics and audio state; refuses changed resources or an active match.
 
 | arg | type | required | description |
 |---|---|---|---|

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <stdexcept>
+#include <mutex>
 
 #include "core/Log.h"
 #include "physics/PhysicsWorld.h"
@@ -13,10 +15,27 @@
 #include "scene/Scene.h"
 
 #include <box2d/box2d.h>
+#include "core/SnapshotHeap.h"
+extern "C" {
+#include "../../third_party/box2d/src/world.h"
+}
+
 
 namespace oe {
 
 namespace {
+
+thread_local SnapshotHeap* snapshotHeap = nullptr;
+std::mutex box2dAllocatorMutex;
+struct HeapScope {
+    std::unique_lock<std::mutex> lock{box2dAllocatorMutex};
+    explicit HeapScope(SnapshotHeap* heap) {
+        snapshotHeap = heap;
+        if (heap) b2SetAllocator([](unsigned int size, int) -> void* { return snapshotHeap->Allocate(size); },
+                                [](void* ptr) { snapshotHeap->Free(ptr); });
+    }
+    ~HeapScope() { if (snapshotHeap) b2SetAllocator(nullptr, nullptr); snapshotHeap = nullptr; }
+};
 
 // ----- Collision filtering ------------------------------------------------------
 // 64 category bits = four groups of 16 layers. A shape's category is its layer
@@ -287,14 +306,16 @@ struct Physics2D::Impl {
         std::set<EntityId> touching;
     };
 
-    Impl() {
+    explicit Impl(bool snapshots) {
+        if (snapshots) heap = std::make_shared<SnapshotHeap>();
+        HeapScope scope(heap.get());
         b2WorldDef def = b2DefaultWorldDef();
         def.gravity = b2Vec2{0.0f, PhysicsWorld::kGravity};
         def.workerCount = 1;
         world = b2CreateWorld(&def);
         b2World_SetPreSolveCallback(world, PreSolve, nullptr);
     }
-    ~Impl() { b2DestroyWorld(world); }
+    ~Impl() { HeapScope scope(heap.get()); b2DestroyWorld(world); }
 
     static void Warn(std::vector<std::string>& warnings, const std::string& msg) {
         if (std::find(warnings.begin(), warnings.end(), msg) != warnings.end()) return;
@@ -1023,6 +1044,7 @@ struct Physics2D::Impl {
         return out;
     }
 
+    std::shared_ptr<SnapshotHeap> heap;
     b2WorldId world;
     std::map<EntityId, BodyRec> bodies;
     std::map<EntityId, CharacterRec> characters;
@@ -1032,14 +1054,15 @@ struct Physics2D::Impl {
 
 // ----- Physics2D -----------------------------------------------------------------------------
 
-Physics2D::Physics2D() : impl_(std::make_unique<Impl>()) {}
+Physics2D::Physics2D(bool snapshots) : impl_(std::make_shared<Impl>(snapshots)) {}
 Physics2D::~Physics2D() = default;
 
 bool Physics2D::Wanted(const Scene& scene) { return !scene.Pool<Collider2D>().empty() || !scene.Pool<CharacterBody2D>().empty(); }
 
-void Physics2D::Sync(Scene& scene, std::vector<std::string>& warnings) { impl_->Sync(scene, 0.0f, warnings, tilesets_); }
+void Physics2D::Sync(Scene& scene, std::vector<std::string>& warnings) { HeapScope scope(impl_->heap.get()); impl_->Sync(scene, 0.0f, warnings, tilesets_); }
 
 void Physics2D::Step(Scene& scene, float dt, std::vector<std::string>& warnings) {
+    HeapScope scope(impl_->heap.get());
     impl_->Sync(scene, dt, warnings, tilesets_);
     impl_->UpdateCharacters(scene, dt);
     b2World_Step(impl_->world, dt, 4);
@@ -1047,10 +1070,11 @@ void Physics2D::Step(Scene& scene, float dt, std::vector<std::string>& warnings)
     ++impl_->steps;
 }
 
-std::set<EntityPair> Physics2D::Collisions() const { return impl_->Collisions(); }
-std::set<EntityPair> Physics2D::Triggers(Scene&) const { return impl_->Triggers(); }
+std::set<EntityPair> Physics2D::Collisions() const { HeapScope scope(impl_->heap.get()); return impl_->Collisions(); }
+std::set<EntityPair> Physics2D::Triggers(Scene&) const { HeapScope scope(impl_->heap.get()); return impl_->Triggers(); }
 
 bool Physics2D::Raycast(const Vec3& origin, const Vec3& direction, float maxDistance, RaycastHit& out) const {
+    HeapScope scope(impl_->heap.get());
     Vec3 dir = Normalize(direction);
     b2Vec2 translation{dir.x * maxDistance, dir.y * maxDistance};
     if (b2LengthSquared(translation) < 1e-12f) return false;  // straight along Z: misses the plane's shapes
@@ -1072,6 +1096,7 @@ bool CollectOverlap(b2ShapeId shape, void* context) {
 }  // namespace
 
 std::vector<EntityId> Physics2D::OverlapCircle(const Vec3& center, float radius) const {
+    HeapScope scope(impl_->heap.get());
     std::set<EntityId> ids;
     b2Vec2 c{center.x, center.y};
     b2ShapeProxy proxy = b2MakeProxy(&c, 1, std::max(0.001f, radius));
@@ -1085,6 +1110,7 @@ void Physics2D::AddImpulse(EntityId id, const Vec3& impulse) { impl_->pendingImp
 bool Physics2D::Has(EntityId id) const { return impl_->bodies.count(id) > 0 || impl_->characters.count(id) > 0; }
 
 void Physics2D::AppendStats(Json& s) const {
+    HeapScope scope(impl_->heap.get());
     int statics = 0, dynamics = 0, kinematics = 0, triggers = 0;
     for (const auto& kv : impl_->bodies) {
         if (!kv.second.triggers.empty()) ++triggers;
@@ -1104,6 +1130,31 @@ void Physics2D::AppendStats(Json& s) const {
     j["shapes"] = c.shapeCount;
     j["contacts"] = c.contactCount;
     s["world2D"] = j;
+}
+
+struct Physics2D::Snapshot {
+    std::shared_ptr<Impl> owner;
+    SnapshotHeap::Image image;
+    b2World world;
+    std::map<EntityId, Impl::BodyRec> bodies;
+    std::map<EntityId, Impl::CharacterRec> characters;
+    std::vector<std::pair<EntityId, Vec3>> impulses;
+    uint64_t steps = 0;
+};
+std::shared_ptr<const Physics2D::Snapshot> Physics2D::SaveState() const {
+    if (!impl_->heap) throw std::runtime_error("Box2D recording must begin before world creation");
+    HeapScope scope(impl_->heap.get());
+    auto state = std::make_shared<Snapshot>(); state->owner = impl_;
+    state->image = impl_->heap->Capture(); state->world = *b2GetWorldFromId(impl_->world);
+    state->bodies = impl_->bodies; state->characters = impl_->characters;
+    state->impulses = impl_->pendingImpulses; state->steps = impl_->steps; return state;
+}
+void Physics2D::LoadState(const Snapshot& state) {
+    impl_ = state.owner;
+    HeapScope scope(impl_->heap.get());
+    impl_->heap->Restore(state.image); *b2GetWorldFromId(impl_->world) = state.world;
+    impl_->bodies = state.bodies; impl_->characters = state.characters;
+    impl_->pendingImpulses = state.impulses; impl_->steps = state.steps;
 }
 
 }  // namespace oe

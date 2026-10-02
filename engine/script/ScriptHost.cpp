@@ -1180,7 +1180,10 @@ lua_State* ScriptHost::State() {
 }
 
 void ScriptHost::Open() {
-    L_ = luaL_newstate();
+    if (heap_) L_ = lua_newstate([](void* context, void* ptr, size_t, size_t size) -> void* {
+        try { return static_cast<SnapshotHeap*>(context)->Reallocate(ptr, size); } catch (...) { return nullptr; }
+    }, heap_.get());
+    else L_ = luaL_newstate();
     lua_State* L = L_;
     *static_cast<ScriptHost**>(lua_getextraspace(L)) = this;
 
@@ -1309,6 +1312,7 @@ void ScriptHost::Reset() {
     modules_.clear();
     instances_.clear();
     netHandlers_.clear(); netSender_ = 0; netDepth_ = 0;
+    if (heap_) heap_ = std::make_shared<SnapshotHeap>();
 }
 
 bool ScriptHost::SetNetHandler(const std::string& name, int ref) {
@@ -1715,6 +1719,41 @@ Json ScriptHost::Status() const {
     out["errors"] = static_cast<uint64_t>(errors_.size());
     out["sessionActive"] = L_ != nullptr;
     return out;
+}
+
+struct ScriptHost::Snapshot {
+    std::shared_ptr<SnapshotHeap> heap;
+    SnapshotHeap::Image image;
+    lua_State* state = nullptr;
+    std::map<std::string, Module> modules;
+    std::map<EntityId, Instance> instances;
+    std::vector<ScriptError> errors;
+    std::map<std::string, int> handlers;
+    uint32_t sender = 0;
+    int budget = 0;
+    float dt = 0;
+};
+void ScriptHost::EnableSnapshots() {
+    if (heap_) return;
+    if (L_) throw ApiError("state_recording", "native recording must begin before Lua execution");
+    heap_ = std::make_shared<SnapshotHeap>();
+}
+std::shared_ptr<const ScriptHost::Snapshot> ScriptHost::SaveState() const {
+    auto snapshot = std::make_shared<Snapshot>();
+    snapshot->heap = heap_; snapshot->state = L_;
+    if (heap_) snapshot->image = heap_->Capture();
+    snapshot->modules = modules_; snapshot->instances = instances_; snapshot->errors = errors_;
+    snapshot->handlers = netHandlers_; snapshot->sender = netSender_; snapshot->budget = budgetTicks; snapshot->dt = currentDt;
+    return snapshot;
+}
+void ScriptHost::LoadState(const Snapshot& state) {
+    if (!state.heap) throw ApiError("state_invalid", "Lua snapshot allocator is missing");
+    // Do not lua_close a discarded speculative branch: finalizers can have effects.
+    // Its blocks are released by the heap when restoring the captured live set.
+    heap_ = state.heap; heap_->Restore(state.image); L_ = state.state;
+    modules_ = state.modules; instances_ = state.instances; errors_ = state.errors;
+    netHandlers_ = state.handlers; netSender_ = state.sender; netDepth_ = 0;
+    budgetTicks = state.budget; currentDt = state.dt;
 }
 
 }  // namespace oe

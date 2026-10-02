@@ -61,7 +61,7 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
             "Set project.json network.mode to lockstep, rollback (reference replay), or authoritative and reopen.");
         if (network_ && network_->Status() != "offline" && network_->Status() != "error")
             throw ApiError("network_active", "a session is already active", "Use net.leave and advance sim.step until offline, or sim.stop first.");
-        sync_.reset(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
+        sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
         audio_->SetOutputMode(false, false); audio_->DiscardPending(); saves_.DeferFlush(false); saves_.FreezeReads(false);
         network_.reset(); networkFrame_ = 0;
         std::string error, name = args["name"].asString("Player");
