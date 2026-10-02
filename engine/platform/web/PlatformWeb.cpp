@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "platform/Platform.h"
+#include "platform/GamepadInput.h"
 
 namespace oe {
 
@@ -40,6 +41,8 @@ EM_JS(void, oe_web_show_error, (const char* title, const char* message), {
 });
 
 EM_JS(void, oe_web_open_url, (const char* url), { window.open(UTF8ToString(url), "_blank"); });
+
+EM_JS(int, oe_web_input_focused, (), { return !document.hidden && document.hasFocus() ? 1 : 0; });
 
 // Software-renderer fallback (no WebGL2): RGBA pixels -> 2D canvas, stretched to the canvas size.
 EM_JS(void, oe_web_present_rgba, (const uint8_t* pixels, int width, int height), {
@@ -118,6 +121,27 @@ std::string KeyName(const EmscriptenKeyboardEvent* e) {
     return std::string();
 }
 
+GamepadSnapshot PollWebGamepad() {
+    GamepadSnapshot result;
+    if (!oe_web_input_focused() || emscripten_sample_gamepad_data() != EMSCRIPTEN_RESULT_SUCCESS) return result;
+    for (int index = 0, count = emscripten_get_num_gamepads(); index < count; ++index) {
+        EmscriptenGamepadEvent pad{};
+        if (emscripten_get_gamepad_status(index, &pad) != EMSCRIPTEN_RESULT_SUCCESS || !pad.connected ||
+            std::strcmp(pad.mapping, "standard") != 0) continue;
+        result.connected = true;
+        result.device = index;
+        for (int axis = 0; axis < 4 && axis < pad.numAxes; ++axis)
+            result.axes[static_cast<size_t>(axis)] = static_cast<float>(pad.axis[axis]) * (axis % 2 ? -1.0f : 1.0f);
+        if (pad.numButtons > 6) result.axes[4] = static_cast<float>(pad.analogButton[6]);
+        if (pad.numButtons > 7) result.axes[5] = static_cast<float>(pad.analogButton[7]);
+        const int buttons[] = {0, 1, 2, 3, 4, 5, 9, 8, 10, 11, 12, 13, 14, 15};
+        for (size_t i = 0; i < result.buttons.size(); ++i)
+            result.buttons[i] = buttons[i] < pad.numButtons && pad.digitalButton[buttons[i]];
+        break;  // lowest connected standard-mapping index
+    }
+    return result;
+}
+
 class WebWindow final : public Window {
 public:
     bool Init(const std::string& title) {
@@ -152,7 +176,12 @@ public:
                     input.mouseX = e.x;
                     input.mouseY = e.y;
                     break;
-                case Event::Clear: input.down.clear(); break;
+                case Event::Clear:
+                    gamepad_.Reset(input);
+                    input.down.clear();
+                    input.pressedThisFrame.clear();
+                    input.axes.clear();
+                    break;
                 case Event::Delta:
                     input.mouseDX += e.x;
                     input.mouseDY += e.y;
@@ -162,6 +191,7 @@ public:
             }
         }
         events_.clear();
+        gamepad_.Apply(input, PollWebGamepad());
         // Pointer lock can only be requested from a user gesture: OnMouse asks
         // for it on the next click while the game wants the mouse locked.
         wantLock_ = input.mouseLocked;
@@ -283,6 +313,7 @@ private:
     }
 
     std::vector<Event> events_;
+    GamepadInput gamepad_;
     bool wantLock_ = false;
     bool pointerLocked_ = false;
     bool relockOnClick_ = false;  // released by Escape, not by the game

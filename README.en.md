@@ -23,6 +23,7 @@ A C++17 game engine designed so that AI agents can drive and verify it as easily
 - Gameplay building blocks: prefabs, scene changes + game data, messages/timers, in-game UI, audio (deterministic mixer, generated sound effects) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 scripting (sandboxed, hot reload, errors with file:line) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - Camera post-processing: exposure, HDR Reinhard tone mapping and vignette in software/GPU renderers, with UI and selection outlines preserved. Bloom, FXAA and custom materials are in progress - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- Gamepad input: six injectable axes, Lua `input.axis`, a shared 0.15 dead zone, Windows XInput/web Gamepad API/Android adapters, editor Game-view forwarding and Platformer/Dungeon controls. Physical-controller checks remain - [docs/INPUT.md](docs/INPUT.md)
 - Deterministic simulation and software renderer: same inputs give the same frame hash, so an AI can use it as a test oracle
 
 ## Build

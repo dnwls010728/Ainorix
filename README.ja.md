@@ -23,6 +23,7 @@ AI が人と同じように扱い、検証できるように設計した C++17 �
 - ゲームの構成要素: プレハブ、シーン切り替え + ゲームデータ、メッセージ/タイマー、ゲーム内 UI、オーディオ (決定的ミキサー、効果音の生成) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 スクリプト (サンドボックス、ホットリロード、エラーにファイル:行を表示) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - カメラ後処理: ソフトウェア・GPUの露出・HDR Reinhardトーンマッピング・ビネットに対応し、UIと選択輪郭を維持。ブルーム・FXAA・カスタムマテリアルは進行中 - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- ゲームパッド入力: 6軸のAPI注入、Lua `input.axis`、共通0.15デッドゾーン、Windows XInput・Web Gamepad API・Android対応、エディターGameビュー転送とPlatformer/Dungeon操作。実コントローラー検証は未完了 - [docs/INPUT.md](docs/INPUT.md)
 - 決定的 (deterministic) なシミュレーションとソフトウェアレンダラー: 同じ入力なら同じフレームハッシュ → AI がテストオラクルとして使えます
 
 ## ビルド

@@ -22,6 +22,7 @@
 #include "core/Log.h"
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
+#include "platform/GamepadInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/RenderScene.h"
@@ -405,6 +406,104 @@ TEST(ScriptEvalAndSandbox) {
     CHECK(t->position.y == 3.0f && t->position.z == 2.0f);  // partial update keeps x/z
     CHECK(Call(e, "history.undo", "{}")["ok"].asBool());    // eval edits are undoable
     CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.y == 0.5f);
+}
+
+TEST(GamepadDeviceLifecycle) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gamepad_device"), &err));
+    GamepadInput device;
+    Call(e, "input.axis", R"J({"name":"LeftX","value":0.7})J");
+    Call(e, "input.key", R"J({"key":"GamepadB","down":true})J");
+    Call(e, "input.key", R"J({"key":"W","down":true})J");
+    device.Apply(e.Input(), GamepadSnapshot{});
+    CHECK(e.Input().axes["LeftX"] == 0.7f && e.Input().IsDown("GamepadB") && e.Input().IsDown("W"));
+    GamepadSnapshot snapshot;
+    snapshot.connected = true;
+    snapshot.device = 0;
+    snapshot.axes = {0.575f, 1, -1, 0, 0.5f, 1};
+    snapshot.buttons.fill(true);
+    device.Apply(e.Input(), snapshot);
+    for (const char* name : GamepadInput::kButtonNames) CHECK(e.Input().IsDown(name));
+    CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f);
+    e.Input().pressedThisFrame.clear();
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().pressedThisFrame.empty());  // holds are not repeated edges
+    snapshot.device = 1;
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().pressedThisFrame.count("GamepadA") == 1);  // another controller begins a new press
+    snapshot.buttons.fill(false);
+    device.Apply(e.Input(), snapshot);
+    for (const char* name : GamepadInput::kButtonNames) CHECK(!e.Input().IsDown(name));
+    CHECK(e.Input().pressedThisFrame.empty());  // a release cancels an unconsumed edge
+    snapshot.buttons[0] = true;
+    device.Apply(e.Input(), snapshot);
+    device.Reset(e.Input());  // focus loss
+    CHECK(!e.Input().IsDown("GamepadA") && e.Input().pressedThisFrame.empty() && e.Input().IsDown("W"));
+    for (const char* name : InputState::kAxisNames) CHECK(e.Input().Axis(name) == 0);
+    snapshot.axes[0] = 2;
+    snapshot.axes[4] = -1;
+    snapshot.axes[5] = std::nanf("");
+    device.Apply(e.Input(), snapshot);
+    CHECK(e.Input().Axis("LeftX") == 1 && e.Input().Axis("LT") == 0 && e.Input().Axis("RT") == 0);
+    device.Apply(e.Input(), GamepadSnapshot{});  // disconnect
+    CHECK(!e.Input().IsDown("GamepadA") && e.Input().Axis("LeftX") == 0 && e.Input().IsDown("W"));
+    Call(e, "input.axis", R"J({"name":"RightX","value":0.9})J");
+    device.Apply(e.Input(), GamepadSnapshot{});
+    CHECK(e.Input().axes["RightX"] == 0.9f);  // inactive polling still preserves tool input
+}
+
+TEST(GamepadAxesAndButtons) {
+    auto run = [] {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TempProject("gamepad_axes"), &err));
+        Call(e, "scene.new", R"J({"empty":true})J");
+        Call(e, "script.write", R"J({"path":"scripts/pad.lua","source":"local Pad={}\nfunction Pad:onUpdate(dt)\n local p=self:position()\n self:setPosition(p.x+input.axis('LeftX')*6*dt,p.y,0)\n self.presses=(self.presses or 0)+(input.pressed('GamepadA') and 1 or 0)\nend\nreturn Pad\n"})J");
+        Call(e, "entity.create", R"J({"name":"Actor","components":{"Transform":{},"Script":{"path":"scripts/pad.lua"}}})J");
+        Json initial = Call(e, "sim.state", "{}")["result"];
+        CHECK(initial["axes"].size() == 6 && initial["rawAxes"].size() == 6);
+        CHECK(initial["axes"]["LT"].asFloat() == 0);
+        size_t undo = e.UndoDepth();
+        Json state = Call(e, "input.axis", R"J({"name":"LeftX","value":0.15})J")["result"];
+        CHECK(state["axes"]["LeftX"].asFloat() == 0 && state["rawAxes"]["LeftX"].asFloat() == 0.15f);
+        state = Call(e, "input.axis", R"J({"name":"LeftX","value":0.575})J")["result"];
+        CHECK(std::fabs(state["axes"]["LeftX"].asFloat() - 0.5f) < 1e-6f);
+        Call(e, "input.axis", R"J({"name":"LeftY","value":-1})J");
+        Call(e, "input.axis", R"J({"name":"RightX","value":1})J");
+        Call(e, "input.axis", R"J({"name":"RightY","value":-0.575})J");
+        Call(e, "input.axis", R"J({"name":"LT","value":0.15})J");
+        Call(e, "input.axis", R"J({"name":"RT","value":1})J");
+        CHECK(e.Input().Axis("LeftY") == -1 && e.Input().Axis("RightX") == 1 && e.Input().Axis("RT") == 1);
+        CHECK(std::fabs(e.Input().Axis("RightY") + 0.5f) < 1e-6f && e.Input().Axis("LT") == 0);
+        for (const char* invalid : {R"J({"name":"Unknown","value":0})J", R"J({"name":"LeftX","value":1.01})J",
+                                    R"J({"name":"LeftX","value":-1.01})J", R"J({"name":"LT","value":-0.01})J",
+                                    R"J({"name":"RT","value":1e100})J"}) {
+            CHECK(!Call(e, "input.axis", invalid)["ok"].asBool());
+        }
+        CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f);  // invalid calls preserve the previous value
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        CHECK(e.UndoDepth() == undo);
+        Call(e, "sim.step", R"J({"frames":60})J");
+        EntityId actor = e.GetScene().FindByName("Actor");
+        CHECK(std::fabs(e.GetScene().Get<Transform>(actor)->position.x - 3.0f) < 1e-4f);
+        Json eval = Call(e, "script.eval", R"J({"entity":"Actor","code":"return {self.presses,input.down('GamepadA'),input.axis('RT'),pcall(input.axis,'Unknown')}"})J")["result"]["value"];
+        CHECK(eval[0].asInt() == 1 && eval[1].asBool() && eval[2].asFloat() == 1 && !eval[3].asBool());
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(Call(e, "script.eval", R"J({"entity":"Actor","code":"return self.presses"})J")["result"]["value"].asInt() == 1);
+        Call(e, "input.key", R"J({"key":"GamepadA","down":false})J");
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(Call(e, "script.eval", R"J({"entity":"Actor","code":"return self.presses"})J")["result"]["value"].asInt() == 2);
+        CHECK(e.Scripts().Errors().empty());
+        std::string result = e.GetScene().ToJson().dump();
+        Call(e, "sim.stop", "{}");
+        CHECK(e.Input().axes.empty() && !e.Input().IsDown("GamepadA") && e.Input().Axis("LeftX") == 0);
+        return result;
+    };
+    std::string first = run();
+    CHECK(first == run());
 }
 
 TEST(MouseLookInput) {
@@ -1242,6 +1341,57 @@ TEST(DungeonSamplePlays) {
     run(&a);
     run(&b);
     CHECK(a == b);
+}
+
+TEST(SampleGamepadControls) {
+    auto run = [](const char* sample) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+        Call(e, "sim.step", R"J({"frames":60})J");
+        float initialX = e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x;
+        auto velocity = [&] {
+            EntityId player = e.GetScene().FindByName("Player");
+            if (auto* body = e.GetScene().Get<CharacterBody2D>(player)) return body->velocity;
+            return e.GetScene().Get<CharacterBody>(player)->velocity;
+        };
+        const bool platformer = std::string(sample) == "Platformer";
+        const float speed = platformer ? 7.0f : 5.0f;
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0.575})J");
+        // Android's legacy arrow alias must not turn a partial stick into full speed.
+        Call(e, "input.key", R"J({"key":"Right","down":true})J");
+        Call(e, "sim.step", R"J({"frames":8})J");
+        CHECK(std::fabs(velocity().x - speed * 0.5f) < 0.02f);
+        Call(e, "input.key", R"J({"key":"Right","down":false})J");
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0.1})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(std::fabs(velocity().x) < 0.02f);
+        Call(e, "input.key", R"J({"key":"GamepadDPadRight","down":true})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        CHECK(std::fabs(velocity().x - speed) < 0.02f);
+        Call(e, "input.key", R"J({"key":"GamepadDPadRight","down":false})J");
+        Call(e, "input.axis", R"J({"name":"LeftX","value":0})J");
+        Call(e, "sim.step", R"J({"frames":12})J");
+        Call(e, "input.key", R"J({"key":"GamepadA","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        if (platformer) CHECK(velocity().y > 10);  // gamepad jump uses the real character mover
+        else CHECK(e.GetScene().FindByName("Bolt") != kNullEntity);
+        Call(e, "sim.step", R"J({"frames":3})J");
+        if (platformer) CHECK(velocity().y > 8);  // held A preserves a high jump
+        Call(e, "input.key", R"J({"key":"GamepadA","down":false})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        if (platformer) CHECK(velocity().y < 8);  // releasing A cuts the jump
+        CHECK(e.Scripts().Errors().empty());
+        std::string state = e.GetScene().ToJson().dump();
+        Call(e, "input.key", R"J({"key":"GamepadStart","down":true})J");
+        Call(e, "sim.step", R"J({"frames":2})J");
+        CHECK(e.GetScene().FindByName("Player") != kNullEntity);
+        CHECK(std::fabs(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x - initialX) < 0.01f);
+        Call(e, "input.key", R"J({"key":"GamepadStart","down":false})J");
+        CHECK(e.Scripts().Errors().empty());
+        return state;
+    };
+    for (const char* sample : {"Platformer", "Dungeon"}) CHECK(run(sample) == run(sample));
 }
 
 // ----- assets & rendering ---------------------------------------------------------
@@ -3010,9 +3160,34 @@ TEST(NativeEditorHeadless) {
     frames(6, CtrlChord(WindowKey::P));
     CHECK(e.InPlaySession());
     CHECK(ed.GameViewFocused());
+    ed.WindowInput().SetAxis("LeftX", 0.575f);
+    ed.WindowInput().down.insert("GamepadA");
+    frames(1);
+    CHECK(std::fabs(e.Input().Axis("LeftX") - 0.5f) < 1e-6f && e.Input().IsDown("GamepadA"));
+    ed.WindowInput().SetAxis("LeftX", 0);
+    ed.WindowInput().down.erase("GamepadA");
+    frames(1);
+    CHECK(e.Input().Axis("LeftX") == 0 && !e.Input().IsDown("GamepadA"));
     frames(30, {KeyEvent(WindowKey::W, true)});
     frames(1, {KeyEvent(WindowKey::W, false)});
     CHECK(s.Exists(player) && s.Get<Transform>(player)->position.z < start.z - 0.5f);
+
+    ed.WindowInput().SetAxis("RT", 1);
+    ed.WindowInput().down.insert("GamepadB");
+    frames(1);
+    CHECK(e.Input().Axis("RT") == 1 && e.Input().IsDown("GamepadB"));
+    WindowEvent focus;
+    focus.type = WindowEvent::Type::Focus;
+    focus.down = false;
+    frames(1, {focus});
+    CHECK(!ed.GameViewFocused() && e.Input().Axis("RT") == 0 && !e.Input().IsDown("GamepadB"));
+    // A stale window snapshot cannot re-press buttons while the Game view is unfocused.
+    frames(1);
+    CHECK(!e.Input().IsDown("GamepadB"));
+    ed.WindowInput().axes.clear();
+    ed.WindowInput().down.clear();
+    focus.down = true;
+    frames(2, {focus});
 
     // Ctrl+P again stops and restores the edit-time scene.
     frames(6, CtrlChord(WindowKey::P));

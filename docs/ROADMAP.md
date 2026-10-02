@@ -151,7 +151,15 @@ Android hardware and Linux/EGL follow-ups remain in [PARTICLES.md](PARTICLES.md)
 - **구현 위치**: 시뮬레이션 `Systems.cpp`, 그리기는 `BuildDrawList`가 빌보드 쿼드를 만들어 양쪽 렌더러가 동일하게 그리게(투명 정렬 규칙 따르기). 에디터에서 재생/정지 미리보기는 2차.
 - **검증**: `render.screenshot --frames N` 해시 테스트, 입자 수 상한 테스트, `samples/Platformer`/`Dungeon`에 코인·피격 이펙트 적용.
 
-### P4. 게임패드 입력 일반화 — [ ]
+### P4. 게임패드 입력 일반화 — [x]
+
+- Implementation status: [INPUT.md](INPUT.md). Portable axes, shared dead zone,
+  API injection and Lua reads are implemented. Windows/web/Android physical
+  adapters, Platformer/Dungeon controls and native editor Game-view forwarding
+  are implemented. Windows 75 and Node/WASM 71 tests pass; CLI sample renders
+  and a D3D11 editor screenshot were inspected. Prebuilt players are refreshed.
+- [ ] Real-controller verification on Windows, web and Android, and a full
+  Linux runtime check; exact follow-ups are recorded in [INPUT.md](INPUT.md).
 
 - **왜**: Android에만 게임패드가 있고(`ANDROID.md`: D-pad/왼 스틱 = 방향키) 데스크톱·웹에는 없다. 아날로그 축도 없다.
 - **요구**: `InputState`에 축(`axes`: `LeftX/LeftY/RightX/RightY/LT/RT`)과 버튼 이름(`GamepadA/B/X/Y/LB/RB/Start/Back/DPadUp...`)을 추가하고 Lua `input.axis(name)`, 기존 `input.key`로도 버튼 접근. API `input.axis {name, value}`로 테스트 주입(`input.touch`처럼). 데드존 처리는 엔진에서(기본 0.15, 문서화).

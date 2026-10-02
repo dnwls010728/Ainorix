@@ -266,9 +266,18 @@ Advance the simulation by N fixed 1/60 s frames (deterministic).
 
 ## input
 
+### `input.axis`
+
+Inject a raw gamepad axis. Reads use a 0.15 scalar dead zone, rescaled to full range.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `name` | string | yes | Logical gamepad axis; positive X right, positive Y up, LT/RT nonnegative. |
+| `value` | number | yes | Raw stick [-1,1] or trigger [0,1] value. |
+
 ### `input.key`
 
-Press or release a key ("W", "A", "S", "D", "Space", "Left", ...).
+Press or release a key ("W", "A", "Space", "Left", ...) or logical Gamepad button.
 
 | arg | type | required | description |
 |---|---|---|---|
