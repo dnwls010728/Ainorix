@@ -25,8 +25,9 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
       Real Showcase CLI screenshots were inspected: off f41d641b55beb483,
       software vignette cac0b279d7c910b7, D3D11 c516b61d9ed5c27e.
       Shaders regenerated with sokol-shdc; web and both Android ABI players
-      rebuilt. WebGL2 vignette and Android GPU execution remain pending.
-- [ ] P6.2: Exposure/tone mapping and bloom, including required color-buffer
+      rebuilt. WebGL2 vignette is additionally verified in the P6.2b browser
+      fixture; Android GPU execution remains pending.
+- [x] P6.2: Exposure/tone mapping and bloom, including required color-buffer
       precision, documented color-space behavior and available backend checks.
       - [x] P6.2a: Preserve HDR lighting and emissive values through scene blending;
             add exposure and optional Reinhard tone mapping in both renderers.
@@ -54,7 +55,12 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             D3D11 mean channel difference stays below 0.60 of 255 for radii
             1/8/32 at 128x72 and 97x55. CLI PNGs inspected: off b5ae0f043da78cdc,
             software 789f48d2d9240334, D3D11 7d9d678c81fcfdac. Shaders/API
-            regenerated. Player refresh and WebGL2 verification follow below.
+            regenerated. Web and both Android ABI players rebuilt from 6c34dc6.
+            The packaged WebGL2 fixture shows bloom on/off, correct hue and
+            unchanged HUD, recreates targets when canvas size changes from
+            640x360 to 320x180 and back, and switches to vignette/neutral modes.
+            This also closes the WebGL2 vignette check from P6.1. Android device
+            and full Linux/EGL execution remain unchecked.
 - [ ] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
       resolution changes and separation from UI/selection overlays.
 - [ ] P6.4: Custom shader materials through commands/assets, validation and

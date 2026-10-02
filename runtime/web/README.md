@@ -8,14 +8,16 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 The runtime does not depend on the game: every project uses the same files.
 
 - Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
-- Engine source: commit 6d76ac9 (combined PRs #18-#21).
+- Engine source: commit 6c34dc6 (P6.2b highlight bloom on integrated main).
   Includes PostProcess settings, optional vignette, HDR scene buffers, exposure
-  and Reinhard tone mapping in both renderers, UI/selection separation and
-  neutral default behavior, particle billboards/sample effects, gamepad input
-  and web multi-touch. Combined Windows tests pass 81 cases; Node/WASM passes 77.
+  and Reinhard tone mapping plus two-pass highlight bloom in both renderers,
+  UI/selection separation and neutral default behavior,
+  particle billboards/sample effects, gamepad input
+  and web multi-touch. Windows tests pass 82 cases; Node/WASM passes 78.
   D3D11/software comparison and real CLI screenshots were checked.
   Browser WebGL2 verifies Reinhard, neutral/HDR transitions and zero exposure
-  with HUD separation. WebGL2 vignette execution remains pending.
+  with HUD separation. Bloom on/off, canvas resizing and vignette/neutral
+  transitions are also verified through the packaged WebGL2 player.
   P1 saves, P2 skeletal animation and P3.1 particle simulation remain included.
   P3 rendering, P4 gamepads and P5 touch adapters are included in this runtime.
 - On this Windows host Binaryen's parallel optimizer crashed; the successful

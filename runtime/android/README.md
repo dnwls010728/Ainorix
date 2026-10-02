@@ -8,12 +8,12 @@ needs Java.
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
 - Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
   Release, API 26, static libc++, GLES3 and AAudio.
-- Source: 6d76ac9 (combined PRs #18-#21). Both ABIs rebuilt
+- Source: 6c34dc6 (P6.2b highlight bloom on integrated main). Both ABIs rebuilt
   with regenerated shaders. Includes reflected PostProcess settings, optional
-  vignette, HDR scene buffers, exposure, Reinhard tone mapping and neutral
+  vignette, HDR scene buffers, exposure, Reinhard tone mapping, two-pass bloom and neutral
   defaults, alongside P1 saves, P2 animation, P3 particle billboards/sample
-  effects and P4 gamepad adapters. Combined Windows tests pass 81 cases;
-  Node/WASM passes 77 cases.
+  effects and P4 gamepad adapters. Windows tests pass 82 cases;
+  Node/WASM passes 78 cases.
   D3D11/software comparison was checked. Android effect execution remains
   unverified. P5 touch changes are web-specific and included in the web player.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
