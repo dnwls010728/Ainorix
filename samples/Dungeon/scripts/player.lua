@@ -62,6 +62,7 @@ end
 function Player:hurt(enemy)
   if not self.controls then return end
   self.hurtTimer = 1.0
+  require("scripts.effects").spawn(self:position(), "hit")
   local p, e = self:position(), scene.get(enemy, "Transform").position
   local dx, dy = p.x - e.x, p.y - e.y
   local len = math.max(0.01, math.sqrt(dx * dx + dy * dy))

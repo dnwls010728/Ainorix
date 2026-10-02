@@ -74,7 +74,8 @@ struct RenderLights {
     float shadowStrength = 0.75f;
 };
 
-std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets);
+// The camera view orients particle billboards; identity faces +Z for callers without a camera.
+std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView = Mat4{});
 RenderLights GatherRenderLights(const Scene& scene);
 
 // Orthographic view-projection of the first directional light, fitted to a

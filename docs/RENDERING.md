@@ -11,6 +11,11 @@ GPU backends: **Direct3D 11** on Windows (hardware, falling back to WARP — the
 
 ## GPU pipeline and shaders
 
+ParticleEmitter uses shared camera-facing quads in both renderers, with lifetime
+size/color/opacity interpolation, texture sheet frames and stable transparent
+ordering. Both 2D and 3D emission modes render without lighting or cast shadows.
+See [PARTICLES.md](PARTICLES.md) for the rendering and simulation contract.
+
 Frame: **shadow pass** (depth only, first directional light) → **scene pass** (MSAA; meshes, then grid/collider/debug lines) → **selection mask** (editor outline) → **composite pass** into the window or an offscreen image (+ UI quads). Screen-space effects (tone mapping, bloom, color grading, FXAA, …) belong in the composite pass or in extra passes between the scene and composite passes.
 
 Shaders live in one file, `engine/render/shaders/Shaders.glsl` (sokol-shdc annotated GLSL). `tools/shaders/compile_shaders.sh` / `.bat` regenerates `Shaders.glsl.h` (HLSL for D3D11, GLSL ES 3.0 for WebGL2/GLES3, desktop GLSL); the generated header is checked in, so building the engine needs no shader tools. Get `sokol-shdc` from https://github.com/floooh/sokol-tools-bin (`bin/<os>/`). Conventions: matrices from `core/Math.h` are column-major with OpenGL clip space (vertex shaders use `@hlsl_options fixup_clipspace`); offscreen images are sampled with `gl_FragCoord / target size`, which has the same orientation on every backend. Lighting math matches the software renderer; keep the two in sync when changing it.

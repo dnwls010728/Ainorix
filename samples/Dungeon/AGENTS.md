@@ -17,6 +17,9 @@ see you and take two bolts; touching one costs a heart (3 hearts).
 - Scripts: `player.lua` (movement, shooting, hurt + knockback), `slime.lua` (wander, line-of-sight chase via
   `physics.raycast`, hits), `bolt.lua`, `coin.lua`, `exit.lua`, `game.lua` (hearts, coins, end screens),
   `level.lua`, `play_again.lua`. Prefabs: `coin`, `slime`, `bolt`, `crate`.
+- Effects: `scripts/effects.lua` exports `spawn(position, "coin"|"hit")` for coin,
+  player-damage and slime-hit bursts. Separate world-space emitters use 0.5-second
+  particles and destroy their effect entities after 0.65 seconds.
 - Art: `tools/make_art.py` generates `assets/tiles/dungeon.png` (47 wall + 16 water autotile frames, floor
   variants, stairs) and `assets/sprites/*.png`. Edit and rerun `python tools/make_art.py`; `tools/` is not packaged.
 - Verify: `oe render . --frames 30 --width 1280 --height 720 --out shot.png` (add `--colliders` for the

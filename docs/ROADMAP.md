@@ -137,11 +137,13 @@ The previous PR #15 merge commit was replaced at the user's request.
 - **검증**: `GpuRendererMatchesSoftware`가 스킨 모델로도 통과, 같은 시간에서 프레임 해시 고정, `render.screenshot`로 걷는 샘플 확인. `samples/Showcase`의 여우(Fox)에 Survey/Walk/Run 클립을 연결해 데모로 쓴다.
 - **주의**: 성능(스킨 정점 수 × 소프트웨어 렌더러) 때문에 테스트 장면은 작게. 멀티스레드 렌더러의 결정성을 깨지 말 것.
 
-### P3. 파티클 시스템 — [ ]
+### P3. 파티클 시스템 — [x]
 
-P3's simulation milestone is integrated into main alongside P1 and P2.
-The combined Windows build passed 72 tests. Particle rendering and sample
-effects remain unfinished; see [PARTICLES.md](PARTICLES.md) for the next milestone.
+P3's simulation milestone is integrated into main alongside P1 and P2. Shared
+billboards and Platformer/Dungeon coin/hit effects are implemented in the follow-up
+branch. Windows passes 75 tests, Node/WASM passes 71, and D3D11/software images
+and packaged WebGL2 coin effects were inspected. Web/Android runtimes are refreshed.
+Android hardware and Linux/EGL follow-ups remain in [PARTICLES.md](PARTICLES.md).
 
 - **왜**: 코드에 파티클이 전혀 없다. 이펙트(폭발, 먼지, 코인 반짝임)가 없어 게임 느낌이 약하다.
 - **요구**: 컴포넌트 `ParticleEmitter {rate, burst, lifetime, speed, spread, gravity, startSize/endSize, startColor/endColor, texture/frame, space(local|world), maxParticles, loop, playing}`. 2D(스프라이트 빌보드)와 3D 모두. 스크립트 `emitter:burst(n)`.

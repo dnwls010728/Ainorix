@@ -438,7 +438,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
-    std::vector<RenderItem> items = GatherRenderItems(scene, assets_);
+    std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view);
     RenderLights gathered = GatherRenderLights(scene);
     Lighting lighting;
     lighting.ambient = gathered.ambient;

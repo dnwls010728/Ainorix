@@ -141,7 +141,7 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
     return opaque;
 }
 
-std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets) {
+std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView) {
     std::vector<RenderItem> items;
     for (const auto& kv : scene.Pool<MeshRenderer>()) {
         const MeshRenderer& mr = kv.second;
@@ -239,6 +239,60 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.world = scene.WorldMatrix(kv.first);
         it.normalMatrix = it.world.Inverse().Transposed();
         items.push_back(std::move(it));
+    }
+    // Each particle shares the static quad. Stable birth order also resolves equal-distance blends.
+    const Mat4 cameraWorld = cameraView.Inverse();
+    const Vec3 right = Normalize(cameraWorld.TransformDir(Vec3(1, 0, 0)));
+    const Vec3 up = Normalize(cameraWorld.TransformDir(Vec3(0, 1, 0)));
+    const Vec3 normal = Normalize(Cross(right, up));
+    const float axes[3][3] = {{right.x, right.y, right.z}, {up.x, up.y, up.z}, {normal.x, normal.y, normal.z}};
+    for (const auto& kv : scene.Pool<ParticleEmitter>()) {
+        const ParticleEmitter& emitter = kv.second;
+        if (emitter.particles.empty()) continue;
+        const Mat4 emitterWorld = scene.WorldMatrix(kv.first);
+        std::shared_ptr<const Texture> texture;
+        if (!emitter.texture.empty() && assets) texture = assets->GetTexture(emitter.texture);
+        float u0, v0, du, dv;
+        FrameRect(emitter.frame, std::max(1, std::min(4096, emitter.columns)),
+                  std::max(1, std::min(4096, emitter.rows)), texture.get(), u0, v0, du, dv);
+        for (const Particle& particle : emitter.particles) {
+            if (!std::isfinite(particle.age) || !std::isfinite(particle.lifetime) || particle.lifetime <= 0) continue;
+            float t = Clamp(particle.age / particle.lifetime, 0, 1);
+            float size = particle.startSize * (1 - t) + particle.endSize * t;
+            float opacity = particle.startOpacity * (1 - t) + particle.endOpacity * t;
+            if (!std::isfinite(size) || size <= 0 || !std::isfinite(opacity) || opacity <= 0) continue;
+            Vec3 center = particle.worldSpace ? particle.position : emitterWorld.TransformPoint(particle.position);
+            if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)) continue;
+            RenderItem it;
+            it.id = kv.first;
+            it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
+            it.textureOverride = texture;
+            it.tint = particle.startColor * (1 - t) + particle.endColor * t;
+            it.opacity = Clamp(opacity, 0, 1);
+            it.blend = true;
+            it.unlit = true;
+            it.castShadows = false;
+            it.pointSample = true;
+            if (!emitter.texture.empty() && !texture) {
+                it.tint = Color(1, 0, 1);
+                it.error = true;
+            }
+            it.uvOffset[0] = u0;
+            it.uvOffset[1] = v0;
+            it.uvScale[0] = du;
+            it.uvScale[1] = dv;
+            // Size is in world meters, independent of emitter scale; only local centers follow it.
+            for (int axis = 0; axis < 3; ++axis) {
+                it.world.at(axis, 0) = axes[0][axis] * size;
+                it.world.at(axis, 1) = axes[1][axis] * size;
+                it.world.at(axis, 2) = axes[2][axis];
+            }
+            it.world.at(0, 3) = center.x;
+            it.world.at(1, 3) = center.y;
+            it.world.at(2, 3) = center.z;
+            it.normalMatrix = it.world.Inverse().Transposed();
+            items.push_back(std::move(it));
+        }
     }
     std::stable_sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) { return a.id < b.id; });
     for (RenderItem& item : items) {

@@ -27,6 +27,7 @@ function Game:onCoin(pos)
   self.coins = self.coins + 1
   game.set("coins", self.coins)
   if pos then
+    require("scripts.effects").spawn(pos, "coin")
     scene.create("Coin Pop", {
       Transform = { position = { pos.x, pos.y, 0.1 } },
       Sprite = { texture = "assets/sprites/coin.png", columns = 4, order = 4 },

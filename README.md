@@ -15,6 +15,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 - 렌더러 두 개가 같은 장면을 그림: **GPU 렌더러**(sokol_gfx — Windows D3D11, Web WebGL2, Linux GLES3; 4× MSAA, 필터링된 그림자, 밉맵, 셰이더는 `engine/render/shaders/Shaders.glsl` 하나)는 게임 창·웹·에디터 뷰용, **소프트웨어 렌더러**(멀티스레드, 결정적)는 스크린샷 해시·테스트·피킹용
 - 렌더링 기능: glTF 모델, PNG/JPEG 텍스처, 스무스/플랫 셰이딩, 포인트 라이트, 그림자, 직교/팔로우 카메라, 디버그 드로잉 — [docs/RENDERING.md](docs/RENDERING.md)
 - 스켈레탈 애니메이션: glTF TRS·스킨, LINEAR/STEP/CUBICSPLINE, Animator·API·Lua 재생, 소프트웨어/GPU 스키닝(조인트 최대 64개). Showcase 여우는 정지/이동/Shift 달리기로 Survey/Walk/Run 전환 — [docs/ANIMATION.md](docs/ANIMATION.md)
+- 파티클: 결정적 2D/3D 방출, 로컬/월드 공간, API·Lua burst, 두 렌더러의 카메라 빌보드, 수명에 따른 크기·색·투명도 변화와 시트 프레임. Platformer·Dungeon에 코인·피격 효과 적용 — [docs/PARTICLES.md](docs/PARTICLES.md)
 - 머티리얼/PBR/반투명: metallic-roughness(GGX) 셰이딩, 노멀맵·AO·발광 텍스처, 반투명(뒤에서 앞으로 정렬)·마스크·양면, glTF 머티리얼 완전 로드, `.mat.json` 머티리얼 파일(`material.create`/`material.set`, 핫리로드) — [docs/RENDERING.md](docs/RENDERING.md)
 - Jolt 기반 3D 물리와 Box2D 기반 2D 물리 (강체, 트리거, 캐릭터 컨트롤러, 원웨이 플랫폼·다각형·충돌 레이어, 결정적 시뮬레이션) — [docs/PHYSICS.md](docs/PHYSICS.md)
 - 게임 UI: TrueType 폰트(한글 등 모든 언어, 폰트 파일 추가), 앵커·스트레치·부모-자식 배치, 레이아웃(세로/가로/그리드, 크기 맞춤), 리치 텍스트·줄바꿈·외곽선·그림자, 둥근 모서리·테두리 패널, 버튼 상태(호버/눌림/비활성), 이미지(9-slice, 채우기 바), 슬라이더/진행 바, 클리핑, 캔버스 스케일 — [docs/UI.md](docs/UI.md)

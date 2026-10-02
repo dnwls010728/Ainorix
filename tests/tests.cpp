@@ -24,6 +24,7 @@
 #include "editor/EditorMath.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
+#include "render/RenderScene.h"
 #include "render/UI.h"
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
@@ -1257,6 +1258,68 @@ double MeanLuma(const RenderTarget& rt) {
     return sum / (3.0 * static_cast<double>(rt.color.size()));
 }
 
+TEST(SampleParticleEffects) {
+    for (const char* sample : {"Platformer", "Dungeon"}) {
+        auto run = [&](bool writeImage) {
+            Engine e;
+            std::string err;
+            CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+            Call(e, "sim.step", R"J({"frames":2})J");
+            Json eval = Call(e, "script.eval", R"J({"code":"return scene.withTag('coin')[1]"})J");
+            EntityId coin = static_cast<EntityId>(eval["result"]["value"].asInt());
+            CHECK(coin != kNullEntity);
+            Vec3 position = e.GetScene().Get<Transform>(coin)->position;
+            Json teleport = Json::parse(R"J({"id":"Player","type":"Transform","values":{}})J");
+            teleport["values"]["position"] = Json(Json::Array{position.x, position.y, 0.1});
+            CHECK(e.Call("component.set", teleport)["ok"].asBool());
+            Call(e, "sim.step", R"J({"frames":2})J");
+            CHECK(!e.GetScene().Exists(coin));
+            CHECK(!e.GetScene().Pool<ParticleEmitter>().empty());
+            std::vector<EntityId> effects;
+            for (const auto& kv : e.GetScene().Pool<ParticleEmitter>()) {
+                effects.push_back(kv.first);
+                CHECK(kv.second.space == "world" && kv.second.dimensions == 2 && !kv.second.loop);
+                CHECK(kv.second.emitted == 12 && kv.second.particles.size() == 12);
+            }
+            Call(e, "sim.step", R"J({"frames":6})J");
+            // Focus the active orthographic camera without waiting for its smoothing.
+            for (const auto& kv : e.GetScene().Pool<CameraFollow>()) {
+                Json cameraArgs = Json::parse(R"J({"type":"CameraFollow","values":{"smoothing":0}})J");
+                cameraArgs["id"] = kv.first;
+                CHECK(e.Call("component.set", cameraArgs)["ok"].asBool());
+            }
+            Call(e, "sim.step", R"J({"frames":1})J");
+            RenderTarget shot;
+            shot.Resize(640,360);
+            e.RenderGameView(shot);
+            size_t visible = 0;
+            for (EntityId effect : effects) visible += CountId(shot, effect);
+            CHECK(visible > 10);
+            if (writeImage) CHECK(WritePng(std::string("build/particle-") + sample + ".png", shot.ToImage(), true));
+            std::string summary = e.GetScene().ToJson().dump() + std::to_string(shot.Hash());
+            std::string hit = std::string(sample) == "Dungeon" ?
+                "local id=scene.withTag('enemy')[1]; scene.send(id,'hit',{x=1,y=0}); scene.send(scene.find('Player'),'hurt',id)" :
+                "scene.send(scene.withTag('enemy')[1],'squash'); scene.send(scene.find('Player'),'die')";
+            Json hitArgs = Json::MakeObject();
+            hitArgs["code"] = hit;
+            CHECK(e.Call("script.eval", hitArgs)["ok"].asBool());
+            int hitEffects = 0;
+            for (const auto& kv : e.GetScene().Pool<ParticleEmitter>()) {
+                if (kv.second.emitted == 16) { ++hitEffects; effects.push_back(kv.first); }
+            }
+            CHECK(hitEffects == 2);
+            Call(e, "sim.step", R"J({"frames":45})J");
+            for (EntityId effect : effects) CHECK(!e.GetScene().Exists(effect));
+            CHECK(e.Scripts().Errors().empty());
+            Json checked = Call(e, "script.check", R"J({"path":"scripts/effects.lua"})J");
+            CHECK(checked["ok"].asBool() && checked["result"]["errors"].asInt() == 0 && checked["result"]["warnings"].asInt() == 0);
+            return summary;
+        };
+        std::string first = run(true);
+        CHECK(first == run(false));
+    }
+}
+
 RenderTarget RenderLook(Engine& e, Vec3 eye, Vec3 target, int w = 160, int h = 90) {
     RenderTarget rt;
     rt.Resize(w, h);
@@ -2265,6 +2328,144 @@ TEST(HdrCameraToneMapping) {
         for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((mapped.color[center] >> shift) & 255) -
                                                   static_cast<int>((again.color[center] >> shift) & 255)) <= 1);
     }
+}
+
+TEST(ParticleBillboardDrawItems) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("particle_items"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[1,2,3],"scale":[2,3,4]},"ParticleEmitter":{"rate":0,"speed":0,"gravity":[0,0,0],"lifetime":2,"startSize":2,"endSize":0,"startColor":[1,0,0],"endColor":[0,0,1],"startOpacity":1,"endOpacity":0,"columns":2,"frame":1}}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":2})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    EntityId id = e.GetScene().FindByName("Effect");
+    RenderView view = MakeLookAtView(Vec3(7,5,8), Vec3(1,2,3), 45, 1);
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(items.size() == 2);
+    const RenderItem& item = items.front();
+    CHECK(item.id == id && item.blend && item.unlit && !item.castShadows && item.pointSample);
+    CHECK(Length(item.world.TransformPoint(Vec3()) - Vec3(1,2,3)) < 1e-5f);
+    CHECK(std::fabs(Length(item.world.TransformDir(Vec3(1,0,0))) - 1) < 1e-4f);
+    CHECK(std::fabs(item.tint.r - 0.5f) < 1e-4f && std::fabs(item.tint.b - 0.5f) < 1e-4f);
+    CHECK(std::fabs(item.opacity - 0.5f) < 1e-4f);
+    CHECK(item.uvOffset[0] == 0.5f && item.uvScale[0] == 0.5f);
+    Vec3 horizontal = view.view.TransformDir(item.world.TransformDir(Vec3(1,0,0)));
+    Vec3 vertical = view.view.TransformDir(item.world.TransformDir(Vec3(0,1,0)));
+    CHECK(std::fabs(horizontal.y) < 1e-5f && std::fabs(horizontal.z) < 1e-5f && horizontal.x > 0);
+    CHECK(std::fabs(vertical.x) < 1e-5f && std::fabs(vertical.z) < 1e-5f && vertical.y > 0);
+    auto draws = BuildDrawList(items, view.eye);
+    CHECK(draws.size() == 2 && draws[0].item == 0 && draws[1].item == 1);  // equal distance: birth order
+    items[1].world = Mat4::Translation(Vec3(-10,2,3));
+    draws = BuildDrawList(items, view.eye);
+    CHECK(draws[0].item == 1 && draws[1].item == 0);
+    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[5,2,3]}})J");
+    items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(Length(items[0].world.TransformPoint(Vec3()) - Vec3(5,2,3)) < 1e-5f);
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"space":"world"}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[9,2,3]}})J");
+    items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(Length(items[0].world.TransformPoint(Vec3()) - Vec3(5,2,3)) < 1e-5f);
+    Call(e, "sim.step", R"J({"frames":121})J");
+    CHECK(GatherRenderItems(e.GetScene(), &e.Assets(), view.view).empty());
+}
+
+TEST(ParticleRenderers) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("particle_renderers"), &err));
+    Image sheet;
+    sheet.width = 8;
+    sheet.height = 4;
+    sheet.rgba.resize(8 * 4 * 4);
+    for (int y = 0; y < 4; ++y) for (int x = 0; x < 8; ++x) {
+        size_t offset = static_cast<size_t>((y * 8 + x) * 4);
+        sheet.rgba[offset] = x < 4 ? 255 : 0;
+        sheet.rgba[offset + 1] = x < 4 ? 0 : 255;
+        sheet.rgba[offset + 2] = 0;
+        sheet.rgba[offset + 3] = 192;
+    }
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "sheet.png"), sheet, true));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{},"ParticleEmitter":{"rate":0,"lifetime":2,"speed":2,"spread":160,"gravity":[0,0,0],"startSize":0.4,"endSize":0.2,"startColor":[1,1,1],"endColor":[0.5,1,0.5],"startOpacity":0.8,"endOpacity":0.4,"seed":23,"texture":"sheet.png","columns":2,"frame":1}}})J");
+    EntityId id = e.GetScene().FindByName("Effect");
+    bool hasGpu = e.EnableGpu(nullptr, &err);
+    if (!hasGpu) std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+    RenderView view = MakeLookAtView(Vec3(3,2,5), Vec3(), 45, 320.0f / 180);
+    view.clearColor = Color(0,0,0);
+    view.drawUI = false;
+    RenderTarget sw, again, gpu;
+    sw.Resize(320,180);
+    again.Resize(320,180);
+    gpu.Resize(320,180);
+    for (int dimensions : {2, 3}) {
+        Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
+        args["values"]["dimensions"] = dimensions;
+        CHECK(e.Call("component.set", args)["ok"].asBool());
+        Call(e, "particles.clear", R"J({"id":"Effect"})J");
+        Call(e, "particles.burst", R"J({"id":"Effect","count":24})J");
+        Call(e, "sim.step", R"J({"frames":30})J");
+        SetMaxRenderThreads(1);
+        e.Renderer().Render(e.GetScene(), view, sw);
+        SetMaxRenderThreads(16);
+        e.Renderer().Render(e.GetScene(), view, again);
+        CHECK(sw.Hash() == again.Hash() && CountId(sw, id) > 300);
+        CHECK(sw.Hash() == (dimensions == 2 ? 0xeeb1529ca41029c9ull : 0x4ea73d9e1b71d479ull));
+        // The second sheet frame is green with alpha: no red-frame bleed or opaque quads.
+        size_t greenPixels = 0;
+        for (uint32_t color : sw.color) {
+            CHECK((color & 0xFF) == 0 && ((color >> 16) & 0xFF) == 0);
+            greenPixels += ((color >> 8) & 0xFF) > 10;
+        }
+        CHECK(greenPixels > 300);
+        CHECK(WritePng("build/particles-software.png", sw.ToImage(), true));
+        if (hasGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double total = 0;
+            int outliers = 0;
+            double interiorTotal = 0;
+            size_t interiorPixels = 0;
+            for (size_t i = 0; i < sw.color.size(); ++i) {
+                int worst = 0;
+                for (int channel = 0; channel < 3; ++channel) {
+                    int difference = std::abs(static_cast<int>((sw.color[i] >> (8 * channel)) & 255) -
+                                              static_cast<int>((gpu.color[i] >> (8 * channel)) & 255));
+                    total += difference;
+                    worst = std::max(worst, difference);
+                }
+                outliers += worst > 32;
+                int x = static_cast<int>(i % 320), y = static_cast<int>(i / 320);
+                if (x > 0 && x < 319 && y > 0 && y < 179 && sw.color[i] != 0xFF000000u &&
+                    sw.color[i] == sw.color[i - 1] && sw.color[i] == sw.color[i + 1] &&
+                    sw.color[i] == sw.color[i - 320] && sw.color[i] == sw.color[i + 320]) {
+                    interiorTotal += std::abs(static_cast<int>((sw.color[i] >> 8) & 255) -
+                                              static_cast<int>((gpu.color[i] >> 8) & 255));
+                    ++interiorPixels;
+                }
+            }
+            double mean = total / (static_cast<double>(sw.color.size()) * 3);
+            std::printf("  %dD particles: mean %.3f, outliers %d, software hash %016llx\n", dimensions,
+                        mean, outliers, static_cast<unsigned long long>(sw.Hash()));
+            // MSAA differs at many overlapping quad edges; fully covered interiors must agree.
+            CHECK(mean < 1.0 && outliers < static_cast<int>(sw.color.size()) / 75);
+            CHECK(interiorPixels > 200 && interiorTotal / static_cast<double>(interiorPixels) < 2.0);
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == gpu.Hash());
+            CHECK(WritePng("build/particles-gpu.png", gpu.ToImage(), true));
+        }
+        uint64_t hash = sw.Hash();
+        Call(e, "particles.clear", R"J({"id":"Effect"})J");
+        Call(e, "particles.burst", R"J({"id":"Effect","count":24})J");
+        Call(e, "sim.step", R"J({"frames":30})J");
+        e.Renderer().Render(e.GetScene(), view, again);
+        CHECK(again.Hash() == hash);
+    }
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"texture":"","startColor":[1,0,0],"endColor":[1,0,0],"speed":0,"startSize":1,"startOpacity":1}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK((again.color[90 * 320 + 160] & 255) > 250 && ((again.color[90 * 320 + 160] >> 8) & 255) == 0);
 }
 
 TEST(GpuRendererMatchesSoftware) {
