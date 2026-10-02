@@ -72,7 +72,8 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             resize/toggle. D3D11 mean channel difference is below 0.32 of 255.
             Real CLI images inspected: off 457ffd44e88c5760, software
             c86ccc033505d8dc, D3D11 c21a168cde9909e4. Shaders/API regenerated.
-            Player refresh and packaged WebGL2 verification belong to P6.3b.
+            Web and both Android ABI players rebuilt from 0ea84f2.
+            Packaged WebGL2 verification and sample controls remain in P6.3b.
       - [ ] P6.3b: Sample effect controls, real CLI/WebGL2 verification and
             refreshed player runtimes.
 - [ ] P6.4: Custom shader materials through commands/assets, validation and
