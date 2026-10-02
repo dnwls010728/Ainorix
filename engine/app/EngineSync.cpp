@@ -174,13 +174,14 @@ bool Engine::PollSync() {
     }
     audio_->Confirm(std::min(frame_, sync_->Confirmed())); outputConfirmed_ = std::min(frame_, sync_->Confirmed());
     if (sync_->NeedsInput()) {
+        const InputState device = SampleNetworkInput();
         FrameInput sample; const auto& config = sync_->Config();
         for (size_t i = 0; i < config.keys.size(); ++i) {
-            if (input_.IsDown(config.keys[i])) sample.down |= uint64_t{1} << i;
-            if (input_.pressedThisFrame.count(config.keys[i])) sample.pulse |= uint64_t{1} << i;
+            if (device.IsDown(config.keys[i])) sample.down |= uint64_t{1} << i;
+            if (device.pressedThisFrame.count(config.keys[i])) sample.pulse |= uint64_t{1} << i;
         }
         for (size_t i = 0; i < config.axes.size(); ++i) if (config.axes[i]) {
-            auto axis = input_.axes.find(InputState::kAxisNames[i]); float value = axis == input_.axes.end() ? 0 : axis->second;
+            auto axis = device.axes.find(InputState::kAxisNames[i]); float value = axis == device.axes.end() ? 0 : axis->second;
             if (!std::isfinite(value)) value = 0;
             sample.axes[i] = static_cast<int16_t>(std::round(std::max(i >= 4 ? 0.0f : -1.0f, std::min(1.0f, value)) * 32767));
         }

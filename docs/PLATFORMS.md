@@ -46,7 +46,7 @@ Native DNS and IPv6 are not implemented in M3. Browser URL resolution is handled
 |---|---|---|
 | Win32 | `platform/net/NativeSockets.cpp`: WinSock, non-blocking I/O, zero-timeout WSAPoll for connect, NODELAY | Windows Release; localhost UDP/TCP, 64 KiB channel messages, source/truncation checks, malformed frames, queue bounds, disconnect and UDP-to-TCP fallback |
 | POSIX (null/macOS/Android) | Same file: BSD sockets, fcntl, zero-timeout poll, NODELAY, SIGPIPE suppression | Implemented but not compiled/run in the current Windows environment; no installed WSL distribution or NDK |
-| Web | `platform/web/NetworkWeb.cpp`: binary WebSocket client, bounded JS-to-Wasm copying, callback queues | JS bridge bounds/cleanup tested with Node mocks; no Emscripten SDK or real browser/Wasm connection validation |
+| Web | `platform/web/NetworkWeb.cpp`: binary WebSocket client, bounded JS-to-Wasm copying, callback queues | Emscripten 6.0.10 Release build; Wasm/Node suite (123 tests) and a real packaged NetArena browser/native-WebSocket match, plus JS bridge bounds/cleanup |
 
 `net/SocketTransports.h` keeps framing, per-peer queues and lifecycle events portable. UDP peers
 must be registered explicitly; TCP accept assigns transport ids and exposes the accepted source
@@ -76,11 +76,16 @@ Console SDKs are under NDA, so their code cannot live in this public tree. The l
 - No GPU or driver needed to verify a change (`oe render` works over SSH, in containers, in CI).
 - Trivial to bring up on a new platform: present a CPU buffer and the platform is playable.
 
-M5 lockstep/reference rollback shares this transport layer. I/O ticks continue while game frames
-wait for input; protocol v2 clients must match rebuilt native/Web runtimes. The Windows localhost
-TCP/UDP tests each run 10000 game frames. POSIX, real Wasm/WebSocket and Android execution remain
-unverified, and the committed prebuilt runtimes have not been refreshed for M5. See NETWORK.md
-for the reference replay backend and the remaining fast native snapshot requirement.
+M5 lockstep/native rollback and M6 authoritative replication share this transport layer.
+I/O ticks continue while game frames wait for input; protocol v3 clients require the refreshed
+runtime/web player. Windows localhost TCP/UDP tests each run 10000 frames. M8 verifies Wasm
+loopback/sample/snapshot tests and a real WebGL2 NetArena browser client against a native
+WebSocket dedicated server (join/ready, movement, touch Collect/Reset, replicated score/HUD).
+The browser cannot host sockets or join raw TCP/UDP. Native WebSocket clients remain unsupported;
+use a WebSocket server for browsers and TCP/UDP for native/Android clients.
+POSIX/Android execution remains unverified. See [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md)
+for launch and platform reproduction steps. On-screen keys are sampled into declared actions
+before sync input capture; pointer coordinates remain local and are not replayed.
 
 
 Dedicated game servers (`oe serve-game`, packaged `--server`) use the native
@@ -88,5 +93,6 @@ nonblocking network platform at fixed 60 Hz without creating a window, GPU or
 speaker device. Native WebSocket hosting uses the same portable NetSocket interface.
 `PlatformAttachParentConsole` lets Windows GUI players in --server mode attach to an
 existing parent console while preserving redirected stdout/stderr; it never creates
-a console. It is a no-op on other platforms. Windows Release execution is verified;
-POSIX/Android server execution and refreshed web/Android runtimes still need toolchains.
+a console. It is a no-op on other platforms. Windows Release execution is verified.
+The web runtime is refreshed for M8; POSIX/Android server execution and Android runtime
+rebuild/device validation still need toolchains/devices.

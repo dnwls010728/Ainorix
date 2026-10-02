@@ -249,3 +249,20 @@ id 1 as an empty protocol input stream; `net.isServer()` is true and `net.isHost
 is false. No playerPrefab is instantiated for that reserved slot. Use isServer for
 server-authority gameplay. `net.simulate`, `net.spawn_local_peers`, `net.peer_call`
 and `net.serve` are tool commands; they do not add Lua callbacks or bindings.
+
+
+### Playable network examples
+
+See `samples/NetCoop/scripts/game.lua` for a shared lockstep score, NetDuel for rollback
+competition, and NetArena for server-only scoring with NetSync HUD/target fields. Their
+player scripts read declared `input.player(id)` actions; offline practice uses ordinary input.
+Lobby buttons call net.host/join/ready/start before the match. Start restores the shared
+edit-time world, so local lobby messages never enter the deterministic match hash. During
+a match, gameplay uses synchronized reset actions rather than a local session control.
+
+UIButton.key mouse/touch gestures are converted to declared actions before network input
+sampling, including short click pulses. Coordinates and gestures are local device state;
+rollback/prediction replays only the recorded actions. NetPlayer/NetSync fields are reserved
+replication metadata and must not be included in NetSync.fields. Ordinary reflected fields
+such as Transform.position, MeshRenderer.color and UIText.text may be selected.
+See [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md) for host/client/device setup.

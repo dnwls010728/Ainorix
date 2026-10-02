@@ -295,7 +295,7 @@ bool Engine::PollAuthority() {
             replayMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); ++authorityCorrections_;
         }
         if (!network_->IsHost() && !authority_->CanPredict()) { InterpolateAuthority(); return false; }
-        FrameInput sample = Sample(input_, networkConfig_.sync); deviceInput_ = input_; input_.pressedThisFrame.clear(); deviceInput_.pressedThisFrame.clear();
+        FrameInput sample = Sample(SampleNetworkInput(), networkConfig_.sync); deviceInput_ = input_; input_.pressedThisFrame.clear(); deviceInput_.pressedThisFrame.clear();
         if (network_->IsHost()) ApplyInputs(authority_->Consume(sample));
         else {
             authorityInput_ = authority_->Submit(sample); if (!authorityInput_) return false;

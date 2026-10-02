@@ -197,6 +197,8 @@ private:
     // Pointer hover/press/click and slider drags for this frame's input.
     std::vector<UIEvent> UpdateUI();
     // UIButton.key: buttons held by the mouse or any finger hold their key down.
+    std::set<EntityId> HeldInputButtons(const InputState& input, bool includeClick);
+    InputState SampleNetworkInput();
     void UpdateButtonKeys();
     void BeginSessionIfNeeded();
     void ResetRuntime();
@@ -233,6 +235,7 @@ private:
     uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0;
     std::map<uint32_t, InputState> playerInputs_;
     FrameInputs frameInputs_;
+    std::set<std::string> networkButtonKeys_;  // device button edges, outside replay checkpoints
     InputState deviceInput_;
     struct JournalFrame { InputState input; FrameInputs players; };
 public:

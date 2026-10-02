@@ -220,3 +220,12 @@ so the engine can find `templates/`; test output is written beneath its
 - Options for the immersive mode / cutout (always on) and per-ABI bundle splits tuning.
 - Adaptive icons (`mipmap-anydpi` foreground/background), splash screen.
 - Compressed APK entries (everything is stored; game data that is already PNG/OGG gains little).
+
+
+## Networking runtime follow-up (M8)
+
+The networking source and native Windows/Web validation do not refresh the committed
+Android players. Both ABIs still need an NDK rebuild and device execution for protocol v3.
+The M8 environment has no Android SDK/NDK/device. Follow the dedicated-server, touch input,
+score/reset and disconnect checklist in [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md), then
+update runtime/android/README.md with the tested source, SDK/ABI and device results.

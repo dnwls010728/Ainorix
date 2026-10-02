@@ -1,0 +1,51 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Player",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [
+            -2,
+            0.5,
+            2
+          ],
+          "scale": [
+            0.65,
+            0.8,
+            0.65
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.22,
+            0.65,
+            1
+          ]
+        },
+        "NetPlayer": {
+          "player": 1
+        },
+        "NetSync": {
+          "owner": 0,
+          "predict": true,
+          "fields": {
+            "Transform.position": {
+              "onChange": true
+            },
+            "MeshRenderer.color": {
+              "onChange": true
+            }
+          }
+        },
+        "Script": {
+          "path": "scripts/player.lua"
+        }
+      }
+    }
+  ]
+}

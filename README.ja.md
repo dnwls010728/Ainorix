@@ -135,3 +135,5 @@ samples/Dungeon  2D 見下ろしアクション (Box2D、オートタイルの�
 samples/Platformer 2D 横スクロールのプラットフォーマー (テキストのタイルマップ、スプライトアニメーション、敵、? ブロック、パララックス)
 samples/FPS      一人称シューティングのテストゲーム (マウス視点、ヒットスキャンのピストル、リロード、動く標的、結果画面)
 ```
+
+ネットワークサンプル: `samples/NetCoop`（lockstep 協力）、`samples/NetDuel`（rollback 対戦）、`samples/NetArena`（サーバー権限対戦）。エディターの Players 2、またはゲーム内 Host/Join/Ready/Start で開始。キーボード・ゲームパッド・タッチボタンに対応。起動・WebSocket・Android 検証: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md)。

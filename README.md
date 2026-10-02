@@ -136,3 +136,5 @@ samples/Dungeon  2D 탑뷰 액션 (Box2D, 자동 연결 타일셋, 밀 수 있�
 samples/Platformer 2D 횡스크롤 플랫포머 (텍스트 타일맵, 스프라이트 애니메이션, 적, ? 블록, 패럴랙스)
 samples/FPS      1인칭 슈팅 테스트 게임 (마우스 시점, 히트스캔 권총, 재장전, 움직이는 표적, 결과 화면)
 ```
+
+네트워크 샘플: `samples/NetCoop`(lockstep 협동), `samples/NetDuel`(rollback 대전), `samples/NetArena`(서버 권한 대전). 에디터 Players 2로 즉시 실행하거나 게임 내 Host/Join/Ready/Start 버튼 사용. WASD·게임패드·터치 버튼 지원. 실행·WebSocket·Android 검증 가이드: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).

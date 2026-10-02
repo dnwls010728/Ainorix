@@ -1,0 +1,34 @@
+{
+  "format": "ownengine.project",
+  "version": 1,
+  "name": "NetDuel",
+  "startScene": "scenes/main.scene.json",
+  "window": {
+    "width": 1280,
+    "height": 720,
+    "title": "NetDuel"
+  },
+  "network": {
+    "mode": "rollback",
+    "transport": "tcp",
+    "bind": "127.0.0.1",
+    "port": 7778,
+    "gameId": "NetDuel",
+    "maxPlayers": 4,
+    "actions": [
+      "W",
+      "A",
+      "S",
+      "D",
+      "Space",
+      "R"
+    ],
+    "axes": [
+      "LeftX",
+      "LeftY"
+    ],
+    "inputDelay": 2,
+    "rollbackFrames": 8,
+    "hashInterval": 30
+  }
+}

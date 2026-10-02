@@ -213,6 +213,7 @@ void Engine::EnableAudioOutput() {
 }
 
 void Engine::ResetRuntime() {
+    networkButtonKeys_.clear();
     debugLines_.clear();
     scripts_->Reset();
     physics_->Reset();
@@ -337,7 +338,7 @@ void Engine::SimulateWorld() {
                       debugLines_.end());
     // Scripts run first so they see this frame's edge-triggered input.
     const float dt = static_cast<float>(kFixedDt);
-    UpdateButtonKeys();
+    if ((!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) UpdateButtonKeys();
     scripts_->Update(dt);
     if (network_ && authority_ && authority_->Running() && !network_->IsHost()) {
         if (replaying_) {
@@ -383,15 +384,15 @@ void Engine::SimulateWorld() {
     }
 }
 
-void Engine::UpdateButtonKeys() {
+std::set<EntityId> Engine::HeldInputButtons(const InputState& input, bool includeClick) {
     std::set<EntityId> held;
     bool any = false;
     for (auto& kv : scene_.Pool<UIButton>()) any = any || !kv.second.key.empty();
-    const int w = input_.viewWidth, h = input_.viewHeight;
+    const int w = input.viewWidth, h = input.viewHeight;
     if (any && w > 0 && h > 0) {
         std::vector<std::pair<float, float>> pointers;
-        if (!input_.mouseLocked && input_.IsDown("MouseLeft")) pointers.push_back({input_.mouseX, input_.mouseY});
-        for (const InputState::Touch& t : input_.touches) pointers.push_back({t.x, t.y});
+        if (!input.mouseLocked && (input.IsDown("MouseLeft") || (includeClick && input.pressedThisFrame.count("MouseLeft")))) pointers.push_back({input.mouseX, input.mouseY});
+        for (const InputState::Touch& t : input.touches) pointers.push_back({t.x, t.y});
         std::vector<UIRect> rects;
         if (!pointers.empty()) rects = LayoutUI(scene_, w, h, assets_.get());
         for (const auto& p : pointers) {
@@ -400,6 +401,24 @@ void Engine::UpdateButtonKeys() {
             if (b && b->interactable && !b->key.empty()) held.insert(hit->entity);
         }
     }
+    return held;
+}
+
+InputState Engine::SampleNetworkInput() {
+    // Only declared actions enter the wire; local pointer coordinates never enter the world.
+    InputState sample = input_;
+    std::set<std::string> keys;
+    for (EntityId id : HeldInputButtons(input_, true)) keys.insert(scene_.Get<UIButton>(id)->key);
+    for (const auto& key : keys) {
+        if (!networkButtonKeys_.count(key) && !sample.IsDown(key)) sample.pressedThisFrame.insert(key);
+        sample.down.insert(key);
+    }
+    networkButtonKeys_ = std::move(keys);
+    return sample;
+}
+
+void Engine::UpdateButtonKeys() {
+    std::set<EntityId> held = HeldInputButtons(input_, false);
     std::set<std::string> keys;
     for (EntityId id : held) keys.insert(scene_.Get<UIButton>(id)->key);
     for (const std::string& k : keys) {

@@ -1545,7 +1545,71 @@ TEST(NetworkLocalPreviewAndFaultControls) {
     host.Stop(); RemoveAll(project);
 }
 
+
+TEST(NetworkSampleGamesOfflineAndMultiplayer) {
+    for (const char* name : {"NetCoop", "NetDuel", "NetArena"}) {
+        std::string project = JoinPath(TestSourceDir(), std::string("samples/") + name), error;
+        Engine host; CHECK(host.Open(project, &error));
+        Json edit = host.GetScene().ToJson();
+        // The packaged player uses the same ordinary play path for offline practice.
+        CHECK(Call(host, "sim.step", R"({"frames":2})")["ok"].asBool());
+        CHECK(host.GetScene().Pool<NetPlayer>().size() == 1);
+        CHECK(Call(host, "script.errors")["result"].size() == 0);
+        for (int crystal = 0; crystal < 5; ++crystal) {
+            EntityId id = host.GetScene().Pool<NetPlayer>().begin()->first;
+            for (int tick = 0; tick < 150; ++tick) {
+                Vec3 p = host.GetScene().Get<Transform>(id)->position;
+                Vec3 t = host.GetScene().Get<Transform>(host.GetScene().FindByName("Target"))->position;
+                if (Length(p - t) < 0.8f) break;
+                for (const auto& key : std::vector<std::pair<const char*, bool>>{
+                         {"W", p.z > t.z + 0.1f}, {"S", p.z < t.z - 0.1f},
+                         {"A", p.x > t.x + 0.1f}, {"D", p.x < t.x - 0.1f}}) {
+                    Json input = Json::MakeObject(); input["key"] = key.first; input["down"] = key.second;
+                    CHECK(host.Call("input.key", input)["ok"].asBool());
+                }
+                host.Step(1);
+            }
+            for (const char* key : {"W", "A", "S", "D"}) {
+                Json release = Json::MakeObject(); release["key"] = key; release["down"] = false;
+                CHECK(host.Call("input.key", release)["ok"].asBool());
+            }
+            CHECK(Call(host, "input.key", R"({"key":"Space","down":true})")["ok"].asBool()); host.Step(1);
+            CHECK(Call(host, "input.key", R"({"key":"Space","down":false})")["ok"].asBool()); host.Step(1);
+        }
+        CHECK(host.GameData()["winner"].asString() == (std::string(name) == "NetCoop" ? "team" : "1"));
+        host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+        CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
+        host.Step(180);
+        Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) continue;
+        CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+        CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
+        CHECK(client->GetScene().Pool<NetPlayer>().size() == 2);
+        CHECK(Call(host, "script.errors")["result"].size() == 0);
+        CHECK(Call(*client, "script.errors")["result"].size() == 0);
+        CHECK(!host.GetScene().Get<UIButton>(host.GetScene().FindByName("Host"))->visible);
+        // Player 1 starts at (-2,2), walks to the first target and collects it.
+        CHECK(Call(host, "input.touch", R"({"id":1,"x":132,"y":533,"width":1280,"height":720})")["ok"].asBool()); host.Step(30);
+        CHECK(Call(host, "input.touch", R"({"id":1,"down":false})")["ok"].asBool()); host.Step(30);
+        CHECK(Call(host, "input.click", R"({"x":1125,"y":603,"width":1280,"height":720})")["ok"].asBool()); host.Step(8);
+        CHECK(Call(host, "input.key", R"({"key":"Space","down":false})")["ok"].asBool()); host.Step(100);
+        CHECK(host.GameData()["scores"][std::string(name) == "NetCoop" ? "team" : "1"].asNumber() == 1);
+        CHECK(host.GetScene().Get<Transform>(host.GetScene().FindByName("Target"))->position.x == 2);
+        // A remote input resets the round; authority sends the result through UIText.text.
+        CHECK(Call(*client, "input.touch", R"({"id":2,"x":1125,"y":533,"width":1280,"height":720})")["ok"].asBool()); host.Step(8);
+        CHECK(Call(*client, "input.touch", R"({"id":2,"down":false})")["ok"].asBool()); host.Step(100);
+        CHECK(host.GameData()["scores"].size() == 0);
+        CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Score"))->text ==
+              client->GetScene().Get<UIText>(client->GetScene().FindByName("Score"))->text);
+        for (Engine* peer : {&host, client}) {
+            CHECK(Call(*peer, "script.errors")["result"].size() == 0);
+            CHECK(Call(*peer, "net.desync_report")["result"].size() == 0);
+        }
+        host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+    }
+}
+
 TEST(NetworkDedicatedReadyBarrierAndCleanup) {
+#ifndef __EMSCRIPTEN__
     std::string project = AuthorityProject("dedicated", "tcp", true), error;
     uint64_t live = PlatformNetSocketsLive();
     Engine server, client; CHECK(server.Open(project, &error)); CHECK(client.Open(project, &error));
@@ -1563,6 +1627,7 @@ TEST(NetworkDedicatedReadyBarrierAndCleanup) {
     CHECK(server.GetScene().Pool<NetPlayer>().begin()->second.player == 2);
     CHECK(!Call(server, "net.simulate", R"({"lossPermille":10})")["ok"].asBool());
     server.Stop(); client.Stop(); CHECK(PlatformNetSocketsLive() == live); RemoveAll(project);
+#endif
 }
 
 std::vector<uint8_t> MaskedWebFrame(uint8_t opcode, bool fin, const std::vector<uint8_t>& payload) {
@@ -1600,6 +1665,7 @@ TEST(NetworkWebSocketServerFramingAndBounds) {
 }
 
 TEST(NetworkWebSocketNativeListener) {
+#ifndef __EMSCRIPTEN__
     uint64_t live = PlatformNetSocketsLive();
     {
         WebSocketServerTransport server; std::string error; CHECK(server.Listen({}, &error));
@@ -1634,6 +1700,7 @@ TEST(NetworkWebSocketNativeListener) {
         CHECK(server.Disconnect(peer)); CHECK(!server.Send(peer, send.data(), 1));
     }
     CHECK(PlatformNetSocketsLive() == live);
+#endif
 }
 
 TEST(NetworkLockstepEngineGatesAndDesync) {
@@ -5758,6 +5825,7 @@ TEST(NativeEditorTilePainting) {
 
 int main() {
     Log::SetEcho(false);
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     for (const TestCase& t : Tests()) {
         int before = g_failures;
         t.fn();

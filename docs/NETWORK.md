@@ -5,7 +5,7 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M7 implemented.** Opt-in lobbies, RPC, lockstep and native rollback are available.
+Status: **M1–M7 and M8a/M8b implemented; M8c Android verification remains pending.** Opt-in lobbies, RPC, lockstep and native rollback are available.
 Authoritative replication, relevance, interpolation and owned prediction are available.
 Platform verification limits are recorded below.
 Progress is tracked in §11.
@@ -242,11 +242,16 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
       Network panel, `net.simulate`
 - [ ] M8 — networked sample games, docs (`API.md`, `SCRIPTING.md`, `PLATFORMS.md`), web and Android
       verification, optional relay/lobby
+  - [x] M8a — playable lockstep co-op, rollback versus and authoritative samples; lobby/touch controls, regression tests and launch docs
+  - [x] M8b — rebuild the protocol-v3 web runtime, run Wasm tests and exercise a packaged browser client against a native WebSocket server
+  - [ ] M8c — rebuild Android runtimes, run device tests and a native-server/device match
+  - [ ] Optional relay/lobby service — deferred; direct hosting and the in-game ready lobby require no external service
 
 Open questions / unverified:
-- `SaveState` cost for Jolt/Box2D/Lua (decides how many rollback frames are affordable) and
-  whether restoring Jolt/Box2D bodies is bit-exact (needs a determinism test).
-- WebSocket hosting is available on a native `oe serve-game` process; browser/Wasm end-to-end execution remains unverified.
+- M5c native snapshots and exact Lua/Jolt/Box2D restore are tested on Windows and Wasm/Node;
+  full cross-device/Android determinism still requires device runs.
+- Native WebSocket hosting and a real packaged Wasm browser client are verified in M8b;
+  Android/POSIX builds and Android player execution remain unverified in this environment.
 - When (if ever) a platform backend such as IOCP/epoll is worth adding (§6): measure first.
 
 ### M1 implementation notes
@@ -803,3 +808,40 @@ add it beside Inspector, new layouts use an explicit NetworkPanel visibility set
 and reopening the panel focuses its tab. Windows regression tests cover disabled
 projects, migrated docking, deliberate hidden-state persistence and zero socket/session
 creation. Only editor code changes; prebuilt game players need no additional rebuild.
+
+
+### M8a/M8b implementation notes
+
+- `samples/NetCoop`, `NetDuel`, `NetArena` are playable crystal-collection games for lockstep,
+  rollback and server authority. They share ordinary Lua player rules and built-in meshes,
+  support offline practice, native lobbies, editor Players previews and keyboard/gamepad/touch.
+  Co-op shares a score; versus awards individual scores and a five-crystal win. R resets a
+  round through synchronized input. Authoritative score/target/HUD changes run on the server.
+- Fixed on-screen action sampling: previously UpdateButtonKeys ran after sync input submission,
+  so a network player reading input.player never received touch button actions. Local pointers
+  now produce held/pulse actions before lockstep/rollback/authority sampling. Device edges stay
+  outside replay checkpoints; replay does not resample local pointer positions. Short clicks
+  count as a one-frame action. Ordinary offline input order and inactive costs are preserved.
+- `NetworkSampleGamesOfflineAndMultiplayer` exercises all three games: offline win, two-peer
+  previews, touch movement, short Collect click, remote touch Reset, matching HUDs, zero
+  script errors/desync, and restored edit worlds on Stop. Native-only dedicated/listener tests
+  skip under Emscripten; portable WebSocket codec/loopback tests still execute. Test output
+  is unbuffered so an interrupted run retains the last completed test.
+- Updated NETWORK_SAMPLES.md, API.md (regenerated; schema unchanged), SCRIPTING.md,
+  PLATFORMS.md, ANDROID.md, agent instructions and all three READMEs. Direct hosting plus
+  the in-game ready lobby is sufficient; optional relay/account/matchmaking remains deferred.
+- Windows Release: 135 tests, zero failed checks. Wasm/Node: 123 registered tests, zero failed
+  checks (native socket and GPU tests skip). `network_server_test.py` passes independent
+  TCP/UDP/WebSocket client/server runs and a packaged `--server` run; JS callback bounds/cleanup
+  pass. All three editor Players 2 screenshots were checked with D3D11. Emscripten 6.0.10
+  Release player refreshed in runtime/web, with BINARYEN_CORES=1.
+- Real packaged NetArena browser/WebGL2 client against a native WebSocket dedicated server:
+  Join/Ready, keyboard movement, Collect button, server score {"2":1}, replicated HUD, Reset
+  returning to empty scores and zero Lua errors verified. Fixture:
+  `python tests/network_browser_fixture.py --sample NetArena --test-controls`; port flags
+  select a free local triple. Other browser sync modes can use the same fixture but their
+  browser/native cross-platform sessions have not been separately exercised in M8.
+- [ ] M8c: no Android SDK/NDK or connected device in this environment. Rebuild both Android
+  ABIs, run the staged tests and a TCP device/server touch match as described in
+  NETWORK_SAMPLES.md; refresh runtime/android after actual build/device verification.
+  M8 stays unchecked until this required validation is completed.

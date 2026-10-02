@@ -134,3 +134,5 @@ samples/Dungeon  2D top-down action (Box2D, autotiled tileset, pushable crates, 
 samples/Platformer 2D side-scroller (text tilemap, sprite animation, enemies, ? blocks, parallax)
 samples/FPS      first-person shooter test game (mouse look, hitscan pistol, reload, moving targets, results screen)
 ```
+
+Network samples: `samples/NetCoop` (lockstep co-op), `samples/NetDuel` (rollback versus), `samples/NetArena` (authoritative versus). Choose editor Players 2 or use the in-game Host/Join/Ready/Start lobby. Keyboard, gamepad and touch buttons share declared actions. Launch, WebSocket and Android verification guide: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).

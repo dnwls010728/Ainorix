@@ -1,60 +1,34 @@
 # Prebuilt web runtime
 
-`oe_player.js` + `oe_player.wasm` are the game player compiled to WebAssembly
-(WebGL2, WebAudio). `oe package --web` combines them with
-`tools/player/web/index.html` and a game's data (`game.pak`), so making a web
-build of a game needs **no Emscripten SDK** — only `oe.exe`.
+`oe_player.js` + `oe_player.wasm` are the shared WebAssembly/WebGL2/WebAudio player.
+`oe package --web` combines them with index.html and game.pak; packaging needs no Emscripten.
 
-The runtime does not depend on the game: every project uses the same files.
+- Built: 2026-10-03, Emscripten 6.0.10, Release (`build_web.bat`, BINARYEN_CORES=1).
+- Source: the networking M8a/M8b commit containing this README (base 5a3f714 plus M8 changes).
+  Includes protocol v3 sessions, lockstep/native rollback, authoritative replication/prediction,
+  Lua lobby controls, loopback previews/fault controls and network on-screen action sampling.
+  Existing saves, skeletal animation, particles, gamepads, multi-touch and postprocessing remain
+  included. Portable surface shader graph/compiler/material binding from the current source
+  is included too; packaged browser shader-graph visual verification remains separately pending.
+- Validation: Windows 135 tests; Wasm/Node 123 registered tests, zero failed checks (native
+  sockets and GPU tests skip). Real packaged NetArena WebGL2 browser client joined a native
+  WebSocket dedicated server, readied, moved, collected a crystal, received score/HUD and reset
+  the round with zero Lua errors. JS callback bounds/cleanup tests pass.
+- Browser can join binary WebSocket sessions, but cannot host or use raw UDP/TCP. Android
+  runtimes are separate and remain pending. See [NETWORK_SAMPLES.md](../../docs/NETWORK_SAMPLES.md).
+- Binaryen's parallel optimizer crashes on this Windows host; use BINARYEN_CORES=1.
 
-- Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
-- Engine source: commit 0ea84f2 (P6.3a directional FXAA and highlight bloom).
-  Includes PostProcess settings, optional vignette, HDR scene buffers, exposure
-  and Reinhard tone mapping plus two-pass highlight bloom in both renderers,
-  optional directional FXAA, UI/selection separation and neutral default behavior,
-  particle billboards/sample effects, gamepad input
-  and web multi-touch. Windows tests pass 83 cases; Node/WASM passes 79.
-  D3D11/software comparison and real CLI screenshots were checked.
-  Browser WebGL2 verifies Reinhard, neutral/HDR transitions and zero exposure
-  with HUD separation. Bloom on/off, canvas resizing and vignette/neutral
-  transitions are also verified through the packaged WebGL2 player.
-  FXAA is tested on Windows and WASM; packaged WebGL2 FXAA and sample
-  controls remain pending in docs/POSTPROCESS.md.
-  P1 saves, P2 skeletal animation and P3.1 particle simulation remain included.
-  P3 rendering, P4 gamepads and P5 touch adapters are included in this runtime.
-- On this Windows host Binaryen's parallel optimizer crashed; the successful
-  rebuild used `BINARYEN_CORES=1`.
+## Rebuild
 
-## When to rebuild
-
-Pending after PR #22: rebuild this runtime with the portable surface shader graph
-compiler, material binding and graph-aware shadow/selection passes. The committed
-player still uses `0ea84f2` and cannot render graph materials. Verify a packaged
-procedural material in WebGL2 after rebuilding; see P6.4c in
-[POSTPROCESS.md](../../docs/POSTPROCESS.md).
-
-Rebuild after changing engine C++ code that the player uses (scene format,
-components, systems, scripting, physics, rendering, platform/web). Otherwise
-web builds keep running the old engine code.
+Rebuild after changing engine C++ used by the player. Commit both files with the source
+change and update this README. Source/Lua/art-only game edits need packaging, not a runtime build.
 
 ```bat
 set EMSDK=C:\path\to\emsdk
+set BINARYEN_CORES=1
 build_web.bat
 ```
 
-`build_web.bat` / `build_web.sh` write the result to `build/bin/web/` and copy
-it here. Commit the two files together with the engine change, and update the
-lines above.
-
-`oe package --web` prefers a runtime built locally (`build/bin/web/`) over the
-one in this folder, and reports which one it used (`webRuntime`).
-
-Networking M5c/M6 source adds session protocol v3, native rollback and authoritative replication.
-This committed runtime was not rebuilt (required SDK unavailable); rebuild before packaging games
-using these APIs. Native Windows Release and unit tests do not verify this platform runtime.
-
-Networking M7 source adds dedicated servers, native WebSocket hosting, loopback previews
-and seeded fault controls. These committed binaries have not been refreshed: rebuild
-with the relevant Emscripten/Android SDK before testing the updated player on devices.
-Native Windows server/wire/editor execution is verified; Wasm, Android and POSIX
-execution remains unverified in this environment. See docs/NETWORK.md.
+The build writes build/bin/web and runtime/web. Packaging prefers build/bin/web over this
+committed fallback and reports the selected webRuntime. Enable OE_BUILD_TESTS in build-web,
+build oe_tests and run `node build-web/bin/oe_tests.js` to repeat the Wasm suite.
