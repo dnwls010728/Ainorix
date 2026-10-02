@@ -286,6 +286,7 @@ void NativeEditor::Impl::ScenePanel() {
     MakeSceneView(scene, aspect, sceneCam);
     RenderView view = MakeLookAtView(cam.Eye(), cam.target, cam.fov, aspect);
     view.clearColor = sceneCam.clearColor;
+    view.shaderTime = static_cast<float>(engine.SimTime());
     view.drawGrid = showGrid;
     view.highlight = Primary();
     if (showColliders) {
@@ -500,6 +501,7 @@ void NativeEditor::Impl::GamePanel() {
     Scene& scene = engine.GetScene();
     RenderView view;
     bool hasCamera = MakeSceneView(scene, static_cast<float>(w) / static_cast<float>(h), view);
+    view.shaderTime = static_cast<float>(engine.SimTime());
     view.drawUI = true;
     engine.AppendDebugLines(view.lines);
     sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kGameSlot);

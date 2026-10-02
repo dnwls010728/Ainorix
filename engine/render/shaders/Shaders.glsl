@@ -61,7 +61,7 @@ void main() {
 
 // Metallic-roughness shading. Must match Lighting::Shade and the pixel loop
 // in SoftwareRenderer.cpp (GpuRendererMatchesSoftware compares them).
-@fs mesh_fs
+@block surface_material
 layout(binding=1) uniform mesh_material {
     vec4 base_color;  // rgb, a: opacity
     vec4 flags;       // x: unlit, y: base texture, z: alpha cutoff (mask; 0 = off), w: double sided
@@ -71,7 +71,77 @@ layout(binding=1) uniform mesh_material {
     vec4 emissive;    // rgb: emissive * intensity, w: flat shading
     vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
     vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets
+    vec4 graph_control; // node count, color output, emissive output (-1 absent), simulation seconds
+    vec4 graph_code[32]; // opcode and three prior-register indices
+    vec4 graph_value[32];
+    vec4 graph_uniform[8];
 };
+@end
+
+@block surface_graph
+// Instruction numbering and finite semantics match ShaderGraph.cpp.
+vec4 GraphFinite(vec4 value) {
+    for (int channel = 0; channel < 4; ++channel) {
+        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
+    }
+    return value;
+}
+
+void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission) {
+    emission = vec3(0.0);
+    if (graph_control.x < 0.5) return;
+    vec4 registers[32];
+    for (int i = 0; i < 32; ++i) registers[i] = vec4(0.0);
+    for (int i = 0; i < 32; ++i) {
+        if (i >= int(graph_control.x)) break;
+        ivec4 code = ivec4(graph_code[i]);
+        vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
+        vec4 value = vec4(0.0);
+        if (code.x == 0) value = graph_value[i];
+        else if (code.x == 1) value = graph_uniform[int(graph_value[i].x)];
+        else if (code.x == 2) value = vec4(uv,0.0,0.0);
+        else if (code.x == 3) value = vec4(v_wpos,1.0);
+        else if (code.x == 4) value = vec4(normal,0.0);
+        else if (code.x == 5) value = vec4(graph_control.w);
+        else if (code.x == 6) value = vec4(base,alpha);
+        // Explicit level zero matches the software texture sampler and avoids
+        // undefined implicit derivatives in data-dependent instruction flow.
+        else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
+        else if (code.x == 8) value = a+b;
+        else if (code.x == 9) value = a-b;
+        else if (code.x == 10) value = a*b;
+        else if (code.x == 11) {
+            value = vec4(b.x == 0.0 ? 0.0 : a.x/b.x, b.y == 0.0 ? 0.0 : a.y/b.y,
+                         b.z == 0.0 ? 0.0 : a.z/b.z, b.w == 0.0 ? 0.0 : a.w/b.w);
+        }
+        else if (code.x == 12) value = min(a,b);
+        else if (code.x == 13) value = max(a,b);
+        else if (code.x == 14) value = sin(a);
+        else if (code.x == 15) value = cos(a);
+        else if (code.x == 16) value = floor(a);
+        else if (code.x == 17) value = fract(a);
+        else if (code.x == 18) value = abs(a);
+        else if (code.x == 19) value = min(max(a,b),c);
+        else if (code.x == 20) value = a*(1.0-c)+b*c;
+        else if (code.x == 21) value = step(a,b);
+        else if (code.x == 22) value = vec4(dot(a,b));
+        else if (code.x == 23) value = length(a) > 1e-8 ? a/length(a) : vec4(0.0);
+        else if (code.x == 24) {
+            ivec4 channels = ivec4(graph_value[i]);
+            value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
+        }
+        registers[i] = GraphFinite(value);
+    }
+    vec4 result = registers[int(graph_control.y)];
+    base = max(result.rgb,vec3(0.0));
+    alpha = clamp(result.a,0.0,1.0);
+    if (graph_control.z >= 0.0) emission = registers[int(graph_control.z)].rgb;
+}
+
+@end
+
+@fs mesh_fs
+@include_block surface_material
 
 layout(binding=2) uniform mesh_lights {
     mat4 shadow_vp;
@@ -145,6 +215,8 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
     return (diffuse + F * spec) * ndl;
 }
 
+@include_block surface_graph
+
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
     vec3 base = base_color.rgb;
@@ -154,6 +226,14 @@ void main() {
         base *= texel.rgb;
         alpha *= texel.a;
     }
+    vec3 graphNormal = normalize(v_nrm);
+    if (graph_control.x > 0.5 && emissive.w > 0.5) {
+        vec3 face = normalize(cross(dFdx(v_wpos),dFdy(v_wpos)));
+        graphNormal = dot(face,graphNormal) < 0.0 ? -face : face;
+    }
+    if (flags.w > 0.5 && !gl_FrontFacing) graphNormal = -graphNormal;
+    vec3 graphEmission;
+    SurfaceGraph(uv,graphNormal,base,alpha,graphEmission);
     if (alpha < flags.z) {
         discard;
     }
@@ -232,7 +312,7 @@ void main() {
     if (maps.z > 0.5) {
         em *= texture(sampler2D(emissive_tex, base_smp), uv).rgb;
     }
-    frag_color = vec4(clamp(color + em, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
+    frag_color = vec4(clamp(color + em + graphEmission, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
 }
 @end
 
@@ -282,6 +362,39 @@ void main() {
 
 @program shadow pos_vs depth_fs
 @program solid pos_vs solid_fs
+
+@fs surface_aux_fs
+@include_block surface_material
+layout(binding=0) uniform texture2D base_tex;
+layout(binding=0) uniform sampler base_smp;
+in vec3 v_wpos;
+in vec3 v_nrm;
+in vec4 v_tan;
+in vec2 v_uv;
+out vec4 frag_color;
+@include_block surface_graph
+void main() {
+    vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
+    vec3 base = base_color.rgb;
+    float alpha = base_color.a;
+    if (flags.y > 0.5) {
+        vec4 texel = textureLod(sampler2D(base_tex,base_smp),uv,0.0);
+        base *= texel.rgb;
+        alpha *= texel.a;
+    }
+    vec3 normal = normalize(v_nrm);
+    if (emissive.w > 0.5) {
+        vec3 face = normalize(cross(dFdx(v_wpos),dFdy(v_wpos)));
+        normal = dot(face,normal) < 0.0 ? -face : face;
+    }
+    if (!gl_FrontFacing) normal = -normal;
+    vec3 emission;
+    SurfaceGraph(uv,normal,base,alpha,emission);
+    if (alpha < flags.z) discard;
+    frag_color = vec4(1.0);
+}
+@end
+@program surface_aux mesh_vs surface_aux_fs
 
 // ----- Vertex-colored lines (grid, colliders, debug.draw) and screen-space UI -----
 
@@ -401,18 +514,26 @@ layout(binding=0) uniform composite_params {
     vec4 outline_color;  // rgb; a > 0 enables the outline
     vec4 vignette;       // x: strength, y: radius, z: softness; zero strength leaves color unchanged
     vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 0 = disabled
+    vec4 bloom_strength; // x: blurred HDR highlight strength, before exposure
+    vec4 post_stage;     // x: source already processed, y: FXAA enabled, zw: reciprocal source size
 };
 
 layout(binding=0) uniform texture2D scene_tex;
 layout(binding=0) uniform sampler scene_smp;
 layout(binding=1) uniform texture2D mask_tex;
 layout(binding=1) uniform sampler mask_smp;
+layout(binding=2) uniform texture2D bloom_tex;
+layout(binding=2) uniform sampler bloom_smp;
 
 out vec4 frag_color;
 
-void main() {
-    vec2 uv = gl_FragCoord.xy / target.xy;
+vec3 DisplayColor(vec2 uv) {
     vec3 c = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
+    if (post_stage.x > 0.5) return c;
+    if (bloom_strength.x > 0.0) {
+        c += texture(sampler2D(bloom_tex, bloom_smp), uv).rgb * bloom_strength.x;
+        c = clamp(c, 0.0, 65504.0);
+    }
     c *= tone_mapping.x;
     if (tone_mapping.y > 0.5) c = c / (vec3(1.0) + c);
     c = clamp(c, 0.0, 1.0);
@@ -420,6 +541,34 @@ void main() {
         float t = clamp((length(uv * 2.0 - 1.0) - vignette.y) / vignette.z, 0.0, 1.0);
         c *= 1.0 - vignette.x * t * t * (3.0 - 2.0 * t);
     }
+    return c;
+}
+
+float FxaaLuma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+vec3 FxaaColor(vec2 uv) {
+    vec2 step_uv = post_stage.zw;
+    vec3 center = DisplayColor(uv);
+    float m = FxaaLuma(center);
+    float nw = FxaaLuma(DisplayColor(uv + vec2(-1.0,-1.0) * step_uv));
+    float ne = FxaaLuma(DisplayColor(uv + vec2( 1.0,-1.0) * step_uv));
+    float sw = FxaaLuma(DisplayColor(uv + vec2(-1.0, 1.0) * step_uv));
+    float se = FxaaLuma(DisplayColor(uv + vec2( 1.0, 1.0) * step_uv));
+    float lo = min(m, min(min(nw,ne), min(sw,se)));
+    float hi = max(m, max(max(nw,ne), max(sw,se)));
+    if (hi - lo < max(1.0 / 32.0, hi * 0.125)) return center;
+    vec2 dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    float reduce = max((nw + ne + sw + se) * (0.25 * 0.125), 1.0 / 128.0);
+    dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), vec2(-8.0), vec2(8.0)) * step_uv;
+    vec3 a = (DisplayColor(uv - dir / 6.0) + DisplayColor(uv + dir / 6.0)) * 0.5;
+    vec3 b = a * 0.5 + (DisplayColor(uv - dir * 0.5) + DisplayColor(uv + dir * 0.5)) * 0.25;
+    float lb = FxaaLuma(b);
+    return lb < lo || lb > hi ? a : b;
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / target.xy;
+    vec3 c = post_stage.y > 0.5 ? FxaaColor(uv) : DisplayColor(uv);
     if (outline_color.a > 0.0) {
         ivec2 size = textureSize(sampler2D(mask_tex, mask_smp), 0);
         ivec2 p = ivec2(uv * vec2(size));
@@ -441,3 +590,37 @@ void main() {
 @end
 
 @program composite fsq_vs composite_fs
+
+// Full-resolution separable tent filter. Must match SoftwareRenderer's bloom
+// passes: brightest-channel extraction preserves hue, integer weights and
+// clamped texel coordinates preserve constant highlights at screen borders.
+@fs bloom_fs
+layout(binding=0) uniform bloom_params {
+    vec4 bloom_filter; // x: radius (1..32), y: threshold, z: 0 horizontal/extract, 1 vertical
+};
+layout(binding=0) uniform texture2D bloom_source_tex;
+layout(binding=0) uniform sampler bloom_source_smp;
+out vec4 frag_color;
+
+void main() {
+    int radius = int(bloom_filter.x);
+    ivec2 size = textureSize(sampler2D(bloom_source_tex, bloom_source_smp), 0);
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    vec3 sum = vec3(0.0);
+    for (int delta = -32; delta <= 32; ++delta) {
+        if (abs(delta) <= radius) {
+            ivec2 q = p + (bloom_filter.z < 0.5 ? ivec2(delta, 0) : ivec2(0, delta));
+            q = clamp(q, ivec2(0), size - ivec2(1));
+            vec3 c = texelFetch(sampler2D(bloom_source_tex, bloom_source_smp), q, 0).rgb;
+            if (bloom_filter.z < 0.5) {
+                float peak = max(max(c.r, c.g), c.b);
+                c = peak > bloom_filter.y ? c * ((peak - bloom_filter.y) / peak) : vec3(0.0);
+            }
+            sum += c * float(radius + 1 - abs(delta));
+        }
+    }
+    frag_color = vec4(sum / float((radius + 1) * (radius + 1)), 1.0);
+}
+@end
+
+@program bloom fsq_vs bloom_fs

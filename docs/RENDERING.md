@@ -163,7 +163,8 @@ outlines. Defaults leave existing frames unchanged; picking and depth buffers
 are unaffected. Free/editor Scene cameras do not inherit game-camera effects.
 Exposure and optional Reinhard tone mapping preserve HDR lighting/emissive values
 before conversion to display color in both renderers. Neutral settings retain
-the original frame hashes. Bloom, FXAA and custom shader materials remain later P6 milestones;
+the original frame hashes. Optional bloom extracts and blurs HDR highlights before
+tone mapping in both renderers. FXAA and custom shader materials remain later P6 milestones;
 see [POSTPROCESS.md](POSTPROCESS.md) for controls and verification.
 
 ## Debug drawing
@@ -184,3 +185,8 @@ Software: the main pass and the shadow pass are split into horizontal bands rend
 ## Sample
 
 `samples/Showcase`: the Khronos "Fox" glTF (CC0 model, CC-BY rig — see `assets/models/CREDITS.md`) as a player-controlled character with a follow camera, procedural textures, a shadowing sun and two colored point lights.
+
+Camera effect presets use keys 1 Off, 2 Tone, 3 Bloom, 4 Vignette, 5 FXAA,
+6 All. Startup stays neutral; the HUD shows the selected mode. Presets use
+the reflected PostProcess component through Lua scene commands; see
+[POSTPROCESS.md](POSTPROCESS.md) for settings and verification.

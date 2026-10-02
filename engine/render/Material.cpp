@@ -33,6 +33,8 @@ const FieldDoc kFields[] = {
     {"pixelArt", "Nearest-neighbour texture sampling"},
     {"tiling", "UV repeat [x,y]"},
     {"offset", "UV offset [x,y]"},
+    {"shader", "Project-relative *.shader.json surface graph (empty disables it)"},
+    {"shaderUniforms", "Named scalar/four-vector overrides of graph uniform defaults"},
 };
 
 bool ReadColor(const Json& v, Color& c) {
@@ -65,7 +67,8 @@ const char* ToString(AlphaMode mode) {
     return "opaque";
 }
 
-bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Material& out, std::string* error) {
+bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Material& out, std::string* error,
+                      const ShaderLoader& loadShader) {
     auto fail = [&](const std::string& msg) {
         if (error) *error = msg;
         return false;
@@ -128,11 +131,24 @@ bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Materi
         else if (k == "pixelArt") ok = boolean(m.pixelArt);
         else if (k == "tiling") ok = pair(m.tiling);
         else if (k == "offset") ok = pair(m.offset);
+        else if (k == "shader") {
+            if (!v.isString()) ok = fail("'shader' must be a *.shader.json path");
+            else m.shaderPath = v.asString();
+        }
+        else if (k == "shaderUniforms") ok = v.isObject() || fail("'shaderUniforms' must be an object");
         else ok = fail("unknown material field '" + k + "'");
         if (!ok) {
             if (error && error->empty()) *error = "'" + k + "' has the wrong type";
             return false;
         }
+    }
+    if (!m.shaderPath.empty()) {
+        std::string shaderError;
+        m.shader = loadShader ? loadShader(m.shaderPath, &shaderError) : nullptr;
+        if (!m.shader) return fail("'shader': " + (shaderError.empty() ? "no shader loader for " + m.shaderPath : shaderError));
+        if (!ShaderUniforms(*m.shader, json["shaderUniforms"], m.shaderUniforms, &shaderError)) return fail(shaderError);
+    } else if (json["shaderUniforms"].isObject() && json["shaderUniforms"].size() != 0) {
+        return fail("'shaderUniforms' requires a shader");
     }
     m.opacity = Clamp(m.opacity, 0.0f, 1.0f);
     m.metallic = Clamp(m.metallic, 0.0f, 1.0f);
@@ -166,6 +182,8 @@ Json DefaultMaterialJson() {
     j["pixelArt"] = d.pixelArt;
     j["tiling"] = Json(Json::Array{1, 1});
     j["offset"] = Json(Json::Array{0, 0});
+    j["shader"] = "";
+    j["shaderUniforms"] = Json::MakeObject();
     return j;
 }
 

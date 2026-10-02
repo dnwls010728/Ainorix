@@ -646,6 +646,26 @@ Pairs touching after the last simulation step (collisions and trigger overlaps).
 
 Physics backend, gravity, body counts and warnings (e.g. invalid shapes).
 
+## shader
+
+### `shader.create`
+
+Create a validated portable surface shader graph (*.shader.json).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project-relative .shader.json file. |
+| `graph` | object | yes | Ordered nodes, color output, optional emissive output and named uniform defaults. |
+| `overwrite` | boolean |  | Replace an existing graph. |
+
+### `shader.check`
+
+Validate a surface shader graph and list its instructions/outputs/uniform names.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project-relative .shader.json file. |
+
 ## material
 
 ### `material.create`
@@ -671,7 +691,7 @@ Change fields of a material file (other fields keep their values). Every mesh us
 
 ### `asset.list`
 
-Project files by kind (model, texture, material, audio, font, script, prefab, scene).
+Project files by kind (model, texture, material, shader, audio, font, script, prefab, scene).
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -821,6 +841,10 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 |---|---|---|---|
 | `exposure` | float | `1` | Scene brightness multiplier before tone mapping. 1 preserves brightness. |
 | `toneMapping` | string | `"none"` | none (disabled) or reinhard (compress HDR channels as c / (1 + c)). |
+| `bloom` | float | `0` | Blurred highlight strength before exposure/tone mapping. 0 disables bloom. |
+| `bloomThreshold` | float | `1` | Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue. |
+| `bloomRadius` | int | `8` | Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional. |
+| `fxaa` | bool | `false` | Optional directional FXAA on display scene color before UI and selection outlines; disabled by default. |
 | `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
 | `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
 | `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |

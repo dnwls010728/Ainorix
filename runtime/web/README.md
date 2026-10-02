@@ -8,20 +8,30 @@ build of a game needs **no Emscripten SDK** — only `oe.exe`.
 The runtime does not depend on the game: every project uses the same files.
 
 - Built with: Emscripten 6.0.10, Release (`build_web.bat`), 2026-10-02.
-- Engine source: commit 6d76ac9 (combined PRs #18-#21).
+- Engine source: commit 0ea84f2 (P6.3a directional FXAA and highlight bloom).
   Includes PostProcess settings, optional vignette, HDR scene buffers, exposure
-  and Reinhard tone mapping in both renderers, UI/selection separation and
-  neutral default behavior, particle billboards/sample effects, gamepad input
-  and web multi-touch. Combined Windows tests pass 81 cases; Node/WASM passes 77.
+  and Reinhard tone mapping plus two-pass highlight bloom in both renderers,
+  optional directional FXAA, UI/selection separation and neutral default behavior,
+  particle billboards/sample effects, gamepad input
+  and web multi-touch. Windows tests pass 83 cases; Node/WASM passes 79.
   D3D11/software comparison and real CLI screenshots were checked.
   Browser WebGL2 verifies Reinhard, neutral/HDR transitions and zero exposure
-  with HUD separation. WebGL2 vignette execution remains pending.
+  with HUD separation. Bloom on/off, canvas resizing and vignette/neutral
+  transitions are also verified through the packaged WebGL2 player.
+  FXAA is tested on Windows and WASM; packaged WebGL2 FXAA and sample
+  controls remain pending in docs/POSTPROCESS.md.
   P1 saves, P2 skeletal animation and P3.1 particle simulation remain included.
   P3 rendering, P4 gamepads and P5 touch adapters are included in this runtime.
 - On this Windows host Binaryen's parallel optimizer crashed; the successful
   rebuild used `BINARYEN_CORES=1`.
 
 ## When to rebuild
+
+Pending after PR #22: rebuild this runtime with the portable surface shader graph
+compiler, material binding and graph-aware shadow/selection passes. The committed
+player still uses `0ea84f2` and cannot render graph materials. Verify a packaged
+procedural material in WebGL2 after rebuilding; see P6.4c in
+[POSTPROCESS.md](../../docs/POSTPROCESS.md).
 
 Rebuild after changing engine C++ code that the player uses (scene format,
 components, systems, scripting, physics, rendering, platform/web). Otherwise

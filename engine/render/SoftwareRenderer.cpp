@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "render/Mesh.h"
 #include "render/PostProcess.h"
+#include "render/Fxaa.h"
 #include "render/RenderScene.h"
 #include "render/Renderer.h"
 #include "render/UI.h"
@@ -171,6 +172,7 @@ struct RasterMaterial {
     EntityId id = kNullEntity;
     float uvOffset[2] = {0, 0};  // item uv rect (sprite frames) applied before the material tiling
     float uvScale[2] = {1, 1};
+    float shaderTime = 0;
 };
 
 enum class Cull { Back, Front, None };
@@ -282,7 +284,7 @@ private:
                 float z = w0 * s0.z + w1 * s1.z + w2 * s2.z;
                 size_t idx = row + static_cast<size_t>(x);
                 if (z < 0.0f || z >= depth_[idx]) continue;
-                if (!lighting) {
+                if (!lighting && !(mat.m && mat.m->shader && mat.m->alphaMode == AlphaMode::Mask)) {
                     depth_[idx] = z;
                     continue;
                 }
@@ -302,7 +304,31 @@ private:
                     base = base * m.baseTexture->Sample(u, v, m.pixelArt, &ta);
                     alpha *= ta;
                 }
+                Color shaderEmissive(0, 0, 0);
+                if (m.shader) {
+                    ShaderInputs input;
+                    input.uv = Vec4(u, v, 0, 0);
+                    input.position = Vec4(a.wpos * p0 + b.wpos * p1 + c.wpos * p2, 1);
+                    Vec3 normal = mat.flat ? faceN : Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
+                    if (backFace) normal = -normal;
+                    input.normal = Vec4(normal, 0);
+                    input.baseColor = Vec4(base.r, base.g, base.b, alpha);
+                    input.time = mat.shaderTime;
+                    input.texture = [&m](float x, float y) {
+                        float ta = 1;
+                        const Color color = m.baseTexture ? m.baseTexture->Sample(x, y, m.pixelArt, &ta) : Color(1, 1, 1);
+                        return Vec4(color.r, color.g, color.b, ta);
+                    };
+                    const ShaderSurface surface = EvaluateShaderGraph(*m.shader, input, m.shaderUniforms);
+                    base = Color(std::max(0.0f, surface.color.x), std::max(0.0f, surface.color.y), std::max(0.0f, surface.color.z));
+                    alpha = Clamp(surface.color.w, 0, 1);
+                    shaderEmissive = Color(surface.emissive.x, surface.emissive.y, surface.emissive.z);
+                }
                 if (m.alphaMode == AlphaMode::Mask && alpha < m.alphaCutoff) continue;  // cut out: no depth, color or id
+                if (!lighting) {
+                    depth_[idx] = z;
+                    continue;
+                }
                 if (!mat.blend) depth_[idx] = z;
                 Color out = base;
                 if (!m.unlit) {
@@ -333,7 +359,7 @@ private:
                 }
                 Color em = m.emissive * m.emissiveIntensity;
                 if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr);
-                out = out + em;
+                out = out + em + shaderEmissive;
                 if (mat.blend) {
                     alpha = Clamp(alpha, 0.0f, 1.0f);
                     if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(out) * alpha);
@@ -489,12 +515,34 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                     if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
                     const Mesh& m = *items[dc.item].mesh;
                     const Submesh& sub = m.submeshes[dc.submesh];
+                    const RenderItem& item = items[dc.item];
+                    const bool surfaceAlpha = dc.material.shader && dc.material.alphaMode == AlphaMode::Mask;
+                    RasterMaterial material;
+                    material.m = &dc.material;
+                    material.flat = item.flat;
+                    material.shaderTime = view.shaderTime;
+                    material.uvOffset[0] = item.uvOffset[0];
+                    material.uvOffset[1] = item.uvOffset[1];
+                    material.uvScale[0] = item.uvScale[0];
+                    material.uvScale[1] = item.uvScale[1];
                     for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
                         Vtx v[3];
-                        for (int j = 0; j < 3; ++j) v[j].clip = lightClip[dc.item][m.indices[k + static_cast<uint32_t>(j)]];
+                        for (int j = 0; j < 3; ++j) {
+                            const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
+                            v[j].clip = lightClip[dc.item][vertex];
+                            if (surfaceAlpha) {
+                                v[j].wpos = transformed[dc.item].wpos[vertex];
+                                v[j].nrm = transformed[dc.item].nrm[vertex];
+                                if (vertex * 2 + 1 < m.uvs.size()) {
+                                    v[j].u = m.uvs[vertex * 2];
+                                    v[j].v = m.uvs[vertex * 2 + 1];
+                                }
+                            }
+                        }
                         // Back faces into the shadow map: avoids self-shadowing acne on lit faces
                         // (double-sided surfaces put both sides in).
-                        shadowRaster.Draw(v, none, nullptr, dc.material.doubleSided ? Cull::None : Cull::Front);
+                        shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
+                                          dc.material.doubleSided ? Cull::None : Cull::Front);
                     }
                 }
             });
@@ -521,6 +569,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         const Submesh& sub = m.submeshes[dc.submesh];
         RasterMaterial mat;
         mat.m = &dc.material;
+        mat.shaderTime = view.shaderTime;
         mat.flat = it.flat;
         mat.blend = dc.blend;
         mat.id = it.id;
@@ -569,6 +618,37 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     }
     for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
 
+    std::vector<Color> bloom;
+    if (post.bloom > 0) {
+        const int radius = post.bloomRadius;
+        const float normalization = static_cast<float>((radius + 1) * (radius + 1));
+        std::vector<Color> horizontal(hdr.size());
+        bloom.resize(hdr.size());
+        // Fuse extraction into the horizontal pass, matching bloom_fs. Edge pixels
+        // are repeated (clamp), so a constant highlight keeps its energy at borders.
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                Color sum(0, 0, 0);
+                for (int delta = -radius; delta <= radius; ++delta) {
+                    const size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(target.width) +
+                                         static_cast<size_t>(std::clamp(x + delta, 0, target.width - 1));
+                    sum = sum + BloomHighlight(hdr[pixel], post.bloomThreshold) * static_cast<float>(radius + 1 - std::abs(delta));
+                }
+                horizontal[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] = sum * (1 / normalization);
+            }
+        });
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                Color sum(0, 0, 0);
+                for (int delta = -radius; delta <= radius; ++delta) {
+                    const size_t pixel = static_cast<size_t>(std::clamp(y + delta, 0, target.height - 1)) *
+                                         static_cast<size_t>(target.width) + static_cast<size_t>(x);
+                    sum = sum + horizontal[pixel] * static_cast<float>(radius + 1 - std::abs(delta));
+                }
+                bloom[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] = sum * (1 / normalization);
+            }
+        });
+    }
     if (!hdr.empty() || post.vignette > 0) {
         ParallelBands(target.height, [&](int, int y0, int y1) {
             for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
@@ -578,9 +658,32 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                                                    (static_cast<float>(y) + 0.5f) / static_cast<float>(target.height));
                 Color display = hdr.empty() ? Color(static_cast<float>(c & 255) / 255,
                                                      static_cast<float>((c >> 8) & 255) / 255,
-                                                     static_cast<float>((c >> 16) & 255) / 255) : ToneMap(hdr[pixel], post);
+                                                     static_cast<float>((c >> 16) & 255) / 255) :
+                                ToneMap(hdr[pixel] + (bloom.empty() ? Color(0, 0, 0) : bloom[pixel] * post.bloom), post);
                 target.color[pixel] = Pack(display * factor);
             }
+        });
+    }
+    if (post.fxaa) {
+        const std::vector<uint32_t> source = target.color;
+        auto sample = [&](float x, float y) {
+            x = Clamp(x, 0, static_cast<float>(target.width - 1));
+            y = Clamp(y, 0, static_cast<float>(target.height - 1));
+            const int x0 = static_cast<int>(std::floor(x)), y0 = static_cast<int>(std::floor(y));
+            const int x1 = std::min(x0 + 1, target.width - 1), y1 = std::min(y0 + 1, target.height - 1);
+            auto read = [&](int px, int py) {
+                const uint32_t c = source[static_cast<size_t>(py) * static_cast<size_t>(target.width) + static_cast<size_t>(px)];
+                return Color(static_cast<float>(c & 255) / 255, static_cast<float>((c >> 8) & 255) / 255,
+                             static_cast<float>((c >> 16) & 255) / 255);
+            };
+            const float tx = x - static_cast<float>(x0), ty = y - static_cast<float>(y0);
+            return (read(x0, y0) * (1 - tx) + read(x1, y0) * tx) * (1 - ty) +
+                   (read(x0, y1) * (1 - tx) + read(x1, y1) * tx) * ty;
+        };
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x)
+                target.color[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] =
+                    Pack(FxaaPixel(static_cast<float>(x), static_cast<float>(y), sample));
         });
     }
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);

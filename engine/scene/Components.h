@@ -259,6 +259,10 @@ struct PostProcess {
     static constexpr const char* kDoc = "Optional screen effects on the active Camera. Defaults preserve existing frames; UI and selection outlines are unaffected.";
     float exposure = 1.0f;         // multiplier applied before tone mapping; one is neutral
     std::string toneMapping = "none";  // none or reinhard (per-channel c / (1 + c))
+    float bloom = 0.0f;            // blurred highlight strength; zero disables bloom
+    float bloomThreshold = 1.0f;   // threshold in unexposed scene RGB, using the largest channel
+    int bloomRadius = 8;           // separable tent filter radius in scene pixels
+    bool fxaa = false;             // directional edge smoothing after color effects, before overlays
     float vignette = 0.0f;          // edge darkening strength; zero disables the effect
     float vignetteRadius = 0.75f;   // normalized distance from screen center
     float vignetteSoftness = 0.5f;  // smooth transition width
@@ -266,6 +270,13 @@ struct PostProcess {
         FieldInfo& exposureField = f.Add("exposure", &PostProcess::exposure, "Scene brightness multiplier before tone mapping. 1 preserves brightness.");
         exposureField.hasRange = true; exposureField.min = 0; exposureField.max = 32;
         f.Add("toneMapping", &PostProcess::toneMapping, "none (disabled) or reinhard (compress HDR channels as c / (1 + c)).").options = {"none", "reinhard"};
+        FieldInfo& bloomStrength = f.Add("bloom", &PostProcess::bloom, "Blurred highlight strength before exposure/tone mapping. 0 disables bloom.");
+        bloomStrength.hasRange = true; bloomStrength.min = 0; bloomStrength.max = 4;
+        FieldInfo& threshold = f.Add("bloomThreshold", &PostProcess::bloomThreshold, "Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue.");
+        threshold.hasRange = true; threshold.min = 0; threshold.max = 32;
+        FieldInfo& bloomRadiusField = f.Add("bloomRadius", &PostProcess::bloomRadius, "Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional.");
+        bloomRadiusField.hasRange = true; bloomRadiusField.min = 1; bloomRadiusField.max = 32;
+        f.Add("fxaa", &PostProcess::fxaa, "Optional directional FXAA on display scene color before UI and selection outlines; disabled by default.");
         FieldInfo& strength = f.Add("vignette", &PostProcess::vignette, "Edge darkening strength: 0 disables, 1 is fully dark outside the transition.");
         strength.hasRange = true; strength.min = 0; strength.max = 1;
         FieldInfo& radius = f.Add("vignetteRadius", &PostProcess::vignetteRadius, "Normalized radius: center 0, edge midpoint 1, corner sqrt(2).");

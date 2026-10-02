@@ -30,6 +30,8 @@ public:
     std::shared_ptr<const Texture> GetTexture(const std::string& path, std::string* error = nullptr);
     // Material file (*.mat.json). nullptr + error on failure.
     std::shared_ptr<const Material> GetMaterial(const std::string& path, std::string* error = nullptr);
+    // Portable surface graph (*.shader.json); validated and cached including failures.
+    std::shared_ptr<const ShaderGraph> GetShader(const std::string& path, std::string* error = nullptr);
     // UI font: "default" (built-in Roboto) or a .ttf/.otf/.ttc path. nullptr + error on failure.
     std::shared_ptr<FontFace> GetFont(const std::string& path, std::string* error = nullptr);
     // Tileset file (*.tileset.json: image, grid, tile rules). nullptr + error on failure.
@@ -57,6 +59,7 @@ private:
     Entry<Mesh> LoadMesh(const std::string& path);
     Entry<Texture> LoadTexture(const std::string& path);
     Entry<Material> LoadMaterial(const std::string& path);
+    Entry<ShaderGraph> LoadShader(const std::string& path);
     Entry<Tileset> LoadTileset(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
@@ -69,6 +72,7 @@ private:
     std::map<std::string, Entry<Mesh>> meshes_;
     std::map<std::string, Entry<Texture>> textures_;
     std::map<std::string, Entry<Material>> materials_;
+    std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;
     std::map<std::string, FontEntry> fonts_;
 };

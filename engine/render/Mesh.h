@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Math.h"
+#include "render/ShaderGraph.h"
 
 namespace oe {
 
@@ -46,6 +47,9 @@ struct Material {
     bool pixelArt = false;     // nearest-neighbour sampling
     float tiling[2] = {1, 1};  // uv = uv * tiling + offset
     float offset[2] = {0, 0};
+    std::string shaderPath;                                  // project-relative surface graph asset
+    std::shared_ptr<const ShaderGraph> shader;                // null retains the standard material
+    std::array<Vec4, ShaderGraph::kMaxUniforms> shaderUniforms{};  // validated graph defaults/overrides
 
     bool Blended() const { return alphaMode == AlphaMode::Blend; }
 };

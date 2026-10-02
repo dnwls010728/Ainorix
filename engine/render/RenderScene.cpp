@@ -88,7 +88,7 @@ Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
         m.alphaCutoff = alphaCutoff;
     }
     if (blend || m.opacity < 1.0f) m.alphaMode = AlphaMode::Blend;
-    if (!m.baseTexture && m.alphaMode == AlphaMode::Mask) m.alphaMode = AlphaMode::Opaque;
+    if (!m.baseTexture && !m.shader && m.alphaMode == AlphaMode::Mask) m.alphaMode = AlphaMode::Opaque;
     return m;
 }
 
@@ -122,7 +122,7 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
             dc.submesh = s;
             dc.material = it.SubmeshMaterial(it.mesh->submeshes[s]);
             dc.blend = dc.material.Blended();
-            if (dc.material.opacity <= 0.0f && dc.blend) continue;
+            if (dc.material.opacity <= 0.0f && dc.blend && !dc.material.shader) continue;
             if (dc.blend) {
                 blended.push_back(std::move(dc));
                 distance.push_back(d);

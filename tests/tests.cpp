@@ -27,6 +27,7 @@
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
 #include "render/RenderScene.h"
+#include "render/ShaderGraph.h"
 #include "render/UI.h"
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
@@ -2015,6 +2016,30 @@ TEST(ShowcaseAnimationControls) {
     std::printf("  animated Showcase hash %016llx\n", static_cast<unsigned long long>(first));
 }
 
+TEST(ShowcasePostProcessControls) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+    const EntityId camera = e.GetScene().FindByName("Main Camera");
+    CHECK(!e.GetScene().Get<PostProcess>(camera)->fxaa);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    for (int mode : {2, 3, 4, 5, 6, 1}) {
+        const std::string key = std::to_string(mode);
+        CHECK(e.Call("input.key", Json::parse("{\"key\":\"" + key + "\",\"down\":true}"))["ok"].asBool());
+        Call(e, "sim.step", R"J({"frames":1})J");
+        const PostProcess& p = *e.GetScene().Get<PostProcess>(camera);
+        const bool hdr = mode == 2 || mode == 3 || mode == 6;
+        CHECK(p.exposure == (hdr ? 0.75f : 1) && p.toneMapping == (hdr ? "reinhard" : "none"));
+        CHECK((p.bloom > 0) == (mode == 3 || mode == 6));
+        CHECK((p.vignette > 0) == (mode == 4 || mode == 6));
+        CHECK(p.fxaa == (mode == 5 || mode == 6));
+        CHECK(e.Call("input.key", Json::parse("{\"key\":\"" + key + "\",\"down\":false}"))["ok"].asBool());
+        Call(e, "sim.step", R"J({"frames":1})J");
+    }
+    CHECK(e.GetScene().Get<UIText>(e.GetScene().FindByName("Hint"))->text.find("All: Off") != std::string::npos);
+    CHECK(e.Scripts().Errors().empty());
+}
+
 TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;
@@ -2663,6 +2688,528 @@ TEST(ParticleRenderers) {
     Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
     e.Renderer().Render(e.GetScene(), view, again);
     CHECK((again.color[90 * 320 + 160] & 255) > 250 && ((again.color[90 * 320 + 160] >> 8) & 255) == 0);
+}
+
+TEST(CameraBloom) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("camera_bloom"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"bright.mat.json","values":{"baseColor":[0,0,0],"unlit":true,"emissive":[1,0.5,0.25],"emissiveIntensity":8}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[0,0,0]},"PostProcess":{"exposure":0.25,"toneMapping":"reinhard"}}})J");
+    Call(e, "entity.create", R"J({"name":"Bright","components":{"MeshRenderer":{"material":"bright.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,1,1],"opacity":1}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    RenderTarget original, effect, again;
+    for (RenderTarget* t : {&original, &effect, &again}) t->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, original);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"bloom":1,"bloomThreshold":1,"bloomRadius":8}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, effect);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(effect.Hash() == again.Hash() && effect.Hash() != original.Hash());
+    CHECK(effect.ids == original.ids && effect.depth == original.depth);
+    CHECK(effect.color[10 * 128 + 10] == original.color[10 * 128 + 10]);
+    CHECK((effect.color[21 * 128 + 21] & 0xFFFFFF) == 0);  // white UI never seeds a glow
+    int glow = 0;
+    for (size_t i = 0; i < original.color.size(); ++i) {
+        if ((original.color[i] & 0xFFFFFF) == 0 && (effect.color[i] & 255) > 0) {
+            ++glow;
+            const uint32_t c = effect.color[i];
+            CHECK((c & 255) >= ((c >> 8) & 255) && ((c >> 8) & 255) >= ((c >> 16) & 255));
+        }
+    }
+    CHECK(glow > 50);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    const PostProcess* saved = restored.Get<PostProcess>(restored.FindByName("Camera"));
+    CHECK(saved && saved->bloom == 1 && saved->bloomThreshold == 1 && saved->bloomRadius == 8);
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == original.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    view.postProcess.bloomThreshold = 32;
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == original.Hash());  // dim scene lies completely below the threshold
+    view.postProcess.bloomThreshold = 1;
+    const bool gpu = e.EnableGpu(nullptr, &err);
+    if (!gpu) std::printf("  SKIP bloom GPU comparison (%s)\n", err.c_str());
+    for (int radius : {1, 8, 32}) for (int width : {128, 97}) {
+        view.postProcess.bloomRadius = radius;
+        effect.Resize(width, width == 128 ? 72 : 55);
+        again.Resize(effect.width, effect.height);
+        e.Renderer().Render(e.GetScene(), view, effect);
+        if (gpu) {
+            e.Gpu()->Render(e.GetScene(), view, again);
+            double error = 0;
+            for (size_t i = 0; i < effect.color.size(); ++i) for (int shift : {0, 8, 16})
+                error += std::abs(static_cast<int>((effect.color[i] >> shift) & 255) - static_cast<int>((again.color[i] >> shift) & 255));
+            const double mean = error / static_cast<double>(effect.color.size() * 3);
+            std::printf("  bloom radius %d width %d software/GPU mean difference %.4f\n", radius, width, mean);
+            CHECK(mean < 1.5);
+            // Toggling bloom on a reused size must not leave a stale glow texture.
+            view.postProcess.bloom = 0;
+            e.Renderer().Render(e.GetScene(), view, effect);
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK((effect.color.back() & 0xFFFFFF) == 0 && (again.color.back() & 0xFFFFFF) == 0);
+            view.postProcess.bloom = 1;
+        }
+    }
+    view.highlight = e.GetScene().FindByName("Bright");
+    view.postProcess.bloom = 0;
+    original.Resize(128, 72);
+    effect.Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, original);
+    view.postProcess.bloom = 1;
+    e.Renderer().Render(e.GetScene(), view, effect);
+    int outline = 0;
+    for (size_t i = 0; i < original.color.size(); ++i) if ((original.color[i] & 0xFFFFFF) == 0x1A9EFF) {
+        ++outline;
+        CHECK(effect.color[i] == original.color[i]);
+    }
+    CHECK(outline > 0);
+    view.highlight = kNullEntity;
+    view.postProcess.exposure = 0;
+    e.Renderer().Render(e.GetScene(), view, effect);
+    CHECK((effect.color[36 * 128 + 64] & 0xFFFFFF) == 0);
+    CHECK((effect.color[10 * 128 + 10] & 0xFFFFFF) == 0xFFFFFF);
+    view.postProcess.exposure = 0.25f;
+    // A constant HDR background keeps its brightness at clamped borders.
+    CHECK(Call(e, "entity.delete", R"J({"id":"Bright"})J")["ok"].asBool());
+    view.clearColor = Color(8, 4, 2);
+    view.postProcess.bloomRadius = 32;
+    for (RenderTarget* t : {&effect, &again}) t->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, effect);
+    CHECK((effect.color.back() & 0xFFFFFF) == (effect.color[36 * 128 + 64] & 0xFFFFFF));
+    CHECK((effect.color.back() & 255) == 201);  // (8 + (8 - 1)) * .25, then Reinhard
+    CHECK(((effect.color.back() >> 8) & 255) == 166);
+    CHECK(((effect.color.back() >> 16) & 255) == 123);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(), view, again);
+        for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((effect.color.back() >> shift) & 255) -
+                                                  static_cast<int>((again.color.back() >> shift) & 255)) <= 1);
+    }
+}
+
+TEST(ShaderMaterialAlphaAndShadow) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_alpha_shadow"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"alpha.shader.json","graph":{"uniforms":{"surface":[0.2,0.5,1,0]},
+      "nodes":[{"op":"uniform","name":"surface"}],"color":0}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"alpha.mat.json","values":{"shader":"alpha.shader.json",
+      "alphaMode":"mask","alphaCutoff":0.5,"doubleSided":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,7,10],"rotation":[-35,0,0]},
+      "Camera":{"clearColor":[0.1,0.1,0.1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-30,65,0]},
+      "DirectionalLight":{"shadows":true,"ambient":[0.2,0.2,0.2]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},
+      "MeshRenderer":{"mesh":"plane","color":[0.7,0.7,0.7]}}})J");
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"position":[0,1,0],"scale":[2,2,2]},
+      "MeshRenderer":{"material":"alpha.mat.json","visible":false}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(),160.0f/90,view);
+    RenderTarget absent, transparent, opaque, gpuAbsent, gpuTransparent, gpuOpaque;
+    for (RenderTarget* target : {&absent,&transparent,&opaque,&gpuAbsent,&gpuTransparent,&gpuOpaque}) target->Resize(160,90);
+    e.Renderer().Render(e.GetScene(),view,absent);
+    const bool gpu = e.EnableGpu(nullptr,&error);
+    if (gpu) e.Gpu()->Render(e.GetScene(),view,gpuAbsent);
+    CHECK(Call(e, "component.set", R"J({"id":"Cube","type":"MeshRenderer","values":{"visible":true}})J")["ok"].asBool());
+    view.highlight = e.GetScene().FindByName("Cube");
+    e.Renderer().Render(e.GetScene(),view,transparent);
+    CHECK(transparent.Hash() == absent.Hash());
+    CHECK(transparent.ids == absent.ids && transparent.depth == absent.depth);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(),view,gpuTransparent);
+        CHECK(gpuTransparent.Hash() == gpuAbsent.Hash());
+    }
+    CHECK(Call(e, "material.set", R"J({"path":"alpha.mat.json","values":{"shaderUniforms":{"surface":[0.2,0.5,1,1]}}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,opaque);
+    CHECK(opaque.Hash() != transparent.Hash());
+    int orange = 0, cubePixels = 0;
+    for (size_t i = 0; i < opaque.color.size(); ++i) {
+        orange += (opaque.color[i] & 0xFFFFFF) == 0x1A9EFF;
+        cubePixels += opaque.ids[i] == view.highlight;
+    }
+    CHECK(orange > 20 && cubePixels > 100);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(),view,gpuOpaque);
+        CHECK(gpuOpaque.Hash() != gpuTransparent.Hash());
+        int gpuOrange = 0;
+        double difference = 0;
+        for (size_t i = 0; i < opaque.color.size(); ++i) {
+            const uint32_t color = gpuOpaque.color[i];
+            gpuOrange += (color & 255) > 230 && ((color >> 8) & 255) > 140 &&
+                         ((color >> 8) & 255) < 175 && ((color >> 16) & 255) < 50;
+            for (int shift : {0,8,16})
+                difference += std::abs(static_cast<int>((opaque.color[i] >> shift) & 255) -
+                                       static_cast<int>((gpuOpaque.color[i] >> shift) & 255));
+        }
+        const double mean = difference/static_cast<double>(opaque.color.size()*3);
+        std::printf("  graph alpha/shadow/outline software/GPU mean difference %.4f\n",mean);
+        CHECK(gpuOrange > 20 && mean < 6);
+    }
+    CHECK(Call(e, "component.set", R"J({"id":"Cube","type":"MeshRenderer","values":{"castShadows":false}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,transparent);
+    int shadowPixels = 0;
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    for (size_t i = 0; i < opaque.color.size(); ++i)
+        shadowPixels += opaque.ids[i] == ground && transparent.ids[i] == ground && opaque.color[i] != transparent.color[i];
+    CHECK(shadowPixels > 20);
+    if (gpu) {
+        e.Gpu()->Render(e.GetScene(),view,gpuTransparent);
+        int changed = 0;
+        for (size_t i = 0; i < opaque.color.size(); ++i)
+            changed += opaque.ids[i] == ground && transparent.ids[i] == ground && gpuOpaque.color[i] != gpuTransparent.color[i];
+        CHECK(changed > 20);
+    }
+}
+
+TEST(ShaderMaterialInstructionFamilies) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_instruction_families"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Surface","components":{"Transform":{"scale":[4,4,1]},
+      "MeshRenderer":{"material":"program.mat.json"}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(),128.0f/72,view);
+    RenderTarget cpu, gpu;
+    cpu.Resize(128,72);
+    gpu.Resize(128,72);
+    const bool hasGpu = e.EnableGpu(nullptr,&error);
+    if (!hasGpu) std::printf("  SKIP graph instruction GPU comparison (%s)\n",error.c_str());
+    struct Case { const char* op; const char* args; Vec3 expected; };
+    // Independent numeric expectations catch matching mistakes in both evaluators.
+    const Case cases[] = {
+        {"add", "[0,1]", {0.4f,0.2f,0.7f}},
+        {"subtract", "[0,1]", {0,0.2f,0.5f}},
+        {"multiply", "[0,1]", {0.03f,0,0.06f}},
+        {"divide", "[0,1]", {1.0f/3,0,1}},
+        {"min", "[0,1]", {0.1f,0,0.1f}},
+        {"max", "[0,1]", {0.3f,0.2f,0.6f}},
+        {"sin", "[0]", {std::sin(0.1f),std::sin(0.2f),std::sin(0.6f)}},
+        {"cos", "[0]", {std::cos(0.1f),std::cos(0.2f),std::cos(0.6f)}},
+        {"floor", "[2]", {0,0,1}},
+        {"fract", "[2]", {0,0.25f,0.75f}},
+        {"abs", "[2]", {1,0.75f,1}},
+        {"clamp", "[2,0,1]", {0.1f,0,0.1f}},
+        {"mix", "[0,1,2]", {0,0.35f,0}},
+        {"step", "[0,1]", {1,0,0}},
+        {"dot", "[0,1]", {0.34f,0.34f,0.34f}},
+        {"normalize", "[0]", {0.1f/std::sqrt(0.66f),0.2f/std::sqrt(0.66f),0.6f/std::sqrt(0.66f)}},
+        {"swizzle", "[0]", {0.5f,0.6f,0.2f}}
+    };
+    double worstMean = 0;
+    auto render = [&]() {
+        e.Renderer().Render(e.GetScene(),view,cpu);
+        if (!hasGpu) return;
+        e.Gpu()->Render(e.GetScene(),view,gpu);
+        double difference = 0;
+        for (size_t i = 0; i < cpu.color.size(); ++i) for (int shift : {0,8,16})
+            difference += std::abs(static_cast<int>((cpu.color[i] >> shift) & 255) -
+                                   static_cast<int>((gpu.color[i] >> shift) & 255));
+        const double mean = difference/static_cast<double>(cpu.color.size()*3);
+        worstMean = std::max(worstMean,mean);
+        CHECK(mean < 2);
+    };
+    auto install = [&](const Json& graph) {
+        Json args = Json::MakeObject();
+        args["path"] = "program.shader.json";
+        args["graph"] = graph;
+        args["overwrite"] = true;
+        CHECK(e.Call("shader.create",args)["ok"].asBool());
+        CHECK(Call(e, "material.create", R"J({"path":"program.mat.json","overwrite":true,
+          "values":{"shader":"program.shader.json","unlit":true,"pixelArt":true}})J")["ok"].asBool());
+    };
+    for (const Case& item : cases) {
+        Json graph = Json::parse(R"J({"nodes":[{"op":"constant","value":[0.1,0.2,0.6,0.5]},
+          {"op":"constant","value":[0.3,0,0.1,0.5]},{"op":"constant","value":[-1,-0.75,1.75,0]}],"color":3})J");
+        Json node = Json::MakeObject();
+        node["op"] = item.op;
+        node["args"] = Json::parse(item.args);
+        if (std::string(item.op) == "swizzle") node["value"] = Json(Json::Array{3,2,1,0});
+        graph["nodes"].push(node);
+        install(graph);
+        render();
+        const float expected[] = {item.expected.x,item.expected.y,item.expected.z};
+        for (int channel = 0; channel < 3; ++channel) {
+            const int value = static_cast<int>((cpu.color[36*128+64] >> (channel*8)) & 255);
+            if (std::abs(value-static_cast<int>(expected[channel]*255+0.5f)) > 1)
+                std::printf("  graph %s channel %d: got %d, expected %.4f\n",item.op,channel,value,expected[channel]*255);
+            CHECK(std::abs(value-static_cast<int>(expected[channel]*255+0.5f)) <= 1);
+        }
+    }
+    Image texture;
+    texture.width = texture.height = 2;
+    texture.rgba = {255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255};
+    CHECK(WritePng(JoinPath(e.ProjectDir(),"graph.png"),texture,true));
+    for (const char* input : {"uv","position","normal","baseColor","time","texture"}) {
+        Json graph = Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"constant","value":0.25}],"color":2})J");
+        Json node = Json::MakeObject();
+        node["op"] = input;
+        if (std::string(input) == "texture") node["args"] = Json(Json::Array{0});
+        graph["nodes"].push(node);
+        install(graph);
+        CHECK(Call(e, "material.set", R"J({"path":"program.mat.json","values":{"baseTexture":"graph.png",
+          "baseColor":[0.5,0.25,0.75]}})J")["ok"].asBool());
+        view.shaderTime = 0.25f;
+        render();
+        if (std::string(input) == "texture") {
+            for (uint32_t expected : {0x0000FFu,0x00FF00u,0xFF0000u,0x00FFFFu}) {
+                int pixels = 0;
+                for (uint32_t color : cpu.color) pixels += (color & 0xFFFFFF) == expected;
+                CHECK(pixels > 20);
+            }
+        }
+        if (std::string(input) == "normal") CHECK((cpu.color[36*128+64] & 0xFFFFFF) == 0xFF0000);
+        if (std::string(input) == "time") {
+            CHECK((cpu.color[36*128+64] & 0xFFFFFF) == 0x404040);
+            const uint64_t first = cpu.Hash();
+            view.shaderTime = 0.75f;
+            render();
+            CHECK(cpu.Hash() != first && (cpu.color[36*128+64] & 0xFFFFFF) == 0xBFBFBF);
+        }
+    }
+    install(Json::parse(R"J({"nodes":[{"op":"constant","value":[4,1,0.5,1]}],"color":0,"emissive":0})J"));
+    view.postProcess.exposure = 0.25f;
+    view.postProcess.toneMapping = "reinhard";
+    render();
+    CHECK((cpu.color[36*128+64] & 0xFFFFFF) == 0x3355AA);  // (base + emission) before exposure/Reinhard
+    install(Json::parse(R"J({"nodes":[{"op":"constant","value":[4,1,0.5,0.25]}],"color":0,"emissive":0})J"));
+    CHECK(Call(e, "material.set", R"J({"path":"program.mat.json","values":{"alphaMode":"blend","opacity":0}})J")["ok"].asBool());
+    render();
+    const uint32_t blended = cpu.color[36*128+64];
+    CHECK((blended & 0xFFFFFF) == 0x0F1C55);  // graph replaces zero input opacity; blend happens in HDR
+    CHECK(cpu.ids[36*128+64] == kNullEntity);  // alpha below 0.5 does not take picking ownership
+    std::printf("  graph instruction/input/HDR worst software/GPU mean difference %.4f\n",worstMean);
+}
+
+TEST(ShaderMaterialRendering) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_material"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/stripes.shader.json","graph":{"uniforms":{"frequency":4},
+      "nodes":[{"op":"uv"},{"op":"swizzle","args":[0],"value":[0,0,0,0]},
+      {"op":"uniform","name":"frequency"},{"op":"multiply","args":[1,2]},{"op":"fract","args":[3]},
+      {"op":"constant","value":0.5},{"op":"step","args":[5,4]},
+      {"op":"constant","value":[1,0,0,1]},{"op":"constant","value":[0,0,1,1]},
+      {"op":"mix","args":[7,8,6]}],"color":9}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"stripes.mat.json","values":{"unlit":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"scale":[4,4,1]},
+      "MeshRenderer":{"material":"stripes.mat.json"}}})J");
+    RenderTarget original, stripes, again;
+    for (RenderTarget* target : {&original,&stripes,&again}) target->Resize(128,72);
+    e.RenderGameView(original);
+    CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{
+      "shaderUniforms":{"frequency":4},"shader":"materials/stripes.shader.json"}})J")["ok"].asBool());
+    SetMaxRenderThreads(1);
+    e.RenderGameView(stripes);
+    SetMaxRenderThreads(4);
+    e.RenderGameView(again);
+    SetMaxRenderThreads(16);
+    CHECK(stripes.Hash() != original.Hash() && stripes.Hash() == again.Hash());
+    CHECK(stripes.ids == original.ids && stripes.depth == original.depth);
+    int red = 0, blue = 0;
+    for (uint32_t color : stripes.color) {
+        red += (color & 0xFFFFFF) == 0x0000FF;
+        blue += (color & 0xFFFFFF) == 0xFF0000;
+    }
+    CHECK(red > 100 && blue > 100);
+    RenderView view;
+    MakeSceneView(e.GetScene(),128.0f/72,view);
+    if (e.EnableGpu(nullptr,&error)) {
+        e.Gpu()->Render(e.GetScene(),view,again);
+        double difference = 0;
+        for (size_t i = 0; i < stripes.color.size(); ++i) for (int shift : {0,8,16})
+            difference += std::abs(static_cast<int>((stripes.color[i] >> shift) & 255) -
+                                   static_cast<int>((again.color[i] >> shift) & 255));
+        const double mean = difference / static_cast<double>(stripes.color.size()*3);
+        std::printf("  surface graph software/GPU mean difference %.4f\n",mean);
+        CHECK(mean < 3);
+    } else std::printf("  SKIP surface graph GPU comparison (%s)\n",error.c_str());
+    CHECK(!Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shaderUniforms":{"typo":2}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() == stripes.Hash());
+    CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shaderUniforms":{"frequency":2}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() != stripes.Hash());
+    const auto oldGraph = e.Assets().GetShader("materials/stripes.shader.json");
+    std::string source;
+    CHECK(ReadTextFile(JoinPath(e.ProjectDir(),"materials/stripes.shader.json"),source));
+    Json changed = Json::parse(source);
+    changed["nodes"][7]["value"] = Json(Json::Array{0,1,0,1});
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(),"materials/stripes.shader.json"),changed.dump(2)));
+    const auto path = std::filesystem::path(JoinPath(e.ProjectDir(),"materials/stripes.shader.json"));
+    std::filesystem::last_write_time(path,std::filesystem::last_write_time(path)+std::chrono::seconds(2));
+    CHECK(!e.Assets().PollChanges().empty());
+    CHECK(e.Assets().GetShader("materials/stripes.shader.json") != oldGraph);
+    e.RenderGameView(stripes);
+    CHECK(stripes.Hash() != again.Hash());
+    CHECK(Call(e, "asset.info", R"J({"path":"materials/stripes.shader.json"})J")["result"]["nodes"].asInt() == 10);
+    CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shader":"","shaderUniforms":{}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() == original.Hash());
+}
+
+TEST(ShaderGraphValidationAndReference) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_graph"), &error));
+    const Json graphJson = Json::parse(R"J({"format":"ownengine.shader","uniforms":{"frequency":4},
+        "nodes":[{"op":"uv"},{"op":"uniform","name":"frequency"},{"op":"multiply","args":[0,1]},
+        {"op":"fract","args":[2]},{"op":"constant","value":[0.5,0.5,0.5,0.5]},
+        {"op":"step","args":[4,3]},{"op":"constant","value":[1,0.25,0.125,1]},
+        {"op":"multiply","args":[5,6]}],"color":7,"emissive":6})J");
+    Json create = Json::MakeObject();
+    create["path"] = "materials/stripes.shader.json";
+    create["graph"] = graphJson;
+    CHECK(e.Call("shader.create", create)["ok"].asBool());
+    CHECK(Call(e, "shader.check", R"J({"path":"materials/stripes.shader.json"})J")["result"]["nodes"].asInt() == 8);
+    CHECK(!e.Call("shader.create", create)["ok"].asBool());
+    CHECK(Call(e, "asset.list", R"J({"kind":"shader"})J")["result"].size() == 1);
+    ShaderGraph graph;
+    CHECK(CompileShaderGraph(graphJson, graph, &error));
+    ShaderInputs inputs;
+    inputs.uv = Vec4(0.2f,0.4f,0,1);
+    auto surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(surface.color.x == 1 && surface.color.y == 0.25f && surface.color.z == 0);
+    CHECK(surface.emissive.x == 1 && surface.emissive.y == 0.25f);
+    std::array<Vec4, ShaderGraph::kMaxUniforms> uniforms;
+    CHECK(ShaderUniforms(graph, Json::parse(R"J({"frequency":2})J"), uniforms, &error));
+    surface = EvaluateShaderGraph(graph, inputs, uniforms);
+    CHECK(surface.color.x == 0 && surface.color.y == 0.25f);
+    CHECK(!ShaderUniforms(graph, Json::parse(R"J({"typo":2})J"), uniforms, &error));
+    CHECK(error.find("typo") != std::string::npos);
+    const std::vector<std::string> invalid = {
+        R"J({"nodes":[{"op":"add","args":[0,0]}],"color":0})J",
+        R"J({"nodes":[{"op":"constant","value":[1,2,3]}],"color":0})J",
+        R"J({"nodes":[{"op":"uniform","name":"missing"}],"color":0})J",
+        R"J({"nodes":[{"op":"constant","value":1}],"color":0.5})J",
+        R"J({"nodes":[{"op":"constant","value":1,"typo":true}],"color":0})J",
+        R"J({"nodes":[{"op":"constant","value":1},{"op":"swizzle","args":[0],"value":[4,0,0,0]}],"color":1})J"
+    };
+    for (const std::string& text : invalid) {
+        create["graph"] = Json::parse(text);
+        create["overwrite"] = true;
+        CHECK(e.Call("shader.create", create)["error"]["code"].asString() == "invalid_shader");
+        CHECK(Call(e, "shader.check", R"J({"path":"materials/stripes.shader.json"})J")["result"]["nodes"].asInt() == 8);
+    }
+    create["path"] = "../outside.shader.json";
+    create["graph"] = graphJson;
+    CHECK(!e.Call("shader.create", create)["ok"].asBool());
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"constant","value":65504},{"op":"constant","value":0},
+        {"op":"divide","args":[0,1]},{"op":"multiply","args":[0,0]}],"color":2,"emissive":3})J"), graph, &error));
+    surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(surface.color.x == 0 && surface.emissive.x == 65504);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"texture","args":[0]},
+        {"op":"swizzle","args":[1],"value":[2,1,0,3]}],"color":2})J"), graph, &error));
+    inputs.texture = [](float u, float v) { return Vec4(u,v,0.75f,0.5f); };
+    surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(surface.color.x == 0.75f && surface.color.y == 0.4f && surface.color.z == 0.2f && surface.color.w == 0.5f);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"time"},{"op":"sin"}],"color":1})J"), graph, &error) == false);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"time"},{"op":"sin","args":[0]}],"color":1})J"), graph, &error));
+    inputs.time = 0.5f;
+    surface = EvaluateShaderGraph(graph, inputs, graph.defaults);
+    CHECK(std::fabs(surface.color.x - 0.47942554f) < 1e-6f);
+    Json oversized = Json::MakeObject();
+    oversized["nodes"] = Json::MakeArray();
+    for (int i = 0; i < 33; ++i) oversized["nodes"].push(Json::parse(R"J({"op":"constant","value":1})J"));
+    oversized["color"] = 0;
+    CHECK(!CompileShaderGraph(oversized, graph, &error));
+    CHECK(error.find("1..32") != std::string::npos);
+}
+
+TEST(CameraFxaa) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("camera_fxaa"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"white.mat.json","values":{"baseColor":[1,1,1],"unlit":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[0,0,0]},"PostProcess":{}}})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"Edge","components":{"Transform":{"rotation":[0,0,25],"scale":[4,1,1]},"MeshRenderer":{"material":"white.mat.json"}}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,1,1],"opacity":1}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    RenderTarget off, on, again;
+    for (RenderTarget* target : {&off, &on, &again}) target->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, off);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"fxaa":true}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, on);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(on.Hash() != off.Hash() && on.Hash() == again.Hash());
+    CHECK(on.depth == off.depth && on.ids == off.ids);
+    CHECK(on.color[10 * 128 + 10] == off.color[10 * 128 + 10]);
+    CHECK(on.color.back() == off.color.back());
+    int smoothed = 0;
+    for (size_t i = 0; i < on.color.size(); ++i)
+        if (on.color[i] != off.color[i] && (on.color[i] & 255) > 0 && (on.color[i] & 255) < 255) ++smoothed;
+    CHECK(smoothed > 20);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    CHECK(restored.Get<PostProcess>(restored.FindByName("Camera"))->fxaa);
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == off.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    view.highlight = e.GetScene().FindByName("Edge");
+    view.postProcess.fxaa = false;
+    e.Renderer().Render(e.GetScene(), view, off);
+    view.postProcess.fxaa = true;
+    e.Renderer().Render(e.GetScene(), view, on);
+    int outlinePixels = 0;
+    for (size_t i = 0; i < off.color.size(); ++i) if ((off.color[i] & 0xFFFFFF) == 0x1A9EFF) {
+        ++outlinePixels;
+        CHECK(on.color[i] == off.color[i]);
+    }
+    CHECK(outlinePixels > 0);
+    view.highlight = kNullEntity;
+    if (e.EnableGpu(nullptr, &err)) {
+        for (int width : {128, 97}) {
+            for (RenderTarget* target : {&off, &on, &again}) target->Resize(width, width == 128 ? 72 : 55);
+            view.postProcess.fxaa = false;
+            e.Gpu()->Render(e.GetScene(), view, off);
+            view.postProcess.fxaa = true;
+            e.Gpu()->Render(e.GetScene(), view, on);
+            CHECK(on.Hash() != off.Hash());
+            CHECK(on.color[10 * width + 10] == off.color[10 * width + 10]);
+            e.Renderer().Render(e.GetScene(), view, again);
+            double error = 0;
+            for (size_t i = 0; i < on.color.size(); ++i) for (int shift : {0, 8, 16})
+                error += std::abs(static_cast<int>((on.color[i] >> shift) & 255) - static_cast<int>((again.color[i] >> shift) & 255));
+            const double mean = error / static_cast<double>(on.color.size() * 3);
+            std::printf("  FXAA width %d software/GPU mean difference %.4f\n", width, mean);
+            CHECK(mean < 3);
+            view.postProcess.fxaa = false;
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == off.Hash());
+        }
+    } else std::printf("  SKIP FXAA GPU comparison (%s)\n", err.c_str());
+    view.postProcess.fxaa = true;
+    view.clearColor = Color(0.25f, 0.5f, 0.75f);
+    CHECK(Call(e, "entity.delete", R"J({"id":"Edge"})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, on);
+    view.postProcess.fxaa = false;
+    e.Renderer().Render(e.GetScene(), view, off);
+    CHECK(on.Hash() == off.Hash());
 }
 
 TEST(GpuRendererMatchesSoftware) {

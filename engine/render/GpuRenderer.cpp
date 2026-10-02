@@ -57,6 +57,22 @@ void Put(float* dst, float x, float y, float z, float w) {
     dst[3] = w;
 }
 
+void PutGraph(oe_mesh_material_t& uniforms, const Material& material, float time) {
+    if (!material.shader) return;
+    Put(uniforms.graph_control, static_cast<float>(material.shader->instructions.size()),
+        static_cast<float>(material.shader->color), static_cast<float>(material.shader->emissive), time);
+    for (size_t node = 0; node < material.shader->instructions.size(); ++node) {
+        const ShaderInstruction& instruction = material.shader->instructions[node];
+        Put(uniforms.graph_code[node], static_cast<float>(instruction.op), static_cast<float>(instruction.args[0]),
+            static_cast<float>(instruction.args[1]), static_cast<float>(instruction.args[2]));
+        Put(uniforms.graph_value[node], instruction.value.x, instruction.value.y, instruction.value.z, instruction.value.w);
+    }
+    for (size_t slot = 0; slot < material.shaderUniforms.size(); ++slot) {
+        const Vec4& value = material.shaderUniforms[slot];
+        Put(uniforms.graph_uniform[slot], value.x, value.y, value.z, value.w);
+    }
+}
+
 // Pixel format of Texture::texels (bytes R, G, B, A) is RGBA8. Mip levels
 // are box filtered on the CPU so distant textures do not shimmer.
 std::vector<std::vector<uint32_t>> BuildMips(const Texture& tex) {
@@ -187,20 +203,33 @@ struct Targets {
     int msaa = 1;
     bool withOutput = false;
     bool hdr = false;
+    bool bloom = false;
+    bool fxaa = false;
     sg_image sceneMsaa{}, sceneDepth{}, sceneColor{}, maskColor{}, maskDepth{}, output{};
+    sg_image bloomHorizontal{}, bloomVertical{};
+    sg_image fxaaColor{};
+    sg_view fxaaAtt{}, fxaaTex{};
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
+    sg_view bloomHorizontalAtt{}, bloomHorizontalTex{}, bloomVerticalAtt{}, bloomVerticalTex{};
 
-    bool Matches(int w, int h, bool output_, bool hdr_) const {
-        return width == w && height == h && withOutput == output_ && hdr == hdr_;
+    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_) const {
+        return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_ && fxaa == fxaa_;
     }
 
-    void Create(int w, int h, int samples, bool output_, bool hdr_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_) {
         Destroy();
         width = w;
         height = h;
         msaa = samples;
         withOutput = output_;
         hdr = hdr_;
+        bloom = bloom_;
+        fxaa = fxaa_;
+        if (fxaa) {
+            fxaaColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-fxaa-source");
+            fxaaAtt = ColorView(fxaaColor);
+            fxaaTex = TextureView(fxaaColor);
+        }
         const sg_pixel_format sceneFormat = hdr ? kHdrFormat : kColorFormat;
         if (msaa > 1) {
             sceneMsaa = MakeAttachmentImage(w, h, sceneFormat, msaa, false, false, "oe-scene-msaa");
@@ -214,6 +243,14 @@ struct Targets {
         sceneDepth = MakeAttachmentImage(w, h, kDepthFormat, msaa, true, false, "oe-scene-depth");
         sceneDepthAtt = DepthView(sceneDepth);
         sceneTex = TextureView(sceneColor);
+        if (bloom) {
+            bloomHorizontal = MakeAttachmentImage(w, h, kHdrFormat, 1, false, false, "oe-bloom-horizontal");
+            bloomHorizontalAtt = ColorView(bloomHorizontal);
+            bloomHorizontalTex = TextureView(bloomHorizontal);
+            bloomVertical = MakeAttachmentImage(w, h, kHdrFormat, 1, false, false, "oe-bloom-vertical");
+            bloomVerticalAtt = ColorView(bloomVertical);
+            bloomVerticalTex = TextureView(bloomVertical);
+        }
         maskColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-mask");
         maskAtt = ColorView(maskColor);
         maskTex = TextureView(maskColor);
@@ -228,10 +265,11 @@ struct Targets {
 
     void Destroy() {
         if (width == 0) return;
-        for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex}) {
+        for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex,
+                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex}) {
             if (v.id) sg_destroy_view(v);
         }
-        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output}) {
+        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor}) {
             if (i.id) sg_destroy_image(i);
         }
         *this = Targets();
@@ -254,10 +292,14 @@ struct GpuRenderer::Impl {
     sg_pipeline meshPips[2][2]{};  // [blend][double sided]
     sg_pipeline hdrMeshPips[2][2]{};
     sg_pipeline hdrLinePip{};
+    sg_pipeline bloomPip{};
+    sg_shader bloomShd{};
     int hdrSamples = 1;
     bool hdrSupported = false;
     sg_pipeline shadowPip{}, shadowPipTwoSided{}, maskDepthPip{}, maskDrawPip{}, linePip{}, compositePip{}, uiPip{};
     sg_shader meshShd{}, shadowShd{}, solidShd{}, lineShd{}, compositeShd{}, uiShd{};
+    sg_shader surfaceAuxShd{};
+    sg_pipeline surfaceShadow[2]{}, surfaceMask[2][2]{};
     sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
@@ -275,16 +317,27 @@ struct GpuRenderer::Impl {
     void Init() {
         sg_backend backend = sg_query_backend();
         meshShd = sg_make_shader(oe_mesh_shader_desc(backend));
+        surfaceAuxShd = sg_make_shader(oe_surface_aux_shader_desc(backend));
         shadowShd = sg_make_shader(oe_shadow_shader_desc(backend));
         solidShd = sg_make_shader(oe_solid_shader_desc(backend));
         lineShd = sg_make_shader(oe_line_shader_desc(backend));
         compositeShd = sg_make_shader(oe_composite_shader_desc(backend));
         uiShd = sg_make_shader(oe_ui_shader_desc(backend));
+        bloomShd = sg_make_shader(oe_bloom_shader_desc(backend));
 
         const int msaa = settings.msaa;
         const sg_pixelformat_info hdrInfo = sg_query_pixelformat(kHdrFormat);
         hdrSupported = hdrInfo.render && hdrInfo.blend && hdrInfo.filter;
         hdrSamples = hdrInfo.msaa ? msaa : 1;
+        if (hdrSupported) {
+            sg_pipeline_desc d{};
+            d.shader = bloomShd;
+            d.depth.pixel_format = SG_PIXELFORMAT_NONE;
+            d.colors[0].pixel_format = kHdrFormat;
+            d.sample_count = 1;
+            d.label = "oe-bloom";
+            bloomPip = sg_make_pipeline(&d);
+        }
         auto alphaBlend = [](sg_color_target_state& c) {
             c.pixel_format = kColorFormat;
             c.blend.enabled = true;
@@ -368,6 +421,35 @@ struct GpuRenderer::Impl {
             d.colors[0].write_mask = SG_COLORMASK_RGBA;
             d.label = "oe-mask-draw";
             maskDrawPip = sg_make_pipeline(&d);
+        }
+        for (int twoSided = 0; twoSided < 2; ++twoSided) {
+            sg_pipeline_desc d{};
+            d.shader = surfaceAuxShd;
+            d.layout.buffers[0].stride = sizeof(MeshVertex);
+            d.layout.attrs[ATTR_oe_surface_aux_position] = {0, offsetof(MeshVertex, pos), SG_VERTEXFORMAT_FLOAT3};
+            d.layout.attrs[ATTR_oe_surface_aux_normal] = {0, offsetof(MeshVertex, nrm), SG_VERTEXFORMAT_FLOAT3};
+            d.layout.attrs[ATTR_oe_surface_aux_texcoord] = {0, offsetof(MeshVertex, uv), SG_VERTEXFORMAT_FLOAT2};
+            d.layout.attrs[ATTR_oe_surface_aux_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
+            d.index_type = SG_INDEXTYPE_UINT32;
+            d.face_winding = SG_FACEWINDING_CCW;
+            d.depth.pixel_format = kDepthFormat;
+            d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
+            d.depth.write_enabled = true;
+            d.sample_count = 1;
+            d.colors[0].pixel_format = SG_PIXELFORMAT_NONE;
+            d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_FRONT;
+            d.label = "oe-surface-shadow";
+            surfaceShadow[twoSided] = sg_make_pipeline(&d);
+            d.colors[0].pixel_format = kColorFormat;
+            d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
+            for (int stage = 0; stage < 2; ++stage) {
+                d.depth.write_enabled = stage == 0;
+                d.colors[0].write_mask = stage == 0 ? SG_COLORMASK_NONE : SG_COLORMASK_RGBA;
+                d.label = "oe-surface-mask";
+                surfaceMask[stage][twoSided] = sg_make_pipeline(&d);
+            }
         }
         {
             sg_pipeline_desc d{};
@@ -487,11 +569,13 @@ struct GpuRenderer::Impl {
     }
 
     void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view) {
-        const bool hdr = UsesHdr(NormalizePostProcess(view.postProcess));
+        const PostProcess post = NormalizePostProcess(view.postProcess);
+        const bool hdr = UsesHdr(post), bloom = post.bloom > 0;
         if (hdr && !hdrSupported) {
             throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
         }
-        if (!t.Matches(w, h, output, hdr)) t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr);
+        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa))
+            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -643,6 +727,32 @@ struct GpuRenderer::Impl {
 
     // Draws `scene` into `t` (scene + mask images) and composites into the
     // output: the offscreen output image or the window swapchain.
+    void ApplySurface(const DrawCall& draw, const RenderItem& item, const GpuMesh& mesh,
+                      const Mat4& viewProj, float time, float cutoff) {
+        const Material& material = draw.material;
+        oe_mesh_vs_params_t vertex{};
+        Put(vertex.view_proj, viewProj);
+        Put(vertex.model, item.world);
+        Put(vertex.normal_mat, item.normalMatrix);
+        for (size_t j = 0; j < item.joints.size(); ++j) Put(vertex.joint_palette[j], item.joints[j]);
+        sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
+        oe_mesh_material_t uniforms{};
+        const sg_view texture = TextureFor(material.baseTexture);
+        Put(uniforms.base_color, material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
+        Put(uniforms.flags, 0, texture.id ? 1.0f : 0.0f, cutoff, material.doubleSided ? 1.0f : 0.0f);
+        Put(uniforms.uv_rect, item.uvOffset[0], item.uvOffset[1], item.uvScale[0], item.uvScale[1]);
+        Put(uniforms.uv_tiling, material.tiling[0], material.tiling[1], material.offset[0], material.offset[1]);
+        Put(uniforms.emissive, 0, 0, 0, item.flat ? 1.0f : 0.0f);
+        PutGraph(uniforms, material, time);
+        sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(uniforms));
+        sg_bindings bindings{};
+        bindings.vertex_buffers[0] = mesh.vbuf;
+        bindings.index_buffer = mesh.ibuf;
+        bindings.views[VIEW_oe_base_tex] = texture.id ? texture : whiteTex;
+        bindings.samplers[SMP_oe_base_smp] = material.pixelArt ? pixelArt : linearRepeat;
+        sg_apply_bindings(&bindings);
+    }
+
     RenderStats Frame(const Scene& scene, const RenderView& view, Targets& t, int outW, int outH, const sg_swapchain* swapchain) {
         auto start = std::chrono::steady_clock::now();
         RenderStats stats;
@@ -692,6 +802,14 @@ struct GpuRenderer::Impl {
             for (const DrawCall& dc : draws) {
                 const RenderItem& it = items[dc.item];
                 if (!it.castShadows || it.unlit || dc.blend) continue;  // transparent surfaces cast no shadow
+                if (dc.material.shader && dc.material.alphaMode == AlphaMode::Mask) {
+                    sg_apply_pipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
+                    ApplySurface(dc, it, *gpuMeshes[dc.item], fit.viewProj, view.shaderTime, dc.material.alphaCutoff);
+                    const Submesh& sub = it.mesh->submeshes[dc.submesh];
+                    sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+                    current = -1;
+                    continue;
+                }
                 int want = dc.material.doubleSided ? 1 : 0;
                 if (want != current) {
                     sg_apply_pipeline(want ? shadowPipTwoSided : shadowPip);
@@ -819,6 +937,7 @@ struct GpuRenderer::Impl {
                 Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
                 Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, 0, 0);
+                PutGraph(mu, m, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
                 b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
@@ -874,6 +993,23 @@ struct GpuRenderer::Impl {
                     sg_apply_uniforms(UB_oe_solid_params, SG_RANGE(su));
                     for (size_t i = 0; i < items.size(); ++i) {
                         if (stage == 1 && items[i].id != view.highlight) continue;
+                        bool surfaceAlpha = false;
+                        for (const DrawCall& draw : draws) if (draw.item == i && draw.material.shader)
+                            surfaceAlpha = surfaceAlpha || draw.blend || draw.material.alphaMode == AlphaMode::Mask;
+                        if (surfaceAlpha) {
+                            for (const DrawCall& draw : draws) {
+                                if (draw.item != i) continue;
+                                sg_apply_pipeline(surfaceMask[stage][draw.material.doubleSided ? 1 : 0]);
+                                const float cutoff = draw.material.alphaMode == AlphaMode::Mask ? draw.material.alphaCutoff :
+                                                     (draw.blend ? 0.5f : 0.0f);
+                                ApplySurface(draw, items[i], *gpuMeshes[i], viewProj, view.shaderTime, cutoff);
+                                const Submesh& sub = items[i].mesh->submeshes[draw.submesh];
+                                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+                            }
+                            continue;
+                        }
+                        sg_apply_pipeline(stage == 0 ? maskDepthPip : maskDrawPip);
+                        sg_apply_uniforms(UB_oe_solid_params, SG_RANGE(su));
                         oe_pos_vs_params_t u{};
                         Put(u.mvp, viewProj * items[i].world);
                         for (size_t j = 0; j < items[i].joints.size(); ++j) Put(u.joint_palette[j], items[i].joints[j]);
@@ -926,6 +1062,53 @@ struct GpuRenderer::Impl {
         }
         bool haveUI = ui.Write(uiVerts.data(), uiVerts.size() * sizeof(UIVertex));
 
+        const PostProcess post = NormalizePostProcess(view.postProcess);
+        // Two separable passes: horizontal highlight extraction/blur, then vertical
+        // blur. UI and the selection mask are never sampled for bloom.
+        if (t.bloom) for (int stage = 0; stage < 2; ++stage) {
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
+            pass.attachments.colors[0] = stage == 0 ? t.bloomHorizontalAtt : t.bloomVerticalAtt;
+            pass.label = stage == 0 ? "oe-bloom-horizontal" : "oe-bloom-vertical";
+            sg_begin_pass(&pass);
+            sg_apply_pipeline(bloomPip);
+            oe_bloom_params_t bu{};
+            Put(bu.bloom_filter, static_cast<float>(post.bloomRadius), post.bloomThreshold, static_cast<float>(stage), 0);
+            sg_apply_uniforms(UB_oe_bloom_params, SG_RANGE(bu));
+            sg_bindings b{};
+            b.views[VIEW_oe_bloom_source_tex] = stage == 0 ? t.sceneTex : t.bloomHorizontalTex;
+            b.samplers[SMP_oe_bloom_source_smp] = nearestClamp;
+            sg_apply_bindings(&b);
+            sg_draw(0, 3, 1);
+            sg_end_pass();
+        }
+
+        // Quantize display color before FXAA, matching the software renderer's RGBA8 source.
+        if (t.fxaa) {
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
+            pass.attachments.colors[0] = t.fxaaAtt;
+            pass.label = "oe-fxaa-source";
+            sg_begin_pass(&pass);
+            sg_apply_pipeline(compositePip);
+            oe_composite_params_t cu{};
+            Put(cu.target, static_cast<float>(t.width), static_cast<float>(t.height), 0, 0);
+            Put(cu.bloom_strength, post.bloom, 0, 0, 0);
+            Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
+            Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
+            sg_bindings b{};
+            b.views[VIEW_oe_scene_tex] = t.sceneTex;
+            b.views[VIEW_oe_mask_tex] = whiteTex;
+            b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
+            b.samplers[SMP_oe_scene_smp] = linearClamp;
+            b.samplers[SMP_oe_mask_smp] = nearestClamp;
+            b.samplers[SMP_oe_bloom_smp] = linearClamp;
+            sg_apply_bindings(&b);
+            sg_draw(0, 3, 1);
+            sg_end_pass();
+        }
+
         // ----- Composite + UI into the output
         {
             sg_pass pass{};
@@ -938,15 +1121,19 @@ struct GpuRenderer::Impl {
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
-            PostProcess post = NormalizePostProcess(view.postProcess);
+            Put(cu.bloom_strength, post.bloom, 0, 0, 0);
             Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            Put(cu.post_stage, t.fxaa ? 1.0f : 0.0f, t.fxaa ? 1.0f : 0.0f,
+                1.0f / static_cast<float>(t.width), 1.0f / static_cast<float>(t.height));
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
-            b.views[VIEW_oe_scene_tex] = t.sceneTex;
+            b.views[VIEW_oe_scene_tex] = t.fxaa ? t.fxaaTex : t.sceneTex;
             b.views[VIEW_oe_mask_tex] = outline ? t.maskTex : whiteTex;
+            b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
             b.samplers[SMP_oe_scene_smp] = linearClamp;
             b.samplers[SMP_oe_mask_smp] = nearestClamp;
+            b.samplers[SMP_oe_bloom_smp] = linearClamp;
             sg_apply_bindings(&b);
             sg_draw(0, 3, 1);
             if (haveUI) {

@@ -13,6 +13,7 @@
 #include "render/GpuRenderer.h"
 #include "render/Material.h"
 #include "render/Mesh.h"
+#include "render/ShaderGraph.h"
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "scene/Prefab.h"
@@ -241,6 +242,7 @@ ViewRequest ParseView(Engine& e, const Json& args) {
         MakeSceneView(e.GetScene(), aspect, r.view);
     }
     r.view.drawGrid = args["grid"].asBool(false);
+    r.view.shaderTime = static_cast<float>(e.SimTime());
     if (args["colliders"].asBool(false)) {
         TilesetLookup tilesets = e.Assets().Tilesets();
         AppendColliderLines(e.GetScene(), r.view.lines, &tilesets);
@@ -1459,6 +1461,51 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json&) { return e.Physics().Stats(); });
 
     // ----- assets ----------------------------------------------------------------
+    // ----- Portable surface graphs (*.shader.json)
+    auto shaderInfo = [](const ShaderGraph& graph) {
+        Json result = Json::MakeObject();
+        result["nodes"] = static_cast<int>(graph.instructions.size());
+        result["color"] = graph.color;
+        result["emissive"] = graph.emissive;
+        result["uniforms"] = Json::MakeArray();
+        for (const std::string& name : graph.uniformNames) result["uniforms"].push(name);
+        return result;
+    };
+    Register(r, "shader.create", "Create a validated portable surface shader graph (*.shader.json).",
+             Params().Req("path", "string", "Project-relative .shader.json file.")
+                 .Req("graph", "object", "Ordered nodes, color output, optional emissive output and named uniform defaults.")
+                 .Opt("overwrite", "boolean", "Replace an existing graph."), false,
+             [shaderInfo](Engine& e, const Json& a) {
+                 const std::string path = a["path"].asString(), full = e.ResolvePath(path);
+                 if (AssetManager::KindOf(path) != "shader") throw ApiError("invalid_path", "shader path must end with .shader.json");
+                 if (FileExists(full) && !a["overwrite"].asBool()) throw ApiError("already_exists", path + " exists", "Use overwrite: true.");
+                 ShaderGraph graph;
+                 std::string error;
+                 if (!CompileShaderGraph(a["graph"], graph, &error))
+                     throw ApiError("invalid_shader", error, "Use ordered nodes with prior-node args and a valid color output; see docs/POSTPROCESS.md.");
+                 CreateDirectories(ParentPath(full));
+                 if (!WriteTextFile(full, a["graph"].dump(2) + "\n")) throw ApiError("io_error", "cannot write " + path);
+                 e.Assets().Forget(path);
+                 Json result = shaderInfo(graph);
+                 result["path"] = path;
+                 return result;
+             });
+    Register(r, "shader.check", "Validate a surface shader graph and list its instructions/outputs/uniform names.",
+             Params().Req("path", "string", "Project-relative .shader.json file."), false,
+             [shaderInfo](Engine& e, const Json& a) {
+                 const std::string path = a["path"].asString(), full = e.ResolvePath(path);
+                 if (AssetManager::KindOf(path) != "shader") throw ApiError("invalid_path", "shader path must end with .shader.json");
+                 std::string text, error;
+                 if (!ReadTextFile(full, text)) throw ApiError("not_found", "cannot read " + path, "Create it with shader.create.");
+                 const Json json = Json::parse(text, &error);
+                 if (!error.empty()) throw ApiError("invalid_shader", error, "Fix the graph JSON syntax.");
+                 ShaderGraph graph;
+                 if (!CompileShaderGraph(json, graph, &error)) throw ApiError("invalid_shader", error, "Fix the named graph field.");
+                 Json result = shaderInfo(graph);
+                 result["path"] = path;
+                 return result;
+             });
+
     // ----- Materials (*.mat.json)
     auto writeMaterial = [](Engine& e, const std::string& path, const Json& values, bool create, bool overwrite) {
         if (AssetManager::KindOf(path) != "material") throw ApiError("invalid_path", "material path must end with .mat.json", "e.g. \"materials/gold.mat.json\"");
@@ -1478,7 +1525,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Material check;
         std::string err;
         TextureLoader load = [&e](const std::string& p, std::string* er) { return e.Assets().GetTexture(p, er); };
-        if (!MaterialFromJson(j, load, check, &err)) {
+        if (!MaterialFromJson(j, load, check, &err,
+            [&e](const std::string& p, std::string* er) { return e.Assets().GetShader(p, er); })) {
             Json docs = MaterialFieldDocs();
             std::string names;
             for (const auto& kv : docs.members()) names += (names.empty() ? "" : ", ") + kv.first;
@@ -1505,7 +1553,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params().Req("path", "string", "Material file.").Req("values", "object", "Fields to change."),
              false, [writeMaterial](Engine& e, const Json& a) { return writeMaterial(e, a["path"].asString(), a["values"], false, false); });
 
-    Register(r, "asset.list", "Project files by kind (model, texture, material, audio, font, script, prefab, scene).",
+    Register(r, "asset.list", "Project files by kind (model, texture, material, shader, audio, font, script, prefab, scene).",
              Params().Opt("kind", "string", "Only this kind."), false, [](Engine& e, const Json& a) {
                  std::string kind = a["kind"].asString("");
                  Json list = Json::MakeArray();
