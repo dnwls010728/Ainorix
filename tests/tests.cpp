@@ -24,6 +24,7 @@
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
 #include "net/Bytes.h"
+#include "net/Channels.h"
 #include "net/LoopbackTransport.h"
 #include "platform/GamepadInput.h"
 #include "platform/TouchInput.h"
@@ -305,6 +306,400 @@ TEST(NetworkLoopbackSeededFaults) {
     CHECK(duplicates->PendingBytes() == 0);
 }
 
+TEST(NetworkPacketCodecAndAckWindow) {
+    AckWindow window;
+    CHECK(!window.Accept(0));
+    CHECK(window.Accept(1) && window.Mask() == 1);
+    CHECK(window.Accept(3) && window.Mask() == 5);
+    CHECK(window.Accept(2) && window.Mask() == 7);
+    CHECK(!window.Accept(2));
+    CHECK(window.Accept(64) && window.Contains(1));
+    CHECK(window.Accept(65) && !window.Contains(1) && window.Contains(2));
+    CHECK(!window.Accept(1));
+    CHECK(window.Accept(129) && window.Mask() == 1);
+    CHECK(window.Accept(128) && window.Mask() == 3);
+    CHECK(window.Accept(UINT64_MAX) && window.Mask() == 1);
+    CHECK(!window.Accept(UINT64_MAX) && !window.Accept(UINT64_MAX - 64));
+
+    NetPacket packet;
+    packet.sequence = 1;
+    packet.message = 2;
+    packet.fragments = 1;
+    packet.totalBytes = 3;
+    packet.payload = {1, 2, 3};
+    packet.ack = 3;
+    packet.ackMask = 5;
+    std::vector<uint8_t> bytes;
+    CHECK(EncodePacket(packet, bytes) && bytes.size() == kNetHeaderBytes + 3);
+    CHECK(bytes[0] == 'O' && bytes[1] == 'E' && bytes[2] == 'N' && bytes[3] == 'P');
+    CHECK(bytes[4] == 1 && bytes[8] == 1 && bytes[16] == 3 && bytes[24] == 5 && bytes[32] == 2);
+    NetPacket decoded;
+    CHECK(DecodePacket(bytes.data(), bytes.size(), decoded));
+    CHECK(decoded.sequence == 1 && decoded.message == 2 && decoded.payload == packet.payload && decoded.ackMask == 5);
+    decoded.message = 99;
+    for (size_t length = 0; length < bytes.size(); ++length) {
+        CHECK(!DecodePacket(bytes.data(), length, decoded));
+        CHECK(decoded.message == 99);
+    }
+    // Header fields must be validated before any reassembly allocation.
+    for (size_t offset : {size_t(0), size_t(4), size_t(5), size_t(6), size_t(7), size_t(40), size_t(42), size_t(44), size_t(48)}) {
+        auto corrupt = bytes;
+        corrupt[offset] = 255;
+        CHECK(!DecodePacket(corrupt.data(), corrupt.size(), decoded) && decoded.message == 99);
+    }
+    auto extra = bytes;
+    extra.push_back(0);
+    CHECK(!DecodePacket(extra.data(), extra.size(), decoded));
+    CHECK(!DecodePacket(nullptr, kNetHeaderBytes, decoded));
+    packet.ackMask = 8;
+    auto unchanged = bytes;
+    CHECK(!EncodePacket(packet, bytes) && bytes == unchanged);
+    packet.ackMask = 1;
+    packet.fragment = 1;
+    CHECK(!EncodePacket(packet, bytes));
+
+    uint32_t seed = 17;
+    for (size_t trial = 0; trial < 3000; ++trial) {
+        std::vector<uint8_t> noise(trial % 1250);
+        for (uint8_t& byte : noise) { seed = seed * 1664525u + 1013904223u; byte = static_cast<uint8_t>(seed >> 24); }
+        decoded.message = 99;
+        const bool ok = DecodePacket(noise.data(), noise.size(), decoded);
+        CHECK(ok ? decoded.payload.size() <= kNetFragmentBytes : decoded.message == 99);
+    }
+}
+
+// Raw packet injection isolates channel order, replay and malformed-packet behavior.
+std::vector<uint8_t> NetworkDataPacket(NetChannel channel, uint64_t message, uint64_t sequence,
+                                      const std::vector<uint8_t>& payload, uint16_t fragment = 0,
+                                      uint32_t total = 0) {
+    NetPacket packet;
+    packet.channel = channel;
+    packet.message = message;
+    packet.sequence = sequence;
+    packet.totalBytes = total ? total : static_cast<uint32_t>(payload.size());
+    packet.fragment = fragment;
+    packet.fragments = static_cast<uint16_t>(std::max<size_t>(1, (packet.totalBytes + kNetFragmentBytes - 1) / kNetFragmentBytes));
+    packet.payload = payload;
+    std::vector<uint8_t> bytes;
+    CHECK(EncodePacket(packet, bytes));
+    return bytes;
+}
+
+TEST(NetworkChannelOrderingAndReplay) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport sender(wire, 1), receiver(wire, 2);
+    ChannelEndpoint endpoint(receiver);
+    CHECK(endpoint.AddPeer(1));
+    CHECK(!endpoint.AddPeer(1) && !endpoint.AddPeer(0));
+    uint64_t sequence = 1;
+    auto send = [&](NetChannel channel, uint64_t message, uint8_t value) {
+        auto bytes = NetworkDataPacket(channel, message, sequence++, {value});
+        CHECK(sender.Send(2, bytes.data(), bytes.size()));
+    };
+    std::vector<ChannelEvent> events;
+    send(NetChannel::ReliableOrdered, 2, 22);
+    CHECK(endpoint.Poll(0, events) && events.empty() && endpoint.BufferedBytes(1) == 1);
+    send(NetChannel::ReliableOrdered, 1, 11);
+    CHECK(endpoint.Poll(1, events) && events.size() == 2);
+    CHECK(events[0].sequence == 1 && events[1].sequence == 2);
+    CHECK(events[0].bytes == std::vector<uint8_t>{11} && events[1].bytes == std::vector<uint8_t>{22});
+    CHECK(endpoint.BufferedBytes(1) == 0);
+    events.clear();
+    send(NetChannel::ReliableUnordered, 2, 22);
+    CHECK(endpoint.Poll(2, events) && events.size() == 1 && events[0].sequence == 2);
+    send(NetChannel::ReliableUnordered, 1, 11);
+    CHECK(endpoint.Poll(3, events) && events.size() == 2 && events[1].sequence == 1);
+    events.clear();
+    send(NetChannel::Sequenced, 2, 22);
+    send(NetChannel::Sequenced, 1, 11);
+    CHECK(endpoint.Poll(4, events) && events.size() == 1 && events[0].sequence == 2);
+    events.clear();
+    send(NetChannel::Unreliable, 2, 22);
+    send(NetChannel::Unreliable, 1, 11);
+    CHECK(endpoint.Poll(5, events) && events.size() == 2 && events[0].sequence == 2 && events[1].sequence == 1);
+    events.clear();
+    send(NetChannel::ReliableOrdered, 1, 11);
+    send(NetChannel::ReliableUnordered, 2, 22);
+    send(NetChannel::Unreliable, 2, 22);
+    CHECK(endpoint.Poll(6, events) && events.empty());
+    CHECK(endpoint.Stats(1)->duplicatePackets == 3);
+    CHECK(!endpoint.Poll(5, events) && endpoint.Poll(6, events) && events.empty());
+    CHECK(endpoint.RemovePeer(1) && !endpoint.RemovePeer(1));
+    CHECK(endpoint.Stats(1) == nullptr && endpoint.BufferedBytes(1) == 0);
+}
+
+TEST(NetworkChannelFragmentValidationAndExpiry) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport sender(wire, 1), receiver(wire, 2), stranger(wire, 3);
+    ChannelConfig config;
+    config.assemblyFrames = 3;
+    ChannelEndpoint endpoint(receiver, config);
+    CHECK(endpoint.AddPeer(1));
+    std::vector<uint8_t> body(kNetFragmentBytes, 7);
+    auto partial = NetworkDataPacket(NetChannel::Unreliable, 1, 1, body, 0,
+                                     static_cast<uint32_t>(kNetFragmentBytes + 1));
+    CHECK(sender.Send(2, partial.data(), partial.size()));
+    std::vector<ChannelEvent> events;
+    CHECK(endpoint.Poll(0, events) && events.empty());
+    CHECK(endpoint.BufferedBytes(1) == kNetFragmentBytes + 1);
+    // Conflicting total size for an existing assembly is rejected without touching its payload.
+    auto conflict = NetworkDataPacket(NetChannel::Unreliable, 1, 2, body, 0,
+                                      static_cast<uint32_t>(kNetFragmentBytes + 2));
+    CHECK(sender.Send(2, conflict.data(), conflict.size()));
+    CHECK(endpoint.Poll(1, events) && endpoint.RejectedPackets() == 1);
+    CHECK(endpoint.BufferedBytes(1) == kNetFragmentBytes + 1);
+    CHECK(endpoint.Poll(3, events) && endpoint.BufferedBytes(1) == 0);
+    CHECK(endpoint.Stats(1)->droppedPackets == 1);
+    auto bytes = NetworkDataPacket(NetChannel::Unreliable, 2, 3, {8});
+    CHECK(stranger.Send(2, bytes.data(), bytes.size()));
+    CHECK(sender.Send(2, nullptr, 0));
+    CHECK(endpoint.Poll(4, events) && events.empty() && endpoint.RejectedPackets() == 3);
+    // Incomplete assemblies consume slots independently of the byte budget.
+    for (uint64_t message = 3; message < 3 + ChannelEndpoint::kMaxAssemblies; ++message) {
+        auto fragment = NetworkDataPacket(NetChannel::Unreliable, message, message + 1, body, 0,
+                                         static_cast<uint32_t>(kNetFragmentBytes + 1));
+        CHECK(sender.Send(2, fragment.data(), fragment.size()));
+    }
+    auto overflow = NetworkDataPacket(NetChannel::Unreliable, 100, 100, body, 0,
+                                     static_cast<uint32_t>(kNetFragmentBytes + 1));
+    CHECK(sender.Send(2, overflow.data(), overflow.size()));
+    CHECK(endpoint.Poll(5, events));
+    CHECK(endpoint.BufferedBytes(1) == ChannelEndpoint::kMaxAssemblies * (kNetFragmentBytes + 1));
+    CHECK(endpoint.Poll(8, events) && endpoint.BufferedBytes(1) == 0);
+    for (int i = 0; i < 200; ++i) CHECK(sender.Send(2, bytes.data(), bytes.size()));
+    CHECK(endpoint.Poll(9, events));
+    CHECK(endpoint.RejectedPackets() == 3 + 200 - ChannelEndpoint::kIncomingPerFrame);
+    events.clear();
+    auto first = NetworkDataPacket(NetChannel::Unreliable, 200, 200, body, 0,
+                                   static_cast<uint32_t>(kNetFragmentBytes + 1));
+    auto last = NetworkDataPacket(NetChannel::Unreliable, 200, 201, {9}, 1,
+                                  static_cast<uint32_t>(kNetFragmentBytes + 1));
+    CHECK(sender.Send(2, first.data(), first.size()));
+    CHECK(endpoint.Poll(10, events) && events.empty());
+    CHECK(sender.Send(2, last.data(), last.size()));
+    // Expiry precedes incoming fragments even when both occur on the same poll.
+    CHECK(endpoint.Poll(13, events) && events.empty() && endpoint.BufferedBytes(1) == kNetFragmentBytes + 1);
+    CHECK(endpoint.Poll(16, events) && endpoint.BufferedBytes(1) == 0);
+}
+
+TEST(NetworkChannelsReliableUnderLoss) {
+    auto run = [](uint32_t seed) {
+        LoopbackConfig faults;
+        faults.seed = seed;
+        faults.latencyFrames = 3;
+        faults.jitterFrames = 2;
+        faults.lossPermille = 250;
+        faults.duplicatePermille = 200;
+        faults.reorderFrames = 6;
+        auto wire = std::make_shared<LoopbackNetwork>(faults);
+        LoopbackTransport ta(wire, 1), tb(wire, 2);
+        ChannelConfig config;
+        config.timeoutFrames = 6000;
+        ChannelEndpoint a(ta, config), b(tb, config);
+        CHECK(a.AddPeer(2) && b.AddPeer(1));
+        std::map<std::pair<NetChannel, uint64_t>, std::vector<uint8_t>> expected;
+        std::map<std::pair<NetChannel, uint64_t>, std::vector<uint8_t>> received;
+        for (NetChannel channel : {NetChannel::ReliableOrdered, NetChannel::ReliableUnordered}) {
+            for (uint64_t message = 1; message <= 24; ++message) {
+                size_t size = message == 24 ? kNetMaxMessageBytes : static_cast<size_t>(message * 153);
+                std::vector<uint8_t> payload(size, static_cast<uint8_t>(message));
+                if (message == 1) payload.clear();
+                expected[{channel, message}] = payload;
+                CHECK(a.Send(2, channel, payload.data(), payload.size()));
+            }
+        }
+        const uint8_t reply[] = {9, 8, 7};
+        CHECK(b.Send(1, NetChannel::ReliableOrdered, reply, sizeof(reply)));
+        std::vector<uint64_t> trace;
+        uint64_t ordered = 1;
+        size_t replyCount = 0;
+        for (uint64_t frame = 0; frame < 6000; ++frame) {
+            std::vector<ChannelEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            for (const auto& event : ea) {
+                CHECK(event.type == ChannelEvent::Type::Message && event.bytes == std::vector<uint8_t>(reply, reply + 3));
+                ++replyCount;
+            }
+            for (const auto& event : eb) {
+                CHECK(event.type == ChannelEvent::Type::Message);
+                const auto key = std::make_pair(event.channel, event.sequence);
+                CHECK(received.emplace(key, event.bytes).second);
+                if (event.channel == NetChannel::ReliableOrdered) CHECK(event.sequence == ordered++);
+                trace.push_back((frame << 16) | (static_cast<uint64_t>(event.channel) << 8) | event.sequence);
+            }
+            if (received.size() == expected.size() && replyCount == 1 && a.PendingMessages(2) == 0 && b.PendingMessages(1) == 0)
+                break;
+        }
+        CHECK(received == expected && replyCount == 1);
+        CHECK(a.PendingMessages(2) == 0 && b.PendingMessages(1) == 0);
+        CHECK(a.BufferedBytes(2) == 0 && b.BufferedBytes(1) == 0);
+        CHECK(a.Stats(2)->retransmittedPackets > 0 && a.Stats(2)->lostPackets > 0);
+        CHECK(a.Stats(2)->rttFrames > 0 && a.Stats(2)->jitterFrames > 0);
+        CHECK(a.Stats(2)->LossPermille() > 0 && a.Stats(2)->LossPermille() < 1000);
+        CHECK(a.Stats(2)->invalidPackets == 0 && b.Stats(1)->invalidPackets == 0);
+        return trace;
+    };
+    CHECK(run(45) == run(45));
+    CHECK(run(46) != run(45));
+}
+
+TEST(NetworkChannelQueueBudgetAndTimeout) {
+    LoopbackConfig faults;
+    faults.lossPermille = 1000;
+    auto wire = std::make_shared<LoopbackNetwork>(faults);
+    LoopbackTransport ta(wire, 1), tb(wire, 2);
+    ChannelConfig config;
+    config.retryFrames = 2;
+    config.timeoutFrames = 6;
+    ChannelEndpoint a(ta, config);
+    CHECK(a.AddPeer(2));
+    const uint8_t byte = 1;
+    CHECK(!a.Send(3, NetChannel::Unreliable, &byte, 1));
+    CHECK(!a.Send(2, static_cast<NetChannel>(4), &byte, 1));
+    CHECK(!a.Send(2, NetChannel::Unreliable, nullptr, 1));
+    CHECK(!a.Send(2, NetChannel::Unreliable, &byte, kNetMaxMessageBytes + 1));
+    for (size_t i = 0; i < ChannelEndpoint::kMaxQueuedMessages; ++i)
+        CHECK(a.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    CHECK(!a.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    std::vector<ChannelEvent> events;
+    CHECK(a.Poll(0, events) && a.Stats(2)->packetsSent == ChannelEndpoint::kPacketsPerFrame);
+    CHECK(a.Poll(0, events) && a.Stats(2)->packetsSent == ChannelEndpoint::kPacketsPerFrame);
+    for (uint64_t frame = 1; frame <= 6; ++frame) CHECK(a.Poll(frame, events));
+    CHECK(events.size() == 1 && events[0].type == ChannelEvent::Type::TimedOut && events[0].peer == 2);
+    CHECK(a.PendingMessages(2) == 0 && a.BufferedBytes(2) == 0);
+    CHECK(!a.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    CHECK(a.Poll(7, events) && events.size() == 1);
+    CHECK(a.Stats(2)->LossPermille() == 1000);
+    CHECK(a.RemovePeer(2) && a.AddPeer(2));
+    for (PeerId id = 3; id <= 65; ++id) CHECK(a.AddPeer(id));
+    CHECK(!a.AddPeer(66));
+}
+
+// Target individual protocol failures independently of the seeded random wire.
+class NetworkFaultTransport final : public ITransport {
+public:
+    explicit NetworkFaultTransport(ITransport& transport) : transport_(transport) {}
+    bool blocked = false;
+    std::function<bool(const NetPacket&)> drop;
+    uint64_t accepted = 0;
+    bool Send(PeerId peer, const uint8_t* bytes, size_t size) override {
+        if (blocked) return false;
+        NetPacket packet;
+        CHECK(DecodePacket(bytes, size, packet));
+        CHECK(size <= kNetPacketBytes);
+        ++accepted;
+        if (drop && drop(packet)) return true;
+        return transport_.Send(peer, bytes, size);
+    }
+    bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override { return transport_.Poll(frame, events); }
+private:
+    ITransport& transport_;
+};
+
+TEST(NetworkChannelsAckLossAndAssemblyRecovery) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport ta(wire, 1), tb(wire, 2);
+    NetworkFaultTransport fa(ta), fb(tb);
+    bool fragmentDropped = false, ackDropped = false;
+    fa.drop = [&](const NetPacket& packet) {
+        if (packet.kind == PacketKind::Data && packet.message == 1 && packet.fragment == 1 && !fragmentDropped) {
+            fragmentDropped = true;
+            return true;
+        }
+        return false;
+    };
+    fb.drop = [&](const NetPacket& packet) {
+        if (packet.kind == PacketKind::Ack && packet.message == 1 && !ackDropped) {
+            ackDropped = true;
+            return true;
+        }
+        return false;
+    };
+    ChannelConfig config;
+    config.retryFrames = 6;
+    config.assemblyFrames = 2;
+    ChannelEndpoint a(fa, config), b(fb, config);
+    CHECK(a.AddPeer(2) && b.AddPeer(1));
+    std::vector<uint8_t> body(kNetFragmentBytes + 7, 123);
+    const uint8_t next = 2;
+    CHECK(a.Send(2, NetChannel::ReliableOrdered, body.data(), body.size()));
+    for (int i = 0; i < 63; ++i) CHECK(a.Send(2, NetChannel::ReliableOrdered, &next, 1));
+    std::vector<ChannelEvent> received;
+    for (uint64_t frame = 0; frame < 40; ++frame) {
+        std::vector<ChannelEvent> ea, eb;
+        CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+        CHECK(ea.empty());
+        received.insert(received.end(), eb.begin(), eb.end());
+        // The first reliable window is complete except for its oldest message. ACKed ordered
+        // payloads must survive expiry; the second window must not overtake the unacknowledged gap.
+        if (frame == 3) CHECK(b.BufferedBytes(1) == 31 && received.empty());
+    }
+    CHECK(fragmentDropped && ackDropped);
+    CHECK(received.size() == 64);
+    if (received.size() == 64) {
+        CHECK(received[0].sequence == 1 && received[0].bytes == body);
+        for (size_t i = 1; i < received.size(); ++i)
+            CHECK(received[i].sequence == i + 1 && received[i].bytes == std::vector<uint8_t>{2});
+    }
+    CHECK(a.PendingMessages(2) == 0 && b.BufferedBytes(1) == 0);
+    CHECK(a.Stats(2)->retransmittedPackets >= 4 && b.Stats(1)->messagesReceived == 64);
+    CHECK(b.Stats(1)->duplicatePackets >= 2);
+}
+
+TEST(NetworkChannelsUnreliableAndBackpressure) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    LoopbackTransport ta(wire, 1), tb(wire, 2);
+    NetworkFaultTransport fa(ta);
+    fa.blocked = true;
+    ChannelEndpoint a(fa), b(tb);
+    CHECK(a.AddPeer(2) && b.AddPeer(1));
+    const uint8_t byte = 7;
+    CHECK(a.Send(2, NetChannel::Unreliable, &byte, 1));
+    std::vector<ChannelEvent> events;
+    CHECK(a.Poll(0, events) && a.PendingMessages(2) == 1 && a.Stats(2)->packetsSent == 0);
+    CHECK(b.Poll(0, events) && events.empty());
+    fa.blocked = false;
+    CHECK(a.Poll(1, events) && a.PendingMessages(2) == 0);
+    CHECK(b.Poll(1, events) && events.size() == 1 && events[0].sequence == 1);
+    events.clear();
+    fa.drop = [](const NetPacket& packet) { return packet.kind == PacketKind::Data; };
+    CHECK(a.Send(2, NetChannel::Unreliable, &byte, 1));
+    CHECK(a.Send(2, NetChannel::Sequenced, &byte, 1));
+    for (uint64_t frame = 2; frame < 70; ++frame) CHECK(a.Poll(frame, events) && b.Poll(frame, events));
+    CHECK(events.empty() && a.PendingMessages(2) == 0);
+    CHECK(a.Stats(2)->packetsSent == 3 && a.Stats(2)->retransmittedPackets == 0);
+    CHECK(a.Stats(2)->ackedPackets == 1 && a.Stats(2)->lostPackets == 2);
+    CHECK(a.Stats(2)->LossPermille() == 666);
+
+    // Sequenced completion discards an older partial message's reserved storage.
+    fa.drop = {};
+    std::vector<uint8_t> first(kNetFragmentBytes, 1);
+    auto old = NetworkDataPacket(NetChannel::Sequenced, 2, 100, first, 0,
+                                 static_cast<uint32_t>(kNetFragmentBytes + 1));
+    auto newest = NetworkDataPacket(NetChannel::Sequenced, 3, 101, {3});
+    CHECK(ta.Send(2, old.data(), old.size()));
+    CHECK(ta.Send(2, newest.data(), newest.size()));
+    CHECK(b.Poll(70, events) && events.size() == 1 && events[0].sequence == 3);
+    CHECK(b.BufferedBytes(1) == 0);
+    CHECK(a.RemovePeer(2) && a.AddPeer(2));
+    std::vector<uint8_t> max(kNetMaxMessageBytes, 1);
+    for (size_t i = 0; i < 64; ++i) CHECK(a.Send(2, NetChannel::Unreliable, max.data(), max.size()));
+    CHECK(a.BufferedBytes(2) == ChannelEndpoint::kMaxBufferedBytes);
+    CHECK(!a.Send(2, NetChannel::Unreliable, &byte, 1));
+    CHECK(a.RemovePeer(2) && a.BufferedBytes(2) == 0);
+    fa.blocked = true;
+    ChannelConfig timing;
+    timing.retryFrames = 2;
+    timing.timeoutFrames = 6;
+    ChannelEndpoint blocked(fa, timing);
+    CHECK(blocked.AddPeer(2) && blocked.Poll(70, events));
+    events.clear();
+    CHECK(blocked.Send(2, NetChannel::ReliableOrdered, &byte, 1));
+    for (uint64_t frame = 71; frame <= 76; ++frame) CHECK(blocked.Poll(frame, events));
+    CHECK(events.size() == 1 && events[0].type == ChannelEvent::Type::TimedOut);
+    CHECK(blocked.PendingMessages(2) == 0 && blocked.Stats(2)->packetsSent == 0);
+}
+
 TEST(SceneRoundTrip) {
     Json sceneJson = MakeSampleScene("Test");
     Scene s;
@@ -459,6 +854,8 @@ Json Call(Engine& e, const char* cmd, const char* args) { return e.Call(cmd, Jso
 TEST(NetworkInactiveZeroCost) {
     const uint64_t instances = LoopbackNetwork::InstancesCreated();
     const uint64_t polls = LoopbackNetwork::PollCalls();
+    const uint64_t channelInstances = ChannelEndpoint::InstancesCreated();
+    const uint64_t channelPolls = ChannelEndpoint::PollCalls();
     const std::string project = TempProject("network_inactive");
     std::string text;
     CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
@@ -488,6 +885,8 @@ TEST(NetworkInactiveZeroCost) {
     CHECK(absent == run());
     CHECK(LoopbackNetwork::InstancesCreated() == instances);
     CHECK(LoopbackNetwork::PollCalls() == polls);
+    CHECK(ChannelEndpoint::InstancesCreated() == channelInstances);
+    CHECK(ChannelEndpoint::PollCalls() == channelPolls);
     CHECK(RemoveAll(project));
 }
 

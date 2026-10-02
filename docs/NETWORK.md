@@ -5,7 +5,7 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1 foundations implemented.** No session, sockets or gameplay integration yet.
+Status: **M1–M2 foundations implemented.** No session, sockets or gameplay integration yet.
 Progress is tracked in §11.
 
 ## 1. Goals and non-goals
@@ -218,7 +218,7 @@ changed + this log ticked in the same commit (DESIGN.md §4–5).
 - [x] M0 — design guidelines (this document)
 - [x] M1 — `engine/net`: `ITransport`, `LoopbackTransport` (seeded latency/loss/reorder),
       bounds-checked byte reader/writer, zero-cost pin test
-- [ ] M2 — packet layer + channels (reliable/unreliable, fragmentation, acks, RTT/loss stats)
+- [x] M2 — packet layer + channels (reliable/unreliable, fragmentation, acks, RTT/loss stats)
 - [ ] M3 — platform UDP + TCP sockets (`Platform.h`: Win32 + POSIX), `UdpTransport`,
       `TcpTransport` (length-prefixed frames, NODELAY, UDP→TCP fallback), WebSocket transport for
       web (Emscripten); tests on loopback and real localhost sockets
@@ -272,3 +272,53 @@ Open questions / unverified:
   `build_android.bat` plus device tests when SDKs are available. M1 is portable library code
   with no player integration; committed player runtimes retain their existing behavior.
   The SDKs are unavailable in this environment; prebuilt runtimes were not rebuilt.
+
+### M2 implementation notes
+
+- `net/Packet.h`: protocol-v1 codec and 64-bit packet receipt window. A 52-byte header uses
+  explicit little-endian fields, magic/version, kind/channel, zero reserved byte, packet sequence,
+  ACK highest/mask, message sequence, fragment index/count/total and length-prefixed payload.
+  Datagrams are at most 1200 bytes; messages at most 64 KiB, with at most 64 fragments. The codec
+  checks exact fragment geometry, truncation, trailing bytes, enums and ACK masks before acceptance.
+- `net/Channels.h`: four independent lanes (`ReliableOrdered`, `ReliableUnordered`,
+  `Unreliable`, `Sequenced`). Ordered messages wait for gaps; unordered messages deliver once on
+  completion; sequenced messages discard older completed inputs. Packet receipts report RTT/loss,
+  while **message ACKs** release reliable sends only after complete reassembly. Whole-message
+  retransmission makes expiry of incomplete assemblies safe even after individual packet ACKs.
+- Timing uses explicit frames. Retransmission starts at 12 frames and adapts to RTT/jitter,
+  capped at 120 frames. Incomplete assemblies expire before incoming processing after 120 idle frames.
+  A reliable send still unacknowledged 600 frames after enqueue produces one terminal `TimedOut`
+  event, releases buffers and rejects new sends until the peer is removed/re-registered, including
+  when transport backpressure prevents the first packet. These timings are configurable. Queue age
+  uses the last polled frame (initially zero); poll the current frame before new sends.
+- Per peer: 64 outgoing messages, 4 MiB each of send/receive payloads, 64 assemblies (including
+  completed ordered messages), 32-message reliable sliding window per lane, 256 sent-packet samples,
+  64 queued message ACKs, 16 outgoing datagrams and 128 incoming datagrams per frame. Repeated
+  same-frame polls do no work; budgets cannot be bypassed by extra calls. Only `AddPeer` allocates
+  peer state. Unknown peers cannot allocate assemblies or cause responses.
+- RTT/jitter use integer Q8 EWMA frame values (samples clamped to 36000 frames), keeping
+  retransmission scheduling independent of floating-point rounding/contraction. Convert reported
+  frame values to milliseconds using the session tick rate in M4.
+  Loss is an estimate from expired/untracked data-attempt ACKs, including late acknowledgements;
+  ACK-only datagrams are not counted as lost data. Retries use fresh packet sequences and stable
+  message ids. ACK-only packets do not trigger ACK replies. Sequence zero is reserved; reconnect
+  before uint64 sequence exhaustion. Session identity/authentication/reconnect replay isolation
+  remain M4 responsibilities; peer registration is not a public-network handshake.
+- No `Engine` hooks, commands or component schemas added; `docs/API.md` remains unchanged.
+  Single-player construction/poll pin now covers both M1 loopback and M2 channel endpoints.
+- [x] Windows Release `build.bat`: no new compiler warnings. Full `oe_tests`: 99 tests,
+  zero failed checks. New coverage: `NetworkPacketCodecAndAckWindow`,
+  `NetworkChannelOrderingAndReplay`, `NetworkChannelFragmentValidationAndExpiry`,
+  `NetworkChannelsReliableUnderLoss`, `NetworkChannelQueueBudgetAndTimeout`,
+  `NetworkChannelsAckLossAndAssemblyRecovery`, `NetworkChannelsUnreliableAndBackpressure`.
+  This includes exact-once reliable delivery under 25% seeded loss/duplication/reordering,
+  64 KiB fragmentation, ACK loss, ordered retention across incomplete-assembly expiry,
+  progression beyond the 32-message reliable window, replay rejection, malformed/fuzzed
+  headers, byte/count/rate limits, blocked sends and terminal timeouts. Repeat seeds produce
+  identical delivery traces; different seeds change those traces. Inactive hashes/counters and
+  `AgentInstructionsInSync` still pass. CLI `oe exec samples/Hello sim.step '{"frames":120}'`
+  returned `ok: true`, frame 120 and zero script errors.
+- [ ] Web/Android tests and prebuilt-runtime rebuild: `build_web.bat` reports Emscripten
+  not found; `build_android.bat` reports Android NDK not found. No real sockets or devices
+  tested in M2; committed runtimes were not rebuilt. Run the SDK commands noted above when
+  available. Public-network handshake/authentication and congestion control remain later work.
