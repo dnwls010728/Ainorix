@@ -63,6 +63,18 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             and full Linux/EGL execution remain unchecked.
 - [ ] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
       resolution changes and separation from UI/selection overlays.
+      - [x] P6.3a: CPU/GPU directional FXAA on post-processed RGBA8 scene color,
+            neutral-frame identity, diagonal edges, flat regions, UI/outline,
+            worker determinism and resize/toggle checks. Refresh shaders/API.
+            Windows passes 83 tests; Node/WASM passes 79. CameraFxaa covers API/serialization/undo,
+            diagonal smoothing, flat-color identity, unchanged depth/IDs and
+            opaque UI/selection outlines, worker determinism and GPU target
+            resize/toggle. D3D11 mean channel difference is below 0.32 of 255.
+            Real CLI images inspected: off 457ffd44e88c5760, software
+            c86ccc033505d8dc, D3D11 c21a168cde9909e4. Shaders/API regenerated.
+            Player refresh and packaged WebGL2 verification belong to P6.3b.
+      - [ ] P6.3b: Sample effect controls, real CLI/WebGL2 verification and
+            refreshed player runtimes.
 - [ ] P6.4: Custom shader materials through commands/assets, validation and
       portable backend shader generation. Document the software reference
       behavior and demonstrate a material in a sample.
@@ -170,3 +182,20 @@ This bounded two-pass filter has no automatic exposure, mip-chain downsampling
 or screen-size-independent radius. Cost and memory grow with scene resolution
 and radius; it is intended as an optional, directly testable effect. Increase
 radius for a broader halo or lower threshold for dimmer light sources.
+
+## FXAA controls
+
+PostProcess.fxaa is a boolean, disabled by default. Enable it through
+component.set (or Lua scene.set). A compact directional FXAA filter samples
+post-processed RGBA8 display scene color with clamped bilinear filtering,
+a maximum span of eight scene pixels and luminance contrast thresholds
+max(1/32, brightest * 0.125). This is not the NVIDIA FXAA 3.11 quality preset
+implementation. It follows the engine's existing RGB convention, without
+adding a color-space conversion. Bloom, exposure, tone mapping and vignette
+run before FXAA; selection outlines and UI run afterward. GPU rendering uses
+an optional RGBA8 intermediate at scene resolution, so reduced-resolution
+window rendering keeps HUD and editor outlines at output resolution.
+
+Disabling FXAA avoids its intermediate allocation/pass and preserves previous
+frame hashes. Depth and entity IDs are never filtered. Sampling across small
+features may soften them; pixel-art cameras should leave it disabled.

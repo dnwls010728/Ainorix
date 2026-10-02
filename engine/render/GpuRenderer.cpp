@@ -188,16 +188,19 @@ struct Targets {
     bool withOutput = false;
     bool hdr = false;
     bool bloom = false;
+    bool fxaa = false;
     sg_image sceneMsaa{}, sceneDepth{}, sceneColor{}, maskColor{}, maskDepth{}, output{};
     sg_image bloomHorizontal{}, bloomVertical{};
+    sg_image fxaaColor{};
+    sg_view fxaaAtt{}, fxaaTex{};
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
     sg_view bloomHorizontalAtt{}, bloomHorizontalTex{}, bloomVerticalAtt{}, bloomVerticalTex{};
 
-    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_) const {
-        return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_;
+    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_) const {
+        return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_ && fxaa == fxaa_;
     }
 
-    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_) {
         Destroy();
         width = w;
         height = h;
@@ -205,6 +208,12 @@ struct Targets {
         withOutput = output_;
         hdr = hdr_;
         bloom = bloom_;
+        fxaa = fxaa_;
+        if (fxaa) {
+            fxaaColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-fxaa-source");
+            fxaaAtt = ColorView(fxaaColor);
+            fxaaTex = TextureView(fxaaColor);
+        }
         const sg_pixel_format sceneFormat = hdr ? kHdrFormat : kColorFormat;
         if (msaa > 1) {
             sceneMsaa = MakeAttachmentImage(w, h, sceneFormat, msaa, false, false, "oe-scene-msaa");
@@ -241,10 +250,10 @@ struct Targets {
     void Destroy() {
         if (width == 0) return;
         for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex,
-                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex}) {
+                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex}) {
             if (v.id) sg_destroy_view(v);
         }
-        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical}) {
+        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor}) {
             if (i.id) sg_destroy_image(i);
         }
         *this = Targets();
@@ -517,7 +526,8 @@ struct GpuRenderer::Impl {
         if (hdr && !hdrSupported) {
             throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
         }
-        if (!t.Matches(w, h, output, hdr, bloom)) t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom);
+        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa))
+            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -973,6 +983,32 @@ struct GpuRenderer::Impl {
             sg_end_pass();
         }
 
+        // Quantize display color before FXAA, matching the software renderer's RGBA8 source.
+        if (t.fxaa) {
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
+            pass.attachments.colors[0] = t.fxaaAtt;
+            pass.label = "oe-fxaa-source";
+            sg_begin_pass(&pass);
+            sg_apply_pipeline(compositePip);
+            oe_composite_params_t cu{};
+            Put(cu.target, static_cast<float>(t.width), static_cast<float>(t.height), 0, 0);
+            Put(cu.bloom_strength, post.bloom, 0, 0, 0);
+            Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
+            Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
+            sg_bindings b{};
+            b.views[VIEW_oe_scene_tex] = t.sceneTex;
+            b.views[VIEW_oe_mask_tex] = whiteTex;
+            b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
+            b.samplers[SMP_oe_scene_smp] = linearClamp;
+            b.samplers[SMP_oe_mask_smp] = nearestClamp;
+            b.samplers[SMP_oe_bloom_smp] = linearClamp;
+            sg_apply_bindings(&b);
+            sg_draw(0, 3, 1);
+            sg_end_pass();
+        }
+
         // ----- Composite + UI into the output
         {
             sg_pass pass{};
@@ -988,9 +1024,11 @@ struct GpuRenderer::Impl {
             Put(cu.bloom_strength, post.bloom, 0, 0, 0);
             Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            Put(cu.post_stage, t.fxaa ? 1.0f : 0.0f, t.fxaa ? 1.0f : 0.0f,
+                1.0f / static_cast<float>(t.width), 1.0f / static_cast<float>(t.height));
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
-            b.views[VIEW_oe_scene_tex] = t.sceneTex;
+            b.views[VIEW_oe_scene_tex] = t.fxaa ? t.fxaaTex : t.sceneTex;
             b.views[VIEW_oe_mask_tex] = outline ? t.maskTex : whiteTex;
             b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
             b.samplers[SMP_oe_scene_smp] = linearClamp;

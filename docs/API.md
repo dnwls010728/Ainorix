@@ -824,6 +824,7 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | `bloom` | float | `0` | Blurred highlight strength before exposure/tone mapping. 0 disables bloom. |
 | `bloomThreshold` | float | `1` | Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue. |
 | `bloomRadius` | int | `8` | Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional. |
+| `fxaa` | bool | `false` | Optional directional FXAA on display scene color before UI and selection outlines; disabled by default. |
 | `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
 | `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
 | `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |

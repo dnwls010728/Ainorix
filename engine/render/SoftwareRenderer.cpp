@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "render/Mesh.h"
 #include "render/PostProcess.h"
+#include "render/Fxaa.h"
 #include "render/RenderScene.h"
 #include "render/Renderer.h"
 #include "render/UI.h"
@@ -613,6 +614,28 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                                 ToneMap(hdr[pixel] + (bloom.empty() ? Color(0, 0, 0) : bloom[pixel] * post.bloom), post);
                 target.color[pixel] = Pack(display * factor);
             }
+        });
+    }
+    if (post.fxaa) {
+        const std::vector<uint32_t> source = target.color;
+        auto sample = [&](float x, float y) {
+            x = Clamp(x, 0, static_cast<float>(target.width - 1));
+            y = Clamp(y, 0, static_cast<float>(target.height - 1));
+            const int x0 = static_cast<int>(std::floor(x)), y0 = static_cast<int>(std::floor(y));
+            const int x1 = std::min(x0 + 1, target.width - 1), y1 = std::min(y0 + 1, target.height - 1);
+            auto read = [&](int px, int py) {
+                const uint32_t c = source[static_cast<size_t>(py) * static_cast<size_t>(target.width) + static_cast<size_t>(px)];
+                return Color(static_cast<float>(c & 255) / 255, static_cast<float>((c >> 8) & 255) / 255,
+                             static_cast<float>((c >> 16) & 255) / 255);
+            };
+            const float tx = x - static_cast<float>(x0), ty = y - static_cast<float>(y0);
+            return (read(x0, y0) * (1 - tx) + read(x1, y0) * tx) * (1 - ty) +
+                   (read(x0, y1) * (1 - tx) + read(x1, y1) * tx) * ty;
+        };
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x)
+                target.color[static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x)] =
+                    Pack(FxaaPixel(static_cast<float>(x), static_cast<float>(y), sample));
         });
     }
     if (view.highlight != kNullEntity) DrawOutline(target, view.highlight);

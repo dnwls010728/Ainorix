@@ -402,6 +402,7 @@ layout(binding=0) uniform composite_params {
     vec4 vignette;       // x: strength, y: radius, z: softness; zero strength leaves color unchanged
     vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 0 = disabled
     vec4 bloom_strength; // x: blurred HDR highlight strength, before exposure
+    vec4 post_stage;     // x: source already processed, y: FXAA enabled, zw: reciprocal source size
 };
 
 layout(binding=0) uniform texture2D scene_tex;
@@ -413,9 +414,9 @@ layout(binding=2) uniform sampler bloom_smp;
 
 out vec4 frag_color;
 
-void main() {
-    vec2 uv = gl_FragCoord.xy / target.xy;
+vec3 DisplayColor(vec2 uv) {
     vec3 c = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
+    if (post_stage.x > 0.5) return c;
     if (bloom_strength.x > 0.0) {
         c += texture(sampler2D(bloom_tex, bloom_smp), uv).rgb * bloom_strength.x;
         c = clamp(c, 0.0, 65504.0);
@@ -427,6 +428,34 @@ void main() {
         float t = clamp((length(uv * 2.0 - 1.0) - vignette.y) / vignette.z, 0.0, 1.0);
         c *= 1.0 - vignette.x * t * t * (3.0 - 2.0 * t);
     }
+    return c;
+}
+
+float FxaaLuma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+vec3 FxaaColor(vec2 uv) {
+    vec2 step_uv = post_stage.zw;
+    vec3 center = DisplayColor(uv);
+    float m = FxaaLuma(center);
+    float nw = FxaaLuma(DisplayColor(uv + vec2(-1.0,-1.0) * step_uv));
+    float ne = FxaaLuma(DisplayColor(uv + vec2( 1.0,-1.0) * step_uv));
+    float sw = FxaaLuma(DisplayColor(uv + vec2(-1.0, 1.0) * step_uv));
+    float se = FxaaLuma(DisplayColor(uv + vec2( 1.0, 1.0) * step_uv));
+    float lo = min(m, min(min(nw,ne), min(sw,se)));
+    float hi = max(m, max(max(nw,ne), max(sw,se)));
+    if (hi - lo < max(1.0 / 32.0, hi * 0.125)) return center;
+    vec2 dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    float reduce = max((nw + ne + sw + se) * (0.25 * 0.125), 1.0 / 128.0);
+    dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), vec2(-8.0), vec2(8.0)) * step_uv;
+    vec3 a = (DisplayColor(uv - dir / 6.0) + DisplayColor(uv + dir / 6.0)) * 0.5;
+    vec3 b = a * 0.5 + (DisplayColor(uv - dir * 0.5) + DisplayColor(uv + dir * 0.5)) * 0.25;
+    float lb = FxaaLuma(b);
+    return lb < lo || lb > hi ? a : b;
+}
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / target.xy;
+    vec3 c = post_stage.y > 0.5 ? FxaaColor(uv) : DisplayColor(uv);
     if (outline_color.a > 0.0) {
         ivec2 size = textureSize(sampler2D(mask_tex, mask_smp), 0);
         ivec2 p = ivec2(uv * vec2(size));

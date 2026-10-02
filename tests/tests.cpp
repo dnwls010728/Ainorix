@@ -2756,7 +2756,7 @@ TEST(CameraBloom) {
     CHECK((effect.color[10 * 128 + 10] & 0xFFFFFF) == 0xFFFFFF);
     view.postProcess.exposure = 0.25f;
     // A constant HDR background keeps its brightness at clamped borders.
-    Call(e, "entity.destroy", R"J({"id":"Bright"})J");
+    CHECK(Call(e, "entity.delete", R"J({"id":"Bright"})J")["ok"].asBool());
     view.clearColor = Color(8, 4, 2);
     view.postProcess.bloomRadius = 32;
     for (RenderTarget* t : {&effect, &again}) t->Resize(128, 72);
@@ -2770,6 +2770,86 @@ TEST(CameraBloom) {
         for (int shift : {0, 8, 16}) CHECK(std::abs(static_cast<int>((effect.color.back() >> shift) & 255) -
                                                   static_cast<int>((again.color.back() >> shift) & 255)) <= 1);
     }
+}
+
+TEST(CameraFxaa) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("camera_fxaa"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "material.create", R"J({"path":"white.mat.json","values":{"baseColor":[1,1,1],"unlit":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","clearColor":[0,0,0]},"PostProcess":{}}})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"Edge","components":{"Transform":{"rotation":[0,0,25],"scale":[4,1,1]},"MeshRenderer":{"material":"white.mat.json"}}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":200,"height":200,"color":[1,1,1],"opacity":1}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    RenderTarget off, on, again;
+    for (RenderTarget* target : {&off, &on, &again}) target->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, off);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"fxaa":true}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, on);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(on.Hash() != off.Hash() && on.Hash() == again.Hash());
+    CHECK(on.depth == off.depth && on.ids == off.ids);
+    CHECK(on.color[10 * 128 + 10] == off.color[10 * 128 + 10]);
+    CHECK(on.color.back() == off.color.back());
+    int smoothed = 0;
+    for (size_t i = 0; i < on.color.size(); ++i)
+        if (on.color[i] != off.color[i] && (on.color[i] & 255) > 0 && (on.color[i] & 255) < 255) ++smoothed;
+    CHECK(smoothed > 20);
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    CHECK(restored.Get<PostProcess>(restored.FindByName("Camera"))->fxaa);
+    Call(e, "history.undo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == off.Hash());
+    Call(e, "history.redo", "{}");
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    view.highlight = e.GetScene().FindByName("Edge");
+    view.postProcess.fxaa = false;
+    e.Renderer().Render(e.GetScene(), view, off);
+    view.postProcess.fxaa = true;
+    e.Renderer().Render(e.GetScene(), view, on);
+    int outlinePixels = 0;
+    for (size_t i = 0; i < off.color.size(); ++i) if ((off.color[i] & 0xFFFFFF) == 0x1A9EFF) {
+        ++outlinePixels;
+        CHECK(on.color[i] == off.color[i]);
+    }
+    CHECK(outlinePixels > 0);
+    view.highlight = kNullEntity;
+    if (e.EnableGpu(nullptr, &err)) {
+        for (int width : {128, 97}) {
+            for (RenderTarget* target : {&off, &on, &again}) target->Resize(width, width == 128 ? 72 : 55);
+            view.postProcess.fxaa = false;
+            e.Gpu()->Render(e.GetScene(), view, off);
+            view.postProcess.fxaa = true;
+            e.Gpu()->Render(e.GetScene(), view, on);
+            CHECK(on.Hash() != off.Hash());
+            CHECK(on.color[10 * width + 10] == off.color[10 * width + 10]);
+            e.Renderer().Render(e.GetScene(), view, again);
+            double error = 0;
+            for (size_t i = 0; i < on.color.size(); ++i) for (int shift : {0, 8, 16})
+                error += std::abs(static_cast<int>((on.color[i] >> shift) & 255) - static_cast<int>((again.color[i] >> shift) & 255));
+            const double mean = error / static_cast<double>(on.color.size() * 3);
+            std::printf("  FXAA width %d software/GPU mean difference %.4f\n", width, mean);
+            CHECK(mean < 3);
+            view.postProcess.fxaa = false;
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == off.Hash());
+        }
+    } else std::printf("  SKIP FXAA GPU comparison (%s)\n", err.c_str());
+    view.postProcess.fxaa = true;
+    view.clearColor = Color(0.25f, 0.5f, 0.75f);
+    CHECK(Call(e, "entity.delete", R"J({"id":"Edge"})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, on);
+    view.postProcess.fxaa = false;
+    e.Renderer().Render(e.GetScene(), view, off);
+    CHECK(on.Hash() == off.Hash());
 }
 
 TEST(GpuRendererMatchesSoftware) {

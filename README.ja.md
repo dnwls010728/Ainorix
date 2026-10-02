@@ -22,7 +22,7 @@ AI が人と同じように扱い、検証できるように設計した C++17 �
 - 2D ゲーム: スプライト・スプライトシートアニメーション (ピクセルアート、透明の切り抜き)、テキストで書くタイルマップ (タイルセットファイル、16/47 パターンのオートタイル、ランダムなバリエーション、タイルごとの衝突: ソリッド・一方通行・坂)、Box2D の 2D 物理、範囲付き追従カメラ、エディターの 2D ビューとタイルブラシ - [docs/2D.md](docs/2D.md)
 - ゲームの構成要素: プレハブ、シーン切り替え + ゲームデータ、メッセージ/タイマー、ゲーム内 UI、オーディオ (決定的ミキサー、効果音の生成) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 スクリプト (サンドボックス、ホットリロード、エラーにファイル:行を表示) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
-- カメラ後処理: ソフトウェア・GPUの露出・HDR Reinhardトーンマッピング・ブルーム・ビネットに対応し、UIと選択輪郭を維持。FXAA・カスタムマテリアルは進行中 - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- カメラ後処理: ソフトウェア・GPUの露出・HDR Reinhardトーンマッピング・ブルーム・ビネット・FXAAに対応し、UIと選択輪郭を維持。カスタムマテリアルとFXAAサンプル検証は進行中 - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - ゲームパッド入力: 6軸のAPI注入、Lua `input.axis`、共通0.15デッドゾーン、Windows XInput・Web Gamepad API・Android対応、エディターGameビュー転送とPlatformer/Dungeon操作。実コントローラー検証は未完了 - [docs/INPUT.md](docs/INPUT.md)
 - Webマルチタッチ: Lua `input.touches()`に全指を渡し、画面上のキーを同時操作。最初の指はマウスとしても動作。ブラウザー合成イベント検証済み、モバイル実機検証は未完了 - [docs/TOUCH.md](docs/TOUCH.md)
 - 決定的 (deterministic) なシミュレーションとソフトウェアレンダラー: 同じ入力なら同じフレームハッシュ → AI がテストオラクルとして使えます
