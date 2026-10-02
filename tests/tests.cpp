@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 #include "app/AndroidPackage.h"
@@ -22,6 +23,8 @@
 #include "core/Log.h"
 #include "core/Zip.h"
 #include "editor/EditorMath.h"
+#include "net/Bytes.h"
+#include "net/LoopbackTransport.h"
 #include "platform/GamepadInput.h"
 #include "platform/TouchInput.h"
 #include "render/Font.h"
@@ -94,6 +97,212 @@ TEST(JsonRoundTrip) {
     Json bad = Json::parse("{\"a\": }", &err);
     CHECK(!err.empty());
     CHECK(err.find("line 1") != std::string::npos);
+}
+
+TEST(NetworkBytesBoundsAndEndian) {
+    ByteWriter writer(64);
+    CHECK(writer.WriteU8(0x12));
+    CHECK(writer.WriteU16(0x3456));
+    CHECK(writer.WriteU32(0x789abcde));
+    CHECK(writer.WriteU64(UINT64_C(0xfedcba9876543210)));
+    const uint8_t payload[] = {1, 0, 255};
+    CHECK(writer.WriteBlob(payload, sizeof(payload)));
+    CHECK(writer.WriteBlob(nullptr, 0));
+    CHECK(writer.Data()[1] == 0x56 && writer.Data()[2] == 0x34);
+    CHECK(writer.Data()[3] == 0xde && writer.Data()[14] == 0xfe);
+    ByteReader reader(writer.Data().data(), writer.Data().size());
+    uint8_t u8 = 0;
+    uint16_t u16 = 0;
+    uint32_t u32 = 0;
+    uint64_t u64 = 0;
+    std::vector<uint8_t> blob;
+    CHECK(reader.ReadU8(u8) && u8 == 0x12);
+    CHECK(reader.ReadU16(u16) && u16 == 0x3456);
+    CHECK(reader.ReadU32(u32) && u32 == 0x789abcde);
+    CHECK(reader.ReadU64(u64) && u64 == UINT64_C(0xfedcba9876543210));
+    CHECK(reader.ReadBlob(blob, 3) && blob == std::vector<uint8_t>(payload, payload + 3));
+    CHECK(reader.ReadBlob(blob, 0) && blob.empty());
+    CHECK(reader.Ok() && reader.Remaining() == 0);
+    u8 = 77;
+    CHECK(!reader.ReadU8(u8) && u8 == 77 && !reader.Ok());
+
+    // Every truncated scalar leaves the caller's value and cursor untouched.
+    for (size_t size = 0; size < 8; ++size) {
+        ByteReader shortReader(writer.Data().data(), size);
+        u64 = 99;
+        CHECK(!shortReader.ReadU64(u64) && u64 == 99 && shortReader.Remaining() == size);
+    }
+    const uint8_t oversized[] = {255, 255, 255, 255};
+    ByteReader large(oversized, 4);
+    blob = {42};
+    CHECK(!large.ReadBlob(blob, 64) && blob == std::vector<uint8_t>{42} && large.Remaining() == 4);
+    const uint8_t truncated[] = {3, 0, 0, 0, 1, 2};
+    ByteReader shortBlob(truncated, sizeof(truncated));
+    CHECK(!shortBlob.ReadBlob(blob, 3) && blob[0] == 42 && shortBlob.Remaining() == sizeof(truncated));
+    ByteReader nullReader(nullptr, 1);
+    CHECK(!nullReader.Ok() && !nullReader.ReadU8(u8));
+    ByteReader emptyReader(nullptr, 0);
+    CHECK(emptyReader.Ok() && !emptyReader.ReadU8(u8));
+    ByteWriter small(5);
+    CHECK(small.WriteU8(9));
+    CHECK(!small.WriteBlob(payload, 3) && small.Data() == std::vector<uint8_t>{9});
+    CHECK(!small.WriteU8(1));
+    ByteWriter nullWriter(8);
+    CHECK(!nullWriter.WriteBlob(nullptr, 1) && nullWriter.Data().empty());
+    ByteWriter zeroWriter(0);
+    CHECK(!zeroWriter.WriteU64(1) && zeroWriter.Data().empty());
+    ByteWriter exact(7);
+    CHECK(exact.WriteBlob(payload, 3) && exact.Data().size() == 7);
+    ByteReader limited(exact.Data().data(), exact.Data().size());
+    CHECK(!limited.ReadBlob(blob, 2) && limited.Remaining() == 7);
+
+    // Deterministic malformed corpus: arbitrary prefixes and lengths never escape the limit.
+    uint32_t seed = 123;
+    for (size_t i = 0; i < 2000; ++i) {
+        std::vector<uint8_t> bytes(i % 65);
+        for (auto& byte : bytes) { seed = seed * 1664525u + 1013904223u; byte = static_cast<uint8_t>(seed >> 24); }
+        ByteReader fuzz(bytes.data(), bytes.size());
+        blob = {42};
+        bool ok = fuzz.ReadBlob(blob, 32);
+        CHECK(blob.size() <= 32 && fuzz.Remaining() <= bytes.size());
+        if (!ok) CHECK(blob == std::vector<uint8_t>{42} && fuzz.Remaining() == bytes.size());
+    }
+}
+
+TEST(NetworkLoopbackDeliveryAndLimits) {
+    LoopbackConfig config;
+    config.latencyFrames = 3;
+    auto wire = std::make_shared<LoopbackNetwork>(config);
+    LoopbackTransport sender(wire, 1), receiver(wire, 2);
+    ITransport& transport = sender;
+    uint8_t byte = 7;
+    CHECK(transport.Send(2, &byte, 1));
+    byte = 9;  // Send owns a copy, never the caller's memory.
+    std::vector<TransportEvent> events;
+    CHECK(receiver.Poll(2, events) && events.empty());
+    CHECK(receiver.Poll(3, events) && events.size() == 1);
+    CHECK(events[0].peer == 1 && events[0].bytes == std::vector<uint8_t>{7});
+    CHECK(!receiver.Poll(2, events) && events.size() == 1);
+    CHECK(wire->PendingMessages() == 0 && wire->PendingBytes() == 0);
+    CHECK(!sender.Send(99, &byte, 1));
+    CHECK(!sender.Send(2, nullptr, 1));
+    CHECK(!sender.Send(2, &byte, ITransport::kMaxMessageBytes + 1));
+    CHECK(wire->DroppedMessages() == 3);
+
+    for (size_t i = 0; i < LoopbackNetwork::kMaxQueuedMessages; ++i) CHECK(sender.Send(2, nullptr, 0));
+    CHECK(!sender.Send(2, nullptr, 0));
+    CHECK(wire->PendingMessages() == LoopbackNetwork::kMaxQueuedMessages);
+    events.clear();
+    CHECK(receiver.Poll(4, events) && events.size() == LoopbackNetwork::kMaxQueuedMessages);
+    std::vector<uint8_t> large(ITransport::kMaxMessageBytes, 1);
+    for (size_t i = 0; i < LoopbackNetwork::kMaxQueuedBytes / large.size(); ++i)
+        CHECK(sender.Send(2, large.data(), large.size()));
+    CHECK(!sender.Send(2, &byte, 1));
+    CHECK(wire->PendingBytes() == LoopbackNetwork::kMaxQueuedBytes);
+    {
+        LoopbackTransport temporary(wire, 3);
+        CHECK(temporary.Send(2, nullptr, 0));
+    }
+    CHECK(wire->PendingMessages() == LoopbackNetwork::kMaxQueuedBytes / large.size());
+    events.clear();
+    CHECK(receiver.Poll(5, events));
+    CHECK(wire->PendingBytes() == 0);
+    {
+        LoopbackTransport temporary(wire, 3);
+        CHECK(sender.Send(3, &byte, 1));
+        CHECK(temporary.Send(2, &byte, 1));
+    }
+    CHECK(wire->PendingMessages() == 0 && wire->PendingBytes() == 0);
+    CHECK(sender.Poll(UINT64_MAX, events));
+    CHECK(!sender.Send(2, &byte, 1) && wire->PendingMessages() == 0);
+
+    bool rejected = false;
+    try { LoopbackTransport duplicate(wire, 1); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    rejected = false;
+    try { LoopbackTransport invalid(wire, 0); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    std::vector<std::unique_ptr<LoopbackTransport>> peers;
+    for (PeerId id = 3; id <= LoopbackNetwork::kMaxPeers; ++id)
+        peers.push_back(std::make_unique<LoopbackTransport>(wire, id));
+    rejected = false;
+    try { LoopbackTransport extra(wire, 65); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+    config.lossPermille = 1001;
+    rejected = false;
+    try { LoopbackNetwork invalid(config); } catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+}
+
+TEST(NetworkLoopbackSeededFaults) {
+    auto run = [](uint32_t seed) {
+        LoopbackConfig config;
+        config.seed = seed;
+        config.latencyFrames = 4;
+        config.jitterFrames = 3;
+        config.lossPermille = 250;
+        config.duplicatePermille = 300;
+        config.reorderFrames = 8;
+        auto wire = std::make_shared<LoopbackNetwork>(config);
+        LoopbackTransport a(wire, 1), b(wire, 2), c(wire, 3);
+        std::vector<uint64_t> trace;
+        for (uint64_t frame = 0; frame < 150; ++frame) {
+            std::vector<TransportEvent> events;
+            CHECK(a.Poll(frame, events));
+            CHECK(b.Poll(frame, events));
+            CHECK(c.Poll(frame, events));
+            for (const auto& event : events) {
+                CHECK(event.bytes.size() == 1);
+                CHECK(frame >= static_cast<uint64_t>(event.bytes[0]) + 1);
+                CHECK(frame <= static_cast<uint64_t>(event.bytes[0]) + 15);
+                trace.push_back((frame << 32) | (static_cast<uint64_t>(event.peer) << 16) | event.bytes[0]);
+            }
+            if (frame < 100) {
+                const uint8_t value = static_cast<uint8_t>(frame);
+                CHECK(a.Send(2, &value, 1));
+                CHECK(b.Send(3, &value, 1));
+                CHECK(c.Send(1, &value, 1));
+            }
+        }
+        CHECK(wire->PendingMessages() == 0 && wire->PendingBytes() == 0);
+        CHECK(wire->DroppedMessages() > 0);
+        return trace;
+    };
+    auto trace = run(42);
+    CHECK(trace == run(42));
+    CHECK(trace != run(43));
+    std::set<uint32_t> seen;
+    bool duplicate = false, reordered = false;
+    std::map<PeerId, uint8_t> previous;
+    for (uint64_t entry : trace) {
+        const uint32_t message = static_cast<uint32_t>(entry);
+        duplicate |= !seen.insert(message).second;
+        const PeerId peer = (message >> 16) & 255;
+        const uint8_t value = static_cast<uint8_t>(message);
+        if (previous.count(peer)) reordered |= value < previous[peer];
+        previous[peer] = value;
+    }
+    CHECK(duplicate && reordered);
+    LoopbackConfig config;
+    config.lossPermille = 1000;
+    auto wire = std::make_shared<LoopbackNetwork>(config);
+    LoopbackTransport a(wire, 1), b(wire, 2);
+    CHECK(a.Send(2, nullptr, 0));
+    std::vector<TransportEvent> events;
+    CHECK(b.Poll(100, events) && events.empty() && wire->DroppedMessages() == 1);
+
+    config.lossPermille = 0;
+    config.duplicatePermille = 1000;
+    auto duplicates = std::make_shared<LoopbackNetwork>(config);
+    LoopbackTransport c(duplicates, 1), d(duplicates, 2);
+    // Fewer than two payloads fit: reject without enqueuing either duplicate.
+    std::vector<uint8_t> payload(65535, 1);
+    for (int i = 0; i < 32; ++i) CHECK(c.Send(2, payload.data(), payload.size()));
+    CHECK(duplicates->PendingBytes() == 4194240);
+    CHECK(!c.Send(2, payload.data(), 33));
+    CHECK(duplicates->PendingBytes() == 4194240 && duplicates->PendingMessages() == 64);
+    CHECK(d.Poll(0, events) && events.size() == 64);
+    CHECK(duplicates->PendingBytes() == 0);
 }
 
 TEST(SceneRoundTrip) {
@@ -246,6 +455,41 @@ std::string TempProject(const char* name) {
 }
 
 Json Call(Engine& e, const char* cmd, const char* args) { return e.Call(cmd, Json::parse(args)); }
+
+TEST(NetworkInactiveZeroCost) {
+    const uint64_t instances = LoopbackNetwork::InstancesCreated();
+    const uint64_t polls = LoopbackNetwork::PollCalls();
+    const std::string project = TempProject("network_inactive");
+    std::string text;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json settings = Json::parse(text);
+    CHECK(settings["network"].isNull());
+    auto run = [&]() {
+        Engine e;
+        std::string error;
+        CHECK(e.Open(project, &error));
+        std::vector<std::string> hashes;
+        for (int step = 0; step < 4; ++step) {
+            CHECK(Call(e, "input.key", step % 2 == 0 ? R"({"key":"W","down":true})" :
+                                                     R"({"key":"W","down":false})")["ok"].asBool());
+            CHECK(Call(e, "sim.step", R"({"frames":30})")["ok"].asBool());
+            Json shot = Call(e, "render.screenshot", R"({"width":64,"height":36,"inline":false})");
+            CHECK(shot["ok"].asBool());
+            hashes.push_back(shot["result"]["hash"].asString());
+            hashes.push_back(e.GetScene().ToJson().dump());
+        }
+        CHECK(Call(e, "sim.stop", "{}")["ok"].asBool());
+        return hashes;
+    };
+    const auto absent = run();
+    CHECK(absent == run());
+    settings["network"] = Json::parse(R"({"mode":"none"})");
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), settings.dump(2)));
+    CHECK(absent == run());
+    CHECK(LoopbackNetwork::InstancesCreated() == instances);
+    CHECK(LoopbackNetwork::PollCalls() == polls);
+    CHECK(RemoveAll(project));
+}
 
 bool Near(const Vec3& a, const Vec3& b, float eps) {
     return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;

@@ -104,6 +104,7 @@ file(GLOB OE_CORE_SOURCES CONFIGURE_DEPENDS
   engine/script/*.cpp
   engine/physics/*.cpp
   engine/audio/*.cpp
+  engine/net/*.cpp
   engine/assets/*.cpp
   engine/render/*.cpp
   engine/api/*.cpp
