@@ -1,0 +1,205 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {
+    "lightDir": [
+      -0.5563486402641867,
+      0.4707565417620042,
+      0.6847367880174606,
+      0
+    ],
+    "shadowCut": 0.12,
+    "shadowTint": [
+      0.45,
+      0.37,
+      0.6,
+      1
+    ],
+    "cameraPos": [
+      0,
+      2.7,
+      8.5,
+      1
+    ],
+    "rimStart": 0.78,
+    "rimColor": [
+      0.06,
+      0.15,
+      0.18,
+      0
+    ],
+    "halfDir": [
+      -0.3006892626861106,
+      0.28679931007089404,
+      0.9095779917347068,
+      0
+    ],
+    "specColor": [
+      0.14,
+      0.14,
+      0.14,
+      0
+    ]
+  },
+  "nodes": [
+    {
+      "op": "normal"
+    },
+    {
+      "op": "uniform",
+      "name": "lightDir"
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "shadowCut"
+    },
+    {
+      "op": "step",
+      "args": [
+        3,
+        2
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "shadowTint"
+    },
+    {
+      "op": "constant",
+      "value": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "op": "mix",
+      "args": [
+        5,
+        6,
+        4
+      ]
+    },
+    {
+      "op": "baseColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        8,
+        7
+      ]
+    },
+    {
+      "op": "position"
+    },
+    {
+      "op": "uniform",
+      "name": "cameraPos"
+    },
+    {
+      "op": "subtract",
+      "args": [
+        11,
+        10
+      ]
+    },
+    {
+      "op": "normalize",
+      "args": [
+        12
+      ]
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        13
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        6,
+        14
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "rimStart"
+    },
+    {
+      "op": "step",
+      "args": [
+        16,
+        15
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "rimColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        17,
+        18
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        9,
+        19
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "halfDir"
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        21
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.965
+    },
+    {
+      "op": "step",
+      "args": [
+        23,
+        22
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "specColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        24,
+        25
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        20,
+        26
+      ]
+    }
+  ],
+  "color": 27
+}

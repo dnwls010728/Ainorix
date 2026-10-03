@@ -1,0 +1,713 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "WuwaToon",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            2.7,
+            8.5
+          ],
+          "rotation": [
+            -5.5,
+            0,
+            0
+          ]
+        },
+        "Camera": {
+          "fov": 32,
+          "clearColor": [
+            0.025,
+            0.04,
+            0.065
+          ]
+        },
+        "PostProcess": {
+          "fxaa": true
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Sun",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -28.083416508868634,
+            -39.0938588862295,
+            0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            0.93,
+            0.98,
+            1
+          ],
+          "intensity": 1.1,
+          "ambient": [
+            0.24,
+            0.28,
+            0.36
+          ],
+          "shadows": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Stage",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.03,
+            0
+          ],
+          "scale": [
+            11,
+            1,
+            9
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [
+            0.09,
+            0.12,
+            0.18
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Pedestal",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.02,
+            0
+          ],
+          "scale": [
+            1.6,
+            0.12,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.14,
+            0.18,
+            0.25
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Canvas",
+      "components": {
+        "UICanvas": {
+          "referenceWidth": 1280,
+          "referenceHeight": 720
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Character",
+      "components": {
+        "Transform": {},
+        "Script": {
+          "path": "scripts/lab.lua"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Part_skin",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/skin.glb",
+          "material": "materials/skin-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 8,
+      "name": "Outline_skin",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/skin-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 9,
+      "name": "Part_hair",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/hair.glb",
+          "material": "materials/hair-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 10,
+      "name": "Outline_hair",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/hair-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 11,
+      "name": "Part_coat",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/coat.glb",
+          "material": "materials/coat-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 12,
+      "name": "Outline_coat",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/coat-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 13,
+      "name": "Part_boots",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/boots.glb",
+          "material": "materials/boots-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 14,
+      "name": "Outline_boots",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/boots-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 15,
+      "name": "Part_trim",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/trim.glb",
+          "material": "materials/trim-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 16,
+      "name": "Part_eyes",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/eyes.glb",
+          "material": "materials/eyes-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 17,
+      "name": "Part_iris",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/iris.glb",
+          "material": "materials/iris-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 18,
+      "name": "Part_ink",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/ink.glb",
+          "material": "materials/ink-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 19,
+      "name": "Part_blush",
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/blush.glb",
+          "material": "materials/blush-toon.mat.json"
+        }
+      },
+      "parent": 6
+    },
+    {
+      "id": 20,
+      "name": "Probe_PBR",
+      "components": {
+        "Transform": {
+          "position": [
+            2.0,
+            0.9,
+            0
+          ],
+          "scale": [
+            0.68,
+            0.68,
+            0.68
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "material": "materials/trim-pbr.mat.json"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "Probe_Toon",
+      "components": {
+        "Transform": {
+          "position": [
+            2.0,
+            1.87,
+            0
+          ],
+          "scale": [
+            0.68,
+            0.68,
+            0.68
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "material": "materials/trim-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "Probe_Normals",
+      "components": {
+        "Transform": {
+          "position": [
+            2.0,
+            2.84,
+            0
+          ],
+          "scale": [
+            0.68,
+            0.68,
+            0.68
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "material": "materials/normals.mat.json"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "Title",
+      "components": {
+        "UIText": {
+          "text": "WUWA / TOON STUDY",
+          "size": 29,
+          "color": [
+            0.82,
+            0.93,
+            1
+          ],
+          "anchor": "top-left",
+          "x": 38,
+          "y": 25,
+          "width": 900,
+          "height": 40.599999999999994
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Subtitle",
+      "components": {
+        "UIText": {
+          "text": "Original mannequin / community shader references / OwnEngine graphs",
+          "size": 14,
+          "color": [
+            0.42,
+            0.62,
+            0.72
+          ],
+          "anchor": "top-left",
+          "x": 40,
+          "y": 66,
+          "width": 900,
+          "height": 19.599999999999998
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "Mode",
+      "components": {
+        "UIText": {
+          "text": "MODE 01   TOON / TINTED SHADOW + RIM + SPECULAR",
+          "size": 14,
+          "color": [
+            0.12,
+            0.83,
+            0.85
+          ],
+          "anchor": "top-left",
+          "x": 40,
+          "y": 101,
+          "width": 900,
+          "height": 19.599999999999998
+        }
+      }
+    },
+    {
+      "id": 26,
+      "name": "Controls",
+      "components": {
+        "UIText": {
+          "text": "1 Toon   2 PBR   3 Normals   O Outline   P Turntable   R Reset",
+          "size": 15,
+          "color": [
+            0.65,
+            0.8,
+            0.86
+          ],
+          "anchor": "top-left",
+          "x": 40,
+          "y": 610,
+          "width": 900,
+          "height": 21.0
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "Limits",
+      "components": {
+        "UIText": {
+          "text": "SURFACE GRAPH STUDY / fixed studio light / view-angle rim / original assets",
+          "size": 12,
+          "color": [
+            0.36,
+            0.5,
+            0.61
+          ],
+          "anchor": "top-left",
+          "x": 40,
+          "y": 638,
+          "width": 900,
+          "height": 16.799999999999997
+        }
+      }
+    },
+    {
+      "id": 28,
+      "name": "ProbeLabel_Normals",
+      "components": {
+        "UIText": {
+          "text": "NORMALS",
+          "size": 18,
+          "color": [
+            0.65,
+            0.8,
+            0.88
+          ],
+          "anchor": "top-left",
+          "x": 1020,
+          "y": 209,
+          "width": 220,
+          "height": 25.2
+        }
+      }
+    },
+    {
+      "id": 29,
+      "name": "ProbeLabel_Toon",
+      "components": {
+        "UIText": {
+          "text": "TOON",
+          "size": 18,
+          "color": [
+            0.65,
+            0.8,
+            0.88
+          ],
+          "anchor": "top-left",
+          "x": 1020,
+          "y": 349,
+          "width": 220,
+          "height": 25.2
+        }
+      }
+    },
+    {
+      "id": 30,
+      "name": "ProbeLabel_PBR",
+      "components": {
+        "UIText": {
+          "text": "PBR",
+          "size": 18,
+          "color": [
+            0.65,
+            0.8,
+            0.88
+          ],
+          "anchor": "top-left",
+          "x": 1020,
+          "y": 489,
+          "width": 220,
+          "height": 25.2
+        }
+      }
+    },
+    {
+      "id": 31,
+      "name": "Button_toon",
+      "components": {
+        "UIButton": {
+          "text": "1 Toon",
+          "size": 15,
+          "anchor": "top-left",
+          "x": 40,
+          "y": 674,
+          "width": 124,
+          "height": 33,
+          "color": [
+            0.08,
+            0.18,
+            0.25
+          ],
+          "textColor": [
+            0.78,
+            0.94,
+            1
+          ],
+          "key": "1"
+        },
+        "Script": {
+          "path": "scripts/lab.lua",
+          "params": {
+            "action": "toon"
+          }
+        }
+      }
+    },
+    {
+      "id": 32,
+      "name": "Button_pbr",
+      "components": {
+        "UIButton": {
+          "text": "2 PBR",
+          "size": 15,
+          "anchor": "top-left",
+          "x": 176,
+          "y": 674,
+          "width": 124,
+          "height": 33,
+          "color": [
+            0.08,
+            0.18,
+            0.25
+          ],
+          "textColor": [
+            0.78,
+            0.94,
+            1
+          ],
+          "key": "2"
+        },
+        "Script": {
+          "path": "scripts/lab.lua",
+          "params": {
+            "action": "pbr"
+          }
+        }
+      }
+    },
+    {
+      "id": 33,
+      "name": "Button_normals",
+      "components": {
+        "UIButton": {
+          "text": "3 Normals",
+          "size": 15,
+          "anchor": "top-left",
+          "x": 312,
+          "y": 674,
+          "width": 124,
+          "height": 33,
+          "color": [
+            0.08,
+            0.18,
+            0.25
+          ],
+          "textColor": [
+            0.78,
+            0.94,
+            1
+          ],
+          "key": "3"
+        },
+        "Script": {
+          "path": "scripts/lab.lua",
+          "params": {
+            "action": "normals"
+          }
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Button_outline",
+      "components": {
+        "UIButton": {
+          "text": "Outline",
+          "size": 15,
+          "anchor": "top-left",
+          "x": 448,
+          "y": 674,
+          "width": 124,
+          "height": 33,
+          "color": [
+            0.08,
+            0.18,
+            0.25
+          ],
+          "textColor": [
+            0.78,
+            0.94,
+            1
+          ],
+          "key": "O"
+        },
+        "Script": {
+          "path": "scripts/lab.lua",
+          "params": {
+            "action": "outline"
+          }
+        }
+      }
+    },
+    {
+      "id": 35,
+      "name": "Button_turntable",
+      "components": {
+        "UIButton": {
+          "text": "Turntable",
+          "size": 15,
+          "anchor": "top-left",
+          "x": 584,
+          "y": 674,
+          "width": 124,
+          "height": 33,
+          "color": [
+            0.08,
+            0.18,
+            0.25
+          ],
+          "textColor": [
+            0.78,
+            0.94,
+            1
+          ],
+          "key": "P"
+        },
+        "Script": {
+          "path": "scripts/lab.lua",
+          "params": {
+            "action": "turntable"
+          }
+        }
+      }
+    },
+    {
+      "id": 36,
+      "name": "Button_reset",
+      "components": {
+        "UIButton": {
+          "text": "Reset",
+          "size": 15,
+          "anchor": "top-left",
+          "x": 720,
+          "y": 674,
+          "width": 124,
+          "height": 33,
+          "color": [
+            0.08,
+            0.18,
+            0.25
+          ],
+          "textColor": [
+            0.78,
+            0.94,
+            1
+          ],
+          "key": "R"
+        },
+        "Script": {
+          "path": "scripts/lab.lua",
+          "params": {
+            "action": "reset"
+          }
+        }
+      }
+    }
+  ]
+}

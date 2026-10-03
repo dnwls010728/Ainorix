@@ -1,0 +1,41 @@
+{
+  "format": "ownengine.shader",
+  "nodes": [
+    {
+      "op": "normal"
+    },
+    {
+      "op": "constant",
+      "value": [
+        0.5,
+        0.5,
+        0.5,
+        0
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        0.5,
+        0.5,
+        0.5,
+        1
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        2,
+        3
+      ]
+    }
+  ],
+  "color": 4
+}

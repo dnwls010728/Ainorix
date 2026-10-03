@@ -4,6 +4,8 @@
 
 AI が人と同じように扱い、検証できるように設計した C++17 ゲームエンジンです。人のためのエディターと AI のためのインターフェース (CLI・HTTP・MCP) が**同じコマンド API** を共有します。
 
+- トゥーンシェーダーテスト: `samples/WuwaToon` — 鳴潮の公開コミュニティ資料を参考にした独自モデル、Toon/PBR/法線比較、輪郭線と回転操作。実装範囲と出典: [docs/TOON.md](docs/TOON.md)
+
 ![ネイティブエディター - Showcase サンプル](docs/images/native-editor.png)
 
 | ゲーム画面 (`oe render samples/Showcase`) | |
