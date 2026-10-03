@@ -1,0 +1,30 @@
+{
+  "format": "ownengine.material",
+  "baseColor": [
+    0.035,
+    0.025,
+    0.045
+  ],
+  "unlit": true,
+  "shader": "materials/toon.shader.json",
+  "shaderUniforms": {
+    "shadowTint": [
+      0.85,
+      0.85,
+      0.9,
+      1
+    ],
+    "rimColor": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "specColor": [
+      0,
+      0,
+      0,
+      0
+    ]
+  }
+}

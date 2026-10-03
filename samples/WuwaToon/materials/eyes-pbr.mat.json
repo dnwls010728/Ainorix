@@ -1,0 +1,10 @@
+{
+  "format": "ownengine.material",
+  "baseColor": [
+    0.96,
+    0.97,
+    0.94
+  ],
+  "metallic": 0,
+  "roughness": 0.7
+}

@@ -318,6 +318,11 @@ The initial scene keeps all effects neutral. Adjust preset values in
 
 ## Portable surface shader graphs
 
+`samples/WuwaToon` demonstrates a project-authored toon graph with independent
+skin/hair/clothing palettes, explicit studio light/camera uniforms, normal/PBR
+comparisons and original procedural silhouette geometry. See [TOON.md](TOON.md)
+for public reference provenance, runnable controls, verification and limits.
+
 A project authors a *.shader.json graph rather than platform-specific HLSL or
 GLSL. The graph is a programmable fragment surface calculation, not a list of
 built-in visual presets. Ordered four-vector instructions form an acyclic

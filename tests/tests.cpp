@@ -4141,6 +4141,174 @@ TEST(ShowcasePostProcessControls) {
     CHECK(e.Scripts().Errors().empty());
 }
 
+TEST(WuwaToonGraphBandsRimAndSpecular) {
+    Engine e; std::string error;
+    CHECK(e.Open(TestSourceDir()+"/samples/WuwaToon",&error));
+    CHECK(Call(e,"shader.check",R"({"path":"materials/toon.shader.json"})")["ok"].asBool());
+    CHECK(Call(e,"shader.check",R"({"path":"materials/normals.shader.json"})")["ok"].asBool());
+    ShaderGraph graph;
+    CHECK(CompileShaderGraph(e.ReadProjectJson("materials/toon.shader.json"),graph,&error));
+    CHECK(graph.instructions.size()<=32 && graph.uniformNames.size()<=8);
+    std::array<Vec4,ShaderGraph::kMaxUniforms> uniforms;
+    Json overrides=Json::parse(R"({"lightDir":[0,0,1,0],"shadowCut":0.12,"shadowTint":[0.5,0.25,0.75,1],
+      "cameraPos":[0,0,10,1],"rimStart":0.78,"rimColor":[0,0,0,0],"halfDir":[0,0,1,0],"specColor":[0,0,0,0]})");
+    ShaderInputs input; input.position=Vec4(0,0,0,1); input.baseColor=Vec4(0.8f,0.6f,0.4f,1);
+    auto expect=[&](float z,const Vec3& rgb) {
+        CHECK(ShaderUniforms(graph,overrides,uniforms,&error));
+        input.normal=Vec4(std::sqrt(std::max(0.0f,1-z*z)),0,z,0);
+        const ShaderSurface surface=EvaluateShaderGraph(graph,input,uniforms);
+        CHECK(std::fabs(surface.color.x-rgb.x)<1e-5f && std::fabs(surface.color.y-rgb.y)<1e-5f &&
+              std::fabs(surface.color.z-rgb.z)<1e-5f && surface.color.w==1);
+    };
+    expect(0.11f,Vec3(0.4f,0.15f,0.3f)); // below threshold: tinted shadow
+    expect(0.13f,Vec3(0.8f,0.6f,0.4f)); // above threshold: flat diffuse band
+    expect(0.7f,Vec3(0.8f,0.6f,0.4f)); // diffuse remains flat within its band
+    overrides["rimColor"]=Json(Json::Array{0.1,0.2,0.3,0});
+    expect(0.21f,Vec3(0.9f,0.8f,0.7f)); // 1-N.V > .78: colored rim
+    expect(0.23f,Vec3(0.8f,0.6f,0.4f)); // 1-N.V < .78: no rim
+    overrides["specColor"]=Json(Json::Array{0.2,0.1,0.05,0});
+    expect(0.96f,Vec3(0.8f,0.6f,0.4f));
+    expect(0.97f,Vec3(1.0f,0.7f,0.45f)); // quantized specular threshold .965
+}
+
+TEST(WuwaToonSampleControlsAndPackaging) {
+    Engine e; std::string error;
+    const std::string project=TestSourceDir()+"/samples/WuwaToon";
+    CHECK(e.Open(project,&error));
+    CHECK(Call(e,"script.check",R"({"path":"scripts/lab.lua"})")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+    RenderTarget toon, pbr, normals, reset;
+    for (RenderTarget* target : {&toon,&pbr,&normals,&reset}) target->Resize(240,135);
+    e.RenderGameView(toon);
+    RenderTarget surfaceToon, surfacePbr, surfaceNormals;
+    for (RenderTarget* target : {&surfaceToon,&surfacePbr,&surfaceNormals}) target->Resize(240,135);
+    auto renderSurface=[&](RenderTarget& target) {
+        RenderView view; MakeSceneView(e.GetScene(),240.0f/135,view); view.drawUI=false;
+        e.Renderer().Render(e.GetScene(),view,target);
+    };
+    renderSurface(surfaceToon);
+    const std::vector<std::string> parts={"skin","hair","coat","boots","trim","eyes","iris","ink","blush"};
+    auto checkMode=[&](const char* mode) {
+        for (const std::string& part : parts) {
+            const MeshRenderer* renderer=e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Part_"+part));
+            CHECK(renderer && renderer->material==(std::string(mode)=="normals"?"materials/normals.mat.json":
+                                                   "materials/"+part+"-"+mode+".mat.json"));
+        }
+    };
+    checkMode("toon");
+    int visible=0;
+    for (EntityId id : toon.ids) if (id && e.GetScene().Record(id)->name.find("Part_")==0) ++visible;
+    CHECK(visible>100);
+    auto key=[&](const char* name) {
+        Json args=Json::MakeObject(); args["key"]=name; args["down"]=true;
+        CHECK(e.Call("input.key",args)["ok"].asBool());
+        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+        args["down"]=false; CHECK(e.Call("input.key",args)["ok"].asBool());
+        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+    };
+    key("2"); checkMode("pbr"); e.RenderGameView(pbr); CHECK(pbr.Hash()!=toon.Hash()); renderSurface(surfacePbr);
+    key("3"); checkMode("normals"); e.RenderGameView(normals); CHECK(normals.Hash()!=pbr.Hash() && normals.Hash()!=toon.Hash());
+    renderSurface(surfaceNormals);
+    int changedPbr=0, changedNormals=0;
+    for (size_t i=0;i<surfaceToon.color.size();++i) {
+        const EntityId id=surfaceToon.ids[i];
+        if (!id || e.GetScene().Record(id)->name.find("Part_")!=0) continue;
+        changedPbr+=surfaceToon.color[i]!=surfacePbr.color[i];
+        changedNormals+=surfaceToon.color[i]!=surfaceNormals.color[i];
+    }
+    CHECK(changedPbr>100 && changedNormals>100); // the surfaces themselves change, independently of mode-label text
+    key("1"); checkMode("toon");
+    key("O"); CHECK(!e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
+    key("P"); CHECK(Call(e,"sim.step",R"({"frames":30})")["ok"].asBool());
+    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y>10);
+    key("R"); checkMode("toon"); e.RenderGameView(reset);
+    CHECK(reset.Hash()==toon.Hash());
+    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y==0);
+    const Json layout=Call(e,"ui.layout",R"({"width":1280,"height":720,"interactable":true})")["result"]["elements"];
+    auto button=[&](const char* name,bool touch) {
+        Json args=Json::MakeObject(); bool found=false;
+        for (const Json& item : layout.items()) if (item["name"].asString()==name) {
+            args["x"]=item["center"][0]; args["y"]=item["center"][1]; found=true;
+        }
+        CHECK(found); if (!found) return;
+        args["width"]=1280; args["height"]=720;
+        if (touch) { args["id"]=7; args["down"]=true; }
+        const Json dispatch=e.Call(touch?"input.touch":"input.click",args);
+        CHECK(dispatch["ok"].asBool());
+        if (!touch) CHECK(dispatch["result"]["buttonName"].asString()==name);
+        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+        if (touch) {
+            const UIButton* control=e.GetScene().Get<UIButton>(e.GetScene().FindByName(name));
+            CHECK(control && !control->key.empty() && control->pressed);
+            args["down"]=false; CHECK(e.Call("input.touch",args)["ok"].asBool());
+            CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+        }
+    };
+    button("Button_pbr",false); checkMode("pbr");
+    button("Button_normals",true); checkMode("normals");
+    button("Button_reset",true); checkMode("toon");
+    button("Button_outline",false);
+    CHECK(!e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
+    button("Button_outline",true);
+    CHECK(e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
+    button("Button_turntable",true);
+    CHECK(Call(e,"sim.step",R"({"frames":10})")["ok"].asBool());
+    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y>0);
+    button("Button_reset",false);
+    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y==0);
+    // Real mouse presses deliver both the mapped key and onClick; primary-touch compatibility adds a third input source.
+    auto heldMouse=[&](const char* name,bool primaryTouch,const std::function<void()>& verify) {
+        Json pointer=Json::MakeObject(); bool found=false;
+        for (const Json& item : layout.items()) if (item["name"].asString()==name) {
+            pointer["x"]=item["center"][0]; pointer["y"]=item["center"][1]; found=true;
+        }
+        CHECK(found); if (!found) return;
+        pointer["width"]=1280; pointer["height"]=720;
+        CHECK(e.Call("input.mouse",pointer)["ok"].asBool());
+        CHECK(Call(e,"input.key",R"({"key":"MouseLeft","down":true})")["ok"].asBool());
+        if (primaryTouch) {
+            pointer["id"]=9; pointer["down"]=true;
+            CHECK(e.Call("input.touch",pointer)["ok"].asBool());
+        }
+        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool()); verify();
+        CHECK(Call(e,"sim.step",R"({"frames":3})")["ok"].asBool()); verify();
+        CHECK(Call(e,"input.key",R"({"key":"MouseLeft","down":false})")["ok"].asBool());
+        if (primaryTouch) CHECK(Call(e,"input.touch",R"({"id":9,"down":false})")["ok"].asBool());
+        CHECK(Call(e,"sim.step",R"({"frames":2})")["ok"].asBool()); verify();
+    };
+    heldMouse("Button_outline",false,[&]() {
+        CHECK(!e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
+        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_outline"))->text=="Outline: OFF");
+    });
+    heldMouse("Button_outline",true,[&]() {
+        CHECK(e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
+        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_outline"))->text=="Outline: ON");
+    });
+    heldMouse("Button_turntable",false,[&]() {
+        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_turntable"))->text=="Spin: ON");
+        CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y>0);
+    });
+    const float stoppedAngle=e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y;
+    heldMouse("Button_turntable",true,[&]() {
+        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_turntable"))->text=="Spin: OFF");
+        CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y==stoppedAngle);
+    });
+    key("R"); checkMode("toon");
+    CHECK(e.Scripts().Errors().empty());
+    const std::vector<std::string> files=GameFiles(project);
+    for (const char* path : {"materials/toon.shader.json","materials/normals.shader.json","materials/skin-toon.mat.json",
+                             "assets/models/skin.glb","assets/models/hair.glb","scripts/lab.lua"})
+        CHECK(std::find(files.begin(),files.end(),path)!=files.end());
+    CHECK(WriteGamePak(project,files,"build/test_wuwa_toon/game.pak",&error));
+    std::vector<unsigned char> bytes; CHECK(ReadBinaryFile("build/test_wuwa_toon/game.pak",bytes));
+    CHECK(ExtractGamePak(bytes,"build/test_wuwa_toon/game",&error));
+    Engine packaged; CHECK(packaged.Open("build/test_wuwa_toon/game",&error));
+    CHECK(Call(packaged,"sim.step",R"({"frames":1})")["ok"].asBool());
+    packaged.RenderGameView(reset);
+    CHECK(reset.Hash()==toon.Hash() && packaged.Scripts().Errors().empty());
+    RemoveAll("build/test_wuwa_toon");
+}
+
 TEST(ShaderLabSampleControlsAndPackaging) {
     Engine e;
     std::string error;
