@@ -5,7 +5,7 @@ The engine is split so that only two small layers touch a platform:
 1. **Platform layer** — `engine/platform/Platform.h`: window, input events (keys, mouse/touch), present, audio output, time, sleep, open URL, executable path, stdio mode, and `CreateGpuDevice`.
 2. **Render backend** — `IRenderer` in `engine/render/Renderer.h`. The software rasterizer is the reference implementation and runs everywhere (including headless CI and AI verification). `GpuRenderer` draws the same scene through sokol_gfx; a platform only supplies a `GpuDevice` (`engine/render/GpuDevice.h`: sokol environment, window swapchain, present, readback). Screenshots and picking keep using the software renderer, so they behave identically on every platform.
 
-Everything else (`core`, `scene`, `api`, `app`, `render`) is portable C++17 with no OS headers. Sockets are the one exception: `HttpServer.cpp` has Winsock and POSIX branches.
+Everything else (`core`, `scene`, `api`, `app`, `render`) is portable C++17 with no OS headers. Sockets are no exception: the local HTTP API (`HttpServer.cpp`) uses the non-blocking `platform/Network.h` sockets like the game transports, so a platform without them (the browser) simply cannot start it.
 
 `PlatformReplaceFile` atomically replaces a file in the same filesystem (Win32
 `MoveFileExW`, POSIX `rename`). Save slots use it after closing a temporary file;
@@ -77,7 +77,7 @@ Console SDKs are under NDA, so their code cannot live in this public tree. The l
 - Trivial to bring up on a new platform: present a CPU buffer and the platform is playable.
 
 M5 lockstep/native rollback and M6 authoritative replication share this transport layer.
-I/O ticks continue while game frames wait for input; protocol v3 clients require the refreshed
+I/O ticks continue while game frames wait for input; protocol v4 clients require the refreshed
 runtime/web player. Windows localhost TCP/UDP tests each run 10000 frames. M8 verifies Wasm
 loopback/sample/snapshot tests and a real WebGL2 NetArena browser client against a native
 WebSocket dedicated server (join/ready, movement, touch Collect/Reset, replicated score/HUD).

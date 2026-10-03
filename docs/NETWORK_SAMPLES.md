@@ -59,7 +59,7 @@ The packaged client still starts offline and uses the same in-game lobby.
 
 ## Browser client against a native WebSocket server
 
-The refreshed prebuilt runtime includes protocol v3; packaging needs no Emscripten SDK.
+The refreshed prebuilt runtime includes protocol v4; packaging needs no Emscripten SDK.
 A browser can join WebSocket sessions, but cannot listen for connections or use native TCP/UDP.
 Native players currently cannot join WebSocket sessions either. Use a native `oe serve-game`
 WebSocket host for browser players, and TCP/UDP hosts for native/Android players.

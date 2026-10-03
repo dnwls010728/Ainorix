@@ -13,6 +13,9 @@ namespace oe {
 namespace {
 constexpr uint32_t kControl = 0x5343454f, kEnvelope = 0x5344454f;
 constexpr uint32_t kAll = 0xffffffff, kOthers = 0xfffffffe;
+// Unauthenticated connections are bounded separately from player slots, so idle sockets
+// cannot fill the lobby; admission against maxPlayers happens at the cookie response.
+constexpr size_t kMaxConnections = 64;
 std::atomic<uint64_t> g_created{0}, g_polls{0};
 struct Room { std::weak_ptr<LoopbackNetwork> wire; std::weak_ptr<uint64_t> clock; PeerId next = 2; };
 // Late join/reconnect starts its private session frame at zero. Map it to the room's
@@ -288,7 +291,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         ++rejected_;
         if (!host_) SetState("error", "session protocol/game/mode/tick mismatch; use matching project settings and engine builds");
         else {
-            if (!connections_.count(peer) && config_.transport == "loopback" && !sealed_ && kind == 1 && connections_.size() < config_.maxPlayers - 1) {
+            if (!connections_.count(peer) && config_.transport == "loopback" && !sealed_ && kind == 1 && connections_.size() < kMaxConnections) {
                 Connection connection; connection.started = frame_; connections_[peer] = connection;
             }
             if (!connections_.count(peer)) return;
@@ -304,7 +307,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         auto it = connections_.find(peer);
         if (it == connections_.end()) {
             // Native peer ids are allocated by bounded TCP accept, never by UDP packets.
-            if (sealed_ || config_.transport != "loopback" || connections_.size() >= config_.maxPlayers - 1) { ++rejected_; return; }
+            if (sealed_ || config_.transport != "loopback" || connections_.size() >= kMaxConnections) { ++rejected_; return; }
             it = connections_.emplace(peer, Connection{}).first;
             it->second.started = frame_;
         }
@@ -328,6 +331,9 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
     } else if (cookieA != connection.cookieA || cookieB != connection.cookieB) { ++rejected_; }
     else if (host_ && kind == 3 && connection.phase == "challenge") {
         if (nextPlayer_ >= kOthers || (config_.mode == "authoritative" && nextPlayer_ > static_cast<uint32_t>(INT32_MAX))) { Drop(peer, "player ids exhausted; restart host"); return; }
+        size_t admitted = 0;
+        for (const auto& item : connections_) if (item.second.player) ++admitted;
+        if (admitted + 1 >= config_.maxPlayers) { Drop(peer, "lobby is full"); return; }
         connection.player = nextPlayer_++;
         connection.phase = "welcome"; connection.hasSent = false;
         RegisterPeer(peer, connection);
@@ -368,7 +374,7 @@ bool Session::Poll(uint64_t frame, std::vector<TransportEvent>& events) {
     for (const auto& event : incoming) {
         if (event.type == TransportEvent::Type::Connected) {
             if (host_) {
-                if (connections_.size() >= config_.maxPlayers - 1 || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); if (webServer_) webServer_->Disconnect(event.peer); continue; }
+                if (connections_.size() >= kMaxConnections || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); if (webServer_) webServer_->Disconnect(event.peer); continue; }
                 Connection connection; connection.started = frame_; connection.received = frame_;
                 connections_.emplace(event.peer, connection);
             }
@@ -506,12 +512,12 @@ void Session::ApplyMessage(const ChannelEvent& event) {
     } else if (kind != 6) ++rejected_;
 }
 
-bool Session::SendSync(uint32_t player, const std::vector<uint8_t>& bytes) {
+bool Session::SendSync(uint32_t player, const std::vector<uint8_t>& bytes, bool reliable) {
     if (!Connected() || bytes.empty() || bytes.size() > 60000 || player == localPlayer_) return false;
     for (const auto& connection : connections_) {
         if (connection.second.phase != "active" || (host_ ? connection.second.player != player : player != 1)) continue;
         std::vector<uint8_t> payload{7}; payload.insert(payload.end(), bytes.begin(), bytes.end());
-        return channels_.Send(connection.first, NetChannel::ReliableOrdered, payload.data(), payload.size());
+        return channels_.Send(connection.first, reliable ? NetChannel::ReliableOrdered : NetChannel::Unreliable, payload.data(), payload.size());
     }
     return false;
 }
@@ -586,7 +592,7 @@ Json Session::State() const {
     state["isHost"] = host_; state["isServer"] = host_; state["isClient"] = !host_; state["localPlayer"] = localPlayer_;
     state["seed"] = seed_; state["tickRate"] = config_.tickRate; state["maxPlayers"] = config_.maxPlayers;
     state["port"] = tcp_ ? tcp_->LocalAddress().port : webServer_ ? webServer_->LocalAddress().port : 0; state["room"] = room_; state["error"] = error_;
-    state["syncImplemented"] = config_.mode == "lockstep" || config_.mode == "rollback";
+    state["syncImplemented"] = true;
     return state;
 }
 bool Session::Simulate(const LoopbackConfig& config, std::string* error) {
@@ -632,7 +638,8 @@ bool Session::Kick(uint32_t player, const std::string& reason, std::string* erro
         return false;
     }
     for (auto& item : connections_) if (item.second.player == player) {
-        if (!SendMessage(item.first, 5, 1, player, 0, reason, Json())) { if (error) *error = "peer send queue is full"; return false; }
+        // An unresponsive peer cannot be told; close it on the next Advance instead of failing.
+        if (!SendMessage(item.first, 5, 1, player, 0, reason, Json())) { item.second.phase = "overflow"; continue; }
         item.second.phase = "closing"; item.second.closing = frame_;
     }
     players_.erase(player); Emit({SessionEvent::Type::Left, player}); BroadcastRoster(); return true;

@@ -116,7 +116,7 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             back, and matching live canvas/exported frame appearance. Player
             binaries were refreshed from 0ea84f2; sample-only changes do not
             require another engine rebuild. Device follow-ups remain open.
-- [ ] P6.4: Custom shader materials through commands/assets, validation and
+- [x] P6.4: Custom shader materials through commands/assets, validation and
       portable backend shader generation. Document the software reference
       behavior and demonstrate a material in a sample.
       - [x] P6.4a: Validate a project-authored surface shader graph, compile
@@ -182,8 +182,10 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
                         removes X3550 from both programs. The auxiliary program
                         compiles without warnings; the main program retains the
                         existing X3570 shadow-comparison derivative warning.
-      - [ ] P6.4c: Sample procedural material, CPU/GPU image comparison,
+      - [x] P6.4c: Sample procedural material, CPU/GPU image comparison,
             hot reload/packaging, WebGL execution, docs and refreshed players.
+            Done in the completion pass at the top of this log (ShaderLab);
+            the Android player refresh is tracked there as an open line.
 - [ ] Hardware follow-up: Android device and full Linux/EGL effect execution.
 - [ ] Browser capture follow-up: the in-app whole-page capture omits the small
       pure-white emitter in the neutral-mode fixture, although scene resolve,

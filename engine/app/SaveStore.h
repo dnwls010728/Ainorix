@@ -1,5 +1,6 @@
 #pragma once
 #include <map>
+#include <set>
 #include <string>
 
 #include "core/Json.h"
@@ -25,8 +26,9 @@ public:
     void Clear(const std::string& key, const std::string& slot = "default");
     // Writes one dirty slot, atomically replacing its previous file. Throws on failure.
     void Flush(const std::string& slot = "default");
-    // Replay/match persistence stays in memory; tools can flush after stopping.
-    void DeferFlush(bool defer) { deferFlush_ = defer; }
+    // Replay/match persistence stays in memory. Flushes requested meanwhile are remembered and
+    // written when deferral ends, so a save made during a match is not silently lost.
+    void DeferFlush(bool defer);
     // Capture existing directory slots, then prevent new external reads during replay.
     // Browser stores must preload needed slots through State/Get before freezing.
     void FreezeReads(bool freeze);
@@ -37,6 +39,7 @@ private:
     std::string directory_;
     SaveStorage storage_;
     std::map<std::string, Slot> slots_;
+    std::set<std::string> deferred_;  // slots whose flush was requested while deferred
     bool deferFlush_ = false, frozenReads_ = false;
 };
 

@@ -29,7 +29,7 @@ void ValidateKey(const std::string& key) {
 void SaveStore::Configure(const std::string& directory) {
     storage_ = {};
     directory_ = directory.empty() ? "" : AbsolutePath(directory);
-    slots_.clear(); frozenReads_ = deferFlush_ = false;
+    slots_.clear(); deferred_.clear(); frozenReads_ = deferFlush_ = false;
 }
 
 void SaveStore::ConfigurePlayer(const std::string& gameName) {
@@ -125,8 +125,20 @@ void SaveStore::FreezeReads(bool freeze) {
     frozenReads_ = freeze;
 }
 
+void SaveStore::DeferFlush(bool defer) {
+    const bool commit = deferFlush_ && !defer;
+    deferFlush_ = defer;
+    if (!commit) return;
+    std::set<std::string> slots;
+    slots.swap(deferred_);
+    for (const auto& slot : slots) {
+        try { Flush(slot); }
+        catch (const ApiError& error) { OE_LOG_WARN("save", "Deferred flush of slot %s failed: %s", slot.c_str(), error.what()); }
+    }
+}
+
 void SaveStore::Flush(const std::string& slot) {
-    if (deferFlush_) { Load(slot); return; }
+    if (deferFlush_) { Load(slot); deferred_.insert(slot); return; }
     Slot& value = Load(slot);
     if (!value.dirty) return;
     if (!directory_.empty() || storage_.write) {

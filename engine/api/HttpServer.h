@@ -9,6 +9,9 @@
 #include <thread>
 #include <vector>
 
+#include "core/Json.h"
+#include "platform/Network.h"
+
 namespace oe {
 
 struct HttpRequest {
@@ -27,8 +30,9 @@ struct HttpResponse {
     std::string body;
 };
 
-// Minimal blocking HTTP/1.1 server on a background thread. Binds to
-// 127.0.0.1 only; requests are handled one at a time.
+// Minimal HTTP/1.1 server on a background thread, built on the platform sockets
+// (platform/Network.h). Binds to 127.0.0.1 only; requests are handled one at a time and a
+// silent client is dropped after an idle timeout. Port 0 picks a free port (see Port()).
 class HttpServer {
 public:
     using Handler = std::function<HttpResponse(const HttpRequest&)>;
@@ -42,7 +46,7 @@ private:
     void Loop();
     std::thread thread_;
     std::atomic<bool> running_{false};
-    intptr_t socket_ = -1;
+    std::unique_ptr<NetSocket> listener_;
     int port_ = 0;
     Handler handler_;
 };

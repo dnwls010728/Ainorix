@@ -189,11 +189,15 @@ private:
     void EnsureAuthority(bool refresh = false);
     bool PollAuthority();
     void AuthorityApplied();
+    // Host: removes departed participants from a running match (avatars destroyed, other owned
+    // entities become server-owned); stops only when no remote participant remains.
+    void DropAuthorityPlayers();
     std::vector<PhysicsEvent> StepAuthorityPhysics(float dt);
     Json ReplicatedWorld(uint32_t player);
     void ValidateReplicatedWorld(const Json& world) const;
     void ApplyReplicatedWorld(const Json& world, bool owned, bool remotes);
-    void InterpolateAuthority();
+    // Poses remote entities from buffered snapshots; advance moves the playback frame (once per tick).
+    void InterpolateAuthority(bool advance = true);
     void ResetAuthority();
     struct UIEvent {
         EntityId id;

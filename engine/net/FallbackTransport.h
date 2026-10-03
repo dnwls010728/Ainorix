@@ -15,7 +15,8 @@ public:
     // Probe age uses the last polled frame, initially zero; poll the current frame before registering.
     bool AddPeer(PeerId peer, uint64_t challengeSeed);
     bool RemovePeer(PeerId peer);
-    // Unknown peers report Tcp but reject Send. TCP remains receivable when UDP is selected.
+    // Unknown peers report Tcp but reject Send. The route only selects the send path: registered
+    // peers are received on both TCP and UDP, so the two sides may select different routes.
     Route Selected(PeerId peer) const;
     bool Send(PeerId peer, const uint8_t* bytes, size_t size) override;
     bool Poll(uint64_t frame, std::vector<TransportEvent>& events) override;

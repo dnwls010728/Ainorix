@@ -77,7 +77,10 @@ bool FallbackTransport::Poll(uint64_t frame, std::vector<TransportEvent>& events
                 peer.probing = false;
                 peer.lastConfirmed = frame;
             }
-        } else if (event.type == TransportEvent::Type::Data && peer.route == Route::Udp) {
+        } else if (event.type == TransportEvent::Type::Data) {
+            // Routes are chosen per side and can disagree after a short outage: one side may keep
+            // sending UDP while this side already fell back. Receive on both paths regardless of
+            // the local send route; the session envelope authenticates the payload.
             event.datagram = true;
             events.push_back(std::move(event));
         }

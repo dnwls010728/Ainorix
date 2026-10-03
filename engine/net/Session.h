@@ -16,7 +16,7 @@ namespace oe {
 // Authenticated lobby/RPC and match payload transport; FrameSync owns M5 synchronization.
 struct SessionConfig {
     std::string mode = "none", transport = "tcp", bind = "127.0.0.1", gameId;
-    uint16_t port = 7778, version = 3;
+    uint16_t port = 7778, version = 4;
     SyncConfig sync;
     uint32_t maxPlayers = 4, tickRate = 60, snapshotRate = 20, interpolationFrames = 6, predictionFrames = 32;
     std::string playerPrefab;
@@ -49,7 +49,9 @@ public:
     // Poll owns the transport, applies bounded messages and orders events by player/sequence.
     bool Advance(uint64_t frame);
     // Authenticated bounded match payloads; only host/client links are permitted.
-    bool SendSync(uint32_t player, const std::vector<uint8_t>& bytes);
+    // reliable=false uses the unreliable channel: no retransmission, ordering or head-of-line
+    // delay; a full queue simply drops the payload (authoritative snapshots and their ACKs).
+    bool SendSync(uint32_t player, const std::vector<uint8_t>& bytes, bool reliable = true);
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> DrainSync();
     void Seal() { sealed_ = true; }
     std::vector<SessionEvent> DrainEvents();

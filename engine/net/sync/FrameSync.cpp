@@ -75,7 +75,7 @@ bool FrameSync::Queue(uint32_t player, std::vector<uint8_t> bytes) {
 }
 void FrameSync::Broadcast(const std::vector<uint8_t>& bytes) { for (uint32_t player : players_) if (player != local_) Queue(player, bytes); }
 void FrameSync::Begin(const std::vector<uint32_t>& players) {
-    dropped_.clear(); players_ = players; ready_.clear(); ready_.insert(local_);
+    dropped_.clear(); stalled_.clear(); players_ = players; ready_.clear(); ready_.insert(local_);
     submitted_.clear(); merged_.clear(); used_.clear(); localInputs_.clear(); hashes_.clear(); outgoing_.clear(); queuedBytes_ = 0;
     gameFrame_ = confirmed_ = 0; rollback_.reset(); report_ = Json::MakeObject(); error_.clear();
     state_ = "preparing"; started_ = waitStarted_ = tick_;
@@ -130,8 +130,16 @@ void FrameSync::Receive(uint32_t sender, const std::vector<uint8_t>& bytes) {
         if (!ReadInput(r, input) || r.Remaining() || !Valid(input) || submitted_[frame].count(sender)) { ++rejected_; return; }
         submitted_[frame][sender] = input; return;
     }
+    if (kind == InputMessage && host_ && Running() && frame < confirmed_ && stalled_.count(sender)) {
+        // Too late to use, but the peer is alive and close: wait for it again so it can rejoin.
+        if (frame + kFutureFrames >= confirmed_) { stalled_.erase(sender); waitStarted_ = tick_; }
+        return;
+    }
+    if (kind == MergedMessage && !host_ && sender == 1 && Running() && frame > gameFrame_ + kBacklogFrames) {
+        Stop("fell too far behind the match"); return;
+    }
     if (kind == MergedMessage && !host_ && sender == 1 && (Running() || state_ == "preparing") &&
-        frame + kFutureFrames >= gameFrame_ && frame <= gameFrame_ + kFutureFrames) {
+        frame + kFutureFrames >= gameFrame_ && frame <= gameFrame_ + kBacklogFrames) {
         uint8_t count = 0; FrameInputs inputs;
         if (!r.ReadU8(count) || count != players_.size()) { ++rejected_; return; }
         for (uint32_t player : players_) {
@@ -159,6 +167,14 @@ void FrameSync::Merged(uint64_t frame, FrameInputs inputs) {
 }
 void FrameSync::Commit() {
     while (host_ && Running()) {
+        if (!stalled_.empty()) {
+            FrameInputs& frame = submitted_[confirmed_];
+            // An input that arrived in time puts its player back in step.
+            for (auto player = stalled_.begin(); player != stalled_.end();) {
+                if (frame.count(*player)) player = stalled_.erase(player); else ++player;
+            }
+            if (frame.size() + stalled_.size() == players_.size()) for (uint32_t player : stalled_) frame.emplace(player, FrameInput{});
+        }
         auto it = submitted_.find(confirmed_);
         if (it == submitted_.end() || it->second.size() != players_.size()) break;
         auto w = Message(MergedMessage, epoch_); w.WriteU64(confirmed_); w.WriteU8(static_cast<uint8_t>(players_.size()));
@@ -176,7 +192,10 @@ void FrameSync::Tick(uint64_t tick) {
     }
     Commit();
     if (host_ && Running() && tick_ - waitStarted_ >= config_.waitFrames) {
-        if (config_.emptyOnTimeout) { for (uint32_t player : players_) submitted_[confirmed_].emplace(player, FrameInput{}); Commit(); }
+        if (config_.emptyOnTimeout) {
+            for (uint32_t player : players_) if (player != local_ && !submitted_[confirmed_].count(player)) stalled_.insert(player);
+            submitted_[confirmed_].emplace(local_, FrameInput{}); Commit(); waitStarted_ = tick_;
+        }
         else {
             for (uint32_t player : players_) if (player != local_ && !submitted_[confirmed_].count(player)) dropped_.push_back(player);
             Stop("missing input timeout; stalled players kicked and match stopped");
@@ -250,6 +269,7 @@ Json FrameSync::State() const {
     Json j = Json::MakeObject(); j["state"] = state_; j["frame"] = gameFrame_; j["confirmed"] = confirmed_;
     j["waiting"] = Running() && (!config_.rollback ? gameFrame_ >= confirmed_ : gameFrame_ >= confirmed_ + config_.rollbackFrames);
     j["predicted"] = gameFrame_ > confirmed_ ? gameFrame_ - confirmed_ : 0; j["rollbacks"] = rollbacks_;
-    j["rejected"] = rejected_; j["error"] = error_; j["epoch"] = epoch_; j["backend"] = config_.rollback ? "referenceReplay" : "lockstep"; return j;
+    j["rejected"] = rejected_; j["error"] = error_; j["epoch"] = epoch_;
+    j["stalled"] = Json::MakeArray(); for (uint32_t player : stalled_) j["stalled"].push(player); j["backend"] = config_.rollback ? "nativeRollback" : "lockstep"; return j;
 }
 }  // namespace oe

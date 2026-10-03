@@ -54,12 +54,18 @@ public:
     void Stop(const std::string& reason);
     bool Active() const { return state_ == "running" || state_ == "preparing"; }
     bool Running() const { return state_ == "running"; }
+    // A client whose confirmed inputs are well ahead of its simulation should step extra frames
+    // (Engine does, up to kCatchUpFrames per tick) so a peer that fell behind rejoins the pace.
+    bool Lagging() const { return !host_ && Running() && confirmed_ > gameFrame_ + config_.delay + 2; }
     uint64_t Frame() const { return gameFrame_; }
     uint64_t Confirmed() const { return confirmed_; }
     const std::vector<uint32_t>& Players() const { return players_; }
     const SyncConfig& Config() const { return config_; }
     static uint64_t InstancesCreated();
-    static constexpr uint64_t kFutureFrames = 32, kHistoryFrames = 12000;
+    static constexpr uint64_t kFutureFrames = 32;
+    // Confirmed frames a late client may buffer ahead of its simulation (one minute).
+    static constexpr uint64_t kBacklogFrames = 3600;
+    static constexpr int kCatchUpFrames = 4;
 private:
     bool Valid(const FrameInput& input) const;
     bool Queue(uint32_t player, std::vector<uint8_t> bytes);
@@ -78,6 +84,9 @@ private:
     std::string state_ = "idle", error_;
     std::vector<uint32_t> players_;
     std::set<uint32_t> ready_;
+    // dropPolicy "empty": players whose input timed out. Their missing frames are neutral without
+    // another wait until one of their inputs arrives close to the confirmed frame again.
+    std::set<uint32_t> stalled_;
     std::vector<uint32_t> dropped_;
     std::map<uint64_t, FrameInputs> submitted_, merged_, used_;
     std::map<uint64_t, FrameInput> localInputs_;

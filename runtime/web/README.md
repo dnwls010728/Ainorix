@@ -4,18 +4,19 @@
 `oe package --web` combines them with index.html and game.pak; packaging needs no Emscripten.
 
 - Built: 2026-10-03, Emscripten 6.0.10, Release (`build_web.bat`, BINARYEN_CORES=1).
-- Source: the P7 editor commit containing this README (base 64e72c1 plus P7 changes).
-  Adds clipboard/history/source-prefab/preview APIs and correct internal prefab reference remapping.
-  Includes protocol v3 sessions, lockstep/native rollback, authoritative replication/prediction,
-  Lua lobby controls, loopback previews/fault controls and network on-screen action sampling.
-  Existing saves, skeletal animation, particles, gamepads, multi-touch and postprocessing remain
-  included. Portable surface shader graph/compiler/material binding from the current source
-  is included too; a packaged ShaderLab fixture verified neutral masks/shadows,
-  white emission and HDR/bloom transitions in WebGL2 after this rebuild.
-- Validation: Windows 141 tests; Wasm/Node 128 registered tests, zero failed checks (native
-  sockets and GPU tests skip). Real packaged NetArena WebGL2 browser client joined a native
-  WebSocket dedicated server, readied, moved, collected a crystal, received score/HUD and reset
-  the round with zero Lua errors. JS callback bounds/cleanup tests pass.
+- Source: the network audit follow-up (P7 editor source plus the fixes listed under
+  "Audit follow-up" in docs/NETWORK.md): both fallback paths always received, single-step
+  client interpolation, departed players dropped from authoritative matches, pending
+  connections outside player slots, deferred save flush committed when a match ends, lockstep
+  catch-up for stalled peers.
+  Includes protocol v4 sessions (binary snapshot payloads on the unreliable channel), lockstep/native rollback, authoritative replication/prediction,
+  Lua lobby controls, loopback previews/fault controls, network on-screen action sampling,
+  saves, skeletal animation, particles, gamepads, multi-touch, postprocessing and surface
+  shader graphs as before.
+- Validation: Windows 154 tests; Wasm/Node 141 registered tests, zero failed checks (native
+  sockets and GPU tests skip). JS callback bounds/cleanup tests pass. The packaged browser
+  client against a native WebSocket server was last exercised with the previous build
+  (NetArena join/ready/move/collect/reset); it was not repeated for this rebuild.
 - Browser can join binary WebSocket sessions, but cannot host or use raw UDP/TCP. Android
   runtimes are separate and remain pending. See [NETWORK_SAMPLES.md](../../docs/NETWORK_SAMPLES.md).
 - Binaryen's parallel optimizer crashes on this Windows host; use BINARYEN_CORES=1.

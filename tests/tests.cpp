@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <set>
 #include <sstream>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "api/HttpServer.h"
 #include "app/AndroidPackage.h"
 #include "app/Engine.h"
 #include "app/Project.h"
@@ -29,6 +31,7 @@
 #include "net/Bytes.h"
 #include "net/Channels.h"
 #include "net/FallbackTransport.h"
+#include "net/JsonCodec.h"
 #include "net/LoopbackTransport.h"
 #include "net/SocketTransports.h"
 #include "net/WebSocketServer.h"
@@ -1420,8 +1423,8 @@ TEST(NetworkAuthoritativePhysicsPrediction) {
 }
 
 std::vector<uint8_t> AuthorityPacket(uint8_t kind, const Json& body, uint64_t epoch = 1) {
-    std::string text=body.dump(); ByteWriter writer(60000); writer.WriteU8(kind); writer.WriteU64(epoch);
-    writer.WriteBlob(reinterpret_cast<const uint8_t*>(text.data()),text.size()); return writer.Data();
+    std::vector<uint8_t> payload; CHECK(EncodeJson(body,payload,56000)); ByteWriter writer(60000); writer.WriteU8(kind); writer.WriteU64(epoch);
+    writer.WriteBlob(payload.data(),payload.size()); return writer.Data();
 }
 TEST(NetworkAuthoritativeDeltaAckAndBounds) {
     SessionConfig config; config.mode="authoritative"; config.sync.keys={"W"};
@@ -1444,7 +1447,7 @@ TEST(NetworkAuthoritativeDeltaAckAndBounds) {
     CHECK(outbound.size()==1);
     ByteReader reader(outbound[0].data(),outbound[0].size()); uint8_t kind; uint64_t epoch; std::vector<uint8_t> blob;
     CHECK(reader.ReadU8(kind) && reader.ReadU64(epoch) && reader.ReadBlob(blob,56000));
-    Json delta=Json::parse(std::string(blob.begin(),blob.end()));
+    Json delta; CHECK(DecodeJson(blob.data(),blob.size(),delta));
     CHECK(delta["base"].asNumber()==1 && delta["delta"]["set"]["1"].has("Transform.position") && delta["delta"]["set"]["1"].has("Transform.rotation"));
     CHECK(!delta["delta"]["set"]["1"].has("Tag.tags")); exchange(); updates=client.DrainUpdates(); CHECK(updates.size()==1 && updates.back().world==world);
     host.Snapshot(3,{{2,Json::MakeObject()}}); exchange(); CHECK(client.DrainUpdates().back().world.size()==0);
@@ -6534,6 +6537,247 @@ TEST(NativeEditorTilePainting) {
 #endif
 
 }  // namespace
+
+// After a short UDP outage the two sides can select different send routes. Each side must keep
+// receiving on both paths, otherwise the UDP sender's traffic is silently discarded.
+TEST(NetworkFallbackRoutesMayDisagree) {
+    int disagreements = 0;
+    for (uint64_t start = 40; start < 110; ++start) for (uint64_t length = 31; length <= 45; length += 7) {
+        auto udp = std::make_shared<LoopbackNetwork>(), tcp = std::make_shared<LoopbackNetwork>();
+        LoopbackTransport ua(udp, 1), ub(udp, 2), ta(tcp, 1), tb(tcp, 2);
+        NetworkDropTransport da(ua), db(ub);
+        FallbackTransport a(da, ta), b(db, tb);
+        CHECK(a.AddPeer(2, 100));
+        size_t toA = 0, toB = 0; const uint8_t byte = 7;
+        for (uint64_t frame = 0; frame < 400; ++frame) {
+            da.drop = db.drop = frame >= start && frame < start + length;
+            std::vector<TransportEvent> ea, eb;
+            CHECK(a.Poll(frame, ea) && b.Poll(frame, eb));
+            if (frame == 15) CHECK(b.AddPeer(1, 200));
+            if (frame == 300) CHECK(a.Send(2, &byte, 1) && b.Send(1, &byte, 1));
+            if (frame >= 300) { toA += ea.size(); toB += eb.size(); }
+        }
+        if (a.Selected(2) != b.Selected(1)) ++disagreements;
+        CHECK(toA == 1 && toB == 1);
+    }
+    CHECK(disagreements > 0);  // the scenario under test really occurs in this sweep
+}
+
+// Remote entities play back one buffered frame per tick: no double-speed catch-up and stalls.
+TEST(NetworkAuthoritativeInterpolationAdvancesOncePerFrame) {
+    std::string project = AuthorityProject("authority_interpolation", "loopback"); Engine host, client;
+    AuthorityPrepare(host, client, project, "loopback");
+    host.Input().down.insert("W");  // the host's P1 moves one unit per frame
+    NetworkSteps(host, client, 30);
+    EntityId remote = client.GetScene().FindByName("P1"); CHECK(remote != 0);
+    float previous = client.GetScene().Get<Transform>(remote)->position.x, first = previous, largest = 0;
+    int stalled = 0;
+    for (int frame = 0; frame < 60; ++frame) {
+        NetworkSteps(host, client, 1);
+        float x = client.GetScene().Get<Transform>(remote)->position.x, step = x - previous;
+        largest = std::max(largest, step); if (step < 0.5f) ++stalled;
+        previous = x;
+    }
+    CHECK(largest <= 1.001f);
+    CHECK(stalled <= 2);
+    CHECK(previous - first > 55);
+    float server = host.GetScene().Get<Transform>(host.GetScene().FindByName("P1"))->position.x;
+    CHECK(server - previous >= 3 && server - previous <= 10);  // about interpolationFrames behind
+    host.Stop(); client.Stop(); RemoveAll(project);
+}
+
+// A departing participant leaves a running authoritative match; the remaining players continue.
+TEST(NetworkAuthoritativePlayerLossKeepsMatch) {
+    std::string project = AuthorityProject("authority_leave", "tcp", true), error;
+    Engine host; CHECK(host.Open(project, &error)); host.GetScene().Clear();
+    CHECK(Call(host, "net.spawn_local_peers", R"({"count":2})")["ok"].asBool()); host.Step(100);
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 3 && host.LocalPeer(1)->GetScene().Pool<NetPlayer>().size() == 3);
+    CHECK(Call(*host.LocalPeer(2), "net.leave")["ok"].asBool()); host.Step(120);
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(Call(*host.LocalPeer(1), "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(Call(host, "net.players")["result"].size() == 2);
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2 && host.LocalPeer(1)->GetScene().Pool<NetPlayer>().size() == 2);
+    for (const auto& item : host.GetScene().Pool<NetSync>()) CHECK(item.second.owner != 3);
+    uint64_t before = host.Frame(); host.Step(60); CHECK(host.Frame() == before + 60);
+    CHECK(host.Scripts().Errors().empty() && host.LocalPeer(1)->Scripts().Errors().empty());
+    // Without any remote participant the match is over.
+    CHECK(Call(*host.LocalPeer(1), "net.leave")["ok"].asBool()); host.Step(120);
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "stopped");
+    host.Stop(); RemoveAll(project);
+}
+
+// Unauthenticated connections do not occupy player slots; maxPlayers is enforced at admission.
+TEST(NetworkSessionPendingConnectionsDoNotFillLobby) {
+    auto wire = std::make_shared<LoopbackNetwork>();
+    SessionConfig config; config.mode = "lockstep"; config.transport = "loopback"; config.gameId = "pending"; config.maxPlayers = 2;
+    Session server(config, std::make_unique<LoopbackTransport>(wire, 1), true, 1, "Server", 71, SessionTestRandom(820));
+    Session idle(config, std::make_unique<LoopbackTransport>(wire, 2), false, 1, "Idle", 0, SessionTestRandom(821));
+    Session real(config, std::make_unique<LoopbackTransport>(wire, 3), false, 1, "Real", 0, SessionTestRandom(822));
+    Session late(config, std::make_unique<LoopbackTransport>(wire, 4), false, 1, "Late", 0, SessionTestRandom(823));
+    uint64_t tick = 0;
+    server.Advance(tick); idle.Advance(tick); ++tick;  // hello only: never answers the challenge
+    for (; tick < 100; ++tick) { server.Advance(tick); real.Advance(tick); }
+    CHECK(server.Stats()["peers"].size() == 2 && !idle.Connected());
+    CHECK(real.Connected() && server.Players().size() == 2);
+    for (; tick < 500; ++tick) { server.Advance(tick); real.Advance(tick); late.Advance(tick); }
+    CHECK(!late.Connected() && real.Connected() && server.Players().size() == 2);
+}
+
+// A flush requested while persistence is deferred (recording/match) is written when it ends.
+TEST(SaveDeferredFlushCommitsOnStop) {
+    const std::string project = TempProject("save_deferred"), directory = JoinPath(project, "saves");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    e.Saves().Configure(directory);
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    CHECK(Call(e, "script.eval", R"J({"code":"save.set('score', 9) save.flush()"})J")["ok"].asBool());
+    CHECK(!FileExists(JoinPath(directory, "slot-default.json")));
+    CHECK(Call(e, "sim.stop")["ok"].asBool());
+    std::string text; CHECK(ReadTextFile(JoinPath(directory, "slot-default.json"), text));
+    CHECK(Json::parse(text)["score"].asNumber() == 9);
+    CHECK(!Call(e, "save.state", "{}")["result"]["dirty"].asBool());
+    CHECK(RemoveAll(project));
+}
+
+// Binary Json payloads: exact round trip, compact repeated keys, and hostile input is rejected
+// without large allocations.
+TEST(NetworkJsonCodecRoundTripAndBounds) {
+    Json world = Json::MakeObject();
+    for (int i = 1; i <= 200; ++i) {
+        Json entity = Json::parse(R"({"name":"Player","owner":3,"predict":true,"prefab":"prefabs/player.prefab.json","always":[],"Transform.position":[1.5,-2.25,1000000],"Transform.rotation":[0,90,0],"Tag.tags":"a"})");
+        entity["source"] = i; entity["Transform.position"][0] = 0.1 * i; world[std::to_string(i)] = entity;
+    }
+    world["misc"] = Json::parse(R"([null,true,false,-7,9007199254740991,0.1,1e300,"",{"nested":{"deep":[1,2,3]}}])");
+    std::vector<uint8_t> bytes; CHECK(EncodeJson(world, bytes, 56000));
+    Json decoded; CHECK(DecodeJson(bytes.data(), bytes.size(), decoded)); CHECK(decoded == world && decoded.dump() == world.dump());
+    CHECK(bytes.size() * 3 < world.dump().size());  // interned keys and binary numbers
+    std::vector<uint8_t> small; CHECK(!EncodeJson(world, small, 100) && small.empty());
+    Json deep = Json::MakeArray(), nan = Json::MakeArray(); nan.push(std::nan(""));
+    for (int i = 0; i < 20; ++i) { Json outer = Json::MakeArray(); outer.push(deep); deep = outer; }
+    CHECK(!EncodeJson(deep, small, 56000) && !EncodeJson(nan, small, 56000));
+    Json out = Json("unchanged");
+    // Truncation at every length, trailing bytes, unknown tags and absurd counts.
+    for (size_t size = 0; size < bytes.size(); size += 7) CHECK(!DecodeJson(bytes.data(), size, out));
+    std::vector<uint8_t> trailing = bytes; trailing.push_back(0); CHECK(!DecodeJson(trailing.data(), trailing.size(), out));
+    for (std::vector<uint8_t> bad : {std::vector<uint8_t>{11}, {9, 0xff, 0xff, 0xff, 0xff, 0x0f}, {10, 0xff, 0xff, 0xff, 0x7f},
+                                     {8, 0}, {7, 5, 'a'}, {3, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f},
+                                     {5, 0, 0, 0x80, 0x7f}, {6, 0, 0, 0, 0, 0, 0, 0xf0, 0x7f}})
+        CHECK(!DecodeJson(bad.data(), bad.size(), out));
+    std::vector<uint8_t> nested(40, 9); for (size_t i = 0; i < nested.size(); ++i) nested[i] = i % 2 ? 1 : 9;
+    CHECK(!DecodeJson(nested.data(), nested.size(), out));
+    CHECK(out == Json("unchanged"));
+    uint32_t seed = 12345;
+    for (int round = 0; round < 2000; ++round) {
+        std::vector<uint8_t> fuzz = bytes;
+        for (int flips = 0; flips < 4; ++flips) { seed = seed * 1664525u + 1013904223u; fuzz[(seed >> 8) % fuzz.size()] = static_cast<uint8_t>(seed >> 24); }
+        Json ignored; DecodeJson(fuzz.data(), fuzz.size(), ignored);
+    }
+}
+
+// Snapshots and their ACKs travel on the unreliable channel: a lossy link neither stalls the
+// match behind retransmissions nor fills the reliable queue, and the client still converges.
+TEST(NetworkAuthoritativeUnreliableSnapshotsConverge) {
+    LoopbackConfig faults; faults.seed=977; faults.lossPermille=150; faults.duplicatePermille=80; faults.latencyFrames=1; faults.reorderFrames=3;
+    auto wire=std::make_shared<LoopbackNetwork>(faults); SessionConfig config; config.mode="authoritative"; config.transport="loopback"; config.sync.keys={"W"};
+    Session server(config,std::make_unique<LoopbackTransport>(wire,1),true,1,"Server",71,SessionTestRandom(830));
+    Session client(config,std::make_unique<LoopbackTransport>(wire,2),false,1,"Client",0,SessionTestRandom(831));
+    uint64_t tick=0; for(;tick<300;++tick) {server.Advance(tick);client.Advance(tick);}
+    CHECK(server.Connected() && client.Connected());
+    Authority host(config,true,1,99,[&](uint32_t player,const std::vector<uint8_t>& b){return server.SendSync(player,b);});
+    Authority guest(config,false,2,99,[&](uint32_t player,const std::vector<uint8_t>& b){return client.SendSync(player,b);});
+    uint64_t lossy=0;
+    host.SetUnreliableSend([&](uint32_t player,const std::vector<uint8_t>& b){++lossy;return server.SendSync(player,b,false);});
+    guest.SetUnreliableSend([&](uint32_t player,const std::vector<uint8_t>& b){return client.SendSync(player,b,false);});
+    std::string error; CHECK(host.Start({1,2},&error)); uint64_t total=0,frames=0,received=0; Json last, world;
+    auto pump=[&] {
+        server.Advance(tick);client.Advance(tick);
+        for(const auto& msg:server.DrainSync()) host.Receive(msg.first,msg.second);
+        for(const auto& msg:client.DrainSync()) guest.Receive(msg.first,msg.second);
+        host.TakeStart();guest.TakeStart();
+        for(const auto& update:guest.DrainUpdates()) {last=update.world;++received;}
+    };
+    for(;tick<100000 && frames<5000;++tick) {
+        pump();
+        if(guest.Running() && guest.CanPredict()) {FrameInput input;input.down=(tick/7)%2;guest.Submit(input);}
+        if(host.Running()) {
+            auto inputs=host.Consume(FrameInput{});total+=inputs[2].down; ++frames;
+            if(frames%3==0) {world=Json::MakeObject();world["1"]=Json::MakeObject();world["1"]["Transform.position"]=Json::parse("[0,0,0]");world["1"]["Transform.position"][0]=total;host.Snapshot(frames,{{2,world}});}
+        }
+        if(!host.Running() && frames) break;
+    }
+    CHECK(frames==5000 && host.Running() && guest.Running() && host.TakeDropped().empty());
+    CHECK(lossy>1500 && received>800 && received<lossy);  // some snapshots were lost and never resent
+    for(int n=0;n<300;++n,++tick) { if(n%3==0) host.Snapshot(frames,{{2,world}}); pump(); }
+    CHECK(last==world);
+    CHECK(server.Stats()["peers"][0]["pending"].asNumber()<32);
+}
+
+// dropPolicy "empty": after one timeout a stalled peer no longer costs a wait per frame, and a
+// peer that resumes catches up through the buffered confirmed frames and plays again.
+TEST(NetworkFrameSyncStalledPeerCatchesUp) {
+    SyncConfig config; config.keys={"W"}; config.delay=2; config.waitFrames=30; config.emptyOnTimeout=true; config.hashInterval=600;
+    std::deque<std::vector<uint8_t>> toClient, toHost;
+    FrameSync host(config,true,1,5,[&](uint32_t,const std::vector<uint8_t>& b){toClient.push_back(b);return true;});
+    FrameSync client(config,false,2,5,[&](uint32_t,const std::vector<uint8_t>& b){toHost.push_back(b);return true;});
+    std::string error; CHECK(host.Start({1,2},&error));
+    uint64_t tick=0, hostTotal=0, clientTotal=0; bool frozen=false; uint64_t clientPlayed=0;
+    auto step=[&](FrameSync& sync, uint64_t& total, bool held, int frames) {
+        sync.Tick(tick); sync.TakeStart();
+        for(int n=0;n<frames;++n) {
+            if(n && !sync.Lagging()) break;
+            if(sync.NeedsInput()) {FrameInput input; input.down=held?1:0; sync.Submit(input);}
+            sync.Tick(tick);
+            auto inputs=sync.Next(); if(!inputs) break;
+            for(const auto& input:*inputs) { total+=input.first*(input.second.down+1)+sync.Frame(); if(&sync==&host && input.first==2) clientPlayed+=input.second.down; }
+            sync.Applied(*inputs);
+        }
+    };
+    auto run=[&](uint64_t until) {
+        for(;tick<until;++tick) {
+            // One tick of latency each way; a frozen client neither reads nor simulates.
+            auto in=std::move(toHost); toHost.clear(); for(const auto& b:in) host.Receive(2,b);
+            step(host,hostTotal,false,1);
+            if(!frozen) { auto out=std::move(toClient); toClient.clear(); for(const auto& b:out) client.Receive(1,b); step(client,clientTotal,true,1+FrameSync::kCatchUpFrames); }
+        }
+    };
+    run(100); CHECK(host.Running() && client.Running() && host.Frame()>80 && clientPlayed>70);
+    frozen=true; uint64_t before=host.Frame(); run(400);
+    // One 30-tick wait, then full speed (the old behaviour gave about ten frames here).
+    CHECK(host.Frame()>before+250 && host.State()["stalled"].size()==1);
+    frozen=false; uint64_t played=clientPlayed; run(700);
+    CHECK(host.Running() && client.Running() && host.State()["stalled"].size()==0);
+    CHECK(client.Frame()+8>=host.Frame() && clientPlayed>played+150);
+    // Both sides simulated the same merged inputs for every frame the client has reached.
+    uint64_t target=client.Frame(); CHECK(target>600);
+    frozen=true; CHECK(host.Frame()>=target);
+    CHECK(client.State()["state"].asString()=="running" && client.State()["error"].asString().empty());
+}
+
+// The local API server runs on the platform sockets: request/response, a silent client cannot
+// block Stop, and an ephemeral port is reported.
+TEST(HttpServerOnPlatformSockets) {
+#ifndef __EMSCRIPTEN__
+    const uint64_t live = PlatformNetSocketsLive();
+    {
+        HttpServer server; std::string error, response;
+        CHECK(server.Start(0, [](const HttpRequest& request) {
+            HttpResponse out; out.body = request.method + " " + request.path + " " + request.Query("x") + " " + std::to_string(request.body.size());
+            return out;
+        }, &error));
+        CHECK(server.Port() > 0);
+        std::string large(300000, 'a');
+        CHECK(HttpPostLocal(server.Port(), "/api/call?x=7", large, response, &error));
+        CHECK(response == "POST /api/call 7 300000");
+        for (int i = 0; i < 20; ++i) CHECK(HttpPostLocal(server.Port(), "/p", "{}", response, &error) && response == "POST /p  2");
+        // A client that connects and never sends must not keep the server from stopping.
+        auto silent = CreateNetSocket(SocketKind::Tcp, &error); CHECK(silent && silent->Connect({"127.0.0.1", static_cast<uint16_t>(server.Port())}, &error));
+        PlatformSleep(0.05);
+        const double start = PlatformTimeSeconds(); server.Stop(); CHECK(PlatformTimeSeconds() - start < 2.0);
+        CHECK(!HttpPostLocal(server.Port(), "/p", "{}", response, &error) && !error.empty());
+    }
+    CHECK(PlatformNetSocketsLive() == live);
+#endif
+}
 
 int main() {
     Log::SetEcho(false);

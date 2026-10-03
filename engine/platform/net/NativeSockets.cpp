@@ -42,6 +42,7 @@ using AddressLength = int;
 constexpr Handle kInvalid = INVALID_SOCKET;
 int LastCode() { return WSAGetLastError(); }
 bool WouldBlock(int code) { return code == WSAEWOULDBLOCK || code == WSAEINPROGRESS || code == WSAEALREADY; }
+bool ListenerBroken(int code) { return code == WSAENOTSOCK || code == WSAEINVAL || code == WSAEFAULT || code == WSANOTINITIALISED; }
 void CloseHandle(Handle handle) { closesocket(handle); }
 bool StartSockets() { WSADATA data{}; return WSAStartup(MAKEWORD(2, 2), &data) == 0; }
 void StopSockets() { WSACleanup(); }
@@ -51,6 +52,7 @@ using AddressLength = socklen_t;
 constexpr Handle kInvalid = -1;
 int LastCode() { return errno; }
 bool WouldBlock(int code) { return code == EAGAIN || code == EWOULDBLOCK || code == EINPROGRESS || code == EALREADY || code == EINTR; }
+bool ListenerBroken(int code) { return code == EBADF || code == ENOTSOCK || code == EINVAL || code == EFAULT; }
 void CloseHandle(Handle handle) { close(handle); }
 bool StartSockets() { return true; }
 void StopSockets() {}
@@ -131,11 +133,15 @@ public:
         AddressLength length = sizeof(native);
         Handle child = accept(handle_, reinterpret_cast<sockaddr*>(&native), &length);
         if (child == kInvalid) {
-            if (!WouldBlock(LastCode())) Fail(ErrorText("accept"), error);
+            // Only a broken listener is fatal. A connection reset before accept, descriptor or
+            // buffer exhaustion and similar per-connection failures are retried on a later poll,
+            // so an unauthenticated remote cannot take the listener down.
+            if (ListenerBroken(LastCode())) Fail(ErrorText("accept"), error);
             return nullptr;
         }
         if (!StartSockets()) { CloseHandle(child); Fail("socket runtime startup failed", error); return nullptr; }
-        if (!Configure(child, SocketKind::Tcp, error)) { CloseHandle(child); StopSockets(); return nullptr; }
+        // The peer may already have reset the stream; drop that connection, keep listening.
+        if (!Configure(child, SocketKind::Tcp, nullptr)) { CloseHandle(child); StopSockets(); return nullptr; }
         address = Address(native);
         return std::make_unique<NativeSocket>(child, SocketKind::Tcp);
     }
