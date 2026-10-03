@@ -2732,6 +2732,242 @@ TEST(PrefabsCreateAndInstantiate) {
     CHECK(Call(e, "prefab.instantiate", R"J({"path": "prefabs/missing.prefab.json"})J")["error"]["code"].asString() == "not_found");
 }
 
+TEST(EntityClipboardSubtreesAndAtomicPaste) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("entity_clipboard"), &error));
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Root","components":{"Transform":{"position":[1,2,3]},"CameraFollow":{}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Child","parent":"Root","components":{"CameraFollow":{}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Outside","components":{"Transform":{"position":[9,0,0]}}})J")["ok"].asBool());
+    const EntityId child = e.GetScene().FindByName("Child"), outside = e.GetScene().FindByName("Outside");
+    Json follow = Json::parse(R"J({"id":"Root","type":"CameraFollow","values":{}})J");
+    follow["values"]["target"] = child;
+    CHECK(e.Call("component.set", follow)["ok"].asBool());
+    follow["id"] = "Child";
+    follow["values"]["target"] = outside;
+    CHECK(e.Call("component.set", follow)["ok"].asBool());
+    Json selection = Json::MakeObject();
+    selection["ids"] = Json(Json::Array{"Root", child, "Root"});
+    const uint64_t copyRevision = e.Revision();
+    const size_t copyUndo = e.UndoDepth();
+    const Json copied = e.Call("entity.copy", selection);
+    CHECK(copied["ok"].asBool() && copied["result"]["entities"].size() == 2);
+    CHECK(e.Revision() == copyRevision && e.UndoDepth() == copyUndo);
+    Json paste = Json::MakeObject();
+    paste["document"] = copied["result"];
+    paste["parent"] = "Outside";
+    const Json pasted = e.Call("entity.paste", paste);
+    CHECK(pasted["ok"].asBool() && pasted["result"]["roots"].size() == 1);
+    const EntityId rootCopy = static_cast<EntityId>(pasted["result"]["roots"][0].asNumber());
+    const auto children = e.GetScene().Children(rootCopy);
+    CHECK(children.size() == 1 && e.GetScene().Entities().size() == 5);
+    CHECK(e.GetScene().Record(rootCopy)->parent == outside);
+    CHECK(e.GetScene().Get<Transform>(rootCopy)->position.x == 1);
+    CHECK(e.GetScene().Get<CameraFollow>(rootCopy)->target == children[0]);
+    CHECK(e.GetScene().Get<CameraFollow>(children[0])->target == kNullEntity);
+    CHECK(e.UndoDepth() == copyUndo + 1);
+    CHECK(e.GetScene().Record(rootCopy)->name == "Root Copy");
+    CHECK(e.Call("entity.paste", paste)["ok"].asBool());
+    CHECK(e.GetScene().FindByName("Root Copy 2") != kNullEntity);
+    CHECK(e.GetScene().FindByName("Child Copy 2") != kNullEntity);
+    const std::string before = e.GetScene().ToJson().dump();
+    const uint64_t revision = e.Revision();
+    const size_t undo = e.UndoDepth();
+    auto rejected = [&](const Json& document) {
+        Json args = Json::MakeObject(); args["document"] = document;
+        CHECK(!e.Call("entity.paste", args)["ok"].asBool());
+        CHECK(e.GetScene().ToJson().dump() == before);
+        CHECK(e.Revision() == revision && e.UndoDepth() == undo);
+    };
+    rejected(Json::MakeObject());
+    Json bad = copied["result"];
+    bad["entities"][0]["id"] = bad["entities"][1]["id"];
+    rejected(bad);
+    bad = copied["result"];
+    bad["entities"][0]["parent"] = bad["entities"][1]["id"];
+    rejected(bad); // child already has root as its parent: this creates a cycle
+    bad = copied["result"];
+    bad["entities"][1]["components"]["UnknownComponent"] = Json::MakeObject();
+    rejected(bad);
+    bad = copied["result"];
+    bad["entities"][1]["components"]["MeshRenderer"]["shading"] = "invalid";
+    rejected(bad);
+    bad = copied["result"];
+    bad["entities"][0]["components"]["CameraFollow"]["target"] = 999;
+    rejected(bad);
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Entities().size() == 5);
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Entities().size() == 3);
+}
+
+TEST(HistoryTimelineCursorAndMergedArguments) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("history_timeline"), &error));
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{}}})J")["ok"].asBool());
+    const size_t base = e.UndoDepth();
+    for (int x : {1,2,3}) {
+        Json args = Json::parse(R"J({"id":"Box","type":"Transform","values":{"position":[0,0,0]},"merge":"drag"})J");
+        args["values"]["position"][0] = x;
+        CHECK(e.Call("component.set", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "entity.rename", R"J({"id":"Box","name":"Renamed"})J")["ok"].asBool());
+    Json timeline = Call(e, "history.list", "{}")["result"];
+    CHECK(timeline["cursor"].asNumber() == base + 2 && timeline["entries"].size() == base + 2);
+    CHECK(timeline["entries"][base]["command"].asString() == "component.set");
+    CHECK(timeline["entries"][base]["args"]["values"]["position"][0].asInt() == 3);
+    CHECK(timeline["entries"][base + 1]["command"].asString() == "entity.rename");
+    Json go = Json::MakeObject(); go["cursor"] = static_cast<uint64_t>(base);
+    CHECK(e.Call("history.go", go)["ok"].asBool());
+    CHECK(e.GetScene().FindByName("Box") != kNullEntity && PosOf(e,"Box").x == 0);
+    timeline = Call(e, "history.list", "{}")["result"];
+    CHECK(timeline["entries"].size() == base + 2);
+    CHECK(!timeline["entries"][base]["applied"].asBool() && !timeline["entries"][base + 1]["applied"].asBool());
+    go["cursor"] = static_cast<uint64_t>(base + 2);
+    CHECK(e.Call("history.go", go)["ok"].asBool());
+    CHECK(PosOf(e,"Renamed").x == 3);
+    go["cursor"] = static_cast<uint64_t>(base);
+    CHECK(e.Call("history.go", go)["ok"].asBool());
+    CHECK(Call(e, "entity.rename", R"J({"id":"Box","name":"Branch"})J")["ok"].asBool());
+    timeline = Call(e, "history.list", "{}")["result"];
+    CHECK(timeline["cursor"].asNumber() == base + 1 && timeline["entries"].size() == base + 1 && e.RedoDepth() == 0);
+    CHECK(timeline["entries"][base]["args"]["name"].asString() == "Branch");
+    CHECK(!Call(e, "history.go", R"J({"cursor":-1})J")["ok"].asBool());
+    CHECK(Call(e, "sim.play", "{}")["ok"].asBool());
+    CHECK(Call(e, "history.go", R"J({"cursor":0})J")["error"]["code"].asString() == "simulating");
+    CHECK(Call(e, "sim.stop", "{}")["ok"].asBool());
+}
+
+TEST(PrefabSourceEditIsolationAndSave) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("prefab_source_edit"), &error));
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Root","components":{"Transform":{}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Child","parent":"Root","components":{"Tag":{"tags":"original"}}})J")["ok"].asBool());
+    CHECK(Call(e, "prefab.create", R"J({"id":"Root","path":"prefabs/edit.prefab.json"})J")["ok"].asBool());
+    CHECK(Call(e, "prefab.instantiate", R"J({"path":"prefabs/edit.prefab.json","name":"Existing"})J")["ok"].asBool());
+    const EntityId existing = e.GetScene().FindByName("Existing");
+    const std::string original = e.GetScene().ToJson().dump();
+    const std::string history = Call(e, "history.list", "{}")["result"].dump();
+    const bool dirty = e.Dirty();
+    CHECK(Call(e, "prefab.edit", R"J({"path":"prefabs/edit.prefab.json"})J")["ok"].asBool());
+    CHECK(e.GetScene().Entities().size() == 2 && e.GetScene().FindByName("Existing") == kNullEntity);
+    CHECK(e.UndoDepth() == 0 && !e.Dirty());
+    CHECK(Call(e, "prefab.state", "{}")["result"]["path"].asString() == "prefabs/edit.prefab.json");
+    CHECK(!Call(e, "prefab.state", "{}")["result"]["dirty"].asBool());
+    for (const char* command : {"scene.new", "scene.save", "sim.play", "sim.step"})
+        CHECK(Call(e, command, "{}")["error"]["code"].asString() == "prefab_editing");
+    CHECK(Call(e, "component.set", R"J({"id":"Child","type":"Tag","values":{"tags":"edited"}})J")["ok"].asBool());
+    CHECK(Call(e, "prefab.state", "{}")["result"]["dirty"].asBool());
+    CHECK(!Call(e, "prefab.close", "{}")["ok"].asBool());
+    CHECK(e.EditingPrefab() == "prefabs/edit.prefab.json");
+    CHECK(Call(e, "prefab.save", "{}")["ok"].asBool());
+    CHECK(!e.Dirty());
+    CHECK(Call(e, "prefab.close", "{}")["ok"].asBool());
+    CHECK(e.GetScene().ToJson().dump() == original && e.Dirty() == dirty);
+    CHECK(Call(e, "history.list", "{}")["result"].dump() == history);
+    CHECK(Call(e, "prefab.state", "{}")["result"]["path"].asString().empty());
+    CHECK(e.GetScene().Get<Tag>(e.GetScene().Children(existing)[0])->tags == "original");
+    CHECK(Call(e, "prefab.instantiate", R"J({"path":"prefabs/edit.prefab.json","name":"Later"})J")["ok"].asBool());
+    CHECK(e.GetScene().Get<Tag>(e.GetScene().Children(e.GetScene().FindByName("Later"))[0])->tags == "edited");
+    const std::string restored = e.GetScene().ToJson().dump();
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(),"prefabs/invalid.prefab.json"),
+        R"J({"format":"ownengine.prefab","version":1,"entities":[{"id":1,"name":"A"},{"id":2,"name":"B"}]})J"));
+    CHECK(!Call(e, "prefab.edit", R"J({"path":"prefabs/invalid.prefab.json"})J")["ok"].asBool());
+    CHECK(e.GetScene().ToJson().dump() == restored && e.EditingPrefab().empty());
+    CHECK(Call(e, "prefab.edit", R"J({"path":"prefabs/edit.prefab.json"})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"ExtraRoot"})J")["ok"].asBool());
+    CHECK(!Call(e, "prefab.save", "{}")["ok"].asBool());
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(Call(e, "entity.delete", R"J({"id":"Root"})J")["ok"].asBool());
+    CHECK(e.GetScene().Entities().empty());
+    CHECK(!Call(e, "prefab.save", "{}")["ok"].asBool());
+    CHECK(!Call(e, "prefab.close", "{}")["ok"].asBool());
+    CHECK(Call(e, "prefab.close", R"J({"discard":true})J")["ok"].asBool());
+    CHECK(e.GetScene().ToJson().dump() == restored);
+}
+
+TEST(AssetPreviewPixelsFramingAndIsolation) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("asset_preview"), &error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Cube","components":{"Transform":{},"MeshRenderer":{"color":[1,0,0],"unlit":true}}})")["ok"].asBool());
+    CHECK(Call(e,"scene.save",R"({"path":"scenes/preview.scene.json"})")["ok"].asBool());
+    CHECK(Call(e,"prefab.create",R"({"id":"Cube","path":"prefabs/preview.prefab.json"})")["ok"].asBool());
+    CHECK(CopyFileTo(TestSourceDir()+"/samples/Showcase/assets/models/fox.glb",JoinPath(e.ProjectDir(),"assets/fox.glb")));
+    Image image; image.width=4; image.height=2; image.rgba.assign(32,0);
+    for (int y=0;y<2;++y) for (int x=2;x<4;++x) {
+        const size_t at=static_cast<size_t>((y*4+x)*4); image.rgba[at]=255; image.rgba[at+3]=255;
+    }
+    CHECK(WritePng(JoinPath(e.ProjectDir(),"assets/wide.png"),image,true));
+    auto preview=[&](const char* path) {
+        Json args=Json::MakeObject(); args["path"]=path; args["size"]=64; args["pixels"]=true;
+        Json result=e.Call("asset.preview",args); CHECK(result["ok"].asBool());
+        CHECK(result["result"]["width"].asInt()==64 && result["result"]["pixels"].size()==4096);
+        return result["result"]["pixels"];
+    };
+    const std::string scene=e.GetScene().ToJson().dump();
+    const uint64_t revision=e.Revision(); const size_t undo=e.UndoDepth(); const bool dirty=e.Dirty();
+    const Json texture=preview("assets/wide.png");
+    CHECK(texture[32*64+48].asNumber()==static_cast<double>(0xFF0000FFu));
+    CHECK(texture[32*64+16].asNumber()==static_cast<double>(0xFF484848u)); // transparent texel reveals checkerboard
+    CHECK(texture[8*64+48].asNumber()==static_cast<double>(0xFF303030u)); // centered 2:1 image leaves top margin
+    for (const char* path : {"assets/fox.glb","scenes/preview.scene.json","prefabs/preview.prefab.json"}) {
+        const Json pixels=preview(path); int changed=0;
+        for (const Json& pixel : pixels.items()) changed+=pixel.asNumber()!=pixels[0].asNumber();
+        CHECK(changed>100);
+    }
+    CHECK(e.GetScene().ToJson().dump()==scene && e.Revision()==revision && e.UndoDepth()==undo && e.Dirty()==dirty);
+    CHECK(!Call(e,"asset.preview",R"({"path":"../outside.png"})")["ok"].asBool());
+    CHECK(!Call(e,"asset.preview",R"({"path":"assets/wide.png","out":"../outside.png"})")["ok"].asBool());
+    CHECK(!Call(e,"asset.preview",R"({"path":"assets/wide.png","size":1000})")["ok"].asBool());
+    CHECK(e.Revision()==revision && e.UndoDepth()==undo);
+    CHECK(Call(e,"component.set",R"({"id":"Cube","type":"Transform","values":{"scale":[1000,1000,1000]}})")["ok"].asBool());
+    CHECK(Call(e,"scene.save",R"({"path":"scenes/large.scene.json"})")["ok"].asBool());
+    const Json large=preview("scenes/large.scene.json"); int visible=0;
+    for (const Json& pixel : large.items()) visible+=(static_cast<uint32_t>(pixel.asNumber()) & 0xFFFFFFu)==255;
+    CHECK(visible>100);
+    CHECK(Call(e,"shader.create",R"({"path":"preview.shader.json","graph":{"nodes":[{"op":"constant","value":[1,0,0,1]}],"color":0}})")["ok"].asBool());
+    CHECK(Call(e,"material.create",R"({"path":"preview.mat.json","values":{"shader":"preview.shader.json","unlit":true}})")["ok"].asBool());
+    const Json red=preview("preview.mat.json");
+    CHECK(Call(e,"shader.create",R"({"path":"preview.shader.json","overwrite":true,"graph":{"nodes":[{"op":"constant","value":[0,0,1,1]}],"color":0}})")["ok"].asBool());
+    const Json blue=preview("preview.mat.json");
+    CHECK(red.dump()!=blue.dump());
+    CHECK(Call(e,"material.set",R"({"path":"preview.mat.json","values":{"shader":"","shaderUniforms":{},"baseColor":[0,1,0]}})")["ok"].asBool());
+    CHECK(preview("preview.mat.json").dump()!=blue.dump());
+}
+
+TEST(PrefabSparseReferencesAndRecordingIsolation) {
+    Engine e; std::string error;
+    CHECK(e.Open(TempProject("prefab_sparse"),&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Original"})")["ok"].asBool());
+    const std::string original=e.GetScene().ToJson().dump();
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(),"sparse.prefab.json"),R"({"format":"ownengine.prefab","version":1,
+      "entities":[{"id":100,"name":"Root","components":{"CameraFollow":{"target":400}}},
+      {"id":400,"name":"Child","parent":100,"components":{"CameraFollow":{"target":100}}}]})"));
+    CHECK(Call(e,"prefab.edit",R"({"path":"sparse.prefab.json"})")["ok"].asBool());
+    CHECK(Call(e,"sim.record_state","{}")["error"]["code"].asString()=="prefab_editing");
+    CHECK(!e.InPlaySession());
+    CHECK(Call(e,"prefab.save","{}")["ok"].asBool());
+    CHECK(Call(e,"prefab.close","{}")["ok"].asBool());
+    CHECK(e.GetScene().ToJson().dump()==original && !e.InPlaySession());
+    const Json result=Call(e,"prefab.instantiate",R"({"path":"sparse.prefab.json","name":"Instance"})");
+    CHECK(result["ok"].asBool());
+    const EntityId root=static_cast<EntityId>(result["result"]["id"].asNumber());
+    const auto children=e.GetScene().Children(root);
+    CHECK(children.size()==1);
+    if (children.size()==1) {
+        CHECK(e.GetScene().Get<CameraFollow>(root)->target==children[0]);
+        CHECK(e.GetScene().Get<CameraFollow>(children[0])->target==root);
+    }
+}
+
 TEST(TimersMessagesAndGameData) {
     Engine e;
     std::string err;
@@ -4073,6 +4309,59 @@ TEST(WuwaToonSampleControlsAndPackaging) {
     RemoveAll("build/test_wuwa_toon");
 }
 
+TEST(ShaderLabSampleControlsAndPackaging) {
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/samples/ShaderLab";
+    CHECK(e.Open(project, &error));
+    for (const char* path : {"materials/pulse.shader.json", "materials/mask.shader.json"}) {
+        Json args = Json::MakeObject();
+        args["path"] = path;
+        CHECK(e.Call("shader.check", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "script.check", R"J({"path":"scripts/effects.lua"})J")["ok"].asBool());
+    RenderTarget first, animated, replay;
+    for (RenderTarget* target : {&first, &animated, &replay}) target->Resize(160,90);
+    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    e.RenderGameView(first);
+    CHECK(Call(e, "sim.step", R"J({"frames":60})J")["ok"].asBool());
+    e.RenderGameView(animated);
+    CHECK(animated.Hash() != first.Hash());
+    CHECK(animated.ids == first.ids && animated.depth == first.depth);
+    const EntityId camera = e.GetScene().FindByName("Camera");
+    for (const char* key : {"2", "1"}) {
+        Json args = Json::MakeObject();
+        args["key"] = key;
+        args["down"] = true;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
+        CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+        const PostProcess* effect = e.GetScene().Get<PostProcess>(camera);
+        const bool hdr = std::string(key) == "2";
+        CHECK(effect && effect->exposure == (hdr ? 0.75f : 1));
+        CHECK(effect && effect->toneMapping == (hdr ? "reinhard" : "none"));
+        CHECK(effect && (effect->bloom > 0) == hdr);
+        args["down"] = false;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
+        CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    }
+    CHECK(e.Scripts().Errors().empty());
+    const std::vector<std::string> files = GameFiles(project);
+    for (const char* path : {"materials/pulse.shader.json", "materials/mask.shader.json",
+                             "materials/pulse.mat.json", "materials/mask.mat.json", "scripts/effects.lua"})
+        CHECK(std::find(files.begin(), files.end(), path) != files.end());
+    CHECK(WriteGamePak(project, files, "build/test_shader_lab/game.pak", &error));
+    std::vector<unsigned char> bytes;
+    CHECK(ReadBinaryFile("build/test_shader_lab/game.pak", bytes));
+    CHECK(ExtractGamePak(bytes, "build/test_shader_lab/game", &error));
+    Engine packaged;
+    CHECK(packaged.Open("build/test_shader_lab/game", &error));
+    CHECK(Call(packaged, "sim.step", R"J({"frames":61})J")["ok"].asBool());
+    packaged.RenderGameView(replay);
+    CHECK(replay.Hash() == animated.Hash());
+    CHECK(packaged.Scripts().Errors().empty());
+    RemoveAll("build/test_shader_lab");
+}
+
 TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;
@@ -4902,6 +5191,121 @@ TEST(ShaderMaterialAlphaAndShadow) {
         for (size_t i = 0; i < opaque.color.size(); ++i)
             changed += opaque.ids[i] == ground && transparent.ids[i] == ground && gpuOpaque.color[i] != gpuTransparent.color[i];
         CHECK(changed > 20);
+    }
+}
+
+TEST(ShaderMaterialVaryingAlphaAndOcclusion) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_varying_alpha"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"half.shader.json","graph":{"nodes":[
+      {"op":"uv"},{"op":"constant","value":0.5},{"op":"step","args":[1,0]},
+      {"op":"swizzle","args":[2],"value":[0,0,0,0]},
+      {"op":"constant","value":[0.2,0.5,1,1]},{"op":"multiply","args":[3,4]}],"color":5}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"half.mat.json","values":{"shader":"half.shader.json",
+      "alphaMode":"mask","alphaCutoff":0.5,"doubleSided":true,"unlit":true}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"reference.mat.json","values":{"baseColor":[0.2,0.5,1],
+      "doubleSided":true,"unlit":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,7,10],"rotation":[-35,0,0]},
+      "Camera":{"clearColor":[0.1,0.1,0.1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-30,65,0]},
+      "DirectionalLight":{"shadows":true,"ambient":[0.2,0.2,0.2]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},
+      "MeshRenderer":{"mesh":"plane","color":[0.7,0.7,0.7]}}})J");
+    Call(e, "entity.create", R"J({"name":"Mask","components":{"Transform":{"position":[0,2,0],"rotation":[-90,0,0],"scale":[4,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"half.mat.json"}}})J");
+    // An independent half-width quad has exactly the geometry retained by step(0.5, uv.x).
+    CHECK(Call(e, "entity.create", R"J({"name":"Reference","components":{"Transform":{"position":[1,2,0],"rotation":[-90,0,0],"scale":[2,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"reference.mat.json","visible":false}}})J")["ok"].asBool());
+    RenderView view;
+    MakeSceneView(e.GetScene(), 160.0f / 90, view);
+    RenderTarget masked, reference, noShadow, gpuMasked, gpuReference, gpuNoShadow;
+    for (RenderTarget* target : {&masked, &reference, &noShadow, &gpuMasked, &gpuReference, &gpuNoShadow}) target->Resize(160,90);
+    const bool gpu = e.EnableGpu(nullptr, &error);
+    if (!gpu) std::printf("  SKIP varying graph alpha GPU comparison (%s)\n", error.c_str());
+    e.Renderer().Render(e.GetScene(), view, masked);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuMasked);
+    CHECK(Call(e, "component.set", R"J({"id":"Mask","type":"MeshRenderer","values":{"castShadows":false}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, noShadow);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuNoShadow);
+    CHECK(Call(e, "component.set", R"J({"id":"Mask","type":"MeshRenderer","values":{"visible":false}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Reference","type":"MeshRenderer","values":{"visible":true}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, reference);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuReference);
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    int shadowPixels = 0, gpuShadowPixels = 0, compared = 0;
+    double cpuDifference = 0, gpuDifference = 0, backendDifference = 0;
+    for (size_t i = 0; i < masked.color.size(); ++i) {
+        if (masked.ids[i] != ground || reference.ids[i] != ground || noShadow.ids[i] != ground) continue;
+        ++compared;
+        shadowPixels += masked.color[i] != noShadow.color[i];
+        if (gpu) gpuShadowPixels += gpuMasked.color[i] != gpuNoShadow.color[i];
+        for (int shift : {0,8,16}) {
+            const auto channel = [shift](uint32_t color) { return static_cast<int>((color >> shift) & 255); };
+            cpuDifference += std::abs(channel(masked.color[i]) - channel(reference.color[i]));
+            if (gpu) {
+                gpuDifference += std::abs(channel(gpuMasked.color[i]) - channel(gpuReference.color[i]));
+                backendDifference += std::abs(channel(masked.color[i]) - channel(gpuMasked.color[i]));
+            }
+        }
+    }
+    CHECK(compared > 1000 && shadowPixels > 20);
+    CHECK(cpuDifference / static_cast<double>(std::max(1, compared) * 3) < 1);
+    if (gpu) {
+        std::printf("  varying graph shadow reference/GPU mean difference %.4f, software/GPU %.4f\n",
+                    gpuDifference / static_cast<double>(std::max(1, compared) * 3),
+                    backendDifference / static_cast<double>(std::max(1, compared) * 3));
+        CHECK(gpuShadowPixels > 20);
+        CHECK(gpuDifference / static_cast<double>(std::max(1, compared) * 3) < 1);
+        CHECK(backendDifference / static_cast<double>(std::max(1, compared) * 3) < 6);
+    }
+
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Back","components":{"Transform":{"scale":[3,3,1]},
+      "MeshRenderer":{"mesh":"quad","color":[0,1,0],"unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Mask","components":{"Transform":{"position":[0,0,1],"scale":[4,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"half.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"Occluder","components":{"Transform":{"position":[-1,0,2],"scale":[2,4,1]},
+      "MeshRenderer":{"mesh":"quad","color":[1,0,0],"unlit":true,"visible":false}}})J");
+    MakeSceneView(e.GetScene(), 160.0f / 90, view);
+    view.highlight = e.GetScene().FindByName("Back");
+    const auto outline = [](uint32_t color) {
+        return (color & 255) > 230 && ((color >> 8) & 255) > 140 &&
+               ((color >> 8) & 255) < 175 && ((color >> 16) & 255) < 50;
+    };
+    e.Renderer().Render(e.GetScene(), view, masked);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuMasked);
+    int visibleBack = 0, cpuOutline = 0, gpuOutline = 0;
+    for (size_t i = 0; i < masked.color.size(); ++i) {
+        visibleBack += masked.ids[i] == view.highlight;
+        cpuOutline += outline(masked.color[i]);
+        if (outline(masked.color[i])) CHECK(i % 160 <= 81); // only the hole exposes the selected quad
+        if (gpu) {
+            gpuOutline += outline(gpuMasked.color[i]);
+            if (outline(gpuMasked.color[i])) CHECK(i % 160 <= 81);
+        }
+    }
+    CHECK(visibleBack > 100 && cpuOutline > 20);
+    if (gpu) CHECK(gpuOutline > 20);
+    // A standard opaque material closes the remaining hole: neither selection pass may leak.
+    CHECK(Call(e, "component.set", R"J({"id":"Occluder","type":"MeshRenderer","values":{"visible":true}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, reference);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuReference);
+    for (size_t i = 0; i < reference.color.size(); ++i) {
+        CHECK(reference.ids[i] != view.highlight && !outline(reference.color[i]));
+        if (gpu) CHECK(!outline(gpuReference.color[i]));
+    }
+    // The selected graph itself must also respect an ordinary material's foreground depth.
+    view.highlight = e.GetScene().FindByName("Mask");
+    CHECK(Call(e, "component.set", R"J({"id":"Occluder","type":"Transform","values":{"position":[1,0,2],"scale":[2.2,4.2,1]}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, reference);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuReference);
+    for (size_t i = 0; i < reference.color.size(); ++i) {
+        CHECK(reference.ids[i] != view.highlight && !outline(reference.color[i]));
+        if (gpu) CHECK(!outline(gpuReference.color[i]));
     }
 }
 
@@ -5826,6 +6230,146 @@ TEST(NativeEditorNetworkPreviewInputAndStop) {
         frames(6, CtrlChord(WindowKey::P)); CHECK(!engine.InPlaySession()); CHECK(!engine.LocalPeer(1));
     }
     RemoveAll(project);
+}
+
+TEST(NativeEditorClipboardHistoryPrefabAndDialogs) {
+    struct DialogWindow : Window {
+        FileDialogResult next; FileDialogOptions last; int calls=0;
+        bool PumpEvents(InputState&) override { return true; }
+        void Present(const RenderTarget&) override {}
+        int Width() const override { return 1280; }
+        int Height() const override { return 720; }
+        void SetTitle(const std::string&) override {}
+        FileDialogResult ChooseFile(const FileDialogOptions& options) override { ++calls; last=options; return next; }
+    } window;
+    Engine e; std::string error;
+    CHECK(e.Open(TempProject("editor_p7"),&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Root","components":{"Transform":{},"MeshRenderer":{}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Child","parent":"Root"})")["ok"].asBool());
+    CHECK(Call(e,"prefab.create",R"({"id":"Root","path":"prefabs/editor.prefab.json"})")["ok"].asBool());
+    CHECK(Call(e,"scene.save",R"({"path":"scenes/original.scene.json"})")["ok"].asBool());
+    if (!e.EnableGpu(nullptr,&error)) { std::printf("  SKIP P7 editor GPU (%s)\n",error.c_str()); return; }
+    NativeEditor::Options options; options.language="en";
+    NativeEditor editor(e,&window,options); CHECK(editor.Init(&error));
+    // Restore platform callbacks on scope exit; test clipboard never touches the user's OS clipboard.
+    struct ClipboardGuard {
+        decltype(ImGuiPlatformIO::Platform_GetClipboardTextFn) get;
+        decltype(ImGuiPlatformIO::Platform_SetClipboardTextFn) set;
+        void* user; std::string text;
+        ClipboardGuard() {
+            auto& platform=ImGui::GetPlatformIO(); get=platform.Platform_GetClipboardTextFn;
+            set=platform.Platform_SetClipboardTextFn; user=platform.Platform_ClipboardUserData;
+            platform.Platform_ClipboardUserData=this;
+            platform.Platform_GetClipboardTextFn=[](ImGuiContext*) {
+                return static_cast<ClipboardGuard*>(ImGui::GetPlatformIO().Platform_ClipboardUserData)->text.c_str();
+            };
+            platform.Platform_SetClipboardTextFn=[](ImGuiContext*,const char* value) {
+                static_cast<ClipboardGuard*>(ImGui::GetPlatformIO().Platform_ClipboardUserData)->text=value;
+            };
+        }
+        ~ClipboardGuard() {
+            auto& platform=ImGui::GetPlatformIO(); platform.Platform_GetClipboardTextFn=get;
+            platform.Platform_SetClipboardTextFn=set; platform.Platform_ClipboardUserData=user;
+        }
+    } clipboard;
+    RenderTarget image;
+    auto frames=[&](int count,std::vector<WindowEvent> events={}) {
+        for (int frame=0;frame<count;++frame) {
+            editor.Update(frame==0?events:std::vector<WindowEvent>(),1280,720,1,Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+    };
+    frames(4); editor.Select(e.GetScene().FindByName("Root")); frames(1);
+    const size_t count=e.GetScene().Entities().size();
+    frames(4,CtrlChord(WindowKey::C));
+    CHECK(Json::parse(clipboard.text)["entities"].size()==2);
+    frames(4,CtrlChord(WindowKey::V));
+    CHECK(e.GetScene().Entities().size()==count+2);
+    CHECK(editor.Selected()==e.GetScene().FindByName("Root Copy"));
+    frames(4,CtrlChord(WindowKey::Z));
+    CHECK(e.GetScene().Entities().size()==count);
+    editor.FocusHistoryPanel(); frames(2);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR,"build/editor-p7.png"),image.ToImage()));
+    // Use the editor save workflow to refresh its dirty-state cache after undo.
+    frames(4,CtrlChord(WindowKey::S)); CHECK(!e.Dirty());
+    editor.EditPrefab("prefabs/editor.prefab.json"); frames(2);
+    CHECK(e.EditingPrefab()=="prefabs/editor.prefab.json" && editor.Selected()!=kNullEntity);
+    CHECK(Call(e,"entity.rename",R"({"id":"Child","name":"SavedChild"})")["ok"].asBool()); frames(1);
+    frames(4,CtrlChord(WindowKey::S)); CHECK(!e.Dirty());
+    editor.ClosePrefab(); frames(2);
+    CHECK(e.EditingPrefab().empty() && e.GetScene().FindByName("Child")!=kNullEntity);
+    editor.EditPrefab("prefabs/editor.prefab.json"); frames(2);
+    CHECK(e.GetScene().FindByName("SavedChild")!=kNullEntity);
+    CHECK(Call(e,"entity.rename",R"({"id":"SavedChild","name":"Discarded"})")["ok"].asBool()); frames(1);
+    editor.ClosePrefab(); frames(2);
+    CHECK(!e.EditingPrefab().empty()); // unsaved edits require the editor prompt
+    auto saveModal=[]() -> ImGuiWindow* {
+        for (ImGuiWindow* item : GImGui->Windows)
+            if (item->Active && std::strstr(item->Name,"Save changes?") && ImGui::IsPopupOpen(item->PopupId,ImGuiPopupFlags_AnyPopupLevel))
+                return item;
+        return nullptr;
+    };
+    auto clickPrompt=[&](int button) {
+        ImGuiWindow* modal=saveModal(); CHECK(modal!=nullptr);
+        if (!modal) return;
+        const ImGuiStyle& style=ImGui::GetStyle(); const float font=ImGui::GetFontSize();
+        WindowEvent move; move.type=WindowEvent::Type::MouseMove;
+        move.x=modal->Pos.x+style.WindowPadding.x+font*3+static_cast<float>(button)*(font*6+style.ItemSpacing.x);
+        move.y=modal->Pos.y+modal->Size.y-style.WindowPadding.y-(font+style.FramePadding.y*2)*0.5f;
+        WindowEvent click=move; click.type=WindowEvent::Type::MouseButton; click.button=0; click.down=true;
+        frames(2,{move,click}); click.down=false; frames(2,{click});
+    };
+    clickPrompt(1);
+    CHECK(e.EditingPrefab().empty());
+    if (!e.EditingPrefab().empty()) { Call(e,"prefab.close",R"({"discard":true})"); frames(2,{KeyEvent(WindowKey::Escape,true),KeyEvent(WindowKey::Escape,false)}); }
+    // Failed source saves keep the pending close and modal open; Cancel preserves the edit context.
+    for (bool deleteRoot : {false,true}) {
+        editor.EditPrefab("prefabs/editor.prefab.json"); frames(2);
+        CHECK(e.EditingPrefab()=="prefabs/editor.prefab.json");
+        if (deleteRoot) CHECK(Call(e,"entity.delete",R"({"id":"Root"})")["ok"].asBool());
+        else CHECK(Call(e,"entity.create",R"({"name":"ExtraRoot"})")["ok"].asBool());
+        frames(1); editor.ClosePrefab(); frames(2);
+        CHECK(saveModal()!=nullptr);
+        clickPrompt(0);
+        CHECK(e.EditingPrefab()=="prefabs/editor.prefab.json" && e.Dirty());
+        CHECK(saveModal()!=nullptr);
+        CHECK(editor.LastNotice().find("prefab_save_failed")!=std::string::npos ||
+              editor.LastNotice().find(deleteRoot?"deleted":"single prefab root")!=std::string::npos);
+        clickPrompt(2);
+        CHECK(saveModal()==nullptr && !e.EditingPrefab().empty());
+        CHECK(Call(e,"history.undo","{}")["ok"].asBool()); frames(1);
+        CHECK(e.GetScene().Entities().size()==2);
+        frames(4,CtrlChord(WindowKey::S)); CHECK(!e.Dirty());
+        editor.ClosePrefab(); frames(2);
+        CHECK(e.EditingPrefab().empty());
+    }
+    window.next.status=FileDialogResult::Status::Selected;
+    window.next.path=JoinPath(e.ProjectDir(),"scenes/chosen.scene.json");
+    editor.BrowseFile(NativeEditor::FilePurpose::SaveScene); frames(1);
+    CHECK(window.last.save && window.last.extension=="scene.json");
+    CHECK(FileExists(window.next.path) && !e.Dirty());
+    editor.BrowseFile(NativeEditor::FilePurpose::OpenScene); frames(2);
+    CHECK(!window.last.save && editor.LastNotice().find("Opened")!=std::string::npos);
+    const std::string scene=e.GetScene().ToJson().dump(); const uint64_t revision=e.Revision();
+    window.next.status=FileDialogResult::Status::Cancelled;
+    for (auto purpose : {NativeEditor::FilePurpose::OpenScene,NativeEditor::FilePurpose::SaveScene,NativeEditor::FilePurpose::ImportAsset})
+        editor.BrowseFile(purpose);
+    CHECK(e.GetScene().ToJson().dump()==scene && e.Revision()==revision);
+    window.next.status=FileDialogResult::Status::Error; window.next.error="Injected chooser failure";
+    editor.BrowseFile(NativeEditor::FilePurpose::OpenScene); CHECK(editor.LastNotice()==window.next.error);
+    window.next.status=FileDialogResult::Status::Unavailable;
+    editor.BrowseFile(NativeEditor::FilePurpose::OpenScene); CHECK(editor.LastNotice().find("unavailable")!=std::string::npos);
+    window.next.status=FileDialogResult::Status::Selected; window.next.path=AbsolutePath("build/outside.scene.json");
+    editor.BrowseFile(NativeEditor::FilePurpose::SaveScene);
+    CHECK(e.GetScene().ToJson().dump()==scene && e.Revision()==revision);
+    Image imported; imported.width=imported.height=2; imported.rgba.assign(16,255);
+    CHECK(WritePng(AbsolutePath("build/editor-p7-import.png"),imported));
+    window.next.path=AbsolutePath("build/editor-p7-import.png");
+    editor.BrowseFile(NativeEditor::FilePurpose::ImportAsset); frames(1);
+    CHECK(Call(e,"asset.list",R"({"kind":"texture"})")["result"].size()>0);
+    CHECK(e.GetScene().ToJson().dump()==scene && e.Revision()==revision);
+    std::filesystem::remove(window.next.path);
 }
 
 TEST(NativeEditorHeadless) {

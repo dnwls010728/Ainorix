@@ -1,0 +1,24 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {"frequency": 8, "speed": 0.5, "tint": [0.1, 0.65, 1, 1]},
+  "nodes": [
+    {"op": "uv"},
+    {"op": "uniform", "name": "frequency"},
+    {"op": "multiply", "args": [0, 1]},
+    {"op": "time"},
+    {"op": "uniform", "name": "speed"},
+    {"op": "multiply", "args": [3, 4]},
+    {"op": "add", "args": [2, 5]},
+    {"op": "fract", "args": [6]},
+    {"op": "swizzle", "args": [7], "value": [0, 0, 0, 0]},
+    {"op": "constant", "value": 0.5},
+    {"op": "step", "args": [9, 8]},
+    {"op": "constant", "value": [0.02, 0.04, 0.09, 1]},
+    {"op": "uniform", "name": "tint"},
+    {"op": "mix", "args": [11, 12, 10]},
+    {"op": "constant", "value": [2, 2, 2, 0]},
+    {"op": "multiply", "args": [13, 14]}
+  ],
+  "color": 13,
+  "emissive": 15
+}

@@ -204,7 +204,7 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(OwnEngine PUBLIC ws2_32 bcrypt user32 gdi32 shell32 winmm d3d11 dxgi)
+  target_link_libraries(OwnEngine PUBLIC ws2_32 bcrypt user32 gdi32 shell32 comdlg32 winmm d3d11 dxgi)
 elseif(EMSCRIPTEN)
   # Single-threaded WebAssembly: no pthreads (works on any static host).
   # Bounded WebSocket JS callbacks copy at most 64 KiB through explicitly exported allocation functions.
