@@ -2,6 +2,36 @@
 
 ## Implementation status (work log)
 
+### P6 completion pass (2026-10-03)
+
+- [x] Verify varying-alpha shadows against independent half-width geometry;
+      verify standard/graph material occlusion in both selection passes.
+      ShaderMaterialVaryingAlphaAndOcclusion passes on software/D3D11;
+      reference/GPU shadow mean channel difference is 0.0109 of 255.
+- [x] Add ShaderLab with animated UV bands, HDR emission, procedural alpha and
+      ground shadows. ShaderLabSampleControlsAndPackaging verifies fixed time,
+      presets, Lua errors and package extraction/render identity. Windows passes
+      137 tests; Node/WASM passes 125. CPU/D3D11 CLI images and packaged WebGL2 neutral/bloom images
+      were inspected; on-screen preset buttons also work without a keyboard.
+- [x] Recheck the neutral white capture discrepancy: a packaged white-cube
+      fixture shows the emitter in both the browser screenshot and exported
+      canvas PNG. The diagnostic page requests preserveDrawingBuffer for export;
+      without it, an asynchronous toDataURL can capture a cleared drawing buffer.
+      This does not establish the cause of the old screenshot, but no rendering
+      failure reproduces in the current player. No engine workaround was added.
+- [x] Confirm the committed web runtime already includes graphs from networking
+      M8; source/asset-only sample edits do not require another player build.
+- [ ] Rebuild both Android ABI players. No NDK or Android SDK is present on this
+      host; run build_android.bat with NDK r28c or newer before shipping graphs
+      or the integrated networking APIs on Android.
+- [ ] Android hardware and full Linux/EGL effect execution remain unavailable.
+      Run ShaderLab neutral/bloom on those targets and compare masked shadows.
+
+The portable P6 implementation and available desktop/browser verification are
+finished. P6 remains unchecked in ROADMAP until Android player refresh and the
+platform checks above are completed. P7 can proceed independently: it changes
+editor tooling and does not depend on those hardware checks.
+
 P6 started from integrated main. At the user's request, the completed P3-P5
 branches and P6 vignette/HDR milestones are combined through PRs #18-#21.
 The remaining P6 milestones continue on a new branch from the updated main;
@@ -101,7 +131,7 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
             finite saturation, texture/swizzle, fixed-time sine and instruction limits.
             Material/GPU integration remains P6.4b. Player refresh is deferred
             to P6.4c; shipped players still use source 0ea84f2.
-      - [ ] P6.4b: Load graph assets from materials, apply per-material uniforms,
+      - [x] P6.4b: Load graph assets from materials, apply per-material uniforms,
             integrate fragment evaluation in both renderers, generate portable
             backend shaders with sokol-shdc and preserve default materials.
             - [x] Main fragment pass: cached graph assets, strict material
@@ -116,7 +146,7 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
                   Software/D3D11 mean channel difference is 0.5606 of 255.
                   CLI images inspected: software c67b46e7be2ac459,
                   D3D11 66d23d1087649f31.
-            - [ ] Verify all instruction families with GPU comparisons,
+            - [x] Verify all instruction families with GPU comparisons,
                   textured/HDR/time-driven surfaces and alpha behavior;
                   extend graph alpha to shadow/selection passes as needed.
                   - [x] Graph alpha in CPU shadow depth and GPU shadow/selection
@@ -144,7 +174,7 @@ on window blur. This verifies the merged touch/gamepad focus-reset code.
                         sub-0.5 fragments out of picking. Worst CPU/D3D11 mean
                         difference is 1.4719 of 255. Windows passes 88 tests;
                         Node/WASM passes 84 tests.
-                  - [ ] Varying-alpha shadow masks and selection occlusion with
+                  - [x] Varying-alpha shadow masks and selection occlusion with
                         mixed materials; packaged WebGL checks are P6.4c.
                   - [x] Recover D3D compiler diagnostics with D3DCompile using
                         the generated HLSL and engine compiler flags. Replacing
@@ -286,7 +316,7 @@ effect settings so switching back to Off cannot retain bloom or HDR targets.
 The initial scene keeps all effects neutral. Adjust preset values in
 `samples/Showcase/scripts/post_process.lua`; no engine rebuild is needed.
 
-## Portable surface shader graphs (P6.4 in progress)
+## Portable surface shader graphs
 
 A project authors a *.shader.json graph rather than platform-specific HLSL or
 GLSL. The graph is a programmable fragment surface calculation, not a list of
@@ -368,5 +398,17 @@ normal are world-space, with geometric normals before normal-map modification.
 Graph files and their dependents reload through AssetManager.PollChanges;
 shader.create overwrite invalidates the graph/material caches immediately.
 Graph validation also appears through asset.info. Invalid material edits are
-validated before disk replacement. Shipped players still predate this binding
-milestone; refresh and packaged execution remain part of P6.4c.
+validated before disk replacement. The web player includes graph binding and
+packaged ShaderLab execution is verified. Android player refresh remains open.
+
+## ShaderLab sample
+
+`oe run samples/ShaderLab` demonstrates time-driven cyan UV bands with emission
+and an orange procedural alpha mask casting a striped ground shadow. Press 1
+for neutral output or 2 for exposure/Reinhard/bloom; the matching on-screen
+buttons work with mouse/touch. Edit materials/pulse.shader.json to change the
+frequency/tint while the player or editor runs. Dependencies hot reload through
+the same asset path covered by ShaderMaterialRendering. Package with
+`oe package samples/ShaderLab --web` or the native packaging command. Graph and
+material assets are included in game.pak; extraction preserves the reference
+frame hash at a fixed simulation time.
