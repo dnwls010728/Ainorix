@@ -4,6 +4,8 @@
 
 AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
 
+- 에디터 보강: 하이어라키 클립보드, 변경 이력, 프리팹 소스 편집, 에셋 썸네일, Windows 파일 대화상자 — [docs/EDITOR.md](docs/EDITOR.md)
+
 ![네이티브 에디터 — Showcase 샘플](docs/images/native-editor.png)
 
 | 게임 화면 (`oe render samples/Showcase`) | |

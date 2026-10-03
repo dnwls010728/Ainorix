@@ -212,16 +212,19 @@ Remaining work after PR #22 (merge requested by the user before P6 completion):
   continue P6.4b in [POSTPROCESS.md](POSTPROCESS.md).
 - [ ] Add a procedural material sample and verify its CPU/GPU images, hot reload,
   packaging and WebGL2 execution (P6.4c).
-- [ ] Rebuild web and both Android ABI player runtimes with shader graphs.
-  Committed runtimes currently use source `0ea84f2` and do not support graphs.
+- [x] Web player has shader graphs and is refreshed with P7 source.
+- [ ] Rebuild both Android ABI players; committed Android runtimes use `0ea84f2`.
 - [ ] Resolve the neutral white-emitter browser capture discrepancy by comparing
   exported canvas images and another capture path; no engine failure is proven.
 - [ ] Verify effects on Android hardware and a full Linux/EGL runtime.
-- [ ] Complete P7 below after the remaining P6 work. P7 implementation has not started.
+- [x] P7 implementation completed independently; remaining P6 platform checks do not block editor work.
 
 - composite 패스(`GpuRenderer`)가 연결 지점. 톤매핑, 블룸, FXAA, 비네트를 켜고 끄는 컴포넌트/카메라 설정부터. **소프트웨어 렌더러는 기준**이므로 효과가 해시에 영향을 주면 안 되게 기본값은 꺼짐으로 두거나, 양쪽 모두 구현한다(`CLAUDE.md` 규칙). 커스텀 셰이더 머티리얼은 sokol-shdc 의존이 커서 이 항목의 후반부로 둔다.
 
-### P7. 에디터 보강 — [ ]
+### P7. 에디터 보강 — [x]
+
+- Implementation and verification: [EDITOR.md](EDITOR.md). Command-backed clipboard, history timeline, isolated prefab source editing, lazy asset previews and Windows native file dialogs implemented. Windows 141 tests pass; localized D3D11 screenshots inspected. Web runtime rebuilt; Android runtime rebuild and real native-dialog/hardware checks remain explicitly tracked.
+- P6 completion/sample verification is in separate PR #24; Android/Linux checks remain pending.
 
 - 하이어라키 복사/붙여넣기(클립보드), 변경 이력(undo 이력) 패널, 프리팹 편집 모드, 에셋 썸네일, 네이티브 파일 대화상자. 편집은 반드시 `Impl::Call`(명령)로, UI 문자열은 `Tr("...")` + `EditorText.cpp`에 한국어·일본어 추가, `oe editor --screenshot`으로 확인, `NativeEditorHeadless` 테스트 추가([EDITOR.md](EDITOR.md)).
 

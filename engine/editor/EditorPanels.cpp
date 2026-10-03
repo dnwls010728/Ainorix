@@ -9,6 +9,7 @@
 
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
+#include "render/GpuRenderer.h"
 #include "imgui_internal.h"
 
 #include "app/Engine.h"
@@ -132,6 +133,8 @@ void NativeEditor::Impl::EntityContextMenu(const EntityRow* row) {
             renameBuffer = row->name;
         }
         if (ImGui::MenuItem(Tr("Duplicate"), "Ctrl+D")) DuplicateSelection();
+        if (ImGui::MenuItem(Tr("Copy"), "Ctrl+C", false, !InPlaySession())) CopySelection();
+        if (ImGui::MenuItem(Tr("Paste"), "Ctrl+V", false, !InPlaySession())) PasteSelection();
         if (ImGui::MenuItem(Tr("Delete"), "Del")) DeleteSelection();
         ImGui::Separator();
         if (ImGui::MenuItem(Tr("Create Empty Child"))) {
@@ -153,6 +156,7 @@ void NativeEditor::Impl::EntityContextMenu(const EntityRow* row) {
         CreateMenuItems();
         ImGui::EndMenu();
     }
+    if (!row && ImGui::MenuItem(Tr("Paste"), "Ctrl+V", false, !InPlaySession())) PasteSelection();
 }
 
 void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<EntityId, std::vector<EntityId>>& children, const std::set<EntityId>& visible) {
@@ -613,6 +617,18 @@ void NativeEditor::Impl::AssetsPanel() {
         if (!ImGui::TreeNodeEx(header, ImGuiTreeNodeFlags_SpanAvailWidth)) continue;
         for (const std::string& path : it->second) {
             ImGui::PushID(path.c_str());
+            const bool previewable = kind == "texture" || kind == "model" || kind == "material" || kind == "prefab" || kind == "scene";
+            if (showThumbnails && previewable) {
+                const float side = ImGui::GetFrameHeight() * 1.8f;
+                if (ImGui::IsRectVisible(ImVec2(side, side))) {
+                    auto image = AssetThumbnail(path);
+                    if (image) {
+                        ImGui::Image(ViewTexture(engine.Gpu()->ImageView(image)), ImVec2(side, side));
+                        HelpTooltip(path);
+                    } else ImGui::Dummy(ImVec2(side, side));
+                } else ImGui::Dummy(ImVec2(side, side));
+                ImGui::SameLine();
+            }
             ImGui::PushStyleColor(ImGuiCol_Text, KindColor(kind));
             ImGui::Bullet();
             ImGui::PopStyleColor();
@@ -636,6 +652,8 @@ void NativeEditor::Impl::AssetsPanel() {
                 if (kind == "scene" && ImGui::MenuItem(Tr("Open"))) RequestAction({PendingAction::Kind::LoadScene, path});
                 if (kind == "script" && ImGui::MenuItem(Tr("Edit"))) OpenScript(path);
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Instantiate"))) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
+                if (kind == "prefab" && ImGui::MenuItem(Tr("Edit Prefab"), nullptr, false, !InPlaySession()))
+                    RequestAction({PendingAction::Kind::EditPrefab, path});
                 if (ImGui::MenuItem(Tr("Copy Path"))) ImGui::SetClipboardText(path.c_str());
                 if (ImGui::MenuItem(Tr("Info"))) {
                     Json r = Call("asset.info", ObjectOf({{"path", Json(path)}}));

@@ -137,6 +137,7 @@ bool Engine::SaveScene(const std::string& path, std::string* error) {
     }
     SetSceneLocation(path);
     dirty_ = false;
+    Touch();  // Remote saves must refresh editor path and dirty-state caches.
     OE_LOG_INFO("scene", "saved %s", path.c_str());
     return true;
 }
@@ -523,9 +524,9 @@ void Engine::ResetHistory() {
 bool Engine::Undo() {
     if (undo_.empty() || playSnapshot_) return false;
     lastMergeKey_.clear();
-    redo_.push_back(scene_.ToJson());
+    redo_.push_back({scene_.ToJson(), undo_.back().command, undo_.back().args});
     std::string err;
-    scene_.FromJson(undo_.back(), &err);
+    scene_.FromJson(undo_.back().scene, &err);
     undo_.pop_back();
     dirty_ = true;
     Touch();
@@ -535,11 +536,114 @@ bool Engine::Undo() {
 bool Engine::Redo() {
     if (redo_.empty() || playSnapshot_) return false;
     lastMergeKey_.clear();
-    undo_.push_back(scene_.ToJson());
+    undo_.push_back({scene_.ToJson(), redo_.back().command, redo_.back().args});
     std::string err;
-    scene_.FromJson(redo_.back(), &err);
+    scene_.FromJson(redo_.back().scene, &err);
     redo_.pop_back();
     dirty_ = true;
+    Touch();
+    return true;
+}
+
+Json Engine::HistoryState() const {
+    Json result = Json::MakeObject(), entries = Json::MakeArray();
+    auto append = [&](const HistoryEntry& entry, bool applied) {
+        Json row = Json::MakeObject();
+        row["command"] = entry.command;
+        row["args"] = entry.args;
+        row["applied"] = applied;
+        entries.push(row);
+    };
+    for (const auto& entry : undo_) append(entry, true);
+    for (auto it = redo_.rbegin(); it != redo_.rend(); ++it) append(*it, false);
+    result["entries"] = entries;
+    result["cursor"] = static_cast<uint64_t>(undo_.size());
+    return result;
+}
+
+bool Engine::BeginPrefabEdit(const std::string& path, std::string* error) {
+    if (InPlaySession() || prefabBackup_) {
+        if (error) *error = "stop play and close the current prefab before editing another";
+        return false;
+    }
+    Json prefab = ReadProjectJson(path);
+    if (!EndsWith(path, ".prefab.json") || prefab["format"].asString() != kPrefabFormat) {
+        if (error) *error = "expected a .prefab.json file";
+        return false;
+    }
+    // Validate in a temporary scene before changing the current edit context.
+    Scene isolated;
+    Json document = prefab;
+    document["format"] = "ownengine.scene";
+    if (!isolated.FromJson(document, error)) return false;
+    if (isolated.Entities().empty()) {
+        if (error) *error = "a prefab must contain one root";
+        return false;
+    }
+    size_t roots = 0;
+    for (const auto& entry : isolated.Entities()) roots += entry.second.parent == kNullEntity;
+    if (roots != 1) {
+        if (error) *error = "a prefab must contain exactly one root";
+        return false;
+    }
+    prefabBackup_ = std::make_unique<PrefabEditBackup>();
+    prefabBackup_->scene = scene_.ToJson();
+    prefabBackup_->scenePath = scenePath_;
+    prefabBackup_->dirty = dirty_;
+    prefabBackup_->undo = std::move(undo_);
+    prefabBackup_->redo = std::move(redo_);
+    prefabBackup_->mergeKey = lastMergeKey_;
+    scene_ = std::move(isolated);
+    prefabPath_ = path;
+    scenePath_.clear();
+    ResetHistory();
+    ResetRuntime();
+    dirty_ = false;
+    Touch();
+    return true;
+}
+
+bool Engine::SavePrefabEdit(std::string* error) {
+    if (!prefabBackup_) {
+        if (error) *error = "no prefab is being edited";
+        return false;
+    }
+    EntityId root = kNullEntity;
+    for (const auto& entry : scene_.Entities()) if (entry.second.parent == kNullEntity) {
+        if (root != kNullEntity) {
+            if (error) *error = "parent all entities under a single prefab root before saving";
+            return false;
+        }
+        root = entry.first;
+    }
+    if (root == kNullEntity) {
+        if (error) *error = "the prefab root was deleted; undo before saving";
+        return false;
+    }
+    if (!WriteTextFileAtomic(ResolvePath(prefabPath_), MakePrefab(scene_, root).dump(2) + "\n", error)) return false;
+    dirty_ = false;
+    Touch();
+    return true;
+}
+
+bool Engine::EndPrefabEdit(bool discard, std::string* error) {
+    if (!prefabBackup_) {
+        if (error) *error = "no prefab is being edited";
+        return false;
+    }
+    if (dirty_ && !discard) {
+        if (error) *error = "prefab has unsaved changes; save it or close with discard:true";
+        return false;
+    }
+    scene_.FromJson(prefabBackup_->scene, error);
+    scenePath_ = prefabBackup_->scenePath;
+    dirty_ = prefabBackup_->dirty;
+    undo_ = std::move(prefabBackup_->undo);
+    redo_ = std::move(prefabBackup_->redo);
+    lastMergeKey_ = prefabBackup_->mergeKey;
+    prefabBackup_.reset();
+    prefabPath_.clear();
+    ResetRuntime();
     Touch();
     return true;
 }
@@ -562,6 +666,11 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
         }
         Json args = rawArgs.isNull() ? Json::MakeObject() : rawArgs;
         ValidateArgs(*cmd, args);
+        if (prefabBackup_ && (name == "scene.load" || name == "scene.new" || name == "scene.save" ||
+                             (name.compare(0, 4, "sim.") == 0 && name != "sim.state") || name == "game.load_scene" ||
+                             name.compare(0, 4, "net.") == 0))
+            throw ApiError("prefab_editing", "this command is unavailable while editing a prefab",
+                           "Call prefab.save, then prefab.close, or prefab.close {discard:true}.");
         if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && !inWorld_ && !replaying_ && (name == "script.eval" || (cmd->mutates && name.compare(0, 6, "input.") != 0 && name.compare(0, 4, "sim.") != 0)))
             throw ApiError("match_active", "external gameplay edits are disabled during a match", "Put deterministic gameplay logic in scripts before net.start.");
         if (journal_ && !inWorld_ && !replaying_ && cmd->mutates && name != "script.eval" &&
@@ -585,8 +694,10 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
             const Json* merge = args.find("merge");
             std::string mergeKey = merge && merge->isString() ? merge->asString() : std::string();
             if (mergeKey.empty() || mergeKey != lastMergeKey_ || undo_.empty()) {
-                undo_.push_back(std::move(before));
+                undo_.push_back({std::move(before), name, args});
                 if (undo_.size() > kMaxUndo) undo_.erase(undo_.begin());
+            } else {
+                undo_.back().args = args;
             }
             lastMergeKey_ = mergeKey;
             redo_.clear();

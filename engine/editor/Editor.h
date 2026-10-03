@@ -73,6 +73,14 @@ public:
     bool SetNetworkPlayers(int players);
     // Bring Network diagnostics to the front for automated screenshots.
     void FocusNetworkPanel();
+    // Bring undo/redo command history forward for inspection/screenshots.
+    void FocusHistoryPanel();
+    // Open a source prefab through the same save/discard workflow as the menu.
+    void EditPrefab(const std::string& path);
+    void ClosePrefab();
+    // Launch a native chooser (unavailable headless platforms keep path pickers).
+    enum class FilePurpose { OpenScene, SaveScene, ImportAsset };
+    void BrowseFile(FilePurpose purpose);
     // Tile painting: the Scene view brush on/off and its tile character (Tiles
     // panel); turning it on switches to the 2D view framed on the selection.
     void SetTileBrush(bool paint, char brush);

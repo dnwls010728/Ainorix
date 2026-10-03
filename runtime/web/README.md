@@ -4,13 +4,15 @@
 `oe package --web` combines them with index.html and game.pak; packaging needs no Emscripten.
 
 - Built: 2026-10-03, Emscripten 6.0.10, Release (`build_web.bat`, BINARYEN_CORES=1).
-- Source: the networking M8a/M8b commit containing this README (base 5a3f714 plus M8 changes).
+- Source: the P7 editor commit containing this README (base 64e72c1 plus P7 changes).
+  Adds clipboard/history/source-prefab/preview APIs and correct internal prefab reference remapping.
   Includes protocol v3 sessions, lockstep/native rollback, authoritative replication/prediction,
   Lua lobby controls, loopback previews/fault controls and network on-screen action sampling.
   Existing saves, skeletal animation, particles, gamepads, multi-touch and postprocessing remain
   included. Portable surface shader graph/compiler/material binding from the current source
-  is included too; packaged browser shader-graph visual verification remains separately pending.
-- Validation: Windows 135 tests; Wasm/Node 123 registered tests, zero failed checks (native
+  is included too; a packaged ShaderLab fixture verified neutral masks/shadows,
+  white emission and HDR/bloom transitions in WebGL2 after this rebuild.
+- Validation: Windows 141 tests; Wasm/Node 128 registered tests, zero failed checks (native
   sockets and GPU tests skip). Real packaged NetArena WebGL2 browser client joined a native
   WebSocket dedicated server, readied, moved, collected a crystal, received score/HUD and reset
   the round with zero Lua errors. JS callback bounds/cleanup tests pass.

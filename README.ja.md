@@ -4,6 +4,8 @@
 
 AI が人と同じように扱い、検証できるように設計した C++17 ゲームエンジンです。人のためのエディターと AI のためのインターフェース (CLI・HTTP・MCP) が**同じコマンド API** を共有します。
 
+- エディタ機能: 階層クリップボード、変更履歴、プレハブのソース編集、アセットサムネイル、Windowsファイルダイアログ — [docs/EDITOR.md](docs/EDITOR.md)
+
 ![ネイティブエディター - Showcase サンプル](docs/images/native-editor.png)
 
 | ゲーム画面 (`oe render samples/Showcase`) | |

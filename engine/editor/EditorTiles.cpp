@@ -186,7 +186,7 @@ void NativeEditor::Impl::TilesPanel() {
         tex = engine.Assets().GetTexture(image);
         if (tex) texId = ViewTexture(engine.Gpu()->ImageView(tex));
     }
-    const int columns = std::max(1, info["columns"].asInt(1)), rows = std::max(1, info["rows"].asInt(1));
+    const int columns = std::max(1, info["columns"].asInt(1)), tileRows = std::max(1, info["rows"].asInt(1));
     const float cell = ImGui::GetFrameHeight() * 2.2f;
     const float avail = ImGui::GetContentRegionAvail().x;
     const int perRow = std::max(1, static_cast<int>(avail / (cell + ImGui::GetStyle().ItemSpacing.x + 6)));
@@ -198,9 +198,9 @@ void NativeEditor::Impl::TilesPanel() {
         ImGui::PushStyleColor(ImGuiCol_Button, sel ? ImVec4(1.0f, 0.62f, 0.1f, 0.9f) : ImVec4(0.16f, 0.17f, 0.2f, 1));
         bool pressed;
         if (tex && frame >= 0) {
-            int f = frame % (columns * rows);
-            ImVec2 uv0(static_cast<float>(f % columns) / static_cast<float>(columns), static_cast<float>(f / columns) / static_cast<float>(rows));
-            ImVec2 uv1(uv0.x + 1.0f / static_cast<float>(columns), uv0.y + 1.0f / static_cast<float>(rows));
+            int f = frame % (columns * tileRows);
+            ImVec2 uv0(static_cast<float>(f % columns) / static_cast<float>(columns), static_cast<float>(f / columns) / static_cast<float>(tileRows));
+            ImVec2 uv1(uv0.x + 1.0f / static_cast<float>(columns), uv0.y + 1.0f / static_cast<float>(tileRows));
             pressed = ImGui::ImageButton("##tile", texId, ImVec2(cell, cell), uv0, uv1);
         } else {
             pressed = ImGui::Button(c == ' ' ? "##erase" : std::string(1, c).c_str(), ImVec2(cell + 6, cell + 6));

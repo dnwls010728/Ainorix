@@ -4,6 +4,8 @@
 
 A C++17 game engine designed so that AI agents can drive and verify it as easily as people can. The editor for people and the interfaces for AI (CLI, HTTP, MCP) share **one command API**.
 
+- Editor tools: hierarchy clipboard, history timeline, prefab source editing, asset thumbnails and Windows native file dialogs — [docs/EDITOR.md](docs/EDITOR.md)
+
 ![Native editor - Showcase sample](docs/images/native-editor.png)
 
 | Game view (`oe render samples/Showcase`) | |

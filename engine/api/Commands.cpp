@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 
 #include "app/Engine.h"
+#include "app/Project.h"
+#include "app/AssetPreview.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
 #include "core/FileSystem.h"
@@ -17,6 +20,7 @@
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "scene/Prefab.h"
+#include "scene/Clipboard.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/TileGrid.h"
 #include "script/ScriptCheck.h"
@@ -700,6 +704,39 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return EntitySummary(e.GetScene(), id);
              });
 
+    Register(r, "entity.copy", "Copy selected subtrees into a portable clipboard document. Remap reflected entity references; external references become null.",
+             Params().Req("ids", "array", "Selected entity ids or names. Descendants included once; JSON script params are copied verbatim."),
+             false, [](Engine& e, const Json& a) {
+                 if (a["ids"].size() == 0 || a["ids"].size() > 10000)
+                     throw ApiError("invalid_argument", "select 1..10000 entities", "Pass ids:[1,2] or entity names.");
+                 std::vector<EntityId> ids;
+                 for (const Json& ref : a["ids"].items()) {
+                     if (ref.isNumber() && (ref.asNumber() <= 0 || ref.asNumber() > std::numeric_limits<EntityId>::max() ||
+                                            std::floor(ref.asNumber()) != ref.asNumber()))
+                         throw ApiError("invalid_argument", "entity ids must be positive uint32 integers", "Use entity ids or unique names.");
+                     Json args = Json::MakeObject(); args["id"] = ref;
+                     ids.push_back(RequireEntity(e, args));
+                 }
+                 Json document = CopyEntities(e.GetScene(), ids);
+                 if (document["entities"].size() > 10000 || document.dump().size() > 8 * 1024 * 1024)
+                     throw ApiError("clipboard_limit", "selected subtrees exceed clipboard bounds", "Copy fewer entities (10000 entities / 8 MiB).");
+                 return document;
+             });
+    Register(r, "entity.paste", "Atomically paste a clipboard document with fresh ids and unique names. Root transforms stay local to parent; one undo step.",
+             Params().Req("document", "object", "Document returned by entity.copy, up to 8 MiB/10000 entities.")
+                 .OptWith("parent", EntityRefSchema("Optional destination parent; 0 or omitted means root.")),
+             true, [](Engine& e, const Json& a) {
+                 EntityId parent = a.has("parent") && a["parent"].asNumber(-1) != 0 ? RequireEntity(e, a, "parent") : kNullEntity;
+                 std::vector<EntityId> roots;
+                 std::string error;
+                 if (!PasteEntities(e.GetScene(), a["document"], parent, roots, &error))
+                     throw ApiError("invalid_clipboard", error, "Copy entities using entity.copy, then pass its result as document.");
+                 Json result = Json::MakeObject(), list = Json::MakeArray();
+                 for (EntityId id : roots) list.push(id);
+                 result["roots"] = list;
+                 return result;
+             });
+
     Register(r, "entity.duplicate", "Duplicate an entity (and its children) next to the original.",
              Params().ReqWith("id", EntityRefSchema("Entity id or name.")).Opt("name", "string", "Name for the copy."), true,
              [](Engine& e, const Json& a) {
@@ -1316,6 +1353,32 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              });
 
     // ----- prefabs ---------------------------------------------------------------
+    Register(r, "prefab.edit", "Open a prefab source in an isolated edit scene. Preserve the original scene and history; play is disabled.",
+             Params().Req("path", "string", "Project-relative .prefab.json source."), false, [](Engine& e, const Json& a) {
+                 std::string error;
+                 if (!e.BeginPrefabEdit(a["path"].asString(), &error))
+                     throw ApiError("prefab_edit_failed", error, "Stop play and close the current prefab; use a valid prefab with one root.");
+                 Json result = Json::MakeObject(); result["path"] = e.EditingPrefab(); return result;
+             });
+    Register(r, "prefab.save", "Atomically save the isolated prefab source. Existing instances are not changed.", Params(), false,
+             [](Engine& e, const Json&) {
+                 std::string error;
+                 if (!e.SavePrefabEdit(&error)) throw ApiError("prefab_save_failed", error, "Call prefab.edit and keep exactly one root.");
+                 Json result = Json::MakeObject(); result["path"] = e.EditingPrefab(); return result;
+             });
+    Register(r, "prefab.close", "Restore the scene and undo history from before prefab editing. Unsaved edits require discard:true.",
+             Params().Opt("discard", "boolean", "Explicitly discard unsaved prefab edits (default false)."), false,
+             [](Engine& e, const Json& a) {
+                 std::string error;
+                 if (!e.EndPrefabEdit(a["discard"].asBool(), &error))
+                     throw ApiError("prefab_close_failed", error, "Call prefab.save first, or prefab.close {discard:true}.");
+                 return e.HistoryState();
+             });
+    Register(r, "prefab.state", "Current isolated prefab source path and unsaved status; empty path outside prefab mode.", Params(), false,
+             [](Engine& e, const Json&) {
+                 Json result = Json::MakeObject(); result["path"] = e.EditingPrefab();
+                 result["dirty"] = !e.EditingPrefab().empty() && e.Dirty(); return result;
+             });
     Register(r, "prefab.create", "Save an entity and its children as a reusable prefab file.",
              Params().ReqWith("id", EntityRefSchema("Root entity id or name.")).Req("path", "string", "Must end with .prefab.json, e.g. \"prefabs/coin.prefab.json\"."),
              false, [](Engine& e, const Json& a) {
@@ -1639,6 +1702,32 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params().Req("path", "string", "Material file.").Req("values", "object", "Fields to change."),
              false, [writeMaterial](Engine& e, const Json& a) { return writeMaterial(e, a["path"].asString(), a["values"], false, false); });
 
+    Register(r, "asset.preview", "Render a static, automatically framed software thumbnail without changing the scene.",
+             Params().Req("path", "string", "Texture/model/material/prefab/scene asset inside the project.")
+                 .Opt("size", "integer", "Square output size 16..256, default 64.")
+                 .Opt("pixels", "boolean", "Include packed RGBA8 pixels for editor consumers.")
+                 .Opt("out", "string", "Optional PNG path inside the project."), false,
+             [](Engine& e, const Json& a) {
+                 RenderTarget target;
+                 std::string error;
+                 if (!RenderAssetPreview(e, a["path"].asString(), a["size"].asInt(64), target, &error))
+                     throw ApiError("preview_failed", error, "Use a renderable asset and size 16..256.");
+                 const auto png = EncodePng(target.ToImage());
+                 if (a.has("out") && !WritePng(e.ResolvePath(a["out"].asString()), target.ToImage()))
+                     throw ApiError("write_failed", "cannot write preview PNG");
+                 Json result = Json::MakeObject(); result["width"] = target.width; result["height"] = target.height;
+                 result["mimeType"] = "image/png"; result["data"] = Base64Encode(png);
+                 if (a["pixels"].asBool()) {
+                     Json pixels = Json::MakeArray(); for (uint32_t pixel : target.color) pixels.push(static_cast<uint64_t>(pixel));
+                     result["pixels"] = pixels;
+                 }
+                 return result;
+             });
+    Register(r, "asset.import", "Import an external file into the project using the same rules as oe import. The explicit source path may be outside the project.",
+             Params().Req("source", "string", "UTF-8 source file path; import copies to a project-owned asset path."), false,
+             [](Engine& e, const Json& a) {
+                 Json result = Json::MakeObject(); result["path"] = ImportAssetFile(e, a["source"].asString()); return result;
+             });
     Register(r, "asset.list", "Project files by kind (model, texture, material, shader, audio, font, script, prefab, scene).",
              Params().Opt("kind", "string", "Only this kind."), false, [](Engine& e, const Json& a) {
                  std::string kind = a["kind"].asString("");
@@ -1769,6 +1858,19 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     });
 
     // ----- history -----------------------------------------------------------------
+    Register(r, "history.list", "Scene edit commands and arguments in chronological order, with applied cursor. Consecutive merge groups share one entry.",
+             Params(), false, [](Engine& e, const Json&) { return e.HistoryState(); });
+    Register(r, "history.go", "Move to an applied history cursor by undoing/redoing edits. Retains the redo branch until a new edit.",
+             Params().Req("cursor", "integer", "Applied entry count from 0 to history.list entries.size."), false,
+             [](Engine& e, const Json& a) {
+                 if (e.InPlaySession()) throw ApiError("simulating", "cannot change history while simulating", "Call sim.stop first.");
+                 const int cursor = a["cursor"].asInt(-1);
+                 if (cursor < 0 || static_cast<size_t>(cursor) > e.UndoDepth() + e.RedoDepth())
+                     throw ApiError("invalid_argument", "history cursor is out of range", "Read history.list for the current entry count.");
+                 while (e.UndoDepth() > static_cast<size_t>(cursor)) e.Undo();
+                 while (e.UndoDepth() < static_cast<size_t>(cursor)) e.Redo();
+                 return e.HistoryState();
+             });
     Register(r, "history.undo", "Undo the last scene edit (not available while simulating).", Params(), false, [](Engine& e, const Json&) {
         if (e.InPlaySession()) throw ApiError("simulating", "cannot undo while simulating", "Call sim.stop first.");
         Json out = Json::MakeObject();

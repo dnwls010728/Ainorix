@@ -351,6 +351,23 @@ Re-parent an entity (parent 0 = scene root).
 | `id` | integer \| string | yes | Entity id or name. |
 | `parent` | integer \| string | yes | New parent id/name, or 0 for root. |
 
+### `entity.copy`
+
+Copy selected subtrees into a portable clipboard document. Remap reflected entity references; external references become null.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `ids` | array | yes | Selected entity ids or names. Descendants included once; JSON script params are copied verbatim. |
+
+### `entity.paste` *(undoable edit)*
+
+Atomically paste a clipboard document with fresh ids and unique names. Root transforms stay local to parent; one undo step.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `document` | object | yes | Document returned by entity.copy, up to 8 MiB/10000 entities. |
+| `parent` | integer \| string |  | Optional destination parent; 0 or omitted means root. |
+
 ### `entity.duplicate` *(undoable edit)*
 
 Duplicate an entity (and its children) next to the original.
@@ -697,6 +714,30 @@ Record the mixed audio of simulated frames: start, sim.step, then stop to get pe
 
 ## prefab
 
+### `prefab.edit`
+
+Open a prefab source in an isolated edit scene. Preserve the original scene and history; play is disabled.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project-relative .prefab.json source. |
+
+### `prefab.save`
+
+Atomically save the isolated prefab source. Existing instances are not changed.
+
+### `prefab.close`
+
+Restore the scene and undo history from before prefab editing. Unsaved edits require discard:true.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `discard` | boolean |  | Explicitly discard unsaved prefab edits (default false). |
+
+### `prefab.state`
+
+Current isolated prefab source path and unsaved status; empty path outside prefab mode.
+
 ### `prefab.create`
 
 Save an entity and its children as a reusable prefab file.
@@ -847,6 +888,25 @@ Change fields of a material file (other fields keep their values). Every mesh us
 
 ## asset
 
+### `asset.preview`
+
+Render a static, automatically framed software thumbnail without changing the scene.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Texture/model/material/prefab/scene asset inside the project. |
+| `size` | integer |  | Square output size 16..256, default 64. |
+| `pixels` | boolean |  | Include packed RGBA8 pixels for editor consumers. |
+| `out` | string |  | Optional PNG path inside the project. |
+
+### `asset.import`
+
+Import an external file into the project using the same rules as oe import. The explicit source path may be outside the project.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `source` | string | yes | UTF-8 source file path; import copies to a project-owned asset path. |
+
 ### `asset.list`
 
 Project files by kind (model, texture, material, shader, audio, font, script, prefab, scene).
@@ -898,6 +958,18 @@ Draw lines/boxes/spheres in every view (visible in screenshots) to mark points, 
 Remove all debug lines.
 
 ## history
+
+### `history.list`
+
+Scene edit commands and arguments in chronological order, with applied cursor. Consecutive merge groups share one entry.
+
+### `history.go`
+
+Move to an applied history cursor by undoing/redoing edits. Retains the redo branch until a new edit.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `cursor` | integer | yes | Applied entry count from 0 to history.list entries.size. |
 
 ### `history.undo`
 
