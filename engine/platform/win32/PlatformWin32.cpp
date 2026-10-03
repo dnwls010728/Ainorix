@@ -1,12 +1,14 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <shellapi.h>
+#include <commdlg.h>
 #include <xinput.h>
 
 #include <fcntl.h>
 #include <io.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -258,6 +260,34 @@ public:
     }
     float DpiScale() const override { return static_cast<float>(WindowDpi(hwnd_)) / 96.0f; }
     void Maximize() override { ShowWindow(hwnd_, SW_MAXIMIZE); }
+    FileDialogResult ChooseFile(const FileDialogOptions& options) override {
+        std::vector<wchar_t> filename(32768, L'\0');
+        const std::wstring initial = Widen(options.filename);
+        if (initial.size() >= filename.size()) return {FileDialogResult::Status::Error, "", "filename is too long"};
+        std::copy(initial.begin(), initial.end(), filename.begin());
+        const std::wstring title = Widen(options.title), directory = Widen(options.directory);
+        const std::wstring extension = Widen(options.extension);
+        std::wstring filter = Widen(options.pattern);
+        filter.push_back(L'\0');
+        filter += Widen(options.pattern);
+        filter.push_back(L'\0'); filter.push_back(L'\0');
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = hwnd_;
+        dialog.lpstrTitle = title.c_str();
+        dialog.lpstrInitialDir = directory.c_str();
+        dialog.lpstrFilter = filter.c_str();
+        dialog.lpstrFile = filename.data();
+        dialog.nMaxFile = static_cast<DWORD>(filename.size());
+        dialog.lpstrDefExt = extension.empty() ? nullptr : extension.c_str();
+        dialog.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST |
+                       (options.save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+        const BOOL selected = options.save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+        if (selected) return {FileDialogResult::Status::Selected, Narrow(filename.data()), ""};
+        const DWORD code = CommDlgExtendedError();
+        if (!code) return {FileDialogResult::Status::Cancelled, "", ""};
+        return {FileDialogResult::Status::Error, "", "Windows file dialog failed (" + std::to_string(code) + ")"};
+    }
 
 private:
     void ApplyCursor() {

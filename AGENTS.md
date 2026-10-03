@@ -40,6 +40,8 @@ Web runtime: `oe package --web` uses the prebuilt `runtime/web/oe_player.js` + `
 
 All commands print JSON `{"ok":true,"result":...}` or `{"ok":false,"error":{"code","message","hint"}}`. Read the `hint` — it says how to fix the call. Entities can be referenced by id or by unique name. Surface shader graphs: `shader.create {path, graph}` / `shader.check {path}` validate project-authored `.shader.json` programs; material/GPU binding is in progress ([docs/POSTPROCESS.md](docs/POSTPROCESS.md)). Full reference: [docs/API.md](docs/API.md) (regenerate with `oe api --markdown > docs/API.md`).
 
+Editor tools: hierarchy Ctrl+C/Ctrl+V uses entity.copy/paste; history.list/go drives the History panel. prefab.edit/save/close/state isolates source editing and restores the scene/history. asset.preview renders bounded thumbnails; asset.import shares CLI import behavior. Native Windows open/save/import dialogs live behind Platform.h; other platforms keep the Assets/drop/path-entry fallback. See docs/EDITOR.md for limits and verification.
+
 ## Code map
 
 - `engine/core` — Json (ordered, diff-friendly), Math, Log (ring buffer, stderr only), Image (PNG encoder, Base64), FileSystem, Zip (reader + aligned writer for APKs).

@@ -43,6 +43,19 @@ struct WindowEvent {
 
 enum class WindowCursor { Arrow, TextInput, ResizeAll, ResizeNS, ResizeEW, ResizeNESW, ResizeNWSE, Hand, NotAllowed, Hidden };
 
+// Tool-only native file chooser. Cancellation is distinct from unavailable UI
+// and an OS failure; paths are UTF-8. Callers validate project containment.
+struct FileDialogOptions {
+    bool save = false;
+    std::string title, directory, filename;
+    std::string pattern = "*.*";
+    std::string extension;
+};
+struct FileDialogResult {
+    enum class Status { Selected, Cancelled, Unavailable, Error } status = Status::Unavailable;
+    std::string path, error;
+};
+
 // Platform abstraction. Each target (Win32 today; Web, Android, iOS, macOS,
 // Linux and consoles later) provides one implementation of this header.
 // Everything above this layer is platform independent C++17.
@@ -70,6 +83,8 @@ public:
     // Pixels per 96-DPI unit of the monitor the window is on (1 = 100 %).
     virtual float DpiScale() const { return 1.0f; }
     virtual void Maximize() {}
+    // Headless/non-desktop targets return Unavailable; tools keep their path picker.
+    virtual FileDialogResult ChooseFile(const FileDialogOptions& options) { return {}; }
 };
 
 // Audio output: receives interleaved stereo float frames at the mixer rate.

@@ -1,5 +1,34 @@
 # Editor
 
+## Implementation status (work log): P7
+
+- [x] P7.1: Command-backed hierarchy clipboard with subtree/reference remapping,
+      validation, atomic paste and native editor Ctrl+C/Ctrl+V.
+- [x] P7.2: Named undo/redo history, history.list/history.go and History panel.
+- [x] P7.3: Isolated prefab edit/save/close commands and editor workflow with
+      save/discard prompts and restoration of the original scene/history.
+- [x] P7.4: Asset thumbnail previews with lazy caching and hot reload.
+- [x] P7.5: Native Windows open/save/import dialogs behind Platform.h, headless
+      fallback, project containment and cancel/error handling.
+- [x] P7.6: Windows tests, user-driven editor events, localized screenshots,
+      API/docs refresh and runtime rebuild or explicit platform follow-ups.
+
+Windows: 141 tests, zero failed checks. Node/WASM: 128 tests, zero failed checks
+(native/GPU tests skip). Added API tests cover atomic clipboard validation,
+merged history/cursor behavior, prefab isolation/reference remapping, bounded
+preview pixels/framing/hot reload and project containment. Window-event tests
+exercise Ctrl+C/V/Z/S, history focus, prefab save/discard and chooser result paths.
+English/Korean/Japanese D3D11 CLI screenshots were inspected; the History panel
+has a separate event-driven screenshot. Web player rebuilt from this source.
+
+- [ ] Exercise the actual Windows chooser UI interactively (automated tests use
+      a Window adapter for selected/cancelled/error/unavailable results).
+- [ ] Rebuild Android arm64-v8a/x86_64 players; NDK/SDK unavailable on this host.
+      Verify on Android hardware and Linux/EGL; neither environment is available.
+
+P7 proceeds independently of the remaining P6 Android/Linux hardware checks.
+It starts from updated main; P6 verification/sample changes have a separate branch.
+
 `oe editor <project>` opens the editor: Dear ImGui (docking) + ImGuizmo panels drawn with sokol_gfx in the engine process. The Scene and Game views are GpuRenderer textures, so nothing is streamed or encoded. It needs a window and a GPU backend (Windows today; a macOS/Linux desktop platform layer is enough, see [PLATFORMS.md](PLATFORMS.md)).
 
 ![Editor](images/native-editor.png)
@@ -40,6 +69,46 @@ The layout (docking), panel visibility, interface size and language, gizmo/snap 
 | Anywhere | Ctrl+P | play / stop (stop restores the edit-time scene) |
 
 Leaving with unsaved changes (closing the window, opening or creating a scene) asks to save first. Saving is disabled while a play session runs, because Stop restores the scene.
+
+## Clipboard, history and prefab sources
+
+Ctrl+C copies selected hierarchy subtrees; Ctrl+V pastes fresh entities in one undo
+step. Nested selections are copied once. Reflected entity fields point to the
+new copies; references outside the copied set become null. Script JSON params
+remain unchanged. Root transforms retain their local values. Clipboard v1 accepts
+at most 10,000 entities and 8 MiB; malformed documents leave the scene untouched.
+Agents use `entity.copy {ids:[...]}` and `entity.paste {document:...,parent:...}`.
+
+View > History opens the named undo/redo timeline. Select Initial state or an
+entry to move the cursor; a new edit after undo drops the redo tail. Merged drags
+remain one entry. `history.list` exposes entries and cursor; `history.go {cursor}`
+moves to a position. History changes are disabled during play.
+
+Right-click a prefab asset and choose Edit Prefab. This opens its source in an
+isolated scene with its own history; Ctrl+S writes the source atomically.
+Close Prefab restores the original scene, dirty state and history. Unsaved
+prefab changes require Save, Don't Save or Cancel. Saving requires exactly one
+root. Source editing disables play, scene switching and network commands;
+instances already placed in another scene are not refreshed automatically.
+Equivalent commands: `prefab.edit {path}`, `prefab.save`, `prefab.close {discard}`
+and `prefab.state`. Internal entity references survive source save/instantiate.
+
+## Thumbnails and file dialogs
+
+Assets shows 64-pixel previews for textures, models, materials, prefabs and scenes.
+View > Asset Thumbnails toggles them. Rendering is lazy (one visible asset per
+frame), with a bounded 128-entry cache. Stopped editors poll asset changes every
+two seconds; dependency changes and periodic cache expiry refresh previews.
+Scenes/prefabs preview geometry without running scripts, audio or physics;
+material previews use a sphere and fixed shader time. UI-only assets have no
+geometry preview. `asset.preview {path,size,pixels,out}` returns a PNG as base64,
+optionally RGBA-packed integer pixels or a project-local PNG file (16..256 px).
+
+File > Open Scene (Ctrl+O), Save Scene As and Import Asset use the Windows native
+chooser. Scene open/save paths must stay inside the project and end in
+`.scene.json`; imports use `asset.import {source}` with the existing CLI rules.
+Cancellation leaves state unchanged; errors are reported. Platforms without
+native dialogs keep the path-entry save dialog and Assets/drop-file workflow.
 
 ## Languages
 

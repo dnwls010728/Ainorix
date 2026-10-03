@@ -20,6 +20,8 @@
 
 namespace oe {
 
+struct Texture;
+
 struct EntityRow {
     EntityId id = kNullEntity;
     std::string name;
@@ -71,7 +73,7 @@ enum class GizmoOp { None, Translate, Rotate, Scale };
 
 // What to do after the "save changes?" prompt.
 struct PendingAction {
-    enum class Kind { None, LoadScene, NewScene, Quit } kind = Kind::None;
+    enum class Kind { None, LoadScene, NewScene, Quit, EditPrefab, ClosePrefab } kind = Kind::None;
     std::string path;
 };
 
@@ -136,6 +138,17 @@ struct NativeEditor::Impl {
     bool showHierarchy = true, showInspector = true, showScene = true, showGame = true;
     bool showConsole = true, showAssets = true, showScripts = true, showMetrics = false;
     bool showNetwork = true, requestNetworkFocus = false;
+    bool showHistory = true, requestHistoryFocus = false;
+    bool showThumbnails = true;
+    struct Thumbnail {
+        std::shared_ptr<const Texture> image;
+        double generated = -100, lastUsed = 0;
+        int64_t modified = 0;
+        std::string error;
+    };
+    std::map<std::string, Thumbnail> thumbnails;
+    int previewBudget = 1;
+    std::shared_ptr<const Texture> AssetThumbnail(const std::string& path);
     int networkPlayers = 1, networkLatency = 0, gamePeer = 0;
     void NetworkPanel();
     Engine& GameEngine();
@@ -250,6 +263,9 @@ struct NativeEditor::Impl {
     void Redo();
     void DeleteSelection();
     void DuplicateSelection();
+    void CopySelection();
+    void PasteSelection();
+    void BrowseFile(NativeEditor::FilePurpose purpose);
     void FrameSelection();
     void CreatePreset(const char* key);
     void RequestAction(PendingAction action);  // asks to save first when dirty
@@ -286,6 +302,7 @@ struct NativeEditor::Impl {
     int newParamType = 0;
     void AssetsPanel();
     void ConsolePanel();
+    void HistoryPanel();
     void ScriptsPanel();
     bool AssetPicker(const char* popupId, const std::string& kind, const std::string& current, std::string& out);
     void CreateMenuItems();

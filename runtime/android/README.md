@@ -22,6 +22,10 @@ needs Java.
 
 ## When to rebuild
 
+P7 also changes prefab entity-reference remapping and shared Engine/API code.
+Rebuild both ABIs from the P7 source before relying on that behavior. Android
+NDK/SDK is unavailable on the verification host; these binaries remain unchanged.
+
 Pending after PR #22: rebuild both ABIs with portable surface shader graphs,
 material binding and graph-aware shadow/selection passes. Committed players still
 use `0ea84f2` and cannot render graph materials. Packaged execution on Android

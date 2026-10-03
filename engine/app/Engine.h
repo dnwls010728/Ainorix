@@ -146,6 +146,13 @@ public:
     bool Redo();
     size_t UndoDepth() const { return undo_.size(); }
     size_t RedoDepth() const { return redo_.size(); }
+    // Command metadata in chronological order; cursor is the applied entry count.
+    Json HistoryState() const;
+    // Prefab editing isolates a source file, preserving the scene and its history.
+    bool BeginPrefabEdit(const std::string& path, std::string* error);
+    bool SavePrefabEdit(std::string* error);
+    bool EndPrefabEdit(bool discard, std::string* error);
+    const std::string& EditingPrefab() const { return prefabPath_; }
 
     // ----- API ---------------------------------------------------------------
     CommandRegistry& Commands() { return commands_; }
@@ -289,9 +296,23 @@ private:
     double simTime_ = 0.0;
     double accumulator_ = 0.0;
 
-    std::vector<Json> undo_;
-    std::vector<Json> redo_;
+    struct HistoryEntry {
+        Json scene;
+        std::string command;
+        Json args;
+    };
+    std::vector<HistoryEntry> undo_;
+    std::vector<HistoryEntry> redo_;
     std::string lastMergeKey_;  // component.set {merge} of the newest undo step
+    struct PrefabEditBackup {
+        Json scene;
+        std::string scenePath;
+        bool dirty = false;
+        std::vector<HistoryEntry> undo, redo;
+        std::string mergeKey;
+    };
+    std::unique_ptr<PrefabEditBackup> prefabBackup_;
+    std::string prefabPath_;
 
     CallObserver remoteObserver_;
     std::mutex jobsMutex_;

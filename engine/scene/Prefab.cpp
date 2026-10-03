@@ -30,6 +30,16 @@ Json MakePrefab(const Scene& scene, EntityId root) {
         for (EntityId child : scene.Children(id)) visit(child);
     };
     if (rec) visit(root);
+    // File ids are local, so reflected references must use the same mapping.
+    // External targets cannot safely travel with a prefab.
+    for (Json& entity : list.items()) for (auto& component : entity["components"].members()) {
+        const ComponentType* type = TypeRegistry::Find(component.first);
+        if (!type) continue;
+        for (const FieldInfo& field : type->fields) if (field.type == FieldType::Entity && component.second.has(field.name)) {
+            const auto target = local.find(static_cast<EntityId>(component.second[field.name].asNumber()));
+            component.second[field.name] = target == local.end() ? kNullEntity : target->second;
+        }
+    }
     prefab["entities"] = list;
     return prefab;
 }
@@ -60,6 +70,14 @@ EntityId InstantiatePrefab(Scene& scene, const Json& prefab, const std::string& 
         }
         created[localId] = id;
         if (root == kNullEntity) root = id;
+    }
+    // Resolve targets only after all siblings/descendants have fresh ids.
+    for (const auto& entry : created) for (const ComponentType* type : scene.ComponentsOf(entry.second)) {
+        void* component = scene.GetComponent(entry.second, *type);
+        for (const FieldInfo& field : type->fields) if (field.type == FieldType::Entity) {
+            const auto target = created.find(static_cast<EntityId>(FieldToJson(field, component).asNumber()));
+            if (!FieldFromJson(field, component, Json(target == created.end() ? kNullEntity : target->second), error)) return kNullEntity;
+        }
     }
     scene.Add<Prefab>(root).path = prefabPath;
     return root;

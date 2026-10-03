@@ -17,6 +17,21 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Copied selected entities", "선택한 엔티티 복사됨", "選択したエンティティをコピーしました"},
+    {"Pasted entities", "엔티티 붙여넣기 완료", "エンティティを貼り付けました"},
+    {"Clipboard does not contain valid entities", "클립보드에 유효한 엔티티가 없습니다", "クリップボードに有効なエンティティがありません"},
+    {"Paste", "붙여넣기", "貼り付け"},
+    {"History", "변경 이력", "履歴"},
+    {"Initial state", "초기 상태", "初期状態"},
+    {"Select an entry to undo or redo to that point.", "항목을 선택하면 해당 시점으로 되돌리거나 다시 실행합니다.", "項目を選択するとその時点まで取り消し・やり直しを行います。"},
+    {"Asset Thumbnails", "에셋 썸네일", "アセットのサムネイル"},
+    {"Edit Prefab", "프리팹 편집", "プレハブを編集"},
+    {"Close Prefab", "프리팹 닫기", "プレハブを閉じる"},
+    {"Editing prefab: %s", "프리팹 편집: %s", "プレハブ編集中: %s"},
+    {"Open Scene...", "씬 열기...", "シーンを開く..."},
+    {"Import Asset...", "에셋 가져오기...", "アセットをインポート..."},
+    {"Native file dialogs unavailable; use Assets or drop a file.", "네이티브 파일 창을 사용할 수 없습니다. 에셋 패널이나 파일 드롭을 사용하세요.", "ネイティブのファイルダイアログは利用できません。アセットパネルかファイルドロップを使ってください。"},
+    {"Choose a .scene.json file inside the project.", "프로젝트 안의 .scene.json 파일을 선택하세요.", "プロジェクト内の .scene.json ファイルを選択してください。"},
     {"Player %u / frame %llu / %s", "플레이어 %u / 프레임 %llu / %s", "プレイヤー %u / フレーム %llu / %s"},
     {"RTT %.1f ms / loss %u/1000\nSent %llu B / received %llu B\nPending %u", "RTT %.1f ms / 손실 %u/1000\n송신 %llu B / 수신 %llu B\n대기 %u", "RTT %.1f ms / 損失 %u/1000\n送信 %llu B / 受信 %llu B\n待機 %u"},
     {"Networking is disabled for this project.", "이 프로젝트는 네트워크가 비활성화되어 있습니다.", "このプロジェクトのネットワークは無効です。"},
