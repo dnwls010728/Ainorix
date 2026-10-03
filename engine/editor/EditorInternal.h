@@ -297,7 +297,7 @@ struct NativeEditor::Impl {
     void ScriptParamsRows(EntityId id, const Json& script);
     const Json& ScriptParamSchema(const std::string& path);
     std::map<std::string, std::pair<double, Json>> paramSchemas;  // script path -> (time fetched, script.params)
-    std::set<EntityId> rawParams;                                // entities showing params as JSON text
+    std::set<EntityId> fieldParams;                              // entities showing params as typed fields (default: JSON text)
     std::string newParamName;
     int newParamType = 0;
     void AssetsPanel();
