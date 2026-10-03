@@ -1,0 +1,4 @@
+{
+  "shader": "materials/pulse.shader.json",
+  "unlit": true
+}

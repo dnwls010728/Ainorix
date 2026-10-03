@@ -3905,6 +3905,59 @@ TEST(ShowcasePostProcessControls) {
     CHECK(e.Scripts().Errors().empty());
 }
 
+TEST(ShaderLabSampleControlsAndPackaging) {
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/samples/ShaderLab";
+    CHECK(e.Open(project, &error));
+    for (const char* path : {"materials/pulse.shader.json", "materials/mask.shader.json"}) {
+        Json args = Json::MakeObject();
+        args["path"] = path;
+        CHECK(e.Call("shader.check", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "script.check", R"J({"path":"scripts/effects.lua"})J")["ok"].asBool());
+    RenderTarget first, animated, replay;
+    for (RenderTarget* target : {&first, &animated, &replay}) target->Resize(160,90);
+    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    e.RenderGameView(first);
+    CHECK(Call(e, "sim.step", R"J({"frames":60})J")["ok"].asBool());
+    e.RenderGameView(animated);
+    CHECK(animated.Hash() != first.Hash());
+    CHECK(animated.ids == first.ids && animated.depth == first.depth);
+    const EntityId camera = e.GetScene().FindByName("Camera");
+    for (const char* key : {"2", "1"}) {
+        Json args = Json::MakeObject();
+        args["key"] = key;
+        args["down"] = true;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
+        CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+        const PostProcess* effect = e.GetScene().Get<PostProcess>(camera);
+        const bool hdr = std::string(key) == "2";
+        CHECK(effect && effect->exposure == (hdr ? 0.75f : 1));
+        CHECK(effect && effect->toneMapping == (hdr ? "reinhard" : "none"));
+        CHECK(effect && (effect->bloom > 0) == hdr);
+        args["down"] = false;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
+        CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    }
+    CHECK(e.Scripts().Errors().empty());
+    const std::vector<std::string> files = GameFiles(project);
+    for (const char* path : {"materials/pulse.shader.json", "materials/mask.shader.json",
+                             "materials/pulse.mat.json", "materials/mask.mat.json", "scripts/effects.lua"})
+        CHECK(std::find(files.begin(), files.end(), path) != files.end());
+    CHECK(WriteGamePak(project, files, "build/test_shader_lab/game.pak", &error));
+    std::vector<unsigned char> bytes;
+    CHECK(ReadBinaryFile("build/test_shader_lab/game.pak", bytes));
+    CHECK(ExtractGamePak(bytes, "build/test_shader_lab/game", &error));
+    Engine packaged;
+    CHECK(packaged.Open("build/test_shader_lab/game", &error));
+    CHECK(Call(packaged, "sim.step", R"J({"frames":61})J")["ok"].asBool());
+    packaged.RenderGameView(replay);
+    CHECK(replay.Hash() == animated.Hash());
+    CHECK(packaged.Scripts().Errors().empty());
+    RemoveAll("build/test_shader_lab");
+}
+
 TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;
@@ -4734,6 +4787,121 @@ TEST(ShaderMaterialAlphaAndShadow) {
         for (size_t i = 0; i < opaque.color.size(); ++i)
             changed += opaque.ids[i] == ground && transparent.ids[i] == ground && gpuOpaque.color[i] != gpuTransparent.color[i];
         CHECK(changed > 20);
+    }
+}
+
+TEST(ShaderMaterialVaryingAlphaAndOcclusion) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_varying_alpha"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"half.shader.json","graph":{"nodes":[
+      {"op":"uv"},{"op":"constant","value":0.5},{"op":"step","args":[1,0]},
+      {"op":"swizzle","args":[2],"value":[0,0,0,0]},
+      {"op":"constant","value":[0.2,0.5,1,1]},{"op":"multiply","args":[3,4]}],"color":5}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"half.mat.json","values":{"shader":"half.shader.json",
+      "alphaMode":"mask","alphaCutoff":0.5,"doubleSided":true,"unlit":true}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"reference.mat.json","values":{"baseColor":[0.2,0.5,1],
+      "doubleSided":true,"unlit":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,7,10],"rotation":[-35,0,0]},
+      "Camera":{"clearColor":[0.1,0.1,0.1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-30,65,0]},
+      "DirectionalLight":{"shadows":true,"ambient":[0.2,0.2,0.2]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},
+      "MeshRenderer":{"mesh":"plane","color":[0.7,0.7,0.7]}}})J");
+    Call(e, "entity.create", R"J({"name":"Mask","components":{"Transform":{"position":[0,2,0],"rotation":[-90,0,0],"scale":[4,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"half.mat.json"}}})J");
+    // An independent half-width quad has exactly the geometry retained by step(0.5, uv.x).
+    CHECK(Call(e, "entity.create", R"J({"name":"Reference","components":{"Transform":{"position":[1,2,0],"rotation":[-90,0,0],"scale":[2,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"reference.mat.json","visible":false}}})J")["ok"].asBool());
+    RenderView view;
+    MakeSceneView(e.GetScene(), 160.0f / 90, view);
+    RenderTarget masked, reference, noShadow, gpuMasked, gpuReference, gpuNoShadow;
+    for (RenderTarget* target : {&masked, &reference, &noShadow, &gpuMasked, &gpuReference, &gpuNoShadow}) target->Resize(160,90);
+    const bool gpu = e.EnableGpu(nullptr, &error);
+    if (!gpu) std::printf("  SKIP varying graph alpha GPU comparison (%s)\n", error.c_str());
+    e.Renderer().Render(e.GetScene(), view, masked);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuMasked);
+    CHECK(Call(e, "component.set", R"J({"id":"Mask","type":"MeshRenderer","values":{"castShadows":false}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, noShadow);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuNoShadow);
+    CHECK(Call(e, "component.set", R"J({"id":"Mask","type":"MeshRenderer","values":{"visible":false}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Reference","type":"MeshRenderer","values":{"visible":true}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, reference);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuReference);
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    int shadowPixels = 0, gpuShadowPixels = 0, compared = 0;
+    double cpuDifference = 0, gpuDifference = 0, backendDifference = 0;
+    for (size_t i = 0; i < masked.color.size(); ++i) {
+        if (masked.ids[i] != ground || reference.ids[i] != ground || noShadow.ids[i] != ground) continue;
+        ++compared;
+        shadowPixels += masked.color[i] != noShadow.color[i];
+        if (gpu) gpuShadowPixels += gpuMasked.color[i] != gpuNoShadow.color[i];
+        for (int shift : {0,8,16}) {
+            const auto channel = [shift](uint32_t color) { return static_cast<int>((color >> shift) & 255); };
+            cpuDifference += std::abs(channel(masked.color[i]) - channel(reference.color[i]));
+            if (gpu) {
+                gpuDifference += std::abs(channel(gpuMasked.color[i]) - channel(gpuReference.color[i]));
+                backendDifference += std::abs(channel(masked.color[i]) - channel(gpuMasked.color[i]));
+            }
+        }
+    }
+    CHECK(compared > 1000 && shadowPixels > 20);
+    CHECK(cpuDifference / static_cast<double>(std::max(1, compared) * 3) < 1);
+    if (gpu) {
+        std::printf("  varying graph shadow reference/GPU mean difference %.4f, software/GPU %.4f\n",
+                    gpuDifference / static_cast<double>(std::max(1, compared) * 3),
+                    backendDifference / static_cast<double>(std::max(1, compared) * 3));
+        CHECK(gpuShadowPixels > 20);
+        CHECK(gpuDifference / static_cast<double>(std::max(1, compared) * 3) < 1);
+        CHECK(backendDifference / static_cast<double>(std::max(1, compared) * 3) < 6);
+    }
+
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Back","components":{"Transform":{"scale":[3,3,1]},
+      "MeshRenderer":{"mesh":"quad","color":[0,1,0],"unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Mask","components":{"Transform":{"position":[0,0,1],"scale":[4,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"half.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"Occluder","components":{"Transform":{"position":[-1,0,2],"scale":[2,4,1]},
+      "MeshRenderer":{"mesh":"quad","color":[1,0,0],"unlit":true,"visible":false}}})J");
+    MakeSceneView(e.GetScene(), 160.0f / 90, view);
+    view.highlight = e.GetScene().FindByName("Back");
+    const auto outline = [](uint32_t color) {
+        return (color & 255) > 230 && ((color >> 8) & 255) > 140 &&
+               ((color >> 8) & 255) < 175 && ((color >> 16) & 255) < 50;
+    };
+    e.Renderer().Render(e.GetScene(), view, masked);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuMasked);
+    int visibleBack = 0, cpuOutline = 0, gpuOutline = 0;
+    for (size_t i = 0; i < masked.color.size(); ++i) {
+        visibleBack += masked.ids[i] == view.highlight;
+        cpuOutline += outline(masked.color[i]);
+        if (outline(masked.color[i])) CHECK(i % 160 <= 81); // only the hole exposes the selected quad
+        if (gpu) {
+            gpuOutline += outline(gpuMasked.color[i]);
+            if (outline(gpuMasked.color[i])) CHECK(i % 160 <= 81);
+        }
+    }
+    CHECK(visibleBack > 100 && cpuOutline > 20);
+    if (gpu) CHECK(gpuOutline > 20);
+    // A standard opaque material closes the remaining hole: neither selection pass may leak.
+    CHECK(Call(e, "component.set", R"J({"id":"Occluder","type":"MeshRenderer","values":{"visible":true}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, reference);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuReference);
+    for (size_t i = 0; i < reference.color.size(); ++i) {
+        CHECK(reference.ids[i] != view.highlight && !outline(reference.color[i]));
+        if (gpu) CHECK(!outline(gpuReference.color[i]));
+    }
+    // The selected graph itself must also respect an ordinary material's foreground depth.
+    view.highlight = e.GetScene().FindByName("Mask");
+    CHECK(Call(e, "component.set", R"J({"id":"Occluder","type":"Transform","values":{"position":[1,0,2],"scale":[2.2,4.2,1]}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, reference);
+    if (gpu) e.Gpu()->Render(e.GetScene(), view, gpuReference);
+    for (size_t i = 0; i < reference.color.size(); ++i) {
+        CHECK(reference.ids[i] != view.highlight && !outline(reference.color[i]));
+        if (gpu) CHECK(!outline(gpuReference.color[i]));
     }
 }
 
