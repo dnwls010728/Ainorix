@@ -775,7 +775,7 @@ void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
     const Json& params = script["params"];
     std::string path = script["path"].asString("");
     const Json& schema = ScriptParamSchema(path);
-    bool raw = rawParams.count(id) > 0 || !(params.isObject() || params.isNull());
+    bool raw = fieldParams.count(id) == 0 || !(params.isObject() || params.isNull());
 
     // Header row: "Params" + view toggle + add.
     ImGui::TableNextRow();
@@ -785,8 +785,8 @@ void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
     HelpTooltip(Tr("Values the script reads as self.params.<name>. Rows come from the script; dimmed values are the script's defaults."));
     ImGui::TableSetColumnIndex(1);
     if (ImGui::SmallButton(raw ? Tr("Fields") : "JSON")) {
-        if (raw) rawParams.erase(id);
-        else rawParams.insert(id);
+        if (raw) fieldParams.insert(id);
+        else fieldParams.erase(id);
     }
     HelpTooltip(raw ? Tr("Edit params as fields") : Tr("Edit params as JSON text"));
     if (!raw) {

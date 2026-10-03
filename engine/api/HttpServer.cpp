@@ -2,40 +2,27 @@
 
 #include <cctype>
 #include <cstring>
-
+#include <thread>
 
 #include "core/Log.h"
-
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-using SocketHandle = SOCKET;
-#define OE_INVALID_SOCKET INVALID_SOCKET
-#define OE_CLOSE_SOCKET closesocket
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-using SocketHandle = int;
-#define OE_INVALID_SOCKET (-1)
-#define OE_CLOSE_SOCKET ::close
-#endif
+#include "platform/Platform.h"
 
 namespace oe {
 
 namespace {
 
-bool EnsureSockets() {
-#ifdef _WIN32
-    static bool ok = [] {
-        WSADATA data;
-        return WSAStartup(MAKEWORD(2, 2), &data) == 0;
-    }();
-    return ok;
-#else
-    return true;
-#endif
+// The platform sockets are non-blocking; this server runs on its own thread and waits by
+// sleeping briefly between polls, so no OS socket API is needed outside engine/platform.
+constexpr double kPollSeconds = 0.001;
+constexpr double kIdleSeconds = 15.0;     // a silent or stalled peer cannot hold the server
+constexpr double kConnectSeconds = 5.0;
+// OS sleeps can be as coarse as ~15 ms. While an exchange is in progress (and shortly after
+// one) the thread yields instead, so a request does not pay several sleep quanta.
+constexpr double kHotSeconds = 0.02;
+
+void Wait(double since) {
+    if (PlatformTimeSeconds() - since < kHotSeconds) std::this_thread::yield();
+    else PlatformSleep(kPollSeconds);
 }
 
 const char* StatusText(int status) {
@@ -52,14 +39,39 @@ const char* StatusText(int status) {
     }
 }
 
-bool SendAll(SocketHandle s, const char* data, size_t size) {
+// Sends everything, waiting while the peer's window is full. False on error or idle timeout.
+bool SendAll(NetSocket& s, const char* data, size_t size) {
+    double idle = PlatformTimeSeconds();
     while (size > 0) {
-        int n = send(s, data, static_cast<int>(size > 1 << 20 ? 1 << 20 : size), 0);
-        if (n <= 0) return false;
-        data += n;
-        size -= static_cast<size_t>(n);
+        size_t sent = 0;
+        SocketIo result = s.Send(reinterpret_cast<const uint8_t*>(data), size > (1u << 20) ? (1u << 20) : size, sent);
+        if (result == SocketIo::WouldBlock) {
+            if (PlatformTimeSeconds() - idle > kIdleSeconds) return false;
+            Wait(idle);
+            continue;
+        }
+        if (result != SocketIo::Progress) return false;
+        data += sent;
+        size -= sent;
+        idle = PlatformTimeSeconds();
     }
     return true;
+}
+
+// Appends available bytes. Returns 1 on data, 0 when the peer closed, -1 on error or idle timeout
+// (idleSeconds <= 0 waits without a limit, for long-running commands on the client side).
+int ReceiveSome(NetSocket& s, std::string& data, double idleSeconds, const std::atomic<bool>* running = nullptr) {
+    uint8_t buf[8192];
+    const double start = PlatformTimeSeconds();
+    for (;;) {
+        size_t n = 0;
+        SocketIo result = s.Receive(buf, sizeof(buf), n);
+        if (result == SocketIo::Progress) { data.append(reinterpret_cast<const char*>(buf), n); return 1; }
+        if (result == SocketIo::Closed) return 0;
+        if (result != SocketIo::WouldBlock) return -1;
+        if ((running && !*running) || (idleSeconds > 0 && PlatformTimeSeconds() - start > idleSeconds)) return -1;
+        Wait(start);
+    }
 }
 
 std::string Lower(std::string s) {
@@ -68,14 +80,11 @@ std::string Lower(std::string s) {
 }
 
 // Reads one request. Returns false on malformed input or disconnect.
-bool ReadRequest(SocketHandle s, HttpRequest& req, int& errorStatus) {
+bool ReadRequest(NetSocket& s, HttpRequest& req, int& errorStatus, const std::atomic<bool>& running) {
     std::string data;
-    char buf[8192];
     size_t headerEnd = std::string::npos;
     while (headerEnd == std::string::npos) {
-        int n = recv(s, buf, sizeof(buf), 0);
-        if (n <= 0) return false;
-        data.append(buf, static_cast<size_t>(n));
+        if (ReceiveSome(s, data, kIdleSeconds, &running) <= 0) return false;
         headerEnd = data.find("\r\n\r\n");
         if (data.size() > 64 * 1024 && headerEnd == std::string::npos) {
             errorStatus = 413;
@@ -118,21 +127,18 @@ bool ReadRequest(SocketHandle s, HttpRequest& req, int& errorStatus) {
     }
     req.body = data.substr(headerEnd + 4);
     while (req.body.size() < contentLength) {
-        int n = recv(s, buf, sizeof(buf), 0);
-        if (n <= 0) return false;
-        req.body.append(buf, static_cast<size_t>(n));
+        if (ReceiveSome(s, req.body, kIdleSeconds, &running) <= 0) return false;
     }
     req.body.resize(contentLength);
     return true;
 }
 
-void WriteResponse(SocketHandle s, const HttpResponse& res) {
+void WriteResponse(NetSocket& s, const HttpResponse& res) {
     std::string head = "HTTP/1.1 " + std::to_string(res.status) + " " + StatusText(res.status) + "\r\n";
     head += "Content-Type: " + res.contentType + "\r\n";
     head += "Content-Length: " + std::to_string(res.body.size()) + "\r\n";
     head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
-    SendAll(s, head.data(), head.size());
-    SendAll(s, res.body.data(), res.body.size());
+    if (SendAll(s, head.data(), head.size())) SendAll(s, res.body.data(), res.body.size());
 }
 
 }  // namespace
@@ -175,99 +181,85 @@ std::string HttpRequest::Header(const std::string& lowerName) const {
 HttpServer::~HttpServer() { Stop(); }
 
 bool HttpServer::Start(int port, Handler handler, std::string* error) {
-    if (!EnsureSockets()) {
-        if (error) *error = "socket library initialization failed";
+    if (port < 0 || port > 65535) {
+        if (error) *error = "port must be 0..65535";
         return false;
     }
-    SocketHandle s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == OE_INVALID_SOCKET) {
-        if (error) *error = "socket() failed";
+    std::string detail;
+    auto listener = CreateNetSocket(SocketKind::Tcp, &detail);
+    // Local only: the API never binds anything but the loopback address.
+    if (!listener || !listener->Bind({"127.0.0.1", static_cast<uint16_t>(port)}, &detail) || !listener->Listen(&detail)) {
+        if (error) *error = "cannot listen on 127.0.0.1:" + std::to_string(port) + " (port in use?): " + detail;
         return false;
     }
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // local only
-    if (bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || listen(s, 16) != 0) {
-        OE_CLOSE_SOCKET(s);
-        if (error) *error = "cannot listen on 127.0.0.1:" + std::to_string(port) + " (port in use?)";
-        return false;
-    }
-    socket_ = static_cast<intptr_t>(s);
-    port_ = port;
+    listener_ = std::move(listener);
+    port_ = listener_->LocalAddress().port;
     handler_ = std::move(handler);
     running_ = true;
     thread_ = std::thread([this] { Loop(); });
-    OE_LOG_INFO("http", "listening on http://127.0.0.1:%d", port);
+    OE_LOG_INFO("http", "listening on http://127.0.0.1:%d", port_);
     return true;
 }
 
 void HttpServer::Stop() {
     if (!running_.exchange(false)) return;
-    OE_CLOSE_SOCKET(static_cast<SocketHandle>(socket_));
     if (thread_.joinable()) thread_.join();
+    listener_.reset();
 }
 
 void HttpServer::Loop() {
-    SocketHandle listenSocket = static_cast<SocketHandle>(socket_);
+    double served = -1.0;  // time of the last exchange; agents usually send calls in bursts
     while (running_) {
-        SocketHandle client = accept(listenSocket, nullptr, nullptr);
-        if (client == OE_INVALID_SOCKET) {
-            if (!running_) break;
+        NetAddress from;
+        std::string acceptError;
+        std::unique_ptr<NetSocket> client = listener_->Accept(from, &acceptError);
+        if (!client) {
+            if (!acceptError.empty()) OE_LOG_WARN("http", "%s", acceptError.c_str());
+            Wait(served);
             continue;
         }
         HttpRequest req;
         int errorStatus = 400;
         HttpResponse res;
-        bool readOk = ReadRequest(client, req, errorStatus);
+        bool readOk = ReadRequest(*client, req, errorStatus, running_);
         if (readOk) {
             try {
                 res = handler_(req);
             } catch (const std::exception& e) {
                 res.status = 500;
-                res.body = std::string("{\"ok\":false,\"error\":{\"code\":\"internal_error\",\"message\":\"") + e.what() + "\"}}";
+                res.body = std::string("{\"ok\":false,\"error\":{\"code\":\"internal_error\",\"message\":\"") + JsonEscape(e.what()) + "\"}}";
             }
         } else {
             res.status = errorStatus;
             res.body = "{\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"malformed HTTP request\"}}";
         }
-        WriteResponse(client, res);
-        OE_CLOSE_SOCKET(client);
+        WriteResponse(*client, res);
+        served = PlatformTimeSeconds();
     }
 }
 
 bool HttpPostLocal(int port, const std::string& path, const std::string& body, std::string& response, std::string* error) {
-    if (!EnsureSockets()) {
-        if (error) *error = "socket library initialization failed";
-        return false;
+    auto fail = [&](const std::string& message) { if (error) *error = message; return false; };
+    const std::string refused = "cannot connect to 127.0.0.1:" + std::to_string(port) + " (is `oe editor` running?)";
+    if (port <= 0 || port > 65535) return fail(refused);
+    std::string detail;
+    auto s = CreateNetSocket(SocketKind::Tcp, &detail);
+    if (!s) return fail(detail.empty() ? "socket creation failed" : detail);
+    if (!s->Connect({"127.0.0.1", static_cast<uint16_t>(port)}, &detail)) return fail(refused);
+    const double start = PlatformTimeSeconds();
+    while (s->State() == SocketState::Connecting) {
+        if (PlatformTimeSeconds() - start > kConnectSeconds) return fail(refused);
+        Wait(start);
     }
-    SocketHandle s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == OE_INVALID_SOCKET) {
-        if (error) *error = "socket() failed";
-        return false;
-    }
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(static_cast<uint16_t>(port));
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        OE_CLOSE_SOCKET(s);
-        if (error) *error = "cannot connect to 127.0.0.1:" + std::to_string(port) + " (is `oe editor` running?)";
-        return false;
-    }
+    if (s->State() != SocketState::Open) return fail(refused);
     std::string req = "POST " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) +
                       "\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
-    SendAll(s, req.data(), req.size());
+    if (!SendAll(*s, req.data(), req.size())) return fail("cannot send the HTTP request");
     std::string data;
-    char buf[8192];
-    int n;
-    while ((n = recv(s, buf, sizeof(buf), 0)) > 0) data.append(buf, static_cast<size_t>(n));
-    OE_CLOSE_SOCKET(s);
+    // Commands such as renders can take long: wait for the server to close without a limit.
+    while (ReceiveSome(*s, data, 0) > 0) {}
     size_t split = data.find("\r\n\r\n");
-    if (split == std::string::npos) {
-        if (error) *error = "malformed HTTP response";
-        return false;
-    }
+    if (split == std::string::npos) return fail("malformed HTTP response");
     response = data.substr(split + 4);
     return true;
 }

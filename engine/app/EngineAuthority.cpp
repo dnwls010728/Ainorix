@@ -3,8 +3,10 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <set>
 #include "core/FileSystem.h"
 #include "core/Image.h"
+#include "core/Log.h"
 #include "scene/Components.h"
 
 namespace oe {
@@ -70,6 +72,7 @@ void Engine::EnsureAuthority(bool refresh) {
     uint64_t blueprint = Fnv1a64(reinterpret_cast<const uint8_t*>(text.data()), text.size());
     authority_ = std::make_unique<Authority>(networkConfig_, network_->IsHost(), network_->LocalPlayer(), blueprint,
         [this](uint32_t player, const std::vector<uint8_t>& bytes) { return network_ && network_->SendSync(player, bytes); });
+    authority_->SetUnreliableSend([this](uint32_t player, const std::vector<uint8_t>& bytes) { return network_ && network_->SendSync(player, bytes, false); });
     authority_->Tick(networkFrame_);
 }
 Json Engine::ReplicatedWorld(uint32_t player) {
@@ -211,9 +214,9 @@ void Engine::ApplyReplicatedWorld(const Json& world, bool owned, bool remotes) {
         std::string error; if (!scene_.SetParent(replicatedEntities_.at(id), replicatedEntities_.count(parent) ? replicatedEntities_.at(parent) : 0, &error)) throw ApiError("network_snapshot", error);
     }
 }
-void Engine::InterpolateAuthority() {
+void Engine::InterpolateAuthority(bool advance) {
     if (authorityWorlds_.empty()) return;
-    const auto& latest = authorityWorlds_.back(); authorityRemoteFrame_ = std::max(authorityWorlds_.front().frame, std::min(authorityRemoteFrame_ + 1, latest.frame));
+    const auto& latest = authorityWorlds_.back(); authorityRemoteFrame_ = std::max(authorityWorlds_.front().frame, std::min(authorityRemoteFrame_ + (advance ? 1 : 0), latest.frame));
     const Authority::Update* a = &authorityWorlds_.front(); const Authority::Update* b = &latest;
     for (const auto& world : authorityWorlds_) { if (world.frame <= authorityRemoteFrame_) a = &world; if (world.frame >= authorityRemoteFrame_) { b = &world; break; } }
     double t = a->frame == b->frame ? 1 : static_cast<double>(authorityRemoteFrame_ - a->frame) / static_cast<double>(b->frame - a->frame);
@@ -238,7 +241,11 @@ bool Engine::PollAuthority() {
             authority_->Receive(message.first, message.second);
         }
         authority_->Tick(networkFrame_);
-        if (authority_->Active() && (!network_->Connected() || network_->Players().size() != authority_->Players().size())) authority_->Stop("match participant disconnected");
+        if (authority_->Active()) {
+            // Clients follow the server: a shrinking roster only changes what it replicates.
+            if (!network_->Connected()) authority_->Stop("match participant disconnected");
+            else if (network_->IsHost()) DropAuthorityPlayers();
+        }
         if (authority_->TakeStart()) {
             std::string error; scene_.FromJson(*playSnapshot_, &error); ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
             frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
@@ -339,6 +346,25 @@ std::vector<PhysicsEvent> Engine::StepAuthorityPhysics(float dt) {
     for (EntityId id : addedColliders2D) scene_.Pool<Collider2D>().erase(id);
     return events;
 }
+void Engine::DropAuthorityPlayers() {
+    for (uint32_t player : authority_->TakeDropped()) { std::string error; network_->Kick(player, "send queue overflow", &error); }
+    std::set<uint32_t> present;
+    const Json roster = network_->Players();
+    for (const Json& player : roster.items()) present.insert(static_cast<uint32_t>(player["id"].asNumber()));
+    std::vector<uint32_t> gone;
+    for (uint32_t player : authority_->Players()) if (player != 1 && !present.count(player)) gone.push_back(player);
+    if (gone.empty()) return;
+    // The ready barrier needs its whole roster; a match without remote participants is over.
+    if (!authority_->Running() || gone.size() + 1 >= authority_->Players().size()) { authority_->Stop("match participant disconnected"); return; }
+    for (uint32_t player : gone) {
+        authority_->Drop(player);
+        std::vector<EntityId> avatars;
+        for (const auto& item : scene_.Pool<NetPlayer>()) if (static_cast<uint32_t>(item.second.player) == player) avatars.push_back(item.first);
+        for (EntityId id : avatars) scene_.Destroy(id);
+        for (auto& item : scene_.Pool<NetSync>()) if (static_cast<uint32_t>(item.second.owner) == player) item.second.owner = 0;
+        OE_LOG_INFO("net", "player %u left the match", player);
+    }
+}
 void Engine::AuthorityApplied() {
     if (!authority_ || !authority_->Running() || replaying_) return;
     try {
@@ -349,7 +375,7 @@ void Engine::AuthorityApplied() {
                 std::map<uint32_t, Json> worlds; for (uint32_t player : authority_->Players()) if (player != 1) worlds[player] = ReplicatedWorld(player);
                 authority_->Snapshot(frame_, worlds);
             }
-        } else { predictionStates_[authorityInput_] = CaptureNative(false); InterpolateAuthority(); }
+        } else { predictionStates_[authorityInput_] = CaptureNative(false); InterpolateAuthority(false); }
     } catch (const std::exception& error) { authority_->Stop(error.what()); }
 }
 }  // namespace oe

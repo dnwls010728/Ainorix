@@ -330,6 +330,15 @@ void Engine::SimulateFrame() {
     SimulateWorld();
     AuthorityApplied();
     if ((sync_ && sync_->Running()) || (authority_ && authority_->Running())) input_ = deviceInput_;
+    // A lockstep/rollback client that fell behind consumes already confirmed frames faster. Game
+    // frames stay identical on every peer; only the number simulated per I/O tick differs.
+    for (int extra = 0; extra < FrameSync::kCatchUpFrames && sync_ && sync_->Lagging(); ++extra) {
+        if (!PollSync()) break;
+        CaptureCheckpoint();
+        if (journal_) journal_->frames.push_back({input_, frameInputs_});
+        SimulateWorld();
+        input_ = deviceInput_;
+    }
 }
 
 void Engine::SimulateWorld() {

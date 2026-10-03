@@ -5,7 +5,7 @@ sessions up to dedicated servers with many players) **later**, while a **single-
 exactly what it is today**. This file is the contract for everyone (human or agent) who implements
 networking: read it together with docs/DESIGN.md before touching `engine/net/`.
 
-Status: **M1–M7 and M8a/M8b implemented; M8c Android verification remains pending.** Opt-in lobbies, RPC, lockstep and native rollback are available.
+Status: **M1–M7 and M8a/M8b implemented; M8c Android verification remains pending** (M8 stays unchecked until then). Opt-in lobbies, RPC, lockstep and native rollback are available.
 Authoritative replication, relevance, interpolation and owned prediction are available.
 Platform verification limits are recorded below.
 Progress is tracked in §11.
@@ -16,7 +16,8 @@ Goals
 - One engine, both kinds of games: single-player ignores networking; a network game turns it on
   with project data, not an engine fork.
 - Support small sessions (2–8 players, listen host or peer-to-peer) **and** dedicated servers
-  (tens to a few hundred players per process) with the same code base.
+  (tens to a few hundred players per process) with the same code base. Current limit: 64
+  participants per session (63 remote on a dedicated server); see the audit follow-up in §11.
 - Every capability is a command + Lua binding, testable headless and deterministically.
 
 Non-goals (for now)
@@ -175,8 +176,9 @@ errors are `ApiError(code, message, hint)`): `net.state`, `net.host`, `net.join`
 
 Lua (documented in `docs/SCRIPTING.md` when added): `net.isHost()`, `net.isServer()`,
 `net.isClient()`, `net.localPlayer()`, `net.players()`, `net.rpc(target, name, ...)` (targets:
-`server`, `owner`, `all`, `others`, player id), `net.on(name, fn)`, raw `net.send`/message handler,
+`server`, `owner`, `all`, `others`, player id), `net.on(name, fn)`, `net.sender()`, `net.entities()`,
 `input.player(id)`, callbacks `onPlayerJoined(id)`, `onPlayerLeft(id)`, `onNetState(state)`.
+A raw `net.send`/message handler was planned here but is not implemented: bounded RPC covers it.
 
 **Single-player compatibility:** with `mode: "none"`, `net.isServer()` is `true`,
 `net.localPlayer()` is `1`, `net.players()` is `{1}` and `net.rpc` runs the handler locally. A game
@@ -214,8 +216,9 @@ hosting cannot accept connections).
   hashes equal at every checked frame. Same test over loopback and real localhost TCP/UDP sockets.
 - Rollback: forced misprediction; after re-simulation the hash equals a never-predicted run.
 - Authoritative: server + clients converge; prediction error bounded; spawn/despawn order stable.
-- Samples are acceptance tests: networked Platformer (2-player co-op, lockstep) and FPS
-  (authoritative).
+- Samples are acceptance tests: `samples/NetCoop` (lockstep co-op), `samples/NetDuel` (rollback
+  versus) and `samples/NetArena` (authoritative). They replaced the originally planned networked
+  Platformer/FPS variants; see [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md).
 - Everything also runs as WebAssembly where applicable (`node build-web/bin/oe_tests.js`).
 
 ## 11. Implementation status (work log)
@@ -362,8 +365,9 @@ Open questions / unverified:
   Destruction removes event handlers before releasing the C++ callback owner.
 - `net/FallbackTransport.h`: initially send over established TCP while known UDP addresses
   exchange bounded echo probes. A successful challenge enables UDP; periodic fresh challenges
-  detect a later outage. Probe failure switches permanently to TCP, with incoming TCP data still
-  accepted during/after route changes. At most one probe response per peer per frame. Nonzero
+  detect a later outage. Probe failure switches permanently to TCP. The route only selects the
+  **send** path: registered peers are received on both TCP and UDP at all times, because the two
+  sides choose independently and can disagree after a short outage (see the audit follow-up). At most one probe response per peer per frame. Nonzero
   connection-specific challenge seeds are supplied by M4; probes are not authentication.
 - Disconnected transport events release channel buffers and produce one `Disconnected` event;
   connected transport events do not automatically register/authenticate channel peers.
@@ -431,7 +435,8 @@ Open questions / unverified:
   when a transport id is reused. Channel ACK/replay windows and monotonic RPC sequences reject
   duplicates within a connection. Cookie possession is **not identity authentication**; v1 is
   unencrypted and is not protected against an on-path attacker. No cookies are reported/logged.
-- Bounds: 64 accepted/pending peers, project max-player admission, eight incoming control messages
+- Bounds: 64 accepted/pending connections (unauthenticated ones do not occupy player slots;
+  `maxPlayers` is enforced when the cookie response is accepted), eight incoming control messages
   per peer/frame, 1024-byte controls, 300-frame handshake/connect timeout, 600-frame inactivity
   timeout and 60-frame keepalive. Reliable channel limits still apply. Graceful leave/kick drains
   acknowledgements for at most 30 frames; terminal states release listeners, sockets, peers and
@@ -524,7 +529,11 @@ Configuration (in `project.json`):
   `net.stats.replayMilliseconds` measures the most recent complete reference restoration.
 - `inputDelay` is 0..8, `rollbackFrames` 1..8, `hashInterval` 1..600, and `waitFrames` 30..600.
   `dropPolicy: "kick"` kicks missing remote inputs and stops the frozen match after the I/O timeout;
-  `empty` substitutes neutral input and continues. A disconnect stops the match. Stop/leave and
+  `empty` substitutes neutral input and continues: after one `waitFrames` timeout the player is
+  marked stalled (`net.state.sync.stalled`) and its missing frames are neutral without further
+  waiting, until one of its inputs arrives within 32 frames of the confirmed frame again. A client
+  that fell behind steps up to four extra confirmed frames per tick and may buffer 3600 confirmed
+  frames; beyond that it stops with "fell too far behind the match". A disconnect stops the match. Stop/leave and
   host/join establish another lobby. Arbitrary RPC, readiness changes, late joins and external
   gameplay edits/evaluation are disabled during matches to keep arrival time out of simulation.
   Session controls also refuse synchronized Lua game callbacks, so speculative/replayed frames
@@ -619,7 +628,7 @@ speaker/capture output. These images are version-specific and never accepted fro
 
 ### M6 — authoritative replication and owned prediction (2026-10-02)
 
-The session protocol is now **v3**; older native/prebuilt players fail the version handshake.
+The session protocol was **v3** at this milestone (now v4, see the audit follow-up); older native/prebuilt players fail the version handshake.
 `net.start` uses a frozen ready roster and validates the initial scene, project content, input
 schema and seed before a frame-zero barrier. The barrier times out after `waitFrames` (default
 300 I/O ticks), including lobbies that have already waited longer than that before starting.
@@ -651,12 +660,16 @@ unreplicated children instantiate with their root. Initially replicated scene en
 until relevant and can be restored from the shared initial blueprint without a prefab path.
 
 Snapshots use the last acknowledged per-client world as their delta baseline. Baselines retain
-16 snapshots; an evicted baseline falls back to a full image. Spawn, update and despawn records
-share Session's reliable ordered channel on TCP/UDP/WebSocket; ordering and delivery are guaranteed,
-but this first backend retains reliable-channel head-of-line delay under packet loss. It does not
-claim unreliable snapshot delivery. `snapshotRate` accepts 1..60 Hz (default 20), with fractional
+16 snapshots; an evicted baseline falls back to a full image. Since protocol v4, snapshots and
+their ACKs use the **unreliable** channel: a lost or late snapshot is never retransmitted, the next
+one is again a delta against the last acknowledged image (spawn and despawn are part of that delta,
+so they need no separate reliable event), and loss cannot stall the stream or fill the reliable
+queue. Over TCP/WebSocket the stream itself still delivers in order. Begin/ready/go, client inputs,
+stop and RPC stay reliable ordered. Payloads use the bounded binary encoding in `net/JsonCodec.h`
+(interned keys, varints, float32 when exact; roughly a third of the JSON text for a typical world).
+`snapshotRate` accepts 1..60 Hz (default 20), with fractional
 rates distributed over fixed 60 Hz frames. At most 1024 entities, 64 selected fields/entity and
-56000 serialized payload bytes are allowed; oversized worlds stop with an explicit diagnostic.
+56000 encoded payload bytes are allowed; oversized worlds stop with an explicit diagnostic.
 Field values are finite, depth <=8, at most 256 children/value and 8192 bytes/string. Queues,
 retained baselines, unread updates and input histories are bounded. Policy errors or invalid
 snapshot images stop the match before invalid state is simulated.
@@ -685,7 +698,7 @@ and journals incoming callbacks within a bounded 256-event window. Client audio 
 PCM until acknowledged and preserves confirmed output across corrections. Save writes remain
 deferred as in rollback. Hot reload and external scene/Lua edits are disabled during the match.
 
-This milestone uses a frozen scene/roster: late join and synchronized scene transitions require
+This milestone uses a frozen scene/roster (departures are handled, see M7): late join and synchronized scene transitions require
 leaving/stopping, opening the same scene and starting another ready barrier. M7 adds the dedicated server,
 editor Players×N/Network panel and network fault commands; M8 samples/platform verification
 remain unchecked. Neither absence of SDKs nor source portability is a device/browser execution test.
@@ -733,8 +746,13 @@ The CLI prints startup and final JSON envelopes; the player prints its final env
 The optional HTTP API still binds only to 127.0.0.1 and accepts MCP attachments.
 
 The ready barrier starts automatically once at least `minPlayers` remote peers have
-joined **and every joined peer is ready**. The match has a frozen roster; participant
-loss stops it rather than silently changing ownership or spawning replacement players.
+joined **and every joined peer is ready**. The roster is frozen for joining: nobody can
+enter a running match. A participant that leaves, times out or stops draining its reliable
+queue is **dropped** from an authoritative match: its `NetPlayer` entities are destroyed, other
+entities it owned become server-owned (`owner` 0), `onPlayerLeft(id)` runs and the remaining
+players continue. The match (and the dedicated runner) stops when no remote participant
+remains, or when anyone is lost during the ready barrier. Lockstep/rollback matches still stop
+on any loss, because every peer simulates every player's input.
 `sim.stop`/`net.leave` ends the runner; reopening/restarting creates a new lobby.
 Dedicated servers reserve participant id **1** as an always-empty input stream; it
 counts toward `maxPlayers`, so 4 slots permit 3 remote players (maximum 63 remotes).
@@ -845,3 +863,60 @@ creation. Only editor code changes; prebuilt game players need no additional reb
   ABIs, run the staged tests and a TCP device/server touch match as described in
   NETWORK_SAMPLES.md; refresh runtime/android after actual build/device verification.
   M8 stays unchecked until this required validation is completed.
+
+### Audit follow-up (2026-10-03)
+
+A review of M1–M8 against this document found the defects below; each fix has a regression test.
+
+- [x] UDP/TCP fallback: sides could select different routes after a ~0.5 s UDP outage (one kept
+      UDP because its probes were still answered, the other had fallen back) and the UDP sender's
+      packets were discarded until the reliable timeout closed the session. Both paths are now
+      always received (`NetworkFallbackRoutesMayDisagree`).
+- [x] Client interpolation advanced its playback frame twice per tick (before and after the
+      simulation), so remote entities moved at double speed and stalled, with about half the
+      configured buffer. It now advances once (`NetworkAuthoritativeInterpolationAdvancesOncePerFrame`).
+- [x] One slow or departing client stopped an authoritative match for everybody and ended the
+      dedicated runner. Departed players are dropped instead (M7 text above;
+      `NetworkAuthoritativePlayerLossKeepsMatch`). `net.kick` no longer fails on an unresponsive
+      peer: the connection is closed on the next poll.
+- [x] Unauthenticated connections counted against `maxPlayers`, so idle sockets could keep a
+      lobby closed (`NetworkSessionPendingConnectionsDoNotFillLobby`). They are now bounded
+      separately (64). An attacker holding all 64 pending connections can still delay joins for
+      the 300-frame handshake timeout; v1 has no authentication (§9).
+- [x] `accept` failures other than a broken listener (reset before accept, descriptor/buffer
+      exhaustion, a child that cannot be configured) are skipped and retried instead of failing
+      the transport poll and closing the host session. Read from code; not reproduced with a real
+      reset race, and the POSIX branch is not compiled here.
+- [x] `save.flush` during a match/recording returned success without ever writing. Requested
+      slots are now flushed when deferral ends (`SaveDeferredFlushCommitsOnStop`, SAVE.md).
+- [x] Stale diagnostics: `net.state.sync.backend` reports `nativeRollback` (was `referenceReplay`),
+      the unused 12000-frame constant is gone, and Session state reports `syncImplemented: true`
+      for every enabled mode.
+- [x] Validation: Windows Release 150 tests and Wasm/Node 137 tests, zero failed checks;
+      `tests/network_server_test.py` (real TCP/UDP/WebSocket dedicated server, packaged
+      `--server`) and `tests/network_web_test.js` pass. `runtime/web` rebuilt (Emscripten 6.0.10);
+      the packaged browser match was not repeated for this rebuild. `docs/API.md` is unchanged.
+- [x] `dropPolicy: "empty"` waited `waitFrames` for **every** frame a stalled peer missed (5 s per
+      frame by default). The host now marks that player stalled after one timeout and substitutes
+      neutral input without waiting; a late client catches up (up to four extra confirmed frames
+      per tick, 3600 buffered) and is waited for again once its inputs are close
+      (`NetworkFrameSyncStalledPeerCatchesUp`). Lockstep stays exact: only how many confirmed
+      frames a peer simulates per tick changes.
+- [x] Authoritative snapshots: unreliable delivery without head-of-line delay and a binary
+      payload encoding (`NetworkAuthoritativeUnreliableSnapshotsConverge`,
+      `NetworkJsonCodecRoundTripAndBounds`). **Session protocol v4**; v3 peers fail the handshake.
+- [ ] Scale beyond 64 participants is still open: `maxPlayers`, the channel/transport peer tables,
+      the roster message (8 KiB) and the 64-bit ready/roster encodings are all sized for 64, and
+      the server builds one filtered world per client per snapshot. The "few hundred players" goal
+      in §1 needs those raised and measured; the 1024-entity / 56000-byte snapshot caps remain.
+- [x] `engine/api/HttpServer.cpp` no longer includes OS socket headers: the local API server and
+      `oe mcp --connect` client run on `platform/Network.h` sockets (`HttpServerOnPlatformSockets`).
+      A silent client is dropped after 15 s instead of blocking the server; port 0 reports the
+      chosen port. Measured 17.6 ms per call in a burst through `oe mcp --port`, which is the
+      tool main loop's sleep between job polls rather than the socket layer.
+- [x] Validation for the four lines above: Windows Release 154 tests and Wasm/Node 141 tests, zero
+      failed checks; `tests/network_server_test.py` and `tests/network_web_test.js` pass;
+      `runtime/web` rebuilt for protocol v4. The packaged browser match was not repeated.
+- [ ] Android runtimes (`runtime/android/`) predate networking entirely (source 0ea84f2) and
+      cannot join protocol v4 sessions; POSIX native build and tests remain unverified (no WSL or
+      Linux toolchain on this host). Unchanged from M8c.

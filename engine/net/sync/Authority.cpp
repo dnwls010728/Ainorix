@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cmath>
 #include "net/Bytes.h"
+#include "net/JsonCodec.h"
 
 namespace oe {
 namespace {
@@ -12,16 +13,6 @@ constexpr uint8_t BeginMessage = 32, ReadyMessage = 33, GoMessage = 34, InputMes
 bool Unsigned(const Json& j, uint64_t limit, uint64_t& value) {
     double n = j.asNumber(-1); if (!j.isNumber() || !std::isfinite(n) || n < 0 || n > static_cast<double>(limit) || std::floor(n) != n) return false;
     value = static_cast<uint64_t>(n); return true;
-}
-bool SafeJson(const std::string& text) {
-    int depth = 0; bool quote = false, escape = false;
-    for (char c : text) {
-        if (quote) { if (escape) escape = false; else if (c == '\\') escape = true; else if (c == '"') quote = false; }
-        else if (c == '"') quote = true;
-        else if (c == '[' || c == '{') { if (++depth > 16) return false; }
-        else if (c == ']' || c == '}') { if (--depth < 0) return false; }
-    }
-    return depth == 0 && !quote;
 }
 Json Encode(const FrameInput& input) {
     Json j = Json::MakeObject(); j["down"] = std::to_string(input.down); j["pulse"] = std::to_string(input.pulse);
@@ -68,11 +59,22 @@ bool Authority::Valid(const FrameInput& input) const {
     return true;
 }
 bool Authority::SendMessage(uint32_t player, uint8_t kind, const Json& body) {
-    std::string text = body.dump(); if (text.size() > 56000) { Stop("authoritative payload exceeds 56000 bytes"); return false; }
+    std::vector<uint8_t> payload;
+    if (!EncodeJson(body, payload, 56000)) { Stop("authoritative payload exceeds 56000 bytes or is not finite"); return false; }
     ByteWriter writer(56032); writer.WriteU8(kind); writer.WriteU64(epoch_);
-    writer.WriteBlob(reinterpret_cast<const uint8_t*>(text.data()), text.size());
-    if (!writer.Ok() || !send_(player, writer.Data())) { state_ = "stopped"; error_ = "authoritative send queue is full"; return false; }
-    return true;
+    writer.WriteBlob(payload.data(), payload.size());
+    if ((kind == SnapshotMessage || kind == AckMessage) && unreliable_ && writer.Ok()) {
+        // Loss is expected here: a dropped or unqueued payload is superseded by the next one.
+        unreliable_(player, writer.Data());
+        return true;
+    }
+    if (writer.Ok() && send_(player, writer.Data())) return true;
+    // One slow or stalled client must not end a running match for everybody else.
+    if (host_ && Running() && player != local_) {
+        if (std::find(dropped_.begin(), dropped_.end(), player) == dropped_.end()) dropped_.push_back(player);
+        return false;
+    }
+    state_ = "stopped"; error_ = "authoritative send queue is full"; return false;
 }
 void Authority::Broadcast(uint8_t kind, const Json& body) { for (uint32_t player : roster_) if (player != local_) SendMessage(player, kind, body); }
 void Authority::Begin() {
@@ -92,9 +94,8 @@ void Authority::Receive(uint32_t sender, const std::vector<uint8_t>& bytes) {
     if (bytes.size() > 56032) { reject(); return; }
     ByteReader reader(bytes.data(), bytes.size()); uint8_t kind; uint64_t epoch; std::vector<uint8_t> blob;
     if (!reader.ReadU8(kind) || !reader.ReadU64(epoch) || !reader.ReadBlob(blob, 56000) || reader.Remaining()) { reject(); return; }
-    std::string text(blob.begin(), blob.end()); if (!SafeJson(text)) { reject(); return; }
-    Json body; try { body = Json::parse(text); } catch (...) { reject(); return; }
-    if (!body.isObject()) { reject(); return; }
+    Json body;
+    if (!DecodeJson(blob.data(), blob.size(), body) || !body.isObject()) { reject(); return; }
     if (kind == BeginMessage && !host_ && sender == 1 && state_ == "idle" && epoch) {
         if (body["blueprint"].asString() != std::to_string(blueprint_) || body["schema"] != config_.sync.ToJson() ||
             body["snapshotRate"].asNumber() != config_.snapshotRate || body["predictionFrames"].asNumber() != config_.predictionFrames) { Stop("authoritative blueprint/schema mismatch"); return; }
@@ -137,8 +138,10 @@ void Authority::Receive(uint32_t sender, const std::vector<uint8_t>& bytes) {
             Json patch = entity.second; bool replace = patch["replace"].asBool(); patch.erase("replace");
             if (replace) world[entity.first] = patch;
             else for (const auto& field : patch.members()) world[entity.first][field.first] = field.second;
+            // Merged records stay bounded even when every delta adds different fields.
+            if (world[entity.first].size() > 96) { reject(); return; }
         }
-        if (world.size() > 1024 || world.dump().size() > 56000) { reject(); return; }
+        if (world.size() > 1024) { reject(); return; }
         sequence_ = sequence; acknowledged_ = ack; received_[sequence] = world;
         while (received_.size() > 16) received_.erase(received_.begin());
         pendingInputs_.erase(pendingInputs_.begin(), pendingInputs_.upper_bound(ack));
@@ -175,6 +178,11 @@ void Authority::Snapshot(uint64_t frame, const std::map<uint32_t, Json>& worlds)
         if (SendMessage(world.first, SnapshotMessage, body)) peer.worlds[sequence_] = world.second;
         while (peer.worlds.size() > 16) peer.worlds.erase(peer.worlds.begin());
     }
+}
+void Authority::Drop(uint32_t player) {
+    if (!host_ || !Running() || player == local_) return;
+    roster_.erase(std::remove(roster_.begin(), roster_.end(), player), roster_.end());
+    inputs_.erase(player); processed_.erase(player); held_.erase(player); peers_.erase(player); ready_.erase(player);
 }
 std::vector<Authority::Update> Authority::DrainUpdates() { auto updates = std::move(updates_); updates_.clear(); return updates; }
 void Authority::Stop(const std::string& reason) {

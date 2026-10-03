@@ -61,3 +61,9 @@ writes a temporary sibling file and atomically replaces the destination; a faile
 write leaves the previous save intact and returns an error. Invalid save files
 are ignored with a warning. Saving does not enter scene undo history. Tool state
 commands report the mode, slot, data and whether a flush is pending.
+
+While a network match or `sim.record_state` recording is active, persistence is
+deferred so replayed frames cannot write twice: `save.flush` succeeds, keeps the
+slot dirty and remembers the request. The remembered slots are written when the
+match/recording ends (`sim.stop`, or the next `net.host`/`net.join`); a failed
+write there is logged and the slot stays dirty for a later `save.flush`.
