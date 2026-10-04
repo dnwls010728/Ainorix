@@ -100,6 +100,7 @@ end
 | `save.delete(key, slot?)` / `save.flush(slot?)` | Remove a key / persist pending changes. Tools default to memory; `--save-dir` enables files ([SAVE.md](SAVE.md)) |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |
 | `input.mouse()` | Mouse position in the game view (0..1) |
+| `input.viewSize()` | Game view size in pixels (`width, height`): the window, or in headless sessions the project's `window` size until a tool passes another one (`input.click {width, height}`). For layouts that adapt to the screen shape (portrait phones, tablets): `local w, h = input.viewSize()` |
 | `input.touches()` | Every finger on a touch screen: `{ {id=, x=, y=, began=}, ... }` (`x, y` normalized like `input.mouse()`, `began` = put down this step). The first finger also acts as the mouse. `UIButton.key` turns buttons into on-screen keys (docs/UI.md) |
 | `input.wheel()` | Mouse wheel notches this step (> 0 = away from the user); `UIScroll` panels use it by themselves |
 | `tween.to(id, type, values, seconds, opts?)` | Animates numeric, vector (`{x=,y=,z=}` or `{1,2,3}`) and colour fields of a component from their current to the given values. opts: `ease` (`linear`, `inQuad`, `outQuad`, `inOutQuad`, `inCubic`, `outCubic` (default), `outBack`, `outElastic`), `delay`, `loop` (`"loop"` / `"pingpong"`), `scaled` (true = waits while the game is paused; default false, so UI keeps moving), `onDone` (function). Returns a handle |

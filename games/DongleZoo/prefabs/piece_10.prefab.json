@@ -1,0 +1,45 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "piece_10",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Piece",
+      "components": {
+        "RigidBody2D": {
+          "mass": 20.449,
+          "gravityScale": 2.2,
+          "linearDamping": 0.05,
+          "angularDamping": 1.2
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 1.43,
+          "friction": 0.35,
+          "bounciness": 0.12
+        },
+        "Tag": {
+          "tags": "piece"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Face",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "texture": "assets/animals/10.png",
+          "width": 3.6608,
+          "height": 3.6608,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 5
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

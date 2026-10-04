@@ -72,6 +72,13 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
         ResetLocalPeers(); network_.reset(); networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
         projectName_ = project["name"].asString("Untitled");
+        // Headless sessions have no window: the game view starts at the project's window size,
+        // so scripts that adapt to the screen (input.viewSize) see the shape the game ships with.
+        const int viewW = project["window"]["width"].asInt(0), viewH = project["window"]["height"].asInt(0);
+        if (viewW > 0 && viewH > 0) {
+            input_.viewWidth = viewW;
+            input_.viewHeight = viewH;
+        }
         std::string start = project["startScene"].asString("");
         if (start.empty()) {
             NewScene("Main");

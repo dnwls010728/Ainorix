@@ -940,6 +940,15 @@ int L_InputMouse(lua_State* L) {
     return 2;
 }
 
+// input.viewSize() -> width, height of the game view in pixels (the window, or the size tools
+// last gave input.click / input.mouse). Device state like the mouse: layouts adapt to it.
+int L_InputViewSize(lua_State* L) {
+    const InputState& in = Host(L).GetEngine().Input();
+    lua_pushinteger(L, in.viewWidth);
+    lua_pushinteger(L, in.viewHeight);
+    return 2;
+}
+
 // input.mouseDelta() -> dx, dy: relative mouse motion in pixels this step (mouse look)
 int L_InputMouseDelta(lua_State* L) {
     const InputState& in = Host(L).GetEngine().Input();
@@ -1412,7 +1421,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "trail", trailFuncs);
     const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"wheel", L_InputWheel}, {"lockMouse", L_InputLockMouse}, {"look", L_InputLook}, {"setLook", L_InputSetLook},
-                                  {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
+                                  {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {"viewSize", L_InputViewSize}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
     const luaL_Reg timeFuncs[] = {{"frame", L_TimeFrame}, {"now", L_TimeNow}, {"dt", L_TimeDt}, {"date", L_TimeDate}, {nullptr, nullptr}};
     SetFuncs(L, "time", timeFuncs);
