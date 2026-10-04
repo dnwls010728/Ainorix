@@ -75,6 +75,10 @@ function D.product(id)
   end
 end
 
+-- Without a host store the shop opens a demo sheet that grants the product for free.
+-- Set this to false in a released build: products then report "store not available".
+D.DEMO_STORE = true
+
 D.DAILY_REWARDS = { 50, 60, 80, 100, 120, 150, 300 } -- coins for day 1..7 of a streak
 D.COINS_PER_SCORE = 1 / 30 -- coins earned at the end of a game
 D.NEW_ANIMAL_COINS = 20 -- first time an animal is made

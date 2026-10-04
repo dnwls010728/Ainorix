@@ -685,6 +685,30 @@ Calendar date scripts see through time.date() (daily rewards). set fixes it for 
 |---|---|---|---|
 | `set` | string |  | YYYY-MM-DD to pin the date, or "" to use the machine's clock again. |
 
+## host
+
+### `host.state`
+
+The host bridge (Lua host.call / host.poll): the calls the game made to its embedding app (ads, purchases), messages waiting for host.poll(), the names tools accept and the user language.
+
+### `host.configure`
+
+Stand in for the embedding app in a tool session: which host.call names report as handled, and the user language.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `accept` | array |  | Names host.call returns true for; ["*"] accepts every name, [] none (the default: games use their fallback). |
+| `language` | string |  | ISO 639-1 code host.language() returns, e.g. "ko". |
+
+### `host.reply`
+
+Deliver a message from the embedding app to the game, as its ad SDK or store would (the game reads it with host.poll()).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `name` | string | yes | Message name, e.g. "ads.result". |
+| `data` | object |  | Payload the game receives as message.data. |
+
 ## game
 
 ### `game.state`

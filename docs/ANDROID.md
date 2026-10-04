@@ -214,6 +214,20 @@ Run from the repository root. Keep the working directory at the staged root
 so the engine can find `templates/`; test output is written beneath its
 `build/` folder. Add `adb -s <serial>` to select a device when several are connected.
 
+### Rebuild 2026-10-04
+
+Both ABIs were rebuilt with NDK r28c from the Dongle Zoo branch (host bridge, `input.viewSize`, VFX
+toolkit and everything pending since the 2026-10-02 runtime); the SDK build-tools and NDK were
+downloaded from dl.google.com into the ignored `build/android-sdk/` (`ANDROID_HOME` points there).
+`games/DongleZoo` packages as an APK and an App Bundle; `apksigner verify`, `aapt2 dump badging` and
+`zipalign -c -P 16 4` pass. `oe package --android` now reads `project.json` `android {package, ...}`
+reliably: the settings were read through a reference that a later lookup could invalidate, so the
+default `com.ownengine.<name>` id was used instead.
+
+- [ ] Run this runtime on a device or emulator (none on this host): start, touch, audio, lifecycle,
+  and the features newer than the last emulator run (Light2D, sorting layers, particles curves,
+  shader graphs, host bridge returning false, `input.viewSize`).
+
 ## Not done yet
 
 - An analog on-screen joystick component (buttons with `key` cover digital controls).

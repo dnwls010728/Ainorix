@@ -6,16 +6,15 @@ no NDK. APK signing still needs SDK build-tools and Java; App Bundle signing
 needs Java.
 
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
-- Built on 2026-10-02 with Android NDK r28c (28.2.13676358), Clang 19.0.1,
-  Release, API 26, static libc++, GLES3 and AAudio.
-- Source: 0ea84f2 (P6.3a directional FXAA and highlight bloom). Both ABIs rebuilt
-  with regenerated shaders. Includes reflected PostProcess settings, optional
-  vignette, HDR scene buffers, exposure, Reinhard tone mapping, two-pass bloom, directional FXAA and neutral
-  defaults, alongside P1 saves, P2 animation, P3 particle billboards/sample
-  effects and P4 gamepad adapters. Windows tests pass 83 cases;
-  Node/WASM passes 79 cases.
-  D3D11/software comparison was checked. Android effect execution remains
-  unverified. P5 touch changes are web-specific and included in the web player.
+- Built on 2026-10-04 with Android NDK r28c (28.2.13676358), Release, API 26, static libc++,
+  GLES3 and AAudio.
+- Source: the Dongle Zoo branch (host bridge, `input.viewSize`) on top of the VFX toolkit, the
+  Water/HD-2D work, protocol v4 networking, surface shader graphs and the P7 engine changes: this
+  rebuild closes the "pending rebuild" notes below. Windows tests pass 189 cases.
+- Checked: both ABIs link; `games/DongleZoo` packaged as APK (`apksigner verify`: v2 signature,
+  `aapt2 dump badging`, `zipalign -c -P 16 4`) and as an App Bundle with the debug key.
+  **Not run on a device or emulator**: none was available on this host, so every feature newer than
+  the 2026-10-02 emulator run in docs/ANDROID.md is unverified on Android.
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is
   exported. Android 15 x86_64 emulator verification is recorded in
   [docs/ANDROID.md](../../docs/ANDROID.md).

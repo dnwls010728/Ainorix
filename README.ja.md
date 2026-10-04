@@ -5,6 +5,7 @@
 AI が人と同じように扱い、検証できるように設計した C++17 ゲームエンジンです。人のためのエディターと AI のためのインターフェース (CLI・HTTP・MCP) が**同じコマンド API** を共有します。
 
 - トゥーンシェーダーテスト: `samples/WuwaToon` — 鳴潮の公開コミュニティ資料を参考にした独自モデル、Toon/PBR/法線比較、輪郭線と回転操作。実装範囲と出典: [docs/TOON.md](docs/TOON.md)
+- リリース向けモバイルゲーム: `games/DongleZoo` — 縦画面マージパズル「Dongle Zoo」（丸い動物を瓶に落とし、同じ動物同士が合体）。アイテム・コイン・ショップ・図鑑・デイリーミッション・ログインボーナス、英語/韓国語。広告と課金はホストブリッジ（`host.call`）経由、ホストが無い場合はデモ表示。企画書（韓国語）: [docs/DONGLEZOO.md](docs/DONGLEZOO.md)。実行: `oe run games/DongleZoo --width 540 --height 960`
 - 完成ゲームサンプル: `samples/Wickbound` — 光が資源の10分サバイバーローグライト。プレハブとエンティティごとのスクリプト、Box2D のボディ・センサー・衝突レイヤー、`Light2D`/`Darkness2D` の2Dライティング、加算ブレンドのスプライトとパーティクル、ソートレイヤー、メニュー/ランシーンと UI 階層・モーダル、`game.pause`、セーブとデイリーギフト（`time.date`）、英語/韓国語テキスト。実行: `oe run samples/Wickbound`
 - UI とエディター: スクロールビュー（`UIScroll`）、登場モーション（`UIMotion`）、ボタンのホバースケール、Lua `tween`、モーダル入力ブロック - [docs/UI.md](docs/UI.md)。停止中の Game ビューで UI の選択・移動・サイズ変更、ヒエラルキーの表示切り替え - [docs/EDITOR.md](docs/EDITOR.md)
 - エディタ機能: 階層クリップボード、変更履歴、プレハブのソース編集、アセットサムネイル、Windowsファイルダイアログ — [docs/EDITOR.md](docs/EDITOR.md)

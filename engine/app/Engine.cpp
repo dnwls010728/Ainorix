@@ -853,6 +853,29 @@ void Engine::RunPostedJobs() {
     for (auto& job : pending) job();
 }
 
+bool Engine::HostCall(const std::string& name, const Json& data) {
+    if (replaying_) return false;  // a replayed frame already made this call
+    bool handled = hostAccept_.count("*") > 0 || hostAccept_.count(name) > 0;
+    if (!handled && hostHandler_) handled = hostHandler_(name, data.dump());
+    if (hostCalls_.size() >= kMaxHostCalls) hostCalls_.erase(hostCalls_.begin());
+    hostCalls_.push_back({name, data, frame_, handled});
+    return handled;
+}
+
+void Engine::PushHostMessage(const std::string& name, const Json& data) {
+    if (hostInbox_.size() >= kMaxHostMessages) {
+        OE_LOG_WARN("host", "host message queue full, dropping the oldest message (%s)", hostInbox_.front().name.c_str());
+        hostInbox_.erase(hostInbox_.begin());
+    }
+    hostInbox_.push_back({name, data});
+}
+
+std::vector<Engine::HostMessage> Engine::TakeHostMessages() {
+    std::vector<HostMessage> out;
+    out.swap(hostInbox_);
+    return out;
+}
+
 std::string Engine::Today() const {
     if (!dateOverride_.empty()) return dateOverride_;
     const std::time_t now = std::time(nullptr);

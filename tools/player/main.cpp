@@ -59,6 +59,12 @@ struct Player {
     // One iteration of the game loop. Returns false once the window closed.
     bool Frame() {
         if (!window->PumpEvents(engine.Input())) return false;
+        for (auto& message : PlatformHostPoll()) {
+            std::string parseError;
+            Json data = Json::parse(message.second, &parseError);
+            if (parseError.empty()) engine.PushHostMessage(message.first, data);
+            else OE_LOG_WARN("host", "ignored host message %s: %s", message.first.c_str(), parseError.c_str());
+        }
         double now = PlatformTimeSeconds();
         engine.Tick(now - last);
         last = now;
@@ -135,6 +141,9 @@ int RunPlayer(const std::string& dir) {
     player->renderScale = std::clamp(win["renderScale"].asFloat(1.0f), 0.25f, 1.0f);
     player->maxWidth = std::max(160, win["maxRenderWidth"].asInt(1280));
 
+    engine.SetHostHandler(PlatformHostCall);
+    engine.SetUserLanguage(PlatformUserLanguage());
+    PlatformHostPoll();  // web: installs Module.oeHostSend before the first frame
     engine.EnableAudioOutput();
     engine.Play();
     player->last = PlatformTimeSeconds();

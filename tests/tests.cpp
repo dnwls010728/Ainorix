@@ -9724,6 +9724,291 @@ TEST(HttpServerOnPlatformSockets) {
 #endif
 }
 
+TEST(HostBridgeAndViewSize) {
+    // host.call / host.poll: a game asks the embedding app for ads or purchases and reads its answer;
+    // input.viewSize: the game view, which starts at the project's window size in headless sessions.
+    const std::string dir = TempProject("host_bridge");
+    std::string text;
+    CHECK(ReadTextFile(dir + "/project.json", text));
+    Json project = Json::parse(text);
+    project["window"]["width"] = 540;
+    project["window"]["height"] = 960;
+    CHECK(WriteTextFile(dir + "/project.json", project.dump(2)));
+    Engine e;
+    std::string error;
+    CHECK(e.Open(dir, &error));
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    Json size = eval("local w, h = input.viewSize() return {w, h}");
+    CHECK(size[0].asInt() == 540 && size[1].asInt() == 960);
+    CHECK(Call(e, "input.mouse", R"J({"x":10,"y":10,"width":800,"height":600})J")["ok"].asBool());
+    size = eval("local w, h = input.viewSize() return {w, h}");
+    CHECK(size[0].asInt() == 800 && size[1].asInt() == 600);
+
+    // No host: the call is recorded and reports unhandled, so the game uses its fallback.
+    CHECK(!eval("return host.call('ads.rewarded', {placement = 'revive'})").asBool());
+    CHECK(eval("return host.language()").asString() == "en");
+    CHECK(eval("return #host.poll()").asInt() == 0);
+    Json state = Call(e, "host.state", "{}")["result"];
+    CHECK(state["calls"].size() == 1 && state["calls"][0]["name"].asString() == "ads.rewarded");
+    CHECK(!state["calls"][0]["handled"].asBool() && state["calls"][0]["data"]["placement"].asString() == "revive");
+
+    // A tool stands in for the host, then answers like an ad SDK would.
+    CHECK(Call(e, "host.configure", R"J({"accept":["ads.rewarded"],"language":"ko"})J")["result"]["language"].asString() == "ko");
+    CHECK(eval("return host.call('ads.rewarded')").asBool());
+    CHECK(!eval("return host.call('iap.purchase', {product = 'x'})").asBool());
+    CHECK(eval("return host.language()").asString() == "ko");
+    CHECK(Call(e, "host.reply", R"J({"name":"ads.result","data":{"ok":true,"n":3}})J")["result"]["pending"].asInt() == 1);
+    CHECK(!Call(e, "host.reply", R"J({"name":""})J")["ok"].asBool());
+    CHECK(!Call(e, "host.configure", R"J({"accept":"all"})J")["ok"].asBool());
+    Json got = eval("local m = host.poll() return {#m, m[1].name, m[1].data.ok, m[1].data.n, #host.poll()}");
+    CHECK(got[0].asInt() == 1 && got[1].asString() == "ads.result" && got[2].asBool() && got[3].asInt() == 3 && got[4].asInt() == 0);
+
+    // The platform handler is asked when no tool accepts the name; both queues are bounded.
+    std::string seen;
+    e.SetHostAccept({});
+    e.SetHostHandler([&](const std::string& name, const std::string& json) {
+        seen = name + " " + json;
+        return name == "game.ready";
+    });
+    CHECK(eval("return host.call('game.ready', {version = 2})").asBool());
+    CHECK(seen.find("game.ready") == 0 && seen.find("\"version\"") != std::string::npos);
+    CHECK(!eval("return host.call('other')").asBool());
+    for (int i = 0; i < 300; ++i) e.PushHostMessage("m", Json::MakeObject());
+    CHECK(e.PendingHostMessages() == Engine::kMaxHostMessages);
+    for (int i = 0; i < 100; ++i) e.HostCall("n", Json::MakeObject());
+    CHECK(e.HostCalls().size() == Engine::kMaxHostCalls);
+
+    // web/ files belong to the page, not to the game data.
+    CHECK(WriteTextFile(dir + "/web/host.js", "window.OEHost = {};"));
+    for (const std::string& file : GameFiles(dir)) CHECK(file.rfind("web/", 0) != 0);
+    RemoveAll(dir);
+}
+
+TEST(DongleZooGame) {
+    // The merge puzzle in games/DongleZoo, played like a user: menu, aiming and dropping with the
+    // pointer, merging, items, game over with a rewarded continue, coins, missions and the daily gift.
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/games/DongleZoo";
+    CHECK(e.Open(project, &error));
+    for (const std::string& file : GameFiles(project)) {
+        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
+        Json args = Json::MakeObject();
+        args["path"] = file;
+        Json result = e.Call("script.check", args)["result"];
+        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
+    }
+    CHECK(Call(e, "time.date", R"J({"set":"2031-03-03"})J")["ok"].asBool());
+    const int W = 540, H = 960;
+    auto step = [&](int frames) {
+        Json args = Json::MakeObject();
+        args["frames"] = frames;
+        CHECK(e.Call("sim.step", args)["ok"].asBool());
+    };
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        args["entity"] = "App";
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    auto click = [&](const char* name) {  // a real pointer click on the named button
+        Json args = Json::MakeObject();
+        args["width"] = W; args["height"] = H;
+        Json layout = e.Call("ui.layout", args)["result"];
+        const EntityId id = e.GetScene().FindByName(name);
+        bool found = false;
+        for (const Json& element : layout["elements"].items()) {
+            if (element["id"].asInt() != static_cast<int>(id)) continue;
+            args["x"] = element["center"][0]; args["y"] = element["center"][1];
+            CHECK(e.Call("input.click", args)["result"]["button"].asInt() == static_cast<int>(id));
+            found = true;
+        }
+        CHECK(found);
+        step(3);
+    };
+    auto mouse = [&](float x, bool down) {
+        Json args = Json::MakeObject();
+        args["x"] = x; args["y"] = 500; args["width"] = W; args["height"] = H;
+        args["button"] = "MouseLeft"; args["down"] = down;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+    };
+    auto drop = [&](float x) {  // press, hold and release in the jar
+        mouse(x, true);
+        step(2);
+        mouse(x, false);
+        step(45);
+    };
+    const char* board = "local B = require('scripts.lib.board') ";
+    const char* meta = "local M = require('scripts.lib.meta') ";
+
+    step(5);
+    CHECK(eval("return self.mode").asString() == "home");
+    CHECK(eval("local w = input.viewSize() return w").asInt() == 540);
+    // The layout follows the screen shape: phones scale with the width, wide screens with the height.
+    CHECK(std::fabs(e.GetScene().Get<Camera>(e.GetScene().FindByName("Camera"))->orthoSize - 1280.0f / 96.0f / 2.0f) < 1e-3f);
+
+    // Daily gift, once per day.
+    click("Home:btn:daily");
+    CHECK(eval("return self.dialog").asString() == "daily");
+    click("Daily:claim");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 50);
+    CHECK(!eval(std::string(meta) + "return M.dailyAvailable()").asBool());
+    click("Dlg:daily:close");
+    CHECK(eval("return self.dialog").isNull());
+
+    // Play: two chicks dropped on the same spot merge into a hamster worth one point.
+    click("Home:play");
+    CHECK(eval("return self.mode").asString() == "play");
+    eval("self.cur, self.nxt = 1, 1 self:refreshHolder()");
+    drop(150);
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == 1);
+    eval("self.nxt = 4");
+    drop(150);
+    step(30);
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == 1);
+    CHECK(eval(std::string(board) + "return B.pieces[B.order[1]].tier").asInt() == 2);
+    CHECK(eval("return self.score").asInt() == 1);
+    CHECK(eval(std::string(meta) + "return M.data.seen[2]").asBool());
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 70);  // +20 for a new friend
+    // The aimed animal lands where the pointer was, inside the jar walls.
+    drop(520);
+    step(40);
+    Json where = eval(std::string(board) + "local x, y = B.pos(B.order[2]) return {x, y}");
+    CHECK(where[0].asFloat() > 2.5f && where[0].asFloat() < 3.3f && where[1].asFloat() < -4.0f);
+
+    // Items: the hammer removes the tapped animal, shake keeps them all, the wand grows one.
+    const int before = eval(std::string(board) + "return B.count()").asInt();
+    click("Item:hammer");
+    CHECK(eval("return self.target").asString() == "hammer");
+    Json at = eval(std::string(board) + "local x, y = B.pos(B.order[1]) return {x, y, self.ortho, self.aspect, self.camY}");
+    {
+        // world -> screen pixels, the inverse of App:pointer()
+        const float ortho = at[2].asFloat(), aspect = at[3].asFloat(), camY = at[4].asFloat();
+        Json args = Json::MakeObject();
+        args["x"] = (at[0].asFloat() / (2 * ortho * aspect) + 0.5f) * W;
+        args["y"] = (0.5f - (at[1].asFloat() - camY) / (2 * ortho)) * H;
+        args["width"] = W; args["height"] = H; args["button"] = "MouseLeft"; args["down"] = true;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+        step(2);
+        args["down"] = false;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+        step(2);
+    }
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == before - 1);
+    CHECK(eval(std::string(meta) + "return M.data.items.hammer").asInt() == 1);
+    CHECK(eval("return self.target").isNull());
+    click("Item:shake");
+    CHECK(eval(std::string(meta) + "return M.data.items.shake").asInt() == 1);
+    step(90);
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == before - 1);
+
+    // Pause freezes the jar; resume continues.
+    click("HUD:pause");
+    CHECK(eval("return self.dialog").asString() == "pause" && eval("return game.paused()").asBool());
+    click("Pause:resume");
+    CHECK(!eval("return game.paused()").asBool());
+
+    // Animals resting above the line end the game after two seconds.
+    // (a balanced column of the three largest reaches past it)
+    eval(std::string(board) + "B.clear() B.spawn(11, 0, -3.38) self.score = 600");
+    step(30);
+    eval(std::string(board) + "B.spawn(10, 0, -0.3)");
+    step(30);
+    eval(std::string(board) + "B.spawn(9, 0, 2.4)");
+    for (int i = 0; i < 12 && eval("return self.mode").asString() == "play"; ++i) step(60);
+    CHECK(eval("return self.mode").asString() == "over");
+    step(80);
+    CHECK(eval("return self.dialog").asString() == "over");
+    const int score = eval("return self.score").asInt();
+    CHECK(score >= 600);
+
+    // Continue with a rewarded ad (demo overlay): the top of the jar is cleared, once per game.
+    click("Over:revive");
+    CHECK(eval("return require('scripts.lib.ads').busy()").asBool());
+    step(170);
+    CHECK(eval("return self.mode").asString() == "play" && eval("return self.revived").asBool());
+    eval("self:gameOver()");
+    step(80);
+    CHECK(eval("return self.dialog").asString() == "over");
+    CHECK(!e.GetScene().Get<UIButton>(e.GetScene().FindByName("Over:revive"))->visible);
+    const int coins = eval(std::string(meta) + "return M.data.coins").asInt();
+    CHECK(coins == 70 + score / 30);
+    CHECK(eval(std::string(meta) + "return M.data.best").asInt() == score);
+
+    // The same flow through a real host: the game waits for the SDK's answer.
+    CHECK(Call(e, "host.configure", R"J({"accept":["ads.rewarded"]})J")["ok"].asBool());
+    click("Over:double");
+    CHECK(eval("return require('scripts.lib.ads').busy()").asBool());
+    step(30);
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == coins);
+    CHECK(Call(e, "host.reply", R"J({"name":"ads.result","data":{"ok":true}})J")["ok"].asBool());
+    step(3);
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == coins + score / 30);
+    Json calls = Call(e, "host.state", "{}")["result"]["calls"];
+    CHECK(calls[static_cast<int>(calls.size()) - 1]["data"]["placement"].asString() == "double_coins");
+    CHECK(Call(e, "host.configure", R"J({"accept":[]})J")["ok"].asBool());
+
+    // Home, then the shop: a background costs coins and changes the scene.
+    click("Over:home");
+    CHECK(eval("return self.mode").asString() == "home" && eval(std::string(board) + "return B.count()").asInt() == 0);
+    eval(std::string(meta) + "M.data.coins = 900 self:refreshWallet()");
+    click("Home:btn:shop");
+    click("Theme:beach:btn");
+    CHECK(eval(std::string(meta) + "return M.data.theme").asString() == "beach");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 100);
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Background"))->texture == "assets/bg/beach.png");
+    click("Theme:night:btn");  // not enough coins
+    CHECK(eval(std::string(meta) + "return M.data.theme").asString() == "beach");
+    click("Dlg:shop:close");
+
+    // Missions: three per day, the same on that date; progress pays out once.
+    Json missions = eval(std::string(meta) + "return M.data.missions.ids");
+    CHECK(missions.size() == 3);
+    eval(std::string(meta) + "local id = M.data.missions.ids[1] M.data.missions.progress[id] = 99999");
+    click("Home:btn:missions");
+    click("Mission1:btn");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() > 100);
+    const int afterMission = eval(std::string(meta) + "return M.data.coins").asInt();
+    eval("self:onAction('claimMission', 1)");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == afterMission);
+    click("Dlg:missions:close");
+
+    // Language switch relabels the UI; the save keeps everything for the next launch.
+    click("Home:btn:settings");
+    const std::string label = e.GetScene().Get<UIButton>(e.GetScene().FindByName("Home:play"))->text;
+    click("Set:lang");
+    CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Home:play"))->text != label);
+    Json saved = Call(e, "save.state", "{}")["result"];
+    CHECK(saved.dump().find("donglezoo.save.v1") != std::string::npos);
+    CHECK(Call(e, "script.errors", "{}")["result"].size() == 0);
+
+    // The whole session is deterministic: a second engine replaying the first inputs matches.
+    auto play = [&](Engine& engine) {
+        std::string openError;
+        CHECK(engine.Open(project, &openError));
+        Call(engine, "time.date", R"J({"set":"2031-03-03"})J");
+        Call(engine, "sim.step", R"J({"frames":5})J");
+        Call(engine, "script.eval", R"J({"code":"self:onAction('play')","entity":"App"})J");
+        for (int i = 0; i < 12; ++i) {
+            Json args = Json::MakeObject();
+            args["x"] = 60 + (i * 97) % 420; args["y"] = 500; args["width"] = W; args["height"] = H;
+            args["button"] = "MouseLeft"; args["down"] = true;
+            engine.Call("input.mouse", args);
+            Call(engine, "sim.step", R"J({"frames":2})J");
+            args["down"] = false;
+            engine.Call("input.mouse", args);
+            Call(engine, "sim.step", R"J({"frames":40})J");
+        }
+        return engine.GetScene().ToJson().dump();
+    };
+    Engine a, b;
+    CHECK(play(a) == play(b));
+}
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

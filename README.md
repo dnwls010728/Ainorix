@@ -5,6 +5,7 @@
 AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
 
 - 툰 셰이더 테스트: `samples/WuwaToon` — 공개 명조 커뮤니티 셰이더 자료 참고, 자체 생성 모델, Toon/PBR/노멀 비교·윤곽선·회전. 구현 범위와 출처: [docs/TOON.md](docs/TOON.md)
+- 출시용 모바일 게임: `games/DongleZoo` — 세로형 머지 퍼즐 "동글 동물원"(동물을 병에 떨어뜨려 같은 것끼리 합치기). 아이템·코인·상점·도감·일일 미션·출석 보상, 한/영, 광고·결제는 호스트 브리지(`host.call`)로 연결하고 없으면 데모로 동작. 기획서: [docs/DONGLEZOO.md](docs/DONGLEZOO.md). 실행: `oe run games/DongleZoo --width 540 --height 960`
 - 완성형 게임 샘플: `samples/Wickbound` — 10분 서바이버 로그라이트(빛이 자원). 프리팹과 엔티티별 스크립트, Box2D 바디·센서·충돌 레이어, `Light2D`/`Darkness2D` 2D 조명, 가산 블렌딩 스프라이트·파티클, 정렬 레이어, 메뉴/런 씬과 UI 계층·모달, `game.pause`, 세이브와 일일 선물(`time.date`), 한/영 텍스트. 실행: `oe run samples/Wickbound`
 - UI: 스크롤 뷰(`UIScroll`), 등장 모션(`UIMotion`), 버튼 호버 스케일, Lua `tween`, 모달 입력 차단 — [docs/UI.md](docs/UI.md)
 - 에디터 보강: 정지 상태 Game 뷰에서 UI 선택·이동·크기 조절, 하이어라키 표시/숨김 토글, 하이어라키 클립보드, 변경 이력, 프리팹 소스 편집, 에셋 썸네일, Windows 파일 대화상자 — [docs/EDITOR.md](docs/EDITOR.md)

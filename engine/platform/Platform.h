@@ -119,6 +119,12 @@ const char* PlatformName();
 double PlatformTimeSeconds();
 void PlatformSleep(double seconds);
 bool PlatformOpenUrl(const std::string& url);
+// Host bridge (Engine::HostCall, Lua host.call): passes a request of the game to the application
+// that embeds the player - on the web the page's `window.OEHost.call(name, json)` - and returns
+// whether it handles that name. Platforms without a host return false.
+bool PlatformHostCall(const std::string& name, const std::string& json);
+// Messages the host sent to the game since the last call: (name, JSON payload text).
+std::vector<std::pair<std::string, std::string>> PlatformHostPoll();
 std::string ExecutableDirectory();
 // Atomically renames a file over its destination (both on the same filesystem).
 bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error);

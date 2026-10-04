@@ -816,6 +816,10 @@ void PlatformSleep(double seconds) {
 }
 
 // Intent.ACTION_VIEW: opens the browser (or the app registered for the link).
+// No embedding application on this platform yet (a store SDK layer would answer here).
+bool PlatformHostCall(const std::string&, const std::string&) { return false; }
+std::vector<std::pair<std::string, std::string>> PlatformHostPoll() { return {}; }
+
 bool PlatformOpenUrl(const std::string& url) {
     return WithJni([&](JNIEnv* env, jobject activity) {
         jclass uriClass = env->FindClass("android/net/Uri");

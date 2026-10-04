@@ -96,6 +96,9 @@ end
 | `timer.after(s, fn)` / `timer.every(s, fn)` / `timer.cancel(id)` | Timers on simulated time |
 | `game.set(k, v)` / `game.get(k)` / `game.loadScene(path)` / `game.scene()` | Cross-scene data and scene changes |
 | `game.pause(on?)` / `game.paused()` | Gameplay pause for menus and dialogs: scripts and UI keep running with `dt = 0`; physics, built-in systems, timers, particles and simulated time wait. Cleared by scene changes and `sim.stop` |
+| `host.call(name, data?)` | Asks the application that embeds the player (the web page's `window.OEHost`, later a store SDK layer) for something the engine does not do: an ad, a purchase. Returns `true` when the host handles `name`, `false` when there is none - then use your own fallback. See [GAMEPLAY.md](GAMEPLAY.md#host-application-ads-purchases) |
+| `host.poll()` | Messages from the host since the last call: `{ {name=, data=}, ... }` (the ad result, a finished purchase). Call it every frame while waiting |
+| `host.language()` | The user's language as an ISO 639-1 code (`"en"`, `"ko"`, ...; `"en"` when unknown) for the first-launch language |
 | `save.get(key, default?, slot?)` / `save.set(key, value, slot?)` | Save slots; finite JSON values only. Default slot is `default` |
 | `save.delete(key, slot?)` / `save.flush(slot?)` | Remove a key / persist pending changes. Tools default to memory; `--save-dir` enables files ([SAVE.md](SAVE.md)) |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |

@@ -389,6 +389,7 @@ int CmdRun(const Args& a) {
     if (!SetupRenderer(engine, a, window.get(), code)) return code;
     HttpServer server;
     if (a.Has("--port") && !StartServer(server, engine, a.GetInt("--port", 7777))) return Fail("server_failed", "cannot start API server");
+    engine.SetUserLanguage(PlatformUserLanguage());
     if (!a.Has("--mute")) engine.EnableAudioOutput();
     engine.Play();
     std::atomic<bool> quit{false};
@@ -801,7 +802,8 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     Json project;
     std::string text, err;
     if (ReadTextFile(JoinPath(projectDir, "project.json"), text)) project = Json::parse(text);
-    const Json& android = project["android"];
+    // A copy: project["network"] below may add a key, which moves the object's members.
+    const Json android = project["android"];
 
     std::vector<std::string> abis;
     std::string runtime = FindAndroidRuntime(abis);
@@ -1051,6 +1053,18 @@ int CmdPackage(const Args& a) {
             page += HtmlEscape(title);
             pos = at + 9;
         }
+        // The project's web/ folder holds files for the page itself (not game data). web/host.js is
+        // the host bridge adapter (window.OEHost: ads, purchases); the page loads it before the player.
+        const std::string webDir = JoinPath(projectDir, "web");
+        std::vector<std::string> pageFiles;
+        if (IsDirectory(webDir)) {
+            for (const std::string& src : ListFiles(webDir, "", true)) pageFiles.push_back(RelativePath(src, webDir));
+        }
+        const bool hostScript = std::find(pageFiles.begin(), pageFiles.end(), "host.js") != pageFiles.end();
+        const std::string hostMark = "<!--{{HOST}}-->";
+        if (size_t at = page.find(hostMark); at != std::string::npos) {
+            page.replace(at, hostMark.size(), hostScript ? "<script src=\"host.js\"></script>" : "");
+        }
         double bytes = 0;
         std::string err;
         if (!WriteGamePak(projectDir, files, JoinPath(out, "game.pak"), &err, &bytes)) return Fail("write_failed", err);
@@ -1058,12 +1072,22 @@ int CmdPackage(const Args& a) {
         for (const char* f : {"oe_player.js", "oe_player.wasm"}) {
             if (!CopyFileTo(JoinPath(runtime, f), JoinPath(out, f))) return Fail("write_failed", std::string("cannot write ") + f);
         }
+        for (const std::string& f : pageFiles) {
+            if (f == "index.html" || f == "game.pak" || f == "oe_player.js" || f == "oe_player.wasm") {
+                return Fail("invalid_web_file", "web/" + f + " would replace a file of the web package", "Rename it; web/ is for extra page files such as host.js.");
+            }
+            if (!CopyFileTo(JoinPath(webDir, f), JoinPath(out, f))) return Fail("write_failed", "cannot write " + f);
+        }
         Json res = Json::MakeObject();
         res["ok"] = true;
         res["result"]["dir"] = out;
         res["result"]["index"] = JoinPath(out, "index.html");
         res["result"]["webRuntime"] = runtime;
         res["result"]["files"] = fileList;
+        Json pageList = Json::MakeArray();
+        for (const std::string& f : pageFiles) pageList.push(f);
+        res["result"]["pageFiles"] = pageList;
+        res["result"]["hostScript"] = hostScript;
         res["result"]["dataBytes"] = bytes;
         res["result"]["next"] = "Test locally with `oe serve " + out + "`, then upload the folder to any static web host "
                                 "(itch.io: zip it and upload as an HTML game; GitHub Pages, Netlify, ...).";

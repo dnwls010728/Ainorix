@@ -43,6 +43,44 @@ EM_JS(void, oe_web_show_error, (const char* title, const char* message), {
 
 EM_JS(void, oe_web_open_url, (const char* url), { window.open(UTF8ToString(url), "_blank"); });
 
+// Host bridge: the page may define window.OEHost = { call: function (name, data) -> true when handled }.
+// It answers later with Module.oeHostSend(name, data), which queues a message for host.poll().
+EM_JS(int, oe_web_host_call, (const char* name, const char* json), {
+    var host = window.OEHost;
+    if (!host || typeof host.call !== "function") return 0;
+    var data = {};
+    try { data = JSON.parse(UTF8ToString(json)); } catch (e) {}
+    try { return host.call(UTF8ToString(name), data) ? 1 : 0; }
+    catch (e) { console.error("OEHost.call failed", e); return 0; }
+});
+
+// Installs Module.oeHostSend(name, data): messages wait in a JS array until the engine polls.
+EM_JS(void, oe_web_host_init, (), {
+    Module.oeHostQueue = [];
+    Module.oeHostSend = function (name, data) {
+        if (Module.oeHostQueue.length >= 256) Module.oeHostQueue.shift();
+        Module.oeHostQueue.push([String(name), JSON.stringify(data === undefined ? {} : data)]);
+    };
+});
+
+// Pops the oldest queued message as name, a line feed, then its JSON (malloc'd, the caller frees) or returns 0.
+EM_JS(char*, oe_web_host_take, (), {
+    var q = Module.oeHostQueue;
+    if (!q || !q.length) return 0;
+    var m = q.shift();
+    // (no escape sequences here: EM_JS passes this text through the C preprocessor)
+    var newline = String.fromCharCode(10);
+    var text = m[0].split(newline).join(" ") + newline + m[1], size = lengthBytesUTF8(text) + 1, result = _malloc(size);
+    if (result) stringToUTF8(text, result, size);
+    return result;
+});
+
+EM_JS(char*, oe_web_language, (), {
+    var text = (navigator.language || "en").slice(0, 2).toLowerCase(), size = lengthBytesUTF8(text) + 1, result = _malloc(size);
+    if (result) stringToUTF8(text, result, size);
+    return result;
+});
+
 EM_JS(int, oe_web_input_focused, (), { return !document.hidden && document.hasFocus() ? 1 : 0; });
 
 // Software-renderer fallback (no WebGL2): RGBA pixels -> 2D canvas, stretched to the canvas size.
@@ -357,13 +395,36 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string& title, int, int)
 
 void PlatformEnableHighDpi() {}
 
-std::string PlatformUserLanguage() { return "en"; }  // not needed by the web player yet
+std::string PlatformUserLanguage() {
+    char* text = oe_web_language();
+    std::string language = text ? text : "en";
+    free(text);
+    return language.size() == 2 ? language : "en";
+}
 
 const char* PlatformName() { return "web"; }
 
 double PlatformTimeSeconds() { return emscripten_get_now() / 1000.0; }
 
 void PlatformSleep(double) {}  // the browser drives the loop; blocking would freeze the page
+
+bool PlatformHostCall(const std::string& name, const std::string& json) { return oe_web_host_call(name.c_str(), json.c_str()) != 0; }
+
+std::vector<std::pair<std::string, std::string>> PlatformHostPoll() {
+    static bool installed = false;
+    if (!installed) {
+        installed = true;
+        oe_web_host_init();
+    }
+    std::vector<std::pair<std::string, std::string>> out;
+    while (char* text = oe_web_host_take()) {
+        std::string message = text;
+        free(text);
+        size_t split = message.find('\n');
+        if (split != std::string::npos) out.push_back({message.substr(0, split), message.substr(split + 1)});
+    }
+    return out;
+}
 
 bool PlatformOpenUrl(const std::string& url) {
     oe_web_open_url(url.c_str());

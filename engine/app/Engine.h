@@ -93,6 +93,39 @@ public:
     void SetDateOverride(const std::string& date) { dateOverride_ = date; }
     const std::string& DateOverride() const { return dateOverride_; }
 
+    // ----- Host application (the web page, a store SDK layer) -----------------
+    // Lets a game ask the app that embeds the player for things the engine does not do itself
+    // (ads, purchases, analytics): host.call(name, data) goes out, answers come back as messages
+    // the game reads with host.poll(). Like the mouse it is device state, outside the
+    // deterministic simulation; nothing is sent while a network match replays frames.
+    struct HostMessage {
+        std::string name;
+        Json data;
+    };
+    struct HostCallRecord {
+        std::string name;
+        Json data;
+        uint64_t frame = 0;
+        bool handled = false;
+    };
+    // The player installs the platform's handler (PlatformHostCall); it returns false when the
+    // host does not know `name`, so games fall back to their own behaviour.
+    void SetHostHandler(std::function<bool(const std::string& name, const std::string& json)> handler) { hostHandler_ = std::move(handler); }
+    // Tools pretend a host handles these names ("*" = every name) to test the hosted path headless.
+    void SetHostAccept(std::set<std::string> names) { hostAccept_ = std::move(names); }
+    const std::set<std::string>& HostAccept() const { return hostAccept_; }
+    bool HostCall(const std::string& name, const Json& data);
+    // Queues a message from the host; the oldest are dropped beyond kMaxHostMessages.
+    void PushHostMessage(const std::string& name, const Json& data);
+    std::vector<HostMessage> TakeHostMessages();
+    size_t PendingHostMessages() const { return hostInbox_.size(); }
+    const std::vector<HostCallRecord>& HostCalls() const { return hostCalls_; }
+    // ISO 639-1 language of the user ("en" when unknown); the player sets it from the platform.
+    const std::string& UserLanguage() const { return userLanguage_; }
+    void SetUserLanguage(const std::string& language) { userLanguage_ = language.empty() ? "en" : language; }
+    static constexpr size_t kMaxHostMessages = 256;
+    static constexpr size_t kMaxHostCalls = 64;
+
     // ----- Game runtime (valid during a play session) -------------------------
     // Data that survives scene changes (score, lives...). Reset when the
     // session ends. Scripts use game.get/game.set; tools read game.state.
@@ -301,6 +334,11 @@ private:
     uint64_t revision_ = 1;
     Json gameData_ = Json::MakeObject();
     std::string dateOverride_;  // empty = the machine's clock
+    std::function<bool(const std::string&, const std::string&)> hostHandler_;
+    std::set<std::string> hostAccept_;
+    std::vector<HostMessage> hostInbox_;
+    std::vector<HostCallRecord> hostCalls_;  // most recent kMaxHostCalls, for host.state
+    std::string userLanguage_ = "en";
     bool gamePaused_ = false;
     SaveStore saves_;
     struct TimedLine {

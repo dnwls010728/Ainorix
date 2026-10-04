@@ -1330,6 +1330,62 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return out;
              });
 
+    auto hostSettings = [](Engine& e, Json& out) {
+        Json accept = Json::MakeArray();
+        for (const std::string& name : e.HostAccept()) accept.push(name);
+        out["accept"] = accept;
+        out["language"] = e.UserLanguage();
+    };
+
+    Register(r, "host.state", "The host bridge (Lua host.call / host.poll): the calls the game made to its embedding app (ads, purchases), "
+                              "messages waiting for host.poll(), the names tools accept and the user language.",
+             Params(), false, [hostSettings](Engine& e, const Json&) {
+                 Json out = Json::MakeObject();
+                 Json calls = Json::MakeArray();
+                 for (const Engine::HostCallRecord& c : e.HostCalls()) {
+                     Json item = Json::MakeObject();
+                     item["name"] = c.name;
+                     item["data"] = c.data;
+                     item["frame"] = static_cast<double>(c.frame);
+                     item["handled"] = c.handled;
+                     calls.push(item);
+                 }
+                 out["calls"] = calls;
+                 out["pending"] = static_cast<int>(e.PendingHostMessages());
+                 hostSettings(e, out);
+                 return out;
+             });
+
+    Register(r, "host.configure", "Stand in for the embedding app in a tool session: which host.call names report as handled, and the user language.",
+             Params()
+                 .Opt("accept", "array", "Names host.call returns true for; [\"*\"] accepts every name, [] none (the default: games use their fallback).")
+                 .Opt("language", "string", "ISO 639-1 code host.language() returns, e.g. \"ko\"."),
+             false, [hostSettings](Engine& e, const Json& a) {
+                 if (a.has("accept")) {
+                     if (!a["accept"].isArray()) throw ApiError("bad_accept", "accept must be an array of names", "Pass e.g. {\"accept\":[\"ads.rewarded\"]}.");
+                     std::set<std::string> names;
+                     for (size_t i = 0; i < a["accept"].size(); ++i) names.insert(a["accept"][i].asString());
+                     e.SetHostAccept(std::move(names));
+                 }
+                 if (a.has("language")) e.SetUserLanguage(a["language"].asString());
+                 Json out = Json::MakeObject();
+                 hostSettings(e, out);
+                 return out;
+             });
+
+    Register(r, "host.reply", "Deliver a message from the embedding app to the game, as its ad SDK or store would (the game reads it with host.poll()).",
+             Params()
+                 .Req("name", "string", "Message name, e.g. \"ads.result\".")
+                 .Opt("data", "object", "Payload the game receives as message.data."),
+             false, [](Engine& e, const Json& a) {
+                 const std::string name = a["name"].asString();
+                 if (name.empty()) throw ApiError("bad_name", "name must not be empty", "Pass the message name the game expects, e.g. \"ads.result\".");
+                 e.PushHostMessage(name, a.has("data") ? a["data"] : Json::MakeObject());
+                 Json out = Json::MakeObject();
+                 out["pending"] = static_cast<int>(e.PendingHostMessages());
+                 return out;
+             });
+
     Register(r, "game.state", "Runtime scene and game data (game.set values) of the current play session.", Params(), false,
              [](Engine& e, const Json&) {
                  Json out = Json::MakeObject();

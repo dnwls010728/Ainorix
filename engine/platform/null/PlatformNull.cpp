@@ -44,6 +44,10 @@ void PlatformSleep(double seconds) {
     if (seconds > 0) std::this_thread::sleep_for(std::chrono::duration<double>(seconds));
 }
 
+// No embedding application on this platform yet (a store SDK layer would answer here).
+bool PlatformHostCall(const std::string&, const std::string&) { return false; }
+std::vector<std::pair<std::string, std::string>> PlatformHostPoll() { return {}; }
+
 bool PlatformOpenUrl(const std::string&) { return false; }
 
 std::string ExecutableDirectory() {

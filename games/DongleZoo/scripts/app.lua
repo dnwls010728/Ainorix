@@ -22,7 +22,12 @@ local floor, min, max = math.floor, math.min, math.max
 
 function App:onStart()
   Meta.load()
-  if Meta.data.settings.locale == "" then Meta.data.settings.locale = self.params.locale or "ko" end
+  if Meta.data.settings.locale == "" then
+    -- first launch: follow the device language (players older than the host bridge start in English)
+    local bridge = rawget(_G, "host")
+    local lang = self.params.locale or (bridge and bridge.language()) or "en"
+    Meta.data.settings.locale = lang == "ko" and "ko" or "en"
+  end
   I.setLocale(Meta.data.settings.locale)
   Audio.configure(Meta.data.settings.sfx, Meta.data.settings.music)
 
@@ -45,6 +50,7 @@ function App:onStart()
   self:layout()
   self:applyTheme()
   self:showHome()
+  Ads.ready()
 end
 
 -- ---------------------------------------------------------------- layout
@@ -196,6 +202,7 @@ function App:drop()
   self.cooldown = D.DROP_COOLDOWN
   Meta.data.stats.drops = Meta.data.stats.drops + 1
   Meta.bump("drops", 1)
+  if Meta.data.stats.drops % 10 == 0 then Meta.save() end -- a phone may close the app at any moment
   if not Meta.data.tutorial then
     Meta.data.tutorial = true
     UI.show("HUD:hint", false)
@@ -534,7 +541,10 @@ function App:onAction(a, b)
       end)
     end
   elseif a == "pause" then
-    if self.mode == "play" and not self.dialog then self:open("pause") end
+    if self.mode == "play" and not self.dialog then
+      Meta.save()
+      self:open("pause")
+    end
   elseif a == "resume" or a == "close" then
     self:close()
   elseif a == "open" then
@@ -544,11 +554,11 @@ function App:onAction(a, b)
   elseif a == "pickCancel" then
     self:cancelPick()
   elseif a == "revive" then
-    Ads.rewarded(function(ok)
+    Ads.rewarded("revive", function(ok)
       if ok then self:revive() end
     end)
   elseif a == "double" then
-    Ads.rewarded(function(ok)
+    Ads.rewarded("double_coins", function(ok)
       if not ok or self.doubled then return end
       self:finalize()
       self.doubled = true
@@ -571,7 +581,7 @@ function App:onAction(a, b)
     end
   elseif a == "itemFree" then
     local id = self.itemWanted
-    Ads.rewarded(function(ok)
+    Ads.rewarded("free_item", function(ok)
       if not ok then return end
       Meta.grantItem(id, 1)
       UI.toast(I.t("toast.item", { name = I.L(D.item(id).name) }))
@@ -613,7 +623,7 @@ function App:onAction(a, b)
   elseif a == "dailyClaim" then
     self:claimDaily(false)
   elseif a == "dailyClaim2" then
-    Ads.rewarded(function(ok) self:claimDaily(ok) end)
+    Ads.rewarded("daily_double", function(ok) self:claimDaily(ok) end)
   elseif a == "toggleSfx" or a == "toggleMusic" or a == "toggleLang" then
     local s = Meta.data.settings
     if a == "toggleSfx" then

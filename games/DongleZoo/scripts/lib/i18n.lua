@@ -92,6 +92,7 @@ local STR = {
   ["toast.newfriend"] = { en = "New friend: {name}! +{n}", ko = "새 친구 {name}! +{n}" },
   ["toast.revived"] = { en = "Second chance!", ko = "한 번 더!" },
   ["toast.noad"] = { en = "No ad available right now", ko = "지금은 광고를 볼 수 없어요" },
+  ["toast.nostore"] = { en = "The store is not available here", ko = "여기서는 스토어를 쓸 수 없어요" },
   ["toast.item"] = { en = "{name} +1", ko = "{name} +1" },
   ["toast.theme"] = { en = "{name} unlocked!", ko = "{name} 획득!" },
   ["toast.thanks"] = { en = "Thank you!", ko = "고마워요!" },

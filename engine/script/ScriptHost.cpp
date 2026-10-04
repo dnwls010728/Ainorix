@@ -541,6 +541,39 @@ int L_GamePaused(lua_State* L) {
     return 1;
 }
 
+// host.call(name, data?) -> true when the embedding app handles `name` (an ad SDK, a store);
+// false means there is no such host and the game should use its own fallback.
+int L_HostCall(lua_State* L) {
+    return Guard(L, [&] {
+        std::string name = luaL_checkstring(L, 1);
+        Json data = lua_isnoneornil(L, 2) ? Json::MakeObject() : ToJson(L, 2);
+        lua_pushboolean(L, Host(L).GetEngine().HostCall(name, data));
+        return 1;
+    });
+}
+
+// host.poll() -> { {name=, data=}, ... }: messages from the host since the last call.
+int L_HostPoll(lua_State* L) {
+    std::vector<Engine::HostMessage> messages = Host(L).GetEngine().TakeHostMessages();
+    lua_createtable(L, static_cast<int>(messages.size()), 0);
+    int i = 0;
+    for (const Engine::HostMessage& m : messages) {
+        lua_createtable(L, 0, 2);
+        lua_pushstring(L, m.name.c_str());
+        lua_setfield(L, -2, "name");
+        PushJson(L, m.data);
+        lua_setfield(L, -2, "data");
+        lua_rawseti(L, -2, ++i);
+    }
+    return 1;
+}
+
+// host.language() -> the user's language as an ISO 639-1 code ("en", "ko", ...)
+int L_HostLanguage(lua_State* L) {
+    lua_pushstring(L, Host(L).GetEngine().UserLanguage().c_str());
+    return 1;
+}
+
 int L_GameScene(lua_State* L) {
     lua_pushstring(L, Host(L).GetEngine().RuntimeScene().c_str());
     return 1;
@@ -1431,6 +1464,8 @@ void ScriptHost::Open() {
     SetFuncs(L, "audio", audioFuncs);
     const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
+    const luaL_Reg hostFuncs[] = {{"call", L_HostCall}, {"poll", L_HostPoll}, {"language", L_HostLanguage}, {nullptr, nullptr}};
+    SetFuncs(L, "host", hostFuncs);
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
     SetFuncs(L, "save", saveFuncs);
     const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
