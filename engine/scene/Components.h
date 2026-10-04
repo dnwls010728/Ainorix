@@ -82,6 +82,9 @@ struct Particle {
     float startSize = 0.1f, endSize = 0;
     Color startColor, endColor;
     float startOpacity = 1, endOpacity = 0;
+    float rotation = 0, spin = 0;  // degrees around the view axis, degrees per second
+    float sizeScale = 1;           // sizeVariation factor, applied to sizeOverLife keys
+    int frameOffset = 0;           // randomFrame: first flipbook frame of this particle
     bool worldSpace = false;
 };
 
@@ -110,9 +113,28 @@ struct ParticleEmitter {
     int layer = 0;
     bool loop = true;
     bool playing = true;
+    float delay = 0, duration = 0;
+    std::string shape = "point";
+    Vec3 shapeSize{1, 1, 1};
+    bool shapeEdge = false;
+    float radialSpeed = 0;
+    float rotation = 0, rotationVariation = 0;
+    float spin = 0, spinVariation = 0;
+    std::string align = "camera";
+    float stretch = 0;
+    int frames = 1;
+    float frameRate = 0;
+    bool randomFrame = false;
+    Json sizeOverLife = Json::MakeArray();
+    Json colorOverLife = Json::MakeArray();
+    Json opacityOverLife = Json::MakeArray();
+    float turbulence = 0, turbulenceScale = 1;
+    bool pixelArt = true;
     std::vector<Particle> particles;  // runtime, not serialized
     uint32_t randomState = 0;        // runtime xorshift stream; zero = uninitialized
     double carry = 0;               // fractional rate births, bounded to [0,1)
+    double elapsed = 0;             // seconds simulated while playing; drives delay/duration
+    int64_t cycle = 0;              // duration cycles started (loop with a duration re-fires the burst)
     bool initialBurstEmitted = false;
     uint64_t emitted = 0;            // accepted births since creation/clear
     bool invalidSettingsReported = false;  // suppress repeated runtime error logs
@@ -147,6 +169,73 @@ struct ParticleEmitter {
         f.Add("layer", &ParticleEmitter::layer, "2D sorting layer, like Sprite.layer: particles draw in front of lower layers.");
         f.Add("loop", &ParticleEmitter::loop, "Enable continuous rate births; false emits only the initial burst.");
         f.Add("playing", &ParticleEmitter::playing, "Automatic emission switch; existing particles continue to age while false.");
+        range(f.Add("delay", &ParticleEmitter::delay, "Seconds of playing before the initial burst and the rate start (layered effects: flash, then smoke)."), 0, 600);
+        range(f.Add("duration", &ParticleEmitter::duration,
+                    "0 = no limit. Otherwise the rate emits for this many seconds after the delay; with loop the cycle repeats and re-fires the burst."), 0, 600);
+        f.Add("shape", &ParticleEmitter::shape,
+              "Where particles are born, in emitter coordinates: point, sphere (radius shapeSize.x), box (half extents shapeSize) or "
+              "circle (radius shapeSize.x; in XY for 2D, on the ground plane XZ for 3D).").options = {"point", "sphere", "box", "circle"};
+        f.Add("shapeSize", &ParticleEmitter::shapeSize, "Sphere/circle radius in x, or box half extents, in meters.");
+        f.Add("shapeEdge", &ParticleEmitter::shapeEdge, "Spawn only on the shape's surface or rim (rings, shells).");
+        range(f.Add("radialSpeed", &ParticleEmitter::radialSpeed,
+                    "Extra speed away from the emitter origin (negative = toward it), for particles born off the origin; captured at birth."), -10000, 10000);
+        range(f.Add("rotation", &ParticleEmitter::rotation, "Billboard rotation in degrees at birth, counter-clockwise on screen."), -36000, 36000);
+        range(f.Add("rotationVariation", &ParticleEmitter::rotationVariation, "Each particle starts within +/- this many degrees of rotation."), 0, 360);
+        range(f.Add("spin", &ParticleEmitter::spin, "Rotation speed in degrees per second, captured at birth."), -36000, 36000);
+        range(f.Add("spinVariation", &ParticleEmitter::spinVariation, "Each particle spins within +/- this many degrees per second of spin."), 0, 36000);
+        f.Add("align", &ParticleEmitter::align,
+              "camera = upright billboards; velocity = the billboard's up axis follows the direction of travel on screen (sparks, rain).").options = {"camera", "velocity"};
+        range(f.Add("stretch", &ParticleEmitter::stretch, "align velocity only: seconds of travel added to the billboard's length (0.05 = streaks)."), 0, 100);
+        range(f.Add("frames", &ParticleEmitter::frames, "Flipbook length: frames played from `frame` on, row-major. 1 = a single frame."), 1, 1000000);
+        range(f.Add("frameRate", &ParticleEmitter::frameRate, "Flipbook frames per second, looping; 0 plays the frames once over the particle's lifetime."), 0, 240);
+        f.Add("randomFrame", &ParticleEmitter::randomFrame, "Each particle starts at a random flipbook frame and keeps it when frameRate is 0 (a sheet of variants).");
+        f.Add("sizeOverLife", &ParticleEmitter::sizeOverLife,
+              "Size keys [[t, meters], ...] with t ascending in 0..1; replaces startSize/endSize when not empty (sizeVariation still scales it). At most 16 keys.");
+        f.Add("colorOverLife", &ParticleEmitter::colorOverLife,
+              "Color keys [[t, [r, g, b]] or [t, \"#rrggbb\"], ...]; replaces startColor/endColor when not empty. At most 16 keys.");
+        f.Add("opacityOverLife", &ParticleEmitter::opacityOverLife,
+              "Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys.");
+        range(f.Add("turbulence", &ParticleEmitter::turbulence, "Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers)."), 0, 10000);
+        range(f.Add("turbulenceScale", &ParticleEmitter::turbulenceScale, "Noise cells per meter: small = wide swirls, large = jitter."), 0.001f, 1000);
+        f.Add("pixelArt", &ParticleEmitter::pixelArt, "Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke).");
+    }
+};
+
+// One sample of the path a Trail follows, in world coordinates.
+struct TrailPoint {
+    Vec3 position;
+    float age = 0;
+};
+
+struct Trail {
+    static constexpr const char* kTypeName = "Trail";
+    static constexpr const char* kDoc = "Camera-facing ribbon left behind the entity as it moves (sword swings, projectiles, dashes); it narrows and fades along its length.";
+    float lifetime = 0.5f;
+    float minDistance = 0.05f;
+    float width = 0.2f, endWidth = 0;
+    Color color{1, 1, 1}, endColor{1, 1, 1};
+    float opacity = 1, endOpacity = 0;
+    std::string texture;
+    std::string blend = "alpha";
+    int layer = 0;
+    int maxPoints = 64;
+    bool emitting = true;
+    std::vector<TrailPoint> points;  // runtime, oldest first; not serialized
+    static void Reflect(FieldList& f) {
+        auto range = [](FieldInfo& field, float lo, float hi) { field.hasRange = true; field.min = lo; field.max = hi; };
+        range(f.Add("lifetime", &Trail::lifetime, "Seconds a point of the path stays; with the entity's speed it sets the ribbon's length."), 0.01f, 60);
+        range(f.Add("minDistance", &Trail::minDistance, "Meters the entity moves before the path gets a new point (smaller = smoother curves)."), 0.001f, 100);
+        range(f.Add("width", &Trail::width, "Ribbon width in meters at the entity."), 0, 1000);
+        range(f.Add("endWidth", &Trail::endWidth, "Width at the oldest point."), 0, 1000);
+        f.Add("color", &Trail::color, "RGB tint at the entity.");
+        f.Add("endColor", &Trail::endColor, "RGB tint at the oldest point.");
+        range(f.Add("opacity", &Trail::opacity, "Opacity at the entity."), 0, 1);
+        range(f.Add("endOpacity", &Trail::endOpacity, "Opacity at the oldest point."), 0, 1);
+        f.Add("texture", &Trail::texture, "Optional image stretched over the ribbon: left edge at the entity, right edge at the oldest point. Empty = solid.");
+        f.Add("blend", &Trail::blend, "alpha = normal; add = the ribbon brightens what is behind it (energy, fire).").options = {"alpha", "add"};
+        f.Add("layer", &Trail::layer, "2D sorting layer, like Sprite.layer.");
+        range(f.Add("maxPoints", &Trail::maxPoints, "Most path points kept; the oldest are dropped first."), 2, 1024);
+        f.Add("emitting", &Trail::emitting, "Add new points while true; false lets the existing ribbon fade out.");
     }
 };
 

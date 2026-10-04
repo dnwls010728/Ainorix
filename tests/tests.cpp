@@ -5991,6 +5991,235 @@ TEST(ParticleVariationAndDrag) {
     CHECK(Call(e, "component.set", R"J({"id":"Varied","type":"ParticleEmitter","values":{"drag":"x"}})J")["ok"].asBool() == false);
 }
 
+TEST(ParticleShapesRotationAndTiming) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("particle_vfx"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    auto emitter = [&](const char* name) { return e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name)); };
+    // Birth shapes: a 2D rim with radial speed, a sphere volume and the faces of a box.
+    Call(e, "entity.create", R"J({"name":"Ring","components":{"ParticleEmitter":{"rate":0,"burst":30,"loop":false,"lifetime":5,"speed":0,
+      "gravity":[0,0,0],"dimensions":2,"shape":"circle","shapeSize":[2,0,0],"shapeEdge":true,"radialSpeed":3,"rotation":10,"spin":90}}})J");
+    Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[10,0,0]},"ParticleEmitter":{"rate":0,"burst":60,"loop":false,
+      "lifetime":5,"speed":0,"gravity":[0,0,0],"shape":"sphere","shapeSize":[1.5,0,0],"space":"world","maxParticles":64,"rotationVariation":45}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":5,"speed":0,
+      "gravity":[0,0,0],"shape":"box","shapeSize":[1,2,3],"shapeEdge":true,"maxParticles":64}}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(emitter("Ring")->particles.size() == 30);
+    for (const Particle& particle : emitter("Ring")->particles) {
+        CHECK(std::fabs(Length(particle.position) - 2) < 1e-4f && particle.position.z == 0);
+        CHECK(std::fabs(Length(particle.velocity) - 3) < 1e-4f && Dot(particle.velocity, particle.position) > 0);
+        CHECK(particle.rotation == 10 && particle.spin == 90);
+    }
+    float nearest = 1e9f, farthest = 0, leastTurn = 1e9f, mostTurn = -1e9f;
+    for (const Particle& particle : emitter("Ball")->particles) {
+        const float distance = Length(particle.position - Vec3(10, 0, 0));  // world space: around the entity
+        nearest = std::min(nearest, distance); farthest = std::max(farthest, distance);
+        leastTurn = std::min(leastTurn, particle.rotation); mostTurn = std::max(mostTurn, particle.rotation);
+    }
+    CHECK(emitter("Ball")->particles.size() == 60 && farthest <= 1.5f + 1e-4f && nearest < 1.0f && farthest > 1.2f);
+    CHECK(leastTurn >= -45 && mostTurn <= 45 && mostTurn - leastTurn > 30);
+    for (const Particle& particle : emitter("Box")->particles) {
+        const Vec3 p = particle.position;
+        CHECK(std::fabs(p.x) <= 1 && std::fabs(p.y) <= 2 && std::fabs(p.z) <= 3);
+        CHECK(std::fabs(p.x) == 1 || std::fabs(p.y) == 2 || std::fabs(p.z) == 3);
+    }
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(std::fabs(emitter("Ring")->particles[0].rotation - 100) < 1e-2f);
+    CHECK(std::fabs(Call(e, "particles.state", R"J({"id":"Ring","particles":true})J")["result"]["particles"][0]["rotation"].asFloat() - 100) < 1e-2f);
+
+    // delay holds the burst back; a duration ends the rate; loop + duration fires the burst every cycle.
+    Call(e, "entity.create", R"J({"name":"Late","components":{"ParticleEmitter":{"rate":0,"burst":5,"loop":false,"lifetime":5,"delay":0.5}}})J");
+    Call(e, "entity.create", R"J({"name":"Puff","components":{"ParticleEmitter":{"rate":60,"loop":false,"lifetime":0.2,"duration":0.5}}})J");
+    Call(e, "entity.create", R"J({"name":"Pulse","components":{"ParticleEmitter":{"rate":0,"burst":3,"loop":true,"lifetime":5,"duration":0.5}}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    CHECK(emitter("Late")->particles.empty() && emitter("Pulse")->emitted == 3);
+    CHECK(!Call(e, "particles.state", R"J({"id":"Late"})J")["result"]["finished"].asBool());
+    Call(e, "sim.step", R"J({"frames":15})J");
+    CHECK(emitter("Late")->particles.size() == 5 && emitter("Pulse")->emitted == 6);
+    Call(e, "sim.step", R"J({"frames":75})J");
+    CHECK(emitter("Puff")->emitted == 30 && emitter("Puff")->particles.empty());
+    CHECK(Call(e, "particles.state", R"J({"id":"Puff"})J")["result"]["finished"].asBool());
+    CHECK(!Call(e, "particles.state", R"J({"id":"Pulse"})J")["result"]["finished"].asBool());
+    CHECK(Call(e, "script.eval", R"J({"code":"local s = particles.state('Puff'); assert(s.finished and s.count == 0 and s.emitted == 30)"})J")["ok"].asBool());
+    Call(e, "particles.clear", R"J({"id":"Puff","restart":true})J");
+    Call(e, "sim.step", R"J({"frames":10})J");
+    CHECK(emitter("Puff")->emitted == 10);  // the clock restarted with the emitter
+
+    // Turbulence bends paths, identically on every run.
+    auto drift = [](float turbulence) {
+        Engine run;
+        Call(run, "scene.new", R"J({"empty":true})J");
+        Json args = Json::parse(R"J({"name":"Smoke","components":{"ParticleEmitter":{"rate":0,"burst":8,"loop":false,"lifetime":5,"speed":1,
+          "spread":0,"gravity":[0,0,0],"turbulenceScale":0.7}}})J");
+        args["components"]["ParticleEmitter"]["turbulence"] = turbulence;
+        run.Call("entity.create", args);
+        Call(run, "sim.step", R"J({"frames":60})J");
+        return Call(run, "particles.state", R"J({"id":"Smoke","particles":true})J")["result"]["particles"];
+    };
+    const Json calm = drift(0), windy = drift(6);
+    CHECK(windy == drift(6) && windy != calm);
+    CHECK(calm[0]["velocity"][0].asFloat() == 0 && std::fabs(windy[0]["velocity"][0].asFloat()) > 1e-3f);
+}
+
+TEST(ParticleCurvesFlipbookAndAlignment) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("particle_curves"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"rate":0,"loop":false,"lifetime":1,"speed":2,"spread":0,
+      "direction":[1,0,0],"gravity":[0,0,0],"startSize":9,"endSize":9,"columns":4,"frames":4,
+      "sizeOverLife":[[0,1],[0.5,3],[1,3]],"colorOverLife":[[0,"#ff0000"],[1,[0,0,1]]],"opacityOverLife":[[0,0],[0.25,1],[1,0]]}}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    Call(e, "sim.step", R"J({"frames":20})J");  // a third of the lifetime: away from key and frame boundaries
+    auto item = [&] {
+        auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+        CHECK(items.size() == 1);
+        return items.empty() ? RenderItem{} : items.front();
+    };
+    RenderItem it = item();
+    CHECK(std::fabs(Length(it.world.TransformDir(Vec3(1, 0, 0))) - (1 + 4.0f / 3)) < 1e-3f);  // size curve, two thirds of the way to the 0.5 key
+    CHECK(std::fabs(it.opacity - 8.0f / 9) < 1e-3f && std::fabs(it.tint.r - 2.0f / 3) < 1e-3f && std::fabs(it.tint.b - 1.0f / 3) < 1e-3f);
+    CHECK(it.uvOffset[0] == 0.25f && it.uvScale[0] == 0.25f);                     // second of four frames over the lifetime
+    Call(e, "sim.step", R"J({"frames":30})J");
+    it = item();
+    CHECK(std::fabs(Length(it.world.TransformDir(Vec3(1, 0, 0))) - 3) < 1e-3f && it.uvOffset[0] == 0.75f);
+    CHECK(std::fabs(it.opacity - 2.0f / 9) < 1e-3f);
+    // A looping flipbook follows frameRate; align velocity turns the billboard's up axis along the travel and stretches it.
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"frameRate":8,"align":"velocity","stretch":0.5,
+      "sizeOverLife":[],"opacityOverLife":[]}})J");
+    it = item();
+    CHECK(it.uvOffset[0] == 0.5f);  // 0.83 s * 8 fps = frame 6, wrapped into four frames
+    const Vec3 along = it.world.TransformDir(Vec3(0, 1, 0)), across = it.world.TransformDir(Vec3(1, 0, 0));
+    CHECK(std::fabs(along.x - (9 + 0.5f * 2)) < 1e-3f && std::fabs(along.y) < 1e-4f);
+    CHECK(std::fabs(across.y + 9) < 1e-3f && std::fabs(across.x) < 1e-4f);
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"align":"camera","rotation":0,"randomFrame":true,"frameRate":0}})J");
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":32})J");
+    std::set<float> variants;
+    for (const RenderItem& variant : GatherRenderItems(e.GetScene(), &e.Assets())) variants.insert(variant.uvOffset[0]);
+    CHECK(variants.size() == 4);  // every particle keeps one of the four frames
+    // Malformed curves stop emission with a message that says which one and how to write it.
+    for (const char* bad : {R"J([[0,1],[2,1]])J", R"J([[0.5,1],[0.2,1]])J", R"J([1,2])J", R"J([[0,"big"]])J", R"J({"keys":1})J"}) {
+        Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
+        args["values"]["sizeOverLife"] = Json::parse(bad);
+        CHECK(e.Call("component.set", args)["ok"].asBool());
+        Json result = Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+        CHECK(result["error"]["code"].asString() == "invalid_emitter" && result["error"]["message"].asString().find("sizeOverLife") == 0);
+    }
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":[],"colorOverLife":[[0,"red"]]}})J");
+    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["message"].asString().find("colorOverLife") == 0);
+    CHECK(!Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":"no"}})J")["ok"].asBool());
+}
+
+TEST(TrailRibbon) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("trail"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Blade","components":{"Transform":{"position":[-2,0,0]},
+      "Trail":{"lifetime":0.5,"minDistance":0.1,"width":0.6,"endWidth":0.2,"color":[1,0.5,0],"endColor":[1,0,0],"opacity":1,"endOpacity":0}}})J");
+    EntityId id = e.GetScene().FindByName("Blade");
+    auto moveTo = [&](float x, float y) {
+        Json args = Json::parse(R"J({"id":"Blade","type":"Transform","values":{}})J");
+        args["values"]["position"] = Json(Json::Array{x, y, 0.0f});
+        e.Call("component.set", args);
+        Call(e, "sim.step", R"J({"frames":1})J");
+    };
+    for (int frame = 0; frame < 20; ++frame) moveTo(-2 + 0.2f * static_cast<float>(frame), 0);
+    Json state = Call(e, "trail.state", R"J({"id":"Blade","points":true})J")["result"];
+    CHECK(state["count"].asInt() == 20 && state["emitting"].asBool());
+    CHECK(std::fabs(state["points"][0]["position"][0].asFloat() + 2) < 1e-5f && std::fabs(state["points"][0]["age"].asFloat() - 19.0f / 60) < 1e-4f);
+    moveTo(1.85f, 0);  // closer than minDistance: no new point, but the ribbon still reaches the entity
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() == 20);
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+    CHECK(items.size() == 1);
+    const RenderItem& ribbon = items.front();
+    CHECK(ribbon.id == id && ribbon.blend && ribbon.unlit && !ribbon.castShadows && ribbon.doubleSided && !ribbon.additive);
+    CHECK(ribbon.mesh->positions.size() == 42 && ribbon.mesh->indices.size() == 20 * 6);
+    // Oldest point first: narrow there, full width at the entity, across the path (Y for a path along X).
+    const Vec3 tail = ribbon.mesh->positions[1] - ribbon.mesh->positions[0], head = ribbon.mesh->positions[41] - ribbon.mesh->positions[40];
+    CHECK(std::fabs(std::fabs(head.y) - 0.6f) < 1e-4f && std::fabs(head.x) < 1e-5f);
+    CHECK(std::fabs(tail.y) < std::fabs(head.y) && std::fabs(tail.y) > 0.2f);
+    CHECK(std::fabs(ribbon.mesh->positions[40].x - 1.85f) < 1e-5f);
+    const Texture& fade = *ribbon.textureOverride;
+    CHECK(fade.width == 64 && fade.height == 1);
+    CHECK(fade.texels.front() == 0xFF0080FFu && fade.texels.back() == 0x000000FFu);  // head orange and solid, tail red and clear
+    CHECK(ribbon.mesh->uvs[80] < ribbon.mesh->uvs[0] && ribbon.mesh->uvs[80] > 0 && ribbon.mesh->uvs[0] < 1);
+    // Both renderers draw it; threads do not change the software image.
+    RenderView view = MakeLookAtView(Vec3(0, 0, 6), Vec3(), 45, 320.0f / 180);
+    view.clearColor = Color(0, 0, 0);
+    view.drawUI = false;
+    RenderTarget sw, again, gpu;
+    sw.Resize(320, 180);
+    again.Resize(320, 180);
+    gpu.Resize(320, 180);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    SetMaxRenderThreads(16);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(sw.Hash() == again.Hash() && CountId(sw, id) > 800);
+    CHECK(WritePng("build/trail-software.png", sw.ToImage(), true));
+    if (e.EnableGpu(nullptr, &error)) {
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double total = 0;
+        for (size_t i = 0; i < sw.color.size(); ++i)
+            for (int channel = 0; channel < 3; ++channel)
+                total += std::abs(static_cast<int>((sw.color[i] >> (8 * channel)) & 255) - static_cast<int>((gpu.color[i] >> (8 * channel)) & 255));
+        const double mean = total / static_cast<double>(sw.color.size() * 3);
+        std::printf("  trail software/GPU mean channel difference %.3f\n", mean);
+        CHECK(mean < 1.5);
+        CHECK(WritePng("build/trail-gpu.png", gpu.ToImage(), true));
+    } else {
+        std::printf("  SKIP no GPU backend here (%s)\n", error.c_str());
+    }
+    // A stopped entity's ribbon fades out; emitting:false stops new points; clear forgets the path.
+    Call(e, "sim.step", R"J({"frames":40})J");
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() <= 1 && GatherRenderItems(e.GetScene(), &e.Assets()).empty());
+    for (int frame = 0; frame < 5; ++frame) moveTo(0, 0.3f * static_cast<float>(frame + 1));
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() >= 5);
+    CHECK(Call(e, "script.eval", R"J({"code":"trail.clear('Blade')"})J")["ok"].asBool());
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() == 0);
+    Call(e, "component.set", R"J({"id":"Blade","type":"Trail","values":{"emitting":false}})J");
+    moveTo(3, 3);
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() == 0);
+    CHECK(Call(e, "trail.clear", R"J({"id":"Blade"})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Plain"})J");
+    CHECK(Call(e, "trail.state", R"J({"id":"Plain"})J")["error"]["code"].asString() == "missing_component");
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &error) && restored.Get<Trail>(id)->points.empty());
+}
+
+TEST(SampleVfxLab) {
+    // The sample runs without script errors, shows every effect and plays back identically.
+    auto run = [&](bool writeImage) {
+        Engine e;
+        std::string error;
+        CHECK(e.Open(TestSourceDir() + "/samples/VFXLab", &error));
+        CHECK(Call(e, "sim.step", R"J({"frames":132})J")["ok"].asBool());  // 0.2 s into the second fireworks cycle
+        CHECK(e.Scripts().Errors().empty());
+        for (const char* name : {"Flames", "Smoke", "Embers", "Rim", "Burst", "Puff", "Sparkles"}) {
+            const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name));
+            CHECK(emitter && ParticleSettingsValid(*emitter) && !emitter->particles.empty());
+        }
+        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Burst"))->emitted == 140);
+        const EntityId orb = e.GetScene().FindByName("Orb");
+        CHECK(e.GetScene().Get<Trail>(orb)->points.size() > 20);
+        Call(e, "input.key", R"J({"key":"Space","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Burst"))->emitted > 140);  // capacity may drop some of the 70
+        RenderTarget target;
+        target.Resize(480, 270);
+        e.RenderGameView(target);
+        size_t lit = 0;
+        for (uint32_t color : target.color) lit += (color & 0xFF) > 120 || ((color >> 8) & 0xFF) > 120;
+        CHECK(lit > 400);
+        if (writeImage) CHECK(WritePng("build/vfxlab-software.png", target.ToImage(), true));
+        return target.Hash();
+    };
+    CHECK(run(true) == run(false));
+}
+
 TEST(Light2DDarkness) {
     // Darkness2D on the camera covers the 2D view; Light2D entities cut soft holes; higher layers stay visible.
     Engine e;

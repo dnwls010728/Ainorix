@@ -454,8 +454,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         if (!emitter) throw ApiError("missing_component", "entity has no ParticleEmitter", "Add ParticleEmitter with component.add first.");
         return *emitter;
     };
-    Register(r, "particles.state", "Live particle count, accepted births and optional particle snapshots in their local/world coordinates.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include age, lifetime, position, velocity and worldSpace."),
+    Register(r, "particles.state", "Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.",
+             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include age, lifetime, position, velocity, rotation and worldSpace."),
              false, [requireEmitter](Engine& e, const Json& a) {
                  const ParticleEmitter& emitter = requireEmitter(e, a);
                  Json out = Json::MakeObject();
@@ -464,6 +464,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["playing"] = emitter.playing;
                  out["loop"] = emitter.loop;
                  out["maxParticles"] = emitter.maxParticles;
+                 out["finished"] = ParticlesFinished(emitter);
                  if (a["particles"].asBool()) {
                      out["particles"] = Json::MakeArray();
                      for (const Particle& particle : emitter.particles) {
@@ -472,6 +473,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          p["lifetime"] = particle.lifetime;
                          p["position"] = Json(Json::Array{particle.position.x, particle.position.y, particle.position.z});
                          p["velocity"] = Json(Json::Array{particle.velocity.x, particle.velocity.y, particle.velocity.z});
+                         p["rotation"] = particle.rotation;
                          p["worldSpace"] = particle.worldSpace;
                          out["particles"].push(p);
                      }
@@ -483,7 +485,16 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              false, [requireEmitter](Engine& e, const Json& a) {
                  const ParticleEmitter& emitter = requireEmitter(e, a);
                  if (!ParticleSettingsValid(emitter))
-                     throw ApiError("invalid_emitter", "particle settings must be finite", "Correct direction/gravity/colors and numeric fields with component.set.");
+                     {
+                     std::string detail;
+                     ParticleCurve curve;
+                     const char* hint = "Correct direction/gravity/colors and numeric fields with component.set.";
+                     if (!ParseParticleCurve(emitter.sizeOverLife, false, curve, &detail)) detail = "sizeOverLife: " + detail;
+                     else if (!ParseParticleCurve(emitter.colorOverLife, true, curve, &detail)) detail = "colorOverLife: " + detail;
+                     else if (!ParseParticleCurve(emitter.opacityOverLife, false, curve, &detail)) detail = "opacityOverLife: " + detail;
+                     if (!detail.empty()) hint = "Curves are [[t, value], ...] with t ascending in 0..1, e.g. [[0,0],[0.2,1],[1,0]]; fix it with component.set.";
+                     throw ApiError("invalid_emitter", detail.empty() ? "particle settings must be finite" : detail, hint);
+                 }
                  double requested = a["count"].asNumber();
                  if (requested < 0 || requested > 10000) throw ApiError("invalid_argument", "count must be 0..10000", "Use a bounded burst; maxParticles also limits accepted births.");
                  int count = static_cast<int>(requested);
@@ -499,7 +510,41 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  emitter.randomState = 0;
                  emitter.carry = 0;
                  emitter.emitted = 0;
+                 emitter.elapsed = 0;
+                 emitter.cycle = 0;
                  emitter.initialBurstEmitted = !a["restart"].asBool(false);
+                 Json out = Json::MakeObject();
+                 out["count"] = 0;
+                 return out;
+             });
+    auto requireTrail = [](Engine& e, const Json& args) -> Trail& {
+        EntityId id = RequireEntity(e, args);
+        Trail* trail = e.GetScene().Get<Trail>(id);
+        if (!trail) throw ApiError("missing_component", "entity has no Trail", "Add Trail with component.add first.");
+        return *trail;
+    };
+    Register(r, "trail.state", "Path of a Trail: point count, emitting and optionally the points (world position, age), oldest first.",
+             Params().ReqWith("id", EntityRefSchema("Trail entity.")).Opt("points", "boolean", "Include position and age of every point."),
+             false, [requireTrail](Engine& e, const Json& a) {
+                 const Trail& trail = requireTrail(e, a);
+                 Json out = Json::MakeObject();
+                 out["count"] = static_cast<uint64_t>(trail.points.size());
+                 out["emitting"] = trail.emitting;
+                 out["maxPoints"] = trail.maxPoints;
+                 if (a["points"].asBool()) {
+                     out["points"] = Json::MakeArray();
+                     for (const TrailPoint& point : trail.points) {
+                         Json p = Json::MakeObject();
+                         p["position"] = Json(Json::Array{point.position.x, point.position.y, point.position.z});
+                         p["age"] = point.age;
+                         out["points"].push(p);
+                     }
+                 }
+                 return out;
+             });
+    Register(r, "trail.clear", "Forget a Trail's path so no ribbon joins the old and new place (teleport, respawn); runtime only.",
+             Params().ReqWith("id", EntityRefSchema("Trail entity.")), false, [requireTrail](Engine& e, const Json& a) {
+                 ClearTrail(requireTrail(e, a));
                  Json out = Json::MakeObject();
                  out["count"] = 0;
                  return out;

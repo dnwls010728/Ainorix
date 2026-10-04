@@ -1,0 +1,7 @@
+{
+  "format": "ownengine.project",
+  "version": 1,
+  "name": "VFXLab",
+  "startScene": "scenes/main.scene.json",
+  "window": {"width": 1280, "height": 720}
+}

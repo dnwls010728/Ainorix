@@ -15,6 +15,8 @@ ParticleEmitter uses shared camera-facing quads in both renderers, with lifetime
 size/color/opacity interpolation, texture sheet frames and stable transparent
 ordering. Both 2D and 3D emission modes render without lighting or cast shadows.
 See [PARTICLES.md](PARTICLES.md) for the rendering and simulation contract.
+Billboards can rotate, follow their velocity and play flipbooks; `Trail` adds a camera-facing
+ribbon mesh rebuilt each frame. Both are unlit draw items shared by the two renderers (docs/PARTICLES.md).
 
 Frame: **shadow pass** (depth only, first directional light) → **scene pass** (MSAA; meshes, then grid/collider/debug lines) → **selection mask** (editor outline) → **composite pass** into the window or an offscreen image (+ UI quads). Screen-space effects (tone mapping, bloom, color grading, FXAA, …) belong in the composite pass or in extra passes between the scene and composite passes.
 

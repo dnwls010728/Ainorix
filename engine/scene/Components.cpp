@@ -38,6 +38,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Tilemap>();
     TypeRegistry::Register<NetSync>();
     TypeRegistry::Register<NetPlayer>();
+    TypeRegistry::Register<Trail>();
 }
 
 }  // namespace oe

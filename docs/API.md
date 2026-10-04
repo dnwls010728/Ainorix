@@ -187,12 +187,12 @@ Play a named model clip; add Animator if needed. Defaults to restarting at the b
 
 ### `particles.state`
 
-Live particle count, accepted births and optional particle snapshots in their local/world coordinates.
+Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | ParticleEmitter entity. |
-| `particles` | boolean |  | Include age, lifetime, position, velocity and worldSpace. |
+| `particles` | boolean |  | Include age, lifetime, position, velocity, rotation and worldSpace. |
 
 ### `particles.burst`
 
@@ -211,6 +211,25 @@ Clear live particles and reset the random stream/counters. Optionally re-arm the
 |---|---|---|---|
 | `id` | integer \| string | yes | ParticleEmitter entity. |
 | `restart` | boolean |  | Re-arm initial burst for next playing step (default false). |
+
+## trail
+
+### `trail.state`
+
+Path of a Trail: point count, emitting and optionally the points (world position, age), oldest first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Trail entity. |
+| `points` | boolean |  | Include position and age of every point. |
+
+### `trail.clear`
+
+Forget a Trail's path so no ribbon joins the old and new place (teleport, respawn); runtime only.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Trail entity. |
 
 ## engine
 
@@ -1198,6 +1217,27 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `layer` | int | `0` | 2D sorting layer, like Sprite.layer: particles draw in front of lower layers. |
 | `loop` | bool | `true` | Enable continuous rate births; false emits only the initial burst. |
 | `playing` | bool | `true` | Automatic emission switch; existing particles continue to age while false. |
+| `delay` | float | `0` | Seconds of playing before the initial burst and the rate start (layered effects: flash, then smoke). |
+| `duration` | float | `0` | 0 = no limit. Otherwise the rate emits for this many seconds after the delay; with loop the cycle repeats and re-fires the burst. |
+| `shape` | string | `"point"` | Where particles are born, in emitter coordinates: point, sphere (radius shapeSize.x), box (half extents shapeSize) or circle (radius shapeSize.x; in XY for 2D, on the ground plane XZ for 3D). |
+| `shapeSize` | vec3 | `[1,1,1]` | Sphere/circle radius in x, or box half extents, in meters. |
+| `shapeEdge` | bool | `false` | Spawn only on the shape's surface or rim (rings, shells). |
+| `radialSpeed` | float | `0` | Extra speed away from the emitter origin (negative = toward it), for particles born off the origin; captured at birth. |
+| `rotation` | float | `0` | Billboard rotation in degrees at birth, counter-clockwise on screen. |
+| `rotationVariation` | float | `0` | Each particle starts within +/- this many degrees of rotation. |
+| `spin` | float | `0` | Rotation speed in degrees per second, captured at birth. |
+| `spinVariation` | float | `0` | Each particle spins within +/- this many degrees per second of spin. |
+| `align` | string | `"camera"` | camera = upright billboards; velocity = the billboard's up axis follows the direction of travel on screen (sparks, rain). |
+| `stretch` | float | `0` | align velocity only: seconds of travel added to the billboard's length (0.05 = streaks). |
+| `frames` | int | `1` | Flipbook length: frames played from `frame` on, row-major. 1 = a single frame. |
+| `frameRate` | float | `0` | Flipbook frames per second, looping; 0 plays the frames once over the particle's lifetime. |
+| `randomFrame` | bool | `false` | Each particle starts at a random flipbook frame and keeps it when frameRate is 0 (a sheet of variants). |
+| `sizeOverLife` | json | `[]` | Size keys [[t, meters], ...] with t ascending in 0..1; replaces startSize/endSize when not empty (sizeVariation still scales it). At most 16 keys. |
+| `colorOverLife` | json | `[]` | Color keys [[t, [r, g, b]] or [t, "#rrggbb"], ...]; replaces startColor/endColor when not empty. At most 16 keys. |
+| `opacityOverLife` | json | `[]` | Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys. |
+| `turbulence` | float | `0` | Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers). |
+| `turbulenceScale` | float | `1` | Noise cells per meter: small = wide swirls, large = jitter. |
+| `pixelArt` | bool | `true` | Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke). |
 
 ### Camera
 
@@ -1700,4 +1740,24 @@ Player entity assigned by the authoritative server; network.playerPrefab spawns 
 |---|---|---|---|
 | `player` | int | `0` | Authenticated player id assigned by the server. |
 | `team` | int | `0` | Player's relevance team. |
+
+### Trail
+
+Camera-facing ribbon left behind the entity as it moves (sword swings, projectiles, dashes); it narrows and fades along its length.
+
+| field | type | default | description |
+|---|---|---|---|
+| `lifetime` | float | `0.5` | Seconds a point of the path stays; with the entity's speed it sets the ribbon's length. |
+| `minDistance` | float | `0.0500000007` | Meters the entity moves before the path gets a new point (smaller = smoother curves). |
+| `width` | float | `0.200000003` | Ribbon width in meters at the entity. |
+| `endWidth` | float | `0` | Width at the oldest point. |
+| `color` | color | `[1,1,1]` | RGB tint at the entity. |
+| `endColor` | color | `[1,1,1]` | RGB tint at the oldest point. |
+| `opacity` | float | `1` | Opacity at the entity. |
+| `endOpacity` | float | `0` | Opacity at the oldest point. |
+| `texture` | string | `""` | Optional image stretched over the ribbon: left edge at the entity, right edge at the oldest point. Empty = solid. |
+| `blend` | string | `"alpha"` | alpha = normal; add = the ribbon brightens what is behind it (energy, fire). |
+| `layer` | int | `0` | 2D sorting layer, like Sprite.layer. |
+| `maxPoints` | int | `64` | Most path points kept; the oldest are dropped first. |
+| `emitting` | bool | `true` | Add new points while true; false lets the existing ribbon fade out. |
 

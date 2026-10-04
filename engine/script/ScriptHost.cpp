@@ -637,6 +637,29 @@ int L_ParticlesBurst(lua_State* L) {
     });
 }
 
+// particles.state(id) -> {count, emitted, playing, loop, maxParticles, finished}
+int L_ParticlesState(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        Json result = Host(L).GetEngine().Call("particles.state", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        PushJson(L, result["result"]);
+        return 1;
+    });
+}
+
+// trail.clear(id): forget the ribbon's path (teleports).
+int L_TrailClear(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        Json result = Host(L).GetEngine().Call("trail.clear", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        return 0;
+    });
+}
+
 // audio.play(path, {volume=1, pitch=1, loop=false}) -> voice id
 int L_AudioPlay(lua_State* L) {
     return Guard(L, [&] {
@@ -1383,8 +1406,10 @@ void ScriptHost::Open() {
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
-    const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {nullptr, nullptr}};
+    const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {"state", L_ParticlesState}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
+    const luaL_Reg trailFuncs[] = {{"clear", L_TrailClear}, {nullptr, nullptr}};
+    SetFuncs(L, "trail", trailFuncs);
     const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"wheel", L_InputWheel}, {"lockMouse", L_InputLockMouse}, {"look", L_InputLook}, {"setLook", L_InputSetLook},
                                   {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};

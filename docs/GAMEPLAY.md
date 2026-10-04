@@ -86,7 +86,7 @@ WAV files: PCM 8/16/24/32-bit or float, mono/stereo, any sample rate (resampled)
 
 1. Timers, then scripts `onStart` / `onUpdate` (entity id order)
 2. UI pointer: hover, press, slider drags (from this frame's mouse)
-3. Built-in systems (Animator, ParticleEmitter, SpriteAnimation)
+3. Built-in systems (Animator, ParticleEmitter, SpriteAnimation); Trail paths are sampled after physics
 4. Physics step, then `onCollision*` / `onTrigger*`
 5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onValueChanged`
 6. Pending scene change
