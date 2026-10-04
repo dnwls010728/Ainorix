@@ -25,6 +25,10 @@
 <body>
 <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
 <div id="status"><div id="statusText">Loading {{TITLE}}…</div><div class="bar"><div id="progress"></div></div></div>
+<!-- Host bridge: `oe package --web` loads the project's web/host.js here. It defines
+     window.OEHost = { call(name, data) -> true when handled } and answers the game with
+     Module.oeHostSend(name, data); see docs/GAMEPLAY.md (Host application). -->
+<!--{{HOST}}-->
 <script>
 (function () {
   var status = document.getElementById("status");

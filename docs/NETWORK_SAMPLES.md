@@ -122,5 +122,5 @@ device, so no Android build/device result is claimed for M8.
    cleanup and `adb logcat -s OwnEngine` for zero script errors. Repeat on arm64 hardware and
    the x86_64 emulator, then refresh runtime/android and record the actual device results.
 
-See [NETWORK.md](NETWORK.md) for milestone status and limits, [SCRIPTING.md](SCRIPTING.md)
+See [NETWORK.md](NETWORK.md) for the design and [NETWORK_NOTES.md](NETWORK_NOTES.md) for milestone status and limits, [SCRIPTING.md](SCRIPTING.md)
 for Lua contracts, and [PLATFORMS.md](PLATFORMS.md) / [ANDROID.md](ANDROID.md) for adapters.

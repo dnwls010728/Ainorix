@@ -70,6 +70,8 @@ public:
     virtual int Width() const = 0;
     virtual int Height() const = 0;
     virtual void SetTitle(const std::string& title) = 0;
+    // A text field has the focus (Engine::TextInputActive): phones show or hide the on-screen keyboard.
+    virtual void SetTextInput(bool) {}
     // OS handle for graphics APIs (HWND on Win32); nullptr where unused.
     virtual void* NativeHandle() const { return nullptr; }
 
@@ -119,6 +121,16 @@ const char* PlatformName();
 double PlatformTimeSeconds();
 void PlatformSleep(double seconds);
 bool PlatformOpenUrl(const std::string& url);
+// Text clipboard (UTF-8) for UIInput copy and paste. Platforms without access to the system clipboard
+// keep the text inside the process.
+std::string PlatformClipboardText();
+void PlatformSetClipboardText(const std::string& text);
+// Host bridge (Engine::HostCall, Lua host.call): passes a request of the game to the application
+// that embeds the player - on the web the page's `window.OEHost.call(name, json)` - and returns
+// whether it handles that name. Platforms without a host return false.
+bool PlatformHostCall(const std::string& name, const std::string& json);
+// Messages the host sent to the game since the last call: (name, JSON payload text).
+std::vector<std::pair<std::string, std::string>> PlatformHostPoll();
 std::string ExecutableDirectory();
 // Atomically renames a file over its destination (both on the same filesystem).
 bool PlatformReplaceFile(const std::string& from, const std::string& to, std::string* error);

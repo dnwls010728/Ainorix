@@ -251,7 +251,7 @@ bool Engine::PollAuthority() {
             frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
             journal_.reset(); snapshots_.clear(); checkpoints_.clear(); predictionStates_.clear(); replicatedEntities_.clear(); authorityIds_.clear(); nextAuthorityId_ = 1;
             authorityWorlds_.clear(); authorityEvents_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
-            uiHovered_ = uiPressed_ = 0; heldKeys_.clear(); heldButtons_.clear();
+            uiHovered_ = uiPressed_ = uiFocus_ = 0; heldKeys_.clear(); heldButtons_.clear();
             saves_.FreezeReads(true); saves_.DeferFlush(true);
             if (network_->IsHost()) {
                 for (uint32_t player : authority_->Players()) {

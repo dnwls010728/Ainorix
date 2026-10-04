@@ -4896,6 +4896,564 @@ Color MeanColor(const RenderTarget& rt, int x0, int y0, int x1, int y1) {
     return Color(static_cast<float>(r / n / 255), static_cast<float>(g / n / 255), static_cast<float>(b / n / 255));
 }
 
+TEST(UIButtonLooksIconToggleAndRelease) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_button"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    auto solid = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
+        Image img;
+        img.width = img.height = 8;
+        img.rgba.resize(8 * 8 * 4);
+        for (size_t i = 0; i < img.rgba.size(); i += 4) img.rgba[i] = r, img.rgba[i + 1] = g, img.rgba[i + 2] = b, img.rgba[i + 3] = 255;
+        CHECK(WritePng(JoinPath(e.ProjectDir(), name), img, true));
+    };
+    solid("red.png", 255, 0, 0);
+    solid("green.png", 0, 255, 0);
+    solid("white.png", 255, 255, 255);
+    Call(e, "script.write", R"J({"path": "scripts/btn_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onClick() table.insert(log_, 'click') end
+function M:onToggle(on) table.insert(log_, 'toggle ' .. tostring(on)) end
+return M
+"})J");
+    // Looks: state textures, state brightness, an icon.
+    Call(e, "entity.create", R"J({"name": "Tex", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 0, "y": 0, "width": 200, "height": 100, "radius": 0,
+      "color": [1, 1, 1], "texture": "red.png", "hoverTexture": "green.png", "slice": 2}}})J");
+    Call(e, "entity.create", R"J({"name": "Col", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 300, "y": 0, "width": 200, "height": 100, "radius": 0,
+      "color": [0.5, 0.5, 0.5], "hoverBrightness": 2, "pressedBrightness": 0}}})J");
+    Call(e, "entity.create", R"J({"name": "Ico", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 0, "y": 200, "width": 200, "height": 100, "radius": 0,
+      "color": [0, 0, 0], "icon": "white.png", "iconSize": 40}}})J");
+    Call(e, "entity.create", R"J({"name": "IcoLeft", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 300, "y": 200, "width": 200, "height": 100, "radius": 0,
+      "color": [0, 0, 0], "icon": "white.png", "iconSize": 40, "align": "left"}}})J");
+    // Behaviour: a radio group, an independent toggle, a button that clicks on release.
+    const char* kToggle = R"J({"name": "%s", "components": {"UIButton": {"anchor": "top-left", "x": %d, "y": 400, "width": 100, "height": 50, "toggle": true, "group": "%s"},
+      "Script": {"path": "scripts/btn_log.lua"}}})J";
+    Call(e, "entity.create", Format(kToggle, "A", 0, "tab").c_str());
+    Call(e, "entity.create", Format(kToggle, "B", 150, "tab").c_str());
+    Call(e, "entity.create", Format(kToggle, "C", 300, "").c_str());
+    Call(e, "entity.create", R"J({"name": "Rel", "components": {"UIButton": {"anchor": "top-left", "x": 500, "y": 400, "width": 100, "height": 50, "clickOn": "release"},
+      "Script": {"path": "scripts/btn_log.lua"}}})J");
+
+    Scene& scene = e.GetScene();
+    auto mean = [&](int x0, int y0, int x1, int y1) {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        return MeanColor(rt, x0, y0, x1, y1);
+    };
+    auto is = [](const Color& c, float r, float g, float b) { return std::fabs(c.r - r) < 0.05f && std::fabs(c.g - g) < 0.05f && std::fabs(c.b - b) < 0.05f; };
+    auto step = [&](int frames) { Call(e, "sim.step", Format(R"J({"frames": %d})J", frames).c_str()); };
+    auto hover = [&](int x, int y) { Call(e, "input.mouse", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str()); };
+    auto click = [&](int x, int y) { Call(e, "input.click", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str()); };
+    auto button = [&](const char* name) { return scene.Get<UIButton>(scene.FindByName(name)); };
+    auto logText = [&] { return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString(); };
+
+    CHECK(is(mean(10, 10, 190, 90), 1, 0, 0));
+    CHECK(is(mean(310, 10, 490, 90), 0.5f, 0.5f, 0.5f));
+    CHECK(is(mean(90, 240, 110, 260), 1, 1, 1) && is(mean(5, 205, 25, 225), 0, 0, 0));      // icon centered
+    CHECK(is(mean(312, 235, 344, 265), 1, 1, 1) && is(mean(400, 240, 480, 260), 0, 0, 0));  // icon at the left padding
+    hover(100, 50);
+    step(1);
+    CHECK(is(mean(10, 10, 190, 90), 0, 1, 0));
+    hover(400, 50);
+    step(1);
+    CHECK(is(mean(10, 10, 190, 90), 1, 0, 0) && is(mean(310, 10, 490, 90), 1, 1, 1));
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": true})J");
+    step(1);
+    CHECK(is(mean(310, 10, 490, 90), 0, 0, 0));
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    hover(700, 50);
+    step(1);
+
+    // Radio group: one stays on, and a click cannot turn it off.
+    click(50, 425);
+    step(1);
+    CHECK(button("A")->on && !button("B")->on && logText() == "click,toggle true");
+    click(200, 425);
+    step(1);
+    CHECK(!button("A")->on && button("B")->on && logText() == "click,toggle true,click,toggle true,toggle false");
+    click(200, 425);
+    step(1);
+    CHECK(button("B")->on && logText() == "click,toggle true,click,toggle true,toggle false,click");
+    click(350, 425);
+    step(1);
+    CHECK(button("C")->on && button("B")->on);
+    click(350, 425);
+    step(1);
+    CHECK(!button("C")->on);
+    Call(e, "script.eval", R"J({"code": "log_ = {}"})J");
+
+    // clickOn release: the click waits for the release and is cancelled by leaving the button.
+    Call(e, "input.mouse", R"J({"x": 550, "y": 425, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(2);
+    CHECK(button("Rel")->pressed && logText() == "");
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(logText() == "click");
+    Call(e, "input.mouse", R"J({"x": 550, "y": 425, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    hover(900, 600);
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(2);
+    CHECK(logText() == "click");
+    click(550, 425);  // a tap within one frame
+    step(2);
+    CHECK(logText() == "click,click");
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+    CHECK(!button("B")->on);
+}
+
+TEST(UINavigationFocusAndTextShrink) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_nav"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "script.write", R"J({"path": "scripts/nav_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onClick() table.insert(log_, 'click') end
+function M:onValueChanged(v) table.insert(log_, string.format('value %.2f', v)) end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Canvas", "components": {"UICanvas": {"navigation": true}}})J");
+    Call(e, "entity.create", R"J({"name": "A", "components": {"UIButton": {"anchor": "top-left", "x": 20, "y": 20, "width": 200, "height": 100}, "Script": {"path": "scripts/nav_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "B", "components": {"UIButton": {"anchor": "top-left", "x": 320, "y": 20, "width": 200, "height": 100}, "Script": {"path": "scripts/nav_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Vol", "components": {"UISlider": {"anchor": "top-left", "x": 20, "y": 220, "width": 400, "height": 40, "value": 0, "step": 0.25}, "Script": {"path": "scripts/nav_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Off", "components": {"UIButton": {"anchor": "top-left", "x": 20, "y": 120, "width": 200, "height": 60, "interactable": false}}})J");
+    Scene& scene = e.GetScene();
+    auto tap = [&](const char* key) {
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": true})J", key).c_str());
+        Call(e, "sim.step", R"J({"frames": 1})J");
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": false})J", key).c_str());
+        Call(e, "sim.step", R"J({"frames": 1})J");
+    };
+    auto focusIs = [&](const char* name) { return e.UIFocus() == scene.FindByName(name); };
+    auto logText = [&] { return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString(); };
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 600, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(e.UIFocus() == kNullEntity);
+    tap("Down");  // the first key picks the top-left element
+    CHECK(focusIs("A") && scene.Get<UIButton>(scene.FindByName("A"))->focused);
+    tap("Right");
+    CHECK(focusIs("B"));
+    tap("GamepadDPadLeft");
+    CHECK(focusIs("A"));
+    tap("Down");  // the disabled button is skipped
+    CHECK(focusIs("Vol"));
+    tap("Right");  // along a slider the key changes its value
+    CHECK(focusIs("Vol") && scene.Get<UISlider>(scene.FindByName("Vol"))->value == 0.25f);
+    tap("Up");
+    CHECK(focusIs("A"));
+    tap("Enter");
+    CHECK(logText() == "value 0.25,click");
+    // The focused element is framed just outside its box.
+    {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        Color ring = MeanColor(rt, 30, 16, 200, 18), other = MeanColor(rt, 330, 16, 500, 18);
+        CHECK(ring.r > 0.95f && ring.g > 0.95f && other.r < 0.9f);
+    }
+    // Tools and scripts: ui.focus, ui.layout, Lua ui.focus / ui.focused.
+    CHECK(Call(e, "ui.focus", R"J({"id": "B"})J")["result"]["name"].asString() == "B");
+    bool listed = false;
+    const Json layout = Call(e, "ui.layout", R"J({"width": 1280, "height": 720})J");
+    for (const Json& el : layout["result"]["elements"].items()) {
+        listed = listed || (el["name"].asString() == "B" && el["focused"].asBool());
+    }
+    CHECK(listed);
+    CHECK(Call(e, "script.eval", R"J({"code": "return ui.focused() == scene.find('B')"})J")["result"]["value"].asBool());
+    CHECK(Call(e, "script.eval", R"J({"code": "ui.focus(scene.find('Vol'))"})J")["ok"].asBool() && focusIs("Vol"));
+    CHECK(Call(e, "ui.focus", R"J({"id": "Canvas"})J")["error"]["code"].asString() == "invalid_argument");
+    // A press with the pointer takes the focus; turning navigation off drops it.
+    Call(e, "input.click", R"J({"x": 100, "y": 60, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(focusIs("A"));
+    Call(e, "component.set", R"J({"id": "Canvas", "type": "UICanvas", "values": {"navigation": false}})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(e.UIFocus() == kNullEntity);
+    CHECK(e.Scripts().Errors().empty());
+
+    // UIText.minSize: the font shrinks until the text fits its box.
+    Call(e, "entity.create", R"J({"name": "Long", "components": {"UIText": {"text": "A rather long label", "size": 40, "anchor": "top-left", "x": 600, "y": 400,
+      "width": 120, "height": 50, "wrap": false}}})J");
+    auto inkWidth = [&] {
+        int x0 = 1 << 30, x1 = -(1 << 30);
+        const EntityId id = scene.FindByName("Long");
+        for (const UIQuad& q : BuildUIQuads(scene, 1280, 720, &e.Assets())) {
+            if (q.entity == id) x0 = std::min(x0, q.x0), x1 = std::max(x1, q.x1);
+        }
+        return x1 - x0;
+    };
+    CHECK(inkWidth() > 200);
+    Call(e, "component.set", R"J({"id": "Long", "type": "UIText", "values": {"minSize": 8}})J");
+    CHECK(inkWidth() <= 121 && inkWidth() > 90);
+    Call(e, "sim.stop", "{}");
+}
+
+TEST(UIInputDropdownAndJoystick) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_widgets"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "script.write", R"J({"path": "scripts/widget_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onTextChanged(t) table.insert(log_, 'text ' .. t) end
+function M:onSubmit(t) table.insert(log_, 'submit ' .. t) end
+function M:onValueChanged(v) table.insert(log_, 'value ' .. math.floor(v)) end
+function M:onClick() table.insert(log_, 'click') end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Name", "components": {"UIInput": {"anchor": "top-left", "x": 20, "y": 20, "width": 320, "height": 48, "maxLength": 5},
+      "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Level", "components": {"UIDropdown": {"anchor": "top-left", "x": 20, "y": 120, "width": 240, "height": 48,
+      "options": ["Easy", "Normal", "Hard"]}, "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Under", "components": {"UIButton": {"anchor": "top-left", "x": 20, "y": 230, "width": 240, "height": 40},
+      "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Side", "components": {"UIButton": {"anchor": "top-left", "x": 400, "y": 120, "width": 100, "height": 48},
+      "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Stick", "components": {"UIJoystick": {"anchor": "top-left", "x": 600, "y": 300, "width": 200, "height": 200}}})J");
+    Scene& scene = e.GetScene();
+    auto step = [&](int frames) { Call(e, "sim.step", Format(R"J({"frames": %d})J", frames).c_str()); };
+    auto click = [&](int x, int y) {
+        Call(e, "input.click", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str());
+        step(1);
+    };
+    auto tap = [&](const char* key) {
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": true})J", key).c_str());
+        step(1);
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": false})J", key).c_str());
+        step(1);
+    };
+    auto logText = [&] { return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString(); };
+    auto clearLog = [&] { Call(e, "script.eval", R"J({"code": "log_ = {}"})J"); };
+    const UIInput* name = scene.Get<UIInput>(scene.FindByName("Name"));
+    const UIDropdown* level = scene.Get<UIDropdown>(scene.FindByName("Level"));
+
+    // Text field: a click focuses it (no UICanvas.navigation needed), typing stops at maxLength.
+    Call(e, "input.text", R"J({"text": "no"})J");
+    step(1);
+    CHECK(name->text.empty());  // not focused: typed characters go nowhere
+    click(100, 44);
+    CHECK(e.UIFocus() == scene.FindByName("Name") && name->focused);
+    Call(e, "input.text", R"J({"text": "Héllo!!"})J");
+    step(1);
+    CHECK(name->text == "H\xC3\xA9" "llo");
+    CHECK(logText() == "text H\xC3\xA9" "llo");
+    for (int i = 0; i < 4; ++i) tap("Backspace");  // removes whole characters, also the two-byte one
+    CHECK(name->text == "H");
+    Call(e, "input.key", R"J({"key": "Backspace", "down": true})J");  // held: repeats after a moment
+    step(40);
+    Call(e, "input.key", R"J({"key": "Backspace", "down": false})J");
+    CHECK(name->text.empty());
+    Call(e, "input.text", R"J({"text": "Kim"})J");
+    step(1);
+    clearLog();
+    tap("Enter");
+    CHECK(logText() == "submit Kim" && e.UIFocus() == kNullEntity && !name->focused);
+    click(100, 44);
+    click(1000, 600);  // a click elsewhere leaves the field
+    CHECK(e.UIFocus() == kNullEntity);
+    // The field draws its text; a password field does not draw more than stars of the same count.
+    Call(e, "component.set", R"J({"id": "Name", "type": "UIInput", "values": {"password": true}})J");
+    {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        CHECK(MeanColor(rt, 30, 30, 120, 58).r > MeanColor(rt, 200, 30, 330, 58).r);  // three stars at the left, nothing further right
+    }
+
+    // Drop-down: opens on top of the button below it; a row selects, a press elsewhere only closes.
+    clearLog();
+    click(100, 144);
+    CHECK(level->open);
+    {
+        const Json layout = Call(e, "ui.layout", R"J({"width": 1280, "height": 720, "interactable": true})J");
+        int rows = 0;
+        for (const Json& el : layout["result"]["elements"].items()) rows += el["name"].asString() == "Level" && el.has("item");
+        CHECK(rows == 3);
+    }
+    Call(e, "input.mouse", R"J({"x": 100, "y": 242, "width": 1280, "height": 720})J");
+    step(1);
+    CHECK(level->hoverItem == 1);
+    click(100, 290);  // "Hard", over the Under button
+    CHECK(!level->open && level->selected == 2 && logText() == "value 2");
+    click(100, 250);
+    CHECK(logText() == "value 2,click");  // the list is gone: the button is reachable again
+    click(100, 144);
+    click(450, 144);  // closes the list, does not click Side
+    CHECK(!level->open && logText() == "value 2,click");
+    click(450, 144);
+    CHECK(logText() == "value 2,click,click");
+
+    // Joystick: a finger that goes down on it drives the axes until it lifts.
+    auto axis = [&](const char* axisName) {
+        return Call(e, "script.eval", Format(R"J({"code": "return input.axis('%s')"})J", axisName).c_str())["result"]["value"].asFloat();
+    };
+    auto touch = [&](int id, int x, int y) {
+        Call(e, "input.touch", Format(R"J({"id": %d, "x": %d, "y": %d, "width": 1280, "height": 720})J", id, x, y).c_str());
+        step(1);
+    };
+    touch(1, 700, 400);
+    CHECK(scene.Get<UIJoystick>(scene.FindByName("Stick"))->held == 1 && std::fabs(axis("LeftX")) < 0.01f);
+    touch(1, 900, 400);  // beyond the edge: clamped
+    CHECK(std::fabs(axis("LeftX") - 1.0f) < 0.01f && std::fabs(axis("LeftY")) < 0.01f);
+    touch(1, 700, 350);  // half way up
+    CHECK(std::fabs(axis("LeftX")) < 0.01f && axis("LeftY") > 0.3f && axis("LeftY") < 0.6f);
+    Call(e, "input.touch", R"J({"id": 1, "down": false})J");
+    step(1);
+    CHECK(axis("LeftY") == 0.0f && scene.Get<UIJoystick>(scene.FindByName("Stick"))->held == UIJoystick::kNoPointer);
+    touch(2, 1000, 650);  // went down elsewhere: sliding onto the stick does not take it
+    touch(2, 780, 400);
+    CHECK(axis("LeftX") == 0.0f);
+    Call(e, "input.touch", R"J({"id": 2, "down": false})J");
+    step(1);
+
+    // With navigation: Enter opens the focused drop-down, up/down choose, Enter closes; a text field keeps left/right.
+    Call(e, "entity.create", R"J({"name": "Canvas", "components": {"UICanvas": {"navigation": true}}})J");
+    clearLog();
+    Call(e, "ui.focus", R"J({"id": "Level"})J");
+    tap("Enter");
+    CHECK(level->open);
+    tap("Up");
+    CHECK(level->selected == 1 && e.UIFocus() == scene.FindByName("Level"));
+    tap("Enter");
+    CHECK(!level->open && logText() == "value 1");
+    tap("Up");
+    CHECK(e.UIFocus() == scene.FindByName("Name"));
+    tap("Right");
+    CHECK(e.UIFocus() == scene.FindByName("Name"));
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+    CHECK(scene.Get<UIDropdown>(scene.FindByName("Level"))->selected == 0);
+}
+
+TEST(EditorAddPresetsAreValid) {
+    // Every entry of the editor's Add menu must be creatable (a broken JSON literal once made "UI Toggle" fail).
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("presets"), &err));
+    for (const auto& preset : EditorAddPresets()) {
+        std::string parseError;
+        Json components = Json::parse(preset.second, &parseError);
+        if (!parseError.empty()) std::printf("  preset %s: %s\n", preset.first.c_str(), parseError.c_str());
+        CHECK(parseError.empty());
+        Json args = Json::MakeObject();
+        args["name"] = "Preset " + preset.first;
+        args["components"] = components;
+        Json made = e.Call("entity.create", args);
+        if (!made["ok"].asBool()) std::printf("  preset %s: %s\n", preset.first.c_str(), made["error"]["message"].asString().c_str());
+        CHECK(made["ok"].asBool());
+    }
+}
+
+TEST(UIInputEditingSkinsAndLongLists) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_editing"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    auto solid = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
+        Image img;
+        img.width = img.height = 8;
+        img.rgba.resize(8 * 8 * 4);
+        for (size_t i = 0; i < img.rgba.size(); i += 4) img.rgba[i] = r, img.rgba[i + 1] = g, img.rgba[i + 2] = b, img.rgba[i + 3] = 255;
+        CHECK(WritePng(JoinPath(e.ProjectDir(), name), img, true));
+    };
+    solid("red.png", 255, 0, 0);
+    solid("green.png", 0, 255, 0);
+    Call(e, "script.write", R"J({"path": "scripts/edit_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onSubmit(t) table.insert(log_, 'submit ' .. t) end
+function M:onValueChanged(v) table.insert(log_, 'value ' .. math.floor(v)) end
+function M:onUpdate() KEY_A = input.down('A') end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Field", "components": {"UIInput": {"anchor": "top-left", "x": 20, "y": 20, "width": 320, "height": 48, "text": "hello world"},
+      "Script": {"path": "scripts/edit_log.lua"}}})J");
+    Scene& scene = e.GetScene();
+    auto step = [&](int frames) { Call(e, "sim.step", Format(R"J({"frames": %d})J", frames).c_str()); };
+    auto key = [&](const char* name, bool down) { Call(e, "input.key", Format(R"J({"key": "%s", "down": %s})J", name, down ? "true" : "false").c_str()); };
+    auto tap = [&](const char* name) {
+        key(name, true);
+        step(1);
+        key(name, false);
+        step(1);
+    };
+    auto chord = [&](const char* modifier, const char* name) {
+        key(modifier, true);
+        tap(name);
+        key(modifier, false);
+        step(1);
+    };
+    auto type = [&](const char* text) {
+        Call(e, "input.text", Format(R"J({"text": "%s"})J", text).c_str());
+        step(1);
+    };
+    auto click = [&](int x, int y) {
+        Call(e, "input.click", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str());
+        step(1);
+    };
+    auto eval = [&](const char* code) { return Call(e, "script.eval", Format(R"J({"code": "%s"})J", code).c_str())["result"]["value"]; };
+    const UIInput* field = scene.Get<UIInput>(scene.FindByName("Field"));
+
+    // Scripts see the keyboard only while no text field has the focus.
+    key("A", true);
+    step(2);
+    CHECK(eval("return KEY_A").asBool() && !e.TextInputActive());
+    click(25, 44);  // left of the first character
+    step(1);
+    CHECK(e.TextInputActive() && !eval("return KEY_A").asBool());
+    key("A", false);
+    step(1);
+
+    // Caret: placed by the pointer, moved by keys; typing inserts there.
+    CHECK(field->caretAt == 0);
+    type("X");
+    CHECK(field->text == "Xhello world" && field->caretAt == 1);
+    click(335, 44);
+    CHECK(field->caretAt == 12);
+    tap("Left");
+    tap("Left");
+    tap("Backspace");
+    CHECK(field->text == "Xhello wold" && field->caretAt == 9);
+    tap("Delete");
+    CHECK(field->text == "Xhello wod");
+    tap("Home");
+    tap("Delete");
+    CHECK(field->text == "hello wod" && field->caretAt == 0);
+    tap("End");
+    CHECK(field->caretAt == 9);
+    // Selection: Shift+arrows, typing replaces it; Ctrl+A / C / X / V.
+    key("Shift", true);
+    tap("Left");
+    tap("Left");
+    tap("Left");
+    key("Shift", false);
+    step(1);
+    CHECK(field->caretAt == 6 && field->selectAt == 9);
+    type("world");
+    CHECK(field->text == "hello world" && field->caretAt == field->selectAt);
+    chord("Control", "A");
+    CHECK(field->selectAt == 0 && field->caretAt == 11);
+    chord("Control", "C");
+    CHECK(Call(e, "ui.clipboard", "{}")["result"]["text"].asString() == "hello world");
+    tap("End");
+    type(" ");
+    chord("Control", "V");
+    CHECK(field->text == "hello world hello world");
+    chord("Control", "A");
+    chord("Control", "X");
+    CHECK(field->text.empty());
+    Call(e, "ui.clipboard", R"J({"text": "two\nlines"})J");
+    chord("Control", "V");
+    CHECK(field->text == "two lines");  // one line: a pasted line break becomes a space
+    // A drag selects.
+    Call(e, "input.mouse", R"J({"x": 25, "y": 44, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"x": 335, "y": 44, "width": 1280, "height": 720})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(field->selectAt == 0 && field->caretAt == 9);
+    // A password is never copied.
+    Call(e, "component.set", R"J({"id": "Field", "type": "UIInput", "values": {"password": true}})J");
+    Call(e, "ui.clipboard", R"J({"text": "kept"})J");
+    chord("Control", "C");
+    CHECK(Call(e, "ui.clipboard", "{}")["result"]["text"].asString() == "kept");
+
+    // Several lines: Enter breaks the line, up/down move between lines, Ctrl+Enter submits.
+    Call(e, "component.set", R"J({"id": "Field", "type": "UIInput", "values": {"password": false, "multiline": true, "height": 140, "text": ""}})J");
+    click(100, 60);
+    type("ab");
+    tap("Enter");
+    type("cd");
+    CHECK(field->text == "ab\ncd" && field->caretAt == 5);
+    tap("Up");
+    CHECK(field->caretAt == 2);
+    tap("Down");
+    CHECK(field->caretAt == 5);
+    CHECK(eval("return table.concat(log_, ',')").asString().empty());
+    chord("Control", "Enter");
+    CHECK(eval("return table.concat(log_, ',')").asString() == "submit ab\ncd");
+    {  // the second line is drawn below the first
+        int top = 1 << 30, bottom = 0;
+        for (const UIQuad& q : BuildUIQuads(scene, 1280, 720, &e.Assets())) {
+            if (q.entity == scene.FindByName("Field") && q.texture) top = std::min(top, q.y0), bottom = std::max(bottom, q.y1);
+        }
+        CHECK(bottom - top > 40);
+    }
+    click(1000, 650);
+    CHECK(!e.TextInputActive());
+
+    // Images instead of colors: panel, text field, slider parts.
+    Call(e, "entity.create", R"J({"name": "Frame", "components": {"UIPanel": {"anchor": "top-left", "x": 400, "y": 20, "width": 200, "height": 100, "color": [1, 1, 1],
+      "opacity": 1, "texture": "red.png", "slice": 2}}})J");
+    Call(e, "entity.create", R"J({"name": "Bar", "components": {"UISlider": {"anchor": "top-left", "x": 400, "y": 200, "width": 400, "height": 40, "radius": 0, "value": 0.5,
+      "handle": false, "color": [1, 1, 1], "fillColor": [1, 1, 1], "texture": "red.png", "fillTexture": "green.png"}}})J");
+    Call(e, "component.set", R"J({"id": "Field", "type": "UIInput", "values": {"text": "", "placeholder": "", "color": [1, 1, 1], "borderWidth": 0, "radius": 0, "texture": "green.png"}})J");
+    {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        auto is = [](const Color& c, float r, float g, float b) { return std::fabs(c.r - r) < 0.05f && std::fabs(c.g - g) < 0.05f && std::fabs(c.b - b) < 0.05f; };
+        CHECK(is(MeanColor(rt, 410, 30, 590, 110), 1, 0, 0));
+        CHECK(is(MeanColor(rt, 410, 205, 590, 235), 0, 1, 0) && is(MeanColor(rt, 610, 205, 790, 235), 1, 0, 0));
+        CHECK(is(MeanColor(rt, 30, 30, 330, 150), 0, 1, 0));
+    }
+
+    // A drop-down with more options than fit: a window of rows that the wheel and a drag scroll.
+    Json options = Json::MakeArray();
+    for (int i = 0; i < 40; ++i) options.push(Json("Option " + std::to_string(i)));
+    Json create = Json::parse(R"J({"name": "Long", "components": {"UIDropdown": {"anchor": "top-left", "x": 900, "y": 20, "width": 240, "height": 48},
+      "Script": {"path": "scripts/edit_log.lua"}}})J");
+    create["components"]["UIDropdown"]["options"] = options;
+    CHECK(e.Call("entity.create", create)["ok"].asBool());
+    const UIDropdown* list = scene.Get<UIDropdown>(scene.FindByName("Long"));
+    auto rows = [&] {  // items of the visible rows, top to bottom
+        std::vector<int> items;
+        for (const UIRect& r : LayoutUI(scene, 1280, 720, &e.Assets())) {
+            if (r.entity == scene.FindByName("Long") && r.item >= 0) items.push_back(r.item);
+        }
+        return items;
+    };
+    click(1000, 44);
+    CHECK(list->open && rows().size() == 13 && rows().front() == 0);  // (720 - 70) / 48 rows fit below
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 200, "width": 1280, "height": 720, "wheel": -3})J");
+    step(1);
+    CHECK(rows().front() == 1);  // a row per frame with wheel motion
+    for (int i = 0; i < 40; ++i) {
+        Call(e, "input.mouse", R"J({"wheel": -1})J");
+        step(1);
+    }
+    CHECK(rows().back() == 39 && rows().size() == 13);  // stops at the end
+    // drag up by two rows: the list moves back, and the release does not select
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 200, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 300, "width": 1280, "height": 720})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(list->open && rows().back() == 37 && list->selected == 0);
+    // press and release on one row selects it
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 94, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(!list->open && list->selected == 25);
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+}
+
 TEST(MaterialsFilesAndPbr) {
     Engine e;
     std::string err;
@@ -5989,6 +6547,235 @@ TEST(ParticleVariationAndDrag) {
     CHECK(hi > lo * 2);                       // and the particles started at different speeds
     CHECK(shortest >= 1 - 1e-3f && longest <= 2 + 1e-3f && longest - shortest > 0.4f);
     CHECK(Call(e, "component.set", R"J({"id":"Varied","type":"ParticleEmitter","values":{"drag":"x"}})J")["ok"].asBool() == false);
+}
+
+TEST(ParticleShapesRotationAndTiming) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("particle_vfx"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    auto emitter = [&](const char* name) { return e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name)); };
+    // Birth shapes: a 2D rim with radial speed, a sphere volume and the faces of a box.
+    Call(e, "entity.create", R"J({"name":"Ring","components":{"ParticleEmitter":{"rate":0,"burst":30,"loop":false,"lifetime":5,"speed":0,
+      "gravity":[0,0,0],"dimensions":2,"shape":"circle","shapeSize":[2,0,0],"shapeEdge":true,"radialSpeed":3,"rotation":10,"spin":90}}})J");
+    Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[10,0,0]},"ParticleEmitter":{"rate":0,"burst":60,"loop":false,
+      "lifetime":5,"speed":0,"gravity":[0,0,0],"shape":"sphere","shapeSize":[1.5,0,0],"space":"world","maxParticles":64,"rotationVariation":45}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":5,"speed":0,
+      "gravity":[0,0,0],"shape":"box","shapeSize":[1,2,3],"shapeEdge":true,"maxParticles":64}}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(emitter("Ring")->particles.size() == 30);
+    for (const Particle& particle : emitter("Ring")->particles) {
+        CHECK(std::fabs(Length(particle.position) - 2) < 1e-4f && particle.position.z == 0);
+        CHECK(std::fabs(Length(particle.velocity) - 3) < 1e-4f && Dot(particle.velocity, particle.position) > 0);
+        CHECK(particle.rotation == 10 && particle.spin == 90);
+    }
+    float nearest = 1e9f, farthest = 0, leastTurn = 1e9f, mostTurn = -1e9f;
+    for (const Particle& particle : emitter("Ball")->particles) {
+        const float distance = Length(particle.position - Vec3(10, 0, 0));  // world space: around the entity
+        nearest = std::min(nearest, distance); farthest = std::max(farthest, distance);
+        leastTurn = std::min(leastTurn, particle.rotation); mostTurn = std::max(mostTurn, particle.rotation);
+    }
+    CHECK(emitter("Ball")->particles.size() == 60 && farthest <= 1.5f + 1e-4f && nearest < 1.0f && farthest > 1.2f);
+    CHECK(leastTurn >= -45 && mostTurn <= 45 && mostTurn - leastTurn > 30);
+    for (const Particle& particle : emitter("Box")->particles) {
+        const Vec3 p = particle.position;
+        CHECK(std::fabs(p.x) <= 1 && std::fabs(p.y) <= 2 && std::fabs(p.z) <= 3);
+        CHECK(std::fabs(p.x) == 1 || std::fabs(p.y) == 2 || std::fabs(p.z) == 3);
+    }
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(std::fabs(emitter("Ring")->particles[0].rotation - 100) < 1e-2f);
+    CHECK(std::fabs(Call(e, "particles.state", R"J({"id":"Ring","particles":true})J")["result"]["particles"][0]["rotation"].asFloat() - 100) < 1e-2f);
+
+    // delay holds the burst back; a duration ends the rate; loop + duration fires the burst every cycle.
+    Call(e, "entity.create", R"J({"name":"Late","components":{"ParticleEmitter":{"rate":0,"burst":5,"loop":false,"lifetime":5,"delay":0.5}}})J");
+    Call(e, "entity.create", R"J({"name":"Puff","components":{"ParticleEmitter":{"rate":60,"loop":false,"lifetime":0.2,"duration":0.5}}})J");
+    Call(e, "entity.create", R"J({"name":"Pulse","components":{"ParticleEmitter":{"rate":0,"burst":3,"loop":true,"lifetime":5,"duration":0.5}}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    CHECK(emitter("Late")->particles.empty() && emitter("Pulse")->emitted == 3);
+    CHECK(!Call(e, "particles.state", R"J({"id":"Late"})J")["result"]["finished"].asBool());
+    Call(e, "sim.step", R"J({"frames":15})J");
+    CHECK(emitter("Late")->particles.size() == 5 && emitter("Pulse")->emitted == 6);
+    Call(e, "sim.step", R"J({"frames":75})J");
+    CHECK(emitter("Puff")->emitted == 30 && emitter("Puff")->particles.empty());
+    CHECK(Call(e, "particles.state", R"J({"id":"Puff"})J")["result"]["finished"].asBool());
+    CHECK(!Call(e, "particles.state", R"J({"id":"Pulse"})J")["result"]["finished"].asBool());
+    CHECK(Call(e, "script.eval", R"J({"code":"local s = particles.state('Puff'); assert(s.finished and s.count == 0 and s.emitted == 30)"})J")["ok"].asBool());
+    Call(e, "particles.clear", R"J({"id":"Puff","restart":true})J");
+    Call(e, "sim.step", R"J({"frames":10})J");
+    CHECK(emitter("Puff")->emitted == 10);  // the clock restarted with the emitter
+
+    // Turbulence bends paths, identically on every run.
+    auto drift = [](float turbulence) {
+        Engine run;
+        Call(run, "scene.new", R"J({"empty":true})J");
+        Json args = Json::parse(R"J({"name":"Smoke","components":{"ParticleEmitter":{"rate":0,"burst":8,"loop":false,"lifetime":5,"speed":1,
+          "spread":0,"gravity":[0,0,0],"turbulenceScale":0.7}}})J");
+        args["components"]["ParticleEmitter"]["turbulence"] = turbulence;
+        run.Call("entity.create", args);
+        Call(run, "sim.step", R"J({"frames":60})J");
+        return Call(run, "particles.state", R"J({"id":"Smoke","particles":true})J")["result"]["particles"];
+    };
+    const Json calm = drift(0), windy = drift(6);
+    CHECK(windy == drift(6) && windy != calm);
+    CHECK(calm[0]["velocity"][0].asFloat() == 0 && std::fabs(windy[0]["velocity"][0].asFloat()) > 1e-3f);
+}
+
+TEST(ParticleCurvesFlipbookAndAlignment) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("particle_curves"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"rate":0,"loop":false,"lifetime":1,"speed":2,"spread":0,
+      "direction":[1,0,0],"gravity":[0,0,0],"startSize":9,"endSize":9,"columns":4,"frames":4,
+      "sizeOverLife":[[0,1],[0.5,3],[1,3]],"colorOverLife":[[0,"#ff0000"],[1,[0,0,1]]],"opacityOverLife":[[0,0],[0.25,1],[1,0]]}}})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    Call(e, "sim.step", R"J({"frames":20})J");  // a third of the lifetime: away from key and frame boundaries
+    auto item = [&] {
+        auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+        CHECK(items.size() == 1);
+        return items.empty() ? RenderItem{} : items.front();
+    };
+    RenderItem it = item();
+    CHECK(std::fabs(Length(it.world.TransformDir(Vec3(1, 0, 0))) - (1 + 4.0f / 3)) < 1e-3f);  // size curve, two thirds of the way to the 0.5 key
+    CHECK(std::fabs(it.opacity - 8.0f / 9) < 1e-3f && std::fabs(it.tint.r - 2.0f / 3) < 1e-3f && std::fabs(it.tint.b - 1.0f / 3) < 1e-3f);
+    CHECK(it.uvOffset[0] == 0.25f && it.uvScale[0] == 0.25f);                     // second of four frames over the lifetime
+    Call(e, "sim.step", R"J({"frames":30})J");
+    it = item();
+    CHECK(std::fabs(Length(it.world.TransformDir(Vec3(1, 0, 0))) - 3) < 1e-3f && it.uvOffset[0] == 0.75f);
+    CHECK(std::fabs(it.opacity - 2.0f / 9) < 1e-3f);
+    // A looping flipbook follows frameRate; align velocity turns the billboard's up axis along the travel and stretches it.
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"frameRate":8,"align":"velocity","stretch":0.5,
+      "sizeOverLife":[],"opacityOverLife":[]}})J");
+    it = item();
+    CHECK(it.uvOffset[0] == 0.5f);  // 0.83 s * 8 fps = frame 6, wrapped into four frames
+    const Vec3 along = it.world.TransformDir(Vec3(0, 1, 0)), across = it.world.TransformDir(Vec3(1, 0, 0));
+    CHECK(std::fabs(along.x - (9 + 0.5f * 2)) < 1e-3f && std::fabs(along.y) < 1e-4f);
+    CHECK(std::fabs(across.y + 9) < 1e-3f && std::fabs(across.x) < 1e-4f);
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"align":"camera","rotation":0,"randomFrame":true,"frameRate":0}})J");
+    Call(e, "particles.clear", R"J({"id":"Effect"})J");
+    Call(e, "particles.burst", R"J({"id":"Effect","count":32})J");
+    std::set<float> variants;
+    for (const RenderItem& variant : GatherRenderItems(e.GetScene(), &e.Assets())) variants.insert(variant.uvOffset[0]);
+    CHECK(variants.size() == 4);  // every particle keeps one of the four frames
+    // Malformed curves stop emission with a message that says which one and how to write it.
+    for (const char* bad : {R"J([[0,1],[2,1]])J", R"J([[0.5,1],[0.2,1]])J", R"J([1,2])J", R"J([[0,"big"]])J", R"J({"keys":1})J"}) {
+        Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
+        args["values"]["sizeOverLife"] = Json::parse(bad);
+        CHECK(e.Call("component.set", args)["ok"].asBool());
+        Json result = Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+        CHECK(result["error"]["code"].asString() == "invalid_emitter" && result["error"]["message"].asString().find("sizeOverLife") == 0);
+    }
+    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":[],"colorOverLife":[[0,"red"]]}})J");
+    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["message"].asString().find("colorOverLife") == 0);
+    CHECK(!Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":"no"}})J")["ok"].asBool());
+}
+
+TEST(TrailRibbon) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("trail"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Blade","components":{"Transform":{"position":[-2,0,0]},
+      "Trail":{"lifetime":0.5,"minDistance":0.1,"width":0.6,"endWidth":0.2,"color":[1,0.5,0],"endColor":[1,0,0],"opacity":1,"endOpacity":0}}})J");
+    EntityId id = e.GetScene().FindByName("Blade");
+    auto moveTo = [&](float x, float y) {
+        Json args = Json::parse(R"J({"id":"Blade","type":"Transform","values":{}})J");
+        args["values"]["position"] = Json(Json::Array{x, y, 0.0f});
+        e.Call("component.set", args);
+        Call(e, "sim.step", R"J({"frames":1})J");
+    };
+    for (int frame = 0; frame < 20; ++frame) moveTo(-2 + 0.2f * static_cast<float>(frame), 0);
+    Json state = Call(e, "trail.state", R"J({"id":"Blade","points":true})J")["result"];
+    CHECK(state["count"].asInt() == 20 && state["emitting"].asBool());
+    CHECK(std::fabs(state["points"][0]["position"][0].asFloat() + 2) < 1e-5f && std::fabs(state["points"][0]["age"].asFloat() - 19.0f / 60) < 1e-4f);
+    moveTo(1.85f, 0);  // closer than minDistance: no new point, but the ribbon still reaches the entity
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() == 20);
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+    CHECK(items.size() == 1);
+    const RenderItem& ribbon = items.front();
+    CHECK(ribbon.id == id && ribbon.blend && ribbon.unlit && !ribbon.castShadows && ribbon.doubleSided && !ribbon.additive);
+    CHECK(ribbon.mesh->positions.size() == 42 && ribbon.mesh->indices.size() == 20 * 6);
+    // Oldest point first: narrow there, full width at the entity, across the path (Y for a path along X).
+    const Vec3 tail = ribbon.mesh->positions[1] - ribbon.mesh->positions[0], head = ribbon.mesh->positions[41] - ribbon.mesh->positions[40];
+    CHECK(std::fabs(std::fabs(head.y) - 0.6f) < 1e-4f && std::fabs(head.x) < 1e-5f);
+    CHECK(std::fabs(tail.y) < std::fabs(head.y) && std::fabs(tail.y) > 0.2f);
+    CHECK(std::fabs(ribbon.mesh->positions[40].x - 1.85f) < 1e-5f);
+    const Texture& fade = *ribbon.textureOverride;
+    CHECK(fade.width == 64 && fade.height == 1);
+    CHECK(fade.texels.front() == 0xFF0080FFu && fade.texels.back() == 0x000000FFu);  // head orange and solid, tail red and clear
+    CHECK(ribbon.mesh->uvs[80] < ribbon.mesh->uvs[0] && ribbon.mesh->uvs[80] > 0 && ribbon.mesh->uvs[0] < 1);
+    // Both renderers draw it; threads do not change the software image.
+    RenderView view = MakeLookAtView(Vec3(0, 0, 6), Vec3(), 45, 320.0f / 180);
+    view.clearColor = Color(0, 0, 0);
+    view.drawUI = false;
+    RenderTarget sw, again, gpu;
+    sw.Resize(320, 180);
+    again.Resize(320, 180);
+    gpu.Resize(320, 180);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    SetMaxRenderThreads(16);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(sw.Hash() == again.Hash() && CountId(sw, id) > 800);
+    CHECK(WritePng("build/trail-software.png", sw.ToImage(), true));
+    if (e.EnableGpu(nullptr, &error)) {
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double total = 0;
+        for (size_t i = 0; i < sw.color.size(); ++i)
+            for (int channel = 0; channel < 3; ++channel)
+                total += std::abs(static_cast<int>((sw.color[i] >> (8 * channel)) & 255) - static_cast<int>((gpu.color[i] >> (8 * channel)) & 255));
+        const double mean = total / static_cast<double>(sw.color.size() * 3);
+        std::printf("  trail software/GPU mean channel difference %.3f\n", mean);
+        CHECK(mean < 1.5);
+        CHECK(WritePng("build/trail-gpu.png", gpu.ToImage(), true));
+    } else {
+        std::printf("  SKIP no GPU backend here (%s)\n", error.c_str());
+    }
+    // A stopped entity's ribbon fades out; emitting:false stops new points; clear forgets the path.
+    Call(e, "sim.step", R"J({"frames":40})J");
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() <= 1 && GatherRenderItems(e.GetScene(), &e.Assets()).empty());
+    for (int frame = 0; frame < 5; ++frame) moveTo(0, 0.3f * static_cast<float>(frame + 1));
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() >= 5);
+    CHECK(Call(e, "script.eval", R"J({"code":"trail.clear('Blade')"})J")["ok"].asBool());
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() == 0);
+    Call(e, "component.set", R"J({"id":"Blade","type":"Trail","values":{"emitting":false}})J");
+    moveTo(3, 3);
+    CHECK(Call(e, "trail.state", R"J({"id":"Blade"})J")["result"]["count"].asInt() == 0);
+    CHECK(Call(e, "trail.clear", R"J({"id":"Blade"})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Plain"})J");
+    CHECK(Call(e, "trail.state", R"J({"id":"Plain"})J")["error"]["code"].asString() == "missing_component");
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &error) && restored.Get<Trail>(id)->points.empty());
+}
+
+TEST(SampleVfxLab) {
+    // The sample runs without script errors, shows every effect and plays back identically.
+    auto run = [&](bool writeImage) {
+        Engine e;
+        std::string error;
+        CHECK(e.Open(TestSourceDir() + "/samples/VFXLab", &error));
+        CHECK(Call(e, "sim.step", R"J({"frames":132})J")["ok"].asBool());  // 0.2 s into the second fireworks cycle
+        CHECK(e.Scripts().Errors().empty());
+        for (const char* name : {"Flames", "Smoke", "Embers", "Rim", "Burst", "Puff", "Sparkles"}) {
+            const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name));
+            CHECK(emitter && ParticleSettingsValid(*emitter) && !emitter->particles.empty());
+        }
+        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Burst"))->emitted == 140);
+        const EntityId orb = e.GetScene().FindByName("Orb");
+        CHECK(e.GetScene().Get<Trail>(orb)->points.size() > 20);
+        Call(e, "input.key", R"J({"key":"Space","down":true})J");
+        Call(e, "sim.step", R"J({"frames":1})J");
+        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Burst"))->emitted > 140);  // capacity may drop some of the 70
+        RenderTarget target;
+        target.Resize(480, 270);
+        e.RenderGameView(target);
+        size_t lit = 0;
+        for (uint32_t color : target.color) lit += (color & 0xFF) > 120 || ((color >> 8) & 0xFF) > 120;
+        CHECK(lit > 400);
+        if (writeImage) CHECK(WritePng("build/vfxlab-software.png", target.ToImage(), true));
+        return target.Hash();
+    };
+    CHECK(run(true) == run(false));
 }
 
 TEST(Light2DDarkness) {
@@ -9493,6 +10280,291 @@ TEST(HttpServerOnPlatformSockets) {
     }
     CHECK(PlatformNetSocketsLive() == live);
 #endif
+}
+
+TEST(HostBridgeAndViewSize) {
+    // host.call / host.poll: a game asks the embedding app for ads or purchases and reads its answer;
+    // input.viewSize: the game view, which starts at the project's window size in headless sessions.
+    const std::string dir = TempProject("host_bridge");
+    std::string text;
+    CHECK(ReadTextFile(dir + "/project.json", text));
+    Json project = Json::parse(text);
+    project["window"]["width"] = 540;
+    project["window"]["height"] = 960;
+    CHECK(WriteTextFile(dir + "/project.json", project.dump(2)));
+    Engine e;
+    std::string error;
+    CHECK(e.Open(dir, &error));
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    Json size = eval("local w, h = input.viewSize() return {w, h}");
+    CHECK(size[0].asInt() == 540 && size[1].asInt() == 960);
+    CHECK(Call(e, "input.mouse", R"J({"x":10,"y":10,"width":800,"height":600})J")["ok"].asBool());
+    size = eval("local w, h = input.viewSize() return {w, h}");
+    CHECK(size[0].asInt() == 800 && size[1].asInt() == 600);
+
+    // No host: the call is recorded and reports unhandled, so the game uses its fallback.
+    CHECK(!eval("return host.call('ads.rewarded', {placement = 'revive'})").asBool());
+    CHECK(eval("return host.language()").asString() == "en");
+    CHECK(eval("return #host.poll()").asInt() == 0);
+    Json state = Call(e, "host.state", "{}")["result"];
+    CHECK(state["calls"].size() == 1 && state["calls"][0]["name"].asString() == "ads.rewarded");
+    CHECK(!state["calls"][0]["handled"].asBool() && state["calls"][0]["data"]["placement"].asString() == "revive");
+
+    // A tool stands in for the host, then answers like an ad SDK would.
+    CHECK(Call(e, "host.configure", R"J({"accept":["ads.rewarded"],"language":"ko"})J")["result"]["language"].asString() == "ko");
+    CHECK(eval("return host.call('ads.rewarded')").asBool());
+    CHECK(!eval("return host.call('iap.purchase', {product = 'x'})").asBool());
+    CHECK(eval("return host.language()").asString() == "ko");
+    CHECK(Call(e, "host.reply", R"J({"name":"ads.result","data":{"ok":true,"n":3}})J")["result"]["pending"].asInt() == 1);
+    CHECK(!Call(e, "host.reply", R"J({"name":""})J")["ok"].asBool());
+    CHECK(!Call(e, "host.configure", R"J({"accept":"all"})J")["ok"].asBool());
+    Json got = eval("local m = host.poll() return {#m, m[1].name, m[1].data.ok, m[1].data.n, #host.poll()}");
+    CHECK(got[0].asInt() == 1 && got[1].asString() == "ads.result" && got[2].asBool() && got[3].asInt() == 3 && got[4].asInt() == 0);
+
+    // The platform handler is asked when no tool accepts the name; both queues are bounded.
+    std::string seen;
+    e.SetHostAccept({});
+    e.SetHostHandler([&](const std::string& name, const std::string& json) {
+        seen = name + " " + json;
+        return name == "game.ready";
+    });
+    CHECK(eval("return host.call('game.ready', {version = 2})").asBool());
+    CHECK(seen.find("game.ready") == 0 && seen.find("\"version\"") != std::string::npos);
+    CHECK(!eval("return host.call('other')").asBool());
+    for (int i = 0; i < 300; ++i) e.PushHostMessage("m", Json::MakeObject());
+    CHECK(e.PendingHostMessages() == Engine::kMaxHostMessages);
+    for (int i = 0; i < 100; ++i) e.HostCall("n", Json::MakeObject());
+    CHECK(e.HostCalls().size() == Engine::kMaxHostCalls);
+
+    // web/ files belong to the page, not to the game data.
+    CHECK(WriteTextFile(dir + "/web/host.js", "window.OEHost = {};"));
+    for (const std::string& file : GameFiles(dir)) CHECK(file.rfind("web/", 0) != 0);
+    RemoveAll(dir);
+}
+
+TEST(DongleZooGame) {
+    // The merge puzzle in games/DongleZoo, played like a user: menu, aiming and dropping with the
+    // pointer, merging, items, game over with a rewarded continue, coins, missions and the daily gift.
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/games/DongleZoo";
+    CHECK(e.Open(project, &error));
+    for (const std::string& file : GameFiles(project)) {
+        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
+        Json args = Json::MakeObject();
+        args["path"] = file;
+        Json result = e.Call("script.check", args)["result"];
+        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
+    }
+    CHECK(Call(e, "time.date", R"J({"set":"2031-03-03"})J")["ok"].asBool());
+    const int W = 540, H = 960;
+    auto step = [&](int frames) {
+        Json args = Json::MakeObject();
+        args["frames"] = frames;
+        CHECK(e.Call("sim.step", args)["ok"].asBool());
+    };
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        args["entity"] = "App";
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    auto click = [&](const char* name) {  // a real pointer click on the named button
+        Json args = Json::MakeObject();
+        args["width"] = W; args["height"] = H;
+        Json layout = e.Call("ui.layout", args)["result"];
+        const EntityId id = e.GetScene().FindByName(name);
+        bool found = false;
+        for (const Json& element : layout["elements"].items()) {
+            if (element["id"].asInt() != static_cast<int>(id)) continue;
+            args["x"] = element["center"][0]; args["y"] = element["center"][1];
+            CHECK(e.Call("input.click", args)["result"]["button"].asInt() == static_cast<int>(id));
+            found = true;
+        }
+        CHECK(found);
+        step(3);
+    };
+    auto mouse = [&](float x, bool down) {
+        Json args = Json::MakeObject();
+        args["x"] = x; args["y"] = 500; args["width"] = W; args["height"] = H;
+        args["button"] = "MouseLeft"; args["down"] = down;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+    };
+    auto drop = [&](float x) {  // press, hold and release in the jar
+        mouse(x, true);
+        step(2);
+        mouse(x, false);
+        step(45);
+    };
+    const char* board = "local B = require('scripts.lib.board') ";
+    const char* meta = "local M = require('scripts.lib.meta') ";
+
+    step(5);
+    CHECK(eval("return self.mode").asString() == "home");
+    CHECK(eval("local w = input.viewSize() return w").asInt() == 540);
+    // The layout follows the screen shape: phones scale with the width, wide screens with the height.
+    CHECK(std::fabs(e.GetScene().Get<Camera>(e.GetScene().FindByName("Camera"))->orthoSize - 1280.0f / 96.0f / 2.0f) < 1e-3f);
+
+    // Daily gift, once per day.
+    click("Home:btn:daily");
+    CHECK(eval("return self.dialog").asString() == "daily");
+    click("Daily:claim");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 50);
+    CHECK(!eval(std::string(meta) + "return M.dailyAvailable()").asBool());
+    click("Dlg:daily:close");
+    CHECK(eval("return self.dialog").isNull());
+
+    // Play: two chicks dropped on the same spot merge into a hamster worth one point.
+    click("Home:play");
+    CHECK(eval("return self.mode").asString() == "play");
+    eval("self.cur, self.nxt = 1, 1 self:refreshHolder()");
+    drop(150);
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == 1);
+    eval("self.nxt = 4");
+    drop(150);
+    step(30);
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == 1);
+    CHECK(eval(std::string(board) + "return B.pieces[B.order[1]].tier").asInt() == 2);
+    CHECK(eval("return self.score").asInt() == 1);
+    CHECK(eval(std::string(meta) + "return M.data.seen[2]").asBool());
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 70);  // +20 for a new friend
+    // The aimed animal lands where the pointer was, inside the jar walls.
+    drop(520);
+    step(40);
+    Json where = eval(std::string(board) + "local x, y = B.pos(B.order[2]) return {x, y}");
+    CHECK(where[0].asFloat() > 2.5f && where[0].asFloat() < 3.3f && where[1].asFloat() < -4.0f);
+
+    // Items: the hammer removes the tapped animal, shake keeps them all, the wand grows one.
+    const int before = eval(std::string(board) + "return B.count()").asInt();
+    click("Item:hammer");
+    CHECK(eval("return self.target").asString() == "hammer");
+    Json at = eval(std::string(board) + "local x, y = B.pos(B.order[1]) return {x, y, self.ortho, self.aspect, self.camY}");
+    {
+        // world -> screen pixels, the inverse of App:pointer()
+        const float ortho = at[2].asFloat(), aspect = at[3].asFloat(), camY = at[4].asFloat();
+        Json args = Json::MakeObject();
+        args["x"] = (at[0].asFloat() / (2 * ortho * aspect) + 0.5f) * W;
+        args["y"] = (0.5f - (at[1].asFloat() - camY) / (2 * ortho)) * H;
+        args["width"] = W; args["height"] = H; args["button"] = "MouseLeft"; args["down"] = true;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+        step(2);
+        args["down"] = false;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+        step(2);
+    }
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == before - 1);
+    CHECK(eval(std::string(meta) + "return M.data.items.hammer").asInt() == 1);
+    CHECK(eval("return self.target").isNull());
+    click("Item:shake");
+    CHECK(eval(std::string(meta) + "return M.data.items.shake").asInt() == 1);
+    step(90);
+    CHECK(eval(std::string(board) + "return B.count()").asInt() == before - 1);
+
+    // Pause freezes the jar; resume continues.
+    click("HUD:pause");
+    CHECK(eval("return self.dialog").asString() == "pause" && eval("return game.paused()").asBool());
+    click("Pause:resume");
+    CHECK(!eval("return game.paused()").asBool());
+
+    // Animals resting above the line end the game after two seconds.
+    // (a balanced column of the three largest reaches past it)
+    eval(std::string(board) + "B.clear() B.spawn(11, 0, -3.38) self.score = 600");
+    step(30);
+    eval(std::string(board) + "B.spawn(10, 0, -0.3)");
+    step(30);
+    eval(std::string(board) + "B.spawn(9, 0, 2.4)");
+    for (int i = 0; i < 12 && eval("return self.mode").asString() == "play"; ++i) step(60);
+    CHECK(eval("return self.mode").asString() == "over");
+    step(80);
+    CHECK(eval("return self.dialog").asString() == "over");
+    const int score = eval("return self.score").asInt();
+    CHECK(score >= 600);
+
+    // Continue with a rewarded ad (demo overlay): the top of the jar is cleared, once per game.
+    click("Over:revive");
+    CHECK(eval("return require('scripts.lib.ads').busy()").asBool());
+    step(170);
+    CHECK(eval("return self.mode").asString() == "play" && eval("return self.revived").asBool());
+    eval("self:gameOver()");
+    step(80);
+    CHECK(eval("return self.dialog").asString() == "over");
+    CHECK(!e.GetScene().Get<UIButton>(e.GetScene().FindByName("Over:revive"))->visible);
+    const int coins = eval(std::string(meta) + "return M.data.coins").asInt();
+    CHECK(coins == 70 + score / 30);
+    CHECK(eval(std::string(meta) + "return M.data.best").asInt() == score);
+
+    // The same flow through a real host: the game waits for the SDK's answer.
+    CHECK(Call(e, "host.configure", R"J({"accept":["ads.rewarded"]})J")["ok"].asBool());
+    click("Over:double");
+    CHECK(eval("return require('scripts.lib.ads').busy()").asBool());
+    step(30);
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == coins);
+    CHECK(Call(e, "host.reply", R"J({"name":"ads.result","data":{"ok":true}})J")["ok"].asBool());
+    step(3);
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == coins + score / 30);
+    Json calls = Call(e, "host.state", "{}")["result"]["calls"];
+    CHECK(calls[static_cast<int>(calls.size()) - 1]["data"]["placement"].asString() == "double_coins");
+    CHECK(Call(e, "host.configure", R"J({"accept":[]})J")["ok"].asBool());
+
+    // Home, then the shop: a background costs coins and changes the scene.
+    click("Over:home");
+    CHECK(eval("return self.mode").asString() == "home" && eval(std::string(board) + "return B.count()").asInt() == 0);
+    eval(std::string(meta) + "M.data.coins = 900 self:refreshWallet()");
+    click("Home:btn:shop");
+    click("Theme:beach:btn");
+    CHECK(eval(std::string(meta) + "return M.data.theme").asString() == "beach");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 100);
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Background"))->texture == "assets/bg/beach.png");
+    click("Theme:night:btn");  // not enough coins
+    CHECK(eval(std::string(meta) + "return M.data.theme").asString() == "beach");
+    click("Dlg:shop:close");
+
+    // Missions: three per day, the same on that date; progress pays out once.
+    Json missions = eval(std::string(meta) + "return M.data.missions.ids");
+    CHECK(missions.size() == 3);
+    eval(std::string(meta) + "local id = M.data.missions.ids[1] M.data.missions.progress[id] = 99999");
+    click("Home:btn:missions");
+    click("Mission1:btn");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() > 100);
+    const int afterMission = eval(std::string(meta) + "return M.data.coins").asInt();
+    eval("self:onAction('claimMission', 1)");
+    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == afterMission);
+    click("Dlg:missions:close");
+
+    // Language switch relabels the UI; the save keeps everything for the next launch.
+    click("Home:btn:settings");
+    const std::string label = e.GetScene().Get<UIButton>(e.GetScene().FindByName("Home:play"))->text;
+    click("Set:lang");
+    CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Home:play"))->text != label);
+    Json saved = Call(e, "save.state", "{}")["result"];
+    CHECK(saved.dump().find("donglezoo.save.v1") != std::string::npos);
+    CHECK(Call(e, "script.errors", "{}")["result"].size() == 0);
+
+    // The whole session is deterministic: a second engine replaying the first inputs matches.
+    auto play = [&](Engine& engine) {
+        std::string openError;
+        CHECK(engine.Open(project, &openError));
+        Call(engine, "time.date", R"J({"set":"2031-03-03"})J");
+        Call(engine, "sim.step", R"J({"frames":5})J");
+        Call(engine, "script.eval", R"J({"code":"self:onAction('play')","entity":"App"})J");
+        for (int i = 0; i < 12; ++i) {
+            Json args = Json::MakeObject();
+            args["x"] = 60 + (i * 97) % 420; args["y"] = 500; args["width"] = W; args["height"] = H;
+            args["button"] = "MouseLeft"; args["down"] = true;
+            engine.Call("input.mouse", args);
+            Call(engine, "sim.step", R"J({"frames":2})J");
+            args["down"] = false;
+            engine.Call("input.mouse", args);
+            Call(engine, "sim.step", R"J({"frames":40})J");
+        }
+        return engine.GetScene().ToJson().dump();
+    };
+    Engine a, b;
+    CHECK(play(a) == play(b));
 }
 
 int main() {

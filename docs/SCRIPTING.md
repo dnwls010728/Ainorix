@@ -27,9 +27,12 @@ function Spinner:onCollisionExit(other) end
 function Spinner:onTriggerEnter(other) end
 function Spinner:onTriggerExit(other) end
 function Spinner:onClick() end               -- UIButton on the same entity was clicked
+function Spinner:onToggle(on) end            -- UIButton {toggle} changed its `on` state
 function Spinner:onPointerEnter() end        -- pointer moved onto this UIButton / UISlider
 function Spinner:onPointerExit() end
-function Spinner:onValueChanged(value) end   -- UISlider dragged (see docs/UI.md)
+function Spinner:onValueChanged(value) end   -- UISlider dragged, UIDropdown option chosen (see docs/UI.md)
+function Spinner:onTextChanged(text) end     -- UIInput text edited
+function Spinner:onSubmit(text) end          -- Enter pressed in a UIInput
 
 return Spinner
 ```
@@ -69,6 +72,8 @@ end
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
 | `animation.play(id, clip, options?)` | Play a glTF clip on MeshRenderer; add Animator if needed. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
 | `particles.burst(id, count)` | Emit up to 0..10000 particles immediately on ParticleEmitter; returns accepted births, respecting capacity even while paused. Attached scripts can use `self:burst(count)`. See [PARTICLES.md](PARTICLES.md) |
+| `particles.state(id)` | `{count, emitted, playing, loop, maxParticles, finished}`; `finished` is true once a non-looping emitter has emitted everything and its particles are gone (destroy one-shot effects then). |
+| `trail.clear(id)` | Forget a Trail's path, e.g. after teleporting the entity, so no ribbon joins the old and new place. |
 | `scene.set(id, type, values)` | Partial update: `scene.set(id, "Transform", {position = {y = 2}})` keeps x and z |
 | `scene.add(id, type, values?)` / `scene.remove(id, type)` / `scene.has(id, type)` | Component management |
 | `scene.create(name?, components?)` | New entity id. `components` like the `entity.create` command |
@@ -94,10 +99,15 @@ end
 | `timer.after(s, fn)` / `timer.every(s, fn)` / `timer.cancel(id)` | Timers on simulated time |
 | `game.set(k, v)` / `game.get(k)` / `game.loadScene(path)` / `game.scene()` | Cross-scene data and scene changes |
 | `game.pause(on?)` / `game.paused()` | Gameplay pause for menus and dialogs: scripts and UI keep running with `dt = 0`; physics, built-in systems, timers, particles and simulated time wait. Cleared by scene changes and `sim.stop` |
+| `host.call(name, data?)` | Asks the application that embeds the player (the web page's `window.OEHost`, later a store SDK layer) for something the engine does not do: an ad, a purchase. Returns `true` when the host handles `name`, `false` when there is none - then use your own fallback. See [GAMEPLAY.md](GAMEPLAY.md#host-application-ads-purchases) |
+| `host.poll()` | Messages from the host since the last call: `{ {name=, data=}, ... }` (the ad result, a finished purchase). Call it every frame while waiting |
+| `host.language()` | The user's language as an ISO 639-1 code (`"en"`, `"ko"`, ...; `"en"` when unknown) for the first-launch language |
 | `save.get(key, default?, slot?)` / `save.set(key, value, slot?)` | Save slots; finite JSON values only. Default slot is `default` |
 | `save.delete(key, slot?)` / `save.flush(slot?)` | Remove a key / persist pending changes. Tools default to memory; `--save-dir` enables files ([SAVE.md](SAVE.md)) |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |
 | `input.mouse()` | Mouse position in the game view (0..1) |
+| `ui.focus(id?)` / `ui.focused()` | Keyboard/gamepad focus of the UI (`UICanvas {navigation: true}`): focus a button or slider (no argument clears it), read the focused entity id or `nil`. See [UI.md](UI.md) |
+| `input.viewSize()` | Game view size in pixels (`width, height`): the window, or in headless sessions the project's `window` size until a tool passes another one (`input.click {width, height}`). For layouts that adapt to the screen shape (portrait phones, tablets): `local w, h = input.viewSize()` |
 | `input.touches()` | Every finger on a touch screen: `{ {id=, x=, y=, began=}, ... }` (`x, y` normalized like `input.mouse()`, `began` = put down this step). The first finger also acts as the mouse. `UIButton.key` turns buttons into on-screen keys (docs/UI.md) |
 | `input.wheel()` | Mouse wheel notches this step (> 0 = away from the user); `UIScroll` panels use it by themselves |
 | `tween.to(id, type, values, seconds, opts?)` | Animates numeric, vector (`{x=,y=,z=}` or `{1,2,3}`) and colour fields of a component from their current to the given values. opts: `ease` (`linear`, `inQuad`, `outQuad`, `inOutQuad`, `inCubic`, `outCubic` (default), `outBack`, `outElastic`), `delay`, `loop` (`"loop"` / `"pingpong"`), `scaled` (true = waits while the game is paused; default false, so UI keeps moving), `onDone` (function). Returns a handle |
@@ -226,7 +236,7 @@ Lobby RPC and player callbacks are withheld during matches. `net.on("net.desync"
 ... end)` and `onNetState("desync")` run once after a terminal mismatch. Input frame waits still
 poll the transport but do not call onUpdate/timers/physics/audio. Plain input sees the quantized
 local player; mouse/touch coordinates are not synchronized. Native rollback preserves opaque closures, timers and physics solver history in bounded
-checkpoints and replays at most eight frames. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.
+checkpoints and replays at most eight frames. See [NETWORK_NOTES.md](NETWORK_NOTES.md) (M5) for bounds and recording contracts.
 
 ### Authoritative gameplay
 
@@ -257,7 +267,7 @@ Lockstep and rollback matches carry the look axes too but still hide `mouseDelta
 The handler receives the routing entity argument too: `net.on("notice", function(entityId, text)
 ... end)`. Entity ids are local; use `net.entities()` when mapping a received server entity id to
 this peer's entity. Owner-only fields filter network transmission, not packaged resource contents.
-See NETWORK.md for limits, relevance, snapshot rates and platform verification.
+See [NETWORK_NOTES.md](NETWORK_NOTES.md) (M6, M7) for limits, relevance, snapshot rates and platform verification.
 
 
 Dedicated servers started by `oe serve-game` or a packaged `--server` reserve player

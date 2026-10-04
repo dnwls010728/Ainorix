@@ -187,12 +187,12 @@ Play a named model clip; add Animator if needed. Defaults to restarting at the b
 
 ### `particles.state`
 
-Live particle count, accepted births and optional particle snapshots in their local/world coordinates.
+Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | ParticleEmitter entity. |
-| `particles` | boolean |  | Include age, lifetime, position, velocity and worldSpace. |
+| `particles` | boolean |  | Include age, lifetime, position, velocity, rotation and worldSpace. |
 
 ### `particles.burst`
 
@@ -211,6 +211,25 @@ Clear live particles and reset the random stream/counters. Optionally re-arm the
 |---|---|---|---|
 | `id` | integer \| string | yes | ParticleEmitter entity. |
 | `restart` | boolean |  | Re-arm initial burst for next playing step (default false). |
+
+## trail
+
+### `trail.state`
+
+Path of a Trail: point count, emitting and optionally the points (world position, age), oldest first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Trail entity. |
+| `points` | boolean |  | Include position and age of every point. |
+
+### `trail.clear`
+
+Forget a Trail's path so no ribbon joins the old and new place (teleport, respawn); runtime only.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Trail entity. |
 
 ## engine
 
@@ -459,6 +478,26 @@ Press or release a key ("W", "A", "Space", "Left", ...) or logical Gamepad butto
 | `key` | string | yes | Key name. |
 | `down` | boolean |  | true = press (default), false = release. |
 
+### `input.text`
+
+Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame (focus it with input.click or ui.focus; Backspace and Enter are keys: input.key).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `text` | string | yes | Characters to type (UTF-8). |
+
+## ui
+
+### `ui.clipboard`
+
+Clipboard used by UIInput copy, cut and paste (Ctrl+C / Ctrl+X / Ctrl+V): read it, or set it before pasting. Tool sessions keep their own; a game window uses the system clipboard.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `text` | string |  | New clipboard text. Omit to read. |
+
+## input
+
 ### `input.click`
 
 Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick (or sets a UISlider) on the next simulated frame.
@@ -481,6 +520,14 @@ Where every visible UI element is on a screen of the given size (pixels, top-lef
 | `width` | integer |  | Screen width (default 640, like render.screenshot). |
 | `height` | integer |  | Screen height (default 360). |
 | `interactable` | boolean |  | Only buttons and sliders that accept clicks. |
+
+### `ui.focus`
+
+Keyboard/gamepad focus of the UI (UICanvas.navigation): give it to a button or slider, clear it, or read it. Arrows / D-pad then move it (input.key), Enter / GamepadA clicks the focused button.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string |  | Button, slider, text field or drop-down to focus (id or name); 0 clears the focus. Omit to read. |
 
 ## input
 
@@ -665,6 +712,30 @@ Calendar date scripts see through time.date() (daily rewards). set fixes it for 
 | arg | type | required | description |
 |---|---|---|---|
 | `set` | string |  | YYYY-MM-DD to pin the date, or "" to use the machine's clock again. |
+
+## host
+
+### `host.state`
+
+The host bridge (Lua host.call / host.poll): the calls the game made to its embedding app (ads, purchases), messages waiting for host.poll(), the names tools accept and the user language.
+
+### `host.configure`
+
+Stand in for the embedding app in a tool session: which host.call names report as handled, and the user language.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `accept` | array |  | Names host.call returns true for; ["*"] accepts every name, [] none (the default: games use their fallback). |
+| `language` | string |  | ISO 639-1 code host.language() returns, e.g. "ko". |
+
+### `host.reply`
+
+Deliver a message from the embedding app to the game, as its ad SDK or store would (the game reads it with host.poll()).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `name` | string | yes | Message name, e.g. "ads.result". |
+| `data` | object |  | Payload the game receives as message.data. |
 
 ## game
 
@@ -1198,6 +1269,27 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `layer` | int | `0` | 2D sorting layer, like Sprite.layer: particles draw in front of lower layers. |
 | `loop` | bool | `true` | Enable continuous rate births; false emits only the initial burst. |
 | `playing` | bool | `true` | Automatic emission switch; existing particles continue to age while false. |
+| `delay` | float | `0` | Seconds of playing before the initial burst and the rate start (layered effects: flash, then smoke). |
+| `duration` | float | `0` | 0 = no limit. Otherwise the rate emits for this many seconds after the delay; with loop the cycle repeats and re-fires the burst. |
+| `shape` | string | `"point"` | Where particles are born, in emitter coordinates: point, sphere (radius shapeSize.x), box (half extents shapeSize) or circle (radius shapeSize.x; in XY for 2D, on the ground plane XZ for 3D). |
+| `shapeSize` | vec3 | `[1,1,1]` | Sphere/circle radius in x, or box half extents, in meters. |
+| `shapeEdge` | bool | `false` | Spawn only on the shape's surface or rim (rings, shells). |
+| `radialSpeed` | float | `0` | Extra speed away from the emitter origin (negative = toward it), for particles born off the origin; captured at birth. |
+| `rotation` | float | `0` | Billboard rotation in degrees at birth, counter-clockwise on screen. |
+| `rotationVariation` | float | `0` | Each particle starts within +/- this many degrees of rotation. |
+| `spin` | float | `0` | Rotation speed in degrees per second, captured at birth. |
+| `spinVariation` | float | `0` | Each particle spins within +/- this many degrees per second of spin. |
+| `align` | string | `"camera"` | camera = upright billboards; velocity = the billboard's up axis follows the direction of travel on screen (sparks, rain). |
+| `stretch` | float | `0` | align velocity only: seconds of travel added to the billboard's length (0.05 = streaks). |
+| `frames` | int | `1` | Flipbook length: frames played from `frame` on, row-major. 1 = a single frame. |
+| `frameRate` | float | `0` | Flipbook frames per second, looping; 0 plays the frames once over the particle's lifetime. |
+| `randomFrame` | bool | `false` | Each particle starts at a random flipbook frame and keeps it when frameRate is 0 (a sheet of variants). |
+| `sizeOverLife` | json | `[]` | Size keys [[t, meters], ...] with t ascending in 0..1; replaces startSize/endSize when not empty (sizeVariation still scales it). At most 16 keys. |
+| `colorOverLife` | json | `[]` | Color keys [[t, [r, g, b]] or [t, "#rrggbb"], ...]; replaces startColor/endColor when not empty. At most 16 keys. |
+| `opacityOverLife` | json | `[]` | Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys. |
+| `turbulence` | float | `0` | Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers). |
+| `turbulenceScale` | float | `1` | Noise cells per meter: small = wide swirls, large = jitter. |
+| `pixelArt` | bool | `true` | Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke). |
 
 ### Camera
 
@@ -1427,6 +1519,7 @@ Screen-space text: TrueType fonts (any language the font covers), alignment, wra
 | `outlineColor` | color | `[0,0,0]` | Outline color. |
 | `shadowDistance` | float | `0` | Drop shadow offset (right and down) in reference pixels (0 = none). |
 | `shadowColor` | color | `[0,0,0]` | Drop shadow color (drawn at half the text opacity). |
+| `minSize` | float | `0` | Shrink the font down to this size until the text fits its width/height box (0 = never shrink). |
 | `visibleCharacters` | int | `-1` | Show only the first N characters (typewriter effects); -1 = all. |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
@@ -1434,7 +1527,7 @@ Screen-space text: TrueType fonts (any language the font covers), alignment, wra
 
 ### UIPanel
 
-Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a border. Parent of other UI elements.
+Screen-space rectangle (backgrounds, windows, bars): a solid color or a 9-slice image, rounded corners, a border. Parent of other UI elements.
 
 | field | type | default | description |
 |---|---|---|---|
@@ -1444,6 +1537,10 @@ Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a b
 | `width` | float | `240` | Size in reference pixels. |
 | `height` | float | `64` | Size in reference pixels. |
 | `color` | color | `[0,0,0]` | Fill color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
 | `radius` | float | `0` | Corner radius in reference pixels. |
 | `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
 | `borderColor` | color | `[1,1,1]` | Border color. |
@@ -1455,28 +1552,46 @@ Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a b
 
 ### UIButton
 
-Clickable screen-space button. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit. Click it from tools with input.click (ui.layout lists where it is).
+Clickable screen-space button: a solid or textured (9-slice) background with a look per state (normal, hover, pressed, disabled, on), a label and an optional icon. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit; a toggle button calls onToggle(self, on). Click it from tools with input.click (ui.layout lists where it is).
 
 | field | type | default | description |
 |---|---|---|---|
-| `text` | string | `"Button"` | Label (same rich text as UIText). |
+| `text` | string | `"Button"` | Label (same rich text as UIText). Empty = no label (icon buttons). |
 | `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
 | `size` | float | `28` | Label font size in reference pixels. |
 | `textColor` | color | `[1,1,1]` | Label color. |
+| `align` | string | `"center"` | Where the label (and icon) sits across the button. |
+| `padding` | float | `8` | Space kept free at the left and right edge in reference pixels. |
+| `icon` | string | `""` | Image drawn next to the label (png/jpg/bmp/tga). Empty = none. |
+| `iconSize` | float | `0` | Icon height in reference pixels, the width follows the image; 0 = the image's pixel size. |
+| `iconSide` | string | `"left"` | Side of the label the icon is on. |
 | `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
 | `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
 | `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
 | `width` | float | `240` | Size in reference pixels. |
 | `height` | float | `64` | Size in reference pixels. |
 | `color` | color | `[0.25,0.449999988,0.899999976]` | Background color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
 | `radius` | float | `8` | Corner radius in reference pixels. |
 | `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
 | `borderColor` | color | `[1,1,1]` | Border color. |
 | `hoverBrightness` | float | `1.14999998` | Background brightness while the pointer is over the button. |
 | `pressedBrightness` | float | `0.850000024` | Background brightness while pressed. |
+| `hoverTexture` | string | `""` | Background image while the pointer is over the button. Empty = texture. |
+| `pressedTexture` | string | `""` | Background image while pressed. Empty = texture. |
+| `disabledTexture` | string | `""` | Background image while not interactable. Empty = texture. |
 | `hoverScale` | float | `1` | Size multiplier while the pointer is over the button (1.05 = grows a little); eased, also while the game is paused. |
 | `pressedScale` | float | `1` | Size multiplier while pressed (0.95 = squeezes). |
 | `interactable` | bool | `true` | Disabled buttons are drawn faded and ignore clicks. |
+| `clickOn` | string | `"press"` | When the click happens: press = as the pointer goes down; release = when it comes up while still over the button (moving off before releasing cancels). |
+| `toggle` | bool | `false` | A click flips `on` and calls onToggle(self, on) (check boxes, tabs, switches). |
+| `on` | bool | `false` | Toggle state. Scripts may set it; the group rule is applied on clicks only. |
+| `group` | string | `""` | Radio group: turning a toggle on turns off every other toggle in the scene with the same group name, and a click cannot turn the one that is on off. Empty = independent. |
+| `onColor` | color | `[0.200000003,0.699999988,0.400000006]` | Background color while on (replaces color). |
+| `onTexture` | string | `""` | Background image while on. Empty = texture. |
 | `key` | string | `""` | On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, CharacterBody controls), e.g. "Left", "Space". Several fingers hold several buttons at once. Empty = none. |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
@@ -1509,6 +1624,89 @@ Screen-space image: icons, portraits, 9-slice frames, fill bars (fill + fillOrig
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
 | `order` | int | `0` | Draw order among siblings (higher on top). |
 
+### UIInput
+
+Text field (player names, chat, codes, notes). A click gives it the focus and places the caret; arrows, Home/End, Shift+arrows or a drag select, Ctrl+A/C/X/V use the clipboard, Enter calls onSubmit(self, text), Escape or a click elsewhere leaves it. Every change calls onTextChanged(self, text). While it has the focus scripts do not see the keyboard. Tools type with input.text.
+
+| field | type | default | description |
+|---|---|---|---|
+| `text` | string | `""` | What the player typed (UTF-8). Scripts may set it. |
+| `placeholder` | string | `"Enter text"` | Hint shown faded while the field is empty and not focused. |
+| `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
+| `size` | float | `24` | Font size in reference pixels. |
+| `textColor` | color | `[1,1,1]` | Text and caret color. |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `320` | Size in reference pixels. |
+| `height` | float | `48` | Size in reference pixels. |
+| `color` | color | `[0.119999997,0.129999995,0.159999996]` | Background color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
+| `radius` | float | `8` | Corner radius in reference pixels. |
+| `borderWidth` | float | `2` | Border thickness in reference pixels (0 = none). |
+| `borderColor` | color | `[0.400000006,0.449999988,0.550000012]` | Border color. |
+| `maxLength` | int | `0` | Most characters the player can type (0 = no limit). |
+| `password` | bool | `false` | Show every character as * (and never copy it). |
+| `multiline` | bool | `false` | Several lines: the text wraps at the width, Enter starts a new line and Ctrl+Enter submits. |
+| `interactable` | bool | `true` | Disabled fields are drawn faded and cannot be focused. |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
+### UIDropdown
+
+Drop-down list (language, difficulty, resolution): shows the selected option; a click opens the list on top of everything else, a click on a row selects it and calls onValueChanged(self, index) on the entity's Script, a click elsewhere closes it.
+
+| field | type | default | description |
+|---|---|---|---|
+| `options` | json | `[]` | The choices, e.g. ["Easy", "Normal", "Hard"]. The open list has one row per option, each as tall as the element; a list longer than the screen scrolls with the wheel or a drag. |
+| `selected` | int | `0` | Index of the chosen option (0 = the first). |
+| `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
+| `size` | float | `24` | Font size in reference pixels. |
+| `textColor` | color | `[1,1,1]` | Text color. |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `240` | Size in reference pixels. |
+| `height` | float | `48` | Size in reference pixels. |
+| `color` | color | `[0.180000007,0.200000003,0.25999999]` | Background color (the list is a little darker, the row under the pointer lighter). |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
+| `radius` | float | `8` | Corner radius in reference pixels. |
+| `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
+| `borderColor` | color | `[1,1,1]` | Border color. |
+| `interactable` | bool | `true` | Disabled drop-downs are drawn faded and cannot be opened. |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
+### UIJoystick
+
+On-screen stick for touch screens: while a finger (or the mouse) that went down on it is held, two gamepad axes follow it, so input.axis("LeftX") works the same with a gamepad and on a phone. Releasing returns the axes to 0.
+
+| field | type | default | description |
+|---|---|---|---|
+| `anchor` | string | `"bottom-left"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `40` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `-40` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `200` | Size in reference pixels (the stick is the circle inside this box). |
+| `height` | float | `200` | Size in reference pixels (the stick is the circle inside this box). |
+| `axisX` | string | `"LeftX"` | Axis the horizontal position drives (+ = right). |
+| `axisY` | string | `"LeftY"` | Axis the vertical position drives (+ = up). |
+| `color` | color | `[1,1,1]` | Base color. |
+| `handleColor` | color | `[1,1,1]` | Handle color (drawn at twice the base opacity). |
+| `texture` | string | `""` | Image of the base (tinted by color). Empty = a disc. |
+| `handleTexture` | string | `""` | Image of the handle (tinted by handleColor). Empty = a disc. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the images (sharp pixels). |
+| `opacity` | float | `0.300000012` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
 ### UISlider
 
 Bar showing value in [min, max]: a draggable slider (calls onValueChanged(self, value) on the entity's Script) or, with interactable false, a progress/health bar.
@@ -1529,6 +1727,12 @@ Bar showing value in [min, max]: a draggable slider (calls onValueChanged(self, 
 | `fillColor` | color | `[0.25,0.449999988,0.899999976]` | Filled part color. |
 | `handle` | bool | `true` | Draw a round handle at the value. |
 | `handleColor` | color | `[1,1,1]` | Handle color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
+| `fillTexture` | string | `""` | Image of the filled part (tinted by fillColor), laid over the whole bar and cut at the value. Empty = solid color. |
+| `handleTexture` | string | `""` | Image of the handle (tinted by handleColor), drawn at its own proportions. Empty = a round handle. |
 | `radius` | float | `12` | Corner radius in reference pixels. |
 | `interactable` | bool | `true` | Drag to change the value; false = display only (progress bar). |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
@@ -1582,6 +1786,8 @@ Optional, one per scene: the reference resolution the UI is authored for and how
 | `referenceWidth` | float | `1280` | Reference canvas width in pixels. |
 | `referenceHeight` | float | `720` | Reference canvas height in pixels. |
 | `match` | float | `1` | 0 = scale with the screen width, 1 = with the height (default), in between = blend. |
+| `navigation` | bool | `false` | Keyboard/gamepad control of the UI: arrows or the D-pad move the focus between buttons and sliders (left/right changes a focused horizontal slider), Enter or GamepadA clicks the focused button. Off = pointer only. |
+| `focusColor` | color | `[1,1,1]` | Color of the frame around the focused element. |
 
 ### AudioSource
 
@@ -1700,4 +1906,24 @@ Player entity assigned by the authoritative server; network.playerPrefab spawns 
 |---|---|---|---|
 | `player` | int | `0` | Authenticated player id assigned by the server. |
 | `team` | int | `0` | Player's relevance team. |
+
+### Trail
+
+Camera-facing ribbon left behind the entity as it moves (sword swings, projectiles, dashes); it narrows and fades along its length.
+
+| field | type | default | description |
+|---|---|---|---|
+| `lifetime` | float | `0.5` | Seconds a point of the path stays; with the entity's speed it sets the ribbon's length. |
+| `minDistance` | float | `0.0500000007` | Meters the entity moves before the path gets a new point (smaller = smoother curves). |
+| `width` | float | `0.200000003` | Ribbon width in meters at the entity. |
+| `endWidth` | float | `0` | Width at the oldest point. |
+| `color` | color | `[1,1,1]` | RGB tint at the entity. |
+| `endColor` | color | `[1,1,1]` | RGB tint at the oldest point. |
+| `opacity` | float | `1` | Opacity at the entity. |
+| `endOpacity` | float | `0` | Opacity at the oldest point. |
+| `texture` | string | `""` | Optional image stretched over the ribbon: left edge at the entity, right edge at the oldest point. Empty = solid. |
+| `blend` | string | `"alpha"` | alpha = normal; add = the ribbon brightens what is behind it (energy, fire). |
+| `layer` | int | `0` | 2D sorting layer, like Sprite.layer. |
+| `maxPoints` | int | `64` | Most path points kept; the oldest are dropped first. |
+| `emitting` | bool | `true` | Add new points while true; false lets the existing ribbon fade out. |
 

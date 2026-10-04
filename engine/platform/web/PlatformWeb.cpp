@@ -43,6 +43,44 @@ EM_JS(void, oe_web_show_error, (const char* title, const char* message), {
 
 EM_JS(void, oe_web_open_url, (const char* url), { window.open(UTF8ToString(url), "_blank"); });
 
+// Host bridge: the page may define window.OEHost = { call: function (name, data) -> true when handled }.
+// It answers later with Module.oeHostSend(name, data), which queues a message for host.poll().
+EM_JS(int, oe_web_host_call, (const char* name, const char* json), {
+    var host = window.OEHost;
+    if (!host || typeof host.call !== "function") return 0;
+    var data = {};
+    try { data = JSON.parse(UTF8ToString(json)); } catch (e) {}
+    try { return host.call(UTF8ToString(name), data) ? 1 : 0; }
+    catch (e) { console.error("OEHost.call failed", e); return 0; }
+});
+
+// Installs Module.oeHostSend(name, data): messages wait in a JS array until the engine polls.
+EM_JS(void, oe_web_host_init, (), {
+    Module.oeHostQueue = [];
+    Module.oeHostSend = function (name, data) {
+        if (Module.oeHostQueue.length >= 256) Module.oeHostQueue.shift();
+        Module.oeHostQueue.push([String(name), JSON.stringify(data === undefined ? {} : data)]);
+    };
+});
+
+// Pops the oldest queued message as name, a line feed, then its JSON (malloc'd, the caller frees) or returns 0.
+EM_JS(char*, oe_web_host_take, (), {
+    var q = Module.oeHostQueue;
+    if (!q || !q.length) return 0;
+    var m = q.shift();
+    // (no escape sequences here: EM_JS passes this text through the C preprocessor)
+    var newline = String.fromCharCode(10);
+    var text = m[0].split(newline).join(" ") + newline + m[1], size = lengthBytesUTF8(text) + 1, result = _malloc(size);
+    if (result) stringToUTF8(text, result, size);
+    return result;
+});
+
+EM_JS(char*, oe_web_language, (), {
+    var text = (navigator.language || "en").slice(0, 2).toLowerCase(), size = lengthBytesUTF8(text) + 1, result = _malloc(size);
+    if (result) stringToUTF8(text, result, size);
+    return result;
+});
+
 EM_JS(int, oe_web_input_focused, (), { return !document.hidden && document.hasFocus() ? 1 : 0; });
 
 // Software-renderer fallback (no WebGL2): RGBA pixels -> 2D canvas, stretched to the canvas size.
@@ -119,6 +157,10 @@ std::string KeyName(const EmscriptenKeyboardEvent* e) {
     if (code == "Escape") return "Escape";
     if (code == "Enter" || code == "NumpadEnter") return "Enter";
     if (code == "Tab") return "Tab";
+    if (code == "Backspace") return "Backspace";
+    if (code == "Delete") return "Delete";
+    if (code == "Home") return "Home";
+    if (code == "End") return "End";
     return std::string();
 }
 
@@ -174,6 +216,7 @@ public:
                     input.down.insert(e.key);
                     break;
                 case Event::Up: input.down.erase(e.key); break;
+                case Event::Text: input.text += e.key; break;
                 case Event::Move:
                     input.mouseX = e.x;
                     input.mouseY = e.y;
@@ -222,7 +265,7 @@ public:
 
 private:
     struct Event {
-        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock, TouchBegin, TouchMove, TouchEnd } kind;
+        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock, TouchBegin, TouchMove, TouchEnd, Text } kind;
         std::string key;
         float x = 0, y = 0;
         int id = 0;
@@ -253,6 +296,13 @@ private:
 
     static bool OnKey(int type, const EmscriptenKeyboardEvent* e, void* user) {
         auto* self = static_cast<WebWindow*>(user);
+        // KeyboardEvent.key is the typed character when it is a single one ("a", "A", "!"); names ("Enter") are longer.
+        // Text composed with an IME does not arrive as key events and is not reported.
+        if (type == EMSCRIPTEN_EVENT_KEYDOWN && !e->ctrlKey && !e->metaKey && !e->altKey) {
+            const unsigned char first = static_cast<unsigned char>(e->key[0]);
+            const size_t length = first < 0x80 ? 1 : first >= 0xF0 ? 4 : first >= 0xE0 ? 3 : first >= 0xC0 ? 2 : 0;
+            if (first >= 32 && first != 127 && length > 0 && std::strlen(e->key) == length) self->Push(Event::Text, e->key);
+        }
         std::string key = KeyName(e);
         if (key.empty()) return false;  // let the browser handle it (F5, F12, ...)
         if (!e->repeat || type == EMSCRIPTEN_EVENT_KEYUP) self->Push(type == EMSCRIPTEN_EVENT_KEYDOWN ? Event::Down : Event::Up, key);
@@ -357,7 +407,12 @@ std::unique_ptr<Window> CreatePlatformWindow(const std::string& title, int, int)
 
 void PlatformEnableHighDpi() {}
 
-std::string PlatformUserLanguage() { return "en"; }  // not needed by the web player yet
+std::string PlatformUserLanguage() {
+    char* text = oe_web_language();
+    std::string language = text ? text : "en";
+    free(text);
+    return language.size() == 2 ? language : "en";
+}
 
 const char* PlatformName() { return "web"; }
 
@@ -365,10 +420,38 @@ double PlatformTimeSeconds() { return emscripten_get_now() / 1000.0; }
 
 void PlatformSleep(double) {}  // the browser drives the loop; blocking would freeze the page
 
+bool PlatformHostCall(const std::string& name, const std::string& json) { return oe_web_host_call(name.c_str(), json.c_str()) != 0; }
+
+std::vector<std::pair<std::string, std::string>> PlatformHostPoll() {
+    static bool installed = false;
+    if (!installed) {
+        installed = true;
+        oe_web_host_init();
+    }
+    std::vector<std::pair<std::string, std::string>> out;
+    while (char* text = oe_web_host_take()) {
+        std::string message = text;
+        free(text);
+        size_t split = message.find('\n');
+        if (split != std::string::npos) out.push_back({message.substr(0, split), message.substr(split + 1)});
+    }
+    return out;
+}
+
 bool PlatformOpenUrl(const std::string& url) {
     oe_web_open_url(url.c_str());
     return true;
 }
+
+// The browser's clipboard is asynchronous and permission-gated: copy and paste stay inside the game.
+namespace {
+std::string& LocalClipboard() {
+    static std::string text;
+    return text;
+}
+}  // namespace
+std::string PlatformClipboardText() { return LocalClipboard(); }
+void PlatformSetClipboardText(const std::string& text) { LocalClipboard() = text; }
 
 std::string ExecutableDirectory() { return "/"; }
 

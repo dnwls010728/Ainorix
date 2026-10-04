@@ -24,6 +24,7 @@
 namespace oe {
 
 class ScriptHost;
+struct UIRect;
 class PhysicsWorld;
 class AudioSystem;
 class AssetManager;
@@ -93,6 +94,39 @@ public:
     void SetDateOverride(const std::string& date) { dateOverride_ = date; }
     const std::string& DateOverride() const { return dateOverride_; }
 
+    // ----- Host application (the web page, a store SDK layer) -----------------
+    // Lets a game ask the app that embeds the player for things the engine does not do itself
+    // (ads, purchases, analytics): host.call(name, data) goes out, answers come back as messages
+    // the game reads with host.poll(). Like the mouse it is device state, outside the
+    // deterministic simulation; nothing is sent while a network match replays frames.
+    struct HostMessage {
+        std::string name;
+        Json data;
+    };
+    struct HostCallRecord {
+        std::string name;
+        Json data;
+        uint64_t frame = 0;
+        bool handled = false;
+    };
+    // The player installs the platform's handler (PlatformHostCall); it returns false when the
+    // host does not know `name`, so games fall back to their own behaviour.
+    void SetHostHandler(std::function<bool(const std::string& name, const std::string& json)> handler) { hostHandler_ = std::move(handler); }
+    // Tools pretend a host handles these names ("*" = every name) to test the hosted path headless.
+    void SetHostAccept(std::set<std::string> names) { hostAccept_ = std::move(names); }
+    const std::set<std::string>& HostAccept() const { return hostAccept_; }
+    bool HostCall(const std::string& name, const Json& data);
+    // Queues a message from the host; the oldest are dropped beyond kMaxHostMessages.
+    void PushHostMessage(const std::string& name, const Json& data);
+    std::vector<HostMessage> TakeHostMessages();
+    size_t PendingHostMessages() const { return hostInbox_.size(); }
+    const std::vector<HostCallRecord>& HostCalls() const { return hostCalls_; }
+    // ISO 639-1 language of the user ("en" when unknown); the player sets it from the platform.
+    const std::string& UserLanguage() const { return userLanguage_; }
+    void SetUserLanguage(const std::string& language) { userLanguage_ = language.empty() ? "en" : language; }
+    static constexpr size_t kMaxHostMessages = 256;
+    static constexpr size_t kMaxHostCalls = 64;
+
     // ----- Game runtime (valid during a play session) -------------------------
     // Data that survives scene changes (score, lives...). Reset when the
     // session ends. Scripts use game.get/game.set; tools read game.state.
@@ -100,6 +134,16 @@ public:
     // Gameplay pause (menus, level-up dialogs): scripts keep running with dt = 0 and UI stays clickable,
     // while physics, built-in systems, timers and particles stand still. Cleared on scene changes and sim.stop.
     bool GamePaused() const { return gamePaused_; }
+    // Button or slider with the keyboard/gamepad focus (UICanvas.navigation), kNullEntity = none. A focus on
+    // something that cannot be reached (hidden, disabled, under a modal panel) is dropped on the next frame.
+    EntityId UIFocus() const { return uiFocus_; }
+    void SetUIFocus(EntityId id) { uiFocus_ = id; }
+    // A UIInput has the focus: the platform should offer text entry (Window::SetTextInput; the soft keyboard on phones).
+    bool TextInputActive() const;
+    // Clipboard of UIInput copy/cut/paste. Tools and tests keep a private one; a game window uses the system's.
+    void UseSystemClipboard(bool on) { systemClipboard_ = on; }
+    std::string ClipboardText() const;
+    void SetClipboardText(const std::string& text);
     void SetGamePaused(bool paused) { gamePaused_ = paused; }
     // Save slots survive sim.stop and scene transitions; memory-only by default.
     SaveStore& Saves() { return saves_; }
@@ -217,15 +261,27 @@ private:
     struct UIEvent {
         EntityId id;
         const char* method;
-        bool hasValue;
+        bool hasValue;         // the script gets `value`
         float value;
+        bool isFlag;           // ... as a boolean (`value != 0`)
+        bool hasText = false;  // the script gets `text`
+        std::string text;
+        UIEvent(EntityId entity, const char* name, bool withValue = false, float number = 0.0f, bool flag = false)
+            : id(entity), method(name), hasValue(withValue), value(number), isFlag(flag) {}
     };
     // Pointer hover/press/click and slider drags for this frame's input.
     std::vector<UIEvent> UpdateUI();
+    // A click on a button: onClick, and for a toggle the new `on` (radio groups turn the others off) with onToggle.
+    void ClickButton(EntityId id, std::vector<UIEvent>& events);
+    // Typing into the focused UIInput; UICanvas.navigation: arrows / D-pad move the focus or change a focused
+    // slider or drop-down, Enter / GamepadA clicks.
+    void UpdateUIFocus(const std::vector<UIRect>& rects, std::vector<UIEvent>& events);
     // UIButton.key: buttons held by the mouse or any finger hold their key down.
     std::set<EntityId> HeldInputButtons(const InputState& input, bool includeClick);
     InputState SampleNetworkInput();
     void UpdateButtonKeys();
+    // UIJoystick: sticks held by the mouse or a finger drive their axes in `input`.
+    void UpdateJoysticks(InputState& input);
     void BeginSessionIfNeeded();
     void ResetRuntime();
     void ApplySceneChange();
@@ -301,6 +357,11 @@ private:
     uint64_t revision_ = 1;
     Json gameData_ = Json::MakeObject();
     std::string dateOverride_;  // empty = the machine's clock
+    std::function<bool(const std::string&, const std::string&)> hostHandler_;
+    std::set<std::string> hostAccept_;
+    std::vector<HostMessage> hostInbox_;
+    std::vector<HostCallRecord> hostCalls_;  // most recent kMaxHostCalls, for host.state
+    std::string userLanguage_ = "en";
     bool gamePaused_ = false;
     SaveStore saves_;
     struct TimedLine {
@@ -312,6 +373,14 @@ private:
     std::string runtimeScene_;
     EntityId uiHovered_ = kNullEntity;
     EntityId uiPressed_ = kNullEntity;
+    EntityId uiFocus_ = kNullEntity;       // keyboard/gamepad focus
+    std::string uiRepeatKey_;              // editing key held in a UIInput and for how many frames (key repeat)
+    int uiRepeat_ = 0;
+    EntityId uiListPress_ = kNullEntity;   // UIDropdown whose open list is pressed: a release selects, a drag scrolls
+    float uiListY_ = 0.0f;                 // pointer position the next scroll step is measured from (pixels)
+    bool uiListDragged_ = false;
+    bool systemClipboard_ = false;
+    std::string clipboard_;
     EntityId uiScrollDrag_ = kNullEntity;  // UIScroll being dragged by the pointer
     float uiScrollLast_ = 0.0f;            // pointer position along its axis at the previous frame (pixels)
     EntityId uiScrollBar_ = kNullEntity;   // UIScroll whose bar thumb is held

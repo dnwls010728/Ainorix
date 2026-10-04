@@ -42,7 +42,7 @@ struct Engine::NativeState {
     std::string runtimeScene, pendingScene;
     std::set<EntityId> buttons;
     std::set<std::string> keys;
-    EntityId hover = 0, press = 0;
+    EntityId hover = 0, press = 0, focus = 0;
     uint64_t frame = 0;
     double time = 0;
 };
@@ -52,7 +52,7 @@ std::shared_ptr<const Engine::NativeState> Engine::CaptureNative(bool output) co
     s->audio = audio_->SaveState(output); s->saves = saves_; s->data = gameData_;
     s->input = input_; s->frameInputs = frameInputs_; s->playerInputs = playerInputs_; s->replicatedEntities = replicatedEntities_;
     s->lines = debugLines_; s->runtimeScene = runtimeScene_; s->pendingScene = pendingScene_;
-    s->buttons = heldButtons_; s->keys = heldKeys_; s->hover = uiHovered_; s->press = uiPressed_;
+    s->buttons = heldButtons_; s->keys = heldKeys_; s->hover = uiHovered_; s->press = uiPressed_; s->focus = uiFocus_;
     s->frame = frame_; s->time = simTime_; return s;
 }
 void Engine::RestoreNative(const NativeState& s) {
@@ -61,7 +61,7 @@ void Engine::RestoreNative(const NativeState& s) {
     audio_->LoadState(*s.audio); saves_ = s.saves; gameData_ = s.data;
     input_ = s.input; frameInputs_ = s.frameInputs; playerInputs_ = s.playerInputs; replicatedEntities_ = s.replicatedEntities;
     debugLines_ = s.lines; runtimeScene_ = s.runtimeScene; pendingScene_ = s.pendingScene;
-    heldButtons_ = s.buttons; heldKeys_ = s.keys; uiHovered_ = s.hover; uiPressed_ = s.press;
+    heldButtons_ = s.buttons; heldKeys_ = s.keys; uiHovered_ = s.hover; uiPressed_ = s.press; uiFocus_ = s.focus;
     frame_ = s.frame; simTime_ = s.time;
 }
 void Engine::CaptureCheckpoint() {
@@ -135,7 +135,7 @@ bool Engine::PollSync() {
         ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
         frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject();
         runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
-        uiHovered_ = uiPressed_ = kNullEntity; heldButtons_.clear(); heldKeys_.clear();
+        uiHovered_ = uiPressed_ = uiFocus_ = kNullEntity; heldButtons_.clear(); heldKeys_.clear();
         checkpoints_.clear(); journal_.reset(); snapshots_.clear(); syncHashes_.clear(); outputConfirmed_ = 0; desyncNotified_ = false;
         if (sync_->Config().rollback) RecordState();
         saves_.FreezeReads(true); saves_.DeferFlush(true);

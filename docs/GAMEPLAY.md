@@ -30,6 +30,40 @@ things with `dt` stop by themselves; a script that must do nothing while paused 
 
 `time.date()` gives the calendar day for daily rewards; it is not simulation state, and `time.date {set: "2030-01-31"}` pins it in tests.
 
+## Host application (ads, purchases)
+
+A shipped game runs inside something: a web page, later a store app. The **host bridge** lets Lua ask that host for
+what the engine does not do itself, without the engine knowing any SDK:
+
+```lua
+if host.call("ads.rewarded", {placement = "revive"}) then   -- true: the host shows the ad
+  self.waiting = true                                        -- its answer arrives later
+else
+  self:showDemoAd()                                          -- false: no host, use your own fallback
+end
+
+function Game:onUpdate()
+  for _, m in ipairs(host.poll()) do                         -- { {name=, data=}, ... }
+    if m.name == "ads.result" and self.waiting then self:reward(m.data.ok) end
+  end
+end
+```
+
+Names and payloads are the game's own protocol with its host (JSON-compatible tables). On the web the page defines
+`window.OEHost = { call: function (name, data) { ...; return true; } }` and answers with
+`Module.oeHostSend(name, data)`. Put that script in the project's `web/host.js`: `oe package --web` copies the `web/`
+folder next to `index.html` (it is not part of the game data) and loads `host.js` before the player.
+`games/DongleZoo/web/host.js` connects rewarded and interstitial ads to Google's H5 Games Ads this way.
+Windows and Android have no host yet (`host.call` returns false); a store SDK layer would implement
+`PlatformHostCall` / `PlatformHostPoll` (`engine/platform/Platform.h`).
+
+`host.language()` is the user's language code. The bridge is device state like the mouse, not part of the
+deterministic simulation, and a network match does not repeat calls while it replays frames.
+
+Tools test both paths headless: `host.state` lists the calls the game made (`name`, `data`, `frame`, `handled`),
+`host.configure {accept: ["ads.rewarded"], language: "ko"}` makes those names report as handled, and
+`host.reply {name: "ads.result", data: {ok: true}}` delivers the host's answer.
+
 ## Messages and timers
 
 Progress between launches uses `save.get/set/delete/flush`, independently of game
@@ -57,9 +91,12 @@ Screen-space components laid out on a **1280×720 reference canvas** scaled to t
 |---|---|
 | `UIText` | `text` (UTF-8, `\n`, `<color=..>`/`<b>`), `font` (`default`, `pixel`, `assets/fonts/x.ttf`), `size`, `color`, `width` (wrap box), `align`, `outlineWidth`, `shadowDistance` |
 | `UIPanel` | `width`, `height`, `color`, `opacity`, `radius`, `borderWidth`, `clip` |
-| `UIButton` | `text`, `width`, `height`, `size`, `color`, `textColor`, `radius`, `interactable`; a click calls `onClick(self)` on the entity's Script |
+| `UIButton` | `text`, `width`, `height`, `size`, `color`, `textColor`, `radius`, `interactable`, `texture` + state textures, `icon`, `toggle`/`group`, `clickOn`; a click calls `onClick(self)` on the entity's Script, a toggle `onToggle(self, on)` (docs/UI.md) |
 | `UIImage` | `texture`, `color`, `frame`/`columns`, `slice`, `fill`, `preserveAspect` |
 | `UISlider` | `value`, `min`, `max`, `step`, `interactable`; dragging calls `onValueChanged(self, value)` |
+| `UIInput` | `text`, `placeholder`, `maxLength`, `password`, `multiline`; typing calls `onTextChanged(self, text)`, Enter `onSubmit(self, text)` |
+| `UIDropdown` | `options`, `selected`; choosing calls `onValueChanged(self, index)` |
+| `UIJoystick` | `axisX`, `axisY`: an on-screen stick read with `input.axis("LeftX")` |
 | all | `anchor` (9 points + `stretch*`), `x`, `y` offsets in reference px (+y down), `width`, `height`, `opacity`, `visible`, `order` |
 
 The anchor is both the point of the parent (or screen) and the element's pivot: `anchor = "bottom-right", x = -20, y = -20` puts the element's bottom-right corner 20 px from the corner.
@@ -86,8 +123,8 @@ WAV files: PCM 8/16/24/32-bit or float, mono/stereo, any sample rate (resampled)
 
 1. Timers, then scripts `onStart` / `onUpdate` (entity id order)
 2. UI pointer: hover, press, slider drags (from this frame's mouse)
-3. Built-in systems (Animator, ParticleEmitter, SpriteAnimation)
+3. Built-in systems (Animator, ParticleEmitter, SpriteAnimation); Trail paths are sampled after physics
 4. Physics step, then `onCollision*` / `onTrigger*`
-5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onValueChanged`
+5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onToggle`, `onValueChanged`, `onTextChanged`, `onSubmit`
 6. Pending scene change
 7. AudioSource updates, audio mix

@@ -94,6 +94,10 @@ std::string GameKeyName(WindowKey k) {
         case WindowKey::Enter:
         case WindowKey::KeypadEnter: return "Enter";
         case WindowKey::Tab: return "Tab";
+        case WindowKey::Backspace: return "Backspace";
+        case WindowKey::Delete: return "Delete";
+        case WindowKey::Home: return "Home";
+        case WindowKey::End: return "End";
         default: return std::string();
     }
 }
@@ -140,6 +144,10 @@ const Preset kPresets[] = {
     {"button", "UI", "UI Button", "Button", R"({"UIButton":{}})"},
     {"panel", "UI", "UI Panel", "Panel", R"({"UIPanel":{"anchor":"center","x":0,"y":0,"width":400,"height":240,"color":[0.1,0.11,0.15],"opacity":0.9,"radius":12}})"},
     {"image", "UI", "UI Image", "Image", R"({"UIImage":{"width":128,"height":128}})"},
+    {"toggle", "UI", "UI Toggle", "Toggle", R"({"UIButton":{"text":"Toggle","toggle":true}})"},
+    {"input", "UI", "UI Text Input", "Input", R"({"UIInput":{}})"},
+    {"dropdown", "UI", "UI Dropdown", "Dropdown", R"({"UIDropdown":{"options":["Option A","Option B","Option C"]}})"},
+    {"joystick", "UI", "UI Joystick", "Joystick", R"({"UIJoystick":{}})"},
     {"slider", "UI", "UI Slider", "Slider", R"({"UISlider":{}})"},
     {"progress", "UI", "UI Progress Bar", "Progress",
      R"({"UISlider":{"interactable":false,"handle":false,"height":16,"radius":8,"fillColor":[0.24,0.77,0.49]}})"},
@@ -270,6 +278,12 @@ bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, boo
 
 }  // namespace
 
+std::vector<std::pair<std::string, std::string>> EditorAddPresets() {
+    std::vector<std::pair<std::string, std::string>> list;
+    for (const Preset& p : kPresets) list.push_back({p.key, p.components});
+    return list;
+}
+
 // ----- Shared helpers -----------------------------------------------------------
 
 Json Vec3Json(const Vec3& v) { return Json(Json::Array{Json(v.x), Json(v.y), Json(v.z)}); }
@@ -298,6 +312,8 @@ std::string AssetKindForField(const std::string& type, const std::string& field)
     if (type == "MeshRenderer" && field == "mesh") return "model";
     if (field == "material") return "material";
     if (field == "texture" || field == "tileset") return "texture";
+    // UI state and part images: hoverTexture, fillTexture, handleTexture, ...
+    if (field == "icon" || (field.size() > 7 && field.compare(field.size() - 7, 7, "Texture") == 0)) return "texture";
     if (type == "Script" && field == "path") return "script";
     if (type == "Prefab" && field == "path") return "prefab";
     if (type == "AudioSource" && field == "clip") return "audio";
@@ -359,6 +375,9 @@ std::string NativeEditor::Impl::VisibilityComponent(EntityId id, bool* visible) 
     if (const char* n = check(scene.Get<UIPanel>(id), "UIPanel")) return n;
     if (const char* n = check(scene.Get<UIButton>(id), "UIButton")) return n;
     if (const char* n = check(scene.Get<UIImage>(id), "UIImage")) return n;
+    if (const char* n = check(scene.Get<UIInput>(id), "UIInput")) return n;
+    if (const char* n = check(scene.Get<UIDropdown>(id), "UIDropdown")) return n;
+    if (const char* n = check(scene.Get<UIJoystick>(id), "UIJoystick")) return n;
     if (const char* n = check(scene.Get<UISlider>(id), "UISlider")) return n;
     if (const char* n = check(scene.Get<UIText>(id), "UIText")) return n;
     if (const char* n = check(scene.Get<Sprite>(id), "Sprite")) return n;
@@ -860,7 +879,13 @@ void NativeEditor::Impl::ApplyEvents(const std::vector<WindowEvent>& events) {
                 break;
             }
             case WindowEvent::Type::Text:
-                if (!gameInput) io.AddInputCharacter(e.codepoint);
+                if (!gameInput) {
+                    io.AddInputCharacter(e.codepoint);
+                } else {  // typing into the game's UIInput
+                    InputState typed;
+                    typed.AddText(e.codepoint);
+                    if (!typed.text.empty()) Call("input.text", ObjectOf({{"text", Json(typed.text)}}), true);
+                }
                 break;
             case WindowEvent::Type::Focus:
                 io.AddFocusEvent(e.down);
@@ -1624,6 +1649,7 @@ std::vector<std::string> NativeEditor::ScriptProblems(const std::string& path) c
 std::string NativeEditor::LastNotice() const { return impl_->lastNotice; }
 
 int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options& options) {
+    engine.UseSystemClipboard(true);  // UIInput copy/paste in the Game view
     NativeEditor editor(engine, &window, options);
     std::string err;
     if (!editor.Init(&err)) {

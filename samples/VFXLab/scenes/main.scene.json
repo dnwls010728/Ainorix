@@ -1,0 +1,1067 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "VFXLab",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Moon",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -50,
+            30,
+            0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            0.55,
+            0.65,
+            0.9
+          ],
+          "intensity": 0.5,
+          "ambient": [
+            0.08,
+            0.09,
+            0.14
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            3.2,
+            10.5
+          ],
+          "rotation": [
+            -11,
+            0,
+            0
+          ]
+        },
+        "Camera": {
+          "fov": 45,
+          "clearColor": [
+            0.02,
+            0.025,
+            0.05
+          ]
+        },
+        "PostProcess": {
+          "toneMapping": "reinhard",
+          "exposure": 1.3,
+          "bloom": 0.9,
+          "bloomThreshold": 0.7,
+          "bloomRadius": 10
+        },
+        "Script": {
+          "path": "scripts/lab.lua"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "scale": [
+            30,
+            1,
+            30
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [
+            0.1,
+            0.11,
+            0.14
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Campfire",
+      "components": {
+        "Transform": {
+          "position": [
+            -4.5,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Log1",
+      "components": {
+        "Transform": {
+          "position": [
+            0.175,
+            0.1,
+            0.0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1.0,
+            0.18,
+            0.18
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.12,
+            0.07
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 6,
+      "name": "Log2",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.1,
+            0.1,
+            0.15
+          ],
+          "rotation": [
+            0,
+            60,
+            0
+          ],
+          "scale": [
+            1.0,
+            0.18,
+            0.18
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.12,
+            0.07
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 7,
+      "name": "Log3",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.1,
+            0.1,
+            -0.15
+          ],
+          "rotation": [
+            0,
+            120,
+            0
+          ],
+          "scale": [
+            1.0,
+            0.18,
+            0.18
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.12,
+            0.07
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 8,
+      "name": "FireLight",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.8,
+            0
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.55,
+            0.2
+          ],
+          "intensity": 3,
+          "range": 6
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 9,
+      "name": "Flames",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.2,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 45,
+          "lifetime": 0.9,
+          "lifetimeVariation": 0.3,
+          "speed": 1.3,
+          "speedVariation": 0.4,
+          "spread": 12,
+          "gravity": [
+            0,
+            1.2,
+            0
+          ],
+          "shape": "circle",
+          "shapeSize": [
+            0.28,
+            0,
+            0
+          ],
+          "blend": "add",
+          "maxParticles": 96,
+          "turbulence": 3,
+          "turbulenceScale": 1.6,
+          "sizeOverLife": [
+            [
+              0,
+              0.35
+            ],
+            [
+              0.25,
+              0.75
+            ],
+            [
+              1,
+              0.15
+            ]
+          ],
+          "colorOverLife": [
+            [
+              0,
+              [
+                1.0,
+                0.9,
+                0.5
+              ]
+            ],
+            [
+              0.35,
+              [
+                1.0,
+                0.45,
+                0.1
+              ]
+            ],
+            [
+              1,
+              [
+                0.5,
+                0.05,
+                0.0
+              ]
+            ]
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              0
+            ],
+            [
+              0.12,
+              0.85
+            ],
+            [
+              0.7,
+              0.5
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 10,
+      "name": "Smoke",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.1,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/smoke.png",
+          "pixelArt": false,
+          "space": "world",
+          "columns": 2,
+          "rows": 2,
+          "frames": 4,
+          "randomFrame": true,
+          "rate": 7,
+          "lifetime": 3.2,
+          "speed": 0.7,
+          "spread": 14,
+          "gravity": [
+            0,
+            0.25,
+            0
+          ],
+          "shape": "circle",
+          "shapeSize": [
+            0.2,
+            0,
+            0
+          ],
+          "maxParticles": 48,
+          "turbulence": 1.2,
+          "turbulenceScale": 0.5,
+          "rotationVariation": 180,
+          "spinVariation": 40,
+          "sizeVariation": 0.3,
+          "sizeOverLife": [
+            [
+              0,
+              0.5
+            ],
+            [
+              1,
+              2.2
+            ]
+          ],
+          "colorOverLife": [
+            [
+              0,
+              [
+                0.35,
+                0.3,
+                0.28
+              ]
+            ],
+            [
+              1,
+              [
+                0.16,
+                0.16,
+                0.18
+              ]
+            ]
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              0
+            ],
+            [
+              0.2,
+              0.42
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 11,
+      "name": "Embers",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.4,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 14,
+          "lifetime": 1.8,
+          "lifetimeVariation": 0.5,
+          "speed": 2.2,
+          "speedVariation": 0.6,
+          "spread": 25,
+          "gravity": [
+            0,
+            0.4,
+            0
+          ],
+          "drag": 0.6,
+          "blend": "add",
+          "maxParticles": 64,
+          "turbulence": 7,
+          "turbulenceScale": 1.1,
+          "align": "velocity",
+          "stretch": 0.06,
+          "startSize": 0.07,
+          "endSize": 0.02,
+          "startColor": [
+            1.0,
+            0.7,
+            0.25
+          ],
+          "endColor": [
+            1.0,
+            0.2,
+            0.0
+          ],
+          "startOpacity": 1,
+          "endOpacity": 0
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 12,
+      "name": "Portal",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.3,
+            0.05,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "PortalLight",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.6,
+            0
+          ]
+        },
+        "PointLight": {
+          "color": [
+            0.3,
+            0.7,
+            1.0
+          ],
+          "intensity": 2,
+          "range": 4
+        }
+      },
+      "parent": 12
+    },
+    {
+      "id": 14,
+      "name": "Rim",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 70,
+          "lifetime": 1.6,
+          "speed": 0.9,
+          "spread": 0,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "shape": "circle",
+          "shapeSize": [
+            1.1,
+            0,
+            0
+          ],
+          "shapeEdge": true,
+          "radialSpeed": -0.45,
+          "blend": "add",
+          "maxParticles": 160,
+          "sizeOverLife": [
+            [
+              0,
+              0.0
+            ],
+            [
+              0.15,
+              0.2
+            ],
+            [
+              1,
+              0.03
+            ]
+          ],
+          "colorOverLife": [
+            [
+              0,
+              [
+                0.3,
+                0.9,
+                1.0
+              ]
+            ],
+            [
+              1,
+              [
+                0.6,
+                0.25,
+                1.0
+              ]
+            ]
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              1
+            ],
+            [
+              0.7,
+              0.8
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 12
+    },
+    {
+      "id": 15,
+      "name": "Core",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.15,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 10,
+          "lifetime": 1.2,
+          "speed": 0.2,
+          "spread": 180,
+          "gravity": [
+            0,
+            0.6,
+            0
+          ],
+          "shape": "circle",
+          "shapeSize": [
+            0.6,
+            0,
+            0
+          ],
+          "blend": "add",
+          "maxParticles": 32,
+          "spinVariation": 90,
+          "sizeOverLife": [
+            [
+              0,
+              0.2
+            ],
+            [
+              0.5,
+              0.9
+            ],
+            [
+              1,
+              0.4
+            ]
+          ],
+          "colorOverLife": [
+            [
+              0,
+              [
+                0.2,
+                0.5,
+                1.0
+              ]
+            ],
+            [
+              1,
+              [
+                0.5,
+                0.2,
+                0.9
+              ]
+            ]
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              0
+            ],
+            [
+              0.4,
+              0.3
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 12
+    },
+    {
+      "id": 16,
+      "name": "Fireworks",
+      "components": {
+        "Transform": {
+          "position": [
+            1.7,
+            2.6,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Burst",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 0,
+          "burst": 70,
+          "loop": true,
+          "duration": 2,
+          "lifetime": 1.3,
+          "lifetimeVariation": 0.4,
+          "speed": 5.5,
+          "speedVariation": 0.5,
+          "spread": 180,
+          "gravity": [
+            0,
+            -3.5,
+            0
+          ],
+          "drag": 1.6,
+          "blend": "add",
+          "maxParticles": 160,
+          "align": "velocity",
+          "stretch": 0.07,
+          "startSize": 0.11,
+          "endSize": 0.03,
+          "colorOverLife": [
+            [
+              0,
+              [
+                1.0,
+                1.0,
+                0.8
+              ]
+            ],
+            [
+              0.3,
+              [
+                1.0,
+                0.5,
+                0.9
+              ]
+            ],
+            [
+              1,
+              [
+                0.3,
+                0.3,
+                1.0
+              ]
+            ]
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              1
+            ],
+            [
+              0.6,
+              0.9
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 16
+    },
+    {
+      "id": 18,
+      "name": "Flash",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 0,
+          "burst": 1,
+          "loop": true,
+          "duration": 2,
+          "lifetime": 0.22,
+          "speed": 0,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "blend": "add",
+          "maxParticles": 4,
+          "sizeOverLife": [
+            [
+              0,
+              0.6
+            ],
+            [
+              0.3,
+              3.2
+            ],
+            [
+              1,
+              2.0
+            ]
+          ],
+          "startColor": [
+            1.0,
+            0.9,
+            0.8
+          ],
+          "endColor": [
+            1.0,
+            0.6,
+            0.9
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 16
+    },
+    {
+      "id": 19,
+      "name": "Puff",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/smoke.png",
+          "pixelArt": false,
+          "space": "world",
+          "columns": 2,
+          "rows": 2,
+          "frames": 4,
+          "randomFrame": true,
+          "rate": 0,
+          "burst": 7,
+          "loop": true,
+          "duration": 2,
+          "delay": 0.12,
+          "lifetime": 1.7,
+          "speed": 0.6,
+          "spread": 180,
+          "gravity": [
+            0,
+            0.15,
+            0
+          ],
+          "shape": "sphere",
+          "shapeSize": [
+            0.35,
+            0,
+            0
+          ],
+          "maxParticles": 24,
+          "rotationVariation": 180,
+          "spinVariation": 25,
+          "sizeOverLife": [
+            [
+              0,
+              0.6
+            ],
+            [
+              1,
+              1.7
+            ]
+          ],
+          "startColor": [
+            0.4,
+            0.38,
+            0.45
+          ],
+          "endColor": [
+            0.2,
+            0.2,
+            0.25
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              0
+            ],
+            [
+              0.15,
+              0.3
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        }
+      },
+      "parent": 16
+    },
+    {
+      "id": 20,
+      "name": "Orb",
+      "components": {
+        "Transform": {
+          "position": [
+            4.6,
+            1.4,
+            0
+          ]
+        },
+        "Script": {
+          "path": "scripts/orbit.lua",
+          "params": {
+            "width": 1.5,
+            "height": 0.9,
+            "speed": 2.4
+          }
+        },
+        "Trail": {
+          "lifetime": 0.7,
+          "minDistance": 0.04,
+          "width": 0.34,
+          "endWidth": 0.02,
+          "color": [
+            0.6,
+            1.0,
+            0.75
+          ],
+          "endColor": [
+            0.1,
+            0.5,
+            1.0
+          ],
+          "opacity": 0.95,
+          "endOpacity": 0,
+          "texture": "assets/textures/streak.png",
+          "blend": "add",
+          "maxPoints": 96
+        },
+        "PointLight": {
+          "color": [
+            0.4,
+            1.0,
+            0.7
+          ],
+          "intensity": 1.5,
+          "range": 3
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "OrbGlow",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "local",
+          "rate": 0,
+          "burst": 1,
+          "loop": true,
+          "duration": 0.5,
+          "lifetime": 0.5,
+          "speed": 0,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "blend": "add",
+          "maxParticles": 4,
+          "startSize": 0.55,
+          "endSize": 0.55,
+          "startColor": [
+            0.7,
+            1.0,
+            0.8
+          ],
+          "endColor": [
+            0.7,
+            1.0,
+            0.8
+          ],
+          "opacityOverLife": [
+            [
+              0,
+              0.9
+            ],
+            [
+              1,
+              0.9
+            ]
+          ]
+        }
+      },
+      "parent": 20
+    },
+    {
+      "id": 22,
+      "name": "Sparkles",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "texture": "assets/textures/glow.png",
+          "pixelArt": false,
+          "space": "world",
+          "rate": 30,
+          "lifetime": 0.8,
+          "lifetimeVariation": 0.4,
+          "speed": 0.5,
+          "speedVariation": 0.6,
+          "spread": 180,
+          "gravity": [
+            0,
+            -0.8,
+            0
+          ],
+          "blend": "add",
+          "maxParticles": 48,
+          "startSize": 0.1,
+          "endSize": 0,
+          "startColor": [
+            0.8,
+            1.0,
+            0.9
+          ],
+          "endColor": [
+            0.2,
+            0.6,
+            1.0
+          ],
+          "startOpacity": 1,
+          "endOpacity": 0
+        }
+      },
+      "parent": 20
+    },
+    {
+      "id": 23,
+      "name": "Help",
+      "components": {
+        "UIText": {
+          "text": "VFXLab   campfire / portal / fireworks / orb trail      Space: fire a burst",
+          "anchor": "bottom-left",
+          "x": 16,
+          "y": -16,
+          "size": 18,
+          "color": [
+            0.8,
+            0.85,
+            0.95
+          ]
+        }
+      }
+    }
+  ]
+}

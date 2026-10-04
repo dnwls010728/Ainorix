@@ -44,7 +44,7 @@ finds (`--abi arm64-v8a` limits it). ABIs: `arm64-v8a` (phones and tablets),
 Enabled `project.json` networking (`network.mode` other than `none`) adds
 `android.permission.INTERNET` to both APK and App Bundle manifests. Single-player/none
 projects keep their previous permissions. M4 lobbies/RPC require a rebuilt Android runtime;
-device networking is unverified without the NDK/device. See [NETWORK.md](NETWORK.md).
+device networking is unverified without the NDK/device. See [NETWORK_NOTES.md](NETWORK_NOTES.md).
 
 `project.json` (all optional):
 
@@ -213,6 +213,25 @@ adb shell 'cd /data/local/tmp/oe-tests && chmod +x oe_tests && OE_TEST_SOURCE_DI
 Run from the repository root. Keep the working directory at the staged root
 so the engine can find `templates/`; test output is written beneath its
 `build/` folder. Add `adb -s <serial>` to select a device when several are connected.
+
+### Rebuild 2026-10-04
+
+Both ABIs were rebuilt with NDK r28c from the Dongle Zoo branch (host bridge, `input.viewSize`, VFX
+toolkit and everything pending since the 2026-10-02 runtime); the SDK build-tools and NDK were
+downloaded from dl.google.com into the ignored `build/android-sdk/` (`ANDROID_HOME` points there).
+`games/DongleZoo` packages as an APK and an App Bundle; `apksigner verify`, `aapt2 dump badging` and
+`zipalign -c -P 16 4` pass. `oe package --android` now reads `project.json` `android {package, ...}`
+reliably: the settings were read through a reference that a later lookup could invalidate, so the
+default `com.ownengine.<name>` id was used instead.
+
+- [ ] Text entry (`UIInput`): `AndroidWindow::SetTextInput` shows/hides the soft keyboard
+  (`InputMethodManager.showSoftInput` on the decor view, fallback `ANativeActivity_showSoftInput`) and
+  `KeyCharacterMap.get` turns key events into `InputState::text`; `AKEYCODE_DEL` is Backspace. Compiled, not
+  run. Composed text (Korean/Japanese IMEs, swipe typing) is not delivered to a NativeActivity as key events:
+  it needs a Java view with an `InputConnection`, which means shipping a dex in the APK. See docs/UI.md.
+- [ ] Run this runtime on a device or emulator (none on this host): start, touch, audio, lifecycle,
+  and the features newer than the last emulator run (Light2D, sorting layers, particles curves,
+  shader graphs, host bridge returning false, `input.viewSize`).
 
 ## Not done yet
 

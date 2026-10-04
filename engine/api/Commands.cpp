@@ -17,6 +17,7 @@
 #include "render/Material.h"
 #include "render/Mesh.h"
 #include "render/ShaderGraph.h"
+#include "render/Font.h"
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "scene/Prefab.h"
@@ -454,8 +455,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         if (!emitter) throw ApiError("missing_component", "entity has no ParticleEmitter", "Add ParticleEmitter with component.add first.");
         return *emitter;
     };
-    Register(r, "particles.state", "Live particle count, accepted births and optional particle snapshots in their local/world coordinates.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include age, lifetime, position, velocity and worldSpace."),
+    Register(r, "particles.state", "Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.",
+             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include age, lifetime, position, velocity, rotation and worldSpace."),
              false, [requireEmitter](Engine& e, const Json& a) {
                  const ParticleEmitter& emitter = requireEmitter(e, a);
                  Json out = Json::MakeObject();
@@ -464,6 +465,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["playing"] = emitter.playing;
                  out["loop"] = emitter.loop;
                  out["maxParticles"] = emitter.maxParticles;
+                 out["finished"] = ParticlesFinished(emitter);
                  if (a["particles"].asBool()) {
                      out["particles"] = Json::MakeArray();
                      for (const Particle& particle : emitter.particles) {
@@ -472,6 +474,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          p["lifetime"] = particle.lifetime;
                          p["position"] = Json(Json::Array{particle.position.x, particle.position.y, particle.position.z});
                          p["velocity"] = Json(Json::Array{particle.velocity.x, particle.velocity.y, particle.velocity.z});
+                         p["rotation"] = particle.rotation;
                          p["worldSpace"] = particle.worldSpace;
                          out["particles"].push(p);
                      }
@@ -483,7 +486,16 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              false, [requireEmitter](Engine& e, const Json& a) {
                  const ParticleEmitter& emitter = requireEmitter(e, a);
                  if (!ParticleSettingsValid(emitter))
-                     throw ApiError("invalid_emitter", "particle settings must be finite", "Correct direction/gravity/colors and numeric fields with component.set.");
+                     {
+                     std::string detail;
+                     ParticleCurve curve;
+                     const char* hint = "Correct direction/gravity/colors and numeric fields with component.set.";
+                     if (!ParseParticleCurve(emitter.sizeOverLife, false, curve, &detail)) detail = "sizeOverLife: " + detail;
+                     else if (!ParseParticleCurve(emitter.colorOverLife, true, curve, &detail)) detail = "colorOverLife: " + detail;
+                     else if (!ParseParticleCurve(emitter.opacityOverLife, false, curve, &detail)) detail = "opacityOverLife: " + detail;
+                     if (!detail.empty()) hint = "Curves are [[t, value], ...] with t ascending in 0..1, e.g. [[0,0],[0.2,1],[1,0]]; fix it with component.set.";
+                     throw ApiError("invalid_emitter", detail.empty() ? "particle settings must be finite" : detail, hint);
+                 }
                  double requested = a["count"].asNumber();
                  if (requested < 0 || requested > 10000) throw ApiError("invalid_argument", "count must be 0..10000", "Use a bounded burst; maxParticles also limits accepted births.");
                  int count = static_cast<int>(requested);
@@ -499,7 +511,41 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  emitter.randomState = 0;
                  emitter.carry = 0;
                  emitter.emitted = 0;
+                 emitter.elapsed = 0;
+                 emitter.cycle = 0;
                  emitter.initialBurstEmitted = !a["restart"].asBool(false);
+                 Json out = Json::MakeObject();
+                 out["count"] = 0;
+                 return out;
+             });
+    auto requireTrail = [](Engine& e, const Json& args) -> Trail& {
+        EntityId id = RequireEntity(e, args);
+        Trail* trail = e.GetScene().Get<Trail>(id);
+        if (!trail) throw ApiError("missing_component", "entity has no Trail", "Add Trail with component.add first.");
+        return *trail;
+    };
+    Register(r, "trail.state", "Path of a Trail: point count, emitting and optionally the points (world position, age), oldest first.",
+             Params().ReqWith("id", EntityRefSchema("Trail entity.")).Opt("points", "boolean", "Include position and age of every point."),
+             false, [requireTrail](Engine& e, const Json& a) {
+                 const Trail& trail = requireTrail(e, a);
+                 Json out = Json::MakeObject();
+                 out["count"] = static_cast<uint64_t>(trail.points.size());
+                 out["emitting"] = trail.emitting;
+                 out["maxPoints"] = trail.maxPoints;
+                 if (a["points"].asBool()) {
+                     out["points"] = Json::MakeArray();
+                     for (const TrailPoint& point : trail.points) {
+                         Json p = Json::MakeObject();
+                         p["position"] = Json(Json::Array{point.position.x, point.position.y, point.position.z});
+                         p["age"] = point.age;
+                         out["points"].push(p);
+                     }
+                 }
+                 return out;
+             });
+    Register(r, "trail.clear", "Forget a Trail's path so no ribbon joins the old and new place (teleport, respawn); runtime only.",
+             Params().ReqWith("id", EntityRefSchema("Trail entity.")), false, [requireTrail](Engine& e, const Json& a) {
+                 ClearTrail(requireTrail(e, a));
                  Json out = Json::MakeObject();
                  out["count"] = 0;
                  return out;
@@ -874,6 +920,22 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return SimState(e);
              });
 
+    Register(r, "input.text", "Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame "
+             "(focus it with input.click or ui.focus; Backspace and Enter are keys: input.key).",
+             Params().Req("text", "string", "Characters to type (UTF-8)."), false, [](Engine& e, const Json& a) {
+                 for (uint32_t c : DecodeUtf8(a["text"].asString())) e.Input().AddText(c);
+                 return SimState(e);
+             });
+
+    Register(r, "ui.clipboard", "Clipboard used by UIInput copy, cut and paste (Ctrl+C / Ctrl+X / Ctrl+V): read it, or set it before pasting. "
+             "Tool sessions keep their own; a game window uses the system clipboard.",
+             Params().Opt("text", "string", "New clipboard text. Omit to read."), false, [](Engine& e, const Json& a) {
+                 if (a.has("text")) e.SetClipboardText(a["text"].asString());
+                 Json out = Json::MakeObject();
+                 out["text"] = e.ClipboardText();
+                 return out;
+             });
+
     Register(r, "input.click", "Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick (or sets a UISlider) on the next simulated frame.",
              Params()
                  .Req("x", "number", "Pixel x (0 = left).")
@@ -904,7 +966,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
                  bool onlyInteractable = a["interactable"].asBool(false);
                  auto r1 = [](float v) { return std::round(static_cast<double>(v) * 10.0) / 10.0; };
-                 static const char* kKinds[] = {"UIText", "UIPanel", "UIButton", "UIImage", "UISlider"};
+                 static const char* kKinds[] = {"UIText", "UIPanel", "UIButton", "UIImage", "UISlider", "UIInput", "UIDropdown", "UIJoystick"};
                  Json list = Json::MakeArray();
                  for (const UIRect& rc : LayoutUI(e.GetScene(), w, h, &e.Assets())) {
                      if (onlyInteractable && !rc.interactable) continue;
@@ -917,6 +979,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      if (rc.parent != kNullEntity) j["parent"] = rc.parent;
                      if (rc.opacity < 1.0f) j["opacity"] = r1(rc.opacity * 100.0f) / 100.0;
                      if (rc.interactable) j["interactable"] = true;
+                     if (rc.kind == UIRect::Kind::Button) {
+                         const UIButton& b = *e.GetScene().Get<UIButton>(rc.entity);
+                         if (b.toggle) j["on"] = b.on;
+                     }
+                     if (rc.kind == UIRect::Kind::Dropdown) {
+                         if (rc.item >= 0) j["item"] = rc.item;  // a row of the open list
+                         else if (e.GetScene().Get<UIDropdown>(rc.entity)->open) j["open"] = true;
+                     }
+                     if (rc.interactable && rc.item < 0 && rc.entity == e.UIFocus()) j["focused"] = true;
                      if (rc.clipped) j["clip"] = Json(Json::Array{r1(rc.clip[0]), r1(rc.clip[1]), r1(rc.clip[2]), r1(rc.clip[3])});
                      list.push(j);
                  }
@@ -925,6 +996,24 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["height"] = h;
                  out["scale"] = std::round(static_cast<double>(UIScale(e.GetScene(), w, h)) * 1e5) / 1e5;
                  out["elements"] = list;
+                 return out;
+             });
+
+    Register(r, "ui.focus", "Keyboard/gamepad focus of the UI (UICanvas.navigation): give it to a button or slider, clear it, or read it. "
+             "Arrows / D-pad then move it (input.key), Enter / GamepadA clicks the focused button.",
+             Params().OptWith("id", EntityRefSchema("Button, slider, text field or drop-down to focus (id or name); 0 clears the focus. Omit to read.")), false, [](Engine& e, const Json& a) {
+                 if (a.has("id")) {
+                     const bool clear = a["id"].isNumber() && a["id"].asInt() == 0;
+                     const EntityId id = clear ? kNullEntity : RequireEntity(e, a);
+                     const Scene& scene = e.GetScene();
+                     if (id != kNullEntity && !scene.Get<UIButton>(id) && !scene.Get<UISlider>(id) && !scene.Get<UIInput>(id) && !scene.Get<UIDropdown>(id))
+                         throw ApiError("invalid_argument", "only a UIButton, UISlider, UIInput or UIDropdown can have the focus",
+                                        "ui.layout {interactable: true} lists them.");
+                     e.SetUIFocus(id);
+                 }
+                 Json out = Json::MakeObject();
+                 out["focus"] = e.UIFocus();
+                 if (e.UIFocus() != kNullEntity && e.GetScene().Exists(e.UIFocus())) out["name"] = e.GetScene().Record(e.UIFocus())->name;
                  return out;
              });
 
@@ -1282,6 +1371,62 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  Json out = Json::MakeObject();
                  out["date"] = e.Today();
                  out["overridden"] = !e.DateOverride().empty();
+                 return out;
+             });
+
+    auto hostSettings = [](Engine& e, Json& out) {
+        Json accept = Json::MakeArray();
+        for (const std::string& name : e.HostAccept()) accept.push(name);
+        out["accept"] = accept;
+        out["language"] = e.UserLanguage();
+    };
+
+    Register(r, "host.state", "The host bridge (Lua host.call / host.poll): the calls the game made to its embedding app (ads, purchases), "
+                              "messages waiting for host.poll(), the names tools accept and the user language.",
+             Params(), false, [hostSettings](Engine& e, const Json&) {
+                 Json out = Json::MakeObject();
+                 Json calls = Json::MakeArray();
+                 for (const Engine::HostCallRecord& c : e.HostCalls()) {
+                     Json item = Json::MakeObject();
+                     item["name"] = c.name;
+                     item["data"] = c.data;
+                     item["frame"] = static_cast<double>(c.frame);
+                     item["handled"] = c.handled;
+                     calls.push(item);
+                 }
+                 out["calls"] = calls;
+                 out["pending"] = static_cast<int>(e.PendingHostMessages());
+                 hostSettings(e, out);
+                 return out;
+             });
+
+    Register(r, "host.configure", "Stand in for the embedding app in a tool session: which host.call names report as handled, and the user language.",
+             Params()
+                 .Opt("accept", "array", "Names host.call returns true for; [\"*\"] accepts every name, [] none (the default: games use their fallback).")
+                 .Opt("language", "string", "ISO 639-1 code host.language() returns, e.g. \"ko\"."),
+             false, [hostSettings](Engine& e, const Json& a) {
+                 if (a.has("accept")) {
+                     if (!a["accept"].isArray()) throw ApiError("bad_accept", "accept must be an array of names", "Pass e.g. {\"accept\":[\"ads.rewarded\"]}.");
+                     std::set<std::string> names;
+                     for (size_t i = 0; i < a["accept"].size(); ++i) names.insert(a["accept"][i].asString());
+                     e.SetHostAccept(std::move(names));
+                 }
+                 if (a.has("language")) e.SetUserLanguage(a["language"].asString());
+                 Json out = Json::MakeObject();
+                 hostSettings(e, out);
+                 return out;
+             });
+
+    Register(r, "host.reply", "Deliver a message from the embedding app to the game, as its ad SDK or store would (the game reads it with host.poll()).",
+             Params()
+                 .Req("name", "string", "Message name, e.g. \"ads.result\".")
+                 .Opt("data", "object", "Payload the game receives as message.data."),
+             false, [](Engine& e, const Json& a) {
+                 const std::string name = a["name"].asString();
+                 if (name.empty()) throw ApiError("bad_name", "name must not be empty", "Pass the message name the game expects, e.g. \"ads.result\".");
+                 e.PushHostMessage(name, a.has("data") ? a["data"] : Json::MakeObject());
+                 Json out = Json::MakeObject();
+                 out["pending"] = static_cast<int>(e.PendingHostMessages());
                  return out;
              });
 

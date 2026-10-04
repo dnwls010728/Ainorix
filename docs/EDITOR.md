@@ -1,41 +1,8 @@
 # Editor
 
-## Implementation status (work log): P7
-
-- [x] P7.1: Command-backed hierarchy clipboard with subtree/reference remapping,
-      validation, atomic paste and native editor Ctrl+C/Ctrl+V.
-- [x] P7.2: Named undo/redo history, history.list/history.go and History panel.
-- [x] P7.3: Isolated prefab edit/save/close commands and editor workflow with
-      save/discard prompts and restoration of the original scene/history.
-- [x] P7.4: Asset thumbnail previews with lazy caching and hot reload.
-- [x] P7.5: Native Windows open/save/import dialogs behind Platform.h, headless
-      fallback, project containment and cancel/error handling.
-- [x] P7.6: Windows tests, user-driven editor events, localized screenshots,
-      API/docs refresh and runtime rebuild or explicit platform follow-ups.
-
-Windows: 141 tests, zero failed checks. Node/WASM: 128 tests, zero failed checks
-(native/GPU tests skip). Added API tests cover atomic clipboard validation,
-merged history/cursor behavior, prefab isolation/reference remapping, bounded
-preview pixels/framing/hot reload and project containment. Window-event tests
-exercise Ctrl+C/V/Z/S, history focus, prefab save/discard and chooser result paths.
-English/Korean/Japanese D3D11 CLI screenshots were inspected; the History panel
-has a separate event-driven screenshot. Web player rebuilt from this source.
-
-- [ ] Exercise the actual Windows chooser UI interactively (automated tests use
-      a Window adapter for selected/cancelled/error/unavailable results).
-- [ ] Rebuild Android arm64-v8a/x86_64 players; NDK/SDK unavailable on this host.
-      Verify on Android hardware and Linux/EGL; neither environment is available.
-
-P7 proceeds independently of the remaining P6 Android/Linux hardware checks.
-It starts from updated main; P6 verification/sample changes have a separate branch.
-
-`oe editor <project>` opens the editor: Dear ImGui (docking) + ImGuizmo panels drawn with sokol_gfx in the engine process. The Scene and Game views are GpuRenderer textures, so nothing is streamed or encoded. It needs a window and a GPU backend (Windows today; a macOS/Linux desktop platform layer is enough, see [PLATFORMS.md](PLATFORMS.md)).
-
-![Editor](images/native-editor.png)
-
-The editor only uses public commands (`Engine::Call`), so an agent attached with `oe mcp --connect 7777` sees and can do exactly what the person in the editor does. The editor keeps the HTTP API running (`--port`, default 7777): `oe mcp --connect` and `POST /api/call` work while it is open, and every edit that arrives through the API shows up as a notice (`API: component.set Player MeshRenderer`) plus a fading dot on the entity in the Hierarchy.
-
-Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
+`oe editor <project>` opens the native editor: a Dear ImGui docking application drawn on the GPU in the engine
+process. It changes the scene only through commands, so an agent attached with `oe mcp --connect 7777` works in
+the same session as the person. What was built when, and what is unverified, is in the work log at the end.
 
 ## Panels
 
@@ -174,3 +141,40 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 Platform requirements (`engine/platform/Platform.h`): `Window::SetEventMode` / `TakeEvents` (full keyboard, text, all mouse buttons, wheel, focus, close, dropped files), `SetCursor`, `DpiScale`, `Maximize`, and `PlatformEnableHighDpi`. Win32 implements them; a macOS port needs them in its AppKit window plus a Metal `GpuDevice` (see [PLATFORMS.md](PLATFORMS.md)).
 
 Adding a panel: a method on `NativeEditor::Impl` (declared in `EditorInternal.h`), called from `NativeEditor::Update`, docked in `DockLayout`, with a toggle in the View menu. Read data with `Call("...")` when the revision changes (`Refresh`), write with commands so undo and agents using the API stay in sync.
+
+## Implementation status (work log): P7
+
+- [x] P7.1: Command-backed hierarchy clipboard with subtree/reference remapping,
+      validation, atomic paste and native editor Ctrl+C/Ctrl+V.
+- [x] P7.2: Named undo/redo history, history.list/history.go and History panel.
+- [x] P7.3: Isolated prefab edit/save/close commands and editor workflow with
+      save/discard prompts and restoration of the original scene/history.
+- [x] P7.4: Asset thumbnail previews with lazy caching and hot reload.
+- [x] P7.5: Native Windows open/save/import dialogs behind Platform.h, headless
+      fallback, project containment and cancel/error handling.
+- [x] P7.6: Windows tests, user-driven editor events, localized screenshots,
+      API/docs refresh and runtime rebuild or explicit platform follow-ups.
+
+Windows: 141 tests, zero failed checks. Node/WASM: 128 tests, zero failed checks
+(native/GPU tests skip). Added API tests cover atomic clipboard validation,
+merged history/cursor behavior, prefab isolation/reference remapping, bounded
+preview pixels/framing/hot reload and project containment. Window-event tests
+exercise Ctrl+C/V/Z/S, history focus, prefab save/discard and chooser result paths.
+English/Korean/Japanese D3D11 CLI screenshots were inspected; the History panel
+has a separate event-driven screenshot. Web player rebuilt from this source.
+
+- [ ] Exercise the actual Windows chooser UI interactively (automated tests use
+      a Window adapter for selected/cancelled/error/unavailable results).
+- [ ] Rebuild Android arm64-v8a/x86_64 players; NDK/SDK unavailable on this host.
+      Verify on Android hardware and Linux/EGL; neither environment is available.
+
+P7 proceeds independently of the remaining P6 Android/Linux hardware checks.
+It starts from updated main; P6 verification/sample changes have a separate branch.
+
+`oe editor <project>` opens the editor: Dear ImGui (docking) + ImGuizmo panels drawn with sokol_gfx in the engine process. The Scene and Game views are GpuRenderer textures, so nothing is streamed or encoded. It needs a window and a GPU backend (Windows today; a macOS/Linux desktop platform layer is enough, see [PLATFORMS.md](PLATFORMS.md)).
+
+![Editor](images/native-editor.png)
+
+The editor only uses public commands (`Engine::Call`), so an agent attached with `oe mcp --connect 7777` sees and can do exactly what the person in the editor does. The editor keeps the HTTP API running (`--port`, default 7777): `oe mcp --connect` and `POST /api/call` work while it is open, and every edit that arrives through the API shows up as a notice (`API: component.set Player MeshRenderer`) plus a fading dot on the entity in the Hierarchy.
+
+Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).

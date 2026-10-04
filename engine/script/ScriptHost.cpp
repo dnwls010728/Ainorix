@@ -541,6 +541,52 @@ int L_GamePaused(lua_State* L) {
     return 1;
 }
 
+// ui.focus(id?) gives a button or slider the keyboard/gamepad focus (nil clears it); ui.focused() -> id or nil.
+int L_UIFocus(lua_State* L) {
+    Host(L).GetEngine().SetUIFocus(lua_isnoneornil(L, 1) ? kNullEntity : CheckEntity(L, 1));
+    return 0;
+}
+
+int L_UIFocused(lua_State* L) {
+    const EntityId id = Host(L).GetEngine().UIFocus();
+    if (id == kNullEntity) lua_pushnil(L);
+    else lua_pushinteger(L, id);
+    return 1;
+}
+
+// host.call(name, data?) -> true when the embedding app handles `name` (an ad SDK, a store);
+// false means there is no such host and the game should use its own fallback.
+int L_HostCall(lua_State* L) {
+    return Guard(L, [&] {
+        std::string name = luaL_checkstring(L, 1);
+        Json data = lua_isnoneornil(L, 2) ? Json::MakeObject() : ToJson(L, 2);
+        lua_pushboolean(L, Host(L).GetEngine().HostCall(name, data));
+        return 1;
+    });
+}
+
+// host.poll() -> { {name=, data=}, ... }: messages from the host since the last call.
+int L_HostPoll(lua_State* L) {
+    std::vector<Engine::HostMessage> messages = Host(L).GetEngine().TakeHostMessages();
+    lua_createtable(L, static_cast<int>(messages.size()), 0);
+    int i = 0;
+    for (const Engine::HostMessage& m : messages) {
+        lua_createtable(L, 0, 2);
+        lua_pushstring(L, m.name.c_str());
+        lua_setfield(L, -2, "name");
+        PushJson(L, m.data);
+        lua_setfield(L, -2, "data");
+        lua_rawseti(L, -2, ++i);
+    }
+    return 1;
+}
+
+// host.language() -> the user's language as an ISO 639-1 code ("en", "ko", ...)
+int L_HostLanguage(lua_State* L) {
+    lua_pushstring(L, Host(L).GetEngine().UserLanguage().c_str());
+    return 1;
+}
+
 int L_GameScene(lua_State* L) {
     lua_pushstring(L, Host(L).GetEngine().RuntimeScene().c_str());
     return 1;
@@ -634,6 +680,29 @@ int L_ParticlesBurst(lua_State* L) {
         if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
         lua_pushinteger(L, result["result"]["accepted"].asInt());
         return 1;
+    });
+}
+
+// particles.state(id) -> {count, emitted, playing, loop, maxParticles, finished}
+int L_ParticlesState(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        Json result = Host(L).GetEngine().Call("particles.state", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        PushJson(L, result["result"]);
+        return 1;
+    });
+}
+
+// trail.clear(id): forget the ribbon's path (teleports).
+int L_TrailClear(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        Json result = Host(L).GetEngine().Call("trail.clear", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        return 0;
     });
 }
 
@@ -914,6 +983,15 @@ int L_InputMouse(lua_State* L) {
     const InputState& in = Host(L).GetEngine().Input();
     lua_pushnumber(L, in.mouseX);
     lua_pushnumber(L, in.mouseY);
+    return 2;
+}
+
+// input.viewSize() -> width, height of the game view in pixels (the window, or the size tools
+// last gave input.click / input.mouse). Device state like the mouse: layouts adapt to it.
+int L_InputViewSize(lua_State* L) {
+    const InputState& in = Host(L).GetEngine().Input();
+    lua_pushinteger(L, in.viewWidth);
+    lua_pushinteger(L, in.viewHeight);
     return 2;
 }
 
@@ -1383,11 +1461,13 @@ void ScriptHost::Open() {
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
-    const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {nullptr, nullptr}};
+    const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {"state", L_ParticlesState}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
+    const luaL_Reg trailFuncs[] = {{"clear", L_TrailClear}, {nullptr, nullptr}};
+    SetFuncs(L, "trail", trailFuncs);
     const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
                                   {"mouseDelta", L_InputMouseDelta}, {"wheel", L_InputWheel}, {"lockMouse", L_InputLockMouse}, {"look", L_InputLook}, {"setLook", L_InputSetLook},
-                                  {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
+                                  {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {"viewSize", L_InputViewSize}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
     const luaL_Reg timeFuncs[] = {{"frame", L_TimeFrame}, {"now", L_TimeNow}, {"dt", L_TimeDt}, {"date", L_TimeDate}, {nullptr, nullptr}};
     SetFuncs(L, "time", timeFuncs);
@@ -1397,6 +1477,10 @@ void ScriptHost::Open() {
     SetFuncs(L, "audio", audioFuncs);
     const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
+    const luaL_Reg uiFuncs[] = {{"focus", L_UIFocus}, {"focused", L_UIFocused}, {nullptr, nullptr}};
+    SetFuncs(L, "ui", uiFuncs);
+    const luaL_Reg hostFuncs[] = {{"call", L_HostCall}, {"poll", L_HostPoll}, {"language", L_HostLanguage}, {nullptr, nullptr}};
+    SetFuncs(L, "host", hostFuncs);
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
     SetFuncs(L, "save", saveFuncs);
     const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
@@ -1654,7 +1738,8 @@ std::vector<std::string> ScriptHost::ReloadAll() {
     return PollHotReload();
 }
 
-bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other) {
+bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other, const bool* flag,
+                            const std::string* text) {
     if (!engine_.PredictEntity(id)) return true;
     lua_State* L = State();
     int top = lua_gettop(L);
@@ -1666,7 +1751,13 @@ bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float
     }
     lua_insert(L, -2);  // function, self
     int nargs = 1;
-    if (withDt) {
+    if (text) {
+        lua_pushlstring(L, text->data(), text->size());
+        nargs = 2;
+    } else if (flag) {
+        lua_pushboolean(L, *flag);
+        nargs = 2;
+    } else if (withDt) {
         lua_pushnumber(L, dt);
         nargs = 2;
     } else if (other != kNullEntity) {
@@ -1710,6 +1801,18 @@ void ScriptHost::Notify(EntityId id, const char* method, float value) {
     auto it = instances_.find(id);
     if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
     CallMethod(id, it->second, method, value, true);
+}
+
+void ScriptHost::NotifyFlag(EntityId id, const char* method, bool flag) {
+    auto it = instances_.find(id);
+    if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
+    CallMethod(id, it->second, method, 0, false, kNullEntity, &flag);
+}
+
+void ScriptHost::NotifyText(EntityId id, const char* method, const std::string& text) {
+    auto it = instances_.find(id);
+    if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
+    CallMethod(id, it->second, method, 0, false, kNullEntity, nullptr, &text);
 }
 
 void ScriptHost::DestroyInstance(EntityId id, Instance& inst, bool callOnDestroy) {

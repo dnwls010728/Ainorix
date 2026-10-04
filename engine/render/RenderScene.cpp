@@ -72,6 +72,51 @@ std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const TileRules& rule
     return mesh;
 }
 
+// Trail ribbons sample one small texture: the color and opacity fade from the entity (u = 0) to
+// the oldest point (u = 1), multiplied into the trail's image when it has one. Rebuilt only when
+// those settings change. The entry keeps the image alive so its address stays a valid key.
+struct TrailFade {
+    std::shared_ptr<const Texture> image;
+    std::shared_ptr<const Texture> texture;
+};
+std::mutex g_trailFadeMutex;
+std::map<std::string, TrailFade> g_trailFades;
+
+std::shared_ptr<const Texture> TrailTexture(const Trail& trail, const std::shared_ptr<const Texture>& image) {
+    std::string key;
+    for (float value : {trail.color.r, trail.color.g, trail.color.b, trail.endColor.r, trail.endColor.g, trail.endColor.b, trail.opacity, trail.endOpacity})
+        key += std::to_string(value) + ",";
+    key += std::to_string(reinterpret_cast<uintptr_t>(image.get())) + "," + std::to_string(image ? image->version : 0);
+    std::lock_guard<std::mutex> lock(g_trailFadeMutex);
+    auto found = g_trailFades.find(key);
+    if (found != g_trailFades.end()) return found->second.texture;
+    auto texture = std::make_shared<Texture>();
+    const bool textured = image && image->width > 0 && image->height > 0;
+    texture->width = textured ? std::min(256, image->width) : 64;
+    texture->height = textured ? std::min(64, image->height) : 1;
+    texture->texels.resize(static_cast<size_t>(texture->width) * static_cast<size_t>(texture->height));
+    auto byte = [](float v) { return static_cast<uint32_t>(Clamp(std::isfinite(v) ? v : 0.0f, 0.0f, 1.0f) * 255.0f + 0.5f); };
+    for (int y = 0; y < texture->height; ++y) {
+        for (int x = 0; x < texture->width; ++x) {
+            const float t = texture->width > 1 ? static_cast<float>(x) / static_cast<float>(texture->width - 1) : 0.0f;
+            Color color = trail.color * (1 - t) + trail.endColor * t;
+            float alpha = trail.opacity * (1 - t) + trail.endOpacity * t;
+            if (textured) {
+                float imageAlpha = 1.0f;
+                const Color texel = image->Sample((static_cast<float>(x) + 0.5f) / static_cast<float>(texture->width),
+                                                  (static_cast<float>(y) + 0.5f) / static_cast<float>(texture->height), false, &imageAlpha);
+                color = color * texel;
+                alpha *= imageAlpha;
+            }
+            texture->texels[static_cast<size_t>(y) * static_cast<size_t>(texture->width) + static_cast<size_t>(x)] =
+                byte(color.r) | (byte(color.g) << 8) | (byte(color.b) << 16) | (byte(alpha) << 24);
+        }
+    }
+    if (g_trailFades.size() > 64) g_trailFades.clear();
+    g_trailFades[key] = {image, texture};
+    return texture;
+}
+
 }  // namespace
 
 Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
@@ -344,14 +389,21 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         const Mat4 emitterWorld = scene.WorldMatrix(kv.first);
         std::shared_ptr<const Texture> texture;
         if (!emitter.texture.empty() && assets) texture = assets->GetTexture(emitter.texture);
+        const int columns = std::max(1, std::min(4096, emitter.columns)), rows = std::max(1, std::min(4096, emitter.rows));
         float u0, v0, du, dv;
-        FrameRect(emitter.frame, std::max(1, std::min(4096, emitter.columns)),
-                  std::max(1, std::min(4096, emitter.rows)), texture.get(), u0, v0, du, dv);
+        FrameRect(emitter.frame, columns, rows, texture.get(), u0, v0, du, dv);
+        // Lifetime curves are live settings like the texture; a malformed one falls back to start/end.
+        ParticleCurve sizeCurve, colorCurve, opacityCurve;
+        ParseParticleCurve(emitter.sizeOverLife, false, sizeCurve, nullptr);
+        ParseParticleCurve(emitter.colorOverLife, true, colorCurve, nullptr);
+        ParseParticleCurve(emitter.opacityOverLife, false, opacityCurve, nullptr);
+        const int flipbook = std::max(1, std::min(1000000, emitter.frames));
+        const bool alignVelocity = emitter.align == "velocity";
         for (const Particle& particle : emitter.particles) {
             if (!std::isfinite(particle.age) || !std::isfinite(particle.lifetime) || particle.lifetime <= 0) continue;
             float t = Clamp(particle.age / particle.lifetime, 0, 1);
-            float size = particle.startSize * (1 - t) + particle.endSize * t;
-            float opacity = particle.startOpacity * (1 - t) + particle.endOpacity * t;
+            float size = sizeCurve.Empty() ? particle.startSize * (1 - t) + particle.endSize * t : sizeCurve.Sample(t).x * particle.sizeScale;
+            float opacity = opacityCurve.Empty() ? particle.startOpacity * (1 - t) + particle.endOpacity * t : opacityCurve.Sample(t).x;
             if (!std::isfinite(size) || size <= 0 || !std::isfinite(opacity) || opacity <= 0) continue;
             Vec3 center = particle.worldSpace ? particle.position : emitterWorld.TransformPoint(particle.position);
             if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)) continue;
@@ -359,26 +411,58 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.id = kv.first;
             it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
             it.textureOverride = texture;
-            it.tint = particle.startColor * (1 - t) + particle.endColor * t;
+            if (colorCurve.Empty()) {
+                it.tint = particle.startColor * (1 - t) + particle.endColor * t;
+            } else {
+                const Vec3 c = colorCurve.Sample(t);
+                it.tint = Color(c.x, c.y, c.z);
+            }
             it.opacity = Clamp(opacity, 0, 1);
             it.sortLayer = emitter.layer;
             it.additive = emitter.blend == "add";
             it.blend = true;
             it.unlit = true;
             it.castShadows = false;
-            it.pointSample = true;
+            it.pointSample = emitter.pixelArt;
             if (!emitter.texture.empty() && !texture) {
                 it.tint = Color(1, 0, 1);
                 it.error = true;
+            }
+            if (flipbook > 1) {
+                // frameRate 0 plays the strip once over the lifetime; otherwise it loops at that rate.
+                int played = emitter.frameRate > 0 ? static_cast<int>(std::floor(particle.age * Clamp(emitter.frameRate, 0, 240)))
+                                                   : (emitter.randomFrame ? 0 : std::min(flipbook - 1, static_cast<int>(t * static_cast<float>(flipbook))));
+                const int index = emitter.frame + (particle.frameOffset + std::max(0, played)) % flipbook;
+                FrameRect(index, columns, rows, texture.get(), u0, v0, du, dv);
             }
             it.uvOffset[0] = u0;
             it.uvOffset[1] = v0;
             it.uvScale[0] = du;
             it.uvScale[1] = dv;
+            // Billboard axes: the camera's, turned toward the travel direction and/or by the particle's rotation.
+            Vec3 across = right, along = up;
+            float length = size;
+            if (alignVelocity) {
+                const Vec3 velocity = particle.worldSpace ? particle.velocity : emitterWorld.TransformDir(particle.velocity);
+                const Vec3 onScreen = velocity - normal * Dot(velocity, normal);
+                const float speed = Length(onScreen);
+                if (std::isfinite(speed) && speed > 1e-6f) {
+                    along = onScreen / speed;
+                    across = Cross(along, normal);
+                    if (emitter.stretch > 0) length += Clamp(emitter.stretch, 0, 100) * speed;
+                }
+            }
+            if (particle.rotation != 0 && std::isfinite(particle.rotation)) {
+                const float angle = Radians(particle.rotation), c = std::cos(angle), s = std::sin(angle);
+                const Vec3 turnedAcross = across * c + along * s;
+                along = along * c - across * s;
+                across = turnedAcross;
+            }
+            const float turned[2][3] = {{across.x, across.y, across.z}, {along.x, along.y, along.z}};
             // Size is in world meters, independent of emitter scale; only local centers follow it.
             for (int axis = 0; axis < 3; ++axis) {
-                it.world.at(axis, 0) = axes[0][axis] * size;
-                it.world.at(axis, 1) = axes[1][axis] * size;
+                it.world.at(axis, 0) = turned[0][axis] * size;
+                it.world.at(axis, 1) = turned[1][axis] * length;
                 it.world.at(axis, 2) = axes[2][axis];
             }
             it.world.at(0, 3) = center.x;
@@ -387,6 +471,61 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.normalMatrix = it.world.Inverse().Transposed();
             items.push_back(std::move(it));
         }
+    }
+    // Trails: one ribbon mesh per entity in world coordinates, rebuilt every frame from its path and
+    // turned toward the camera. The fade along its length comes from the texture (TrailTexture).
+    for (const auto& kv : scene.Pool<Trail>()) {
+        const Trail& trail = kv.second;
+        std::vector<TrailPoint> path = trail.points;
+        if (trail.emitting) {  // the ribbon always reaches the entity, also between path points
+            const Vec3 head = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
+            if (std::isfinite(head.x) && std::isfinite(head.y) && std::isfinite(head.z) &&
+                (path.empty() || Length(head - path.back().position) > 1e-5f)) path.push_back({head, 0.0f});
+        }
+        if (path.size() < 2 || !std::isfinite(trail.width) || !std::isfinite(trail.endWidth)) continue;
+        std::shared_ptr<const Texture> image;
+        if (!trail.texture.empty() && assets) image = assets->GetTexture(trail.texture);
+        const bool missing = !trail.texture.empty() && !image;
+        std::shared_ptr<const Texture> fade = TrailTexture(trail, missing ? nullptr : image);
+        const float lifetime = std::isfinite(trail.lifetime) ? Clamp(trail.lifetime, 0.01f, 60) : 0.01f;
+        const float texelU = 1.0f / static_cast<float>(fade->width), texelV = 1.0f / static_cast<float>(fade->height);
+        auto mesh = std::make_shared<Mesh>();
+        Vec3 side = right;
+        for (size_t i = 0; i < path.size(); ++i) {
+            const Vec3 tangent = path[std::min(i + 1, path.size() - 1)].position - path[i > 0 ? i - 1 : 0].position;
+            const Vec3 across = Cross(tangent, normal);
+            const float span = Length(across);
+            if (std::isfinite(span) && span > 1e-6f) side = across / span;  // otherwise keep the previous side (path toward the camera)
+            const float u = Clamp(path[i].age / lifetime, 0, 1);
+            const float half = std::max(0.0f, trail.width * (1 - u) + trail.endWidth * u) * 0.5f;
+            // Texel centers of the first/last column and row: bilinear sampling never wraps head into tail.
+            const float tu = texelU * 0.5f + u * (1.0f - texelU);
+            mesh->positions.push_back(path[i].position - side * half);
+            mesh->positions.push_back(path[i].position + side * half);
+            mesh->normals.insert(mesh->normals.end(), 2, normal);
+            mesh->uvs.insert(mesh->uvs.end(), {tu, 1.0f - texelV * 0.5f, tu, texelV * 0.5f});
+            if (i == 0) continue;
+            const uint32_t base = static_cast<uint32_t>(i - 1) * 2;
+            mesh->indices.insert(mesh->indices.end(), {base, base + 1, base + 3, base, base + 3, base + 2});
+        }
+        Submesh sub;
+        sub.indexCount = static_cast<uint32_t>(mesh->indices.size());
+        mesh->submeshes = {sub};
+        mesh->ComputeBounds();
+        mesh->ComputeTangents();
+        RenderItem it;
+        it.id = kv.first;
+        it.mesh = mesh;
+        it.textureOverride = fade;
+        it.tint = missing ? Color(1, 0, 1) : Color(1, 1, 1);
+        it.error = missing;
+        it.blend = true;
+        it.additive = trail.blend == "add";
+        it.unlit = true;
+        it.castShadows = false;
+        it.doubleSided = true;
+        it.sortLayer = trail.layer;
+        items.push_back(std::move(it));
     }
     std::stable_sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) { return a.id < b.id; });
     for (RenderItem& item : items) {

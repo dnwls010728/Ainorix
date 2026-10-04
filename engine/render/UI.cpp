@@ -200,6 +200,7 @@ struct ShapedText {
     float width = 0, height = 0;
     std::vector<std::vector<ShapedGlyph>> lines;
     std::vector<float> lineWidths;
+    std::vector<int> lineStarts;  // index of the first character of each line
 };
 
 ShapedText Shape(const std::vector<RichChar>& chars, const FontRef& font, float sizePx, float letterPx, float lineSpacing, float wrapWidth) {
@@ -221,6 +222,7 @@ ShapedText Shape(const std::vector<RichChar>& chars, const FontRef& font, float 
         t.lineHeight = 8.0f * t.unit * lineSpacing;
     }
     t.lines.emplace_back();
+    t.lineStarts.push_back(0);
     bool wrapped = false;  // the current line started because of wrapping
     float pen = 0.0f;
     uint32_t prev = 0;
@@ -230,6 +232,7 @@ ShapedText Shape(const std::vector<RichChar>& chars, const FontRef& font, float 
         const RichChar& c = chars[i];
         if (c.cp == '\n') {
             t.lines.emplace_back();
+            t.lineStarts.push_back(static_cast<int>(i) + 1);
             wrapped = false;
             pen = 0.0f;
             prev = 0;
@@ -256,6 +259,7 @@ ShapedText Shape(const std::vector<RichChar>& chars, const FontRef& font, float 
         if (wrapWidth > 0.0f && !line->empty() && g.x + g.ink > wrapWidth + 0.5f) {
             if (c.cp == ' ') {  // a space overflows: break here and drop it
                 t.lines.emplace_back();
+                t.lineStarts.push_back(static_cast<int>(i) + 1);
                 wrapped = true;
                 pen = 0.0f;
                 prev = 0;
@@ -281,6 +285,7 @@ ShapedText Shape(const std::vector<RichChar>& chars, const FontRef& font, float 
             std::vector<ShapedGlyph> moved(line->begin() + static_cast<std::ptrdiff_t>(cut + (dropSpace ? 1 : 0)), line->end());
             line->erase(line->begin() + static_cast<std::ptrdiff_t>(cut), line->end());
             t.lines.emplace_back();
+            t.lineStarts.push_back(moved.empty() ? g.index : moved.front().index);
             line = &t.lines.back();
             wrapped = true;
             float shift = moved.empty() ? 0.0f : moved.front().x;
@@ -360,6 +365,29 @@ void AddBox(std::vector<UIQuad>& out, const Box& b, const Color& c, float alpha,
 
 Color Brighten(const Color& c, float k) { return Color(Clamp(c.r * k, 0.0f, 1.0f), Clamp(c.g * k, 0.0f, 1.0f), Clamp(c.b * k, 0.0f, 1.0f)); }
 
+// Background color of a button in its current state. Keyboard/gamepad focus looks like hover.
+Color ButtonColor(const UIButton& b) {
+    const Color base = b.toggle && b.on ? b.onColor : b.color;
+    if (!b.interactable) return base;
+    return Brighten(base, b.pressed ? b.pressedBrightness : b.hovered || b.focused ? b.hoverBrightness : 1.0f);
+}
+
+// Background image of a button in its current state (empty = solid color).
+const std::string& ButtonTexture(const UIButton& b) {
+    const std::string* path = &b.texture;
+    auto use = [&](const std::string& p) {
+        if (!p.empty()) path = &p;
+    };
+    if (!b.interactable) {
+        use(b.disabledTexture);
+    } else {
+        if (b.hovered || b.focused) use(b.hoverTexture);
+        if (b.toggle && b.on) use(b.onTexture);
+        if (b.pressed) use(b.pressedTexture);
+    }
+    return *path;
+}
+
 struct TextDraw {
     float alpha = 1.0f;
     float alignX = 0.0f, alignY = 0.0f;
@@ -438,6 +466,78 @@ void EmitText(std::vector<UIQuad>& out, const ShapedText& t, const Box& b, const
     }
 }
 
+// ----- Text field layout ------------------------------------------------------------
+
+// Byte offset of every character of a UTF-8 string, then its size.
+std::vector<int> CharOffsets(const std::string& text) {
+    std::vector<int> at;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) at.push_back(static_cast<int>(i));
+    }
+    at.push_back(static_cast<int>(text.size()));
+    return at;
+}
+
+// Number of characters before a byte offset.
+int CharIndex(const std::vector<int>& offsets, int byte) {
+    return static_cast<int>(std::lower_bound(offsets.begin(), offsets.end(), byte) - offsets.begin());
+}
+
+// Where the caret before character `index` is: pixels from the line start, and the line.
+void CaretSpot(const ShapedText& sh, int index, float* x, int* line) {
+    size_t l = 0;
+    for (size_t k = 0; k < sh.lineStarts.size(); ++k) {
+        if (sh.lineStarts[k] <= index) l = k;
+    }
+    *x = sh.lineWidths[l];
+    for (const ShapedGlyph& g : sh.lines[l]) {
+        if (g.index >= index) {
+            *x = g.x;
+            break;
+        }
+    }
+    *line = static_cast<int>(l);
+}
+
+// Character boundary nearest to a point given from the top-left of the first line.
+int IndexAtSpot(const ShapedText& sh, float lx, float ly) {
+    const int last = static_cast<int>(sh.lines.size()) - 1;
+    const size_t l = static_cast<size_t>(std::max(0, std::min(last, static_cast<int>(std::floor(ly / std::max(sh.lineHeight, 1.0f))))));
+    for (const ShapedGlyph& g : sh.lines[l]) {
+        if (lx < g.x + g.ink * 0.5f) return g.index;
+    }
+    return sh.lines[l].empty() ? sh.lineStarts[l] : sh.lines[l].back().index + 1;
+}
+
+// A UIInput's text as it is drawn in box `b`: shaped, and scrolled so the caret is in view.
+struct InputView {
+    ShapedText sh;
+    std::vector<int> offsets;  // CharOffsets of the text
+    Box inner;                 // where the text may show
+    float x = 0, y = 0;        // top-left of the first line
+    bool hint = false;         // the placeholder is shown instead of the text
+};
+
+InputView MakeInputView(const UIInput& in, const Box& b, float s, AssetManager* assets) {
+    InputView v;
+    const float pad = 12.0f * s, padY = in.multiline ? 8.0f * s : 0.0f;
+    v.inner = {b.x + pad, b.y + padY, std::max(1.0f, b.w - 2 * pad), std::max(1.0f, b.h - 2 * padY)};
+    v.hint = in.text.empty() && !in.focused;
+    v.offsets = CharOffsets(in.text);
+    const std::string shown = v.hint ? in.placeholder : in.password ? std::string(v.offsets.size() - 1, '*') : in.text;
+    v.sh = Shape(ParseRich(shown, false, in.textColor, false), ResolveFont(in.font, assets), in.size * s, 0.0f, 1.0f, in.multiline ? v.inner.w : 0.0f);
+    v.x = v.inner.x;
+    v.y = in.multiline ? v.inner.y : b.y + (b.h - v.sh.height) * 0.5f;
+    if (in.focused && !v.hint) {
+        float cx = 0;
+        int line = 0;
+        CaretSpot(v.sh, CharIndex(v.offsets, in.caretAt), &cx, &line);
+        if (in.multiline) v.y -= std::max(0.0f, static_cast<float>(line + 1) * v.sh.lineHeight - v.inner.h);
+        else v.x -= std::max(0.0f, cx + 2.0f * s - v.inner.w);
+    }
+    return v;
+}
+
 // ----- The element tree -------------------------------------------------------------
 
 // Kinds in the order they draw on one entity (background first).
@@ -447,6 +547,9 @@ int KindRank(UIRect::Kind k) {
         case UIRect::Kind::Image: return 1;
         case UIRect::Kind::Slider: return 2;
         case UIRect::Kind::Button: return 3;
+        case UIRect::Kind::Input: return 3;
+        case UIRect::Kind::Dropdown: return 3;
+        case UIRect::Kind::Joystick: return 3;
         case UIRect::Kind::Text: return 4;
     }
     return 5;
@@ -491,6 +594,8 @@ public:
             const Node& n = nodes_.at(r);
             Visit(n, Place(n, screen_), Clip{}, 1.0f);
         }
+        // Open drop-down lists go last: on top of everything, not clipped by their parents.
+        for (const Popup& p : popups_) EmitPopup(p);
     }
 
 private:
@@ -513,6 +618,9 @@ private:
         AddElems<UIImage>(UIRect::Kind::Image);
         AddElems<UISlider>(UIRect::Kind::Slider);
         AddElems<UIButton>(UIRect::Kind::Button);
+        AddElems<UIInput>(UIRect::Kind::Input);
+        AddElems<UIDropdown>(UIRect::Kind::Dropdown);
+        AddElems<UIJoystick>(UIRect::Kind::Joystick);
         AddElems<UIText>(UIRect::Kind::Text);
         for (auto& kv : nodes_) {
             Node& n = kv.second;
@@ -550,9 +658,11 @@ private:
 
     // ----- sizes
 
-    ShapedText ShapeTextOf(const UIText& t, float wrapWidth) const {
+    // `size` (reference pixels) replaces the text's own size when > 0.
+    ShapedText ShapeTextOf(const UIText& t, float wrapWidth, float size = 0.0f) const {
         FontRef font = ResolveFont(t.font, assets_);
-        return oe::Shape(ParseRich(t.text, t.richText, t.color, t.bold), font, t.size * s_, t.letterSpacing * s_, t.lineSpacing, wrapWidth);
+        return oe::Shape(ParseRich(t.text, t.richText, t.color, t.bold), font, (size > 0.0f ? size : t.size) * s_, t.letterSpacing * s_, t.lineSpacing,
+                         wrapWidth);
     }
 
     // Text box width decides wrapping: a width field or a stretched axis.
@@ -575,6 +685,13 @@ private:
     std::shared_ptr<const Texture> TextureOf(const UIImage& im) const {
         if (!assets_ || im.texture.empty()) return nullptr;
         return assets_->GetTexture(im.texture);
+    }
+
+    // A project image that can be drawn, or null (no path, no assets, failed to load).
+    std::shared_ptr<const Texture> LoadImage(const std::string& path) const {
+        if (!assets_ || path.empty()) return nullptr;
+        std::shared_ptr<const Texture> tex = assets_->GetTexture(path);
+        return tex && tex->width > 0 && tex->height > 0 ? tex : nullptr;
     }
 
     // Natural size of one element in pixels (-1 = use the size fields).
@@ -782,6 +899,7 @@ private:
             Box b = box;
             if (&e != n.primary && !inLayout) b = PlaceElem(n, e, parentBox_);
             Emit(n, e, b, Clamp(e.opacity, 0.0f, 1.0f) * inherit, clip);
+            if (quads_ && Focused(n, e)) EmitFocusRing(b, n.id, inherit, clip);
         }
         Clip kidsClip = clip;
         if (scroll || (n.primary->kind == UIRect::Kind::Panel && scene_.Get<UIPanel>(n.id)->clip)) kidsClip = clip.Intersect(box);
@@ -825,6 +943,9 @@ private:
                 }
             }
             if (e.kind == UIRect::Kind::Slider) r.interactable = scene_.Get<UISlider>(n.id)->interactable;
+            if (e.kind == UIRect::Kind::Input) r.interactable = scene_.Get<UIInput>(n.id)->interactable;
+            if (e.kind == UIRect::Kind::Dropdown) r.interactable = scene_.Get<UIDropdown>(n.id)->interactable;
+            if (e.kind == UIRect::Kind::Joystick) r.interactable = true;
             r.clipped = clip.on;
             r.clip[0] = clip.x0;
             r.clip[1] = clip.y0;
@@ -832,35 +953,24 @@ private:
             r.clip[3] = clip.y1;
             rects_->push_back(r);
         }
+        if (e.kind == UIRect::Kind::Dropdown && scene_.Get<UIDropdown>(n.id)->open) popups_.push_back({n.id, b, alpha});
         if (!quads_) return;
         std::vector<UIQuad>& out = *quads_;
         switch (e.kind) {
             case UIRect::Kind::Panel: {
                 const UIPanel& p = *scene_.Get<UIPanel>(n.id);
-                UIQuad q = RectQuad(b.x, b.y, b.x + b.w, b.y + b.h, p.color, alpha, n.id);
-                Shape(q, b, p.radius * s_, p.borderWidth * s_, p.borderColor, alpha);
-                AddQuad(out, std::move(q), clip);
+                EmitSkin(b, p, p.color, alpha, p.radius * s_, p.borderWidth * s_, p.borderColor, n.id, clip);
                 break;
             }
-            case UIRect::Kind::Button: {
-                const UIButton& bt = *scene_.Get<UIButton>(n.id);
-                float k = !bt.interactable ? 1.0f : bt.pressed ? bt.pressedBrightness : bt.hovered ? bt.hoverBrightness : 1.0f;
-                float a = bt.interactable ? alpha : alpha * 0.5f;
-                AddBox(out, b, Brighten(bt.color, k), a, bt.radius * s_, bt.borderWidth * s_, bt.borderColor, n.id, clip);
-                float pad = 8.0f * s_;
-                Box inner{b.x + pad, b.y, std::max(1.0f, b.w - 2 * pad), b.h};
-                FontRef font = ResolveFont(bt.font, assets_);
-                ShapedText sh = oe::Shape(ParseRich(bt.text, true, bt.textColor, false), font, bt.size * s_, 0.0f, 1.0f, inner.w);
-                TextDraw d;
-                d.alpha = a;
-                d.alignX = 0.5f;
-                d.alignY = 0.5f;
-                EmitText(out, sh, inner, d, n.id, clip);
-                break;
-            }
+            case UIRect::Kind::Button: EmitButton(n, b, alpha, clip); break;
             case UIRect::Kind::Text: {
                 const UIText& t = *scene_.Get<UIText>(n.id);
-                ShapedText sh = ShapeTextOf(t, t.wrap && (t.width > 0.0f || ParseAnchor(t.anchor).maxX > ParseAnchor(t.anchor).minX) ? b.w : 0.0f);
+                const float wrapWidth = t.wrap && (t.width > 0.0f || ParseAnchor(t.anchor).maxX > ParseAnchor(t.anchor).minX) ? b.w : 0.0f;
+                ShapedText sh = ShapeTextOf(t, wrapWidth);
+                // minSize: the font shrinks a reference pixel at a time until the text fits its box (longer translations).
+                for (float size = t.size - 1.0f; t.minSize > 0.0f && size >= t.minSize && (sh.width > b.w + 0.5f || sh.height > b.h + 0.5f); size -= 1.0f) {
+                    sh = ShapeTextOf(t, wrapWidth, size);
+                }
                 TextDraw d;
                 d.alpha = alpha;
                 d.alignX = t.align == "left" ? 0.0f : t.align == "center" ? 0.5f : t.align == "right" ? 1.0f : ParseAnchor(t.anchor).pivotX;
@@ -875,12 +985,34 @@ private:
             }
             case UIRect::Kind::Image: EmitImage(n, b, alpha, clip); break;
             case UIRect::Kind::Slider: EmitSlider(n, b, alpha, clip); break;
+            case UIRect::Kind::Input: EmitInput(n, b, alpha, clip); break;
+            case UIRect::Kind::Dropdown: EmitDropdown(n, b, alpha, clip); break;
+            case UIRect::Kind::Joystick: EmitJoystick(n, b, alpha, clip); break;
         }
+    }
+
+    bool Focused(const Node& n, const Elem& e) const {
+        if (e.kind == UIRect::Kind::Button) return scene_.Get<UIButton>(n.id)->focused;
+        if (e.kind == UIRect::Kind::Input) return scene_.Get<UIInput>(n.id)->focused;
+        if (e.kind == UIRect::Kind::Dropdown) return scene_.Get<UIDropdown>(n.id)->focused;
+        return e.kind == UIRect::Kind::Slider && scene_.Get<UISlider>(n.id)->focused;
+    }
+
+    // Frame around the element that has the keyboard/gamepad focus (UICanvas.focusColor), just outside its box.
+    void EmitFocusRing(const Box& b, EntityId id, float alpha, const Clip& clip) {
+        const auto& canvases = scene_.Pool<UICanvas>();
+        const Color color = canvases.empty() ? Color(1, 1, 1) : canvases.begin()->second.focusColor;
+        const float gap = std::round(2.0f * s_), t = std::max(1.0f, std::round(3.0f * s_));
+        const float x0 = b.x - gap - t, y0 = b.y - gap - t, x1 = b.x + b.w + gap + t, y1 = b.y + b.h + gap + t;
+        std::vector<UIQuad>& out = *quads_;
+        AddQuad(out, RectQuad(x0, y0, x1, y0 + t, color, alpha, id), clip);
+        AddQuad(out, RectQuad(x0, y1 - t, x1, y1, color, alpha, id), clip);
+        AddQuad(out, RectQuad(x0, y0 + t, x0 + t, y1 - t, color, alpha, id), clip);
+        AddQuad(out, RectQuad(x1 - t, y0 + t, x1, y1 - t, color, alpha, id), clip);
     }
 
     void EmitImage(const Node& n, Box b, float alpha, const Clip& clip) {
         const UIImage& im = *scene_.Get<UIImage>(n.id);
-        std::vector<UIQuad>& out = *quads_;
         std::shared_ptr<const Texture> tex = TextureOf(im);
         float s0 = 0, t0 = 0, fw = 1, fh = 1;
         if (tex && tex->width > 0) ImageFrame(im, tex.get(), &s0, &t0, &fw, &fh);
@@ -908,19 +1040,51 @@ private:
             else f.w = b.w * fill;
             c = clip.Intersect(f);
         }
+        EmitFilled(b, tex, s0, t0, fw, fh, im.slice, im.sliceScale, im.pixelArt, im.color, alpha, im.radius * s_, 0.0f, im.color, n.id, c);
+    }
+
+    // Box `b` in the look of an element with the ReflectUISkin fields: its `texture` (or the image at `path`), sliced, else a solid color.
+    template <class T>
+    void EmitSkinImage(const Box& b, const std::string& path, const T& c, const Color& color, float alpha, float radius, float border,
+                       const Color& borderColor, EntityId id, const Clip& clip) {
+        std::shared_ptr<const Texture> tex = LoadImage(path);
+        const float tw = tex ? static_cast<float>(tex->width) : 1.0f, th = tex ? static_cast<float>(tex->height) : 1.0f;
+        EmitFilled(b, tex, 0.0f, 0.0f, tw, th, c.slice, c.sliceScale, c.pixelArt, color, alpha, radius, border, borderColor, id, clip);
+    }
+    template <class T>
+    void EmitSkin(const Box& b, const T& c, const Color& color, float alpha, float radius, float border, const Color& borderColor, EntityId id,
+                  const Clip& clip) {
+        EmitSkinImage(b, c.texture, c, color, alpha, radius, border, borderColor, id, clip);
+    }
+
+    // An image stretched over `b` (tinted), or a disc when there is none.
+    void EmitPart(const Box& b, const std::string& path, bool nearest, const Color& color, float alpha, EntityId id, const Clip& clip) {
+        std::shared_ptr<const Texture> tex = LoadImage(path);
+        if (!tex) {
+            AddBox(*quads_, b, color, alpha, std::min(b.w, b.h) * 0.5f, 0.0f, color, id, clip);
+            return;
+        }
+        EmitFilled(b, tex, 0.0f, 0.0f, static_cast<float>(tex->width), static_cast<float>(tex->height), 0.0f, 1.0f, nearest, color, alpha, 0.0f, 0.0f,
+                   color, id, clip);
+    }
+
+    // Box `b` filled with `color`, multiplied by the frame (s0, t0, fw, fh; texels) of `tex` when there is one: stretched, or
+    // 9-sliced with a border of `slice` image pixels. Rounded corners and the border (pixels) follow the whole box.
+    void EmitFilled(const Box& b, const std::shared_ptr<const Texture>& tex, float s0, float t0, float fw, float fh, float slice, float sliceScale,
+                    bool nearest, const Color& color, float alpha, float radius, float border, const Color& borderColor, EntityId id, const Clip& clip) {
         auto piece = [&](float x0, float y0, float x1, float y1, float ss0, float tt0, float ss1, float tt1) {
-            UIQuad q = RectQuad(x0, y0, x1, y1, im.color, alpha, n.id);
+            UIQuad q = RectQuad(x0, y0, x1, y1, color, alpha, id);
             if (tex) {
                 q.texture = tex;
                 q.s0 = ss0, q.t0 = tt0, q.s1 = ss1, q.t1 = tt1;
-                q.nearest = im.pixelArt;
+                q.nearest = nearest;
             }
-            Shape(q, b, im.radius * s_, 0.0f, im.color, alpha);
-            AddQuad(out, std::move(q), c);
+            Shape(q, b, radius, border, borderColor, alpha);
+            AddQuad(*quads_, std::move(q), clip);
         };
-        if (tex && im.slice > 0.0f) {
-            float bs = std::min(im.slice, std::min(fw, fh) * 0.5f);
-            float bp = std::min(bs * im.sliceScale * s_, std::min(b.w, b.h) * 0.5f);
+        if (tex && slice > 0.0f) {
+            float bs = std::min(slice, std::min(fw, fh) * 0.5f);
+            float bp = std::min(bs * sliceScale * s_, std::min(b.w, b.h) * 0.5f);
             float xs[4] = {b.x, b.x + bp, b.x + b.w - bp, b.x + b.w};
             float ys[4] = {b.y, b.y + bp, b.y + b.h - bp, b.y + b.h};
             float ss[4] = {s0, s0 + bs, s0 + fw - bs, s0 + fw};
@@ -933,34 +1097,211 @@ private:
         }
     }
 
+    // Background in the look of the button's state, then the icon and the label as one group placed by `align`.
+    void EmitButton(const Node& n, const Box& b, float alpha, const Clip& clip) {
+        const UIButton& bt = *scene_.Get<UIButton>(n.id);
+        std::vector<UIQuad>& out = *quads_;
+        const float a = bt.interactable ? alpha : alpha * 0.5f;
+        EmitSkinImage(b, ButtonTexture(bt), bt, ButtonColor(bt), a, bt.radius * s_, bt.borderWidth * s_, bt.borderColor, n.id, clip);
+
+        const float pad = bt.padding * s_;
+        const Box inner{b.x + pad, b.y, std::max(1.0f, b.w - 2 * pad), b.h};
+        const float alignX = bt.align == "left" ? 0.0f : bt.align == "right" ? 1.0f : 0.5f;
+        std::shared_ptr<const Texture> icon = LoadImage(bt.icon);
+        const bool hasText = !bt.text.empty();
+        const bool beside = bt.iconSide != "top" && bt.iconSide != "bottom";
+        float iw = 0.0f, ih = 0.0f, gap = 0.0f;  // between icon and label: the edge padding
+        if (icon) {
+            ih = (bt.iconSize > 0.0f ? bt.iconSize : static_cast<float>(icon->height)) * s_;
+            iw = ih * static_cast<float>(icon->width) / static_cast<float>(icon->height);
+            if (hasText) gap = pad;
+        }
+        FontRef font = ResolveFont(bt.font, assets_);
+        const float wrap = icon && beside ? std::max(1.0f, inner.w - iw - gap) : inner.w;
+        ShapedText sh = oe::Shape(ParseRich(bt.text, true, bt.textColor, false), font, bt.size * s_, 0.0f, 1.0f, wrap);
+        TextDraw d;
+        d.alpha = a;
+        if (!icon) {
+            d.alignX = alignX;
+            d.alignY = 0.5f;
+            EmitText(out, sh, inner, d, n.id, clip);
+            return;
+        }
+        const float tw = hasText ? sh.width : 0.0f, th = hasText ? sh.height : 0.0f;
+        Box ib, tb;
+        if (beside) {
+            const bool first = bt.iconSide != "right";
+            const float gx = inner.x + (inner.w - (iw + gap + tw)) * alignX;
+            ib = {first ? gx : gx + tw + gap, b.y + (b.h - ih) * 0.5f, iw, ih};
+            tb = {first ? gx + iw + gap : gx, b.y, tw, b.h};
+            d.alignY = 0.5f;
+        } else {
+            const bool first = bt.iconSide == "top";
+            const float gy = b.y + (b.h - (ih + gap + th)) * 0.5f;
+            ib = {inner.x + (inner.w - iw) * alignX, first ? gy : gy + th + gap, iw, ih};
+            tb = {inner.x, first ? gy + ih + gap : gy, inner.w, th};
+            d.alignX = alignX;
+        }
+        EmitFilled(ib, icon, 0.0f, 0.0f, static_cast<float>(icon->width), static_cast<float>(icon->height), 0.0f, 1.0f, bt.pixelArt, Color(1, 1, 1), a, 0.0f,
+                   0.0f, Color(1, 1, 1), n.id, clip);
+        if (hasText) EmitText(out, sh, tb, d, n.id, clip);
+    }
+
     void EmitSlider(const Node& n, const Box& b, float alpha, const Clip& clip) {
         const UISlider& sl = *scene_.Get<UISlider>(n.id);
-        std::vector<UIQuad>& out = *quads_;
         float t = sl.max > sl.min ? Clamp((sl.value - sl.min) / (sl.max - sl.min), 0.0f, 1.0f) : 0.0f;
         float a = alpha;
         float radius = sl.radius * s_;
-        AddBox(out, b, sl.color, a, radius, 0.0f, sl.color, n.id, clip);
+        EmitSkin(b, sl, sl.color, a, radius, 0.0f, sl.color, n.id, clip);
         Box f = b;
         float hx = 0, hy = 0;
         if (sl.direction == "right-to-left") f.x = b.x + b.w * (1 - t), f.w = b.w * t, hx = f.x, hy = b.y + b.h * 0.5f;
         else if (sl.direction == "bottom-to-top") f.y = b.y + b.h * (1 - t), f.h = b.h * t, hx = b.x + b.w * 0.5f, hy = f.y;
         else if (sl.direction == "top-to-bottom") f.h = b.h * t, hx = b.x + b.w * 0.5f, hy = b.y + f.h;
         else f.w = b.w * t, hx = b.x + f.w, hy = b.y + b.h * 0.5f;
-        if (t > 0.0f) {
-            UIQuad q = RectQuad(b.x, b.y, b.x + b.w, b.y + b.h, sl.fillColor, a, n.id);
-            Shape(q, b, radius, 0.0f, sl.fillColor, a);
-            AddQuad(out, std::move(q), clip.Intersect(f));
-        }
+        // The filled part is the whole bar cut at the value, so rounded ends and sliced images stay in place.
+        if (t > 0.0f) EmitSkinImage(b, sl.fillTexture, sl, sl.fillColor, a, radius, 0.0f, sl.fillColor, n.id, clip.Intersect(f));
         if (sl.handle && sl.interactable) {
-            float d = std::min(b.w, b.h) * 1.5f;
-            Box hb{hx - d * 0.5f, hy - d * 0.5f, d, d};
-            float k = sl.pressed ? 0.85f : sl.hovered ? 1.0f : 0.95f;
-            AddBox(out, hb, Brighten(sl.handleColor, k), a, d * 0.5f, 0.0f, sl.handleColor, n.id, clip);
+            float d = std::min(b.w, b.h) * 1.5f, hw = d;
+            float k = sl.pressed ? 0.85f : sl.hovered || sl.focused ? 1.0f : 0.95f;
+            if (std::shared_ptr<const Texture> tex = LoadImage(sl.handleTexture)) hw = d * static_cast<float>(tex->width) / static_cast<float>(tex->height);
+            EmitPart(Box{hx - hw * 0.5f, hy - d * 0.5f, hw, d}, sl.handleTexture, sl.pixelArt, Brighten(sl.handleColor, k), a, n.id, clip);
         }
+    }
+
+    // One line of plain text in `box`, vertically centred and cut off at its edges.
+    void EmitLabel(const std::string& text, const std::string& fontName, float size, const Color& color, const Box& box, float alignX, float alpha,
+                   EntityId id, const Clip& clip) {
+        ShapedText sh = oe::Shape(ParseRich(text, false, color, false), ResolveFont(fontName, assets_), size * s_, 0.0f, 1.0f, 0.0f);
+        TextDraw d;
+        d.alpha = alpha;
+        d.alignX = sh.width > box.w ? 1.0f : alignX;  // too long: keep the end in view
+        d.alignY = 0.5f;
+        EmitText(*quads_, sh, box, d, id, clip.Intersect(box));
+    }
+
+    void EmitInput(const Node& n, const Box& b, float alpha, const Clip& clip) {
+        const UIInput& in = *scene_.Get<UIInput>(n.id);
+        std::vector<UIQuad>& out = *quads_;
+        const float a = in.interactable ? alpha : alpha * 0.5f;
+        EmitSkin(b, in, Brighten(in.color, in.hovered && !in.focused ? 1.15f : 1.0f), a, in.radius * s_, in.borderWidth * s_, in.borderColor, n.id, clip);
+        const InputView v = MakeInputView(in, b, s_, assets_);
+        const Clip cut = clip.Intersect(v.inner);
+        const int lines = static_cast<int>(v.sh.lines.size());
+        const float lh = v.sh.lineHeight, ink = v.sh.height - static_cast<float>(lines - 1) * lh;
+        // Selection: a band behind the selected characters of each line.
+        if (in.focused && in.caretAt != in.selectAt && !v.hint) {
+            const int lo = CharIndex(v.offsets, std::min(in.caretAt, in.selectAt)), hi = CharIndex(v.offsets, std::max(in.caretAt, in.selectAt));
+            auto xOn = [&](size_t l, int index) {
+                for (const ShapedGlyph& g : v.sh.lines[l]) {
+                    if (g.index >= index) return g.x;
+                }
+                return v.sh.lineWidths[l];
+            };
+            for (size_t l = 0; l < v.sh.lines.size(); ++l) {
+                const int start = v.sh.lineStarts[l], next = l + 1 < v.sh.lines.size() ? v.sh.lineStarts[l + 1] : hi + 1;
+                if (hi <= start || lo >= next) continue;
+                const float x0 = xOn(l, std::max(lo, start)), x1 = hi >= next ? v.sh.lineWidths[l] + 4.0f * s_ : xOn(l, hi);
+                const float top = v.y + static_cast<float>(l) * lh;
+                AddQuad(out, RectQuad(v.x + x0, top, v.x + x1, top + ink, in.textColor, a * 0.3f, n.id), cut);
+            }
+        }
+        TextDraw d;
+        d.alpha = v.hint ? a * 0.45f : a;
+        EmitText(out, v.sh, Box{v.x, v.y, 0.0f, v.sh.height}, d, n.id, cut);
+        if (in.focused && std::fmod(in.caret, 1.0f) < 0.5f) {
+            float cx = 0;
+            int line = 0;
+            if (!v.hint) CaretSpot(v.sh, CharIndex(v.offsets, in.caretAt), &cx, &line);
+            const float x = v.x + cx, top = v.y + static_cast<float>(line) * lh, cw = std::max(1.0f, std::round(2.0f * s_));
+            AddQuad(out, RectQuad(x, top, x + cw, top + ink, in.textColor, a, n.id), clip.Intersect(b));
+        }
+    }
+
+    static std::string OptionAt(const UIDropdown& dd, int index) {
+        int i = 0;
+        for (const Json& option : dd.options.items()) {
+            if (i++ == index) return option.asString("");
+        }
+        return std::string();
+    }
+
+    void EmitDropdown(const Node& n, const Box& b, float alpha, const Clip& clip) {
+        const UIDropdown& dd = *scene_.Get<UIDropdown>(n.id);
+        const float a = dd.interactable ? alpha : alpha * 0.5f;
+        const float k = !dd.interactable ? 1.0f : dd.open ? 0.9f : dd.hovered || dd.focused ? 1.15f : 1.0f;
+        EmitSkin(b, dd, Brighten(dd.color, k), a, dd.radius * s_, dd.borderWidth * s_, dd.borderColor, n.id, clip);
+        const float pad = 12.0f * s_, arrow = dd.size * s_;
+        EmitLabel(OptionAt(dd, dd.selected), dd.font, dd.size, dd.textColor, Box{b.x + pad, b.y, std::max(1.0f, b.w - 2 * pad - arrow), b.h}, 0.0f, a, n.id, clip);
+        // The arrow: a triangle pointing down, one pixel row at a time.
+        const int rows = std::max(3, static_cast<int>(std::lround(dd.size * s_ * 0.3f)));
+        const float cx = std::round(b.x + b.w - pad - arrow * 0.5f), top = std::round(b.y + b.h * 0.5f - static_cast<float>(rows) * 0.5f);
+        for (int r = 0; r < rows; ++r) {
+            const float half = static_cast<float>(rows - r);
+            AddQuad(*quads_, RectQuad(cx - half, top + static_cast<float>(r), cx + half, top + static_cast<float>(r + 1), dd.textColor, a * 0.8f, n.id), clip);
+        }
+    }
+
+    struct Popup {
+        EntityId id;
+        Box box;  // the drop-down itself
+        float alpha;
+    };
+
+    // The open list of a drop-down: rows under the element, or above it when more of them fit there. A list
+    // longer than that shows a window of rows starting at `first`.
+    void EmitPopup(const Popup& p) {
+        const UIDropdown& dd = *scene_.Get<UIDropdown>(p.id);
+        const int count = static_cast<int>(dd.options.size());
+        if (count <= 0) return;
+        const float gap = std::round(2.0f * s_), rowH = std::max(1.0f, p.box.h);
+        const int below = static_cast<int>((screen_.y + screen_.h - (p.box.y + p.box.h + gap)) / rowH);
+        const int above = static_cast<int>((p.box.y - gap - screen_.y) / rowH);
+        const bool up = count > below && above > below;
+        const int visible = std::max(1, std::min(count, up ? above : below));
+        const int first = std::max(0, std::min(dd.first, count - visible));
+        const float total = rowH * static_cast<float>(visible), top = up ? p.box.y - gap - total : p.box.y + p.box.h + gap;
+        const Box list{p.box.x, top, p.box.w, total};
+        if (quads_) EmitSkin(list, dd, Brighten(dd.color, 0.8f), p.alpha, dd.radius * s_, dd.borderWidth * s_, dd.borderColor, p.id, Clip{});
+        const float pad = 12.0f * s_;
+        for (int k = 0; k < visible; ++k) {
+            const int i = first + k;
+            const Box row{list.x, top + rowH * static_cast<float>(k), list.w, rowH};
+            if (rects_) {
+                UIRect r;
+                r.entity = p.id;
+                r.kind = UIRect::Kind::Dropdown;
+                r.x = row.x, r.y = row.y, r.w = row.w, r.h = row.h;
+                r.opacity = p.alpha;
+                r.interactable = true;
+                r.item = i;
+                rects_->push_back(r);
+            }
+            if (!quads_) continue;
+            if (i == dd.hoverItem || i == dd.selected) {
+                AddBox(*quads_, row, Brighten(dd.color, i == dd.hoverItem ? 1.3f : 1.0f), p.alpha, dd.radius * s_, 0.0f, dd.color, p.id, Clip{});
+            }
+            EmitLabel(OptionAt(dd, i), dd.font, dd.size, dd.textColor, Box{row.x + pad, row.y, std::max(1.0f, row.w - 2 * pad), row.h}, 0.0f, p.alpha, p.id, Clip{});
+        }
+        if (quads_ && count > visible) {
+            const UIThumb t = ScrollThumb(total, rowH * static_cast<float>(count), rowH * static_cast<float>(first), s_);
+            AddBox(*quads_, Box{list.x + list.w - t.thickness - t.margin, list.y + t.at, t.thickness, t.length}, dd.textColor, 0.5f * p.alpha,
+                   t.thickness * 0.5f, 0.0f, dd.textColor, p.id, Clip{});
+        }
+    }
+
+    void EmitJoystick(const Node& n, const Box& b, float alpha, const Clip& clip) {
+        const UIJoystick& j = *scene_.Get<UIJoystick>(n.id);
+        const float d = std::min(b.w, b.h), cx = b.x + b.w * 0.5f, cy = b.y + b.h * 0.5f;
+        EmitPart(Box{cx - d * 0.5f, cy - d * 0.5f, d, d}, j.texture, j.pixelArt, j.color, alpha, n.id, clip);
+        const float hd = d * 0.45f, travel = (d - hd) * 0.5f;
+        const float hx = cx + j.valueX * travel, hy = cy - j.valueY * travel;
+        EmitPart(Box{hx - hd * 0.5f, hy - hd * 0.5f, hd, hd}, j.handleTexture, j.pixelArt, j.handleColor, std::min(1.0f, alpha * 2.0f), n.id, clip);
     }
 
     const Scene& scene_;
     AssetManager* assets_;
+    std::vector<Popup> popups_;
     Box screen_;
     Box parentBox_;
     float s_ = 1.0f;
@@ -1093,7 +1434,7 @@ bool Shown(const Scene& scene, EntityId id) {
 bool VisibleInTree(const Scene& scene, EntityId id) {
     for (int guard = 0; id != kNullEntity && guard < 1000; ++guard) {
         if (!Shown<UIPanel>(scene, id) || !Shown<UIButton>(scene, id) || !Shown<UIText>(scene, id) || !Shown<UIImage>(scene, id) ||
-            !Shown<UISlider>(scene, id)) return false;
+            !Shown<UISlider>(scene, id) || !Shown<UIInput>(scene, id) || !Shown<UIDropdown>(scene, id) || !Shown<UIJoystick>(scene, id)) return false;
         const EntityRecord* rec = scene.Record(id);
         id = rec ? rec->parent : kNullEntity;
     }
@@ -1112,7 +1453,10 @@ UIThumb ScrollThumb(float view, float extent, float offset, float scale) {
     return t;
 }
 
+void UpdateUICarets(Scene& scene, float dt);
+
 void UpdateUIMotion(Scene& scene, float dt) {
+    UpdateUICarets(scene, dt);
     for (auto& kv : scene.Pool<UIMotion>()) {
         UIMotion& m = kv.second;
         const bool visible = VisibleInTree(scene, kv.first);
@@ -1122,10 +1466,35 @@ void UpdateUIMotion(Scene& scene, float dt) {
     }
     for (auto& kv : scene.Pool<UIButton>()) {
         UIButton& b = kv.second;
-        const float target = !b.interactable ? 1.0f : b.pressed ? b.pressedScale : b.hovered ? b.hoverScale : 1.0f;
+        const float target = !b.interactable ? 1.0f : b.pressed ? b.pressedScale : b.hovered || b.focused ? b.hoverScale : 1.0f;
         b.scaleNow += (target - b.scaleNow) * std::min(1.0f, dt * 18.0f);
         if (std::fabs(target - b.scaleNow) < 1e-3f) b.scaleNow = target;
     }
+}
+
+void UpdateUICarets(Scene& scene, float dt) {
+    for (auto& kv : scene.Pool<UIInput>()) kv.second.caret = kv.second.focused ? kv.second.caret + dt : 0.0f;
+}
+
+int UIInputOffsetAt(const Scene& scene, const UIRect& rect, float px, float py, int width, int height, AssetManager* assets) {
+    const UIInput* in = scene.Get<UIInput>(rect.entity);
+    if (!in) return 0;
+    const InputView v = MakeInputView(*in, Box{rect.x, rect.y, rect.w, rect.h}, UIScale(scene, width, height), assets);
+    return v.hint ? 0 : v.offsets[static_cast<size_t>(IndexAtSpot(v.sh, px - v.x, py - v.y))];
+}
+
+int UIInputOffsetVertical(const Scene& scene, const UIRect& rect, int offset, int dir, int width, int height, AssetManager* assets) {
+    const UIInput* in = scene.Get<UIInput>(rect.entity);
+    if (!in) return 0;
+    const InputView v = MakeInputView(*in, Box{rect.x, rect.y, rect.w, rect.h}, UIScale(scene, width, height), assets);
+    if (v.hint) return 0;
+    float x = 0;
+    int line = 0;
+    CaretSpot(v.sh, CharIndex(v.offsets, offset), &x, &line);
+    const int target = line + dir;
+    if (target < 0) return 0;
+    if (target >= static_cast<int>(v.sh.lines.size())) return v.offsets.back();
+    return v.offsets[static_cast<size_t>(IndexAtSpot(v.sh, x, (static_cast<float>(target) + 0.5f) * v.sh.lineHeight))];
 }
 
 const UIRect* HitTestUI(const std::vector<UIRect>& rects, float px, float py) {

@@ -17,6 +17,25 @@ bool InputState::SetAxis(const std::string& name, float value) {
     return true;
 }
 
+void InputState::AddText(uint32_t c) {
+    if (c < 32 || c == 127 || c > 0x10FFFF || (c >= 0xD800 && c < 0xE000)) return;
+    if (c < 0x80) {
+        text += static_cast<char>(c);
+    } else if (c < 0x800) {
+        text += static_cast<char>(0xC0 | (c >> 6));
+        text += static_cast<char>(0x80 | (c & 0x3F));
+    } else if (c < 0x10000) {
+        text += static_cast<char>(0xE0 | (c >> 12));
+        text += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (c & 0x3F));
+    } else {
+        text += static_cast<char>(0xF0 | (c >> 18));
+        text += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+        text += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (c & 0x3F));
+    }
+}
+
 float InputState::Axis(const std::string& name) const {
     auto found = axes.find(name);
     if (found == axes.end() || !std::isfinite(found->second)) return 0;
@@ -134,25 +153,77 @@ Vec3 ParticleDirection(ParticleEmitter& emitter, EntityId id) {
     return direction*z + right*(radius*std::cos(angle)) + up*(radius*std::sin(angle));
 }
 
+// Value noise in [-1, 1] on an integer lattice: integer hashes and float lerps only, so every
+// platform gets the same field (no libm).
+float LatticeValue(int x, int y, int z, uint32_t seed) {
+    uint32_t h = static_cast<uint32_t>(x) * 0x8da6b343u ^ static_cast<uint32_t>(y) * 0xd8163841u ^
+                 static_cast<uint32_t>(z) * 0xcb1ab31fu ^ seed * 0x9e3779b9u;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return static_cast<float>(h >> 8) * (2.0f / 16777216.0f) - 1.0f;
+}
+
+float ValueNoise(const Vec3& p, uint32_t seed) {
+    const float fx = std::floor(p.x), fy = std::floor(p.y), fz = std::floor(p.z);
+    const int x = static_cast<int>(fx), y = static_cast<int>(fy), z = static_cast<int>(fz);
+    auto fade = [](float t) { return t * t * (3.0f - 2.0f * t); };
+    const float tx = fade(p.x - fx), ty = fade(p.y - fy), tz = fade(p.z - fz);
+    auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+    auto row = [&](int yy, int zz) { return lerp(LatticeValue(x, yy, zz, seed), LatticeValue(x + 1, yy, zz, seed), tx); };
+    return lerp(lerp(row(y, z), row(y + 1, z), ty), lerp(row(y, z + 1), row(y + 1, z + 1), ty), tz);
+}
+
+// Acceleration of the emitter's turbulence field at a particle position.
+Vec3 TurbulenceAt(const Vec3& position, float scale, uint32_t seed) {
+    const float limit = 1.0e6f;  // keeps the lattice coordinates inside int range
+    Vec3 p(Clamp(position.x * scale, -limit, limit), Clamp(position.y * scale, -limit, limit), Clamp(position.z * scale, -limit, limit));
+    return Vec3(ValueNoise(p, seed), ValueNoise(p, seed + 1), ValueNoise(p, seed + 2));
+}
+
 void UpdateParticles(Scene& scene, float dt) {
     for (auto& kv : scene.Pool<ParticleEmitter>()) {
         ParticleEmitter& emitter = kv.second;
         size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
         if (emitter.particles.size() > limit) emitter.particles.resize(limit);
+        const float turbulence = std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) ? Clamp(emitter.turbulence, 0, 10000) : 0;
+        const float turbulenceScale = Clamp(emitter.turbulenceScale, 0.001f, 1000);
+        const uint32_t turbulenceSeed = static_cast<uint32_t>(emitter.seed) ^ (kv.first * 0x9e3779b9u);
         for (Particle& particle : emitter.particles) {
             particle.age += dt;
             particle.velocity += particle.gravity * dt;
+            if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
+                Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
+                if (emitter.dimensions == 2) push.z = 0;
+                particle.velocity += push;
+            }
             if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
             particle.position += particle.velocity * dt;
+            if (particle.spin != 0) particle.rotation += particle.spin * dt;
         }
         emitter.particles.erase(std::remove_if(emitter.particles.begin(), emitter.particles.end(),
             [](const Particle& particle) { return particle.age >= particle.lifetime; }), emitter.particles.end());
         if (!emitter.playing) continue;
+        // Emission runs on the time played before this step, so delay 0 starts on the first one.
+        const double local = emitter.elapsed - static_cast<double>(Clamp(emitter.delay, 0, 600));
+        emitter.elapsed += dt;
+        if (local < 0) continue;
+        const double duration = std::isfinite(emitter.duration) ? static_cast<double>(Clamp(emitter.duration, 0, 600)) : 0;
+        if (duration > 0 && emitter.loop) {
+            const int64_t cycle = static_cast<int64_t>(std::floor(local / duration));
+            if (cycle > emitter.cycle) {  // a new cycle fires the burst again
+                emitter.cycle = cycle;
+                emitter.initialBurstEmitted = false;
+            }
+        }
         if (!emitter.initialBurstEmitted) {
             emitter.initialBurstEmitted = true;
             BurstParticles(scene, kv.first, emitter.burst);
         }
-        if (!emitter.loop || !std::isfinite(emitter.rate)) continue;
+        const bool rateActive = duration > 0 ? (emitter.loop || local < duration) : emitter.loop;
+        if (!rateActive || !std::isfinite(emitter.rate)) continue;
         emitter.carry += static_cast<double>(Clamp(emitter.rate, 0, 10000)) * dt;
         int births = static_cast<int>(std::floor(emitter.carry));
         emitter.carry -= births;
@@ -206,12 +277,75 @@ std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* c
 bool ParticleSettingsValid(const ParticleEmitter& emitter) {
     auto finiteVector = [](const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
     auto finiteColor = [](const Color& c) { return std::isfinite(c.r) && std::isfinite(c.g) && std::isfinite(c.b); };
+    ParticleCurve curve;
     return std::isfinite(emitter.rate) && std::isfinite(emitter.lifetime) && std::isfinite(emitter.speed) &&
            std::isfinite(emitter.speedVariation) && std::isfinite(emitter.lifetimeVariation) && std::isfinite(emitter.sizeVariation) &&
            std::isfinite(emitter.drag) && std::isfinite(emitter.spread) && std::isfinite(emitter.startSize) && std::isfinite(emitter.endSize) &&
            std::isfinite(emitter.startOpacity) && std::isfinite(emitter.endOpacity) && finiteVector(emitter.direction) &&
-           finiteVector(emitter.gravity) && finiteColor(emitter.startColor) && finiteColor(emitter.endColor);
+           finiteVector(emitter.gravity) && finiteColor(emitter.startColor) && finiteColor(emitter.endColor) &&
+           finiteVector(emitter.shapeSize) && std::isfinite(emitter.radialSpeed) && std::isfinite(emitter.rotation) &&
+           std::isfinite(emitter.rotationVariation) && std::isfinite(emitter.spin) && std::isfinite(emitter.spinVariation) &&
+           std::isfinite(emitter.stretch) && std::isfinite(emitter.frameRate) && std::isfinite(emitter.delay) &&
+           std::isfinite(emitter.duration) && std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) &&
+           ParseParticleCurve(emitter.sizeOverLife, false, curve, nullptr) && ParseParticleCurve(emitter.colorOverLife, true, curve, nullptr) &&
+           ParseParticleCurve(emitter.opacityOverLife, false, curve, nullptr);
 }
+
+Vec3 ParticleCurve::Sample(float t) const {
+    if (times.empty()) return Vec3();
+    if (!(t > times.front())) return values.front();
+    for (size_t i = 1; i < times.size(); ++i) {
+        if (t > times[i]) continue;
+        const float span = times[i] - times[i - 1];
+        const float k = span > 0 ? (t - times[i - 1]) / span : 1.0f;
+        return values[i - 1] * (1 - k) + values[i] * k;
+    }
+    return values.back();
+}
+
+bool ParseParticleCurve(const Json& keys, bool color, ParticleCurve& out, std::string* error) {
+    out.times.clear();
+    out.values.clear();
+    auto fail = [&](const std::string& message) {
+        if (error) *error = message;
+        out.times.clear();
+        out.values.clear();
+        return false;
+    };
+    if (keys.isNull()) return true;
+    if (!keys.isArray()) return fail("expected an array of [t, value] keys");
+    if (keys.size() > ParticleCurve::kMaxKeys) return fail("at most 16 keys");
+    for (const Json& key : keys.items()) {
+        if (!key.isArray() || key.size() != 2 || !key[0].isNumber()) return fail("each key is [t, value], got " + key.dump());
+        const float t = key[0].asFloat();
+        if (!std::isfinite(t) || t < 0 || t > 1) return fail("key time must be 0..1, got " + key[0].dump());
+        if (!out.times.empty() && t < out.times.back()) return fail("key times must ascend");
+        Vec3 value;
+        if (color) {
+            FieldInfo field;  // the component color syntax: [r, g, b] or "#rrggbb"
+            field.name = "color";
+            field.type = FieldType::Color;
+            Color parsed;
+            std::string message;
+            if (!FieldFromJson(field, &parsed, key[1], &message)) return fail(message);
+            value = Vec3(parsed.r, parsed.g, parsed.b);
+        } else {
+            if (!key[1].isNumber()) return fail("key value must be a number, got " + key[1].dump());
+            value = Vec3(key[1].asFloat(), 0, 0);
+        }
+        if (!std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z)) return fail("key value must be finite");
+        out.times.push_back(t);
+        out.values.push_back(value);
+    }
+    return true;
+}
+
+bool ParticlesFinished(const ParticleEmitter& emitter) {
+    if (emitter.loop || !emitter.particles.empty() || !emitter.initialBurstEmitted) return false;
+    return !(emitter.duration > 0) || emitter.elapsed >= static_cast<double>(Clamp(emitter.delay, 0, 600)) + static_cast<double>(emitter.duration);
+}
+
+void ClearTrail(Trail& trail) { trail.points.clear(); }
 
 int BurstParticles(Scene& scene, EntityId id, int count) {
     ParticleEmitter* emitter = scene.Get<ParticleEmitter>(id);
@@ -246,9 +380,54 @@ int BurstParticles(Scene& scene, EntityId id, int count) {
         particle.endColor = emitter->endColor;
         particle.startOpacity = emitter->startOpacity;
         particle.endOpacity = emitter->endOpacity;
+        particle.sizeScale = sizeScale;
+        // Later features draw after the older ones for the same reason.
+        if (emitter->shape != "point") {
+            const bool planar = emitter->dimensions == 2;
+            const float radius = std::fabs(emitter->shapeSize.x);
+            Vec3 offset;
+            if (emitter->shape == "box") {
+                Vec3 unit;  // one statement per draw: argument evaluation order differs between compilers
+                unit.x = ParticleRandom(*emitter, id) * 2 - 1;
+                unit.y = ParticleRandom(*emitter, id) * 2 - 1;
+                unit.z = planar ? 0.0f : ParticleRandom(*emitter, id) * 2 - 1;
+                if (emitter->shapeEdge) {  // push the coordinate nearest a face onto it
+                    const float ax = std::fabs(unit.x), ay = std::fabs(unit.y), az = std::fabs(unit.z);
+                    if (ax >= ay && ax >= az) unit.x = unit.x < 0 ? -1.0f : 1.0f;
+                    else if (ay >= az) unit.y = unit.y < 0 ? -1.0f : 1.0f;
+                    else unit.z = unit.z < 0 ? -1.0f : 1.0f;
+                }
+                offset = Vec3(unit.x * emitter->shapeSize.x, unit.y * emitter->shapeSize.y, unit.z * emitter->shapeSize.z);
+            } else if (emitter->shape == "circle" || planar) {
+                const float angle = ParticleRandom(*emitter, id) * (2 * kPi);
+                const float r = radius * (emitter->shapeEdge ? 1.0f : std::sqrt(ParticleRandom(*emitter, id)));
+                offset = planar ? Vec3(std::cos(angle) * r, std::sin(angle) * r, 0) : Vec3(std::cos(angle) * r, 0, std::sin(angle) * r);
+            } else {  // sphere
+                const float z = ParticleRandom(*emitter, id) * 2 - 1;
+                const float angle = ParticleRandom(*emitter, id) * (2 * kPi);
+                const float ring = std::sqrt(std::max(0.0f, 1 - z * z));
+                float r = radius;
+                // The largest of three uniform draws is distributed like a cube root: uniform in the volume without cbrt.
+                if (!emitter->shapeEdge) {
+                    float largest = 0;
+                    for (int draw = 0; draw < 3; ++draw) largest = std::max(largest, ParticleRandom(*emitter, id));
+                    r *= largest;
+                }
+                offset = Vec3(ring * std::cos(angle), z, ring * std::sin(angle)) * r;
+            }
+            particle.position = offset;
+            const float distance = Length(offset);
+            if (emitter->radialSpeed != 0 && distance > 1e-6f) particle.velocity += offset * (emitter->radialSpeed / distance);
+        }
+        particle.rotation = emitter->rotation;
+        if (emitter->rotationVariation > 0) particle.rotation += (ParticleRandom(*emitter, id) * 2 - 1) * emitter->rotationVariation;
+        particle.spin = emitter->spin;
+        if (emitter->spinVariation > 0) particle.spin += (ParticleRandom(*emitter, id) * 2 - 1) * emitter->spinVariation;
+        if (emitter->randomFrame && emitter->frames > 1)
+            particle.frameOffset = std::min(emitter->frames - 1, static_cast<int>(ParticleRandom(*emitter, id) * static_cast<float>(emitter->frames)));
         particle.worldSpace = emitter->space == "world";
         if (particle.worldSpace) {
-            particle.position = world.TransformPoint(Vec3());
+            particle.position = world.TransformPoint(particle.position);
             particle.velocity = world.TransformDir(particle.velocity);
         }
         emitter->particles.push_back(particle);
@@ -275,6 +454,22 @@ void UpdateLateSystems(Scene& scene, float dt) {
         if (f.useBounds) continue;  // clamped cameras keep their rotation (look straight ahead)
         Vec3 look = target + f.lookOffset - t->position;
         if (Length(look) > 1e-4f) t->rotation = EulerLookDirection(look);
+    }
+    for (auto& kv : scene.Pool<Trail>()) {
+        Trail& trail = kv.second;
+        const float lifetime = std::isfinite(trail.lifetime) ? Clamp(trail.lifetime, 0.01f, 60) : 0.01f;
+        for (TrailPoint& point : trail.points) point.age += dt;
+        size_t expired = 0;  // points are oldest first
+        while (expired < trail.points.size() && trail.points[expired].age >= lifetime) ++expired;
+        trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(expired));
+        if (!trail.emitting) continue;
+        const Vec3 position = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) continue;
+        const float step = std::isfinite(trail.minDistance) ? Clamp(trail.minDistance, 0.001f, 100) : 0.001f;
+        if (!trail.points.empty() && Length(position - trail.points.back().position) < step) continue;
+        const size_t limit = static_cast<size_t>(std::max(2, std::min(1024, trail.maxPoints)));
+        if (trail.points.size() >= limit) trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(trail.points.size() - limit + 1));
+        trail.points.push_back({position, 0.0f});
     }
 }
 
@@ -312,6 +507,7 @@ void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* asse
     UpdateParticles(scene, dt);
     UpdateSpriteAnimations(scene, dt);
     input.pressedThisFrame.clear();
+    input.text.clear();
     input.mouseDX = input.mouseDY = 0.0f;
     input.wheel = 0.0f;
     for (InputState::Touch& t : input.touches) t.began = false;

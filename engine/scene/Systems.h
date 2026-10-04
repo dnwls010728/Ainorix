@@ -23,6 +23,27 @@ bool ParticleSettingsValid(const ParticleEmitter& emitter);
 
 // Emits up to the configured capacity immediately; returns accepted births.
 int BurstParticles(Scene& scene, EntityId id, int count);
+// True once a non-looping emitter has emitted everything it will and its particles are gone
+// (effect entities can be destroyed). Looping emitters never finish.
+bool ParticlesFinished(const ParticleEmitter& emitter);
+
+// Keys of a ParticleEmitter sizeOverLife/colorOverLife/opacityOverLife field, ascending in
+// t (0..1). Scalars are in x; colors in xyz.
+struct ParticleCurve {
+    static constexpr size_t kMaxKeys = 16;
+    std::vector<float> times;
+    std::vector<Vec3> values;
+    bool Empty() const { return times.empty(); }
+    // Linear between keys; the first/last key holds outside their times.
+    Vec3 Sample(float t) const;
+};
+// Parses [[t, value], ...]; `color` takes [r, g, b] or "#rrggbb" values, otherwise a number.
+// An empty array gives an empty curve; malformed keys return false with a message.
+bool ParseParticleCurve(const Json& keys, bool color, ParticleCurve& out, std::string* error);
+
+struct Trail;
+// Forgets a Trail's path (teleports, respawns).
+void ClearTrail(Trail& trail);
 
 // Logical key state. Key names: "W","A","S","D","Up","Down","Left","Right",
 // "Space","Shift","Escape", letters "A".."Z", digits "0".."9".
@@ -74,11 +95,15 @@ struct InputState {
         bool began = false;
     };
     std::vector<Touch> touches;
+    // Characters typed since the last simulation step (UTF-8, no control characters; IME results
+    // included), read by a focused UIInput and cleared like pressedThisFrame. The API adds to it with input.text.
+    std::string text;
+    void AddText(uint32_t codepoint);
 };
 
 // Advances all behavior components by dt seconds (before physics).
 void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr);
-// Runs after physics: CameraFollow.
+// Runs after physics: CameraFollow, Trail paths (so they follow physics bodies too).
 void UpdateLateSystems(Scene& scene, float dt);
 
 }  // namespace oe

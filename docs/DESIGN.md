@@ -87,7 +87,8 @@ Match the surrounding code; when in doubt copy the nearest similar code.
 - **Warnings**: builds stay warning-free with MSVC `/W4` and clang/gcc `-Wall -Wextra`; new code
   should also be clean under `-Wconversion` (explicit `static_cast`s).
 - **Text**: code, comments, docs and commit messages in English. User-facing editor strings go
-  through `Tr()`; the READMEs exist in Korean (`README.md`), English and Japanese — change all three.
+  through `Tr()`; the README is English (`README.md`, the reference) with Korean (`README.ko.md`) and Japanese
+  (`README.ja.md`) translations — change all three.
 
 ## 4. Definition of done
 
@@ -112,6 +113,9 @@ Large features are built so that another agent can continue at any point:
 
 1. Before coding, add an **Implementation status (work log)** checklist to the feature's doc
    (example: `docs/ANDROID.md`): one line per milestone, what it contains, and what is unverified.
+   A feature doc starts with what the feature is and how to use it; the work log is its **last** section.
+   When the log and its implementation notes outgrow the doc, they move to a file beside it
+   (`docs/NETWORK_NOTES.md`, `docs/TEAM_LOG.md`) and the doc links to it.
 2. Commit and push after every milestone and tick its line in the same commit. Never leave
    finished work only in a working tree.
 3. When something cannot be done or checked in the current environment, leave an unchecked line
