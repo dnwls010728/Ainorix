@@ -1,0 +1,37 @@
+{
+  "format": "ownengine.project",
+  "version": 1,
+  "name": "NetChase",
+  "startScene": "scenes/main.scene.json",
+  "window": {
+    "width": 1280,
+    "height": 720,
+    "title": "NetChase"
+  },
+  "network": {
+    "mode": "authoritative",
+    "transport": "tcp",
+    "bind": "127.0.0.1",
+    "port": 7778,
+    "gameId": "NetChase",
+    "maxPlayers": 4,
+    "actions": [
+      "W",
+      "A",
+      "S",
+      "D",
+      "Space",
+      "R"
+    ],
+    "axes": [
+      "LookX"
+    ],
+    "inputDelay": 2,
+    "rollbackFrames": 8,
+    "hashInterval": 30,
+    "playerPrefab": "prefabs/player.prefab.json",
+    "snapshotRate": 20,
+    "interpolationFrames": 6,
+    "predictionFrames": 32
+  }
+}

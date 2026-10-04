@@ -1,0 +1,9 @@
+{
+  "baseTexture": "assets/textures/grass.png",
+  "pixelArt": true,
+  "roughness": 1,
+  "tiling": [
+    22.0,
+    4.0
+  ]
+}

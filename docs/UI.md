@@ -13,6 +13,8 @@ software screenshot an agent looks at shows exactly what the game window shows.
 | `UIImage` | Picture: sprite sheet frame, 9-slice, preserve aspect, fill amount (health bars, cooldowns), rounded corners |
 | `UISlider` | Draggable slider (`onValueChanged`), or a progress/health bar with `interactable: false` |
 | `UILayout` | Arranges the element's children in a column, row or grid; `fit` sizes the element to its content |
+| `UIScroll` | Makes a panel a scroll view: clips its children and moves them with the wheel, a drag or the scroll bar |
+| `UIMotion` | Entrance animation (fade, pop, slide) that plays whenever the element becomes visible |
 | `UICanvas` | Optional, once per scene: reference resolution and scale mode |
 
 ## Placement
@@ -55,6 +57,38 @@ places its UI children one after another in **hierarchy (id) order**; their `anc
 {"name": "Options", "parent": "Menu", "components": {"UIButton": {"text": "Options", "height": 56}}}
 ```
 
+## Scroll views
+
+`UIScroll {direction, scroll, wheelStep, bar, barColor}` on an entity with a `UIPanel` turns it into a scroll view: the
+children are clipped to the panel and shifted by `scroll` (reference pixels from the start of the content). Give the panel a
+`UILayout` for a list:
+
+```json
+{"name": "List", "components": {
+  "UIPanel":  {"anchor": "center", "width": 600, "height": 400, "radius": 16},
+  "UILayout": {"direction": "vertical", "spacing": 8, "padding": 12, "crossAlign": "stretch"},
+  "UIScroll": {"wheelStep": 80}}}
+{"name": "Row 1", "parent": "List", "components": {"UIButton": {"text": "First", "height": 64}}}
+```
+
+While simulating, the mouse wheel over the view scrolls it by `wheelStep` per notch, pressing its empty area (between or
+beside the rows — also a finger) and dragging moves the content with the pointer, and the engine keeps `scroll` inside the
+content. Rows scrolled out of view cannot be clicked. The bar on the edge can be grabbed and dragged (clicking its track jumps there; neither clicks the row underneath). The thumb shows the position when the content is larger than
+the panel (`bar: false` hides it). Scripts read or set `scroll` like any field; `ui.layout` reports the panel. Tools turn the
+wheel with `input.mouse {x, y, wheel}` and scripts read it with `input.wheel()`.
+
+## Motion
+
+- `UIMotion {enter, duration, delay, distance}` plays each time its element becomes visible (itself or through a parent that
+  was hidden): `fade`, `pop` (grows from 85 % with a small overshoot) or `slide-up/down/left/right` (moves in from `distance`
+  reference pixels away), always with a fade. The element's children move and fade with it. Increasing `delay` values along a
+  row stagger the entrance of cards. It runs on real frames, so dialogs animate while the game is paused (`game.pause`); the state advances at the end of the frame, after scripts and click handlers, so an element shown this frame is drawn at the start of its entrance, never at its final look first; and
+  outside a play session the element simply shows its final state. Set `time` to 0 to replay.
+- `UIButton {hoverScale, pressedScale}` (1 = off) eases the button's size while the pointer is over it or holds it.
+- Anything else is a tween from Lua: `tween.to(id, "UIPanel", {x = 0, opacity = 1}, 0.3, {ease = "outBack", delay = 0.1})`
+  animates numeric, vector and colour fields of any component (see [SCRIPTING.md](SCRIPTING.md)); tweens are unscaled by
+  default, like `UIMotion`.
+
 ## Text and fonts
 
 `UIText {text, font, size, color, align, verticalAlign, wrap, lineSpacing, letterSpacing, bold, richText,
@@ -87,11 +121,13 @@ position (disabled while the mouse is locked for mouse look):
 | `onValueChanged(self, value)` | a dragged `UISlider` changed value (the slider follows the pointer until release) |
 
 `UIButton`: `color`, `textColor`, `font`, `size`, `radius`, `borderWidth`, `borderColor`, `hoverBrightness`,
-`pressedBrightness`, `interactable` (false = faded, no events).
+`pressedBrightness`, `hoverScale`, `pressedScale`, `interactable` (false = faded, no events).
 `UISlider`: `value`, `min`, `max`, `step`, `direction` (`left-to-right`, `right-to-left`, `bottom-to-top`,
 `top-to-bottom`), `color` (track), `fillColor`, `handle`, `handleColor`, `radius`, `interactable`.
 Panels, images and text never block clicks. A `UIPanel {clip: true}` cuts its children off at its edges; clipped
-parts cannot be clicked.
+parts cannot be clicked. A `UIPanel {blockInput: true}` is a modal backdrop: buttons and sliders drawn under it cannot be
+clicked or hovered inside its rectangle, while its own children (drawn on top of it) can — show a full-screen blocking panel
+with the dialog as its child and hide it again to close the dialog.
 
 ### On-screen controls (touch screens)
 

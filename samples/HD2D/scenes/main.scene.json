@@ -1,0 +1,2357 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Lantern Road",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -40,
+            -48,
+            0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.66,
+            0.42
+          ],
+          "intensity": 1.25,
+          "ambient": [
+            0.17,
+            0.2,
+            0.36
+          ],
+          "shadowStrength": 0.85
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Hero",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.6,
+            7
+          ]
+        },
+        "CharacterBody": {
+          "radius": 0.3,
+          "height": 1.2
+        },
+        "Tag": {
+          "tags": "hero"
+        },
+        "Script": {
+          "path": "scripts/hero.lua",
+          "params": {
+            "speed": 3.2
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "HeroSprite",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.6,
+            0
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/hero.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true,
+          "columns": 4,
+          "rows": 3
+        },
+        "SpriteAnimation": {
+          "clip": "idle_down",
+          "clips": {
+            "idle_down": {
+              "frames": [
+                0
+              ],
+              "fps": 1
+            },
+            "walk_down": {
+              "frames": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "fps": 8
+            },
+            "idle_side": {
+              "frames": [
+                4
+              ],
+              "fps": 1
+            },
+            "walk_side": {
+              "frames": [
+                4,
+                5,
+                6,
+                7
+              ],
+              "fps": 8
+            },
+            "idle_up": {
+              "frames": [
+                8
+              ],
+              "fps": 1
+            },
+            "walk_up": {
+              "frames": [
+                8,
+                9,
+                10,
+                11
+              ],
+              "fps": 8
+            }
+          }
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      },
+      "parent": 2
+    },
+    {
+      "id": 4,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            6.8,
+            15.8
+          ],
+          "rotation": [
+            -35.2,
+            0,
+            0
+          ]
+        },
+        "Camera": {
+          "fov": 30,
+          "nearPlane": 1,
+          "farPlane": 120,
+          "clearColor": [
+            0.2,
+            0.17,
+            0.3
+          ]
+        },
+        "CameraFollow": {
+          "target": 2,
+          "offset": [
+            0,
+            6.2,
+            8.8
+          ],
+          "lookOffset": [
+            0,
+            0.9,
+            0
+          ],
+          "smoothing": 5
+        },
+        "PostProcess": {
+          "exposure": 1.7,
+          "toneMapping": "reinhard",
+          "bloom": 0.7,
+          "bloomThreshold": 1.0,
+          "bloomRadius": 12,
+          "vignette": 0.5,
+          "vignetteRadius": 0.55,
+          "vignetteSoftness": 0.7,
+          "dofRadius": 6,
+          "dofFocus": 10.8,
+          "dofRange": 2.0,
+          "dofFalloff": 6
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Game",
+      "components": {
+        "Script": {
+          "path": "scripts/game.lua"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Billboards",
+      "components": {
+        "Script": {
+          "path": "scripts/billboards.lua"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Meadow",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            44,
+            1,
+            32
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/grass_22x16.mat.json",
+          "castShadows": false
+        },
+        "Collider": {
+          "center": [
+            0,
+            -0.5,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Plaza",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.02,
+            0
+          ],
+          "scale": [
+            8,
+            1,
+            6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/path_4x3.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "South Road",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.02,
+            9.5
+          ],
+          "scale": [
+            2,
+            1,
+            13
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/path_1x6.5.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "North Road",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.02,
+            -6
+          ],
+          "scale": [
+            2,
+            1,
+            6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/path_1x3.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "East Road",
+      "components": {
+        "Transform": {
+          "position": [
+            7,
+            0.02,
+            0
+          ],
+          "scale": [
+            6,
+            1,
+            2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/path_3x1.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Terrace",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.0,
+            -13
+          ],
+          "scale": [
+            44,
+            2,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/cliff_22x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 13,
+      "name": "Terrace Top",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            2.01,
+            -13
+          ],
+          "scale": [
+            44,
+            1,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/grass_22x4.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Ledge",
+      "components": {
+        "Transform": {
+          "position": [
+            -16,
+            1.0,
+            -6
+          ],
+          "scale": [
+            8,
+            2,
+            6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/cliff_4x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 15,
+      "name": "Ledge Top",
+      "components": {
+        "Transform": {
+          "position": [
+            -16,
+            2.01,
+            -6
+          ],
+          "scale": [
+            8,
+            1,
+            6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/grass_4x3.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Pond",
+      "components": {
+        "Transform": {
+          "position": [
+            13.5,
+            0.03,
+            1
+          ],
+          "scale": [
+            8,
+            1,
+            6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "material": "materials/water.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Pond Edge",
+      "components": {
+        "Transform": {
+          "position": [
+            13.5,
+            1,
+            1
+          ],
+          "scale": [
+            7.4,
+            2,
+            5.4
+          ]
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 18,
+      "name": "Wall South",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.5,
+            16.5
+          ],
+          "scale": [
+            46,
+            3,
+            1
+          ]
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 19,
+      "name": "Wall West",
+      "components": {
+        "Transform": {
+          "position": [
+            -22.5,
+            1.5,
+            0
+          ],
+          "scale": [
+            1,
+            3,
+            34
+          ]
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 20,
+      "name": "Wall East",
+      "components": {
+        "Transform": {
+          "position": [
+            22.5,
+            1.5,
+            0
+          ],
+          "scale": [
+            1,
+            3,
+            34
+          ]
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 21,
+      "name": "Ruin 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -9,
+            1.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            2,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 22,
+      "name": "Ruin 2",
+      "components": {
+        "Transform": {
+          "position": [
+            -7,
+            2.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            4,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x2.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 23,
+      "name": "Ruin 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -5,
+            1.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            2,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 24,
+      "name": "Ruin 4",
+      "components": {
+        "Transform": {
+          "position": [
+            5,
+            1.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            2,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 25,
+      "name": "Ruin 5",
+      "components": {
+        "Transform": {
+          "position": [
+            7,
+            2.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            4,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x2.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 26,
+      "name": "Ruin 6",
+      "components": {
+        "Transform": {
+          "position": [
+            9,
+            1.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            2,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 27,
+      "name": "Ruin 7",
+      "components": {
+        "Transform": {
+          "position": [
+            11,
+            1.0,
+            -3.6
+          ],
+          "scale": [
+            2,
+            2,
+            1.2
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_1x1.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 28,
+      "name": "Gate Pillar L",
+      "components": {
+        "Transform": {
+          "position": [
+            -2,
+            1.5,
+            -3.6
+          ],
+          "scale": [
+            1,
+            3,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_0.5x1.5.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 29,
+      "name": "Gate Pillar R",
+      "components": {
+        "Transform": {
+          "position": [
+            2,
+            1.5,
+            -3.6
+          ],
+          "scale": [
+            1,
+            3,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_0.5x1.5.mat.json",
+          "shading": "flat"
+        },
+        "Collider": {}
+      }
+    },
+    {
+      "id": 30,
+      "name": "Gate Lintel",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            3.5,
+            -3.6
+          ],
+          "scale": [
+            5,
+            1,
+            1
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "material": "materials/stone_2.5x0.5.mat.json",
+          "shading": "flat"
+        }
+      }
+    },
+    {
+      "id": 31,
+      "name": "Tree 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -18,
+            2,
+            -12.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "name": "Tree 2",
+      "components": {
+        "Transform": {
+          "position": [
+            -11,
+            2,
+            -11.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 33,
+      "name": "Tree 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -4.5,
+            2,
+            -13
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Tree 4",
+      "components": {
+        "Transform": {
+          "position": [
+            5,
+            2,
+            -11.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 35,
+      "name": "Tree 5",
+      "components": {
+        "Transform": {
+          "position": [
+            11.5,
+            2,
+            -13
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 36,
+      "name": "Tree 6",
+      "components": {
+        "Transform": {
+          "position": [
+            18,
+            2,
+            -11.8
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 37,
+      "name": "Tree 7",
+      "components": {
+        "Transform": {
+          "position": [
+            -17,
+            2,
+            -5.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 38,
+      "name": "Tree 8",
+      "components": {
+        "Transform": {
+          "position": [
+            -13.5,
+            0,
+            3
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 39,
+      "name": "Tree 9",
+      "components": {
+        "Transform": {
+          "position": [
+            -17.5,
+            0,
+            9
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 40,
+      "name": "Tree 10",
+      "components": {
+        "Transform": {
+          "position": [
+            -9,
+            0,
+            12.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 41,
+      "name": "Tree 11",
+      "components": {
+        "Transform": {
+          "position": [
+            8.5,
+            0,
+            11
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 42,
+      "name": "Tree 12",
+      "components": {
+        "Transform": {
+          "position": [
+            17.5,
+            0,
+            -5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 43,
+      "name": "Tree 13",
+      "components": {
+        "Transform": {
+          "position": [
+            19,
+            0,
+            8.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 44,
+      "name": "Tree 14",
+      "components": {
+        "Transform": {
+          "position": [
+            6.5,
+            0,
+            -7.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/tree.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.9,
+            3,
+            0.6
+          ],
+          "center": [
+            0,
+            1.5,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 45,
+      "name": "Bush 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -6,
+            0,
+            -2.5
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 46,
+      "name": "Bush 2",
+      "components": {
+        "Transform": {
+          "position": [
+            6.2,
+            0,
+            3.4
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "name": "Bush 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -10,
+            0,
+            6
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 48,
+      "name": "Bush 4",
+      "components": {
+        "Transform": {
+          "position": [
+            9,
+            0,
+            4.6
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 49,
+      "name": "Bush 5",
+      "components": {
+        "Transform": {
+          "position": [
+            17.8,
+            0,
+            2
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 50,
+      "name": "Bush 6",
+      "components": {
+        "Transform": {
+          "position": [
+            10,
+            0,
+            -2.4
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 51,
+      "name": "Bush 7",
+      "components": {
+        "Transform": {
+          "position": [
+            -3.5,
+            0,
+            12
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 52,
+      "name": "Bush 8",
+      "components": {
+        "Transform": {
+          "position": [
+            4,
+            0,
+            14
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 53,
+      "name": "Bush 9",
+      "components": {
+        "Transform": {
+          "position": [
+            -13,
+            2,
+            -4.2
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 54,
+      "name": "Bush 10",
+      "components": {
+        "Transform": {
+          "position": [
+            2.5,
+            2,
+            -10.2
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 55,
+      "name": "Bush 11",
+      "components": {
+        "Transform": {
+          "position": [
+            -8,
+            2,
+            -10.4
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/bush.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 56,
+      "name": "Lamp 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -4.6,
+            0,
+            -2.6
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/lamp.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.3,
+            2,
+            0.3
+          ],
+          "center": [
+            0,
+            1,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 57,
+      "name": "Lamp Light 1",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.75,
+            0.45
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.68,
+            0.32
+          ],
+          "intensity": 3.2,
+          "range": 8
+        },
+        "Script": {
+          "path": "scripts/flicker.lua",
+          "params": {
+            "phase": 0.0
+          }
+        }
+      },
+      "parent": 56
+    },
+    {
+      "id": 58,
+      "name": "Lamp 2",
+      "components": {
+        "Transform": {
+          "position": [
+            4.6,
+            0,
+            -2.6
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/lamp.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.3,
+            2,
+            0.3
+          ],
+          "center": [
+            0,
+            1,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 59,
+      "name": "Lamp Light 2",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.75,
+            0.45
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.68,
+            0.32
+          ],
+          "intensity": 3.2,
+          "range": 8
+        },
+        "Script": {
+          "path": "scripts/flicker.lua",
+          "params": {
+            "phase": 1.7
+          }
+        }
+      },
+      "parent": 58
+    },
+    {
+      "id": 60,
+      "name": "Lamp 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -4.6,
+            0,
+            3.4
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/lamp.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.3,
+            2,
+            0.3
+          ],
+          "center": [
+            0,
+            1,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 61,
+      "name": "Lamp Light 3",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.75,
+            0.45
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.68,
+            0.32
+          ],
+          "intensity": 3.2,
+          "range": 8
+        },
+        "Script": {
+          "path": "scripts/flicker.lua",
+          "params": {
+            "phase": 3.4
+          }
+        }
+      },
+      "parent": 60
+    },
+    {
+      "id": 62,
+      "name": "Lamp 4",
+      "components": {
+        "Transform": {
+          "position": [
+            4.6,
+            0,
+            3.4
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/lamp.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.3,
+            2,
+            0.3
+          ],
+          "center": [
+            0,
+            1,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 63,
+      "name": "Lamp Light 4",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.75,
+            0.45
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.68,
+            0.32
+          ],
+          "intensity": 3.2,
+          "range": 8
+        },
+        "Script": {
+          "path": "scripts/flicker.lua",
+          "params": {
+            "phase": 5.1
+          }
+        }
+      },
+      "parent": 62
+    },
+    {
+      "id": 64,
+      "name": "Lamp 5",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.8,
+            0,
+            11
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/lamp.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "size": [
+            0.3,
+            2,
+            0.3
+          ],
+          "center": [
+            0,
+            1,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "billboard"
+        }
+      }
+    },
+    {
+      "id": 65,
+      "name": "Lamp Light 5",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.75,
+            0.45
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.68,
+            0.32
+          ],
+          "intensity": 3.2,
+          "range": 8
+        },
+        "Script": {
+          "path": "scripts/flicker.lua",
+          "params": {
+            "phase": 6.8
+          }
+        }
+      },
+      "parent": 64
+    },
+    {
+      "id": 66,
+      "name": "Elder",
+      "components": {
+        "Transform": {
+          "position": [
+            2.4,
+            0,
+            -1.2
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/npc.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true
+        },
+        "Collider": {
+          "shape": "capsule",
+          "radius": 0.35,
+          "height": 1.4,
+          "center": [
+            0,
+            0.7,
+            0
+          ]
+        },
+        "Tag": {
+          "tags": "elder,billboard"
+        }
+      }
+    },
+    {
+      "id": 67,
+      "name": "Crystal 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -6.5,
+            0.5,
+            1.5
+          ],
+          "rotation": [
+            -35.2,
+            0,
+            0
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/crystal.png",
+          "pixelsPerUnit": 44,
+          "pivotY": 0.5,
+          "lit": false,
+          "castShadows": false,
+          "color": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "Tag": {
+          "tags": "crystal,billboard-camera"
+        },
+        "Script": {
+          "path": "scripts/crystal.lua",
+          "params": {
+            "phase": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": 68,
+      "name": "Crystal Light 1",
+      "components": {
+        "PointLight": {
+          "color": [
+            0.35,
+            0.9,
+            1.0
+          ],
+          "intensity": 1.6,
+          "range": 3.5
+        }
+      },
+      "parent": 67
+    },
+    {
+      "id": 69,
+      "name": "Crystal 2",
+      "components": {
+        "Transform": {
+          "position": [
+            8.5,
+            0.5,
+            -1.2
+          ],
+          "rotation": [
+            -35.2,
+            0,
+            0
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/crystal.png",
+          "pixelsPerUnit": 44,
+          "pivotY": 0.5,
+          "lit": false,
+          "castShadows": false,
+          "color": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "Tag": {
+          "tags": "crystal,billboard-camera"
+        },
+        "Script": {
+          "path": "scripts/crystal.lua",
+          "params": {
+            "phase": 1.3
+          }
+        }
+      }
+    },
+    {
+      "id": 70,
+      "name": "Crystal Light 2",
+      "components": {
+        "PointLight": {
+          "color": [
+            0.35,
+            0.9,
+            1.0
+          ],
+          "intensity": 1.6,
+          "range": 3.5
+        }
+      },
+      "parent": 69
+    },
+    {
+      "id": 71,
+      "name": "Crystal 3",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.5,
+            -8.2
+          ],
+          "rotation": [
+            -35.2,
+            0,
+            0
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/crystal.png",
+          "pixelsPerUnit": 44,
+          "pivotY": 0.5,
+          "lit": false,
+          "castShadows": false,
+          "color": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "Tag": {
+          "tags": "crystal,billboard-camera"
+        },
+        "Script": {
+          "path": "scripts/crystal.lua",
+          "params": {
+            "phase": 2.6
+          }
+        }
+      }
+    },
+    {
+      "id": 72,
+      "name": "Crystal Light 3",
+      "components": {
+        "PointLight": {
+          "color": [
+            0.35,
+            0.9,
+            1.0
+          ],
+          "intensity": 1.6,
+          "range": 3.5
+        }
+      },
+      "parent": 71
+    },
+    {
+      "id": 73,
+      "name": "Crystal 4",
+      "components": {
+        "Transform": {
+          "position": [
+            -11.5,
+            0.5,
+            9.5
+          ],
+          "rotation": [
+            -35.2,
+            0,
+            0
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/crystal.png",
+          "pixelsPerUnit": 44,
+          "pivotY": 0.5,
+          "lit": false,
+          "castShadows": false,
+          "color": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "Tag": {
+          "tags": "crystal,billboard-camera"
+        },
+        "Script": {
+          "path": "scripts/crystal.lua",
+          "params": {
+            "phase": 3.9000000000000004
+          }
+        }
+      }
+    },
+    {
+      "id": 74,
+      "name": "Crystal Light 4",
+      "components": {
+        "PointLight": {
+          "color": [
+            0.35,
+            0.9,
+            1.0
+          ],
+          "intensity": 1.6,
+          "range": 3.5
+        }
+      },
+      "parent": 73
+    },
+    {
+      "id": 75,
+      "name": "Crystal 5",
+      "components": {
+        "Transform": {
+          "position": [
+            16.2,
+            0.5,
+            5.4
+          ],
+          "rotation": [
+            -35.2,
+            0,
+            0
+          ]
+        },
+        "Sprite": {
+          "texture": "assets/textures/crystal.png",
+          "pixelsPerUnit": 44,
+          "pivotY": 0.5,
+          "lit": false,
+          "castShadows": false,
+          "color": [
+            1.5,
+            1.5,
+            1.5
+          ]
+        },
+        "Tag": {
+          "tags": "crystal,billboard-camera"
+        },
+        "Script": {
+          "path": "scripts/crystal.lua",
+          "params": {
+            "phase": 5.2
+          }
+        }
+      }
+    },
+    {
+      "id": 76,
+      "name": "Crystal Light 5",
+      "components": {
+        "PointLight": {
+          "color": [
+            0.35,
+            0.9,
+            1.0
+          ],
+          "intensity": 1.6,
+          "range": 3.5
+        }
+      },
+      "parent": 75
+    },
+    {
+      "id": 77,
+      "name": "Fireflies Pond",
+      "components": {
+        "Transform": {
+          "position": [
+            13.5,
+            1.2,
+            1
+          ]
+        },
+        "ParticleEmitter": {
+          "rate": 5,
+          "lifetime": 5,
+          "speed": 0.35,
+          "spread": 180,
+          "speedVariation": 0.6,
+          "gravity": [
+            0,
+            0.02,
+            0
+          ],
+          "startSize": 0.1,
+          "endSize": 0.03,
+          "startColor": [
+            1.6,
+            1.5,
+            0.5
+          ],
+          "endColor": [
+            0.9,
+            1.3,
+            0.3
+          ],
+          "startOpacity": 0.9,
+          "space": "world",
+          "maxParticles": 40,
+          "blend": "add",
+          "seed": 76
+        }
+      }
+    },
+    {
+      "id": 78,
+      "name": "Fireflies Meadow",
+      "components": {
+        "Transform": {
+          "position": [
+            -9,
+            1.2,
+            5
+          ]
+        },
+        "ParticleEmitter": {
+          "rate": 5,
+          "lifetime": 5,
+          "speed": 0.35,
+          "spread": 180,
+          "speedVariation": 0.6,
+          "gravity": [
+            0,
+            0.02,
+            0
+          ],
+          "startSize": 0.1,
+          "endSize": 0.03,
+          "startColor": [
+            1.6,
+            1.5,
+            0.5
+          ],
+          "endColor": [
+            0.9,
+            1.3,
+            0.3
+          ],
+          "startOpacity": 0.9,
+          "space": "world",
+          "maxParticles": 40,
+          "blend": "add",
+          "seed": 77
+        }
+      }
+    },
+    {
+      "id": 79,
+      "name": "Quest",
+      "components": {
+        "UIText": {
+          "text": "Crystals 0 / 5",
+          "size": 26,
+          "x": 28,
+          "y": 22,
+          "color": [
+            0.75,
+            0.95,
+            1.0
+          ],
+          "outlineWidth": 2,
+          "outlineColor": [
+            0.05,
+            0.04,
+            0.1
+          ]
+        }
+      }
+    },
+    {
+      "id": 80,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "WASD / arrows: walk   Shift: run   E: talk   1: effects   2: depth of field",
+          "size": 18,
+          "anchor": "bottom",
+          "x": 0,
+          "y": -16,
+          "color": [
+            0.9,
+            0.88,
+            0.8
+          ],
+          "outlineWidth": 2,
+          "outlineColor": [
+            0.05,
+            0.04,
+            0.1
+          ]
+        }
+      }
+    },
+    {
+      "id": 81,
+      "name": "Prompt",
+      "components": {
+        "UIText": {
+          "text": "E  Talk",
+          "size": 24,
+          "anchor": "center",
+          "x": 0,
+          "y": 120,
+          "visible": false,
+          "color": [
+            1.0,
+            0.9,
+            0.6
+          ],
+          "outlineWidth": 2,
+          "outlineColor": [
+            0.05,
+            0.04,
+            0.1
+          ]
+        }
+      }
+    },
+    {
+      "id": 82,
+      "name": "Dialog",
+      "components": {
+        "UIPanel": {
+          "anchor": "bottom",
+          "x": 0,
+          "y": -56,
+          "width": 860,
+          "height": 150,
+          "radius": 14,
+          "color": [
+            0.07,
+            0.06,
+            0.16
+          ],
+          "opacity": 0.88,
+          "borderWidth": 2,
+          "borderColor": [
+            0.85,
+            0.72,
+            0.45
+          ],
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 83,
+      "name": "Dialog Name",
+      "components": {
+        "UIText": {
+          "text": "Elder",
+          "size": 22,
+          "x": 26,
+          "y": 16,
+          "bold": true,
+          "color": [
+            1.0,
+            0.82,
+            0.5
+          ]
+        }
+      },
+      "parent": 82
+    },
+    {
+      "id": 84,
+      "name": "Dialog Text",
+      "components": {
+        "UIText": {
+          "text": "",
+          "size": 22,
+          "x": 26,
+          "y": 52,
+          "width": 808,
+          "lineSpacing": 1.2,
+          "color": [
+            0.95,
+            0.94,
+            0.9
+          ]
+        }
+      },
+      "parent": 82
+    }
+  ]
+}

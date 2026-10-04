@@ -1,0 +1,42 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "fx_burst",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Burst",
+      "components": {
+        "Script": {
+          "path": "scripts/fx/burst.lua"
+        },
+        "ParticleEmitter": {
+          "rate": 0,
+          "burst": 0,
+          "loop": false,
+          "lifetime": 0.8,
+          "lifetimeVariation": 0.6,
+          "speed": 4,
+          "speedVariation": 0.7,
+          "drag": 4,
+          "spread": 180,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "startSize": 0.125,
+          "endSize": 0.05,
+          "sizeVariation": 0.6,
+          "space": "world",
+          "dimensions": 2,
+          "texture": "assets/fx/disc.png",
+          "blend": "add",
+          "layer": 12,
+          "maxParticles": 64
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

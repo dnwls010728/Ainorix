@@ -43,6 +43,7 @@ struct Material {
     AlphaMode alphaMode = AlphaMode::Opaque;
     float alphaCutoff = 0.5f;  // Mask: texels below are discarded
     bool doubleSided = false;
+    bool additive = false;     // Blend only: add color * alpha to the target (glows) instead of mixing
     bool unlit = false;
     bool pixelArt = false;     // nearest-neighbour sampling
     float tiling[2] = {1, 1};  // uv = uv * tiling + offset

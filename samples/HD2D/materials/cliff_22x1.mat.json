@@ -1,0 +1,9 @@
+{
+  "baseTexture": "assets/textures/cliff.png",
+  "pixelArt": true,
+  "roughness": 1,
+  "tiling": [
+    22.0,
+    1.0
+  ]
+}

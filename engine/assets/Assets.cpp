@@ -423,6 +423,11 @@ bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::stri
     return true;
 }
 
+bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& height) {
+    int channels = 0;
+    return size <= 0x7fffffff && stbi_info_from_memory(data, static_cast<int>(size), &width, &height, &channels) != 0;
+}
+
 bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
     cgltf_options options{};
     cgltf_data* data = nullptr;
@@ -809,6 +814,8 @@ Json AssetManager::Info(const std::string& path) {
         out["nodes"] = static_cast<int>(graph->instructions.size());
         out["color"] = graph->color;
         out["emissive"] = graph->emissive;
+        out["normal"] = graph->normal;
+        out["offset"] = graph->offset;
         out["uniforms"] = Json::MakeArray();
         for (const std::string& name : graph->uniformNames) out["uniforms"].push(name);
     } else if (kind == "font") {

@@ -1,0 +1,209 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {
+    "lightDirection": [
+      0,
+      1,
+      0,
+      0
+    ],
+    "cameraPosition": [
+      0,
+      3,
+      12,
+      1
+    ],
+    "shadowCut": 0.12,
+    "shadowTint": [
+      0.45,
+      0.37,
+      0.6,
+      1
+    ],
+    "rimStart": 0.78,
+    "rimColor": [
+      0.06,
+      0.15,
+      0.18,
+      0
+    ],
+    "specCut": 0.965,
+    "specColor": [
+      0.14,
+      0.14,
+      0.14,
+      0
+    ]
+  },
+  "nodes": [
+    {
+      "op": "normal"
+    },
+    {
+      "op": "uniform",
+      "name": "lightDirection"
+    },
+    {
+      "op": "uniform",
+      "name": "shadowCut"
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "step",
+      "args": [
+        2,
+        3
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "shadowTint"
+    },
+    {
+      "op": "mix",
+      "args": [
+        6,
+        5,
+        4
+      ]
+    },
+    {
+      "op": "baseColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        8,
+        7
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "cameraPosition"
+    },
+    {
+      "op": "position"
+    },
+    {
+      "op": "subtract",
+      "args": [
+        10,
+        11
+      ]
+    },
+    {
+      "op": "normalize",
+      "args": [
+        12
+      ]
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        13
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        5,
+        14
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "rimStart"
+    },
+    {
+      "op": "step",
+      "args": [
+        16,
+        15
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "rimColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        17,
+        18
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        9,
+        19
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        1,
+        13
+      ]
+    },
+    {
+      "op": "normalize",
+      "args": [
+        21
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "specCut"
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        22
+      ]
+    },
+    {
+      "op": "step",
+      "args": [
+        23,
+        24
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "specColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        25,
+        26
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        20,
+        27
+      ]
+    }
+  ],
+  "color": 28
+}

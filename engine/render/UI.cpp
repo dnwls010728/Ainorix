@@ -489,7 +489,7 @@ public:
         SortSiblings(roots);
         for (EntityId r : roots) {
             const Node& n = nodes_.at(r);
-            Visit(n, Place(n, screen_), Clip{});
+            Visit(n, Place(n, screen_), Clip{}, 1.0f);
         }
     }
 
@@ -719,29 +719,87 @@ private:
         return m;
     }
 
-    // `box` is the node's rectangle (from its parent or a layout).
-    void Visit(const Node& n, const Box& box, const Clip& clip) {
+    // Entrance animation: offset / scale of the node's rectangle and an opacity factor for its subtree.
+    static void ApplyMotion(const UIMotion& m, float s, Box& box, float& alpha) {
+        if (m.enter == "none") return;
+        const float p = Clamp((m.time - m.delay) / std::max(m.duration, 1e-3f), 0.0f, 1.0f);
+        if (p >= 1.0f) return;
+        const float k = 1.0f - (1.0f - p) * (1.0f - p) * (1.0f - p);  // ease out
+        alpha *= std::min(1.0f, p * 2.0f);
+        const float d = m.distance * s * (1.0f - k);
+        if (m.enter == "slide-up") box.y += d;
+        else if (m.enter == "slide-down") box.y -= d;
+        else if (m.enter == "slide-left") box.x += d;
+        else if (m.enter == "slide-right") box.x -= d;
+        else if (m.enter == "pop") {
+            const float c = 1.70158f, q = p - 1.0f;
+            ScaleBox(box, 0.85f + 0.15f * (1.0f + (c + 1.0f) * q * q * q + c * q * q));  // overshoots a little
+        }
+    }
+
+    static void ScaleBox(Box& box, float scale) {
+        const float cx = box.x + box.w * 0.5f, cy = box.y + box.h * 0.5f;
+        box.w *= scale;
+        box.h *= scale;
+        box.x = cx - box.w * 0.5f;
+        box.y = cy - box.h * 0.5f;
+    }
+
+    // `box` is the node's rectangle (from its parent or a layout); `inherit` the opacity factor of animated ancestors.
+    void Visit(const Node& n, Box box, const Clip& clip, float inherit) {
         if (!n.primary->visible) return;
+        if (const UIMotion* motion = scene_.Get<UIMotion>(n.id)) ApplyMotion(*motion, s_, box, inherit);
+        if (n.primary->kind == UIRect::Kind::Button) {
+            const float scale = scene_.Get<UIButton>(n.id)->scaleNow;
+            if (scale != 1.0f) ScaleBox(box, scale);
+        }
+        // A scroll view lays its children out in a rectangle shifted by the scroll offset and clips them.
+        const UILayout* lay = LayoutOf(n);
+        const UIScroll* scroll = scene_.Get<UIScroll>(n.id);
+        Box kidsBox = box;
+        std::map<EntityId, Box> arranged;
+        float extent = 0, offset = 0;
+        bool horizontal = false;
+        if (scroll) {
+            horizontal = scroll->direction == "horizontal";
+            if (lay) arranged = Arrange(n, *lay, box);
+            for (EntityId k : n.kids) {
+                const Node& kid = nodes_.at(k);
+                if (!kid.primary->visible) continue;
+                const Box kb = lay ? arranged[k] : Place(kid, box);
+                extent = std::max(extent, horizontal ? kb.x + kb.w - box.x : kb.y + kb.h - box.y);
+            }
+            if (lay) extent += lay->padding * s_;
+            const float most = std::max(0.0f, extent - (horizontal ? box.w : box.h));
+            offset = Clamp(scroll->scroll * s_, 0.0f, most);
+            (horizontal ? kidsBox.x : kidsBox.y) -= offset;
+            scrollMax_[n.id] = most / s_;
+        }
         const Node* parentNode = n.parent != kNullEntity ? &nodes_.at(n.parent) : nullptr;
         bool inLayout = parentNode && LayoutOf(*parentNode);
         for (const Elem& e : n.elems) {
             if (!e.visible) continue;
             Box b = box;
             if (&e != n.primary && !inLayout) b = PlaceElem(n, e, parentBox_);
-            Emit(n, e, b, Clamp(e.opacity, 0.0f, 1.0f), clip);
+            Emit(n, e, b, Clamp(e.opacity, 0.0f, 1.0f) * inherit, clip);
         }
         Clip kidsClip = clip;
-        if (n.primary->kind == UIRect::Kind::Panel && scene_.Get<UIPanel>(n.id)->clip) kidsClip = clip.Intersect(box);
-        const UILayout* lay = LayoutOf(n);
-        std::map<EntityId, Box> arranged;
-        if (lay) arranged = Arrange(n, *lay, box);
+        if (scroll || (n.primary->kind == UIRect::Kind::Panel && scene_.Get<UIPanel>(n.id)->clip)) kidsClip = clip.Intersect(box);
+        if (lay) arranged = Arrange(n, *lay, kidsBox);
         for (EntityId k : n.kids) {
             const Node& kid = nodes_.at(k);
             Box saved = parentBox_;
-            parentBox_ = box;
-            Box kb = lay ? arranged[k] : Place(kid, box);
-            Visit(kid, kb, kidsClip);
+            parentBox_ = kidsBox;
+            Box kb = lay ? arranged[k] : Place(kid, kidsBox);
+            Visit(kid, kb, kidsClip, inherit);
             parentBox_ = saved;
+        }
+        // Scroll bar thumb: its length shows how much of the content is visible.
+        if (scroll && scroll->bar && quads_ && extent > (horizontal ? box.w : box.h) + 0.5f) {
+            const UIThumb t = ScrollThumb(horizontal ? box.w : box.h, extent, offset, s_);
+            Box thumb = horizontal ? Box{box.x + t.at, box.y + box.h - t.thickness - t.margin, t.length, t.thickness}
+                                   : Box{box.x + box.w - t.thickness - t.margin, box.y + t.at, t.thickness, t.length};
+            AddBox(*quads_, thumb, scroll->barColor, 0.6f * inherit, t.thickness * 0.5f, 0.0f, scroll->barColor, n.id, clip);
         }
     }
 
@@ -758,6 +816,14 @@ private:
             r.parent = n.parent;
             r.opacity = alpha;
             if (e.kind == UIRect::Kind::Button) r.interactable = scene_.Get<UIButton>(n.id)->interactable;
+            if (e.kind == UIRect::Kind::Panel) r.blocksInput = scene_.Get<UIPanel>(n.id)->blockInput;
+            if (&e == n.primary) {
+                if (const UIScroll* sc = scene_.Get<UIScroll>(n.id)) {
+                    r.scroll = true;
+                    r.scrollHorizontal = sc->direction == "horizontal";
+                    r.scrollMax = scrollMax_.count(n.id) ? scrollMax_.at(n.id) : 0.0f;
+                }
+            }
             if (e.kind == UIRect::Kind::Slider) r.interactable = scene_.Get<UISlider>(n.id)->interactable;
             r.clipped = clip.on;
             r.clip[0] = clip.x0;
@@ -899,6 +965,7 @@ private:
     Box parentBox_;
     float s_ = 1.0f;
     std::map<EntityId, Node> nodes_;
+    std::map<EntityId, float> scrollMax_;  // per scroll view, reference pixels
     std::vector<UIRect>* rects_ = nullptr;
     std::vector<UIQuad>* quads_ = nullptr;
 };
@@ -1016,11 +1083,60 @@ void DrawUI(const Scene& scene, RenderTarget& t, AssetManager* assets) {
     }
 }
 
+namespace {
+template <class T>
+bool Shown(const Scene& scene, EntityId id) {
+    const T* c = scene.Get<T>(id);
+    return !c || c->visible;
+}
+// Visible itself and through every ancestor with a UI element.
+bool VisibleInTree(const Scene& scene, EntityId id) {
+    for (int guard = 0; id != kNullEntity && guard < 1000; ++guard) {
+        if (!Shown<UIPanel>(scene, id) || !Shown<UIButton>(scene, id) || !Shown<UIText>(scene, id) || !Shown<UIImage>(scene, id) ||
+            !Shown<UISlider>(scene, id)) return false;
+        const EntityRecord* rec = scene.Record(id);
+        id = rec ? rec->parent : kNullEntity;
+    }
+    return true;
+}
+}  // namespace
+
+UIThumb ScrollThumb(float view, float extent, float offset, float scale) {
+    UIThumb t;
+    t.thickness = 8.0f * scale;
+    t.margin = 3.0f * scale;
+    t.length = std::min(view - 2 * t.margin, std::max(28.0f * scale, view * view / std::max(extent, 1.0f)));
+    t.travel = std::max(0.0f, view - t.length - 2 * t.margin);
+    const float most = extent - view;
+    t.at = t.margin + (most > 0.0f ? t.travel * Clamp(offset / most, 0.0f, 1.0f) : 0.0f);
+    return t;
+}
+
+void UpdateUIMotion(Scene& scene, float dt) {
+    for (auto& kv : scene.Pool<UIMotion>()) {
+        UIMotion& m = kv.second;
+        const bool visible = VisibleInTree(scene, kv.first);
+        if (visible && !m.wasVisible) m.time = 0.0f;
+        else if (visible && m.time < 1e8f) m.time += dt;
+        m.wasVisible = visible;
+    }
+    for (auto& kv : scene.Pool<UIButton>()) {
+        UIButton& b = kv.second;
+        const float target = !b.interactable ? 1.0f : b.pressed ? b.pressedScale : b.hovered ? b.hoverScale : 1.0f;
+        b.scaleNow += (target - b.scaleNow) * std::min(1.0f, dt * 18.0f);
+        if (std::fabs(target - b.scaleNow) < 1e-3f) b.scaleNow = target;
+    }
+}
+
 const UIRect* HitTestUI(const std::vector<UIRect>& rects, float px, float py) {
     const UIRect* hit = nullptr;
     for (const UIRect& r : rects) {
-        if (!r.interactable || px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h) continue;
+        if ((!r.interactable && !r.blocksInput) || px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h) continue;
         if (r.clipped && !(px >= r.clip[0] && px < r.clip[2] && py >= r.clip[1] && py < r.clip[3])) continue;
+        if (r.blocksInput) {  // a modal backdrop: whatever was found under it is out of reach
+            hit = nullptr;
+            continue;
+        }
         hit = &r;  // last = topmost
     }
     return hit;

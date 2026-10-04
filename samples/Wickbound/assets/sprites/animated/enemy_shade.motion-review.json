@@ -1,0 +1,15 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "idle"
+  },
+  "evidence": {
+    "idle": {
+      "sha256": "802020ddf883ff64199cf83eaed0a32b39247f3d3fd972fde2b9ec6895193dd6",
+      "report": "build/wickbound-grok/enemy_shade-wide/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "Continuous floating animation replaces independent full-body pose fitting. Round core remains substantially stable while tips/tufts flow. Idle and movement intentionally use the same floating loop."
+}

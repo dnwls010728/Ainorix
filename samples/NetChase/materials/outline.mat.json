@@ -1,0 +1,9 @@
+{
+  "format": "ownengine.material",
+  "unlit": true,
+  "baseColor": [
+    0.018,
+    0.022,
+    0.04
+  ]
+}

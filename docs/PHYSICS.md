@@ -4,7 +4,7 @@
 
 The backends are hidden behind `engine/physics/PhysicsWorld` (Jolt) and `engine/physics/Physics2D` (Box2D): the components, commands and Lua API below are the engine's own. A world is created only when the scene has bodies for it; events and queries merge both (2D and 3D bodies do not collide with each other; tilemaps collide with both).
 
-Physics runs only while simulating. Each fixed step (1/60 s): **scripts `onUpdate` → built-in systems (PlayerController, …) → physics → collision/trigger callbacks**.
+Physics runs only while simulating. Each fixed step (1/60 s): **scripts `onUpdate` → built-in systems (Animator, ParticleEmitter, SpriteAnimation) → physics → collision/trigger callbacks**.
 
 ## Components
 
@@ -17,7 +17,7 @@ Physics runs only while simulating. Each fixed step (1/60 s): **scripts `onUpdat
 
 `RigidBody.plane2D` restricts a body to the XY plane (rotation around Z only). A `Tilemap` with colliding tiles becomes one static body made of merged boxes (and prisms for slopes, see [2D.md](2D.md)).
 
-`PlayerController` automatically drives a `CharacterBody` when the entity has one (otherwise it falls back to its simple y = 0 ground). Things moved by editing their Transform: statics are teleported, kinematics are moved smoothly, dynamics are teleported and keep their velocity.
+The template's `scripts/player_controller.lua` sets the `CharacterBody` velocity when the entity has one (otherwise it moves the Transform). Things moved by editing their Transform: statics are teleported, kinematics are moved smoothly, dynamics are teleported and keep their velocity.
 
 Example — a crate the player can push, a ball that bounces:
 

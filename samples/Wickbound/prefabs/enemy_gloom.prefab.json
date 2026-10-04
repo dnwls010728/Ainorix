@@ -1,0 +1,171 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "enemy_gloom",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Enemy gloom",
+      "components": {
+        "RigidBody2D": {
+          "gravityScale": 0,
+          "fixedRotation": true,
+          "mass": 1
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.42500000000000004,
+          "friction": 0,
+          "layer": 2,
+          "ignoreLayers": [
+            1,
+            4,
+            5,
+            6,
+            8
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/enemy.lua",
+          "params": {
+            "kind": "gloom"
+          }
+        },
+        "Tag": {
+          "tags": "enemy"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Shadow",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.3400000000000001,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.7650000000000001,
+          "height": 0.2975,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/shadow.png",
+          "opacity": 0.35
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Aura",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 2.125,
+          "height": 2.125,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.6039,
+            0.7529
+          ],
+          "opacity": 0.35,
+          "blend": "add",
+          "order": 1,
+          "visible": false
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.10625000000000001,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 1.4875000000000003,
+          "height": 1.4875000000000003,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 7,
+          "texture": "assets/sprites/enemy_gloom.png",
+          "columns": 1,
+          "rows": 1
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Flash",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.10625000000000001,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 1.2750000000000001,
+          "height": 1.2750000000000001,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "opacity": 0.7,
+          "blend": "add",
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Eyes",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.08500000000000002,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.6800000000000002,
+          "height": 0.17000000000000004,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 21,
+          "texture": "assets/fx/eyes.png",
+          "color": [
+            1.0,
+            0.9412,
+            0.6588
+          ],
+          "visible": false
+        }
+      }
+    }
+  ]
+}

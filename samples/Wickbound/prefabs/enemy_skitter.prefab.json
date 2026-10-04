@@ -1,0 +1,171 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "enemy_skitter",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Enemy skitter",
+      "components": {
+        "RigidBody2D": {
+          "gravityScale": 0,
+          "fixedRotation": true,
+          "mass": 1
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.225,
+          "friction": 0,
+          "layer": 2,
+          "ignoreLayers": [
+            1,
+            4,
+            5,
+            6,
+            8
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/enemy.lua",
+          "params": {
+            "kind": "skitter"
+          }
+        },
+        "Tag": {
+          "tags": "enemy"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Shadow",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.18000000000000002,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.405,
+          "height": 0.1575,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/shadow.png",
+          "opacity": 0.35
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Aura",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 1.125,
+          "height": 1.125,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.6039,
+            0.7529
+          ],
+          "opacity": 0.35,
+          "blend": "add",
+          "order": 1,
+          "visible": false
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.05625,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.7875,
+          "height": 0.7875,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 7,
+          "texture": "assets/sprites/enemy_skitter.png",
+          "columns": 1,
+          "rows": 1
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Flash",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.05625,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.675,
+          "height": 0.675,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "opacity": 0.7,
+          "blend": "add",
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Eyes",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.045000000000000005,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.36000000000000004,
+          "height": 0.09000000000000001,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 21,
+          "texture": "assets/fx/eyes.png",
+          "color": [
+            0.7882,
+            0.9843,
+            1.0
+          ],
+          "visible": false
+        }
+      }
+    }
+  ]
+}

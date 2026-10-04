@@ -55,6 +55,11 @@ uint32_t Blend(uint32_t dst, const Color& src, float a) {
     return Pack(d * (1.0f - a) + src * a);
 }
 
+uint32_t BlendAdd(uint32_t dst, const Color& src, float a) {
+    Color d((dst & 0xFF) / 255.0f, ((dst >> 8) & 0xFF) / 255.0f, ((dst >> 16) & 0xFF) / 255.0f);
+    return Pack(d + src * a);
+}
+
 // ----- Lighting ------------------------------------------------------------------
 
 // Depth map rendered from the first directional light (orthographic).
@@ -169,6 +174,7 @@ struct RasterMaterial {
     const Material* m = nullptr;
     bool flat = false;
     bool blend = false;
+    bool pick = true;  // blended surfaces with alpha >= 0.5 claim the pixel for picking
     EntityId id = kNullEntity;
     float uvOffset[2] = {0, 0};  // item uv rect (sprite frames) applied before the material tiling
     float uvScale[2] = {1, 1};
@@ -284,7 +290,7 @@ private:
                 float z = w0 * s0.z + w1 * s1.z + w2 * s2.z;
                 size_t idx = row + static_cast<size_t>(x);
                 if (z < 0.0f || z >= depth_[idx]) continue;
-                if (!lighting && !(mat.m && mat.m->shader && mat.m->alphaMode == AlphaMode::Mask)) {
+                if (!lighting && !mat.m) {  // depth only, no cut-out
                     depth_[idx] = z;
                     continue;
                 }
@@ -305,6 +311,7 @@ private:
                     alpha *= ta;
                 }
                 Color shaderEmissive(0, 0, 0);
+                Vec3 shaderNormal;  // graph `normal` output; zero = keep the geometric normal
                 if (m.shader) {
                     ShaderInputs input;
                     input.uv = Vec4(u, v, 0, 0);
@@ -323,6 +330,7 @@ private:
                     base = Color(std::max(0.0f, surface.color.x), std::max(0.0f, surface.color.y), std::max(0.0f, surface.color.z));
                     alpha = Clamp(surface.color.w, 0, 1);
                     shaderEmissive = Color(surface.emissive.x, surface.emissive.y, surface.emissive.z);
+                    shaderNormal = surface.normal;
                 }
                 if (m.alphaMode == AlphaMode::Mask && alpha < m.alphaCutoff) continue;  // cut out: no depth, color or id
                 if (!lighting) {
@@ -334,6 +342,7 @@ private:
                 if (!m.unlit) {
                     Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
                     Vec3 ng = mat.flat ? faceN : Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
+                    if (Length(shaderNormal) > 1e-8f) ng = Normalize(shaderNormal);
                     if (backFace) ng = -ng;
                     Vec3 n = ng;
                     if (m.normalTexture) {
@@ -362,9 +371,14 @@ private:
                 out = out + em + shaderEmissive;
                 if (mat.blend) {
                     alpha = Clamp(alpha, 0.0f, 1.0f);
-                    if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(out) * alpha);
-                    else color_[idx] = Blend(color_[idx], out, alpha);
-                    if (alpha >= 0.5f) ids_[idx] = mat.id;
+                    if (m.additive) {  // glow: brightens the target and is never picked
+                        if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] + ClampHdr(out) * alpha);
+                        else color_[idx] = BlendAdd(color_[idx], out, alpha);
+                    } else {
+                        if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(out) * alpha);
+                        else color_[idx] = Blend(color_[idx], out, alpha);
+                        if (alpha >= 0.5f && mat.pick) ids_[idx] = mat.id;
+                    }
                 } else {
                     if (hdr_) hdr_[idx] = ClampHdr(out);
                     else color_[idx] = Pack(out);
@@ -426,6 +440,7 @@ void DrawOutline(RenderTarget& t, EntityId id) {
 
 // Transforms mesh vertices into world space once per item.
 struct Transformed {
+    Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};  // world bounds before graph vertex offsets (shadow fit)
     std::vector<Vec3> wpos;
     std::vector<Vec3> nrm;
     std::vector<Vec4> tan;
@@ -441,6 +456,9 @@ Transformed TransformItem(const RenderItem& item) {
         Mat4 skin = item.VertexSkinMatrix(i);
         Mat4 skinNormal = item.joints.empty() ? Mat4{} : skin.Inverse().Transposed();
         t.wpos[i] = item.world.TransformPoint(skin.TransformPoint(m.positions[i]));
+        const Vec3& p = t.wpos[i];
+        t.lo = Vec3(std::min(t.lo.x, p.x), std::min(t.lo.y, p.y), std::min(t.lo.z, p.z));
+        t.hi = Vec3(std::max(t.hi.x, p.x), std::max(t.hi.y, p.y), std::max(t.hi.z, p.z));
         t.nrm[i] = i < m.normals.size() ? Normalize(item.normalMatrix.TransformDir(skinNormal.TransformDir(m.normals[i]))) : Vec3(0, 1, 0);
         if (i < m.tangents.size()) {
             Vec3 tw = Normalize(item.world.TransformDir(skin.TransformDir(m.tangents[i].xyz())));
@@ -477,7 +495,13 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::vector<Transformed> transformed;
     transformed.reserve(items.size());
     for (const RenderItem& it : items) transformed.push_back(TransformItem(it));
-    const std::vector<DrawCall> draws = BuildDrawList(items, view.eye);
+    const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &gathered);
+    // Vertex stage of shader graphs with an `offset` output (mesh_vs runs the same instructions).
+    for (const DrawCall& dc : draws) {
+        std::vector<Vec3>& wpos = transformed[dc.item].wpos;
+        ForEachVertexOffset(items[dc.item], dc, view.shaderTime,
+                            [&](uint32_t vertex, const Vec3& position, const Vec3& offset) { wpos[vertex] = position + offset; });
+    }
 
     // ----- Shadow map (first directional light, fitted to the shadow casters + receivers)
     if (shadows && !items.empty()) {
@@ -486,11 +510,12 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         for (size_t i = 0; i < items.size(); ++i) {
             if (items[i].unlit) continue;
             anyCaster = anyCaster || items[i].castShadows;
-            for (const Vec3& p : transformed[i].wpos) {
-                lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
-                hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
-            }
+            if (transformed[i].wpos.empty()) continue;
+            const Vec3 &a = transformed[i].lo, &b = transformed[i].hi;
+            lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+            hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
         }
+        ExtendOffsetBounds(items, draws, view.shaderTime, lo, hi);
         if (anyCaster && lo.x <= hi.x) {
             ShadowMap& sm = lighting.shadow;
             sm.enabled = true;
@@ -516,7 +541,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                     const Mesh& m = *items[dc.item].mesh;
                     const Submesh& sub = m.submeshes[dc.submesh];
                     const RenderItem& item = items[dc.item];
-                    const bool surfaceAlpha = dc.material.shader && dc.material.alphaMode == AlphaMode::Mask;
+                    // Cut-outs (textured or graph alpha) shadow only where they are drawn.
+                    const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                     RasterMaterial material;
                     material.m = &dc.material;
                     material.flat = item.flat;
@@ -572,6 +598,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         mat.shaderTime = view.shaderTime;
         mat.flat = it.flat;
         mat.blend = dc.blend;
+        mat.pick = it.pickable;
         mat.id = it.id;
         mat.uvOffset[0] = it.uvOffset[0];
         mat.uvOffset[1] = it.uvOffset[1];
@@ -617,6 +644,52 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         line(Vec3(0, 0, -20), Vec3(0, 0, 20), Color(0.25f, 0.45f, 0.95f), 0.8f);  // Z axis
     }
     for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
+
+    // Depth of field: two separable gather passes over the scene color, matching dof_fs.
+    if (post.dofRadius > 0) {
+        const size_t count = target.color.size();
+        const bool orthographic = view.proj.at(3, 3) == 1.0f;
+        std::vector<float> viewDepth(count), coc(count);
+        for (size_t i = 0; i < count; ++i) {
+            viewDepth[i] = DofViewDepth(target.depth[i], view.proj.at(2, 2), view.proj.at(2, 3), orthographic);
+            coc[i] = DofCoc(post, viewDepth[i]);
+        }
+        std::vector<Color> source = hdr;
+        if (source.empty()) {
+            source.resize(count);
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t c = target.color[i];
+                source[i] = Color(static_cast<float>(c & 255) / 255, static_cast<float>((c >> 8) & 255) / 255,
+                                  static_cast<float>((c >> 16) & 255) / 255);
+            }
+        }
+        std::vector<Color> blurred(count);
+        const int radius = post.dofRadius;
+        for (int stage = 0; stage < 2; ++stage) {
+            ParallelBands(target.height, [&](int, int y0, int y1) {
+                for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                    const size_t center = static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x);
+                    Color sum(0, 0, 0);
+                    float total = 0;
+                    for (int delta = -radius; delta <= radius; ++delta) {
+                        const int qx = stage == 0 ? std::clamp(x + delta, 0, target.width - 1) : x;
+                        const int qy = stage == 0 ? y : std::clamp(y + delta, 0, target.height - 1);
+                        const size_t q = static_cast<size_t>(qy) * static_cast<size_t>(target.width) + static_cast<size_t>(qx);
+                        const float weight = DofWeight(coc[center], viewDepth[center], coc[q], viewDepth[q], std::abs(delta));
+                        sum = sum + source[q] * weight;
+                        total += weight;
+                    }
+                    blurred[center] = sum * (1 / total);
+                }
+            });
+            source.swap(blurred);
+        }
+        if (hdr.empty()) {
+            for (size_t i = 0; i < count; ++i) target.color[i] = Pack(source[i]);
+        } else {
+            hdr.swap(source);
+        }
+    }
 
     std::vector<Color> bloom;
     if (post.bloom > 0) {

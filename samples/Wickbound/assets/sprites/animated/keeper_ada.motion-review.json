@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "walk"
+  },
+  "evidence": {
+    "walk": {
+      "sha256": "bf61ea01c6e7a56c0f24d06acf8209145d62e5c125aff32b4f77baf360292e6a",
+      "report": "build/wickbound-grok/keeper_ada-wide/front_diagonal-walk/loop.report.json"
+    },
+    "idle": {
+      "sha256": "a273775d9d6161f68f4e31cbcbf87cc035861ba0d28958ddbc815a059cf6d759",
+      "report": "build/wickbound-grok/keeper_ada-wide/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "Alternating foot poses and continuous intermediate steps replace the four kick poses. Head/lantern remain substantially stable. Residual small sideways step discontinuity was reported before RIFE installation; physically accurate contact is not certified."
+}

@@ -5,7 +5,9 @@
 AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진입니다. 사람용 에디터와 AI용 인터페이스(CLI · HTTP · MCP)가 **같은 명령 API**를 공유합니다.
 
 - 툰 셰이더 테스트: `samples/WuwaToon` — 공개 명조 커뮤니티 셰이더 자료 참고, 자체 생성 모델, Toon/PBR/노멀 비교·윤곽선·회전. 구현 범위와 출처: [docs/TOON.md](docs/TOON.md)
-- 에디터 보강: 하이어라키 클립보드, 변경 이력, 프리팹 소스 편집, 에셋 썸네일, Windows 파일 대화상자 — [docs/EDITOR.md](docs/EDITOR.md)
+- 완성형 게임 샘플: `samples/Wickbound` — 10분 서바이버 로그라이트(빛이 자원). 프리팹과 엔티티별 스크립트, Box2D 바디·센서·충돌 레이어, `Light2D`/`Darkness2D` 2D 조명, 가산 블렌딩 스프라이트·파티클, 정렬 레이어, 메뉴/런 씬과 UI 계층·모달, `game.pause`, 세이브와 일일 선물(`time.date`), 한/영 텍스트. 실행: `oe run samples/Wickbound`
+- UI: 스크롤 뷰(`UIScroll`), 등장 모션(`UIMotion`), 버튼 호버 스케일, Lua `tween`, 모달 입력 차단 — [docs/UI.md](docs/UI.md)
+- 에디터 보강: 정지 상태 Game 뷰에서 UI 선택·이동·크기 조절, 하이어라키 표시/숨김 토글, 하이어라키 클립보드, 변경 이력, 프리팹 소스 편집, 에셋 썸네일, Windows 파일 대화상자 — [docs/EDITOR.md](docs/EDITOR.md)
 
 ![네이티브 에디터 — Showcase 샘플](docs/images/native-editor.png)
 
@@ -26,6 +28,7 @@ AI가 쉽게 접근하고 검증할 수 있도록 설계한 C++17 게임 엔진�
 - 게임 구성 요소: 프리팹, 씬 전환 + 게임 데이터, 메시지/타이머, 게임 내 UI, 오디오(결정적 믹서, 효과음 생성) — [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 스크립팅 (샌드박스, 핫리로드, 에러에 파일:줄 표시) — [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - 카메라 후처리: 소프트웨어·GPU 노출·HDR Reinhard 톤매핑·블룸·비네트·FXAA 지원, UI와 선택 윤곽선 유지. Showcase 1~6 키로 Off·톤매핑·블룸·비네트·FXAA·전체 효과 선택. `shader.create`·`shader.check`로 셰이더 그래프 생성·검증 가능. 재질 셰이더 그래프의 CPU·GPU 기본 픽셀 실행 지원. 그래프 알파의 그림자·선택 처리 지원. ShaderLab에서 시간 기반 발광·절차적 마스크·그림자 시연, CPU/D3D11·WebGL2 패키지 검증 완료. Android 런타임 갱신·장치 검증 남음 — [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- HD-2D 스프라이트: 프로젝트 스크립트(`samples/HD2D/scripts/billboards.lua`)가 픽셀아트 스프라이트를 라이팅된 3D 월드에서 카메라 쪽으로 돌리고, `Sprite.castShadows`로 이미지 모양의 그림자를 드리우며, `PostProcess` 피사계 심도(`dofRadius`/`dofFocus`/`dofRange`/`dofFalloff`)가 두 렌더러에서 뷰 깊이로 흐림을 적용합니다. samples/HD2D로 시연. 웹·Android 플레이어는 재빌드 필요 — [docs/2D.md](docs/2D.md), [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - 게임패드 입력: 축 6개 API 주입과 Lua `input.axis`, 공통 0.15 데드존, Windows XInput·웹 Gamepad API·Android 매핑, 에디터 Game 뷰와 Platformer/Dungeon 조작. 실제 컨트롤러 검증은 남음 — [docs/INPUT.md](docs/INPUT.md)
 - 웹 멀티터치: Lua `input.touches()`에 모든 손가락 전달, 화면 버튼 동시 조작, 첫 손가락 마우스 호환. 브라우저 합성 이벤트 검증 완료, 모바일 실기기 검증은 남음 — [docs/TOUCH.md](docs/TOUCH.md)
 - 결정적(deterministic) 시뮬레이션과 소프트웨어 렌더러: 같은 입력이면 같은 프레임 해시 → AI가 테스트 오라클로 사용 가능
@@ -102,11 +105,23 @@ Lua `save.get/set/delete/flush` 또는 `save.*` 명령으로 진행 상황을 �
 | 방식 | 명령 |
 |---|---|
 | MCP (Claude Code 등) | `oe mcp <project> [--port 7777]` — 모든 명령이 MCP 도구, 스크린샷은 이미지로 반환. `--port`를 주면 사람이 같은 세션을 에디터로 봄 |
-| 실행 중인 에디터에 붙기 | `oe mcp --connect 7777` |
+| 실행 중인 에디터에 붙기 | `oe mcp --connect 7777` (MCP), 또는 MCP 없이 `oe exec --connect 7777 <command> [json]`, `oe script --connect 7777` |
 | CLI / 스크립트 | `oe exec`, `oe script` (JSON 입출력, 실패 시 exit code 1) |
 | HTTP | `POST /api/call {"command": "...", "args": {...}}` |
 
 이 저장소의 [.mcp.json](.mcp.json)은 Claude Code에서 `samples/Hello` 프로젝트를 MCP 서버로 연결합니다 (먼저 빌드 필요). 에이전트용 작업 가이드는 [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md), 전체 API는 [docs/API.md](docs/API.md), 구조는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), 코드를 고칠 때 지킬 설계 방침(사람·AI 에이전트 공통)은 [docs/DESIGN.md](docs/DESIGN.md)에 있습니다.
+
+### 에이전트 팀
+
+에디터 안에서 여러 AI 에이전트를 팀으로 두고 일을 시킬 수 있습니다. 엔진이 모델 API를 직접 부르지 않고, 이 PC에 설치되어 로그인된 코딩 에이전트 CLI(Claude Code, Codex)를 자식 프로세스로 실행합니다.
+
+- **Team 패널** (보기 > 팀): 에이전트 추가·편집·삭제. 프로필 사진, 설명, 지시문, 사용할 CLI와 모델, 권한(읽기 전용 / 프로젝트 편집 / 전체 권한)을 정합니다. 설치되지 않은 CLI는 선택할 수 없습니다.
+- **Team Chat 패널** (보기 > 팀 채팅): `@이름`으로 에이전트를 부르고, `@all`은 전원, 멘션이 없으면 리드에게 갑니다. 일하는 에이전트는 무엇을 하는지와 **정지** 버튼이 표시됩니다. 파일을 패널에 끌어다 놓으면 첨부되고, `#`으로 프로젝트 파일을 미리 보며 참조합니다. 에이전트가 만든 이미지는 답변 아래에 표시됩니다.
+- 에이전트는 답변에서 `@id`로 팀원에게 일을 넘길 수 있고, 연쇄는 `maxHops`(기본 4)에서 끊깁니다.
+- 에이전트는 열린 에디터를 명령 API로 직접 다루며, 누가 무엇을 바꿨는지 에디터에 표시됩니다.
+- 같은 기능이 전부 명령입니다: `team.add`, `team.send`, `team.state`, `team.messages` 등. 팀 설정과 대화는 `<project>/.oe/team/`에 저장되며 git에 올라가지 않습니다.
+
+현재 Windows에서만 동작합니다. 자세한 내용과 진행 상황: [docs/TEAM.md](docs/TEAM.md)
 
 ## 구조
 
@@ -138,6 +153,8 @@ samples/Showcase 렌더링 샘플 (glTF 여우 캐릭터, 텍스처, 그림자, 
 samples/Dungeon  2D 탑뷰 액션 (Box2D, 자동 연결 타일셋, 밀 수 있는 상자, 마법탄, 슬라임)
 samples/Platformer 2D 횡스크롤 플랫포머 (텍스트 타일맵, 스프라이트 애니메이션, 적, ? 블록, 패럴랙스)
 samples/FPS      1인칭 슈팅 테스트 게임 (마우스 시점, 히트스캔 권총, 재장전, 움직이는 표적, 결과 화면)
+samples/HD2D     HD-2D 테스트 게임 "Lantern Road" (3D 월드의 빌보드 픽셀아트 스프라이트와 그림자, 피사계 심도, 수정, 대화)
+samples/Water     출렁이는 바다 (셰이더 그래프 버텍스 오프셋·노멀 출력, plane64, 파도 위에 뜨는 부표와 배, 잔잔함/너울/폭풍)
 ```
 
-네트워크 샘플: `samples/NetCoop`(lockstep 협동), `samples/NetDuel`(rollback 대전), `samples/NetArena`(서버 권한 대전). 에디터 Players 2로 즉시 실행하거나 게임 내 Host/Join/Ready/Start 버튼 사용. WASD·게임패드·터치 버튼 지원. 실행·WebSocket·Android 검증 가이드: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).
+네트워크 샘플: `samples/NetCoop`(lockstep 협동), `samples/NetDuel`(rollback 대전), `samples/NetArena`(서버 권한 대전), `samples/NetChase`(서버 권한 3인칭 크리스털 경주). 에디터 Players 2로 즉시 실행하거나 게임 내 Host/Join/Ready/Start 버튼 사용. WASD·게임패드·터치 버튼 지원. 실행·WebSocket·Android 검증 가이드: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).

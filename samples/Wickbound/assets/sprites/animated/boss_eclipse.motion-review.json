@@ -1,0 +1,15 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "idle"
+  },
+  "evidence": {
+    "idle": {
+      "sha256": "7c358edac6ea1c2e6996782829e1cff62b8a59033386e6ff3a8dedbc0d97e9d7",
+      "report": "build/wickbound-grok/boss_eclipse-wide/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "The original single-eyed moon identity is retained. Fire crown moves continuously around a substantially stable sphere. Idle/movement share the hover cycle."
+}

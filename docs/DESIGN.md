@@ -51,6 +51,17 @@ task conflict, follow the task but say which rule you broke and why (PR descript
 | CLI-only tooling (packaging, process launching) | `tools/oe/main.cpp`; portable logic it needs (formats, encoders) in `engine/app` or `engine/core` so tests reach it | `oe help` text, README command list |
 | Default project | `templates/default/`, then regenerate `samples/Hello` | `TemplateGamePlaythrough` test |
 
+**Engine or project?** Before adding a component, a field or a system, ask whether a project script
+could do it. Behaviour and presentation choices that Lua can express through the existing API
+(spinning or moving an entity, player controls, sprites that face the camera, spawn patterns, game
+rules) belong to the project: put them in `templates/default/scripts/` when every new game wants them,
+otherwise in the sample that needs them. The engine keeps what scripts cannot do, or what must be
+identical in both renderers and in the deterministic core: rendering, physics, audio, UI layout,
+networking, asset loading, and systems that have to run at a point in the frame scripts cannot reach
+(`CameraFollow` runs after physics). `Rotator`, `Velocity`, `PlayerController` and `Sprite.billboard`
+left the engine under this rule; scene files that still name the three components load without them
+and log a warning (`RemovedComponentHint` in `scene/Scene.cpp`).
+
 Keep one responsibility per file and follow the existing split (e.g. only `PhysicsWorld.cpp` knows
 Jolt, only `Physics2D.cpp` knows Box2D). Before adding a helper, search for an existing one
 (`core/FileSystem.h`, `core/Json.h`, `core/Image.h` (`Fnv1a64`, PNG), `core/Zip.h`, `render/UI.h`).

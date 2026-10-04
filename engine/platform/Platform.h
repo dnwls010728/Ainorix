@@ -38,7 +38,7 @@ struct WindowEvent {
     WindowKey key = WindowKey::None;
     uint32_t codepoint = 0;  // Text: one Unicode character (IME results included)
     bool ctrl = false, shift = false, alt = false, super = false;  // modifier state (Key, MouseButton)
-    std::string path;        // DropFile: UTF-8 path of a file dropped on the window
+    std::string path;        // DropFile: UTF-8 path of a file dropped on the window (x, y: where, client pixels; 0, 0 when unknown)
 };
 
 enum class WindowCursor { Arrow, TextInput, ResizeAll, ResizeNS, ResizeEW, ResizeNESW, ResizeNWSE, Hand, NotAllowed, Hidden };

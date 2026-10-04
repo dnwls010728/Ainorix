@@ -13,6 +13,8 @@ namespace oe {
 struct SyncConfig {
     std::vector<std::string> keys;
     std::array<bool, 6> axes{};
+    // LookX/LookY travel in the RightX/RightY slots (same wire format) but carry InputState::lookX/lookY.
+    std::array<bool, 2> look{};
     uint32_t delay = 2, rollbackFrames = 8, hashInterval = 60, waitFrames = 300;
     bool rollback = false, emptyOnTimeout = false;
     static bool Parse(const Json& network, SyncConfig& out, std::string* error);

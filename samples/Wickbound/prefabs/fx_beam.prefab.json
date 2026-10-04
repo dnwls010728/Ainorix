@@ -1,0 +1,45 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "fx_beam",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Beam fx",
+      "components": {
+        "Script": {
+          "path": "scripts/fx/beam.lua"
+        },
+        "Sprite": {
+          "width": 1,
+          "height": 1,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/beam.png",
+          "blend": "add",
+          "opacity": 0.45
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Core",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 1,
+          "height": 0.3,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/beam.png",
+          "order": 1,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

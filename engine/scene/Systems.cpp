@@ -28,12 +28,6 @@ float InputState::Axis(const std::string& name) const {
 }
 
 namespace {
-float WrapDegrees(float d) {
-    d = std::fmod(d, 360.0f);
-    if (d < 0) d += 360.0f;
-    return d;
-}
-
 float QuaternionDot(const Vec4& a, const Vec4& b) { return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w; }
 
 Vec4 NormalizeQuaternion(const Vec4& q) {
@@ -148,6 +142,7 @@ void UpdateParticles(Scene& scene, float dt) {
         for (Particle& particle : emitter.particles) {
             particle.age += dt;
             particle.velocity += particle.gravity * dt;
+            if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
             particle.position += particle.velocity * dt;
         }
         emitter.particles.erase(std::remove_if(emitter.particles.begin(), emitter.particles.end(),
@@ -212,7 +207,8 @@ bool ParticleSettingsValid(const ParticleEmitter& emitter) {
     auto finiteVector = [](const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
     auto finiteColor = [](const Color& c) { return std::isfinite(c.r) && std::isfinite(c.g) && std::isfinite(c.b); };
     return std::isfinite(emitter.rate) && std::isfinite(emitter.lifetime) && std::isfinite(emitter.speed) &&
-           std::isfinite(emitter.spread) && std::isfinite(emitter.startSize) && std::isfinite(emitter.endSize) &&
+           std::isfinite(emitter.speedVariation) && std::isfinite(emitter.lifetimeVariation) && std::isfinite(emitter.sizeVariation) &&
+           std::isfinite(emitter.drag) && std::isfinite(emitter.spread) && std::isfinite(emitter.startSize) && std::isfinite(emitter.endSize) &&
            std::isfinite(emitter.startOpacity) && std::isfinite(emitter.endOpacity) && finiteVector(emitter.direction) &&
            finiteVector(emitter.gravity) && finiteColor(emitter.startColor) && finiteColor(emitter.endColor);
 }
@@ -238,6 +234,14 @@ int BurstParticles(Scene& scene, EntityId id, int count) {
         particle.lifetime = Clamp(emitter->lifetime, 0.001f, 600);
         particle.startSize = emitter->startSize;
         particle.endSize = emitter->endSize;
+        // Variations draw from the emitter's stream only when used, so emitters without them keep their sequence.
+        auto vary = [&](float variation) { return variation > 0 ? 1.0f - Clamp(variation, 0, 1) * ParticleRandom(*emitter, id) : 1.0f; };
+        particle.velocity = particle.velocity * vary(emitter->speedVariation);
+        particle.lifetime = std::max(0.001f, particle.lifetime * vary(emitter->lifetimeVariation));
+        const float sizeScale = vary(emitter->sizeVariation);
+        particle.startSize *= sizeScale;
+        particle.endSize *= sizeScale;
+        particle.drag = Clamp(emitter->drag, 0, 60);
         particle.startColor = emitter->startColor;
         particle.endColor = emitter->endColor;
         particle.startOpacity = emitter->startOpacity;
@@ -303,63 +307,13 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
     }
 }
 
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets, const std::function<const InputState*(EntityId)>& playerInput) {
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets) {
     if (assets) UpdateAnimators(scene, *assets, dt);
     UpdateParticles(scene, dt);
     UpdateSpriteAnimations(scene, dt);
-    for (auto& kv : scene.Pool<Rotator>()) {
-        if (Transform* t = scene.Get<Transform>(kv.first)) {
-            t->rotation += kv.second.degreesPerSecond * dt;
-            t->rotation = Vec3(WrapDegrees(t->rotation.x), WrapDegrees(t->rotation.y), WrapDegrees(t->rotation.z));
-        }
-    }
-
-    for (auto& kv : scene.Pool<Velocity>()) {
-        if (Transform* t = scene.Get<Transform>(kv.first)) t->position += kv.second.linear * dt;
-    }
-
-    for (auto& kv : scene.Pool<PlayerController>()) {
-        const InputState* selected = playerInput ? playerInput(kv.first) : &input;
-        if (!selected) continue;
-        const auto& controls = *selected;
-        Transform* t = scene.Get<Transform>(kv.first);
-        if (!t) continue;
-        PlayerController& pc = kv.second;
-        CharacterBody* body = scene.Get<CharacterBody>(kv.first);
-        Vec3 move(0, 0, 0);
-        if (controls.IsDown("W") || controls.IsDown("Up")) move.z -= 1;
-        if (controls.IsDown("S") || controls.IsDown("Down")) move.z += 1;
-        if (controls.IsDown("A") || controls.IsDown("Left")) move.x -= 1;
-        if (controls.IsDown("D") || controls.IsDown("Right")) move.x += 1;
-        if (body) {
-            // Physics path: express intent as velocity; the physics step moves
-            // the character, handles walls, slopes, gravity and landing.
-            Vec3 v = Length(move) > 0 ? Normalize(move) * pc.speed : Vec3(0, 0, 0);
-            body->velocity.x = v.x;
-            body->velocity.z = v.z;
-            if (body->grounded && (controls.pressedThisFrame.count("Space") || controls.IsDown("Space"))) body->velocity.y = pc.jumpSpeed;
-            continue;
-        }
-        if (Length(move) > 0) t->position += Normalize(move) * (pc.speed * dt);
-
-        float groundY = 0.5f * t->scale.y;
-        bool grounded = t->position.y <= groundY + 1e-4f;
-        if (grounded && (controls.pressedThisFrame.count("Space") || controls.IsDown("Space")) && pc.verticalVelocity <= 0) {
-            pc.verticalVelocity = pc.jumpSpeed;
-            grounded = false;
-        }
-        if (!grounded || pc.verticalVelocity > 0) {
-            pc.verticalVelocity -= pc.gravity * dt;
-            t->position.y += pc.verticalVelocity * dt;
-            if (t->position.y <= groundY) {
-                t->position.y = groundY;
-                pc.verticalVelocity = 0;
-            }
-        }
-    }
-
     input.pressedThisFrame.clear();
     input.mouseDX = input.mouseDY = 0.0f;
+    input.wheel = 0.0f;
     for (InputState::Touch& t : input.touches) t.began = false;
 }
 

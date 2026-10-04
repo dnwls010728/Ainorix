@@ -67,8 +67,11 @@
           "color": [0.899999976, 0.349999994, 0.25],
           "visible": true
         },
-        "Rotator": {
-          "degreesPerSecond": [20, 60, 0]
+        "Script": {
+          "path": "scripts/rotator.lua",
+          "params": {
+            "degreesPerSecond": [20, 60, 0]
+          }
         }
       }
     },
@@ -86,11 +89,8 @@
           "color": [0.25, 0.550000012, 0.949999988],
           "visible": true
         },
-        "PlayerController": {
-          "speed": 4,
-          "jumpSpeed": 5,
-          "gravity": 12,
-          "verticalVelocity": 0
+        "Script": {
+          "path": "scripts/player_controller.lua"
         },
         "Tag": {
           "tags": "player"
@@ -127,8 +127,11 @@
           "color": [0.286274523, 0.905882359, 1],
           "visible": true
         },
-        "Rotator": {
-          "degreesPerSecond": [0, 70, 0]
+        "Script": {
+          "path": "scripts/rotator.lua",
+          "params": {
+            "degreesPerSecond": [0, 70, 0]
+          }
         }
       }
     }

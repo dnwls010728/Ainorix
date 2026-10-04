@@ -43,7 +43,7 @@ void EntityKindTag(const EntityRow& r) {
     else if (r.Has("AudioSource")) tag = "SND", col = ImVec4(0.6f, 0.85f, 1.0f, 1);
     if (!*tag) return;
     ImGui::SameLine(0, 4);
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.72f);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.78f);
     ImGui::TextColored(col, "%s", tag);
     ImGui::PopFont();
 }
@@ -181,7 +181,7 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
             renaming = kNullEntity;
         }
     } else {
-        open = ImGui::TreeNodeEx("##node", flags, "%s", row.name.c_str());
+        open = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "%s", row.name.c_str());
         if (scrollToRow == row.id) {
             ImGui::SetScrollHereY(0.4f);
             scrollToRow = kNullEntity;
@@ -229,6 +229,30 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
             ImGui::EndPopup();
         }
         EntityKindTag(row);
+        // Eye: shows / hides what the entity draws (its UI element, sprite, mesh or tilemap).
+        {
+            bool shown = true;
+            const std::string type = VisibilityComponent(row.id, &shown);
+            if (!type.empty()) {
+                const float side = ImGui::GetFrameHeight();
+                ImGui::SameLine(ImGui::GetWindowWidth() - side - ImGui::GetStyle().ScrollbarSize);
+                ImGui::SetNextItemAllowOverlap();
+                const ImVec2 p = ImGui::GetCursorScreenPos();
+                if (ImGui::InvisibleButton("##eye", ImVec2(side, side)))
+                    Call("component.set", ObjectOf({{"id", Json(row.id)}, {"type", Json(type)}, {"values", ObjectOf({{"visible", Json(!shown)}})}}));
+                const bool hot = ImGui::IsItemHovered();
+                const ImVec2 c(p.x + side * 0.5f, p.y + side * 0.5f);
+                const ImU32 col = shown ? (hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(190, 196, 208, 200)) : IM_COL32(120, 124, 134, hot ? 255 : 170);
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                // A long name or its tag must not show through the eye: the icon sits on the row's own color.
+                draw->AddRectFilled(ImVec2(p.x - 4.0f, p.y), ImVec2(p.x + side, p.y + side),
+                                    ImGui::GetColorU32(IsSelected(row.id) ? ImGuiCol_Header : ImGuiCol_WindowBg));
+                draw->AddEllipse(c, ImVec2(side * 0.3f, side * 0.18f), col, 0.0f, 0, 1.4f);
+                if (shown) draw->AddCircleFilled(c, side * 0.09f, col);
+                else draw->AddLine(ImVec2(c.x - side * 0.28f, c.y + side * 0.24f), ImVec2(c.x + side * 0.28f, c.y - side * 0.24f), col, 1.4f);
+                HelpTooltip(Tr(shown ? "Visible - click to hide" : "Hidden - click to show"));
+            }
+        }
         // Fading dot on entities an agent (API call) just changed.
         auto edit = remoteEdits.find(row.id);
         if (edit != remoteEdits.end()) {
@@ -238,7 +262,9 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 float r = ImGui::GetFontSize() * 0.22f;
                 int alpha = static_cast<int>(255.0f * (1.0f - age / 4.0f));
-                ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + ImGui::GetFrameHeight() * 0.5f), r, IM_COL32(255, 158, 26, alpha));
+                const auto agentColor = remoteEditColors.find(row.id);  // a team agent's edit: its color
+                const ImU32 dot = agentColor == remoteEditColors.end() ? IM_COL32(255, 158, 26, alpha) : ((agentColor->second & 0x00FFFFFFu) | (static_cast<ImU32>(alpha) << 24));
+                ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + r, p.y + ImGui::GetFrameHeight() * 0.5f), r, dot);
                 ImGui::Dummy(ImVec2(r * 2, ImGui::GetFrameHeight()));
                 HelpTooltip(Tr("Changed through the API (agent) just now"));
             }
@@ -320,7 +346,7 @@ bool NativeEditor::Impl::AssetPicker(const char* popupId, const std::string& kin
         };
         item("", Tr("(none)"));
         if (kind == "model") {
-            for (const char* b : {"cube", "sphere", "plane", "pyramid", "quad"}) item(b, b);
+            for (const char* b : {"cube", "sphere", "plane", "plane64", "pyramid", "quad"}) item(b, b);
             ImGui::Separator();
         }
         if (kind == "font") {
@@ -455,6 +481,16 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
             ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
             std::string popup = "##pick" + field;
             if (ImGui::Button(("..." + label).c_str(), ImVec2(button, 0))) ImGui::OpenPopup(popup.c_str());
+            if (!cur.empty() && showThumbnails && ImGui::IsItemHovered() && (kind == "texture" || kind == "model" || kind == "material" || kind == "prefab")) {
+                // What the field points at, without opening the Assets panel.
+                if (auto image = AssetThumbnail(cur)) {
+                    ImGui::BeginTooltip();
+                    const float side = ImGui::GetFontSize() * 9;
+                    ImGui::Image(ViewTexture(engine.Gpu()->ImageView(image)), ImVec2(side, side));
+                    ImGui::TextUnformatted(cur.c_str());
+                    ImGui::EndTooltip();
+                }
+            } else
             HelpTooltip(Format(Tr("Pick a %s from the project (or drag one from Assets)"), kind.c_str()));
             std::string picked;
             if (AssetPicker(popup.c_str(), kind, cur, picked)) newValue = Json(picked), changed = true;
@@ -533,7 +569,12 @@ void NativeEditor::Impl::InspectorPanel() {
         const Json* typeInfo = typeIt == typeByName.end() ? nullptr : typeIt->second;
         float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        // Section bars are neutral: the accent color is kept for what is selected.
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.215f, 0.235f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.26f, 0.285f, 0.34f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.29f, 0.32f, 0.38f, 1.0f));
         bool open = ImGui::CollapsingHeader(type.c_str(), ImGuiTreeNodeFlags_AllowOverlap);
+        ImGui::PopStyleColor(3);
         if (typeInfo) HelpTooltip((*typeInfo)["doc"].asString(""));
         if (ImGui::BeginPopupContextItem("##compctx")) {
             if (ImGui::MenuItem(Tr("Remove Component"))) removeType = type;
@@ -705,7 +746,7 @@ void NativeEditor::Impl::ConsolePanel() {
         }
         if (!logShow[li]) continue;
         if (!logFilter.empty() && !ContainsNoCase(l.message, logFilter) && !ContainsNoCase(l.category, logFilter)) continue;
-        ImVec4 col = li == 3 ? ImVec4(1, 0.45f, 0.4f, 1) : li == 2 ? ImVec4(0.95f, 0.78f, 0.35f, 1) : li == 0 ? ImVec4(0.55f, 0.58f, 0.63f, 1) : ImVec4(0.85f, 0.87f, 0.9f, 1);
+        ImVec4 col = li == 3 ? ImVec4(1, 0.45f, 0.4f, 1) : li == 2 ? ImVec4(0.95f, 0.78f, 0.35f, 1) : li == 0 ? ImVec4(0.66f, 0.69f, 0.75f, 1) : ImVec4(0.90f, 0.91f, 0.94f, 1);
         ImGui::PushStyleColor(ImGuiCol_Text, col);
         ImGui::TextUnformatted(("[" + l.category + "] " + l.message).c_str());
         ImGui::PopStyleColor();

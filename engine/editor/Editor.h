@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,8 @@ public:
         // Interface language: "en", "ko" or "ja". Empty = the choice saved in
         // layoutFile (View > Language), else the OS language.
         std::string language;
+        // Called once per frame after the simulation tick (the tool updates its agent team here).
+        std::function<void()> onFrame;
     };
 
     NativeEditor(Engine& engine, Window* window, Options options);
@@ -60,6 +63,8 @@ public:
     // Automation (tests, `oe editor --screenshot`).
     void Select(EntityId id);
     EntityId Selected() const;
+    // The Scene view's 2D mode (XY grid, planar gizmo), as its "2D" toggle.
+    void SetSceneView2D(bool on);
     // Opens a project script in the Scripts panel (code editor).
     void OpenScript(const std::string& path);
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
@@ -73,6 +78,29 @@ public:
     bool SetNetworkPlayers(int players);
     // Bring Network diagnostics to the front for automated screenshots.
     void FocusNetworkPanel();
+    // Agent team (shown when the tool registered the team.* commands). Bring the Team panel forward.
+    void FocusTeamPanel();
+    // Open the agent profile dialog for an agent id, or for a new agent (empty id).
+    void EditAgent(const std::string& id);
+    // Choose a backend in the open profile dialog as its combo does; false for a CLI that is
+    // not installed (it cannot be chosen).
+    bool SetAgentBackend(const std::string& backend);
+    // Ask to remove an agent: the confirmation prompt opens.
+    void RemoveAgent(const std::string& id);
+    // Bring the Team Chat panel forward and give its input the keyboard.
+    void FocusTeamChat();
+    // What is typed in the chat input (tests check mention completion).
+    std::string TeamChatInput() const;
+    // The Stop button of the first running agent's line in the chat, in window pixels: x, y,
+    // width, height (zero size when no turn runs).
+    std::array<float, 4> TeamChatStopRect() const;
+    // The Team Chat window in window pixels (a file dropped inside it is attached, not imported).
+    std::array<float, 4> TeamChatRect() const;
+    // Files waiting to be sent with the next chat message.
+    std::vector<std::string> TeamChatAttachments() const;
+    // Open the picture viewer on a project-relative image; which one it shows (empty = closed).
+    void ViewChatImage(const std::string& path);
+    std::string ViewedChatImage() const;
     // Bring undo/redo command history forward for inspection/screenshots.
     void FocusHistoryPanel();
     // Open a source prefab through the same save/discard workflow as the menu.
@@ -86,6 +114,8 @@ public:
     void SetTileBrush(bool paint, char brush);
     // Scene view image in window pixels: x, y, width, height.
     std::array<float, 4> SceneViewRect() const;
+    // Game view image in window pixels: x, y, width, height (UI is edited there while stopped).
+    std::array<float, 4> GameViewRect() const;
     // Last error or notice shown to the user (toast), for tests.
     std::string LastNotice() const;
 
@@ -94,6 +124,10 @@ public:
 private:
     std::unique_ptr<Impl> impl_;
 };
+
+// A built-in agent profile picture (PNG bytes embedded from engine/editor/avatars/); false when
+// there is no picture of that name.
+bool EditorAvatarPreset(const std::string& name, const unsigned char** data, size_t* size);
 
 // Runs the editor in `window` until the user closes it. The caller keeps
 // serving the HTTP/MCP API; posted jobs run inside this loop.

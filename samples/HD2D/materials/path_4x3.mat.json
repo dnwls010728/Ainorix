@@ -1,0 +1,9 @@
+{
+  "baseTexture": "assets/textures/path.png",
+  "pixelArt": true,
+  "roughness": 1,
+  "tiling": [
+    4.0,
+    3.0
+  ]
+}

@@ -51,8 +51,8 @@ const TextEditor::Palette& CodePalette() {
         set(C::punctuation, IM_COL32(171, 178, 191, 255));
         set(C::identifier, IM_COL32(220, 223, 228, 255));
         set(C::knownIdentifier, IM_COL32(97, 175, 239, 255));
-        set(C::comment, IM_COL32(110, 118, 132, 255));
-        set(C::lineNumber, IM_COL32(95, 102, 115, 255));
+        set(C::comment, IM_COL32(142, 152, 168, 255));  // comments are read, not skipped: 6:1 on the background
+        set(C::lineNumber, IM_COL32(124, 132, 148, 255));
         set(C::currentLineNumber, IM_COL32(200, 204, 212, 255));
         set(C::currentLineHighlight, IM_COL32(255, 255, 255, 10));
         set(C::currentLineHighlightBorder, IM_COL32(255, 255, 255, 18));

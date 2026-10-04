@@ -1,0 +1,283 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "enemy_brute",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Enemy brute",
+      "components": {
+        "RigidBody2D": {
+          "gravityScale": 0,
+          "fixedRotation": true,
+          "mass": 1
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.55,
+          "friction": 0,
+          "layer": 2,
+          "ignoreLayers": [
+            1,
+            4,
+            5,
+            6,
+            8
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/enemy.lua",
+          "params": {
+            "kind": "brute"
+          }
+        },
+        "Tag": {
+          "tags": "enemy"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Shadow",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.44000000000000006,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.9900000000000001,
+          "height": 0.385,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/shadow.png",
+          "opacity": 0.35
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Aura",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 2.75,
+          "height": 2.75,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.6039,
+            0.7529
+          ],
+          "opacity": 0.35,
+          "blend": "add",
+          "order": 1,
+          "visible": false
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.1375,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 2.4062500000000004,
+          "height": 2.4062500000000004,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 7,
+          "texture": "assets/sprites/animated/enemy_brute.png",
+          "columns": 8,
+          "rows": 12
+        },
+        "SpriteAnimation": {
+          "clip": "move",
+          "clips": {
+            "idle": {
+              "frames": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                43,
+                44,
+                45,
+                46,
+                47,
+                48,
+                49,
+                50,
+                51,
+                52,
+                53,
+                54,
+                55,
+                56,
+                57,
+                58,
+                59,
+                60,
+                61,
+                62,
+                63
+              ],
+              "fps": 21.331058020477816,
+              "loop": true
+            },
+            "move": {
+              "frames": [
+                64,
+                65,
+                66,
+                67,
+                68,
+                69,
+                70,
+                71,
+                72,
+                73,
+                74,
+                75,
+                76,
+                77,
+                78,
+                79,
+                80,
+                81,
+                82,
+                83,
+                84,
+                85,
+                86,
+                87,
+                88,
+                89,
+                90,
+                91,
+                92,
+                93,
+                94
+              ],
+              "fps": 23.99808015358771,
+              "loop": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Flash",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.1375,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 1.6500000000000001,
+          "height": 1.6500000000000001,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "opacity": 0.7,
+          "blend": "add",
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Eyes",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.11000000000000001,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.8800000000000001,
+          "height": 0.22000000000000003,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 21,
+          "texture": "assets/fx/eyes.png",
+          "color": [
+            1.0,
+            0.7686,
+            0.9255
+          ],
+          "visible": false
+        }
+      }
+    }
+  ]
+}

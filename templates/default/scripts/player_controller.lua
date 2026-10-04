@@ -1,5 +1,5 @@
--- Lua port of the built-in PlayerController component.
--- W/A/S/D or arrow keys move on the XZ plane, Space jumps.
+-- Simple player movement: W/A/S/D or arrow keys move on the XZ plane, Space jumps.
+-- With a CharacterBody the physics engine moves the entity; without one it lands at y = half its height.
 -- params: { "speed": 4, "jumpSpeed": 5, "gravity": 12 }
 local Player = {}
 

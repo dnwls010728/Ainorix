@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "walk"
+  },
+  "evidence": {
+    "walk": {
+      "sha256": "5b2e36f7b99356a615e5474268f9dc82d8960b15b96ea8f8bbbbde853bab32e3",
+      "report": "build/wickbound-grok/keeper_bram-wide/front_diagonal-walk/loop.report.json"
+    },
+    "idle": {
+      "sha256": "a294d675f57dd1050ca245286e51c61060502f9b32e986bfb3a733ef29c0dbe2",
+      "report": "build/wickbound-grok/keeper_bram-wide/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "Continuous shuffling steps preserve the broad body and lantern. Sprite-gen reports 1.17% head displacement at one step; this is recorded as residual motion, not silently treated as perfect registration."
+}

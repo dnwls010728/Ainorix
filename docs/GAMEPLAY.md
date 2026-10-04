@@ -19,6 +19,17 @@ A prefab is an entity tree saved as `prefabs/*.prefab.json` (format `ownengine.p
 
 Game data is a JSON object for cross-scene state (score, lives, unlocked levels): `game.set(key, value)`, `game.get(key)`, `game.get()` (all). Tools read it with `game.state` (also shows the running scene).
 
+## Pausing the game
+
+`game.pause(true)` (Lua) or `game.pause {paused}` (API) freezes the world for a pause menu, a level-up choice or a cutscene
+dialog: physics, built-in systems, particles, timers and `time.now()` stand still, while scripts keep receiving `onUpdate`
+with `dt = 0` and the UI stays clickable — so a dialog script can read keys and call `game.pause(false)`. Scripts that move
+things with `dt` stop by themselves; a script that must do nothing while paused returns early when `dt == 0`. Count frames
+(`time.frame()`) for animations that should run during a pause. `sim.state.gamePaused` shows the state; a scene change or
+`sim.stop` clears it. Network matches should not use it (it is local state, not part of the synchronized simulation).
+
+`time.date()` gives the calendar day for daily rewards; it is not simulation state, and `time.date {set: "2030-01-31"}` pins it in tests.
+
 ## Messages and timers
 
 Progress between launches uses `save.get/set/delete/flush`, independently of game
@@ -75,7 +86,7 @@ WAV files: PCM 8/16/24/32-bit or float, mono/stereo, any sample rate (resampled)
 
 1. Timers, then scripts `onStart` / `onUpdate` (entity id order)
 2. UI pointer: hover, press, slider drags (from this frame's mouse)
-3. Built-in systems (Rotator, Velocity, PlayerController)
+3. Built-in systems (Animator, ParticleEmitter, SpriteAnimation)
 4. Physics step, then `onCollision*` / `onTrigger*`
 5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onValueChanged`
 6. Pending scene change

@@ -1,0 +1,286 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "brazier",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Brazier",
+      "components": {
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 2.25,
+          "isTrigger": true,
+          "layer": 6,
+          "ignoreLayers": [
+            0,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        },
+        "Light2D": {
+          "radius": 1.75,
+          "strength": 0.55
+        },
+        "Script": {
+          "path": "scripts/run/brazier.lua"
+        },
+        "Tag": {
+          "tags": "brazier"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Ring",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 4.625,
+          "height": 4.625,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 2,
+          "texture": "assets/fx/ring_dash.png",
+          "color": [
+            1.0,
+            0.702,
+            0.2784
+          ],
+          "opacity": 0.45
+        },
+        "Script": {
+          "path": "scripts/fx/spin.lua",
+          "params": {
+            "speed": 23
+          }
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Progress",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "scale": [
+            0.001,
+            0.001,
+            1
+          ]
+        },
+        "Sprite": {
+          "width": 4.5,
+          "height": 4.5,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 2,
+          "texture": "assets/fx/disc.png",
+          "order": 1,
+          "color": [
+            1.0,
+            0.702,
+            0.2784
+          ],
+          "opacity": 0.3
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.25,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 1.8,
+          "height": 1.8,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 3,
+          "texture": "assets/sprites/brazier.png",
+          "columns": 1,
+          "rows": 1
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Ember",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.15000000000000002,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 0.7000000000000001,
+          "height": 0.7000000000000001,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 4,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.4784,
+            0.2353
+          ],
+          "opacity": 0.5,
+          "blend": "add"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Beacon",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.15000000000000002,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 1.7000000000000002,
+          "height": 1.7000000000000002,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 21,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "opacity": 0.3,
+          "blend": "add"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Fire",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.25,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 2.3000000000000003,
+          "height": 2.3000000000000003,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 4,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "opacity": 0.9,
+          "blend": "add",
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "FireCore",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.35000000000000003,
+            0
+          ]
+        },
+        "Sprite": {
+          "width": 1.1,
+          "height": 1.1,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 4,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.949,
+            0.6902
+          ],
+          "opacity": 1,
+          "blend": "add",
+          "order": 1,
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Sparks",
+      "parent": 1,
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.30000000000000004,
+            0
+          ]
+        },
+        "ParticleEmitter": {
+          "rate": 15,
+          "lifetime": 0.7,
+          "lifetimeVariation": 0.4,
+          "speed": 2.0,
+          "speedVariation": 0.4,
+          "spread": 12,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "startSize": 0.1,
+          "endSize": 0.025,
+          "startColor": [
+            1.0,
+            0.702,
+            0.2784
+          ],
+          "endColor": [
+            1.0,
+            0.4784,
+            0.2353
+          ],
+          "space": "world",
+          "dimensions": 2,
+          "texture": "assets/fx/disc.png",
+          "blend": "add",
+          "layer": 12,
+          "maxParticles": 24,
+          "playing": false
+        }
+      }
+    }
+  ]
+}

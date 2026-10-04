@@ -1,0 +1,89 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "orb",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Orb",
+      "components": {
+        "Sprite": {
+          "width": 1.8,
+          "height": 1.8,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.4157,
+            0.1647
+          ],
+          "opacity": 0.9,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Core",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.8250000000000001,
+          "height": 0.8250000000000001,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.949,
+            0.6902
+          ],
+          "opacity": 1,
+          "blend": "add",
+          "order": 1
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Trail",
+      "parent": 1,
+      "components": {
+        "ParticleEmitter": {
+          "rate": 24,
+          "lifetime": 0.3,
+          "speed": 0,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "startSize": 0.15000000000000002,
+          "endSize": 0.05,
+          "startColor": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "endColor": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "space": "world",
+          "dimensions": 2,
+          "texture": "assets/fx/disc.png",
+          "blend": "add",
+          "layer": 12,
+          "maxParticles": 12
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

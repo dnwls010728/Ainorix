@@ -46,6 +46,10 @@ the remaining range is rescaled linearly to full scale. Triggers use the same
 dead zone. Applying it at the shared read boundary avoids platform differences
 and allows tests to inject exactly the values a device would produce.
 
+Mouse look is separate from the sticks: a local script stores a look direction with Lua
+`input.setLook(x, y)` (each -1..1, read with `input.look()`), and a network project carries it by
+declaring `LookX`/`LookY` in `network.axes` (no dead zone). See SCRIPTING.md, authoritative gameplay.
+
 input.axis {name, value} injects a raw axis value. It rejects unknown names,
 non-finite values and values outside the axis range. sim.state exposes axes
 (after dead zone) and rawAxes (before dead zone), including all six names.

@@ -22,6 +22,7 @@ namespace {
 constexpr sg_pixel_format kColorFormat = SG_PIXELFORMAT_RGBA8;
 constexpr sg_pixel_format kHdrFormat = SG_PIXELFORMAT_RGBA16F;
 constexpr sg_pixel_format kDepthFormat = SG_PIXELFORMAT_DEPTH;
+constexpr sg_pixel_format kDofDepthFormat = SG_PIXELFORMAT_R32F;  // depth buffer values read by the depth-of-field passes
 constexpr int kMaxDirLights = 4;
 constexpr int kMaxPointLights = 16;
 const Color kOutlineColor(1.0f, 0.62f, 0.1f);
@@ -61,6 +62,7 @@ void PutGraph(oe_mesh_material_t& uniforms, const Material& material, float time
     if (!material.shader) return;
     Put(uniforms.graph_control, static_cast<float>(material.shader->instructions.size()),
         static_cast<float>(material.shader->color), static_cast<float>(material.shader->emissive), time);
+    Put(uniforms.graph_outputs, static_cast<float>(material.shader->normal), 0, 0, 0);
     for (size_t node = 0; node < material.shader->instructions.size(); ++node) {
         const ShaderInstruction& instruction = material.shader->instructions[node];
         Put(uniforms.graph_code[node], static_cast<float>(instruction.op), static_cast<float>(instruction.args[0]),
@@ -70,6 +72,30 @@ void PutGraph(oe_mesh_material_t& uniforms, const Material& material, float time
     for (size_t slot = 0; slot < material.shaderUniforms.size(); ++slot) {
         const Vec4& value = material.shaderUniforms[slot];
         Put(uniforms.graph_uniform[slot], value.x, value.y, value.z, value.w);
+    }
+}
+
+// True when the material's graph moves vertices: its depth, shadow and mask draws need mesh_vs too.
+bool Displaced(const Material& material) { return material.shader && material.shader->offset >= 0; }
+
+// Vertex stage of a graph with an `offset` output: the instructions up to that output.
+void PutVertexGraph(oe_mesh_vs_graph_t& uniforms, const Material& material, const RenderItem& item, float time) {
+    if (!Displaced(material)) return;
+    const ShaderGraph& graph = *material.shader;
+    const size_t count = static_cast<size_t>(graph.offset) + 1;
+    Put(uniforms.vgraph_control, static_cast<float>(count), static_cast<float>(graph.offset), 0, time);
+    Put(uniforms.vgraph_base_color, material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
+    Put(uniforms.vgraph_uv_rect, item.uvOffset[0], item.uvOffset[1], item.uvScale[0], item.uvScale[1]);
+    Put(uniforms.vgraph_uv_tiling, material.tiling[0], material.tiling[1], material.offset[0], material.offset[1]);
+    for (size_t node = 0; node < count; ++node) {
+        const ShaderInstruction& instruction = graph.instructions[node];
+        Put(uniforms.vgraph_code[node], static_cast<float>(instruction.op), static_cast<float>(instruction.args[0]),
+            static_cast<float>(instruction.args[1]), static_cast<float>(instruction.args[2]));
+        Put(uniforms.vgraph_value[node], instruction.value.x, instruction.value.y, instruction.value.z, instruction.value.w);
+    }
+    for (size_t slot = 0; slot < material.shaderUniforms.size(); ++slot) {
+        const Vec4& value = material.shaderUniforms[slot];
+        Put(uniforms.vgraph_uniform[slot], value.x, value.y, value.z, value.w);
     }
 }
 
@@ -205,6 +231,10 @@ struct Targets {
     bool hdr = false;
     bool bloom = false;
     bool fxaa = false;
+    bool dof = false;
+    // Depth of field: single-sample scene depth as a color, then the two blur passes in the scene format.
+    sg_image dofDepth{}, dofHorizontal{}, dofVertical{};
+    sg_view dofDepthAtt{}, dofDepthTex{}, dofHorizontalAtt{}, dofHorizontalTex{}, dofVerticalAtt{}, dofVerticalTex{};
     sg_image sceneMsaa{}, sceneDepth{}, sceneColor{}, maskColor{}, maskDepth{}, output{};
     sg_image bloomHorizontal{}, bloomVertical{};
     sg_image fxaaColor{};
@@ -212,11 +242,11 @@ struct Targets {
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
     sg_view bloomHorizontalAtt{}, bloomHorizontalTex{}, bloomVerticalAtt{}, bloomVerticalTex{};
 
-    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_) const {
-        return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_ && fxaa == fxaa_;
+    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_) const {
+        return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_ && fxaa == fxaa_ && dof == dof_;
     }
 
-    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_) {
         Destroy();
         width = w;
         height = h;
@@ -225,6 +255,7 @@ struct Targets {
         hdr = hdr_;
         bloom = bloom_;
         fxaa = fxaa_;
+        dof = dof_;
         if (fxaa) {
             fxaaColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-fxaa-source");
             fxaaAtt = ColorView(fxaaColor);
@@ -243,6 +274,17 @@ struct Targets {
         sceneDepth = MakeAttachmentImage(w, h, kDepthFormat, msaa, true, false, "oe-scene-depth");
         sceneDepthAtt = DepthView(sceneDepth);
         sceneTex = TextureView(sceneColor);
+        if (dof) {
+            dofDepth = MakeAttachmentImage(w, h, kDofDepthFormat, 1, false, false, "oe-dof-depth");
+            dofDepthAtt = ColorView(dofDepth);
+            dofDepthTex = TextureView(dofDepth);
+            dofHorizontal = MakeAttachmentImage(w, h, sceneFormat, 1, false, false, "oe-dof-horizontal");
+            dofHorizontalAtt = ColorView(dofHorizontal);
+            dofHorizontalTex = TextureView(dofHorizontal);
+            dofVertical = MakeAttachmentImage(w, h, sceneFormat, 1, false, false, "oe-dof-vertical");
+            dofVerticalAtt = ColorView(dofVertical);
+            dofVerticalTex = TextureView(dofVertical);
+        }
         if (bloom) {
             bloomHorizontal = MakeAttachmentImage(w, h, kHdrFormat, 1, false, false, "oe-bloom-horizontal");
             bloomHorizontalAtt = ColorView(bloomHorizontal);
@@ -266,10 +308,12 @@ struct Targets {
     void Destroy() {
         if (width == 0) return;
         for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex,
-                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex}) {
+                          bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex,
+                          dofDepthAtt, dofDepthTex, dofHorizontalAtt, dofHorizontalTex, dofVerticalAtt, dofVerticalTex}) {
             if (v.id) sg_destroy_view(v);
         }
-        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor}) {
+        for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor,
+                           dofDepth, dofHorizontal, dofVertical}) {
             if (i.id) sg_destroy_image(i);
         }
         *this = Targets();
@@ -289,8 +333,8 @@ struct GpuRenderer::Impl {
     AssetManager* assets;
     Settings settings;
 
-    sg_pipeline meshPips[2][2]{};  // [blend][double sided]
-    sg_pipeline hdrMeshPips[2][2]{};
+    sg_pipeline meshPips[3][2]{};  // [0 opaque, 1 alpha blend, 2 additive][double sided]
+    sg_pipeline hdrMeshPips[3][2]{};
     sg_pipeline hdrLinePip{};
     sg_pipeline bloomPip{};
     sg_shader bloomShd{};
@@ -300,6 +344,10 @@ struct GpuRenderer::Impl {
     sg_shader meshShd{}, shadowShd{}, solidShd{}, lineShd{}, compositeShd{}, uiShd{};
     sg_shader surfaceAuxShd{};
     sg_pipeline surfaceShadow[2]{}, surfaceMask[2][2]{};
+    // Depth of field: scene depth as color [double sided] (plain and cut-out surfaces), blur [0 RGBA8, 1 HDR].
+    sg_shader sceneDepthShd{}, dofShd{};
+    sg_pipeline sceneDepthPip[2]{}, surfaceDepthPip[2]{}, dofPip[2]{};
+    bool dofSupported = false;
     sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
@@ -324,11 +372,14 @@ struct GpuRenderer::Impl {
         compositeShd = sg_make_shader(oe_composite_shader_desc(backend));
         uiShd = sg_make_shader(oe_ui_shader_desc(backend));
         bloomShd = sg_make_shader(oe_bloom_shader_desc(backend));
+        sceneDepthShd = sg_make_shader(oe_scene_depth_shader_desc(backend));
+        dofShd = sg_make_shader(oe_dof_shader_desc(backend));
 
         const int msaa = settings.msaa;
         const sg_pixelformat_info hdrInfo = sg_query_pixelformat(kHdrFormat);
         hdrSupported = hdrInfo.render && hdrInfo.blend && hdrInfo.filter;
         hdrSamples = hdrInfo.msaa ? msaa : 1;
+        dofSupported = sg_query_pixelformat(kDofDepthFormat).render;
         if (hdrSupported) {
             sg_pipeline_desc d{};
             d.shader = bloomShd;
@@ -350,7 +401,7 @@ struct GpuRenderer::Impl {
             c.blend.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
         };
         // Opaque/cut-out surfaces write depth; transparent ones blend and only test it.
-        for (int blend = 0; blend < 2; ++blend) {
+        for (int blend = 0; blend < 3; ++blend) {
             for (int twoSided = 0; twoSided < 2; ++twoSided) {
                 sg_pipeline_desc d{};
                 d.shader = meshShd;
@@ -367,6 +418,11 @@ struct GpuRenderer::Impl {
                 d.depth.write_enabled = blend == 0;
                 d.colors[0].pixel_format = kColorFormat;
                 if (blend) alphaBlend(d.colors[0]);
+                if (blend == 2) {  // additive: color * alpha on top, target alpha untouched
+                    d.colors[0].blend.dst_factor_rgb = SG_BLENDFACTOR_ONE;
+                    d.colors[0].blend.src_factor_alpha = SG_BLENDFACTOR_ZERO;
+                    d.colors[0].blend.dst_factor_alpha = SG_BLENDFACTOR_ONE;
+                }
                 d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
                 d.face_winding = SG_FACEWINDING_CCW;
                 d.sample_count = msaa;
@@ -442,6 +498,12 @@ struct GpuRenderer::Impl {
             d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_FRONT;
             d.label = "oe-surface-shadow";
             surfaceShadow[twoSided] = sg_make_pipeline(&d);
+            if (dofSupported) {
+                d.colors[0].pixel_format = kDofDepthFormat;
+                d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
+                d.label = "oe-surface-depth";
+                surfaceDepthPip[twoSided] = sg_make_pipeline(&d);
+            }
             d.colors[0].pixel_format = kColorFormat;
             d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
             for (int stage = 0; stage < 2; ++stage) {
@@ -449,6 +511,29 @@ struct GpuRenderer::Impl {
                 d.colors[0].write_mask = stage == 0 ? SG_COLORMASK_NONE : SG_COLORMASK_RGBA;
                 d.label = "oe-surface-mask";
                 surfaceMask[stage][twoSided] = sg_make_pipeline(&d);
+            }
+        }
+        if (dofSupported) {
+            for (int twoSided = 0; twoSided < 2; ++twoSided) {
+                sg_pipeline_desc d{};
+                positionOnly(d);
+                d.shader = sceneDepthShd;
+                d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
+                d.depth.write_enabled = true;
+                d.colors[0].pixel_format = kDofDepthFormat;
+                d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
+                d.label = "oe-scene-depth";
+                sceneDepthPip[twoSided] = sg_make_pipeline(&d);
+            }
+            for (int hdr = 0; hdr < 2; ++hdr) {
+                if (hdr && !hdrSupported) continue;
+                sg_pipeline_desc d{};
+                d.shader = dofShd;
+                d.depth.pixel_format = SG_PIXELFORMAT_NONE;
+                d.colors[0].pixel_format = hdr ? kHdrFormat : kColorFormat;
+                d.sample_count = 1;
+                d.label = "oe-dof";
+                dofPip[hdr] = sg_make_pipeline(&d);
             }
         }
         {
@@ -574,8 +659,12 @@ struct GpuRenderer::Impl {
         if (hdr && !hdrSupported) {
             throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
         }
-        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa))
-            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa);
+        const bool dof = post.dofRadius > 0;
+        if (dof && !dofSupported) {
+            throw std::runtime_error("GPU depth of field requires renderable R32F targets; use the software renderer on this device.");
+        }
+        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa, dof))
+            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa, dof);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -728,7 +817,7 @@ struct GpuRenderer::Impl {
     // Draws `scene` into `t` (scene + mask images) and composites into the
     // output: the offscreen output image or the window swapchain.
     void ApplySurface(const DrawCall& draw, const RenderItem& item, const GpuMesh& mesh,
-                      const Mat4& viewProj, float time, float cutoff) {
+                      const Mat4& viewProj, float time, float cutoff, bool depthOut = false) {
         const Material& material = draw.material;
         oe_mesh_vs_params_t vertex{};
         Put(vertex.view_proj, viewProj);
@@ -736,6 +825,9 @@ struct GpuRenderer::Impl {
         Put(vertex.normal_mat, item.normalMatrix);
         for (size_t j = 0; j < item.joints.size(); ++j) Put(vertex.joint_palette[j], item.joints[j]);
         sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
+        oe_mesh_vs_graph_t vertexGraph{};
+        PutVertexGraph(vertexGraph, material, item, time);
+        sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vertexGraph));
         oe_mesh_material_t uniforms{};
         const sg_view texture = TextureFor(material.baseTexture);
         Put(uniforms.base_color, material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
@@ -743,6 +835,7 @@ struct GpuRenderer::Impl {
         Put(uniforms.uv_rect, item.uvOffset[0], item.uvOffset[1], item.uvScale[0], item.uvScale[1]);
         Put(uniforms.uv_tiling, material.tiling[0], material.tiling[1], material.offset[0], material.offset[1]);
         Put(uniforms.emissive, 0, 0, 0, item.flat ? 1.0f : 0.0f);
+        Put(uniforms.color_range, 0, depthOut ? 1.0f : 0.0f, 0, 0);
         PutGraph(uniforms, material, time);
         sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(uniforms));
         sg_bindings bindings{};
@@ -759,7 +852,7 @@ struct GpuRenderer::Impl {
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
         RenderLights lights = GatherRenderLights(scene);
-        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye);
+        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights);
         std::vector<const GpuMesh*> gpuMeshes;
         gpuMeshes.reserve(items.size());
         for (const RenderItem& it : items) {
@@ -785,6 +878,7 @@ struct GpuRenderer::Impl {
                     hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
                 }
             }
+            ExtendOffsetBounds(items, draws, view.shaderTime, lo, hi);
             if (anyCaster && lo.x <= hi.x) {
                 shadows = true;
                 fit = FitShadow(lo, hi, lights.dirs[0].dir, settings.shadowMapSize);
@@ -802,9 +896,10 @@ struct GpuRenderer::Impl {
             for (const DrawCall& dc : draws) {
                 const RenderItem& it = items[dc.item];
                 if (!it.castShadows || it.unlit || dc.blend) continue;  // transparent surfaces cast no shadow
-                if (dc.material.shader && dc.material.alphaMode == AlphaMode::Mask) {
+                const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+                if (cutout || Displaced(dc.material)) {
                     sg_apply_pipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
-                    ApplySurface(dc, it, *gpuMeshes[dc.item], fit.viewProj, view.shaderTime, dc.material.alphaCutoff);
+                    ApplySurface(dc, it, *gpuMeshes[dc.item], fit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
                     const Submesh& sub = it.mesh->submeshes[dc.submesh];
                     sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
                     current = -1;
@@ -908,8 +1003,8 @@ struct GpuRenderer::Impl {
             for (const DrawCall& dc : draws) {
                 const RenderItem& it = items[dc.item];
                 const Material& m = dc.material;
-                sg_pipeline pip = t.hdr ? hdrMeshPips[dc.blend ? 1 : 0][m.doubleSided ? 1 : 0]
-                                        : meshPips[dc.blend ? 1 : 0][m.doubleSided ? 1 : 0];
+                const int blendMode = dc.blend ? (m.additive ? 2 : 1) : 0;
+                sg_pipeline pip = t.hdr ? hdrMeshPips[blendMode][m.doubleSided ? 1 : 0] : meshPips[blendMode][m.doubleSided ? 1 : 0];
                 if (pip.id != current.id) {
                     sg_apply_pipeline(pip);
                     sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
@@ -921,6 +1016,9 @@ struct GpuRenderer::Impl {
                 Put(vu.normal_mat, it.normalMatrix);
                 for (size_t j = 0; j < it.joints.size(); ++j) Put(vu.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
+                oe_mesh_vs_graph_t vg{};
+                PutVertexGraph(vg, m, it, view.shaderTime);
+                sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vg));
                 sg_view base = TextureFor(m.baseTexture);
                 sg_view normal = m.unlit ? sg_view{} : TextureFor(m.normalTexture);
                 sg_view mr = m.unlit ? sg_view{} : TextureFor(m.metallicRoughnessTexture);
@@ -968,6 +1066,66 @@ struct GpuRenderer::Impl {
             sg_end_pass();
         }
 
+        // ----- Depth of field: the depth of opaque and cut-out surfaces as a color (single sample;
+        // transparent surfaces write no depth, as in the scene pass), then two blur passes.
+        const PostProcess post = NormalizePostProcess(view.postProcess);
+        if (t.dof) {
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
+            pass.action.colors[0].clear_value = {1, 0, 0, 1};
+            pass.action.depth.load_action = SG_LOADACTION_CLEAR;
+            pass.action.depth.clear_value = 1.0f;
+            pass.attachments.colors[0] = t.dofDepthAtt;
+            pass.attachments.depth_stencil = t.maskDepthAtt;
+            pass.label = "oe-dof-depth";
+            sg_begin_pass(&pass);
+            for (const DrawCall& dc : draws) {
+                if (dc.blend) continue;
+                const RenderItem& it = items[dc.item];
+                const Submesh& sub = it.mesh->submeshes[dc.submesh];
+                const int twoSided = dc.material.doubleSided ? 1 : 0;
+                const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+                if (cutout || Displaced(dc.material)) {
+                    sg_apply_pipeline(surfaceDepthPip[twoSided]);
+                    ApplySurface(dc, it, *gpuMeshes[dc.item], viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
+                } else {
+                    sg_apply_pipeline(sceneDepthPip[twoSided]);
+                    oe_pos_vs_params_t u{};
+                    Put(u.mvp, viewProj * it.world);
+                    for (size_t j = 0; j < it.joints.size(); ++j) Put(u.joint_palette[j], it.joints[j]);
+                    sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                    sg_bindings b{};
+                    b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
+                    b.index_buffer = gpuMeshes[dc.item]->ibuf;
+                    sg_apply_bindings(&b);
+                }
+                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+            }
+            sg_end_pass();
+            for (int stage = 0; stage < 2; ++stage) {
+                sg_pass blur{};
+                blur.action.colors[0].load_action = SG_LOADACTION_DONTCARE;
+                blur.attachments.colors[0] = stage == 0 ? t.dofHorizontalAtt : t.dofVerticalAtt;
+                blur.label = stage == 0 ? "oe-dof-horizontal" : "oe-dof-vertical";
+                sg_begin_pass(&blur);
+                sg_apply_pipeline(dofPip[t.hdr ? 1 : 0]);
+                oe_dof_params_t du{};
+                Put(du.dof_lens, static_cast<float>(post.dofRadius), post.dofFocus, post.dofRange, post.dofFalloff);
+                Put(du.dof_proj, view.proj.at(2, 2), view.proj.at(2, 3), view.proj.at(3, 3) == 1.0f ? 1.0f : 0.0f, static_cast<float>(stage));
+                sg_apply_uniforms(UB_oe_dof_params, SG_RANGE(du));
+                sg_bindings b{};
+                b.views[VIEW_oe_dof_source_tex] = stage == 0 ? t.sceneTex : t.dofHorizontalTex;
+                b.views[VIEW_oe_dof_depth_tex] = t.dofDepthTex;
+                b.samplers[SMP_oe_dof_source_smp] = nearestClamp;
+                b.samplers[SMP_oe_dof_depth_smp] = nearestClamp;
+                sg_apply_bindings(&b);
+                sg_draw(0, 3, 1);
+                sg_end_pass();
+            }
+        }
+        // Scene color the later effects read: blurred when depth of field is on.
+        const sg_view sceneSource = t.dof ? t.dofVerticalTex : t.sceneTex;
+
         // ----- Selection mask (editor): visible pixels of the highlighted entity
         bool outline = false;
         if (view.highlight != kNullEntity) {
@@ -995,7 +1153,7 @@ struct GpuRenderer::Impl {
                         if (stage == 1 && items[i].id != view.highlight) continue;
                         bool surfaceAlpha = false;
                         for (const DrawCall& draw : draws) if (draw.item == i && draw.material.shader)
-                            surfaceAlpha = surfaceAlpha || draw.blend || draw.material.alphaMode == AlphaMode::Mask;
+                            surfaceAlpha = surfaceAlpha || draw.blend || draw.material.alphaMode == AlphaMode::Mask || Displaced(draw.material);
                         if (surfaceAlpha) {
                             for (const DrawCall& draw : draws) {
                                 if (draw.item != i) continue;
@@ -1062,7 +1220,6 @@ struct GpuRenderer::Impl {
         }
         bool haveUI = ui.Write(uiVerts.data(), uiVerts.size() * sizeof(UIVertex));
 
-        const PostProcess post = NormalizePostProcess(view.postProcess);
         // Two separable passes: horizontal highlight extraction/blur, then vertical
         // blur. UI and the selection mask are never sampled for bloom.
         if (t.bloom) for (int stage = 0; stage < 2; ++stage) {
@@ -1076,7 +1233,7 @@ struct GpuRenderer::Impl {
             Put(bu.bloom_filter, static_cast<float>(post.bloomRadius), post.bloomThreshold, static_cast<float>(stage), 0);
             sg_apply_uniforms(UB_oe_bloom_params, SG_RANGE(bu));
             sg_bindings b{};
-            b.views[VIEW_oe_bloom_source_tex] = stage == 0 ? t.sceneTex : t.bloomHorizontalTex;
+            b.views[VIEW_oe_bloom_source_tex] = stage == 0 ? sceneSource : t.bloomHorizontalTex;
             b.samplers[SMP_oe_bloom_source_smp] = nearestClamp;
             sg_apply_bindings(&b);
             sg_draw(0, 3, 1);
@@ -1098,7 +1255,7 @@ struct GpuRenderer::Impl {
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
-            b.views[VIEW_oe_scene_tex] = t.sceneTex;
+            b.views[VIEW_oe_scene_tex] = sceneSource;
             b.views[VIEW_oe_mask_tex] = whiteTex;
             b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
             b.samplers[SMP_oe_scene_smp] = linearClamp;
@@ -1128,7 +1285,7 @@ struct GpuRenderer::Impl {
                 1.0f / static_cast<float>(t.width), 1.0f / static_cast<float>(t.height));
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
-            b.views[VIEW_oe_scene_tex] = t.fxaa ? t.fxaaTex : t.sceneTex;
+            b.views[VIEW_oe_scene_tex] = t.fxaa ? t.fxaaTex : sceneSource;
             b.views[VIEW_oe_mask_tex] = outline ? t.maskTex : whiteTex;
             b.views[VIEW_oe_bloom_tex] = t.bloom ? t.bloomVerticalTex : whiteTex;
             b.samplers[SMP_oe_scene_smp] = linearClamp;

@@ -1,0 +1,1445 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Sea",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -24,
+            150,
+            0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.9,
+            0.76
+          ],
+          "intensity": 1.5,
+          "ambient": [
+            0.3,
+            0.4,
+            0.52
+          ],
+          "shadowStrength": 0.6
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Focus",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.4,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            4.6,
+            13.5
+          ],
+          "rotation": [
+            -17,
+            0,
+            0
+          ]
+        },
+        "Camera": {
+          "fov": 45,
+          "nearPlane": 0.3,
+          "farPlane": 200,
+          "clearColor": [
+            0.45,
+            0.7,
+            1.0
+          ]
+        },
+        "CameraFollow": {
+          "target": 2,
+          "offset": [
+            0,
+            4.2,
+            13.5
+          ],
+          "smoothing": 0
+        },
+        "PostProcess": {
+          "exposure": 1.25,
+          "toneMapping": "reinhard",
+          "bloom": 0.35,
+          "bloomThreshold": 1.1,
+          "bloomRadius": 8
+        },
+        "Script": {
+          "path": "scripts/orbit.lua"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Water",
+      "components": {
+        "Transform": {
+          "scale": [
+            44,
+            1,
+            44
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane64",
+          "material": "materials/water.mat.json",
+          "castShadows": false
+        },
+        "Script": {
+          "path": "scripts/ocean.lua"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Island",
+      "components": {
+        "Transform": {
+          "position": [
+            -5,
+            -0.9,
+            -4
+          ],
+          "scale": [
+            9,
+            3.2,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.84,
+            0.74,
+            0.52
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Rock A",
+      "components": {
+        "Transform": {
+          "position": [
+            -8.2,
+            0.1,
+            -1.4
+          ],
+          "scale": [
+            1.9,
+            1.5,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.42,
+            0.43,
+            0.46
+          ],
+          "shading": "flat"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Rock B",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.2,
+            0.0,
+            -7.6
+          ],
+          "scale": [
+            1.4,
+            1.2,
+            1.7
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.42,
+            0.43,
+            0.46
+          ],
+          "shading": "flat"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Rock C",
+      "components": {
+        "Transform": {
+          "position": [
+            6.5,
+            -0.1,
+            -6.5
+          ],
+          "scale": [
+            2.4,
+            1.6,
+            2.0
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.42,
+            0.43,
+            0.46
+          ],
+          "shading": "flat"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Rock D",
+      "components": {
+        "Transform": {
+          "position": [
+            8.3,
+            -0.2,
+            -5.2
+          ],
+          "scale": [
+            1.2,
+            0.9,
+            1.1
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.42,
+            0.43,
+            0.46
+          ],
+          "shading": "flat"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Lighthouse 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -5.2,
+            1.25,
+            -4.2
+          ],
+          "scale": [
+            1.1,
+            1.1,
+            1.1
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.92,
+            0.92,
+            0.9
+          ]
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Lighthouse 2",
+      "components": {
+        "Transform": {
+          "position": [
+            -5.2,
+            2.3,
+            -4.2
+          ],
+          "scale": [
+            0.9500000000000001,
+            1.0,
+            0.9500000000000001
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.82,
+            0.2,
+            0.18
+          ]
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Lighthouse 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -5.2,
+            3.25,
+            -4.2
+          ],
+          "scale": [
+            0.8,
+            0.9,
+            0.8
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.92,
+            0.92,
+            0.9
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Lamp",
+      "components": {
+        "Transform": {
+          "position": [
+            -5.2,
+            4.0,
+            -4.2
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            1.0,
+            0.92,
+            0.6
+          ],
+          "unlit": true,
+          "castShadows": false
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.85,
+            0.5
+          ],
+          "intensity": 2.2,
+          "range": 9
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Lighthouse Roof",
+      "components": {
+        "Transform": {
+          "position": [
+            -5.2,
+            4.55,
+            -4.2
+          ],
+          "scale": [
+            1.0,
+            0.6,
+            1.0
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "pyramid",
+          "color": [
+            0.25,
+            0.27,
+            0.32
+          ]
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Pier Plank 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.6,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Pier Plank 2",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.9800000000000001,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Pier Plank 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.3600000000000001,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Pier Plank 4",
+      "components": {
+        "Transform": {
+          "position": [
+            0.2599999999999998,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Pier Plank 5",
+      "components": {
+        "Transform": {
+          "position": [
+            0.8799999999999999,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Pier Plank 6",
+      "components": {
+        "Transform": {
+          "position": [
+            1.5,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "Pier Plank 7",
+      "components": {
+        "Transform": {
+          "position": [
+            2.1199999999999997,
+            0.62,
+            -2.3
+          ],
+          "scale": [
+            0.56,
+            0.08,
+            1.3
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.5,
+            0.34,
+            0.2
+          ]
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "Pier Post 1a",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.5,
+            -0.1,
+            -2.85
+          ],
+          "scale": [
+            0.14,
+            1.5,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.36,
+            0.25,
+            0.16
+          ]
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "Pier Post 1b",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.5,
+            -0.1,
+            -1.75
+          ],
+          "scale": [
+            0.14,
+            1.5,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.36,
+            0.25,
+            0.16
+          ]
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Pier Post 2a",
+      "components": {
+        "Transform": {
+          "position": [
+            0.4,
+            -0.1,
+            -2.85
+          ],
+          "scale": [
+            0.14,
+            1.5,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.36,
+            0.25,
+            0.16
+          ]
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "Pier Post 2b",
+      "components": {
+        "Transform": {
+          "position": [
+            0.4,
+            -0.1,
+            -1.75
+          ],
+          "scale": [
+            0.14,
+            1.5,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.36,
+            0.25,
+            0.16
+          ]
+        }
+      }
+    },
+    {
+      "id": 26,
+      "name": "Pier Post 3a",
+      "components": {
+        "Transform": {
+          "position": [
+            2.2,
+            -0.1,
+            -2.85
+          ],
+          "scale": [
+            0.14,
+            1.5,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.36,
+            0.25,
+            0.16
+          ]
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "Pier Post 3b",
+      "components": {
+        "Transform": {
+          "position": [
+            2.2,
+            -0.1,
+            -1.75
+          ],
+          "scale": [
+            0.14,
+            1.5,
+            0.14
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.36,
+            0.25,
+            0.16
+          ]
+        }
+      }
+    },
+    {
+      "id": 28,
+      "name": "Buoy 1",
+      "components": {
+        "Transform": {
+          "position": [
+            3.6,
+            0,
+            2.4
+          ]
+        },
+        "Script": {
+          "path": "scripts/float.lua",
+          "params": {
+            "lift": 0.12,
+            "tilt": 0.6
+          }
+        }
+      }
+    },
+    {
+      "id": 29,
+      "name": "Buoy Body",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.62,
+            0.62,
+            0.62
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.9,
+            0.22,
+            0.14
+          ]
+        }
+      },
+      "parent": 28
+    },
+    {
+      "id": 30,
+      "name": "Buoy Band",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.22,
+            0
+          ],
+          "scale": [
+            0.5,
+            0.1,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.95,
+            0.95,
+            0.92
+          ]
+        }
+      },
+      "parent": 28
+    },
+    {
+      "id": 31,
+      "name": "Buoy Mast",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.62,
+            0
+          ],
+          "scale": [
+            0.06,
+            0.62,
+            0.06
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.2,
+            0.22
+          ]
+        }
+      },
+      "parent": 28
+    },
+    {
+      "id": 32,
+      "name": "Buoy Top",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.02,
+            0
+          ],
+          "scale": [
+            0.22,
+            0.24,
+            0.22
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "pyramid",
+          "color": [
+            1.0,
+            0.8,
+            0.2
+          ]
+        }
+      },
+      "parent": 28
+    },
+    {
+      "id": 33,
+      "name": "Buoy 2",
+      "components": {
+        "Transform": {
+          "position": [
+            -3.2,
+            0,
+            4.6
+          ]
+        },
+        "Script": {
+          "path": "scripts/float.lua",
+          "params": {
+            "lift": 0.12,
+            "tilt": 0.6
+          }
+        }
+      }
+    },
+    {
+      "id": 34,
+      "name": "Buoy Body",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.62,
+            0.62,
+            0.62
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.9,
+            0.22,
+            0.14
+          ]
+        }
+      },
+      "parent": 33
+    },
+    {
+      "id": 35,
+      "name": "Buoy Band",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.22,
+            0
+          ],
+          "scale": [
+            0.5,
+            0.1,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.95,
+            0.95,
+            0.92
+          ]
+        }
+      },
+      "parent": 33
+    },
+    {
+      "id": 36,
+      "name": "Buoy Mast",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.62,
+            0
+          ],
+          "scale": [
+            0.06,
+            0.62,
+            0.06
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.2,
+            0.22
+          ]
+        }
+      },
+      "parent": 33
+    },
+    {
+      "id": 37,
+      "name": "Buoy Top",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.02,
+            0
+          ],
+          "scale": [
+            0.22,
+            0.24,
+            0.22
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "pyramid",
+          "color": [
+            1.0,
+            0.8,
+            0.2
+          ]
+        }
+      },
+      "parent": 33
+    },
+    {
+      "id": 38,
+      "name": "Buoy 3",
+      "components": {
+        "Transform": {
+          "position": [
+            7.2,
+            0,
+            -1.6
+          ]
+        },
+        "Script": {
+          "path": "scripts/float.lua",
+          "params": {
+            "lift": 0.12,
+            "tilt": 0.6
+          }
+        }
+      }
+    },
+    {
+      "id": 39,
+      "name": "Buoy Body",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.62,
+            0.62,
+            0.62
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            0.9,
+            0.22,
+            0.14
+          ]
+        }
+      },
+      "parent": 38
+    },
+    {
+      "id": 40,
+      "name": "Buoy Band",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.22,
+            0
+          ],
+          "scale": [
+            0.5,
+            0.1,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.95,
+            0.95,
+            0.92
+          ]
+        }
+      },
+      "parent": 38
+    },
+    {
+      "id": 41,
+      "name": "Buoy Mast",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.62,
+            0
+          ],
+          "scale": [
+            0.06,
+            0.62,
+            0.06
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.2,
+            0.22
+          ]
+        }
+      },
+      "parent": 38
+    },
+    {
+      "id": 42,
+      "name": "Buoy Top",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.02,
+            0
+          ],
+          "scale": [
+            0.22,
+            0.24,
+            0.22
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "pyramid",
+          "color": [
+            1.0,
+            0.8,
+            0.2
+          ]
+        }
+      },
+      "parent": 38
+    },
+    {
+      "id": 43,
+      "name": "Boat",
+      "components": {
+        "Transform": {
+          "position": [
+            0.6,
+            0,
+            3.2
+          ]
+        },
+        "Script": {
+          "path": "scripts/float.lua",
+          "params": {
+            "lift": 0.2,
+            "tilt": 0.55,
+            "yaw": 28
+          }
+        }
+      }
+    },
+    {
+      "id": 44,
+      "name": "Hull",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.02,
+            0
+          ],
+          "scale": [
+            2.3,
+            0.42,
+            0.95
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.86,
+            0.86,
+            0.82
+          ]
+        }
+      },
+      "parent": 43
+    },
+    {
+      "id": 45,
+      "name": "Keel",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.2,
+            0
+          ],
+          "scale": [
+            1.9,
+            0.2,
+            0.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.16,
+            0.3,
+            0.5
+          ]
+        }
+      },
+      "parent": 43
+    },
+    {
+      "id": 46,
+      "name": "Bow",
+      "components": {
+        "Transform": {
+          "position": [
+            1.45,
+            0.02,
+            0
+          ],
+          "scale": [
+            0.95,
+            0.6,
+            0.42
+          ],
+          "rotation": [
+            0,
+            0,
+            -90
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "pyramid",
+          "color": [
+            0.86,
+            0.86,
+            0.82
+          ]
+        }
+      },
+      "parent": 43
+    },
+    {
+      "id": 47,
+      "name": "Cabin",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.45,
+            0.48,
+            0
+          ],
+          "scale": [
+            0.8,
+            0.5,
+            0.7
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.42,
+            0.62
+          ]
+        }
+      },
+      "parent": 43
+    },
+    {
+      "id": 48,
+      "name": "Mast",
+      "components": {
+        "Transform": {
+          "position": [
+            0.35,
+            0.95,
+            0
+          ],
+          "scale": [
+            0.06,
+            1.5,
+            0.06
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.45,
+            0.32,
+            0.2
+          ]
+        }
+      },
+      "parent": 43
+    },
+    {
+      "id": 49,
+      "name": "Flag",
+      "components": {
+        "Transform": {
+          "position": [
+            0.6,
+            1.55,
+            0
+          ],
+          "scale": [
+            0.45,
+            0.26,
+            0.03
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.95,
+            0.3,
+            0.25
+          ]
+        }
+      },
+      "parent": 43
+    },
+    {
+      "id": 50,
+      "name": "Crate 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -2.4,
+            0,
+            1.3
+          ]
+        },
+        "Script": {
+          "path": "scripts/float.lua",
+          "params": {
+            "lift": 0.1,
+            "tilt": 1.0,
+            "yaw": 15
+          }
+        }
+      }
+    },
+    {
+      "id": 51,
+      "name": "Crate Box",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.6,
+            0.6,
+            0.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.66,
+            0.48,
+            0.28
+          ],
+          "shading": "flat"
+        }
+      },
+      "parent": 50
+    },
+    {
+      "id": 52,
+      "name": "Crate 2",
+      "components": {
+        "Transform": {
+          "position": [
+            5.0,
+            0,
+            5.2
+          ]
+        },
+        "Script": {
+          "path": "scripts/float.lua",
+          "params": {
+            "lift": 0.1,
+            "tilt": 1.0,
+            "yaw": 50
+          }
+        }
+      }
+    },
+    {
+      "id": 53,
+      "name": "Crate Box",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.6,
+            0.6,
+            0.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.66,
+            0.48,
+            0.28
+          ],
+          "shading": "flat"
+        }
+      },
+      "parent": 52
+    },
+    {
+      "id": 54,
+      "name": "Title",
+      "components": {
+        "UIText": {
+          "text": "Sea state: Swell",
+          "size": 26,
+          "x": 28,
+          "y": 22,
+          "color": [
+            0.92,
+            0.98,
+            1.0
+          ],
+          "outlineWidth": 2,
+          "outlineColor": [
+            0.03,
+            0.1,
+            0.18
+          ]
+        }
+      }
+    },
+    {
+      "id": 55,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "1 Calm   2 Swell   3 Storm      A / D orbit   W / S zoom   Q / E height",
+          "size": 18,
+          "anchor": "bottom",
+          "x": 0,
+          "y": -16,
+          "color": [
+            0.9,
+            0.95,
+            1.0
+          ],
+          "outlineWidth": 2,
+          "outlineColor": [
+            0.03,
+            0.1,
+            0.18
+          ]
+        }
+      }
+    }
+  ]
+}

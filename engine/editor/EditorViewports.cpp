@@ -17,6 +17,8 @@
 #include "physics/PhysicsWorld.h"
 #include "platform/GamepadInput.h"
 #include "render/GpuRenderer.h"
+#include "render/UI.h"
+#include "scene/Components.h"
 
 namespace oe {
 
@@ -125,6 +127,23 @@ void NativeEditor::Impl::SceneOverlays(ImDrawList* dl) {
         dl->AddText(ImVec2(s.x - ts.x * 0.5f, s.y - ts.y * 0.5f), sel ? IM_COL32(20, 20, 20, 255) : col, letter);
         if (hover) dl->AddText(ImVec2(s.x + r + 4, s.y - ts.y * 0.5f), IM_COL32(230, 232, 238, 255), row.name.c_str());
     }
+    // Light2D: the reach of each 2D light as a ring in its entity's XY plane.
+    for (const auto& kv : scene.Pool<Light2D>()) {
+        const Light2D& light = kv.second;
+        const Mat4 world = scene.WorldMatrix(kv.first);
+        const Vec3 center = world.TransformPoint(Vec3(0, 0, 0));
+        const ImU32 color = IsSelected(kv.first) ? IM_COL32(255, 158, 26, 255) : IM_COL32(255, 220, 120, light.enabled ? 170 : 70);
+        ImVec2 previous;
+        bool havePrevious = false;
+        for (int i = 0; i <= 48; ++i) {
+            const float a = static_cast<float>(i) / 48.0f * 6.2831853f;
+            ImVec2 point;
+            const bool ok = Project(vp, center + Vec3(std::cos(a) * light.radius, std::sin(a) * light.radius, 0), sceneImagePos, sceneImageSize, point);
+            if (ok && havePrevious) dl->AddLine(previous, point, color, 1.5f);
+            previous = point;
+            havePrevious = ok;
+        }
+    }
     markerHover = hovered;
 }
 
@@ -140,6 +159,11 @@ void NativeEditor::Impl::SceneGizmo() {
     ImGuizmo::SetDrawlist();
     ImGuizmo::SetRect(sceneImagePos.x, sceneImagePos.y, sceneImageSize.x, sceneImageSize.y);
     ImGuizmo::OPERATION op = gizmoOp == GizmoOp::Translate ? ImGuizmo::TRANSLATE : gizmoOp == GizmoOp::Rotate ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
+    if (cam.mode2D) {  // 2D: move and scale in the XY plane, rotate around Z
+        op = gizmoOp == GizmoOp::Translate ? ImGuizmo::TRANSLATE_X | ImGuizmo::TRANSLATE_Y
+             : gizmoOp == GizmoOp::Rotate ? ImGuizmo::ROTATE_Z
+                                          : ImGuizmo::SCALE_X | ImGuizmo::SCALE_Y;
+    }
     ImGuizmo::MODE mode = (gizmoLocal || gizmoOp == GizmoOp::Scale) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
     bool useSnap = snap != ImGui::GetIO().KeyCtrl;
     float step = gizmoOp == GizmoOp::Translate ? snapMove : gizmoOp == GizmoOp::Rotate ? snapAngle : snapScale;
@@ -287,8 +311,37 @@ void NativeEditor::Impl::ScenePanel() {
     RenderView view = MakeLookAtView(cam.Eye(), cam.target, cam.fov, aspect);
     view.clearColor = sceneCam.clearColor;
     view.shaderTime = static_cast<float>(engine.SimTime());
-    view.drawGrid = showGrid;
+    view.drawGrid = showGrid && !cam.mode2D;
     view.highlight = Primary();
+    if (showGrid && cam.mode2D && cam.Eye().z > 1e-3f) {
+        // 2D: a grid in the XY plane that follows the camera and coarsens with zoom.
+        // Sized by the eye's distance to that plane (the target may sit at another depth).
+        const float halfH = cam.Eye().z * std::tan(Radians(cam.fov) * 0.5f), halfW = halfH * aspect;
+        // Like Unity's scene grid: decade levels (.., 0.1, 1, 10, ..) that fade in as their
+        // cells grow on screen, so zooming never pops from one spacing to the next.
+        const float unitsPerPixel = 2.0f * halfH / static_cast<float>(h);
+        const float step = Grid2DStep(unitsPerPixel, kGrid2DMinPixels);
+        // Lines carry no alpha: blend towards a tone that contrasts with the background.
+        const Color base = view.clearColor;
+        const bool bright = base.r * 0.3f + base.g * 0.59f + base.b * 0.11f > 0.45f;
+        const Color gridColor = bright ? Color(0.08f, 0.1f, 0.14f) : Color(0.75f, 0.78f, 0.82f);
+        auto mix = [&](const Color& c, float a) { return base * (1.0f - a) + c * a; };
+        const float x0 = cam.target.x - halfW, x1 = cam.target.x + halfW, y0 = cam.target.y - halfH, y1 = cam.target.y + halfH;
+        // A line belongs to the coarsest level it lies on; weaker levels are drawn first.
+        auto lines = [&](bool vertical, int level) {
+            const float lo = vertical ? x0 : y0, hi = vertical ? x1 : y1;
+            const float pixels = step * (level == 0 ? 1.0f : level == 1 ? 10.0f : 100.0f) / unitsPerPixel;
+            const Color c = mix(gridColor, 0.42f * Grid2DAlpha(pixels));
+            for (long long i = static_cast<long long>(std::ceil(lo / step)); static_cast<float>(i) * step <= hi; ++i) {
+                if (i == 0 || (i % 100 == 0 ? 2 : i % 10 == 0 ? 1 : 0) != level) continue;
+                const float f = static_cast<float>(i) * step;
+                view.lines.push_back(vertical ? DebugLine{Vec3(f, y0, 0), Vec3(f, y1, 0), c} : DebugLine{Vec3(x0, f, 0), Vec3(x1, f, 0), c});
+            }
+        };
+        for (int level = 0; level < 3; ++level) lines(true, level), lines(false, level);
+        if (y0 <= 0 && y1 >= 0) view.lines.push_back({Vec3(x0, 0, 0), Vec3(x1, 0, 0), mix(Color(0.9f, 0.25f, 0.25f), 0.8f)});  // X axis
+        if (x0 <= 0 && x1 >= 0) view.lines.push_back({Vec3(0, y0, 0), Vec3(0, y1, 0), mix(Color(0.35f, 0.8f, 0.3f), 0.8f)});   // Y axis
+    }
     if (showColliders) {
         TilesetLookup tilesets = engine.Assets().Tilesets();
         AppendColliderLines(scene, view.lines, &tilesets);
@@ -491,7 +544,7 @@ void NativeEditor::Impl::GamePanel() {
     ImVec2 barEnd = ImGui::GetCursorScreenPos();
     ImGui::SameLine();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%s", Tr(!session ? "Press Play (Ctrl+P) to run the game here"
+    ImGui::TextDisabled("%s", Tr(!session ? "Click UI to select it: drag moves, handles resize, arrows nudge. Play (Ctrl+P) runs the game here"
                                  : gameFocused ? (windowInput.mouseLocked ? "Game has the mouse - Esc releases it" : "Game has keyboard, mouse and gamepad - click outside to release")
                                                : "Click the view to play"));
     ImGui::SetCursorScreenPos(ImVec2(barEnd.x - 6, barEnd.y + 3));
@@ -567,8 +620,183 @@ void NativeEditor::Impl::GamePanel() {
         }
     }
 
+    if (gameFocused && session && gameHovered && io.MouseWheel != 0)
+        Call("input.mouse", ObjectOf({{"wheel", Json(io.MouseWheel)}}), true);
+    if (!session) GameUIEdit(dl, pos, w, h);
+
     if (session) dl->AddRect(pos, pos + gameImageSize, gameFocused ? IM_COL32(90, 200, 120, 255) : IM_COL32(255, 180, 60, 160), 0.0f, 2.0f);
     ImGui::End();
+}
+
+namespace {
+const char* UITypeName(UIRect::Kind kind) {
+    switch (kind) {
+        case UIRect::Kind::Text: return "UIText";
+        case UIRect::Kind::Panel: return "UIPanel";
+        case UIRect::Kind::Button: return "UIButton";
+        case UIRect::Kind::Image: return "UIImage";
+        case UIRect::Kind::Slider: return "UISlider";
+    }
+    return "UIPanel";
+}
+// Pivot of an anchor preset along one axis: 0 = left/top, 0.5 = centre (and stretch), 1 = right/bottom.
+float AnchorPivot(const std::string& anchor, const char* low, const char* high) {
+    if (anchor.rfind("stretch", 0) == 0) return 0.5f;
+    if (anchor.find(low) != std::string::npos) return 0.0f;
+    if (anchor.find(high) != std::string::npos) return 1.0f;
+    return 0.5f;
+}
+}  // namespace
+
+// Editing UI where it is drawn: click selects the topmost element under the pointer, dragging it
+// moves it (x, y), the eight handles resize it (width, height, keeping the opposite edge in place),
+// arrow keys nudge. Every drag is one undo step (component.set {merge}).
+void NativeEditor::Impl::GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h) {
+    Scene& scene = engine.GetScene();
+    ImGuiIO& io = ImGui::GetIO();
+    const std::vector<UIRect> rects = LayoutUI(scene, w, h, &engine.Assets());
+    const float scale = std::max(1e-3f, UIScale(scene, w, h));
+    const ImVec2 mouse(io.MousePos.x - pos.x, io.MousePos.y - pos.y);
+    auto rectOf = [&](EntityId id) -> const UIRect* {
+        const UIRect* found = nullptr;
+        for (const UIRect& r : rects)
+            if (r.entity == id && (!found || r.kind == UIRect::Kind::Panel)) found = &r;
+        return found;
+    };
+    const EntityId primary = Primary();
+    const UIRect* sel = primary != kNullEntity ? rectOf(primary) : nullptr;
+
+    // Handles of the primary selection.
+    const float hs = std::max(4.0f, ImGui::GetFontSize() * 0.3f);
+    ImVec2 handles[8];
+    int hoverHandle = -1;
+    if (sel) {
+        const float x0 = pos.x + sel->x, y0 = pos.y + sel->y, x1 = x0 + sel->w, y1 = y0 + sel->h, xm = (x0 + x1) * 0.5f, ym = (y0 + y1) * 0.5f;
+        const ImVec2 points[8] = {{x0, y0}, {xm, y0}, {x1, y0}, {x1, ym}, {x1, y1}, {xm, y1}, {x0, y1}, {x0, ym}};
+        for (int i = 0; i < 8; ++i) {
+            handles[i] = points[i];
+            if (std::fabs(io.MousePos.x - points[i].x) <= hs + 2 && std::fabs(io.MousePos.y - points[i].y) <= hs + 2) hoverHandle = i;
+        }
+    }
+
+    if (gameHovered && uiDragHandle < 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const UIRect* hit = nullptr;
+        if (hoverHandle >= 0) {
+            hit = sel;
+        } else {
+            for (const UIRect& r : rects) {  // last = topmost
+                if (mouse.x < r.x || mouse.x >= r.x + r.w || mouse.y < r.y || mouse.y >= r.y + r.h) continue;
+                if (r.clipped && !(mouse.x >= r.clip[0] && mouse.x < r.clip[2] && mouse.y >= r.clip[1] && mouse.y < r.clip[3])) continue;
+                hit = &r;
+            }
+        }
+        if (!hit) {
+            if (!io.KeyCtrl) SelectOnly(kNullEntity);
+        } else if (io.KeyCtrl && hoverHandle < 0) {
+            ToggleSelect(hit->entity);
+        } else {
+            if (!IsSelected(hit->entity)) {
+                SelectOnly(hit->entity);
+                scrollToRow = hit->entity;
+            }
+            const UIRect* r = rectOf(hit->entity);
+            uiDragEntity = hit->entity;
+            uiDragType = UITypeName(r->kind);
+            uiDragHandle = hoverHandle >= 0 ? hoverHandle + 1 : 0;
+            uiDragMouse = io.MousePos;
+            Json comp = Call("entity.get", ObjectOf({{"id", Json(uiDragEntity)}}), true)["result"]["components"][uiDragType];
+            uiDragStart[0] = comp["x"].asFloat(0);
+            uiDragStart[1] = comp["y"].asFloat(0);
+            // Text and images sized by their content get explicit sizes once a handle moves them.
+            const bool stretched = comp["anchor"].asString().rfind("stretch", 0) == 0;
+            uiDragStart[2] = comp["width"].asFloat(0) != 0 || stretched ? comp["width"].asFloat(0) : r->w / scale;
+            uiDragStart[3] = comp["height"].asFloat(0) != 0 || stretched ? comp["height"].asFloat(0) : r->h / scale;
+            ++uiDragSerial;
+        }
+    }
+    if (uiDragHandle >= 0) {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !scene.Exists(uiDragEntity)) {
+            uiDragHandle = -1;
+        } else {
+            const float dx = (io.MousePos.x - uiDragMouse.x) / scale, dy = (io.MousePos.y - uiDragMouse.y) / scale;
+            if (dx != 0 || dy != 0) {
+                Json comp = Call("entity.get", ObjectOf({{"id", Json(uiDragEntity)}}), true)["result"]["components"][uiDragType];
+                const std::string anchor = comp["anchor"].asString();
+                const float px = AnchorPivot(anchor, "left", "right"), py = AnchorPivot(anchor, "top", "bottom");
+                float x = uiDragStart[0], y = uiDragStart[1], wide = uiDragStart[2], tall = uiDragStart[3];
+                const int handle = uiDragHandle - 1;  // 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L
+                Json values = Json::MakeObject();
+                if (uiDragHandle == 0) {
+                    x += dx;
+                    y += dy;
+                } else {
+                    const bool left = handle == 0 || handle == 6 || handle == 7, right = handle >= 2 && handle <= 4;
+                    const bool top = handle <= 2, bottom = handle >= 4 && handle <= 6;
+                    if (right) { wide += dx; x += px * dx; }
+                    if (left) { wide -= dx; x += (1.0f - px) * dx; }
+                    if (bottom) { tall += dy; y += py * dy; }
+                    if (top) { tall -= dy; y += (1.0f - py) * dy; }
+                    const bool stretched = anchor.rfind("stretch", 0) == 0;
+                    if (!stretched) { wide = std::max(1.0f, wide); tall = std::max(1.0f, tall); }
+                    values["width"] = std::round(wide);
+                    values["height"] = std::round(tall);
+                }
+                values["x"] = std::round(x);
+                values["y"] = std::round(y);
+                Call("component.set", ObjectOf({{"id", Json(uiDragEntity)}, {"type", Json(uiDragType)}, {"values", values},
+                                                {"merge", Json("uiedit:" + std::to_string(uiDragSerial))}}));
+            }
+        }
+    }
+    // Arrow keys nudge the selected elements by one reference pixel (ten with Shift).
+    if (gameHovered && sel && uiDragHandle < 0 && !io.WantTextInput) {
+        float nx = 0, ny = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) nx = -1;
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) nx = 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) ny = -1;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) ny = 1;
+        if (nx != 0 || ny != 0) {
+            const float step = io.KeyShift ? 10.0f : 1.0f;
+            for (EntityId id : selection) {
+                const UIRect* r = rectOf(id);
+                if (!r) continue;
+                const char* type = UITypeName(r->kind);
+                Json comp = Call("entity.get", ObjectOf({{"id", Json(id)}}), true)["result"]["components"][type];
+                Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json(type)},
+                                                {"values", ObjectOf({{"x", Json(comp["x"].asFloat(0) + nx * step)}, {"y", Json(comp["y"].asFloat(0) + ny * step)}})}}));
+            }
+        }
+    }
+
+    // Outlines: every selected element, handles and size readout on the primary one.
+    dl->PushClipRect(pos, pos + gameImageSize, true);
+    for (EntityId id : selection) {
+        const UIRect* r = rectOf(id);
+        if (!r) continue;
+        const ImVec2 a(pos.x + r->x, pos.y + r->y), b(a.x + r->w, a.y + r->h);
+        dl->AddRect(a, b, IM_COL32(20, 22, 28, 200), 0.0f, 3.0f);
+        dl->AddRect(a, b, IM_COL32(255, 158, 26, 255), 0.0f, 1.5f);
+    }
+    if (sel) {
+        for (int i = 0; i < 8; ++i) {
+            const ImVec2 a(handles[i].x - hs, handles[i].y - hs), b(handles[i].x + hs, handles[i].y + hs);
+            dl->AddRectFilled(a, b, i == hoverHandle || i == uiDragHandle - 1 ? IM_COL32(255, 220, 150, 255) : IM_COL32(255, 255, 255, 255));
+            dl->AddRect(a, b, IM_COL32(255, 158, 26, 255));
+        }
+        const EntityRecord* rec = scene.Record(primary);
+        const std::string label = Format("%s   %.0f x %.0f", rec ? rec->name.c_str() : "", sel->w / scale, sel->h / scale);
+        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        ImVec2 at(pos.x + sel->x, pos.y + sel->y - ts.y - hs - 4);
+        if (at.y < pos.y) at.y = pos.y + sel->y + sel->h + hs + 4;
+        dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + ts.x + 3, at.y + ts.y + 1), IM_COL32(20, 22, 28, 220), 3.0f);
+        dl->AddText(at, IM_COL32(255, 220, 150, 255), label.c_str());
+    }
+    dl->PopClipRect();
+    if (gameHovered && uiDragHandle < 0 && hoverHandle >= 0) {
+        static const ImGuiMouseCursor cursors[8] = {ImGuiMouseCursor_ResizeNWSE, ImGuiMouseCursor_ResizeNS, ImGuiMouseCursor_ResizeNESW, ImGuiMouseCursor_ResizeEW,
+                                                    ImGuiMouseCursor_ResizeNWSE, ImGuiMouseCursor_ResizeNS, ImGuiMouseCursor_ResizeNESW, ImGuiMouseCursor_ResizeEW};
+        ImGui::SetMouseCursor(cursors[hoverHandle]);
+    }
 }
 
 }  // namespace oe

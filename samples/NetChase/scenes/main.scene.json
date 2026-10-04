@@ -1,0 +1,654 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "NetChase",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            3.2,
+            12
+          ],
+          "rotation": [
+            -15,
+            0,
+            0
+          ]
+        },
+        "Camera": {},
+        "Script": {
+          "path": "scripts/camera.lua",
+          "params": {
+            "distance": 5.5,
+            "height": 2.6,
+            "sensitivity": 0.2
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Light",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -55,
+            35,
+            0
+          ]
+        },
+        "DirectionalLight": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "scale": [
+            24,
+            1,
+            24
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [
+            0.16,
+            0.22,
+            0.3
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Wall N",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.5,
+            -12.25
+          ],
+          "scale": [
+            25,
+            1,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.3,
+            0.36,
+            0.48
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Wall S",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.5,
+            12.25
+          ],
+          "scale": [
+            25,
+            1,
+            0.5
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.3,
+            0.36,
+            0.48
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Wall W",
+      "components": {
+        "Transform": {
+          "position": [
+            -12.25,
+            0.5,
+            0
+          ],
+          "scale": [
+            0.5,
+            1,
+            25
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.3,
+            0.36,
+            0.48
+          ]
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Wall E",
+      "components": {
+        "Transform": {
+          "position": [
+            12.25,
+            0.5,
+            0
+          ],
+          "scale": [
+            0.5,
+            1,
+            25
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.3,
+            0.36,
+            0.48
+          ]
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Pillar 1",
+      "components": {
+        "Transform": {
+          "position": [
+            -5,
+            1.5,
+            -5
+          ],
+          "scale": [
+            1.6,
+            3,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.55,
+            0.42,
+            0.3
+          ],
+          "material": "materials/prop-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Pillar 2",
+      "components": {
+        "Transform": {
+          "position": [
+            5,
+            1.5,
+            -5
+          ],
+          "scale": [
+            1.6,
+            3,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.55,
+            0.42,
+            0.3
+          ],
+          "material": "materials/prop-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Pillar 3",
+      "components": {
+        "Transform": {
+          "position": [
+            -5,
+            1.5,
+            5
+          ],
+          "scale": [
+            1.6,
+            3,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.55,
+            0.42,
+            0.3
+          ],
+          "material": "materials/prop-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Pillar 4",
+      "components": {
+        "Transform": {
+          "position": [
+            5,
+            1.5,
+            5
+          ],
+          "scale": [
+            1.6,
+            3,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.55,
+            0.42,
+            0.3
+          ],
+          "material": "materials/prop-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Pillar 5",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.5,
+            0
+          ],
+          "scale": [
+            1.6,
+            3,
+            1.6
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.55,
+            0.42,
+            0.3
+          ],
+          "material": "materials/prop-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Target",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.7,
+            -4
+          ],
+          "scale": [
+            0.7,
+            0.7,
+            0.7
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "sphere",
+          "color": [
+            1,
+            0.8,
+            0.15
+          ],
+          "material": "materials/prop-toon.mat.json"
+        },
+        "NetSync": {
+          "fields": {
+            "Transform.position": {
+              "onChange": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Game",
+      "components": {
+        "Script": {
+          "path": "scripts/game.lua"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Canvas",
+      "components": {
+        "UICanvas": {}
+      }
+    },
+    {
+      "id": 16,
+      "name": "Title",
+      "components": {
+        "UIText": {
+          "text": "NetChase | THIRD PERSON",
+          "x": 32,
+          "y": 24,
+          "size": 32,
+          "color": [
+            0.4,
+            0.8,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Score",
+      "components": {
+        "UIText": {
+          "text": "Host or join, ready every player, then start.",
+          "x": 32,
+          "y": 70,
+          "size": 24
+        },
+        "NetSync": {
+          "fields": {
+            "UIText.text": {
+              "onChange": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Status",
+      "components": {
+        "UIText": {
+          "text": "Offline practice available. Join address: 127.0.0.1:7778",
+          "x": 32,
+          "y": 110,
+          "size": 20
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "status"
+          }
+        }
+      }
+    },
+    {
+      "id": 19,
+      "name": "Host",
+      "components": {
+        "UIButton": {
+          "text": "Host",
+          "anchor": "top-left",
+          "x": 32,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "host",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Join",
+      "components": {
+        "UIButton": {
+          "text": "Join",
+          "anchor": "top-left",
+          "x": 177,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "join",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "Ready",
+      "components": {
+        "UIButton": {
+          "text": "Ready",
+          "anchor": "top-left",
+          "x": 322,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "ready",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "Start",
+      "components": {
+        "UIButton": {
+          "text": "Start",
+          "anchor": "top-left",
+          "x": 467,
+          "y": 150,
+          "width": 130,
+          "height": 48,
+          "size": 22
+        },
+        "Script": {
+          "path": "scripts/lobby.lua",
+          "params": {
+            "action": "start",
+            "address": "127.0.0.1",
+            "port": 7778
+          }
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "Hint",
+      "components": {
+        "UIText": {
+          "text": "W/S/A/D: move | mouse: turn (Esc frees the cursor) | Space: jump | R: reset",
+          "anchor": "bottom",
+          "y": -25,
+          "size": 20
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Touch W",
+      "components": {
+        "UIButton": {
+          "text": "W",
+          "key": "W",
+          "anchor": "bottom-left",
+          "x": 100,
+          "y": -155,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 25,
+      "name": "Touch A",
+      "components": {
+        "UIButton": {
+          "text": "A",
+          "key": "A",
+          "anchor": "bottom-left",
+          "x": 32,
+          "y": -85,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 26,
+      "name": "Touch S",
+      "components": {
+        "UIButton": {
+          "text": "S",
+          "key": "S",
+          "anchor": "bottom-left",
+          "x": 100,
+          "y": -85,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 27,
+      "name": "Touch D",
+      "components": {
+        "UIButton": {
+          "text": "D",
+          "key": "D",
+          "anchor": "bottom-left",
+          "x": 168,
+          "y": -85,
+          "width": 64,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 28,
+      "name": "Touch Space",
+      "components": {
+        "UIButton": {
+          "text": "Jump",
+          "key": "Space",
+          "anchor": "bottom-left",
+          "x": 1050,
+          "y": -85,
+          "width": 150,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 29,
+      "name": "Touch R",
+      "components": {
+        "UIButton": {
+          "text": "Reset",
+          "key": "R",
+          "anchor": "bottom-left",
+          "x": 1050,
+          "y": -155,
+          "width": 150,
+          "height": 64,
+          "size": 22,
+          "color": [
+            0.15,
+            0.28,
+            0.43
+          ]
+        }
+      }
+    },
+    {
+      "id": 30,
+      "name": "Target Spin",
+      "components": {
+        "Script": {
+          "path": "scripts/spin.lua",
+          "params": {
+            "target": "Target"
+          }
+        }
+      }
+    }
+  ]
+}

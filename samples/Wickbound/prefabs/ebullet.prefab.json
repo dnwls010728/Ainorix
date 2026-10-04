@@ -1,0 +1,87 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "ebullet",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Enemy bullet",
+      "components": {
+        "RigidBody2D": {
+          "type": "kinematic",
+          "gravityScale": 0
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.17500000000000002,
+          "layer": 4,
+          "ignoreLayers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            8
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/projectile.lua",
+          "params": {
+            "kind": "ebullet"
+          }
+        },
+        "Tag": {
+          "tags": "ebullet"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Glow",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 1.0,
+          "height": 1.0,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            0.7882,
+            0.6275,
+            1.0
+          ],
+          "opacity": 0.8,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Core",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.275,
+          "height": 0.275,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/disc.png",
+          "order": 1,
+          "color": [
+            0.9529,
+            0.902,
+            1.0
+          ]
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

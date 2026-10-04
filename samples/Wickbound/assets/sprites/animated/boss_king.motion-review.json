@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "walk"
+  },
+  "evidence": {
+    "walk": {
+      "sha256": "04de4adbabb2d9510fa257a307caefdad97e3f8b584ed6743738f83b4e643501",
+      "report": "build/wickbound-grok/boss_king-wide/front_diagonal-walk/loop.report.json"
+    },
+    "idle": {
+      "sha256": "c597e50433a94704a8ed27c7d62e9f6b361068fe33301a87de3b57ecb78b604b",
+      "report": "build/wickbound-grok/boss_king-wide/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "Continuous short shuffling steps replace separated oversized/undersized cloak poses. Crown/face remain substantially stable; physical contact is not certified."
+}

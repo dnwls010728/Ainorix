@@ -19,6 +19,10 @@ InputState Decode(const FrameInput& value, const SyncConfig& config) {
     }
     for (size_t i = 0; i < config.axes.size(); ++i) if (config.axes[i])
         input.axes[InputState::kAxisNames[i]] = static_cast<float>(value.axes[i]) / 32767.0f;
+    for (size_t i = 0; i < config.look.size(); ++i) if (config.look[i]) {
+        (i == 0 ? input.lookX : input.lookY) = static_cast<float>(value.axes[2 + i]) / 32767.0f;
+        input.axes.erase(InputState::kAxisNames[2 + i]);
+    }
     return input;
 }
 }

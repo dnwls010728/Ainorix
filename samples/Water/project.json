@@ -1,0 +1,11 @@
+{
+  "format": "ownengine.project",
+  "version": 1,
+  "name": "Water",
+  "startScene": "scenes/main.scene.json",
+  "window": {
+    "width": 1280,
+    "height": 720,
+    "title": "Water: rolling sea"
+  }
+}

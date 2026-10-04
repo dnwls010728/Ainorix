@@ -47,7 +47,7 @@ Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffe
 
 | Field | Meaning |
 |---|---|
-| `mesh` | `cube`, `sphere`, `plane`, `pyramid`, `quad` (1×1 in XY facing +Z) or a model path. A missing or broken model renders as an **unlit magenta cube** (and a log warning), so problems are visible in screenshots |
+| `mesh` | `cube`, `sphere`, `plane`, `plane64` (the same 1×1 plane split into 64×64 cells, for vertex offsets), `pyramid`, `quad` (1×1 in XY facing +Z) or a model path. A missing or broken model renders as an **unlit magenta cube** (and a log warning), so problems are visible in screenshots |
 | `material` | Path to a `.mat.json` applied to every submesh; empty = the model's own glTF materials (default material for built-in meshes). See [Materials](#materials) |
 | `color` | Tint multiplied with the material's base color / texture |
 | `texture` | Image overriding the material's base color texture (UVs: built-in meshes have 0..1 per face) |
@@ -115,6 +115,11 @@ oe exec samples/Hello asset.info '{"path":"materials/gold.mat.json"}'
 
 ### How MeshRenderer combines with a material
 
+`MeshRenderer.shaderUniforms` sets values for the material's shader graph uniforms on this entity only
+(scripts may change them every frame); see [POSTPROCESS.md](POSTPROCESS.md#portable-surface-shader-graphs).
+
+A shader graph can also bend the surface: its optional `offset` output is added to every vertex's world position in the vertex stage (shadows, depth of field and the selection outline follow it; physics and picking do not), and its `normal` output replaces the lighting normal per fragment. Use the `plane64` built-in mesh for a flat surface with enough vertices; see the same POSTPROCESS.md section and `samples/Water`.
+
 `MeshRenderer.material` is applied to every submesh. If it is empty, a model uses its own glTF materials and a built-in mesh (`cube`, `sphere`, ...) uses the default material (white, metallic 0, roughness 0.7, opaque). On top of that:
 
 | Field | Effect |
@@ -132,13 +137,13 @@ glTF models load their full materials: base color factor including alpha, base c
 
 - **Order**: opaque and `mask` surfaces are drawn first; blended surfaces follow, sorted back to front by the distance from the camera to each object's bounds center (ties by entity id).
 - **Depth**: blended surfaces test against depth but do not write it. `mask` surfaces write depth (pixels below `alphaCutoff` are discarded).
-- **Shadows**: blended surfaces cast no shadows. `mask` surfaces cast shadows of their full geometry (there is no alpha test in the shadow pass). Double-sided materials put both sides into the shadow map and draw back faces with flipped normals.
+- **Shadows**: blended surfaces cast no shadows. `mask` surfaces that have a base texture or a shader graph are alpha-tested in the shadow pass of both renderers, so cut-out materials (glTF `alphaMode: mask` leaves, fences) shadow only where they are drawn. Double-sided materials put both sides into the shadow map and draw back faces with flipped normals.
 - **Picking**: blended surfaces are pickable (`render.pick`, editor click) where they are at least 50% opaque.
 - **Limitations**: sorting is per object, so intersecting transparent objects, or one large transparent object around others, can sort wrongly. Split the mesh or use `mask` where that matters.
 
 ## Sprites and tilemaps (2D)
 
-`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id; a cutoff of 0 blends the image alpha instead, with `Sprite.opacity` on top) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default and do not cast shadows. See [2D.md](2D.md).
+`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id; a cutoff of 0 blends the image alpha instead, with `Sprite.opacity` on top) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default. Tilemaps never cast shadows; a sprite casts one only with `castShadows` (lit, cut-out), shaped by its image through the shadow-pass alpha test. A Sprite is always drawn along its entity rotation; facing the camera is a project script (`samples/HD2D/scripts/billboards.lua`). See [2D.md](2D.md#sprites-in-a-3d-world-hd-2d).
 
 ## Lights and shadows
 
@@ -164,7 +169,8 @@ are unaffected. Free/editor Scene cameras do not inherit game-camera effects.
 Exposure and optional Reinhard tone mapping preserve HDR lighting/emissive values
 before conversion to display color in both renderers. Neutral settings retain
 the original frame hashes. Optional bloom extracts and blurs HDR highlights before
-tone mapping in both renderers. FXAA and custom shader materials remain later P6 milestones;
+tone mapping in both renderers. Optional depth of field (`dofRadius`, `dofFocus`,
+`dofRange`, `dofFalloff`) blurs surfaces by their view depth before bloom. FXAA and custom shader materials remain later P6 milestones;
 see [POSTPROCESS.md](POSTPROCESS.md) for controls and verification.
 
 ## Debug drawing
@@ -190,3 +196,5 @@ Camera effect presets use keys 1 Off, 2 Tone, 3 Bloom, 4 Vignette, 5 FXAA,
 6 All. Startup stays neutral; the HUD shows the selected mode. Presets use
 the reflected PostProcess component through Lua scene commands; see
 [POSTPROCESS.md](POSTPROCESS.md) for settings and verification.
+
+`samples/HD2D` ("Lantern Road"): pixel-art sprites turned to the camera by a script in a lit 3D world with shadow-casting sprites, a long lens and depth of field; see [2D.md](2D.md#sprites-in-a-3d-world-hd-2d).

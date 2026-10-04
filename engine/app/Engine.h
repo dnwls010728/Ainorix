@@ -63,6 +63,8 @@ public:
     // ----- Simulation ------------------------------------------------------
     Scene& GetScene() { return scene_; }
     InputState& Input() { return input_; }
+    // Lua input.setLook: stores the local look direction on the device input (see InputState::lookX).
+    void SetLook(float x, float y);
     void Play();
     void Pause();
     void Stop();  // restores the scene captured when play started
@@ -85,11 +87,20 @@ public:
     uint64_t Revision() const { return revision_; }
     void Touch() { ++revision_; }
     double SimTime() const { return simTime_; }
+    // Calendar date "YYYY-MM-DD" in local time for game features outside the simulation (daily rewards).
+    // Not part of the deterministic state: tests and tools fix it with SetDateOverride (time.date {set}).
+    std::string Today() const;
+    void SetDateOverride(const std::string& date) { dateOverride_ = date; }
+    const std::string& DateOverride() const { return dateOverride_; }
 
     // ----- Game runtime (valid during a play session) -------------------------
     // Data that survives scene changes (score, lives...). Reset when the
     // session ends. Scripts use game.get/game.set; tools read game.state.
     Json& GameData() { return gameData_; }
+    // Gameplay pause (menus, level-up dialogs): scripts keep running with dt = 0 and UI stays clickable,
+    // while physics, built-in systems, timers and particles stand still. Cleared on scene changes and sim.stop.
+    bool GamePaused() const { return gamePaused_; }
+    void SetGamePaused(bool paused) { gamePaused_ = paused; }
     // Save slots survive sim.stop and scene transitions; memory-only by default.
     SaveStore& Saves() { return saves_; }
     // Loads another scene at the end of the current frame, keeping the Lua
@@ -162,7 +173,11 @@ public:
 
     // ----- Threading ---------------------------------------------------------
     // Queues work for the main thread (used by the HTTP server thread).
-    std::future<Json> PostCall(const std::string& name, const Json& args);
+    // `agent`: who asked, when the caller says so (a team agent's id from `oe mcp --connect
+    // --agent`); empty for an anonymous API call.
+    std::future<Json> PostCall(const std::string& name, const Json& args, const std::string& agent = std::string());
+    // While a posted call runs and inside the remote-call observer: the `agent` that made it, else empty.
+    const std::string& RemoteCallAgent() const { return remoteAgent_; }
     // Called on the main thread after each PostCall command (HTTP, MCP): the
     // native editor uses it to show what an agent changed. Empty = none.
     using CallObserver = std::function<void(const std::string& name, const Json& args, const Json& result)>;
@@ -285,6 +300,8 @@ private:
     uint64_t frame_ = 0;
     uint64_t revision_ = 1;
     Json gameData_ = Json::MakeObject();
+    std::string dateOverride_;  // empty = the machine's clock
+    bool gamePaused_ = false;
     SaveStore saves_;
     struct TimedLine {
         DebugLine line;
@@ -295,6 +312,10 @@ private:
     std::string runtimeScene_;
     EntityId uiHovered_ = kNullEntity;
     EntityId uiPressed_ = kNullEntity;
+    EntityId uiScrollDrag_ = kNullEntity;  // UIScroll being dragged by the pointer
+    float uiScrollLast_ = 0.0f;            // pointer position along its axis at the previous frame (pixels)
+    EntityId uiScrollBar_ = kNullEntity;   // UIScroll whose bar thumb is held
+    float uiScrollGrab_ = 0.0f;            // where on the thumb it was grabbed (pixels from its start)
     std::set<EntityId> heldButtons_;    // UIButtons with a key, held this frame
     std::set<std::string> heldKeys_;    // keys those buttons hold down
     double simTime_ = 0.0;
@@ -319,6 +340,7 @@ private:
     std::string prefabPath_;
 
     CallObserver remoteObserver_;
+    std::string remoteAgent_;
     std::mutex jobsMutex_;
     std::deque<std::function<void()>> jobs_;
 };

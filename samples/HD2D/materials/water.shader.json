@@ -1,0 +1,103 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {
+    "repeat": [
+      4,
+      3,
+      0,
+      0
+    ],
+    "flowA": [
+      0.035,
+      0.02,
+      0,
+      0
+    ],
+    "flowB": [
+      -0.025,
+      0.03,
+      0,
+      0
+    ]
+  },
+  "nodes": [
+    {
+      "op": "uv"
+    },
+    {
+      "op": "uniform",
+      "name": "repeat"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "time"
+    },
+    {
+      "op": "uniform",
+      "name": "flowA"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        3,
+        4
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        2,
+        5
+      ]
+    },
+    {
+      "op": "texture",
+      "args": [
+        6
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "flowB"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        3,
+        8
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        2,
+        9
+      ]
+    },
+    {
+      "op": "texture",
+      "args": [
+        10
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.5
+    },
+    {
+      "op": "mix",
+      "args": [
+        7,
+        11,
+        12
+      ]
+    }
+  ],
+  "color": 13
+}

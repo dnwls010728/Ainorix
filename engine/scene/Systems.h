@@ -51,10 +51,18 @@ struct InputState {
     // look). Platforms accumulate it; it is cleared after every step.
     float mouseDX = 0.0f;
     float mouseDY = 0.0f;
+    // Mouse wheel notches since the last simulation step (> 0 = away from the user); cleared like mouseDX.
+    float wheel = 0.0f;
     // Set by the game (input.lockMouse): hide the cursor and keep it in the
     // view so only relative motion matters. Platforms clear it when the player
     // presses Escape or the window loses focus.
     bool mouseLocked = false;
+    // Look direction a local script accumulates from relative mouse motion
+    // (input.setLook), each in [-1,1] on the int16 grid of a network axis. It is
+    // device state: no checkpoint restores it, and a match carries it in the input
+    // stream when the project declares the LookX/LookY axes.
+    float lookX = 0.0f;
+    float lookY = 0.0f;
     // Touch screens: every finger on the view, in the order they went down.
     // Positions are normalized like the mouse; `began` is set on the step the
     // finger went down. Platforms also report the first finger as the mouse
@@ -69,7 +77,7 @@ struct InputState {
 };
 
 // Advances all behavior components by dt seconds (before physics).
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr, const std::function<const InputState*(EntityId)>& playerInput = {});
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr);
 // Runs after physics: CameraFollow.
 void UpdateLateSystems(Scene& scene, float dt);
 

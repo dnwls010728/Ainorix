@@ -15,6 +15,7 @@
 #include "sokol_imgui.h"
 
 #include "app/Engine.h"
+#include "scene/Components.h"
 #include "assets/Assets.h"
 #include "scene/TileGrid.h"
 #include "app/Project.h"
@@ -30,7 +31,10 @@ extern const size_t kDefaultFontSize;
 
 namespace {
 
-constexpr float kBaseFontSize = 15.0f;
+constexpr float kBaseFontSize = 16.0f;
+// Korean/Japanese system fonts draw smaller and thinner than Roboto at the same size: merged a
+// little larger so mixed text reads as one size.
+constexpr float kCjkFontScale = 1.06f;
 
 ImGuiKey ToImGuiKey(WindowKey k) {
     int i = static_cast<int>(k);
@@ -169,6 +173,8 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "NetworkPlayers=%d", &i) == 1) m->networkPlayers = std::max(1, std::min(8, i));
     else if (std::sscanf(line, "NetworkPanel=%d", &i) == 1) m->showNetwork = i != 0;
     else if (std::sscanf(line, "HistoryPanel=%d", &i) == 1) m->showHistory = i != 0;
+    else if (std::sscanf(line, "TeamPanel=%d", &i) == 1) m->showTeam = i != 0;
+    else if (std::sscanf(line, "TeamChatPanel=%d", &i) == 1) m->showTeamChat = i != 0;
     else if (std::sscanf(line, "Thumbnails=%d", &i) == 1) m->showThumbnails = i != 0;
     else if (std::sscanf(line, "NetworkLatency=%d", &i) == 1) m->networkLatency = std::max(0, std::min(30, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
@@ -203,7 +209,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
-    buf->appendf("HistoryPanel=%d\nThumbnails=%d\n", m->showHistory, m->showThumbnails);
+    buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam, m->showTeamChat);
     buf->appendf("GameAspect=%d\nFlySpeed=%.2f\nPanels=%d\nLanguage=%s\n", m->gameAspect, m->flySpeed, panels, EditorLanguageCode(GetEditorLanguage()));
     buf->appendf("Camera=%.4f,%.4f,%.4f\nCameraAngles=%.3f,%.3f,%.4f\nCamera2D=%d\n\n", m->cam.target.x, m->cam.target.y, m->cam.target.z, m->cam.yaw,
                  m->cam.pitch, m->cam.distance, m->cam.mode2D);
@@ -343,6 +349,24 @@ std::string NativeEditor::Impl::UniqueName(const std::string& base) const {
 
 bool NativeEditor::Impl::IsSelected(EntityId id) const { return std::find(selection.begin(), selection.end(), id) != selection.end(); }
 
+std::string NativeEditor::Impl::VisibilityComponent(EntityId id, bool* visible) const {
+    const Scene& scene = engine.GetScene();
+    auto check = [&](const auto* component, const char* name) -> const char* {
+        if (!component) return nullptr;
+        *visible = component->visible;
+        return name;
+    };
+    if (const char* n = check(scene.Get<UIPanel>(id), "UIPanel")) return n;
+    if (const char* n = check(scene.Get<UIButton>(id), "UIButton")) return n;
+    if (const char* n = check(scene.Get<UIImage>(id), "UIImage")) return n;
+    if (const char* n = check(scene.Get<UISlider>(id), "UISlider")) return n;
+    if (const char* n = check(scene.Get<UIText>(id), "UIText")) return n;
+    if (const char* n = check(scene.Get<Sprite>(id), "Sprite")) return n;
+    if (const char* n = check(scene.Get<MeshRenderer>(id), "MeshRenderer")) return n;
+    if (const char* n = check(scene.Get<Tilemap>(id), "Tilemap")) return n;
+    return std::string();
+}
+
 void NativeEditor::Impl::SelectOnly(EntityId id) {
     selection.clear();
     if (id != kNullEntity) selection.push_back(id);
@@ -449,9 +473,20 @@ void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args,
         what += " " + (r ? r->name : "#" + std::to_string(id));
         remoteEdits[id] = time;
     }
+    // A team agent says who it is (oe mcp --connect --agent): the notice carries its name and color.
+    const std::string agent = engine.RemoteCallAgent();
+    std::string who = "API";
+    for (const Json& member : team["agents"].items()) {
+        if (!agent.empty() && member["id"].asString("") == agent) who = member["name"].asString(agent);
+    }
+    if (id != kNullEntity) {
+        if (agent.empty()) remoteEditColors.erase(id);
+        else remoteEditColors[id] = AgentColor(agent);
+    }
     if (args["type"].isString()) what += " " + args["type"].asString();
     OE_LOG_INFO("api", "%s", what.c_str());
-    Notify("API: " + what);
+    Notify(who + ": " + what);
+    if (!agent.empty() && !toasts.empty()) toasts.back().color = AgentColor(agent);
     selectedId = kNullEntity;  // reload the inspector
 }
 
@@ -699,48 +734,71 @@ void NativeEditor::Impl::ApplyStyle() {
     st.GrabRounding = 3.0f;
     st.TabRounding = 4.0f;
     st.ScrollbarRounding = 6.0f;
-    st.WindowPadding = ImVec2(8, 8);
-    st.FramePadding = ImVec2(6, 4);
-    st.ItemSpacing = ImVec2(8, 5);
-    st.IndentSpacing = 16.0f;
+    // Readability first: roomy rows, fields that stand out from their panel (lighter fill and
+    // an outline), text hints bright enough to read, a selection that cannot be missed, and
+    // panel chrome (menu, tab bars, gaps between docks) clearly darker than the panels.
+    st.WindowPadding = ImVec2(10, 8);
+    st.FramePadding = ImVec2(7, 5);
+    st.ItemSpacing = ImVec2(8, 6);
+    st.ItemInnerSpacing = ImVec2(6, 4);
+    st.CellPadding = ImVec2(6, 3);
+    st.IndentSpacing = 18.0f;
+    st.ScrollbarSize = 13.0f;
+    st.GrabMinSize = 12.0f;
     st.WindowBorderSize = 1.0f;
+    st.PopupBorderSize = 1.0f;
+    st.FrameBorderSize = 1.0f;
     st.TabBarBorderSize = 1.0f;
+    st.TabBarOverlineSize = 2.0f;
     st.DockingSeparatorSize = 3.0f;
+    st.SeparatorTextBorderSize = 2.0f;
+    st.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesToNodes;  // parent-child guides in the Hierarchy
+    st.TreeLinesSize = 1.0f;
     ImVec4* c = st.Colors;
-    const ImVec4 bg(0.105f, 0.115f, 0.135f, 1.0f), panel(0.135f, 0.145f, 0.17f, 1.0f), frame(0.18f, 0.195f, 0.225f, 1.0f);
-    const ImVec4 accent(0.26f, 0.52f, 0.96f, 1.0f), accentDim(0.22f, 0.38f, 0.66f, 1.0f);
-    c[ImGuiCol_Text] = ImVec4(0.90f, 0.91f, 0.93f, 1.0f);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.53f, 0.58f, 1.0f);
+    const ImVec4 bg(0.075f, 0.08f, 0.095f, 1.0f), panel(0.13f, 0.14f, 0.165f, 1.0f), frame(0.205f, 0.22f, 0.255f, 1.0f);
+    const ImVec4 accent(0.30f, 0.58f, 1.0f, 1.0f), accentDim(0.22f, 0.40f, 0.72f, 1.0f);
+    c[ImGuiCol_Text] = ImVec4(0.93f, 0.94f, 0.96f, 1.0f);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.63f, 0.66f, 0.72f, 1.0f);  // hints and secondary text: 6:1 on the panel
     c[ImGuiCol_WindowBg] = panel;
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.13f, 0.155f, 0.98f);
-    c[ImGuiCol_Border] = ImVec4(0.06f, 0.065f, 0.08f, 1.0f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.105f, 0.115f, 0.14f, 0.99f);
+    c[ImGuiCol_Border] = ImVec4(0.30f, 0.325f, 0.375f, 0.75f);  // outlines of fields, popups and notices
     c[ImGuiCol_FrameBg] = frame;
-    c[ImGuiCol_FrameBgHovered] = ImVec4(0.23f, 0.25f, 0.29f, 1.0f);
-    c[ImGuiCol_FrameBgActive] = ImVec4(0.26f, 0.28f, 0.33f, 1.0f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.25f, 0.27f, 0.315f, 1.0f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.27f, 0.31f, 0.39f, 1.0f);
     c[ImGuiCol_TitleBg] = bg;
     c[ImGuiCol_TitleBgActive] = bg;
     c[ImGuiCol_MenuBarBg] = bg;
-    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_CheckMark] = accent;
-    c[ImGuiCol_SliderGrab] = accentDim;
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.18f);
+    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.36f, 0.385f, 0.44f, 1.0f);
+    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.46f, 0.49f, 0.56f, 1.0f);
+    c[ImGuiCol_ScrollbarGrabActive] = accentDim;
+    c[ImGuiCol_CheckMark] = ImVec4(0.55f, 0.76f, 1.0f, 1.0f);
+    c[ImGuiCol_SliderGrab] = ImVec4(0.38f, 0.56f, 0.92f, 1.0f);
     c[ImGuiCol_SliderGrabActive] = accent;
-    c[ImGuiCol_Button] = frame;
-    c[ImGuiCol_ButtonHovered] = ImVec4(0.25f, 0.27f, 0.32f, 1.0f);
+    c[ImGuiCol_Button] = ImVec4(0.235f, 0.25f, 0.295f, 1.0f);
+    c[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.33f, 0.40f, 1.0f);
     c[ImGuiCol_ButtonActive] = accentDim;
-    c[ImGuiCol_Header] = ImVec4(0.20f, 0.25f, 0.33f, 1.0f);
-    c[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.29f, 0.38f, 1.0f);
-    c[ImGuiCol_HeaderActive] = ImVec4(0.26f, 0.36f, 0.55f, 1.0f);
-    c[ImGuiCol_Separator] = c[ImGuiCol_Border];
+    c[ImGuiCol_Header] = ImVec4(0.19f, 0.31f, 0.52f, 1.0f);  // selected rows and section bars
+    c[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.27f, 0.36f, 1.0f);
+    c[ImGuiCol_HeaderActive] = ImVec4(0.24f, 0.40f, 0.68f, 1.0f);
+    c[ImGuiCol_Separator] = ImVec4(0.24f, 0.26f, 0.30f, 1.0f);
     c[ImGuiCol_SeparatorHovered] = accentDim;
     c[ImGuiCol_SeparatorActive] = accent;
+    c[ImGuiCol_ResizeGrip] = ImVec4(0.30f, 0.33f, 0.38f, 0.6f);
     c[ImGuiCol_Tab] = bg;
-    c[ImGuiCol_TabHovered] = ImVec4(0.22f, 0.26f, 0.33f, 1.0f);
+    c[ImGuiCol_TabHovered] = ImVec4(0.22f, 0.27f, 0.36f, 1.0f);
     c[ImGuiCol_TabSelected] = panel;
     c[ImGuiCol_TabSelectedOverline] = accent;
     c[ImGuiCol_TabDimmed] = bg;
     c[ImGuiCol_TabDimmedSelected] = panel;
-    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.40f, 0.46f, 0.56f, 1.0f);  // which tab shows, also in unfocused docks
+    c[ImGuiCol_TreeLines] = ImVec4(0.30f, 0.325f, 0.375f, 1.0f);
+    c[ImGuiCol_TableHeaderBg] = ImVec4(0.17f, 0.185f, 0.215f, 1.0f);
+    c[ImGuiCol_TableBorderStrong] = ImVec4(0.26f, 0.28f, 0.33f, 1.0f);
+    c[ImGuiCol_TableBorderLight] = ImVec4(0.20f, 0.215f, 0.25f, 1.0f);
+    c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.025f);
+    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
     c[ImGuiCol_DockingPreview] = ImVec4(accent.x, accent.y, accent.z, 0.5f);
     c[ImGuiCol_DockingEmptyBg] = bg;
     c[ImGuiCol_TextSelectedBg] = ImVec4(accent.x, accent.y, accent.z, 0.35f);
@@ -809,7 +867,11 @@ void NativeEditor::Impl::ApplyEvents(const std::vector<WindowEvent>& events) {
                 if (!e.down) { ReleaseGameInput(); gameFocused = false; }
                 break;
             case WindowEvent::Type::Close: RequestAction({PendingAction::Kind::Quit, ""}); break;
-            case WindowEvent::Type::DropFile: droppedFiles.push_back(e.path); break;
+            case WindowEvent::Type::DropFile:
+                droppedFiles.push_back(e.path);
+                droppedAt.resize(droppedFiles.size(), ImVec2(-1, -1));
+                droppedAt.back() = ImVec2(e.x, e.y);
+                break;
         }
     }
 }
@@ -971,6 +1033,8 @@ void NativeEditor::Impl::MainMenu() {
         }
         if (ImGui::MenuItem(Tr("Reset Layout"))) resetLayout = true;
         if (ImGui::MenuItem(Tr("Network"), nullptr, &showNetwork) && showNetwork) requestNetworkFocus = true;
+        if (teamAvailable && ImGui::MenuItem(Tr("Team"), nullptr, &showTeam) && showTeam) requestTeamFocus = true;
+        if (teamAvailable && ImGui::MenuItem(Tr("Team Chat"), nullptr, &showTeamChat) && showTeamChat) requestTeamChatFocus = true;
         ImGui::MenuItem(Tr("ImGui Metrics"), nullptr, &showMetrics);
         ImGui::EndMenu();
     }
@@ -1088,8 +1152,7 @@ void NativeEditor::Impl::StatusBar(float barHeight) {
             ImGui::SameLine(); if (ImGui::SmallButton(Tr("Close Prefab"))) RequestAction({PendingAction::Kind::ClosePrefab, ""});
         }
         ImGui::SameLine();
-        ImGui::TextDisabled(Tr("|  %d entities  |  %d fps  |  %s"), static_cast<int>(rows.size()), fps,
-                            engine.Gpu() ? engine.Gpu()->Name() : "software");
+        ImGui::Text(Tr("|  %d entities  |  %d fps  |  %s"), static_cast<int>(rows.size()), fps, engine.Gpu() ? engine.Gpu()->Name() : "software");
         if (!options.serverInfo.empty()) {
             ImGui::SameLine();
             ImGui::TextDisabled("|  %s", options.serverInfo.c_str());
@@ -1126,10 +1189,18 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
             ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("###Console"));
             if (console && console->DockId) ImGui::DockBuilderDockWindow("###History", console->DockId);
         }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Team"))) {
+            ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("###Hierarchy"));
+            if (hierarchy && hierarchy->DockId) ImGui::DockBuilderDockWindow("###Team", hierarchy->DockId);
+        }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Team Chat"))) {
+            ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("###Console"));
+            if (console && console->DockId) ImGui::DockBuilderDockWindow("###Team Chat", console->DockId);
+        }
         return;
     }
     resetLayout = false;
-    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = true;
+    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = showTeam = showTeamChat = true;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockspace);
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -1139,6 +1210,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.27f, nullptr, &center);
     ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
     ImGui::DockBuilderDockWindow("###Hierarchy", left);
+    ImGui::DockBuilderDockWindow("###Team", left);
     ImGui::DockBuilderDockWindow("###Tiles", right);
     ImGui::DockBuilderDockWindow("###Inspector", right);
     ImGui::DockBuilderDockWindow("###Network", right);
@@ -1148,8 +1220,11 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderDockWindow("###History", bottom);
+    ImGui::DockBuilderDockWindow("###Team Chat", bottom);
     ImGui::DockBuilderFinish(dockspace);
+    if (ImGuiDockNode* b = ImGui::DockBuilderGetNode(bottom)) b->SelectedTabId = ImHashStr("###Assets");  // as before the chat tab existed
     if (ImGuiDockNode* r = ImGui::DockBuilderGetNode(right)) r->SelectedTabId = ImHashStr("###Inspector");  // Tiles waits behind it
+    if (ImGuiDockNode* l = ImGui::DockBuilderGetNode(left)) l->SelectedTabId = ImHashStr("###Hierarchy");  // Team waits behind it
     focusSceneTab = 2;  // once the windows are docked (they appear this frame)
 }
 
@@ -1251,7 +1326,7 @@ void NativeEditor::Impl::Toasts() {
         std::snprintf(name, sizeof(name), "##toast%d", i);
         ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                              ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoInputs;
-        ImGui::PushStyleColor(ImGuiCol_Border, it->error ? ImVec4(0.9f, 0.35f, 0.3f, 1) : ImVec4(0.3f, 0.6f, 0.95f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Border, it->color ? ImGui::ColorConvertU32ToFloat4(it->color) : it->error ? ImVec4(0.9f, 0.35f, 0.3f, 1) : ImVec4(0.3f, 0.6f, 0.95f, 1));
         if (ImGui::Begin(name, nullptr, f)) {
             ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
             ImGui::TextUnformatted(it->text.c_str());
@@ -1305,6 +1380,7 @@ bool NativeEditor::Init(std::string* error) {
     if (m.window) ImGui::GetMainViewport()->PlatformHandleRaw = m.window->NativeHandle();  // IME window placement (Win32)
 
     g_settingsTarget = &m;
+    m.teamAvailable = m.engine.Commands().Find("team.state") != nullptr;  // registered by the hosting tool (docs/TEAM.md)
     ImGuiSettingsHandler h;
     h.TypeName = "OwnEngine";
     h.TypeHash = ImHashStr("OwnEngine");
@@ -1338,7 +1414,7 @@ bool NativeEditor::Init(std::string* error) {
                 if (path != merged) {  // Noto CJK covers both: merge it once
                     ImFontConfig merge;
                     merge.MergeMode = true;
-                    io.Fonts->AddFontFromFileTTF(path, kBaseFontSize, &merge);
+                    io.Fonts->AddFontFromFileTTF(path, kBaseFontSize * kCjkFontScale, &merge);
                     merged = path;
                 }
                 break;
@@ -1378,6 +1454,11 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
 
     m.GameInput();
     m.engine.Tick(dt);
+    if (m.options.onFrame) m.options.onFrame();
+    if (m.teamAvailable) {  // every frame, whatever is visible: the tab's unread count and the roster stay current
+        m.RefreshTeam();
+        m.PollChat();
+    }
     m.Refresh(false);
     m.PollLog();
     m.RefreshAssets(false);
@@ -1402,8 +1483,13 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showTiles) m.TilesPanel();
     if (m.showNetwork) m.NetworkPanel();
     if (m.showHistory) m.HistoryPanel();
+    if (m.teamAvailable && m.showTeam) m.TeamPanel();
+    if (m.teamAvailable && m.showTeamChat) m.TeamChatPanel();
     if (m.showMetrics) ImGui::ShowMetricsWindow(&m.showMetrics);
     m.Modals();
+    if (m.teamAvailable) m.TeamModals();
+    if (m.teamAvailable) m.ImageViewer();
+    if (m.teamAvailable && !m.droppedFiles.empty()) m.RouteDroppedFiles();  // onto the chat: attached, not imported
     m.Toasts();
     if (!m.droppedFiles.empty()) m.ImportDroppedFiles();
     m.UpdateCursor();
@@ -1489,8 +1575,14 @@ void NativeEditor::SetTileBrush(bool paint, char brush) {
     }
 }
 
+void NativeEditor::SetSceneView2D(bool on) { impl_->cam.Set2D(on); }
+
 std::array<float, 4> NativeEditor::SceneViewRect() const {
     return {impl_->sceneImagePos.x, impl_->sceneImagePos.y, impl_->sceneImageSize.x, impl_->sceneImageSize.y};
+}
+
+std::array<float, 4> NativeEditor::GameViewRect() const {
+    return {impl_->gameImagePos.x, impl_->gameImagePos.y, impl_->gameImageSize.x, impl_->gameImageSize.y};
 }
 
 void NativeEditor::FocusGameView(bool focus) {

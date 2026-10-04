@@ -5,6 +5,8 @@
 A C++17 game engine designed so that AI agents can drive and verify it as easily as people can. The editor for people and the interfaces for AI (CLI, HTTP, MCP) share **one command API**.
 
 - Toon shader test: `samples/WuwaToon` — public Wuthering Waves community references, original geometry, Toon/PBR/Normals comparisons, outlines and turntable controls. Scope and sources: [docs/TOON.md](docs/TOON.md)
+- Complete game sample: `samples/Wickbound` — a 10-minute survivor roguelite where light is the resource. Prefabs with per-entity scripts, Box2D bodies, sensors and collision layers, `Light2D`/`Darkness2D` 2D lighting, additive sprites and particles, sorting layers, menu and run scenes with UI hierarchies and modal dialogs, `game.pause`, save data and a daily gift (`time.date`), English/Korean text. Run: `oe run samples/Wickbound`
+- UI and editor: scroll views (`UIScroll`), entrance motion (`UIMotion`), button hover scale, Lua `tween`, modal input blocking - [docs/UI.md](docs/UI.md). The editor's stopped Game view selects, moves and resizes UI; the Hierarchy eye toggles visibility - [docs/EDITOR.md](docs/EDITOR.md)
 - Editor tools: hierarchy clipboard, history timeline, prefab source editing, asset thumbnails and Windows native file dialogs — [docs/EDITOR.md](docs/EDITOR.md)
 
 ![Native editor - Showcase sample](docs/images/native-editor.png)
@@ -26,6 +28,7 @@ A C++17 game engine designed so that AI agents can drive and verify it as easily
 - Gameplay building blocks: prefabs, scene changes + game data, messages/timers, in-game UI, audio (deterministic mixer, generated sound effects) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 scripting (sandboxed, hot reload, errors with file:line) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - Camera post-processing: exposure, HDR Reinhard tone mapping, bloom, vignette and FXAA in software/GPU renderers, with UI and selection outlines preserved. Showcase keys 1-6 select Off, Tone, Bloom, Vignette, FXAA or All. `shader.create`/`shader.check` create and validate surface graphs. Material surface graphs execute in CPU/GPU main passes. Graph alpha also drives shadow/selection passes. ShaderLab demonstrates animated emission, procedural masks and shadows; CPU/D3D11 and packaged WebGL2 verified. Android runtime/device checks remain - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- HD-2D sprites: a project script (`samples/HD2D/scripts/billboards.lua`) turns pixel-art sprites towards the camera in a lit 3D world, `Sprite.castShadows` casts image-shaped shadows, and `PostProcess` depth of field (`dofRadius`/`dofFocus`/`dofRange`/`dofFalloff`) blurs by view depth in both renderers. Demonstrated by samples/HD2D; web/Android players need a rebuild - [docs/2D.md](docs/2D.md), [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - Gamepad input: six injectable axes, Lua `input.axis`, a shared 0.15 dead zone, Windows XInput/web Gamepad API/Android adapters, editor Game-view forwarding and Platformer/Dungeon controls. Physical-controller checks remain - [docs/INPUT.md](docs/INPUT.md)
 - Web multi-touch: every finger in Lua `input.touches()`, simultaneous on-screen keys and first-finger mouse compatibility; synthetic browser events verified, mobile hardware checks remain - [docs/TOUCH.md](docs/TOUCH.md)
 - Deterministic simulation and software renderer: same inputs give the same frame hash, so an AI can use it as a test oracle
@@ -100,11 +103,23 @@ use memory by default; `--save-dir <dir>` enables persistent JSON slots. See
 | Method | Command |
 |---|---|
 | MCP (Claude Code etc.) | `oe mcp <project> [--port 7777]` - every command is an MCP tool, screenshots come back as images. With `--port` a person watches the same session in the editor |
-| Attach to a running editor | `oe mcp --connect 7777` |
+| Attach to a running editor | `oe mcp --connect 7777` (MCP), or without MCP `oe exec --connect 7777 <command> [json]`, `oe script --connect 7777` |
 | CLI / scripts | `oe exec`, `oe script` (JSON in and out, exit code 1 on failure) |
 | HTTP | `POST /api/call {"command": "...", "args": {...}}` |
 
 This repository's [.mcp.json](.mcp.json) connects the `samples/Hello` project to Claude Code as an MCP server (build first). The working guide for agents is in [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md), the full API in [docs/API.md](docs/API.md) the architecture in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the design rules every contributor (human or AI agent) follows in [docs/DESIGN.md](docs/DESIGN.md).
+
+### Agent team
+
+Inside the editor you can keep several AI agents as a team and give them work. The engine does not call model APIs itself: it runs the coding-agent CLIs installed and logged in on this PC (Claude Code, Codex) as child processes.
+
+- **Team panel** (View > Team): add, edit and remove agents. Each has a picture, a description, instructions, the CLI and model it runs on, and an access level (read only / edit project / full access). A CLI that is not installed cannot be chosen.
+- **Team Chat panel** (View > Team Chat): `@name` calls an agent, `@all` everyone, a message without a mention goes to the lead. A working agent shows what it is doing and a **Stop** button. Files dropped on the panel are attached, `#` refers to a project file with a preview. Images an agent produced appear under its reply.
+- An agent can hand work on to a teammate with `@id` in its reply; a chain is cut at `maxHops` (4 by default).
+- Agents drive the open editor through the command API, and the editor shows who changed what.
+- Everything is a command too: `team.add`, `team.send`, `team.state`, `team.messages`, ... The team and its chat live in `<project>/.oe/team/` and are not committed.
+
+Windows only for now. Details and status: [docs/TEAM.md](docs/TEAM.md)
 
 ## Layout
 
@@ -136,6 +151,8 @@ samples/Showcase rendering sample (glTF fox character, textures, shadows, point 
 samples/Dungeon  2D top-down action (Box2D, autotiled tileset, pushable crates, bolts, slimes)
 samples/Platformer 2D side-scroller (text tilemap, sprite animation, enemies, ? blocks, parallax)
 samples/FPS      first-person shooter test game (mouse look, hitscan pistol, reload, moving targets, results screen)
+samples/HD2D     HD-2D test game "Lantern Road" (pixel-art sprites turned to the camera by a script, with shadows in a 3D world, depth of field, crystals, dialog)
+samples/Water      rolling sea (shader graph vertex offset and normal outputs, plane64, buoys and a boat riding the waves, Calm/Swell/Storm)
 ```
 
-Network samples: `samples/NetCoop` (lockstep co-op), `samples/NetDuel` (rollback versus), `samples/NetArena` (authoritative versus). Choose editor Players 2 or use the in-game Host/Join/Ready/Start lobby. Keyboard, gamepad and touch buttons share declared actions. Launch, WebSocket and Android verification guide: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).
+Network samples: `samples/NetCoop` (lockstep co-op), `samples/NetDuel` (rollback versus), `samples/NetArena` (authoritative versus), `samples/NetChase` (authoritative third-person crystal race). Choose editor Players 2 or use the in-game Host/Join/Ready/Start lobby. Keyboard, gamepad and touch buttons share declared actions. Launch, WebSocket and Android verification guide: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md).

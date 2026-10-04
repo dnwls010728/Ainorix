@@ -1,0 +1,7 @@
+{
+  "format": "ownengine.project",
+  "version": 1,
+  "name": "Wickbound",
+  "startScene": "scenes/menu.scene.json",
+  "window": {"width": 1280, "height": 720, "title": "Wickbound"}
+}

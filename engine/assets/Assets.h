@@ -16,6 +16,9 @@ class Engine;
 
 // Decoders (stb_image / cgltf). `baseDir` resolves external files of .gltf.
 bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::string* error);
+// Size of an encoded image from its header, without decoding the pixels (callers bound the
+// memory a decode may take). False when the data is not a supported image.
+bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& height);
 bool LoadModelFile(const std::string& path, Mesh& out, std::string* error);
 
 // Loads models and textures referenced by the scene, caches them, and

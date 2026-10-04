@@ -1,0 +1,203 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Player",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.6,
+            9
+          ],
+          "rotation": [
+            0,
+            180,
+            0
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "assets/models/coat.glb",
+          "material": "materials/coat-toon.mat.json",
+          "color": [
+            0.22,
+            0.65,
+            1
+          ]
+        },
+        "NetPlayer": {
+          "player": 1
+        },
+        "NetSync": {
+          "owner": 0,
+          "predict": true,
+          "fields": {
+            "Transform.position": {
+              "onChange": true
+            },
+            "Transform.rotation": {
+              "onChange": true
+            },
+            "MeshRenderer.color": {
+              "onChange": true
+            }
+          }
+        },
+        "Script": {
+          "path": "scripts/player.lua"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Part_skin",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/skin.glb",
+          "material": "materials/skin-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Part_hair",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/hair.glb",
+          "material": "materials/hair-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Part_boots",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/boots.glb",
+          "material": "materials/boots-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Part_trim",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/trim.glb",
+          "material": "materials/trim-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Part_eyes",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/eyes.glb",
+          "material": "materials/eyes-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Part_iris",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/iris.glb",
+          "material": "materials/iris-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Part_ink",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/ink.glb",
+          "material": "materials/ink-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Part_blush",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/blush.glb",
+          "material": "materials/blush-toon.mat.json"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Outline_skin",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/skin-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Outline_hair",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/hair-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Outline_coat",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/coat-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Outline_boots",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "MeshRenderer": {
+          "mesh": "assets/models/boots-outline.glb",
+          "material": "materials/outline.mat.json",
+          "castShadows": false
+        }
+      }
+    }
+  ]
+}

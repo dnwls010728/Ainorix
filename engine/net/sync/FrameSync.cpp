@@ -47,8 +47,13 @@ bool SyncConfig::Parse(const Json& json, SyncConfig& out, std::string* error) {
         config.keys.push_back(name);
     }
     for (const Json& axis : json["axes"].items()) {
+        size_t look = axis.asString() == "LookX" ? 0 : axis.asString() == "LookY" ? 1 : 2;
+        if (axis.isString() && look < 2) {
+            if (config.axes[2 + look]) return fail("LookX/LookY use the RightX/RightY slots; declare each slot once");
+            config.axes[2 + look] = config.look[look] = true; continue;
+        }
         auto found = std::find_if(std::begin(kAxes), std::end(kAxes), [&](const char* name) { return axis.isString() && axis.asString() == name; });
-        if (found == std::end(kAxes) || config.axes[static_cast<size_t>(found - std::begin(kAxes))]) return fail("axes must be unique standard gamepad axis names");
+        if (found == std::end(kAxes) || config.axes[static_cast<size_t>(found - std::begin(kAxes))]) return fail("axes must be unique standard gamepad axis names, LookX or LookY");
         config.axes[static_cast<size_t>(found - std::begin(kAxes))] = true;
     }
     out = std::move(config); return true;
@@ -56,7 +61,7 @@ bool SyncConfig::Parse(const Json& json, SyncConfig& out, std::string* error) {
 Json SyncConfig::ToJson() const {
     Json j = Json::MakeObject(); j["actions"] = Json::MakeArray(); j["axes"] = Json::MakeArray();
     for (const auto& key : keys) j["actions"].push(key);
-    for (size_t i = 0; i < axes.size(); ++i) if (axes[i]) j["axes"].push(kAxes[i]);
+    for (size_t i = 0; i < axes.size(); ++i) if (axes[i]) j["axes"].push(i >= 2 && i < 4 && look[i - 2] ? (i == 2 ? "LookX" : "LookY") : kAxes[i]);
     j["inputDelay"] = delay; j["rollbackFrames"] = rollbackFrames; j["rollback"] = rollback;
     j["hashInterval"] = hashInterval; j["waitFrames"] = waitFrames; j["empty"] = emptyOnTimeout; return j;
 }
