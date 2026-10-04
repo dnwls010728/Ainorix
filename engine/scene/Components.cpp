@@ -9,10 +9,9 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<ParticleEmitter>();
     TypeRegistry::Register<Camera>();
     TypeRegistry::Register<PostProcess>();
+    TypeRegistry::Register<Light2D>();
+    TypeRegistry::Register<Darkness2D>();
     TypeRegistry::Register<DirectionalLight>();
-    TypeRegistry::Register<Rotator>();
-    TypeRegistry::Register<Velocity>();
-    TypeRegistry::Register<PlayerController>();
     TypeRegistry::Register<Tag>();
     TypeRegistry::Register<Script>();
     TypeRegistry::Register<Collider>();
@@ -28,6 +27,8 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<UIImage>();
     TypeRegistry::Register<UISlider>();
     TypeRegistry::Register<UILayout>();
+    TypeRegistry::Register<UIScroll>();
+    TypeRegistry::Register<UIMotion>();
     TypeRegistry::Register<UICanvas>();
     TypeRegistry::Register<AudioSource>();
     TypeRegistry::Register<PointLight>();

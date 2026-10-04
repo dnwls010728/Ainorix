@@ -218,6 +218,7 @@ Json SimState(Engine& e) {
         s["rawAxes"][name] = raw == e.Input().axes.end() ? 0.0f : raw->second;
     }
     s["mouseLocked"] = e.Input().mouseLocked;
+    s["gamePaused"] = e.GamePaused();
     s["scriptErrors"] = static_cast<uint64_t>(e.Scripts().Errors().size());
     s["sceneName"] = e.GetScene().name;
     s["entities"] = static_cast<uint64_t>(e.GetScene().Entities().size());
@@ -971,6 +972,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  .Opt("y", "number", "Pixel y.")
                  .Opt("dx", "number", "Relative motion in pixels, read by scripts with input.mouseDelta() on the next step (mouse look).")
                  .Opt("dy", "number", "Relative vertical motion in pixels (positive = down).")
+                 .Opt("wheel", "number", "Mouse wheel notches for the next step (positive = away from the user; scrolls UIScroll panels, input.wheel()).")
                  .Opt("locked", "boolean", "Set the mouse lock state (what input.lockMouse() does; the editor clears it when the player presses Escape).")
                  .Opt("width", "integer", "Width of the image the coordinates refer to (default 640).")
                  .Opt("height", "integer", "Height of that image (default 360).")
@@ -987,6 +989,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  }
                  in.mouseDX += a["dx"].asFloat(0.0f);
                  in.mouseDY += a["dy"].asFloat(0.0f);
+                 in.wheel += a["wheel"].asFloat(0.0f);
                  if (a.has("locked")) in.mouseLocked = a["locked"].asBool();
                  if (a.has("button")) {
                      std::string b = a["button"].asString();
@@ -1264,6 +1267,24 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return e.Saves().State(slot);
              });
 
+    Register(r, "time.date", "Calendar date scripts see through time.date() (daily rewards). set fixes it for tests; an empty set returns to the clock.",
+             Params().Opt("set", "string", "YYYY-MM-DD to pin the date, or \"\" to use the machine's clock again."), false,
+             [](Engine& e, const Json& a) {
+                 if (a.has("set")) {
+                     const std::string date = a["set"].asString();
+                     const bool shape = date.size() == 10 && date[4] == '-' && date[7] == '-';
+                     bool digits = shape;
+                     for (size_t i = 0; digits && i < date.size(); ++i)
+                         if (i != 4 && i != 7 && (date[i] < '0' || date[i] > '9')) digits = false;
+                     if (!date.empty() && !digits) throw ApiError("bad_date", "set must look like 2026-01-31", "Pass YYYY-MM-DD, or \"\" to clear the override.");
+                     e.SetDateOverride(date);
+                 }
+                 Json out = Json::MakeObject();
+                 out["date"] = e.Today();
+                 out["overridden"] = !e.DateOverride().empty();
+                 return out;
+             });
+
     Register(r, "game.state", "Runtime scene and game data (game.set values) of the current play session.", Params(), false,
              [](Engine& e, const Json&) {
                  Json out = Json::MakeObject();
@@ -1272,6 +1293,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["sceneName"] = e.GetScene().name;
                  out["data"] = e.GameData();
                  out["frame"] = static_cast<uint64_t>(e.Frame());
+                 return out;
+             });
+
+    Register(r, "game.pause", "Gameplay pause of the play session (like game.pause in Lua): scripts and UI keep running with dt = 0, "
+             "physics, systems, timers and particles wait. Omit paused to read the state.",
+             Params().Opt("paused", "bool", "true pauses, false resumes."), false, [](Engine& e, const Json& a) {
+                 if (a.has("paused")) e.SetGamePaused(a["paused"].asBool());
+                 Json out = Json::MakeObject();
+                 out["paused"] = e.GamePaused();
                  return out;
              });
 
@@ -1616,13 +1646,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         result["nodes"] = static_cast<int>(graph.instructions.size());
         result["color"] = graph.color;
         result["emissive"] = graph.emissive;
+        result["normal"] = graph.normal;
+        result["offset"] = graph.offset;
         result["uniforms"] = Json::MakeArray();
         for (const std::string& name : graph.uniformNames) result["uniforms"].push(name);
         return result;
     };
     Register(r, "shader.create", "Create a validated portable surface shader graph (*.shader.json).",
              Params().Req("path", "string", "Project-relative .shader.json file.")
-                 .Req("graph", "object", "Ordered nodes, color output, optional emissive output and named uniform defaults.")
+                 .Req("graph", "object", "Ordered nodes, color output, optional emissive/normal/offset outputs and named uniform defaults.")
                  .Opt("overwrite", "boolean", "Replace an existing graph."), false,
              [shaderInfo](Engine& e, const Json& a) {
                  const std::string path = a["path"].asString(), full = e.ResolvePath(path);

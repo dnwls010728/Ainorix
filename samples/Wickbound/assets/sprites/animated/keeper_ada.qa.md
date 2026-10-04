@@ -1,0 +1,1 @@
+Alternating foot poses and continuous intermediate steps replace the four kick poses. Head/lantern remain substantially stable. Residual small sideways step discontinuity was reported before RIFE installation; physically accurate contact is not certified.

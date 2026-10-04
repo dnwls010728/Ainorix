@@ -1,5 +1,5 @@
--- Lua port of the built-in PlayerController component.
--- W/A/S/D or arrow keys move on the XZ plane, Space jumps.
+-- Simple player movement: W/A/S/D or arrow keys move on the XZ plane, Space jumps.
+-- With a CharacterBody the physics engine moves the entity; without one it lands at y = half its height.
 -- params: { "speed": 4, "jumpSpeed": 5, "gravity": 12 }
 local Player = {}
 
@@ -26,9 +26,8 @@ function Player:onUpdate(dt)
   if self:has("CharacterBody") then
     local vx, vz = 0, 0
     if len > 0 then
-      local speed = self.speed * (input.down("Shift") and 1.6 or 1)
-      vx = mx / len * speed
-      vz = mz / len * speed
+      vx = mx / len * self.speed
+      vz = mz / len * self.speed
     end
     local vy = self:velocity().y
     if self:grounded() and (input.pressed("Space") or input.down("Space")) then vy = self.jumpSpeed end

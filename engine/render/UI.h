@@ -26,6 +26,10 @@ struct UIRect {
     EntityId parent = kNullEntity;     // UI parent entity (kNullEntity = screen)
     float opacity = 1.0f;              // including ancestors
     bool interactable = false;         // enabled button or slider
+    bool blocksInput = false;          // UIPanel.blockInput: elements drawn under it cannot be clicked
+    bool scroll = false;               // has a UIScroll
+    bool scrollHorizontal = false;
+    float scrollMax = 0.0f;            // largest UIScroll.scroll in reference pixels (0 = content fits)
     bool clipped = false;              // inside a clipping panel: only [clip] is visible
     float clip[4] = {0, 0, 0, 0};      // x0, y0, x1, y1 in pixels
 };
@@ -65,6 +69,18 @@ void ShadeUIQuad(const UIQuad& q, float px, float py, Color* color, float* alpha
 // Draws all visible UI on top of the frame (also writes the entity-id buffer
 // where a quad is at least half opaque).
 void DrawUI(const Scene& scene, RenderTarget& target, AssetManager* assets = nullptr);
+
+// Scroll bar thumb of a scroll view along its axis, in pixels from the start of the view: where it
+// starts, how long it is and how far it can travel. `view` = visible length, `extent` = content length,
+// `offset` = current scroll, all in pixels; `scale` = pixels per reference pixel.
+struct UIThumb {
+    float at = 0, length = 0, travel = 0, margin = 0, thickness = 0;
+};
+UIThumb ScrollThumb(float view, float extent, float offset, float scale);
+
+// Advances UI animation state by one real frame: UIMotion timers (restarting when an element becomes
+// visible) and the eased UIButton hover/press scale. Called once per simulated frame, also while paused.
+void UpdateUIMotion(Scene& scene, float dt);
 
 // Topmost interactable element (enabled button or slider) under a pixel, or null.
 const UIRect* HitTestUI(const std::vector<UIRect>& rects, float px, float py);

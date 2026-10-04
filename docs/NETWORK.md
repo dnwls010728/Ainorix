@@ -686,7 +686,9 @@ without bounds. Local/unreplicated scripts and owned prediction run on clients; 
 scripts are suppressed. Remote rigid bodies are kinematic and remote characters provide colliders.
 Physics correction rebuilds solvers with corrected poses while preserving collision event history.
 Author gameplay outside replicated entities with `net.isServer()` guards; local UI/camera scripts
-can run normally. Remote float/Vec3/Color fields interpolate at `interpolationFrames` (0..30,
+can run normally, including relative mouse look (`input.mouseDelta`/`lockMouse`). A look direction
+must travel in the input stream: `input.setLook` plus the `LookX`/`LookY` entries of `network.axes`
+(RightX/RightY wire slots, no dead zone; see SCRIPTING.md). Remote float/Vec3/Color fields interpolate at `interpolationFrames` (0..30,
 default 6, about 100 ms). Integer, boolean, string and entity-reference fields do not interpolate.
 
 `net.entities` / Lua `net.entities()` expose network ids, local ids, owners and received fields.

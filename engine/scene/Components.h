@@ -25,9 +25,10 @@ struct Transform {
 
 struct MeshRenderer {
     static constexpr const char* kTypeName = "MeshRenderer";
-    static constexpr const char* kDoc = "Draws a mesh: a built-in shape (cube, sphere, plane, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.";
+    static constexpr const char* kDoc = "Draws a mesh: a built-in shape (cube, sphere, plane, plane64, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.";
     std::string mesh = "cube";
     std::string material;
+    Json shaderUniforms = Json::MakeObject();
     Color color{0.8f, 0.8f, 0.8f};
     float opacity = 1.0f;
     std::string texture;
@@ -36,10 +37,13 @@ struct MeshRenderer {
     bool castShadows = true;
     bool visible = true;
     static void Reflect(FieldList& f) {
-        f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf).");
+        f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf).");
         f.Add("material", &MeshRenderer::material,
               "Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. "
               "Empty = the model's own materials (glTF) or the default (white, roughness 0.7).");
+        f.Add("shaderUniforms", &MeshRenderer::shaderUniforms,
+              "Per-entity values for the material's shader graph uniforms: {name: number or [x, y, z, w]}. Unnamed uniforms keep the "
+              "material's values; scripts can change them every frame. An unknown name or a material without a graph renders magenta.");
         f.Add("color", &MeshRenderer::color, "Tint multiplied with the material/texture color, linear RGB 0..1 (or \"#rrggbb\").");
         FieldInfo& op = f.Add("opacity", &MeshRenderer::opacity, "Below 1 the mesh is drawn transparent (alpha blended, sorted back to front, no shadow).");
         op.hasRange = true;
@@ -74,6 +78,7 @@ struct Animator {
 struct Particle {
     Vec3 position, velocity, gravity;
     float age = 0, lifetime = 1;
+    float drag = 0;
     float startSize = 0.1f, endSize = 0;
     Color startColor, endColor;
     float startOpacity = 1, endOpacity = 0;
@@ -88,6 +93,8 @@ struct ParticleEmitter {
     float lifetime = 1;
     float speed = 1;
     float spread = 30;
+    float speedVariation = 0, lifetimeVariation = 0, sizeVariation = 0;
+    float drag = 0;
     Vec3 direction{0, 1, 0};
     Vec3 gravity{0, -9.8f, 0};
     float startSize = 0.1f, endSize = 0;
@@ -99,6 +106,8 @@ struct ParticleEmitter {
     int dimensions = 3;
     int seed = 1;
     int maxParticles = 256;
+    std::string blend = "alpha";
+    int layer = 0;
     bool loop = true;
     bool playing = true;
     std::vector<Particle> particles;  // runtime, not serialized
@@ -114,6 +123,10 @@ struct ParticleEmitter {
         range(f.Add("lifetime", &ParticleEmitter::lifetime, "Lifetime in seconds, captured at birth."), 0.001f, 600);
         range(f.Add("speed", &ParticleEmitter::speed, "Initial speed in emitter coordinates, captured at birth."), 0, 10000);
         range(f.Add("spread", &ParticleEmitter::spread, "Cone half-angle in degrees around direction; planar fan in 2D."), 0, 180);
+        range(f.Add("speedVariation", &ParticleEmitter::speedVariation, "0..1: each particle starts between speed * (1 - variation) and speed."), 0, 1);
+        range(f.Add("lifetimeVariation", &ParticleEmitter::lifetimeVariation, "0..1: each particle lives between lifetime * (1 - variation) and lifetime."), 0, 1);
+        range(f.Add("sizeVariation", &ParticleEmitter::sizeVariation, "0..1: each particle's start and end size are scaled between (1 - variation) and 1."), 0, 1);
+        range(f.Add("drag", &ParticleEmitter::drag, "Velocity lost per second (0 = none, 4 = slows to a stop quickly), captured at birth."), 0, 60);
         f.Add("direction", &ParticleEmitter::direction, "Emission direction; zero falls back to +Y. 2D uses XY only.");
         f.Add("gravity", &ParticleEmitter::gravity, "Acceleration in particle coordinates (world or local), captured at birth.");
         range(f.Add("startSize", &ParticleEmitter::startSize, "Billboard size in meters at birth."), 0, 10000);
@@ -130,6 +143,8 @@ struct ParticleEmitter {
         range(f.Add("dimensions", &ParticleEmitter::dimensions, "2 = XY fan/planar motion; 3 = cone in 3D."), 2, 3);
         f.Add("seed", &ParticleEmitter::seed, "Fixed seed mixed with entity id; changes take effect after particles.clear.");
         range(f.Add("maxParticles", &ParticleEmitter::maxParticles, "Maximum live particles per emitter; excess births are dropped."), 0, 10000);
+        f.Add("blend", &ParticleEmitter::blend, "alpha = normal; add = particles brighten what is behind them (sparks, fire).").options = {"alpha", "add"};
+        f.Add("layer", &ParticleEmitter::layer, "2D sorting layer, like Sprite.layer: particles draw in front of lower layers.");
         f.Add("loop", &ParticleEmitter::loop, "Enable continuous rate births; false emits only the initial burst.");
         f.Add("playing", &ParticleEmitter::playing, "Automatic emission switch; existing particles continue to age while false.");
     }
@@ -156,7 +171,10 @@ struct Sprite {
     float alphaCutoff = 0.5f;
     float opacity = 1.0f;
     bool lit = false;
+    std::string blend = "alpha";
+    int layer = 0;
     int order = 0;
+    bool castShadows = false;
     bool visible = true;
     static void Reflect(FieldList& f) {
         f.Add("texture", &Sprite::texture, "Image file (.png with transparency). A sprite sheet is a grid of equally sized frames.");
@@ -178,7 +196,14 @@ struct Sprite {
         op.min = 0.0f;
         op.max = 1.0f;
         f.Add("lit", &Sprite::lit, "Apply scene lighting (default: full brightness, like classic 2D).");
-        f.Add("order", &Sprite::order, "Sorting among sprites at the same depth: higher is drawn in front.");
+        f.Add("blend", &Sprite::blend, "alpha = normal; add = the image brightens what is behind it (glows, fire, light beams) and is always blended.").options = {"alpha", "add"};
+        f.Add("layer", &Sprite::layer,
+              "2D sorting layer: sprites of a higher layer are drawn in front of lower ones at the same depth, whatever their "
+              "position on screen (background 0, characters 1, effects 2, ...).");
+        f.Add("order", &Sprite::order, "Sorting inside the layer: higher is drawn in front.");
+        f.Add("castShadows", &Sprite::castShadows,
+              "Cast a shadow shaped by the image (texels below alphaCutoff cast none). Needs lit: true and a cut-out sprite "
+              "(alphaCutoff > 0); the sprite is then drawn from both sides.");
         f.Add("visible", &Sprite::visible, "Whether the sprite is drawn.");
     }
 };
@@ -266,6 +291,10 @@ struct PostProcess {
     float vignette = 0.0f;          // edge darkening strength; zero disables the effect
     float vignetteRadius = 0.75f;   // normalized distance from screen center
     float vignetteSoftness = 0.5f;  // smooth transition width
+    int dofRadius = 0;             // largest depth-of-field blur radius in scene pixels; zero disables it
+    float dofFocus = 10.0f;        // view depth in meters that is sharp
+    float dofRange = 2.0f;         // depth on either side of dofFocus that stays sharp
+    float dofFalloff = 8.0f;       // further depth over which the blur grows to dofRadius
     static void Reflect(FieldList& f) {
         FieldInfo& exposureField = f.Add("exposure", &PostProcess::exposure, "Scene brightness multiplier before tone mapping. 1 preserves brightness.");
         exposureField.hasRange = true; exposureField.min = 0; exposureField.max = 32;
@@ -283,6 +312,56 @@ struct PostProcess {
         radius.hasRange = true; radius.min = 0; radius.max = 1.5f;
         FieldInfo& softness = f.Add("vignetteSoftness", &PostProcess::vignetteSoftness, "Smooth transition width in normalized screen coordinates (minimum 0.01).");
         softness.hasRange = true; softness.min = 0.01f; softness.max = 2;
+        FieldInfo& dof = f.Add("dofRadius", &PostProcess::dofRadius,
+                               "Depth of field: largest blur radius in scene pixels (0..16) for surfaces far from dofFocus. 0 disables it.");
+        dof.hasRange = true; dof.min = 0; dof.max = 16;
+        FieldInfo& focus = f.Add("dofFocus", &PostProcess::dofFocus, "Depth of field: distance in front of the camera, in meters, that is sharp.");
+        focus.hasRange = true; focus.min = 0; focus.max = 100000;
+        FieldInfo& range = f.Add("dofRange", &PostProcess::dofRange, "Depth of field: depth on either side of dofFocus that stays fully sharp.");
+        range.hasRange = true; range.min = 0; range.max = 100000;
+        FieldInfo& falloff = f.Add("dofFalloff", &PostProcess::dofFalloff,
+                                   "Depth of field: depth beyond dofRange over which the blur grows to dofRadius (minimum 0.01).");
+        falloff.hasRange = true; falloff.min = 0.01f; falloff.max = 100000;
+    }
+};
+
+struct Light2D {
+    static constexpr const char* kTypeName = "Light2D";
+    static constexpr const char* kDoc = "2D light: a soft round hole in the active camera's Darkness2D, centred on the entity. Without a Darkness2D it does nothing.";
+    float radius = 5.0f;
+    float inner = 0.25f;
+    float strength = 1.0f;
+    bool enabled = true;
+    static void Reflect(FieldList& f) {
+        f.Add("radius", &Light2D::radius, "World units where the light ends (Transform.scale does not change it).");
+        FieldInfo& in = f.Add("inner", &Light2D::inner, "Fraction of the radius that is fully lit before the falloff starts.");
+        in.hasRange = true; in.min = 0.0f; in.max = 0.99f;
+        FieldInfo& st = f.Add("strength", &Light2D::strength, "How much darkness the centre removes: 1 = all, 0.5 = a dim glimpse.");
+        st.hasRange = true; st.min = 0.0f; st.max = 1.0f;
+        f.Add("enabled", &Light2D::enabled, "Off = no light, without removing the component.");
+    }
+};
+
+struct Darkness2D {
+    static constexpr const char* kTypeName = "Darkness2D";
+    static constexpr const char* kDoc =
+        "On an orthographic Camera: covers the 2D view with a colour that Light2D entities cut soft holes into (night, fog of war, caves). "
+        "Drawn at `layer`: blended sprites and particles in higher layers stay visible on top of it.";
+    Color color{0.02f, 0.02f, 0.06f};
+    float opacity = 0.9f;
+    int layer = 100;
+    int resolution = 144;
+    bool enabled = true;
+    static void Reflect(FieldList& f) {
+        f.Add("color", &Darkness2D::color, "Colour of the unlit area.");
+        FieldInfo& op = f.Add("opacity", &Darkness2D::opacity, "How opaque the unlit area is (1 hides it completely).");
+        op.hasRange = true; op.min = 0.0f; op.max = 1.0f;
+        f.Add("layer", &Darkness2D::layer,
+              "2D sorting layer of the overlay (see Sprite.layer). Blended sprites (alphaCutoff 0) and particles above it are not darkened; "
+              "cut-out sprites are always under it.");
+        FieldInfo& res = f.Add("resolution", &Darkness2D::resolution, "Light map rows across the view height; edges are smoothed when it is stretched.");
+        res.hasRange = true; res.min = 16; res.max = 512;
+        f.Add("enabled", &Darkness2D::enabled, "Off = no darkness.");
     }
 };
 
@@ -335,35 +414,6 @@ struct CameraFollow {
         f.Add("useBounds", &CameraFollow::useBounds, "Clamp the camera position to boundsMin..boundsMax and keep its rotation (2D side-scrollers: the view stops at the level edges).");
         f.Add("boundsMin", &CameraFollow::boundsMin, "Lowest camera position when useBounds is on.");
         f.Add("boundsMax", &CameraFollow::boundsMax, "Highest camera position when useBounds is on.");
-    }
-};
-
-struct Rotator {
-    static constexpr const char* kTypeName = "Rotator";
-    static constexpr const char* kDoc = "Behavior: spins the entity at a constant angular speed while simulating.";
-    Vec3 degreesPerSecond{0, 45, 0};
-    static void Reflect(FieldList& f) { f.Add("degreesPerSecond", &Rotator::degreesPerSecond, "Rotation speed per axis in degrees/second."); }
-};
-
-struct Velocity {
-    static constexpr const char* kTypeName = "Velocity";
-    static constexpr const char* kDoc = "Behavior: moves the entity linearly while simulating.";
-    Vec3 linear{0, 0, 0};
-    static void Reflect(FieldList& f) { f.Add("linear", &Velocity::linear, "Velocity in meters/second (world axes)."); }
-};
-
-struct PlayerController {
-    static constexpr const char* kTypeName = "PlayerController";
-    static constexpr const char* kDoc = "Behavior: moves the entity on the XZ plane with W/A/S/D (or arrow keys) and jumps with Space. Input can be injected through the input.* API.";
-    float speed = 4.0f;
-    float jumpSpeed = 5.0f;
-    float gravity = 12.0f;
-    float verticalVelocity = 0.0f;
-    static void Reflect(FieldList& f) {
-        f.Add("speed", &PlayerController::speed, "Move speed in meters/second.");
-        f.Add("jumpSpeed", &PlayerController::jumpSpeed, "Initial upward speed when jumping.");
-        f.Add("gravity", &PlayerController::gravity, "Downward acceleration while airborne (lands at y = 0 + half scale).");
-        f.Add("verticalVelocity", &PlayerController::verticalVelocity, "Runtime state: current vertical speed.");
     }
 };
 
@@ -692,6 +742,7 @@ struct UIPanel {
     float borderWidth = 0.0f;
     Color borderColor{1, 1, 1};
     bool clip = false;
+    bool blockInput = false;
     bool visible = true;
     int order = -1;
     static void Reflect(FieldList& f) {
@@ -700,6 +751,8 @@ struct UIPanel {
         f.Add("radius", &UIPanel::radius, "Corner radius in reference pixels.");
         f.Add("borderWidth", &UIPanel::borderWidth, "Border thickness in reference pixels (0 = none).");
         f.Add("borderColor", &UIPanel::borderColor, "Border color.");
+        f.Add("blockInput", &UIPanel::blockInput,
+              "Modal backdrop: buttons and sliders drawn under this panel cannot be clicked or hovered; elements drawn over it (its children) can.");
         f.Add("clip", &UIPanel::clip, "Children are cut off at the panel's edges (and cannot be clicked outside it).");
         ReflectUICommon<UIPanel>(f);
     }
@@ -725,6 +778,8 @@ struct UIButton {
     Color borderColor{1, 1, 1};
     float hoverBrightness = 1.15f;
     float pressedBrightness = 0.85f;
+    float hoverScale = 1.0f;
+    float pressedScale = 1.0f;
     bool interactable = true;
     std::string key;
     float opacity = 1.0f;
@@ -733,6 +788,7 @@ struct UIButton {
     // Runtime state set by the simulation (not saved).
     bool hovered = false;
     bool pressed = false;
+    float scaleNow = 1.0f;  // eases toward hoverScale / pressedScale
     static void Reflect(FieldList& f) {
         f.Add("text", &UIButton::text, "Label (same rich text as UIText).");
         f.Add("font", &UIButton::font, kUIFontDoc);
@@ -745,6 +801,8 @@ struct UIButton {
         f.Add("borderColor", &UIButton::borderColor, "Border color.");
         f.Add("hoverBrightness", &UIButton::hoverBrightness, "Background brightness while the pointer is over the button.");
         f.Add("pressedBrightness", &UIButton::pressedBrightness, "Background brightness while pressed.");
+        f.Add("hoverScale", &UIButton::hoverScale, "Size multiplier while the pointer is over the button (1.05 = grows a little); eased, also while the game is paused.");
+        f.Add("pressedScale", &UIButton::pressedScale, "Size multiplier while pressed (0.95 = squeezes).");
         f.Add("interactable", &UIButton::interactable, "Disabled buttons are drawn faded and ignore clicks.");
         f.Add("key", &UIButton::key,
               "On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, "
@@ -861,6 +919,46 @@ struct UILayout {
         f.Add("align", &UILayout::align, "Where the children sit along the layout direction.").options = {"start", "center", "end"};
         f.Add("crossAlign", &UILayout::crossAlign, "Placement across the direction; stretch makes children as wide (tall) as the element.").options = {"start", "center", "end", "stretch"};
         f.Add("fit", &UILayout::fit, "Resize the element to wrap its children.");
+    }
+};
+
+struct UIScroll {
+    static constexpr const char* kTypeName = "UIScroll";
+    static constexpr const char* kDoc =
+        "Makes a UIPanel a scroll view: its children are clipped to the panel and move with `scroll`. The mouse wheel over the panel, "
+        "dragging its empty area (or a finger) and the scroll bar change `scroll`. Combine with UILayout for lists.";
+    std::string direction = "vertical";
+    float scroll = 0.0f;
+    float wheelStep = 60.0f;
+    bool bar = true;
+    Color barColor{1, 1, 1};
+    static void Reflect(FieldList& f) {
+        f.Add("direction", &UIScroll::direction, "Axis the content scrolls along.").options = {"vertical", "horizontal"};
+        f.Add("scroll", &UIScroll::scroll, "Offset in reference pixels from the start of the content; kept inside the content by the engine while simulating.");
+        f.Add("wheelStep", &UIScroll::wheelStep, "Reference pixels per mouse wheel notch.");
+        f.Add("bar", &UIScroll::bar, "Draw a scroll bar thumb when the content is larger than the panel.");
+        f.Add("barColor", &UIScroll::barColor, "Scroll bar colour.");
+    }
+};
+
+struct UIMotion {
+    static constexpr const char* kTypeName = "UIMotion";
+    static constexpr const char* kDoc =
+        "Entrance animation of a UI element and its children: plays each time the element becomes visible (screens, dialogs, toasts). "
+        "Runs on real frames, so it also plays while the game is paused. Outside a play session the element shows its final state.";
+    std::string enter = "fade";
+    float duration = 0.25f;
+    float delay = 0.0f;
+    float distance = 40.0f;
+    float time = 1e9f;        // runtime: seconds since the element became visible
+    bool wasVisible = false;  // runtime
+    static void Reflect(FieldList& f) {
+        f.Add("enter", &UIMotion::enter, "fade = opacity; pop = grows from 85% with a small overshoot; slide-* = moves in from `distance` away, all with a fade.")
+            .options = {"none", "fade", "pop", "slide-up", "slide-down", "slide-left", "slide-right"};
+        f.Add("duration", &UIMotion::duration, "Seconds the animation takes.");
+        f.Add("delay", &UIMotion::delay, "Seconds to wait first (stagger a row of cards with increasing delays).");
+        f.Add("distance", &UIMotion::distance, "Slide distance in reference pixels.");
+        f.Add("time", &UIMotion::time, "Runtime: seconds since the element became visible; set 0 to replay.");
     }
 };
 

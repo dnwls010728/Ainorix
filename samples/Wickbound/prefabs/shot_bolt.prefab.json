@@ -1,0 +1,124 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "shot_bolt",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Shot bolt",
+      "components": {
+        "RigidBody2D": {
+          "type": "kinematic",
+          "gravityScale": 0,
+          "bullet": true
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.17500000000000002,
+          "isTrigger": true,
+          "layer": 3,
+          "ignoreLayers": [
+            0,
+            1,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/projectile.lua",
+          "params": {
+            "kind": "bolt"
+          }
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Glow",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 1.0,
+          "height": 1.0,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "opacity": 0.9,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Core",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.45,
+          "height": 0.45,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.9647,
+            0.8392
+          ],
+          "opacity": 1,
+          "blend": "add",
+          "order": 1
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 4,
+      "name": "Trail",
+      "parent": 1,
+      "components": {
+        "ParticleEmitter": {
+          "rate": 60,
+          "lifetime": 0.18,
+          "speed": 0,
+          "gravity": [
+            0,
+            0,
+            0
+          ],
+          "startSize": 0.1125,
+          "endSize": 0.037500000000000006,
+          "startColor": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "endColor": [
+            1.0,
+            0.6039,
+            0.2353
+          ],
+          "space": "world",
+          "dimensions": 2,
+          "texture": "assets/fx/disc.png",
+          "blend": "add",
+          "layer": 12,
+          "maxParticles": 16
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

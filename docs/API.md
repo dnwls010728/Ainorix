@@ -507,6 +507,7 @@ Move the mouse over the game view, add relative motion (mouse look) and optional
 | `y` | number |  | Pixel y. |
 | `dx` | number |  | Relative motion in pixels, read by scripts with input.mouseDelta() on the next step (mouse look). |
 | `dy` | number |  | Relative vertical motion in pixels (positive = down). |
+| `wheel` | number |  | Mouse wheel notches for the next step (positive = away from the user; scrolls UIScroll panels, input.wheel()). |
 | `locked` | boolean |  | Set the mouse lock state (what input.lockMouse() does; the editor clears it when the player presses Escape). |
 | `width` | integer |  | Width of the image the coordinates refer to (default 640). |
 | `height` | integer |  | Height of that image (default 360). |
@@ -655,11 +656,29 @@ Flush one save slot; memory mode never touches the filesystem.
 |---|---|---|---|
 | `slot` | string |  | Slot name; default is default. |
 
+## time
+
+### `time.date`
+
+Calendar date scripts see through time.date() (daily rewards). set fixes it for tests; an empty set returns to the clock.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `set` | string |  | YYYY-MM-DD to pin the date, or "" to use the machine's clock again. |
+
 ## game
 
 ### `game.state`
 
 Runtime scene and game data (game.set values) of the current play session.
+
+### `game.pause`
+
+Gameplay pause of the play session (like game.pause in Lua): scripts and UI keep running with dt = 0, physics, systems, timers and particles wait. Omit paused to read the state.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `paused` | bool |  | true pauses, false resumes. |
 
 ### `game.load_scene`
 
@@ -854,7 +873,7 @@ Create a validated portable surface shader graph (*.shader.json).
 | arg | type | required | description |
 |---|---|---|---|
 | `path` | string | yes | Project-relative .shader.json file. |
-| `graph` | object | yes | Ordered nodes, color output, optional emissive output and named uniform defaults. |
+| `graph` | object | yes | Ordered nodes, color output, optional emissive/normal/offset outputs and named uniform defaults. |
 | `overwrite` | boolean |  | Replace an existing graph. |
 
 ### `shader.check`
@@ -979,6 +998,130 @@ Undo the last scene edit (not available while simulating).
 
 Redo the last undone edit.
 
+## team
+
+### `team.backends`
+
+Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, its version, path, models and install hint. Detection runs once per session (it starts `<cli> --version`, a few seconds in total).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `refresh` | boolean |  | Detect again, e.g. after installing a CLI (default false). |
+| `async` | boolean |  | Do not wait: detection runs in the background and entries report status "detecting" until a later call finds it done (what the editor does, so its window never freezes; default false). |
+
+### `team.presets`
+
+Names of the built-in profile pictures (use as avatar "preset:<name>").
+
+### `team.list`
+
+The project's agent team: settings (lead, maxConcurrent, maxHops), a revision that changes with every edit, and all agent profiles.
+
+### `team.get`
+
+One agent profile.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
+
+### `team.add`
+
+Add an agent to the team (at most 16). The id is generated from the name and never changes; the first agent becomes the lead. Stored in .oe/team/team.json, local to this checkout.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `name` | string | yes | Display name, 1..40 characters, unique. |
+| `description` | string |  | One or two lines: what the agent is for (shown in the roster and told to teammates), at most 400 bytes. |
+| `instructions` | string |  | Standing instructions added to the agent's system prompt, at most 16 KiB. |
+| `backend` | string |  | Agent CLI id from team.backends (default: the first one). |
+| `model` | string |  | Model id of that backend; "" = the CLI's default (default: the backend's default model). |
+| `access` | string |  | read | edit (default) | full: what the agent may do without asking. |
+| `avatar` | string |  | "preset:<name>" from team.presets (default: the first preset no teammate uses). |
+
+### `team.update`
+
+Change some fields of an agent (partial update). Changing the backend without a model resets the model to the new backend's default.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
+| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, avatar ("preset:<name>"). |
+
+### `team.remove`
+
+Remove an agent and its uploaded picture. If it was the lead, the team has no lead afterwards.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
+
+### `team.move`
+
+Move an agent to another place in the roster (the order agents are listed and given turns).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
+| `index` | integer | yes | New position, 0 = first; larger than the team = last. |
+
+### `team.avatar`
+
+Set an agent's profile picture: a built-in preset, or an image file that is center-cropped to a square and stored as a 256x256 PNG in .oe/team/avatars/.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
+| `preset` | string |  | Preset name from team.presets. |
+| `source` | string |  | Path of a .png/.jpg/.jpeg file (may be outside the project; it is only read). At most 16 MiB and 8192 px per side. |
+
+### `team.settings`
+
+Read or change the team settings; without arguments it only reads them.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `lead` | string |  | Agent (id or name) that receives messages without a mention; "" = nobody. |
+| `maxConcurrent` | integer |  | Agent turns that may run at the same time, 1..8 (default 3). |
+| `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 4). |
+
+### `team.send`
+
+Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `text` | string | yes | The message, at most 32 KiB (may be empty when files are attached). Mention agents as @id or @name. |
+| `attachments` | array |  | Files the agents should look at: paths on this PC or relative to the project, at most 8, 32 MiB each. A file outside the project is copied into .oe/team/attachments/. |
+| `from` | string |  | Sender: "user" (default) or an agent id. |
+| `wait` | number |  | Block up to this many seconds until the addressed agents have finished, then also return the new messages and the state (for one-shot `oe exec`; default 0 = return at once). |
+
+### `team.cancel`
+
+Stop an agent's running turn (its process tree is killed) and drop its waiting message; the chat gets a notice.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string |  | Agent id or name. |
+| `all` | boolean |  | Stop every agent. |
+
+### `team.state`
+
+Live state of every agent: offline | idle | queued | thinking | working | error, the activity line, the task, elapsed seconds and tool count. `revision` changes whenever the roster, a state or the chat changed.
+
+### `team.messages`
+
+Team chat messages, oldest first: {messages, first, last} (first = oldest id still in the log, 0 when it is empty). kind is message, notice or error; an agent's reply carries its turn summary.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `after` | integer |  | Only messages with a larger id (poll with the previous `last`). |
+| `limit` | integer |  | At most this many, 1..500 (default 100). |
+
+### `team.clear`
+
+Stop every turn, empty the chat log and forget the agents' stored conversations. Profiles are kept.
+
 ## Component types
 
 ### Transform
@@ -993,12 +1136,13 @@ Position, rotation (Euler degrees, applied X then Y then Z) and scale relative t
 
 ### MeshRenderer
 
-Draws a mesh: a built-in shape (cube, sphere, plane, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.
+Draws a mesh: a built-in shape (cube, sphere, plane, plane64, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.
 
 | field | type | default | description |
 |---|---|---|---|
-| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
+| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
 | `material` | string | `""` | Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. Empty = the model's own materials (glTF) or the default (white, roughness 0.7). |
+| `shaderUniforms` | json | `{}` | Per-entity values for the material's shader graph uniforms: {name: number or [x, y, z, w]}. Unnamed uniforms keep the material's values; scripts can change them every frame. An unknown name or a material without a graph renders magenta. |
 | `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the material/texture color, linear RGB 0..1 (or "#rrggbb"). |
 | `opacity` | float | `1` | Below 1 the mesh is drawn transparent (alpha blended, sorted back to front, no shadow). |
 | `texture` | string | `""` | Image (.png/.jpg) overriding the material's base color texture. Empty = use the material's. |
@@ -1030,6 +1174,10 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `lifetime` | float | `1` | Lifetime in seconds, captured at birth. |
 | `speed` | float | `1` | Initial speed in emitter coordinates, captured at birth. |
 | `spread` | float | `30` | Cone half-angle in degrees around direction; planar fan in 2D. |
+| `speedVariation` | float | `0` | 0..1: each particle starts between speed * (1 - variation) and speed. |
+| `lifetimeVariation` | float | `0` | 0..1: each particle lives between lifetime * (1 - variation) and lifetime. |
+| `sizeVariation` | float | `0` | 0..1: each particle's start and end size are scaled between (1 - variation) and 1. |
+| `drag` | float | `0` | Velocity lost per second (0 = none, 4 = slows to a stop quickly), captured at birth. |
 | `direction` | vec3 | `[0,1,0]` | Emission direction; zero falls back to +Y. 2D uses XY only. |
 | `gravity` | vec3 | `[0,-9.80000019,0]` | Acceleration in particle coordinates (world or local), captured at birth. |
 | `startSize` | float | `0.100000001` | Billboard size in meters at birth. |
@@ -1046,6 +1194,8 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `dimensions` | int | `3` | 2 = XY fan/planar motion; 3 = cone in 3D. |
 | `seed` | int | `1` | Fixed seed mixed with entity id; changes take effect after particles.clear. |
 | `maxParticles` | int | `256` | Maximum live particles per emitter; excess births are dropped. |
+| `blend` | string | `"alpha"` | alpha = normal; add = particles brighten what is behind them (sparks, fire). |
+| `layer` | int | `0` | 2D sorting layer, like Sprite.layer: particles draw in front of lower layers. |
 | `loop` | bool | `true` | Enable continuous rate births; false emits only the initial burst. |
 | `playing` | bool | `true` | Automatic emission switch; existing particles continue to age while false. |
 
@@ -1078,6 +1228,33 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | `vignette` | float | `0` | Edge darkening strength: 0 disables, 1 is fully dark outside the transition. |
 | `vignetteRadius` | float | `0.75` | Normalized radius: center 0, edge midpoint 1, corner sqrt(2). |
 | `vignetteSoftness` | float | `0.5` | Smooth transition width in normalized screen coordinates (minimum 0.01). |
+| `dofRadius` | int | `0` | Depth of field: largest blur radius in scene pixels (0..16) for surfaces far from dofFocus. 0 disables it. |
+| `dofFocus` | float | `10` | Depth of field: distance in front of the camera, in meters, that is sharp. |
+| `dofRange` | float | `2` | Depth of field: depth on either side of dofFocus that stays fully sharp. |
+| `dofFalloff` | float | `8` | Depth of field: depth beyond dofRange over which the blur grows to dofRadius (minimum 0.01). |
+
+### Light2D
+
+2D light: a soft round hole in the active camera's Darkness2D, centred on the entity. Without a Darkness2D it does nothing.
+
+| field | type | default | description |
+|---|---|---|---|
+| `radius` | float | `5` | World units where the light ends (Transform.scale does not change it). |
+| `inner` | float | `0.25` | Fraction of the radius that is fully lit before the falloff starts. |
+| `strength` | float | `1` | How much darkness the centre removes: 1 = all, 0.5 = a dim glimpse. |
+| `enabled` | bool | `true` | Off = no light, without removing the component. |
+
+### Darkness2D
+
+On an orthographic Camera: covers the 2D view with a colour that Light2D entities cut soft holes into (night, fog of war, caves). Drawn at `layer`: blended sprites and particles in higher layers stay visible on top of it.
+
+| field | type | default | description |
+|---|---|---|---|
+| `color` | color | `[0.0199999996,0.0199999996,0.0599999987]` | Colour of the unlit area. |
+| `opacity` | float | `0.899999976` | How opaque the unlit area is (1 hides it completely). |
+| `layer` | int | `100` | 2D sorting layer of the overlay (see Sprite.layer). Blended sprites (alphaCutoff 0) and particles above it are not darkened; cut-out sprites are always under it. |
+| `resolution` | int | `144` | Light map rows across the view height; edges are smoothed when it is stretched. |
+| `enabled` | bool | `true` | Off = no darkness. |
 
 ### DirectionalLight
 
@@ -1090,33 +1267,6 @@ Sun-like light. Direction comes from the entity's rotation (local -Z).
 | `ambient` | color | `[0.180000007,0.200000003,0.25]` | Ambient light added to every surface. |
 | `shadows` | bool | `true` | Cast shadows (first directional light only). |
 | `shadowStrength` | float | `0.75` | 0 = no darkening, 1 = black shadows. |
-
-### Rotator
-
-Behavior: spins the entity at a constant angular speed while simulating.
-
-| field | type | default | description |
-|---|---|---|---|
-| `degreesPerSecond` | vec3 | `[0,45,0]` | Rotation speed per axis in degrees/second. |
-
-### Velocity
-
-Behavior: moves the entity linearly while simulating.
-
-| field | type | default | description |
-|---|---|---|---|
-| `linear` | vec3 | `[0,0,0]` | Velocity in meters/second (world axes). |
-
-### PlayerController
-
-Behavior: moves the entity on the XZ plane with W/A/S/D (or arrow keys) and jumps with Space. Input can be injected through the input.* API.
-
-| field | type | default | description |
-|---|---|---|---|
-| `speed` | float | `4` | Move speed in meters/second. |
-| `jumpSpeed` | float | `5` | Initial upward speed when jumping. |
-| `gravity` | float | `12` | Downward acceleration while airborne (lands at y = 0 + half scale). |
-| `verticalVelocity` | float | `0` | Runtime state: current vertical speed. |
 
 ### Tag
 
@@ -1297,6 +1447,7 @@ Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a b
 | `radius` | float | `0` | Corner radius in reference pixels. |
 | `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
 | `borderColor` | color | `[1,1,1]` | Border color. |
+| `blockInput` | bool | `false` | Modal backdrop: buttons and sliders drawn under this panel cannot be clicked or hovered; elements drawn over it (its children) can. |
 | `clip` | bool | `false` | Children are cut off at the panel's edges (and cannot be clicked outside it). |
 | `opacity` | float | `0.5` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
@@ -1323,6 +1474,8 @@ Clickable screen-space button. A click calls onClick(self) on the entity's Scrip
 | `borderColor` | color | `[1,1,1]` | Border color. |
 | `hoverBrightness` | float | `1.14999998` | Background brightness while the pointer is over the button. |
 | `pressedBrightness` | float | `0.850000024` | Background brightness while pressed. |
+| `hoverScale` | float | `1` | Size multiplier while the pointer is over the button (1.05 = grows a little); eased, also while the game is paused. |
+| `pressedScale` | float | `1` | Size multiplier while pressed (0.95 = squeezes). |
 | `interactable` | bool | `true` | Disabled buttons are drawn faded and ignore clicks. |
 | `key` | string | `""` | On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, CharacterBody controls), e.g. "Left", "Space". Several fingers hold several buttons at once. Empty = none. |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
@@ -1396,6 +1549,30 @@ Arranges the UI children of this entity's UI element in a column, row or grid (t
 | `crossAlign` | string | `"start"` | Placement across the direction; stretch makes children as wide (tall) as the element. |
 | `fit` | bool | `false` | Resize the element to wrap its children. |
 
+### UIScroll
+
+Makes a UIPanel a scroll view: its children are clipped to the panel and move with `scroll`. The mouse wheel over the panel, dragging its empty area (or a finger) and the scroll bar change `scroll`. Combine with UILayout for lists.
+
+| field | type | default | description |
+|---|---|---|---|
+| `direction` | string | `"vertical"` | Axis the content scrolls along. |
+| `scroll` | float | `0` | Offset in reference pixels from the start of the content; kept inside the content by the engine while simulating. |
+| `wheelStep` | float | `60` | Reference pixels per mouse wheel notch. |
+| `bar` | bool | `true` | Draw a scroll bar thumb when the content is larger than the panel. |
+| `barColor` | color | `[1,1,1]` | Scroll bar colour. |
+
+### UIMotion
+
+Entrance animation of a UI element and its children: plays each time the element becomes visible (screens, dialogs, toasts). Runs on real frames, so it also plays while the game is paused. Outside a play session the element shows its final state.
+
+| field | type | default | description |
+|---|---|---|---|
+| `enter` | string | `"fade"` | fade = opacity; pop = grows from 85% with a small overshoot; slide-* = moves in from `distance` away, all with a fade. |
+| `duration` | float | `0.25` | Seconds the animation takes. |
+| `delay` | float | `0` | Seconds to wait first (stagger a row of cards with increasing delays). |
+| `distance` | float | `40` | Slide distance in reference pixels. |
+| `time` | float | `1000000000` | Runtime: seconds since the element became visible; set 0 to replay. |
+
 ### UICanvas
 
 Optional, one per scene: the reference resolution the UI is authored for and how it scales to other screen sizes.
@@ -1464,7 +1641,10 @@ Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at t
 | `alphaCutoff` | float | `0.5` | Pixels with alpha below this are not drawn. 0 = soft edges: the image's alpha is blended (smoke, glows, UI-like art). |
 | `opacity` | float | `1` | Below 1 the sprite is drawn see-through (alpha blended). |
 | `lit` | bool | `false` | Apply scene lighting (default: full brightness, like classic 2D). |
-| `order` | int | `0` | Sorting among sprites at the same depth: higher is drawn in front. |
+| `blend` | string | `"alpha"` | alpha = normal; add = the image brightens what is behind it (glows, fire, light beams) and is always blended. |
+| `layer` | int | `0` | 2D sorting layer: sprites of a higher layer are drawn in front of lower ones at the same depth, whatever their position on screen (background 0, characters 1, effects 2, ...). |
+| `order` | int | `0` | Sorting inside the layer: higher is drawn in front. |
+| `castShadows` | bool | `false` | Cast a shadow shaped by the image (texels below alphaCutoff cast none). Needs lit: true and a cut-out sprite (alphaCutoff > 0); the sprite is then drawn from both sides. |
 | `visible` | bool | `true` | Whether the sprite is drawn. |
 
 ### SpriteAnimation

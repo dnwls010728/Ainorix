@@ -1,0 +1,15 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "idle"
+  },
+  "evidence": {
+    "idle": {
+      "sha256": "7934c2d800ce03397d8549b0efa3a37115523c80066fefffd2045e1844b200d8",
+      "report": "build/wickbound-grok/enemy_wisp-wide/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "Continuous fire-tip motion keeps a substantially stable face/core. Idle and movement intentionally share a floating flame cycle rather than inventing walking legs."
+}

@@ -36,10 +36,10 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
     if (!json.isObject()) return fail("shader must be an object");
     for (const auto& field : json.members())
         if (field.first != "format" && field.first != "nodes" && field.first != "uniforms" &&
-            field.first != "color" && field.first != "emissive") return fail("unknown shader field '" + field.first + "'");
+            field.first != "color" && field.first != "emissive" && field.first != "normal" && field.first != "offset") return fail("unknown shader field '" + field.first + "'");
     if (json.has("format") && json["format"].asString() != "ownengine.shader") return fail("format must be ownengine.shader");
     const Json& nodes = json["nodes"];
-    if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > ShaderGraph::kMaxNodes) return fail("nodes must contain 1..32 instructions");
+    if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > ShaderGraph::kMaxNodes) return fail("nodes must contain 1.." + std::to_string(ShaderGraph::kMaxNodes) + " instructions");
     ShaderGraph result;
     const Json& uniforms = json["uniforms"];
     if (!uniforms.isNull() && (!uniforms.isObject() || uniforms.size() > ShaderGraph::kMaxUniforms))
@@ -49,6 +49,8 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
         Vec4 value;
         if (!Vector(item.second, value)) return fail("uniform '" + item.first + "' must be a finite scalar or four-vector");
         result.defaults[result.uniformNames.size()] = value;
+        if (item.first == "cameraPosition") result.cameraUniform = static_cast<int>(result.uniformNames.size());
+        if (item.first == "lightDirection") result.lightUniform = static_cast<int>(result.uniformNames.size());
         result.uniformNames.push_back(item.first);
     }
     for (size_t index = 0; index < nodes.size(); ++index) {
@@ -92,6 +94,25 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
         if (!Index(json["emissive"], static_cast<int>(nodes.size()))) return fail("emissive must reference a node");
         result.emissive = json["emissive"].asInt();
     }
+    if (json.has("normal")) {
+        if (!Index(json["normal"], static_cast<int>(nodes.size()))) return fail("normal must reference a node");
+        result.normal = json["normal"].asInt();
+    }
+    if (json.has("offset")) {
+        if (!Index(json["offset"], static_cast<int>(nodes.size()))) return fail("offset must reference a node");
+        result.offset = json["offset"].asInt();
+        // The vertex stage has no texture: reject graphs whose displacement reads one.
+        std::array<bool, ShaderGraph::kMaxNodes> needed{};
+        needed[static_cast<size_t>(result.offset)] = true;
+        for (int index = result.offset; index >= 0; --index) {
+            if (!needed[static_cast<size_t>(index)]) continue;
+            const ShaderInstruction& instruction = result.instructions[static_cast<size_t>(index)];
+            if (instruction.op == ShaderOp::Texture) return fail("offset must not depend on a texture node (nodes[" + std::to_string(index) + "])");
+            int count = 0;
+            for (const OpInfo& op : kOps) if (op.op == instruction.op) count = op.args;
+            for (int a = 0; a < count; ++a) needed[static_cast<size_t>(instruction.args[static_cast<size_t>(a)])] = true;
+        }
+    }
     out = std::move(result);
     if (error) error->clear();
     return true;
@@ -99,24 +120,32 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
 
 bool ShaderUniforms(const ShaderGraph& graph, const Json& values,
                     std::array<Vec4, ShaderGraph::kMaxUniforms>& out, std::string* error) {
+    out = graph.defaults;
+    return OverrideShaderUniforms(graph, values, out, error);
+}
+
+bool OverrideShaderUniforms(const ShaderGraph& graph, const Json& values,
+                            std::array<Vec4, ShaderGraph::kMaxUniforms>& inout, std::string* error) {
     auto fail = [&](const std::string& message) { if (error) *error = message; return false; };
     if (!values.isNull() && !values.isObject()) return fail("shader uniform overrides must be an object");
-    auto result = graph.defaults;
+    auto result = inout;
     for (const auto& item : values.members()) {
         auto it = std::find(graph.uniformNames.begin(), graph.uniformNames.end(), item.first);
         if (it == graph.uniformNames.end()) return fail("unknown shader uniform '" + item.first + "'");
         if (!Vector(item.second, result[static_cast<size_t>(it - graph.uniformNames.begin())]))
             return fail("shader uniform '" + item.first + "' must be a finite scalar or four-vector");
     }
-    out = result;
+    inout = result;
     if (error) error->clear();
     return true;
 }
 
-ShaderSurface EvaluateShaderGraph(const ShaderGraph& graph, const ShaderInputs& inputs,
-                                 const std::array<Vec4, ShaderGraph::kMaxUniforms>& uniforms) {
+namespace {
+// Runs the first `count` instructions; later registers stay zero.
+std::array<Vec4, ShaderGraph::kMaxNodes> RunGraph(const ShaderGraph& graph, const ShaderInputs& inputs,
+                                                  const std::array<Vec4, ShaderGraph::kMaxUniforms>& uniforms, size_t count) {
     std::array<Vec4, ShaderGraph::kMaxNodes> registers{};
-    for (size_t index = 0; index < graph.instructions.size(); ++index) {
+    for (size_t index = 0; index < count; ++index) {
         const ShaderInstruction& instruction = graph.instructions[index];
         const Vec4 a = registers[static_cast<size_t>(instruction.args[0])];
         const Vec4 b = registers[static_cast<size_t>(instruction.args[1])];
@@ -163,8 +192,22 @@ ShaderSurface EvaluateShaderGraph(const ShaderGraph& graph, const ShaderInputs& 
         }
         registers[index] = Vec4(Finite(result.x),Finite(result.y),Finite(result.z),Finite(result.w));
     }
+    return registers;
+}
+}  // namespace
+
+ShaderSurface EvaluateShaderGraph(const ShaderGraph& graph, const ShaderInputs& inputs,
+                                 const std::array<Vec4, ShaderGraph::kMaxUniforms>& uniforms) {
+    const auto registers = RunGraph(graph, inputs, uniforms, graph.instructions.size());
     return {registers[static_cast<size_t>(graph.color)],
-            graph.emissive < 0 ? Vec3() : registers[static_cast<size_t>(graph.emissive)].xyz()};
+            graph.emissive < 0 ? Vec3() : registers[static_cast<size_t>(graph.emissive)].xyz(),
+            graph.normal < 0 ? Vec3() : registers[static_cast<size_t>(graph.normal)].xyz()};
+}
+
+Vec3 ShaderVertexOffset(const ShaderGraph& graph, const ShaderInputs& inputs,
+                        const std::array<Vec4, ShaderGraph::kMaxUniforms>& uniforms) {
+    if (graph.offset < 0) return Vec3();
+    return RunGraph(graph, inputs, uniforms, static_cast<size_t>(graph.offset) + 1)[static_cast<size_t>(graph.offset)].xyz();
 }
 
 }  // namespace oe

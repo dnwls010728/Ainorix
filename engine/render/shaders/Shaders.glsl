@@ -19,6 +19,46 @@
 
 // ----- Meshes ---------------------------------------------------------------------
 
+// Shader graph arithmetic shared by the vertex (offset) and fragment (surface) evaluators.
+// Instruction numbering and finite semantics match ShaderGraph.cpp.
+@block graph_ops
+vec4 GraphFinite(vec4 value) {
+    for (int channel = 0; channel < 4; ++channel) {
+        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
+    }
+    return value;
+}
+
+// Instructions 8..24; `literal` is the instruction's value (swizzle channels).
+vec4 GraphOp(int op, vec4 a, vec4 b, vec4 c, vec4 literal) {
+    vec4 value = vec4(0.0);
+    if (op == 8) value = a+b;
+    else if (op == 9) value = a-b;
+    else if (op == 10) value = a*b;
+    else if (op == 11) {
+        value = vec4(b.x == 0.0 ? 0.0 : a.x/b.x, b.y == 0.0 ? 0.0 : a.y/b.y,
+                     b.z == 0.0 ? 0.0 : a.z/b.z, b.w == 0.0 ? 0.0 : a.w/b.w);
+    }
+    else if (op == 12) value = min(a,b);
+    else if (op == 13) value = max(a,b);
+    else if (op == 14) value = sin(a);
+    else if (op == 15) value = cos(a);
+    else if (op == 16) value = floor(a);
+    else if (op == 17) value = fract(a);
+    else if (op == 18) value = abs(a);
+    else if (op == 19) value = min(max(a,b),c);
+    else if (op == 20) value = a*(1.0-c)+b*c;
+    else if (op == 21) value = step(a,b);
+    else if (op == 22) value = vec4(dot(a,b));
+    else if (op == 23) value = length(a) > 1e-8 ? a/length(a) : vec4(0.0);
+    else if (op == 24) {
+        ivec4 channels = ivec4(literal);
+        value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
+    }
+    return value;
+}
+@end
+
 @vs mesh_vs
 @hlsl_options fixup_clipspace
 layout(binding=0) uniform mesh_vs_params {
@@ -26,6 +66,17 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 model;
     mat4 normal_mat;
     mat4 joint_palette[64];
+};
+
+// Vertex stage of a shader graph with an `offset` output (ShaderVertexOffset in ShaderGraph.cpp).
+layout(binding=3) uniform mesh_vs_graph {
+    vec4 vgraph_control;    // x: instructions to run (0 = no offset), y: offset output, w: simulation seconds
+    vec4 vgraph_base_color; // material base color and opacity (no texture in this stage)
+    vec4 vgraph_uv_rect;    // as uv_rect / uv_tiling of mesh_material
+    vec4 vgraph_uv_tiling;
+    vec4 vgraph_code[48];
+    vec4 vgraph_value[48];
+    vec4 vgraph_uniform[8];
 };
 
 in vec3 position;
@@ -40,6 +91,31 @@ out vec3 v_nrm;
 out vec4 v_tan;
 centroid out vec2 v_uv;
 
+@include_block graph_ops
+
+vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
+    if (vgraph_control.x < 0.5) return vec3(0.0);
+    vec4 registers[48];
+    for (int i = 0; i < 48; ++i) registers[i] = vec4(0.0);
+    for (int i = 0; i < 48; ++i) {
+        if (i >= int(vgraph_control.x)) break;
+        ivec4 code = ivec4(vgraph_code[i]);
+        vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
+        vec4 value = vec4(0.0);
+        if (code.x == 0) value = vgraph_value[i];
+        else if (code.x == 1) value = vgraph_uniform[int(vgraph_value[i].x)];
+        else if (code.x == 2) value = vec4(uv,0.0,0.0);
+        else if (code.x == 3) value = vec4(wpos,1.0);
+        else if (code.x == 4) value = vec4(nrm,0.0);
+        else if (code.x == 5) value = vec4(vgraph_control.w);
+        else if (code.x == 6) value = vgraph_base_color;
+        else if (code.x == 7) value = vec4(1.0);  // no texture in the vertex stage
+        else value = GraphOp(code.x, a, b, c, vgraph_value[i]);
+        registers[i] = GraphFinite(value);
+    }
+    return registers[int(vgraph_control.y)].xyz;
+}
+
 void main() {
     mat4 skin = mat4(1.0);
     if (dot(joint_weights, vec4(1.0)) > 0.0) {
@@ -50,9 +126,10 @@ void main() {
     }
     // Treat the blended xyz as a point, matching CPU TransformPoint even when float weights sum imperfectly.
     vec4 wp = model * vec4((skin * vec4(position, 1.0)).xyz, 1.0);
-    v_wpos = wp.xyz;
     mat4 skin_normal = abs(determinant(skin)) < 1e-12 ? mat4(1.0) : transpose(inverse(skin));
     v_nrm = normalize((normal_mat * skin_normal * vec4(normal, 0.0)).xyz);
+    wp.xyz += VertexOffset(wp.xyz, v_nrm, (texcoord * vgraph_uv_rect.zw + vgraph_uv_rect.xy) * vgraph_uv_tiling.xy + vgraph_uv_tiling.zw);
+    v_wpos = wp.xyz;
     v_tan = vec4(normalize((model * skin * vec4(tangent.xyz, 0.0)).xyz), tangent.w);
     v_uv = texcoord;
     gl_Position = view_proj * wp;
@@ -70,29 +147,24 @@ layout(binding=1) uniform mesh_material {
     vec4 pbr;         // x: metallic, y: roughness, z: normal scale, w: occlusion strength
     vec4 emissive;    // rgb: emissive * intensity, w: flat shading
     vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
-    vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets
+    vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets, y: 1 = surface_aux writes depth (depth of field)
     vec4 graph_control; // node count, color output, emissive output (-1 absent), simulation seconds
-    vec4 graph_code[32]; // opcode and three prior-register indices
-    vec4 graph_value[32];
+    vec4 graph_outputs; // x: normal output (-1 absent)
+    vec4 graph_code[48]; // opcode and three prior-register indices
+    vec4 graph_value[48];
     vec4 graph_uniform[8];
 };
 @end
 
 @block surface_graph
-// Instruction numbering and finite semantics match ShaderGraph.cpp.
-vec4 GraphFinite(vec4 value) {
-    for (int channel = 0; channel < 4; ++channel) {
-        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
-    }
-    return value;
-}
-
-void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission) {
+// `normal_out` is the graph's lighting normal, zero when it has none.
+void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission, out vec3 normal_out) {
     emission = vec3(0.0);
+    normal_out = vec3(0.0);
     if (graph_control.x < 0.5) return;
-    vec4 registers[32];
-    for (int i = 0; i < 32; ++i) registers[i] = vec4(0.0);
-    for (int i = 0; i < 32; ++i) {
+    vec4 registers[48];
+    for (int i = 0; i < 48; ++i) registers[i] = vec4(0.0);
+    for (int i = 0; i < 48; ++i) {
         if (i >= int(graph_control.x)) break;
         ivec4 code = ivec4(graph_code[i]);
         vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
@@ -107,35 +179,14 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
         // Explicit level zero matches the software texture sampler and avoids
         // undefined implicit derivatives in data-dependent instruction flow.
         else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
-        else if (code.x == 8) value = a+b;
-        else if (code.x == 9) value = a-b;
-        else if (code.x == 10) value = a*b;
-        else if (code.x == 11) {
-            value = vec4(b.x == 0.0 ? 0.0 : a.x/b.x, b.y == 0.0 ? 0.0 : a.y/b.y,
-                         b.z == 0.0 ? 0.0 : a.z/b.z, b.w == 0.0 ? 0.0 : a.w/b.w);
-        }
-        else if (code.x == 12) value = min(a,b);
-        else if (code.x == 13) value = max(a,b);
-        else if (code.x == 14) value = sin(a);
-        else if (code.x == 15) value = cos(a);
-        else if (code.x == 16) value = floor(a);
-        else if (code.x == 17) value = fract(a);
-        else if (code.x == 18) value = abs(a);
-        else if (code.x == 19) value = min(max(a,b),c);
-        else if (code.x == 20) value = a*(1.0-c)+b*c;
-        else if (code.x == 21) value = step(a,b);
-        else if (code.x == 22) value = vec4(dot(a,b));
-        else if (code.x == 23) value = length(a) > 1e-8 ? a/length(a) : vec4(0.0);
-        else if (code.x == 24) {
-            ivec4 channels = ivec4(graph_value[i]);
-            value = vec4(a[channels.x],a[channels.y],a[channels.z],a[channels.w]);
-        }
+        else value = GraphOp(code.x, a, b, c, graph_value[i]);
         registers[i] = GraphFinite(value);
     }
     vec4 result = registers[int(graph_control.y)];
     base = max(result.rgb,vec3(0.0));
     alpha = clamp(result.a,0.0,1.0);
     if (graph_control.z >= 0.0) emission = registers[int(graph_control.z)].rgb;
+    if (graph_outputs.x >= 0.0) normal_out = registers[int(graph_outputs.x)].xyz;
 }
 
 @end
@@ -215,6 +266,7 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
     return (diffuse + F * spec) * ndl;
 }
 
+@include_block graph_ops
 @include_block surface_graph
 
 void main() {
@@ -233,7 +285,8 @@ void main() {
     }
     if (flags.w > 0.5 && !gl_FrontFacing) graphNormal = -graphNormal;
     vec3 graphEmission;
-    SurfaceGraph(uv,graphNormal,base,alpha,graphEmission);
+    vec3 graphLightNormal;
+    SurfaceGraph(uv,graphNormal,base,alpha,graphEmission,graphLightNormal);
     if (alpha < flags.z) {
         discard;
     }
@@ -243,6 +296,9 @@ void main() {
         if (emissive.w > 0.5) {
             vec3 face = normalize(cross(dFdx(v_wpos), dFdy(v_wpos)));
             ng = dot(face, ng) < 0.0 ? -face : face;
+        }
+        if (length(graphLightNormal) > 1e-8) {
+            ng = normalize(graphLightNormal);
         }
         if (flags.w > 0.5 && !gl_FrontFacing) {
             ng = -ng;
@@ -360,8 +416,18 @@ void main() {
 }
 @end
 
+// Depth buffer value (NDC z * 0.5 + 0.5, like the software renderer's depth) as a color, for depth of field.
+@fs depth_color_fs
+out vec4 frag_color;
+
+void main() {
+    frag_color = vec4(gl_FragCoord.z, 0.0, 0.0, 1.0);
+}
+@end
+
 @program shadow pos_vs depth_fs
 @program solid pos_vs solid_fs
+@program scene_depth pos_vs depth_color_fs
 
 @fs surface_aux_fs
 @include_block surface_material
@@ -372,6 +438,7 @@ in vec3 v_nrm;
 in vec4 v_tan;
 in vec2 v_uv;
 out vec4 frag_color;
+@include_block graph_ops
 @include_block surface_graph
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
@@ -389,9 +456,10 @@ void main() {
     }
     if (!gl_FrontFacing) normal = -normal;
     vec3 emission;
-    SurfaceGraph(uv,normal,base,alpha,emission);
+    vec3 lightNormal;
+    SurfaceGraph(uv,normal,base,alpha,emission,lightNormal);
     if (alpha < flags.z) discard;
-    frag_color = vec4(1.0);
+    frag_color = color_range.y > 0.5 ? vec4(gl_FragCoord.z, 0.0, 0.0, 1.0) : vec4(1.0);
 }
 @end
 @program surface_aux mesh_vs surface_aux_fs
@@ -624,3 +692,51 @@ void main() {
 @end
 
 @program bloom fsq_vs bloom_fs
+
+// Depth of field: separable gather over the scene color, weighted by each sample's blur radius.
+// Must match DofViewDepth/DofCoc/DofWeight in PostProcess.h and the software renderer's passes.
+@fs dof_fs
+layout(binding=0) uniform dof_params {
+    vec4 dof_lens; // x: largest radius in pixels (1..16), y: focus depth, z: sharp range, w: falloff
+    vec4 dof_proj; // x: projection (2,2), y: projection (2,3), z: 1 = orthographic, w: 0 horizontal, 1 vertical
+};
+layout(binding=0) uniform texture2D dof_source_tex;
+layout(binding=0) uniform sampler dof_source_smp;
+layout(binding=1) uniform texture2D dof_depth_tex;
+layout(binding=1) uniform sampler dof_depth_smp;
+out vec4 frag_color;
+
+float DofDepth(ivec2 q) {
+    float ndc = texelFetch(sampler2D(dof_depth_tex, dof_depth_smp), q, 0).r * 2.0 - 1.0;
+    return dof_proj.z > 0.5 ? (dof_proj.y - ndc) / dof_proj.x : dof_proj.y / (ndc + dof_proj.x);
+}
+
+float DofCoc(float depth) {
+    return dof_lens.x * clamp((abs(depth - dof_lens.y) - dof_lens.z) / dof_lens.w, 0.0, 1.0);
+}
+
+void main() {
+    int radius = int(dof_lens.x);
+    ivec2 size = textureSize(sampler2D(dof_source_tex, dof_source_smp), 0);
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    float center_depth = DofDepth(p);
+    float center_coc = DofCoc(center_depth);
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    for (int delta = -16; delta <= 16; ++delta) {
+        if (abs(delta) <= radius) {
+            ivec2 q = p + (dof_proj.w < 0.5 ? ivec2(delta, 0) : ivec2(0, delta));
+            q = clamp(q, ivec2(0), size - ivec2(1));
+            float depth = DofDepth(q);
+            float coc = DofCoc(depth);
+            if (depth > center_depth) coc = min(coc, center_coc);
+            float weight = clamp(coc - float(abs(delta)) + 1.0, 0.0, 1.0);
+            sum += texelFetch(sampler2D(dof_source_tex, dof_source_smp), q, 0).rgb * weight;
+            total += weight;
+        }
+    }
+    frag_color = vec4(sum / total, 1.0);
+}
+@end
+
+@program dof fsq_vs dof_fs

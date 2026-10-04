@@ -48,6 +48,12 @@ startColor/endColor, texture/frame, local/world space, maxParticles, loop and
 playing. Additional direction, dimensions (2 or 3), seed and sheet columns/rows
 make orientation, planar emission and reproducible art choices explicit.
 
+`speedVariation`, `lifetimeVariation` and `sizeVariation` (0..1) scale each particle's speed, lifetime and size by a random
+factor between `1 - variation` and 1, so a burst spreads out instead of forming a ring; `drag` is the fraction of velocity
+lost per second. They draw from the emitter's random stream only when non-zero, so existing emitters keep their sequence.
+`blend: "add"` makes the particles brighten what is behind them (sparks, fire) and `layer` is their 2D sorting layer, like
+`Sprite.layer`. The world stands still while the game is paused (`game.pause`): particles neither age nor move.
+
 An emitter starts its configured burst once on its first playing simulation
 step. loop:false disables continuous rate emission; explicit particles.burst
 still works. playing:false pauses automatic emission; existing particles keep

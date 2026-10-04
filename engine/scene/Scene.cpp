@@ -2,9 +2,21 @@
 
 #include <algorithm>
 
+#include "core/Log.h"
 #include "scene/Components.h"
 
 namespace oe {
+namespace {
+// Behaviour components that moved out of the engine into project scripts. Files that still name
+// them keep loading: the component is skipped with a warning that says what replaces it.
+const char* RemovedComponentHint(const std::string& type) {
+    if (type == "Rotator") return "scripts/rotator.lua from the project template: self:rotate(x * dt, y * dt, z * dt)";
+    if (type == "Velocity") return "a script that calls self:translate(x * dt, y * dt, z * dt)";
+    if (type == "PlayerController") return "scripts/player_controller.lua from the project template";
+    return nullptr;
+}
+}  // namespace
+
 Scene::Scene(const Scene& other) { *this = other; }
 Scene& Scene::operator=(const Scene& other) {
     if (this == &other) return *this;
@@ -177,6 +189,12 @@ EntityId Scene::CreateFromJson(const Json& e, bool keepId, std::string* error) {
     }
     for (const auto& kv : comps.members()) {
         const ComponentType* type = TypeRegistry::Find(kv.first);
+        const char* removed = type ? nullptr : RemovedComponentHint(kv.first);
+        if (removed) {
+            OE_LOG_WARN("scene", "entity '%s': component '%s' is no longer built in and was skipped; use a Script instead (%s)",
+                        e["name"].asString("").c_str(), kv.first.c_str(), removed);
+            continue;
+        }
         if (!type) {
             std::string names;
             for (const ComponentType& t : TypeRegistry::All()) names += (names.empty() ? "" : ", ") + t.name;

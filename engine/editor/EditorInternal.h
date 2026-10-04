@@ -46,6 +46,7 @@ struct Toast {
     std::string text;
     bool error = false;
     double until = 0;
+    ImU32 color = 0;  // border color; 0 = by kind (a team agent's edit uses the agent's color)
 };
 
 struct ScriptDiagnostic {
@@ -67,6 +68,15 @@ struct ScriptTab {
     std::vector<ScriptDiagnostic> runtime;      // script.errors for this file
     std::string runtimeKey;
     bool markersDirty = true;
+};
+
+// One entry of the chat's completion list: what a typed `@` or `#` word becomes.
+struct ChatCompletion {
+    std::string insert;                    // replaces the word: "@id " or "path "
+    std::string label, detail;             // shown in the list
+    std::string avatar, id;                // agents: picture key and id
+    std::string file;                      // files: project-relative path
+    bool enabled = true;                   // an offline agent is listed but cannot be chosen
 };
 
 enum class GizmoOp { None, Translate, Rotate, Scale };
@@ -192,6 +202,76 @@ struct NativeEditor::Impl {
     Mat4 sceneViewMat, sceneProjMat;
     ImVec2 sceneImagePos{0, 0}, sceneImageSize{0, 0};
 
+    // ----- Agent team (EditorTeam.cpp): Team panel and the agent profile dialog
+    bool teamAvailable = false;     // the hosting tool registered the team.* commands
+    bool showTeam = true, requestTeamFocus = false;
+    Json team;                      // team.list
+    Json teamState;                 // team.state, read every frame the panel shows
+    Json teamBackends = Json::MakeArray();  // team.backends {async}
+    Json teamPresets = Json::MakeArray();   // team.presets
+    double teamListRevision = -1;   // team.state revision `team` was read for
+    double teamBackendsPoll = -100;
+    std::string selectedAgent;
+    struct AgentForm {              // the profile dialog's working copy; nothing is stored before Save
+        bool isNew = true, installed = false, customModel = false, showPathInput = false, askFull = false;
+        std::string id, name, description, instructions, backend, model, access = "edit";
+        std::string avatar, avatarPath, originalAvatar;  // "preset:<name>" or "file" (+ its project-relative path)
+        std::string avatarSource;   // picture chosen for upload, applied by Save
+        std::string pathInput, error;
+    } agentForm;
+    bool openAgentDialog = false, openRemoveAgent = false;
+    std::string removeAgentId;
+    struct AvatarImage {
+        std::shared_ptr<const Texture> image;
+        int64_t modified = 0;
+        double lastUsed = 0;
+    };
+    std::map<std::string, AvatarImage> avatarTextures;  // "preset:<name>" / "file:<path>", at most 64
+    std::shared_ptr<const Texture> AvatarTexture(const std::string& key);
+    void DrawAvatar(ImDrawList* dl, ImVec2 pos, float size, const std::string& key, const std::string& id, const std::string& name);
+    const Json* TeamBackend(const std::string& id) const;
+    void RefreshTeam();
+    void EditAgent(const std::string& id);  // empty = a new agent
+    bool SetAgentFormBackend(const std::string& id);
+    bool SaveAgentForm();
+    void TeamPanel();
+    void TeamModals();
+    // Team Chat (EditorTeamChat.cpp)
+    bool showTeamChat = true, requestTeamChatFocus = false;
+    struct ChatEntry {
+        Json message;                    // one team.messages entry
+        std::vector<std::string> links;  // project files named in the text (open on click)
+        std::vector<std::string> files;  // every existing project file the text names (tinted)
+        bool rich = false;               // the text has references to tint (mentions, files)
+        bool open = false;               // turn steps expanded
+    };
+    std::vector<ChatEntry> chat;
+    bool chatLoaded = false, chatVisible = false, chatScrollToBottom = false, chatJustSent = false, chatFocusInput = false;
+    double chatLast = 0, chatRevision = -1;  // newest message id read; team.state revision it was read for
+    int chatUnread = 0;                      // arrived while the tab was hidden
+    std::string chatInput, chatAutoMention;  // chatAutoMention: the "@id " a roster click put there (replaced by the next click)
+    std::array<float, 4> chatStopRect{0, 0, 0, 0};  // first live line's Stop button (tests click it)
+    std::vector<std::string> chatAttachments;       // files that go with the next message (dropped on the panel)
+    std::array<float, 4> chatRect{0, 0, 0, 0};      // the panel's window: a file dropped inside it is attached
+    std::vector<ImVec2> droppedAt;                  // where each entry of droppedFiles landed
+    std::string chatViewerPath;                     // project-relative picture shown in the viewer; empty = closed
+    bool chatViewerActual = false;                  // 100 % instead of fit
+    std::vector<std::pair<std::string, bool>> MentionCandidates(const std::string& prefix) const;
+    std::vector<std::string> FileCandidates(const std::string& prefix) const;
+    int chatCompleteIndex = 0;            // chosen row of the completion list (Up / Down, the pointer)
+    std::string chatCompleteKey;          // the word the list was built for; another word starts at the top
+    bool chatCompleteScroll = false;      // bring the chosen row into view
+    std::vector<ChatCompletion> Completions(char marker, const std::string& prefix) const;
+    ImU32 ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length) const;
+    void DrawChatText(const std::string& text, const std::vector<std::string>& files);
+    void PollChat();
+    void SendChat();
+    void RouteDroppedFiles();
+    bool DrawImageFile(const std::string& absolutePath, ImVec2 box, float zoom);
+    void ImportChatImage(const std::string& path);
+    void ImageViewer();
+    void TeamChatPanel();
+
     // ----- Tile painting (EditorTiles.cpp): Tiles panel + brush in the Scene view
     bool showTiles = true;
     bool tilePaint = false;        // Scene view clicks paint the selected Tilemap
@@ -220,6 +300,16 @@ struct NativeEditor::Impl {
     std::set<std::string> gameAxesForwarded;  // only these axes are released when Game loses focus
     bool gameMouseDown[2] = {false, false};
     float lastGameMouse[2] = {-1, -1};
+    // UI editing in the stopped Game view: select, drag to move, handles to resize.
+    int uiDragHandle = -1;        // -1 none, 0 = move, 1..8 = handles clockwise from the top-left corner
+    EntityId uiDragEntity = kNullEntity;
+    std::string uiDragType;       // UI component being edited
+    float uiDragStart[4] = {0, 0, 0, 0};  // x, y, width, height when the drag began (reference pixels)
+    ImVec2 uiDragMouse{0, 0};
+    int uiDragSerial = 0;
+    void GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h);
+    // Component that carries the entity's `visible` flag (UI, Sprite, MeshRenderer, Tilemap), or empty.
+    std::string VisibilityComponent(EntityId id, bool* visible) const;
     bool gameWantsLock = false;
     bool requestGameFocus = false;
 
@@ -233,6 +323,7 @@ struct NativeEditor::Impl {
     std::vector<Toast> toasts;
     std::vector<std::string> droppedFiles;
     std::map<EntityId, double> remoteEdits;  // entity -> editor time of the last API (agent) edit
+    std::map<EntityId, ImU32> remoteEditColors;  // ... and the color of the team agent that made it, when known
     void OnRemoteCall(const std::string& name, const Json& args, const Json& result);
     double fpsTimer = 0;
     int fpsFrames = 0;
@@ -322,6 +413,8 @@ struct NativeEditor::Impl {
 };
 
 // Small helpers shared by the editor files.
+// A team agent's color (from its id): its name in the chat, its edits in the Hierarchy and notices.
+ImU32 AgentColor(const std::string& id);
 Json Vec3Json(const Vec3& v);
 Vec3 JsonVec3(const Json& j, Vec3 def = Vec3(0, 0, 0));
 Json ObjectOf(std::initializer_list<std::pair<const char*, Json>> members);

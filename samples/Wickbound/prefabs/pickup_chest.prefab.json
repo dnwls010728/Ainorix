@@ -1,0 +1,85 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "pickup_chest",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Pickup chest",
+      "components": {
+        "RigidBody2D": {
+          "type": "kinematic",
+          "gravityScale": 0
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.15000000000000002,
+          "layer": 5,
+          "ignoreLayers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/pickup.lua",
+          "params": {
+            "kind": "chest"
+          }
+        },
+        "Tag": {
+          "tags": "chest"
+        },
+        "Light2D": {
+          "radius": 2.0,
+          "strength": 0.8
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Glow",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 3.0,
+          "height": 3.0,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 5,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.8863,
+            0.4784
+          ],
+          "opacity": 0.6,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.8,
+          "height": 0.8,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 21,
+          "texture": "assets/fx/chest.png",
+          "order": 1
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

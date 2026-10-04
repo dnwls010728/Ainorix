@@ -63,6 +63,19 @@ Face SDF masks, sampled ramps/control maps, depth-buffer rims, anisotropic hair,
 stencil hair/face layering and original-game tone mapping are outside this graph
 experiment. Materials can be edited/hot-reloaded through existing material APIs.
 
+## Toon graph in a game (NetChase)
+
+`samples/NetChase` uses the same technique on a moving third-person camera. Its
+`materials/toon.shader.json` (29 nodes) declares the reserved `cameraPosition` and
+`lightDirection` uniforms (see POSTPROCESS.md), so the rim and the highlight half-vector
+are computed from the real view and scene light instead of fixed studio values. The
+player prefab is the mannequin scaled to 1.8 m with inverted-hull outlines; the coat is
+the root mesh and takes the replicated player colour as its tint. Pillars and the
+crystal share `materials/prop-toon.mat.json`. `tools/make_art.py` regenerates the models,
+graph, materials and prefab. Covered by `ShaderGraphSceneUniforms` and
+`NetChaseThirdPersonSample`; software and D3D11 screenshots were inspected. The limits
+above still apply (no cast-shadow darkening on toon surfaces, no face SDF or ramps).
+
 ## Reference provenance
 
 Reviewed the public community

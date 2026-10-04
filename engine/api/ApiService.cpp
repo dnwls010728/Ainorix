@@ -51,7 +51,14 @@ HttpResponse HandleApiRequest(Engine& engine, const HttpRequest& req) {
         if (!parseError.empty()) return Error(400, "invalid_json", parseError);
         std::string command = body["command"].asString("");
         if (command.empty()) return Error(400, "missing_command", "body must be {\"command\": \"name\", \"args\": {...}}");
-        auto future = engine.PostCall(command, body["args"]);
+        // Optional "agent": the team agent calling (oe mcp --connect --agent <id>), shown by the
+        // editor next to the edit. Anything that is not a plain id is ignored.
+        std::string agent = body["agent"].asString("");
+        const bool plain = !agent.empty() && agent.size() <= 32 && std::all_of(agent.begin(), agent.end(), [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+        });
+        if (!plain) agent.clear();
+        auto future = engine.PostCall(command, body["args"], agent);
         if (!WaitFor(future)) return Error(500, "timeout", "engine did not respond");
         return JsonResponse(future.get());
     }

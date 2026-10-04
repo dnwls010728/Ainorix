@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "basis": "Visual frame and native playback review; improvement over the rejected first atlas, with documented residual limitations.",
+  "states": {
+    "idle": "idle",
+    "move": "walk"
+  },
+  "evidence": {
+    "walk": {
+      "sha256": "4825152a017ebdcbc115b49a3cd3d50a251384240ef9f3cf969da2b0d73877af",
+      "report": "build/wickbound-grok/enemy_brute-wide-retry/front_diagonal-walk/loop.report.json"
+    },
+    "idle": {
+      "sha256": "886ff2d2bfb2f88aa6cb43049fd320e519d71ecacb49817ff39b2f1629ea3098",
+      "report": "build/wickbound-grok/enemy_brute-wide-retry/front_diagonal-idle/loop.report.json"
+    }
+  },
+  "notes": "The first flat/nonperiodic motion failed. The revised 31-frame quadruped cycle alternates paw positions without the large squash/jump poses of the first atlas. Residual 0.93% head displacement and gait-review warning remain; contact physics is not certified."
+}

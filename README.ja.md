@@ -5,6 +5,8 @@
 AI が人と同じように扱い、検証できるように設計した C++17 ゲームエンジンです。人のためのエディターと AI のためのインターフェース (CLI・HTTP・MCP) が**同じコマンド API** を共有します。
 
 - トゥーンシェーダーテスト: `samples/WuwaToon` — 鳴潮の公開コミュニティ資料を参考にした独自モデル、Toon/PBR/法線比較、輪郭線と回転操作。実装範囲と出典: [docs/TOON.md](docs/TOON.md)
+- 完成ゲームサンプル: `samples/Wickbound` — 光が資源の10分サバイバーローグライト。プレハブとエンティティごとのスクリプト、Box2D のボディ・センサー・衝突レイヤー、`Light2D`/`Darkness2D` の2Dライティング、加算ブレンドのスプライトとパーティクル、ソートレイヤー、メニュー/ランシーンと UI 階層・モーダル、`game.pause`、セーブとデイリーギフト（`time.date`）、英語/韓国語テキスト。実行: `oe run samples/Wickbound`
+- UI とエディター: スクロールビュー（`UIScroll`）、登場モーション（`UIMotion`）、ボタンのホバースケール、Lua `tween`、モーダル入力ブロック - [docs/UI.md](docs/UI.md)。停止中の Game ビューで UI の選択・移動・サイズ変更、ヒエラルキーの表示切り替え - [docs/EDITOR.md](docs/EDITOR.md)
 - エディタ機能: 階層クリップボード、変更履歴、プレハブのソース編集、アセットサムネイル、Windowsファイルダイアログ — [docs/EDITOR.md](docs/EDITOR.md)
 
 ![ネイティブエディター - Showcase サンプル](docs/images/native-editor.png)
@@ -26,6 +28,7 @@ AI が人と同じように扱い、検証できるように設計した C++17 �
 - ゲームの構成要素: プレハブ、シーン切り替え + ゲームデータ、メッセージ/タイマー、ゲーム内 UI、オーディオ (決定的ミキサー、効果音の生成) - [docs/GAMEPLAY.md](docs/GAMEPLAY.md)
 - Lua 5.4 スクリプト (サンドボックス、ホットリロード、エラーにファイル:行を表示) - [docs/SCRIPTING.md](docs/SCRIPTING.md)
 - カメラ後処理: ソフトウェア・GPUの露出・HDR Reinhardトーンマッピング・ブルーム・ビネット・FXAAに対応し、UIと選択輪郭を維持。Showcaseの1〜6キーでOff・Tone・Bloom・Vignette・FXAA・Allを選択。`shader.create`・`shader.check`でシェーダーグラフを作成・検証可能。マテリアルグラフをCPU・GPUのメインパスで実行。グラフのアルファを影・選択パスにも適用。ShaderLab で時間駆動の発光・手続き的マスク・影を実演。CPU/D3D11・WebGL2 パッケージ検証済み。Android ランタイム更新・実機検証は未完了 - [docs/POSTPROCESS.md](docs/POSTPROCESS.md)
+- HD-2Dスプライト: プロジェクトのスクリプト(`samples/HD2D/scripts/billboards.lua`)がピクセルアートのスプライトをライティングされた3Dワールドでカメラに向け、`Sprite.castShadows`で画像の形の影を落とし、`PostProcess`の被写界深度(`dofRadius`/`dofFocus`/`dofRange`/`dofFalloff`)が両レンダラーでビュー深度に応じてぼかします。samples/HD2Dで実演。Web・Androidプレイヤーは再ビルドが必要 - [docs/2D.md](docs/2D.md)、[docs/POSTPROCESS.md](docs/POSTPROCESS.md)
 - ゲームパッド入力: 6軸のAPI注入、Lua `input.axis`、共通0.15デッドゾーン、Windows XInput・Web Gamepad API・Android対応、エディターGameビュー転送とPlatformer/Dungeon操作。実コントローラー検証は未完了 - [docs/INPUT.md](docs/INPUT.md)
 - Webマルチタッチ: Lua `input.touches()`に全指を渡し、画面上のキーを同時操作。最初の指はマウスとしても動作。ブラウザー合成イベント検証済み、モバイル実機検証は未完了 - [docs/TOUCH.md](docs/TOUCH.md)
 - 決定的 (deterministic) なシミュレーションとソフトウェアレンダラー: 同じ入力なら同じフレームハッシュ → AI がテストオラクルとして使えます
@@ -101,11 +104,23 @@ Lua `save.get/set/delete/flush` または `save.*` コマンドで進行状況�
 | 方法 | コマンド |
 |---|---|
 | MCP (Claude Code など) | `oe mcp <project> [--port 7777]` - すべてのコマンドが MCP ツール、スクリーンショットは画像で返ります。`--port` を指定すると人が同じセッションをエディターで見られます |
-| 実行中のエディターに接続 | `oe mcp --connect 7777` |
+| 実行中のエディターに接続 | `oe mcp --connect 7777` (MCP)、MCP なしなら `oe exec --connect 7777 <command> [json]`、`oe script --connect 7777` |
 | CLI / スクリプト | `oe exec`、`oe script` (JSON の入出力、失敗時は終了コード 1) |
 | HTTP | `POST /api/call {"command": "...", "args": {...}}` |
 
 このリポジトリの [.mcp.json](.mcp.json) は Claude Code で `samples/Hello` プロジェクトを MCP サーバーとして接続します (先にビルドが必要)。エージェント向けの作業ガイドは [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md)、API 全体は [docs/API.md](docs/API.md)、構成は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、コードを変更するときの設計方針 (人間・AI エージェント共通) は [docs/DESIGN.md](docs/DESIGN.md) にあります。
+
+### エージェントチーム
+
+エディターの中で複数の AI エージェントをチームとして置き、作業を任せられます。エンジンがモデルの API を直接呼ぶことはなく、この PC にインストールされログイン済みのコーディングエージェント CLI (Claude Code、Codex) を子プロセスとして実行します。
+
+- **Team パネル** (表示 > チーム): エージェントの追加・編集・削除。プロフィール画像、説明、指示、使用する CLI とモデル、権限 (読み取り専用 / プロジェクトを編集 / フルアクセス) を設定します。インストールされていない CLI は選択できません。
+- **Team Chat パネル** (表示 > チームチャット): `@名前` でエージェントを呼び、`@all` は全員、メンションがなければリードに届きます。作業中のエージェントには作業内容と **停止** ボタンが表示されます。パネルにファイルをドロップすると添付され、`#` でプロジェクトのファイルをプレビューしながら参照できます。エージェントが作った画像は返信の下に表示されます。
+- エージェントは返信の `@id` でチームメイトに作業を引き継げます。連鎖は `maxHops` (既定 4) で止まります。
+- エージェントは開いているエディターをコマンド API で直接操作し、誰が何を変更したかがエディターに表示されます。
+- すべてコマンドでも使えます: `team.add`、`team.send`、`team.state`、`team.messages` など。チームの設定と会話は `<project>/.oe/team/` に保存され、git には含まれません。
+
+現在は Windows のみ対応です。詳細と進捗: [docs/TEAM.md](docs/TEAM.md)
 
 ## 構成
 
@@ -137,6 +152,8 @@ samples/Showcase レンダリングサンプル (glTF のキツネキャラク�
 samples/Dungeon  2D 見下ろしアクション (Box2D、オートタイルのタイルセット、押せる木箱、魔法弾、スライム)
 samples/Platformer 2D 横スクロールのプラットフォーマー (テキストのタイルマップ、スプライトアニメーション、敵、? ブロック、パララックス)
 samples/FPS      一人称シューティングのテストゲーム (マウス視点、ヒットスキャンのピストル、リロード、動く標的、結果画面)
+samples/HD2D    HD-2D テストゲーム "Lantern Road" (3Dワールドのビルボード ピクセルアートスプライトと影、被写界深度、クリスタル、会話)
+samples/Water    うねる海 (シェーダーグラフの頂点オフセット・法線出力、plane64、波に乗るブイと船、穏やか/うねり/嵐)
 ```
 
-ネットワークサンプル: `samples/NetCoop`（lockstep 協力）、`samples/NetDuel`（rollback 対戦）、`samples/NetArena`（サーバー権限対戦）。エディターの Players 2、またはゲーム内 Host/Join/Ready/Start で開始。キーボード・ゲームパッド・タッチボタンに対応。起動・WebSocket・Android 検証: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md)。
+ネットワークサンプル: `samples/NetCoop`（lockstep 協力）、`samples/NetDuel`（rollback 対戦）、`samples/NetArena`（サーバー権限対戦）、`samples/NetChase`（サーバー権限の三人称クリスタルレース）。エディターの Players 2、またはゲーム内 Host/Join/Ready/Start で開始。キーボード・ゲームパッド・タッチボタンに対応。起動・WebSocket・Android 検証: [docs/NETWORK_SAMPLES.md](docs/NETWORK_SAMPLES.md)。

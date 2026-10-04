@@ -30,6 +30,7 @@
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 #include "render/GpuRenderer.h"
+#include "team/TeamCommands.h"
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #endif
@@ -51,7 +52,7 @@ struct Args {
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
 const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script",
-                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--seed", "--api-port", "--players"};
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--seed", "--api-port", "--players", "--agent"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -127,13 +128,15 @@ bool SetupRenderer(Engine& engine, const Args& a, Window* window, int& exitCode)
 // Runs the engine main loop: posted API jobs, real-time simulation and the
 // optional native window. Returns when the window closes or `quit` is set.
 // The window shows the GPU renderer when it was enabled for that window.
-void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, bool gpuWindow = false) {
+// `team` (optional) is updated every iteration so agent turns advance without API calls.
+void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, bool gpuWindow = false, const TeamHandle* team = nullptr) {
     RenderTarget frame;
     double last = PlatformTimeSeconds();
     double fpsTimer = last;
     int frames = 0;
     while (!quit) {
         engine.RunPostedJobs();
+        if (team) team->update();
         if (window && !window->PumpEvents(engine.Input())) break;
         double now = PlatformTimeSeconds();
         engine.Tick(now - last);
@@ -180,7 +183,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --play --players N --script scripts/x.lua --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --team --chat --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -193,6 +196,8 @@ int CmdHelp() {
                  "  script [path] [--save]            Run newline-delimited {\"command\",\"args\"} from stdin\n"
                  "  mcp [path] [--port P]             MCP server on stdio (optionally also serve the HTTP API)\n"
                  "  mcp --connect <port>              MCP server that drives a running editor (or oe run/mcp --port)\n"
+                 "  exec --connect <port> <command> [json] [--save]   one command to a running editor, without MCP\n"
+                 "  script --connect <port> [--save]  many commands (JSON lines on stdin) to a running editor\n"
                  "  import <path> <file> [--to rel]   Copy a model/texture/sound into the project (prints asset.info)\n"
                  "  package [path] [--out dist/Name] [--name N] [--web]\n"
                  "                                    Build a standalone game: Name.exe + game data, or with --web\n"
@@ -274,18 +279,56 @@ int CmdRender(const Args& a) {
     return 0;
 }
 
+// One command sent to a running engine (`oe editor`, or `oe run` / `oe mcp` with --port) over
+// its HTTP API: what `--connect <port>` does for exec, script and mcp. `agent` (optional) is a
+// team agent's id, shown by the editor next to the edit.
+Json RemoteCall(int port, const std::string& command, const Json& args, const std::string& agent) {
+    Json body = Json::MakeObject();
+    body["command"] = command;
+    body["args"] = args.isNull() ? Json::MakeObject() : args;
+    if (!agent.empty()) body["agent"] = agent;
+    std::string response, err;
+    if (!HttpPostLocal(port, "/api/call", body.dump(), response, &err)) {
+        Json e = Json::MakeObject();
+        e["ok"] = false;
+        e["error"]["code"] = "editor_unreachable";
+        e["error"]["message"] = err;
+        e["error"]["hint"] = "Nothing answers on 127.0.0.1:" + std::to_string(port) + ". Start `oe editor <project>` (port 7777) or pass the port it reports.";
+        return e;
+    }
+    return Json::parse(response);
+}
+
 int CmdExec(const Args& a) {
     // oe exec [path] <command> [json]
     Args b = a;
     std::string path = ".";
     std::vector<std::string>& p = b.positional;
-    if (p.empty()) return Fail("missing_argument", "usage: oe exec [path] <command> [json-args] [--save]");
+    if (p.empty()) return Fail("missing_argument", "usage: oe exec [path] <command> [json-args] [--save] | oe exec --connect <port> <command> [json-args] [--save]");
     // First positional is a path if it exists on disk or looks like one.
     if (p.size() >= 2 && (FileExists(p[0]) || p[0] == ".")) {
         path = p[0];
         p.erase(p.begin());
     }
+    if (a.Has("--connect")) {
+        // The running editor's scene, live: no project is opened here (a path, if given, is ignored).
+        const int port = a.GetInt("--connect", 7777);
+        Json args = Json::MakeObject();
+        if (p.size() >= 2) {
+            std::string err;
+            args = Json::parse(p[1], &err);
+            if (!err.empty()) return Fail("invalid_json", err, "Arguments must be one JSON object, e.g. '{\"id\": 3}'. Quote it for your shell.");
+        }
+        Json res = RemoteCall(port, p[0], args, a.Get("--agent"));
+        if (res["ok"].asBool() && a.Has("--save")) {
+            Json saved = RemoteCall(port, "scene.save", Json(), a.Get("--agent"));
+            if (!saved["ok"].asBool()) res = saved;
+        }
+        PrintJson(res);
+        return res["ok"].asBool() ? 0 : 1;
+    }
     Engine engine;
+    RegisterTeamCommands(engine.Commands());
     Args openArgs;
     openArgs.flags = a.flags;
     openArgs.positional.push_back(path);
@@ -308,9 +351,13 @@ int CmdExec(const Args& a) {
 }
 
 int CmdScript(const Args& a) {
+    const bool remote = a.Has("--connect");  // lines go to the running editor instead of a project opened here
+    const int port = a.GetInt("--connect", 7777);
     Engine engine;
+    RegisterTeamCommands(engine.Commands());
     int code = 0;
-    if (!OpenOrFail(engine, a, code)) return code;
+    if (!remote && !OpenOrFail(engine, a, code)) return code;
+    auto call = [&](const std::string& command, const Json& args) { return remote ? RemoteCall(port, command, args, a.Get("--agent")) : engine.Call(command, args); };
     std::string line;
     bool allOk = true;
     while (std::getline(std::cin, line)) {
@@ -318,7 +365,7 @@ int CmdScript(const Args& a) {
         if (line.empty() || line[0] == '#') continue;
         std::string err;
         Json msg = Json::parse(line, &err);
-        Json res = err.empty() ? engine.Call(msg["command"].asString(""), msg["args"])
+        Json res = err.empty() ? call(msg["command"].asString(""), msg["args"])
                                : Json::parse("{\"ok\":false,\"error\":{\"code\":\"invalid_json\"}}");
         allOk = allOk && res["ok"].asBool();
         std::string s = res.dump();
@@ -326,7 +373,7 @@ int CmdScript(const Args& a) {
         std::fputc('\n', stdout);
     }
     if (allOk && a.Has("--save")) {
-        Json saved = engine.Call("scene.save", Json());
+        Json saved = call("scene.save", Json());
         allOk = saved["ok"].asBool();
     }
     std::fflush(stdout);
@@ -370,6 +417,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         if (!r["ok"].asBool()) return Fail("not_found", "no entity " + a.Get("--select"));
         editor.Select(static_cast<EntityId>(r["result"]["id"].asNumber(0)));
     }
+    if (a.Has("--2d")) editor.SetSceneView2D(true);
     if (a.Has("--players")) {
         int players = a.GetInt("--players", 1);
         editor.SetNetworkPlayers(players);
@@ -382,12 +430,15 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(a.Has("--script") || a.Has("--players") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") ? 8 : a.Has("--script") || a.Has("--players") || a.Has("--game") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
-        if (i == 1 && a.Has("--play")) editor.FocusGameView(true);  // as after pressing Play
+        if (i == 1 && (a.Has("--play") || a.Has("--game"))) editor.FocusGameView(true);  // as after pressing Play; --game: the stopped Game view (UI editing)
         if (i == 3 && a.Has("--players")) editor.FocusNetworkPanel();
+        if (i == 3 && a.Has("--team")) editor.FocusTeamPanel();
+        if (i == 3 && a.Has("--chat")) editor.FocusTeamChat();
+        if (i == 4 && a.Has("--agent")) editor.EditAgent(a.Get("--agent") == "new" ? "" : a.Get("--agent"));  // the profile dialog
         if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (!editor.DrawToImage(rt)) return Fail("render_failed", "cannot read back the editor frame");
     }
@@ -406,6 +457,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
 
 int CmdEditor(const Args& a) {
     Engine engine;
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(engine.Commands());
     int code = 0;
     if (!OpenOrFail(engine, a, code)) return code;
 #if OE_NATIVE_EDITOR
@@ -427,8 +479,13 @@ int CmdEditor(const Args& a) {
     NativeEditor::Options options;
     options.layoutFile = EditorLayoutFile(engine);
     options.language = a.Get("--lang");
-    if (StartServer(server, engine, port)) options.serverInfo = "API http://127.0.0.1:" + std::to_string(port);
-    else OE_LOG_WARN("editor", "port %d is busy: agents cannot attach (pick another with --port)", port);
+    if (StartServer(server, engine, port)) {
+        options.serverInfo = "API http://127.0.0.1:" + std::to_string(port);
+        team->host.apiPort = port;  // agents drive this editor through `oe mcp --connect`
+    } else {
+        OE_LOG_WARN("editor", "port %d is busy: agents cannot attach (pick another with --port)", port);
+    }
+    options.onFrame = team->update;  // agent turns advance every frame, whatever panel is open
     if (!a.Has("--mute")) engine.EnableAudioOutput();
     window->Maximize();
     OE_LOG_INFO("editor", "native editor (%s)", engine.Gpu()->Name());
@@ -444,30 +501,19 @@ int CmdMcp(const Args& a) {
     PlatformSetBinaryStdio();
     if (a.Has("--connect")) {
         int port = a.GetInt("--connect", 7777);
-        CommandCaller call = [port](const std::string& command, const Json& args) {
-            Json body = Json::MakeObject();
-            body["command"] = command;
-            body["args"] = args;
-            std::string response, err;
-            if (!HttpPostLocal(port, "/api/call", body.dump(), response, &err)) {
-                Json e = Json::MakeObject();
-                e["ok"] = false;
-                e["error"]["code"] = "editor_unreachable";
-                e["error"]["message"] = err;
-                return e;
-            }
-            return Json::parse(response);
-        };
+        const std::string agent = a.Get("--agent");  // a team agent's id: the editor shows who made each edit
+        CommandCaller call = [port, agent](const std::string& command, const Json& args) { return RemoteCall(port, command, args, agent); };
         return RunMcpServer(call, std::cin, std::cout);
     }
 
     Engine engine;
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(engine.Commands());
     int code = 0;
     if (!OpenOrFail(engine, a, code)) return code;
     HttpServer server;
     if (a.Has("--port")) {
         if (!SetupRenderer(engine, a, nullptr, code)) return code;
-        StartServer(server, engine, a.GetInt("--port", 7777));
+        if (StartServer(server, engine, a.GetInt("--port", 7777))) team->host.apiPort = a.GetInt("--port", 7777);
     }
     std::atomic<bool> quit{false};
     // MCP I/O on a worker thread; engine work stays on the main thread.
@@ -475,13 +521,14 @@ int CmdMcp(const Args& a) {
         RunMcpServer([&engine](const std::string& c, const Json& args) { return engine.PostCall(c, args).get(); }, std::cin, std::cout);
         quit = true;
     });
-    MainLoop(engine, nullptr, quit);
+    MainLoop(engine, nullptr, quit, false, team.get());
     io.join();
     return 0;
 }
 
 int CmdApi(const Args& a) {
     Engine engine;
+    RegisterTeamCommands(engine.Commands());  // tool commands are part of the reference
     Json list = engine.Call("api.list", Json())["result"];
     if (!a.Has("--markdown")) {
         PrintJson(list);

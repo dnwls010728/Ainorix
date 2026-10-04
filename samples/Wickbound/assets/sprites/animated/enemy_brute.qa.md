@@ -1,0 +1,1 @@
+The first flat/nonperiodic motion failed. The revised 31-frame quadruped cycle alternates paw positions without the large squash/jump poses of the first atlas. Residual 0.93% head displacement and gait-review warning remain; contact physics is not certified.

@@ -62,6 +62,18 @@ MSVC/Ninja configuration probes the compiler's raw `/showIncludes` prefix to avo
 dependency tracking when localized compiler output is decoded using the wrong code page. This
 keeps incremental builds consistent after public transport structs change.
 
+## Child processes
+
+`platform/Process.h` starts programs for tools (the agent CLIs of [TEAM.md](TEAM.md)): argv
+arrays, stdin/stdout/stderr pipes read line by line, exit code, and killing the whole process
+tree. Games never use it. A platform without an implementation compiles `null/ProcessNone.cpp`
+(`PlatformProcessSupported()` is false) and tools report the feature as unavailable.
+
+| Backend | Implementation | Verification |
+|---|---|---|
+| Win32 | `platform/win32/ProcessWin32.cpp`: `CreateProcessW` without a console window, kill-on-close job object, inherited handle list, `.cmd`/`.bat` through `cmd.exe /d /s /c` with quoted arguments | Windows Release; `ProcessRunsChildren`, and `team.backends` against the installed Claude Code, Codex and Gemini CLIs |
+| Everything else | `platform/null/ProcessNone.cpp` (stub) | Not compiled in the current Windows environment; a POSIX backend (`posix_spawn`, process groups) is still to be written |
+
 ## Consoles
 
 Console SDKs are under NDA, so their code cannot live in this public tree. The layout that keeps them out:

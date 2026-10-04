@@ -1,0 +1,86 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "pickup_xp",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Pickup xp",
+      "components": {
+        "RigidBody2D": {
+          "type": "kinematic",
+          "gravityScale": 0
+        },
+        "Collider2D": {
+          "shape": "circle",
+          "radius": 0.15000000000000002,
+          "layer": 5,
+          "ignoreLayers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ]
+        },
+        "Script": {
+          "path": "scripts/run/pickup.lua",
+          "params": {
+            "kind": "xp"
+          }
+        },
+        "Tag": {
+          "tags": "pickup"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Glow",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.5850000000000001,
+          "height": 0.5850000000000001,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 5,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            1.0,
+            0.7843,
+            0.3412
+          ],
+          "opacity": 0.45,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.225,
+          "height": 0.225,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 5,
+          "texture": "assets/fx/gem.png",
+          "order": 1,
+          "color": [
+            1.0,
+            0.7843,
+            0.3412
+          ]
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

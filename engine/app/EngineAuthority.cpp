@@ -292,6 +292,7 @@ bool Engine::PollAuthority() {
             for (const auto& input : authority_->PendingInputs()) {
                 if (input.first <= update.acknowledged) continue;
                 authorityInput_ = input.first; ApplyInputs({{network_->LocalPlayer(), input.second}});
+                input_.mouseLocked = raw.mouseLocked;  // replayed local scripts see the real lock, with no mouse motion
                 audio_->SetOutputMode(false, true); SimulateWorld(); predictionStates_[input.first] = CaptureNative(false);
             }
             replaying_ = false; input_ = raw; audio_->RestoreOutput(std::move(output));
@@ -308,6 +309,9 @@ bool Engine::PollAuthority() {
             authorityInput_ = authority_->Submit(sample); if (!authorityInput_) return false;
             ApplyInputs({{network_->LocalPlayer(), sample}}); InterpolateAuthority(); audio_->SetOutputMode(false, true);
         }
+        // Server state is never hash-compared, so local scripts (cameras) may keep relative mouse
+        // look. It is not part of any player's input stream: send what the server needs by RPC.
+        input_.mouseDX = deviceInput_.mouseDX; input_.mouseDY = deviceInput_.mouseDY; input_.mouseLocked = deviceInput_.mouseLocked;
         return true;
     } catch (const std::exception& error) {
         replaying_ = false; inWorld_ = false;

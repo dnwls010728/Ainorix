@@ -319,6 +319,32 @@ int L_SceneParent(lua_State* L) {
     return 1;
 }
 
+// scene.children(id) -> direct child ids in id order; scene.child(id, name) -> the child with that name, or nil.
+int L_SceneChildren(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    lua_newtable(L);
+    int i = 0;
+    for (EntityId child : SceneOf(L).Children(id)) {
+        lua_pushinteger(L, child);
+        lua_rawseti(L, -2, ++i);
+    }
+    return 1;
+}
+
+int L_SceneChild(lua_State* L) {
+    EntityId id = CheckEntity(L, 1);
+    const std::string name = luaL_checkstring(L, 2);
+    Scene& s = SceneOf(L);
+    for (EntityId child : s.Children(id)) {
+        if (s.Record(child)->name == name) {
+            lua_pushinteger(L, child);
+            return 1;
+        }
+    }
+    lua_pushnil(L);
+    return 1;
+}
+
 int L_SceneAll(lua_State* L) {
     return Guard(L, [&] {
         Scene& s = SceneOf(L);
@@ -502,6 +528,17 @@ int L_GameLoadScene(lua_State* L) {
         Host(L).GetEngine().RequestSceneChange(path);
         return 0;
     });
+}
+
+// game.pause(on = true) / game.paused(): gameplay pause, see Engine::SetGamePaused.
+int L_GamePause(lua_State* L) {
+    Host(L).GetEngine().SetGamePaused(lua_isnone(L, 1) ? true : lua_toboolean(L, 1) != 0);
+    return 0;
+}
+
+int L_GamePaused(lua_State* L) {
+    lua_pushboolean(L, Host(L).GetEngine().GamePaused());
+    return 1;
 }
 
 int L_GameScene(lua_State* L) {
@@ -817,6 +854,7 @@ int L_PlayerInputQuery(lua_State* L) {
         uint32_t player = static_cast<uint32_t>(lua_tointeger(L, lua_upvalueindex(1)));
         int kind = static_cast<int>(lua_tointeger(L, lua_upvalueindex(2)));
         const auto& input = Host(L).GetEngine().PlayerInput(player);
+        if (kind == 3) { lua_pushnumber(L, input.lookX); lua_pushnumber(L, input.lookY); return 2; }
         const char* name = luaL_checkstring(L, lua_istable(L, 1) ? 2 : 1);
         if (kind == 2) lua_pushnumber(L, input.Axis(name));
         else lua_pushboolean(L, kind == 0 ? input.IsDown(name) : input.pressedThisFrame.count(name) != 0);
@@ -827,8 +865,8 @@ int L_InputPlayer(lua_State* L) {
     return Guard(L, [&] {
         lua_Integer player = luaL_checkinteger(L, 1);
         if (player < 1 || player >= 0xfffffffeLL) return luaL_error(L, "player id must be 1..4294967293");
-        lua_newtable(L); const char* names[] = {"down", "pressed", "axis"};
-        for (int i = 0; i < 3; ++i) {
+        lua_newtable(L); const char* names[] = {"down", "pressed", "axis", "look"};
+        for (int i = 0; i < 4; ++i) {
             lua_pushinteger(L, player); lua_pushinteger(L, i); lua_pushcclosure(L, L_PlayerInputQuery, 2); lua_setfield(L, -2, names[i]);
         }
         return 1;
@@ -844,6 +882,21 @@ int L_InputAxis(lua_State* L) {
         lua_pushnumber(L, Host(L).GetEngine().Input().Axis(name));
         return 1;
     });
+}
+
+// input.look() -> x, y: the look direction stored with input.setLook, each in [-1,1]
+int L_InputLook(lua_State* L) {
+    const InputState& in = Host(L).GetEngine().Input();
+    lua_pushnumber(L, in.lookX);
+    lua_pushnumber(L, in.lookY);
+    return 2;
+}
+
+// input.setLook(x, y?) - store the local look direction (mouse look). It survives prediction
+// replays and reaches every peer through the declared LookX/LookY network axes.
+int L_InputSetLook(lua_State* L) {
+    Host(L).GetEngine().SetLook(static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_optnumber(L, 2, 0.0)));
+    return 0;
 }
 
 int L_InputDown(lua_State* L) {
@@ -870,6 +923,12 @@ int L_InputMouseDelta(lua_State* L) {
     lua_pushnumber(L, in.mouseDX);
     lua_pushnumber(L, in.mouseDY);
     return 2;
+}
+
+// input.wheel() -> mouse wheel notches this step (> 0 = away from the user)
+int L_InputWheel(lua_State* L) {
+    lua_pushnumber(L, Host(L).GetEngine().Input().wheel);
+    return 1;
 }
 
 // input.lockMouse(on?) - hide and capture the cursor (default true). The player
@@ -912,6 +971,12 @@ int L_TimeFrame(lua_State* L) {
 
 int L_TimeNow(lua_State* L) {
     lua_pushnumber(L, Host(L).GetEngine().SimTime());
+    return 1;
+}
+
+// time.date() -> "YYYY-MM-DD": the calendar day (or the time.date override). Outside the deterministic simulation.
+int L_TimeDate(lua_State* L) {
+    lua_pushstring(L, Host(L).GetEngine().Today().c_str());
     return 1;
 }
 
@@ -1058,6 +1123,105 @@ function __oe_update_timers(now)
     if t.every then t.at = t.at + t.every else timer.cancel(t.id) end
     local ok, err = pcall(t.fn)
     if not ok then __oe_error("timer " .. t.id .. ": " .. tostring(err)) end
+  end
+end
+
+-- Tweens: animate numeric fields of a component over time. Unscaled by default, so UI keeps
+-- moving while the game is paused; pass {scaled = true} for world effects.
+local tweens, nextTween = {}, 1
+local eases = {
+  linear = function(t) return t end,
+  inQuad = function(t) return t * t end,
+  outQuad = function(t) return 1 - (1 - t) * (1 - t) end,
+  inOutQuad = function(t) if t < 0.5 then return 2 * t * t end return 1 - (-2 * t + 2) ^ 2 / 2 end,
+  outCubic = function(t) return 1 - (1 - t) ^ 3 end,
+  inCubic = function(t) return t * t * t end,
+  outBack = function(t) local c = 1.70158 return 1 + (c + 1) * (t - 1) ^ 3 + c * (t - 1) ^ 2 end,
+  outElastic = function(t)
+    if t <= 0 then return 0 elseif t >= 1 then return 1 end
+    return 2 ^ (-10 * t) * math.sin((t * 10 - 0.75) * (2 * math.pi) / 3) + 1
+  end,
+}
+local VEC = {"x", "y", "z"}
+local RGB = {"r", "g", "b"}
+local function tweenLerp(a, b, k)
+  if type(b) == "number" then return (tonumber(a) or 0) + (b - (tonumber(a) or 0)) * k end
+  if type(b) ~= "table" then return b end
+  local out = {}
+  for key, target in pairs(b) do
+    local from = type(a) == "table" and a[key] or nil
+    if from == nil and type(key) == "number" and type(a) == "table" then
+      from = a[VEC[key]]
+      if from == nil then from = a[RGB[key]] end
+    end
+    out[key] = tweenLerp(from, target, k)
+  end
+  return out
+end
+tween = {}
+-- tween.to(id, "UIPanel", {opacity = 1, y = 0}, 0.3, {ease = "outCubic", delay = 0, loop = "pingpong", scaled = false, onDone = fn})
+function tween.to(id, component, values, seconds, opts)
+  opts = opts or {}
+  local handle = nextTween; nextTween = handle + 1
+  tweens[#tweens + 1] = {handle = handle, id = id, component = component, to = values, duration = math.max(seconds or 0, 1e-4),
+    ease = eases[opts.ease or "outCubic"] or eases.outCubic, delay = opts.delay or 0, loop = opts.loop, scaled = opts.scaled or false,
+    onDone = opts.onDone, t = 0}
+  return handle
+end
+-- tween.from: start at `values` and settle on what the component has now.
+function tween.from(id, component, values, seconds, opts)
+  local now = scene.get(id, component)
+  if not now then return nil end
+  local back = {}
+  for key in pairs(values) do back[key] = now[key] end
+  scene.set(id, component, values)
+  return tween.to(id, component, back, seconds, opts)
+end
+function tween.cancel(handle)
+  for i, t in ipairs(tweens) do
+    if t.handle == handle then table.remove(tweens, i) return true end
+  end
+  return false
+end
+-- tween.stop(id, component?): drop every tween of an entity (or of one of its components).
+function tween.stop(id, component)
+  for i = #tweens, 1, -1 do
+    if tweens[i].id == id and (component == nil or tweens[i].component == component) then table.remove(tweens, i) end
+  end
+end
+function __oe_update_tweens(dt, realDt)
+  local done = {}
+  for _, t in ipairs({table.unpack(tweens)}) do
+    local step = t.scaled and dt or realDt
+    if not scene.exists(t.id) or not scene.has(t.id, t.component) then
+      tween.cancel(t.handle)
+    elseif t.delay > 0 then
+      t.delay = t.delay - step
+    else
+      if not t.from then
+        local now = scene.get(t.id, t.component)
+        t.from = {}
+        for key in pairs(t.to) do t.from[key] = now[key] end
+      end
+      t.t = t.t + step / t.duration
+      local k = math.min(1, t.t)
+      scene.set(t.id, t.component, tweenLerp(t.from, t.to, t.ease(k)))
+      if k >= 1 then
+        if t.loop == "pingpong" then
+          t.from, t.to, t.t = t.to, t.from, 0
+        elseif t.loop == "loop" then
+          scene.set(t.id, t.component, t.from)
+          t.t = 0
+        else
+          tween.cancel(t.handle)
+          if t.onDone then done[#done + 1] = t end
+        end
+      end
+    end
+  end
+  for _, t in ipairs(done) do
+    local ok, err = pcall(t.onDone)
+    if not ok then __oe_error("tween " .. t.handle .. ": " .. tostring(err)) end
   end
 end
 return {__index = Script}
@@ -1214,7 +1378,7 @@ void ScriptHost::Open() {
     lua_register(L, "require", L_Require);
     const luaL_Reg sceneFuncs[] = {{"get", L_SceneGet},     {"set", L_SceneSet},       {"add", L_SceneAdd},       {"remove", L_SceneRemove},
                                    {"has", L_SceneHas},     {"create", L_SceneCreate}, {"instantiate", L_SceneInstantiate}, {"send", L_SceneSend}, {"broadcast", L_SceneBroadcast}, {"destroy", L_SceneDestroy}, {"find", L_SceneFind},
-                                   {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"all", L_SceneAll},
+                                   {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"children", L_SceneChildren}, {"child", L_SceneChild}, {"all", L_SceneAll},
                                    {"withTag", L_SceneWithTag}, {nullptr, nullptr}};
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {nullptr, nullptr}};
@@ -1222,16 +1386,16 @@ void ScriptHost::Open() {
     const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
     const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
-                                  {"mouseDelta", L_InputMouseDelta}, {"lockMouse", L_InputLockMouse},
+                                  {"mouseDelta", L_InputMouseDelta}, {"wheel", L_InputWheel}, {"lockMouse", L_InputLockMouse}, {"look", L_InputLook}, {"setLook", L_InputSetLook},
                                   {"mouseLocked", L_InputMouseLocked}, {"touches", L_InputTouches}, {nullptr, nullptr}};
     SetFuncs(L, "input", inputFuncs);
-    const luaL_Reg timeFuncs[] = {{"frame", L_TimeFrame}, {"now", L_TimeNow}, {"dt", L_TimeDt}, {nullptr, nullptr}};
+    const luaL_Reg timeFuncs[] = {{"frame", L_TimeFrame}, {"now", L_TimeNow}, {"dt", L_TimeDt}, {"date", L_TimeDate}, {nullptr, nullptr}};
     SetFuncs(L, "time", timeFuncs);
     const luaL_Reg drawFuncs[] = {{"line", L_DrawLine}, {"box", L_DrawBox}, {"sphere", L_DrawSphere}, {nullptr, nullptr}};
     SetFuncs(L, "draw", drawFuncs);
     const luaL_Reg audioFuncs[] = {{"play", L_AudioPlay}, {"stop", L_AudioStop}, {"stopAll", L_AudioStopAll}, {nullptr, nullptr}};
     SetFuncs(L, "audio", audioFuncs);
-    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {nullptr, nullptr}};
+    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
     SetFuncs(L, "save", saveFuncs);
@@ -1560,14 +1724,26 @@ void ScriptHost::Update(float dt) {
     Scene& scene = engine_.GetScene();
     currentDt = dt;
 
-    // Timers created with timer.after/every fire at the start of the frame.
-    if (L_) {
+    // Timers created with timer.after/every fire at the start of the frame; they wait while the game is paused.
+    if (L_ && !engine_.GamePaused()) {
         int top = lua_gettop(L_);
         lua_getglobal(L_, "__oe_update_timers");
         if (lua_isfunction(L_, -1)) {
             lua_pushnumber(L_, engine_.SimTime());
             ArmBudget();
             if (lua_pcall(L_, 1, 0, 0) != LUA_OK) RecordError("", kNullEntity, "timer: " + PopMessage(L_));
+        }
+        lua_settop(L_, top);
+    }
+    // Tweens advance every frame; unscaled ones (the default, for UI) also while the game is paused.
+    if (L_) {
+        int top = lua_gettop(L_);
+        lua_getglobal(L_, "__oe_update_tweens");
+        if (lua_isfunction(L_, -1)) {
+            lua_pushnumber(L_, dt);
+            lua_pushnumber(L_, Engine::kFixedDt);
+            ArmBudget();
+            if (lua_pcall(L_, 2, 0, 0) != LUA_OK) RecordError("", kNullEntity, "tween: " + PopMessage(L_));
         }
         lua_settop(L_, top);
     }

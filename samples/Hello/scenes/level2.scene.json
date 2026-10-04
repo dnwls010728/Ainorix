@@ -16,7 +16,7 @@
     {"id": 4, "name": "Player", "components": {
       "Transform": {"position": [-5, 0.5, 0]},
       "MeshRenderer": {"mesh": "sphere", "color": [0.25, 0.55, 0.95]},
-      "PlayerController": {},
+      "Script": {"path": "scripts/player_controller.lua"},
       "CharacterBody": {"shape": "sphere", "radius": 0.5},
       "Tag": {"tags": "player"}}},
     {"id": 5, "name": "Pillar Left", "components": {

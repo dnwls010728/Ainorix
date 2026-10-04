@@ -37,6 +37,7 @@
 #include "net/WebSocketServer.h"
 #include "platform/Platform.h"
 #include "platform/GamepadInput.h"
+#include "platform/Process.h"
 #include "platform/TouchInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
@@ -47,6 +48,10 @@
 #include "scene/Components.h"
 #include "scene/TileGrid.h"
 #include "script/ScriptHost.h"
+#if OE_TEAM
+#include "team/TeamCommands.h"
+#include "team/TeamStore.h"
+#endif
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #include "editor/EditorText.h"
@@ -999,7 +1004,7 @@ TEST(SceneRoundTrip) {
     CHECK(s.ToJson() == sceneJson);
     EntityId player = s.FindByName("Player");
     CHECK(player != kNullEntity);
-    CHECK(s.Get<PlayerController>(player) != nullptr);
+    CHECK(s.Get<Script>(player) != nullptr);
 }
 
 TEST(ReflectionErrors) {
@@ -1073,11 +1078,14 @@ TEST(FileCopyAndRemove) {
     CHECK(RelativePath("C:/ownengine/assets/model.glb", "C:/ownengine") == "assets/model.glb");
 }
 
+std::string TempProject(const char* name);  // defined below
+
 TEST(SimulationDeterminismAndInput) {
     Json sceneJson = MakeSampleScene("Sim");
     auto run = [&](bool pressW) {
         Engine engine;
         std::string err;
+        CHECK(engine.Open(TempProject("sim_determinism"), &err));  // the player moves through a project script
         engine.GetScene().FromJson(sceneJson, &err);
         if (pressW) engine.Call("input.key", Json::parse(R"J({"key": "W"})J"));
         engine.Call("sim.step", Json::parse(R"J({"frames": 60})J"));
@@ -1306,6 +1314,7 @@ function M:onUpdate()
 end
 return M
 )"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/drift.lua"), "local M={}\nfunction M:onUpdate(dt) self:translate(dt,0,0) end\nreturn M\n"));
     CHECK(WriteTextFile(JoinPath(project,"scripts/authority_physics.lua"), R"(
 local M={}
 function M:onUpdate()
@@ -1324,7 +1333,7 @@ void AuthorityPrepare(Engine& host, Engine& client, const std::string& project, 
         if (!prefab) {
             CHECK(Call(*e,"entity.create",R"({"name":"P1","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":1,"team":1},"NetSync":{"owner":1,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-host"}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"P2","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":2,"team":2},"NetSync":{"owner":2,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-client"}}})")["ok"].asBool());
-            CHECK(Call(*e,"entity.create",R"({"name":"Remote","components":{"Transform":{},"Velocity":{"linear":[1,0,0]},"NetSync":{"fields":{"Transform.position":{"onChange":true,"quantize":0.1}}}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Remote","components":{"Transform":{},"Script":{"path":"scripts/drift.lua"},"NetSync":{"fields":{"Transform.position":{"onChange":true,"quantize":0.1}}}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"Far","components":{"Transform":{"position":[5000,0,0]},"NetSync":{"distance":10}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"Team1","components":{"Transform":{},"NetSync":{"teamOnly":true,"team":1}}})")["ok"].asBool());
         }
@@ -1609,6 +1618,100 @@ TEST(NetworkSampleGamesOfflineAndMultiplayer) {
         }
         host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
     }
+}
+
+TEST(NetChaseThirdPersonSample) {
+    std::string project = JoinPath(TestSourceDir(), "samples/NetChase"), error;
+    Engine host; CHECK(host.Open(project, &error));
+    Json edit = host.GetScene().ToJson();
+    auto avatar = [](Engine& engine, int player) {
+        for (const auto& kv : engine.GetScene().Pool<NetPlayer>()) if (kv.second.player == player) return kv.first;
+        return kNullEntity;
+    };
+    auto position = [](Engine& engine, EntityId id) { return engine.GetScene().Get<Transform>(id)->position; };
+    auto camera = [&](Engine& engine) { return position(engine, engine.GetScene().FindByName("Camera")); };
+    // Offline practice: one avatar facing -Z, the camera behind and above it. The camera
+    // script runs before the spawned player's, so it settles a frame after the spawn.
+    CHECK(Call(host, "sim.step", R"({"frames":4})")["ok"].asBool());
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 1);
+    EntityId p1 = avatar(host, 1); CHECK(p1 != kNullEntity); if (p1 == kNullEntity) return;
+    CHECK(std::fabs((position(host, p1).z) - (9.0f)) < 1e-3f);
+    CHECK(std::fabs(camera(host).x - position(host, p1).x) < 1e-2f);
+    CHECK(std::fabs((camera(host).z - position(host, p1).z) - (5.5f)) < 1e-2f);
+    // The player is the toon character: every part and outline hull resolves its assets,
+    // and the view-dependent graph changes the picture when only the camera moves.
+    CHECK(host.GetScene().FindByName("Part_hair") != kNullEntity && host.GetScene().FindByName("Outline_coat") != kNullEntity);
+    CHECK(Call(host, "asset.info", R"({"path":"materials/coat-toon.mat.json"})")["ok"].asBool());
+    CHECK(Call(host, "shader.check", R"({"path":"materials/toon.shader.json"})")["ok"].asBool());
+    for (const RenderItem& item : GatherRenderItems(host.GetScene(), &host.Assets())) CHECK(!item.error);
+    {
+        RenderTarget shot; shot.Resize(640, 360);
+        host.RenderGameView(shot);
+        int player = 0;
+        for (EntityId id : shot.ids) player += id == p1;
+        CHECK(player > 150);  // the tinted coat on the root entity is on screen
+    }
+    // Running into the crystal scores and moves it along the fixed route.
+    CHECK(Call(host, "component.set", R"({"id":"Target","type":"Transform","values":{"position":[-3,0.7,6]}})")["ok"].asBool());
+    CHECK(Call(host, "input.key", R"({"key":"W","down":true})")["ok"].asBool()); host.Step(60);
+    CHECK(Call(host, "input.key", R"({"key":"W","down":false})")["ok"].asBool());
+    CHECK(position(host, p1).z < 5.0f);
+    CHECK(host.GameData()["scores"]["1"].asNumber() == 1);
+    CHECK(position(host, host.GetScene().FindByName("Target")).x == 8);
+    // Moving captured the mouse; moving it right turns the player and the camera stays behind.
+    CHECK(host.Input().mouseLocked);
+    CHECK(Call(host, "input.mouse", R"({"dx":450})")["ok"].asBool()); host.Step(2);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(p1)->rotation.y - 90.0f) < 0.1f);
+    CHECK(std::fabs((camera(host).x - position(host, p1).x) + 5.5f) < 0.05f);
+    // A strafes to the player's left (-Z while facing +X) without turning.
+    float z = position(host, p1).z;
+    CHECK(Call(host, "input.key", R"({"key":"A","down":true})")["ok"].asBool()); host.Step(30);
+    CHECK(Call(host, "input.key", R"({"key":"A","down":false})")["ok"].asBool()); host.Step(2);
+    CHECK(position(host, p1).z < z - 2.0f);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(p1)->rotation.y - 90.0f) < 0.1f);
+    CHECK(Call(host, "script.errors")["result"].size() == 0);
+    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+
+    CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
+    host.Step(180);
+    Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) return;
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
+    CHECK(client->GetScene().Pool<NetPlayer>().size() == 2);
+    // Each peer's camera follows its own player.
+    EntityId hostP1 = avatar(host, 1), clientP2 = avatar(*client, 2), hostP2 = avatar(host, 2);
+    CHECK(hostP1 != kNullEntity && clientP2 != kNullEntity && hostP2 != kNullEntity);
+    if (hostP1 == kNullEntity || clientP2 == kNullEntity || hostP2 == kNullEntity) return;
+    CHECK(std::fabs((camera(host).x) - (-3.0f)) < 1e-2f);
+    CHECK(std::fabs((camera(*client).x) - (-1.0f)) < 1e-2f);
+    // The client's input moves its player on the server and in its own prediction.
+    CHECK(Call(*client, "input.key", R"({"key":"W","down":true})")["ok"].asBool()); host.Step(60);
+    CHECK(Call(*client, "input.key", R"({"key":"W","down":false})")["ok"].asBool()); host.Step(60);
+    CHECK(position(host, hostP2).z < 5.5f);
+    CHECK(std::fabs(position(*client, clientP2).z - position(host, hostP2).z) < 1e-3f);
+    CHECK(std::fabs((camera(*client).z - position(*client, clientP2).z) - (5.5f)) < 1e-2f);
+    CHECK(std::fabs((position(host, hostP1).z) - (9.0f)) < 1e-3f);
+    // The match captured the mouse. The turn travels in the input stream (LookX), so the
+    // server follows it and a prediction replay cannot take it back, even with latency.
+    CHECK(client->Input().mouseLocked);
+    CHECK(Call(*client, "input.mouse", R"({"dx":-150})")["ok"].asBool()); host.Step(30);
+    CHECK(std::fabs(client->GetScene().Get<Transform>(clientP2)->rotation.y - 210.0f) < 0.1f);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(hostP2)->rotation.y - 210.0f) < 0.1f);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(hostP1)->rotation.y - 180.0f) < 0.1f);
+    CHECK(Call(host, "net.simulate", R"({"latencyFrames":6})")["ok"].asBool()); host.Step(30);
+    for (int i = 0; i < 6; ++i) {
+        CHECK(Call(*client, "input.mouse", R"({"dx":-50})")["ok"].asBool()); host.Step(1);
+        // The camera turns on the same frame, before the server has seen the input.
+        CHECK(std::fabs(std::fmod(client->GetScene().Get<Transform>(client->GetScene().FindByName("Camera"))->rotation.y, 360.0f) - (30.0f + 10.0f * (i + 1))) < 0.1f);
+    }
+    host.Step(60);
+    CHECK(std::fabs(client->GetScene().Get<Transform>(clientP2)->rotation.y - 270.0f) < 0.1f);
+    CHECK(std::fabs(host.GetScene().Get<Transform>(hostP2)->rotation.y - 270.0f) < 0.1f);
+    for (Engine* peer : {&host, client}) {
+        CHECK(Call(*peer, "script.errors")["result"].size() == 0);
+        CHECK(Call(*peer, "net.desync_report")["result"].size() == 0);
+    }
+    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
 }
 
 TEST(NetworkDedicatedReadyBarrierAndCleanup) {
@@ -2218,39 +2321,61 @@ TEST(SaveFailedFlushPreservesData) {
     CHECK(RemoveAll(project));
 }
 
-TEST(LuaRotatorMatchesNative) {
+TEST(TemplateRotatorScript) {
+    // Spinning is project code: scripts/rotator.lua of the template.
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("rotator"), &err));
-    Call(e, "entity.create", R"J({"name": "Native", "components": {"Rotator": {"degreesPerSecond": [20, 60, 0]}}})J");
     Call(e, "entity.create", R"J({"name": "Lua", "components": {"Script": {"path": "scripts/rotator.lua", "params": {"degreesPerSecond": [20, 60, 0]}}}})J");
     Call(e, "sim.step", R"J({"frames": 400})J");
     Scene& s = e.GetScene();
-    Vec3 a = s.Get<Transform>(s.FindByName("Native"))->rotation;
-    Vec3 b = s.Get<Transform>(s.FindByName("Lua"))->rotation;
-    CHECK(a.y > 1.0f);
-    CHECK(Near(a, b, 1e-2f));
+    Vec3 r = s.Get<Transform>(s.FindByName("Lua"))->rotation;
+    CHECK(Near(r, Vec3(20.0f * 400 / 60, 60.0f * 400 / 60 - 360, 0), 1e-2f));  // wrapped to 0..360
     CHECK(e.Scripts().Errors().empty());
 }
 
-TEST(LuaPlayerControllerMatchesNative) {
+TEST(TemplatePlayerScript) {
+    // Without a CharacterBody scripts/player_controller.lua moves the Transform and lands at half the height.
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("player"), &err));
-    Call(e, "entity.create", R"J({"name": "Native", "components": {"Transform": {"position": [0, 0.5, 0]}, "PlayerController": {}}})J");
     Call(e, "entity.create", R"J({"name": "Lua", "components": {"Transform": {"position": [10, 0.5, 0]}, "Script": {"path": "scripts/player_controller.lua"}}})J");
     Call(e, "input.key", R"J({"key": "W"})J");
     Call(e, "input.key", R"J({"key": "D"})J");
     Call(e, "input.key", R"J({"key": "Space"})J");
     Call(e, "sim.step", R"J({"frames": 20})J");
+    Scene& s = e.GetScene();
+    CHECK(s.Get<Transform>(s.FindByName("Lua"))->position.y > 0.8f);  // jumping
     Call(e, "input.clear", "{}");
     Call(e, "sim.step", R"J({"frames": 60})J");
-    Scene& s = e.GetScene();
-    Vec3 a = s.Get<Transform>(s.FindByName("Native"))->position;
-    Vec3 b = s.Get<Transform>(s.FindByName("Lua"))->position - Vec3(10, 0, 0);
-    CHECK(a.z < -0.9f && a.x > 0.9f);  // moved diagonally ~0.94 m
-    CHECK(Near(a, b, 1e-3f));
+    Vec3 p = s.Get<Transform>(s.FindByName("Lua"))->position - Vec3(10, 0, 0);
+    const float moved = 4.0f * 20 / 60 * 0.70710678f;  // 20 frames at 4 m/s, diagonally
+    CHECK(Near(p, Vec3(moved, 0.5f, -moved), 1e-3f));
     CHECK(e.Scripts().Errors().empty());
+}
+
+TEST(RemovedComponentsStillLoad) {
+    // Rotator, Velocity and PlayerController moved into project scripts: old files load without them
+    // (with a warning), and the API no longer knows the types.
+    Scene s;
+    std::string err;
+    Json old = Json::parse(R"J({"format": "ownengine.scene", "version": 1, "name": "Old", "entities": [
+      {"id": 1, "name": "Cube", "components": {"Transform": {"position": [1, 2, 3]}, "Rotator": {"degreesPerSecond": [0, 90, 0]},
+        "Velocity": {"linear": [1, 0, 0]}, "PlayerController": {"speed": 3}, "MeshRenderer": {}}}]})J");
+    CHECK(s.FromJson(old, &err));
+    EntityId cube = s.FindByName("Cube");
+    CHECK(cube != kNullEntity && s.Get<MeshRenderer>(cube) && Near(s.Get<Transform>(cube)->position, Vec3(1, 2, 3), 1e-6f));
+    CHECK(s.ToJson().dump().find("Rotator") == std::string::npos);
+    Json typo = Json::parse(R"J({"format": "ownengine.scene", "version": 1, "name": "Typo", "entities": [
+      {"id": 1, "name": "Cube", "components": {"Rotater": {}}}]})J");
+    CHECK(!s.FromJson(typo, &err) && err.find("unknown component type 'Rotater'") != std::string::npos);
+    Engine e;
+    CHECK(e.Open(TempProject("removed_components"), &err));
+    CHECK(Call(e, "component.add", R"J({"id": "Player", "type": "Rotator"})J")["error"]["code"].asString() == "unknown_component");
+    for (const Json& type : Call(e, "component.types", "{}")["result"].items()) {
+        const std::string name = type["name"].asString();
+        CHECK(name != "Rotator" && name != "Velocity" && name != "PlayerController");
+    }
 }
 
 TEST(ScriptEvalAndSandbox) {
@@ -2570,10 +2695,12 @@ TEST(PhysicsBoxStackIsStable) {
 
 TEST(PhysicsCharacterBlockedByWall) {
     Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("physics_character"), &err));
     PhysicsScene(e);
     // Wall face at z = -3 (wall spans z -3.5 .. -3).
     Call(e, "entity.create", R"J({"name": "Wall", "components": {"Transform": {"position": [0, 1, -3.25], "scale": [6, 2, 0.5]}, "Collider": {}}})J");
-    Call(e, "entity.create", R"J({"name": "Player", "components": {"Transform": {"position": [0, 0.5, 0]}, "CharacterBody": {"shape": "sphere", "radius": 0.5}, "PlayerController": {}}})J");
+    Call(e, "entity.create", R"J({"name": "Player", "components": {"Transform": {"position": [0, 0.5, 0]}, "CharacterBody": {"shape": "sphere", "radius": 0.5}, "Script": {"path": "scripts/player_controller.lua"}}})J");
     Call(e, "input.key", R"J({"key": "W"})J");
     Call(e, "sim.step", R"J({"frames": 180})J");  // 3 s at 4 m/s would reach z = -12 without the wall
     Vec3 p = PosOf(e, "Player");
@@ -2599,7 +2726,7 @@ TEST(PhysicsTriggersAndScriptCallbacks) {
     Call(e, "script.write", R"J({"path": "scripts/crate.lua", "source": "local M = {}\nfunction M:onCollisionEnter(other) landed = (landed or 0) + 1 lastHit = scene.name(other) end\nreturn M\n"})J");
     Call(e, "entity.create", R"J({"name": "Coin", "components": {"Transform": {"position": [0, 0.5, -2]}, "Collider": {"shape": "sphere", "radius": 0.4, "isTrigger": true}, "Script": {"path": "scripts/coin.lua"}}})J");
     Call(e, "entity.create", R"J({"name": "Crate", "components": {"Transform": {"position": [3, 2, 0]}, "Collider": {}, "RigidBody": {}, "Script": {"path": "scripts/crate.lua"}}})J");
-    Call(e, "entity.create", R"J({"name": "Player", "components": {"Transform": {"position": [0, 0.5, 0]}, "CharacterBody": {"shape": "sphere", "radius": 0.5}, "PlayerController": {}}})J");
+    Call(e, "entity.create", R"J({"name": "Player", "components": {"Transform": {"position": [0, 0.5, 0]}, "CharacterBody": {"shape": "sphere", "radius": 0.5}, "Script": {"path": "scripts/player_controller.lua"}}})J");
     Call(e, "input.key", R"J({"key": "W"})J");
     Call(e, "sim.step", R"J({"frames": 90})J");  // walks through the coin and beyond
     CHECK(Call(e, "script.eval", R"J({"code": "hits"})J")["result"]["value"].asInt() == 1);
@@ -2629,21 +2756,22 @@ TEST(PhysicsQueries) {
     CHECK(a["result"]["hash"].asString() != b["result"]["hash"].asString());
 }
 
-TEST(LuaCharacterControllerMatchesNative) {
+TEST(TemplatePlayerScriptWithCharacterBody) {
+    // With a CharacterBody the template's player script only sets the velocity; physics moves the body.
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("lua_character"), &err));
     PhysicsScene(e);
-    Call(e, "entity.create", R"J({"name": "Native", "components": {"Transform": {"position": [-3, 0.5, 0]}, "CharacterBody": {"shape": "sphere", "radius": 0.5}, "PlayerController": {}}})J");
     Call(e, "entity.create", R"J({"name": "Lua", "components": {"Transform": {"position": [3, 0.5, 0]}, "CharacterBody": {"shape": "sphere", "radius": 0.5}, "Script": {"path": "scripts/player_controller.lua"}}})J");
     Call(e, "input.key", R"J({"key": "W"})J");
     Call(e, "input.key", R"J({"key": "Space"})J");
     Call(e, "sim.step", R"J({"frames": 5})J");
     Call(e, "input.key", R"J({"key": "Space", "down": false})J");
-    Call(e, "sim.step", R"J({"frames": 90})J");
-    Vec3 a = PosOf(e, "Native"), b = PosOf(e, "Lua") - Vec3(6, 0, 0);
-    CHECK(a.z < -3.0f);
-    CHECK(Near(a, b, 1e-3f));
+    Call(e, "sim.step", R"J({"frames": 20})J");
+    CHECK(PosOf(e, "Lua").y > 1.0f);  // in the air
+    Call(e, "sim.step", R"J({"frames": 70})J");
+    Vec3 p = PosOf(e, "Lua");
+    CHECK(p.z < -6.0f && p.z > -6.5f && std::fabs(p.x - 3) < 1e-3f && std::fabs(p.y - 0.5f) < 0.05f);  // 95 frames at 4 m/s, landed
     CHECK(e.Scripts().Errors().empty());
 }
 
@@ -3147,6 +3275,8 @@ TEST(AudioMixingIsCapturable) {
 TEST(PhysicsIsDeterministic) {
     auto run = [] {
         Engine e;
+        std::string err;
+        CHECK(e.Open(TempProject("physics_deterministic"), &err));
         PhysicsScene(e);
         for (int i = 0; i < 6; ++i) {
             Json args = Json::parse(R"J({"components": {"Transform": {}, "Collider": {}, "RigidBody": {}}})J");
@@ -3155,7 +3285,7 @@ TEST(PhysicsIsDeterministic) {
             args["components"]["Transform"]["rotation"] = Json(Json::Array{10.0 * i, 20.0 * i, 0.0});
             e.Call("entity.create", args);
         }
-        Call(e, "entity.create", R"J({"name": "Player", "components": {"Transform": {"position": [0, 0.5, 4]}, "CharacterBody": {}, "PlayerController": {}}})J");
+        Call(e, "entity.create", R"J({"name": "Player", "components": {"Transform": {"position": [0, 0.5, 4]}, "CharacterBody": {}, "Script": {"path": "scripts/player_controller.lua"}}})J");
         Call(e, "input.key", R"J({"key": "W"})J");
         Call(e, "sim.step", R"J({"frames": 240})J");
         Json shot = Call(e, "render.screenshot", R"J({"width": 96, "height": 54, "inline": false, "camera": {"eye": [6, 5, 8], "target": [0, 1, 0]}})J");
@@ -3487,6 +3617,185 @@ TEST(DungeonSamplePlays) {
         CHECK(e.Scripts().Errors().empty());
         CHECK(Call(e, "physics.state", "{}")["result"]["warnings"].size() == 0);
         Json shot = Call(e, "render.screenshot", R"J({"width": 128, "height": 72, "inline": false})J");
+        *summary = shot["result"]["hash"].asString() + e.GetScene().ToJson().dump();
+    };
+    std::string a, b;
+    run(&a);
+    run(&b);
+    CHECK(a == b);
+}
+
+TEST(HD2DSamplePlays) {
+    // Billboard sprites in a 3D world: walk, collect the five shards, report to the elder, switch the lens effects.
+    auto run = [](std::string* summary) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/HD2D", &err));
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        auto eval = [&](const std::string& code) {
+            Json a = Json::MakeObject();
+            a["code"] = code;
+            return e.Call("script.eval", a)["result"]["value"];
+        };
+        auto tap = [&](const char* key, int frames) {
+            Json a = Json::MakeObject();
+            a["key"] = key;
+            a["down"] = true;
+            e.Call("input.key", a);
+            Call(e, "sim.step", R"J({"frames": 1})J");
+            a["down"] = false;
+            e.Call("input.key", a);
+            Json step = Json::MakeObject();
+            step["frames"] = frames;
+            e.Call("sim.step", step);
+        };
+        auto moveHero = [&](float x, float z) {
+            Json a = Json::parse(R"J({"id": "Hero", "type": "Transform", "values": {"position": [0, 0.6, 0]}})J");
+            a["values"]["position"][0] = x;
+            a["values"]["position"][2] = z;
+            CHECK(e.Call("component.set", a)["ok"].asBool());
+            Call(e, "sim.step", R"J({"frames": 5})J");
+        };
+        const Scene& scene = e.GetScene();
+        const EntityId heroSprite = scene.FindByName("HeroSprite");
+        CHECK(scene.Get<Sprite>(heroSprite)->castShadows);
+        // Billboards are project code (scripts/billboards.lua): upright sprites take the camera's yaw,
+        // camera-facing ones its pitch as well.
+        const Vec3 look = scene.Get<Transform>(scene.FindByName("Camera"))->rotation;
+        CHECK(look.x < -30 && Near(scene.Get<Transform>(heroSprite)->rotation, Vec3(0, look.y, 0), 1e-3f));
+        CHECK(Near(scene.Get<Transform>(scene.FindByName("Tree 1"))->rotation, Vec3(0, look.y, 0), 1e-3f));
+        CHECK(Near(scene.Get<Transform>(scene.FindByName("Crystal 1"))->rotation, Vec3(look.x, look.y, 0), 0.5f));
+        CHECK(eval("return #scene.withTag('crystal')").asInt() == 5 && eval("return game.get('crystals')").asInt() == 0);
+
+        // Walking picks the side row and mirrors it for left.
+        const float startX = scene.Get<Transform>(scene.FindByName("Hero"))->position.x;
+        Call(e, "input.key", R"J({"key": "D", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 30})J");
+        CHECK(scene.Get<Transform>(scene.FindByName("Hero"))->position.x > startX + 1.0f);
+        CHECK(scene.Get<SpriteAnimation>(heroSprite)->clip == "walk_side" && !scene.Get<Sprite>(heroSprite)->flipX);
+        Call(e, "input.key", R"J({"key": "D", "down": false})J");
+        Call(e, "input.key", R"J({"key": "A", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 5})J");
+        CHECK(scene.Get<Sprite>(heroSprite)->flipX);
+        Call(e, "input.key", R"J({"key": "A", "down": false})J");
+        Call(e, "sim.step", R"J({"frames": 2})J");
+        CHECK(scene.Get<SpriteAnimation>(heroSprite)->clip == "idle_side");
+
+        // A shard is collected by walking into it.
+        moveHero(-6.5f, 1.5f);
+        CHECK(eval("return game.get('crystals')").asInt() == 1 && eval("return #scene.withTag('crystal')").asInt() == 4);
+        CHECK(eval("return scene.get(scene.find('Quest'), 'UIText').text").asString() == "Crystals 1 / 5");
+        CHECK(Call(e, "audio.state", "{}")["result"].dump().find("crystal.wav") != std::string::npos);
+
+        // The elder explains the quest; the hero stands still while the dialog is open.
+        moveHero(2.4f, -0.2f);
+        CHECK(eval("return scene.get(scene.find('Prompt'), 'UIText').visible").asBool());
+        tap("E", 3);
+        CHECK(eval("return game.get('dialog')").asBool() && eval("return scene.get(scene.find('Dialog'), 'UIPanel').visible").asBool());
+        const float talkX = scene.Get<Transform>(scene.FindByName("Hero"))->position.x;
+        Call(e, "input.key", R"J({"key": "D", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 20})J");
+        Call(e, "input.key", R"J({"key": "D", "down": false})J");
+        CHECK(std::fabs(scene.Get<Transform>(scene.FindByName("Hero"))->position.x - talkX) < 0.01f);
+        auto finishDialog = [&] {
+            for (int press = 0; press < 12 && eval("return game.get('dialog')").asBool(); ++press) tap("E", 3);
+            CHECK(!eval("return game.get('dialog')").asBool());
+        };
+        finishDialog();
+        CHECK(eval("return scene.get(scene.find('Quest'), 'UIText').text").asString() == "Crystals 1 / 5");
+
+        const float shards[4][2] = {{8.5f, -1.2f}, {0, -8.2f}, {-11.5f, 9.5f}, {16.2f, 5.4f}};
+        for (const auto& shard : shards) moveHero(shard[0], shard[1]);
+        CHECK(eval("return game.get('crystals')").asInt() == 5 && eval("return #scene.withTag('crystal')").asInt() == 0);
+        moveHero(2.4f, -0.2f);
+        tap("E", 3);
+        finishDialog();
+        CHECK(eval("return scene.get(scene.find('Quest'), 'UIText').text").asString().find("lanterns") != std::string::npos);
+
+        // Keys 2 and 1 switch depth of field and the whole lens look.
+        const PostProcess* post = scene.Get<PostProcess>(scene.FindByName("Camera"));
+        CHECK(post->dofRadius == 6 && post->bloom > 0);
+        tap("2", 1);
+        CHECK(post->dofRadius == 0 && post->bloom > 0);
+        tap("2", 1);
+        CHECK(post->dofRadius == 6);
+        tap("1", 1);
+        CHECK(post->dofRadius == 0 && post->bloom == 0 && post->toneMapping == "none");
+        tap("1", 1);
+        CHECK(post->dofRadius == 6 && post->toneMapping == "reinhard");
+
+        CHECK(e.Scripts().Errors().empty());
+        CHECK(Call(e, "physics.state", "{}")["result"]["warnings"].size() == 0);
+        Json shot = Call(e, "render.screenshot", R"J({"width": 160, "height": 90, "inline": false})J");
+        *summary = shot["result"]["hash"].asString() + e.GetScene().ToJson().dump();
+    };
+    std::string a, b;
+    run(&a);
+    run(&b);
+    CHECK(a == b);
+}
+
+TEST(WaterSamplePlays) {
+    // A sea whose shader graph lifts the vertices; Lua floats ride the same waves.
+    auto run = [](std::string* summary) {
+        Engine e;
+        std::string err;
+        CHECK(e.Open(TestSourceDir() + "/samples/Water", &err));
+        Call(e, "sim.step", R"J({"frames": 45})J");
+        auto eval = [&](const std::string& code) {
+            Json a = Json::MakeObject();
+            a["code"] = code;
+            return e.Call("script.eval", a)["result"]["value"];
+        };
+        const Scene& scene = e.GetScene();
+        ShaderGraph graph;
+        CHECK(CompileShaderGraph(e.ReadProjectJson("materials/water.shader.json"), graph, &err));
+        CHECK(graph.offset >= 0 && graph.normal >= 0);
+        const EntityId water = scene.FindByName("Water"), buoy = scene.FindByName("Buoy 1");
+        CHECK(scene.Get<MeshRenderer>(water)->mesh == "plane64");
+        // Height of the drawn surface at a world position: the graph's vertex stage with the entity's uniforms.
+        auto surface = [&](float x, float z) {
+            std::array<Vec4, ShaderGraph::kMaxUniforms> uniforms;
+            CHECK(ShaderUniforms(graph, scene.Get<MeshRenderer>(water)->shaderUniforms, uniforms, &err));
+            ShaderInputs inputs;
+            inputs.position = Vec4(x, 0, z, 1);
+            inputs.time = static_cast<float>(e.SimTime());
+            return ShaderVertexOffset(graph, inputs, uniforms).y;
+        };
+        auto buoyOnSurface = [&] {
+            const Vec3 p = scene.Get<Transform>(buoy)->position;
+            return std::fabs(p.y - 0.12f - surface(p.x, p.z)) < 2e-3f;
+        };
+        CHECK(buoyOnSurface());
+        const float before = scene.Get<Transform>(buoy)->position.y;
+        Call(e, "sim.step", R"J({"frames": 40})J");
+        CHECK(buoyOnSurface() && std::fabs(scene.Get<Transform>(buoy)->position.y - before) > 0.02f);
+        CHECK(std::fabs(scene.Get<Transform>(scene.FindByName("Boat"))->rotation.z) > 0.5f);  // leans with the slope
+
+        // Key 3: the storm's amplitudes ease in and reach the graph.
+        CHECK(eval("return game.get('seaState')").asString() == "Swell");
+        const float swell = scene.Get<MeshRenderer>(water)->shaderUniforms["amp"][0].asFloat();
+        CHECK(std::fabs(swell - 0.16f) < 1e-4f);
+        Call(e, "input.key", R"J({"key": "3", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 1})J");
+        Call(e, "input.key", R"J({"key": "3", "down": false})J");
+        Call(e, "sim.step", R"J({"frames": 300})J");
+        CHECK(eval("return game.get('seaState')").asString() == "Storm");
+        CHECK(scene.Get<UIText>(scene.FindByName("Title"))->text == "Sea state: Storm");
+        CHECK(scene.Get<MeshRenderer>(water)->shaderUniforms["amp"][0].asFloat() > 0.16f * 1.8f);
+        CHECK(buoyOnSurface());
+
+        // A / D orbit the camera around the scene.
+        const EntityId camera = scene.FindByName("Camera");
+        const Vec3 offset = scene.Get<CameraFollow>(camera)->offset;
+        Call(e, "input.key", R"J({"key": "D", "down": true})J");
+        Call(e, "sim.step", R"J({"frames": 40})J");
+        Call(e, "input.key", R"J({"key": "D", "down": false})J");
+        const Vec3 turned = scene.Get<CameraFollow>(camera)->offset;
+        CHECK(turned.x > offset.x + 3 && std::fabs(Length(Vec3(turned.x, 0, turned.z)) - Length(Vec3(offset.x, 0, offset.z))) < 1e-3f);
+
+        CHECK(e.Scripts().Errors().empty());
+        Json shot = Call(e, "render.screenshot", R"J({"width": 160, "height": 90, "inline": false})J");
         *summary = shot["result"]["hash"].asString() + e.GetScene().ToJson().dump();
     };
     std::string a, b;
@@ -4006,6 +4315,8 @@ TEST(ShadingShadowsAndLights) {
 
 TEST(OrthographicAndFollowCamera) {
     Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("follow_camera"), &err));  // the runner below moves through a project script
     e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
     Call(e, "entity.create", R"J({"name": "Cam", "components": {"Transform": {"position": [0, 0, 5]}, "Camera": {"projection": "orthographic", "orthoSize": 3}}})J");
     Call(e, "entity.create", R"J({"name": "Box", "components": {"MeshRenderer": {}}})J");
@@ -4024,7 +4335,8 @@ TEST(OrthographicAndFollowCamera) {
     CHECK(coverage() < far1 / 4);
 
     // CameraFollow keeps the camera at target + offset and aims at the target.
-    Call(e, "entity.create", R"J({"name": "Runner", "components": {"Transform": {"position": [0, 0.5, 0]}, "Velocity": {"linear": [3, 0, 0]}}})J");
+    Call(e, "script.write", R"J({"path": "scripts/runner.lua", "source": "local M = {}\nfunction M:onUpdate(dt) self:translate(3 * dt, 0, 0) end\nreturn M\n"})J");
+    Call(e, "entity.create", R"J({"name": "Runner", "components": {"Transform": {"position": [0, 0.5, 0]}, "Script": {"path": "scripts/runner.lua"}}})J");
     EntityId runner = e.GetScene().FindByName("Runner");
     Json args = Json::parse(R"J({"id": "Cam", "type": "CameraFollow", "values": {"offset": [0, 3, 6], "smoothing": 0}})J");
     args["values"]["target"] = runner;
@@ -4142,6 +4454,48 @@ TEST(ShowcasePostProcessControls) {
     }
     CHECK(e.GetScene().Get<UIText>(e.GetScene().FindByName("Hint"))->text.find("All: Off") != std::string::npos);
     CHECK(e.Scripts().Errors().empty());
+}
+
+TEST(ShaderGraphSceneUniforms) {
+    // cameraPosition and lightDirection are reserved uniform names filled by the renderer,
+    // so a view-dependent graph follows a moving camera without material edits.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("shader_scene_uniforms"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/side.shader.json","graph":{
+      "uniforms":{"cameraPosition":[9,9,9,9],"lightDirection":[9,9,9,9]},
+      "nodes":[{"op":"uniform","name":"cameraPosition"},{"op":"uniform","name":"lightDirection"},
+      {"op":"constant","value":0},{"op":"step","args":[2,0]},{"op":"swizzle","args":[3],"value":[0,0,0,0]},
+      {"op":"constant","value":[1,0,0,1]},{"op":"constant","value":[0,0,1,1]},
+      {"op":"mix","args":[5,6,4]}],"color":7}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"side.mat.json","values":{"unlit":true,
+      "shader":"materials/side.shader.json","shaderUniforms":{"cameraPosition":[-50,0,0,1]}}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[3,0,10]},"Camera":{"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-40,25,0]},"DirectionalLight":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"scale":[4,4,1]},"MeshRenderer":{"material":"side.mat.json"}}})J");
+    auto count = [&](uint32_t rgb) {
+        RenderTarget target; target.Resize(128, 72);
+        e.RenderGameView(target);
+        int n = 0;
+        for (uint32_t color : target.color) n += (color & 0xFFFFFF) == rgb;
+        return n;
+    };
+    CHECK(count(0xFF0000) > 100 && count(0x0000FF) == 0);  // camera at +X: blue, despite the override
+    Call(e, "component.set", R"J({"id":"Camera","type":"Transform","values":{"position":[-3,0,10]}})J");
+    CHECK(count(0x0000FF) > 100 && count(0xFF0000) == 0);  // camera at -X: red
+    RenderView view = MakeLookAtView(Vec3(1,2,3), Vec3(0,0,0), 45, 1);
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    RenderLights lights = GatherRenderLights(e.GetScene());
+    auto draws = BuildDrawList(items, view.eye, &lights);
+    CHECK(draws.size() == 1 && draws[0].material.shader);
+    if (draws.size() != 1 || !draws[0].material.shader) return;
+    const Vec4 eye = draws[0].material.shaderUniforms[0], light = draws[0].material.shaderUniforms[1];
+    CHECK(eye.x == 1 && eye.y == 2 && eye.z == 3 && eye.w == 1);
+    const Vec3 toward = -Normalize(lights.dirs[0].dir);
+    CHECK(Length(light.xyz() - toward) < 1e-6f && light.w == 0 && toward.y > 0.5f);
+    draws = BuildDrawList(items, view.eye);  // no lights supplied: the declared value stays
+    CHECK(draws[0].material.shaderUniforms[1].x == 9);
 }
 
 TEST(WuwaToonGraphBandsRimAndSpecular) {
@@ -5504,6 +5858,560 @@ TEST(ShaderMaterialRendering) {
     CHECK(again.Hash() == original.Hash());
 }
 
+TEST(MeshRendererShaderUniforms) {
+    // Per-entity graph uniforms: two entities share one material file and draw different colors.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("entity_uniforms"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/tint.shader.json","graph":{"uniforms":{"tint":[1,0,0,1],"gain":1},
+      "nodes":[{"op":"uniform","name":"tint"},{"op":"uniform","name":"gain"},{"op":"multiply","args":[0,1]}],"color":2}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"tint.mat.json","values":{"unlit":true,
+      "shader":"materials/tint.shader.json","shaderUniforms":{"gain":[1,1,1,1]}}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Left","components":{"Transform":{"position":[-3,0,0],"scale":[4,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"tint.mat.json"}}})J");
+    Call(e, "entity.create", R"J({"name":"Right","components":{"Transform":{"position":[3,0,0],"scale":[4,4,1]},
+      "MeshRenderer":{"mesh":"quad","material":"tint.mat.json","shaderUniforms":{"tint":[0,1,0,1]}}}})J");
+    RenderTarget shot, again;
+    for (RenderTarget* target : {&shot, &again}) target->Resize(128, 72);
+    auto count = [&](const RenderTarget& target, uint32_t rgb) {
+        int n = 0;
+        for (uint32_t color : target.color) n += (color & 0xFFFFFF) == rgb;
+        return n;
+    };
+    e.RenderGameView(shot);
+    CHECK(count(shot, 0x0000FF) > 300 && count(shot, 0x00FF00) > 300);  // red from the material, green from the entity
+    // Unnamed uniforms keep the material's values; the override is saved with the scene and undoable.
+    CHECK(Call(e, "component.set", R"J({"id":"Left","type":"MeshRenderer","values":{"shaderUniforms":{"gain":0.5}}})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(count(again, 0x0000FF) == 0 && count(again, 0x00FF00) == count(shot, 0x00FF00));
+    CHECK(count(again, 0x00007F) + count(again, 0x000080) > 300);
+    CHECK(e.GetScene().ToJson().dump().find("\"gain\"") != std::string::npos);
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(again.Hash() == shot.Hash());
+    // Scripts change them every frame through scene.set.
+    CHECK(Call(e, "script.eval", R"J({"code":"scene.set(scene.find('Right'), 'MeshRenderer', {shaderUniforms = {tint = {0, 0, 1, 1}}})"})J")["ok"].asBool());
+    e.RenderGameView(again);
+    CHECK(count(again, 0xFF0000) == count(shot, 0x00FF00));
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(128, 72);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double difference = 0;
+        for (size_t i = 0; i < again.color.size(); ++i) for (int shift : {0, 8, 16})
+            difference += std::abs(static_cast<int>((again.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+        CHECK(difference / static_cast<double>(again.color.size() * 3) < 3);
+    } else std::printf("  SKIP per-entity uniform GPU comparison (%s)\n", error.c_str());
+    // A name the graph does not declare, or uniforms without a graph, is as loud as a broken material.
+    CHECK(Call(e, "component.set", R"J({"id":"Right","type":"MeshRenderer","values":{"shaderUniforms":{"typo":1}}})J")["ok"].asBool());
+    bool flagged = false;
+    for (const RenderItem& item : GatherRenderItems(e.GetScene(), &e.Assets()))
+        if (item.id == e.GetScene().FindByName("Right")) flagged = item.error;
+    CHECK(flagged);
+    e.RenderGameView(again);
+    CHECK(count(again, 0xFF00FF) == count(shot, 0x00FF00));
+}
+
+TEST(SpriteLayerAndAdditiveBlend) {
+    // Sprite.layer decides the order of blended sprites whatever their ids or where they are on screen,
+    // and blend "add" brightens what is behind instead of covering it.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("sprite_layers"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":2,"clearColor":[0,0,0]}}})J");
+    // Red is created first (lower id) and sits far to the side; green overlaps it at the origin.
+    Call(e, "entity.create", R"J({"name":"Red","components":{"Transform":{"position":[1.5,0,0]},
+      "Sprite":{"width":5,"height":2,"alphaCutoff":0,"color":[1,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Green","components":{"Transform":{"position":[0,0,0]},
+      "Sprite":{"width":1,"height":1,"alphaCutoff":0,"color":[0,1,0]}}})J");
+    RenderTarget shot;
+    shot.Resize(128, 72);
+    auto center = [&] { e.RenderGameView(shot); return shot.color[36 * 128 + 64] & 0xFFFFFF; };
+    CHECK(center() == 0x00FF00);  // same layer: nearer bounds centre last, then id
+    CHECK(Call(e, "component.set", R"J({"id":"Red","type":"Sprite","values":{"layer":1}})J")["ok"].asBool());
+    CHECK(center() == 0x0000FF);  // the higher layer wins although it has the lower id
+    CHECK(Call(e, "component.set", R"J({"id":"Green","type":"Sprite","values":{"layer":2}})J")["ok"].asBool());
+    CHECK(center() == 0x00FF00);
+    CHECK(Call(e, "component.set", R"J({"id":"Green","type":"Sprite","values":{"blend":"add"}})J")["ok"].asBool());
+    CHECK(center() == 0x00FFFF);  // red + green
+    CHECK(shot.ids[36 * 128 + 64] == e.GetScene().FindByName("Red"));  // additive sprites are not picked
+    // A cut-out sprite of a higher layer also stays in front (the layer nudges its depth).
+    CHECK(Call(e, "component.set", R"J({"id":"Green","type":"Sprite","values":{"blend":"alpha","alphaCutoff":0.5,"layer":0}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Red","type":"Sprite","values":{"alphaCutoff":0.5,"layer":3}})J")["ok"].asBool());
+    CHECK(center() == 0x0000FF);
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    Call(e, "component.set", R"J({"id":"Red","type":"Sprite","values":{"alphaCutoff":0,"layer":0}})J");
+    Call(e, "component.set", R"J({"id":"Green","type":"Sprite","values":{"alphaCutoff":0,"blend":"add","layer":1}})J");
+    e.RenderGameView(shot);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(128, 72);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        CHECK((gpu.color[36 * 128 + 64] & 0xFFFFFF) == 0x00FFFF);
+    } else std::printf("  SKIP additive GPU check (%s)\n", error.c_str());
+}
+
+TEST(ParticleVariationAndDrag) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("particle_variation"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Plain","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":2,
+      "speed":4,"spread":180,"gravity":[0,0,0],"dimensions":2,"space":"world","maxParticles":64}}})J");
+    Call(e, "entity.create", R"J({"name":"Varied","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":2,
+      "speed":4,"speedVariation":0.8,"lifetimeVariation":0.5,"sizeVariation":0.5,"drag":3,"spread":180,"gravity":[0,0,0],
+      "dimensions":2,"space":"world","maxParticles":64}}})J");
+    CHECK(Call(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
+    auto spread = [&](const char* name, float& slowest, float& fastest, float& shortest, float& longest) {
+        const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name));
+        slowest = shortest = 1e9f;
+        fastest = longest = 0;
+        for (const Particle& particle : emitter->particles) {
+            const float speed = Length(particle.velocity);
+            slowest = std::min(slowest, speed); fastest = std::max(fastest, speed);
+            shortest = std::min(shortest, particle.lifetime); longest = std::max(longest, particle.lifetime);
+        }
+        return emitter->particles.size();
+    };
+    float lo, hi, shortest, longest;
+    CHECK(spread("Plain", lo, hi, shortest, longest) == 40);
+    CHECK(std::fabs(lo - 4) < 1e-3f && std::fabs(hi - 4) < 1e-3f && shortest == 2 && longest == 2);
+    CHECK(spread("Varied", lo, hi, shortest, longest) == 40);
+    CHECK(hi < 4 * 0.3f);                    // drag: 3/s for half a second leaves under a quarter of the speed
+    CHECK(hi > lo * 2);                       // and the particles started at different speeds
+    CHECK(shortest >= 1 - 1e-3f && longest <= 2 + 1e-3f && longest - shortest > 0.4f);
+    CHECK(Call(e, "component.set", R"J({"id":"Varied","type":"ParticleEmitter","values":{"drag":"x"}})J")["ok"].asBool() == false);
+}
+
+TEST(Light2DDarkness) {
+    // Darkness2D on the camera covers the 2D view; Light2D entities cut soft holes; higher layers stay visible.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("light2d"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+      "Camera":{"projection":"orthographic","orthoSize":4,"clearColor":[1,1,1]},
+      "Darkness2D":{"color":[0,0,0],"opacity":1,"layer":5}}})J");
+    Call(e, "entity.create", R"J({"name":"Floor","components":{"Sprite":{"width":40,"height":40,"color":[1,1,1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Lamp","components":{"Transform":{"position":[0,0,0]},"Light2D":{"radius":2,"inner":0.5}}})J");
+    Call(e, "entity.create", R"J({"name":"Marker","components":{"Transform":{"position":[-6,3,0]},
+      "Sprite":{"width":1,"height":1,"alphaCutoff":0,"color":[1,0,0],"layer":6}}})J");
+    RenderTarget shot;
+    shot.Resize(160, 90);
+    auto at = [&](float x, float y) {  // world position -> pixel (orthoSize 4: 8 units over 90 px)
+        const int px = 80 + static_cast<int>(std::lround(x * 90.0f / 8.0f)), py = 45 - static_cast<int>(std::lround(y * 90.0f / 8.0f));
+        return shot.color[static_cast<size_t>(py) * 160 + static_cast<size_t>(px)] & 0xFFFFFF;
+    };
+    e.RenderGameView(shot);
+    CHECK(at(0, 0) == 0xFFFFFF);          // fully lit inside the inner radius
+    CHECK(at(3.5f, 0) == 0x000000);       // dark outside the light
+    const uint32_t edge = at(1.6f, 0) & 0xFF;
+    CHECK(edge > 20 && edge < 235);       // soft falloff between
+    CHECK(at(-6, 3) == 0x0000FF);         // a blended sprite on a higher layer is not darkened
+    const EntityId floor = e.GetScene().FindByName("Floor");
+    CHECK(shot.ids[45 * 160 + 150] == floor);  // the overlay is never picked
+    // Lights move with their entity; a second light adds its hole.
+    CHECK(Call(e, "component.set", R"J({"id":"Lamp","type":"Transform","values":{"position":[3.5,0,0]}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Dim","components":{"Transform":{"position":[-3,-2,0]},"Light2D":{"radius":1.5,"strength":0.5}}})J");
+    e.RenderGameView(shot);
+    CHECK(at(0, 0) == 0x000000 && at(3.5f, 0) == 0xFFFFFF);
+    const uint32_t dim = at(-3, -2) & 0xFF;
+    CHECK(dim > 110 && dim < 145);        // strength 0.5 removes half the darkness
+    RenderView view;
+    MakeSceneView(e.GetScene(), 160.0f / 90, view);
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(160, 90);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double difference = 0;
+        for (size_t i = 0; i < shot.color.size(); ++i) for (int shift : {0, 8, 16})
+            difference += std::abs(static_cast<int>((shot.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+        const double mean = difference / static_cast<double>(shot.color.size() * 3);
+        std::printf("  Darkness2D software/GPU mean difference %.4f\n", mean);
+        CHECK(mean < 3);
+    } else std::printf("  SKIP Darkness2D GPU comparison (%s)\n", error.c_str());
+    // Off switches and non-orthographic cameras draw no overlay.
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"Darkness2D","values":{"enabled":false}})J")["ok"].asBool());
+    e.RenderGameView(shot);
+    CHECK(at(0, 0) == 0xFFFFFF);
+}
+
+TEST(GamePauseFreezesWorld) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("game_pause"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "script.write", R"J({"path":"scripts/probe.lua","source":"local P = {}\nfunction P:onStart() self.updates, self.elapsed, self.fired = 0, 0, 0 timer.every(0.1, function() self.fired = self.fired + 1 end) end\nfunction P:onUpdate(dt) self.updates = self.updates + 1 self.elapsed = self.elapsed + dt if input.pressed('P') then game.pause(not game.paused()) end end\nreturn P\n"})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Probe","components":{"Script":{"path":"scripts/probe.lua"}}})J");
+    Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[0,10,0]},"RigidBody2D":{},
+      "Collider2D":{"shape":"circle","radius":0.5}}})J");
+    Call(e, "entity.create", R"J({"name":"Dust","components":{"ParticleEmitter":{"rate":60,"lifetime":5}}})J");
+    auto eval = [&](const char* code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        args["entity"] = "Probe";
+        return e.Call("script.eval", args)["result"]["value"].asNumber();
+    };
+    auto ballY = [&] { return e.GetScene().Get<Transform>(e.GetScene().FindByName("Ball"))->position.y; };
+    CHECK(Call(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
+    const float y = ballY();
+    const double updates = eval("return self.updates"), fired = eval("return self.fired"), now = e.SimTime();
+    const size_t dust = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Dust"))->particles.size();
+    CHECK(y < 10 && fired >= 3 && dust > 20);
+    CHECK(Call(e, "game.pause", R"J({"paused":true})J")["result"]["paused"].asBool());
+    CHECK(Call(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
+    CHECK(Call(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
+    CHECK(ballY() == y);                                   // physics waits
+    CHECK(eval("return self.fired") == fired);             // timers wait
+    CHECK(e.SimTime() == now);
+    CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Dust"))->particles.size() == dust);
+    CHECK(eval("return self.updates") == updates + 30);    // scripts keep running, with a zero step
+    CHECK(std::fabs(eval("return self.elapsed") - 0.5) < 1e-3);
+    // Scripts read input while paused and can resume themselves.
+    CHECK(Call(e, "input.key", R"J({"key":"P","down":true})J")["ok"].asBool());
+    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    CHECK(Call(e, "input.key", R"J({"key":"P","down":false})J")["ok"].asBool());
+    CHECK(!Call(e, "game.pause", "{}")["result"]["paused"].asBool());
+    CHECK(Call(e, "sim.step", R"J({"frames":10})J")["ok"].asBool());
+    CHECK(ballY() < y);
+    // The pause does not outlive the play session.
+    Call(e, "game.pause", R"J({"paused":true})J");
+    Call(e, "sim.stop", "{}");
+    CHECK(!Call(e, "game.pause", "{}")["result"]["paused"].asBool());
+}
+
+TEST(TimeDateOverride) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("time_date"), &error));
+    Json today = Call(e, "time.date", "{}")["result"];
+    CHECK(today["date"].asString().size() == 10 && !today["overridden"].asBool());
+    CHECK(Call(e, "time.date", R"J({"set":"2031-02-28"})J")["result"]["overridden"].asBool());
+    CHECK(Call(e, "script.eval", R"J({"code":"return time.date()"})J")["result"]["value"].asString() == "2031-02-28");
+    CHECK(!Call(e, "time.date", R"J({"set":"tomorrow"})J")["ok"].asBool());
+    CHECK(Call(e, "time.date", "{}")["result"]["date"].asString() == "2031-02-28");
+    CHECK(Call(e, "time.date", R"J({"set":""})J")["result"]["date"].asString() == today["date"].asString());
+}
+
+TEST(UIPanelBlockInputAndChildLookup) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("ui_block"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Under","components":{"UIButton":{"text":"Under","anchor":"center","x":0,"y":0,"width":200,"height":80,"order":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Side","components":{"UIButton":{"text":"Side","anchor":"top-left","x":10,"y":10,"width":120,"height":60,"order":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Modal","components":{"UIPanel":{"anchor":"center","x":0,"y":0,"width":400,"height":300,"order":5,"visible":false,"blockInput":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Ok","parent":"Modal","components":{"UIButton":{"text":"Ok","anchor":"center","x":0,"y":0,"width":100,"height":40}}})J");
+    Scene& scene = e.GetScene();
+    const EntityId under = scene.FindByName("Under"), side = scene.FindByName("Side"), ok = scene.FindByName("Ok");
+    CHECK(HitTestButton(scene, 640, 360, 1280, 720) == under);
+    CHECK(Call(e, "component.set", R"J({"id":"Modal","type":"UIPanel","values":{"visible":true}})J")["ok"].asBool());
+    CHECK(HitTestButton(scene, 640, 360, 1280, 720) == ok);              // children of the modal are on top of it
+    CHECK(HitTestButton(scene, 640 + 90, 360 + 30, 1280, 720) == kNullEntity);  // the button under the modal is out of reach
+    CHECK(HitTestButton(scene, 60, 40, 1280, 720) == side);              // outside the panel nothing is blocked
+    CHECK(Call(e, "component.set", R"J({"id":"Modal","type":"UIPanel","values":{"blockInput":false}})J")["ok"].asBool());
+    CHECK(HitTestButton(scene, 640 + 90, 360 + 30, 1280, 720) == under);
+    // scene.children / scene.child
+    Json children = Call(e, "script.eval", R"J({"code":"return scene.children(scene.find('Modal'))"})J")["result"]["value"];
+    CHECK(children.size() == 1 && children[0].asInt() == static_cast<int>(ok));
+    CHECK(Call(e, "script.eval", R"J({"code":"return scene.child(scene.find('Modal'), 'Ok')"})J")["result"]["value"].asInt() == static_cast<int>(ok));
+    CHECK(Call(e, "script.eval", R"J({"code":"return scene.child(scene.find('Modal'), 'Nope') == nil"})J")["result"]["value"].asBool());
+}
+
+TEST(UIScrollMotionAndTweens) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("ui_motion"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    // A 200 px tall scroll view with ten 50 px rows (10 px apart, 10 px padding): 610 px of content.
+    Call(e, "entity.create", R"J({"name":"List","components":{"UIPanel":{"anchor":"top-left","x":100,"y":100,"width":300,"height":200},
+      "UILayout":{"direction":"vertical","spacing":10,"padding":10,"crossAlign":"stretch"},"UIScroll":{"wheelStep":50}}})J");
+    for (int i = 1; i <= 10; ++i) {
+        Json args = Json::parse(R"J({"parent":"List","components":{"UIButton":{"text":"Row","height":50}}})J");
+        args["name"] = "Row" + std::to_string(i);
+        CHECK(e.Call("entity.create", args)["ok"].asBool());
+    }
+    Scene& scene = e.GetScene();
+    auto rect = [&](const char* name) {
+        const EntityId id = scene.FindByName(name);
+        for (const UIRect& r : LayoutUI(scene, 1280, 720)) if (r.entity == id) return r;
+        return UIRect{};
+    };
+    auto step = [&](int frames) {
+        Json args = Json::MakeObject();
+        args["frames"] = frames;
+        CHECK(e.Call("sim.step", args)["ok"].asBool());
+    };
+    const EntityId list = scene.FindByName("List");
+    CHECK(rect("List").scroll && std::fabs(rect("List").scrollMax - 410) < 0.5f);
+    CHECK(std::fabs(rect("Row1").y - 110) < 0.5f);
+    CHECK(HitTestButton(scene, 250, 130, 1280, 720) == scene.FindByName("Row1"));
+    CHECK(HitTestButton(scene, 250, 340, 1280, 720) == kNullEntity);  // a row below the view is clipped away
+    step(1);
+    // Wheel over the list: two notches toward the user scroll 100 px; the engine keeps scroll inside the content.
+    CHECK(Call(e, "input.mouse", R"J({"x":250,"y":200,"width":1280,"height":720,"wheel":-2})J")["ok"].asBool());
+    step(1);
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 100) < 1e-3f);
+    CHECK(std::fabs(rect("Row1").y - 10) < 0.5f);
+    CHECK(HitTestButton(scene, 250, 150, 1280, 720) == scene.FindByName("Row3"));
+    CHECK(HitTestButton(scene, 250, 90, 1280, 720) == kNullEntity);  // Row2 continues above the view, where it is clipped
+    CHECK(Call(e, "input.mouse", R"J({"wheel":-50})J")["ok"].asBool());
+    step(1);
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 410) < 1e-3f);
+    CHECK(Call(e, "input.mouse", R"J({"x":900,"y":600,"width":1280,"height":720,"wheel":5})J")["ok"].asBool());
+    step(1);
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 410) < 1e-3f);  // the pointer is elsewhere
+    CHECK(Call(e, "script.eval", R"J({"code":"return input.wheel()"})J")["result"]["value"].asNumber() == 0);  // cleared after the step
+    // Dragging the gap between two rows moves the content with the pointer.
+    Call(e, "input.mouse", R"J({"x":250,"y":295,"width":1280,"height":720,"button":"MouseLeft","down":true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"x":250,"y":355,"width":1280,"height":720})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button":"MouseLeft","down":false})J");
+    step(1);
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 350) < 1e-3f);
+
+    // The bar: grabbing the thumb moves the content in proportion; clicking the track jumps there; neither clicks a row.
+    CHECK(Call(e, "script.write", R"J({"path":"scripts/count.lua","source":"local C = {}\nfunction C:onClick() CLICKS = (CLICKS or 0) + 1 end\nreturn C\n"})J")["ok"].asBool());
+    for (int i = 1; i <= 10; ++i) {
+        Json args = Json::parse(R"J({"type":"Script","values":{"path":"scripts/count.lua"}})J");
+        args["id"] = "Row" + std::to_string(i);
+        CHECK(e.Call("component.add", args)["ok"].asBool());
+    }
+    scene.Get<UIScroll>(list)->scroll = 0;
+    step(1);
+    const UIThumb thumb = ScrollThumb(200, 610, 0, 1);
+    const float barX = 100 + 300 - 6, top = 100 + thumb.at + thumb.length * 0.5f;
+    auto pointer = [&](float x, float y, const char* extra) {
+        Json args = Json::parse(std::string("{") + extra + "}");
+        args["x"] = x; args["y"] = y; args["width"] = 1280; args["height"] = 720;
+        CHECK(e.Call("input.mouse", args)["ok"].asBool());
+        step(1);
+    };
+    pointer(barX, top, R"J("button":"MouseLeft","down":true)J");
+    CHECK(scene.Get<UIScroll>(list)->scroll == 0);  // grabbing the thumb where it is does not move it
+    pointer(barX, top + thumb.travel * 0.5f, "");
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 205) < 1.0f);  // half the travel = half the content
+    pointer(barX, top + 500, "");
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 410) < 1e-3f);  // clamped at the end, also outside the view
+    pointer(barX, top, R"J("button":"MouseLeft","down":false)J");
+    pointer(barX, 100 + 100, R"J("button":"MouseLeft","down":true)J");   // the track: the thumb centres on the pointer
+    CHECK(std::fabs(scene.Get<UIScroll>(list)->scroll - 205) < 1.0f);
+    pointer(barX, 100 + 100, R"J("button":"MouseLeft","down":false)J");
+    CHECK(Call(e, "script.eval", R"J({"code":"return CLICKS or 0"})J")["result"]["value"].asInt() == 0);
+    pointer(250, 225, R"J("button":"MouseLeft","down":true)J");
+    pointer(250, 225, R"J("button":"MouseLeft","down":false)J");
+    CHECK(Call(e, "script.eval", R"J({"code":"return CLICKS or 0"})J")["result"]["value"].asInt() == 1);  // rows still click
+
+    // UIMotion: plays when the element becomes visible, on real frames (also while the game is paused).
+    Call(e, "entity.create", R"J({"name":"Dialog","components":{"UIPanel":{"anchor":"center","x":0,"y":0,"width":200,"height":100,"opacity":1,"visible":false},
+      "UIMotion":{"enter":"slide-up","duration":0.5,"distance":60}}})J");
+    Call(e, "entity.create", R"J({"name":"Label","parent":"Dialog","components":{"UIText":{"text":"Hi","anchor":"center","x":0,"y":0}}})J");
+    step(2);
+    Call(e, "game.pause", R"J({"paused":true})J");
+    Call(e, "component.set", R"J({"id":"Dialog","type":"UIPanel","values":{"visible":true}})J");
+    step(1);
+    UIRect early = rect("Dialog"), label = rect("Label");
+    CHECK(early.y > 310 + 40 && early.opacity < 0.2f && label.opacity < 0.2f);  // starts lower and transparent, children with it
+    step(12);
+    UIRect mid = rect("Dialog");
+    CHECK(mid.y < early.y && mid.y > 310 && mid.opacity > early.opacity);
+    step(30);
+    CHECK(std::fabs(rect("Dialog").y - 310) < 0.01f && rect("Dialog").opacity == 1.0f);
+    Call(e, "game.pause", R"J({"paused":false})J");
+
+    // An element shown by a click handler (callbacks run late in the frame) is already at the start of its
+    // entrance when that frame is drawn: it never appears at its final look for one frame first.
+    CHECK(Call(e, "script.write", R"J({"path":"scripts/open.lua","source":"local O = {}\nfunction O:onClick() scene.set(scene.find('Popup'), 'UIPanel', {visible = true}) end\nreturn O\n"})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Popup","components":{"UIPanel":{"anchor":"bottom","x":0,"y":-20,"width":200,"height":60,"opacity":1,"visible":false},
+      "UIMotion":{"enter":"fade","duration":0.3}}})J");
+    Call(e, "entity.create", R"J({"name":"Opener","components":{"UIButton":{"text":"Open","anchor":"top-right","x":-20,"y":20,"width":120,"height":50},
+      "Script":{"path":"scripts/open.lua"}}})J");
+    step(2);
+    CHECK(Call(e, "input.click", R"J({"x":1200,"y":45,"width":1280,"height":720})J")["result"]["button"].asInt() == static_cast<int>(scene.FindByName("Opener")));
+    step(1);
+    CHECK(scene.Get<UIPanel>(scene.FindByName("Popup"))->visible);
+    CHECK(rect("Popup").opacity < 0.05f);
+    step(30);
+    CHECK(rect("Popup").opacity == 1.0f);
+
+    // Buttons ease toward hoverScale / pressedScale.
+    Call(e, "entity.create", R"J({"name":"Grow","components":{"UIButton":{"text":"Go","anchor":"top-left","x":600,"y":500,"width":100,"height":40,"hoverScale":1.2}}})J");
+    step(1);
+    CHECK(std::fabs(rect("Grow").w - 100) < 0.01f);
+    Call(e, "input.mouse", R"J({"x":650,"y":520,"width":1280,"height":720})J");
+    step(30);
+    CHECK(std::fabs(rect("Grow").w - 120) < 0.5f && std::fabs(rect("Grow").x - 590) < 0.5f);
+
+    // Lua tweens: unscaled by default, eased, with a completion callback.
+    CHECK(Call(e, "script.eval", R"J({"code":"DONE = 0 tween.to(scene.find('Dialog'), 'UIPanel', {x = 100, color = {1, 0, 0}}, 0.5, {ease = 'linear', onDone = function() DONE = DONE + 1 end})"})J")["ok"].asBool());
+    step(15);
+    CHECK(std::fabs(scene.Get<UIPanel>(scene.FindByName("Dialog"))->x - 50) < 0.5f);
+    Call(e, "game.pause", R"J({"paused":true})J");
+    step(20);
+    const UIPanel* panel = scene.Get<UIPanel>(scene.FindByName("Dialog"));
+    CHECK(std::fabs(panel->x - 100) < 1e-3f && std::fabs(panel->color.r - 1) < 1e-3f && panel->color.g == 0);
+    CHECK(Call(e, "script.eval", R"J({"code":"return DONE"})J")["result"]["value"].asInt() == 1);
+    // scaled tweens wait with the world; tween.stop drops them
+    CHECK(Call(e, "script.eval", R"J({"code":"tween.to(scene.find('Dialog'), 'UIPanel', {y = 80}, 0.25, {scaled = true})"})J")["ok"].asBool());
+    step(30);
+    CHECK(scene.Get<UIPanel>(scene.FindByName("Dialog"))->y == 0);
+    Call(e, "game.pause", R"J({"paused":false})J");
+    step(5);
+    CHECK(scene.Get<UIPanel>(scene.FindByName("Dialog"))->y > 0);
+    Call(e, "script.eval", R"J({"code":"tween.stop(scene.find('Dialog'))"})J");
+    const float y = scene.Get<UIPanel>(scene.FindByName("Dialog"))->y;
+    step(10);
+    CHECK(scene.Get<UIPanel>(scene.FindByName("Dialog"))->y == y);
+    CHECK(e.Scripts().Errors().empty());
+}
+
+TEST(WickboundSample) {
+    // The survivor roguelite built from engine pieces: prefab entities with their own scripts, Box2D
+    // colliders and sensors, Light2D darkness, UI scenes. Plays through the menu into a run and back.
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/samples/Wickbound";
+    CHECK(e.Open(project, &error));
+    for (const std::string& file : GameFiles(project)) {
+        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
+        Json args = Json::MakeObject();
+        args["path"] = file;
+        Json result = e.Call("script.check", args)["result"];
+        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
+    }
+    CHECK(Call(e, "time.date", R"J({"set":"2030-05-05"})J")["ok"].asBool());
+    auto step = [&](int frames) {
+        Json args = Json::MakeObject();
+        args["frames"] = frames;
+        CHECK(e.Call("sim.step", args)["ok"].asBool());
+    };
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    auto click = [&](const char* name) {  // a real pointer click on the named button
+        Json layout = Call(e, "ui.layout", R"J({"width":1280,"height":720})J")["result"];
+        const EntityId id = e.GetScene().FindByName(name);
+        bool found = false;
+        for (const Json& element : (layout.has("elements") ? layout["elements"] : layout).items()) {
+            if (element["id"].asInt() != static_cast<int>(id)) continue;
+            Json args = Json::MakeObject();
+            args["x"] = element["center"][0]; args["y"] = element["center"][1]; args["width"] = 1280; args["height"] = 720;
+            CHECK(e.Call("input.click", args)["result"]["button"].asInt() == static_cast<int>(id));
+            found = true;
+        }
+        CHECK(found);
+        step(3);
+    };
+    auto action = [&](const char* target, const char* name, const char* arg) {
+        eval(std::string("scene.send(scene.find('") + target + "'), 'onAction', '" + name + "', " + arg + ")");
+        step(2);
+    };
+    const char* world = "local W = require('scripts.lib.world') ";
+    step(3);
+    CHECK(e.RuntimeScene() == "scenes/menu.scene.json");
+    RenderTarget title, run;
+    for (RenderTarget* target : {&title, &run}) target->Resize(320, 180);
+    e.RenderGameView(title);
+    // Daily gift: 50 Glims today, nothing more until the date changes, 75 on the next day (streak).
+    CHECK(eval("return require('scripts.lib.meta').dailyAvailable()").asBool());
+    action("Menu", "dailyOpen", "nil");
+    action("Menu", "dailyClaim", "nil");
+    CHECK(eval("return require('scripts.lib.meta').data.glims").asInt() == 50);
+    CHECK(!eval("return require('scripts.lib.meta').dailyAvailable()").asBool());
+    Call(e, "time.date", R"J({"set":"2030-05-06"})J");
+    CHECK(eval("return require('scripts.lib.meta').dailyAmount()").asInt() == 75);
+
+    action("Menu", "nav", "'play'");
+    click("Start");
+    step(3);
+    CHECK(e.RuntimeScene() == "scenes/run.scene.json");
+    CHECK(eval(std::string(world) + "return W.game.phase").asString() == "playing");
+    // The keeper is a CharacterBody2D with child entities: body sprite, lantern light, sensors and its first weapon.
+    Scene& scene = e.GetScene();
+    const EntityId player = scene.FindByName("Player");
+    CHECK(scene.Get<CharacterBody2D>(player) != nullptr);
+    CHECK(scene.Children(player).size() >= 7);
+    CHECK(scene.Get<Light2D>(scene.FindByName("Lantern")) != nullptr && scene.Get<Darkness2D>(scene.FindByName("Camera")) != nullptr);
+    CHECK(scene.Record(scene.FindByName("Weapon ember_bolt"))->parent == player);
+    const EntityId playerBody = static_cast<EntityId>(eval(std::string(world) + "return W.player.body").asInt());
+    const Sprite* keeperSprite = scene.Get<Sprite>(playerBody);
+    CHECK(keeperSprite && keeperSprite->columns >= 4 && keeperSprite->rows >= 2);
+    CHECK(keeperSprite->texture == "assets/sprites/animated/keeper_ada.png");
+    CHECK(scene.Get<SpriteAnimation>(playerBody)->clip == "idle");
+    CHECK(Call(e, "input.key", R"J({"key":"D","down":true})J")["ok"].asBool());
+    step(12);
+    CHECK(scene.Get<SpriteAnimation>(playerBody)->clip == "move");
+    bool inMoveClip = false;
+    for (const Json& frame : scene.Get<SpriteAnimation>(playerBody)->clips["move"]["frames"].items())
+        if (frame.asInt() == scene.Get<Sprite>(playerBody)->frame) inMoveClip = true;
+    CHECK(inMoveClip);
+    step(228);
+    CHECK(Call(e, "input.key", R"J({"key":"D","down":false})J")["ok"].asBool());
+    CHECK(e.Scripts().Errors().empty());
+    CHECK(scene.Get<Transform>(player)->position.x > 14);  // walked right at about 4.1 units/s
+    CHECK(eval(std::string(world) + "return #W.enemyList").asInt() > 0 && scene.Pool<RigidBody2D>().size() > 3);
+    e.RenderGameView(run);
+    CHECK(run.Hash() != title.Hash());
+    step(2);
+    CHECK(scene.Get<SpriteAnimation>(playerBody)->clip == "idle");
+    eval(std::string(world) + "for _, e in ipairs(W.enemyList) do if scene.has(e.body, 'SpriteAnimation') then e.stun = 0.5 break end end");
+    step(2);
+    CHECK(eval(std::string(world) + "for _, e in ipairs(W.enemyList) do if scene.has(e.body, 'SpriteAnimation') then return scene.get(e.body, 'SpriteAnimation').clip end end").asString() == "idle");
+    for (const RenderItem& item : GatherRenderItems(scene, &e.Assets())) CHECK(!item.error);
+    // An enemy placed on the keeper is seen by the Hurtbox sensor and hurts; the bolt weapon's trigger shots kill it.
+    eval(std::string(world) + "W.spawn('enemy_shade', W.player.x + 0.2, W.player.y, {kind = 'shade'})");
+    step(30);
+    CHECK(eval(std::string(world) + "return W.player.hp").asNumber() < 100);
+    step(180);
+    CHECK(eval(std::string(world) + "return W.game.kills").asInt() >= 1);
+    // A level-up pauses the world (game.pause) until a card is picked with key 1.
+    eval(std::string(world) + "W.game:gainXp(40)");
+    step(2);
+    CHECK(eval(std::string(world) + "return W.game.phase").asString() == "levelup");
+    CHECK(Call(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
+    const double frozen = eval(std::string(world) + "return W.game.time").asNumber();
+    const int frozenFrame = scene.Get<Sprite>(playerBody)->frame;
+    step(30);
+    CHECK(eval(std::string(world) + "return W.game.time").asNumber() == frozen);
+    CHECK(scene.Get<Sprite>(playerBody)->frame == frozenFrame);
+    for (int guard = 0; guard < 6 && eval(std::string(world) + "return W.game.phase").asString() == "levelup"; ++guard) {
+        CHECK(Call(e, "input.key", R"J({"key":"1","down":true})J")["ok"].asBool());
+        step(2);
+        CHECK(Call(e, "input.key", R"J({"key":"1","down":false})J")["ok"].asBool());
+        step(2);
+    }
+    CHECK(eval(std::string(world) + "return W.game.phase").asString() == "playing");
+    CHECK(!Call(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
+    // Standing in a brazier's trigger ring for three seconds lights it: a permanent Light2D.
+    eval(std::string(world) + "local b = W.braziers[1] scene.set(W.player.id, 'Transform', {position = {x = b.x, y = b.y}})");
+    step(200);
+    CHECK(eval(std::string(world) + "return W.game.braziersLit").asInt() == 1);
+    CHECK(eval(std::string(world) + "return scene.get(W.braziers[1].id, 'Light2D').strength").asNumber() == 1);
+    CHECK(!eval(std::string(world) + "return scene.has(scene.child(W.braziers[1].id, 'Body'), 'SpriteAnimation')").asBool());
+    CHECK(eval(std::string(world) + "return scene.get(scene.child(W.braziers[1].id, 'Fire'), 'Sprite').visible").asBool());
+    CHECK(e.Scripts().Errors().empty());
+    // Giving up returns to the menu scene with the result, and the run's Glims and achievement are saved.
+    eval(std::string(world) + "W.game:giveUp()");
+    step(3);
+    CHECK(e.RuntimeScene() == "scenes/menu.scene.json");
+    CHECK(e.GetScene().Get<UIPanel>(e.GetScene().FindByName("Screen:result"))->visible);
+    CHECK(eval("return require('scripts.lib.meta').data.stats.runs").asInt() == 1);
+    CHECK(eval("return require('scripts.lib.meta').data.achievements.first_light").asBool());
+    CHECK(eval("return require('scripts.lib.meta').data.glims").asInt() > 100);
+    CHECK(e.Scripts().Errors().empty());
+}
+
 TEST(ShaderGraphValidationAndReference) {
     Engine e;
     std::string error;
@@ -5566,10 +6474,118 @@ TEST(ShaderGraphValidationAndReference) {
     CHECK(std::fabs(surface.color.x - 0.47942554f) < 1e-6f);
     Json oversized = Json::MakeObject();
     oversized["nodes"] = Json::MakeArray();
-    for (int i = 0; i < 33; ++i) oversized["nodes"].push(Json::parse(R"J({"op":"constant","value":1})J"));
+    for (int i = 0; i < ShaderGraph::kMaxNodes + 1; ++i) oversized["nodes"].push(Json::parse(R"J({"op":"constant","value":1})J"));
     oversized["color"] = 0;
     CHECK(!CompileShaderGraph(oversized, graph, &error));
-    CHECK(error.find("1..32") != std::string::npos);
+    CHECK(error.find("1..48") != std::string::npos);
+}
+
+TEST(ShaderGraphVertexOffset) {
+    // Graph outputs `offset` (moves vertices in world space) and `normal` (lighting normal), in both renderers.
+    ShaderGraph graph;
+    std::string err;
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"position"},{"op":"constant","value":2},
+        {"op":"multiply","args":[0,1]}],"color":1,"offset":2,"normal":0})J"), graph, &err));
+    CHECK(graph.offset == 2 && graph.normal == 0);
+    ShaderInputs inputs;
+    inputs.position = Vec4(1, 2, 3, 1);
+    const Vec3 moved = ShaderVertexOffset(graph, inputs, graph.defaults);
+    CHECK(moved.x == 2 && moved.y == 4 && moved.z == 6);
+    CHECK(EvaluateShaderGraph(graph, inputs, graph.defaults).normal.z == 3);
+    // The vertex stage has no texture.
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"texture","args":[0]}],"color":1,"offset":1})J"), graph, &err));
+    CHECK(err.find("texture") != std::string::npos);
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":3})J"), graph, &err));
+    CHECK(GetBuiltinMesh("plane64")->positions.size() == 65 * 65 && GetBuiltinMesh("plane64")->TriangleCount() == 64 * 64 * 2);
+
+    Engine e;
+    CHECK(e.Open(TempProject("shader_offset"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    // The sheet's graph moves it from the origin to x 1..5 at height 1.
+    Json created = Call(e, "shader.create", R"J({"path":"moved.shader.json","graph":{"uniforms":{"shift":[3,1,0,0]},
+        "nodes":[{"op":"constant","value":[1,0,0,1]},{"op":"uniform","name":"shift"}],"color":0,"offset":1}})J");
+    CHECK(created["ok"].asBool() && created["result"]["offset"].asInt() == 1 && created["result"]["normal"].asInt() == -1);
+    CHECK(Call(e, "shader.create", R"J({"path":"sideways.shader.json","graph":{"uniforms":{"shift":[3,1,0,0]},
+        "nodes":[{"op":"constant","value":[1,0,0,1]},{"op":"uniform","name":"shift"},{"op":"constant","value":[1,0,0,0]}],
+        "color":0,"offset":1,"normal":2}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"moved.mat.json","values":{"shader":"moved.shader.json","roughness":1,"doubleSided":true}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"sideways.mat.json","values":{"shader":"sideways.shader.json","roughness":1,"doubleSided":true}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[1.5,5,9],"rotation":[-29.05,0,0]},"Camera":{"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-70,0,0]},"DirectionalLight":{"ambient":[0.1,0.1,0.1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"position":[0,-1,0],"scale":[20,1,20]},"MeshRenderer":{"mesh":"plane","color":[1,1,1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sheet","components":{"Transform":{"scale":[4,1,4]},"MeshRenderer":{"mesh":"plane64","material":"moved.mat.json"}}})J");
+    const int w = 160, h = 120;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    auto pixel = [&](const RenderTarget& t, Vec3 world) {
+        const Vec4 clip = view.proj * view.view * Vec4(world, 1);
+        const int x = static_cast<int>((clip.x / clip.w * 0.5f + 0.5f) * w), y = static_cast<int>((0.5f - clip.y / clip.w * 0.5f) * h);
+        return t.color[static_cast<size_t>(y) * w + static_cast<size_t>(x)];
+    };
+    auto red = [](uint32_t c) { return static_cast<int>(c & 255); };
+    auto green = [](uint32_t c) { return static_cast<int>((c >> 8) & 255); };
+    const EntityId sheet = e.GetScene().FindByName("Sheet");
+    auto check = [&](IRenderer& renderer, const char* name) {
+        RenderTarget plain, sideways, outlined;
+        for (RenderTarget* target : {&plain, &sideways, &outlined}) target->Resize(w, h);
+        CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"moved.mat.json"}})J")["ok"].asBool());
+        view.highlight = kNullEntity;
+        renderer.Render(e.GetScene(), view, plain);
+        // The sheet is drawn where the graph moved it, not at the origin (white ground shows there).
+        CHECK(red(pixel(plain, Vec3(3, 1, 0))) > 150 && green(pixel(plain, Vec3(3, 1, 0))) < 40);
+        CHECK(green(pixel(plain, Vec3(-1, 0, 0))) > 150);
+        // Its shadow moved with it: the ground below the new place is dark, below the old one lit.
+        const int shaded = green(pixel(plain, Vec3(4.5f, -1, 0.8f))), lit = green(pixel(plain, Vec3(-0.5f, -1, 0.8f)));
+        std::printf("  vertex offset (%s): shadowed ground %d, lit ground %d\n", name, shaded, lit);
+        CHECK(lit > 150 && shaded < lit / 2);
+        // The selection outline follows the moved surface.
+        view.highlight = sheet;
+        renderer.Render(e.GetScene(), view, outlined);
+        view.highlight = kNullEntity;
+        const Vec4 corner = view.proj * view.view * Vec4(1, 1, 2, 1);
+        const int left = static_cast<int>((corner.x / corner.w * 0.5f + 0.5f) * w);
+        int changed = 0, changedLeft = 0;
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            const size_t i = static_cast<size_t>(y) * w + static_cast<size_t>(x);
+            if (plain.color[i] == outlined.color[i]) continue;
+            ++changed;
+            changedLeft += x < left - 6;
+        }
+        CHECK(changed > 20 && changedLeft == 0);
+        // The `normal` output replaces the lighting normal: perpendicular to the sun leaves only ambient light.
+        CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"sideways.mat.json"}})J")["ok"].asBool());
+        renderer.Render(e.GetScene(), view, sideways);
+        CHECK(red(pixel(sideways, Vec3(3, 1, 0))) < red(pixel(plain, Vec3(3, 1, 0))) / 2);
+        return plain;
+    };
+    const RenderTarget software = check(e.Renderer(), "software");
+    // Depth of field reads the moved surface's depth (GPU: its own depth pass).
+    CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"moved.mat.json"}})J")["ok"].asBool());
+    view.postProcess.dofRadius = 6;
+    view.postProcess.dofFocus = 9.5f;
+    view.postProcess.dofRange = 3;
+    view.postProcess.dofFalloff = 4;
+    RenderTarget softwareDof, gpuDof;
+    softwareDof.Resize(w, h);
+    gpuDof.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, softwareDof);
+    view.postProcess.dofRadius = 0;
+    auto difference = [](const RenderTarget& a, const RenderTarget& b) {
+        double error = 0;
+        for (size_t i = 0; i < a.color.size(); ++i) for (int shift : {0, 8, 16})
+            error += std::abs(static_cast<int>((a.color[i] >> shift) & 255) - static_cast<int>((b.color[i] >> shift) & 255));
+        return error / static_cast<double>(a.color.size() * 3);
+    };
+    if (e.EnableGpu(nullptr, &err)) {
+        const RenderTarget gpu = check(*e.Gpu(), "gpu");
+        const double mean = difference(software, gpu);
+        CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"moved.mat.json"}})J")["ok"].asBool());
+        view.postProcess.dofRadius = 6;
+        e.Gpu()->Render(e.GetScene(), view, gpuDof);
+        const double meanDof = difference(softwareDof, gpuDof);
+        std::printf("  vertex offset software/GPU mean difference %.4f, with depth of field %.4f\n", mean, meanDof);
+        CHECK(mean < 1.5 && meanDof < 2.0);
+    } else std::printf("  SKIP vertex offset GPU comparison (%s)\n", err.c_str());
 }
 
 TEST(CameraFxaa) {
@@ -5650,6 +6666,190 @@ TEST(CameraFxaa) {
     view.postProcess.fxaa = false;
     e.Renderer().Render(e.GetScene(), view, off);
     CHECK(on.Hash() == off.Hash());
+}
+
+TEST(SpriteBillboardScript) {
+    // Facing the camera is project code: samples/HD2D/scripts/billboards.lua turns tagged sprites, the
+    // renderer only draws a Sprite along its entity's rotation.
+    Engine e;
+    std::string err, source;
+    CHECK(e.Open(TempProject("sprite_billboards"), &err));
+    CHECK(ReadTextFile(TestSourceDir() + "/samples/HD2D/scripts/billboards.lua", source));
+    Json write = Json::MakeObject();
+    write["path"] = "scripts/billboards.lua";
+    write["source"] = source;
+    CHECK(e.Call("script.write", write)["ok"].asBool());
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[8,7,0]},"Camera":{"fov":40}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Billboards","components":{"Script":{"path":"scripts/billboards.lua"}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"S","components":{"Transform":{"position":[0,0,0]},"Tag":{"tags":"prop, billboard"},
+      "Sprite":{"width":1,"height":2,"pivotY":0,"color":[1,0,0]}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Plain","components":{"Transform":{"position":[0,0,3],"rotation":[0,30,0]},
+      "Sprite":{"width":1,"height":1}}})J")["ok"].asBool());
+    const Vec3 look = EulerLookDirection(Vec3(0, 1, 0) - Vec3(8, 7, 0));
+    Json aim = Json::parse(R"J({"id":"Camera","type":"Transform","values":{}})J");
+    aim["values"]["rotation"] = Json(Json::Array{look.x, look.y, look.z});
+    CHECK(e.Call("component.set", aim)["ok"].asBool());
+    RenderTarget shot;
+    shot.Resize(128, 72);
+    auto red = [&] {
+        RenderView view = MakeLookAtView(Vec3(8, 7, 0), Vec3(0, 1, 0), 40.0f, 128.0f / 72);
+        view.clearColor = Color(0, 0, 0);
+        e.Renderer().Render(e.GetScene(), view, shot);
+        int count = 0;
+        for (uint32_t c : shot.color) count += (c & 0xFFFFFF) == 0x0000FF;
+        return count;
+    };
+    CHECK(red() == 0);  // seen from the side: edge-on
+    Call(e, "sim.step", R"J({"frames": 2})J");
+    const Scene& scene = e.GetScene();
+    CHECK(Near(scene.Get<Transform>(scene.FindByName("S"))->rotation, Vec3(0, look.y, 0), 1e-3f));
+    CHECK(Near(scene.Get<Transform>(scene.FindByName("Plain"))->rotation, Vec3(0, 30, 0), 1e-6f));  // untagged sprites are left alone
+    const int upright = red();
+    CHECK(upright > 100);
+    CHECK(shot.IdAt(64, 36) == scene.FindByName("S"));
+    CHECK(Call(e, "component.set", R"J({"id":"S","type":"Tag","values":{"tags":"billboard-camera"}})J")["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(Near(scene.Get<Transform>(scene.FindByName("S"))->rotation, Vec3(look.x, look.y, 0), 1e-3f));
+    CHECK(red() > upright + upright / 10);  // no foreshortening from the camera's pitch
+    CHECK(e.Scripts().Errors().empty());
+    // The engine has no billboard switch on Sprite any more.
+    CHECK(!Call(e, "component.set", R"J({"id":"S","type":"Sprite","values":{"billboard":"upright"}})J")["ok"].asBool());
+}
+
+TEST(SpriteCutoutShadows) {
+    // A lit sprite with castShadows shadows the ground only behind its opaque texels, in both renderers.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("sprite_shadows"), &err));
+    Image half;  // left texel opaque, right texel transparent
+    half.width = 2;
+    half.height = 1;
+    half.rgba = {255, 255, 255, 255, 255, 255, 255, 0};
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "half.png"), half, true));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    // Top-down view: screen right = +X, screen down = +Z, 8 pixels per unit.
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,20,0],"rotation":[-90,0,0]},
+      "Camera":{"projection":"orthographic","orthoSize":4,"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-45,0,0]},
+      "DirectionalLight":{"color":[1,1,1],"intensity":1,"ambient":[0.2,0.2,0.2],"shadowStrength":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[20,1,20]},"MeshRenderer":{"mesh":"plane"}}})J");
+    CHECK(Call(e, "entity.create", R"J({"name":"S","components":{"Transform":{"position":[0,0,0]},
+      "Sprite":{"texture":"half.png","width":2,"height":2,"pivotY":0,"lit":true}}})J")["ok"].asBool());
+    RenderView view;
+    MakeSceneView(e.GetScene(), 1.0f, view);
+    RenderTarget shot;
+    shot.Resize(64, 64);
+    auto level = [&](float x, float z) {
+        return static_cast<int>(shot.color[static_cast<size_t>(32 + static_cast<int>(z * 8)) * 64 + static_cast<size_t>(32 + static_cast<int>(x * 8))] & 255);
+    };
+    e.Renderer().Render(e.GetScene(), view, shot);
+    const int open = level(3, -1);
+    CHECK(open > 100);
+    CHECK(level(-0.5f, -1) == open && level(0.5f, -1) == open);  // castShadows is off by default
+    CHECK(Call(e, "component.set", R"J({"id":"S","type":"Sprite","values":{"castShadows":true}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, shot);
+    CHECK(level(-0.5f, -1) < open - 60);  // behind the opaque half
+    CHECK(level(0.5f, -1) == open);       // the transparent half casts nothing
+    CHECK(level(3, -1) == open);
+    const uint64_t reference = shot.Hash();
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, shot);
+    SetMaxRenderThreads(16);
+    CHECK(shot.Hash() == reference);
+    if (e.EnableGpu(nullptr, &err)) {
+        e.Gpu()->Render(e.GetScene(), view, shot);
+        const int gpuOpen = level(3, -1);
+        CHECK(level(-0.5f, -1) < gpuOpen - 60);
+        CHECK(std::abs(level(0.5f, -1) - gpuOpen) <= 2);
+    } else std::printf("  SKIP sprite shadow GPU check (%s)\n", err.c_str());
+}
+
+TEST(CameraDepthOfField) {
+    // PostProcess.dofRadius blurs surfaces away from dofFocus and leaves the focused ones untouched.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("camera_dof"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"clearColor":[0,0,0]},"PostProcess":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Near","components":{"Transform":{"position":[-3,0,0],"scale":[2,2,2]},"MeshRenderer":{"unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Far","components":{"Transform":{"position":[12,0,-20],"scale":[8,8,8]},"MeshRenderer":{"unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":8,"height":8,"color":[1,1,1],"opacity":1}}})J");
+    RenderView view;
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    RenderTarget off, on, again;
+    for (RenderTarget* target : {&off, &on, &again}) target->Resize(128, 72);
+    e.Renderer().Render(e.GetScene(), view, off);
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"PostProcess","values":{"dofRadius":6,"dofFocus":10,"dofRange":2,"dofFalloff":5}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    SetMaxRenderThreads(1);
+    e.Renderer().Render(e.GetScene(), view, on);
+    SetMaxRenderThreads(4);
+    e.Renderer().Render(e.GetScene(), view, again);
+    SetMaxRenderThreads(16);
+    CHECK(on.Hash() != off.Hash() && on.Hash() == again.Hash());
+    CHECK(on.depth == off.depth && on.ids == off.ids);
+    // The focused cube and the black background around it are untouched; the far cube's edges turn soft.
+    auto softPixels = [](const RenderTarget& a, const RenderTarget& b, int x0, int x1) {
+        int count = 0;
+        for (int y = 0; y < a.height; ++y) for (int x = x0; x < x1; ++x) {
+            const size_t i = static_cast<size_t>(y) * static_cast<size_t>(a.width) + static_cast<size_t>(x);
+            count += a.color[i] != b.color[i];
+        }
+        return count;
+    };
+    CHECK(softPixels(on, off, 0, 64) == 0);
+    CHECK(softPixels(on, off, 64, 128) > 40);
+    int grey = 0;
+    for (uint32_t c : on.color) grey += (c & 255) > 20 && (c & 255) < 235;
+    CHECK(grey > 40);
+    CHECK(on.color[0] == off.color[0] && (on.color[0] & 0xFFFFFF) == 0xFFFFFF);  // UI is drawn afterwards
+    // Focusing on the far cube swaps the roles.
+    view.postProcess.dofFocus = 28;
+    view.postProcess.dofRange = 10;
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(softPixels(again, off, 0, 64) > 20);
+    CHECK(softPixels(again, off, 64, 128) == 0);
+    view.postProcess.dofFocus = 10;
+    view.postProcess.dofRange = 2;
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &err));
+    CHECK(restored.Get<PostProcess>(restored.FindByName("Camera"))->dofRadius == 6);
+    Call(e, "history.undo", "{}");
+    RenderView neutral;
+    MakeSceneView(e.GetScene(), 128.0f / 72, neutral);
+    e.Renderer().Render(e.GetScene(), neutral, again);
+    CHECK(again.Hash() == off.Hash());
+    Call(e, "history.redo", "{}");
+    if (e.EnableGpu(nullptr, &err)) {
+        for (const char* tone : {"none", "reinhard"}) {
+            view.postProcess.toneMapping = tone;
+            view.postProcess.dofRadius = 0;
+            e.Gpu()->Render(e.GetScene(), view, off);
+            view.postProcess.dofRadius = 6;
+            e.Gpu()->Render(e.GetScene(), view, on);
+            // MSAA edge pixels of the focused cube carry the background's depth, so only its interior is exact.
+            CHECK(on.color[36 * 128 + 45] == off.color[36 * 128 + 45] && (on.color[36 * 128 + 45] & 255) > 100);
+            CHECK(softPixels(on, off, 64, 128) > 40);
+            e.Renderer().Render(e.GetScene(), view, again);
+            double error = 0;
+            for (size_t i = 0; i < on.color.size(); ++i) for (int shift : {0, 8, 16})
+                error += std::abs(static_cast<int>((on.color[i] >> shift) & 255) - static_cast<int>((again.color[i] >> shift) & 255));
+            const double mean = error / static_cast<double>(on.color.size() * 3);
+            std::printf("  depth of field (%s) software/GPU mean difference %.4f\n", tone, mean);
+            CHECK(mean < 1.5);
+            view.postProcess.dofRadius = 0;
+            e.Gpu()->Render(e.GetScene(), view, again);
+            CHECK(again.Hash() == off.Hash());
+        }
+    } else std::printf("  SKIP depth of field GPU comparison (%s)\n", err.c_str());
+    // Orthographic cameras use the same view depth.
+    CHECK(Call(e, "component.set", R"J({"id":"Camera","type":"Camera","values":{"projection":"orthographic","orthoSize":12}})J")["ok"].asBool());
+    MakeSceneView(e.GetScene(), 128.0f / 72, view);
+    e.Renderer().Render(e.GetScene(), view, on);
+    view.postProcess.dofRadius = 0;
+    e.Renderer().Render(e.GetScene(), view, off);
+    CHECK(softPixels(on, off, 0, 64) == 0 && softPixels(on, off, 64, 128) > 40);
 }
 
 TEST(GpuRendererMatchesSoftware) {
@@ -5953,6 +7153,992 @@ TEST(AndroidApk) {
     RemoveAll("build/test_apk");
 }
 
+// A scratch folder (with a space in its name: command lines must quote it) for process fixtures.
+std::string ProcessFixtureDir(const char* name) {
+    namespace fs = std::filesystem;
+    fs::path dir = fs::path(TestSourceDir()) / "build/test_projects" / (std::string("oe_tests ") + name);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    CHECK(CreateDirectories(dir.generic_string()));
+    return dir.generic_string();
+}
+
+TEST(ProcessRunsChildren) {
+    std::string error;
+    if (!PlatformProcessSupported()) {
+        CHECK(PlatformFindExecutable("cmd").empty());
+        CHECK(!PlatformStartProcess(ProcessOptions(), &error) && !error.empty());
+        return;
+    }
+#if defined(_WIN32)
+    struct Output {
+        std::vector<std::string> out, err;
+        int exitCode = -1;
+    };
+    auto finish = [](Process& process) {
+        Output output;
+        std::string line;
+        bool isStderr = false;
+        while (process.ReadLine(line, isStderr)) (isStderr ? output.err : output.out).push_back(line);
+        for (int i = 0; i < 500 && process.Running(&output.exitCode); ++i) PlatformSleep(0.01);
+        return output;
+    };
+    const std::string cmd = PlatformFindExecutable("cmd");
+    CHECK(cmd.size() > 8 && cmd.find('\\') == std::string::npos && FileExists(cmd));
+    CHECK(PlatformFindExecutable(cmd) == cmd);  // a path is checked as given
+    CHECK(PlatformFindExecutable("oe-no-such-program").empty() && PlatformFindExecutable("").empty());
+
+    // Both streams, line breaks stripped, the exit code.
+    ProcessOptions options;
+    options.executable = cmd;
+    options.arguments = {"/d", "/c", "echo out& echo err>&2& exit 3"};
+    options.pipeStdin = false;
+    std::unique_ptr<Process> process = PlatformStartProcess(options, &error);
+    CHECK(process);
+    if (!process) return;
+    Output output = finish(*process);
+    CHECK(output.out == std::vector<std::string>{"out"} && output.err == std::vector<std::string>{"err"} && output.exitCode == 3);
+    CHECK(!process->Running(nullptr) && !process->Write("x", &error));  // no stdin pipe was requested
+
+    // stdin reaches the child; closing it ends a filter.
+    options.executable = PlatformFindExecutable("findstr");
+    options.arguments = {"x"};
+    options.pipeStdin = true;
+    process = PlatformStartProcess(options, &error);
+    CHECK(process);
+    if (!process) return;
+    CHECK(process->Running(nullptr));
+    CHECK(process->Write("x1\nskip\nx2\n", &error));
+    process->CloseInput();
+    output = finish(*process);
+    CHECK(output.out == (std::vector<std::string>{"x1", "x2"}) && output.err.empty() && output.exitCode == 0);
+
+    // Added environment variables and the working directory.
+    const std::string dir = ProcessFixtureDir("process");
+    options.executable = cmd;
+    options.arguments = {"/d", "/c", "echo %OE_PROCESS_TEST%& cd"};
+    options.environment = {{"OE_PROCESS_TEST", "value 1"}, {"OE_PROCESS_OTHER", ""}};
+    options.workingDirectory = dir;
+    options.pipeStdin = false;
+    process = PlatformStartProcess(options, &error);
+    CHECK(process);
+    if (!process) return;
+    output = finish(*process);
+    CHECK(output.out.size() == 2 && output.out[0] == "value 1" && output.exitCode == 0);
+    if (output.out.size() == 2) CHECK(std::filesystem::equivalent(std::filesystem::u8path(output.out[1]), std::filesystem::u8path(dir)));
+    options.environment.clear();
+    options.workingDirectory.clear();
+
+    // Kill ends the whole tree: the pipes reach their end although ping would run for 30 s.
+    options.arguments = {"/d", "/c", "ping -n 30 127.0.0.1"};
+    process = PlatformStartProcess(options, &error);
+    CHECK(process);
+    if (!process) return;
+    std::string line;
+    bool isStderr = true;
+    CHECK(process->ReadLine(line, isStderr) && !isStderr && process->Running(nullptr));  // ping is running and printing
+    const double killedAt = PlatformTimeSeconds();
+    process->Kill();
+    output = finish(*process);
+    CHECK(!process->Running(nullptr) && PlatformTimeSeconds() - killedAt < 5.0);
+    process.reset();  // destroying a finished process does not hang
+
+    // Command scripts (npm's .cmd shims) run through cmd.exe with every argument quoted.
+    const std::string shim = JoinPath(dir, "shim.cmd");
+    CHECK(WriteTextFile(shim, "@echo off\necho first=%~1\necho \"second=%~2\"\nexit /b 7\n"));
+    options.executable = shim;
+    options.arguments = {"a b", "x&y|z"};
+    process = PlatformStartProcess(options, &error);
+    CHECK(process);
+    if (!process) return;
+    output = finish(*process);
+    CHECK(output.out == (std::vector<std::string>{"first=a b", "\"second=x&y|z\""}) && output.exitCode == 7);
+    for (const char* unsafe : {"100%", "say \"hi\"", "wow!", "two\nlines"}) {  // cmd.exe would expand or split these
+        options.arguments = {unsafe};
+        error.clear();
+        CHECK(!PlatformStartProcess(options, &error) && !error.empty());
+    }
+
+    options.executable = JoinPath(dir, "missing.exe");
+    options.arguments.clear();
+    error.clear();
+    CHECK(!PlatformStartProcess(options, &error) && error.find("not found") != std::string::npos);
+    options.executable = cmd;
+    options.workingDirectory = JoinPath(dir, "missing");
+    CHECK(!PlatformStartProcess(options, &error));
+    CHECK(RemoveAll(dir));
+#endif
+}
+
+#if OE_TEAM
+TEST(TeamBackendParsing) {
+    CHECK(ParseCliVersion("2.1.288 (Claude Code)\n") == "2.1.288");
+    CHECK(ParseCliVersion("codex-cli 0.159.3") == "0.159.3");
+    CHECK(ParseCliVersion("tool2 build 7, v1.20.") == "1.20");
+    CHECK(ParseCliVersion("no version 42").empty() && ParseCliVersion("").empty());
+    CHECK(ValidModelId("gpt-6.1-sol") && ValidModelId("claude-opus-5-5[1m]") && ValidModelId("a:b_c"));
+    CHECK(!ValidModelId("") && !ValidModelId("a b") && !ValidModelId("a\"b") && !ValidModelId("a%b") && !ValidModelId(std::string(65, 'a')));
+
+    // Listed entries in priority order; hidden ones and ids unfit for a command line are dropped.
+    std::vector<ModelInfo> models = ParseCodexModelCache(R"J({"client_version":"0.160.0","models":[
+        {"slug":"second","display_name":"Second","visibility":"list","priority":5,"context_window":128000},
+        {"slug":"hidden","display_name":"Hidden","visibility":"hide","priority":1},
+        {"slug":"bad id","visibility":"list","priority":2},
+        {"slug":"first","visibility":"list","priority":1,"context_window":272000}]})J");
+    CHECK(models.size() == 2);
+    if (models.size() == 2) {
+        CHECK(models[0].id == "first" && models[0].label == "first" && models[0].isDefault && models[0].contextWindow == 272000);
+        CHECK(models[1].id == "second" && models[1].label == "Second" && !models[1].isDefault && models[1].contextWindow == 128000);
+    }
+    CHECK(ParseCodexModelCache("{\"models\":7}").empty() && ParseCodexModelCache("not json").empty());
+
+    std::vector<Backend> builtin = BuiltinBackends();
+    CHECK(builtin.size() == 3 && builtin[0].id == "claude" && builtin[1].id == "codex" && builtin[2].id == "gemini");
+    for (const Backend& backend : builtin) {
+        int defaults = 0;
+        for (const ModelInfo& model : backend.models) {
+            CHECK(ValidModelId(model.id) && !model.label.empty());
+            defaults += model.isDefault ? 1 : 0;
+        }
+        CHECK(defaults == (backend.models.empty() ? 0 : 1) && !backend.installHint.empty() && !backend.executable.empty());
+    }
+
+    // User overrides: executable and catalog replaced; an invalid file changes nothing.
+    const std::string dir = ProcessFixtureDir("backends");
+    const std::string file = JoinPath(dir, "backends.json");
+    std::string error;
+    std::vector<Backend> backends = builtin;
+    CHECK(ApplyBackendOverrides(file, backends, &error) && error.empty());  // a missing file is fine
+    CHECK(WriteTextFile(file, R"J({"claude":{"supportsImages":true},"codex":{"executable":"C:/tools/codex.cmd","models":[{"id":"m1"},{"id":"m2","label":"Two","default":true,"contextWindow":1000}]}})J"));
+    CHECK(!backends[0].supportsImages && ApplyBackendOverrides(file, backends, &error) && backends[0].supportsImages);
+    CHECK(backends[1].executable == "C:/tools/codex.cmd" && backends[1].discoverModels == nullptr && backends[1].models.size() == 2);
+    if (backends[1].models.size() == 2) {
+        CHECK(backends[1].models[0].label == "m1" && backends[1].models[1].label == "Two");
+        CHECK(backends[1].models[1].isDefault && backends[1].models[1].contextWindow == 1000);
+    }
+    CHECK(backends[0].executable == "claude" && backends[0].models.size() == 4 && backends[0].models[1].id == "opus" && backends[0].models[1].label == "Opus");
+    for (const char* invalid : {"[]", "{\"nobody\":{}}", "{\"claude\":{\"models\":[{\"id\":\"a b\"}]}}", "{\"claude\":{\"executable\":\"\"}}", "{\"claude\":{\"supportsImages\":1}}",
+                                "{\"claude\":{\"executable\":\"x\"},\"codex\":{\"models\":[{\"id\":\"a\",\"default\":true},{\"id\":\"b\",\"default\":true}]}}", "{"}) {
+        backends = builtin;
+        error.clear();
+        CHECK(WriteTextFile(file, invalid));
+        CHECK(!ApplyBackendOverrides(file, backends, &error) && error.find("backends.json") != std::string::npos);
+        CHECK(backends[0].executable == "claude" && backends[1].models.size() == builtin[1].models.size());
+    }
+    CHECK(RemoveAll(dir));
+}
+
+TEST(TeamBackendDetection) {
+    Backend missing;
+    missing.id = "missing";
+    missing.displayName = "Missing";
+    missing.executable = "oe-no-such-agent-cli";
+    missing.installHint = "npm install -g missing";
+    missing.models = {{"m", "M", true, 0}};
+    if (!PlatformProcessSupported()) {
+        BackendState state = DetectBackend(missing);
+        CHECK(state.status == BackendStatus::Unavailable && !state.message.empty() && state.models.size() == 1);
+        return;
+    }
+#if defined(_WIN32)
+    // Stand-ins for agent CLIs: real ones are not run by the tests (login, network).
+    const std::string dir = ProcessFixtureDir("backends detect");
+    auto shim = [&](const char* id, const std::string& script) {
+        Backend backend;
+        backend.id = id;
+        backend.displayName = std::string("Fake ") + id;
+        backend.executable = JoinPath(dir, std::string(id) + ".cmd");
+        backend.installHint = "npm install -g fake";
+        backend.models = {{"catalog", "Catalog", true, 0}};
+        CHECK(WriteTextFile(backend.executable, "@echo off\n" + script));
+        return backend;
+    };
+    std::vector<Backend> backends = {shim("good", "if not \"%~1\"==\"--version\" exit /b 9\necho fake-cli 1.2.3\n"),
+                                     shim("failing", "echo please log in 1>&2\nexit /b 2\n"), shim("slow", "ping -n 30 127.0.0.1 >nul\n"), missing,
+                                     shim("lingering", "echo linger-cli 4.5.6\nping -n 30 127.0.0.1 >nul\n"), shim("oldnode", "echo needs node 20.1, found 18.0.0\nexit /b 1\n")};
+    backends[0].discoverModels = [] { return std::vector<ModelInfo>{{"found", "Found", true, 5000}}; };
+    backends[0].supportsImages = true;
+    backends[1].discoverModels = backends[0].discoverModels;  // not asked: the CLI does not run
+
+    const double started = PlatformTimeSeconds();
+    std::vector<BackendState> states = DetectBackends(backends, 3.0);  // generous: cmd.exe starts slowly on a busy machine
+    CHECK(PlatformTimeSeconds() - started < 15.0);  // the slow one was killed, not awaited
+    CHECK(states.size() == 6);
+    if (states.size() != 6) return;
+    // A CLI that printed its version and keeps running (an update check) is installed; a version
+    // number inside a failure message is not a version.
+    CHECK(states[4].status == BackendStatus::Installed && states[4].version == "4.5.6" && states[4].message.empty());
+    CHECK(states[5].status == BackendStatus::Error && states[5].version.empty() && states[5].message.find("code 1") != std::string::npos);
+    backends.resize(4);
+    CHECK(states[0].status == BackendStatus::Installed && states[0].version == "1.2.3" && states[0].message.empty());
+    CHECK(states[0].modelsDiscovered && states[0].models.size() == 1 && states[0].models[0].id == "found");
+    CHECK(states[0].path.find("good.cmd") != std::string::npos && states[0].path.find('\\') == std::string::npos);
+    CHECK(states[1].status == BackendStatus::Error && states[1].message.find("code 2") != std::string::npos);
+    CHECK(states[1].message.find("please log in") != std::string::npos && !states[1].modelsDiscovered && states[1].models[0].id == "catalog");
+    CHECK(states[2].status == BackendStatus::Error && states[2].message.find("did not finish") != std::string::npos);
+    CHECK(states[3].status == BackendStatus::NotInstalled && states[3].path.empty() && states[3].message.find("PATH") != std::string::npos);
+
+    // The command: cached for the session, detected again on refresh.
+    Engine e;
+    backends.erase(backends.begin() + 2);  // keep the command test fast
+    RegisterTeamCommands(e.Commands(), backends);
+    Json result = Call(e, "team.backends");
+    CHECK(result["ok"].asBool() && result["result"].size() == 3);
+    const Json good = result["result"][0];
+    CHECK(good["id"].asString() == "good" && good["name"].asString() == "Fake good" && good["status"].asString() == "installed");
+    CHECK(good["version"].asString() == "1.2.3" && good["path"].asString() == states[0].path && !good.has("message"));
+    CHECK(good["modelSource"].asString() == "discovered" && good["supportsImages"].asBool() && good["installHint"].asString() == "npm install -g fake");
+    CHECK(good["models"].size() == 1 && good["models"][0]["id"].asString() == "found" && good["models"][0]["label"].asString() == "Found");
+    CHECK(good["models"][0]["default"].asBool() && good["models"][0]["contextWindow"].asInt() == 5000);
+    const Json failing = result["result"][1];
+    CHECK(failing["status"].asString() == "error" && !failing.has("version") && failing["modelSource"].asString() == "catalog");
+    CHECK(!failing["models"][0].has("contextWindow"));
+    const Json absent = result["result"][2];
+    CHECK(absent["status"].asString() == "notInstalled" && !absent.has("path") && absent["models"].size() == 1);
+    CHECK(WriteTextFile(backends[0].executable, "@echo off\necho fake-cli 2.0.0\n"));
+    CHECK(Call(e, "team.backends")["result"][0]["version"].asString() == "1.2.3");
+    CHECK(Call(e, "team.backends", R"({"refresh":true})")["result"][0]["version"].asString() == "2.0.0");
+    CHECK(!Call(e, "team.backends", R"({"refresh":"yes"})")["ok"].asBool());
+    CHECK(e.UndoDepth() == 0);  // not a scene edit
+
+    // async: returns at once with "detecting", a later call has the result (the editor polls it).
+    {
+        Engine background;
+        RegisterTeamCommands(background.Commands(), backends);
+        result = Call(background, "team.backends", R"({"async":true})");
+        CHECK(result["ok"].asBool() && result["result"].size() == 3 && result["result"][0]["status"].asString() == "detecting");
+        CHECK(result["result"][0]["models"][0]["id"].asString() == "catalog" && !result["result"][0].has("version"));
+        const double end = PlatformTimeSeconds() + 20.0;
+        while (PlatformTimeSeconds() < end && Call(background, "team.backends", R"({"async":true})")["result"][0]["status"].asString() == "detecting") PlatformSleep(0.02);
+        result = Call(background, "team.backends", R"({"async":true})");
+        CHECK(result["result"][0]["status"].asString() == "installed" && result["result"][0]["version"].asString() == "2.0.0");
+        CHECK(result["result"][2]["status"].asString() == "notInstalled");
+        CHECK(Call(background, "team.backends", R"({"async":true,"refresh":true})")["result"][0]["status"].asString() == "detecting");
+        CHECK(Call(background, "team.backends")["result"][0]["status"].asString() == "installed");  // a plain call waits for it
+    }
+    CHECK(RemoveAll(dir));
+#endif
+}
+TEST(TeamStoreProfiles) {
+    const std::string project = TempProject("team_store");
+    const std::string file = JoinPath(project, ".oe/team/team.json");
+    std::string error, text;
+    Engine e;
+    CHECK(e.Open(project, &error));
+    RegisterTeamCommands(e.Commands(), BuiltinBackends());
+    auto code = [&](const char* command, const char* args) { return Call(e, command, args)["error"]["code"].asString(); };
+
+    Json team = Call(e, "team.list")["result"];
+    CHECK(team["agents"].size() == 0 && team["lead"].asString() == "" && team["maxConcurrent"].asInt() == 3 && team["maxHops"].asInt() == 4);
+    CHECK(!FileExists(file));  // reading creates nothing
+    const double firstRevision = team["revision"].asNumber();
+    Json presets = Call(e, "team.presets")["result"];
+    CHECK(presets.size() == TeamAvatarPresets().size() && presets.size() >= 1 && presets[0].asString() == "fox");
+
+    // Defaults: id from the name, first backend and its default model, first free picture, lead.
+    Json mina = Call(e, "team.add", R"J({"name":" Mina Kim ","description":"Gameplay programmer.","instructions":"Work only in scripts/.\nRun script.check."})J");
+    CHECK(mina["ok"].asBool());
+    CHECK(mina["result"]["id"].asString() == "mina-kim" && mina["result"]["name"].asString() == "Mina Kim");
+    CHECK(mina["result"]["avatar"].asString() == "preset:fox" && !mina["result"].has("avatarPath"));
+    CHECK(mina["result"]["backend"].asString() == "claude" && mina["result"]["model"].asString() == "sonnet" && mina["result"]["access"].asString() == "edit");
+    Json jun = Call(e, "team.add", R"J({"name":"준","backend":"codex","model":"","access":"full"})J")["result"];
+    CHECK(jun["id"].asString() == "agent" && jun["avatar"].asString().rfind("preset:", 0) == 0 && jun["model"].asString() == "" && jun["access"].asString() == "full");
+    CHECK(Call(e, "team.add", R"J({"name":"all!","avatar":"preset:fox"})J")["result"]["id"].asString() == "all-2");  // "all" is the everyone mention
+    team = Call(e, "team.list")["result"];
+    CHECK(team["agents"].size() == 3 && team["lead"].asString() == "mina-kim" && team["revision"].asNumber() > firstRevision);
+    CHECK(team["agents"][2]["avatar"].asString() == "preset:fox");
+
+    // Roster order.
+    team = Call(e, "team.move", R"J({"id":"all!","index":0})J")["result"];
+    CHECK(team["agents"][0]["id"].asString() == "all-2" && team["agents"][1]["id"].asString() == "mina-kim" && team["lead"].asString() == "mina-kim");
+    team = Call(e, "team.move", R"J({"id":"all-2","index":99})J")["result"];
+    CHECK(team["agents"][0]["id"].asString() == "mina-kim" && team["agents"][2]["id"].asString() == "all-2");
+    CHECK(Call(e, "team.move", R"J({"id":"all-2","index":-1})J")["error"]["code"].asString() == "invalid_argument");
+    CHECK(Call(e, "team.move", R"J({"id":"ghost","index":0})J")["error"]["code"].asString() == "unknown_agent");
+
+    // The file is ordered and leaves defaults out.
+    CHECK(ReadTextFile(file, text));
+    Json stored = Json::parse(text);
+    CHECK(stored["version"].asInt() == 1 && stored["lead"].asString() == "mina-kim" && !stored.has("maxConcurrent") && !stored.has("maxHops") && !stored.has("revision"));
+    CHECK(stored["agents"][0].members()[0].first == "id" && stored["agents"][0]["model"].asString() == "sonnet" && !stored["agents"][0].has("access"));
+    CHECK(!stored["agents"][1].has("model") && !stored["agents"][1].has("description") && stored["agents"][1]["access"].asString() == "full");
+    CHECK(!FileExists(file + ".tmp"));
+
+    // Caller mistakes change nothing.
+    CHECK(code("team.add", R"J({"name":"mina kim"})J") == "name_taken");
+    CHECK(code("team.add", R"J({"name":"ALL"})J") == "invalid_argument" && code("team.add", R"J({"name":"  "})J") == "invalid_argument");
+    CHECK(code("team.add", R"J({"name":"A","backend":"nope"})J") == "unknown_backend");
+    CHECK(code("team.add", R"J({"name":"A","model":"a b"})J") == "invalid_model");
+    CHECK(code("team.add", R"J({"name":"A","avatar":"preset:dragon"})J") == "unknown_preset" && code("team.add", R"J({"name":"A","avatar":"file"})J") == "unknown_preset");
+    CHECK(code("team.add", R"J({"name":"A","access":"admin"})J") == "invalid_argument" && code("team.add", R"J({"name":"two\nlines"})J") == "invalid_argument");
+    CHECK(code("team.add", R"J({"description":"no name"})J") == "missing_argument");
+    Json args = Json::MakeObject();
+    args["name"] = std::string(41, 'x');
+    CHECK(e.Call("team.add", args)["error"]["code"].asString() == "invalid_argument");
+    args["name"] = std::string("\xEA\xB0\x80", 3) + std::string("\xEA\xB0\x80", 3);  // characters are counted, not bytes
+    args["description"] = std::string(401, 'd');
+    CHECK(e.Call("team.add", args)["error"]["code"].asString() == "invalid_argument");
+    args["description"] = std::string(400, 'd');
+    args["name"] = "bad \xFF utf8";
+    CHECK(e.Call("team.add", args)["error"]["code"].asString() == "invalid_argument");
+    CHECK(code("team.update", R"J({"id":"mina-kim","values":{"id":"other"}})J") == "invalid_argument");
+    CHECK(code("team.update", R"J({"id":"mina-kim","values":{"name":7}})J") == "invalid_argument");
+    CHECK(code("team.update", R"J({"id":"mina-kim","values":{"name":"준"}})J") == "name_taken");
+    CHECK(code("team.update", R"J({"id":"mina-kim","values":{"avatar":"file"}})J") == "invalid_argument");
+    CHECK(code("team.update", R"J({"id":"ghost","values":{}})J") == "unknown_agent" && code("team.get", R"J({"id":"ghost"})J") == "unknown_agent");
+    std::string unchanged;
+    CHECK(ReadTextFile(file, unchanged) && unchanged == text);
+
+    // Partial updates; the id is stable and a new backend brings its default model.
+    Json updated = Call(e, "team.update", R"J({"id":"Mina Kim","values":{"backend":"codex"}})J")["result"];
+    CHECK(updated["id"].asString() == "mina-kim" && updated["backend"].asString() == "codex" && updated["model"].asString() == "");  // nothing detected: the CLI's default
+    CHECK(updated["description"].asString() == "Gameplay programmer.");
+    updated = Call(e, "team.update", R"J({"id":"mina-kim","values":{"name":"MINA","model":"custom-1","access":"read","backend":"claude"}})J")["result"];
+    CHECK(updated["id"].asString() == "mina-kim" && updated["name"].asString() == "MINA" && updated["model"].asString() == "custom-1" && updated["access"].asString() == "read");
+    CHECK(Call(e, "team.update", R"J({"id":"mina-kim","values":{"name":"Mina"}})J")["ok"].asBool());  // only the case changed
+    CHECK(Call(e, "team.get", R"J({"id":"mina"})J")["result"]["id"].asString() == "mina-kim");
+    CHECK(Call(e, "team.get", R"J({"id":"준"})J")["result"]["id"].asString() == "agent");
+
+    // Settings.
+    CHECK(Call(e, "team.settings")["result"]["lead"].asString() == "mina-kim");
+    Json settings = Call(e, "team.settings", R"J({"lead":"준","maxConcurrent":2,"maxHops":0})J")["result"];
+    CHECK(settings["lead"].asString() == "agent" && settings["maxConcurrent"].asInt() == 2 && settings["maxHops"].asInt() == 0);
+    CHECK(code("team.settings", R"J({"maxConcurrent":9})J") == "invalid_argument" && code("team.settings", R"J({"maxHops":-1})J") == "invalid_argument");
+    CHECK(code("team.settings", R"J({"lead":"ghost"})J") == "unknown_agent");
+    CHECK(Call(e, "team.settings")["result"]["maxConcurrent"].asInt() == 2);
+
+    // Another session (the editor next to `oe exec`) sees the same team and its changes.
+    {
+        Engine other;
+        CHECK(other.Open(project, &error));
+        RegisterTeamCommands(other.Commands(), BuiltinBackends());
+        team = Call(other, "team.list")["result"];
+        CHECK(team["agents"].size() == 3 && team["lead"].asString() == "agent" && team["maxConcurrent"].asInt() == 2 && team["maxHops"].asInt() == 0);
+        CHECK(team["agents"][0]["name"].asString() == "Mina" && team["agents"][0]["instructions"].asString() == "Work only in scripts/.\nRun script.check.");
+        PlatformSleep(0.05);  // file times tell a changed file
+        CHECK(Call(other, "team.remove", R"J({"id":"준"})J")["result"]["removed"].asString() == "agent");
+    }
+    team = Call(e, "team.list")["result"];
+    CHECK(team["agents"].size() == 2 && team["lead"].asString() == "");  // the removed agent was the lead
+    CHECK(code("team.remove", R"J({"id":"agent"})J") == "unknown_agent");
+
+    // At most 16 agents; pictures repeat once all presets are taken.
+    for (int i = 0; i < 14; ++i) {
+        args = Json::MakeObject();
+        args["name"] = "Bot " + std::to_string(i);
+        CHECK(e.Call("team.add", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "team.list")["result"]["agents"].size() == 16 && code("team.add", R"J({"name":"One too many"})J") == "team_full");
+    CHECK(Call(e, "team.get", R"J({"id":"bot-13"})J")["result"]["avatar"].asString() == "preset:fox");
+
+    // An invalid file is shown as an empty team and is never overwritten.
+    PlatformSleep(0.05);
+    CHECK(WriteTextFile(file, "{ broken"));
+    team = Call(e, "team.list")["result"];
+    CHECK(team["agents"].size() == 0 && team["error"].asString().find("team.json") != std::string::npos);
+    CHECK(code("team.add", R"J({"name":"A"})J") == "team_file_invalid" && code("team.settings", R"J({"maxHops":1})J") == "team_file_invalid");
+    CHECK(ReadTextFile(file, text) && text == "{ broken");
+    PlatformSleep(0.05);
+    CHECK(WriteTextFile(file, R"J({"version":1,"lead":"a","future":true,"agents":[{"id":"a","name":"A","avatar":"preset:later","backend":"someday","extra":1}]})J"));
+    team = Call(e, "team.list")["result"];  // unknown keys, backend and preset keep loading
+    CHECK(!team.has("error") && team["agents"].size() == 1 && team["agents"][0]["backend"].asString() == "someday" && team["lead"].asString() == "a");
+    for (const char* invalid : {R"J({"version":2,"agents":[]})J", R"J({"agents":[{"id":"A B","name":"A","avatar":"preset:fox"}]})J",
+                                R"J({"agents":[{"id":"a","name":"A","avatar":"preset:fox"},{"id":"a","name":"B","avatar":"preset:fox"}]})J",
+                                R"J({"lead":"nobody","agents":[]})J", R"J({"agents":[{"id":"a","name":"A","avatar":"../x"}]})J", R"J([])J"}) {
+        PlatformSleep(0.05);
+        CHECK(WriteTextFile(file, invalid));
+        CHECK(Call(e, "team.list")["result"].has("error"));
+    }
+    CHECK(e.UndoDepth() == 0 && !e.Dirty());  // the team is not part of the scene
+}
+
+TEST(TeamAvatars) {
+    auto pixel = [](const Image& image, int x, int y) {
+        const uint8_t* p = &image.rgba[(static_cast<size_t>(y) * static_cast<size_t>(image.width) + static_cast<size_t>(x)) * 4];
+        return std::vector<int>{p[0], p[1], p[2], p[3]};
+    };
+    auto filled = [](int width, int height, const std::function<std::vector<int>(int, int)>& color) {
+        Image image;
+        image.width = width;
+        image.height = height;
+        image.rgba.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const std::vector<int> c = color(x, y);
+                for (int k = 0; k < 4; ++k) image.rgba[(static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4 + static_cast<size_t>(k)] = static_cast<uint8_t>(c[static_cast<size_t>(k)]);
+            }
+        }
+        return image;
+    };
+    const std::vector<int> red = {255, 0, 0, 255}, blue = {0, 0, 255, 255};
+
+    // Center crop: of a 512x256 picture split at x = 256 the middle square is half red, half blue.
+    const Image wide = filled(512, 256, [&](int x, int) { return x < 256 ? red : blue; });
+    Image avatar = MakeAvatarImage(wide);
+    CHECK(avatar.width == kAvatarSize && avatar.height == kAvatarSize && avatar.rgba.size() == 256u * 256u * 4u);
+    CHECK(pixel(avatar, 4, 128) == red && pixel(avatar, 127, 4) == red && pixel(avatar, 128, 250) == blue && pixel(avatar, 251, 128) == blue);
+    // Downscale averages; upscale keeps hard edges; transparent pixels do not tint their neighbours.
+    avatar = MakeAvatarImage(filled(512, 512, [](int x, int y) { return (x + y) % 2 ? std::vector<int>{255, 255, 255, 255} : std::vector<int>{0, 0, 0, 255}; }));
+    CHECK(std::abs(pixel(avatar, 100, 100)[0] - 128) <= 1 && pixel(avatar, 100, 100)[3] == 255);
+    avatar = MakeAvatarImage(filled(2, 2, [](int x, int y) { return x == 0 && y == 0 ? std::vector<int>{255, 255, 255, 255} : std::vector<int>{0, 0, 0, 0}; }));
+    CHECK(pixel(avatar, 127, 127) == (std::vector<int>{255, 255, 255, 255}) && pixel(avatar, 128, 127)[3] == 0 && pixel(avatar, 127, 128)[3] == 0);
+    avatar = MakeAvatarImage(filled(4, 2, [](int x, int) { return x < 2 ? std::vector<int>{200, 100, 50, 255} : std::vector<int>{0, 0, 0, 0}; }));
+    CHECK(MakeAvatarImage(Image()).rgba.empty());
+
+    const std::string project = TempProject("team_avatars");
+    const std::string outside = ProcessFixtureDir("avatars");  // pictures come from anywhere on the PC
+    std::string error;
+    Engine e;
+    CHECK(e.Open(project, &error));
+    RegisterTeamCommands(e.Commands(), BuiltinBackends());
+    CHECK(Call(e, "team.add", R"J({"name":"Mina"})J")["ok"].asBool());
+    auto setAvatar = [&](const char* key, const std::string& value) {
+        Json args = Json::MakeObject();
+        args["id"] = "mina";
+        args[key] = value;
+        return e.Call("team.avatar", args);
+    };
+    const std::string picture = JoinPath(outside, "Photo.PNG"), stored = JoinPath(project, ".oe/team/avatars/mina.png");
+    CHECK(WritePng(picture, wide, true));
+    Json result = setAvatar("source", picture);
+    CHECK(result["ok"].asBool() && result["result"]["avatar"].asString() == "file" && result["result"]["avatarPath"].asString() == ".oe/team/avatars/mina.png");
+    std::vector<unsigned char> bytes;
+    Texture texture;
+    CHECK(ReadBinaryFile(stored, bytes) && DecodeImage(bytes.data(), bytes.size(), texture, &error));
+    CHECK(texture.width == kAvatarSize && texture.height == kAvatarSize);
+    if (texture.width == kAvatarSize && texture.height == kAvatarSize) {
+        Image decoded;
+        decoded.width = decoded.height = kAvatarSize;
+        decoded.rgba.resize(texture.texels.size() * 4);
+        std::memcpy(decoded.rgba.data(), texture.texels.data(), decoded.rgba.size());
+        CHECK(pixel(decoded, 4, 128) == red && pixel(decoded, 251, 128) == blue);
+    }
+    CHECK(!FileExists(stored + ".tmp") && FileExists(picture));  // the source is only read
+    std::string text;
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/team.json"), text) && Json::parse(text)["agents"][0]["avatar"].asString() == "file");
+
+    // Refused pictures leave the stored one alone.
+    const std::string notes = JoinPath(outside, "notes.txt"), garbage = JoinPath(outside, "garbage.png"), huge = JoinPath(outside, "huge.png");
+    CHECK(WriteTextFile(notes, "hello") && WriteTextFile(garbage, "not a png"));
+    CHECK(WritePng(huge, filled(8193, 1, [&](int, int) { return red; }), true));
+    CHECK(setAvatar("source", notes)["error"]["code"].asString() == "invalid_image");
+    CHECK(setAvatar("source", garbage)["error"]["code"].asString() == "invalid_image");
+    CHECK(setAvatar("source", huge)["error"]["code"].asString() == "invalid_image");
+    CHECK(setAvatar("source", JoinPath(outside, "missing.png"))["error"]["code"].asString() == "not_found");
+    CHECK(setAvatar("preset", "dragon")["error"]["code"].asString() == "unknown_preset");
+    CHECK(Call(e, "team.avatar", R"J({"id":"mina"})J")["error"]["code"].asString() == "invalid_argument");
+    CHECK(Call(e, "team.avatar", R"J({"id":"mina","preset":"fox","source":"x.png"})J")["error"]["code"].asString() == "invalid_argument");
+    CHECK(Call(e, "team.avatar", R"J({"id":"ghost","preset":"fox"})J")["error"]["code"].asString() == "unknown_agent");
+    CHECK(Call(e, "team.get", R"J({"id":"mina"})J")["result"]["avatar"].asString() == "file" && FileExists(stored));
+
+    // A preset replaces the upload; removing an agent removes its picture.
+    result = setAvatar("preset", "fox");
+    CHECK(result["result"]["avatar"].asString() == "preset:fox" && !result["result"].has("avatarPath") && !FileExists(stored));
+    CHECK(setAvatar("source", picture)["ok"].asBool() && FileExists(stored));
+    CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"avatar":"preset:fox"}})J")["ok"].asBool() && !FileExists(stored));
+    CHECK(setAvatar("source", picture)["ok"].asBool() && FileExists(stored));
+    CHECK(Call(e, "team.remove", R"J({"id":"mina"})J")["ok"].asBool() && !FileExists(stored));
+    CHECK(RemoveAll(outside));
+}
+TEST(TeamStreamParsers) {
+    auto parse = [](void (*parser)(const std::string&, TurnEvents&), const char* line) {
+        TurnEvents events;
+        parser(line, events);
+        return events;
+    };
+    using Kind = TurnEvent::Kind;
+
+    // Lines recorded from Claude Code 2.1.288 (`-p --output-format stream-json --verbose`), shortened.
+    TurnEvents events = parse(ParseClaudeLine, R"J({"type":"system","subtype":"init","cwd":"C:\\p","session_id":"9cded71b-2279-4cb4-b3a2-42e1b27ba20d","tools":["Read"],"model":"claude-haiku-4-5-20251001","permissionMode":"acceptEdits"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Session && events[0].text == "9cded71b-2279-4cb4-b3a2-42e1b27ba20d");
+    CHECK(parse(ParseClaudeLine, R"J({"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup","session_id":"9cded71b"})J").empty());
+    CHECK(parse(ParseClaudeLine, R"J({"type":"system","subtype":"thinking_tokens","estimated_tokens":50,"session_id":"9cded71b"})J").empty());
+    CHECK(parse(ParseClaudeLine, R"J({"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"},"session_id":"9cded71b"})J").empty());
+    events = parse(ParseClaudeLine, R"J({"type":"assistant","message":{"model":"claude-haiku-4-5-20251001","role":"assistant","content":[{"type":"thinking","thinking":"","signature":"ErQH"}],"stop_reason":null},"parent_tool_use_id":null,"session_id":"9cded71b"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Thinking);
+    events = parse(ParseClaudeLine, R"J({"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01RK","name":"Read","input":{"file_path":"C:\\p\\hello.txt"},"caller":{"type":"direct"}}]},"parent_tool_use_id":null,"session_id":"9cded71b"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Tool && events[0].text == "Reading" && events[0].detail == "C:\\p\\hello.txt");
+    CHECK(events.size() == 1 && events[0].detailIsPath && events[0].itemId == "toolu_01RK");
+    events = parse(ParseClaudeLine, R"J({"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01RK","type":"tool_result","content":"1\tbanana-42\n2\t"}]},"parent_tool_use_id":null,"session_id":"9cded71b"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Thinking);
+    events = parse(ParseClaudeLine, R"J({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"banana-42\n\nDONE"}]},"parent_tool_use_id":null,"session_id":"9cded71b"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Text && events[0].text == "banana-42\n\nDONE");
+    events = parse(ParseClaudeLine, R"J({"duration_api_ms":4917,"stop_reason":"end_turn","session_id":"9cded71b-2279-4cb4-b3a2-42e1b27ba20d","total_cost_usd":0.0293026,"is_error":false,"num_turns":2,"subtype":"success","result":"banana-42\n\nDONE","type":"result","duration_ms":5456})J");
+    CHECK(events.size() == 2 && events[0].kind == Kind::Session && events[1].kind == Kind::Done && events[1].text == "banana-42\n\nDONE");
+    CHECK(events.size() == 2 && std::abs(events[1].costUsd - 0.0293026) < 1e-9);
+    // Other tools, a delegated agent's text (not the reply) and failed results.
+    events = parse(ParseClaudeLine, R"J({"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"mcp__ownengine__component_set","input":{"id":"Player","type":"Transform","values":{}}},{"type":"tool_use","id":"b","name":"Bash","input":{"command":"build.bat"}},{"type":"tool_use","id":"c","name":"Edit","input":{"file_path":"scripts/x.lua"}},{"type":"tool_use","id":"d","name":"mcp__ownengine__entity_set_parent","input":{"id":7}},{"type":"tool_use","id":"e","name":"TodoWrite","input":{}}]}})J");
+    CHECK(events.size() == 5);
+    if (events.size() == 5) {
+        CHECK(events[0].text == "Engine:" && events[0].detail == "component.set Player" && !events[0].detailIsPath);
+        CHECK(events[1].text == "Running" && events[1].detail == "build.bat" && events[2].text == "Editing" && events[2].detail == "scripts/x.lua");
+        CHECK(events[3].detail == "entity.set_parent 7" && events[4].text == "Using" && events[4].detail == "TodoWrite");
+    }
+    events = parse(ParseClaudeLine, R"J({"type":"assistant","message":{"content":[{"type":"text","text":"sub"},{"type":"tool_use","id":"s","name":"Grep","input":{"pattern":"jump"}}]},"parent_tool_use_id":"toolu_parent"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Tool && events[0].text == "Searching" && events[0].detail == "jump");
+    events = parse(ParseClaudeLine, R"J({"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login","session_id":"s1"})J");
+    CHECK(events.size() == 2 && events[1].kind == Kind::Failed && events[1].text.find("Not logged in") == 0);
+    events = parse(ParseClaudeLine, R"J({"type":"result","subtype":"error_max_turns","is_error":false})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Failed && events[0].text.find("error_max_turns") != std::string::npos);
+
+    // Lines recorded from codex-cli 0.159.3 (`exec --json`).
+    events = parse(ParseCodexLine, R"J({"type":"thread.started","thread_id":"01a101f0-7fc8-7651-a1bf-b87b4d7ebb01"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Session && events[0].text == "01a101f0-7fc8-7651-a1bf-b87b4d7ebb01");
+    events = parse(ParseCodexLine, R"J({"type":"turn.started"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Thinking);
+    events = parse(ParseCodexLine, R"J({"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll read hello.txt.\n"}})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Text && events[0].text == "I\xE2\x80\x99ll read hello.txt.\n");
+    const char* commandStarted = R"J({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\WINDOWS\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'Get-Content -LiteralPath hello.txt -Raw'","aggregated_output":"","exit_code":null,"status":"in_progress"}})J";
+    events = parse(ParseCodexLine, commandStarted);
+    CHECK(events.size() == 1 && events[0].kind == Kind::Tool && events[0].text == "Running" && events[0].itemId == "item_1");
+    CHECK(events.size() == 1 && events[0].detail.find("powershell.exe\" -Command 'Get-Content") != std::string::npos);
+    events = parse(ParseCodexLine, R"J({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"powershell","aggregated_output":"banana-42\n\r\n","exit_code":0,"status":"completed"}})J");
+    CHECK(events.size() == 2 && events[0].kind == Kind::Tool && events[0].itemId == "item_1" && events[1].kind == Kind::Thinking);
+    events = parse(ParseCodexLine, R"J({"type":"turn.completed","usage":{"input_tokens":31220,"cached_input_tokens":27904,"output_tokens":62}})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Done && events[0].text.empty() && events[0].costUsd == 0.0);
+    events = parse(ParseCodexLine, R"J({"type":"item.started","item":{"id":"m","type":"mcp_tool_call","server":"ownengine","tool":"scene_summary","arguments":{}}})J");
+    CHECK(events.size() == 1 && events[0].text == "Engine:" && events[0].detail == "scene.summary");
+    events = parse(ParseCodexLine, R"J({"type":"item.completed","item":{"id":"f","type":"file_change","changes":[{"path":"scripts/player.lua","kind":"update"}],"status":"completed"}})J");
+    CHECK(events.size() == 2 && events[0].text == "Editing" && events[0].detail == "scripts/player.lua" && events[0].detailIsPath);
+    events = parse(ParseCodexLine, R"J({"type":"turn.failed","error":{"message":"stream disconnected"}})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Failed && events[0].text == "stream disconnected");
+    events = parse(ParseCodexLine, R"J({"type":"error","message":"401 Unauthorized"})J");
+    CHECK(events.size() == 1 && events[0].kind == Kind::Failed && events[0].text == "401 Unauthorized");
+
+    // A stream never fails a turn by its shape: cut, foreign and non-JSON lines give nothing.
+    for (auto parser : {&ParseClaudeLine, &ParseCodexLine}) {
+        for (const char* line : {"", "plain text", "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"te", "[1,2]", "{\"type\":7}", "{\"type\":\"future.event\",\"x\":1}",
+                                 "{\"type\":\"assistant\",\"message\":\"text\"}", "{\"type\":\"item.completed\",\"item\":7}"}) {
+            CHECK(parse(parser, line).empty());
+        }
+    }
+
+    // Command lines: argv only, no user text, values a .cmd shim accepts (no double quotes).
+    TurnRequest request;
+    request.executable = "C:/bin/claude.exe";
+    request.model = "sonnet";
+    request.systemPromptFile = ".oe/team/tmp/mina.system.md";
+    ProcessOptions options = ClaudeBuildTurn(request);
+    CHECK(options.executable == request.executable);
+    CHECK(options.arguments == (std::vector<std::string>{"-p", "--output-format", "stream-json", "--verbose", "--model", "sonnet", "--append-system-prompt-file",
+                                                         ".oe/team/tmp/mina.system.md", "--permission-mode", "acceptEdits"}));
+    request.model.clear();
+    request.access = "read";
+    request.sessionId = "abc-123";
+    request.mcpConfigFile = ".oe/team/tmp/mina.mcp.json";
+    options = ClaudeBuildTurn(request);
+    CHECK(options.arguments == (std::vector<std::string>{"-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt-file", ".oe/team/tmp/mina.system.md",
+                                                         "--permission-mode", "plan", "--mcp-config", ".oe/team/tmp/mina.mcp.json", "--strict-mcp-config", "--resume", "abc-123"}));
+    request.access = "edit";
+    options = ClaudeBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp__ownengine") != options.arguments.end());
+    request.access = "full";
+    options = ClaudeBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "bypassPermissions") != options.arguments.end());
+
+    request = TurnRequest();
+    request.executable = "C:/npm/codex.cmd";
+    request.model = "gpt-6.1-sol";
+    options = CodexBuildTurn(request);
+    CHECK(options.arguments == (std::vector<std::string>{"exec", "--json", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "-c", "sandbox_mode='workspace-write'", "-"}));
+    request.model.clear();
+    request.access = "full";
+    request.sessionId = "01a101f0-7fc8";
+    request.oeExecutable = "C:/Program Files/oe/oe.exe";
+    request.apiPort = 7777;
+    options = CodexBuildTurn(request);
+    CHECK(options.arguments == (std::vector<std::string>{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode='danger-full-access'", "-c",
+                                                         "mcp_servers.ownengine.command='C:/Program Files/oe/oe.exe'", "-c",
+                                                         "mcp_servers.ownengine.args=['mcp','--connect','7777']", "-c",
+                                                         "mcp_servers.ownengine.default_tools_approval_mode='approve'", "01a101f0-7fc8", "-"}));
+    request.agentId = "mina";
+    options = CodexBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp_servers.ownengine.args=['mcp','--connect','7777','--agent','mina']") != options.arguments.end());
+    request.access = "read";  // a read-only agent may not change the scene through the editor either
+    options = CodexBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp_servers.ownengine.default_tools_approval_mode='approve'") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "sandbox_mode='read-only'") != options.arguments.end());
+    for (const std::string& argument : options.arguments) CHECK(argument.find_first_of("\"%!") == std::string::npos);
+    CHECK(ValidSessionId("01a101f0-7fc8_x") && !ValidSessionId("") && !ValidSessionId("a b") && !ValidSessionId("a'b") && !ValidSessionId(std::string(65, 'a')));
+
+    // Mentions: ids and names without regard to case, the longest match, not inside a word.
+    std::vector<AgentProfile> agents(3);
+    agents[0].id = "mina";
+    agents[0].name = "Mina";
+    agents[1].id = "mina-kim";
+    agents[1].name = "Mina Kim";
+    agents[2].id = "agent";
+    agents[2].name = "\xEC\xA4\x80";  // a Korean name; the id has no letters of it
+    bool all = false;
+    CHECK(FindMentions("@Mina add a jump", agents, all) == std::vector<size_t>{0} && !all);
+    CHECK(FindMentions("hey @mina kim, and @MINA.", agents, all) == (std::vector<size_t>{1, 0}));
+    CHECK(FindMentions("@mina-kim @mina @Mina", agents, all) == (std::vector<size_t>{1, 0}));
+    CHECK(FindMentions("\xEC\xA4\x80 and @\xEC\xA4\x80!", agents, all) == std::vector<size_t>{2});
+    CHECK(FindMentions("mail user@mina.io, @minas, @min, @ mina", agents, all).empty() && !all);
+    CHECK(FindMentions("@all please, @mina first", agents, all) == std::vector<size_t>{0} && all);
+    CHECK(FindMentions("@allies", agents, all).empty() && !all);
+}
+
+TEST(TeamSessionTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_session");
+    const std::string dir = ProcessFixtureDir("team session");  // stand-in CLIs; agents write what they received here
+    std::string error, text;
+    // A stand-in agent CLI: a command script that saves its prompt and arguments, then prints a
+    // recorded Claude stream. Real CLIs are not run by the tests (login, network, cost).
+    auto fake = [&](const char* id, const std::string& script) {
+        Backend backend;
+        backend.id = id;
+        backend.displayName = std::string("Fake ") + id;
+        backend.executable = JoinPath(dir, std::string(id) + ".cmd");
+        backend.installHint = "npm install -g fake";
+        backend.models = {{"m", "M", true, 0}};
+        backend.systemPromptFlag = true;
+        backend.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options;
+            options.executable = request.executable;
+            options.arguments = {request.sessionId.empty() ? "new" : request.sessionId, request.model, request.access, request.systemPromptFile.empty() ? "nofile" : request.systemPromptFile,
+                                 request.mcpConfigFile.empty() ? "nomcp" : request.mcpConfigFile};
+            return options;
+        };
+        backend.parseLine = &ParseClaudeLine;
+        CHECK(WriteTextFile(backend.executable, "@echo off\n" + script));
+        return backend;
+    };
+    const std::string save = "findstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n"
+                             "echo hop%OE_TEAM_HOP%h> \"%~dp0%OE_TEAM_AGENT%.hop.txt\"\n";
+    std::vector<Backend> backends = {fake("echo", save + "type \"%~dp0reply.jsonl\"\n"), fake("plain", save + "type \"%~dp0reply.jsonl\"\n"),
+                                     fake("slow", "findstr \"^\" >nul\ntype \"%~dp0tool.jsonl\"\nping -n 30 127.0.0.1 >nul\n"),
+                                     fake("crash", "findstr \"^\" >nul\necho boom 1>&2\nexit /b 3\n"), fake("denied", "findstr \"^\" >nul\ntype \"%~dp0denied.jsonl\"\nexit /b 1\n"),
+                                     fake("missing", ""), fake("later", ""),
+                                     fake("ping", save + "type \"%~dp0ping.jsonl\"\n"), fake("pong", save + "type \"%~dp0pong.jsonl\"\n"),
+                                     fake("painter", save + "copy /y \"%~dp0pic.png\" \".oe\\team\\images\\made.png\" >nul\ntype \"%~dp0reply.jsonl\"\n")};
+    backends[1].systemPromptFlag = false;
+    backends[5].executable = "oe-no-such-agent-cli";
+    backends[6].buildTurn = nullptr;  // detected, but no turn adapter yet
+    const std::string toolLine = R"J({"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":")J" + project + R"J(/scripts/player.lua"}}]}})J";
+    CHECK(WriteTextFile(JoinPath(dir, "tool.jsonl"), toolLine + "\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), std::string(R"J({"type":"system","subtype":"init","session_id":"sess-1"})J") + "\nnot json\n" + toolLine + "\n" +
+                                                         R"J({"type":"user","message":{}})J" + "\n" + R"J({"type":"assistant","message":{"content":[{"type":"text","text":"Done it."}]}})J" + "\n" +
+                                                         R"J({"type":"result","subtype":"success","is_error":false,"result":"Done it.","session_id":"sess-1","total_cost_usd":0.25})J" + "\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "denied.jsonl"), R"J({"type":"result","subtype":"success","is_error":true,"result":"Not logged in","session_id":"sess-9"})J" "\n"));
+
+    Engine e;
+    CHECK(e.Open(project, &error));
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), backends);
+    for (const char* agent : {R"J({"name":"Mina","backend":"echo","description":"Gameplay."})J", R"J({"name":"Jun","backend":"plain","instructions":"Be brief."})J", R"J({"name":"Sloth","backend":"slow"})J",
+                              R"J({"name":"Crash","backend":"crash"})J", R"J({"name":"Denied","backend":"denied"})J", R"J({"name":"Ghost","backend":"missing"})J",
+                              R"J({"name":"Later","backend":"later"})J"}) {
+        CHECK(Call(e, "team.add", agent)["ok"].asBool());
+    }
+    auto stateOf = [&](const std::string& id) {
+        const Json state = Call(e, "team.state")["result"];
+        for (const Json& agent : state["agents"].items()) {
+            if (agent["id"].asString() == id) return agent;
+        }
+        return Json();
+    };
+    auto until = [&](const std::function<bool()>& done) {
+        const double end = PlatformTimeSeconds() + 30.0;
+        while (PlatformTimeSeconds() < end && !done()) PlatformSleep(0.02);
+        return done();
+    };
+    auto settled = [&] {
+        const Json state = Call(e, "team.state")["result"];
+        for (const Json& agent : state["agents"].items()) {
+            if (agent["state"].asString() == "queued") return false;
+        }
+        return state["running"].asInt() == 0;
+    };
+    auto lastMessage = [&] {
+        const Json messages = Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"];
+        return messages.size() ? messages[0] : Json();
+    };
+    auto fileText = [&](const std::string& name) {
+        std::string content;
+        ReadTextFile(JoinPath(dir, name), content);
+        return content;
+    };
+    auto code = [&](const char* command, const char* args) { return Call(e, command, args)["error"]["code"].asString(); };
+
+    // Before any turn: who can work.
+    CHECK(stateOf("mina")["state"].asString() == "idle" && stateOf("mina")["activity"].asString() == "" && !stateOf("mina").has("error"));
+    CHECK(stateOf("ghost")["state"].asString() == "offline" && stateOf("ghost")["error"].asString().find("not installed") != std::string::npos);
+    CHECK(stateOf("ghost")["hint"].asString().find("npm install -g fake") != std::string::npos);
+    CHECK(stateOf("later")["state"].asString() == "offline" && stateOf("later")["error"].asString().find("cannot run turns yet") != std::string::npos);
+    CHECK(Call(e, "team.messages")["result"]["messages"].size() == 0 && !FileExists(JoinPath(project, ".oe/team/chat.jsonl")));
+
+    // A message without a mention goes to the lead (the first agent).
+    Json sent = Call(e, "team.send", R"J({"text":"hello team\nsecond line"})J");
+    CHECK(sent["ok"].asBool() && sent["result"]["started"].size() == 1 && sent["result"]["started"][0].asString() == "mina");
+    CHECK(sent["result"]["queued"].size() == 0 && sent["result"]["offline"].size() == 0);
+    CHECK(sent["result"]["message"]["id"].asInt() == 1 && sent["result"]["message"]["from"].asString() == "user" && sent["result"]["message"]["to"][0].asString() == "mina");
+    CHECK(sent["result"]["message"]["kind"].asString() == "message" && sent["result"]["message"]["time"].asString().size() == 20);
+    CHECK(until(settled));
+    Json reply = lastMessage();
+    CHECK(reply["id"].asInt() == 2 && reply["from"].asString() == "mina" && reply["to"][0].asString() == "user" && reply["kind"].asString() == "message");
+    CHECK(reply["text"].asString() == "Done it." && reply["turn"]["tools"].asInt() == 1 && reply["turn"]["costUsd"].asNumber() == 0.25);
+    CHECK(reply["turn"]["steps"].size() == 1 && reply["turn"]["steps"][0].asString() == "Reading scripts/player.lua" && reply["turn"]["seconds"].asNumber() >= 0.0);
+    CHECK(stateOf("mina")["state"].asString() == "idle" && stateOf("mina")["tools"].asInt() == 0);
+    // What the CLI got: the prompt on stdin, only generated values as arguments, the context as a file.
+    CHECK(fileText("mina.prompt.txt").find("[User] hello team") != std::string::npos && fileText("mina.prompt.txt").find("second line") != std::string::npos);
+    CHECK(fileText("mina.args.txt").find(R"J("new" "m" "edit" ".oe/team/tmp/mina.system.md" "nomcp")J") == 0);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text));
+    CHECK(text.find("You are Mina (@mina)") == 0 && text.find("Gameplay.") != std::string::npos && text.find("- @jun - Jun") != std::string::npos);
+    CHECK(text.find("No editor is attached") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/sessions.json"), text) && Json::parse(text)["mina"]["session"].asString() == "sess-1");
+    CHECK(Json::parse(text)["mina"]["seen"].asInt() == 1 && Json::parse(text)["mina"]["backend"].asString() == "echo");
+
+    // The next turn resumes the conversation and gets only what is new; with an API port the agent can attach to the editor.
+    team->host.apiPort = 7777;
+    team->host.oeExecutable = backends[0].executable;  // any existing file stands in for `oe`
+    CHECK(Call(e, "team.send", R"J({"text":"@MINA again"})J")["result"]["started"].size() == 1);
+    CHECK(until(settled));
+    CHECK(fileText("mina.args.txt").find(R"J("sess-1" "m" "edit" ".oe/team/tmp/mina.system.md" ".oe/team/tmp/mina.mcp.json")J") == 0);
+    CHECK(fileText("mina.prompt.txt").find("[User] @MINA again") != std::string::npos && fileText("mina.prompt.txt").find("hello team") == std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.mcp.json"), text));
+    const Json mcp = Json::parse(text)["mcpServers"]["ownengine"];
+    CHECK(mcp["command"].asString() == backends[0].executable && mcp["args"].size() == 5 && mcp["args"][2].asString() == "7777");
+    CHECK(mcp["args"][3].asString() == "--agent" && mcp["args"][4].asString() == "mina");  // the editor shows who made an edit
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("`ownengine` MCP server") != std::string::npos);
+    team->host.apiPort = 0;
+
+    // A CLI without a system prompt flag gets the context once, on stdin, and sees what teammates said.
+    CHECK(Call(e, "team.send", R"J({"text":"@Jun hi"})J")["result"]["started"][0].asString() == "jun");
+    CHECK(until(settled));
+    text = fileText("jun.prompt.txt");
+    CHECK(text.find("You are Jun (@jun)") == 0 && text.find("Be brief.") != std::string::npos && text.find("[User] @Jun hi") != std::string::npos);
+    CHECK(text.find("[User] hello team") != std::string::npos && text.find("[Mina] Done it.") != std::string::npos);
+    CHECK(fileText("jun.args.txt").find(R"J("new" "m" "edit" "nofile" "nomcp")J") == 0);
+    CHECK(Call(e, "team.send", R"J({"text":"@jun more"})J")["ok"].asBool() && until(settled));
+    text = fileText("jun.prompt.txt");
+    CHECK(text.find("You are Jun") == std::string::npos && text.find("[User] @jun more") != std::string::npos && text.find("@Jun hi") == std::string::npos);
+    CHECK(text.find("[Jun]") == std::string::npos);  // its own replies are not repeated to it
+
+    // A running turn: state, activity, task; a second message waits; cancel kills the process tree.
+    CHECK(Call(e, "team.send", R"J({"text":"@Sloth work on the player\ndetails"})J")["result"]["started"][0].asString() == "sloth");
+    CHECK(until([&] { return stateOf("sloth")["state"].asString() == "working"; }));
+    Json sloth = stateOf("sloth");
+    CHECK(sloth["activity"].asString() == "Reading scripts/player.lua" && sloth["task"].asString() == "@Sloth work on the player" && sloth["tools"].asInt() == 1);
+    CHECK(Call(e, "team.state")["result"]["running"].asInt() == 1);
+    const double revision = Call(e, "team.state")["result"]["revision"].asNumber();
+    sent = Call(e, "team.send", R"J({"text":"@sloth one more thing"})J");
+    CHECK(sent["result"]["started"].size() == 0 && sent["result"]["queued"][0].asString() == "sloth");
+    CHECK(Call(e, "team.state")["result"]["revision"].asNumber() > revision);
+    const double cancelStarted = PlatformTimeSeconds();
+    Json cancelled = Call(e, "team.cancel", R"J({"id":"Sloth"})J");
+    CHECK(cancelled["result"]["cancelled"].size() == 1 && cancelled["result"]["cancelled"][0].asString() == "sloth" && PlatformTimeSeconds() - cancelStarted < 5.0);
+    CHECK(stateOf("sloth")["state"].asString() == "idle" && settled());  // the waiting message was dropped too
+    CHECK(lastMessage()["kind"].asString() == "notice" && lastMessage()["text"].asString() == "Sloth was stopped." && lastMessage()["from"].asString() == "sloth");
+    CHECK(Call(e, "team.cancel", R"J({"id":"sloth"})J")["result"]["cancelled"].size() == 0);
+
+    // maxConcurrent: the second agent waits for a free slot.
+    CHECK(Call(e, "team.settings", R"J({"maxConcurrent":1})J")["ok"].asBool());
+    CHECK(Call(e, "team.send", R"J({"text":"@sloth go"})J")["result"]["started"].size() == 1);
+    sent = Call(e, "team.send", R"J({"text":"@mina you too"})J");
+    CHECK(sent["result"]["started"].size() == 0 && sent["result"]["queued"][0].asString() == "mina");
+    CHECK(stateOf("mina")["state"].asString() == "queued" && stateOf("mina")["activity"].asString() == "Waiting for a free slot");
+    CHECK(Call(e, "team.cancel", R"J({"id":"sloth"})J")["ok"].asBool());
+    CHECK(until([&] { return lastMessage()["from"].asString() == "mina" && lastMessage()["kind"].asString() == "message"; }));
+    CHECK(Call(e, "team.settings", R"J({"maxConcurrent":3})J")["ok"].asBool());
+
+    // Failures: a crash (exit code and stderr), an error the CLI reports, a CLI that is not installed.
+    CHECK(Call(e, "team.send", R"J({"text":"@Crash go"})J")["result"]["started"][0].asString() == "crash" && until(settled));
+    reply = lastMessage();
+    CHECK(reply["kind"].asString() == "error" && reply["from"].asString() == "crash" && reply["text"].asString().find("exited with code 3") != std::string::npos);
+    CHECK(reply["text"].asString().find("boom") != std::string::npos && reply["hint"].asString().find("crash.cmd") != std::string::npos && !reply.has("turn"));
+    CHECK(stateOf("crash")["state"].asString() == "error" && stateOf("crash")["error"].asString() == reply["text"].asString());
+    CHECK(Call(e, "team.send", R"J({"text":"@denied go"})J")["ok"].asBool() && until(settled));
+    CHECK(lastMessage()["kind"].asString() == "error" && lastMessage()["text"].asString() == "Not logged in");
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/sessions.json"), text) && !Json::parse(text)["denied"].has("session"));
+    sent = Call(e, "team.send", R"J({"text":"@Ghost and @later, are you there?"})J");
+    CHECK(sent["result"]["offline"].size() == 2 && sent["result"]["started"].size() == 0 && sent["result"]["message"]["to"].size() == 2);
+    CHECK(lastMessage()["kind"].asString() == "notice" && lastMessage()["text"].asString().find("Later is offline") == 0);
+
+    // @all reaches everyone who can work; the sender is told who cannot.
+    sent = Call(e, "team.send", R"J({"text":"@all status?"})J");
+    CHECK(sent["result"]["started"].size() == 3 && sent["result"]["offline"].size() == 2 && sent["result"]["queued"].size() == 2);  // maxConcurrent 3 of 5
+    CHECK(until([&] { return stateOf("sloth")["state"].asString() == "working"; }));
+    CHECK(Call(e, "team.cancel", R"J({"all":true})J")["result"]["cancelled"].size() >= 1 && until(settled));
+
+    // Nobody addressed; invalid calls.
+    CHECK(Call(e, "team.settings", R"J({"lead":""})J")["ok"].asBool());
+    sent = Call(e, "team.send", R"J({"text":"anyone?"})J");
+    CHECK(sent["ok"].asBool() && sent["result"]["message"]["to"].size() == 0 && lastMessage()["text"].asString().find("Nobody was addressed") == 0);
+    CHECK(lastMessage()["from"].asString() == "system");
+    CHECK(code("team.send", R"J({"text":"  \n"})J") == "invalid_argument" && code("team.send", R"J({"text":"hi","from":"nobody"})J") == "unknown_agent");
+    CHECK(code("team.cancel", "{}") == "invalid_argument" && code("team.cancel", R"J({"id":"mina","all":true})J") == "invalid_argument");
+    CHECK(code("team.cancel", R"J({"id":"nobody"})J") == "unknown_agent" && code("team.messages", R"J({"limit":0})J") == "invalid_argument");
+    Json args = Json::MakeObject();
+    args["text"] = std::string(32769, 'x');
+    CHECK(e.Call("team.send", args)["error"]["code"].asString() == "invalid_argument");
+    // A teammate as the sender does not address itself.
+    sent = Call(e, "team.send", R"J({"text":"@mina @jun review please","from":"mina"})J");
+    CHECK(sent["result"]["message"]["from"].asString() == "mina" && sent["result"]["started"].size() == 1 && sent["result"]["started"][0].asString() == "jun");
+    CHECK(until(settled));
+
+    // Paging through the chat.
+    const Json page = Call(e, "team.messages", R"J({"after":1,"limit":2})J")["result"];
+    CHECK(page["messages"].size() == 2 && page["messages"][0]["id"].asInt() == 2 && page["messages"][1]["id"].asInt() == 3);
+    const int last = page["last"].asInt();
+    CHECK(page["first"].asInt() == 1);
+    CHECK(last > 10 && lastMessage()["id"].asInt() == last);
+    args = Json::MakeObject();
+    args["after"] = last;
+    CHECK(e.Call("team.messages", args)["result"]["messages"].size() == 0);
+
+    // Attachments: a project file is referred to in place, a file from elsewhere is copied into
+    // .oe/team/attachments/; the agent is told the paths.
+    {
+        Image picture;
+        picture.width = 4;
+        picture.height = 2;
+        picture.rgba.assign(4 * 2 * 4, 200);
+        const std::string outsideImage = JoinPath(dir, "shot one.png"), outsideText = JoinPath(dir, "notes.txt");
+        CHECK(WritePng(outsideImage, picture, true) && WritePng(JoinPath(dir, "pic.png"), picture, true) && WriteTextFile(outsideText, "remember the jump"));
+        args = Json::MakeObject();
+        args["text"] = "@mina look at these";
+        args["attachments"] = Json::MakeArray();
+        for (const std::string& file : {std::string("project.json"), outsideImage, outsideText}) args["attachments"].push(file);
+        sent = e.Call("team.send", args);
+        CHECK(sent["ok"].asBool() && sent["result"]["message"]["attachments"].size() == 3);
+        const Json attached = sent["result"]["message"]["attachments"];
+        const std::string id = std::to_string(sent["result"]["message"]["id"].asInt());
+        CHECK(attached[0]["type"].asString() == "file" && attached[0]["path"].asString() == "project.json" && !attached[0].has("width"));
+        CHECK(attached[1]["type"].asString() == "image" && attached[1]["path"].asString() == ".oe/team/attachments/" + id + "-2-shot_one.png");
+        CHECK(attached[1]["width"].asInt() == 4 && attached[1]["height"].asInt() == 2);
+        CHECK(attached[2]["type"].asString() == "file" && attached[2]["path"].asString() == ".oe/team/attachments/" + id + "-3-notes.txt");
+        CHECK(ReadTextFile(JoinPath(project, attached[2]["path"].asString()), text) && text == "remember the jump" && FileExists(outsideText));
+        CHECK(until(settled));
+        text = fileText("mina.prompt.txt");
+        CHECK(text.find("[User] @mina look at these") != std::string::npos && text.find("Attached file: project.json") != std::string::npos);
+        CHECK(text.find("Attached image: .oe/team/attachments/" + id + "-2-shot_one.png") != std::string::npos);
+        CHECK(lastMessage()["from"].asString() == "mina" && !lastMessage().has("attachments"));  // the agent made no picture
+
+        args["text"] = "";  // files alone are a message
+        args["attachments"] = Json::MakeArray();
+        args["attachments"].push("project.json");
+        sent = e.Call("team.send", args);
+        CHECK(sent["ok"].asBool() && sent["result"]["message"]["text"].asString() == "" && until(settled));
+        args["attachments"].push(JoinPath(dir, "missing.png"));
+        CHECK(e.Call("team.send", args)["error"]["code"].asString() == "not_found");
+        args["attachments"] = Json::MakeArray();
+        args["attachments"].push(dir);  // a folder is not a file
+        CHECK(e.Call("team.send", args)["error"]["code"].asString() == "not_found");
+        args["attachments"] = Json::MakeArray();
+        for (int i = 0; i < 9; ++i) args["attachments"].push("project.json");
+        CHECK(e.Call("team.send", args)["error"]["code"].asString() == "invalid_argument");
+        CHECK(code("team.send", R"J({"text":"x","attachments":[7]})J") == "invalid_argument");
+        CHECK(code("team.send", R"J({"text":"x","attachments":"project.json"})J") == "invalid_argument");
+
+        // A picture the turn wrote into .oe/team/images/ comes back attached to the reply, once.
+        CHECK(Call(e, "team.add", R"J({"name":"Painter","backend":"painter"})J")["ok"].asBool());
+        CHECK(Call(e, "team.send", R"J({"text":"@painter draw"})J")["result"]["started"].size() == 1 && until(settled));
+        reply = lastMessage();
+        CHECK(reply["from"].asString() == "painter" && reply["attachments"].size() == 1 && reply["attachments"][0]["type"].asString() == "image");
+        CHECK(reply["attachments"][0]["path"].asString() == ".oe/team/images/made.png" && reply["attachments"][0]["width"].asInt() == 4);
+        CHECK(FileExists(JoinPath(project, ".oe/team/images/made.png")));
+        CHECK(Call(e, "team.send", R"J({"text":"@mina and you?"})J")["ok"].asBool() && until(settled));
+        CHECK(lastMessage()["from"].asString() == "mina" && !lastMessage().has("attachments"));
+        CHECK(Call(e, "team.remove", R"J({"id":"painter"})J")["ok"].asBool());
+    }
+
+    // Agent to agent: a teammate mentioned in a reply gets a turn; the chain a person's message
+    // starts is cut after maxHops such turns.
+    {
+        auto result = [](const char* answer) { return std::string(R"J({"type":"result","subtype":"success","is_error":false,"result":")J") + answer + R"J(","session_id":"s2"})J" + "\n"; };
+        CHECK(WriteTextFile(JoinPath(dir, "ping.jsonl"), result("Done my part. Your turn @pong, and @ping is me.")) && WriteTextFile(JoinPath(dir, "pong.jsonl"), result("Back to @Ping.")));
+        CHECK(Call(e, "team.add", R"J({"name":"Ping","backend":"ping"})J")["ok"].asBool() && Call(e, "team.add", R"J({"name":"Pong","backend":"pong"})J")["ok"].asBool());
+        CHECK(Call(e, "team.settings", R"J({"maxHops":2})J")["ok"].asBool());
+        const int base = lastMessage()["id"].asInt();
+        sent = Call(e, "team.send", R"J({"text":"@ping start"})J");
+        CHECK(sent["result"]["started"].size() == 1 && !sent["result"]["message"].has("hop"));
+        CHECK(until([&] { return settled() && lastMessage()["kind"].asString() == "notice"; }));
+        args = Json::MakeObject();
+        args["after"] = base;
+        const Json chain = e.Call("team.messages", args)["result"]["messages"];
+        // person -> ping (hop 1, calls pong) -> pong (hop 2, calls ping) -> ping (hop 3: over the limit, notice)
+        CHECK(chain.size() == 5);
+        if (chain.size() == 5) {
+            CHECK(chain[1]["from"].asString() == "ping" && chain[1]["hop"].asInt() == 1 && chain[1]["to"].size() == 2 && chain[1]["to"][1].asString() == "pong");
+            CHECK(chain[2]["from"].asString() == "pong" && chain[2]["hop"].asInt() == 2 && chain[2]["to"][0].asString() == "ping");
+            CHECK(chain[3]["from"].asString() == "ping" && chain[3]["hop"].asInt() == 3);
+            CHECK(chain[4]["kind"].asString() == "notice" && chain[4]["text"].asString().find("Not handed on to Pong") == 0 && chain[4]["text"].asString().find("maxHops") != std::string::npos);
+        }
+        CHECK(fileText("pong.prompt.txt").find("[Ping] Done my part. Your turn @pong") != std::string::npos && fileText("pong.hop.txt").find("hop1h") == 0);
+        CHECK(fileText("ping.hop.txt").find("hop2h") == 0);  // its second turn answered pong's hop-2 message
+        // maxHops 0: agents never call each other.
+        CHECK(Call(e, "team.settings", R"J({"maxHops":0})J")["ok"].asBool());
+        CHECK(Call(e, "team.send", R"J({"text":"@pong once"})J")["ok"].asBool() && until([&] { return settled() && lastMessage()["kind"].asString() == "notice"; }));
+        CHECK(lastMessage()["text"].asString().find("Not handed on to Ping") == 0);
+        // A message an agent posts itself (team.send through the API, with its id) is that agent's,
+        // whatever `from` says, and continues the chain of its running turn.
+        CHECK(Call(e, "team.send", R"J({"text":"@sloth work"})J")["result"]["started"].size() == 1);
+        CHECK(until([&] { return stateOf("sloth")["state"].asString() == "working"; }));
+        auto posted = e.PostCall("team.send", Json::parse(R"J({"text":"@pong can you look?","from":"user"})J"), "sloth");
+        e.RunPostedJobs();
+        Json byAgent = posted.get();
+        CHECK(byAgent["ok"].asBool() && byAgent["result"]["message"]["from"].asString() == "sloth" && byAgent["result"]["message"]["hop"].asInt() == 1);
+        CHECK(byAgent["result"]["started"].size() == 0 && lastMessage()["kind"].asString() == "notice" && lastMessage()["text"].asString().find("Not handed on to Pong") == 0);
+        CHECK(e.RemoteCallAgent().empty());
+        CHECK(Call(e, "team.settings", R"J({"maxHops":4})J")["ok"].asBool());
+        posted = e.PostCall("team.send", Json::parse(R"J({"text":"@pong now?"})J"), "sloth");
+        e.RunPostedJobs();
+        byAgent = posted.get();
+        CHECK(byAgent["result"]["message"]["hop"].asInt() == 1 && byAgent["result"]["started"].size() == 1 && byAgent["result"]["started"][0].asString() == "pong");
+        // An id that is not in the team is not an agent: the call is the person's.
+        posted = e.PostCall("team.send", Json::parse(R"J({"text":"hello nobody in particular"})J"), "stranger");
+        e.RunPostedJobs();
+        byAgent = posted.get();
+        CHECK(byAgent["result"]["message"]["from"].asString() == "user" && !byAgent["result"]["message"].has("hop"));
+        CHECK(Call(e, "team.cancel", R"J({"all":true})J")["ok"].asBool() && until(settled));
+        CHECK(Call(e, "team.remove", R"J({"id":"ping"})J")["ok"].asBool() && Call(e, "team.remove", R"J({"id":"pong"})J")["ok"].asBool());
+    }
+
+    // A turn that never ends is stopped at the timeout; the host's update drives turns without commands.
+    team->host.turnTimeoutSeconds = 0.3;
+    CHECK(Call(e, "team.send", R"J({"text":"@sloth forever"})J")["result"]["started"].size() == 1);
+    const std::string chatFile = JoinPath(project, ".oe/team/chat.jsonl");
+    CHECK(until([&] {
+        team->update();
+        return ReadTextFile(chatFile, text) && text.find("without finishing") != std::string::npos;
+    }));
+    CHECK(lastMessage()["kind"].asString() == "error" && lastMessage()["from"].asString() == "sloth" && stateOf("sloth")["state"].asString() == "error");
+    team->host.turnTimeoutSeconds = 1800.0;
+
+    // `wait` blocks until the reply is there (one-shot use from `oe exec`).
+    sent = Call(e, "team.send", R"J({"text":"@mina quick","wait":30})J");
+    CHECK(sent["result"]["replies"].size() == 1 && sent["result"]["replies"][0]["from"].asString() == "mina" && sent["result"]["state"]["running"].asInt() == 0);
+
+    // Removing an agent stops its turn and forgets its conversation.
+    CHECK(Call(e, "team.send", R"J({"text":"@sloth again"})J")["result"]["started"].size() == 1);
+    CHECK(Call(e, "team.remove", R"J({"id":"sloth"})J")["ok"].asBool() && settled() && stateOf("sloth").isNull());
+    CHECK(Call(e, "team.remove", R"J({"id":"mina"})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/sessions.json"), text) && !Json::parse(text).has("mina") && Json::parse(text).has("jun"));
+
+    // The chat and the conversations survive a restart; team.clear empties them.
+    const size_t count = Call(e, "team.messages", R"J({"limit":500})J")["result"]["messages"].size();
+    {
+        Engine other;
+        CHECK(other.Open(project, &error));
+        RegisterTeamCommands(other.Commands(), backends);
+        const Json result = Call(other, "team.messages", R"J({"limit":500})J")["result"];
+        CHECK(result["messages"].size() == count && result["last"].asInt() == lastMessage()["id"].asInt());
+        CHECK(result["messages"][1]["turn"]["steps"][0].asString() == "Reading scripts/player.lua");
+        CHECK(Call(other, "team.send", R"J({"text":"@jun after restart","wait":30})J")["result"]["replies"].size() == 1);
+        CHECK(fileText("jun.args.txt").find("\"sess-1\" ") == 0);  // resumed from sessions.json
+        CHECK(Call(other, "team.clear")["ok"].asBool());
+        CHECK(Call(other, "team.messages")["result"]["first"].asInt() == 0);
+        CHECK(Call(other, "team.messages")["result"]["messages"].size() == 0 && !FileExists(chatFile) && !FileExists(JoinPath(project, ".oe/team/sessions.json")));
+        CHECK(Call(other, "team.list")["result"]["agents"].size() == 5);  // profiles are kept
+    }
+    CHECK(e.UndoDepth() == 0 && !e.Dirty());
+    CHECK(RemoveAll(dir));
+#endif
+}
+#endif
+
 TEST(AgentInstructionsInSync) {
     // AGENTS.md (read by most coding agents) and CLAUDE.md must say the same thing (docs/DESIGN.md).
     std::string agents, claude;
@@ -6028,6 +8214,13 @@ TEST(EditorCameraRays) {
     CHECK(Near(cam.Eye(), eye, 1e-3f));
     cam.Set2D(true);
     CHECK(Near(cam.Forward(), Vec3(0, 0, -1), 1e-6f));
+    // 2D grid: powers of ten, never denser than the minimum pixel spacing.
+    CHECK(std::fabs(Grid2DStep(0.01f) - 0.1f) < 1e-5f);
+    CHECK(std::fabs(Grid2DStep(0.1f) - 1.0f) < 1e-4f);
+    CHECK(std::fabs(Grid2DStep(0.25f) - 10.0f) < 1e-3f);
+    // Levels fade in from the minimum spacing to ten times that.
+    CHECK(Grid2DAlpha(kGrid2DMinPixels) == 0.0f && Grid2DAlpha(kGrid2DMinPixels * 10.0f) == 1.0f);
+    CHECK(Grid2DAlpha(kGrid2DMinPixels * 5.5f) > 0.45f && Grid2DAlpha(kGrid2DMinPixels * 5.5f) < 0.55f);
 }
 
 #if OE_NATIVE_EDITOR
@@ -6375,6 +8568,452 @@ TEST(NativeEditorClipboardHistoryPrefabAndDialogs) {
     std::filesystem::remove(window.next.path);
 }
 
+#if OE_TEAM
+TEST(EditorAvatarPresets) {
+    // Every preset name the team offers has a picture embedded in the editor.
+    CHECK(!TeamAvatarPresets().empty());
+    for (const std::string& preset : TeamAvatarPresets()) {
+        const unsigned char* data = nullptr;
+        size_t size = 0;
+        Texture texture;
+        std::string error;
+        CHECK(EditorAvatarPreset(preset, &data, &size) && data && size > 100);
+        CHECK(data && DecodeImage(data, size, texture, &error) && texture.width == 128 && texture.height == 128);
+        CHECK(FileExists(TestSourceDir() + "/engine/editor/avatars/" + preset + ".png"));
+    }
+    CHECK(!EditorAvatarPreset("dragon", nullptr, nullptr) && !EditorAvatarPreset("", nullptr, nullptr));
+}
+
+TEST(NativeEditorTeam) {
+    const std::string project = TempProject("editor_team");
+    const std::string dir = ProcessFixtureDir("editor team");
+    std::string error;
+    // Stand-in CLIs: one installed (a script that prints a version), one that is not on this PC.
+    Backend good;
+    good.id = "good";
+    good.displayName = "Good CLI";
+    good.executable = JoinPath(dir, "good.cmd");
+    good.installHint = "npm install -g good";
+    good.models = {{"m1", "Model One", true, 0}, {"m2", "Model Two", false, 0}};
+    good.supportsImages = true;
+    good.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options;
+        options.executable = request.executable;
+        return options;
+    };
+    good.parseLine = &ParseClaudeLine;
+    CHECK(WriteTextFile(good.executable, "@echo off\necho good-cli 1.2.3\n"));
+    Backend missing = good;
+    missing.id = "missing";
+    missing.displayName = "Missing CLI";
+    missing.executable = "oe-no-such-agent-cli";
+    missing.models = {{"x", "X", true, 0}};
+
+    Engine e;
+    CHECK(e.Open(project, &error));
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), {good, missing});
+    CHECK(Call(e, "team.add", R"J({"name":"Mina","backend":"good","description":"Gameplay programmer."})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Sora","backend":"missing"})J")["ok"].asBool());
+    if (!e.EnableGpu(nullptr, &error)) {
+        std::printf("  SKIP editor team (%s)\n", error.c_str());
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    int ticks = 0;
+    options.onFrame = [&] {
+        ++ticks;
+        team->update();
+    };
+    NativeEditor editor(e, nullptr, options);
+    CHECK(editor.Init(&error));
+    RenderTarget image;
+    auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+        for (int frame = 0; frame < count; ++frame) {
+            editor.Update(frame == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+    };
+    auto typed = [](const char* text) {
+        std::vector<WindowEvent> events;
+        for (const char* c = text; *c; ++c) {
+            WindowEvent event;
+            event.type = WindowEvent::Type::Text;
+            event.codepoint = static_cast<uint32_t>(static_cast<unsigned char>(*c));
+            events.push_back(event);
+        }
+        return events;
+    };
+    const std::vector<WindowEvent> enter = {KeyEvent(WindowKey::Enter, true), KeyEvent(WindowKey::Enter, false)};
+    const std::vector<WindowEvent> escape = {KeyEvent(WindowKey::Escape, true), KeyEvent(WindowKey::Escape, false)};
+    auto modal = [](const char* id) -> ImGuiWindow* {
+        for (ImGuiWindow* window : GImGui->Windows) {
+            if (window->Active && std::strstr(window->Name, id) && ImGui::IsPopupOpen(window->PopupId, ImGuiPopupFlags_AnyPopupLevel)) return window;
+        }
+        return nullptr;
+    };
+    auto agents = [&] { return Call(e, "team.list")["result"]["agents"]; };
+
+    // The Team tab waits behind the Hierarchy; the editor's frame keeps the team updated.
+    frames(4);
+    ImGuiWindow* panel = ImGui::FindWindowByName("###Team");
+    ImGuiWindow* hierarchy = ImGui::FindWindowByName("###Hierarchy");
+    CHECK(panel && hierarchy && panel->DockId == hierarchy->DockId && hierarchy->DockTabIsVisible && ticks >= 4);
+    editor.FocusTeamPanel();
+    frames(3);
+    panel = ImGui::FindWindowByName("###Team");
+    CHECK(panel && panel->Active && panel->DockTabIsVisible);
+#if defined(_WIN32)
+    // Detection runs in the background while frames keep coming.
+    // (A busy machine can make the stand-in's first start fail or time out: ask again then.)
+    const double end = PlatformTimeSeconds() + 60.0;
+    for (std::string status = "detecting"; PlatformTimeSeconds() < end && status != "installed";) {
+        status = Call(e, "team.backends", status == "detecting" ? R"({"async":true})" : R"({"async":true,"refresh":true})")["result"][0]["status"].asString();
+        frames(1);
+        PlatformSleep(0.02);
+    }
+    frames(20);  // the panel polls every quarter second of editor time
+    const Json detected = Call(e, "team.backends", R"({"async":true})")["result"][0];
+    CHECK(detected["status"].asString() == "installed");
+    if (detected["status"].asString() != "installed") std::printf("  backend: %s\n", detected.dump().c_str());
+
+    // Add an agent through the dialog: the name field has the focus, Enter saves.
+    editor.EditAgent("");
+    frames(3);
+    CHECK(modal("###Agent") != nullptr);
+    CHECK(!editor.SetAgentBackend("missing"));  // a CLI that is not installed cannot be chosen
+    CHECK(!editor.SetAgentBackend("nobody") && editor.SetAgentBackend("good"));
+    frames(2, typed("Kai"));
+    frames(3, enter);
+    CHECK(modal("###Agent") == nullptr && agents().size() == 3);
+    Json kai = Call(e, "team.get", R"J({"id":"kai"})J")["result"];
+    CHECK(kai["name"].asString() == "Kai" && kai["backend"].asString() == "good" && kai["model"].asString() == "m1" && kai["access"].asString() == "edit");
+    CHECK(kai["avatar"].asString() == "preset:fox");
+
+    // A refused save (the name is taken) keeps the dialog open; Escape closes it without saving.
+    editor.EditAgent("");
+    frames(3);
+    frames(2, typed("mina"));
+    frames(3, enter);
+    CHECK(modal("###Agent") != nullptr && agents().size() == 3);
+    frames(3, escape);
+    CHECK(modal("###Agent") == nullptr && agents().size() == 3);
+
+    // Editing keeps what was not touched.
+    editor.EditAgent("mina");
+    frames(3);
+    CHECK(modal("###Agent") != nullptr);
+    frames(3, enter);
+    CHECK(modal("###Agent") == nullptr);
+    const Json mina = Call(e, "team.get", R"J({"id":"mina"})J")["result"];
+    CHECK(mina["name"].asString() == "Mina" && mina["description"].asString() == "Gameplay programmer." && mina["model"].asString() == "m1");
+
+    // Deleting asks first.
+    editor.RemoveAgent("kai");
+    frames(3);
+    CHECK(modal("###Remove Agent") != nullptr && agents().size() == 3);
+    frames(3, escape);
+    CHECK(modal("###Remove Agent") == nullptr && agents().size() == 3);
+    editor.RemoveAgent("kai");
+    frames(3);
+    frames(3, enter);
+    CHECK(modal("###Remove Agent") == nullptr && agents().size() == 2 && Call(e, "team.get", R"J({"id":"kai"})J")["error"]["code"].asString() == "unknown_agent");
+#endif
+
+    // An API call that names a team agent is reported under the agent's name; others as "API".
+    {
+        std::vector<std::string> seen;
+        auto posted = e.PostCall("entity.create", Json::parse(R"J({"name":"ByAgent"})J"), "mina");
+        e.RunPostedJobs();
+        CHECK(posted.get()["ok"].asBool() && editor.LastNotice().find("Mina: entity.create") == 0);
+        posted = e.PostCall("entity.create", Json::parse(R"J({"name":"ByApi"})J"));
+        e.RunPostedJobs();
+        CHECK(posted.get()["ok"].asBool() && editor.LastNotice().find("API: entity.create") == 0 && e.RemoteCallAgent().empty());
+        posted = e.PostCall("entity.create", Json::parse(R"J({"name":"ByStranger"})J"), "nobody");  // not in the team: no name to show
+        e.RunPostedJobs();
+        CHECK(posted.get()["ok"].asBool() && editor.LastNotice().find("API: entity.create") == 0);
+        frames(2);
+        CHECK(Call(e, "history.undo")["ok"].asBool() && Call(e, "history.undo")["ok"].asBool() && Call(e, "history.undo")["ok"].asBool());
+        CHECK(Call(e, "scene.save")["ok"].asBool());
+        frames(2);
+    }
+
+    // Looked at by a person or an agent: the panel in each language, and the profile dialog.
+    for (EditorLanguage language : {EditorLanguage::Korean, EditorLanguage::Japanese, EditorLanguage::English}) {
+        SetEditorLanguage(language);
+        frames(3);
+        panel = ImGui::FindWindowByName("###Team");
+        CHECK(panel && panel->Active);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, std::string("build/editor-team-") + EditorLanguageCode(language) + ".png"), image.ToImage()));
+    }
+    editor.EditAgent("mina");
+    frames(4);
+    CHECK(modal("###Agent") != nullptr);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-dialog.png"), image.ToImage()));
+    frames(3, escape);
+    CHECK(e.UndoDepth() == 0 && !e.Dirty());  // managing the team is not a scene edit
+    CHECK(RemoveAll(dir));
+}
+TEST(NativeEditorTeamChat) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("editor_chat");
+    const std::string dir = ProcessFixtureDir("editor chat");
+    std::string error;
+    // Stand-in CLIs as in TeamSessionTurns: one answers at once, one works until it is stopped.
+    auto fake = [&](const char* id, const std::string& script) {
+        Backend backend;
+        backend.id = id;
+        backend.displayName = std::string("Fake ") + id;
+        backend.executable = JoinPath(dir, std::string(id) + ".cmd");
+        backend.installHint = "npm install -g fake";
+        backend.models = {{"m", "M", true, 0}};
+        backend.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options;
+            options.executable = request.executable;
+            return options;
+        };
+        backend.parseLine = &ParseClaudeLine;
+        CHECK(WriteTextFile(backend.executable, "@echo off\n" + script));
+        return backend;
+    };
+    const std::string toolLine = R"J({"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":")J" + project + R"J(/scripts/player.lua"}}]}})J";
+    CHECK(WriteTextFile(JoinPath(dir, "tool.jsonl"), toolLine + "\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), toolLine + "\n" +
+                                                         R"J({"type":"result","subtype":"success","is_error":false,"result":"Done. See scenes/main.scene.json:\n```lua\nlocal x = 1\n```","session_id":"s1"})J" + "\n"));
+    Engine e;
+    CHECK(e.Open(project, &error));
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(
+        e.Commands(), {fake("echo", "findstr \"^\" >nul\ntype \"%~dp0reply.jsonl\"\n"), fake("slow", "findstr \"^\" >nul\ntype \"%~dp0tool.jsonl\"\nping -n 30 127.0.0.1 >nul\n")});
+    CHECK(Call(e, "team.add", R"J({"name":"Mina","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Sloth","backend":"slow"})J")["ok"].asBool());
+    if (!e.EnableGpu(nullptr, &error)) {
+        std::printf("  SKIP editor chat (%s)\n", error.c_str());
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    options.onFrame = team->update;
+    NativeEditor editor(e, nullptr, options);
+    CHECK(editor.Init(&error));
+    RenderTarget image;
+    auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+        for (int frame = 0; frame < count; ++frame) {
+            editor.Update(frame == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+    };
+    auto typed = [](const char* text) {
+        std::vector<WindowEvent> events;
+        for (const char* c = text; *c; ++c) {
+            WindowEvent event;
+            event.type = WindowEvent::Type::Text;
+            event.codepoint = static_cast<uint32_t>(static_cast<unsigned char>(*c));
+            events.push_back(event);
+        }
+        return events;
+    };
+    auto key = [](WindowKey which, bool down, bool shift = false) {
+        WindowEvent event = KeyEvent(which, down);
+        event.shift = shift;
+        return event;
+    };
+    const std::vector<WindowEvent> enter = {KeyEvent(WindowKey::Enter, true), KeyEvent(WindowKey::Enter, false)};
+    auto messages = [&] { return Call(e, "team.messages", R"J({"limit":50})J")["result"]["messages"]; };
+    auto lastMessage = [&] {
+        const Json all = messages();
+        return all.size() ? all[all.size() - 1] : Json();
+    };
+    auto until = [&](const std::function<bool()>& done) {
+        const double end = PlatformTimeSeconds() + 30.0;
+        while (PlatformTimeSeconds() < end && !done()) {
+            frames(1);  // the editor's frame is what advances the turn
+            PlatformSleep(0.01);
+        }
+        return done();
+    };
+    auto stateOf = [&](const char* id) {
+        const Json state = Call(e, "team.state")["result"];
+        for (const Json& agent : state["agents"].items()) {
+            if (agent["id"].asString() == id) return agent["state"].asString();
+        }
+        return std::string();
+    };
+
+    // The chat tab waits beside the Console; focusing it gives the input the keyboard.
+    frames(4);
+    ImGuiWindow* chat = ImGui::FindWindowByName("###Team Chat");
+    ImGuiWindow* console = ImGui::FindWindowByName("###Console");
+    CHECK(chat && console && chat->DockId == console->DockId);
+    editor.FocusTeamChat();
+    frames(3);
+    chat = ImGui::FindWindowByName("###Team Chat");
+    CHECK(chat && chat->Active && chat->DockTabIsVisible);
+
+    // Tab completes the mention being typed; Enter sends; the reply arrives while frames run.
+    frames(2, typed("@mi"));
+    CHECK(editor.TeamChatInput() == "@mi");
+    frames(2, {KeyEvent(WindowKey::Tab, true), KeyEvent(WindowKey::Tab, false)});
+    CHECK(editor.TeamChatInput() == "@mina ");
+    frames(2, typed("hello"));
+    frames(3, enter);
+    CHECK(editor.TeamChatInput().empty());
+    CHECK(messages().size() >= 1 && messages()[0]["text"].asString() == "@mina hello" && messages()[0]["to"][0].asString() == "mina");
+    CHECK(until([&] { return lastMessage()["from"].asString() == "mina"; }));
+    CHECK(lastMessage()["text"].asString().find("Done.") == 0 && lastMessage()["turn"]["steps"].size() == 1);
+    frames(3);
+
+    // Shift+Enter is a line break, not a send. The input keeps the keyboard after a send.
+    frames(2, typed("one"));
+    frames(1, {key(WindowKey::Shift, true, true)});
+    frames(2, {key(WindowKey::Enter, true, true), key(WindowKey::Enter, false, true)});
+    frames(1, {key(WindowKey::Shift, false)});
+    CHECK(editor.TeamChatInput() == "one\n");
+    frames(2, typed("two"));
+    const size_t before = messages().size();
+    frames(3, enter);
+    CHECK(until([&] { return messages().size() >= before + 2; }));  // sent (to the lead) and answered
+    CHECK(messages()[before]["text"].asString() == "one\ntwo" && messages()[before]["from"].asString() == "user");
+    frames(2, enter);  // an empty input sends nothing
+    frames(2);
+    CHECK(messages().size() == before + 2);
+
+    // A running turn has a live line with Stop; a real click on it cancels the turn.
+    frames(2, typed("@sloth go"));
+    frames(3, enter);
+    CHECK(until([&] { return stateOf("sloth") == "working" && editor.TeamChatStopRect()[2] > 0.0f; }));
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-chat-en.png"), image.ToImage()));
+    const std::array<float, 4> stop = editor.TeamChatStopRect();
+    WindowEvent move;
+    move.type = WindowEvent::Type::MouseMove;
+    move.x = stop[0] + stop[2] * 0.5f;
+    move.y = stop[1] + stop[3] * 0.5f;
+    WindowEvent click = move;
+    click.type = WindowEvent::Type::MouseButton;
+    click.button = 0;
+    click.down = true;
+    frames(2, {move});
+    frames(2, {click});
+    click.down = false;
+    frames(2, {click});
+    CHECK(until([&] { return stateOf("sloth") == "idle"; }));
+    CHECK(lastMessage()["kind"].asString() == "notice" && lastMessage()["text"].asString() == "Sloth was stopped.");
+    frames(2);
+    CHECK(editor.TeamChatStopRect()[2] == 0.0f);
+
+    // Messages that arrive while the tab is hidden are counted in its title.
+    editor.FocusHistoryPanel();
+    frames(3);
+    chat = ImGui::FindWindowByName("###Team Chat");
+    CHECK(chat && !chat->DockTabIsVisible);
+    CHECK(Call(e, "team.send", R"J({"text":"@mina status?"})J")["ok"].asBool());
+    CHECK(until([&] { return lastMessage()["from"].asString() == "mina"; }));
+    frames(3);
+    chat = ImGui::FindWindowByName("###Team Chat");
+    CHECK(chat && std::strstr(chat->Name, "(1)") != nullptr);
+    editor.FocusTeamChat();
+    frames(3);
+    chat = ImGui::FindWindowByName("###Team Chat");
+    CHECK(chat && chat->DockTabIsVisible && std::strstr(chat->Name, "(1)") == nullptr);
+
+    // A file dropped on the chat is attached to the next message; one dropped elsewhere is imported as before.
+    Image picture;
+    picture.width = 8;
+    picture.height = 6;
+    picture.rgba.assign(8 * 6 * 4, 255);
+    for (size_t i = 0; i < picture.rgba.size(); i += 4) picture.rgba[i + 1] = picture.rgba[i + 2] = 40;  // red
+    const std::string shot = JoinPath(dir, "shot.png");
+    CHECK(WritePng(shot, picture, true));
+    const std::array<float, 4> panel = editor.TeamChatRect();
+    CHECK(panel[2] > 100.0f && panel[3] > 50.0f);
+    WindowEvent drop;
+    drop.type = WindowEvent::Type::DropFile;
+    drop.path = shot;
+    drop.x = panel[0] + panel[2] * 0.5f;
+    drop.y = panel[1] + panel[3] * 0.5f;
+    frames(3, {drop});
+    CHECK(editor.TeamChatAttachments() == std::vector<std::string>{shot});
+    frames(2, {drop});  // the same file again: still one
+    CHECK(editor.TeamChatAttachments().size() == 1 && !FileExists(JoinPath(project, "assets/textures/shot.png")));
+    frames(2, typed("@mina what is this?"));
+    const size_t beforeAttach = messages().size();
+    frames(3, enter);
+    CHECK(editor.TeamChatAttachments().empty() && editor.TeamChatInput().empty());
+    CHECK(messages().size() > beforeAttach && messages()[beforeAttach]["attachments"].size() == 1);
+    const std::string attachedPath = messages()[beforeAttach]["attachments"][0]["path"].asString();
+    CHECK(attachedPath.find(".oe/team/attachments/") == 0 && messages()[beforeAttach]["attachments"][0]["width"].asInt() == 8);
+    CHECK(until([&] { return lastMessage()["from"].asString() == "mina"; }));
+    frames(3);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-chat-attachment.png"), image.ToImage()));
+    drop.x = 600.0f;  // the Scene view
+    drop.y = 250.0f;
+    frames(3, {drop});
+    CHECK(editor.TeamChatAttachments().empty() && editor.LastNotice().find("shot.png") != std::string::npos);
+
+    // # completes a project file (Tab), as @ completes an agent.
+    editor.FocusTeamChat();
+    frames(3);
+    frames(2, typed("open #main.sc"));
+    frames(2, {KeyEvent(WindowKey::Tab, true), KeyEvent(WindowKey::Tab, false)});
+    CHECK(editor.TeamChatInput() == "open scenes/main.scene.json ");
+    // Up / Down move the choice in the list (wrapping), Tab takes it; the caret stays put.
+    const std::vector<WindowEvent> down = {KeyEvent(WindowKey::Down, true), KeyEvent(WindowKey::Down, false)};
+    const std::vector<WindowEvent> up = {KeyEvent(WindowKey::Up, true), KeyEvent(WindowKey::Up, false)};
+    const std::vector<WindowEvent> tab = {KeyEvent(WindowKey::Tab, true), KeyEvent(WindowKey::Tab, false)};
+    frames(2, typed("@"));  // Mina, Sloth, all
+    frames(2, down);
+    frames(2, tab);
+    CHECK(editor.TeamChatInput() == "open scenes/main.scene.json @sloth ");
+    frames(2, typed("@"));
+    frames(2, up);  // from the first entry up: the last one
+    frames(2, tab);
+    CHECK(editor.TeamChatInput() == "open scenes/main.scene.json @sloth @all ");
+    const Json files = Call(e, "asset.list")["result"];
+    CHECK(files.size() > 9);  // more than the eight rows that show: the list scrolls
+    frames(2, typed("#"));
+    for (int i = 0; i < 9; ++i) frames(2, down);
+    frames(2);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-chat-files.png"), image.ToImage()));
+    frames(2, tab);
+    CHECK(files.size() > 9 && editor.TeamChatInput() == "open scenes/main.scene.json @sloth @all " + files[9]["path"].asString() + " ");
+    frames(2);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-chat-complete.png"), image.ToImage()));  // references tinted in the input
+    frames(3, enter);
+    CHECK(until([&] { return lastMessage()["from"].asString() == "mina" && stateOf("mina") == "idle"; }));
+    CHECK(Call(e, "team.cancel", R"J({"all":true})J")["ok"].asBool());  // @all also called the slow one
+    frames(3);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-chat-attachment.png"), image.ToImage()));  // and in the sent message
+
+    // The picture viewer opens on an attachment and closes with Escape.
+    editor.ViewChatImage(attachedPath);
+    frames(3);
+    ImGuiWindow* viewer = ImGui::FindWindowByName("###Image");
+    CHECK(viewer && viewer->Active && editor.ViewedChatImage() == attachedPath);
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-team-chat-viewer.png"), image.ToImage()));
+    frames(3, {KeyEvent(WindowKey::Escape, true), KeyEvent(WindowKey::Escape, false)});
+    CHECK(editor.ViewedChatImage().empty());
+
+    // team.clear empties the panel's copy too (checked through what it draws next: no crash, new ids).
+    CHECK(Call(e, "team.clear")["ok"].asBool());
+    frames(3);
+    CHECK(messages().size() == 0);
+    for (EditorLanguage language : {EditorLanguage::Korean, EditorLanguage::Japanese, EditorLanguage::English}) {
+        SetEditorLanguage(language);
+        if (language == EditorLanguage::Korean) {
+            CHECK(Call(e, "team.send", R"J({"text":"@mina show me"})J")["ok"].asBool());
+            CHECK(until([&] { return lastMessage()["from"].asString() == "mina"; }));
+        }
+        frames(3);
+        if (language != EditorLanguage::English) {
+            CHECK(WritePng(JoinPath(OE_SOURCE_DIR, std::string("build/editor-team-chat-") + EditorLanguageCode(language) + ".png"), image.ToImage()));
+        }
+    }
+    CHECK(e.UndoDepth() == 0);
+    CHECK(RemoveAll(dir));
+#endif
+}
+#endif
+
 TEST(NativeEditorHeadless) {
     Engine e;
     std::string err;
@@ -6466,6 +9105,83 @@ TEST(NativeEditorHeadless) {
     close.type = WindowEvent::Type::Close;
     frames(2, {close});
     CHECK(!ed.QuitRequested());
+}
+
+TEST(NativeEditorUIEditing) {
+    // The stopped Game view edits UI in place: click selects, drag moves, handles resize, arrows nudge.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("editor_ui"), &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Back","components":{"UIPanel":{"anchor":"stretch","x":0,"y":0,"width":0,"height":0,"opacity":0.2}}})J");
+    Call(e, "entity.create", R"J({"name":"Play","parent":"Back","components":{"UIButton":{"text":"Play","anchor":"top-left","x":200,"y":150,"width":240,"height":80}}})J");
+    Call(e, "entity.create", R"J({"name":"Corner","parent":"Back","components":{"UIPanel":{"anchor":"bottom-right","x":-40,"y":-40,"width":100,"height":60,"opacity":1}}})J");
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 900, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    auto mouse = [](WindowEvent::Type type, float x, float y, int button = 0, bool down = false) {
+        WindowEvent ev;
+        ev.type = type;
+        ev.x = x;
+        ev.y = y;
+        ev.button = button;
+        ev.down = down;
+        return ev;
+    };
+    frames(3);
+    ed.FocusGameView(true);
+    frames(4);
+    const std::array<float, 4> view = ed.GameViewRect();
+    CHECK(view[2] > 200 && view[3] > 100);
+    const float k = view[3] / 720.0f;  // window pixels per reference pixel
+    Scene& s = e.GetScene();
+    const EntityId play = s.FindByName("Play"), corner = s.FindByName("Corner");
+    auto at = [&](float rx, float ry) { return std::pair<float, float>(view[0] + rx * k, view[1] + ry * k); };
+    auto drag = [&](std::pair<float, float> from, float dx, float dy) {
+        frames(2, {mouse(WindowEvent::Type::MouseMove, from.first, from.second)});
+        frames(2, {mouse(WindowEvent::Type::MouseButton, from.first, from.second, 0, true)});
+        for (int i = 1; i <= 4; ++i) frames(1, {mouse(WindowEvent::Type::MouseMove, from.first + dx * static_cast<float>(i) / 4, from.second + dy * static_cast<float>(i) / 4)});
+        frames(2, {mouse(WindowEvent::Type::MouseButton, from.first + dx, from.second + dy, 0, false)});
+    };
+    const size_t history = Call(e, "history.list", "{}")["result"]["entries"].size();
+    // Click selects the topmost element under the pointer; dragging it moves it in reference pixels.
+    drag(at(320, 190), 60 * k, 30 * k);
+    CHECK(ed.Selected() == play);
+    const UIButton* button = s.Get<UIButton>(play);
+    CHECK(std::fabs(button->x - 260) <= 1 && std::fabs(button->y - 180) <= 1);
+    CHECK(Call(e, "history.list", "{}")["result"]["entries"].size() == history + 1);  // the whole drag is one undo step
+    // The bottom-right handle resizes; the top-left corner stays where it is.
+    drag(at(260 + 240, 180 + 80), 40 * k, 20 * k);
+    CHECK(std::fabs(button->width - 280) <= 1 && std::fabs(button->height - 100) <= 1);
+    CHECK(std::fabs(button->x - 260) <= 1 && std::fabs(button->y - 180) <= 1);
+    // A bottom-right anchored element keeps its right edge when its left handle moves.
+    const float cx = 1280.0f * (view[2] / (1280.0f * k)) ;  // reference width of this view
+    (void)cx;
+    const float refW = view[2] / k;
+    drag(at(refW - 40 - 50, 720 - 40 - 30), 0, 0);  // select it
+    CHECK(ed.Selected() == corner);
+    drag(at(refW - 40 - 100, 720 - 40 - 30), -30 * k, 0);  // left edge handle
+    const UIPanel* panel = s.Get<UIPanel>(corner);
+    CHECK(std::fabs(panel->width - 130) <= 1 && std::fabs(panel->x - (-40)) <= 1);
+    // Undo walks back through the drags.
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(std::fabs(s.Get<UIPanel>(corner)->width - 100) <= 1);
+    // Clicking empty space (the transparent backdrop is an element too) selects what is there.
+    drag(at(640, 600), 0, 0);
+    CHECK(ed.Selected() == s.FindByName("Back"));
 }
 
 TEST(NativeEditorTilePainting) {

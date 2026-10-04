@@ -1,0 +1,69 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "pool",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Pool",
+      "components": {
+        "Script": {
+          "path": "scripts/run/pool.lua"
+        },
+        "Sprite": {
+          "width": 1,
+          "height": 1,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 1,
+          "texture": "assets/fx/pool.png",
+          "opacity": 0.55
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Bubbles",
+      "parent": 1,
+      "components": {
+        "ParticleEmitter": {
+          "rate": 18,
+          "lifetime": 0.5,
+          "speed": 1.25,
+          "spread": 180,
+          "direction": [
+            0,
+            1,
+            0
+          ],
+          "gravity": [
+            0,
+            1.2,
+            0
+          ],
+          "startSize": 0.1,
+          "endSize": 0.025,
+          "startColor": [
+            1.0,
+            0.7529,
+            0.2902
+          ],
+          "endColor": [
+            1.0,
+            0.7529,
+            0.2902
+          ],
+          "speedVariation": 1,
+          "space": "world",
+          "dimensions": 2,
+          "texture": "assets/fx/disc.png",
+          "blend": "add",
+          "layer": 12,
+          "maxParticles": 16
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

@@ -155,6 +155,30 @@ Mesh MakePlane() {
     return m;
 }
 
+// The plane split into cells x cells quads sharing vertices: enough vertices for a shader
+// graph's `offset` output (waves, wind) to bend it. Same size, facing and uv as MakePlane.
+Mesh MakePlaneGrid(int cells) {
+    Mesh m;
+    for (int z = 0; z <= cells; ++z) {
+        for (int x = 0; x <= cells; ++x) {
+            const float u = static_cast<float>(x) / static_cast<float>(cells), v = static_cast<float>(z) / static_cast<float>(cells);
+            m.positions.push_back(Vec3(u - 0.5f, 0, v - 0.5f));
+            m.normals.push_back(Vec3(0, 1, 0));
+            m.uvs.push_back(u);
+            m.uvs.push_back(v);
+        }
+    }
+    const uint32_t stride = static_cast<uint32_t>(cells + 1);
+    for (uint32_t z = 0; z < static_cast<uint32_t>(cells); ++z) {
+        for (uint32_t x = 0; x < static_cast<uint32_t>(cells); ++x) {
+            const uint32_t a = z * stride + x, b = a + 1, c = a + stride + 1, d = a + stride;
+            m.indices.insert(m.indices.end(), {d, c, b, d, b, a});
+        }
+    }
+    Finish(m);
+    return m;
+}
+
 // 1x1 quad in the XY plane facing +Z (sprites); uv (0,0) = top-left.
 Mesh MakeQuad() {
     Mesh m;
@@ -215,6 +239,7 @@ const std::map<std::string, Mesh>& Meshes() {
     static const std::map<std::string, Mesh> meshes = {
         {"cube", MakeCube()},
         {"plane", MakePlane()},
+        {"plane64", MakePlaneGrid(64)},
         {"pyramid", MakePyramid()},
         {"quad", MakeQuad()},
         {"sphere", MakeSphere(16, 24)},

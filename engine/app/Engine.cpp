@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include "core/FileSystem.h"
 #include "core/Log.h"
@@ -198,6 +200,7 @@ void Engine::BeginSessionIfNeeded() {
     simTime_ = 0;
     ResetRuntime();  // fresh Lua state and physics world for every session
     gameData_ = Json::MakeObject();
+    gamePaused_ = false;
     runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
     pendingScene_.clear();
 }
@@ -224,6 +227,7 @@ void Engine::ResetRuntime() {
 }
 
 void Engine::ApplySceneChange() {
+    gamePaused_ = false;
     std::string path = pendingScene_;
     pendingScene_.clear();
     std::string err;
@@ -273,7 +277,9 @@ void Engine::Stop() {
     input_.pressedThisFrame.clear();
     input_.mouseDX = input_.mouseDY = 0.0f;
     input_.mouseLocked = false;
+    input_.lookX = input_.lookY = 0.0f;
     gameData_ = Json::MakeObject();
+    gamePaused_ = false;
     frame_ = 0;
     simTime_ = 0;
     Touch();
@@ -329,7 +335,11 @@ void Engine::SimulateFrame() {
     if (journal_ && sync_ && sync_->Running()) journal_->frames.push_back({input_, frameInputs_});
     SimulateWorld();
     AuthorityApplied();
-    if ((sync_ && sync_->Running()) || (authority_ && authority_->Running())) input_ = deviceInput_;
+    if (authority_ && authority_->Running()) {
+        // The frame consumed the relative mouse motion and may have changed the lock (input.lockMouse).
+        bool locked = input_.mouseLocked;
+        input_ = deviceInput_; input_.mouseLocked = locked; input_.mouseDX = input_.mouseDY = 0.0f;
+    } else if (sync_ && sync_->Running()) input_ = deviceInput_;
     // A lockstep/rollback client that fell behind consumes already confirmed frames faster. Game
     // frames stay identical on every peer; only the number simulated per I/O tick differs.
     for (int extra = 0; extra < FrameSync::kCatchUpFrames && sync_ && sync_->Lagging(); ++extra) {
@@ -347,7 +357,9 @@ void Engine::SimulateWorld() {
     debugLines_.erase(std::remove_if(debugLines_.begin(), debugLines_.end(), [&](const TimedLine& t) { return t.expires >= 0 && t.expires <= simTime_; }),
                       debugLines_.end());
     // Scripts run first so they see this frame's edge-triggered input.
-    const float dt = static_cast<float>(kFixedDt);
+    // A paused game still runs scripts and UI, with a zero step, so dialogs work while the world waits.
+    const bool paused = gamePaused_;
+    const float dt = paused ? 0.0f : static_cast<float>(kFixedDt);
     if ((!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) UpdateButtonKeys();
     scripts_->Update(dt);
     if (network_ && authority_ && authority_->Running() && !network_->IsHost()) {
@@ -363,16 +375,10 @@ void Engine::SimulateWorld() {
         }
     } else if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents());
     std::vector<UIEvent> uiEvents = UpdateUI();
-    std::function<const InputState*(EntityId)> playerInput;
-    if (authority_ && authority_->Running()) playerInput = [this](EntityId id) -> const InputState* {
-        if (!PredictEntity(id)) return nullptr;
-        if (const auto* player = scene_.Get<NetPlayer>(id)) return &PlayerInput(static_cast<uint32_t>(player->player));
-        if (const auto* sync = scene_.Get<NetSync>(id)) return &PlayerInput(static_cast<uint32_t>(sync->owner));
-        return &input_;
-    };
-    UpdateSystems(scene_, input_, dt, assets_.get(), playerInput);
-    std::vector<PhysicsEvent> events = authority_ && authority_->Running() && !network_->IsHost() ? StepAuthorityPhysics(dt) : physics_->Step(scene_, dt);
-    UpdateLateSystems(scene_, dt);
+    UpdateSystems(scene_, input_, dt, assets_.get());
+    std::vector<PhysicsEvent> events;
+    if (!paused) events = authority_ && authority_->Running() && !network_->IsHost() ? StepAuthorityPhysics(dt) : physics_->Step(scene_, dt);
+    if (!paused) UpdateLateSystems(scene_, dt);
     scripts_->DispatchPhysicsEvents(events);
     for (const UIEvent& ev : uiEvents) {
         if (!scene_.Exists(ev.id)) continue;
@@ -381,10 +387,13 @@ void Engine::SimulateWorld() {
         else scripts_->Notify(ev.id, ev.method);
     }
     if (!pendingScene_.empty()) ApplySceneChange();
+    // UI animation state last: an element a script or a click showed this frame starts its entrance
+    // before the frame is drawn (never one frame at its final look). Real frames: also while paused.
+    UpdateUIMotion(scene_, static_cast<float>(kFixedDt));
     audio_->Update(scene_);
     audio_->Render();
     ++frame_;
-    simTime_ += kFixedDt;
+    if (!paused) simTime_ += kFixedDt;  // timers and shader time wait with the world
     inWorld_ = false;
     if (sync_ && sync_->Running() && !replaying_) {
         sync_->Applied(frameInputs_);
@@ -424,7 +433,18 @@ InputState Engine::SampleNetworkInput() {
         sample.down.insert(key);
     }
     networkButtonKeys_ = std::move(keys);
+    if (networkConfig_.sync.look[0]) sample.axes["RightX"] = sample.lookX;
+    if (networkConfig_.sync.look[1]) sample.axes["RightY"] = sample.lookY;
     return sample;
+}
+
+void Engine::SetLook(float x, float y) {
+    // Replayed frames must not move the device: they only re-run what the stream already holds.
+    if (replaying_) return;
+    auto grid = [](float v) { return std::round(Clamp(std::isfinite(v) ? v : 0.0f, -1.0f, 1.0f) * 32767.0f) / 32767.0f; };
+    // In a match input_ is the decoded sample; the device copy is what the next frame samples.
+    InputState& device = (sync_ && sync_->Running()) || (authority_ && authority_->Running()) ? deviceInput_ : input_;
+    device.lookX = grid(x); device.lookY = grid(y);
 }
 
 void Engine::UpdateButtonKeys() {
@@ -459,9 +479,64 @@ std::vector<Engine::UIEvent> Engine::UpdateUI() {
         if (hover != kNullEntity) events.push_back({hover, "onPointerEnter", false, 0.0f});
         uiHovered_ = hover;
     }
+    // Scroll views: the wheel scrolls the topmost one under the pointer, a press on its empty area drags
+    // the content, and its bar can be grabbed (or its track clicked) to move straight to a position.
+    bool barPress = false;
+    {
+        const float scale = std::max(1e-3f, UIScale(scene_, w, h));
+        const UIRect* over = nullptr;
+        for (const UIRect& r : rects) {
+            if (!r.scroll || px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h) continue;
+            if (r.clipped && !(px >= r.clip[0] && px < r.clip[2] && py >= r.clip[1] && py < r.clip[3])) continue;
+            over = &r;
+        }
+        auto thumbOf = [&](const UIRect& r, const UIScroll& sc) {
+            const float view = r.scrollHorizontal ? r.w : r.h;
+            return ScrollThumb(view, view + r.scrollMax * scale, sc.scroll * scale, scale);
+        };
+        if (over && input_.wheel != 0.0f) {
+            if (UIScroll* sc = scene_.Get<UIScroll>(over->entity)) sc->scroll = Clamp(sc->scroll - input_.wheel * sc->wheelStep, 0.0f, over->scrollMax);
+        }
+        if (input_.pressedThisFrame.count("MouseLeft")) {
+            uiScrollDrag_ = uiScrollBar_ = kNullEntity;
+            const UIScroll* sc = over ? scene_.Get<UIScroll>(over->entity) : nullptr;
+            if (sc && sc->bar && over->scrollMax > 0.0f) {
+                // the strip along the far edge belongs to the bar, wider than the thumb so it is easy to hit
+                const float across = over->scrollHorizontal ? over->y + over->h - py : over->x + over->w - px;
+                if (across >= 0.0f && across <= 18.0f * scale) {
+                    const UIThumb t = thumbOf(*over, *sc);
+                    const float along = over->scrollHorizontal ? px - over->x : py - over->y;
+                    uiScrollBar_ = over->entity;
+                    uiScrollGrab_ = along >= t.at && along <= t.at + t.length ? along - t.at : t.length * 0.5f;
+                    barPress = true;
+                }
+            }
+            if (!barPress) {
+                uiScrollDrag_ = over && !hit ? over->entity : kNullEntity;
+                if (over) uiScrollLast_ = over->scrollHorizontal ? px : py;
+            }
+        } else if (!input_.IsDown("MouseLeft")) {
+            uiScrollDrag_ = uiScrollBar_ = kNullEntity;
+        }
+        for (const UIRect& r : rects) {
+            if (!r.scroll) continue;
+            if (r.entity == uiScrollBar_) {
+                UIScroll* sc = scene_.Get<UIScroll>(r.entity);
+                const UIThumb t = thumbOf(r, *sc);
+                const float along = r.scrollHorizontal ? px - r.x : py - r.y;
+                if (t.travel > 0.0f) sc->scroll = Clamp((along - uiScrollGrab_ - t.margin) / t.travel, 0.0f, 1.0f) * r.scrollMax;
+            } else if (r.entity == uiScrollDrag_) {
+                UIScroll* sc = scene_.Get<UIScroll>(r.entity);
+                const float now = r.scrollHorizontal ? px : py;
+                sc->scroll = Clamp(sc->scroll - (now - uiScrollLast_) / scale, 0.0f, r.scrollMax);
+                uiScrollLast_ = now;
+            }
+        }
+    }
     if (input_.pressedThisFrame.count("MouseLeft")) {
-        uiPressed_ = hover;
-        if (hit && hit->kind == UIRect::Kind::Button) events.push_back({hover, "onClick", false, 0.0f});
+        // a press on a scroll bar is not a click on the row under it
+        uiPressed_ = barPress ? kNullEntity : hover;
+        if (!barPress && hit && hit->kind == UIRect::Kind::Button) events.push_back({hover, "onClick", false, 0.0f});
     } else if (!input_.IsDown("MouseLeft")) {
         uiPressed_ = kNullEntity;
     }
@@ -734,13 +809,15 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
     return response;
 }
 
-std::future<Json> Engine::PostCall(const std::string& name, const Json& args) {
+std::future<Json> Engine::PostCall(const std::string& name, const Json& args, const std::string& agent) {
     auto promise = std::make_shared<std::promise<Json>>();
     std::future<Json> future = promise->get_future();
     std::lock_guard<std::mutex> lock(jobsMutex_);
-    jobs_.push_back([this, name, args, promise] {
+    jobs_.push_back([this, name, args, agent, promise] {
+        remoteAgent_ = agent;  // known to the command itself (team.send counts an agent's hops) and to the observer
         Json result = Call(name, args);
         if (remoteObserver_) remoteObserver_(name, args, result);
+        remoteAgent_.clear();
         promise->set_value(std::move(result));
     });
     return future;
@@ -767,6 +844,20 @@ void Engine::RunPostedJobs() {
         pending.swap(jobs_);
     }
     for (auto& job : pending) job();
+}
+
+std::string Engine::Today() const {
+    if (!dateOverride_.empty()) return dateOverride_;
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#ifdef _MSC_VER
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char text[16];
+    std::snprintf(text, sizeof(text), "%04d-%02d-%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
+    return text;
 }
 
 }  // namespace oe

@@ -98,6 +98,18 @@ struct EditorCamera {
     }
 };
 
+// Spacing of the 2D Scene view grid: the power of ten that keeps neighbouring
+// lines at least `minPixels` apart (every tenth line is drawn stronger).
+inline float Grid2DStep(float unitsPerPixel, float minPixels = 10.0f) {
+    float units = std::max(1e-6f, unitsPerPixel * minPixels);
+    return std::pow(10.0f, std::ceil(std::log10(units) - 1e-4f));
+}
+
+// A grid level appears once its cells are this many pixels wide and is fully
+// drawn at ten times that (where the next finer level starts to appear).
+constexpr float kGrid2DMinPixels = 8.0f;
+inline float Grid2DAlpha(float cellPixels) { return Clamp((cellPixels - kGrid2DMinPixels) / (kGrid2DMinPixels * 9.0f), 0.0f, 1.0f); }
+
 // World-space ray through a pixel of a view (x, y from the top-left).
 inline void ScreenRay(const Mat4& view, const Mat4& proj, float x, float y, float width, float height, Vec3& origin, Vec3& dir) {
     Mat4 inv = (proj * view).Inverse();

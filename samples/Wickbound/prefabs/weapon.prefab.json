@@ -1,0 +1,20 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "weapon",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Weapon",
+      "components": {
+        "Script": {
+          "path": "scripts/run/weapon.lua",
+          "params": {
+            "id": "ember_bolt"
+          }
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

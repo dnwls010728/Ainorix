@@ -378,6 +378,7 @@ private:
                     float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / static_cast<float>(WHEEL_DELTA);
                     if (msg == WM_MOUSEWHEEL) e.y = notches;
                     else e.x = -notches;
+                    if (msg == WM_MOUSEWHEEL && self->input_) self->input_->wheel += notches;
                     self->Push(e);
                     return 0;
                 }
@@ -401,6 +402,8 @@ private:
                 case WM_DROPFILES: {
                     HDROP drop = reinterpret_cast<HDROP>(wp);
                     UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+                    POINT point = {0, 0};
+                    DragQueryPoint(drop, &point);  // client pixels: tools decide by where the file landed
                     for (UINT i = 0; i < count; ++i) {
                         UINT len = DragQueryFileW(drop, i, nullptr, 0);
                         std::wstring w(static_cast<size_t>(len) + 1, L'\0');
@@ -408,6 +411,8 @@ private:
                         w.resize(len);
                         WindowEvent e;
                         e.type = WindowEvent::Type::DropFile;
+                        e.x = static_cast<float>(point.x);
+                        e.y = static_cast<float>(point.y);
                         e.path = Narrow(w);
                         for (char& c : e.path) {
                             if (c == '\\') c = '/';

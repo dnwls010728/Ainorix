@@ -1,4 +1,4 @@
--- Lua port of the built-in Rotator component.
+-- Spins the entity at a constant angular speed.
 -- params: { "degreesPerSecond": [x, y, z] }   (default: 45 deg/s around Y)
 local Rotator = {}
 

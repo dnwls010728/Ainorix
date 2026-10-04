@@ -2,6 +2,46 @@
 
 ## Implementation status (work log)
 
+### Shader graph vertex offset and normal outputs (2026-10-04)
+
+- [x] Add the optional graph outputs `offset` (vertex displacement added to the
+      world position, evaluated per vertex) and `normal` (per-fragment world-space
+      lighting normal) in both renderers; the node limit rises from 32 to 48.
+      Displaced surfaces also move in the shadow map, the depth-of-field depth
+      pass and the selection outline. ShaderGraphVertexOffset covers compile
+      rules, the reference offset and software/D3D11 parity.
+- [x] Add the built-in mesh `plane64` (64x64 cells) and `samples/Water`, a rolling
+      sea driven by a 47-node graph. WaterSamplePlays passes; Windows passes 182
+      tests.
+- [ ] Rebuild the prebuilt web runtime and both Android players. Shipped players
+      ignore `offset`/`normal` and reject graphs with more than 32 nodes.
+- [ ] Verify the vertex-stage evaluator on WebGL2, GLES3 and Linux/EGL; only
+      D3D11 and the software renderer are checked.
+
+### Depth of field and HD-2D sprites (2026-10-04)
+
+- [x] Add `Sprite.billboard` (`none`/`upright`/`camera`) and `Sprite.castShadows`;
+      alpha-test every `mask` surface with a base texture or shader graph in the
+      shadow pass of both renderers. SpriteBillboards and SpriteCutoutShadows pass.
+      Later `Sprite.billboard` was removed from the engine: billboards moved to the
+      project script `samples/HD2D/scripts/billboards.lua` (tests:
+      `SpriteBillboardScript`, `HD2DSamplePlays`, `RemovedComponentsStillLoad`).
+- [x] Add PostProcess depth of field (`dofRadius`, `dofFocus`, `dofRange`,
+      `dofFalloff`) in both renderers: two separable gather passes before bloom,
+      software depth buffer or a GPU R32F depth pass. CameraDepthOfField covers
+      a focused cube untouched and a far cube soft, focus swap, worker-thread
+      determinism, unchanged depth/IDs, unaffected UI, serialization and
+      undo/redo and an orthographic camera. Software/D3D11 mean channel
+      difference is 0.62 of 255 with RGBA8 and 0.34 with Reinhard HDR.
+      Windows passes 179 tests.
+- [x] Add `samples/HD2D` ("Lantern Road") using billboards, sprite shadows and
+      depth of field; key 1 toggles all camera effects, key 2 only depth of field.
+- [ ] Rebuild the prebuilt web runtime (`build_web.bat`, Emscripten SDK) and both
+      Android players (`build_android.bat`, NDK). Shipped players do not yet have
+      sprite shadows or depth of field.
+- [ ] Verify execution of the new `scene_depth` and `dof` shaders on WebGL2,
+      GLES3 and Linux/EGL; only D3D11 and the software renderer are checked.
+
 ### P6 completion pass (2026-10-03)
 
 - [x] Verify varying-alpha shadows against independent half-width geometry;
@@ -239,8 +279,9 @@ An exposure other than 1, enabled tone mapping or nonzero bloom selects an HDR s
 float32 RGB in software and RGBA16F on the GPU. Lighting and emissive channels
 remain above 1 through opaque draws and alpha blending, bounded to the largest
 finite float16 value (65504) before blending. Exposure is applied after scene
-rendering and bloom addition, followed by tone mapping, clamping to 0..1,
-vignette and then overlays.
+rendering, depth of field and bloom addition, followed by tone mapping, clamping
+to 0..1, vignette and then overlays. The full order is: scene, depth of field,
+bloom, exposure/tone mapping, vignette, FXAA, selection outline and UI.
 Only the final display image is quantized to RGBA8. With exposure 0.25, emissive
 RGB (8,4,2) becomes (2,1,0.5), or (2/3,1/2,1/3) with Reinhard enabled; clipping
 the scene to RGBA8 first would lose that distinction.
@@ -291,6 +332,56 @@ or screen-size-independent radius. Cost and memory grow with scene resolution
 and radius; it is intended as an optional, directly testable effect. Increase
 radius for a broader halo or lower threshold for dimmer light sources.
 
+## Depth of field
+
+PostProcess controls (all default to disabled):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `dofRadius` | 0 | Integer 0..16: largest blur radius in scene pixels for surfaces far from the focus; 0 disables the effect. Scene pixels are the scene buffer, like `bloomRadius`, so the look depends on resolution and `renderScale` |
+| `dofFocus` | 10 | View depth in meters (distance in front of the camera along its view direction) that is sharp |
+| `dofRange` | 2 | Depth on either side of `dofFocus` that stays fully sharp |
+| `dofFalloff` | 8 | Further depth over which the blur grows linearly to `dofRadius` (minimum 0.01) |
+
+The blur radius (circle of confusion, coc) of a surface at view depth d is
+`dofRadius * clamp((|d - dofFocus| - dofRange) / dofFalloff, 0, 1)`.
+
+```json
+{"command":"component.set","args":{"id":"Camera","type":"PostProcess","values":{"dofRadius":6,"dofFocus":12.9,"dofRange":2.2,"dofFalloff":7}}}
+```
+
+Two separable gather passes (horizontal, then vertical) run over the scene
+color, each over offsets -dofRadius..dofRadius with edge clamping. A sample k
+pixels away has weight `clamp(coc - k + 1, 0, 1)`, where coc is the sample's own
+blur radius; a sample behind the filtered pixel uses `min(its coc, the filtered
+pixel's coc)` instead. A blurred background therefore does not bleed over a sharp
+surface in front of it, while a blurred foreground spreads over what is behind it.
+The result is the weighted average.
+
+Order: scene, depth of field, bloom, exposure/tone mapping, vignette, FXAA,
+then selection outline and UI (UI is never blurred). The effect works on the
+RGBA8 scene buffer or the HDR buffer, whichever the other settings select; it
+does not select HDR by itself. Depth and entity IDs (picking) are unchanged, and
+`dofRadius` 0 skips the passes and keeps previous frame hashes. Perspective and
+orthographic cameras both work (same view depth).
+
+Depth comes from opaque and cut-out surfaces. Blended surfaces (soft-edged
+sprites, particles, anything with opacity below 1) write no depth and are blurred
+like whatever is behind them; pixels with nothing drawn count as the far plane.
+
+The software renderer uses its depth buffer directly. The GPU renderer adds one
+single-sample geometry pass that writes the depth buffer value into an R32F
+target, then runs the two blur passes in the scene format (shaders `scene_depth`
+and `dof` in `engine/render/shaders/Shaders.glsl`; helpers `DofViewDepth`,
+`DofCoc` and `DofWeight` in `engine/render/PostProcess.h`). It needs renderable
+R32F targets; without them an error tells the caller to use the software
+renderer. Because the depth pass is not multisampled, MSAA edge pixels of a
+focused object can carry the background's depth and smear slightly.
+
+Verified by CameraDepthOfField (see the work log). The prebuilt web and Android
+players do not include depth of field yet, and WebGL2/GLES3/EGL execution of the
+new shaders is unverified. `samples/HD2D` uses it with a long lens.
+
 ## FXAA controls
 
 PostProcess.fxaa is a boolean, disabled by default. Enable it through
@@ -318,6 +409,12 @@ effect settings so switching back to Off cannot retain bloom or HDR targets.
 The initial scene keeps all effects neutral. Adjust preset values in
 `samples/Showcase/scripts/post_process.lua`; no engine rebuild is needed.
 
+## HD2D sample
+
+`oe run samples/HD2D`: pixel-art sprites turned to the camera by a script in a lit 3D world. Key 1
+toggles all camera effects (Reinhard exposure, bloom, vignette, depth of field)
+and key 2 toggles only depth of field, to compare with the plain scene.
+
 ## Portable surface shader graphs
 
 `samples/WuwaToon` demonstrates a project-authored toon graph with independent
@@ -326,8 +423,8 @@ comparisons and original procedural silhouette geometry. See [TOON.md](TOON.md)
 for public reference provenance, runnable controls, verification and limits.
 
 A project authors a *.shader.json graph rather than platform-specific HLSL or
-GLSL. The graph is a programmable fragment surface calculation, not a list of
-built-in visual presets. Ordered four-vector instructions form an acyclic
+GLSL. The graph is a programmable surface calculation (per-fragment color, emission
+and normal, optional per-vertex displacement), not a list of built-in visual presets. Ordered four-vector instructions form an acyclic
 program; the CPU reference evaluates the same instructions that the generated
 GPU evaluator will execute. Existing sokol-shdc generation remains the backend
 compiler. Material binding and main fragment execution are implemented on CPU
@@ -362,11 +459,68 @@ Each node's args contains indices of earlier nodes; cycles and forward reference
 are rejected. color references the RGBA output, and optional emissive references
 an RGB output. All registers are four-vectors. Scalar constants/uniform defaults
 broadcast to all channels; vector values must have exactly four finite numbers
-in -65504..65504. Up to 32 nodes and 8 named uniform defaults are supported.
+in -65504..65504. Up to 48 nodes and 8 named uniform defaults are supported.
 Per-material overrides must name declared uniforms and preserve unspecified
 values. Node outputs saturate to -65504..65504; NaN becomes zero. Division by
 zero returns zero for that channel. This gives the GPU a finite bounded program
 and keeps the CPU reference independent of platform compiler behavior.
+
+Two more optional outputs sit next to `color` and `emissive`:
+
+- `"offset": <node index>` displaces vertices. The node's xyz is added to each
+  vertex's world position. It is evaluated per vertex, in both renderers, and only
+  the instructions up to that node run in the vertex stage. Vertex-stage inputs:
+  `position` (world position before the offset), `normal` (world vertex normal),
+  `uv` (mesh uv with the sprite frame and material tiling/offset), `time`, and
+  `baseColor` (the material's base color and opacity without the texture). A
+  `texture` node cannot feed `offset`; `shader.create`/`shader.check` reject it
+  ("offset must not depend on a texture node"). In the fragment stage `position`
+  is the displaced world position.
+- `"normal": <node index>` replaces the world-space lighting normal per fragment.
+  The renderer normalizes it; a zero vector keeps the geometric normal; it is
+  flipped on back faces of double-sided materials, and a normal map is applied on
+  top of it. The `normal` input node still gives the geometric normal.
+
+Displaced surfaces are displaced consistently in the shadow map, the
+depth-of-field depth pass and the editor selection outline. The displacement is
+render-only: physics, `physics.raycast` picking and `boundsMin`/`boundsMax` do not
+know about it. Shared vertices need a mesh with enough vertices, so use `plane64`
+(see [RENDERING.md](RENDERING.md)) rather than the 4-vertex `plane`.
+`shader.create`, `shader.check` and `asset.info` report `normal` and `offset`
+(-1 = absent). Prebuilt web and Android players older than this change ignore both
+outputs and reject graphs with more than 32 nodes until they are rebuilt.
+
+Example: a sine wave along world x that moves with time lifts the vertices of a
+`plane64` surface (`offset` uses the xyz of its node, so only the y channel is set):
+
+```json
+{
+  "format": "ownengine.shader",
+  "uniforms": {"amplitude": 0.4},
+  "nodes": [
+    {"op": "position"},
+    {"op": "time"},
+    {"op": "add", "args": [0, 1]},
+    {"op": "sin", "args": [2]},
+    {"op": "uniform", "name": "amplitude"},
+    {"op": "multiply", "args": [3, 4]},
+    {"op": "constant", "value": [0, 1, 0, 0]},
+    {"op": "multiply", "args": [5, 6]},
+    {"op": "constant", "value": [0.1, 0.4, 0.8, 1]}
+  ],
+  "color": 8,
+  "offset": 7
+}
+```
+
+Two uniform names are reserved: a graph that declares `cameraPosition` receives the
+rendering view's world position (w = 1) and one that declares `lightDirection` receives the
+unit vector toward the first directional light (w = 0), every frame and in both renderers.
+Declared defaults and material overrides for these two names are replaced, so view- and
+light-dependent graphs follow a moving camera or sun without material edits
+(`samples/NetChase`). They still count toward the eight uniforms. Graphs without these
+names are unaffected. Prebuilt web/Android players older than this change leave the
+declared defaults in place.
 
 Inputs: uv, world position, world normal, fixed simulation time (broadcast),
 baseColor RGBA, and texture(args UV) for the material's base texture. Missing
@@ -389,6 +543,17 @@ Operations and argument counts:
 | dot | 2 | Four-channel dot product, broadcast |
 | normalize | 1 | Four-vector length; length <=1e-8 gives zero |
 | swizzle | 1 | value contains four channel indices 0..3 |
+
+`MeshRenderer.shaderUniforms` overrides graph uniforms per entity: `{name: number or [x, y, z, w]}`.
+Unnamed uniforms keep the material's values, so entities sharing one material file can draw
+differently, and a script can change the values every frame with `scene.set(id, "MeshRenderer",
+{shaderUniforms = {...}})` without touching the material file. Setting the component field replaces
+the whole object. A name the graph does not declare, a malformed value, or uniforms on a material
+without a graph render the mesh magenta, like a broken material. The values are resolved when render
+items are gathered, so both renderers use them (`MeshRendererShaderUniforms` test); the reserved
+`cameraPosition`/`lightDirection` uniforms still win. Prebuilt web and Android players built before
+this field need a rebuild to run scenes or scripts that use it. (For 2D light and darkness use
+`Light2D`/`Darkness2D`, see [2D.md](2D.md#lights-and-darkness).)
 
 Material files accept shader (a project-relative graph path) and shaderUniforms
 (named scalar/four-vector overrides). The graph's color RGBA replaces the
@@ -419,3 +584,19 @@ the same asset path covered by ShaderMaterialRendering. Package with
 `oe package samples/ShaderLab --web` or the native packaging command. Graph and
 material assets are included in game.pak; extraction preserves the reference
 frame hash at a fixed simulation time.
+
+## Water sample
+
+`oe run samples/Water` is a rolling sea: one `plane64` scaled 44x44 whose graph
+`materials/water.shader.json` (47 nodes) sums four sine waves, one per register
+channel. `offset` lifts the vertices, `normal` gives per-pixel slopes so sun glitter
+comes from the ordinary PBR lighting, and `color` goes from trough to crest color
+plus foam. `scripts/waves.lua` holds the same wave table; `scripts/float.lua` makes
+buoys, crates and a boat ride and lean on the surface (it samples at
+`time.now() + dt` because the frame is drawn with the time after the step).
+`scripts/ocean.lua` eases between the sea states Calm/Swell/Storm (keys 1/2/3) and
+sends amplitudes and colors through `MeshRenderer.shaderUniforms` every frame.
+`scripts/orbit.lua` orbits the camera (A/D or arrows turn, W/S zoom, Q/E height).
+`python tools/make_scene.py` regenerates the scene, graph and material. WaterSamplePlays
+checks that a buoy's height equals the graph's vertex stage, the storm preset, the
+orbit camera and determinism.

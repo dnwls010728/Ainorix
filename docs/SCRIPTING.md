@@ -75,11 +75,13 @@ end
 | `scene.destroy(id)` | Destroys the entity and its children |
 | `scene.find(name)` | Entity id or `nil` |
 | `scene.exists(id)`, `scene.name(id)`, `scene.parent(id)` | Entity info |
+| `scene.children(id)` / `scene.child(id, name)` | Direct children in id order / the child with that name or `nil` (parts of a prefab: body sprite, light, sensors) |
 | `scene.all(type?)` | Array of entity ids (optionally only those with a component) |
 | `scene.withTag(tag)` | Array of entity ids whose `Tag` contains `tag` |
 | `input.down(key)` / `input.pressed(key)` | Key held / pressed this frame (`"W"`, `"Space"`, `"Left"`, …) |
 | `input.axis(name)` | Gamepad stick LeftX/LeftY/RightX/RightY (-1..1; +Y up) or LT/RT (0..1), with a 0.15 scalar dead zone rescaled to full range. Buttons use `input.down/pressed("GamepadA")` etc.; see [INPUT.md](INPUT.md) |
-| `time.dt()`, `time.frame()`, `time.now()` | Step length, frame number, simulated seconds |
+| `time.dt()`, `time.frame()`, `time.now()` | Step length (0 while the game is paused), frame number, simulated seconds (they wait during a pause) |
+| `time.date()` | Calendar date `"YYYY-MM-DD"` in local time, for features outside the simulation (daily rewards). Tools pin it with `time.date {set}` |
 | `log.info(...)`, `log.warn(...)`, `log.error(...)`, `print(...)` | Engine log (`log.get`) |
 | `physics.raycast(origin, dir, maxDist?)` | `{entity, point, normal, distance}` or `nil` |
 | `physics.overlapSphere(center, radius)` / `physics.contacts(id)` | Entity ids |
@@ -91,11 +93,15 @@ end
 | `scene.send(id, method, ...)` / `scene.broadcast(method, ...)` | Call methods on other scripts |
 | `timer.after(s, fn)` / `timer.every(s, fn)` / `timer.cancel(id)` | Timers on simulated time |
 | `game.set(k, v)` / `game.get(k)` / `game.loadScene(path)` / `game.scene()` | Cross-scene data and scene changes |
+| `game.pause(on?)` / `game.paused()` | Gameplay pause for menus and dialogs: scripts and UI keep running with `dt = 0`; physics, built-in systems, timers, particles and simulated time wait. Cleared by scene changes and `sim.stop` |
 | `save.get(key, default?, slot?)` / `save.set(key, value, slot?)` | Save slots; finite JSON values only. Default slot is `default` |
 | `save.delete(key, slot?)` / `save.flush(slot?)` | Remove a key / persist pending changes. Tools default to memory; `--save-dir` enables files ([SAVE.md](SAVE.md)) |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |
 | `input.mouse()` | Mouse position in the game view (0..1) |
 | `input.touches()` | Every finger on a touch screen: `{ {id=, x=, y=, began=}, ... }` (`x, y` normalized like `input.mouse()`, `began` = put down this step). The first finger also acts as the mouse. `UIButton.key` turns buttons into on-screen keys (docs/UI.md) |
+| `input.wheel()` | Mouse wheel notches this step (> 0 = away from the user); `UIScroll` panels use it by themselves |
+| `tween.to(id, type, values, seconds, opts?)` | Animates numeric, vector (`{x=,y=,z=}` or `{1,2,3}`) and colour fields of a component from their current to the given values. opts: `ease` (`linear`, `inQuad`, `outQuad`, `inOutQuad`, `inCubic`, `outCubic` (default), `outBack`, `outElastic`), `delay`, `loop` (`"loop"` / `"pingpong"`), `scaled` (true = waits while the game is paused; default false, so UI keeps moving), `onDone` (function). Returns a handle |
+| `tween.from(id, type, values, seconds, opts?)` / `tween.cancel(handle)` / `tween.stop(id, type?)` | Start at `values` and settle on the current ones / stop one tween / stop every tween of an entity (or of one of its components) |
 | `input.mouseDelta()` | Relative mouse motion in pixels since the last step (`dx, dy`; `dy` > 0 = down) — for mouse look |
 | `input.lockMouse(on?)` / `input.mouseLocked()` | Capture the mouse for mouse look: hidden cursor kept in the view (Windows), Pointer Lock (web, editor Game view). **Escape** releases it and the next click captures it again (that click is not passed to the game). Where the browser refuses pointer lock, clicks go through and `input.mouse()` keeps working |
 | `draw.line(a, b, color?, s?)` / `draw.box(c, size, color?, s?)` / `draw.sphere(c, r, color?, s?)` | Debug lines (default: this frame only) |
@@ -103,7 +109,7 @@ end
 
 Instance helpers (from the built-in base class): `self:get(type)`, `self:set(type, values)`, `self:add`, `self:has`, `self:remove`, `self:destroy()`, `self:position()`, `self:setPosition(x, y, z)`, `self:translate(x, y, z)`, `self:rotate(x, y, z)`, and for physics (CharacterBody, CharacterBody2D, RigidBody or RigidBody2D) `self:grounded()`, `self:velocity()`, `self:setVelocity(x, y, z)`, `self:addImpulse(x, y, z)`, `self:contacts()`.
 
-`scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are line-by-line Lua ports of the built-in `Rotator` and `PlayerController` components; tests check they behave identically.
+`scripts/rotator.lua` and `scripts/player_controller.lua` in every new project are the implementation of rotating and WASD/arrows + Space movement (there are no built-in equivalents); tests `TemplateRotatorScript`, `TemplatePlayerScript` and `TemplatePlayerScriptWithCharacterBody` cover them. For constant linear motion call `self:translate(x*dt, y*dt, z*dt)`.
 
 ## Networking (M4–M6)
 
@@ -227,8 +233,8 @@ checkpoints and replays at most eight frames. See [NETWORK.md](NETWORK.md) for b
 With `network.mode: "authoritative"`, put `NetSync` on replicated entities and `NetPlayer` on
 controlled entities. `network.playerPrefab` can spawn one per ready player automatically.
 The server owns state; a client's frame-tagged inputs only enter its authenticated player stream.
-For example, a player script reads `input.player(self:get("NetPlayer").player)`. The built-in
-PlayerController also uses that player's input instead of the host's local controls.
+For example, a player script reads `input.player(self:get("NetPlayer").player)`. The template `player_controller.lua` reads the local controls, so a networked game uses its own player script.
+On an authoritative client, scripts on replicated (NetSync) entities it does not own do not run; put cosmetic motion of such an entity on a plain entity's script (`samples/NetChase/scripts/spin.lua` spins the `Target` crystal from an entity `Target Spin`).
 
 Clients predict their owned entities, interpolate remote replicated entities and continue running
 local/unreplicated scripts (UI/cameras). Guard server-only level/spawn/score logic with
@@ -236,6 +242,16 @@ local/unreplicated scripts (UI/cameras). Guard server-only level/spawn/score log
 in NetSync.fields for physical players. Corrections preserve Lua state and replay only unacknowledged
 inputs; RPC callbacks are journaled, repeated sends suppressed and speculative audio deferred.
 Authoritative scene transitions and late join require a new ready barrier after leaving/stopping.
+
+Mouse look in an authoritative match: `input.mouseDelta()`, `input.lockMouse()` and `input.mouseLocked()`
+work in local scripts (cameras), but raw mouse motion is not part of any player's input stream. A correction
+restores Lua state and game data to the acknowledged frame and replays without mouse motion, so a turn kept
+in `self`, in `game.set` or sent by RPC is taken back on every snapshot. Store it with `input.setLook(x, y)`
+instead (each -1..1, kept on the device outside checkpoints, ignored during replays) and declare `LookX`
+and/or `LookY` in `network.axes`: they use the RightX/RightY wire slots without a dead zone. Read it with
+`input.look()` or `input.player(id).look()` (returns x, y). `samples/NetChase/scripts/camera.lua` adds the
+mouse delta to the look each frame and `player.lua` turns it into the facing on the server and in prediction.
+Lockstep and rollback matches carry the look axes too but still hide `mouseDelta`/`lockMouse` from scripts.
 
 `net.rpc("owner", "notice", self.id, "Hit!")` routes to the entity's NetSync.owner (0 means server).
 The handler receives the routing entity argument too: `net.on("notice", function(entityId, text)

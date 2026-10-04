@@ -1,0 +1,45 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "fx_ring",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ring fx",
+      "components": {
+        "Script": {
+          "path": "scripts/fx/ring.lua"
+        },
+        "Sprite": {
+          "width": 1,
+          "height": 1,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/ring.png",
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Fill",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 1,
+          "height": 1,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 11,
+          "texture": "assets/fx/ring_fill.png",
+          "blend": "add",
+          "opacity": 0.35,
+          "visible": false
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}

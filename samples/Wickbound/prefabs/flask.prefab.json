@@ -1,0 +1,71 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "flask",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Flask",
+      "components": {
+        "Script": {
+          "path": "scripts/run/flask.lua"
+        },
+        "Sprite": {
+          "width": 0.35000000000000003,
+          "height": 0.15000000000000002,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 6,
+          "texture": "assets/fx/shadow.png",
+          "opacity": 0.3
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 2,
+      "name": "Body",
+      "parent": 1,
+      "components": {
+        "Sprite": {
+          "width": 0.325,
+          "height": 0.325,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/disc.png",
+          "order": 1,
+          "color": [
+            0.8471,
+            1.0,
+            0.5412
+          ]
+        },
+        "Transform": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Glow",
+      "parent": 2,
+      "components": {
+        "Sprite": {
+          "width": 0.8,
+          "height": 0.8,
+          "alphaCutoff": 0,
+          "pixelArt": false,
+          "layer": 10,
+          "texture": "assets/fx/glow.png",
+          "color": [
+            0.7843,
+            1.0,
+            0.3529
+          ],
+          "opacity": 0.7,
+          "blend": "add"
+        },
+        "Transform": {}
+      }
+    }
+  ]
+}
