@@ -61,6 +61,10 @@ public:
     void Notify(EntityId id, const char* method);
     // Same with a number argument: `method(self, value)`.
     void Notify(EntityId id, const char* method, float value);
+    // Same with a boolean argument: `method(self, flag)`.
+    void NotifyFlag(EntityId id, const char* method, bool flag);
+    // Same with a string argument: `method(self, text)`.
+    void NotifyText(EntityId id, const char* method, const std::string& text);
     // Ordered session notifications and bounded RPC handlers at the fixed frame boundary.
     void DispatchNetwork(const std::vector<SessionEvent>& events);
     void DispatchRpc(uint32_t sender, const std::string& name, const Json& args);
@@ -118,7 +122,9 @@ private:
     int GetModule(const std::string& path);  // ref or -1
     bool ReloadModule(const std::string& path, Module& module);
     void DestroyInstance(EntityId id, Instance& inst, bool callOnDestroy);
-    bool CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other = kNullEntity);
+    // The one extra argument is `text` or `flag` (boolean) when given, else dt (withDt), else `other`.
+    bool CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other = kNullEntity, const bool* flag = nullptr,
+                    const std::string* text = nullptr);
 
     Engine& engine_;
     lua_State* L_ = nullptr;

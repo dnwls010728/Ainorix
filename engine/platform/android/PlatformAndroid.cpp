@@ -42,16 +42,17 @@ class AndroidAudioDevice;
 
 // Input collected by the glue callbacks, applied in PumpEvents.
 struct Event {
-    enum Kind { Down, Up, Move, Clear, Delta, TouchDown, TouchMove, TouchUp } kind;
+    enum Kind { Down, Up, Move, Clear, Delta, TouchDown, TouchMove, TouchUp, Text } kind;
     std::string key;
     float x = 0, y = 0;
-    int id = 0;  // Touch*: pointer id
+    int id = 0;  // Touch*: pointer id; Text: the Unicode character
 };
 
 struct State {
     android_app* app = nullptr;
     ANativeWindow* window = nullptr;
     bool resumed = false;
+    bool textInput = false;  // a UIInput has the focus: the soft keyboard is up and key presses are also text
     std::function<void()> surfaceLost;
     std::vector<Event> events;
     AndroidAudioDevice* audio = nullptr;
@@ -291,6 +292,10 @@ const char* KeyName(int32_t code) {
         case AKEYCODE_DPAD_RIGHT: return "Right";
         case AKEYCODE_DPAD_UP: return "Up";
         case AKEYCODE_DPAD_DOWN: return "Down";
+        case AKEYCODE_DEL: return "Backspace";
+        case AKEYCODE_FORWARD_DEL: return "Delete";
+        case AKEYCODE_MOVE_HOME: return "Home";
+        case AKEYCODE_MOVE_END: return "End";
         default: return nullptr;
     }
 }
@@ -470,6 +475,9 @@ int32_t OnMotion(const AInputEvent* event) {
     }
 }
 
+uint32_t AndroidKeyChar(int device, int code, int meta);
+void ShowSoftKeyboard(bool show);
+
 int32_t OnInput(android_app*, AInputEvent* event) {
     if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) return OnMotion(event);
     if (AInputEvent_getType(event) != AINPUT_EVENT_TYPE_KEY) return 0;
@@ -494,6 +502,14 @@ int32_t OnInput(android_app*, AInputEvent* event) {
         }
         UpdateGamepadLegacy();
         return 1;
+    }
+    // Typing: an on-screen keyboard without an InputConnection (NativeActivity has none) sends key events for
+    // the characters it can; KeyCharacterMap turns them into text. Composed text (Korean, Japanese, swipe
+    // typing) needs a Java InputConnection and does not arrive.
+    if (S().textInput && action == AKEY_EVENT_ACTION_DOWN) {
+        if (const uint32_t c = AndroidKeyChar(AInputEvent_getDeviceId(event), code, AKeyEvent_getMetaState(event))) {
+            S().events.push_back({Event::Text, std::string(), 0, 0, static_cast<int>(c)});
+        }
     }
     const char* key = KeyName(code);
     if (!key) return 0;  // volume, home, ...: the system handles them
@@ -575,6 +591,7 @@ public:
                     input.down.insert(e.key);
                     break;
                 case Event::Up: input.down.erase(e.key); break;
+                case Event::Text: input.AddText(static_cast<uint32_t>(e.id)); break;
                 case Event::Move:
                     input.mouseX = e.x;
                     input.mouseY = e.y;
@@ -650,6 +667,12 @@ public:
         return height_;
     }
     void SetTitle(const std::string&) override {}
+    void SetTextInput(bool on) override {
+        State& s = S();
+        if (on == s.textInput) return;
+        s.textInput = on;
+        ShowSoftKeyboard(on);
+    }
     void* NativeHandle() const override { return S().window; }
 
 private:
@@ -681,6 +704,60 @@ bool WithJni(F body) {
     }
     if (attached) vm->DetachCurrentThread();
     return ok;
+}
+
+// KeyCharacterMap.load(device).get(keyCode, metaState): the character a key press types, 0 for none.
+uint32_t AndroidKeyChar(int device, int code, int meta) {
+    jint value = 0;
+    WithJni([&](JNIEnv* env, jobject) {
+        jclass cls = env->FindClass("android/view/KeyCharacterMap");
+        if (!cls) return false;
+        jmethodID load = env->GetStaticMethodID(cls, "load", "(I)Landroid/view/KeyCharacterMap;");
+        jmethodID get = env->GetMethodID(cls, "get", "(II)I");
+        jobject map = load ? env->CallStaticObjectMethod(cls, load, static_cast<jint>(device)) : nullptr;
+        if (env->ExceptionCheck()) {  // unknown device: the built-in virtual keyboard map
+            env->ExceptionClear();
+            map = env->CallStaticObjectMethod(cls, load, static_cast<jint>(-1));
+        }
+        if (map && get && !env->ExceptionCheck()) value = env->CallIntMethod(map, get, static_cast<jint>(code), static_cast<jint>(meta));
+        if (map) env->DeleteLocalRef(map);
+        env->DeleteLocalRef(cls);
+        return true;
+    });
+    if (value <= 0 || (static_cast<uint32_t>(value) & 0x80000000u)) return 0;  // nothing, or a dead key (COMBINING_ACCENT)
+    return static_cast<uint32_t>(value);
+}
+
+// InputMethodManager.showSoftInput / hideSoftInputFromWindow on the activity's decor view.
+void ShowSoftKeyboard(bool show) {
+    bool shown = false;
+    WithJni([&](JNIEnv* env, jobject activity) {
+        jclass activityClass = env->GetObjectClass(activity);
+        jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+        jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+        if (!getSystemService || !getWindow) return false;
+        jstring service = env->NewStringUTF("input_method");
+        jobject manager = env->CallObjectMethod(activity, getSystemService, service);
+        jobject window = env->CallObjectMethod(activity, getWindow);
+        if (!manager || !window) return false;
+        jmethodID getDecorView = env->GetMethodID(env->GetObjectClass(window), "getDecorView", "()Landroid/view/View;");
+        jobject view = getDecorView ? env->CallObjectMethod(window, getDecorView) : nullptr;
+        if (!view) return false;
+        jclass managerClass = env->GetObjectClass(manager);
+        if (show) {
+            jmethodID showSoftInput = env->GetMethodID(managerClass, "showSoftInput", "(Landroid/view/View;I)Z");
+            shown = showSoftInput && env->CallBooleanMethod(manager, showSoftInput, view, static_cast<jint>(0));
+        } else {
+            jmethodID getWindowToken = env->GetMethodID(env->GetObjectClass(view), "getWindowToken", "()Landroid/os/IBinder;");
+            jmethodID hide = env->GetMethodID(managerClass, "hideSoftInputFromWindow", "(Landroid/os/IBinder;I)Z");
+            jobject token = getWindowToken ? env->CallObjectMethod(view, getWindowToken) : nullptr;
+            if (hide && token) env->CallBooleanMethod(manager, hide, token, static_cast<jint>(0));
+        }
+        return true;
+    });
+    // The decor view may not be the served view; NativeActivity's own request is the fallback.
+    State& s = S();
+    if (show && !shown && s.app && s.app->activity) ANativeActivity_showSoftInput(s.app->activity, ANATIVEACTIVITY_SHOW_SOFT_INPUT_FORCED);
 }
 
 bool AndroidGamepadPresent(int device) {
@@ -819,6 +896,16 @@ void PlatformSleep(double seconds) {
 // No embedding application on this platform yet (a store SDK layer would answer here).
 bool PlatformHostCall(const std::string&, const std::string&) { return false; }
 std::vector<std::pair<std::string, std::string>> PlatformHostPoll() { return {}; }
+
+// Copy and paste stay inside the game (ClipboardManager is not wired up).
+namespace {
+std::string& LocalClipboard() {
+    static std::string text;
+    return text;
+}
+}  // namespace
+std::string PlatformClipboardText() { return LocalClipboard(); }
+void PlatformSetClipboardText(const std::string& text) { LocalClipboard() = text; }
 
 bool PlatformOpenUrl(const std::string& url) {
     return WithJni([&](JNIEnv* env, jobject activity) {

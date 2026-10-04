@@ -478,6 +478,26 @@ Press or release a key ("W", "A", "Space", "Left", ...) or logical Gamepad butto
 | `key` | string | yes | Key name. |
 | `down` | boolean |  | true = press (default), false = release. |
 
+### `input.text`
+
+Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame (focus it with input.click or ui.focus; Backspace and Enter are keys: input.key).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `text` | string | yes | Characters to type (UTF-8). |
+
+## ui
+
+### `ui.clipboard`
+
+Clipboard used by UIInput copy, cut and paste (Ctrl+C / Ctrl+X / Ctrl+V): read it, or set it before pasting. Tool sessions keep their own; a game window uses the system clipboard.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `text` | string |  | New clipboard text. Omit to read. |
+
+## input
+
 ### `input.click`
 
 Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick (or sets a UISlider) on the next simulated frame.
@@ -500,6 +520,14 @@ Where every visible UI element is on a screen of the given size (pixels, top-lef
 | `width` | integer |  | Screen width (default 640, like render.screenshot). |
 | `height` | integer |  | Screen height (default 360). |
 | `interactable` | boolean |  | Only buttons and sliders that accept clicks. |
+
+### `ui.focus`
+
+Keyboard/gamepad focus of the UI (UICanvas.navigation): give it to a button or slider, clear it, or read it. Arrows / D-pad then move it (input.key), Enter / GamepadA clicks the focused button.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string |  | Button, slider, text field or drop-down to focus (id or name); 0 clears the focus. Omit to read. |
 
 ## input
 
@@ -1491,6 +1519,7 @@ Screen-space text: TrueType fonts (any language the font covers), alignment, wra
 | `outlineColor` | color | `[0,0,0]` | Outline color. |
 | `shadowDistance` | float | `0` | Drop shadow offset (right and down) in reference pixels (0 = none). |
 | `shadowColor` | color | `[0,0,0]` | Drop shadow color (drawn at half the text opacity). |
+| `minSize` | float | `0` | Shrink the font down to this size until the text fits its width/height box (0 = never shrink). |
 | `visibleCharacters` | int | `-1` | Show only the first N characters (typewriter effects); -1 = all. |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
@@ -1498,7 +1527,7 @@ Screen-space text: TrueType fonts (any language the font covers), alignment, wra
 
 ### UIPanel
 
-Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a border. Parent of other UI elements.
+Screen-space rectangle (backgrounds, windows, bars): a solid color or a 9-slice image, rounded corners, a border. Parent of other UI elements.
 
 | field | type | default | description |
 |---|---|---|---|
@@ -1508,6 +1537,10 @@ Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a b
 | `width` | float | `240` | Size in reference pixels. |
 | `height` | float | `64` | Size in reference pixels. |
 | `color` | color | `[0,0,0]` | Fill color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
 | `radius` | float | `0` | Corner radius in reference pixels. |
 | `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
 | `borderColor` | color | `[1,1,1]` | Border color. |
@@ -1519,28 +1552,46 @@ Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a b
 
 ### UIButton
 
-Clickable screen-space button. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit. Click it from tools with input.click (ui.layout lists where it is).
+Clickable screen-space button: a solid or textured (9-slice) background with a look per state (normal, hover, pressed, disabled, on), a label and an optional icon. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit; a toggle button calls onToggle(self, on). Click it from tools with input.click (ui.layout lists where it is).
 
 | field | type | default | description |
 |---|---|---|---|
-| `text` | string | `"Button"` | Label (same rich text as UIText). |
+| `text` | string | `"Button"` | Label (same rich text as UIText). Empty = no label (icon buttons). |
 | `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
 | `size` | float | `28` | Label font size in reference pixels. |
 | `textColor` | color | `[1,1,1]` | Label color. |
+| `align` | string | `"center"` | Where the label (and icon) sits across the button. |
+| `padding` | float | `8` | Space kept free at the left and right edge in reference pixels. |
+| `icon` | string | `""` | Image drawn next to the label (png/jpg/bmp/tga). Empty = none. |
+| `iconSize` | float | `0` | Icon height in reference pixels, the width follows the image; 0 = the image's pixel size. |
+| `iconSide` | string | `"left"` | Side of the label the icon is on. |
 | `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
 | `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
 | `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
 | `width` | float | `240` | Size in reference pixels. |
 | `height` | float | `64` | Size in reference pixels. |
 | `color` | color | `[0.25,0.449999988,0.899999976]` | Background color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
 | `radius` | float | `8` | Corner radius in reference pixels. |
 | `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
 | `borderColor` | color | `[1,1,1]` | Border color. |
 | `hoverBrightness` | float | `1.14999998` | Background brightness while the pointer is over the button. |
 | `pressedBrightness` | float | `0.850000024` | Background brightness while pressed. |
+| `hoverTexture` | string | `""` | Background image while the pointer is over the button. Empty = texture. |
+| `pressedTexture` | string | `""` | Background image while pressed. Empty = texture. |
+| `disabledTexture` | string | `""` | Background image while not interactable. Empty = texture. |
 | `hoverScale` | float | `1` | Size multiplier while the pointer is over the button (1.05 = grows a little); eased, also while the game is paused. |
 | `pressedScale` | float | `1` | Size multiplier while pressed (0.95 = squeezes). |
 | `interactable` | bool | `true` | Disabled buttons are drawn faded and ignore clicks. |
+| `clickOn` | string | `"press"` | When the click happens: press = as the pointer goes down; release = when it comes up while still over the button (moving off before releasing cancels). |
+| `toggle` | bool | `false` | A click flips `on` and calls onToggle(self, on) (check boxes, tabs, switches). |
+| `on` | bool | `false` | Toggle state. Scripts may set it; the group rule is applied on clicks only. |
+| `group` | string | `""` | Radio group: turning a toggle on turns off every other toggle in the scene with the same group name, and a click cannot turn the one that is on off. Empty = independent. |
+| `onColor` | color | `[0.200000003,0.699999988,0.400000006]` | Background color while on (replaces color). |
+| `onTexture` | string | `""` | Background image while on. Empty = texture. |
 | `key` | string | `""` | On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, CharacterBody controls), e.g. "Left", "Space". Several fingers hold several buttons at once. Empty = none. |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
@@ -1573,6 +1624,89 @@ Screen-space image: icons, portraits, 9-slice frames, fill bars (fill + fillOrig
 | `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
 | `order` | int | `0` | Draw order among siblings (higher on top). |
 
+### UIInput
+
+Text field (player names, chat, codes, notes). A click gives it the focus and places the caret; arrows, Home/End, Shift+arrows or a drag select, Ctrl+A/C/X/V use the clipboard, Enter calls onSubmit(self, text), Escape or a click elsewhere leaves it. Every change calls onTextChanged(self, text). While it has the focus scripts do not see the keyboard. Tools type with input.text.
+
+| field | type | default | description |
+|---|---|---|---|
+| `text` | string | `""` | What the player typed (UTF-8). Scripts may set it. |
+| `placeholder` | string | `"Enter text"` | Hint shown faded while the field is empty and not focused. |
+| `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
+| `size` | float | `24` | Font size in reference pixels. |
+| `textColor` | color | `[1,1,1]` | Text and caret color. |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `320` | Size in reference pixels. |
+| `height` | float | `48` | Size in reference pixels. |
+| `color` | color | `[0.119999997,0.129999995,0.159999996]` | Background color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
+| `radius` | float | `8` | Corner radius in reference pixels. |
+| `borderWidth` | float | `2` | Border thickness in reference pixels (0 = none). |
+| `borderColor` | color | `[0.400000006,0.449999988,0.550000012]` | Border color. |
+| `maxLength` | int | `0` | Most characters the player can type (0 = no limit). |
+| `password` | bool | `false` | Show every character as * (and never copy it). |
+| `multiline` | bool | `false` | Several lines: the text wraps at the width, Enter starts a new line and Ctrl+Enter submits. |
+| `interactable` | bool | `true` | Disabled fields are drawn faded and cannot be focused. |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
+### UIDropdown
+
+Drop-down list (language, difficulty, resolution): shows the selected option; a click opens the list on top of everything else, a click on a row selects it and calls onValueChanged(self, index) on the entity's Script, a click elsewhere closes it.
+
+| field | type | default | description |
+|---|---|---|---|
+| `options` | json | `[]` | The choices, e.g. ["Easy", "Normal", "Hard"]. The open list has one row per option, each as tall as the element; a list longer than the screen scrolls with the wheel or a drag. |
+| `selected` | int | `0` | Index of the chosen option (0 = the first). |
+| `font` | string | `"default"` | "default" (built-in Roboto), "pixel" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). Characters a font lacks fall back to the default font. |
+| `size` | float | `24` | Font size in reference pixels. |
+| `textColor` | color | `[1,1,1]` | Text color. |
+| `anchor` | string | `"center"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `0` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `0` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `240` | Size in reference pixels. |
+| `height` | float | `48` | Size in reference pixels. |
+| `color` | color | `[0.180000007,0.200000003,0.25999999]` | Background color (the list is a little darker, the row under the pointer lighter). |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
+| `radius` | float | `8` | Corner radius in reference pixels. |
+| `borderWidth` | float | `0` | Border thickness in reference pixels (0 = none). |
+| `borderColor` | color | `[1,1,1]` | Border color. |
+| `interactable` | bool | `true` | Disabled drop-downs are drawn faded and cannot be opened. |
+| `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
+### UIJoystick
+
+On-screen stick for touch screens: while a finger (or the mouse) that went down on it is held, two gamepad axes follow it, so input.axis("LeftX") works the same with a gamepad and on a phone. Releasing returns the axes to 0.
+
+| field | type | default | description |
+|---|---|---|---|
+| `anchor` | string | `"bottom-left"` | Where the element hangs in its parent (the screen or the parent UI element) and its pivot. stretch-* modes stretch along an axis: there width/height is added to the parent's size (-40 leaves 20 px on each side). |
+| `x` | float | `40` | Horizontal offset in reference pixels (canvas is 1280x720 by default). |
+| `y` | float | `-40` | Vertical offset in reference pixels (+y is down). |
+| `width` | float | `200` | Size in reference pixels (the stick is the circle inside this box). |
+| `height` | float | `200` | Size in reference pixels (the stick is the circle inside this box). |
+| `axisX` | string | `"LeftX"` | Axis the horizontal position drives (+ = right). |
+| `axisY` | string | `"LeftY"` | Axis the vertical position drives (+ = up). |
+| `color` | color | `[1,1,1]` | Base color. |
+| `handleColor` | color | `[1,1,1]` | Handle color (drawn at twice the base opacity). |
+| `texture` | string | `""` | Image of the base (tinted by color). Empty = a disc. |
+| `handleTexture` | string | `""` | Image of the handle (tinted by handleColor). Empty = a disc. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the images (sharp pixels). |
+| `opacity` | float | `0.300000012` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
+| `visible` | bool | `true` | Hidden elements (and their children) are not drawn and cannot be clicked. |
+| `order` | int | `10` | Draw order among siblings (higher on top). |
+
 ### UISlider
 
 Bar showing value in [min, max]: a draggable slider (calls onValueChanged(self, value) on the entity's Script) or, with interactable false, a progress/health bar.
@@ -1593,6 +1727,12 @@ Bar showing value in [min, max]: a draggable slider (calls onValueChanged(self, 
 | `fillColor` | color | `[0.25,0.449999988,0.899999976]` | Filled part color. |
 | `handle` | bool | `true` | Draw a round handle at the value. |
 | `handleColor` | color | `[1,1,1]` | Handle color. |
+| `texture` | string | `""` | Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color. |
+| `slice` | float | `0` | 9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch). |
+| `sliceScale` | float | `1` | Size of the 9-slice border on screen, in reference pixels per image pixel. |
+| `pixelArt` | bool | `false` | Nearest-neighbour sampling of the element's images (sharp pixels). |
+| `fillTexture` | string | `""` | Image of the filled part (tinted by fillColor), laid over the whole bar and cut at the value. Empty = solid color. |
+| `handleTexture` | string | `""` | Image of the handle (tinted by handleColor), drawn at its own proportions. Empty = a round handle. |
 | `radius` | float | `12` | Corner radius in reference pixels. |
 | `interactable` | bool | `true` | Drag to change the value; false = display only (progress bar). |
 | `opacity` | float | `1` | 0 = invisible, 1 = opaque (this element only; children keep theirs). |
@@ -1646,6 +1786,8 @@ Optional, one per scene: the reference resolution the UI is authored for and how
 | `referenceWidth` | float | `1280` | Reference canvas width in pixels. |
 | `referenceHeight` | float | `720` | Reference canvas height in pixels. |
 | `match` | float | `1` | 0 = scale with the screen width, 1 = with the height (default), in between = blend. |
+| `navigation` | bool | `false` | Keyboard/gamepad control of the UI: arrows or the D-pad move the focus between buttons and sliders (left/right changes a focused horizontal slider), Enter or GamepadA clicks the focused button. Off = pointer only. |
+| `focusColor` | color | `[1,1,1]` | Color of the frame around the focused element. |
 
 ### AudioSource
 

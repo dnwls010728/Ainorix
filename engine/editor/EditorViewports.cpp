@@ -636,6 +636,9 @@ const char* UITypeName(UIRect::Kind kind) {
         case UIRect::Kind::Button: return "UIButton";
         case UIRect::Kind::Image: return "UIImage";
         case UIRect::Kind::Slider: return "UISlider";
+        case UIRect::Kind::Input: return "UIInput";
+        case UIRect::Kind::Dropdown: return "UIDropdown";
+        case UIRect::Kind::Joystick: return "UIJoystick";
     }
     return "UIPanel";
 }

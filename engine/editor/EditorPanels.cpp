@@ -39,7 +39,8 @@ void EntityKindTag(const EntityRow& r) {
     else if (r.Has("Tilemap")) tag = "MAP", col = ImVec4(0.8f, 0.65f, 1.0f, 1);
     else if (r.Has("Sprite")) tag = "SPR", col = ImVec4(0.95f, 0.6f, 0.8f, 1);
     else if (r.Has("MeshRenderer")) tag = "MSH", col = ImVec4(0.7f, 0.74f, 0.8f, 1);
-    else if (r.Has("UIText") || r.Has("UIPanel") || r.Has("UIButton") || r.Has("UIImage") || r.Has("UISlider")) tag = "UI", col = ImVec4(1.0f, 0.62f, 0.35f, 1);
+    else if (r.Has("UIText") || r.Has("UIPanel") || r.Has("UIButton") || r.Has("UIImage") || r.Has("UISlider") || r.Has("UIInput") || r.Has("UIDropdown") ||
+             r.Has("UIJoystick")) tag = "UI", col = ImVec4(1.0f, 0.62f, 0.35f, 1);
     else if (r.Has("AudioSource")) tag = "SND", col = ImVec4(0.6f, 0.85f, 1.0f, 1);
     if (!*tag) return;
     ImGui::SameLine(0, 4);

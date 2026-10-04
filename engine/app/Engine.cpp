@@ -275,13 +275,17 @@ void Engine::Stop() {
         playSnapshot_.reset();
     }
     ResetRuntime();
-    uiHovered_ = uiPressed_ = kNullEntity;
+    uiHovered_ = uiPressed_ = uiFocus_ = kNullEntity;
     heldButtons_.clear();
     heldKeys_.clear();
     input_.touches.clear();
     input_.down.clear();
     input_.axes.clear();
     input_.pressedThisFrame.clear();
+    input_.text.clear();
+    uiRepeat_ = 0;
+    uiRepeatKey_.clear();
+    uiListPress_ = kNullEntity;
     input_.mouseDX = input_.mouseDY = 0.0f;
     input_.mouseLocked = false;
     input_.lookX = input_.lookY = 0.0f;
@@ -368,7 +372,24 @@ void Engine::SimulateWorld() {
     const bool paused = gamePaused_;
     const float dt = paused ? 0.0f : static_cast<float>(kFixedDt);
     if ((!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) UpdateButtonKeys();
-    scripts_->Update(dt);
+    {
+        // While a text field has the focus the keyboard types: scripts see only the mouse and the gamepad.
+        const bool typing = TextInputActive();
+        std::set<std::string> down, pressed;
+        if (typing) {
+            down = input_.down;
+            pressed = input_.pressedThisFrame;
+            auto keyboard = [](const std::string& key) { return key.compare(0, 5, "Mouse") != 0 && key.compare(0, 7, "Gamepad") != 0; };
+            for (auto* keys : {&input_.down, &input_.pressedThisFrame}) {
+                for (auto it = keys->begin(); it != keys->end();) it = keyboard(*it) ? keys->erase(it) : std::next(it);
+            }
+        }
+        scripts_->Update(dt);
+        if (typing) {
+            input_.down = std::move(down);
+            input_.pressedThisFrame = std::move(pressed);
+        }
+    }
     if (network_ && authority_ && authority_->Running() && !network_->IsHost()) {
         if (replaying_) {
             auto it = authorityEvents_.find(frame_); if (it != authorityEvents_.end()) scripts_->DispatchNetwork(it->second);
@@ -390,7 +411,9 @@ void Engine::SimulateWorld() {
     for (const UIEvent& ev : uiEvents) {
         if (!scene_.Exists(ev.id)) continue;
         if (std::strcmp(ev.method, "onClick") == 0) OE_LOG_INFO("ui", "button '%s' clicked", scene_.Record(ev.id)->name.c_str());
-        if (ev.hasValue) scripts_->Notify(ev.id, ev.method, ev.value);
+        if (ev.hasText) scripts_->NotifyText(ev.id, ev.method, ev.text);
+        else if (ev.isFlag) scripts_->NotifyFlag(ev.id, ev.method, ev.value != 0.0f);
+        else if (ev.hasValue) scripts_->Notify(ev.id, ev.method, ev.value);
         else scripts_->Notify(ev.id, ev.method);
     }
     if (!pendingScene_.empty()) ApplySceneChange();
@@ -440,6 +463,7 @@ InputState Engine::SampleNetworkInput() {
         sample.down.insert(key);
     }
     networkButtonKeys_ = std::move(keys);
+    UpdateJoysticks(sample);
     if (networkConfig_.sync.look[0]) sample.axes["RightX"] = sample.lookX;
     if (networkConfig_.sync.look[1]) sample.axes["RightY"] = sample.lookY;
     return sample;
@@ -468,6 +492,59 @@ void Engine::UpdateButtonKeys() {
     }
     heldKeys_ = std::move(keys);
     heldButtons_ = std::move(held);
+    UpdateJoysticks(input_);
+}
+
+void Engine::UpdateJoysticks(InputState& input) {
+    if (scene_.Pool<UIJoystick>().empty()) return;
+    const int w = input.viewWidth, h = input.viewHeight;
+    if (w <= 0 || h <= 0) return;
+    // Fingers; the mouse only when there are none (platforms report the first finger as the mouse too).
+    struct Pointer {
+        int id;
+        float x, y;
+        bool began;
+    };
+    std::vector<Pointer> pointers;
+    for (const InputState::Touch& t : input.touches) pointers.push_back({t.id, t.x * static_cast<float>(w), t.y * static_cast<float>(h), t.began});
+    const bool click = input.pressedThisFrame.count("MouseLeft") > 0;
+    if (pointers.empty() && !input.mouseLocked && (input.IsDown("MouseLeft") || click)) {
+        pointers.push_back({UIJoystick::kMousePointer, input.mouseX * static_cast<float>(w), input.mouseY * static_cast<float>(h), click});
+    }
+    const std::vector<UIRect> rects = LayoutUI(scene_, w, h, assets_.get());
+    for (auto& kv : scene_.Pool<UIJoystick>()) {
+        UIJoystick& stick = kv.second;
+        const UIRect* rect = nullptr;
+        for (const UIRect& r : rects) {
+            if (r.entity == kv.first && r.kind == UIRect::Kind::Joystick) rect = &r;
+        }
+        const Pointer* holder = nullptr;
+        for (const Pointer& p : pointers) {
+            if (rect && stick.held == p.id) holder = &p;
+        }
+        for (const Pointer& p : pointers) {  // a pointer that just went down on the stick takes it
+            if (holder || !rect || !p.began) continue;
+            const UIRect* hit = HitTestUI(rects, p.x, p.y);
+            if (hit && hit->entity == kv.first && hit->kind == UIRect::Kind::Joystick) holder = &p;
+        }
+        const bool was = stick.held != UIJoystick::kNoPointer;
+        if (holder) {
+            const float radius = std::max(1.0f, std::min(rect->w, rect->h) * 0.5f);
+            float vx = (holder->x - (rect->x + rect->w * 0.5f)) / radius, vy = -(holder->y - (rect->y + rect->h * 0.5f)) / radius;
+            const float length = std::sqrt(vx * vx + vy * vy);
+            if (length > 1.0f) vx /= length, vy /= length;
+            stick.held = holder->id;
+            stick.valueX = vx;
+            stick.valueY = vy;
+        } else {
+            stick.held = UIJoystick::kNoPointer;
+            stick.valueX = stick.valueY = 0.0f;
+        }
+        if (holder || was) {
+            input.SetAxis(stick.axisX, stick.valueX);
+            input.SetAxis(stick.axisY, stick.valueY);
+        }
+    }
 }
 
 std::vector<Engine::UIEvent> Engine::UpdateUI() {
@@ -501,7 +578,8 @@ std::vector<Engine::UIEvent> Engine::UpdateUI() {
             const float view = r.scrollHorizontal ? r.w : r.h;
             return ScrollThumb(view, view + r.scrollMax * scale, sc.scroll * scale, scale);
         };
-        if (over && input_.wheel != 0.0f) {
+        const bool onList = hit && hit->kind == UIRect::Kind::Dropdown;  // an open drop-down list takes the wheel
+        if (over && input_.wheel != 0.0f && !onList) {
             if (UIScroll* sc = scene_.Get<UIScroll>(over->entity)) sc->scroll = Clamp(sc->scroll - input_.wheel * sc->wheelStep, 0.0f, over->scrollMax);
         }
         if (input_.pressedThisFrame.count("MouseLeft")) {
@@ -540,11 +618,65 @@ std::vector<Engine::UIEvent> Engine::UpdateUI() {
             }
         }
     }
+    // Drop-downs: a press on one opens or closes its list; a press anywhere else closes an open list and does
+    // nothing more. In the list a press that is released on the same row selects it, a drag scrolls a long list
+    // (as does the wheel).
+    bool closedList = false;
+    const bool pressNow = input_.pressedThisFrame.count("MouseLeft") > 0 && !barPress, heldNow = input_.IsDown("MouseLeft");
+    for (auto& kv : scene_.Pool<UIDropdown>()) {
+        UIDropdown& dd = kv.second;
+        const bool mine = hit && hit->kind == UIRect::Kind::Dropdown && hit->entity == kv.first;
+        const bool row = mine && hit->item >= 0;
+        dd.hoverItem = row && dd.open ? hit->item : -1;
+        auto choose = [&](int item) {
+            if (dd.selected != item) {
+                dd.selected = item;
+                events.push_back({kv.first, "onValueChanged", true, static_cast<float>(item)});
+            }
+            dd.open = false;
+        };
+        if (dd.open) {
+            int visible = 0;
+            for (const UIRect& r : rects) visible += r.entity == kv.first && r.item >= 0 ? 1 : 0;
+            if (mine && input_.wheel != 0.0f) dd.first -= input_.wheel > 0.0f ? 1 : -1;
+            if (uiListPress_ == kv.first && heldNow && !pressNow) {
+                const float rowH = std::max(1.0f, hit && row ? hit->h : 48.0f);
+                const int steps = static_cast<int>((uiListY_ - py) / rowH);
+                if (steps != 0) dd.first += steps, uiListY_ -= static_cast<float>(steps) * rowH, uiListDragged_ = true;
+            }
+            dd.first = std::max(0, std::min(dd.first, static_cast<int>(dd.options.size()) - std::max(1, visible)));
+        }
+        if (uiListPress_ == kv.first && !heldNow && !pressNow) {  // released
+            if (row && dd.open && !uiListDragged_) choose(hit->item);
+            uiListPress_ = kNullEntity;
+        }
+        if (!pressNow) continue;
+        if (row && !heldNow) {  // a tap within one frame
+            choose(hit->item);
+        } else if (row) {
+            uiListPress_ = kv.first;
+            uiListY_ = py;
+            uiListDragged_ = false;
+        } else if (mine) {
+            dd.open = !dd.open;
+            dd.first = std::max(0, dd.selected - 2);
+        } else if (dd.open) {
+            dd.open = false;
+            closedList = true;
+        }
+    }
     if (input_.pressedThisFrame.count("MouseLeft")) {
         // a press on a scroll bar is not a click on the row under it
-        uiPressed_ = barPress ? kNullEntity : hover;
-        if (!barPress && hit && hit->kind == UIRect::Kind::Button) events.push_back({hover, "onClick", false, 0.0f});
+        uiPressed_ = barPress || closedList ? kNullEntity : hover;
+        if (!barPress && !closedList && hit && hit->kind == UIRect::Kind::Button) {
+            // clickOn release waits for the pointer to come up; a tap that went down and up within this frame clicks now.
+            const bool tap = !input_.IsDown("MouseLeft");
+            if (scene_.Get<UIButton>(hover)->clickOn != "release") ClickButton(hover, events);
+            else if (tap) ClickButton(hover, events), uiPressed_ = kNullEntity;
+        }
     } else if (!input_.IsDown("MouseLeft")) {
+        if (uiPressed_ != kNullEntity && uiPressed_ == hover && hit->kind == UIRect::Kind::Button &&
+            scene_.Get<UIButton>(hover)->clickOn == "release") ClickButton(hover, events);
         uiPressed_ = kNullEntity;
     }
     // A pressed slider follows the pointer (also outside its rectangle) until release.
@@ -559,15 +691,248 @@ std::vector<Engine::UIEvent> Engine::UpdateUI() {
             break;
         }
     }
+    UpdateUIFocus(rects, events);
     for (auto& kv : scene_.Pool<UIButton>()) {
         kv.second.hovered = kv.first == uiHovered_;
         kv.second.pressed = kv.first == uiPressed_ || heldButtons_.count(kv.first) > 0;
+        kv.second.focused = kv.first == uiFocus_;
     }
     for (auto& kv : scene_.Pool<UISlider>()) {
         kv.second.hovered = kv.first == uiHovered_;
         kv.second.pressed = kv.first == uiPressed_;
+        kv.second.focused = kv.first == uiFocus_;
+    }
+    for (auto& kv : scene_.Pool<UIInput>()) {
+        kv.second.hovered = kv.first == uiHovered_;
+        kv.second.focused = kv.first == uiFocus_;
+    }
+    for (auto& kv : scene_.Pool<UIDropdown>()) {
+        kv.second.hovered = kv.first == uiHovered_;
+        kv.second.focused = kv.first == uiFocus_;
     }
     return events;
+}
+
+bool Engine::TextInputActive() const { return uiFocus_ != kNullEntity && scene_.Get<UIInput>(uiFocus_) != nullptr; }
+
+std::string Engine::ClipboardText() const { return systemClipboard_ ? PlatformClipboardText() : clipboard_; }
+
+void Engine::SetClipboardText(const std::string& text) {
+    if (systemClipboard_) PlatformSetClipboardText(text);
+    else clipboard_ = text;
+}
+
+void Engine::ClickButton(EntityId id, std::vector<UIEvent>& events) {
+    events.push_back({id, "onClick", false, 0.0f});
+    UIButton* button = scene_.Get<UIButton>(id);
+    if (!button->toggle || (button->on && !button->group.empty())) return;  // the chosen one of a radio group stays on
+    button->on = !button->on;
+    events.push_back({id, "onToggle", true, button->on ? 1.0f : 0.0f, true});
+    if (!button->on || button->group.empty()) return;
+    for (auto& kv : scene_.Pool<UIButton>()) {
+        UIButton& other = kv.second;
+        if (kv.first == id || !other.toggle || !other.on || other.group != button->group) continue;
+        other.on = false;
+        events.push_back({kv.first, "onToggle", true, 0.0f, true});
+    }
+}
+
+void Engine::UpdateUIFocus(const std::vector<UIRect>& rects, std::vector<UIEvent>& events) {
+    const auto& canvases = scene_.Pool<UICanvas>();
+    const bool navigation = !canvases.empty() && canvases.begin()->second.navigation;
+    // A press with the pointer takes the focus; a press anywhere else takes it away from a text field.
+    const bool press = input_.pressedThisFrame.count("MouseLeft") > 0;
+    EntityId wanted = uiFocus_;
+    if (press && uiPressed_ != kNullEntity) wanted = uiPressed_;
+    else if (press && scene_.Get<UIInput>(uiFocus_)) wanted = kNullEntity;
+    // What the pointer could reach at its centre: not hidden, clipped away or under a modal panel.
+    std::vector<const UIRect*> reach;
+    const UIRect* current = nullptr;
+    for (const UIRect& r : rects) {
+        if (!r.interactable || r.item >= 0 || r.kind == UIRect::Kind::Joystick) continue;
+        const UIRect* top = HitTestUI(rects, r.x + r.w * 0.5f, r.y + r.h * 0.5f);
+        if (!top || top->entity != r.entity) continue;
+        reach.push_back(&r);
+        if (r.entity == wanted) current = &r;
+    }
+    // Without navigation only a text field holds the focus (to be typed into).
+    if (current && !navigation && current->kind != UIRect::Kind::Input) current = nullptr;
+    uiFocus_ = current ? current->entity : kNullEntity;
+    auto pressed = [&](const char* key, const char* pad) { return input_.pressedThisFrame.count(key) || input_.pressedThisFrame.count(pad) ? 1 : 0; };
+
+    UIInput* field = current && current->kind == UIRect::Kind::Input ? scene_.Get<UIInput>(uiFocus_) : nullptr;
+    // Editing keys repeat while held.
+    std::string heldKey;
+    for (const char* key : {"Backspace", "Delete", "Left", "Right", "Up", "Down"}) {
+        if (field && heldKey.empty() && input_.IsDown(key)) heldKey = key;
+    }
+    uiRepeat_ = !heldKey.empty() && heldKey == uiRepeatKey_ ? uiRepeat_ + 1 : 0;
+    uiRepeatKey_ = heldKey;
+    auto fire = [&](const char* key) { return input_.pressedThisFrame.count(key) > 0 || (uiRepeatKey_ == key && uiRepeat_ > 24 && uiRepeat_ % 3 == 0); };
+    if (field) {
+        auto lead = [](char c) { return (static_cast<unsigned char>(c) & 0xC0) != 0x80; };  // first byte of a UTF-8 character
+        std::string text = field->text;
+        auto size = [&] { return static_cast<int>(text.size()); };
+        auto snap = [&](int at) {  // inside the text, on a character boundary
+            at = std::max(0, std::min(at, size()));
+            while (at > 0 && at < size() && !lead(text[static_cast<size_t>(at)])) --at;
+            return at;
+        };
+        auto prev = [&](int at) {
+            if (at > 0) --at;
+            while (at > 0 && !lead(text[static_cast<size_t>(at)])) --at;
+            return at;
+        };
+        auto next = [&](int at) {
+            if (at < size()) ++at;
+            while (at < size() && !lead(text[static_cast<size_t>(at)])) ++at;
+            return at;
+        };
+        int caret = snap(field->caretAt), anchor = snap(field->selectAt);
+        if (!field->focused && !press) caret = anchor = size();  // focused by a key or a script: continue at the end
+        const bool ctrl = input_.IsDown("Control"), shift = input_.IsDown("Shift");
+        auto move = [&](int to) {
+            caret = to;
+            if (!shift) anchor = caret;
+        };
+        auto eraseSelection = [&] {
+            if (caret == anchor) return false;
+            const int lo = std::min(caret, anchor), hi = std::max(caret, anchor);
+            text.erase(static_cast<size_t>(lo), static_cast<size_t>(hi - lo));
+            caret = anchor = lo;
+            return true;
+        };
+        auto insert = [&](const std::string& piece) {  // replaces the selection, a character at a time up to maxLength
+            eraseSelection();
+            int count = static_cast<int>(std::count_if(text.begin(), text.end(), lead));
+            for (size_t at = 0; at < piece.size();) {
+                size_t end = at + 1;
+                while (end < piece.size() && !lead(piece[end])) ++end;
+                std::string ch = piece.substr(at, end - at);
+                at = end;
+                if (ch == "\n" && !field->multiline) ch = " ";
+                if (static_cast<unsigned char>(ch[0]) < 32 && ch != "\n") continue;
+                if (field->maxLength > 0 && count >= field->maxLength) break;
+                text.insert(static_cast<size_t>(caret), ch);
+                caret += static_cast<int>(ch.size());
+                ++count;
+            }
+            anchor = caret;
+        };
+        // The pointer places the caret; dragging extends the selection.
+        const int w = input_.viewWidth, h = input_.viewHeight;
+        const float px = input_.mouseX * static_cast<float>(w), py = input_.mouseY * static_cast<float>(h);
+        if (uiPressed_ == uiFocus_ && (press || input_.IsDown("MouseLeft"))) {
+            caret = snap(UIInputOffsetAt(scene_, *current, px, py, w, h, assets_.get()));
+            if (press && !shift) anchor = caret;
+        }
+        if (fire("Left")) move(caret != anchor && !shift ? std::min(caret, anchor) : prev(caret));
+        if (fire("Right")) move(caret != anchor && !shift ? std::max(caret, anchor) : next(caret));
+        if (input_.pressedThisFrame.count("Home")) move(caret > 0 ? static_cast<int>(text.rfind('\n', static_cast<size_t>(caret - 1)) + 1) : 0);
+        if (input_.pressedThisFrame.count("End")) {
+            const size_t end = text.find('\n', static_cast<size_t>(caret));
+            move(end == std::string::npos ? size() : static_cast<int>(end));
+        }
+        if (field->multiline && fire("Up")) move(snap(UIInputOffsetVertical(scene_, *current, caret, -1, w, h, assets_.get())));
+        if (field->multiline && fire("Down")) move(snap(UIInputOffsetVertical(scene_, *current, caret, 1, w, h, assets_.get())));
+        if (ctrl && input_.pressedThisFrame.count("A")) anchor = 0, caret = size();
+        if (ctrl && (input_.pressedThisFrame.count("C") || input_.pressedThisFrame.count("X")) && caret != anchor && !field->password) {
+            SetClipboardText(text.substr(static_cast<size_t>(std::min(caret, anchor)), static_cast<size_t>(std::abs(caret - anchor))));
+            if (input_.pressedThisFrame.count("X")) eraseSelection();
+        }
+        if (ctrl && input_.pressedThisFrame.count("V")) insert(ClipboardText());
+        if (fire("Backspace") && !eraseSelection() && caret > 0) {
+            const int from = prev(caret);
+            text.erase(static_cast<size_t>(from), static_cast<size_t>(caret - from));
+            caret = anchor = from;
+        }
+        if (fire("Delete") && !eraseSelection() && caret < size()) text.erase(static_cast<size_t>(caret), static_cast<size_t>(next(caret) - caret));
+        if (!ctrl && !input_.text.empty()) insert(input_.text);
+        bool submit = false;
+        if (input_.pressedThisFrame.count("Enter")) {
+            if (field->multiline && !ctrl) insert("\n");
+            else submit = true;
+        }
+        if (caret != field->caretAt || anchor != field->selectAt || text != field->text) field->caret = 0.0f;  // shown at once after it moves
+        field->caretAt = caret;
+        field->selectAt = anchor;
+        auto notify = [&](const char* method) {
+            UIEvent ev{uiFocus_, method, false, 0.0f};
+            ev.hasText = true;
+            ev.text = text;
+            events.push_back(ev);
+        };
+        if (text != field->text) {
+            field->text = text;
+            notify("onTextChanged");
+        }
+        if (submit) {
+            notify("onSubmit");
+            if (!navigation) uiFocus_ = kNullEntity;
+            return;
+        }
+        if (input_.pressedThisFrame.count("Escape")) {
+            uiFocus_ = kNullEntity;
+            return;
+        }
+    }
+    if (!navigation) return;
+
+    const int dx = field ? 0 : pressed("Right", "GamepadDPadRight") - pressed("Left", "GamepadDPadLeft");
+    const int dy = dx != 0 || (field && field->multiline) ? 0 : pressed("Down", "GamepadDPadDown") - pressed("Up", "GamepadDPadUp");
+    const bool accept = pressed("Enter", "GamepadA") != 0;
+    if (current && current->kind == UIRect::Kind::Button && accept) ClickButton(uiFocus_, events);
+    // A focused drop-down: Enter opens and closes its list, up/down pick the option while it is open.
+    if (UIDropdown* dd = current && current->kind == UIRect::Kind::Dropdown ? scene_.Get<UIDropdown>(uiFocus_) : nullptr) {
+        if (accept) dd->open = !dd->open, dd->first = std::max(0, dd->selected - 2);
+        if (dd->open && dy != 0) {
+            const int item = std::max(0, std::min(dd->selected + dy, static_cast<int>(dd->options.size()) - 1));
+            if (item != dd->selected) {
+                dd->selected = item;
+                events.push_back({uiFocus_, "onValueChanged", true, static_cast<float>(item)});
+            }
+            // keep the chosen row in the window of a long list
+            int visible = 0;
+            for (const UIRect& r : rects) visible += r.entity == uiFocus_ && r.item >= 0 ? 1 : 0;
+            dd->first = std::max(std::min(dd->first, item), item - std::max(1, visible) + 1);
+            return;
+        }
+    }
+    if (dx == 0 && dy == 0) return;
+    if (!current) {  // nothing focused yet: start at the top-left element
+        for (const UIRect* r : reach) {
+            if (!current || r->y < current->y || (r->y == current->y && r->x < current->x)) current = r;
+        }
+        uiFocus_ = current ? current->entity : kNullEntity;
+        return;
+    }
+    // A focused slider is changed along its own axis; across it the focus moves on.
+    if (UISlider* s = current->kind == UIRect::Kind::Slider ? scene_.Get<UISlider>(uiFocus_) : nullptr) {
+        const bool horizontal = s->direction == "left-to-right" || s->direction == "right-to-left";
+        if (horizontal ? dx != 0 : dy != 0) {
+            const float sign = s->direction == "left-to-right" ? static_cast<float>(dx) : s->direction == "right-to-left" ? static_cast<float>(-dx)
+                             : s->direction == "top-to-bottom" ? static_cast<float>(dy) : static_cast<float>(-dy);
+            const float amount = s->step > 0.0f ? s->step : std::fabs(s->max - s->min) / 20.0f;
+            const float v = Clamp(s->value + sign * amount, std::min(s->min, s->max), std::max(s->min, s->max));
+            if (v != s->value) {
+                s->value = v;
+                events.push_back({uiFocus_, "onValueChanged", true, v});
+            }
+            return;
+        }
+    }
+    // The nearest element in that direction; being off to the side counts double. Draw order breaks ties.
+    const float fx = current->x + current->w * 0.5f, fy = current->y + current->h * 0.5f;
+    const UIRect* best = nullptr;
+    float bestScore = 0.0f;
+    for (const UIRect* r : reach) {
+        const float vx = r->x + r->w * 0.5f - fx, vy = r->y + r->h * 0.5f - fy;
+        const float along = vx * static_cast<float>(dx) + vy * static_cast<float>(dy);
+        if (r == current || along < 1.0f) continue;
+        const float score = along + 2.0f * (dx != 0 ? std::fabs(vy) : std::fabs(vx));
+        if (!best || score < bestScore) best = r, bestScore = score;
+    }
+    if (best) uiFocus_ = best->entity;
 }
 
 RenderStats Engine::RenderGameView(RenderTarget& target) {

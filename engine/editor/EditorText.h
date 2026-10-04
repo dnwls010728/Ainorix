@@ -1,6 +1,8 @@
 #pragma once
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace oe {
 
@@ -25,6 +27,8 @@ std::string TrId(const char* english);
 // Catalog checks for tests: entries with a missing translation or different
 // printf arguments, and English strings looked up that are not in the catalog.
 std::set<std::string> EditorCatalogProblems();
+// Entities of the Add menu: key and the components JSON each one is created with (tests create every one).
+std::vector<std::pair<std::string, std::string>> EditorAddPresets();
 bool EditorCatalogHas(const std::string& english);
 std::set<std::string> EditorMissingTranslations();
 

@@ -17,6 +17,25 @@ bool InputState::SetAxis(const std::string& name, float value) {
     return true;
 }
 
+void InputState::AddText(uint32_t c) {
+    if (c < 32 || c == 127 || c > 0x10FFFF || (c >= 0xD800 && c < 0xE000)) return;
+    if (c < 0x80) {
+        text += static_cast<char>(c);
+    } else if (c < 0x800) {
+        text += static_cast<char>(0xC0 | (c >> 6));
+        text += static_cast<char>(0x80 | (c & 0x3F));
+    } else if (c < 0x10000) {
+        text += static_cast<char>(0xE0 | (c >> 12));
+        text += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (c & 0x3F));
+    } else {
+        text += static_cast<char>(0xF0 | (c >> 18));
+        text += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+        text += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+        text += static_cast<char>(0x80 | (c & 0x3F));
+    }
+}
+
 float InputState::Axis(const std::string& name) const {
     auto found = axes.find(name);
     if (found == axes.end() || !std::isfinite(found->second)) return 0;
@@ -488,6 +507,7 @@ void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* asse
     UpdateParticles(scene, dt);
     UpdateSpriteAnimations(scene, dt);
     input.pressedThisFrame.clear();
+    input.text.clear();
     input.mouseDX = input.mouseDY = 0.0f;
     input.wheel = 0.0f;
     for (InputState::Touch& t : input.touches) t.began = false;

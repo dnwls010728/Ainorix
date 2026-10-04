@@ -142,6 +142,10 @@ void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, boo
         engine.Tick(now - last);
         last = now;
         if (window) {
+            engine.UseSystemClipboard(true);
+            window->SetTextInput(engine.TextInputActive());
+        }
+        if (window) {
             int w = window->Width(), h = window->Height();
             if (engine.Gpu() && gpuWindow) {
                 engine.PresentGameView();

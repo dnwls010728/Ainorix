@@ -4896,6 +4896,564 @@ Color MeanColor(const RenderTarget& rt, int x0, int y0, int x1, int y1) {
     return Color(static_cast<float>(r / n / 255), static_cast<float>(g / n / 255), static_cast<float>(b / n / 255));
 }
 
+TEST(UIButtonLooksIconToggleAndRelease) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_button"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    auto solid = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
+        Image img;
+        img.width = img.height = 8;
+        img.rgba.resize(8 * 8 * 4);
+        for (size_t i = 0; i < img.rgba.size(); i += 4) img.rgba[i] = r, img.rgba[i + 1] = g, img.rgba[i + 2] = b, img.rgba[i + 3] = 255;
+        CHECK(WritePng(JoinPath(e.ProjectDir(), name), img, true));
+    };
+    solid("red.png", 255, 0, 0);
+    solid("green.png", 0, 255, 0);
+    solid("white.png", 255, 255, 255);
+    Call(e, "script.write", R"J({"path": "scripts/btn_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onClick() table.insert(log_, 'click') end
+function M:onToggle(on) table.insert(log_, 'toggle ' .. tostring(on)) end
+return M
+"})J");
+    // Looks: state textures, state brightness, an icon.
+    Call(e, "entity.create", R"J({"name": "Tex", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 0, "y": 0, "width": 200, "height": 100, "radius": 0,
+      "color": [1, 1, 1], "texture": "red.png", "hoverTexture": "green.png", "slice": 2}}})J");
+    Call(e, "entity.create", R"J({"name": "Col", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 300, "y": 0, "width": 200, "height": 100, "radius": 0,
+      "color": [0.5, 0.5, 0.5], "hoverBrightness": 2, "pressedBrightness": 0}}})J");
+    Call(e, "entity.create", R"J({"name": "Ico", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 0, "y": 200, "width": 200, "height": 100, "radius": 0,
+      "color": [0, 0, 0], "icon": "white.png", "iconSize": 40}}})J");
+    Call(e, "entity.create", R"J({"name": "IcoLeft", "components": {"UIButton": {"text": "", "anchor": "top-left", "x": 300, "y": 200, "width": 200, "height": 100, "radius": 0,
+      "color": [0, 0, 0], "icon": "white.png", "iconSize": 40, "align": "left"}}})J");
+    // Behaviour: a radio group, an independent toggle, a button that clicks on release.
+    const char* kToggle = R"J({"name": "%s", "components": {"UIButton": {"anchor": "top-left", "x": %d, "y": 400, "width": 100, "height": 50, "toggle": true, "group": "%s"},
+      "Script": {"path": "scripts/btn_log.lua"}}})J";
+    Call(e, "entity.create", Format(kToggle, "A", 0, "tab").c_str());
+    Call(e, "entity.create", Format(kToggle, "B", 150, "tab").c_str());
+    Call(e, "entity.create", Format(kToggle, "C", 300, "").c_str());
+    Call(e, "entity.create", R"J({"name": "Rel", "components": {"UIButton": {"anchor": "top-left", "x": 500, "y": 400, "width": 100, "height": 50, "clickOn": "release"},
+      "Script": {"path": "scripts/btn_log.lua"}}})J");
+
+    Scene& scene = e.GetScene();
+    auto mean = [&](int x0, int y0, int x1, int y1) {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        return MeanColor(rt, x0, y0, x1, y1);
+    };
+    auto is = [](const Color& c, float r, float g, float b) { return std::fabs(c.r - r) < 0.05f && std::fabs(c.g - g) < 0.05f && std::fabs(c.b - b) < 0.05f; };
+    auto step = [&](int frames) { Call(e, "sim.step", Format(R"J({"frames": %d})J", frames).c_str()); };
+    auto hover = [&](int x, int y) { Call(e, "input.mouse", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str()); };
+    auto click = [&](int x, int y) { Call(e, "input.click", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str()); };
+    auto button = [&](const char* name) { return scene.Get<UIButton>(scene.FindByName(name)); };
+    auto logText = [&] { return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString(); };
+
+    CHECK(is(mean(10, 10, 190, 90), 1, 0, 0));
+    CHECK(is(mean(310, 10, 490, 90), 0.5f, 0.5f, 0.5f));
+    CHECK(is(mean(90, 240, 110, 260), 1, 1, 1) && is(mean(5, 205, 25, 225), 0, 0, 0));      // icon centered
+    CHECK(is(mean(312, 235, 344, 265), 1, 1, 1) && is(mean(400, 240, 480, 260), 0, 0, 0));  // icon at the left padding
+    hover(100, 50);
+    step(1);
+    CHECK(is(mean(10, 10, 190, 90), 0, 1, 0));
+    hover(400, 50);
+    step(1);
+    CHECK(is(mean(10, 10, 190, 90), 1, 0, 0) && is(mean(310, 10, 490, 90), 1, 1, 1));
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": true})J");
+    step(1);
+    CHECK(is(mean(310, 10, 490, 90), 0, 0, 0));
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    hover(700, 50);
+    step(1);
+
+    // Radio group: one stays on, and a click cannot turn it off.
+    click(50, 425);
+    step(1);
+    CHECK(button("A")->on && !button("B")->on && logText() == "click,toggle true");
+    click(200, 425);
+    step(1);
+    CHECK(!button("A")->on && button("B")->on && logText() == "click,toggle true,click,toggle true,toggle false");
+    click(200, 425);
+    step(1);
+    CHECK(button("B")->on && logText() == "click,toggle true,click,toggle true,toggle false,click");
+    click(350, 425);
+    step(1);
+    CHECK(button("C")->on && button("B")->on);
+    click(350, 425);
+    step(1);
+    CHECK(!button("C")->on);
+    Call(e, "script.eval", R"J({"code": "log_ = {}"})J");
+
+    // clickOn release: the click waits for the release and is cancelled by leaving the button.
+    Call(e, "input.mouse", R"J({"x": 550, "y": 425, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(2);
+    CHECK(button("Rel")->pressed && logText() == "");
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(logText() == "click");
+    Call(e, "input.mouse", R"J({"x": 550, "y": 425, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    hover(900, 600);
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(2);
+    CHECK(logText() == "click");
+    click(550, 425);  // a tap within one frame
+    step(2);
+    CHECK(logText() == "click,click");
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+    CHECK(!button("B")->on);
+}
+
+TEST(UINavigationFocusAndTextShrink) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_nav"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "script.write", R"J({"path": "scripts/nav_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onClick() table.insert(log_, 'click') end
+function M:onValueChanged(v) table.insert(log_, string.format('value %.2f', v)) end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Canvas", "components": {"UICanvas": {"navigation": true}}})J");
+    Call(e, "entity.create", R"J({"name": "A", "components": {"UIButton": {"anchor": "top-left", "x": 20, "y": 20, "width": 200, "height": 100}, "Script": {"path": "scripts/nav_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "B", "components": {"UIButton": {"anchor": "top-left", "x": 320, "y": 20, "width": 200, "height": 100}, "Script": {"path": "scripts/nav_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Vol", "components": {"UISlider": {"anchor": "top-left", "x": 20, "y": 220, "width": 400, "height": 40, "value": 0, "step": 0.25}, "Script": {"path": "scripts/nav_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Off", "components": {"UIButton": {"anchor": "top-left", "x": 20, "y": 120, "width": 200, "height": 60, "interactable": false}}})J");
+    Scene& scene = e.GetScene();
+    auto tap = [&](const char* key) {
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": true})J", key).c_str());
+        Call(e, "sim.step", R"J({"frames": 1})J");
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": false})J", key).c_str());
+        Call(e, "sim.step", R"J({"frames": 1})J");
+    };
+    auto focusIs = [&](const char* name) { return e.UIFocus() == scene.FindByName(name); };
+    auto logText = [&] { return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString(); };
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 600, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(e.UIFocus() == kNullEntity);
+    tap("Down");  // the first key picks the top-left element
+    CHECK(focusIs("A") && scene.Get<UIButton>(scene.FindByName("A"))->focused);
+    tap("Right");
+    CHECK(focusIs("B"));
+    tap("GamepadDPadLeft");
+    CHECK(focusIs("A"));
+    tap("Down");  // the disabled button is skipped
+    CHECK(focusIs("Vol"));
+    tap("Right");  // along a slider the key changes its value
+    CHECK(focusIs("Vol") && scene.Get<UISlider>(scene.FindByName("Vol"))->value == 0.25f);
+    tap("Up");
+    CHECK(focusIs("A"));
+    tap("Enter");
+    CHECK(logText() == "value 0.25,click");
+    // The focused element is framed just outside its box.
+    {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        Color ring = MeanColor(rt, 30, 16, 200, 18), other = MeanColor(rt, 330, 16, 500, 18);
+        CHECK(ring.r > 0.95f && ring.g > 0.95f && other.r < 0.9f);
+    }
+    // Tools and scripts: ui.focus, ui.layout, Lua ui.focus / ui.focused.
+    CHECK(Call(e, "ui.focus", R"J({"id": "B"})J")["result"]["name"].asString() == "B");
+    bool listed = false;
+    const Json layout = Call(e, "ui.layout", R"J({"width": 1280, "height": 720})J");
+    for (const Json& el : layout["result"]["elements"].items()) {
+        listed = listed || (el["name"].asString() == "B" && el["focused"].asBool());
+    }
+    CHECK(listed);
+    CHECK(Call(e, "script.eval", R"J({"code": "return ui.focused() == scene.find('B')"})J")["result"]["value"].asBool());
+    CHECK(Call(e, "script.eval", R"J({"code": "ui.focus(scene.find('Vol'))"})J")["ok"].asBool() && focusIs("Vol"));
+    CHECK(Call(e, "ui.focus", R"J({"id": "Canvas"})J")["error"]["code"].asString() == "invalid_argument");
+    // A press with the pointer takes the focus; turning navigation off drops it.
+    Call(e, "input.click", R"J({"x": 100, "y": 60, "width": 1280, "height": 720})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(focusIs("A"));
+    Call(e, "component.set", R"J({"id": "Canvas", "type": "UICanvas", "values": {"navigation": false}})J");
+    Call(e, "sim.step", R"J({"frames": 1})J");
+    CHECK(e.UIFocus() == kNullEntity);
+    CHECK(e.Scripts().Errors().empty());
+
+    // UIText.minSize: the font shrinks until the text fits its box.
+    Call(e, "entity.create", R"J({"name": "Long", "components": {"UIText": {"text": "A rather long label", "size": 40, "anchor": "top-left", "x": 600, "y": 400,
+      "width": 120, "height": 50, "wrap": false}}})J");
+    auto inkWidth = [&] {
+        int x0 = 1 << 30, x1 = -(1 << 30);
+        const EntityId id = scene.FindByName("Long");
+        for (const UIQuad& q : BuildUIQuads(scene, 1280, 720, &e.Assets())) {
+            if (q.entity == id) x0 = std::min(x0, q.x0), x1 = std::max(x1, q.x1);
+        }
+        return x1 - x0;
+    };
+    CHECK(inkWidth() > 200);
+    Call(e, "component.set", R"J({"id": "Long", "type": "UIText", "values": {"minSize": 8}})J");
+    CHECK(inkWidth() <= 121 && inkWidth() > 90);
+    Call(e, "sim.stop", "{}");
+}
+
+TEST(UIInputDropdownAndJoystick) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_widgets"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    Call(e, "script.write", R"J({"path": "scripts/widget_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onTextChanged(t) table.insert(log_, 'text ' .. t) end
+function M:onSubmit(t) table.insert(log_, 'submit ' .. t) end
+function M:onValueChanged(v) table.insert(log_, 'value ' .. math.floor(v)) end
+function M:onClick() table.insert(log_, 'click') end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Name", "components": {"UIInput": {"anchor": "top-left", "x": 20, "y": 20, "width": 320, "height": 48, "maxLength": 5},
+      "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Level", "components": {"UIDropdown": {"anchor": "top-left", "x": 20, "y": 120, "width": 240, "height": 48,
+      "options": ["Easy", "Normal", "Hard"]}, "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Under", "components": {"UIButton": {"anchor": "top-left", "x": 20, "y": 230, "width": 240, "height": 40},
+      "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Side", "components": {"UIButton": {"anchor": "top-left", "x": 400, "y": 120, "width": 100, "height": 48},
+      "Script": {"path": "scripts/widget_log.lua"}}})J");
+    Call(e, "entity.create", R"J({"name": "Stick", "components": {"UIJoystick": {"anchor": "top-left", "x": 600, "y": 300, "width": 200, "height": 200}}})J");
+    Scene& scene = e.GetScene();
+    auto step = [&](int frames) { Call(e, "sim.step", Format(R"J({"frames": %d})J", frames).c_str()); };
+    auto click = [&](int x, int y) {
+        Call(e, "input.click", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str());
+        step(1);
+    };
+    auto tap = [&](const char* key) {
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": true})J", key).c_str());
+        step(1);
+        Call(e, "input.key", Format(R"J({"key": "%s", "down": false})J", key).c_str());
+        step(1);
+    };
+    auto logText = [&] { return Call(e, "script.eval", R"J({"code": "table.concat(log_ or {}, ',')"})J")["result"]["value"].asString(); };
+    auto clearLog = [&] { Call(e, "script.eval", R"J({"code": "log_ = {}"})J"); };
+    const UIInput* name = scene.Get<UIInput>(scene.FindByName("Name"));
+    const UIDropdown* level = scene.Get<UIDropdown>(scene.FindByName("Level"));
+
+    // Text field: a click focuses it (no UICanvas.navigation needed), typing stops at maxLength.
+    Call(e, "input.text", R"J({"text": "no"})J");
+    step(1);
+    CHECK(name->text.empty());  // not focused: typed characters go nowhere
+    click(100, 44);
+    CHECK(e.UIFocus() == scene.FindByName("Name") && name->focused);
+    Call(e, "input.text", R"J({"text": "Héllo!!"})J");
+    step(1);
+    CHECK(name->text == "H\xC3\xA9" "llo");
+    CHECK(logText() == "text H\xC3\xA9" "llo");
+    for (int i = 0; i < 4; ++i) tap("Backspace");  // removes whole characters, also the two-byte one
+    CHECK(name->text == "H");
+    Call(e, "input.key", R"J({"key": "Backspace", "down": true})J");  // held: repeats after a moment
+    step(40);
+    Call(e, "input.key", R"J({"key": "Backspace", "down": false})J");
+    CHECK(name->text.empty());
+    Call(e, "input.text", R"J({"text": "Kim"})J");
+    step(1);
+    clearLog();
+    tap("Enter");
+    CHECK(logText() == "submit Kim" && e.UIFocus() == kNullEntity && !name->focused);
+    click(100, 44);
+    click(1000, 600);  // a click elsewhere leaves the field
+    CHECK(e.UIFocus() == kNullEntity);
+    // The field draws its text; a password field does not draw more than stars of the same count.
+    Call(e, "component.set", R"J({"id": "Name", "type": "UIInput", "values": {"password": true}})J");
+    {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        CHECK(MeanColor(rt, 30, 30, 120, 58).r > MeanColor(rt, 200, 30, 330, 58).r);  // three stars at the left, nothing further right
+    }
+
+    // Drop-down: opens on top of the button below it; a row selects, a press elsewhere only closes.
+    clearLog();
+    click(100, 144);
+    CHECK(level->open);
+    {
+        const Json layout = Call(e, "ui.layout", R"J({"width": 1280, "height": 720, "interactable": true})J");
+        int rows = 0;
+        for (const Json& el : layout["result"]["elements"].items()) rows += el["name"].asString() == "Level" && el.has("item");
+        CHECK(rows == 3);
+    }
+    Call(e, "input.mouse", R"J({"x": 100, "y": 242, "width": 1280, "height": 720})J");
+    step(1);
+    CHECK(level->hoverItem == 1);
+    click(100, 290);  // "Hard", over the Under button
+    CHECK(!level->open && level->selected == 2 && logText() == "value 2");
+    click(100, 250);
+    CHECK(logText() == "value 2,click");  // the list is gone: the button is reachable again
+    click(100, 144);
+    click(450, 144);  // closes the list, does not click Side
+    CHECK(!level->open && logText() == "value 2,click");
+    click(450, 144);
+    CHECK(logText() == "value 2,click,click");
+
+    // Joystick: a finger that goes down on it drives the axes until it lifts.
+    auto axis = [&](const char* axisName) {
+        return Call(e, "script.eval", Format(R"J({"code": "return input.axis('%s')"})J", axisName).c_str())["result"]["value"].asFloat();
+    };
+    auto touch = [&](int id, int x, int y) {
+        Call(e, "input.touch", Format(R"J({"id": %d, "x": %d, "y": %d, "width": 1280, "height": 720})J", id, x, y).c_str());
+        step(1);
+    };
+    touch(1, 700, 400);
+    CHECK(scene.Get<UIJoystick>(scene.FindByName("Stick"))->held == 1 && std::fabs(axis("LeftX")) < 0.01f);
+    touch(1, 900, 400);  // beyond the edge: clamped
+    CHECK(std::fabs(axis("LeftX") - 1.0f) < 0.01f && std::fabs(axis("LeftY")) < 0.01f);
+    touch(1, 700, 350);  // half way up
+    CHECK(std::fabs(axis("LeftX")) < 0.01f && axis("LeftY") > 0.3f && axis("LeftY") < 0.6f);
+    Call(e, "input.touch", R"J({"id": 1, "down": false})J");
+    step(1);
+    CHECK(axis("LeftY") == 0.0f && scene.Get<UIJoystick>(scene.FindByName("Stick"))->held == UIJoystick::kNoPointer);
+    touch(2, 1000, 650);  // went down elsewhere: sliding onto the stick does not take it
+    touch(2, 780, 400);
+    CHECK(axis("LeftX") == 0.0f);
+    Call(e, "input.touch", R"J({"id": 2, "down": false})J");
+    step(1);
+
+    // With navigation: Enter opens the focused drop-down, up/down choose, Enter closes; a text field keeps left/right.
+    Call(e, "entity.create", R"J({"name": "Canvas", "components": {"UICanvas": {"navigation": true}}})J");
+    clearLog();
+    Call(e, "ui.focus", R"J({"id": "Level"})J");
+    tap("Enter");
+    CHECK(level->open);
+    tap("Up");
+    CHECK(level->selected == 1 && e.UIFocus() == scene.FindByName("Level"));
+    tap("Enter");
+    CHECK(!level->open && logText() == "value 1");
+    tap("Up");
+    CHECK(e.UIFocus() == scene.FindByName("Name"));
+    tap("Right");
+    CHECK(e.UIFocus() == scene.FindByName("Name"));
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+    CHECK(scene.Get<UIDropdown>(scene.FindByName("Level"))->selected == 0);
+}
+
+TEST(EditorAddPresetsAreValid) {
+    // Every entry of the editor's Add menu must be creatable (a broken JSON literal once made "UI Toggle" fail).
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("presets"), &err));
+    for (const auto& preset : EditorAddPresets()) {
+        std::string parseError;
+        Json components = Json::parse(preset.second, &parseError);
+        if (!parseError.empty()) std::printf("  preset %s: %s\n", preset.first.c_str(), parseError.c_str());
+        CHECK(parseError.empty());
+        Json args = Json::MakeObject();
+        args["name"] = "Preset " + preset.first;
+        args["components"] = components;
+        Json made = e.Call("entity.create", args);
+        if (!made["ok"].asBool()) std::printf("  preset %s: %s\n", preset.first.c_str(), made["error"]["message"].asString().c_str());
+        CHECK(made["ok"].asBool());
+    }
+}
+
+TEST(UIInputEditingSkinsAndLongLists) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("ui_editing"), &err));
+    e.Call("scene.new", Json::parse(R"J({"empty": true})J"));
+    auto solid = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
+        Image img;
+        img.width = img.height = 8;
+        img.rgba.resize(8 * 8 * 4);
+        for (size_t i = 0; i < img.rgba.size(); i += 4) img.rgba[i] = r, img.rgba[i + 1] = g, img.rgba[i + 2] = b, img.rgba[i + 3] = 255;
+        CHECK(WritePng(JoinPath(e.ProjectDir(), name), img, true));
+    };
+    solid("red.png", 255, 0, 0);
+    solid("green.png", 0, 255, 0);
+    Call(e, "script.write", R"J({"path": "scripts/edit_log.lua", "source": "local M = {}
+log_ = log_ or {}
+function M:onSubmit(t) table.insert(log_, 'submit ' .. t) end
+function M:onValueChanged(v) table.insert(log_, 'value ' .. math.floor(v)) end
+function M:onUpdate() KEY_A = input.down('A') end
+return M
+"})J");
+    Call(e, "entity.create", R"J({"name": "Field", "components": {"UIInput": {"anchor": "top-left", "x": 20, "y": 20, "width": 320, "height": 48, "text": "hello world"},
+      "Script": {"path": "scripts/edit_log.lua"}}})J");
+    Scene& scene = e.GetScene();
+    auto step = [&](int frames) { Call(e, "sim.step", Format(R"J({"frames": %d})J", frames).c_str()); };
+    auto key = [&](const char* name, bool down) { Call(e, "input.key", Format(R"J({"key": "%s", "down": %s})J", name, down ? "true" : "false").c_str()); };
+    auto tap = [&](const char* name) {
+        key(name, true);
+        step(1);
+        key(name, false);
+        step(1);
+    };
+    auto chord = [&](const char* modifier, const char* name) {
+        key(modifier, true);
+        tap(name);
+        key(modifier, false);
+        step(1);
+    };
+    auto type = [&](const char* text) {
+        Call(e, "input.text", Format(R"J({"text": "%s"})J", text).c_str());
+        step(1);
+    };
+    auto click = [&](int x, int y) {
+        Call(e, "input.click", Format(R"J({"x": %d, "y": %d, "width": 1280, "height": 720})J", x, y).c_str());
+        step(1);
+    };
+    auto eval = [&](const char* code) { return Call(e, "script.eval", Format(R"J({"code": "%s"})J", code).c_str())["result"]["value"]; };
+    const UIInput* field = scene.Get<UIInput>(scene.FindByName("Field"));
+
+    // Scripts see the keyboard only while no text field has the focus.
+    key("A", true);
+    step(2);
+    CHECK(eval("return KEY_A").asBool() && !e.TextInputActive());
+    click(25, 44);  // left of the first character
+    step(1);
+    CHECK(e.TextInputActive() && !eval("return KEY_A").asBool());
+    key("A", false);
+    step(1);
+
+    // Caret: placed by the pointer, moved by keys; typing inserts there.
+    CHECK(field->caretAt == 0);
+    type("X");
+    CHECK(field->text == "Xhello world" && field->caretAt == 1);
+    click(335, 44);
+    CHECK(field->caretAt == 12);
+    tap("Left");
+    tap("Left");
+    tap("Backspace");
+    CHECK(field->text == "Xhello wold" && field->caretAt == 9);
+    tap("Delete");
+    CHECK(field->text == "Xhello wod");
+    tap("Home");
+    tap("Delete");
+    CHECK(field->text == "hello wod" && field->caretAt == 0);
+    tap("End");
+    CHECK(field->caretAt == 9);
+    // Selection: Shift+arrows, typing replaces it; Ctrl+A / C / X / V.
+    key("Shift", true);
+    tap("Left");
+    tap("Left");
+    tap("Left");
+    key("Shift", false);
+    step(1);
+    CHECK(field->caretAt == 6 && field->selectAt == 9);
+    type("world");
+    CHECK(field->text == "hello world" && field->caretAt == field->selectAt);
+    chord("Control", "A");
+    CHECK(field->selectAt == 0 && field->caretAt == 11);
+    chord("Control", "C");
+    CHECK(Call(e, "ui.clipboard", "{}")["result"]["text"].asString() == "hello world");
+    tap("End");
+    type(" ");
+    chord("Control", "V");
+    CHECK(field->text == "hello world hello world");
+    chord("Control", "A");
+    chord("Control", "X");
+    CHECK(field->text.empty());
+    Call(e, "ui.clipboard", R"J({"text": "two\nlines"})J");
+    chord("Control", "V");
+    CHECK(field->text == "two lines");  // one line: a pasted line break becomes a space
+    // A drag selects.
+    Call(e, "input.mouse", R"J({"x": 25, "y": 44, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"x": 335, "y": 44, "width": 1280, "height": 720})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(field->selectAt == 0 && field->caretAt == 9);
+    // A password is never copied.
+    Call(e, "component.set", R"J({"id": "Field", "type": "UIInput", "values": {"password": true}})J");
+    Call(e, "ui.clipboard", R"J({"text": "kept"})J");
+    chord("Control", "C");
+    CHECK(Call(e, "ui.clipboard", "{}")["result"]["text"].asString() == "kept");
+
+    // Several lines: Enter breaks the line, up/down move between lines, Ctrl+Enter submits.
+    Call(e, "component.set", R"J({"id": "Field", "type": "UIInput", "values": {"password": false, "multiline": true, "height": 140, "text": ""}})J");
+    click(100, 60);
+    type("ab");
+    tap("Enter");
+    type("cd");
+    CHECK(field->text == "ab\ncd" && field->caretAt == 5);
+    tap("Up");
+    CHECK(field->caretAt == 2);
+    tap("Down");
+    CHECK(field->caretAt == 5);
+    CHECK(eval("return table.concat(log_, ',')").asString().empty());
+    chord("Control", "Enter");
+    CHECK(eval("return table.concat(log_, ',')").asString() == "submit ab\ncd");
+    {  // the second line is drawn below the first
+        int top = 1 << 30, bottom = 0;
+        for (const UIQuad& q : BuildUIQuads(scene, 1280, 720, &e.Assets())) {
+            if (q.entity == scene.FindByName("Field") && q.texture) top = std::min(top, q.y0), bottom = std::max(bottom, q.y1);
+        }
+        CHECK(bottom - top > 40);
+    }
+    click(1000, 650);
+    CHECK(!e.TextInputActive());
+
+    // Images instead of colors: panel, text field, slider parts.
+    Call(e, "entity.create", R"J({"name": "Frame", "components": {"UIPanel": {"anchor": "top-left", "x": 400, "y": 20, "width": 200, "height": 100, "color": [1, 1, 1],
+      "opacity": 1, "texture": "red.png", "slice": 2}}})J");
+    Call(e, "entity.create", R"J({"name": "Bar", "components": {"UISlider": {"anchor": "top-left", "x": 400, "y": 200, "width": 400, "height": 40, "radius": 0, "value": 0.5,
+      "handle": false, "color": [1, 1, 1], "fillColor": [1, 1, 1], "texture": "red.png", "fillTexture": "green.png"}}})J");
+    Call(e, "component.set", R"J({"id": "Field", "type": "UIInput", "values": {"text": "", "placeholder": "", "color": [1, 1, 1], "borderWidth": 0, "radius": 0, "texture": "green.png"}})J");
+    {
+        RenderView view;
+        MakeSceneView(scene, 1280.0f / 720.0f, view);
+        RenderTarget rt;
+        rt.Resize(1280, 720);
+        e.Renderer().Render(scene, view, rt);
+        auto is = [](const Color& c, float r, float g, float b) { return std::fabs(c.r - r) < 0.05f && std::fabs(c.g - g) < 0.05f && std::fabs(c.b - b) < 0.05f; };
+        CHECK(is(MeanColor(rt, 410, 30, 590, 110), 1, 0, 0));
+        CHECK(is(MeanColor(rt, 410, 205, 590, 235), 0, 1, 0) && is(MeanColor(rt, 610, 205, 790, 235), 1, 0, 0));
+        CHECK(is(MeanColor(rt, 30, 30, 330, 150), 0, 1, 0));
+    }
+
+    // A drop-down with more options than fit: a window of rows that the wheel and a drag scroll.
+    Json options = Json::MakeArray();
+    for (int i = 0; i < 40; ++i) options.push(Json("Option " + std::to_string(i)));
+    Json create = Json::parse(R"J({"name": "Long", "components": {"UIDropdown": {"anchor": "top-left", "x": 900, "y": 20, "width": 240, "height": 48},
+      "Script": {"path": "scripts/edit_log.lua"}}})J");
+    create["components"]["UIDropdown"]["options"] = options;
+    CHECK(e.Call("entity.create", create)["ok"].asBool());
+    const UIDropdown* list = scene.Get<UIDropdown>(scene.FindByName("Long"));
+    auto rows = [&] {  // items of the visible rows, top to bottom
+        std::vector<int> items;
+        for (const UIRect& r : LayoutUI(scene, 1280, 720, &e.Assets())) {
+            if (r.entity == scene.FindByName("Long") && r.item >= 0) items.push_back(r.item);
+        }
+        return items;
+    };
+    click(1000, 44);
+    CHECK(list->open && rows().size() == 13 && rows().front() == 0);  // (720 - 70) / 48 rows fit below
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 200, "width": 1280, "height": 720, "wheel": -3})J");
+    step(1);
+    CHECK(rows().front() == 1);  // a row per frame with wheel motion
+    for (int i = 0; i < 40; ++i) {
+        Call(e, "input.mouse", R"J({"wheel": -1})J");
+        step(1);
+    }
+    CHECK(rows().back() == 39 && rows().size() == 13);  // stops at the end
+    // drag up by two rows: the list moves back, and the release does not select
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 200, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 300, "width": 1280, "height": 720})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(list->open && rows().back() == 37 && list->selected == 0);
+    // press and release on one row selects it
+    Call(e, "input.mouse", R"J({"x": 1000, "y": 94, "width": 1280, "height": 720, "button": "MouseLeft", "down": true})J");
+    step(1);
+    Call(e, "input.mouse", R"J({"button": "MouseLeft", "down": false})J");
+    step(1);
+    CHECK(!list->open && list->selected == 25);
+    CHECK(e.Scripts().Errors().empty());
+    Call(e, "sim.stop", "{}");
+}
+
 TEST(MaterialsFilesAndPbr) {
     Engine e;
     std::string err;

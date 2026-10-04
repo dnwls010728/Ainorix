@@ -25,6 +25,9 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<UIPanel>();
     TypeRegistry::Register<UIButton>();
     TypeRegistry::Register<UIImage>();
+    TypeRegistry::Register<UIInput>();
+    TypeRegistry::Register<UIDropdown>();
+    TypeRegistry::Register<UIJoystick>();
     TypeRegistry::Register<UISlider>();
     TypeRegistry::Register<UILayout>();
     TypeRegistry::Register<UIScroll>();

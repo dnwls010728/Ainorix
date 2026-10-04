@@ -95,6 +95,10 @@ struct InputState {
         bool began = false;
     };
     std::vector<Touch> touches;
+    // Characters typed since the last simulation step (UTF-8, no control characters; IME results
+    // included), read by a focused UIInput and cleared like pressedThisFrame. The API adds to it with input.text.
+    std::string text;
+    void AddText(uint32_t codepoint);
 };
 
 // Advances all behavior components by dt seconds (before physics).

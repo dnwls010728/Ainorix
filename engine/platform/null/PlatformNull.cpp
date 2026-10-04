@@ -50,6 +50,15 @@ std::vector<std::pair<std::string, std::string>> PlatformHostPoll() { return {};
 
 bool PlatformOpenUrl(const std::string&) { return false; }
 
+namespace {
+std::string& LocalClipboard() {
+    static std::string text;
+    return text;
+}
+}  // namespace
+std::string PlatformClipboardText() { return LocalClipboard(); }
+void PlatformSetClipboardText(const std::string& text) { LocalClipboard() = text; }
+
 std::string ExecutableDirectory() {
 #if defined(__linux__)
     char buf[4096];

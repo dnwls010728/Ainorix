@@ -91,9 +91,12 @@ Screen-space components laid out on a **1280×720 reference canvas** scaled to t
 |---|---|
 | `UIText` | `text` (UTF-8, `\n`, `<color=..>`/`<b>`), `font` (`default`, `pixel`, `assets/fonts/x.ttf`), `size`, `color`, `width` (wrap box), `align`, `outlineWidth`, `shadowDistance` |
 | `UIPanel` | `width`, `height`, `color`, `opacity`, `radius`, `borderWidth`, `clip` |
-| `UIButton` | `text`, `width`, `height`, `size`, `color`, `textColor`, `radius`, `interactable`; a click calls `onClick(self)` on the entity's Script |
+| `UIButton` | `text`, `width`, `height`, `size`, `color`, `textColor`, `radius`, `interactable`, `texture` + state textures, `icon`, `toggle`/`group`, `clickOn`; a click calls `onClick(self)` on the entity's Script, a toggle `onToggle(self, on)` (docs/UI.md) |
 | `UIImage` | `texture`, `color`, `frame`/`columns`, `slice`, `fill`, `preserveAspect` |
 | `UISlider` | `value`, `min`, `max`, `step`, `interactable`; dragging calls `onValueChanged(self, value)` |
+| `UIInput` | `text`, `placeholder`, `maxLength`, `password`, `multiline`; typing calls `onTextChanged(self, text)`, Enter `onSubmit(self, text)` |
+| `UIDropdown` | `options`, `selected`; choosing calls `onValueChanged(self, index)` |
+| `UIJoystick` | `axisX`, `axisY`: an on-screen stick read with `input.axis("LeftX")` |
 | all | `anchor` (9 points + `stretch*`), `x`, `y` offsets in reference px (+y down), `width`, `height`, `opacity`, `visible`, `order` |
 
 The anchor is both the point of the parent (or screen) and the element's pivot: `anchor = "bottom-right", x = -20, y = -20` puts the element's bottom-right corner 20 px from the corner.
@@ -122,6 +125,6 @@ WAV files: PCM 8/16/24/32-bit or float, mono/stereo, any sample rate (resampled)
 2. UI pointer: hover, press, slider drags (from this frame's mouse)
 3. Built-in systems (Animator, ParticleEmitter, SpriteAnimation); Trail paths are sampled after physics
 4. Physics step, then `onCollision*` / `onTrigger*`
-5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onValueChanged`
+5. UI callbacks: `onPointerExit` / `onPointerEnter`, `onClick`, `onToggle`, `onValueChanged`, `onTextChanged`, `onSubmit`
 6. Pending scene change
 7. AudioSource updates, audio mix

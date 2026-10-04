@@ -58,6 +58,7 @@ struct Player {
 
     // One iteration of the game loop. Returns false once the window closed.
     bool Frame() {
+        engine.UseSystemClipboard(true);
         if (!window->PumpEvents(engine.Input())) return false;
         for (auto& message : PlatformHostPoll()) {
             std::string parseError;
@@ -68,6 +69,7 @@ struct Player {
         double now = PlatformTimeSeconds();
         engine.Tick(now - last);
         last = now;
+        window->SetTextInput(engine.TextInputActive());
         if (gpu) {
 #ifndef __EMSCRIPTEN__
             // Minimized: nothing is presented, so nothing waits for vsync either.

@@ -8,10 +8,13 @@ needs Java.
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
 - Built on 2026-10-04 with Android NDK r28c (28.2.13676358), Release, API 26, static libc++,
   GLES3 and AAudio.
-- Source: the Dongle Zoo branch (host bridge, `input.viewSize`) on top of the VFX toolkit, the
+- Source: the Dongle Zoo branch plus the UI widget work (`UIInput` with the soft keyboard through
+  `Window::SetTextInput` and `KeyCharacterMap`, `UIDropdown`, `UIJoystick`, images on every UI element,
+  keyboard/gamepad focus), built from the working tree; (host bridge, `input.viewSize`) on top of the VFX toolkit, the
   Water/HD-2D work, protocol v4 networking, surface shader graphs and the P7 engine changes: this
-  rebuild closes the "pending rebuild" notes below. Windows tests pass 189 cases.
-- Checked: both ABIs link; `games/DongleZoo` packaged as APK (`apksigner verify`: v2 signature,
+  rebuild closes the "pending rebuild" notes below. Windows tests pass 194 cases.
+- Checked: both ABIs link (the UI widget work was only compiled: the soft keyboard and typing were never
+  run on Android); before that work `games/DongleZoo` was packaged as APK (`apksigner verify`: v2 signature,
   `aapt2 dump badging`, `zipalign -c -P 16 4`) and as an App Bundle with the debug key.
   **Not run on a device or emulator**: none was available on this host, so every feature newer than
   the 2026-10-02 emulator run in docs/ANDROID.md is unverified on Android.

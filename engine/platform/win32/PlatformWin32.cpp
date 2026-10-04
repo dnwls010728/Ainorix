@@ -10,6 +10,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <thread>
 #include <vector>
@@ -51,6 +52,10 @@ std::string KeyName(WPARAM vk) {
         case VK_ESCAPE: return "Escape";
         case VK_RETURN: return "Enter";
         case VK_TAB: return "Tab";
+        case VK_BACK: return "Backspace";
+        case VK_DELETE: return "Delete";
+        case VK_HOME: return "Home";
+        case VK_END: return "End";
         default: return std::string();
     }
 }
@@ -318,6 +323,7 @@ private:
         }
         highSurrogate_ = 0;
         if (c < 32 || c == 127) return;  // control characters come as Key events
+        if (input_) input_->AddText(c);
         WindowEvent e;
         e.type = WindowEvent::Type::Text;
         e.codepoint = c;
@@ -675,6 +681,36 @@ std::vector<std::pair<std::string, std::string>> PlatformHostPoll() { return {};
 
 bool PlatformOpenUrl(const std::string& url) {
     return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", Widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+}
+
+std::string PlatformClipboardText() {
+    std::string text;
+    if (!OpenClipboard(nullptr)) return text;
+    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        if (const wchar_t* wide = static_cast<const wchar_t*>(GlobalLock(data))) {
+            text = Narrow(wide);
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return text;
+}
+
+void PlatformSetClipboardText(const std::string& text) {
+    const std::wstring wide = Widen(text);
+    if (!OpenClipboard(nullptr)) return;
+    EmptyClipboard();
+    const size_t bytes = (wide.size() + 1) * sizeof(wchar_t);
+    if (HGLOBAL block = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+        if (void* to = GlobalLock(block)) {
+            std::memcpy(to, wide.c_str(), bytes);
+            GlobalUnlock(block);
+            if (!SetClipboardData(CF_UNICODETEXT, block)) GlobalFree(block);  // on success the system owns the block
+        } else {
+            GlobalFree(block);
+        }
+    }
+    CloseClipboard();
 }
 
 std::string ExecutableDirectory() {

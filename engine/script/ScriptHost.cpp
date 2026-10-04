@@ -541,6 +541,19 @@ int L_GamePaused(lua_State* L) {
     return 1;
 }
 
+// ui.focus(id?) gives a button or slider the keyboard/gamepad focus (nil clears it); ui.focused() -> id or nil.
+int L_UIFocus(lua_State* L) {
+    Host(L).GetEngine().SetUIFocus(lua_isnoneornil(L, 1) ? kNullEntity : CheckEntity(L, 1));
+    return 0;
+}
+
+int L_UIFocused(lua_State* L) {
+    const EntityId id = Host(L).GetEngine().UIFocus();
+    if (id == kNullEntity) lua_pushnil(L);
+    else lua_pushinteger(L, id);
+    return 1;
+}
+
 // host.call(name, data?) -> true when the embedding app handles `name` (an ad SDK, a store);
 // false means there is no such host and the game should use its own fallback.
 int L_HostCall(lua_State* L) {
@@ -1464,6 +1477,8 @@ void ScriptHost::Open() {
     SetFuncs(L, "audio", audioFuncs);
     const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
+    const luaL_Reg uiFuncs[] = {{"focus", L_UIFocus}, {"focused", L_UIFocused}, {nullptr, nullptr}};
+    SetFuncs(L, "ui", uiFuncs);
     const luaL_Reg hostFuncs[] = {{"call", L_HostCall}, {"poll", L_HostPoll}, {"language", L_HostLanguage}, {nullptr, nullptr}};
     SetFuncs(L, "host", hostFuncs);
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
@@ -1723,7 +1738,8 @@ std::vector<std::string> ScriptHost::ReloadAll() {
     return PollHotReload();
 }
 
-bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other) {
+bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other, const bool* flag,
+                            const std::string* text) {
     if (!engine_.PredictEntity(id)) return true;
     lua_State* L = State();
     int top = lua_gettop(L);
@@ -1735,7 +1751,13 @@ bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float
     }
     lua_insert(L, -2);  // function, self
     int nargs = 1;
-    if (withDt) {
+    if (text) {
+        lua_pushlstring(L, text->data(), text->size());
+        nargs = 2;
+    } else if (flag) {
+        lua_pushboolean(L, *flag);
+        nargs = 2;
+    } else if (withDt) {
         lua_pushnumber(L, dt);
         nargs = 2;
     } else if (other != kNullEntity) {
@@ -1779,6 +1801,18 @@ void ScriptHost::Notify(EntityId id, const char* method, float value) {
     auto it = instances_.find(id);
     if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
     CallMethod(id, it->second, method, value, true);
+}
+
+void ScriptHost::NotifyFlag(EntityId id, const char* method, bool flag) {
+    auto it = instances_.find(id);
+    if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
+    CallMethod(id, it->second, method, 0, false, kNullEntity, &flag);
+}
+
+void ScriptHost::NotifyText(EntityId id, const char* method, const std::string& text) {
+    auto it = instances_.find(id);
+    if (!L_ || it == instances_.end() || it->second.ref < 0 || it->second.faulted) return;
+    CallMethod(id, it->second, method, 0, false, kNullEntity, nullptr, &text);
 }
 
 void ScriptHost::DestroyInstance(EntityId id, Instance& inst, bool callOnDestroy) {

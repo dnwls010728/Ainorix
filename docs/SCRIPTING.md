@@ -27,9 +27,12 @@ function Spinner:onCollisionExit(other) end
 function Spinner:onTriggerEnter(other) end
 function Spinner:onTriggerExit(other) end
 function Spinner:onClick() end               -- UIButton on the same entity was clicked
+function Spinner:onToggle(on) end            -- UIButton {toggle} changed its `on` state
 function Spinner:onPointerEnter() end        -- pointer moved onto this UIButton / UISlider
 function Spinner:onPointerExit() end
-function Spinner:onValueChanged(value) end   -- UISlider dragged (see docs/UI.md)
+function Spinner:onValueChanged(value) end   -- UISlider dragged, UIDropdown option chosen (see docs/UI.md)
+function Spinner:onTextChanged(text) end     -- UIInput text edited
+function Spinner:onSubmit(text) end          -- Enter pressed in a UIInput
 
 return Spinner
 ```
@@ -103,6 +106,7 @@ end
 | `save.delete(key, slot?)` / `save.flush(slot?)` | Remove a key / persist pending changes. Tools default to memory; `--save-dir` enables files ([SAVE.md](SAVE.md)) |
 | `audio.play(path, {volume, pitch, loop})` / `audio.stop(id)` / `audio.stopAll()` | Sound |
 | `input.mouse()` | Mouse position in the game view (0..1) |
+| `ui.focus(id?)` / `ui.focused()` | Keyboard/gamepad focus of the UI (`UICanvas {navigation: true}`): focus a button or slider (no argument clears it), read the focused entity id or `nil`. See [UI.md](UI.md) |
 | `input.viewSize()` | Game view size in pixels (`width, height`): the window, or in headless sessions the project's `window` size until a tool passes another one (`input.click {width, height}`). For layouts that adapt to the screen shape (portrait phones, tablets): `local w, h = input.viewSize()` |
 | `input.touches()` | Every finger on a touch screen: `{ {id=, x=, y=, began=}, ... }` (`x, y` normalized like `input.mouse()`, `began` = put down this step). The first finger also acts as the mouse. `UIButton.key` turns buttons into on-screen keys (docs/UI.md) |
 | `input.wheel()` | Mouse wheel notches this step (> 0 = away from the user); `UIScroll` panels use it by themselves |
@@ -232,7 +236,7 @@ Lobby RPC and player callbacks are withheld during matches. `net.on("net.desync"
 ... end)` and `onNetState("desync")` run once after a terminal mismatch. Input frame waits still
 poll the transport but do not call onUpdate/timers/physics/audio. Plain input sees the quantized
 local player; mouse/touch coordinates are not synchronized. Native rollback preserves opaque closures, timers and physics solver history in bounded
-checkpoints and replays at most eight frames. See [NETWORK.md](NETWORK.md) for bounds and recording contracts.
+checkpoints and replays at most eight frames. See [NETWORK_NOTES.md](NETWORK_NOTES.md) (M5) for bounds and recording contracts.
 
 ### Authoritative gameplay
 
@@ -263,7 +267,7 @@ Lockstep and rollback matches carry the look axes too but still hide `mouseDelta
 The handler receives the routing entity argument too: `net.on("notice", function(entityId, text)
 ... end)`. Entity ids are local; use `net.entities()` when mapping a received server entity id to
 this peer's entity. Owner-only fields filter network transmission, not packaged resource contents.
-See NETWORK.md for limits, relevance, snapshot rates and platform verification.
+See [NETWORK_NOTES.md](NETWORK_NOTES.md) (M6, M7) for limits, relevance, snapshot rates and platform verification.
 
 
 Dedicated servers started by `oe serve-game` or a packaged `--server` reserve player

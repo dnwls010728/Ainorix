@@ -17,6 +17,7 @@
 #include "render/Material.h"
 #include "render/Mesh.h"
 #include "render/ShaderGraph.h"
+#include "render/Font.h"
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "scene/Prefab.h"
@@ -919,6 +920,22 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return SimState(e);
              });
 
+    Register(r, "input.text", "Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame "
+             "(focus it with input.click or ui.focus; Backspace and Enter are keys: input.key).",
+             Params().Req("text", "string", "Characters to type (UTF-8)."), false, [](Engine& e, const Json& a) {
+                 for (uint32_t c : DecodeUtf8(a["text"].asString())) e.Input().AddText(c);
+                 return SimState(e);
+             });
+
+    Register(r, "ui.clipboard", "Clipboard used by UIInput copy, cut and paste (Ctrl+C / Ctrl+X / Ctrl+V): read it, or set it before pasting. "
+             "Tool sessions keep their own; a game window uses the system clipboard.",
+             Params().Opt("text", "string", "New clipboard text. Omit to read."), false, [](Engine& e, const Json& a) {
+                 if (a.has("text")) e.SetClipboardText(a["text"].asString());
+                 Json out = Json::MakeObject();
+                 out["text"] = e.ClipboardText();
+                 return out;
+             });
+
     Register(r, "input.click", "Click the game view at a pixel (as seen in a screenshot of the given size). Triggers UIButton onClick (or sets a UISlider) on the next simulated frame.",
              Params()
                  .Req("x", "number", "Pixel x (0 = left).")
@@ -949,7 +966,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  int w = std::max(1, a["width"].asInt(640)), h = std::max(1, a["height"].asInt(360));
                  bool onlyInteractable = a["interactable"].asBool(false);
                  auto r1 = [](float v) { return std::round(static_cast<double>(v) * 10.0) / 10.0; };
-                 static const char* kKinds[] = {"UIText", "UIPanel", "UIButton", "UIImage", "UISlider"};
+                 static const char* kKinds[] = {"UIText", "UIPanel", "UIButton", "UIImage", "UISlider", "UIInput", "UIDropdown", "UIJoystick"};
                  Json list = Json::MakeArray();
                  for (const UIRect& rc : LayoutUI(e.GetScene(), w, h, &e.Assets())) {
                      if (onlyInteractable && !rc.interactable) continue;
@@ -962,6 +979,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      if (rc.parent != kNullEntity) j["parent"] = rc.parent;
                      if (rc.opacity < 1.0f) j["opacity"] = r1(rc.opacity * 100.0f) / 100.0;
                      if (rc.interactable) j["interactable"] = true;
+                     if (rc.kind == UIRect::Kind::Button) {
+                         const UIButton& b = *e.GetScene().Get<UIButton>(rc.entity);
+                         if (b.toggle) j["on"] = b.on;
+                     }
+                     if (rc.kind == UIRect::Kind::Dropdown) {
+                         if (rc.item >= 0) j["item"] = rc.item;  // a row of the open list
+                         else if (e.GetScene().Get<UIDropdown>(rc.entity)->open) j["open"] = true;
+                     }
+                     if (rc.interactable && rc.item < 0 && rc.entity == e.UIFocus()) j["focused"] = true;
                      if (rc.clipped) j["clip"] = Json(Json::Array{r1(rc.clip[0]), r1(rc.clip[1]), r1(rc.clip[2]), r1(rc.clip[3])});
                      list.push(j);
                  }
@@ -970,6 +996,24 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["height"] = h;
                  out["scale"] = std::round(static_cast<double>(UIScale(e.GetScene(), w, h)) * 1e5) / 1e5;
                  out["elements"] = list;
+                 return out;
+             });
+
+    Register(r, "ui.focus", "Keyboard/gamepad focus of the UI (UICanvas.navigation): give it to a button or slider, clear it, or read it. "
+             "Arrows / D-pad then move it (input.key), Enter / GamepadA clicks the focused button.",
+             Params().OptWith("id", EntityRefSchema("Button, slider, text field or drop-down to focus (id or name); 0 clears the focus. Omit to read.")), false, [](Engine& e, const Json& a) {
+                 if (a.has("id")) {
+                     const bool clear = a["id"].isNumber() && a["id"].asInt() == 0;
+                     const EntityId id = clear ? kNullEntity : RequireEntity(e, a);
+                     const Scene& scene = e.GetScene();
+                     if (id != kNullEntity && !scene.Get<UIButton>(id) && !scene.Get<UISlider>(id) && !scene.Get<UIInput>(id) && !scene.Get<UIDropdown>(id))
+                         throw ApiError("invalid_argument", "only a UIButton, UISlider, UIInput or UIDropdown can have the focus",
+                                        "ui.layout {interactable: true} lists them.");
+                     e.SetUIFocus(id);
+                 }
+                 Json out = Json::MakeObject();
+                 out["focus"] = e.UIFocus();
+                 if (e.UIFocus() != kNullEntity && e.GetScene().Exists(e.UIFocus())) out["name"] = e.GetScene().Record(e.UIFocus())->name;
                  return out;
              });
 

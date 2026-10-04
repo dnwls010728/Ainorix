@@ -12,7 +12,7 @@ class AssetManager;
 struct Texture;
 struct UISlider;
 
-// Screen-space UI (UIText / UIPanel / UIButton / UIImage / UISlider, arranged
+// Screen-space UI (UIText / UIPanel / UIButton / UIImage / UISlider / UIInput / UIDropdown / UIJoystick, arranged
 // by UILayout, scaled by UICanvas). Laid out on a reference canvas (default
 // 1280x720, scaled with the target height). Both renderers draw the same
 // quads from BuildUIQuads, so software and GPU output match.
@@ -20,12 +20,13 @@ constexpr float kUIReferenceHeight = 720.0f;
 
 struct UIRect {
     EntityId entity = kNullEntity;
-    enum class Kind { Text, Panel, Button, Image, Slider } kind = Kind::Panel;
+    enum class Kind { Text, Panel, Button, Image, Slider, Input, Dropdown, Joystick } kind = Kind::Panel;
     float x = 0, y = 0, w = 0, h = 0;  // pixels, top-left origin
     int order = 0;
     EntityId parent = kNullEntity;     // UI parent entity (kNullEntity = screen)
     float opacity = 1.0f;              // including ancestors
-    bool interactable = false;         // enabled button or slider
+    bool interactable = false;         // takes the pointer: enabled button, slider, text field, drop-down; joystick
+    int item = -1;                     // UIDropdown: row of its open list (-1 = the element itself)
     bool blocksInput = false;          // UIPanel.blockInput: elements drawn under it cannot be clicked
     bool scroll = false;               // has a UIScroll
     bool scrollHorizontal = false;
@@ -79,15 +80,20 @@ struct UIThumb {
 UIThumb ScrollThumb(float view, float extent, float offset, float scale);
 
 // Advances UI animation state by one real frame: UIMotion timers (restarting when an element becomes
-// visible) and the eased UIButton hover/press scale. Called once per simulated frame, also while paused.
+// visible), the eased UIButton hover/press scale and the UIInput caret blink. Called once per simulated frame, also while paused.
 void UpdateUIMotion(Scene& scene, float dt);
 
-// Topmost interactable element (enabled button or slider) under a pixel, or null.
+// Topmost interactable element (see UIRect::interactable) under a pixel, or null.
 const UIRect* HitTestUI(const std::vector<UIRect>& rects, float px, float py);
 // Same from a scene: the entity, or kNullEntity.
 EntityId HitTestButton(const Scene& scene, float px, float py, int width, int height, AssetManager* assets = nullptr);
 // Slider value under a pixel (clamped, snapped to step).
 float SliderValueAt(const UISlider& slider, const UIRect& rect, float px, float py);
+
+// UIInput editing. `rect` is the field's rectangle from LayoutUI for a screen of width x height. Byte offset in its
+// `text` of the character boundary nearest to a pixel, and of the one a line above (dir -1) or below (+1) an offset.
+int UIInputOffsetAt(const Scene& scene, const UIRect& rect, float px, float py, int width, int height, AssetManager* assets = nullptr);
+int UIInputOffsetVertical(const Scene& scene, const UIRect& rect, int offset, int dir, int width, int height, AssetManager* assets = nullptr);
 
 // Pixel size of a string in a font at a font size in pixels (no wrapping).
 void MeasureText(const std::string& text, float size, float* w, float* h, const std::string& font = "pixel", AssetManager* assets = nullptr);

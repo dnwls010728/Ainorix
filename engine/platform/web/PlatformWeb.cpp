@@ -157,6 +157,10 @@ std::string KeyName(const EmscriptenKeyboardEvent* e) {
     if (code == "Escape") return "Escape";
     if (code == "Enter" || code == "NumpadEnter") return "Enter";
     if (code == "Tab") return "Tab";
+    if (code == "Backspace") return "Backspace";
+    if (code == "Delete") return "Delete";
+    if (code == "Home") return "Home";
+    if (code == "End") return "End";
     return std::string();
 }
 
@@ -212,6 +216,7 @@ public:
                     input.down.insert(e.key);
                     break;
                 case Event::Up: input.down.erase(e.key); break;
+                case Event::Text: input.text += e.key; break;
                 case Event::Move:
                     input.mouseX = e.x;
                     input.mouseY = e.y;
@@ -260,7 +265,7 @@ public:
 
 private:
     struct Event {
-        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock, TouchBegin, TouchMove, TouchEnd } kind;
+        enum Kind { Down, Up, Move, Clear, Delta, Unlock, Lock, TouchBegin, TouchMove, TouchEnd, Text } kind;
         std::string key;
         float x = 0, y = 0;
         int id = 0;
@@ -291,6 +296,13 @@ private:
 
     static bool OnKey(int type, const EmscriptenKeyboardEvent* e, void* user) {
         auto* self = static_cast<WebWindow*>(user);
+        // KeyboardEvent.key is the typed character when it is a single one ("a", "A", "!"); names ("Enter") are longer.
+        // Text composed with an IME does not arrive as key events and is not reported.
+        if (type == EMSCRIPTEN_EVENT_KEYDOWN && !e->ctrlKey && !e->metaKey && !e->altKey) {
+            const unsigned char first = static_cast<unsigned char>(e->key[0]);
+            const size_t length = first < 0x80 ? 1 : first >= 0xF0 ? 4 : first >= 0xE0 ? 3 : first >= 0xC0 ? 2 : 0;
+            if (first >= 32 && first != 127 && length > 0 && std::strlen(e->key) == length) self->Push(Event::Text, e->key);
+        }
         std::string key = KeyName(e);
         if (key.empty()) return false;  // let the browser handle it (F5, F12, ...)
         if (!e->repeat || type == EMSCRIPTEN_EVENT_KEYUP) self->Push(type == EMSCRIPTEN_EVENT_KEYDOWN ? Event::Down : Event::Up, key);
@@ -430,6 +442,16 @@ bool PlatformOpenUrl(const std::string& url) {
     oe_web_open_url(url.c_str());
     return true;
 }
+
+// The browser's clipboard is asynchronous and permission-gated: copy and paste stay inside the game.
+namespace {
+std::string& LocalClipboard() {
+    static std::string text;
+    return text;
+}
+}  // namespace
+std::string PlatformClipboardText() { return LocalClipboard(); }
+void PlatformSetClipboardText(const std::string& text) { LocalClipboard() = text; }
 
 std::string ExecutableDirectory() { return "/"; }
 

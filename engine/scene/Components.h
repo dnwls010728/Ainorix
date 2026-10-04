@@ -764,6 +764,16 @@ void ReflectUICommon(FieldList& f) {
     f.Add("order", &T::order, "Draw order among siblings (higher on top).");
 }
 
+// Image look shared by UI elements (Unity's sliced Image, Unreal's box brush, Godot's StyleBoxTexture): a texture
+// replaces the solid background and every other image of the element uses the same slicing and sampling.
+template <class T>
+void ReflectUISkin(FieldList& f) {
+    f.Add("texture", &T::texture, "Background image (png/jpg/bmp/tga); the color then tints it (white = unchanged). Empty = solid color.");
+    f.Add("slice", &T::slice, "9-slice border of the element's images in image pixels: corners keep their size, edges and center stretch (0 = plain stretch).");
+    f.Add("sliceScale", &T::sliceScale, "Size of the 9-slice border on screen, in reference pixels per image pixel.");
+    f.Add("pixelArt", &T::pixelArt, "Nearest-neighbour sampling of the element's images (sharp pixels).");
+}
+
 constexpr const char* kUIFontDoc =
     "\"default\" (built-in Roboto), \"pixel\" (built-in 5x7 pixel font, ASCII) or a font file in the project (assets/fonts/x.ttf, .otf, .ttc). "
     "Characters a font lacks fall back to the default font.";
@@ -792,6 +802,7 @@ struct UIText {
     float shadowDistance = 0.0f;
     Color shadowColor{0, 0, 0};
     int visibleCharacters = -1;
+    float minSize = 0.0f;
     float opacity = 1.0f;
     bool visible = true;
     int order = 0;
@@ -812,6 +823,7 @@ struct UIText {
         f.Add("outlineColor", &UIText::outlineColor, "Outline color.");
         f.Add("shadowDistance", &UIText::shadowDistance, "Drop shadow offset (right and down) in reference pixels (0 = none).");
         f.Add("shadowColor", &UIText::shadowColor, "Drop shadow color (drawn at half the text opacity).");
+        f.Add("minSize", &UIText::minSize, "Shrink the font down to this size until the text fits its width/height box (0 = never shrink).");
         f.Add("visibleCharacters", &UIText::visibleCharacters, "Show only the first N characters (typewriter effects); -1 = all.");
         ReflectUICommon<UIText>(f);
     }
@@ -819,13 +831,17 @@ struct UIText {
 
 struct UIPanel {
     static constexpr const char* kTypeName = "UIPanel";
-    static constexpr const char* kDoc = "Screen-space rectangle (backgrounds, windows, bars) with rounded corners and a border. Parent of other UI elements.";
+    static constexpr const char* kDoc = "Screen-space rectangle (backgrounds, windows, bars): a solid color or a 9-slice image, rounded corners, a border. Parent of other UI elements.";
     std::string anchor = "top-left";
     float x = 16.0f;
     float y = 16.0f;
     float width = 240.0f;
     float height = 64.0f;
     Color color{0, 0, 0};
+    std::string texture;
+    float slice = 0.0f;
+    float sliceScale = 1.0f;
+    bool pixelArt = false;
     float opacity = 0.5f;
     float radius = 0.0f;
     float borderWidth = 0.0f;
@@ -837,6 +853,7 @@ struct UIPanel {
     static void Reflect(FieldList& f) {
         ReflectUIPlacement<UIPanel>(f, "Size in reference pixels.");
         f.Add("color", &UIPanel::color, "Fill color.");
+        ReflectUISkin<UIPanel>(f);
         f.Add("radius", &UIPanel::radius, "Corner radius in reference pixels.");
         f.Add("borderWidth", &UIPanel::borderWidth, "Border thickness in reference pixels (0 = none).");
         f.Add("borderColor", &UIPanel::borderColor, "Border color.");
@@ -850,26 +867,45 @@ struct UIPanel {
 struct UIButton {
     static constexpr const char* kTypeName = "UIButton";
     static constexpr const char* kDoc =
-        "Clickable screen-space button. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls onPointerEnter/onPointerExit. "
-        "Click it from tools with input.click (ui.layout lists where it is).";
+        "Clickable screen-space button: a solid or textured (9-slice) background with a look per state (normal, hover, pressed, disabled, on), "
+        "a label and an optional icon. A click calls onClick(self) on the entity's Script; the pointer entering/leaving calls "
+        "onPointerEnter/onPointerExit; a toggle button calls onToggle(self, on). Click it from tools with input.click (ui.layout lists where it is).";
     std::string text = "Button";
     std::string font = "default";
     float size = 28.0f;
     Color textColor{1, 1, 1};
+    std::string align = "center";
+    float padding = 8.0f;
+    std::string icon;
+    float iconSize = 0.0f;
+    std::string iconSide = "left";
     std::string anchor = "center";
     float x = 0.0f;
     float y = 0.0f;
     float width = 240.0f;
     float height = 64.0f;
     Color color{0.25f, 0.45f, 0.9f};
+    std::string texture;
+    float slice = 0.0f;
+    float sliceScale = 1.0f;
+    bool pixelArt = false;
     float radius = 8.0f;
     float borderWidth = 0.0f;
     Color borderColor{1, 1, 1};
     float hoverBrightness = 1.15f;
     float pressedBrightness = 0.85f;
+    std::string hoverTexture;
+    std::string pressedTexture;
+    std::string disabledTexture;
     float hoverScale = 1.0f;
     float pressedScale = 1.0f;
     bool interactable = true;
+    std::string clickOn = "press";
+    bool toggle = false;
+    bool on = false;
+    std::string group;
+    Color onColor{0.2f, 0.7f, 0.4f};
+    std::string onTexture;
     std::string key;
     float opacity = 1.0f;
     bool visible = true;
@@ -877,22 +913,42 @@ struct UIButton {
     // Runtime state set by the simulation (not saved).
     bool hovered = false;
     bool pressed = false;
+    bool focused = false;   // has the keyboard/gamepad focus (UICanvas.navigation)
     float scaleNow = 1.0f;  // eases toward hoverScale / pressedScale
     static void Reflect(FieldList& f) {
-        f.Add("text", &UIButton::text, "Label (same rich text as UIText).");
+        f.Add("text", &UIButton::text, "Label (same rich text as UIText). Empty = no label (icon buttons).");
         f.Add("font", &UIButton::font, kUIFontDoc);
         f.Add("size", &UIButton::size, "Label font size in reference pixels.");
         f.Add("textColor", &UIButton::textColor, "Label color.");
+        f.Add("align", &UIButton::align, "Where the label (and icon) sits across the button.").options = {"left", "center", "right"};
+        f.Add("padding", &UIButton::padding, "Space kept free at the left and right edge in reference pixels.");
+        f.Add("icon", &UIButton::icon, "Image drawn next to the label (png/jpg/bmp/tga). Empty = none.");
+        f.Add("iconSize", &UIButton::iconSize, "Icon height in reference pixels, the width follows the image; 0 = the image's pixel size.");
+        f.Add("iconSide", &UIButton::iconSide, "Side of the label the icon is on.").options = {"left", "right", "top", "bottom"};
         ReflectUIPlacement<UIButton>(f, "Size in reference pixels.");
         f.Add("color", &UIButton::color, "Background color.");
+        ReflectUISkin<UIButton>(f);
         f.Add("radius", &UIButton::radius, "Corner radius in reference pixels.");
         f.Add("borderWidth", &UIButton::borderWidth, "Border thickness in reference pixels (0 = none).");
         f.Add("borderColor", &UIButton::borderColor, "Border color.");
         f.Add("hoverBrightness", &UIButton::hoverBrightness, "Background brightness while the pointer is over the button.");
         f.Add("pressedBrightness", &UIButton::pressedBrightness, "Background brightness while pressed.");
+        f.Add("hoverTexture", &UIButton::hoverTexture, "Background image while the pointer is over the button. Empty = texture.");
+        f.Add("pressedTexture", &UIButton::pressedTexture, "Background image while pressed. Empty = texture.");
+        f.Add("disabledTexture", &UIButton::disabledTexture, "Background image while not interactable. Empty = texture.");
         f.Add("hoverScale", &UIButton::hoverScale, "Size multiplier while the pointer is over the button (1.05 = grows a little); eased, also while the game is paused.");
         f.Add("pressedScale", &UIButton::pressedScale, "Size multiplier while pressed (0.95 = squeezes).");
         f.Add("interactable", &UIButton::interactable, "Disabled buttons are drawn faded and ignore clicks.");
+        f.Add("clickOn", &UIButton::clickOn,
+              "When the click happens: press = as the pointer goes down; release = when it comes up while still over the button "
+              "(moving off before releasing cancels).").options = {"press", "release"};
+        f.Add("toggle", &UIButton::toggle, "A click flips `on` and calls onToggle(self, on) (check boxes, tabs, switches).");
+        f.Add("on", &UIButton::on, "Toggle state. Scripts may set it; the group rule is applied on clicks only.");
+        f.Add("group", &UIButton::group,
+              "Radio group: turning a toggle on turns off every other toggle in the scene with the same group name, and a click cannot "
+              "turn the one that is on off. Empty = independent.");
+        f.Add("onColor", &UIButton::onColor, "Background color while on (replaces color).");
+        f.Add("onTexture", &UIButton::onTexture, "Background image while on. Empty = texture.");
         f.Add("key", &UIButton::key,
               "On-screen control: while the mouse or any finger holds the button, this key is down (input.down / input.pressed, "
               "CharacterBody controls), e.g. \"Left\", \"Space\". Several fingers hold several buttons at once. Empty = none.");
@@ -963,6 +1019,12 @@ struct UISlider {
     Color fillColor{0.25f, 0.45f, 0.9f};
     bool handle = true;
     Color handleColor{1, 1, 1};
+    std::string texture;
+    float slice = 0.0f;
+    float sliceScale = 1.0f;
+    bool pixelArt = false;
+    std::string fillTexture;
+    std::string handleTexture;
     float radius = 12.0f;
     bool interactable = true;
     float opacity = 1.0f;
@@ -971,6 +1033,7 @@ struct UISlider {
     // Runtime state set by the simulation (not saved).
     bool hovered = false;
     bool pressed = false;
+    bool focused = false;  // has the keyboard/gamepad focus (UICanvas.navigation)
     static void Reflect(FieldList& f) {
         f.Add("value", &UISlider::value, "Current value.");
         f.Add("min", &UISlider::min, "Value at the start.");
@@ -982,9 +1045,158 @@ struct UISlider {
         f.Add("fillColor", &UISlider::fillColor, "Filled part color.");
         f.Add("handle", &UISlider::handle, "Draw a round handle at the value.");
         f.Add("handleColor", &UISlider::handleColor, "Handle color.");
+        ReflectUISkin<UISlider>(f);
+        f.Add("fillTexture", &UISlider::fillTexture, "Image of the filled part (tinted by fillColor), laid over the whole bar and cut at the value. Empty = solid color.");
+        f.Add("handleTexture", &UISlider::handleTexture, "Image of the handle (tinted by handleColor), drawn at its own proportions. Empty = a round handle.");
         f.Add("radius", &UISlider::radius, "Corner radius in reference pixels.");
         f.Add("interactable", &UISlider::interactable, "Drag to change the value; false = display only (progress bar).");
         ReflectUICommon<UISlider>(f);
+    }
+};
+
+struct UIInput {
+    static constexpr const char* kTypeName = "UIInput";
+    static constexpr const char* kDoc =
+        "Text field (player names, chat, codes, notes). A click gives it the focus and places the caret; arrows, Home/End, Shift+arrows or a drag "
+        "select, Ctrl+A/C/X/V use the clipboard, Enter calls onSubmit(self, text), Escape or a click elsewhere leaves it. Every change calls "
+        "onTextChanged(self, text). While it has the focus scripts do not see the keyboard. Tools type with input.text.";
+    std::string text;
+    std::string placeholder = "Enter text";
+    std::string font = "default";
+    float size = 24.0f;
+    Color textColor{1, 1, 1};
+    std::string anchor = "center";
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 320.0f;
+    float height = 48.0f;
+    Color color{0.12f, 0.13f, 0.16f};
+    std::string texture;
+    float slice = 0.0f;
+    float sliceScale = 1.0f;
+    bool pixelArt = false;
+    float radius = 8.0f;
+    float borderWidth = 2.0f;
+    Color borderColor{0.4f, 0.45f, 0.55f};
+    int maxLength = 0;
+    bool password = false;
+    bool multiline = false;
+    bool interactable = true;
+    float opacity = 1.0f;
+    bool visible = true;
+    int order = 10;
+    // Runtime state set by the simulation (not saved).
+    bool hovered = false;
+    bool focused = false;
+    float caret = 0.0f;  // seconds since the caret last moved (blink)
+    int caretAt = 0;     // byte offset of the caret in `text`
+    int selectAt = 0;    // other end of the selection (== caretAt: nothing selected)
+    static void Reflect(FieldList& f) {
+        f.Add("text", &UIInput::text, "What the player typed (UTF-8). Scripts may set it.");
+        f.Add("placeholder", &UIInput::placeholder, "Hint shown faded while the field is empty and not focused.");
+        f.Add("font", &UIInput::font, kUIFontDoc);
+        f.Add("size", &UIInput::size, "Font size in reference pixels.");
+        f.Add("textColor", &UIInput::textColor, "Text and caret color.");
+        ReflectUIPlacement<UIInput>(f, "Size in reference pixels.");
+        f.Add("color", &UIInput::color, "Background color.");
+        ReflectUISkin<UIInput>(f);
+        f.Add("radius", &UIInput::radius, "Corner radius in reference pixels.");
+        f.Add("borderWidth", &UIInput::borderWidth, "Border thickness in reference pixels (0 = none).");
+        f.Add("borderColor", &UIInput::borderColor, "Border color.");
+        f.Add("maxLength", &UIInput::maxLength, "Most characters the player can type (0 = no limit).");
+        f.Add("password", &UIInput::password, "Show every character as * (and never copy it).");
+        f.Add("multiline", &UIInput::multiline, "Several lines: the text wraps at the width, Enter starts a new line and Ctrl+Enter submits.");
+        f.Add("interactable", &UIInput::interactable, "Disabled fields are drawn faded and cannot be focused.");
+        ReflectUICommon<UIInput>(f);
+    }
+};
+
+struct UIDropdown {
+    static constexpr const char* kTypeName = "UIDropdown";
+    static constexpr const char* kDoc =
+        "Drop-down list (language, difficulty, resolution): shows the selected option; a click opens the list on top of everything else, a click "
+        "on a row selects it and calls onValueChanged(self, index) on the entity's Script, a click elsewhere closes it.";
+    Json options = Json::MakeArray();
+    int selected = 0;
+    std::string font = "default";
+    float size = 24.0f;
+    Color textColor{1, 1, 1};
+    std::string anchor = "center";
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 240.0f;
+    float height = 48.0f;
+    Color color{0.18f, 0.2f, 0.26f};
+    std::string texture;
+    float slice = 0.0f;
+    float sliceScale = 1.0f;
+    bool pixelArt = false;
+    float radius = 8.0f;
+    float borderWidth = 0.0f;
+    Color borderColor{1, 1, 1};
+    bool interactable = true;
+    float opacity = 1.0f;
+    bool visible = true;
+    int order = 10;
+    // Runtime state set by the simulation (not saved).
+    bool hovered = false;
+    bool focused = false;
+    bool open = false;
+    int hoverItem = -1;  // row under the pointer while open
+    int first = 0;       // first row shown when the list is longer than the screen
+    static void Reflect(FieldList& f) {
+        f.Add("options", &UIDropdown::options, "The choices, e.g. [\"Easy\", \"Normal\", \"Hard\"]. The open list has one row per option, each as tall as the element; a list longer than the screen scrolls with the wheel or a drag.");
+        f.Add("selected", &UIDropdown::selected, "Index of the chosen option (0 = the first).");
+        f.Add("font", &UIDropdown::font, kUIFontDoc);
+        f.Add("size", &UIDropdown::size, "Font size in reference pixels.");
+        f.Add("textColor", &UIDropdown::textColor, "Text color.");
+        ReflectUIPlacement<UIDropdown>(f, "Size in reference pixels.");
+        f.Add("color", &UIDropdown::color, "Background color (the list is a little darker, the row under the pointer lighter).");
+        ReflectUISkin<UIDropdown>(f);
+        f.Add("radius", &UIDropdown::radius, "Corner radius in reference pixels.");
+        f.Add("borderWidth", &UIDropdown::borderWidth, "Border thickness in reference pixels (0 = none).");
+        f.Add("borderColor", &UIDropdown::borderColor, "Border color.");
+        f.Add("interactable", &UIDropdown::interactable, "Disabled drop-downs are drawn faded and cannot be opened.");
+        ReflectUICommon<UIDropdown>(f);
+    }
+};
+
+struct UIJoystick {
+    static constexpr const char* kTypeName = "UIJoystick";
+    static constexpr const char* kDoc =
+        "On-screen stick for touch screens: while a finger (or the mouse) that went down on it is held, two gamepad axes follow it, so "
+        "input.axis(\"LeftX\") works the same with a gamepad and on a phone. Releasing returns the axes to 0.";
+    static constexpr int kNoPointer = -1;
+    static constexpr int kMousePointer = -2;
+    std::string anchor = "bottom-left";
+    float x = 40.0f;
+    float y = -40.0f;
+    float width = 200.0f;
+    float height = 200.0f;
+    std::string axisX = "LeftX";
+    std::string axisY = "LeftY";
+    Color color{1, 1, 1};
+    Color handleColor{1, 1, 1};
+    std::string texture;
+    std::string handleTexture;
+    bool pixelArt = false;
+    float opacity = 0.3f;
+    bool visible = true;
+    int order = 10;
+    // Runtime state set by the simulation (not saved).
+    float valueX = 0.0f;      // -1 left .. 1 right
+    float valueY = 0.0f;      // -1 down .. 1 up
+    int held = kNoPointer;    // touch id holding the stick, or kMousePointer
+    static void Reflect(FieldList& f) {
+        ReflectUIPlacement<UIJoystick>(f, "Size in reference pixels (the stick is the circle inside this box).");
+        f.Add("axisX", &UIJoystick::axisX, "Axis the horizontal position drives (+ = right).").options = {"LeftX", "RightX"};
+        f.Add("axisY", &UIJoystick::axisY, "Axis the vertical position drives (+ = up).").options = {"LeftY", "RightY"};
+        f.Add("color", &UIJoystick::color, "Base color.");
+        f.Add("handleColor", &UIJoystick::handleColor, "Handle color (drawn at twice the base opacity).");
+        f.Add("texture", &UIJoystick::texture, "Image of the base (tinted by color). Empty = a disc.");
+        f.Add("handleTexture", &UIJoystick::handleTexture, "Image of the handle (tinted by handleColor). Empty = a disc.");
+        f.Add("pixelArt", &UIJoystick::pixelArt, "Nearest-neighbour sampling of the images (sharp pixels).");
+        ReflectUICommon<UIJoystick>(f);
     }
 };
 
@@ -1057,6 +1269,8 @@ struct UICanvas {
     float referenceWidth = 1280.0f;
     float referenceHeight = 720.0f;
     float match = 1.0f;
+    bool navigation = false;
+    Color focusColor{1, 1, 1};
     static void Reflect(FieldList& f) {
         f.Add("referenceWidth", &UICanvas::referenceWidth, "Reference canvas width in pixels.");
         f.Add("referenceHeight", &UICanvas::referenceHeight, "Reference canvas height in pixels.");
@@ -1064,6 +1278,10 @@ struct UICanvas {
         m.hasRange = true;
         m.min = 0.0f;
         m.max = 1.0f;
+        f.Add("navigation", &UICanvas::navigation,
+              "Keyboard/gamepad control of the UI: arrows or the D-pad move the focus between buttons and sliders (left/right changes a focused "
+              "horizontal slider), Enter or GamepadA clicks the focused button. Off = pointer only.");
+        f.Add("focusColor", &UICanvas::focusColor, "Color of the frame around the focused element.");
     }
 };
 

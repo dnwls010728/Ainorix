@@ -4,12 +4,15 @@
 `oe package --web` combines them with index.html and game.pak; packaging needs no Emscripten.
 
 - Built: 2026-10-04, Emscripten 6.0.10, Release (`build_web.bat`, BINARYEN_CORES=1).
-- Source: the Dongle Zoo branch: host bridge (`host.call` / `host.poll` / `host.language`, the page's
+- Source: the Dongle Zoo branch plus the UI widget work (`UIButton` textures/icons/toggles, keyboard/gamepad
+  focus, `UIInput` with typed text from `KeyboardEvent.key`, caret/selection and an in-game clipboard,
+  `UIDropdown`, `UIJoystick`, images on every UI element): host bridge (`host.call` / `host.poll` / `host.language`, the page's
   `window.OEHost` and `Module.oeHostSend`), `input.viewSize`, on top of the VFX toolkit (particle
   curves, `Trail`), the Water/HD-2D work and everything listed before (protocol v4 sessions, lockstep,
   rollback, authoritative replication, saves, animation, gamepads, multi-touch, postprocessing,
   surface shader graphs).
-- Validation: Windows 189 tests. The Wasm test suite was not rebuilt for this runtime. The packaged
+- Validation: Windows 194 tests. The Wasm test suite was not rebuilt for this runtime, and the UI widget work
+  (typing into a `UIInput` in a browser in particular) was not run in a browser. Before that work, the packaged
   `games/DongleZoo` was driven in headless Edge (WebGL2 through SwiftShader) over the DevTools
   protocol: page load, `host.js` loaded (`window.OEHost`, `Module.oeHostSend` present), Play clicked,
   animals dropped and merged, save written to localStorage, a host message queued and drained by the
