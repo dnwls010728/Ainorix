@@ -1,40 +1,8 @@
 # Gamepad input
 
-## Implementation status (work log)
-
-P4 starts from the integrated main. P3 rendering and sample effects remain in
-their separate follow-up PR; gamepad input does not depend on that feature.
-
-- [x] P4.1: Portable raw axes, fixed dead zone, input.axis injection, sim.state
-      inspection, Lua input.axis and button edge/state tests. Windows Release passes
-      73 tests. GamepadAxesAndButtons drives deterministic Lua movement, all six
-      axes, range errors, dead-zone endpoints, button press/hold/repress, input
-      persistence, non-undo state and stop reset. The real CLI confirmed raw
-      LeftX 0.575 reads as approximately 0.5 through API state and Lua.
-      Node/WASM passes 69 tests. Web and both Android players rebuilt without
-      new warnings. The PlatformNull translation unit also compiled with
-      Emscripten/Clang (existing unused-parameter warnings in Platform.h); this
-      is a portability compile check, not a full Linux build or device test.
-- [x] P4.2: Windows dynamic XInput, browser Gamepad API and Android analog/button
-      adapters, disconnect/focus reset and platform builds. Windows Release passes
-      74 tests and Node/WASM passes 70. GamepadDeviceLifecycle checks all named buttons, press/hold/release,
-      controller replacement, focus reset, disconnect, malformed axis normalization
-      and preservation of injected input while no physical device is active.
-      Web and both Android ABI players rebuilt without new warnings; runtime
-      refresh is recorded in runtime/web/README.md and runtime/android/README.md.
-- [x] P4.3: Platformer/Dungeon stick, D-pad, A and Start controls; focused native
-      editor Game-view forwarding through commands, with axes/buttons released
-      on focus loss. Windows passes 75 tests; Node/WASM passes 71.
-      SampleGamepadControls checks partial-stick speed despite Android aliases,
-      dead-zone rest, D-pad speed, jump hold/release, firing, restart and repeated
-      scene determinism. NativeEditorHeadless checks forwarding and focus reset.
-      CLI-injected samples were rendered and inspected (Platformer hash
-      34e10cc120feae25, Dungeon d0a265a1f2245fb1); the D3D11 editor screenshot
-      confirmed the translated Game input hint and sample control instructions.
-      Three READMEs and sample guides updated. Only editor C++/Lua/sample data
-      changed after P4.2, so player runtime binaries remain current.
-- [ ] Hardware follow-up: verify sticks, triggers, buttons and disconnect on a
-      real controller on Windows, web and Android; no device is assumed available.
+Gamepads are read through six logical axes and named buttons that are the same on every platform and can be
+injected through the API (`input.axis`, `input.key`), so controller code is testable without a device. What is
+implemented and what is still unverified on real hardware is in the work log at the end.
 
 ## Logical input contract
 
@@ -107,3 +75,39 @@ Game view has focus. Forwarding uses input.axis/input.key commands, sends button
 state changes without repeating held presses, and releases only forwarded input
 when focus is lost. A window with no sampled axes leaves agent-injected axes
 alone. Click the Game view to resume forwarding after losing window focus.
+
+## Implementation status (work log)
+
+P4 starts from the integrated main. P3 rendering and sample effects remain in
+their separate follow-up PR; gamepad input does not depend on that feature.
+
+- [x] P4.1: Portable raw axes, fixed dead zone, input.axis injection, sim.state
+      inspection, Lua input.axis and button edge/state tests. Windows Release passes
+      73 tests. GamepadAxesAndButtons drives deterministic Lua movement, all six
+      axes, range errors, dead-zone endpoints, button press/hold/repress, input
+      persistence, non-undo state and stop reset. The real CLI confirmed raw
+      LeftX 0.575 reads as approximately 0.5 through API state and Lua.
+      Node/WASM passes 69 tests. Web and both Android players rebuilt without
+      new warnings. The PlatformNull translation unit also compiled with
+      Emscripten/Clang (existing unused-parameter warnings in Platform.h); this
+      is a portability compile check, not a full Linux build or device test.
+- [x] P4.2: Windows dynamic XInput, browser Gamepad API and Android analog/button
+      adapters, disconnect/focus reset and platform builds. Windows Release passes
+      74 tests and Node/WASM passes 70. GamepadDeviceLifecycle checks all named buttons, press/hold/release,
+      controller replacement, focus reset, disconnect, malformed axis normalization
+      and preservation of injected input while no physical device is active.
+      Web and both Android ABI players rebuilt without new warnings; runtime
+      refresh is recorded in runtime/web/README.md and runtime/android/README.md.
+- [x] P4.3: Platformer/Dungeon stick, D-pad, A and Start controls; focused native
+      editor Game-view forwarding through commands, with axes/buttons released
+      on focus loss. Windows passes 75 tests; Node/WASM passes 71.
+      SampleGamepadControls checks partial-stick speed despite Android aliases,
+      dead-zone rest, D-pad speed, jump hold/release, firing, restart and repeated
+      scene determinism. NativeEditorHeadless checks forwarding and focus reset.
+      CLI-injected samples were rendered and inspected (Platformer hash
+      34e10cc120feae25, Dungeon d0a265a1f2245fb1); the D3D11 editor screenshot
+      confirmed the translated Game input hint and sample control instructions.
+      Three READMEs and sample guides updated. Only editor C++/Lua/sample data
+      changed after P4.2, so player runtime binaries remain current.
+- [ ] Hardware follow-up: verify sticks, triggers, buttons and disconnect on a
+      real controller on Windows, web and Android; no device is assumed available.

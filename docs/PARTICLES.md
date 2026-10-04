@@ -1,65 +1,8 @@
 # Particle effects and trails (VFX)
 
-## Implementation status (work log)
-
-P1, P2 and P3.1 were integrated into main directly at the user's request.
-P3.2 and P3.3 continue from that combined main.
-
-- [x] P3.1: Reflected ParticleEmitter, bounded deterministic fixed-step simulation,
-      explicit state/burst/clear commands, Lua burst helpers and simulation tests.
-      Windows Release build and all 64 tests pass. ParticleSimulationAndCommands
-      covers startup burst, capacity/drop/shrink, expiry, paused emission,
-      world-space spawn positions, runtime serialization exclusion, fractional
-      rate, API errors and Lua/global/instance bursts. ParticleRandomStreamIsDeterministic
-      checks repeated seeds, changed seeds and cone/speed constraints.
-- [x] P3.2: Shared 2D/3D billboard draw items, lifetime size/color interpolation,
-      texture sheet frames and transparent ordering in both renderers; visual,
-      hash, thread-determinism and software/GPU comparison tests. Windows Release
-      passes 74 tests. ParticleBillboardDrawItems checks camera orientation,
-      interpolation, local/world positions, sheet UVs, sorting and expiry.
-      ParticleRenderers covers solid/textured quads, 2D/3D seeded frame hashes,
-      single/multi-thread equality and D3D11 comparison (mean channel difference
-      0.118/0.180 of 255; fully covered interiors differ by less than 2 of 255).
-      Software/GPU PNGs were inspected. Both Android ABI players rebuilt;
-      browser execution is covered below; Android device execution remains unverified.
-      Node/WASM passes 70 tests, including the same fixed particle frame hashes
-      as Windows (2D eeb1529ca41029c9; 3D 4ea73d9e1b71d479). GPU tests skip
-      in Node because there is no browser canvas. CLI script screenshots also
-      verified a world-space colored burst in software and D3D11.
-- [x] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
-      Android runtimes rebuilt and available platform verification. Windows passes
-      75 tests and Node/WASM passes 71. SampleParticleEffects drives real coin
-      trigger collection in both samples, enemy/player hit callbacks, visible
-      orthographic particles, cleanup and repeatable scene/frame output.
-      Native PNGs were inspected. Packaged Platformer ran with WebGL2 and no
-      console errors; an ignored copy used a helper to move coins onto the player,
-      exercising the actual collection callback and displaying its particle burst.
-      The helper is not part of either sample. P3.2 runtimes are current because
-      this milestone changes only Lua, documentation and tests.
-- [ ] Hardware follow-up: run packaged samples on an Android device and verify
-      coin/hit bursts and expiry; run the rendering suite on Linux/EGL. No Android
-      device or Linux execution was available for this feature.
-- [x] V1: ParticleEmitter for effects work: birth shapes (point/sphere/box/circle,
-      shapeEdge, radialSpeed), rotation and spin, align velocity + stretch, flipbooks
-      (frames, frameRate, randomFrame), sizeOverLife/colorOverLife/opacityOverLife
-      curves, turbulence, delay/duration cycles, pixelArt switch, `finished` in
-      particles.state and Lua particles.state. Emitters that do not use a new field
-      keep their random sequence and frame hashes (ParticleRenderers hashes unchanged).
-      Tests: ParticleShapesRotationAndTiming, ParticleCurvesFlipbookAndAlignment.
-- [x] V2: Trail component (camera-facing ribbon, width/color/opacity fade, optional
-      texture, additive blend), trail.state/trail.clear, Lua trail.clear. Both renderers
-      draw the same mesh; TrailRibbon measures a mean channel difference of 0.106 of
-      255 between software and D3D11.
-- [x] V3: samples/VFXLab (campfire, portal, fireworks, orb trail) with generated
-      textures; SampleVfxLab runs it twice and compares frame hashes. Software and
-      D3D11 PNGs at frames 132 and 200 were inspected. Windows passes 187 tests.
-- [ ] Rebuild runtime/web and runtime/android: engine C++ used by the player changed
-      and this host has no Emscripten SDK or Android NDK. Until then packaged web and
-      Android games ignore the V1/V2 fields and Trail. Also run the suite under
-      Node/WASM to confirm the new tests and the turbulence field match Windows.
-- [ ] Not done, candidates for later: sub-emitters (spawn on particle death), mesh
-      particles, lit or soft (depth-faded) particles, particle collision, an editor
-      preview that simulates the selected emitter while the game is stopped.
+`ParticleEmitter` and `Trail` are simulated at the fixed step, deterministic, and drawn the same by both renderers.
+This document is the contract and the reference for their fields; status and verification are in the work log at
+the end.
 
 ## Simulation contract
 
@@ -195,3 +138,64 @@ inset to avoid neighbouring-frame bleed. Empty texture gives a solid quad;
 missing textures give magenta quads. Texture alpha multiplies particle opacity.
 Opaque geometry precedes particles; blended draws sort back to front by bounds
 center distance. Entity id breaks ties, then stable birth order within an emitter.
+
+## Implementation status (work log)
+
+P1, P2 and P3.1 were integrated into main directly at the user's request.
+P3.2 and P3.3 continue from that combined main.
+
+- [x] P3.1: Reflected ParticleEmitter, bounded deterministic fixed-step simulation,
+      explicit state/burst/clear commands, Lua burst helpers and simulation tests.
+      Windows Release build and all 64 tests pass. ParticleSimulationAndCommands
+      covers startup burst, capacity/drop/shrink, expiry, paused emission,
+      world-space spawn positions, runtime serialization exclusion, fractional
+      rate, API errors and Lua/global/instance bursts. ParticleRandomStreamIsDeterministic
+      checks repeated seeds, changed seeds and cone/speed constraints.
+- [x] P3.2: Shared 2D/3D billboard draw items, lifetime size/color interpolation,
+      texture sheet frames and transparent ordering in both renderers; visual,
+      hash, thread-determinism and software/GPU comparison tests. Windows Release
+      passes 74 tests. ParticleBillboardDrawItems checks camera orientation,
+      interpolation, local/world positions, sheet UVs, sorting and expiry.
+      ParticleRenderers covers solid/textured quads, 2D/3D seeded frame hashes,
+      single/multi-thread equality and D3D11 comparison (mean channel difference
+      0.118/0.180 of 255; fully covered interiors differ by less than 2 of 255).
+      Software/GPU PNGs were inspected. Both Android ABI players rebuilt;
+      browser execution is covered below; Android device execution remains unverified.
+      Node/WASM passes 70 tests, including the same fixed particle frame hashes
+      as Windows (2D eeb1529ca41029c9; 3D 4ea73d9e1b71d479). GPU tests skip
+      in Node because there is no browser canvas. CLI script screenshots also
+      verified a world-space colored burst in software and D3D11.
+- [x] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
+      Android runtimes rebuilt and available platform verification. Windows passes
+      75 tests and Node/WASM passes 71. SampleParticleEffects drives real coin
+      trigger collection in both samples, enemy/player hit callbacks, visible
+      orthographic particles, cleanup and repeatable scene/frame output.
+      Native PNGs were inspected. Packaged Platformer ran with WebGL2 and no
+      console errors; an ignored copy used a helper to move coins onto the player,
+      exercising the actual collection callback and displaying its particle burst.
+      The helper is not part of either sample. P3.2 runtimes are current because
+      this milestone changes only Lua, documentation and tests.
+- [ ] Hardware follow-up: run packaged samples on an Android device and verify
+      coin/hit bursts and expiry; run the rendering suite on Linux/EGL. No Android
+      device or Linux execution was available for this feature.
+- [x] V1: ParticleEmitter for effects work: birth shapes (point/sphere/box/circle,
+      shapeEdge, radialSpeed), rotation and spin, align velocity + stretch, flipbooks
+      (frames, frameRate, randomFrame), sizeOverLife/colorOverLife/opacityOverLife
+      curves, turbulence, delay/duration cycles, pixelArt switch, `finished` in
+      particles.state and Lua particles.state. Emitters that do not use a new field
+      keep their random sequence and frame hashes (ParticleRenderers hashes unchanged).
+      Tests: ParticleShapesRotationAndTiming, ParticleCurvesFlipbookAndAlignment.
+- [x] V2: Trail component (camera-facing ribbon, width/color/opacity fade, optional
+      texture, additive blend), trail.state/trail.clear, Lua trail.clear. Both renderers
+      draw the same mesh; TrailRibbon measures a mean channel difference of 0.106 of
+      255 between software and D3D11.
+- [x] V3: samples/VFXLab (campfire, portal, fireworks, orb trail) with generated
+      textures; SampleVfxLab runs it twice and compares frame hashes. Software and
+      D3D11 PNGs at frames 132 and 200 were inspected. Windows passes 187 tests.
+- [ ] Rebuild runtime/web and runtime/android: engine C++ used by the player changed
+      and this host has no Emscripten SDK or Android NDK. Until then packaged web and
+      Android games ignore the V1/V2 fields and Trail. Also run the suite under
+      Node/WASM to confirm the new tests and the turbulence field match Windows.
+- [ ] Not done, candidates for later: sub-emitters (spawn on particle death), mesh
+      particles, lit or soft (depth-faded) particles, particle collision, an editor
+      preview that simulates the selected emitter while the game is stopped.
