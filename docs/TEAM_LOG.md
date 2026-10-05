@@ -28,7 +28,7 @@ Decisions are settled (TEAM.md §10, items 5 to 7; hand-over rules in §11.6). M
 - [x] E5: usage capture, `usage.jsonl`, `team.usage`, panel numbers, `maxBudgetUsd`
 - [x] E6: `team.reset`, rotate a large resumed conversation
 - [x] Final k=3 measurement (last entry below): C/A median cost 1.22x, 2/3 Bat runs passed; the idle turn is still 32.7k tokens
-- [ ] Open: a lead can still answer with an `@mention` instead of `team_delegate` (final run C3); idle base context still 32.7k (see the last entry)
+- [x] Open follow-ups: permitted delegation advice on blocked mentions; outside-repository M1 remeasured (22,977 input tokens vs 32,699 inside). Model handoff reliability and the remaining gap to 19k are observations, not rollback gates; see the follow-up entries below.
 
 ## Later
 
@@ -737,3 +737,89 @@ Validation: build.bat warning-free; build/bin/oe_tests passed all 207 tests
 (0 failed checks), including stand-in tests only for agent turns. Evidence retained
 in build/scratch/team-followups/build-notice-final.log and tests-notice-final.log.
 No headers or player runtime code changed. Agent guides remain byte-identical.
+
+
+### Outside-repository idle context follow-up - 2026-10-05
+
+One M1 campaign only, conditions (a) standalone Claude and (c) current team, k=3
+each, interleaved a/c, exact prompt "Say ok", haiku (resolved model
+claude-haiku-4-5-20251001), Claude Code 2.1.289. Every run starts a fresh conversation
+in a separate project created by oe new beneath
+%TEMP%/oe-team-idle-outside-20261005, outside the repository. No attached engine API,
+no cache flush, no repeated campaign, no favourable replacement run, no M2 rerun.
+This explicitly requested external folder supersedes the usual build/scratch location
+for this measurement. Models ran through the manual harness, never oe_tests.
+
+Manifest matches the previous canonical unattached M1: standalone flags are
+-p --model haiku --output-format stream-json --verbose --permission-mode bypassPermissions;
+team profiles are Lead/Worker with the exact instructions from the final restoration
+manifest, both Claude/haiku/full. Team settings: maxHops=0, maxConcurrent=3,
+inheritUserTools=false, rotateAboveInputTokens=0, maxBudgetUsd=0. Only Lead takes
+an idle turn. Claude team flags retain strict MCP config and disabled slash commands.
+The notice-only code change does not affect an idle turn's prompt.
+
+Input includes new + cache creation + cache read. Cost is the fresh conversation's
+CLI result, checked against team.usage for every c run. All six raw JSONL streams
+were captured as unchanged bytes and decoded strictly as UTF-8. Harness errors: 0;
+model errors: 0; "ok" acceptance: 3/3 for a, 3/3 for c. Each CLI result reports one
+turn, with no permission denials. Team turns loaded 30 tools / 0 skills throughout;
+standalone loaded 69/116/116 tools and 120 skills (user configuration remains enabled).
+
+| Condition/run | Input | Output | Cache read | Cache creation | USD | Seconds |
+|---|---:|---:|---:|---:|---:|---:|
+| a1 | 27,033 | 134 | 16,344 | 10,679 | 0.0236724 | 6.349 |
+| c1 | 22,977 | 55 | 15,882 | 7,086 | 0.0160442 | 3.810 |
+| a2 | 27,920 | 56 | 16,344 | 11,566 | 0.0250564 | 5.898 |
+| c2 | 22,977 | 193 | 15,882 | 7,086 | 0.0167342 | 5.721 |
+| a3 | 27,920 | 81 | 16,344 | 11,566 | 0.0251814 | 6.097 |
+| c3 | 22,977 | 104 | 15,882 | 7,086 | 0.0162892 | 4.256 |
+
+Median [min, max], previous repository-local results alongside external results:
+
+| Location / condition | Input tokens | USD | Seconds |
+|---|---:|---:|---:|
+| Inside repository / a | 37,721 [36,834, 37,721] | 0.0370892 [0.0353202, 0.0371292] | 6.053 [5.964, 6.141] |
+| Inside repository / c | 32,699 [32,699, 32,699] | 0.0359682 [0.0356032, 0.0359932] | 5.015 [4.155, 5.727] |
+| Outside repository / a | 27,920 [27,033, 27,920] | 0.0250564 [0.0236724, 0.0251814] | 6.097 [5.898, 6.349] |
+| Outside repository / c | 22,977 [22,977, 22,977] | 0.0162892 [0.0160442, 0.0167342] | 4.256 [3.810, 5.721] |
+
+The current team's input drops by 9,722 tokens (29.73%) from 32,699 to 22,977.
+Cache read remains exactly 15,882; new input remains 9; cache creation falls from
+16,808 to 7,086. CLI/model, profiles, tool/skill counts and prompt are unchanged.
+The repository has a 30,347-byte parent CLAUDE.md; no CLAUDE.md or .claude/CLAUDE.md
+exists along the external project's ancestor chain. The generated project contains
+AGENTS.md (1,725 bytes), but no CLAUDE.md. These observations strongly support parent
+repository instructions as the source of the roughly 9.7k extra input, rather than
+chat history or user MCP/skills. This is an inference from the location comparison,
+not a token-by-token attribution or simultaneous controlled deletion experiment.
+TEAM.md section 11.1 now warns that repository-local folders inherit parent CLAUDE.md.
+
+Against the outside-repository basis, the 19,000-token goal is still missed by 3,977
+tokens (20.93%). Normal Claude base/tool instructions and the team's standing context
+remain; the prior approximate 19k observation used CLI 2.1.288. These captures do not
+separate the remaining base tokens, so no specific further code fix is asserted.
+Outside c median USD is 0.0162892 versus inside 0.0359682 (54.71% lower); cache state
+and output vary, so this cost comparison is descriptive. No source rollback follows.
+
+The blocked-mention follow-up improves the existing human-visible advice; it does
+not guarantee that a model will choose team_delegate on its first attempt. No new
+retry, automatic conversion or notice-to-agent prompt mechanism was introduced.
+Both requested open follow-ups are complete; remaining reliability/19k observations
+are recorded for future evaluation rather than treated as failed implementation gates.
+
+Validation: notice milestone built without warnings; all 207 tests passed, including
+TeamBlockedMentionGuidance. This measurement milestone changes documentation only;
+no subsequent code or header changed, so no extra build/test run was needed.
+CLAUDE.md and AGENTS.md remain identical. Unrelated user edits and sample team.json
+were not modified or staged. The user's documentation cleanup was first committed
+separately as a62422d; blocked-mention guidance is 161eefa. Initial byte inspection
+found both TEAM documents using LF (0 CRLF pairs); their existing LF bytes were
+preserved, including the cleanup commit, rather than converting the documents.
+
+Evidence retained (not committed): %TEMP%/oe-team-idle-outside-20261005/{manifest.json,
+results.json,summary.json}, M1-{a,c}-{1,2,3}/measurement.json, a projects' raw-standalone.jsonl,
+c projects' .oe/team/raw-*.jsonl and usage.jsonl. The manifest records engine SHA-256,
+parent instruction file SHA-256/size, exact profiles and flags; per-run records include
+raw capture SHA-256, CLI result/init and ledger data. Local harness and console capture:
+build/scratch/team-followups/{outside-idle.py,outside-idle.log}. Inside comparison:
+build/scratch/team-restore/measurements/{idle-results.json,idle-summary.json}.

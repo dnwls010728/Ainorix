@@ -735,6 +735,8 @@ input tokens):
 | + `--disable-slash-commands` | ~19,000 | $0.027 | 30 tools, 0 skills |
 | `--bare` | not usable | - | needs an API key, not the subscription login |
 
+If the measurement folder is inside the repository, Claude loads the parent `CLAUDE.md`; compare the 19k goal against an outside-repository project (2026-10-05: 22,977 tokens, see TEAM_LOG.md).
+
 Codex reports tokens but no cost (31,220 input tokens for a one-command turn, 27,904 cached).
 
 ### 11.2 Why it costs more
