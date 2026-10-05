@@ -102,6 +102,10 @@ std::vector<BackendState> DetectBackends(const std::vector<Backend>& backends, d
 // The `team.backends` entry for one backend.
 Json BackendToJson(const Backend& backend, const BackendState& state);
 
+// Low-cost team policy toggled by OE_TEAM_LEAN. Besides backend-specific CLI flags, TeamSession
+// uses it to avoid pushing unrelated chat and to require explicit team.handoff for delegation.
+bool LeanTeamTurnsEnabled();
+
 // First dotted number in a `--version` output: "codex-cli 0.159.3" -> "0.159.3"; empty if none.
 std::string ParseCliVersion(const std::string& output);
 // Model ids go on a command line: [A-Za-z0-9._:[]-]{1,64}.
