@@ -1,6 +1,7 @@
 // Engine self tests. Run: build/bin/oe_tests  (exit code 0 = all passed)
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -50,6 +51,9 @@
 #include "script/ScriptHost.h"
 #if OE_TEAM
 #include "team/TeamCommands.h"
+#include "team/TeamContext.h"
+#include "team/TeamUsage.h"
+#include "team/TeamDefaults.h"
 #include "team/TeamStore.h"
 #endif
 #if OE_NATIVE_EDITOR
@@ -8207,6 +8211,47 @@ TEST(TeamBackendDetection) {
 #endif
 }
 TEST(TeamStoreProfiles) {
+TEST(DefaultTeamForNewProject) {
+    const std::string project = TempProject("default_team");  // CreateProject itself writes no team
+    const std::string file = JoinPath(project, ".oe/team/team.json");
+    CHECK(!FileExists(file));
+    std::string error;
+    CHECK(SeedDefaultTeam(project, &error));
+
+    TeamStore store;
+    CHECK(store.Open(project, &error));
+    const auto& agents = store.Agents();
+    CHECK(agents.size() == 5);
+    CHECK(agents[0].id == "lead" && agents[1].id == "core" && agents[2].id == "content" && agents[3].id == "art" && agents[4].id == "qa");
+    CHECK(store.Settings().lead == "lead" && store.Settings().maxHops == 0 && !store.Settings().inheritUserTools);
+    CHECK(store.Settings().rotateAboveInputTokens == 150000);
+    CHECK(agents[0].backend == "claude" && agents[0].model == "sonnet");
+    CHECK(agents[1].backend == "claude" && agents[1].model == "opus");
+    CHECK(agents[2].model == "sonnet" && agents[4].model == "sonnet");
+    CHECK(agents[3].backend == "codex" && agents[3].model.empty());
+    for (const AgentProfile& a : agents) {
+        CHECK(a.access == "edit" && a.canCall.empty());  // no escalation; the lead may call everyone by rule
+        CHECK(a.instructions.find("OwnEngine") != std::string::npos && a.instructions.find("Wickbound") == std::string::npos);
+        CHECK(a.instructions.size() < 4000);
+    }
+    CHECK(agents[0].instructions.find("team_delegate") != std::string::npos);
+    CHECK(agents[2].instructions.find("team_report") != std::string::npos);
+    CHECK(agents[4].instructions.find("never edit") != std::string::npos);
+
+    // An existing team is never touched, and neither is a file that cannot be read.
+    std::string before;
+    CHECK(ReadTextFile(file, before));
+    CHECK(!SeedDefaultTeam(project, &error) && error.find("already") != std::string::npos);
+    std::string after;
+    CHECK(ReadTextFile(file, after) && after == before);
+
+    const std::string broken = TempProject("default_team_broken");
+    CHECK(WriteTextFile(JoinPath(broken, ".oe/team/team.json"), "{ not json"));
+    CHECK(!SeedDefaultTeam(broken, &error) && !error.empty());
+    std::string kept;
+    CHECK(ReadTextFile(JoinPath(broken, ".oe/team/team.json"), kept) && kept == "{ not json");
+}
+
     const std::string project = TempProject("team_store");
     const std::string file = JoinPath(project, ".oe/team/team.json");
     std::string error, text;
@@ -8216,7 +8261,8 @@ TEST(TeamStoreProfiles) {
     auto code = [&](const char* command, const char* args) { return Call(e, command, args)["error"]["code"].asString(); };
 
     Json team = Call(e, "team.list")["result"];
-    CHECK(team["agents"].size() == 0 && team["lead"].asString() == "" && team["maxConcurrent"].asInt() == 3 && team["maxHops"].asInt() == 4);
+    CHECK(team["agents"].size() == 0 && team["lead"].asString() == "" && team["maxConcurrent"].asInt() == 3 && team["maxHops"].asInt() == 0);
+    CHECK(!team["inheritUserTools"].asBool());
     CHECK(!FileExists(file));  // reading creates nothing
     const double firstRevision = team["revision"].asNumber();
     Json presets = Call(e, "team.presets")["result"];
@@ -8293,6 +8339,10 @@ TEST(TeamStoreProfiles) {
     CHECK(code("team.settings", R"J({"maxConcurrent":9})J") == "invalid_argument" && code("team.settings", R"J({"maxHops":-1})J") == "invalid_argument");
     CHECK(code("team.settings", R"J({"lead":"ghost"})J") == "unknown_agent");
     CHECK(Call(e, "team.settings")["result"]["maxConcurrent"].asInt() == 2);
+    CHECK(code("team.settings", R"J({"inheritUserTools":1})J") == "invalid_argument");
+    CHECK(Call(e, "team.settings", R"J({"inheritUserTools":true})J")["result"]["inheritUserTools"].asBool());
+    CHECK(ReadTextFile(file, text) && Json::parse(text)["inheritUserTools"].asBool());
+    CHECK(Call(e, "team.list")["result"]["inheritUserTools"].asBool());
 
     // Another session (the editor next to `oe exec`) sees the same team and its changes.
     {
@@ -8301,6 +8351,7 @@ TEST(TeamStoreProfiles) {
         RegisterTeamCommands(other.Commands(), BuiltinBackends());
         team = Call(other, "team.list")["result"];
         CHECK(team["agents"].size() == 3 && team["lead"].asString() == "agent" && team["maxConcurrent"].asInt() == 2 && team["maxHops"].asInt() == 0);
+        CHECK(team["inheritUserTools"].asBool());
         CHECK(team["agents"][0]["name"].asString() == "Mina" && team["agents"][0]["instructions"].asString() == "Work only in scripts/.\nRun script.check.");
         PlatformSleep(0.05);  // file times tell a changed file
         CHECK(Call(other, "team.remove", R"J({"id":"준"})J")["result"]["removed"].asString() == "agent");
@@ -8508,33 +8559,39 @@ TEST(TeamStreamParsers) {
     ProcessOptions options = ClaudeBuildTurn(request);
     CHECK(options.executable == request.executable);
     CHECK(options.arguments == (std::vector<std::string>{"-p", "--output-format", "stream-json", "--verbose", "--model", "sonnet", "--append-system-prompt-file",
-                                                         ".oe/team/tmp/mina.system.md", "--permission-mode", "acceptEdits"}));
+                                                         ".oe/team/tmp/mina.system.md", "--permission-mode", "acceptEdits", "--strict-mcp-config", "--disable-slash-commands"}));
     request.model.clear();
     request.access = "read";
     request.sessionId = "abc-123";
     request.mcpConfigFile = ".oe/team/tmp/mina.mcp.json";
+    request.apiPort = 7777;
     options = ClaudeBuildTurn(request);
     CHECK(options.arguments == (std::vector<std::string>{"-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt-file", ".oe/team/tmp/mina.system.md",
-                                                         "--permission-mode", "plan", "--mcp-config", ".oe/team/tmp/mina.mcp.json", "--strict-mcp-config", "--resume", "abc-123"}));
+                                                         "--permission-mode", "plan", "--strict-mcp-config", "--disable-slash-commands", "--mcp-config", ".oe/team/tmp/mina.mcp.json", "--resume", "abc-123"}));
     request.access = "edit";
     options = ClaudeBuildTurn(request);
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp__ownengine") != options.arguments.end());
     request.access = "full";
     options = ClaudeBuildTurn(request);
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "bypassPermissions") != options.arguments.end());
+    request.inheritUserTools = true;
+    options = ClaudeBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--strict-mcp-config") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--disable-slash-commands") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--mcp-config") != options.arguments.end());
 
     request = TurnRequest();
     request.executable = "C:/npm/codex.cmd";
     request.model = "gpt-6.1-sol";
     options = CodexBuildTurn(request);
-    CHECK(options.arguments == (std::vector<std::string>{"exec", "--json", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "-c", "sandbox_mode='workspace-write'", "-"}));
+    CHECK(options.arguments == (std::vector<std::string>{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "-c", "skills.include_instructions=false", "-m", "gpt-6.1-sol", "-c", "sandbox_mode='workspace-write'", "-"}));
     request.model.clear();
     request.access = "full";
     request.sessionId = "01a101f0-7fc8";
     request.oeExecutable = "C:/Program Files/oe/oe.exe";
     request.apiPort = 7777;
     options = CodexBuildTurn(request);
-    CHECK(options.arguments == (std::vector<std::string>{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode='danger-full-access'", "-c",
+    CHECK(options.arguments == (std::vector<std::string>{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "-c", "skills.include_instructions=false", "-c", "sandbox_mode='danger-full-access'", "-c",
                                                          "mcp_servers.ownengine.command='C:/Program Files/oe/oe.exe'", "-c",
                                                          "mcp_servers.ownengine.args=['mcp','--connect','7777']", "-c",
                                                          "mcp_servers.ownengine.default_tools_approval_mode='approve'", "01a101f0-7fc8", "-"}));
@@ -8546,6 +8603,10 @@ TEST(TeamStreamParsers) {
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp_servers.ownengine.default_tools_approval_mode='approve'") == options.arguments.end());
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "sandbox_mode='read-only'") != options.arguments.end());
     for (const std::string& argument : options.arguments) CHECK(argument.find_first_of("\"%!") == std::string::npos);
+    request.inheritUserTools = true;
+    options = CodexBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--ignore-user-config") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "skills.include_instructions=false") == options.arguments.end());
     CHECK(ValidSessionId("01a101f0-7fc8_x") && !ValidSessionId("") && !ValidSessionId("a b") && !ValidSessionId("a'b") && !ValidSessionId(std::string(65, 'a')));
 
     // Mentions: ids and names without regard to case, the longest match, not inside a word.
@@ -8564,6 +8625,548 @@ TEST(TeamStreamParsers) {
     CHECK(FindMentions("mail user@mina.io, @minas, @min, @ mina", agents, all).empty() && !all);
     CHECK(FindMentions("@all please, @mina first", agents, all) == std::vector<size_t>{0} && all);
     CHECK(FindMentions("@allies", agents, all).empty() && !all);
+}
+
+TEST(TeamUsageParsingAndLedger) {
+    TurnEvents events;
+    ParseClaudeLine(R"J({"type":"result","subtype":"success","session_id":"s","total_cost_usd":0.2,"usage":{"input_tokens":10,"cache_read_input_tokens":30,"cache_creation_input_tokens":20,"output_tokens":4}})J", events);
+    CHECK(events.back().usage.known && events.back().usage.inputTokens == 60 && events.back().usage.outputTokens == 4);
+    CHECK(events.back().costKnown && events.back().costCumulative);
+    events.clear(); ParseCodexLine(R"J({"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":70,"output_tokens":5}})J", events);
+    CHECK(events.back().usage.known && events.back().usage.inputTokens == 100 && events.back().usage.cacheReadTokens == 70 && !events.back().costKnown);
+    events.clear(); ParseCodexLine(R"J({"type":"turn.completed","usage":{"input_tokens":-1,"output_tokens":5}})J", events);
+    CHECK(!events.back().usage.known);
+    events.clear(); ParseClaudeLine(R"J({"type":"result","subtype":"error_max_budget_usd","session_id":"s","total_cost_usd":0.3,"usage":{"input_tokens":0,"output_tokens":0}})J", events);
+    CHECK(events.back().kind == TurnEvent::Kind::Failed && events.back().costKnown && events.back().usage.known);
+    TurnRequest request; request.maxBudgetUsd = 0.123456;
+    auto args = ClaudeBuildTurn(request).arguments;
+    CHECK(std::find(args.begin(), args.end(), "--max-budget-usd") != args.end() && std::find(args.begin(), args.end(), "0.123456") != args.end());
+    const std::string project = TempProject("team_usage"), path = JoinPath(project, ".oe/team/usage.jsonl");
+    TeamUsage ledger; ledger.Open(path);
+    Json record = Json::parse(R"J({"version":1,"date":"2026-10-05","agent":"a","backend":"claude","session":"s","tokensKnown":true,"costKnown":true,"inputTokens":60,"outputTokens":4,"cacheReadTokens":30,"cacheCreationTokens":20,"costUsd":0.2,"reportedCostKnown":true,"reportedCostUsd":0.2})J");
+    ledger.Append(record); record["agent"] = "b"; record["date"] = "2026-10-06"; ledger.Append(record);
+    TeamUsage reopened; reopened.Open(path);
+    CHECK(reopened.Read()["total"]["inputTokens"].asInt() == 120 && reopened.Read("a", "2026-10-05")["total"]["turns"].asInt() == 1);
+    CHECK(reopened.Baseline("claude", "s")["reportedCostUsd"].asNumber() == 0.2);
+    CHECK(reopened.LastContext("claude", "s") == 60); // legacy ledger fallback
+    record["contextTokens"] = 25; record["contextEstimated"] = false; reopened.Append(record);
+    CHECK(reopened.LastContext("claude", "s") == 25);
+    record["tokensKnown"] = false; reopened.Append(record);
+    CHECK(reopened.LastContext("claude", "s") == 0); // unknown latest usage must not revive an old estimate
+    CHECK(WriteTextFile(path, "{broken"));
+    bool refused = false; try { reopened.Append(record); } catch (const ApiError& e) { refused = e.code == "usage_file_invalid"; }
+    std::string text; CHECK(refused && ReadTextFile(path, text) && text == "{broken");
+}
+
+TEST(TeamUsageTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_usage_turn"), dir = ProcessFixtureDir("team usage");
+    Backend backend; backend.id = "claude"; backend.displayName = "Fake Claude";
+    backend.executable = JoinPath(dir, "claude.cmd"); backend.models = {{"m", "M", true, 0}}; backend.parseLine = ParseClaudeLine;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable;
+        options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId, std::to_string(request.maxBudgetUsd)};
+        return options;
+    };
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" >nul\necho %*> \"%~dp0args.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    auto reply = [&](double cost) {
+        Json j = Json::parse(R"J({"type":"result","subtype":"success","is_error":false,"session_id":"cost-1","result":"ok","usage":{"input_tokens":1000,"cache_read_input_tokens":300,"cache_creation_input_tokens":100,"output_tokens":20}})J");
+        j["total_cost_usd"] = cost; CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), j.dump() + "\n"));
+    };
+    std::string error, text;
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.add", R"J({"name":"Mina","backend":"claude"})J")["ok"].asBool());
+        CHECK(!Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":-1}})J")["ok"].asBool());
+        reply(0.25); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        reply(0.40); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        Json total = Call(e, "team.usage", R"J({"id":"Mina","date":"today"})J")["result"]["total"];
+        CHECK(total["inputTokens"].asInt() == 2800 && std::abs(total["costUsd"].asNumber() - .40) < 1e-9);
+        const Json msgs = Call(e, "team.messages")["result"]["messages"];
+        CHECK(std::abs(msgs[msgs.size()-1]["turn"]["costUsd"].asNumber() - .15) < 1e-9);
+        CHECK(Call(e, "team.clear")["ok"].asBool());
+        CHECK(Call(e, "team.usage")["result"]["total"]["turns"].asInt() == 2);
+        reply(.45); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+    }
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0.02}})J")["ok"].asBool());
+        reply(.46); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir, "args.txt"), text) && text.find("cost-1") != std::string::npos && text.find("0.470000") != std::string::npos);
+        const Json total = Call(e, "team.usage")["result"]["total"];
+        CHECK(total["turns"].asInt() == 4 && total["inputTokens"].asInt() == 5600 && std::abs(total["costUsd"].asNumber() - .46) < 1e-9);
+    }
+    // Existing resumed sessions without a ledger baseline never bill lifetime spend as one turn.
+    CHECK(RemoveAll(JoinPath(project, ".oe/team/usage.jsonl")));
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0}})J")["ok"].asBool());
+        reply(.50); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(Call(e, "team.usage")["result"]["total"]["costReportedTurns"].asInt() == 0);
+        reply(.55); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(std::abs(Call(e, "team.usage")["result"]["total"]["costUsd"].asNumber() - .05) < 1e-9);
+    }
+    CHECK(RemoveAll(JoinPath(project, ".oe/team/usage.jsonl")));
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0.02}})J")["ok"].asBool());
+        reply(.01); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir, "args.txt"), text) && text.find("fresh") != std::string::npos && text.find("0.020000") != std::string::npos);
+    }
+    RemoveAll(dir);
+#endif
+}
+
+TEST(TeamResetAndRotation) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_reset"), dir = ProcessFixtureDir("team reset");
+    auto fake = [&](const char* id, bool slow) {
+        Backend b; b.id = id; b.displayName = id; b.executable = JoinPath(dir, std::string(id) + ".cmd");
+        b.models = {{"m", "M", true, 0}}; b.parseLine = ParseClaudeLine;
+        b.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options; options.executable = request.executable;
+            options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId}; return options;
+        };
+        std::string script = "@echo off\nfindstr \"^\" >nul\necho %*> \"%~dp0%OE_TEAM_AGENT%.args\"\n";
+        if (slow) script += "ping -n 30 127.0.0.1 >nul\n";
+        script += R"J(echo {"type":"result","subtype":"success","is_error":false,"session_id":"sess-%OE_TEAM_AGENT%","result":"ok","usage":{"input_tokens":1000,"cache_read_input_tokens":500,"output_tokens":20,"iterations":[{"input_tokens":10,"cache_read_input_tokens":490,"output_tokens":20}]}})J" "\n";
+        CHECK(WriteTextFile(b.executable, script)); return b;
+    };
+    const std::vector<Backend> backends = {fake("fast", false), fake("slow", true)};
+    std::string error, text;
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), backends);
+        for (const char* a : {R"J({"name":"A","backend":"fast"})J",R"J({"name":"B","backend":"fast"})J",R"J({"name":"C","backend":"slow"})J"}) CHECK(Call(e,"team.add",a)["ok"].asBool());
+        CHECK(Call(e,"team.settings")["result"]["rotateAboveInputTokens"].asInt() == 0);
+        CHECK(!Call(e,"team.settings",R"J({"rotateAboveInputTokens":-1})J")["ok"].asBool());
+        for (const char* msg : {R"J({"text":"@a hello","wait":10})J",R"J({"text":"@b hello","wait":10})J"}) CHECK(Call(e,"team.send",msg)["ok"].asBool());
+        const Json chat = Call(e,"team.messages")["result"], usage = Call(e,"team.usage")["result"];
+        CHECK(Call(e,"team.reset",R"J({"id":"A"})J")["ok"].asBool());
+        CHECK(Call(e,"team.messages")["result"].dump() == chat.dump() && Call(e,"team.usage")["result"].dump() == usage.dump());
+        CHECK(ReadTextFile(JoinPath(project,".oe/team/sessions.json"),text));
+        CHECK(!Json::parse(text)["a"].has("session") && Json::parse(text)["b"]["session"].asString() == "sess-b");
+        CHECK(Call(e,"team.send",R"J({"text":"@a hello","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"a.args"),text) && text.find("fresh") != std::string::npos);
+        CHECK(Call(e,"team.send",R"J({"text":"@b hello","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"b.args"),text) && text.find("sess-b") != std::string::npos); // default off even with 1,500 input tokens
+        CHECK(Call(e,"team.send",R"J({"text":"@c work"})J")["ok"].asBool());
+        CHECK(Call(e,"team.reset",R"J({"id":"c"})J")["error"]["code"].asString() == "agent_busy");
+        CHECK(Call(e,"team.cancel",R"J({"id":"c"})J")["ok"].asBool());
+        CHECK(Call(e,"team.settings",R"J({"rotateAboveInputTokens":600})J")["ok"].asBool());
+        CHECK(Call(e,"team.send",R"J({"text":"@b below threshold","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"b.args"),text) && text.find("sess-b") != std::string::npos); // last API context is 500, not turn total 1,500
+        CHECK(Call(e,"team.settings",R"J({"rotateAboveInputTokens":500})J")["ok"].asBool());
+    }
+    {
+        Engine e; CHECK(e.Open(project,&error)); auto team = RegisterTeamCommands(e.Commands(),backends);
+        CHECK(Call(e,"team.settings")["result"]["rotateAboveInputTokens"].asInt() == 500);
+        CHECK(Call(e,"team.send",R"J({"text":"@b rotate","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"b.args"),text) && text.find("fresh") != std::string::npos);
+        CHECK(Call(e,"team.messages")["result"].dump().find("input-size estimate") != std::string::npos);
+        const std::string path=JoinPath(project,".oe/team/sessions.json"); CHECK(WriteTextFile(path,"{broken"));
+        CHECK(Call(e,"team.reset",R"J({"id":"a"})J")["error"]["code"].asString() == "session_file_invalid");
+        CHECK(ReadTextFile(path,text) && text == "{broken");
+    }
+    RemoveAll(dir);
+#endif
+}
+
+TEST(TeamStableContext) {
+    AgentProfile agent; agent.id = "lead"; agent.name = "Lead"; agent.description = "Gameplay"; agent.instructions = "Check scripts.";
+    AgentProfile a; a.id = "a"; a.name = "Alpha";
+    AgentProfile b; b.id = "b"; b.name = "Beta";
+    const std::string prefix = BuildTeamStandingContext(agent, {b, a, agent}, "game");
+    CHECK(prefix == BuildTeamStandingContext(agent, {agent, a, b}, "game"));
+    a.description = "Now busy with another task."; // teammate role/state metadata does not invalidate the prefix
+    CHECK(prefix == BuildTeamStandingContext(agent, {a, b}, "game"));
+    CHECK(prefix.find("@a - Alpha") < prefix.find("@b - Beta"));
+    CHECK(prefix.find("@lead -") == std::string::npos && prefix.find("busy") == std::string::npos);
+    CHECK(BuildTeamStandingContext(agent, {}, "game").find("Alpha") == std::string::npos);
+    agent.instructions += " New instruction.";
+    CHECK(prefix != BuildTeamStandingContext(agent, {a, b}, "game"));
+}
+
+TEST(TeamChatPull) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_pull"), dir = ProcessFixtureDir("team pull");
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"session_id":"pull-1","result":"ok"})J" "\n"));
+    Backend backend;
+    backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
+    backend.models = {{"m", "M", true, 0}};
+    backend.systemPromptFlag = true;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable;
+        options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId}; return options;
+    };
+    backend.parseLine = ParseClaudeLine;
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" > \"%~dp0prompt.txt\"\necho %*> \"%~dp0args.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    Backend offline = backend; offline.id = "offline"; offline.executable = "oe-no-pull-cli";
+    Engine e; std::string error, prompt;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), {backend, offline});
+    CHECK(Call(e, "team.add", R"J({"name":"Lead","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Other","backend":"offline"})J")["ok"].asBool());
+    CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
+    const size_t baseline = prompt.size();
+    std::string stablePrefix;
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), stablePrefix));
+    team->host.apiPort = 7777; team->host.oeExecutable = backend.executable;
+    for (int i = 0; i < 30; ++i) {
+        Json args = Json::MakeObject(); args["text"] = "@other unrelated-secret-" + std::to_string(i) + std::string(300, 'x');
+        CHECK(e.Call("team.send", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
+    CHECK(prompt.find("unrelated-secret") == std::string::npos && prompt.find("30 chat messages omitted") != std::string::npos);
+    CHECK(prompt.size() < baseline + 120 && prompt.find("team_messages") != std::string::npos);
+    std::string laterPrefix;
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), laterPrefix) && laterPrefix == stablePrefix);
+    Json brief = Json::parse(R"J({"to":"lead","goal":"task protocol only"})J");
+    CHECK(e.Call("team.delegate", brief)["ok"].asBool());
+    for (int i = 0; i < 500 && Call(e, "team.state")["result"]["running"].asInt(); ++i) { PlatformSleep(0.01); team->update(); }
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), laterPrefix) && laterPrefix == stablePrefix);
+    CHECK(Call(e, "team.messages", R"J({"limit":100})J")["result"]["messages"].size() >= 34);
+    // The next delivery does not count already skipped history again; resume remains intact.
+    CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("messages omitted") == std::string::npos);
+    CHECK(ReadTextFile(JoinPath(dir, "args.txt"), prompt) && prompt.find("pull-1") != std::string::npos);
+    RemoveAll(dir);
+#endif
+}
+
+TEST(TeamChatDelegationProtocol) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_chat_protocol"), dir = ProcessFixtureDir("team chat protocol");
+    Backend backend;
+    backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
+    backend.models = {{"m", "M", true, 0}}; backend.systemPromptFlag = true;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable; return options;
+    };
+    backend.parseLine = ParseClaudeLine;
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" > \"%~dp0prompt.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"),
+        R"J({"type":"result","subtype":"success","is_error":false,"session_id":"protocol-1","result":"ok"})J" "\n"));
+    Engine e; std::string error, prompt;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), {backend});
+    team->host.apiPort = 7777; team->host.oeExecutable = backend.executable;
+    CHECK(Call(e, "team.add", R"J({"name":"Lead","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Worker","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Caller","backend":"echo","canCall":["worker"]})J")["ok"].asBool());
+    const std::string clarification = "An @mention does not hand work to a teammate; only team_delegate does. "
+        "To give a teammate a task, call team_delegate; do not answer with a mention.";
+    for (const char* id : {"lead", "caller", "worker"}) {
+        std::string firstPrefix;
+        for (int hops : {0, 2}) {
+            Json settings = Json::MakeObject(); settings["maxHops"] = hops;
+            CHECK(e.Call("team.settings", settings)["ok"].asBool());
+            Json args = Json::MakeObject(); args["text"] = std::string("@") + id + " Say ok"; args["wait"] = 10;
+            CHECK(e.Call("team.send", args)["ok"].asBool());
+            CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
+            const bool mayDelegate = std::string(id) != "worker";
+            CHECK((prompt.find(clarification) != std::string::npos) == (mayDelegate && hops == 0));
+            CHECK((prompt.find("Use team_delegate for one task step") != std::string::npos) == mayDelegate);
+            if (!mayDelegate) CHECK(prompt.find("team_delegate") == std::string::npos);
+            std::string prefix;
+            CHECK(ReadTextFile(JoinPath(project, std::string(".oe/team/tmp/") + id + ".system.md"), prefix));
+            CHECK(prefix.find(clarification) == std::string::npos && prefix.find("Chat protocol:") == std::string::npos);
+            if (hops == 0) firstPrefix = prefix;
+            else CHECK(prefix == firstPrefix);
+        }
+    }
+    RemoveAll(dir);
+#endif
+}
+
+TEST(TeamBlockedMentionGuidance) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_blocked_mentions"), dir = ProcessFixtureDir("team blocked mentions");
+    Backend backend;
+    backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
+    backend.models = {{"m", "M", true, 0}}; backend.systemPromptFlag = true;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable; return options;
+    };
+    backend.parseLine = ParseClaudeLine;
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"),
+        R"J({"type":"result","subtype":"success","is_error":false,"session_id":"blocked-1","result":"@target @other please implement."})J" "\n"));
+    Engine e; std::string error, prompt;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), {backend});
+    for (const char* name : {"Lead", "Worker", "Allowed", "Wrong", "Target", "Other"}) {
+        Json args = Json::MakeObject(); args["name"] = name; args["backend"] = "echo";
+        CHECK(e.Call("team.add", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "team.update", R"J({"id":"allowed","values":{"canCall":["target"]}})J")["ok"].asBool());
+    CHECK(Call(e, "team.update", R"J({"id":"wrong","values":{"canCall":["lead"]}})J")["ok"].asBool());
+    CHECK(Call(e, "team.settings")["result"]["maxHops"].asInt() == 0);
+    auto notice = [&] { return Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"][0]; };
+    for (const char* id : {"lead", "worker", "allowed", "wrong"}) {
+        Json args = Json::MakeObject(); args["text"] = std::string("@") + id + " work"; args["wait"] = 10;
+        CHECK(e.Call("team.send", args)["ok"].asBool());
+        const Json message = notice(); const std::string text = message["text"].asString();
+        CHECK(message["kind"].asString() == "notice" && message["from"].asString() == id);
+        CHECK(text.find("team.settings {maxHops: 2}") != std::string::npos);
+        if (std::string(id) == "lead") CHECK(text.find("To hand work to Target, Other, call team_delegate") != std::string::npos);
+        else if (std::string(id) == "allowed") CHECK(text.find("To hand work to Target, call team_delegate") != std::string::npos);
+        else CHECK(text.find("team_delegate") == std::string::npos);
+        CHECK(Call(e, "team.state")["result"]["running"].asInt() == 0);
+        CHECK(!FileExists(JoinPath(dir, "target.prompt.txt")) && !FileExists(JoinPath(dir, "other.prompt.txt")));
+        const Json tasks = Call(e, "team.tasks")["result"];
+        CHECK(tasks.isArray() && tasks.size() == 0);
+    }
+    // Notices remain visible in the chat API, but the next prompt does not resend them to the author.
+    CHECK(Call(e, "team.send", R"J({"text":"@lead next","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "lead.prompt.txt"), prompt));
+    CHECK(prompt.find("[User] @lead next") != std::string::npos && prompt.find("Not handed on") == std::string::npos);
+    // The same guidance applies to agent-attributed API sends without scheduling a turn or retry.
+    for (const char* id : {"lead", "worker", "allowed", "wrong"}) {
+        auto posted = e.PostCall("team.send", Json::parse(R"J({"text":"@target @other work","from":"user"})J"), id);
+        e.RunPostedJobs();
+        const Json response = posted.get();
+        CHECK(response["ok"].asBool());
+        const Json sent = response["result"];
+        CHECK(sent["started"].size() == 0 && sent["queued"].size() == 0);
+        const std::string text = notice()["text"].asString();
+        CHECK((text.find("team_delegate") != std::string::npos) == (std::string(id) == "lead" || std::string(id) == "allowed"));
+    }
+    RemoveAll(dir);
+#endif
+}
+
+TEST(TeamLeanTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_lean");
+    const std::string dir = ProcessFixtureDir("team lean");
+    const std::string executable = JoinPath(dir, "agent.cmd");
+    CHECK(WriteTextFile(executable, "@echo off\nfindstr \"^\" >nul\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n"
+                                   "type \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"lean-1"})J" "\n"));
+    auto backends = BuiltinBackends();
+    for (Backend& backend : backends) {
+        backend.executable = executable;
+        backend.parseLine = ParseClaudeLine; // both stand-ins emit the same recorded result
+    }
+    Engine e;
+    std::string error, text;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), backends);
+    CHECK(Call(e, "team.add", R"J({"name":"Claude","backend":"claude","model":"haiku"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Codex","backend":"codex","model":"cheap"})J")["ok"].asBool());
+    for (bool inherit : {false, true}) {
+        Json settings = Json::MakeObject();
+        settings["inheritUserTools"] = inherit;
+        CHECK(e.Call("team.settings", settings)["ok"].asBool());
+        for (const char* id : {"claude", "codex"}) {
+            Json args = Json::MakeObject();
+            args["text"] = std::string("@") + id + " say ok";
+            args["wait"] = 10;
+            Json sent = e.Call("team.send", args);
+            CHECK(sent["ok"].asBool() && sent["result"]["replies"].size() == 1);
+            CHECK(ReadTextFile(JoinPath(dir, std::string(id) + ".args.txt"), text));
+            if (std::string(id) == "claude") {
+                CHECK((text.find("--strict-mcp-config") != std::string::npos) == !inherit);
+                CHECK((text.find("--disable-slash-commands") != std::string::npos) == !inherit);
+                CHECK(text.find(".oe/team/tmp/claude.mcp.json") != std::string::npos);
+            } else {
+                CHECK((text.find("--ignore-user-config") != std::string::npos) == !inherit);
+                CHECK((text.find("skills.include_instructions=false") != std::string::npos) == !inherit);
+            }
+            CHECK((text.find("lean-1") != std::string::npos) == inherit); // second chat turn resumes
+        }
+    }
+    CHECK(Call(e, "team.settings", R"J({"inheritUserTools":false})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/team.json"), text) && !Json::parse(text).has("inheritUserTools") && !Json::parse(text).has("maxHops"));
+    // Periodic unrecognized stdout and stderr both reset idle, but never the absolute cap.
+    CHECK(WriteTextFile(executable, "@echo off\nfindstr \"^\" >nul\n"
+                                   "for /l %%i in (1,1,4) do (\necho progress\necho progress 1>&2\nping -n 2 127.0.0.1 >nul\n)\n"
+                                   "type \"%~dp0reply.jsonl\"\n"));
+    team->host.idleTimeoutSeconds = 2.5;
+    team->host.turnTimeoutSeconds = 10.0;
+    CHECK(Call(e, "team.send", R"J({"text":"@claude active","wait":10})J")["result"]["replies"].size() == 1);
+    team->host.turnTimeoutSeconds = 1.5;
+    Json sent = Call(e, "team.send", R"J({"text":"@claude capped","wait":10})J");
+    CHECK(sent["result"]["replies"].size() == 1 && sent["result"]["replies"][0]["kind"].asString() == "error");
+    Json messages = Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"];
+    CHECK(messages.size() == 1 && messages[0]["text"].asString().find("without finishing") != std::string::npos);
+    team->host.turnTimeoutSeconds = 10.0;
+    team->host.idleTimeoutSeconds = 0.4;
+    sent = Call(e, "team.send", R"J({"text":"@claude silent","wait":10})J");
+    CHECK(sent["result"]["replies"].size() == 1 && sent["result"]["replies"][0]["kind"].asString() == "error");
+    messages = Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"];
+    CHECK(messages.size() == 1 && messages[0]["text"].asString().find("idle timeout") != std::string::npos);
+    CHECK(RemoveAll(dir));
+#endif
+}
+
+TEST(TeamTaskRecords) {
+    const std::string project = TempProject("team_tasks");
+    const std::string directory = JoinPath(project, ".oe/team/tasks");
+    TeamTasks tasks;
+    tasks.Open(directory);
+    Json brief = Json::parse(R"J({"goal":"Copy a prefab","acceptance":"script.check clean","files":["scripts/a.lua"],"context":"one step","maxDurationMs":500})J");
+    Json task = tasks.Create(brief, "lead", "worker");
+    const std::string id = task["id"].asString();
+    CHECK(task["state"].asString() == "running" && !task["verified"].asBool());
+    Json report = Json::parse(R"J({"summary":"Checked","changed":["scripts/a.lua"],"evidence":[{"command":"script.check","result":0,"output":"0 errors"}]})J");
+    report["evidence"][0]["output"] = std::string(5000, 'x');
+    tasks.Report(id, report);
+    CHECK(tasks.Get(id)["state"].asString() == "running" && tasks.Get(id)["evidence"][0]["output"].asString().size() == 4096);
+    tasks.Finish(id, "done", "", 1.0, 0.1, 2);
+    CHECK(tasks.Get(id)["summary"].asString() == "Checked" && !tasks.Get(id)["verified"].asBool());
+    Json interrupted = tasks.Create(brief, "lead", "worker");
+    TeamTasks reopened;
+    reopened.Open(directory);
+    CHECK(reopened.Get(interrupted["id"].asString())["state"].asString() == "failed");
+    CHECK(reopened.Get(id)["state"].asString() == "done" && reopened.List().size() == 2);
+    auto rejects = [](const std::function<void()>& run, const char* code) {
+        try { run(); } catch (const ApiError& e) { return e.code == code; }
+        return false;
+    };
+    brief["files"][0] = "../outside.lua";
+    CHECK(rejects([&] { reopened.Create(brief, "lead", "worker"); }, "invalid_argument"));
+    CHECK(reopened.List().size() == 2);
+    CHECK(rejects([&] { reopened.Report(id, report); }, "task_closed"));
+    CHECK(WriteTextFile(JoinPath(directory, id + ".json"), "{broken"));
+    TeamTasks corrupt;
+    corrupt.Open(directory);
+    CHECK(rejects([&] { corrupt.Clear(); }, "task_file_invalid"));
+    std::string text;
+    CHECK(ReadTextFile(JoinPath(directory, id + ".json"), text) && text == "{broken");
+    // The blocking MCP wrapper polls through its caller and propagates transport errors.
+    Json envelope = Json::parse(R"J({"ok":true,"result":{"id":"task-1","state":"running"}})J");
+    int polls = 0;
+    Json final = AwaitTeamTask([&](const std::string& command, const Json& args) {
+        CHECK(command == "team.task" && args["id"].asString() == "task-1");
+        ++polls;
+        Json result = envelope;
+        if (polls == 2) result["result"]["state"] = "done";
+        return result;
+    }, envelope);
+    CHECK(polls == 2 && final["result"]["state"].asString() == "done");
+    CHECK(!AwaitTeamTask([](const std::string&, const Json&) { return Json::parse(R"J({"ok":false,"error":{"code":"connection_failed"}})J"); }, envelope)["ok"].asBool());
+}
+TEST(TeamDelegationTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_delegate");
+    const std::string dir = ProcessFixtureDir("team delegate");
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"session_id":"chat-1","result":"Done; @lead should not be called."})J" "\n"));
+    const std::string save = "findstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n";
+    auto fake = [&](const char* id, int delay) {
+        Backend backend;
+        backend.id = id; backend.displayName = id; backend.executable = JoinPath(dir, std::string(id) + ".cmd");
+        backend.models = {{"m", "M", true, 0}};
+        backend.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options;
+            options.executable = request.executable;
+            options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId};
+            return options;
+        };
+        backend.parseLine = ParseClaudeLine;
+        CHECK(WriteTextFile(backend.executable, "@echo off\n" + save + (delay ? "ping -n " + std::to_string(delay) + " 127.0.0.1 >nul\n" : "") + "type \"%~dp0reply.jsonl\"\n"));
+        return backend;
+    };
+    std::vector<Backend> backends = {fake("quick", 0), fake("slow", 30), fake("report", 3)};
+    Engine e;
+    std::string error, text;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), backends);
+    for (const char* profile : {R"J({"name":"Lead","backend":"slow"})J", R"J({"name":"Worker","backend":"quick"})J",
+                               R"J({"name":"Other","backend":"slow"})J", R"J({"name":"Reporter","backend":"report"})J"}) CHECK(Call(e, "team.add", profile)["ok"].asBool());
+    CHECK(Call(e, "team.settings", R"J({"maxHops":0})J")["ok"].asBool());
+    CHECK(Call(e, "team.get", R"J({"id":"other"})J")["result"]["canCall"].size() == 0);
+    CHECK(!Call(e, "team.update", R"J({"id":"other","values":{"canCall":["worker","worker"]}})J")["ok"].asBool());
+    CHECK(!Call(e, "team.update", R"J({"id":"other","values":{"canCall":["all"]}})J")["ok"].asBool());
+    auto remote = [&](const char* command, const Json& args, const char* agent) {
+        auto call = e.PostCall(command, args, agent);
+        e.RunPostedJobs();
+        return call.get();
+    };
+    auto settled = [&] {
+        const double end = PlatformTimeSeconds() + 10;
+        while (PlatformTimeSeconds() < end) { team->update(); if (!Call(e, "team.state")["result"]["running"].asInt()) return true; PlatformSleep(0.02); }
+        return false;
+    };
+    CHECK(Call(e, "team.send", R"J({"text":"@worker unrelated-secret-chat","wait":10})J")["ok"].asBool());
+    const size_t chatCount = Call(e, "team.messages")["result"]["messages"].size();
+    Json brief = Json::parse(R"J({"to":"@worker","goal":"copy only the bat prefab","acceptance":"script.check clean","files":["scripts/bat.lua"],"context":"brief-only"})J");
+    Json task = e.Call("team.delegate", brief)["result"];
+    CHECK(task["state"].asString() == "running" && settled());
+    Json read = Json::MakeObject(); read["id"] = task["id"];
+    task = e.Call("team.task", read)["result"];
+    CHECK(task["state"].asString() == "done" && !task["verified"].asBool() && !task["reportReceived"].asBool());
+    CHECK(Call(e, "team.messages")["result"]["messages"].size() == chatCount);
+    CHECK(ReadTextFile(JoinPath(dir, "worker.prompt.txt"), text) && text.find("unrelated-secret-chat") == std::string::npos && text.find("copy only the bat prefab") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/worker.task.md"), text) && text.find("unrelated-secret-chat") == std::string::npos && text.find("[User]") == std::string::npos);
+    CHECK(ReadTextFile(JoinPath(dir, "worker.args.txt"), text) && text.find("fresh") != std::string::npos && text.find("chat-1") == std::string::npos);
+    CHECK(Call(e, "team.send", R"J({"text":"@worker resume","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "worker.args.txt"), text) && text.find("chat-1") != std::string::npos); // tasks preserve chat resume
+    CHECK(Call(e, "team.send", R"J({"text":"@other work"})J")["ok"].asBool());
+    CHECK(remote("team.delegate", brief, "other")["error"]["code"].asString() == "delegate_forbidden");
+    CHECK(Call(e, "team.update", R"J({"id":"other","values":{"canCall":["worker"]}})J")["ok"].asBool());
+    CHECK(remote("team.delegate", brief, "other")["ok"].asBool());
+    CHECK(Call(e, "team.cancel", R"J({"id":"other"})J")["ok"].asBool());
+    CHECK(settled());
+    // Cancelling the lead also cancels its task, independent of maxHops/canCall.
+    CHECK(Call(e, "team.send", R"J({"text":"@lead work"})J")["ok"].asBool());
+    brief["to"] = "other";
+    task = remote("team.delegate", brief, "lead")["result"];
+    read["id"] = task["id"];
+    CHECK(remote("team.send", Json::parse(R"J({"text":"@worker ack"})J"), "other")["error"]["code"].asString() == "task_chat_forbidden");
+    CHECK(remote("team.report", Json::parse(R"J({"id":"task-1","summary":"forged","changed":[],"evidence":[]})J"), "lead")["error"]["code"].asString() == "report_forbidden");
+    CHECK(Call(e, "team.cancel", R"J({"id":"lead"})J")["ok"].asBool() && settled());
+    CHECK(e.Call("team.task", read)["result"]["state"].asString() == "cancelled");
+    brief["maxDurationMs"] = 100;
+    task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    CHECK(settled() && e.Call("team.task", read)["result"]["state"].asString() == "timed_out");
+    // With an editor, a final text remains done and unverified; evidence must come from the assigned worker.
+    team->host.apiPort = 7777;
+    team->host.oeExecutable = backends[0].executable;
+    brief["to"] = "worker"; brief["maxDurationMs"] = 10000;
+    task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    CHECK(settled());
+    task = e.Call("team.task", read)["result"];
+    CHECK(task["state"].asString() == "done" && task["unverified"].asBool() && task["summary"].asString() == "Done; @lead should not be called.");
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/worker.task.md"), text) && text.find("MUST call the team_report tool") != std::string::npos && text.find("Do not print report JSON") != std::string::npos);
+    brief["to"] = "reporter";
+    task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    Json report = Json::parse(R"J({"summary":"Checked","changed":[],"evidence":[{"command":"script.check","result":0,"output":"0 errors"}]})J");
+    report["id"] = task["id"];
+    CHECK(remote("team.report", report, "worker")["error"]["code"].asString() == "report_forbidden");
+    CHECK(remote("team.report", report, "reporter")["result"]["state"].asString() == "running");
+    CHECK(remote("team.report", report, "reporter")["error"]["code"].asString() == "task_closed");
+    CHECK(settled());
+    task = e.Call("team.task", read)["result"];
+    CHECK(task["state"].asString() == "done" && task["reportReceived"].asBool() && !task["verified"].asBool());
+    CHECK(task["evidence"][0]["result"].asInt() == 0);
+    // Names and ids are both accepted; abnormal CLI exit cannot be called done.
+    std::string quickScript; CHECK(ReadTextFile(backends[0].executable, quickScript));
+    CHECK(WriteTextFile(backends[0].executable, quickScript + "exit /b 7\n"));
+    brief["to"] = "Worker"; task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    CHECK(settled() && e.Call("team.task", read)["result"]["state"].asString() == "failed");
+    CHECK(WriteTextFile(backends[0].executable, quickScript));
+    // A child cannot extend its parent's absolute deadline.
+    CHECK(Call(e, "team.update", R"J({"id":"reporter","values":{"canCall":["other"]}})J")["ok"].asBool());
+    brief["to"] = "reporter"; brief["maxDurationMs"] = 500;
+    const Json parent = e.Call("team.delegate", brief)["result"];
+    brief["to"] = "other"; brief["maxDurationMs"] = 10000;
+    const Json child = remote("team.delegate", brief, "reporter")["result"];
+    CHECK(child["deadlineAt"].asNumber() == parent["deadlineAt"].asNumber());
+    CHECK(settled());
+    CHECK(Call(e, "team.usage")["result"]["total"]["turns"].asInt() > 5);
+    CHECK(Call(e, "team.clear")["ok"].asBool() && Call(e, "team.tasks")["result"].size() == 0);
+    CHECK(RemoveAll(dir));
+#endif
 }
 
 TEST(TeamSessionTurns) {
@@ -8670,10 +9273,12 @@ TEST(TeamSessionTurns) {
     CHECK(stateOf("mina")["state"].asString() == "idle" && stateOf("mina")["tools"].asInt() == 0);
     // What the CLI got: the prompt on stdin, only generated values as arguments, the context as a file.
     CHECK(fileText("mina.prompt.txt").find("[User] hello team") != std::string::npos && fileText("mina.prompt.txt").find("second line") != std::string::npos);
-    CHECK(fileText("mina.args.txt").find(R"J("new" "m" "edit" ".oe/team/tmp/mina.system.md" "nomcp")J") == 0);
+    CHECK(fileText("mina.args.txt").find(R"J("new" "m" "edit" ".oe/team/tmp/mina.system.md" ".oe/team/tmp/mina.mcp.json")J") == 0);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.mcp.json"), text) && Json::parse(text)["mcpServers"].isObject() && Json::parse(text)["mcpServers"].size() == 0);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("never to accept work, acknowledge receipt, make small talk") != std::string::npos);
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text));
     CHECK(text.find("You are Mina (@mina)") == 0 && text.find("Gameplay.") != std::string::npos && text.find("- @jun - Jun") != std::string::npos);
-    CHECK(text.find("No editor is attached") != std::string::npos);
+    CHECK(text.find("Connection:") == std::string::npos && fileText("mina.prompt.txt").find("Connection: no API") != std::string::npos);
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/sessions.json"), text) && Json::parse(text)["mina"]["session"].asString() == "sess-1");
     CHECK(Json::parse(text)["mina"]["seen"].asInt() == 1 && Json::parse(text)["mina"]["backend"].asString() == "echo");
 
@@ -8688,16 +9293,16 @@ TEST(TeamSessionTurns) {
     const Json mcp = Json::parse(text)["mcpServers"]["ownengine"];
     CHECK(mcp["command"].asString() == backends[0].executable && mcp["args"].size() == 5 && mcp["args"][2].asString() == "7777");
     CHECK(mcp["args"][3].asString() == "--agent" && mcp["args"][4].asString() == "mina");  // the editor shows who made an edit
-    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("`ownengine` MCP server") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("Connection:") == std::string::npos && fileText("mina.prompt.txt").find("Connection: ownengine MCP") != std::string::npos);
     team->host.apiPort = 0;
 
-    // A CLI without a system prompt flag gets the context once, on stdin, and sees what teammates said.
+    // A CLI without a system prompt flag gets context once, on stdin, and only its addressed messages.
     CHECK(Call(e, "team.send", R"J({"text":"@Jun hi"})J")["result"]["started"][0].asString() == "jun");
     CHECK(until(settled));
     text = fileText("jun.prompt.txt");
     CHECK(text.find("You are Jun (@jun)") == 0 && text.find("Be brief.") != std::string::npos && text.find("[User] @Jun hi") != std::string::npos);
-    CHECK(text.find("[User] hello team") != std::string::npos && text.find("[Mina] Done it.") != std::string::npos);
-    CHECK(fileText("jun.args.txt").find(R"J("new" "m" "edit" "nofile" "nomcp")J") == 0);
+    CHECK(text.find("[User] hello team") == std::string::npos && text.find("[Mina] Done it.") == std::string::npos);
+    CHECK(fileText("jun.args.txt").find(R"J("new" "m" "edit" "nofile" ".oe/team/tmp/jun.mcp.json")J") == 0);
     CHECK(Call(e, "team.send", R"J({"text":"@jun more"})J")["ok"].asBool() && until(settled));
     text = fileText("jun.prompt.txt");
     CHECK(text.find("You are Jun") == std::string::npos && text.find("[User] @jun more") != std::string::npos && text.find("@Jun hi") == std::string::npos);
@@ -8837,6 +9442,11 @@ TEST(TeamSessionTurns) {
         auto result = [](const char* answer) { return std::string(R"J({"type":"result","subtype":"success","is_error":false,"result":")J") + answer + R"J(","session_id":"s2"})J" + "\n"; };
         CHECK(WriteTextFile(JoinPath(dir, "ping.jsonl"), result("Done my part. Your turn @pong, and @ping is me.")) && WriteTextFile(JoinPath(dir, "pong.jsonl"), result("Back to @Ping.")));
         CHECK(Call(e, "team.add", R"J({"name":"Ping","backend":"ping"})J")["ok"].asBool() && Call(e, "team.add", R"J({"name":"Pong","backend":"pong"})J")["ok"].asBool());
+        // Default maxHops=0: even an explicit mention in an agent reply starts no teammate.
+        CHECK(Call(e, "team.settings")["result"]["maxHops"].asInt() == 0);
+        CHECK(Call(e, "team.send", R"J({"text":"@ping default"})J")["ok"].asBool() && until(settled));
+        CHECK(lastMessage()["kind"].asString() == "notice" && lastMessage()["text"].asString().find("team.settings {maxHops: 2}") != std::string::npos);
+        CHECK(fileText("pong.prompt.txt").empty());
         CHECK(Call(e, "team.settings", R"J({"maxHops":2})J")["ok"].asBool());
         const int base = lastMessage()["id"].asInt();
         sent = Call(e, "team.send", R"J({"text":"@ping start"})J");
@@ -8893,6 +9503,10 @@ TEST(TeamSessionTurns) {
     }));
     CHECK(lastMessage()["kind"].asString() == "error" && lastMessage()["from"].asString() == "sloth" && stateOf("sloth")["state"].asString() == "error");
     team->host.turnTimeoutSeconds = 1800.0;
+    team->host.idleTimeoutSeconds = 0.3;
+    CHECK(Call(e, "team.send", R"J({"text":"@sloth silent"})J")["ok"].asBool() && until(settled));
+    CHECK(lastMessage()["kind"].asString() == "error" && lastMessage()["text"].asString().find("idle timeout") != std::string::npos);
+    team->host.idleTimeoutSeconds = 600.0;
 
     // `wait` blocks until the reply is there (one-shot use from `oe exec`).
     sent = Call(e, "team.send", R"J({"text":"@mina quick","wait":30})J");
@@ -9412,6 +10026,14 @@ TEST(NativeEditorTeam) {
         ++ticks;
         team->update();
     };
+    // The roster's usage row is rendered with measured data, not only the unknown state.
+    {
+        const std::time_t now = std::time(nullptr); char day[11];
+        std::strftime(day, sizeof(day), "%Y-%m-%d", std::gmtime(&now));
+        TeamUsage ledger; ledger.Open(JoinPath(project, ".oe/team/usage.jsonl"));
+        Json record = Json::parse(R"J({"version":1,"date":"","agent":"mina","backend":"good","session":"visual","tokensKnown":true,"costKnown":true,"inputTokens":1234,"outputTokens":56,"cacheReadTokens":1000,"cacheCreationTokens":0,"costUsd":0.0123,"reportedCostKnown":false,"reportedCostUsd":0})J");
+        record["date"] = day; ledger.Append(record);
+    }
     NativeEditor editor(e, nullptr, options);
     CHECK(editor.Init(&error));
     RenderTarget image;

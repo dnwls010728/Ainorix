@@ -1086,7 +1086,7 @@ Names of the built-in profile pictures (use as avatar "preset:<name>").
 
 ### `team.list`
 
-The project's agent team: settings (lead, maxConcurrent, maxHops), a revision that changes with every edit, and all agent profiles.
+The project's agent team: settings (lead, maxConcurrent, maxHops, inheritUserTools), a revision that changes with every edit, and all agent profiles.
 
 ### `team.get`
 
@@ -1108,6 +1108,8 @@ Add an agent to the team (at most 16). The id is generated from the name and nev
 | `backend` | string |  | Agent CLI id from team.backends (default: the first one). |
 | `model` | string |  | Model id of that backend; "" = the CLI's default (default: the backend's default model). |
 | `access` | string |  | read | edit (default) | full: what the agent may do without asking. |
+| `maxBudgetUsd` | number |  | Claude per-turn allowance: 0 disables it; 0.000001..1000 USD. The CLI may exceed it by one request. |
+| `canCall` | array |  | Agent ids this agent may delegate tasks to (default none); the lead may call everyone. |
 | `avatar` | string |  | "preset:<name>" from team.presets (default: the first preset no teammate uses). |
 
 ### `team.update`
@@ -1117,7 +1119,7 @@ Change some fields of an agent (partial update). Changing the backend without a 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | string | yes | Agent id or name. |
-| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, avatar ("preset:<name>"). |
+| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, maxBudgetUsd, canCall, avatar ("preset:<name>"). |
 
 ### `team.remove`
 
@@ -1154,11 +1156,13 @@ Read or change the team settings; without arguments it only reads them.
 |---|---|---|---|
 | `lead` | string |  | Agent (id or name) that receives messages without a mention; "" = nobody. |
 | `maxConcurrent` | integer |  | Agent turns that may run at the same time, 1..8 (default 3). |
-| `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 4). |
+| `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off). |
+| `inheritUserTools` | boolean |  | Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain. |
+| `rotateAboveInputTokens` | integer |  | Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000. |
 
 ### `team.send`
 
-Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages.
+Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages. Agent mentions beyond maxHops are not delivered; the notice explains how to enable them and, for callable targets, use team_delegate.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -1167,9 +1171,45 @@ Post a message to the team chat and give a turn to every agent it addresses: @id
 | `from` | string |  | Sender: "user" (default) or an agent id. |
 | `wait` | number |  | Block up to this many seconds until the addressed agents have finished, then also return the new messages and the state (for one-shot `oe exec`; default 0 = return at once). |
 
+### `team.delegate`
+
+Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `to` | string | yes | Worker id or name; an optional @ prefix is accepted. |
+| `goal` | string | yes | Exact task goal, at most 16 KiB. |
+| `acceptance` | string |  | Success check, at most 8 KiB. |
+| `files` | array |  | Project-relative files to consult or change. |
+| `context` | string |  | Task-specific context, at most 16 KiB. |
+| `maxDurationMs` | integer |  | Absolute duration limit, 100..7200000 ms; default 1800000, capped by the host turn limit. |
+
+### `team.report`
+
+Submit evidence from the assigned running worker. The task stays running until the CLI finishes; a report never verifies acceptance automatically.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Task id from team.delegate. |
+| `summary` | string | yes | What happened, at most 8 KiB. |
+| `changed` | array | yes | Changed project-relative paths. |
+| `evidence` | array | yes | Actual command, result/exit code and output, trimmed to 4 KiB per record. Done is not verified. |
+
+### `team.task`
+
+Read one task record: running | done | failed | timed_out | cancelled, brief, report and turn cost. Never starts or retries a turn.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Task id. |
+
+### `team.tasks`
+
+Read stored task records (at most 256); reports remain unverified. Interrupted tasks fail on reopen and are never retried.
+
 ### `team.cancel`
 
-Stop an agent's running turn (its process tree is killed) and drop its waiting message; the chat gets a notice.
+Stop an agent's running turn and its delegated tasks (process trees are killed), and drop its waiting message; the chat gets a notice.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -1189,9 +1229,26 @@ Team chat messages, oldest first: {messages, first, last} (first = oldest id sti
 | `after` | integer |  | Only messages with a larger id (poll with the previous `last`). |
 | `limit` | integer |  | At most this many, 1..500 (default 100). |
 
+### `team.reset`
+
+Forget one idle agent's backend conversation. Chat, profiles, usage and other conversations are retained; never starts a model turn. Busy agents must be cancelled first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
+
+### `team.usage`
+
+Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-turn deltas, not Claude session totals; reportedTurns/costReportedTurns distinguish unknown usage from measured zero. Clearing chat retains usage.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string |  | Agent id or current name; omit for every agent, including removed profiles. |
+| `date` | string |  | YYYY-MM-DD or today in UTC; omit for all days. |
+
 ### `team.clear`
 
-Stop every turn, empty the chat log and forget the agents' stored conversations. Profiles are kept.
+Stop every turn, empty the chat log and task records, and forget the agents' stored conversations. Profiles are kept.
 
 ## Component types
 

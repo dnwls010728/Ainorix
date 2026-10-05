@@ -206,6 +206,8 @@ struct NativeEditor::Impl {
     bool teamAvailable = false;     // the hosting tool registered the team.* commands
     bool showTeam = true, requestTeamFocus = false;
     Json team;                      // team.list
+    Json teamUsage;                 // team.usage for today in UTC
+    double teamUsagePoll = -100;
     Json teamState;                 // team.state, read every frame the panel shows
     Json teamBackends = Json::MakeArray();  // team.backends {async}
     Json teamPresets = Json::MakeArray();   // team.presets
@@ -215,6 +217,7 @@ struct NativeEditor::Impl {
     struct AgentForm {              // the profile dialog's working copy; nothing is stored before Save
         bool isNew = true, installed = false, customModel = false, showPathInput = false, askFull = false;
         std::string id, name, description, instructions, backend, model, access = "edit";
+        double maxBudgetUsd = 0;
         std::string avatar, avatarPath, originalAvatar;  // "preset:<name>" or "file" (+ its project-relative path)
         std::string avatarSource;   // picture chosen for upload, applied by Save
         std::string pathInput, error;

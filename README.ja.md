@@ -82,6 +82,12 @@ oe render MyGame --frames 120 --out shot.png
 エージェント CLI (Claude Code、Codex) を子プロセスとして実行します。Windows のみ、開発中 —
 [docs/TEAM.md](docs/TEAM.md)。
 
+エージェント使用量: `team.usage`でエージェント/日別トークンとターン別費用を取得できます。Teamパネルは本日(UTC)の使用量を表示し、Claudeプロファイルに`maxBudgetUsd`を設定できます（0で無制限）。
+
+タスク委譲はチャットと併用できます。`team.delegate/report/task/tasks`で新しいワーカー会話、期限、証拠報告を扱います。`canCall`の既定は呼出先なしで、リーダーは全員を呼べます。ツール報告なしの正常終了はdoneですが未検証です。
+
+`team.reset {id}`（または一覧のReset Conversation）で待機中のエージェント一人の会話を初期化できます。チャットと使用量は保持します。`team.settings {rotateAboveInputTokens: N}`は入力サイズが閾値に達すると次のターンを新しい会話で開始します。既定値0は無効です。初期化でキャッシュの節約効果を失う場合があります。
+
 ## エディター
 
 `oe editor` はドッキングエディター(Dear ImGui + ImGuizmo、エンジンプロセス内で GPU 描画)を開きます。Hierarchy、

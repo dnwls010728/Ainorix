@@ -31,6 +31,7 @@
 #include "platform/Platform.h"
 #include "render/GpuRenderer.h"
 #include "team/TeamCommands.h"
+#include "team/TeamDefaults.h"
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #endif
@@ -183,7 +184,7 @@ int CmdHelp() {
     std::fprintf(stdout,
                  "OwnEngine %s (%s) - AI-friendly game engine\n\n"
                  "Usage: oe <command> [args]\n\n"
-                 "  new <dir> [--name N]              Create a project with a sample scene\n"
+                 "  new <dir> [--name N] [--no-team]  Create a project with a sample scene and a default agent team\n"
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
@@ -220,7 +221,7 @@ int CmdHelp() {
 }
 
 int CmdNew(const Args& a) {
-    if (a.positional.empty()) return Fail("missing_argument", "usage: oe new <dir> [--name N]");
+    if (a.positional.empty()) return Fail("missing_argument", "usage: oe new <dir> [--name N] [--no-team]");
     std::string dir = a.positional[0];
     std::string name = a.Get("--name", dir.substr(dir.find_last_of("/\\") + 1));
     std::string err;
@@ -243,6 +244,11 @@ int CmdRender(const Args& a) {
     RenderTarget rt;
     rt.Resize(a.GetInt("--width", 640), a.GetInt("--height", 360));
     float aspect = static_cast<float>(rt.width) / static_cast<float>(rt.height);
+    if (!a.Has("--no-team")) {  // docs/TEAM.md §3.3: a new project starts with the default agent team
+        std::string teamError;
+        if (SeedDefaultTeam(dir, &teamError)) out["team"] = "default";
+        else OE_LOG_WARN("project", "default team not created: %s", teamError.c_str());
+    }
     RenderView view;
     bool hasCamera = MakeSceneView(engine.GetScene(), aspect, view);
     bool custom = a.Has("--eye") || a.Has("--target");
@@ -508,7 +514,10 @@ int CmdMcp(const Args& a) {
         int port = a.GetInt("--connect", 7777);
         const std::string agent = a.Get("--agent");  // a team agent's id: the editor shows who made each edit
         CommandCaller call = [port, agent](const std::string& command, const Json& args) { return RemoteCall(port, command, args, agent); };
-        return RunMcpServer(call, std::cin, std::cout);
+        return RunMcpServer([&call](const std::string& command, const Json& args) {
+            Json result = call(command, args);
+            return command == "team.delegate" ? AwaitTeamTask(call, std::move(result)) : result;
+        }, std::cin, std::cout);
     }
 
     Engine engine;
@@ -523,7 +532,11 @@ int CmdMcp(const Args& a) {
     std::atomic<bool> quit{false};
     // MCP I/O on a worker thread; engine work stays on the main thread.
     std::thread io([&] {
-        RunMcpServer([&engine](const std::string& c, const Json& args) { return engine.PostCall(c, args).get(); }, std::cin, std::cout);
+        CommandCaller call = [&engine](const std::string& c, const Json& args) { return engine.PostCall(c, args).get(); };
+        RunMcpServer([&call](const std::string& command, const Json& args) {
+            Json result = call(command, args);
+            return command == "team.delegate" ? AwaitTeamTask(call, std::move(result)) : result;
+        }, std::cin, std::cout);
         quit = true;
     });
     MainLoop(engine, nullptr, quit, false, team.get());

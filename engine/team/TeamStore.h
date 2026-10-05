@@ -21,13 +21,17 @@ struct AgentProfile {
     std::string instructions;  // standing instructions (system prompt addition), <= 16 KiB
     std::string backend;       // backend id (team/Backends.h); an unknown one keeps loading
     std::string model;         // model id of that backend, empty = the CLI's default
+    double maxBudgetUsd = 0.0;    // Claude per-turn allowance; 0 = disabled, up to 1000 USD
     std::string access = "edit";  // read | edit | full (docs/TEAM.md §6)
+    std::vector<std::string> canCall; // task delegate targets by id; none by default, lead may call everyone
 };
 
 struct TeamSettings {
     std::string lead;       // agent id that receives messages without a mention; empty = nobody
     int maxConcurrent = 3;  // turns running at once, 1..8
-    int maxHops = 4;        // chained agent-to-agent turns per user message, 0..16
+    int rotateAboveInputTokens = 0; // 0 = disabled; fresh conversation before next turn at/above this estimate
+    int maxHops = 0;        // chained agent-to-agent turns per user message, 0..16; off by default
+    bool inheritUserTools = false; // opt in to the CLI's user MCP servers and skills
 };
 
 constexpr size_t kMaxTeamAgents = 16;

@@ -21,7 +21,7 @@ constexpr size_t kMaxTeamFileBytes = 1024 * 1024;
 constexpr uintmax_t kMaxAvatarSourceBytes = 16 * 1024 * 1024;
 constexpr int kMaxAvatarSourcePixels = 8192;
 constexpr int kTeamFileVersion = 1;
-const char* const kAgentKeys[] = {"name", "avatar", "description", "instructions", "backend", "model", "access"};
+const char* const kAgentKeys[] = {"name", "avatar", "description", "instructions", "backend", "model", "access", "maxBudgetUsd", "canCall"};
 
 std::string Lower(std::string text) {
     for (char& c : text) {
@@ -103,6 +103,21 @@ void ApplyValues(AgentProfile& agent, const Json& values, bool fromFile) {
     if (!values.isObject()) throw Invalid("agent values must be an object");
     for (const auto& member : values.members()) {
         const std::string& key = member.first;
+        if (key == "maxBudgetUsd") {
+            const double n = member.second.asNumber(-1);
+            if (!member.second.isNumber() || !std::isfinite(n) || n < 0 || n > 1000 || (n > 0 && n < 0.000001)) throw Invalid("maxBudgetUsd must be 0 or 0.000001..1000");
+            agent.maxBudgetUsd = n; continue;
+        }
+        if (key == "canCall") {
+            if (!member.second.isArray() || member.second.size() > kMaxTeamAgents) throw Invalid("canCall must be an array of at most 16 agent ids");
+            agent.canCall.clear();
+            for (const Json& target : member.second.items()) {
+                if (!target.isString() || !ValidSlug(target.asString()) || target.asString() == "user" || target.asString() == "all" ||
+                    std::find(agent.canCall.begin(), agent.canCall.end(), target.asString()) != agent.canCall.end()) throw Invalid("canCall requires unique agent ids");
+                agent.canCall.push_back(target.asString());
+            }
+            continue;
+        }
         std::string* field = key == "name" ? &agent.name : key == "avatar" ? &agent.avatar : key == "description" ? &agent.description :
                              key == "instructions" ? &agent.instructions : key == "backend" ? &agent.backend : key == "model" ? &agent.model :
                              key == "access" ? &agent.access : (fromFile && key == "id") ? &agent.id : nullptr;
@@ -119,6 +134,7 @@ void ApplyValues(AgentProfile& agent, const Json& values, bool fromFile) {
 
 // Rules every stored profile satisfies, whatever wrote it.
 void ValidateFields(AgentProfile& agent) {
+    if (agent.maxBudgetUsd > 0 && agent.backend != "claude") throw Invalid("maxBudgetUsd is supported only by Claude", "Use a Claude profile, or set maxBudgetUsd to 0.");
     agent.name = Trim(agent.name);
     size_t characters = 0;
     if (!Utf8Characters(agent.name, characters) || characters < 1 || characters > kMaxNameCharacters || HasControl(agent.name, false)) {
@@ -152,7 +168,9 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
     root["version"] = kTeamFileVersion;
     if (!settings.lead.empty()) root["lead"] = settings.lead;
     if (settings.maxConcurrent != defaults.maxConcurrent) root["maxConcurrent"] = settings.maxConcurrent;
+    if (settings.rotateAboveInputTokens != defaults.rotateAboveInputTokens) root["rotateAboveInputTokens"] = settings.rotateAboveInputTokens;
     if (settings.maxHops != defaults.maxHops) root["maxHops"] = settings.maxHops;
+    if (settings.inheritUserTools) root["inheritUserTools"] = true;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents) {
         Json j = Json::MakeObject();
@@ -164,6 +182,11 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
         j["backend"] = agent.backend;
         if (!agent.model.empty()) j["model"] = agent.model;
         if (agent.access != "edit") j["access"] = agent.access;
+        if (agent.maxBudgetUsd > 0) j["maxBudgetUsd"] = agent.maxBudgetUsd;
+        if (!agent.canCall.empty()) {
+            j["canCall"] = Json::MakeArray();
+            for (const std::string& id : agent.canCall) j["canCall"].push(id);
+        }
         list.push(std::move(j));
     }
     root["agents"] = std::move(list);
@@ -178,6 +201,13 @@ int IntegerSetting(const Json& values, const char* key, int minimum, int maximum
         throw Invalid(std::string(key) + " must be an integer from " + std::to_string(minimum) + " to " + std::to_string(maximum));
     }
     return static_cast<int>(number);
+}
+
+bool BooleanSetting(const Json& values, const char* key, bool current) {
+    const Json* value = values.find(key);
+    if (!value) return current;
+    if (!value->isBool()) throw Invalid(std::string(key) + " must be a boolean");
+    return value->asBool();
 }
 
 }  // namespace
@@ -264,6 +294,8 @@ bool TeamStore::Open(const std::string& projectDir, std::string* error) {
         TeamSettings settings;
         settings.maxConcurrent = IntegerSetting(root, "maxConcurrent", 1, 8, settings.maxConcurrent);
         settings.maxHops = IntegerSetting(root, "maxHops", 0, 16, settings.maxHops);
+        settings.rotateAboveInputTokens = IntegerSetting(root, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
+        settings.inheritUserTools = BooleanSetting(root, "inheritUserTools", settings.inheritUserTools);
         settings.lead = root["lead"].asString("");
         const bool leadExists = std::any_of(agents.begin(), agents.end(), [&](const AgentProfile& a) { return a.id == settings.lead; });
         if (!settings.lead.empty() && !leadExists) throw Invalid("lead \"" + settings.lead + "\" is not an agent of the team");
@@ -391,6 +423,7 @@ std::string TeamStore::Remove(const std::string& idOrName) {
     const std::string id = agents_[index].id, uploaded = AvatarFile(agents_[index]);
     std::vector<AgentProfile> agents = agents_;
     agents.erase(agents.begin() + static_cast<std::ptrdiff_t>(index));
+    for (AgentProfile& agent : agents) agent.canCall.erase(std::remove(agent.canCall.begin(), agent.canCall.end(), id), agent.canCall.end());
     TeamSettings settings = settings_;
     if (settings.lead == id) settings.lead.clear();
     Commit(std::move(agents), std::move(settings));
@@ -453,6 +486,8 @@ void TeamStore::SetSettings(const Json& values) {
     TeamSettings settings = settings_;
     settings.maxConcurrent = IntegerSetting(values, "maxConcurrent", 1, 8, settings.maxConcurrent);
     settings.maxHops = IntegerSetting(values, "maxHops", 0, 16, settings.maxHops);
+    settings.rotateAboveInputTokens = IntegerSetting(values, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
+    settings.inheritUserTools = BooleanSetting(values, "inheritUserTools", settings.inheritUserTools);
     if (const Json* lead = values.find("lead")) {
         if (!lead->isString()) throw Invalid("lead must be an agent id or name, or \"\" for nobody");
         settings.lead = lead->asString().empty() ? std::string() : agents_[RequireIndex(lead->asString())].id;
@@ -471,6 +506,9 @@ Json TeamStore::AgentToJson(const AgentProfile& agent) const {
     j["backend"] = agent.backend;
     j["model"] = agent.model;
     j["access"] = agent.access;
+    j["maxBudgetUsd"] = agent.maxBudgetUsd;
+    j["canCall"] = Json::MakeArray();
+    for (const std::string& id : agent.canCall) j["canCall"].push(id);
     return j;
 }
 
@@ -481,6 +519,8 @@ Json TeamStore::ToJson() const {
     root["lead"] = settings_.lead;
     root["maxConcurrent"] = settings_.maxConcurrent;
     root["maxHops"] = settings_.maxHops;
+    root["rotateAboveInputTokens"] = settings_.rotateAboveInputTokens;
+    root["inheritUserTools"] = settings_.inheritUserTools;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents_) list.push(AgentToJson(agent));
     root["agents"] = std::move(list);

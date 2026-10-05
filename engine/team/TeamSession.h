@@ -9,6 +9,8 @@
 #include "core/Json.h"
 #include "team/Backends.h"
 #include "team/TeamStore.h"
+#include "team/TeamUsage.h"
+#include "team/TeamTasks.h"
 
 namespace oe {
 
@@ -21,6 +23,7 @@ struct TeamHost {
     int apiPort = 0;                    // the tool's HTTP API port agents attach to with `oe mcp --connect`; 0 = none
     std::string oeExecutable;           // the `oe` program that serves MCP for agents; default: next to the running program
     double turnTimeoutSeconds = 1800.0; // a turn running longer is stopped and reported as an error
+    double idleTimeoutSeconds = 600.0;  // stopped after this much silence on stdout and stderr
 };
 
 // A file that travels with a chat message: one the person attached, or an image an agent's
@@ -43,6 +46,8 @@ struct ChatMessage {
     int hop = 0;                  // 0 = from the person; an agent's reply is one more than what it answered
     bool hasTurn = false;         // an agent's reply: how the turn went
     double seconds = 0.0, costUsd = 0.0;
+    bool costKnown = false;
+    TokenUsage usage;
     int tools = 0;
     std::vector<std::string> steps;  // the turn's tool activity lines, bounded
     std::vector<ChatAttachment> attachments;
@@ -76,16 +81,25 @@ public:
     void Forget(const std::string& id);
     // Stops every turn, empties the chat log and forgets all conversations.
     void Clear();
+    // Drop one idle agent's backend conversation; chat, usage and other agents stay intact.
+    void Reset(const std::string& idOrName);
     // Executable paths are looked up once; call after a CLI was installed.
     void RefreshBackends() { executables_.clear(); ++revision_; }
 
     // {revision, running, agents: [{id, state, activity, task, elapsed, tools, error?, hint?}]}.
     Json State();
+    // Persisted agent/day totals in UTC; includes unknown-count turns explicitly.
+    Json Usage(const std::string& agent = "", const std::string& date = "") const;
     // Messages with id > after (all = the newest `limit`), oldest first: {messages, first, last},
     // where first/last are the oldest and newest ids the log holds.
     Json Messages(uint64_t after, bool hasAfter, int limit);
     // True while one of these agents has a turn running or waiting (empty = any agent).
     bool Busy(const std::vector<std::string>& ids);
+    // Nonblocking task entry point; sender is the authenticated remote agent or "user".
+    Json Delegate(const Json& brief, const std::string& from);
+    Json Report(const Json& report, const std::string& from);
+    Json Task(const std::string& id) const { return tasks_.Get(id); }
+    Json Tasks() const { return tasks_.List(); }
 
 private:
     struct Turn;
@@ -94,6 +108,7 @@ private:
         bool pending = false;       // has unread messages addressed to it and waits for a turn
         std::string session;        // the backend's conversation id
         std::string sessionBackend; // backend that conversation belongs to
+        uint64_t contextTokens = 0; // saved context estimate, used only when rotation is enabled
         uint64_t seen = 0;          // chat messages up to this id were given to the agent
         std::string lastError, lastHint;
     };
@@ -105,10 +120,12 @@ private:
     ChatMessage& Append(ChatMessage message);
     void Notice(const std::string& text, const std::string& about);
     void Schedule();
-    void StartTurn(const AgentProfile& agent, Runtime& runtime);
+    void StartTurn(const AgentProfile& agent, Runtime& runtime, const Json* task = nullptr);
+    void CancelTask(const std::string& id); // also cancels tasks delegated by this worker
     void HandleLine(Turn& turn, const std::string& line, bool isStderr);
     void FinishTurn(const std::string& id, Runtime& runtime);
     void StopTurn(Runtime& runtime);
+    Json RecordTurn(const Turn& turn, const std::string& state);
     void FailTurn(const std::string& id, Runtime& runtime, const std::string& message, const std::string& hint);
     std::string StandingContext(const AgentProfile& agent) const;
     void SaveSessions();
@@ -118,9 +135,11 @@ private:
     ChatAttachment Describe(const std::string& relativePath) const;
     std::string Directory() const { return store_.Directory(); }
 
+    TeamUsage usage_;
     TeamStore& store_;
     const std::vector<Backend>& backends_;
     const TeamHost& host_;
+    TeamTasks tasks_;
     std::string projectDir_;
     std::deque<ChatMessage> messages_;
     uint64_t lastMessageId_ = 0;

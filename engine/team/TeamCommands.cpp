@@ -131,7 +131,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
         return list;
     });
 
-    Register(registry, "team.list", "The project's agent team: settings (lead, maxConcurrent, maxHops), a revision that changes with every edit, and all agent profiles.",
+    Register(registry, "team.list", "The project's agent team: settings (lead, maxConcurrent, maxHops, inheritUserTools), a revision that changes with every edit, and all agent profiles.",
              Params(), [state](Engine& e, const Json&) {
                  TeamStore& store = state->Store(e);
                  Json result = store.ToJson();
@@ -156,6 +156,8 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  .Opt("backend", "string", "Agent CLI id from team.backends (default: the first one).")
                  .Opt("model", "string", "Model id of that backend; \"\" = the CLI's default (default: the backend's default model).")
                  .Opt("access", "string", "read | edit (default) | full: what the agent may do without asking.")
+                 .Opt("maxBudgetUsd", "number", "Claude per-turn allowance: 0 disables it; 0.000001..1000 USD. The CLI may exceed it by one request.")
+                 .OptWith("canCall", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":16,"description":"Agent ids this agent may delegate tasks to (default none); the lead may call everyone."})J"))
                  .Opt("avatar", "string", "\"preset:<name>\" from team.presets (default: the first preset no teammate uses)."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
@@ -166,7 +168,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
 
     Register(registry, "team.update",
              "Change some fields of an agent (partial update). Changing the backend without a model resets the model to the new backend's default.",
-             Params().Req("id", "string", kAgentRef).Req("values", "object", "Fields to change: name, description, instructions, backend, model, access, avatar (\"preset:<name>\")."),
+             Params().Req("id", "string", kAgentRef).Req("values", "object", "Fields to change: name, description, instructions, backend, model, access, maxBudgetUsd, canCall, avatar (\"preset:<name>\")."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
                  return store.AgentToJson(store.Update(a["id"].asString(), a["values"], state->Lookup()));
@@ -206,7 +208,9 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
              Params()
                  .Opt("lead", "string", "Agent (id or name) that receives messages without a mention; \"\" = nobody.")
                  .Opt("maxConcurrent", "integer", "Agent turns that may run at the same time, 1..8 (default 3).")
-                 .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 4)."),
+                 .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off).")
+                 .Opt("inheritUserTools", "boolean", "Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain.")
+                 .Opt("rotateAboveInputTokens", "integer", "Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
                  if (a.size() > 0) store.SetSettings(a);
@@ -214,12 +218,15 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  result["lead"] = store.Settings().lead;
                  result["maxConcurrent"] = store.Settings().maxConcurrent;
                  result["maxHops"] = store.Settings().maxHops;
+                 result["rotateAboveInputTokens"] = store.Settings().rotateAboveInputTokens;
+                 result["inheritUserTools"] = store.Settings().inheritUserTools;
                  return result;
              });
 
     Register(registry, "team.send",
              "Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. "
-             "A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages.",
+             "A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages. "
+             "Agent mentions beyond maxHops are not delivered; the notice explains how to enable them and, for callable targets, use team_delegate.",
              Params()
                  .Req("text", "string", "The message, at most 32 KiB (may be empty when files are attached). Mention agents as @id or @name.")
                  .OptWith("attachments", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":8,"description":"Files the agents should look at: paths on this PC or relative to the project, at most 8, 32 MiB each. A file outside the project is copied into .oe/team/attachments/."})J"))
@@ -260,7 +267,26 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  return result;
              });
 
-    Register(registry, "team.cancel", "Stop an agent's running turn (its process tree is killed) and drop its waiting message; the chat gets a notice.",
+    Register(registry, "team.delegate", "Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.",
+             Params().Req("to", "string", "Worker id or name; an optional @ prefix is accepted.").Req("goal", "string", "Exact task goal, at most 16 KiB.")
+                 .Opt("acceptance", "string", "Success check, at most 8 KiB.")
+                 .OptWith("files", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":32,"description":"Project-relative files to consult or change."})J"))
+                 .Opt("context", "string", "Task-specific context, at most 16 KiB.")
+                 .Opt("maxDurationMs", "integer", "Absolute duration limit, 100..7200000 ms; default 1800000, capped by the host turn limit."),
+             [state](Engine& e, const Json& a) {
+                 return state->Session(e).Delegate(a, e.RemoteCallAgent().empty() ? "user" : e.RemoteCallAgent());
+             });
+    Register(registry, "team.report", "Submit evidence from the assigned running worker. The task stays running until the CLI finishes; a report never verifies acceptance automatically.",
+             Params().Req("id", "string", "Task id from team.delegate.").Req("summary", "string", "What happened, at most 8 KiB.")
+                 .ReqWith("changed", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":32,"description":"Changed project-relative paths."})J"))
+                 .ReqWith("evidence", Json::parse(R"J({"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"command":{"type":"string"},"result":{},"output":{"type":"string"}},"required":["command","result","output"]},"description":"Actual command, result/exit code and output, trimmed to 4 KiB per record. Done is not verified."})J")),
+             [state](Engine& e, const Json& a) { return state->Session(e).Report(a, e.RemoteCallAgent()); });
+    Register(registry, "team.task", "Read one task record: running | done | failed | timed_out | cancelled, brief, report and turn cost. Never starts or retries a turn.",
+             Params().Req("id", "string", "Task id."), [state](Engine& e, const Json& a) { return state->Session(e).Task(a["id"].asString()); });
+    Register(registry, "team.tasks", "Read stored task records (at most 256); reports remain unverified. Interrupted tasks fail on reopen and are never retried.",
+             Params(), [state](Engine& e, const Json&) { return state->Session(e).Tasks(); });
+
+    Register(registry, "team.cancel", "Stop an agent's running turn and its delegated tasks (process trees are killed), and drop its waiting message; the chat gets a notice.",
              Params().Opt("id", "string", kAgentRef).Opt("all", "boolean", "Stop every agent."), [state](Engine& e, const Json& a) {
                  TeamSession& session = state->Session(e);
                  const bool all = a["all"].asBool(false);
@@ -285,7 +311,23 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  return state->Session(e).Messages(static_cast<uint64_t>(a["after"].asNumber(0.0)), a.has("after"), limit);
              });
 
-    Register(registry, "team.clear", "Stop every turn, empty the chat log and forget the agents' stored conversations. Profiles are kept.", Params(),
+    Register(registry, "team.reset", "Forget one idle agent's backend conversation. Chat, profiles, usage and other conversations are retained; never starts a model turn. Busy agents must be cancelled first.",
+             Params().Req("id", "string", kAgentRef), [state](Engine& e, const Json& a) {
+                 state->Session(e).Reset(a["id"].asString());
+                 Json result = Json::MakeObject(); result["reset"] = true; return result;
+             });
+
+    Register(registry, "team.usage", "Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-turn deltas, not Claude session totals; reportedTurns/costReportedTurns distinguish unknown usage from measured zero. Clearing chat retains usage.",
+             Params().Opt("id", "string", "Agent id or current name; omit for every agent, including removed profiles.")
+                 .Opt("date", "string", "YYYY-MM-DD or today in UTC; omit for all days."),
+             [state](Engine& e, const Json& a) {
+                 TeamSession& session = state->Session(e);
+                 std::string id = a["id"].asString();
+                 if (const AgentProfile* agent = state->store.Find(id)) id = agent->id;
+                 return session.Usage(id, a["date"].asString());
+             });
+
+    Register(registry, "team.clear", "Stop every turn, empty the chat log and task records, and forget the agents' stored conversations. Profiles are kept.", Params(),
              [state](Engine& e, const Json&) {
                  state->Session(e).Clear();
                  return Json::MakeObject();

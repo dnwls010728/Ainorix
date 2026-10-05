@@ -4,6 +4,11 @@
 // (`exec --json`); the fixtures are in tests/tests.cpp (TeamStreamParsers).
 #include "team/Backends.h"
 
+#include <cmath>
+#include <iomanip>
+#include <locale>
+#include <sstream>
+
 namespace oe {
 namespace {
 
@@ -55,7 +60,54 @@ TurnEvent ClaudeTool(const Json& item) {
     return Tool(id, "Using", name);
 }
 
+bool Count(const Json& j, const char* key, uint64_t& out) {
+    const Json* value = j.find(key); const double n = value ? value->asNumber(-1) : -1;
+    if (!value || !value->isNumber() || !std::isfinite(n) || n < 0 || n > 1e12 || std::floor(n) != n) return false;
+    out = static_cast<uint64_t>(n); return true;
+}
+TokenUsage ReadUsage(const Json& j, bool claude) {
+    TokenUsage u;
+    if (!Count(j, "input_tokens", u.inputTokens) || !Count(j, "output_tokens", u.outputTokens)) return u;
+    if (claude) {
+        if (j.has("cache_read_input_tokens") && !Count(j, "cache_read_input_tokens", u.cacheReadTokens)) return TokenUsage();
+        if (j.has("cache_creation_input_tokens") && !Count(j, "cache_creation_input_tokens", u.cacheCreationTokens)) return TokenUsage();
+        u.inputTokens += u.cacheReadTokens + u.cacheCreationTokens;
+    } else if (j.has("cached_input_tokens") && !Count(j, "cached_input_tokens", u.cacheReadTokens)) return TokenUsage();
+    if (u.cacheReadTokens > u.inputTokens) return TokenUsage();
+    u.known = true; u.contextTokens = u.inputTokens;
+    if (claude && j["iterations"].isArray() && j["iterations"].size() > 0) {
+        const TokenUsage last = ReadUsage(j["iterations"][j["iterations"].size() - 1], true);
+        if (last.known) { u.contextTokens = last.inputTokens; u.contextEstimated = false; }
+    }
+    return u;
+}
+void Cost(const Json& j, TurnEvent& event) {
+    const Json* value = j.find("total_cost_usd"); const double cost = value ? value->asNumber(-1) : -1;
+    if (value && value->isNumber() && std::isfinite(cost) && cost >= 0 && cost <= 1e6) {
+        event.costUsd = cost; event.costKnown = true; event.costCumulative = true;
+    }
+}
 }  // namespace
+
+Json TokenUsageToJson(const TokenUsage& u) {
+    Json j = Json::MakeObject(); j["known"] = u.known;
+    if (u.known) {
+        j["inputTokens"] = u.inputTokens; j["outputTokens"] = u.outputTokens;
+        j["cacheReadTokens"] = u.cacheReadTokens; j["cacheCreationTokens"] = u.cacheCreationTokens;
+        j["contextTokens"] = u.contextTokens; j["contextEstimated"] = u.contextEstimated;
+    }
+    return j;
+}
+TokenUsage TokenUsageFromJson(const Json& j) {
+    TokenUsage u;
+    if (!j["known"].asBool() || !Count(j, "inputTokens", u.inputTokens) || !Count(j, "outputTokens", u.outputTokens) ||
+        !Count(j, "cacheReadTokens", u.cacheReadTokens) || !Count(j, "cacheCreationTokens", u.cacheCreationTokens) ||
+        u.cacheReadTokens + u.cacheCreationTokens > u.inputTokens) return TokenUsage();
+    u.contextTokens = u.inputTokens;
+    if (j.has("contextTokens") && !Count(j, "contextTokens", u.contextTokens)) return TokenUsage();
+    u.contextEstimated = j["contextEstimated"].asBool(true);
+    u.known = true; return u;
+}
 
 bool ValidSessionId(const std::string& id) {
     if (id.empty() || id.size() > 64) return false;
@@ -74,10 +126,14 @@ ProcessOptions ClaudeBuildTurn(const TurnRequest& request) {
     if (!request.systemPromptFile.empty()) add({"--append-system-prompt-file", request.systemPromptFile});
     // docs/TEAM.md §6: a headless turn cannot ask, so the mode decides what is refused.
     add({"--permission-mode", request.access == "read" ? "plan" : request.access == "full" ? "bypassPermissions" : "acceptEdits"});
+    if (!request.inheritUserTools) add({"--strict-mcp-config", "--disable-slash-commands"});
     if (!request.mcpConfigFile.empty()) {
-        // Strict: the agent drives this editor, not another engine server from the user's own config.
-        add({"--mcp-config", request.mcpConfigFile, "--strict-mcp-config"});
-        if (request.access == "edit") add({"--allowedTools", "mcp__ownengine"});
+        add({"--mcp-config", request.mcpConfigFile});
+        if (request.access == "edit" && request.apiPort > 0) add({"--allowedTools", "mcp__ownengine"});
+    }
+    if (request.maxBudgetUsd > 0) {
+        std::ostringstream number; number.imbue(std::locale::classic()); number << std::fixed << std::setprecision(6) << request.maxBudgetUsd;
+        add({"--max-budget-usd", number.str()});
     }
     if (!request.sessionId.empty()) add({"--resume", request.sessionId});
     return options;
@@ -105,10 +161,12 @@ void ParseClaudeLine(const std::string& line, TurnEvents& out) {
         const std::string text = j["result"].asString("");
         if (!j["is_error"].asBool(false) && j["subtype"].asString("") == "success") {
             TurnEvent done = Event(TurnEvent::Kind::Done, text);
-            done.costUsd = j["total_cost_usd"].asNumber(0.0);
+            done.usage = ReadUsage(j["usage"], true);
+            Cost(j, done);
             out.push_back(std::move(done));
         } else {
-            out.push_back(Event(TurnEvent::Kind::Failed, text.empty() ? "the turn ended with " + j["subtype"].asString("an error") : text));
+            TurnEvent failed = Event(TurnEvent::Kind::Failed, text.empty() ? "the turn ended with " + j["subtype"].asString("an error") : text);
+            failed.usage = ReadUsage(j["usage"], true); Cost(j, failed); out.push_back(std::move(failed));
         }
     }
 }
@@ -121,6 +179,9 @@ ProcessOptions CodexBuildTurn(const TurnRequest& request) {
     const bool resume = !request.sessionId.empty();
     if (resume) add({"resume"});
     add({"--json", "--skip-git-repo-check"});
+    // Codex 0.159.3 supports this on exec and resume, retaining auth in CODEX_HOME.
+    // It removes user-configured MCP/plugins; auto-discovered skills are not fully isolated.
+    if (!request.inheritUserTools) add({"--ignore-user-config", "-c", "skills.include_instructions=false"});
     if (!request.model.empty()) add({"-m", request.model});
     // Values are TOML; an npm-installed Codex is a .cmd shim that refuses double quotes, so
     // strings use TOML's single-quoted form. `exec resume` has no -s flag: the config key works for both.
@@ -175,7 +236,7 @@ void ParseCodexLine(const std::string& line, TurnEvents& out) {
         }
         if (completed && kind != "agent_message" && kind != "reasoning") out.push_back(Event(TurnEvent::Kind::Thinking));
     } else if (type == "turn.completed") {
-        out.push_back(Event(TurnEvent::Kind::Done));
+        TurnEvent done = Event(TurnEvent::Kind::Done); done.usage = ReadUsage(j["usage"], false); out.push_back(std::move(done));
     } else if (type == "turn.failed") {
         out.push_back(Event(TurnEvent::Kind::Failed, j["error"]["message"].asString("the turn failed")));
     } else if (type == "error") {

@@ -290,6 +290,12 @@ void NativeEditor::Impl::TeamChatPanel() {
             } else {
                 ImGui::TextDisabled("%s", summary.c_str());
             }
+            const Json& usage = turn["usage"];
+            if (usage["known"].asBool()) {
+                ImGui::TextDisabled(Tr("%.0f in, %.0f out, %.0f cached"), usage["inputTokens"].asNumber(), usage["outputTokens"].asNumber(), usage["cacheReadTokens"].asNumber());
+            } else ImGui::TextDisabled("%s", Tr("Usage unavailable"));
+            if (turn["costKnown"].asBool()) ImGui::TextDisabled("$%.4f", turn["costUsd"].asNumber());
+            else ImGui::TextDisabled("%s", Tr("Cost unavailable"));
             if (entry.open) {
                 for (const Json& step : turn["steps"].items()) ImGui::TextDisabled("   %s", step.asString("").c_str());
             }

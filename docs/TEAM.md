@@ -152,9 +152,13 @@ Everything is under `<project>/.oe/team/` (a dot folder: not packaged by `oe pac
 | `backend` | a backend id from §4; unknown ids keep loading and show as unavailable, but cannot be chosen through `team.add` / `team.update` |
 | `model` | a model id of that backend (`[A-Za-z0-9._:\[\]-]{1,64}`), or empty for the CLI's default |
 | `access` | `read` \| `edit` (default) \| `full`, see §6 |
+| `canCall` | callable agent ids; default none. The lead may delegate to everyone; other agents need explicit permission |
+| `maxBudgetUsd` | Claude per-turn allowance, 0 = disabled (omitted on disk), otherwise 0.000001..1000 USD. Unsupported on other backends |
 | `lead` | agent that receives messages with no mention; empty = such messages reach nobody. The first agent added to an empty team becomes the lead; removing the lead leaves it empty |
 | `maxConcurrent` | 1..8, default 3 |
-| `maxHops` | 0..16, default 4 |
+| `maxHops` | 0..16, default 0 (off); a blocked handoff notice gives `team.settings {maxHops: 2}` |
+| `inheritUserTools` | false by default; opt in to user MCP servers and skills. Codex user-config isolation is partial |
+| `rotateAboveInputTokens` | 0 disables automatic conversation rotation (default); otherwise 1..2,000,000 input tokens |
 
 Limits: 16 agents per team, file ≤ 1 MiB. Ordered, pretty JSON; defaults are not written
 (DESIGN.md invariant 8). Writes are atomic (`WriteTextFileAtomic`): a change is validated, written,
@@ -190,6 +194,25 @@ each other's changes.
   without a GPU texture.
 - Pictures are drawn round (`AddImageRounded`) at 24 px in lists and chat, 64 px in the profile
   dialog, with a status dot at the lower right.
+
+### 3.3 The default team of a new project
+
+`oe new <dir>` writes `.oe/team/team.json` with five agents (`engine/team/TeamDefaults.cpp`,
+`SeedDefaultTeam`; `--no-team` skips it; a project that already has agents is never touched):
+
+| Agent | CLI / model | Role |
+|---|---|---|
+| Lead (the lead) | Claude, `sonnet` | gets messages without a mention; small changes itself, larger ones through `team_delegate` with checkable acceptance lines |
+| Core | Claude, `opus` | hard gameplay code, rules, balance; reached by delegation or by name |
+| Content | Claude, `sonnet` | scenes, prefabs, UI, texts |
+| Art | Codex, default model | images and sound |
+| QA | Claude, `sonnet` | play-tests through the editor, edits nothing |
+
+All have access `edit` (no escalation), `maxHops` stays 0, and `rotateAboveInputTokens` is 150000 so
+a long chat conversation starts fresh. The instructions are project-neutral (they point to the
+project's `AGENTS.md`) and say how to work with delegation: tasks end with `team_report` and evidence,
+an `@mention` does not hand work on. An agent whose CLI is not installed shows as offline. The
+Wickbound sample's own team is a tuned version of this one; it is local and git-ignored.
 
 ## 4. Backends
 
@@ -297,30 +320,14 @@ is no longer in the catalog is kept and shown as custom.
 
 ### 4.3 Verified on the build host
 
-2026-10-03, Windows 11, checked with `oe exec samples/Hello team.backends` and each CLI's
-`--help`. Turns (T3) were run with Claude Code 2.1.288 and codex-cli 0.159.3 on a scratch project
-through `oe exec <project> team.send {text, wait}` and, with an engine to attach to, through
-`oe mcp <project> --port <p>` + `POST /api/call`:
-
-- a new conversation and a resumed one for both CLIs (a second `oe exec` read `sessions.json`;
-  both agents remembered the first question), two agents in parallel with `@all`;
-- `--append-system-prompt-file` (Claude followed the agent's instructions), the standing context
-  on stdin (Codex knew its teammates and saw the teammate's reply in the chat);
-- tool activity: Claude `Read` -> "Reading project.json", MCP -> "Engine: scene.summary";
-- attaching to the engine: both called `scene_summary` through the generated MCP configuration
-  and reported the scene's 16 entities. Codex refuses engine tools without
-  `default_tools_approval_mode='approve'` ("approval is required and the policy is never").
-
-Not run with real CLIs: `read` and `full` access, a failing login, cancel, images.
-
-| CLI | Version | Found as | Flags confirmed in `--help` |
-|---|---|---|---|
-| Claude Code | 2.1.288 | `~/.local/bin/claude.exe` (native) | `-p`, `--output-format stream-json`, `--verbose`, `--model`, `--mcp-config`, `--strict-mcp-config`, `--resume <id>`, `--permission-mode`, `--allowedTools`, `--input-format`. `--append-system-prompt` is listed; the `-file` form is only mentioned in another flag's description: check it in T3 |
-| Codex | codex-cli 0.159.3 | `%APPDATA%/npm/codex.cmd` (npm shim) | `codex exec [PROMPT]` (stdin when omitted or `-`), `--json`, `-m`, `-C <dir>`, `-s read-only\|workspace-write\|danger-full-access`, `-c key=value`, `--skip-git-repo-check`, `-o <file>`; resume is `codex exec resume <session id> [PROMPT]` |
-| Gemini CLI | 0.31.0 | `%APPDATA%/npm/gemini.cmd` (npm shim) | `-p`, `-o stream-json`, `-m`, `--approval-mode default\|auto_edit\|yolo\|plan`, `-r <session>` |
-
-Detection of all three takes about 3.5 s in total (the npm shims start Node), which is why the
-timeout is 10 s and why the editor must not call it on the UI thread.
+2026-10-03, Windows 11: Claude Code 2.1.288 (native `claude.exe`), codex-cli 0.159.3 and Gemini CLI
+0.31.0 (npm `.cmd` shims). Turns were run by hand through `oe exec <project> team.send {text, wait}`
+and through `oe mcp <project> --port <p>` + `POST /api/call`: new and resumed conversations for both
+CLIs, two agents in parallel with `@all`, `--append-system-prompt-file`, the standing context on stdin
+for Codex, tool activity lines, and attaching to the engine through the generated MCP configuration
+(Codex refuses engine tools without `default_tools_approval_mode='approve'`). Not run with real CLIs:
+`read` and `full` access, a failing login, cancel. Detection of all three takes about 3.5 s (the npm
+shims start Node), hence the 10 s timeout and the rule that the editor never calls it on the UI thread.
 
 ## 5. Sessions, chat and state
 
@@ -335,28 +342,51 @@ A turn is one run of an agent's CLI in response to a message.
    addresses nobody is stored with a notice saying so.
 2. For each recipient not already busy, a turn starts (others wait in state `queued` behind
    `maxConcurrent`, in roster order; a message to a busy agent is delivered when its turn ends).
-3. The prompt given to the CLI = the chat messages (kind `message`, not its own) since that
-   agent's previous successful turn, bounded to the last 40 messages or 32 KiB, each as
+3. The prompt given to the CLI contains unread messages addressed to that agent (including
+   the triggering message), bounded to the last 40 messages or 32 KiB, each as
    `[Sender] text`. The standing context is passed as the system prompt addition
    (`.oe/team/tmp/<id>.system.md`): the agent's name, description and instructions, the roster
    (ids, names and descriptions of teammates), the project path, where to save images
    (`.oe/team/images/`), and whether the editor is reachable through the `ownengine` MCP server.
+   Unrelated chat stays in the log. With an attached API, an omission count points to
+   `team_messages` for context on demand; without an API that tool hint is omitted.
 4. The process runs in the project directory with the environment variables
    `OE_TEAM_AGENT=<id>` and `OE_TEAM_HOP=<n>` and, when the hosting tool serves the HTTP API
    (`oe editor`, `oe mcp --port`), an MCP server entry that starts `oe mcp --connect <port>`
    (`.oe/team/tmp/<id>.mcp.json` for Claude, `-c` overrides for Codex; `--agent <id>` is T5).
    Without an API port (`oe exec`, `oe mcp` on stdio only) the agent works on the files.
-5. Stream lines become events (§5.3). The final assistant text becomes the agent's chat message;
+   Claude defaults to `--strict-mcp-config --disable-slash-commands`, using an empty
+   MCP config when unattached. Codex defaults to `--ignore-user-config` and
+   `-c skills.include_instructions=false`; discovered project/system skills may remain.
+   `inheritUserTools:true` omits these restrictions. Never mention a teammate merely
+   to accept, acknowledge receipt, make small talk or talk about them.
+5. Usage is recorded atomically in `.oe/team/usage.jsonl`, with agent/backend/session,
+   UTC date, input/output/cache tokens and per-turn cost. Claude reports session-cumulative
+   cost: the persisted prior result is subtracted. Missing baselines/counters and Codex
+   costs remain unknown. Failed/cancelled turns are included; clearing chat retains usage.
+   Legacy replies with no known cost scope show unavailable rather than a cumulative bill.
+   Stream lines become events (§5.3). The final assistant text becomes the agent's chat message;
    the backend's session id is stored in `sessions.json` (with the id of the last chat message
    the agent has seen) so the next turn resumes the same conversation, also after a restart. A
    failed turn drops the stored conversation, so a broken or expired one cannot fail every
    later turn; changing an agent's backend starts a new conversation.
+   `team.reset {id}` clears only that idle agent's conversation. It preserves the chat,
+   seen watermark, usage, profiles and other agents; busy/queued agents must be cancelled
+   or allowed to finish first. The roster context menu provides Reset Conversation.
+   With `rotateAboveInputTokens` enabled, the next addressed turn starts fresh when
+   the previous input-size estimate meets the threshold, and appends a notice.
+   Claude uses the last reported API iteration input (including caches); otherwise
+   the whole turn input is a conservative estimate. This is not the context-window
+   limit. Unknown usage cannot trigger rotation. The estimate survives reopening.
+   Rotation makes no model call of its own and may discard useful context or lose
+   cache savings, so it is disabled by default. Invalid sessions files are preserved.
 6. `team.cancel {id}` (the Stop button) kills the process tree and drops the agent's waiting
    message; the chat gets a "stopped" notice. Closing the tool cancels all turns (the job
    object ends them even if the tool crashes).
 7. A turn ends with an `error` message when the CLI reports a failure, exits without a result
    (the text carries the exit code and the end of its stderr), cannot be started, or runs
-   longer than 30 minutes (`TeamHost::turnTimeoutSeconds`). If the result arrived but the
+   longer than 30 minutes (`TeamHost::turnTimeoutSeconds`) or has no stdout/stderr
+   output for 10 minutes (`TeamHost::idleTimeoutSeconds`). Any output resets only the idle timer. If the result arrived but the
    process does not end within 5 s (something it started holds the pipes), the tree is killed.
 
 `team.send {wait: seconds}` blocks the command until the addressed agents are done and adds
@@ -369,8 +399,14 @@ Agent-to-agent: when an agent's final message mentions a teammate, that teammate
 0 for the person's, and for a reply one more than the newest message its turn answered. A reply
 is handed on only while its hop is at most `maxHops`, so one message of the person is followed
 by its first turn plus at most `maxHops` agent-to-agent turns per branch; beyond that the
-mention is shown but not delivered, with a notice naming who was not called. `maxHops: 0`
-turns the feature off. This bounds loops and cost. The agent itself and offline teammates are
+mention is shown but not delivered, with a notice naming who was not called and explaining
+`team.settings {maxHops: 2}`. For targets the sender may call (`canCall`, or every teammate
+for the lead), the notice also says to hand work off by calling `team_delegate`; mentions
+are not delivered. Targets outside that permission get no delegation advice. The same
+notice applies to agent-attributed `team.send` calls. Notices are visible through
+`team.messages` and the chat UI, but excluded from subsequent turn prompts; there is no
+automatic retry or conversion to a task. `maxHops: 0` turns the feature off.
+This bounds loops and cost. The agent itself and offline teammates are
 skipped (an offline one with a notice). Because every `@id` in a reply calls someone, the
 standing context asks agents to write a name without `@` when they only talk about a teammate.
 
@@ -466,6 +502,32 @@ name without a thumbnail. Whether a backend can generate images is the descripto
 `supportsImages` (reported by `team.backends`); the profile dialog does not show it (decided
 2026-10-03). The installed CLI's version appears in the agent combo's list, not beside the
 combo: text there changed the dialog's width whenever another agent was chosen.
+
+### 5.5 Task turns
+
+Chat turns tell the lead and agents with `canCall` to call `team_delegate` rather than answer with an `@mention` when `maxHops` is 0; this instruction follows the stable prefix and is omitted when mentions are enabled or the worker has no delegation permission.
+
+Delegation runs beside chat. Workers receive only role/project context and the
+bounded task brief, never chat history or a resume id; their final text/session
+never enters the chat conversation. `team_delegate` in the MCP bridge waits on
+its I/O thread while the engine/editor continues updating. The worker must call
+`team_report` to submit summary, changed paths and command/result/output evidence;
+printing JSON in the final answer does not submit a report. A successful turn
+without a tool report becomes done with unverified:true and its final text as
+summary. A report is also unverified until the caller checks acceptance.
+CLI errors/abnormal exits are failed; absolute deadline expiry is timed_out.
+Cancellation propagates down the caller's task tree; there is no automatic retry.
+Tasks cannot extend an ancestor deadline. Chat and task usage share the E5 ledger,
+including failures/cancellations and per-session Claude budget accounting.
+
+### 5.6 Stable prefix
+
+BuildTeamStandingContext is the single prefix builder for chat and task turns.
+It contains role, instructions, sorted callable agent ids/names and project facts.
+Runtime state, connection details, time, counts, unread chat and task requirements
+follow the prefix. The callable list follows canCall permissions (the lead may
+call everyone). State/history changes leave identical prefix bytes. Changing role,
+instructions, callable agents or project facts intentionally changes the prefix.
 
 ## 6. Safety
 
@@ -618,18 +680,24 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.presets` | | avatar preset ids |
 | `team.list` | | `{version, revision, lead, maxConcurrent, maxHops, agents: [profile], error?}` |
 | `team.get` | `{id}` | one profile: every field, plus `avatarPath` (project-relative) for an uploaded picture |
-| `team.add` | `{name, description?, instructions?, backend?, model?, access?, avatar?}` | the new profile (id generated; backend defaults to the first one, model to that backend's default) |
+| `team.add` | `{name, description?, instructions?, backend?, model?, access?, maxBudgetUsd?, canCall?, avatar?}` | the new profile (id generated; backend defaults to the first one, model to that backend's default) |
 | `team.update` | `{id, values}` | the profile; partial update like `component.set`. A new backend without a model resets the model |
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
 | `team.avatar` | `{id, preset}` or `{id, source}` | the profile |
-| `team.settings` | `{lead?, maxConcurrent?, maxHops?}` | team settings; without arguments it only reads |
+| `team.settings` | `{lead?, maxConcurrent?, maxHops?, inheritUserTools?, rotateAboveInputTokens?}` | team settings; without arguments it only reads |
 
 Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |
 | `team.cancel` | `{id}` or `{all:true}` | `{cancelled: [ids]}` |
 | `team.state` | | `{revision, running, agents}`: per agent state, activity, task, elapsed, tools, error and hint |
-| `team.messages` | `{after?, limit?}` | `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
+| `team.messages` | `{after?, limit?}` | Read omitted chat on demand: `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
+| `team.usage` | `{id?, date?}` | per-agent/per-day totals with reportedTurns and costReportedTurns; date is YYYY-MM-DD or today (UTC), omit for all days |
+| `team.delegate` | `{to, goal, acceptance?, files?, context?, maxDurationMs?}` | fresh worker task; to accepts @id, id or name |
+| `team.report` | `{id, summary, changed, evidence}` | attributed worker evidence; never automatically verified |
+| `team.task` | `{id}` | task record and state |
+| `team.tasks` | | stored task records |
+| `team.reset` | `{id}` | `{reset: true}`; clears only the selected idle agent's conversation; keeps chat/usage/profiles/other sessions |
 | `team.clear` | | stops every turn, empties the chat log and stored sessions |
 
 Errors follow the usual shape, with hints that say how to fix the call, for example
@@ -641,38 +709,13 @@ commands use `unknown_agent`, `name_taken`, `team_full`, `unknown_backend`, `inv
 
 ## 9. Tests
 
-- **Parsers** (`TeamStreamParsers`): recorded Claude and Codex stream lines as fixtures in
-  `tests/tests.cpp`; each must produce the expected events, activity parts, final text and
-  session id; truncated, foreign and unknown lines give no event. Also the two command lines
-  (no double quote, percent or exclamation mark in any argument) and mention parsing.
-- **TeamStore** (`TeamStoreProfiles`, `TeamAvatars`): add / update / remove, id and name
-  uniqueness, limits, defaults left out of the file, unknown backend and keys kept loading,
-  invalid file never overwritten, a second session sees changes, avatar crop and resize
-  (pixels checked), refused pictures, upload removed with its agent.
-- **TeamSession with stand-in backends** (`TeamSessionTurns`): backends whose executable is a
-  `.cmd` script that saves its prompt and arguments and prints a recorded Claude stream (no
-  `oe fake-agent` subcommand was needed: a `Backend` is injected through
-  `RegisterTeamCommands(registry, backends)`). Covers routing (mention, `@all`, lead, sender
-  excluded, nobody), prompt content and resume, context on stdin, the MCP config file, state and
-  activity of a running turn, queueing behind a busy agent and behind `maxConcurrent`, cancel,
-  process crash (`error` state with the stderr tail), a failure the CLI reports, offline agents,
-  the turn timeout, `wait`, removal of a running agent, restart and `team.clear`. Hop limit and
-  images come with T7 and T6.
-- **Process** (`ProcessRunsChildren`): start, write stdin, read lines from both pipes, exit code,
-  environment and working directory, kill tree, missing executable; `.cmd` shim start with
-  quoted arguments and refusal of unsafe ones on Windows.
-- **Backends** (`TeamBackendParsing`, `TeamBackendDetection`): version and Codex model cache
-  parsing, overrides file, detection of stand-in `.cmd` CLIs (installed, failing, hanging,
-  missing) and the `team.backends` cache and refresh.
-- **Editor**: `NativeEditorTeam` drives the Team panel with window events: the tab beside the
-  Hierarchy, background detection, adding an agent through the dialog (typed name, Enter), a
-  backend that is not installed cannot be chosen, a refused save keeps the dialog open, Escape
-  discards, editing keeps untouched fields, delete asks first; it writes a screenshot per
-  language and one of the dialog to `build/editor-team-*.png`. `EditorAvatarPresets` checks the
-  embedded pictures. `EditorTranslations` covers the new strings. Sending a message and
-  stopping a turn from the UI come with the chat panel (T5).
-- Real CLIs are not run by `oe_tests` (network, cost, login). T1 and T3 are checked by hand with
-  the installed CLIs and the result is recorded in the work log.
+All in `tests/tests.cpp`; `oe_tests` never runs a real CLI (network, cost, login). Stand-in backends
+(`.cmd` scripts printing a recorded stream, injected through `RegisterTeamCommands(registry,
+backends)`) cover turns: `TeamStreamParsers` (recorded Claude/Codex lines, argv without `"`, `%`, `!`),
+`TeamSessionTurns` (routing, resume, queueing, cancel, crash, timeout, hops, images, attachments),
+`TeamStoreProfiles`, `TeamAvatars`, `ProcessRunsChildren`, `TeamBackendParsing`,
+`TeamBackendDetection`, `NativeEditorTeam`, `NativeEditorTeamChat`, `EditorAvatarPresets`,
+`EditorTranslations`. Real CLIs are checked by hand and the result goes in the work log.
 
 ## 10. Decisions
 
@@ -687,80 +730,228 @@ Settled on 2026-10-03; the sections above already describe these choices.
    stays as the fallback only.
 4. **Message with no mention**: goes to the lead.
 
-## 11. Usage and cost (to do)
+Settled on 2026-10-05 (usage and cost, §11):
 
-Written on 2026-10-04 after the first real use (the Wickbound team: Core on Opus, Content and QA
-on Sonnet, Art on Codex). The person's observation: the team uses clearly more than a single
-agent told "core work on Opus, the rest on Sonnet, images through Codex". Nothing in this
-section is implemented; it records what was measured and what to do when the work is taken up.
+5. **`maxHops` default 0**: agent-to-agent `@mention` turns are off until a team sets it (for
+   example `team.settings {maxHops: 2}`).
+6. **Delegation beside the chat**: `team.delegate` is how a lead moves work; the person still calls
+   agents by `@mention` in the chat, and `@mention` turns between agents stay available.
+7. **Workers always start a fresh conversation**: a task turn never resumes and never sees the
+   chat. The chat conversations of the lead and the person stay resumed.
+
+## 11. Usage and cost
+
+A team spends clearly more than one agent told "core work on Opus, the rest on Sonnet, images
+through Codex" (observed 2026-10-04 on the Wickbound team). E1–E6 are implemented; historical rejection measurements are retained in TEAM_LOG.md.
 
 ### 11.1 Measured
 
-One turn that only answers "ok" (Claude Code 2.1.288, `--model haiku`, this PC's own setup, a
-scratch folder; input side = new + cached input tokens of the turn):
+One turn that only answers "ok" (Claude Code 2.1.288, `--model haiku`, input side = new + cached
+input tokens):
 
 | How the turn is started | Input-side tokens | Cost | Loaded |
 |---|---|---|---|
 | As the team starts it today | ~27,000 | $0.056 | 116 tools, 120 skills, 7 MCP servers |
 | + `--mcp-config <empty> --strict-mcp-config` | ~22,900 | $0.034 | 31 tools |
 | + `--disable-slash-commands` | ~19,000 | $0.027 | 30 tools, 0 skills |
-| `--bare` | not usable | - | "Not logged in": needs an API key, not the subscription login |
+| `--bare` | not usable | - | needs an API key, not the subscription login |
 
-So a turn costs 19,000 to 27,000 tokens before it does anything, and the person's own MCP
-servers and skills ride along on every team turn. Real turns seen while testing: $0.03 to $0.20
-each on haiku. Codex reports tokens but no cost (31,220 input tokens for a one-command turn,
-27,904 of them cached).
+If the measurement folder is inside the repository, Claude loads the parent `CLAUDE.md`; compare the 19k goal against an outside-repository project (2026-10-05: 22,977 tokens, see TEAM_LOG.md).
 
-### 11.2 Why a team costs more than one delegating agent
+Codex reports tokens but no cost (31,220 input tokens for a one-command turn, 27,904 cached).
 
-1. **The base context is paid per turn and per agent.** Every turn is a new CLI process
-   (`--resume` continues the conversation, and the prompt cache gives a discount, but the
-   context is still sent). One agent pays it once per session and starts sub-agents only when
-   it needs them, with small prompts.
-2. **A handoff is a full turn in another conversation.** The receiver knows nothing of what the
-   sender read and reads the files again.
-3. **The chat is pushed into every turn**: all messages since the agent's last turn, up to 40
-   or 32 KiB (§5.1), whether it needs them or not.
-4. **The lead is the most expensive model.** Every message without a mention goes to it, also
-   when all it does is pass the work on.
-5. **Agent-to-agent turns are on by default** (`maxHops` 4), and every `@id` in a reply calls
-   someone.
+### 11.2 Why it costs more
 
-Keeping the CLI processes alive between turns would save start-up time and hook runs, but
-hardly any tokens: the conversation is resent on every request either way.
+1. Every turn is a new CLI process with its own base context (19,000 to 27,000 tokens), per turn
+   and per agent. One delegating agent pays it once and starts sub-agents with small prompts.
+2. A handoff is a full turn in another conversation: the receiver re-reads what the sender read.
+3. The chat is pushed into every turn (up to 40 messages / 32 KiB), needed or not.
+4. Messages without a mention go to the lead, usually the most expensive model.
+5. Agent-to-agent turns are on by default (`maxHops` 4); every `@id` in a reply calls someone.
+
+Long-lived CLI processes would save start-up time, not tokens (the conversation is resent on every
+request either way).
 
 ### 11.3 What Buzz does (reference)
 
-The feature was inspired by [Buzz](https://github.com/block/buzz) (Block). Read on 2026-10-04
-from its README, `VISION_AGENT.md` and the `crates/buzz-acp` README through a summarizing
-fetch, not from the code, so details may be off. It documents no token budgets and no model
-routing; it spends less by structure:
+[Buzz](https://github.com/block/buzz) (Block) is a Nostr-based chat where humans and agents work in
+channels. Read on 2026-10-05 from its raw files (`VISION_AGENT.md`, `crates/buzz-acp/README.md` and
+`TASKS.md`, `crates/buzz-acp/src/base_prompt.md` and `session_model_*.md`,
+`benchmarks/harbor-buzz-orchestra/`), not from the code. It publishes no token budgets or model
+routing; it spends less by structure, and its stated rule is "if you can delete it, delete it".
+What carries over to a local game-dev team:
 
-| Buzz | Effect | OwnEngine today |
+| Buzz | Why it is cheap or safe | Used here as |
 |---|---|---|
-| Only an `@mention` wakes an agent | no turn for unrelated messages | same, but no mention = the lead |
-| `--respond-to owner-only` by default: only the owner's messages reach the agent | agents do not wake each other unless that is switched on | the opposite: handoff is on |
-| Queued messages of a channel are drained into one prompt | three messages, one turn | same (messages that arrive during a turn are delivered together) |
-| Context is pulled: the agent reads history through the CLI / search when it needs it | no tokens for history nobody reads | the opposite: pushed (11.2 point 3) |
-| Long-lived agent processes over ACP, a session per channel | no start-up per turn | a process per turn with `--resume` |
-| A session summarizes its own history when the context fills (buzz-agent) | bounds a long conversation | left to Claude Code / Codex, which compact by themselves |
+| Only an `@mention` wakes an agent; `--respond-to owner-only` by default, so agents do not wake each other unless switched on | no turn nobody asked for | E1: `maxHops` 0 |
+| Prompt rule: `@mention` only to hand work back or ask; never to accept, confirm receipt or talk *about* someone | no ack or courtesy turns | E1: standing-context rule |
+| Events queued for a channel are drained into one batched prompt; at most one prompt in flight per channel | three messages, one turn | already so (§5.1) |
+| Context is pulled: the agent reads history with a tool when it needs it | no tokens for history nobody reads | E3 |
+| `buzz-acp run --task`: one prepared task (`version`, `taskId`, `prompt`, `maxDurationMs`), a fresh process and session, no history, no automatic channel context, no retry after failure or timeout, final text not auto-published, one JSON status line (`completed`, `failed`, `invalid`, `timed_out`, `cancelled`) | a worker is a bounded function call; "exit 0 is not proof of success" | E2: the task turn |
+| Orchestrator persona: does not run commands; one step per message with the exact goal **and** the success check; relays the task's requirements verbatim and adds no constraints; verifies the worker's output itself. Worker persona: reports the command, exit code and trimmed output; never claims success without the verifying output; on failure reports verbatim and stops | handoffs that do not loop or invent work | E2: task brief and report format |
+| Turn limits: idle timeout (silence, default 620 s, reset by any output) plus an absolute cap (7200 s) | a stuck turn stops spending | E1: idle timeout |
+| Owner control commands `!cancel`, `!rotate`, `!shutdown`, consumed by the harness, never sent to the model | control without a model call | E6: per-agent reset |
+| A session summarizes its own history at 90 % of its context window and continues | a long conversation stays bounded | E6: rotate a resumed conversation by size |
+| A shared `AgentRuntime` owns the capabilities and prompt context of both entry points | one place for the prompt prefix | E4 |
+| Benchmark harness: a team is a manifest (roster, count, model endpoint, byte-pinned prompt hash, generation settings); a cheap model on purpose, "a weak result is a prompt finding, not a model finding"; regression layer k=1, workflow layer k=3; a harness fault is told apart from a model fault | team cost and quality are measured per condition | §11.5 |
 
-### 11.4 Options, by expected effect
+Not taken over: long-lived ACP processes (they save start-up time, not tokens), heartbeat prompts
+(idle spending), Nostr identities and relay, one-process-per-session scale (32 agents). Buzz's
+"ten agents in parallel without resource overhead" is about local processes, not tokens.
 
-| # | Change | Where | Effect, cost |
-|---|---|---|---|
-| U1 | Agent-to-agent turns off unless switched on: `maxHops` default 0 (or keep it on with a lower default, 2) | `TeamSettings`, `team.settings`, docs | The largest: each avoided hop is a whole turn. Changes the behaviour introduced in T7a, so it needs the person's decision (open) |
-| U2 | Pull instead of push: a turn gets the messages addressed to the agent and the one that handed the work on; the rest it reads with `team.messages` | `TeamSession::StartTurn`, standing context | Fewer input tokens per turn, most in busy chats. An agent may miss context it would have needed and must be told how to fetch it |
-| U3 | Lean turns: always `--strict-mcp-config` (the engine's server only, also without an editor) and `--disable-slash-commands`; a per-agent tool list by role (QA: engine tools only) | `ClaudeBuildTurn`, a `tools` field on the profile; the Codex equivalent to be looked up | Measured: about 30 % fewer tokens and about half the cost of an idle turn. Team agents lose the person's own skills and MCP servers; make it a team setting if that is not wanted |
-| U4 | A cheap lead: route unmentioned messages to a Sonnet agent and call the Opus one by name; tell the lead to do small jobs itself instead of planning and handing on | team configuration and instructions (Wickbound: `.oe/team/team.json`), no engine change | Opus only where it is asked for |
-| U5 | Budgets: `--max-budget-usd` per turn for Claude (the flag exists, `-p` only); a per-chain cap; `--effort low` for QA and content agents | profile fields, `ClaudeBuildTurn` | A hard stop instead of a surprise |
-| U6 | Show it: tokens and cost per turn, per agent and per day in the Team panel and on each reply; Codex gives tokens only | `TurnEvent` (usage), `ChatMessage.turn`, `team.state`, the panels | Saves nothing by itself, but shows where it goes. Today only Claude's `costUsd` is kept, and whether that number is per turn or cumulative for a resumed conversation is still unverified (T3) |
+### 11.4 Proposal
 
-Suggested order when resumed: U3 + U2 + U6 in the engine, U4 for the Wickbound team at the same
-time, U1 once decided, U5 last.
+Model the team as call and return instead of a chat room. Chat stays for the person and the lead;
+work moves as small tasks; shared state (files, `scene.summary`, `script.errors`) is read on demand,
+never pushed. Goal: the fixed task of §11.5 costs at most about 1.5x one agent that delegates.
 
-### 11.5 A limit that stays
+| # | Change | Effect |
+|---|---|---|
+| E1 | `maxHops` default 0. Claude turns always get `--strict-mcp-config` (the engine's server, or an empty config without an editor) and `--disable-slash-commands`; team setting `inheritUserTools` (default false) restores the user's own MCP servers and skills; look up the Codex equivalent. Standing context: `@mention` only to hand work back or ask, never to acknowledge or when talking about someone. Turn timeout becomes idle (default 10 min without output) plus the existing 30 min cap | idle turn 27k to 19k tokens, no unasked or courtesy turns, stuck turns stop |
+| E2 | `team.delegate {to, goal, acceptance?, files?, context?, maxDurationMs?}` writes `.oe/team/tasks/<id>.json` and starts the worker. The worker turn is fresh (no `--resume`, nothing from the chat), its prompt is the task plus a short role context, and it is never retried automatically. It ends with `team.report {id, summary, changed, evidence}`; evidence is the command, its result and a trimmed output, not a claim. States: `running`, `done`, `failed`, `timed_out`, `cancelled`; without an editor the final text is taken and marked unverified; "done" is not "verified" until the lead checks `evidence` against `acceptance`. The lead's context says: one step per task, give the exact goal and success check, pass the person's requirements verbatim, add none. `oe mcp --connect` exposes `team_delegate` as a blocking tool (it polls `team.task` on its own thread, so the editor stays responsive). Profile field `canCall: [ids]`, default none, the lead may call everyone. Cancelling the delegating turn cancels its tasks | no chat resend, one bounded turn per task, no improvising |
+| E3 | Chat pull: a turn gets the messages addressed to the agent plus the one that triggered it, and a line saying how many were left out and that `team_messages` reads them (only when an editor is attached) | prompt no longer grows with the chat |
+| E4 | Cache-stable prompt: the standing context is byte-identical between turns of an agent (role, instructions, only the agents it may call; no states, times, counts); everything volatile goes after it. Build it in one place used by chat turns and task turns | cached tokens from the second turn on |
+| E5 | Usage: token counts on `TurnEvent` (Claude `result.usage`, Codex `turn.completed.usage`), `.oe/team/usage.jsonl`, `team.usage`, numbers in the Team panel and on each reply; profile `maxBudgetUsd` (Claude `--max-budget-usd`). First verify whether Claude's `total_cost_usd` is per turn or cumulative on a resumed conversation | shows where it goes; a hard stop per turn |
+| E6 | `team.reset {id}` starts a fresh conversation for one agent (today only `team.clear` drops everything), with a Reset item in the roster menu; when E5 shows a resumed conversation above a size threshold (setting, off by default) the next turn starts fresh and says so in a notice | a long conversation cannot grow the base cost of every later turn |
 
-Even with all of the above a handoff costs at least one base context (about 19,000 tokens with
-U3). A team pays off for parallel or long work; for a small change one agent is always cheaper.
-The guidance for users belongs in the READMEs once the numbers after U2/U3 are known.
+Decided (§10, items 5 to 7): `maxHops` 0, delegation beside the chat, fresh worker turns.
+Model choice is configuration, not code: a Sonnet lead, Opus
+called by name for hard jobs, pictures through the agent whose backend `supportsImages`; the
+Wickbound `team.json` is local (git-ignored), so the settings are described in the log.
+
+Left out until a measurement or a real collision asks for it (Buzz's own rule is to delete what
+does not pay rent): file claims between tasks, `owns` globs, independent QA tasks, `hardModel`
+retry (a failed task is not retried automatically, as in Buzz), `effort`, a per-chain cost cap,
+per-agent git worktrees. Not planned: provider APIs (§1), our own history summarizer, ACP or
+long-lived processes.
+
+### 11.5 Measuring
+
+Measurements report rather than gate. Identical M2 runs have ranged from $0.19
+to $0.47. Run k=3 per condition at the end, report median/range, exclude harness
+faults with reasons and retain model failures as quality results.
+
+- **M1 idle turn**: `oe exec <scratch> team.send '{"text":"Say ok","wait":120}'` on `haiku` in a
+  scratch `oe new` project; read tokens from the CLI's `result` line, cost from `team.messages`.
+- **M2 fixed task**: "Add a Bat enemy" (copy the slime prefab and script, speed 3, one in
+  `scenes/run.scene.json`, `script.check` clean) on a copy of `samples/Wickbound`, k=3 at the end per
+  condition: (a) one Claude agent alone that may use sub-agents, (b) the team before, (c) the improved team
+  after E4. Record tokens, cost, wall time and whether the acceptance lines held, in
+  [TEAM_LOG.md](TEAM_LOG.md). Write each condition down the way Buzz's manifest does (agents,
+  models, the exact prompts) so a later run is comparable; use the cheap models.
+- Measurement reports, it does not gate. One run is noise: identical M2 runs on this PC cost
+  between $0.19 and $0.47, because the model takes a different tool path each time. So measure
+  once, at the end of E1 to E4, with k=3 per condition (median and range), and use it to find out
+  where cost remains. A harness fault (CLI not logged in, capture or encoding error, crash) is
+  told apart from a model fault and left out with its reason.
+- Real CLIs run only by hand on the cheapest model; tests use stand-in backends.
+
+Each of E1 to E6 is one commit that also updates §3.1, §5 and §8 and `docs/API.md`.
+
+### 11.6 Hand-over for whoever implements E1 to E6
+
+Read §5 (turns), §11 and docs/DESIGN.md (invariants, definition of done) first. Do the steps in
+order, one commit each; step N may assume steps before it. Tick the box in
+[TEAM_LOG.md](TEAM_LOG.md) when the step is implemented, tested and its "Done when" holds.
+
+Rules:
+
+- Build with `build.bat`, test with `build/bin/oe_tests`. After changing a header, **touch the
+  `.cpp` files that include it** (`build.bat` misses header dependencies on this PC). Never kill
+  `oe.exe` by image name (`taskkill /IM oe.exe` kills the user's MCP servers); kill by PID.
+- `oe_tests` never runs real CLIs. Tests use stand-in `.cmd` backends (see `TeamSessionTurns` in
+  `tests/tests.cpp`). Real CLIs only by hand, on `haiku` / the cheapest Codex model, in a scratch
+  folder (`build/scratch/...`). Do not edit or commit a project's `.oe/team/team.json`; describe
+  intended settings in the log.
+- Commands: `Register(...)` with a `Params()` schema in `engine/team/TeamCommands.cpp`, no
+  `mutates` (the team is not the scene), `ApiError(code, message, hint)` for caller mistakes, then
+  `oe api --markdown > docs/API.md`. Add a test for every new behaviour.
+- Editor strings go through `Tr("...")` with a Korean and Japanese row in
+  `engine/editor/EditorText.cpp` (`EditorTranslations` test).
+- `CLAUDE.md` and `AGENTS.md` stay identical (`AgentInstructionsInSync`): change both or neither.
+- Command lines: no user text in arguments, no `"`, `%`, `!` (§2.1); format numbers yourself, no
+  locale. `.oe/team/` files are written atomically (`WriteTextFileAtomic`); an unreadable file is
+  never overwritten. Update this document (§3.1, §5, §8, §11) in the same commit as the behaviour.
+- Do not revert a step because one measurement is not better: a step is reverted only when tests
+  fail, an acceptance check regresses, or the cost clearly rises in every run. Structural changes
+  (fewer turns, a smaller prompt, no chat resend) are kept on their reasoning; measure afterwards
+  (§11.5) and record the numbers.
+
+| Step | Main files | Done when |
+|---|---|---|
+| M | none (measure only) | M1 and M2 baselines in the log: numbers, CLI versions, date |
+| E1 | `TeamStore.h/.cpp` (`maxHops` default, `inheritUserTools`), `TeamAdapters.cpp` (`ClaudeBuildTurn`, `CodexBuildTurn`), `Backends.h` (`TurnRequest`), `TeamSession.cpp` (`StartTurn`, `StandingContext`, timeouts), `TeamCommands.cpp` (`team.settings`) | idle turn at most about 19,000 input-side tokens; a mention in a reply is not delivered and the notice says how to turn it on; stand-in tests for the new flags |
+| E2 | new `engine/team/TeamTasks.h/.cpp` (add to the `oe_team` target in `CMakeLists.txt`), `TeamStore.h` (`canCall`), `TeamSession.cpp` (`StartTask`, no `--resume`, no chat history), `TeamCommands.cpp`, `tools/oe/main.cpp` (`CmdMcp`: the blocking `team_delegate` wrapper) | by hand on a scratch project the lead delegates over `team_delegate` and gets the worker's report back as the tool result; the worker's prompt in `.oe/team/tmp` holds no chat text; M2 (c) within about 1.5x of (a) |
+| E3 | `TeamSession::StartTurn` | prompt size no longer grows with the number of unrelated chat messages (test with 30 of them) |
+| E4 | `TeamSession::StandingContext` / task context | the same inputs give byte-identical context after a teammate's state changed; the second real Claude turn shows cached tokens above 0 |
+| E5 | `Backends.h` (`TurnEvent`), `TeamAdapters.cpp` (usage parsing), `TeamSession.cpp`, `TeamCommands.cpp` (`team.usage`), `EditorTeam.cpp`, `EditorTeamChat.cpp` | the Team panel shows tokens per agent and day and they agree with the CLI's own result lines; first record whether Claude's `total_cost_usd` is per turn or cumulative on a resumed conversation |
+| E6 | `TeamSession.cpp`, `TeamCommands.cpp` (`team.reset`), `EditorTeam.cpp` (roster menu) | `team.reset` drops one agent's conversation and nothing else; the size rotation is off by default and tested |
+
+After E1 to E4 are in, run the final measurement of §11.5 once (k=3). If the team is still far above
+the target, use `team.usage` to see where the tokens go and fix that, instead of adding features.
+
+### E3 checkpoint — 2026-10-05
+
+Chat pull is implemented without new profile settings (§3.1). Routing is unchanged:
+explicit recipients and the lead determine delivery. Prompts exclude unrelated
+messages; completed turns advance their seen watermark past skipped history.
+Thirty unrelated messages leave only the omission-count line in the next prompt.
+E1/E2 remain reverted; no task API is implied by this checkpoint. Measurements and
+acceptance are recorded in TEAM_LOG.md.
+
+### E5 checkpoint — 2026-10-05
+
+Usage accounting is implemented in the Team roster (today in UTC), each reply,
+and team.usage. Input includes cache creation/read; cached is the read subset.
+Known zero differs from unknown; partial totals carry reported-turn counts.
+Profiles support a Claude turn budget, editable in the profile dialog. The CLI
+ceiling adds the known session cost to that allowance. An unknown resumed baseline
+starts fresh when a budget is enabled. Claude checks between requests and can
+exceed the allowance by one request; this is not a prepaid spending reservation.
+Changing backend requires clearing an unsupported budget. Usage survives clear,
+reset and profile removal. The ledger is bounded to 20,000 records/16 MiB;
+archive it and reopen when full. Unreadable or externally changed files are never
+overwritten. E1/E2/E4 remain reverted. E5 measures accounting accuracy, not a claim
+that provider spend falls because telemetry is shown; evidence is in TEAM_LOG.md.
+
+### E6 checkpoint — 2026-10-05
+
+Per-agent reset and optional input-size rotation are implemented. The threshold
+defaults to 0 and is omitted on disk; reset never calls a model. Reset preserves
+other agents, chat, usage and the selected agent's seen watermark. Busy and queued
+agents refuse reset. Stand-in tests cover manual reset, threshold boundaries,
+restart persistence and invalid-session-file preservation. The roster exposes
+Reset Conversation and displays usage on two lines so cost fits a narrow panel.
+Manual haiku measurements reduced resumed input from 86,138 to 38,049 tokens.
+Cold-cache reset cost increased; automatic rotation is optional, not a promise
+of lower cost on every turn. Full measurements and tradeoffs are in TEAM_LOG.md.
+
+### E1 restoration — 2026-10-05
+
+Implemented and retained under the revised measurement policy. Build warning-free;
+203 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
+are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
+
+### E2 restoration — 2026-10-05
+
+Implemented and retained under the revised measurement policy. Build warning-free;
+205 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
+are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
+
+### E4 restoration — 2026-10-05
+
+Implemented and retained under the revised measurement policy. Build warning-free;
+206 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
+are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
+
+### Final restoration measurements — 2026-10-05
+
+E1/E2/E4 are restored alongside E3/E5/E6, superseding the historical rejections.
+Final builds passed 203/205/206 tests with no warnings. Canonical M1/M2 use k=3
+per condition; medians/ranges, exact prompts, raw UTF-8 and failure classifications
+are in TEAM_LOG.md. M1 improved from 38,104 to 32,699 input tokens (19k not reached).
+M2 median cost is 0.2910520 USD standalone and 0.3539734 USD improved team, about
+1.22x; Bat acceptance is 3/3 and 2/3 respectively, versus 0/3 before restoration.
+The improved team's failed run emitted @worker instead of calling team_delegate;
+default maxHops 0 correctly blocked it. Failed runs remain in the distributions.
+No favourable replacement run or measurement-driven source rollback was made.
