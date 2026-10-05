@@ -345,12 +345,20 @@ std::string TeamSession::StandingContext(const AgentProfile& agent) const {
     std::string text = "You are " + agent.name + " (@" + agent.id + "), a member of an AI agent team that works on the game project in this directory.\n";
     if (!agent.description.empty()) text += "Your role: " + agent.description + "\n";
     if (!agent.instructions.empty()) text += "\n## Your instructions\n\n" + agent.instructions + "\n";
-    text += "\n## Team chat\n\nThe person (\"User\") and your teammates talk to you through the team chat of the OwnEngine editor. Each turn you receive "
-            "the chat messages since your last turn. Your final message of the turn is posted to the chat as your reply: keep it short, say what you "
-            "did and what you did not verify. Writing @id of a teammate in that final message HANDS THE WORK ON: the teammate gets a turn and sees "
-            "your message (@all calls everyone). Do it when someone else must continue, with what they should do; write the name without @ when "
-            "you only talk about them, or the chain goes on for nothing. Files attached to a message are listed under it as paths relative to the "
-            "project directory: open them to look at them (images included).\n\n## Team\n\n";
+    if (LeanTeamTurnsEnabled()) {
+        text += "\n## Team chat\n\nThe person (\"User\") and your teammates talk to you through the team chat of the OwnEngine editor. Each turn you receive "
+                "only new messages addressed to you. Your final message is posted to the chat as your reply: keep it short, say what you did and what you "
+                "did not verify. Mentioning a teammate in that reply is text only and does not start another model turn. When another specialist must continue, "
+                "call `team.handoff` through the attached editor/API with one explicit recipient; if no editor/API is attached, tell the user who should continue. "
+                "Files attached to a message are listed under it as paths relative to the project directory: open them to look at them (images included).\n\n## Team\n\n";
+    } else {
+        text += "\n## Team chat\n\nThe person (\"User\") and your teammates talk to you through the team chat of the OwnEngine editor. Each turn you receive "
+                "the chat messages since your last turn. Your final message of the turn is posted to the chat as your reply: keep it short, say what you "
+                "did and what you did not verify. Writing @id of a teammate in that final message HANDS THE WORK ON: the teammate gets a turn and sees "
+                "your message (@all calls everyone). Do it when someone else must continue, with what they should do; write the name without @ when "
+                "you only talk about them, or the chain goes on for nothing. Files attached to a message are listed under it as paths relative to the "
+                "project directory: open them to look at them (images included).\n\n## Team\n\n";
+    }
     for (const AgentProfile& mate : store_.Agents()) {
         text += "- @" + mate.id + " - " + mate.name + (mate.id == agent.id ? " (you)" : "") + (mate.description.empty() ? "" : ": " + mate.description) + "\n";
     }
@@ -385,10 +393,15 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     if (!offline.empty()) return FailTurn(agent.id, runtime, agent.name + " cannot take a turn: " + offline + ".", hint);
     const Backend& backend = *FindBackend(agent.backend);
 
-    // Unread chat: what others said since this agent's last successful turn.
+    // Normal mode preserves the original shared unread-chat behavior. Lean mode pushes only
+    // messages whose routing metadata explicitly addresses this agent; the rest stays queryable
+    // through team.messages instead of being paid for in every turn.
+    const bool lean = LeanTeamTurnsEnabled();
     std::vector<const ChatMessage*> unread;
     for (const ChatMessage& message : messages_) {
-        if (message.id > runtime.seen && message.kind == "message" && message.from != agent.id) unread.push_back(&message);
+        if (message.id <= runtime.seen || message.kind != "message" || message.from == agent.id) continue;
+        const bool addressed = std::find(message.to.begin(), message.to.end(), agent.id) != message.to.end();
+        if (!lean || addressed) unread.push_back(&message);
     }
     if (unread.empty()) return;
     if (unread.size() > kMaxPromptMessages) unread.erase(unread.begin(), unread.end() - static_cast<std::ptrdiff_t>(kMaxPromptMessages));
@@ -398,7 +411,8 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         bytes -= unread.front()->text.size();
         unread.erase(unread.begin());
     }
-    std::string prompt = "New messages in the team chat, oldest first. Reply to what is addressed to you.\n";
+    std::string prompt = lean ? "New messages addressed to you in the team chat, oldest first.\n" :
+                                "New messages in the team chat, oldest first. Reply to what is addressed to you.\n";
     for (const ChatMessage* message : unread) {
         const AgentProfile* sender = FindById(store_, message->from);
         prompt += "\n[" + (message->from == "user" ? std::string("User") : sender ? sender->name : message->from) + "] " + message->text + "\n";
@@ -553,19 +567,21 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
             claimedImages_[image.first] = image.second;
             reply.attachments.push_back(Describe(image.first));
         }
-        // Agent-to-agent: teammates the reply mentions get a turn, as long as the chain that
-        // began with the person's message is not longer than maxHops.
         reply.hop = turn->hop + 1;
         const std::vector<AgentProfile>& roster = store_.Agents();
-        bool all = false;
-        std::vector<size_t> mentioned = FindMentions(reply.text, roster, all);
-        if (all) {
-            mentioned.clear();
-            for (size_t i = 0; i < roster.size(); ++i) mentioned.push_back(i);
-        }
-        mentioned.erase(std::remove_if(mentioned.begin(), mentioned.end(), [&](size_t i) { return roster[i].id == id; }), mentioned.end());
-        for (size_t i : mentioned) {
-            if (std::find(reply.to.begin(), reply.to.end(), roster[i].id) == reply.to.end()) reply.to.push_back(roster[i].id);
+        std::vector<size_t> mentioned;
+        if (!LeanTeamTurnsEnabled()) {
+            // Compatibility mode: final-message mentions automatically schedule teammates.
+            bool all = false;
+            mentioned = FindMentions(reply.text, roster, all);
+            if (all) {
+                mentioned.clear();
+                for (size_t i = 0; i < roster.size(); ++i) mentioned.push_back(i);
+            }
+            mentioned.erase(std::remove_if(mentioned.begin(), mentioned.end(), [&](size_t i) { return roster[i].id == id; }), mentioned.end());
+            for (size_t i : mentioned) {
+                if (std::find(reply.to.begin(), reply.to.end(), roster[i].id) == reply.to.end()) reply.to.push_back(roster[i].id);
+            }
         }
         const int replyHop = reply.hop;
         Append(std::move(reply));
