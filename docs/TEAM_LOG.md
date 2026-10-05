@@ -842,3 +842,14 @@ TEAM.md section 5 updated; section 11.1 already warns about parent CLAUDE.md loa
 Command schemas unchanged, so API regeneration was skipped as requested. No headers
 changed. Agent guides remain identical; sample settings and unrelated user edits
 are untouched. Logs retained in build/scratch/team-chat-protocol/{build.log,tests.log}.
+
+### Default team for new projects - 2026-10-05
+
+`oe new` now seeds Lead (Sonnet, lead), Core (Opus), Content (Sonnet), Art (Codex) and QA (Sonnet)
+through `SeedDefaultTeam` (`engine/team/TeamDefaults.cpp`), see TEAM.md section 3.3. `--no-team` skips
+it; an existing or unreadable team file is never touched. Project-neutral instructions follow the
+delegation protocol (`team_delegate`, `team_report`, no `@mention` handoffs). The generator lives in
+`oe_team`, so `engine/app` and the player stay team-free. Test: `DefaultTeamForNewProject` (roster,
+models, settings, no access escalation, idempotence, broken file preserved). 209 tests, 0 failed
+checks; `oe new` checked by hand outside the repository. No model was run. Not done: an existing
+project without a team gets nothing automatically (add agents in the Team panel or copy a team.json).

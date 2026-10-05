@@ -195,6 +195,25 @@ each other's changes.
 - Pictures are drawn round (`AddImageRounded`) at 24 px in lists and chat, 64 px in the profile
   dialog, with a status dot at the lower right.
 
+### 3.3 The default team of a new project
+
+`oe new <dir>` writes `.oe/team/team.json` with five agents (`engine/team/TeamDefaults.cpp`,
+`SeedDefaultTeam`; `--no-team` skips it; a project that already has agents is never touched):
+
+| Agent | CLI / model | Role |
+|---|---|---|
+| Lead (the lead) | Claude, `sonnet` | gets messages without a mention; small changes itself, larger ones through `team_delegate` with checkable acceptance lines |
+| Core | Claude, `opus` | hard gameplay code, rules, balance; reached by delegation or by name |
+| Content | Claude, `sonnet` | scenes, prefabs, UI, texts |
+| Art | Codex, default model | images and sound |
+| QA | Claude, `sonnet` | play-tests through the editor, edits nothing |
+
+All have access `edit` (no escalation), `maxHops` stays 0, and `rotateAboveInputTokens` is 150000 so
+a long chat conversation starts fresh. The instructions are project-neutral (they point to the
+project's `AGENTS.md`) and say how to work with delegation: tasks end with `team_report` and evidence,
+an `@mention` does not hand work on. An agent whose CLI is not installed shows as offline. The
+Wickbound sample's own team is a tuned version of this one; it is local and git-ignored.
+
 ## 4. Backends
 
 A backend is one agent CLI. The descriptor table is code (`engine/team/Backends.cpp`):

@@ -31,6 +31,7 @@
 #include "platform/Platform.h"
 #include "render/GpuRenderer.h"
 #include "team/TeamCommands.h"
+#include "team/TeamDefaults.h"
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #endif
@@ -183,7 +184,7 @@ int CmdHelp() {
     std::fprintf(stdout,
                  "OwnEngine %s (%s) - AI-friendly game engine\n\n"
                  "Usage: oe <command> [args]\n\n"
-                 "  new <dir> [--name N]              Create a project with a sample scene\n"
+                 "  new <dir> [--name N] [--no-team]  Create a project with a sample scene and a default agent team\n"
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
@@ -220,7 +221,7 @@ int CmdHelp() {
 }
 
 int CmdNew(const Args& a) {
-    if (a.positional.empty()) return Fail("missing_argument", "usage: oe new <dir> [--name N]");
+    if (a.positional.empty()) return Fail("missing_argument", "usage: oe new <dir> [--name N] [--no-team]");
     std::string dir = a.positional[0];
     std::string name = a.Get("--name", dir.substr(dir.find_last_of("/\\") + 1));
     std::string err;
@@ -243,6 +244,11 @@ int CmdRender(const Args& a) {
     RenderTarget rt;
     rt.Resize(a.GetInt("--width", 640), a.GetInt("--height", 360));
     float aspect = static_cast<float>(rt.width) / static_cast<float>(rt.height);
+    if (!a.Has("--no-team")) {  // docs/TEAM.md §3.3: a new project starts with the default agent team
+        std::string teamError;
+        if (SeedDefaultTeam(dir, &teamError)) out["team"] = "default";
+        else OE_LOG_WARN("project", "default team not created: %s", teamError.c_str());
+    }
     RenderView view;
     bool hasCamera = MakeSceneView(engine.GetScene(), aspect, view);
     bool custom = a.Has("--eye") || a.Has("--target");

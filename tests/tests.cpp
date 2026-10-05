@@ -53,6 +53,7 @@
 #include "team/TeamCommands.h"
 #include "team/TeamContext.h"
 #include "team/TeamUsage.h"
+#include "team/TeamDefaults.h"
 #include "team/TeamStore.h"
 #endif
 #if OE_NATIVE_EDITOR
@@ -8210,6 +8211,47 @@ TEST(TeamBackendDetection) {
 #endif
 }
 TEST(TeamStoreProfiles) {
+TEST(DefaultTeamForNewProject) {
+    const std::string project = TempProject("default_team");  // CreateProject itself writes no team
+    const std::string file = JoinPath(project, ".oe/team/team.json");
+    CHECK(!FileExists(file));
+    std::string error;
+    CHECK(SeedDefaultTeam(project, &error));
+
+    TeamStore store;
+    CHECK(store.Open(project, &error));
+    const auto& agents = store.Agents();
+    CHECK(agents.size() == 5);
+    CHECK(agents[0].id == "lead" && agents[1].id == "core" && agents[2].id == "content" && agents[3].id == "art" && agents[4].id == "qa");
+    CHECK(store.Settings().lead == "lead" && store.Settings().maxHops == 0 && !store.Settings().inheritUserTools);
+    CHECK(store.Settings().rotateAboveInputTokens == 150000);
+    CHECK(agents[0].backend == "claude" && agents[0].model == "sonnet");
+    CHECK(agents[1].backend == "claude" && agents[1].model == "opus");
+    CHECK(agents[2].model == "sonnet" && agents[4].model == "sonnet");
+    CHECK(agents[3].backend == "codex" && agents[3].model.empty());
+    for (const AgentProfile& a : agents) {
+        CHECK(a.access == "edit" && a.canCall.empty());  // no escalation; the lead may call everyone by rule
+        CHECK(a.instructions.find("OwnEngine") != std::string::npos && a.instructions.find("Wickbound") == std::string::npos);
+        CHECK(a.instructions.size() < 4000);
+    }
+    CHECK(agents[0].instructions.find("team_delegate") != std::string::npos);
+    CHECK(agents[2].instructions.find("team_report") != std::string::npos);
+    CHECK(agents[4].instructions.find("never edit") != std::string::npos);
+
+    // An existing team is never touched, and neither is a file that cannot be read.
+    std::string before;
+    CHECK(ReadTextFile(file, before));
+    CHECK(!SeedDefaultTeam(project, &error) && error.find("already") != std::string::npos);
+    std::string after;
+    CHECK(ReadTextFile(file, after) && after == before);
+
+    const std::string broken = TempProject("default_team_broken");
+    CHECK(WriteTextFile(JoinPath(broken, ".oe/team/team.json"), "{ not json"));
+    CHECK(!SeedDefaultTeam(broken, &error) && !error.empty());
+    std::string kept;
+    CHECK(ReadTextFile(JoinPath(broken, ".oe/team/team.json"), kept) && kept == "{ not json");
+}
+
     const std::string project = TempProject("team_store");
     const std::string file = JoinPath(project, ".oe/team/team.json");
     std::string error, text;
