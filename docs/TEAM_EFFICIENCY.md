@@ -13,13 +13,13 @@ Use one normal worker for routine work and wake expensive specialists only when 
 | QA | Sonnet 5.5 | Explicit verification for risky changes, regressions and release checks; do not wake after every small edit. |
 | Art | Sol 6.1 | Images and visual assets only; give it the request and references it needs, not general engineering chat. |
 
-For normal work, set Content as the lead and stop automatic agent-to-agent chains:
+For normal work, set Content as the lead and keep concurrency conservative:
 
 ```text
 oe exec <project> team.settings '{"lead":"content","maxConcurrent":2,"maxHops":0}'
 ```
 
-`maxHops: 0` still lets the person call any agent with `@core`, `@qa`, `@art`, or `team.handoff`; it prevents an agent turn from automatically starting another agent. Raise it temporarily when an agent itself must continue a short specialist chain.
+`maxHops: 0` still lets the person call any agent with `@core`, `@qa`, `@art`, or `team.handoff`; it prevents an agent-originated message from starting another agent. Raise it temporarily when an agent itself must continue a short specialist chain.
 
 ## Explicit handoff
 
@@ -29,15 +29,20 @@ Use `team.handoff` when exactly one specialist should take the next task instead
 oe exec <project> team.handoff '{"to":"core","task":"Review the renderer ownership model and report only architecture risks."}'
 ```
 
-The command resolves `to` by agent id or name and sends one addressed turn through the existing `TeamSession`, so attachment handling, offline reporting, session resume, concurrency and `maxHops` stay unchanged. To guarantee a single recipient with the current mention-based router, the task may mention the selected teammate but rejects another teammate mention or `@all` with `ambiguous_handoff`.
+The command resolves `to` by agent id or name and sends one addressed turn through the existing `TeamSession`, so attachment handling, offline reporting, session resume, concurrency and `maxHops` stay unchanged. To guarantee a single recipient with the current mention-based `TeamSession::Send` router, the task may mention the selected teammate but rejects another teammate mention or `@all` with `ambiguous_handoff`.
 
-This is the first compatibility step toward separating human-readable chat from executable tasks. `team.send` and reply mentions keep their existing behavior for now; the next routing milestone makes automatic reply handoff opt-in and removes unrelated unread chat from prompts.
+This is a compatibility step toward separating human-readable chat from executable tasks. It gives lean turns an explicit execution signal without changing the normal `team.send` path.
 
-## Lean Claude turns
+## Lean team turns
 
-A Claude Code turn loads a large fixed context before it does useful project work. Measurements in `TEAM.md` §11 showed roughly 27k input-side tokens for an idle team turn on the development machine, about 22.9k with the engine-only MCP configuration, and about 19k when slash commands / user skills were also disabled.
+A team turn loads a large fixed context before it does useful project work. Measurements in `TEAM.md` §11 showed roughly 27k input-side tokens for an idle Claude team turn on the development machine, about 22.9k with the engine-only MCP configuration, and about 19k when slash commands / user skills were also disabled.
 
-Set `OE_TEAM_LEAN=1` in the environment of the `oe` process to add Claude Code's `--disable-slash-commands` flag to team turns:
+Set `OE_TEAM_LEAN=1` in the environment of the `oe` process to enable the low-cost team policy:
+
+1. Claude Code gets `--disable-slash-commands`, avoiding the user's slash-command / skill catalog.
+2. `TeamSession::StartTurn` pushes only new chat messages whose `to` contains that agent, instead of every unread team message.
+3. An agent's final-message `@mention` is text only; it does not automatically start another model turn. Use `team.handoff` for deliberate delegation.
+4. The standing prompt tells agents about these lean semantics, so the model does not accidentally depend on automatic mention handoff.
 
 ### PowerShell
 
@@ -53,16 +58,14 @@ set OE_TEAM_LEAN=1
 build\bin\oe.exe editor <project>
 ```
 
-Unset the variable (or set it to `0`, `false`, or `off`) when a team agent intentionally needs the user's Claude slash-command / skill catalog.
-
-The switch is opt-in so existing projects and automated tests keep their current behavior. It affects Claude Code only; Codex has no equivalent flag wired into the backend yet.
+Unset the variable (or set it to `0`, `false`, or `off`) for compatibility mode. With lean mode disabled, the original unread-chat push and reply-mention handoff behavior remain unchanged. The CLI flag portion applies to Claude Code; the context/handoff policy in `TeamSession` applies to all backends.
 
 ## Cost rules
 
 1. Finish with one agent whenever one agent can finish the task.
 2. Treat Core / Opus as an expensive specialist, not a router.
 3. Do not run QA automatically after every small change.
-4. Keep `maxHops` at `0` for normal work; enable short chains only for a specific task.
+4. Run normal development with `OE_TEAM_LEAN=1` and a small `maxHops` (use `0` when agents must never continue a chain themselves).
 5. Prefer `team.handoff` when exactly one specialist should wake.
 6. Keep `maxConcurrent` at `2` unless real parallel work exists.
 7. Give Art only the visual brief and referenced files.
@@ -70,23 +73,22 @@ The switch is opt-in so existing projects and automated tests keep their current
 
 ## Focused routing test
 
-The explicit handoff routing has a small CLI-independent test target so it can be compiled without logging into Claude or Codex. On Windows, run:
+The explicit handoff routing and lean-policy switch have a small CLI-independent test target so they can be compiled without logging into Claude or Codex. On Windows, run:
 
 ```bat
 tests\team_efficiency\run.bat
 ```
 
-The runner configures the normal repository root and injects only the focused test target through `CMAKE_PROJECT_TOP_LEVEL_INCLUDES`; this preserves the root `CMAKE_SOURCE_DIR` assumptions used by the engine build. The test verifies id/name resolution, one-recipient routing text, rejection of another teammate / `@all`, unknown-agent handling, and registration of the `team.handoff` command.
+The runner configures the normal repository root and injects only the focused test target through `CMAKE_PROJECT_TOP_LEVEL_INCLUDES`; this preserves the root `CMAKE_SOURCE_DIR` assumptions used by the engine build. The test verifies the lean environment switch, id/name resolution, one-recipient routing text, rejection of another teammate / `@all`, unknown-agent handling, and registration of the `team.handoff` command.
 
 ## Follow-up engine work
 
-The next structural changes should be implemented separately because they affect prompt semantics and need dedicated tests:
+The next structural changes should be implemented separately:
 
-- pull only messages addressed to an agent instead of pushing every unread team message;
-- split human-readable `ChatMessage` from executable `AgentTask` so an `@mention` is not inherently a model invocation;
-- make automatic reply handoff opt-in instead of treating every final-message mention as execution;
+- split human-readable `ChatMessage` from executable `AgentTask`, so explicit routing no longer needs to encode the recipient as an `@mention` in stored chat text;
 - record input, cached input and output tokens per turn and aggregate them per agent / chain / day;
 - add per-role tool policies and prevent nested sub-agent delegation unless explicitly enabled;
-- make the scheduler aware of write scopes so safe read-only QA can run beside an editor while conflicting writers queue.
+- make the scheduler aware of write scopes so safe read-only QA can run beside an editor while conflicting writers queue;
+- move the lean policy from an environment switch into persisted team/profile execution settings once the semantics have been exercised in real projects.
 
-Those changes should land as measured, focused changes with migration notes rather than changing prompt semantics inside the compatibility patch.
+Those changes should land as measured, focused changes with migration notes rather than widening this compatibility-oriented patch.
