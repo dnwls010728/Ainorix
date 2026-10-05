@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "api/Commands.h"
@@ -22,5 +23,10 @@ struct TeamHandle {
 };
 std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry);
 std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std::vector<Backend> backends);
+
+// Builds the single-recipient chat text used by team.handoff. The target is resolved by id/name;
+// task text may not contain another team mention because team.send routes every mention it sees.
+// Kept public so routing semantics have a small unit test independent of a real agent CLI.
+std::string BuildTeamHandoffText(const TeamStore& store, const std::string& to, const std::string& task);
 
 }  // namespace oe

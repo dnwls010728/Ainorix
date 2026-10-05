@@ -80,6 +80,25 @@ const char* const kAgentRef = "Agent id or name.";
 
 }  // namespace
 
+std::string BuildTeamHandoffText(const TeamStore& store, const std::string& to, const std::string& task) {
+    const AgentProfile* target = store.Find(to);
+    if (!target) throw ApiError("unknown_agent", "no agent '" + to + "' in the team", "team.list shows the agents; use an id or a name.");
+
+    bool all = false;
+    const std::vector<size_t> mentioned = FindMentions(task, store.Agents(), all);
+    for (size_t index : mentioned) {
+        if (index >= store.Agents().size() || store.Agents()[index].id != target->id) {
+            throw ApiError("ambiguous_handoff", "a handoff task cannot mention another teammate",
+                           "Put context in plain text and use the `to` field as the only recipient.");
+        }
+    }
+    if (all) {
+        throw ApiError("ambiguous_handoff", "a handoff task cannot contain @all",
+                       "Use one explicit recipient in the `to` field.");
+    }
+    return "@" + target->id + (task.empty() ? std::string() : " " + task);
+}
+
 std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry) {
     std::vector<Backend> backends = BuiltinBackends();
     std::string error;
@@ -243,6 +262,46 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                      hop = session.TurnHop(from) + 1;
                  }
                  Json result = session.Send(a["text"].asString(), from, attachments, hop);
+                 const double wait = a["wait"].asNumber(0.0);
+                 if (wait > 0.0) {
+                     std::vector<std::string> ids;
+                     for (const char* key : {"started", "queued"}) {
+                         for (const Json& id : result[key].items()) ids.push_back(id.asString());
+                     }
+                     const double deadline = PlatformTimeSeconds() + wait;
+                     while (!ids.empty() && session.Busy(ids) && PlatformTimeSeconds() < deadline) {
+                         PlatformSleep(0.01);
+                         session.Update();
+                     }
+                     result["replies"] = session.Messages(static_cast<uint64_t>(result["message"]["id"].asNumber()), true, 500)["messages"];
+                     result["state"] = session.State();
+                 }
+                 return result;
+             });
+
+    Register(registry, "team.handoff",
+             "Give exactly one teammate a task. The `to` field is the recipient; task text may mention that same teammate but no other teammate or @all.",
+             Params()
+                 .Req("to", "string", kAgentRef)
+                 .Req("task", "string", "Task for the teammate, at most 32 KiB (may be empty when files are attached).")
+                 .OptWith("attachments", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":8,"description":"Files the teammate should look at: paths on this PC or relative to the project, at most 8, 32 MiB each."})J"))
+                 .Opt("from", "string", "Sender: \"user\" (default) or an agent id.")
+                 .Opt("wait", "number", "Block up to this many seconds until the teammate has finished (default 0)."),
+             [state](Engine& e, const Json& a) {
+                 TeamSession& session = state->Session(e);
+                 std::vector<std::string> attachments;
+                 for (const Json& path : a["attachments"].items()) {
+                     if (!path.isString()) throw ApiError("invalid_argument", "attachments must be file paths (strings)");
+                     attachments.push_back(path.asString());
+                 }
+                 std::string from = a["from"].asString("user");
+                 int hop = 0;
+                 if (!e.RemoteCallAgent().empty() && state->store.Find(e.RemoteCallAgent()) && state->store.Find(e.RemoteCallAgent())->id == e.RemoteCallAgent()) {
+                     from = e.RemoteCallAgent();
+                     hop = session.TurnHop(from) + 1;
+                 }
+                 const std::string text = BuildTeamHandoffText(state->store, a["to"].asString(), a["task"].asString());
+                 Json result = session.Send(text, from, attachments, hop);
                  const double wait = a["wait"].asNumber(0.0);
                  if (wait > 0.0) {
                      std::vector<std::string> ids;
