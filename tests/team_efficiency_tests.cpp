@@ -1,5 +1,6 @@
 // Focused tests for agent-team routing that do not need a real agent CLI.
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -29,6 +30,15 @@ Json Agent(const char* name) {
     return values;
 }
 
+void SetLeanEnv(const char* value) {
+#if defined(_WIN32)
+    _putenv_s("OE_TEAM_LEAN", value ? value : "");
+#else
+    if (value && *value) setenv("OE_TEAM_LEAN", value, 1);
+    else unsetenv("OE_TEAM_LEAN");
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -38,6 +48,19 @@ int main() {
     fs::remove_all(project, ec);
     fs::create_directories(project, ec);
     CHECK(!ec);
+
+    const char* originalLean = std::getenv("OE_TEAM_LEAN");
+    const std::string savedLean = originalLean ? originalLean : "";
+    const bool hadLean = originalLean != nullptr;
+    SetLeanEnv(nullptr);
+    CHECK(!LeanTeamTurnsEnabled());
+    SetLeanEnv("1");
+    CHECK(LeanTeamTurnsEnabled());
+    SetLeanEnv("false");
+    CHECK(!LeanTeamTurnsEnabled());
+    SetLeanEnv("on");
+    CHECK(LeanTeamTurnsEnabled());
+    SetLeanEnv(hadLean ? savedLean.c_str() : nullptr);
 
     TeamStore store;
     std::string error;
