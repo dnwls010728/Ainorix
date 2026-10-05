@@ -301,30 +301,14 @@ is no longer in the catalog is kept and shown as custom.
 
 ### 4.3 Verified on the build host
 
-2026-10-03, Windows 11, checked with `oe exec samples/Hello team.backends` and each CLI's
-`--help`. Turns (T3) were run with Claude Code 2.1.288 and codex-cli 0.159.3 on a scratch project
-through `oe exec <project> team.send {text, wait}` and, with an engine to attach to, through
-`oe mcp <project> --port <p>` + `POST /api/call`:
-
-- a new conversation and a resumed one for both CLIs (a second `oe exec` read `sessions.json`;
-  both agents remembered the first question), two agents in parallel with `@all`;
-- `--append-system-prompt-file` (Claude followed the agent's instructions), the standing context
-  on stdin (Codex knew its teammates and saw the teammate's reply in the chat);
-- tool activity: Claude `Read` -> "Reading project.json", MCP -> "Engine: scene.summary";
-- attaching to the engine: both called `scene_summary` through the generated MCP configuration
-  and reported the scene's 16 entities. Codex refuses engine tools without
-  `default_tools_approval_mode='approve'` ("approval is required and the policy is never").
-
-Not run with real CLIs: `read` and `full` access, a failing login, cancel, images.
-
-| CLI | Version | Found as | Flags confirmed in `--help` |
-|---|---|---|---|
-| Claude Code | 2.1.288 | `~/.local/bin/claude.exe` (native) | `-p`, `--output-format stream-json`, `--verbose`, `--model`, `--mcp-config`, `--strict-mcp-config`, `--resume <id>`, `--permission-mode`, `--allowedTools`, `--input-format`. `--append-system-prompt` is listed; the `-file` form is only mentioned in another flag's description: check it in T3 |
-| Codex | codex-cli 0.159.3 | `%APPDATA%/npm/codex.cmd` (npm shim) | `codex exec [PROMPT]` (stdin when omitted or `-`), `--json`, `-m`, `-C <dir>`, `-s read-only\|workspace-write\|danger-full-access`, `-c key=value`, `--skip-git-repo-check`, `-o <file>`; resume is `codex exec resume <session id> [PROMPT]` |
-| Gemini CLI | 0.31.0 | `%APPDATA%/npm/gemini.cmd` (npm shim) | `-p`, `-o stream-json`, `-m`, `--approval-mode default\|auto_edit\|yolo\|plan`, `-r <session>` |
-
-Detection of all three takes about 3.5 s in total (the npm shims start Node), which is why the
-timeout is 10 s and why the editor must not call it on the UI thread.
+2026-10-03, Windows 11: Claude Code 2.1.288 (native `claude.exe`), codex-cli 0.159.3 and Gemini CLI
+0.31.0 (npm `.cmd` shims). Turns were run by hand through `oe exec <project> team.send {text, wait}`
+and through `oe mcp <project> --port <p>` + `POST /api/call`: new and resumed conversations for both
+CLIs, two agents in parallel with `@all`, `--append-system-prompt-file`, the standing context on stdin
+for Codex, tool activity lines, and attaching to the engine through the generated MCP configuration
+(Codex refuses engine tools without `default_tools_approval_mode='approve'`). Not run with real CLIs:
+`read` and `full` access, a failing login, cancel. Detection of all three takes about 3.5 s (the npm
+shims start Node), hence the 10 s timeout and the rule that the editor never calls it on the UI thread.
 
 ## 5. Sessions, chat and state
 
@@ -698,38 +682,13 @@ commands use `unknown_agent`, `name_taken`, `team_full`, `unknown_backend`, `inv
 
 ## 9. Tests
 
-- **Parsers** (`TeamStreamParsers`): recorded Claude and Codex stream lines as fixtures in
-  `tests/tests.cpp`; each must produce the expected events, activity parts, final text and
-  session id; truncated, foreign and unknown lines give no event. Also the two command lines
-  (no double quote, percent or exclamation mark in any argument) and mention parsing.
-- **TeamStore** (`TeamStoreProfiles`, `TeamAvatars`): add / update / remove, id and name
-  uniqueness, limits, defaults left out of the file, unknown backend and keys kept loading,
-  invalid file never overwritten, a second session sees changes, avatar crop and resize
-  (pixels checked), refused pictures, upload removed with its agent.
-- **TeamSession with stand-in backends** (`TeamSessionTurns`): backends whose executable is a
-  `.cmd` script that saves its prompt and arguments and prints a recorded Claude stream (no
-  `oe fake-agent` subcommand was needed: a `Backend` is injected through
-  `RegisterTeamCommands(registry, backends)`). Covers routing (mention, `@all`, lead, sender
-  excluded, nobody), prompt content and resume, context on stdin, the MCP config file, state and
-  activity of a running turn, queueing behind a busy agent and behind `maxConcurrent`, cancel,
-  process crash (`error` state with the stderr tail), a failure the CLI reports, offline agents,
-  the turn timeout, `wait`, removal of a running agent, restart and `team.clear`. Hop limit and
-  images come with T7 and T6.
-- **Process** (`ProcessRunsChildren`): start, write stdin, read lines from both pipes, exit code,
-  environment and working directory, kill tree, missing executable; `.cmd` shim start with
-  quoted arguments and refusal of unsafe ones on Windows.
-- **Backends** (`TeamBackendParsing`, `TeamBackendDetection`): version and Codex model cache
-  parsing, overrides file, detection of stand-in `.cmd` CLIs (installed, failing, hanging,
-  missing) and the `team.backends` cache and refresh.
-- **Editor**: `NativeEditorTeam` drives the Team panel with window events: the tab beside the
-  Hierarchy, background detection, adding an agent through the dialog (typed name, Enter), a
-  backend that is not installed cannot be chosen, a refused save keeps the dialog open, Escape
-  discards, editing keeps untouched fields, delete asks first; it writes a screenshot per
-  language and one of the dialog to `build/editor-team-*.png`. `EditorAvatarPresets` checks the
-  embedded pictures. `EditorTranslations` covers the new strings. Sending a message and
-  stopping a turn from the UI come with the chat panel (T5).
-- Real CLIs are not run by `oe_tests` (network, cost, login). T1 and T3 are checked by hand with
-  the installed CLIs and the result is recorded in the work log.
+All in `tests/tests.cpp`; `oe_tests` never runs a real CLI (network, cost, login). Stand-in backends
+(`.cmd` scripts printing a recorded stream, injected through `RegisterTeamCommands(registry,
+backends)`) cover turns: `TeamStreamParsers` (recorded Claude/Codex lines, argv without `"`, `%`, `!`),
+`TeamSessionTurns` (routing, resume, queueing, cancel, crash, timeout, hops, images, attachments),
+`TeamStoreProfiles`, `TeamAvatars`, `ProcessRunsChildren`, `TeamBackendParsing`,
+`TeamBackendDetection`, `NativeEditorTeam`, `NativeEditorTeamChat`, `EditorAvatarPresets`,
+`EditorTranslations`. Real CLIs are checked by hand and the result goes in the work log.
 
 ## 10. Decisions
 
