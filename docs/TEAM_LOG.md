@@ -358,3 +358,75 @@ errors/warnings. One pair is not a statistical estimate: cache state and differe
 numbers of model/tool steps affect total cost. Nevertheless the measured condition
 improved input by 75.76% and cost by 45.32%, and the regression test isolates the
 removed unrelated prompt bytes. E3 is retained. Test total: 199, zero failed checks.
+
+
+## 2026-10-05 — E4 measured, rejected; stop before E5/E6
+
+- [ ] E4: provisional stable prefix passed tests, but failed the keep gate and
+  was removed. E3 remains implemented at 9d2bfcb.
+- [ ] E5/E6: not implemented because §11.6 requires stopping when a step fails
+  to improve its measured number. E5's prerequisite cost-scope investigation is
+  recorded below; no usage/reset commands or editor controls are shipped.
+
+Provisional E4 extracted BuildTeamStandingContext into one portable builder:
+role/instructions, sorted callable ids/names and project facts only; no teammate
+role descriptions, API state, time or counts. Chat permissions came from existing
+maxHops because E2/canCall remains absent. Connection and omitted-history data
+followed the prefix in the per-turn prompt. No task path was claimed as integrated.
+The prefix shrank from **1,340 to 487 UTF-8 bytes** (63.66%). Stand-in tests covered
+sorting, allowed-target omission, ignored teammate metadata, changed instructions,
+and identical generated prefix before/after history/connection changes. Existing
+system-file assertions moved to the per-turn connection line. Build warning-free;
+**200 tests, zero failed checks** after correcting the old connection expectation.
+
+One manual M2 run used the exact E3 manifest/prompt (same SHA-256), fresh Wickbound
+scratch copy, Lead Claude/haiku/full plus inactive Other, explicit maxHops 0 and
+30 unrelated messages. Claude Code **2.1.289**, resolved
+`claude-haiku-4-5-20251001`. Raw UTF-8 capture was valid JSON throughout.
+
+| Condition | New | Creation | Read | Input side | Output | USD | Wall s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Kept E3 | 67 | 57,515 | 378,845 | 436,427 | 7,985 | 0.1929065 | 84.728 |
+| Provisional E4 | 187 | 104,639 | 1,758,487 | 1,863,313 | 16,524 | 0.4679337 | 170.984 |
+
+Independent Bat acceptance passed: root id 383, assigned script plus both physics
+components, five children, script.check zero errors/warnings. E4 put speed 3 in
+both prefab/instance Script.params and used that as the copied script's base speed.
+Cost increased **142.57%**, input **326.95%**. The model took a different tool path;
+a single pair cannot establish that the prefix caused the increase. Cached input
+on resume and a shorter prefix do not establish the required M2 cost improvement.
+Under the existing rule, E4 was removed and the requested sequence stopped here.
+No additional favourable M2 run was selected.
+
+### E5 prerequisite finding: Claude result cost is session-cumulative
+
+After E4's M2 completed, the same agent received two messages:
+`Say ok and nothing else. Do not call tools.` Both used --resume; all three result
+lines carried session `0542db4c-82d4-4797-a99d-43022a44c317`.
+
+| CLI invocation | Input side | Output | result.total_cost_usd | Difference from previous result |
+|---|---:|---:|---:|---:|
+| Fresh Bat turn | 1,863,313 | 16,524 | 0.4679337 | 0.4679337 |
+| First resumed ok | 121,518 | 40 | 0.4812835 | 0.0133498 |
+| Second resumed ok | 121,709 | 40 | 0.4940254 | 0.0127419 |
+
+Result.usage described each invocation, while total_cost_usd carried forward the
+session's spend. The first resumed turn had 120,988 cache-read tokens, the second
+121,509, so the real cache-hit condition was met. Summing the three reported costs
+would double-count earlier spend. E5 must persist a baseline per backend/session
+and record deltas, including reopen, failure/cancellation, and missing baseline
+when first attaching to an existing conversation. A missing baseline or unavailable
+Codex cost must remain unknown, not become zero or the entire session's spend.
+Investigate max-budget-usd's scope on resumed conversations before claiming a
+per-turn budget. The existing chat cost label remains cumulative until E5 fixes it.
+
+No production E5 changes were made. An unused draft usage ledger is only in ignored
+build/scratch/team-e3-e6/e5-prepared; it is not an implementation or a tested API.
+The rejected E4 source/tests are likewise only in ignored rejected-e4/. Shared
+source/tests were restored to their pre-E4 state, preserving unrelated user edits.
+
+Final verification after E4 restoration: build.bat warning-free, **199 tests, zero
+failed checks**. tests/tests.cpp and docs/API.md match the kept E3 snapshots byte
+for byte; engine/team has no unstaged diff; CLAUDE.md and AGENTS.md are identical.
+No original Wickbound changes or local team.json files are committed. Only the
+E4 rejection and billing-scope evidence are retained in this milestone commit.
