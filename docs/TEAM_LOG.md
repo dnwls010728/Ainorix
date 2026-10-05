@@ -178,7 +178,7 @@ checks**. `CLAUDE.md` and `AGENTS.md` were not changed by this milestone.
 ## E1 attempt — rejected on measurement, 2026-10-05
 
 - [x] M: baseline measurements recorded above, including M2 model failures.
-- [ ] E1: attempted and tested, then discarded; measured result did not satisfy the keep gate.
+- [x] E1: attempted and tested, then discarded; measured result did not satisfy the keep gate.
 
 Implemented provisionally: maxHops default 0 and an enable command in both blocked
 handoff notices; strictly typed `inheritUserTools` setting, default false and omitted
@@ -362,7 +362,7 @@ removed unrelated prompt bytes. E3 is retained. Test total: 199, zero failed che
 
 ## 2026-10-05 — E4 measured, rejected; stop before E5/E6
 
-- [ ] E4: provisional stable prefix passed tests, but failed the keep gate and
+- [x] E4: provisional stable prefix passed tests, but failed the keep gate and
   was removed. E3 remains implemented at 9d2bfcb.
 - [ ] E5/E6: not implemented because §11.6 requires stopping when a step fails
   to improve its measured number. E5's prerequisite cost-scope investigation is
@@ -634,3 +634,157 @@ TEAM §§3.1/5/8/11 and identical agent guides updated. No original sample team 
 or unrelated net/OnlineRPG edit is staged. Measurements are next: M1/M2, a/b/c,
 k=3, UTF-8 raw capture, medians/ranges and independent Bat acceptance. No provider
 model was run during these engine/stand-in tests.
+
+## 2026-10-05 — Final restoration measurement (k=3; no rollback gate)
+
+- [x] E1/E2/E4 restored and retained: commits c51a527, c0f8508, 679a1f1.
+  Step builds were warning-free; stand-in/engine test totals were 203, 205, 206,
+  all zero failed checks. E3/E5/E6 stay implemented. No source was reverted from
+  the following noisy model results. The old rejection entries remain historical.
+- [x] Final M1/M2: three fresh runs per condition; median and min/max below.
+- [ ] The earlier approximate M1 target of 19,000 input tokens is not reached:
+  lean CLI usage is 32,699, despite 30 tools and zero skills. Structural isolation
+  is demonstrated; measurement is not a keep gate under the revised user rule.
+
+Date: 2026-10-05 UTC/KST. Claude Code 2.1.289, haiku resolves to
+claude-haiku-4-5-20251001, full/bypassPermissions throughout. Native haiku
+sub-agents were allowed but none were spawned by the standalone runs. No actual
+Codex model was run; its recorded investigation/version remains in the E1 log.
+Costs are the CLI's reported list-price USD, not a subscription charge.
+Every actual model ran only in build/scratch/team-restore/measurements.
+
+Conditions: (a) standalone Claude, no OwnEngine team profiles, native sub-agents
+permitted on haiku; (b) the saved pre-restoration E3/E5/E6 binary/team behavior;
+(c) the E1–E6 binary/team behavior. Both teams use Lead and Worker, Claude/haiku/
+full, maxConcurrent 3, no unrelated history, rotation 0, no budget. B uses
+maxHops 4 and inherited CLI tools; C uses maxHops 0 and inheritUserTools false.
+C's lead may delegate to everyone, its worker has canCall none. Configurations
+were created with team APIs in scratch only; original sample team.json files
+were not edited or committed. Standalone M2 uses a generated ownengine MCP config;
+M2 team hosts use unused loopback ports and are attached. Canonical M1 uses
+oe exec team.send {text:"Say ok",wait:120}, without an attached engine API;
+standalone M1 has no generated MCP config. B/C CLI flags follow their adapters.
+
+Lead instructions (identical between B and C):
+> Delegate one implementation step to Worker using the team mechanism available to you, pass the goal and acceptance verbatim, then independently verify acceptance. Do not implement the task yourself. For an idle request, answer it yourself without delegation.
+
+Worker instructions (identical between B and C):
+> Implement only the assigned requirements. For chat requests, hand the finished result back to Lead with an @lead mention; do not mention anyone merely to acknowledge receipt.
+
+Exact M1 prompt: `Say ok`.
+
+Exact M2 prompt (identical user prompt in all conditions):
+> Add a Bat enemy. Copy prefabs/enemy_gloom.prefab.json and scripts/run/enemy.lua to prefabs/enemy_bat.prefab.json and scripts/run/bat.lua. Keep the copied behaviour, set its base speed to 3 in the copied script, and make the copied prefab use scripts/run/bat.lua. Put one real instance named Bat in scenes/run.scene.json. No new art. Acceptance: exactly one Bat root has Script.path scripts/run/bat.lua, RigidBody2D and Collider2D, all five prefab children instantiated; script.check for scripts/run/bat.lua has zero errors and warnings. A Prefab marker alone does not instantiate entities. Use scene.load, prefab.instantiate, scene.save through the ownengine MCP tools; load scenes/run.scene.json first. Native sub-agents are permitted on haiku only. Work only inside this scratch project. Do not change the original sample or engine. Report changed paths and actual verification output concisely.
+
+Fresh M1 projects were generated with oe new; M2 projects copied Wickbound
+excluding .oe. seed-manifest.json records every starting file SHA-256. Run order
+was interleaved a,b,c within each repetition, with no cache flush. Raw stdout was
+captured as bytes, then checked as strict UTF-8 JSONL; no locale decoding, JSON
+recovery, normalization or favourable replacement model run was used. Claude's
+cost was summed as the maximum cumulative result per session, matching team.usage
+per-turn deltas. Tokens are CLI per-invocation input-side totals (new + cache
+creation/read), summed over every agent. All known ledger totals matched raw CLI.
+
+Manifest SHA-256: `a5500e43d5202c424ee8c98ae1b2657399e9ed2ce0edd544415e987a7c3d3ced`.
+M1 prompt SHA-256: `908810d980c242e79194a2d0094f0eb9642283eaabb6b0347b9aee2ca3e3083b`.
+M2 prompt SHA-256: `af7ea063d50ca3c82810d6e04c84b774d4bd22d4f8a0a8e9ef73a0fe7b3f7f38`.
+Binary SHA-256 before: `0a6995acbc10a9350e5cbfd6e2747f9650cc1ec1780bd3ba06411991a2e36f4e`;
+after: `bd5db6e18769198887a8b68f334d3bfea5bf98a3e74878eb188ecdde26557711`.
+
+Each cell below is median [min, max]. Model-failed runs are retained in the
+distribution and quality count; failed cheap runs are not a successful-work cost.
+No canonical run had a capture/UTF-8/authentication/transport harness fault.
+
+| Test | Condition | Input side | Output | Cache read | Cache creation | USD | Wall seconds | Acceptance |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| M1 | a | 37,721 [36,834, 37,721] | 51 [50, 58] | 20,312 [20,312, 20,312] | 17,399 [16,512, 17,399] | 0.0370892 [0.0353202, 0.0371292] | 6.053 [5.964, 6.141] | 3/3 |
+| M1 | b | 38,104 [37,217, 38,104] | 87 [62, 103] | 16,349 [16,349, 16,349] | 21,746 [20,859, 21,746] | 0.0455709 [0.0436719, 0.0456509] | 6.386 [5.965, 6.474] | 3/3 |
+| M1 | c | 32,699 [32,699, 32,699] | 151 [78, 156] | 15,882 [15,882, 15,882] | 16,808 [16,808, 16,808] | 0.0359682 [0.0356032, 0.0359932] | 5.015 [4.155, 5.727] | 3/3 |
+| M2 | a | 1,385,188 [775,587, 1,483,831] | 11,765 [8,563, 13,596] | 1,340,580 [716,848, 1,430,345] | 53,292 [44,406, 58,639] | 0.2910520 [0.2318778, 0.3086375] | 170.001 [120.216, 184.867] | 3/3 |
+| M2 | b | 161,010 [78,768, 1,579,770] | 1,689 [1,252, 13,639] | 136,058 [53,820, 1,509,868] | 24,929 [24,917, 69,668] | 0.0719198 [0.0615190, 0.3587518] | 24.889 [18.599, 149.129] | 0/3 |
+| M2 | c | 1,031,355 [35,235, 1,226,227] | 12,657 [661, 13,130] | 931,620 [15,882, 1,138,914] | 87,119 [19,344, 99,583] | 0.3539734 [0.0435902, 0.3557650] | 120.950 [7.524, 142.439] | 2/3 |
+
+Individual M2 results (failures are not excluded or retried):
+
+| Condition/run | Input side | USD | Wall seconds | Bat | Task reports |
+|---|---:|---:|---:|---|---|
+| a/1 | 1,385,188 | 0.2910520 | 184.867 | pass | not a task run |
+| b/1 | 161,010 | 0.0719198 | 24.889 | model failure | not a task run |
+| c/1 | 1,031,355 | 0.3557650 | 120.950 | pass | 1/1 |
+| a/2 | 775,587 | 0.2318778 | 120.216 | pass | not a task run |
+| b/2 | 78,768 | 0.0615190 | 18.599 | model failure | not a task run |
+| c/2 | 1,226,227 | 0.3539734 | 142.439 | pass | 1/1 |
+| a/3 | 1,483,831 | 0.3086375 | 170.001 | pass | not a task run |
+| b/3 | 1,579,770 | 0.3587518 | 149.129 | model failure | not a task run |
+| c/3 | 35,235 | 0.0435902 | 7.524 | model failure | 0/0 |
+
+Acceptance was independently checked from the saved run.scene.json: exactly one
+Bat, assigned scripts/run/bat.lua, RigidBody2D and Collider2D, five instantiated
+children, base speed 3 in the copied script, actual oe exec script.check errors 0
+and warnings 0. All three A runs and C1/C2 passed, with root 383 and children
+384..388. C1/C2 each made one blocking team_delegate call, one worker team_report,
+then lead scene.load/script.check; the report returned through the blocking tool.
+Worker CLI sessions were fresh; task final text did not enter chat. Reports retain
+verified:false; independent acceptance is recorded here rather than inferred from
+a done status. All C task records that actually started completed with reports.
+
+Model errors: B1 tried Claude's native SendMessage/ListAgents instead of OwnEngine
+chat routing and claimed Worker was unreachable; both engine agents were idle.
+B2 claimed MCP was disconnected without delegating, while the host remained
+responsive and the raw initialization recorded its connection. B3 did hand off
+by @worker but saved a Bat root missing Script; its final text contained a cp949
+UnicodeEncodeError from its own script. This is a model tool/output error, not
+our byte-preserving capture failing. C3 made no tool call: it printed @worker in
+the final answer, so the expected maxHops 0 notice blocked it. No task started and
+Bat was absent. This is a model routing failure, not a CLI/backend/test regression.
+B success rate is 0/3, C is 2/3; C's success is not claimed to be reliable at 3/3.
+
+Harness configuration correction: the first M1 suite accidentally attached an
+engine API, unlike §11.5. Those nine captures remain as supplementary diagnostics
+and are excluded from canonical M1 statistics; the unattached suite above is the
+canonical k=3. Attached median costs A/B/C were 0.0415592/0.0454949/0.0405182,
+with median inputs 39,821/38,126/34,994. Standalone attached runs took about
+33 seconds including normal CLI startup/shutdown; a suspected shutdown fault
+was investigated but no process was killed and all those exits were normal.
+This setup correction is distinct from the four M2 model failures. No unsuccessful
+M2 run was replaced to produce a better cost or quality figure.
+
+M1 C vs B: input fell 14.18%, cost 21.07%, skills 127 to 0, tools 69/116 to 30.
+The remaining 32,699-token base is not caused by pushed chat (fresh one-message
+turns) or user MCP/skills. Normal CLI and inherited CLAUDE/project instructions are a plausible remaining
+base-context source; these captures do not separately attribute every base token.
+Isolating user MCP/skills does not establish that all instruction context is removed.
+One additional C resume diagnostic, excluded from the fresh k=3 distribution,
+had 32,960 input, 32,690 cache-read and a 0.0041650 USD turn delta. This confirms
+cached input on the second turn while E5 subtracts the cumulative billing baseline.
+
+M2 C/A median cost ratio is 1.2162 (about 1.22x), within the approximate 1.5x
+goal in these samples. Conditioning only on C's two successful runs gives median
+0.3548692 USD and ratio 1.2193, so the conclusion does not depend on calling C3's
+cheap failure successful. B's cheaper median is unusable as a successful task
+comparison because no B run passed. These small samples are descriptive, not
+causal proof or a reliability guarantee. All implementation steps remain kept.
+
+team.usage analysis of the successful C runs:
+
+| Run | Lead input | Lead USD | Worker input | Worker USD | Total cache creation |
+|---|---:|---:|---:|---:|---:|
+| 1 | 159,447 | 0.0900288 | 871,908 | 0.2657362 | 99,583 |
+| 2 | 246,597 | 0.1009097 | 979,630 | 0.2530637 | 87,119 |
+
+Workers consumed 71.5–74.7% of successful C spend; the lead's delegation and
+verification consumed 25.3–28.5%. Two fresh CLI contexts created 87,119–99,583
+cache tokens versus A's 44,406–58,639; tool work also resends long context mostly
+as cache reads. The cost goal is not far away in this suite. The clearest remaining
+failure is routing: a lead can still choose a chat mention instead of team_delegate.
+An explicit lead-profile instruction to use only team_delegate for task handoff
+is a configuration finding for future evaluation, not an automatic retry or a
+post-hoc change to this fixed manifest. No source change follows this measurement.
+
+Evidence retained (ignored): build/scratch/team-restore/{build-e1.log,tests-e1.log,
+build-e2.log,tests-e2.log,build-e4.log,tests-e4-final.log}; measurements/{manifest.json,
+summary.json,idle-summary.json,results.json,idle-results.json,resume-diagnostic.json},
+per-run measurement.json/seed-manifest.json, raw-standalone.jsonl or
+.oe/team/raw-*.jsonl and persisted usage/task records. Original sample settings,
+credentials and unrelated user edits are excluded from all commits. Both agent
+guides are identical; API regeneration is in each implementation milestone.

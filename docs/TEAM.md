@@ -494,6 +494,30 @@ name without a thumbnail. Whether a backend can generate images is the descripto
 2026-10-03). The installed CLI's version appears in the agent combo's list, not beside the
 combo: text there changed the dialog's width whenever another agent was chosen.
 
+### 5.5 Task turns
+
+Delegation runs beside chat. Workers receive only role/project context and the
+bounded task brief, never chat history or a resume id; their final text/session
+never enters the chat conversation. `team_delegate` in the MCP bridge waits on
+its I/O thread while the engine/editor continues updating. The worker must call
+`team_report` to submit summary, changed paths and command/result/output evidence;
+printing JSON in the final answer does not submit a report. A successful turn
+without a tool report becomes done with unverified:true and its final text as
+summary. A report is also unverified until the caller checks acceptance.
+CLI errors/abnormal exits are failed; absolute deadline expiry is timed_out.
+Cancellation propagates down the caller's task tree; there is no automatic retry.
+Tasks cannot extend an ancestor deadline. Chat and task usage share the E5 ledger,
+including failures/cancellations and per-session Claude budget accounting.
+
+### 5.6 Stable prefix
+
+BuildTeamStandingContext is the single prefix builder for chat and task turns.
+It contains role, instructions, sorted callable agent ids/names and project facts.
+Runtime state, connection details, time, counts, unread chat and task requirements
+follow the prefix. The callable list follows canCall permissions (the lead may
+call everyone). State/history changes leave identical prefix bytes. Changing role,
+instructions, callable agents or project facts intentionally changes the prefix.
+
 ## 6. Safety
 
 - **Process arguments**: argv arrays, no shell strings, no user text in arguments (§2.1).
@@ -920,38 +944,26 @@ Implemented and retained under the revised measurement policy. Build warning-fre
 203 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
 are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
 
-### Task turns (E2 restored)
-
-Delegation runs beside chat. Workers receive only role/project context and the
-bounded task brief, never chat history or a resume id; their final text/session
-never enters the chat conversation. `team_delegate` in the MCP bridge waits on
-its I/O thread while the engine/editor continues updating. The worker must call
-`team_report` to submit summary, changed paths and command/result/output evidence;
-printing JSON in the final answer does not submit a report. A successful turn
-without a tool report becomes done with unverified:true and its final text as
-summary. A report is also unverified until the caller checks acceptance.
-CLI errors/abnormal exits are failed; absolute deadline expiry is timed_out.
-Cancellation propagates down the caller's task tree; there is no automatic retry.
-Tasks cannot extend an ancestor deadline. Chat and task usage share the E5 ledger,
-including failures/cancellations and per-session Claude budget accounting.
-
 ### E2 restoration — 2026-10-05
 
 Implemented and retained under the revised measurement policy. Build warning-free;
 205 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
 are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
 
-### Stable prefix (E4 restored)
-
-BuildTeamStandingContext is the single prefix builder for chat and task turns.
-It contains role, instructions, sorted callable agent ids/names and project facts.
-Runtime state, connection details, time, counts, unread chat and task requirements
-follow the prefix. The callable list follows canCall permissions (the lead may
-call everyone). State/history changes leave identical prefix bytes. Changing role,
-instructions, callable agents or project facts intentionally changes the prefix.
-
 ### E4 restoration — 2026-10-05
 
 Implemented and retained under the revised measurement policy. Build warning-free;
 206 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
 are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
+
+### Final restoration measurements — 2026-10-05
+
+E1/E2/E4 are restored alongside E3/E5/E6, superseding the historical rejections.
+Final builds passed 203/205/206 tests with no warnings. Canonical M1/M2 use k=3
+per condition; medians/ranges, exact prompts, raw UTF-8 and failure classifications
+are in TEAM_LOG.md. M1 improved from 38,104 to 32,699 input tokens (19k not reached).
+M2 median cost is 0.2910520 USD standalone and 0.3539734 USD improved team, about
+1.22x; Bat acceptance is 3/3 and 2/3 respectively, versus 0/3 before restoration.
+The improved team's failed run emitted @worker instead of calling team_delegate;
+default maxHops 0 correctly blocked it. Failed runs remain in the distributions.
+No favourable replacement run or measurement-driven source rollback was made.
