@@ -1,0 +1,59 @@
+name: Verify structured team handoff
+
+on:
+  push:
+    branches:
+      - feature/agent-team-efficiency
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/agent-team-efficiency
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Apply direct handoff patch
+        run: python .github/scripts/apply_team_direct_handoff.py
+
+      - name: Build OwnEngine
+        shell: cmd
+        run: build.bat
+
+      - name: Run engine tests
+        shell: cmd
+        run: build\bin\oe_tests.exe
+
+      - name: Run focused efficiency tests
+        shell: cmd
+        run: tests\team_efficiency\run.bat
+
+      - name: Regenerate API docs
+        run: python tools/gen_api_docs.py
+
+      - name: Check repository invariants
+        shell: pwsh
+        run: |
+          if ((Get-FileHash AGENTS.md).Hash -ne (Get-FileHash CLAUDE.md).Hash) { throw 'AGENTS.md and CLAUDE.md differ' }
+          git diff --check
+
+      - name: Commit verified changes
+        shell: pwsh
+        run: |
+          Remove-Item .github/scripts/apply_team_direct_handoff.py
+          Remove-Item .github/workflows/verify-team-direct-handoff.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Team: route explicit handoffs structurally [skip ci]"
+          git push origin HEAD:feature/agent-team-efficiency
