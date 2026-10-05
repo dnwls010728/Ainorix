@@ -13,13 +13,13 @@ Use one normal worker for routine work and wake expensive specialists only when 
 | QA | Sonnet 5.5 | Explicit verification for risky changes, regressions and release checks; do not wake after every small edit. |
 | Art | Sol 6.1 | Images and visual assets only; give it the request and references it needs, not general engineering chat. |
 
-For normal work, set Content as the lead and keep concurrency conservative:
+For normal work, set Content as the lead, keep concurrency conservative, and allow only a short explicit specialist chain:
 
 ```text
-oe exec <project> team.settings '{"lead":"content","maxConcurrent":2,"maxHops":0}'
+oe exec <project> team.settings '{"lead":"content","maxConcurrent":2,"maxHops":2}'
 ```
 
-`maxHops: 0` still lets the person call any agent with `@core`, `@qa`, `@art`, or `team.handoff`; it prevents an agent-originated message from starting another agent. Raise it temporarily when an agent itself must continue a short specialist chain.
+With `OE_TEAM_LEAN=1`, reply mentions do not start teammates, so `maxHops: 2` is only a safety cap for deliberate agent-originated calls such as `team.handoff`. Set it to `0` when agents must never continue a chain themselves; the person can still call any agent directly.
 
 ## Explicit handoff
 
@@ -65,7 +65,7 @@ Unset the variable (or set it to `0`, `false`, or `off`) for compatibility mode.
 1. Finish with one agent whenever one agent can finish the task.
 2. Treat Core / Opus as an expensive specialist, not a router.
 3. Do not run QA automatically after every small change.
-4. Run normal development with `OE_TEAM_LEAN=1` and a small `maxHops` (use `0` when agents must never continue a chain themselves).
+4. Run normal development with `OE_TEAM_LEAN=1` and `maxHops` around `2`; use `0` when agents must never continue a chain themselves.
 5. Prefer `team.handoff` when exactly one specialist should wake.
 6. Keep `maxConcurrent` at `2` unless real parallel work exists.
 7. Give Art only the visual brief and referenced files.
