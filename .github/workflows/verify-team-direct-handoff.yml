@@ -1,53 +1,13 @@
 name: Finalize structured team handoff
 
 on:
-  push:
-    branches:
-      - feature/agent-team-efficiency
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   finalize:
-    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/agent-team-efficiency
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      # This exact product patch already passed the full Windows build and oe_tests,
-      # including the real team.handoff command-path regression.
-      - name: Apply verified direct handoff patch
-        run: python .github/scripts/apply_team_direct_handoff.py
-
-      - name: Verify focused runner
-        shell: cmd
-        run: tests\team_efficiency\run.bat
-
-      - name: Regenerate API docs
-        run: python tools/gen_api_docs.py
-
-      - name: Check repository invariants
-        shell: pwsh
-        run: |
-          if ((Get-FileHash AGENTS.md).Hash -ne (Get-FileHash CLAUDE.md).Hash) { throw 'AGENTS.md and CLAUDE.md differ' }
-          git diff --check
-
-      - name: Commit verified changes
-        shell: pwsh
-        run: |
-          Remove-Item .github/scripts/apply_team_direct_handoff.py
-          Remove-Item .github/workflows/verify-team-direct-handoff.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "Team: route explicit handoffs structurally [skip ci]"
-          git push origin HEAD:feature/agent-team-efficiency
+      - run: echo "Paused while the API reference generation command is corrected."
