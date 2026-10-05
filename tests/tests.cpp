@@ -8566,6 +8566,47 @@ TEST(TeamStreamParsers) {
     CHECK(FindMentions("@allies", agents, all).empty() && !all);
 }
 
+TEST(TeamChatPull) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_pull"), dir = ProcessFixtureDir("team pull");
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"session_id":"pull-1","result":"ok"})J" "\n"));
+    Backend backend;
+    backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
+    backend.models = {{"m", "M", true, 0}};
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable;
+        options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId}; return options;
+    };
+    backend.parseLine = ParseClaudeLine;
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" > \"%~dp0prompt.txt\"\necho %*> \"%~dp0args.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    Backend offline = backend; offline.id = "offline"; offline.executable = "oe-no-pull-cli";
+    Engine e; std::string error, prompt;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), {backend, offline});
+    CHECK(Call(e, "team.add", R"J({"name":"Lead","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Other","backend":"offline"})J")["ok"].asBool());
+    CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
+    const size_t baseline = prompt.size();
+    team->host.apiPort = 7777; team->host.oeExecutable = backend.executable;
+    for (int i = 0; i < 30; ++i) {
+        Json args = Json::MakeObject(); args["text"] = "@other unrelated-secret-" + std::to_string(i) + std::string(300, 'x');
+        CHECK(e.Call("team.send", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
+    CHECK(prompt.find("unrelated-secret") == std::string::npos && prompt.find("30 chat messages omitted") != std::string::npos);
+    CHECK(prompt.size() < baseline + 120 && prompt.find("team_messages") != std::string::npos);
+    CHECK(Call(e, "team.messages", R"J({"limit":100})J")["result"]["messages"].size() >= 34);
+    // The next delivery does not count already skipped history again; resume remains intact.
+    CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("messages omitted") == std::string::npos);
+    CHECK(ReadTextFile(JoinPath(dir, "args.txt"), prompt) && prompt.find("pull-1") != std::string::npos);
+    RemoveAll(dir);
+#endif
+}
+
 TEST(TeamSessionTurns) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)
@@ -8691,12 +8732,12 @@ TEST(TeamSessionTurns) {
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("`ownengine` MCP server") != std::string::npos);
     team->host.apiPort = 0;
 
-    // A CLI without a system prompt flag gets the context once, on stdin, and sees what teammates said.
+    // A CLI without a system prompt flag gets context once, on stdin, and only its addressed messages.
     CHECK(Call(e, "team.send", R"J({"text":"@Jun hi"})J")["result"]["started"][0].asString() == "jun");
     CHECK(until(settled));
     text = fileText("jun.prompt.txt");
     CHECK(text.find("You are Jun (@jun)") == 0 && text.find("Be brief.") != std::string::npos && text.find("[User] @Jun hi") != std::string::npos);
-    CHECK(text.find("[User] hello team") != std::string::npos && text.find("[Mina] Done it.") != std::string::npos);
+    CHECK(text.find("[User] hello team") == std::string::npos && text.find("[Mina] Done it.") == std::string::npos);
     CHECK(fileText("jun.args.txt").find(R"J("new" "m" "edit" "nofile" "nomcp")J") == 0);
     CHECK(Call(e, "team.send", R"J({"text":"@jun more"})J")["ok"].asBool() && until(settled));
     text = fileText("jun.prompt.txt");

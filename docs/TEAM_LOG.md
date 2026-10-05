@@ -326,3 +326,35 @@ Final restoration verification: `build.bat` succeeded without compiler warnings;
 pre-E2 snapshot byte for byte. `engine/team/` has no remaining diff; both agent
 guides remain identical. Existing unrelated edits remain unstaged. Only this
 measurement/rejection record is committed for the E2 step.
+
+
+## 2026-10-05 — E3 chat pull kept
+
+- [x] E3: unread addressed/triggering messages only; unrelated history remains
+  available through team.messages, with an omission count/tool hint when attached.
+  Completed turns advance seen past skipped messages. No new profile field.
+- User authorized E3–E6 from the E1/E2-restored state. Those steps remain rejected;
+  task-only integration cannot be claimed while E2 is absent.
+- Build passed without warnings. Stand-in TeamChatPull checks 30 unrelated messages,
+  prompt growth under 120 bytes (only count/hint), history still available, no repeat
+  of omitted history, and unchanged resume. TeamSessionTurns' previous all-history
+  expectation was updated to the addressed-message contract.
+
+Actual CLI: Claude Code 2.1.289, haiku resolved claude-haiku-4-5-20251001/full.
+Manual scratch Wickbound copies, one run per condition, Lead haiku + inactive
+Other/Gemini profile, maxConcurrent 3, explicit maxHops 0. Thirty identical unrelated
+messages addressed to Other preceded the same Bat task. Prompt SHA-256:
+`e661600325da7711fd5cb441a98e12a79de0420619c5c562e87a9501a205f373`. No sample/team.json was edited. UTF-8 was captured as raw bytes;
+no decoding proxy or recovery of malformed result strings was used.
+
+| Condition | New | Creation | Read | Input side | Output | USD | Wall s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Before | 233 | 57,169 | 1,743,073 | 1,800,475 | 12,787 | 0.3528133 | 174.153 |
+| E3 | 67 | 57,515 | 378,845 | 436,427 | 7,985 | 0.1929065 | 84.728 |
+
+Both independently passed: one Bat root with the assigned script, both physics
+components, five prefab children, base speed 3 and actual script.check with zero
+errors/warnings. One pair is not a statistical estimate: cache state and different
+numbers of model/tool steps affect total cost. Nevertheless the measured condition
+improved input by 75.76% and cost by 45.32%, and the regression test isolates the
+removed unrelated prompt bytes. E3 is retained. Test total: 199, zero failed checks.

@@ -385,17 +385,26 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     if (!offline.empty()) return FailTurn(agent.id, runtime, agent.name + " cannot take a turn: " + offline + ".", hint);
     const Backend& backend = *FindBackend(agent.backend);
 
-    // Unread chat: what others said since this agent's last successful turn.
+    // Delivery uses persisted recipients, including the message that scheduled this turn.
+    // Unrelated history stays available through team.messages rather than entering every prompt.
     std::vector<const ChatMessage*> unread;
+    size_t omitted = 0;
+    const uint64_t seenUpTo = lastMessageId_;
     for (const ChatMessage& message : messages_) {
-        if (message.id > runtime.seen && message.kind == "message" && message.from != agent.id) unread.push_back(&message);
+        if (message.id <= runtime.seen || message.kind != "message" || message.from == agent.id) continue;
+        if (std::find(message.to.begin(), message.to.end(), agent.id) != message.to.end()) unread.push_back(&message);
+        else ++omitted;
     }
     if (unread.empty()) return;
-    if (unread.size() > kMaxPromptMessages) unread.erase(unread.begin(), unread.end() - static_cast<std::ptrdiff_t>(kMaxPromptMessages));
+    if (unread.size() > kMaxPromptMessages) {
+        omitted += unread.size() - kMaxPromptMessages;
+        unread.erase(unread.begin(), unread.end() - static_cast<std::ptrdiff_t>(kMaxPromptMessages));
+    }
     size_t bytes = 0;
     for (const ChatMessage* message : unread) bytes += message->text.size();
     while (unread.size() > 1 && bytes > kMaxPromptBytes) {
         bytes -= unread.front()->text.size();
+        ++omitted;
         unread.erase(unread.begin());
     }
     std::string prompt = "New messages in the team chat, oldest first. Reply to what is addressed to you.\n";
@@ -403,6 +412,10 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         const AgentProfile* sender = FindById(store_, message->from);
         prompt += "\n[" + (message->from == "user" ? std::string("User") : sender ? sender->name : message->from) + "] " + message->text + "\n";
         for (const ChatAttachment& attachment : message->attachments) prompt += "  Attached " + attachment.type + ": " + attachment.path + "\n";
+    }
+
+    if (omitted > 0 && host_.apiPort > 0) {
+        prompt += "\n" + std::to_string(omitted) + " chat messages omitted. Read team_messages when earlier context is needed.\n";
     }
 
     if (runtime.sessionBackend != backend.id) runtime.session.clear();  // a conversation belongs to the CLI that made it
@@ -415,7 +428,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     request.sessionId = runtime.session;
     const std::string context = StandingContext(agent);
     if (backend.systemPromptFlag) {
-        if (!WriteTextFile(JoinPath(tmp, agent.id + ".system.md"), context)) return FailTurn(agent.id, runtime, "cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
+        if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".system.md"), context, nullptr)) return FailTurn(agent.id, runtime, "cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
         request.systemPromptFile = relativeTmp + agent.id + ".system.md";
     } else if (runtime.session.empty()) {
         prompt = context + "\n---\n\n" + prompt;  // the CLI has no system prompt flag: said once, at the start of the conversation
@@ -433,7 +446,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         server["args"] = std::move(arguments);
         Json config = Json::MakeObject();
         config["mcpServers"]["ownengine"] = std::move(server);
-        if (WriteTextFile(JoinPath(tmp, agent.id + ".mcp.json"), config.dump(2) + "\n")) request.mcpConfigFile = relativeTmp + agent.id + ".mcp.json";
+        if (WriteTextFileAtomic(JoinPath(tmp, agent.id + ".mcp.json"), config.dump(2) + "\n", nullptr)) request.mcpConfigFile = relativeTmp + agent.id + ".mcp.json";
         request.oeExecutable = oe;
         request.apiPort = host_.apiPort;
         request.agentId = agent.id;
@@ -453,7 +466,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     turn->task = Shorten(FirstLine(unread.back()->text), 120);
     turn->replyTo = unread.back()->from;
     turn->hop = unread.back()->hop;
-    turn->seenUpTo = unread.back()->id;
+    turn->seenUpTo = seenUpTo;
     CreateDirectories(JoinPath(Directory(), "images"));  // where agents are told to save pictures
     turn->imagesBefore = ScanImages();
     Turn* raw = turn.get();

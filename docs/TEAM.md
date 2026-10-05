@@ -335,12 +335,14 @@ A turn is one run of an agent's CLI in response to a message.
    addresses nobody is stored with a notice saying so.
 2. For each recipient not already busy, a turn starts (others wait in state `queued` behind
    `maxConcurrent`, in roster order; a message to a busy agent is delivered when its turn ends).
-3. The prompt given to the CLI = the chat messages (kind `message`, not its own) since that
-   agent's previous successful turn, bounded to the last 40 messages or 32 KiB, each as
+3. The prompt given to the CLI contains unread messages addressed to that agent (including
+   the triggering message), bounded to the last 40 messages or 32 KiB, each as
    `[Sender] text`. The standing context is passed as the system prompt addition
    (`.oe/team/tmp/<id>.system.md`): the agent's name, description and instructions, the roster
    (ids, names and descriptions of teammates), the project path, where to save images
    (`.oe/team/images/`), and whether the editor is reachable through the `ownengine` MCP server.
+   Unrelated chat stays in the log. With an attached API, an omission count points to
+   `team_messages` for context on demand; without an API that tool hint is omitted.
 4. The process runs in the project directory with the environment variables
    `OE_TEAM_AGENT=<id>` and `OE_TEAM_HOP=<n>` and, when the hosting tool serves the HTTP API
    (`oe editor`, `oe mcp --port`), an MCP server entry that starts `oe mcp --connect <port>`
@@ -629,7 +631,7 @@ Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |
 | `team.cancel` | `{id}` or `{all:true}` | `{cancelled: [ids]}` |
 | `team.state` | | `{revision, running, agents}`: per agent state, activity, task, elapsed, tools, error and hint |
-| `team.messages` | `{after?, limit?}` | `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
+| `team.messages` | `{after?, limit?}` | Read omitted chat on demand: `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
 | `team.clear` | | stops every turn, empties the chat log and stored sessions |
 
 Errors follow the usual shape, with hints that say how to fix the call, for example
@@ -764,3 +766,12 @@ time, U1 once decided, U5 last.
 Even with all of the above a handoff costs at least one base context (about 19,000 tokens with
 U3). A team pays off for parallel or long work; for a small change one agent is always cheaper.
 The guidance for users belongs in the READMEs once the numbers after U2/U3 are known.
+
+### E3 checkpoint — 2026-10-05
+
+Chat pull is implemented without new profile settings (§3.1). Routing is unchanged:
+explicit recipients and the lead determine delivery. Prompts exclude unrelated
+messages; completed turns advance their seen watermark past skipped history.
+Thirty unrelated messages leave only the omission-count line in the next prompt.
+E1/E2 remain reverted; no task API is implied by this checkpoint. Measurements and
+acceptance are recorded in TEAM_LOG.md.
