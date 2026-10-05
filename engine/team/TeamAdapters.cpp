@@ -4,8 +4,17 @@
 // (`exec --json`); the fixtures are in tests/tests.cpp (TeamStreamParsers).
 #include "team/Backends.h"
 
+#include <cstdlib>
+
 namespace oe {
 namespace {
+
+bool LeanTeamTurnsEnabled() {
+    const char* value = std::getenv("OE_TEAM_LEAN");
+    if (!value || !*value) return false;
+    const std::string setting = value;
+    return setting != "0" && setting != "false" && setting != "FALSE" && setting != "off" && setting != "OFF";
+}
 
 TurnEvent Event(TurnEvent::Kind kind, std::string text = std::string()) {
     TurnEvent event;
@@ -70,6 +79,10 @@ ProcessOptions ClaudeBuildTurn(const TurnRequest& request) {
     options.executable = request.executable;
     options.arguments = {"-p", "--output-format", "stream-json", "--verbose"};
     auto add = [&](std::initializer_list<std::string> arguments) { options.arguments.insert(options.arguments.end(), arguments); };
+    // Team turns normally do not need the user's Claude slash-command/skill catalog. Opting into
+    // lean mode removes that catalog from every Claude turn, cutting the fixed context overhead
+    // without changing the normal mode or the backend-neutral TurnRequest contract.
+    if (LeanTeamTurnsEnabled()) add({"--disable-slash-commands"});
     if (!request.model.empty()) add({"--model", request.model});
     if (!request.systemPromptFile.empty()) add({"--append-system-prompt-file", request.systemPromptFile});
     // docs/TEAM.md §6: a headless turn cannot ask, so the mode decides what is refused.
