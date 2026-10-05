@@ -82,6 +82,8 @@ oe render MyGame --frames 120 --out shot.png
 エージェント CLI (Claude Code、Codex) を子プロセスとして実行します。Windows のみ、開発中 —
 [docs/TEAM.md](docs/TEAM.md)。
 
+エージェント使用量: `team.usage`でエージェント/日別トークンとターン別費用を取得できます。Teamパネルは本日(UTC)の使用量を表示し、Claudeプロファイルに`maxBudgetUsd`を設定できます（0で無制限）。
+
 ## エディター
 
 `oe editor` はドッキングエディター(Dear ImGui + ImGuizmo、エンジンプロセス内で GPU 描画)を開きます。Hierarchy、

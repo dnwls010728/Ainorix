@@ -81,6 +81,8 @@ contributor follows are in [docs/DESIGN.md](docs/DESIGN.md).
 installed on the PC (Claude Code, Codex) as child processes. Windows only, in progress —
 [docs/TEAM.md](docs/TEAM.md).
 
+Agent usage: `team.usage` reads agent/day token totals and per-turn cost. The Team panel shows today in UTC; Claude profiles can set `maxBudgetUsd` (0 disables it).
+
 ## Editor
 
 `oe editor` opens a docking editor (Dear ImGui + ImGuizmo, drawn on the GPU in the engine process): Hierarchy,

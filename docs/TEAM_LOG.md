@@ -430,3 +430,55 @@ failed checks**. tests/tests.cpp and docs/API.md match the kept E3 snapshots byt
 for byte; engine/team has no unstaged diff; CLAUDE.md and AGENTS.md are identical.
 No original Wickbound changes or local team.json files are committed. Only the
 E4 rejection and billing-scope evidence are retained in this milestone commit.
+
+
+## 2026-10-05 — E5 usage accounting kept
+
+- [x] E5: Claude/Codex token parsing, atomic bounded usage.jsonl, team.usage,
+  agent/day totals in the Team panel and per-reply usage; Claude maxBudgetUsd.
+  Unknown values/legacy cost scopes remain unknown. Usage survives clear/reopen.
+- This step's measured improvement is accounting error, as its §11.6 acceptance
+  requires CLI-matching usage. It does not reduce provider spend by adding telemetry.
+  The existing E1/E2/E4 rejection decisions remain in effect.
+
+Build warning-free. Stand-in TeamUsageParsingAndLedger and TeamUsageTurns cover
+Claude new/cache totals, Codex inclusive cached input/unknown cost, missing/invalid
+usage, failed-budget results, numeric budget flags, persistence, filtering,
+external corruption preservation, cumulative-cost deltas across reopen, unknown
+baseline and fresh-start budget handling. EditorTranslations and the headless
+Team/Chat tests cover the UI; the roster screenshot includes 1,234 input/56 output/
+1,000 cached measured fixture data. English/Korean/Japanese UI rows are provided.
+Actual editor screenshot was also captured manually in scratch. Final test count
+is recorded below after the check finishes.
+
+Manual cheap Claude Code 2.1.289/haiku runs only under build/scratch/team-e5-e6.
+The budget-scope experiment returned fresh cost 0.0352532, then a resumed
+--max-budget-usd 0.000001 ended error_max_budget_usd at cumulative 0.042368.
+The CLI ceiling is session-based and may overshoot by a request. Profile budget
+adds the persisted cumulative baseline; an unknown baseline forces fresh context.
+It is not an exact prepaid limit. Unsupported backend budgets are refused.
+
+M2 manifest/prompt matches E3 (SHA-256 `e661600325da7711fd5cb441a98e12a79de0420619c5c562e87a9501a205f373`): fresh Wickbound copy,
+Lead Claude/haiku/full + inactive Other, maxConcurrent 3, explicit maxHops 0,
+30 unrelated messages. Native sub-agents were not requested. After Bat, two
+resumed "Say ok and nothing else. Do not call tools." messages measured accounting.
+
+| Invocation | Input side | Output | Cache read | CLI cumulative USD | Recorded delta USD |
+|---|---:|---:|---:|---:|---:|
+| Fresh Bat | 777,283 | 7,982 | 718,345 | 0.2295055 | 0.2295055 |
+| Resumed ok 1 | 76,057 | 44 | 75,172 | 0.2390037 | 0.0094982 |
+| Resumed ok 2 | 76,544 | 38 | 76,048 | 0.2477815 | 0.0087778 |
+
+team.usage matched exactly: input 929,884, output 8,064, cache read 869,565,
+creation 60,186, cost 0.2477815, all 3 token/cost reports known. Summing the old
+reply costs would report 0.7162907 (error +0.4685092); new accounting error is 0.
+Bat took 87.946 s and independently passed root/script/physics/five-child checks
+and actual script.check zero errors/warnings. The Bat model turn cost exceeds
+E3's 0.1929065 and input exceeds 436,427; this is recorded, not claimed as a spend
+improvement. E5 is retained for the demonstrated elimination of billing error
+and the explicit usage-accuracy acceptance criterion. No favourable extra M2 run
+was chosen. API regenerated, guides identical, original sample team files untouched.
+
+Final E5 checks: build.bat passed without warnings; **201 tests, zero failed checks**.
+Usage and chat screenshots were visually reviewed. Original user edits remain
+unstaged; only E5 code/docs/tests are included in the milestone commit.

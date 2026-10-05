@@ -1108,6 +1108,7 @@ Add an agent to the team (at most 16). The id is generated from the name and nev
 | `backend` | string |  | Agent CLI id from team.backends (default: the first one). |
 | `model` | string |  | Model id of that backend; "" = the CLI's default (default: the backend's default model). |
 | `access` | string |  | read | edit (default) | full: what the agent may do without asking. |
+| `maxBudgetUsd` | number |  | Claude per-turn allowance: 0 disables it; 0.000001..1000 USD. The CLI may exceed it by one request. |
 | `avatar` | string |  | "preset:<name>" from team.presets (default: the first preset no teammate uses). |
 
 ### `team.update`
@@ -1117,7 +1118,7 @@ Change some fields of an agent (partial update). Changing the backend without a 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | string | yes | Agent id or name. |
-| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, avatar ("preset:<name>"). |
+| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, maxBudgetUsd, avatar ("preset:<name>"). |
 
 ### `team.remove`
 
@@ -1188,6 +1189,15 @@ Team chat messages, oldest first: {messages, first, last} (first = oldest id sti
 |---|---|---|---|
 | `after` | integer |  | Only messages with a larger id (poll with the previous `last`). |
 | `limit` | integer |  | At most this many, 1..500 (default 100). |
+
+### `team.usage`
+
+Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-turn deltas, not Claude session totals; reportedTurns/costReportedTurns distinguish unknown usage from measured zero. Clearing chat retains usage.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string |  | Agent id or current name; omit for every agent, including removed profiles. |
+| `date` | string |  | YYYY-MM-DD or today in UTC; omit for all days. |
 
 ### `team.clear`
 

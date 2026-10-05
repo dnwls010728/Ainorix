@@ -156,6 +156,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  .Opt("backend", "string", "Agent CLI id from team.backends (default: the first one).")
                  .Opt("model", "string", "Model id of that backend; \"\" = the CLI's default (default: the backend's default model).")
                  .Opt("access", "string", "read | edit (default) | full: what the agent may do without asking.")
+                 .Opt("maxBudgetUsd", "number", "Claude per-turn allowance: 0 disables it; 0.000001..1000 USD. The CLI may exceed it by one request.")
                  .Opt("avatar", "string", "\"preset:<name>\" from team.presets (default: the first preset no teammate uses)."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
@@ -166,7 +167,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
 
     Register(registry, "team.update",
              "Change some fields of an agent (partial update). Changing the backend without a model resets the model to the new backend's default.",
-             Params().Req("id", "string", kAgentRef).Req("values", "object", "Fields to change: name, description, instructions, backend, model, access, avatar (\"preset:<name>\")."),
+             Params().Req("id", "string", kAgentRef).Req("values", "object", "Fields to change: name, description, instructions, backend, model, access, maxBudgetUsd, avatar (\"preset:<name>\")."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
                  return store.AgentToJson(store.Update(a["id"].asString(), a["values"], state->Lookup()));
@@ -283,6 +284,16 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  const int limit = a["limit"].asInt(100);
                  if (limit < 1 || limit > 500 || a["after"].asNumber(0.0) < 0.0) throw ApiError("invalid_argument", "limit must be 1..500 and after must not be negative");
                  return state->Session(e).Messages(static_cast<uint64_t>(a["after"].asNumber(0.0)), a.has("after"), limit);
+             });
+
+    Register(registry, "team.usage", "Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-turn deltas, not Claude session totals; reportedTurns/costReportedTurns distinguish unknown usage from measured zero. Clearing chat retains usage.",
+             Params().Opt("id", "string", "Agent id or current name; omit for every agent, including removed profiles.")
+                 .Opt("date", "string", "YYYY-MM-DD or today in UTC; omit for all days."),
+             [state](Engine& e, const Json& a) {
+                 TeamSession& session = state->Session(e);
+                 std::string id = a["id"].asString();
+                 if (const AgentProfile* agent = state->store.Find(id)) id = agent->id;
+                 return session.Usage(id, a["date"].asString());
              });
 
     Register(registry, "team.clear", "Stop every turn, empty the chat log and forget the agents' stored conversations. Profiles are kept.", Params(),

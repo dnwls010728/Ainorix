@@ -21,7 +21,7 @@ constexpr size_t kMaxTeamFileBytes = 1024 * 1024;
 constexpr uintmax_t kMaxAvatarSourceBytes = 16 * 1024 * 1024;
 constexpr int kMaxAvatarSourcePixels = 8192;
 constexpr int kTeamFileVersion = 1;
-const char* const kAgentKeys[] = {"name", "avatar", "description", "instructions", "backend", "model", "access"};
+const char* const kAgentKeys[] = {"name", "avatar", "description", "instructions", "backend", "model", "access", "maxBudgetUsd"};
 
 std::string Lower(std::string text) {
     for (char& c : text) {
@@ -103,6 +103,11 @@ void ApplyValues(AgentProfile& agent, const Json& values, bool fromFile) {
     if (!values.isObject()) throw Invalid("agent values must be an object");
     for (const auto& member : values.members()) {
         const std::string& key = member.first;
+        if (key == "maxBudgetUsd") {
+            const double n = member.second.asNumber(-1);
+            if (!member.second.isNumber() || !std::isfinite(n) || n < 0 || n > 1000 || (n > 0 && n < 0.000001)) throw Invalid("maxBudgetUsd must be 0 or 0.000001..1000");
+            agent.maxBudgetUsd = n; continue;
+        }
         std::string* field = key == "name" ? &agent.name : key == "avatar" ? &agent.avatar : key == "description" ? &agent.description :
                              key == "instructions" ? &agent.instructions : key == "backend" ? &agent.backend : key == "model" ? &agent.model :
                              key == "access" ? &agent.access : (fromFile && key == "id") ? &agent.id : nullptr;
@@ -119,6 +124,7 @@ void ApplyValues(AgentProfile& agent, const Json& values, bool fromFile) {
 
 // Rules every stored profile satisfies, whatever wrote it.
 void ValidateFields(AgentProfile& agent) {
+    if (agent.maxBudgetUsd > 0 && agent.backend != "claude") throw Invalid("maxBudgetUsd is supported only by Claude", "Use a Claude profile, or set maxBudgetUsd to 0.");
     agent.name = Trim(agent.name);
     size_t characters = 0;
     if (!Utf8Characters(agent.name, characters) || characters < 1 || characters > kMaxNameCharacters || HasControl(agent.name, false)) {
@@ -164,6 +170,7 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
         j["backend"] = agent.backend;
         if (!agent.model.empty()) j["model"] = agent.model;
         if (agent.access != "edit") j["access"] = agent.access;
+        if (agent.maxBudgetUsd > 0) j["maxBudgetUsd"] = agent.maxBudgetUsd;
         list.push(std::move(j));
     }
     root["agents"] = std::move(list);
@@ -471,6 +478,7 @@ Json TeamStore::AgentToJson(const AgentProfile& agent) const {
     j["backend"] = agent.backend;
     j["model"] = agent.model;
     j["access"] = agent.access;
+    j["maxBudgetUsd"] = agent.maxBudgetUsd;
     return j;
 }
 

@@ -146,6 +146,11 @@ void NativeEditor::Impl::RefreshTeam() {
             teamListRevision = revision;
         }
     }
+    if (time - teamUsagePoll > 0.25) {
+        teamUsagePoll = time;
+        const Json usage = Call("team.usage", ObjectOf({{"date", Json("today")}}), true);
+        teamUsage = Ok(usage) ? usage["result"] : Json();
+    }
     // CLI detection takes seconds: it runs in the background and is polled until it is done.
     bool detecting = teamBackends.size() == 0;
     for (const Json& backend : teamBackends.items()) detecting = detecting || backend["status"].asString("") == "detecting";
@@ -192,6 +197,7 @@ void NativeEditor::Impl::EditAgent(const std::string& id) {
         form.backend = agent["backend"].asString("");
         form.model = agent["model"].asString("");
         form.access = agent["access"].asString("edit");
+        form.maxBudgetUsd = agent["maxBudgetUsd"].asNumber();
         form.avatar = agent["avatar"].asString("");
         form.avatarPath = agent["avatarPath"].asString("");
         if (const Json* backend = TeamBackend(form.backend)) {
@@ -209,6 +215,7 @@ bool NativeEditor::Impl::SetAgentFormBackend(const std::string& id) {
     if (!backend || (*backend)["status"].asString("") != "installed") return false;  // a CLI that is not on this PC cannot be chosen
     if (agentForm.backend == id) return true;
     agentForm.backend = id;
+    if (id != "claude") agentForm.maxBudgetUsd = 0;
     agentForm.model.clear();
     agentForm.customModel = false;
     for (const Json& model : (*backend)["models"].items()) {
@@ -228,6 +235,7 @@ bool NativeEditor::Impl::SaveAgentForm() {
     values["backend"] = form.backend;
     values["model"] = form.model;
     values["access"] = form.access;
+    values["maxBudgetUsd"] = form.maxBudgetUsd;
     if (form.avatarSource.empty() && form.avatar.rfind("preset:", 0) == 0 && (form.isNew || form.avatar != form.originalAvatar)) values["avatar"] = form.avatar;
     auto failed = [&](const Json& response) {
         if (Ok(response)) return false;
@@ -269,11 +277,13 @@ void NativeEditor::Impl::TeamPanel() {
         ImGui::Spacing();
         if (ImGui::Button(Tr("Add your first agent"))) EditAgent("");
     }
+    ImGui::TextDisabled("%s", Tr("Usage today (UTC)"));
+    if (teamUsage.isNull()) ImGui::TextDisabled("%s", Tr("Usage unavailable"));
     ImGui::Separator();
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float line = ImGui::GetTextLineHeight();
-    const float rowHeight = line * 2.0f + style.ItemSpacing.y, avatarSize = rowHeight - 2.0f;
+    const float rowHeight = line * 3.0f + style.ItemSpacing.y, avatarSize = line * 2.0f - 2.0f;
     const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text), dimColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     const std::string lead = team["lead"].asString("");
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -375,6 +385,18 @@ void NativeEditor::Impl::TeamPanel() {
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + line + style.ItemSpacing.y * 0.5f - 1.0f);
             if (ImGui::SmallButton(stopLabel.c_str())) Call("team.cancel", ObjectOf({{"id", Json(id)}}));
         }
+        const Json* usage = nullptr;
+        for (const Json& item : teamUsage["agents"].items()) if (item["id"].asString() == id) usage = &item;
+        std::string usageLine = Tr("Usage unavailable");
+        if (usage) {
+            usageLine = Format(Tr("%.0f in, %.0f out, %.0f cached"), (*usage)["inputTokens"].asNumber(), (*usage)["outputTokens"].asNumber(), (*usage)["cacheReadTokens"].asNumber());
+            if ((*usage)["reportedTurns"].asNumber() < (*usage)["turns"].asNumber()) usageLine += " | " + std::string(Tr("Incomplete usage"));
+            if ((*usage)["costReportedTurns"].asNumber() == (*usage)["turns"].asNumber()) usageLine += Format(" | $%.4f", (*usage)["costUsd"].asNumber());
+            else usageLine += " | " + std::string(Tr("Cost unavailable"));
+        }
+        dl->PushClipRect(ImVec2(textX, pos.y), ImVec2(pos.x + rowWidth, pos.y + rowHeight), true);
+        dl->AddText(ImVec2(textX, pos.y + line * 2.0f + style.ItemSpacing.y * 0.5f), dimColor, usageLine.c_str());
+        dl->PopClipRect();
         ImGui::PopID();
         ++index;
     }
@@ -522,6 +544,11 @@ void NativeEditor::Impl::TeamModals() {
         }
         ImGui::EndDisabled();
 
+        if (form.backend == "claude") {
+            label(Tr("Turn budget (USD)"));
+            ImGui::InputDouble("##budget", &form.maxBudgetUsd, 0, 0, "%.6f");
+            ImGui::TextDisabled("%s", Tr("0 disables the budget; Claude may exceed it by one request."));
+        }
         label(Tr("Access"));
         const char* accessIds[] = {"read", "edit", "full"};
         const char* accessLabels[] = {Tr("Read only"), Tr("Edit project"), Tr("Full access")};

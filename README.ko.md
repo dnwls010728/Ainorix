@@ -79,6 +79,8 @@ oe render MyGame --frames 120 --out shot.png
 에이전트 간 인계). 엔진이 모델 API를 직접 부르지 않고, PC에 설치된 코딩 에이전트 CLI(Claude Code, Codex)를 자식
 프로세스로 실행합니다. Windows 전용, 진행 중 — [docs/TEAM.md](docs/TEAM.md).
 
+에이전트 사용량: `team.usage`로 에이전트/날짜별 토큰과 턴별 비용을 읽습니다. Team 패널은 오늘(UTC)의 사용량을 표시하며, Claude 프로필에 `maxBudgetUsd`를 설정할 수 있습니다(0은 제한 해제).
+
 ## 에디터
 
 `oe editor`는 도킹 에디터(Dear ImGui + ImGuizmo, 엔진 프로세스 안에서 GPU로 그림)를 엽니다. Hierarchy, 리플렉션으로

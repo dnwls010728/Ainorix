@@ -113,6 +113,8 @@ bool MessageFromJson(const Json& j, ChatMessage& message) {
         message.seconds = (*turn)["seconds"].asNumber(0.0);
         message.tools = (*turn)["tools"].asInt(0);
         message.costUsd = (*turn)["costUsd"].asNumber(0.0);
+        message.costKnown = (*turn)["costKnown"].asBool(false);
+        message.usage = TokenUsageFromJson((*turn)["usage"]);
         for (const Json& step : (*turn)["steps"].items()) message.steps.push_back(step.asString(""));
     }
     for (const Json& item : j["attachments"].items()) {
@@ -161,7 +163,9 @@ Json ChatMessageToJson(const ChatMessage& message) {
         Json turn = Json::MakeObject();
         turn["seconds"] = std::round(message.seconds * 10.0) / 10.0;
         turn["tools"] = message.tools;
-        if (message.costUsd > 0.0) turn["costUsd"] = message.costUsd;
+        turn["costKnown"] = message.costKnown;
+        if (message.costKnown) turn["costUsd"] = message.costUsd;
+        turn["usage"] = TokenUsageToJson(message.usage);
         if (!message.steps.empty()) {
             Json steps = Json::MakeArray();
             for (const std::string& step : message.steps) steps.push(step);
@@ -212,6 +216,9 @@ struct TeamSession::Turn {
     std::string task, replyTo, activity = "Starting", finalText, lastText, failure, sessionId;
     int hop = 0;  // of the message this turn answers
     double costUsd = 0.0;
+    bool costKnown = false, costCumulative = false, resumed = false;
+    TokenUsage usage;
+    std::string agentId, model;
     int tools = 0;
     std::set<std::string> toolIds;
     std::vector<std::string> steps;
@@ -232,6 +239,7 @@ void TeamSession::Open() {
     messages_.clear();
     lastMessageId_ = 0;
     projectDir_ = store_.ProjectDir();
+    usage_.Open(JoinPath(Directory(), "usage.jsonl"));
     ++revision_;
 
     std::string text;
@@ -426,6 +434,16 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     request.model = agent.model;
     request.access = agent.access;
     request.sessionId = runtime.session;
+    try {
+        const Json baseline = usage_.Baseline(backend.id, request.sessionId);
+        if (agent.maxBudgetUsd > 0) {
+            if (!request.sessionId.empty() && baseline.isNull()) {
+                runtime.session.clear(); request.sessionId.clear();
+                Notice(agent.name + " started a fresh conversation because its budget baseline is unknown.", agent.id);
+            }
+            request.maxBudgetUsd = agent.maxBudgetUsd + (request.sessionId.empty() ? 0 : baseline["reportedCostUsd"].asNumber());
+        }
+    } catch (const ApiError& e) { return FailTurn(agent.id, runtime, e.what(), e.hint); }
     const std::string context = StandingContext(agent);
     if (backend.systemPromptFlag) {
         if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".system.md"), context, nullptr)) return FailTurn(agent.id, runtime, "cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
@@ -462,6 +480,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     turn->process = PlatformStartProcess(options, &error);
     if (!turn->process) return FailTurn(agent.id, runtime, "Cannot start " + backend.displayName + ": " + error, "Call team.backends {refresh:true} to check the installation.");
     turn->backend = &backend;
+    turn->agentId = agent.id; turn->model = agent.model; turn->resumed = !request.sessionId.empty();
     turn->startedAt = PlatformTimeSeconds();
     turn->task = Shorten(FirstLine(unread.back()->text), 120);
     turn->replyTo = unread.back()->from;
@@ -521,21 +540,51 @@ void TeamSession::HandleLine(Turn& turn, const std::string& line, bool isStderr)
                 turn.doneAt = PlatformTimeSeconds();
                 turn.finalText = event.text;
                 turn.costUsd = event.costUsd;
+                turn.costKnown = event.costKnown; turn.costCumulative = event.costCumulative; turn.usage = event.usage;
                 turn.failure.clear();
                 break;
             case TurnEvent::Kind::Failed:
                 turn.done = false;
                 turn.failure = event.text;
+                if (event.usage.known) turn.usage = event.usage;
+                if (event.costKnown) { turn.costUsd = event.costUsd; turn.costKnown = true; turn.costCumulative = event.costCumulative; }
                 break;
         }
         ++revision_;
     }
 }
 
+Json TeamSession::RecordTurn(const Turn& turn, const std::string& state) {
+    Json record = Json::MakeObject();
+    record["version"] = 1; record["time"] = NowUtc(); record["date"] = record["time"].asString().substr(0, 10);
+    record["agent"] = turn.agentId; record["backend"] = turn.backend->id; record["model"] = turn.model;
+    record["session"] = turn.sessionId; record["state"] = state;
+    record["tokensKnown"] = turn.usage.known;
+    record["inputTokens"] = turn.usage.inputTokens; record["outputTokens"] = turn.usage.outputTokens;
+    record["cacheReadTokens"] = turn.usage.cacheReadTokens; record["cacheCreationTokens"] = turn.usage.cacheCreationTokens;
+    record["reportedCostKnown"] = turn.costKnown; record["reportedCostUsd"] = turn.costUsd;
+    record["costKnown"] = false; record["costUsd"] = 0;
+    try {
+        if (turn.costKnown && !turn.costCumulative) { record["costKnown"] = true; record["costUsd"] = turn.costUsd; }
+        else if (turn.costKnown && !turn.sessionId.empty()) {
+            const Json baseline = usage_.Baseline(turn.backend->id, turn.sessionId);
+            if (!baseline.isNull() && turn.costUsd >= baseline["reportedCostUsd"].asNumber()) {
+                record["costKnown"] = true; record["costUsd"] = turn.costUsd - baseline["reportedCostUsd"].asNumber();
+            } else if (baseline.isNull() && !turn.resumed) { record["costKnown"] = true; record["costUsd"] = turn.costUsd; }
+        }
+        usage_.Append(record);
+    } catch (const ApiError& e) { OE_LOG_WARN("team", "cannot record usage: %s", e.what()); }
+    return record;
+}
+
+Json TeamSession::Usage(const std::string& agent, const std::string& date) const { return usage_.Read(agent, date == "today" ? NowUtc().substr(0, 10) : date); }
+
 void TeamSession::StopTurn(Runtime& runtime) {
     if (!runtime.turn) return;
     runtime.turn->process->Kill();
     runtime.turn->thread.join();
+    for (const auto& line : runtime.turn->lines) HandleLine(*runtime.turn, line.first, line.second);
+    RecordTurn(*runtime.turn, "cancelled");
     runtime.turn.reset();
     ++revision_;
 }
@@ -547,6 +596,7 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
     turn->process->Running(&exitCode);
     const double seconds = PlatformTimeSeconds() - turn->startedAt;
     const bool pending = runtime.pending;
+    const Json accounting = RecordTurn(*turn, turn->timedOut ? "timed_out" : turn->done ? "done" : "failed");
     if (turn->done && !turn->timedOut) {
         ChatMessage reply;
         reply.from = id;
@@ -555,7 +605,9 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
         reply.hasTurn = true;
         reply.seconds = seconds;
         reply.tools = turn->tools;
-        reply.costUsd = turn->costUsd;
+        reply.costUsd = accounting["costUsd"].asNumber();
+        reply.costKnown = accounting["costKnown"].asBool();
+        reply.usage = turn->usage;
         reply.steps = turn->steps;
         // Images the turn made: new or changed png/jpg files in .oe/team/images/ and assets/.
         for (const auto& image : ScanImages()) {

@@ -9,6 +9,7 @@
 #include "core/Json.h"
 #include "team/Backends.h"
 #include "team/TeamStore.h"
+#include "team/TeamUsage.h"
 
 namespace oe {
 
@@ -43,6 +44,8 @@ struct ChatMessage {
     int hop = 0;                  // 0 = from the person; an agent's reply is one more than what it answered
     bool hasTurn = false;         // an agent's reply: how the turn went
     double seconds = 0.0, costUsd = 0.0;
+    bool costKnown = false;
+    TokenUsage usage;
     int tools = 0;
     std::vector<std::string> steps;  // the turn's tool activity lines, bounded
     std::vector<ChatAttachment> attachments;
@@ -81,6 +84,8 @@ public:
 
     // {revision, running, agents: [{id, state, activity, task, elapsed, tools, error?, hint?}]}.
     Json State();
+    // Persisted agent/day totals in UTC; includes unknown-count turns explicitly.
+    Json Usage(const std::string& agent = "", const std::string& date = "") const;
     // Messages with id > after (all = the newest `limit`), oldest first: {messages, first, last},
     // where first/last are the oldest and newest ids the log holds.
     Json Messages(uint64_t after, bool hasAfter, int limit);
@@ -109,6 +114,7 @@ private:
     void HandleLine(Turn& turn, const std::string& line, bool isStderr);
     void FinishTurn(const std::string& id, Runtime& runtime);
     void StopTurn(Runtime& runtime);
+    Json RecordTurn(const Turn& turn, const std::string& state);
     void FailTurn(const std::string& id, Runtime& runtime, const std::string& message, const std::string& hint);
     std::string StandingContext(const AgentProfile& agent) const;
     void SaveSessions();
@@ -118,6 +124,7 @@ private:
     ChatAttachment Describe(const std::string& relativePath) const;
     std::string Directory() const { return store_.Directory(); }
 
+    TeamUsage usage_;
     TeamStore& store_;
     const std::vector<Backend>& backends_;
     const TeamHost& host_;

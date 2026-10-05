@@ -17,6 +17,13 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Usage today (UTC)", "오늘 사용량 (UTC)", "本日の使用量 (UTC)"},
+    {"Usage unavailable", "사용량 정보 없음", "使用量不明"},
+    {"Cost unavailable", "비용 정보 없음", "費用不明"},
+    {"Incomplete usage", "일부 사용량 미확인", "使用量の一部不明"},
+    {"%.0f in, %.0f out, %.0f cached", "입력 %.0f, 출력 %.0f, 캐시 %.0f", "入力 %.0f、出力 %.0f、キャッシュ %.0f"},
+    {"Turn budget (USD)", "턴 예산 (USD)", "ターン予算 (USD)"},
+    {"0 disables the budget; Claude may exceed it by one request.", "0은 예산 제한 해제; Claude는 한 요청만큼 초과할 수 있습니다.", "0で予算無制限。Claudeは1リクエスト分超過する場合があります。"},
     {"Copied selected entities", "선택한 엔티티 복사됨", "選択したエンティティをコピーしました"},
     {"Pasted entities", "엔티티 붙여넣기 완료", "エンティティを貼り付けました"},
     {"Clipboard does not contain valid entities", "클립보드에 유효한 엔티티가 없습니다", "クリップボードに有効なエンティティがありません"},

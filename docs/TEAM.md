@@ -152,6 +152,7 @@ Everything is under `<project>/.oe/team/` (a dot folder: not packaged by `oe pac
 | `backend` | a backend id from §4; unknown ids keep loading and show as unavailable, but cannot be chosen through `team.add` / `team.update` |
 | `model` | a model id of that backend (`[A-Za-z0-9._:\[\]-]{1,64}`), or empty for the CLI's default |
 | `access` | `read` \| `edit` (default) \| `full`, see §6 |
+| `maxBudgetUsd` | Claude per-turn allowance, 0 = disabled (omitted on disk), otherwise 0.000001..1000 USD. Unsupported on other backends |
 | `lead` | agent that receives messages with no mention; empty = such messages reach nobody. The first agent added to an empty team becomes the lead; removing the lead leaves it empty |
 | `maxConcurrent` | 1..8, default 3 |
 | `maxHops` | 0..16, default 4 |
@@ -348,7 +349,12 @@ A turn is one run of an agent's CLI in response to a message.
    (`oe editor`, `oe mcp --port`), an MCP server entry that starts `oe mcp --connect <port>`
    (`.oe/team/tmp/<id>.mcp.json` for Claude, `-c` overrides for Codex; `--agent <id>` is T5).
    Without an API port (`oe exec`, `oe mcp` on stdio only) the agent works on the files.
-5. Stream lines become events (§5.3). The final assistant text becomes the agent's chat message;
+5. Usage is recorded atomically in `.oe/team/usage.jsonl`, with agent/backend/session,
+   UTC date, input/output/cache tokens and per-turn cost. Claude reports session-cumulative
+   cost: the persisted prior result is subtracted. Missing baselines/counters and Codex
+   costs remain unknown. Failed/cancelled turns are included; clearing chat retains usage.
+   Legacy replies with no known cost scope show unavailable rather than a cumulative bill.
+   Stream lines become events (§5.3). The final assistant text becomes the agent's chat message;
    the backend's session id is stored in `sessions.json` (with the id of the last chat message
    the agent has seen) so the next turn resumes the same conversation, also after a restart. A
    failed turn drops the stored conversation, so a broken or expired one cannot fail every
@@ -620,7 +626,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.presets` | | avatar preset ids |
 | `team.list` | | `{version, revision, lead, maxConcurrent, maxHops, agents: [profile], error?}` |
 | `team.get` | `{id}` | one profile: every field, plus `avatarPath` (project-relative) for an uploaded picture |
-| `team.add` | `{name, description?, instructions?, backend?, model?, access?, avatar?}` | the new profile (id generated; backend defaults to the first one, model to that backend's default) |
+| `team.add` | `{name, description?, instructions?, backend?, model?, access?, maxBudgetUsd?, avatar?}` | the new profile (id generated; backend defaults to the first one, model to that backend's default) |
 | `team.update` | `{id, values}` | the profile; partial update like `component.set`. A new backend without a model resets the model |
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
@@ -632,6 +638,7 @@ Every `id` argument accepts the agent's id or its name.
 | `team.cancel` | `{id}` or `{all:true}` | `{cancelled: [ids]}` |
 | `team.state` | | `{revision, running, agents}`: per agent state, activity, task, elapsed, tools, error and hint |
 | `team.messages` | `{after?, limit?}` | Read omitted chat on demand: `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
+| `team.usage` | `{id?, date?}` | per-agent/per-day totals with reportedTurns and costReportedTurns; date is YYYY-MM-DD or today (UTC), omit for all days |
 | `team.clear` | | stops every turn, empties the chat log and stored sessions |
 
 Errors follow the usual shape, with hints that say how to fix the call, for example
@@ -775,3 +782,18 @@ messages; completed turns advance their seen watermark past skipped history.
 Thirty unrelated messages leave only the omission-count line in the next prompt.
 E1/E2 remain reverted; no task API is implied by this checkpoint. Measurements and
 acceptance are recorded in TEAM_LOG.md.
+
+### E5 checkpoint — 2026-10-05
+
+Usage accounting is implemented in the Team roster (today in UTC), each reply,
+and team.usage. Input includes cache creation/read; cached is the read subset.
+Known zero differs from unknown; partial totals carry reported-turn counts.
+Profiles support a Claude turn budget, editable in the profile dialog. The CLI
+ceiling adds the known session cost to that allowance. An unknown resumed baseline
+starts fresh when a budget is enabled. Claude checks between requests and can
+exceed the allowance by one request; this is not a prepaid spending reservation.
+Changing backend requires clearing an unsupported budget. Usage survives clear,
+reset and profile removal. The ledger is bounded to 20,000 records/16 MiB;
+archive it and reopen when full. Unreadable or externally changed files are never
+overwritten. E1/E2/E4 remain reverted. E5 measures accounting accuracy, not a claim
+that provider spend falls because telemetry is shown; evidence is in TEAM_LOG.md.

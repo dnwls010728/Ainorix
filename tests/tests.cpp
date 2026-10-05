@@ -1,6 +1,7 @@
 // Engine self tests. Run: build/bin/oe_tests  (exit code 0 = all passed)
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -50,6 +51,7 @@
 #include "script/ScriptHost.h"
 #if OE_TEAM
 #include "team/TeamCommands.h"
+#include "team/TeamUsage.h"
 #include "team/TeamStore.h"
 #endif
 #if OE_NATIVE_EDITOR
@@ -8566,6 +8568,92 @@ TEST(TeamStreamParsers) {
     CHECK(FindMentions("@allies", agents, all).empty() && !all);
 }
 
+TEST(TeamUsageParsingAndLedger) {
+    TurnEvents events;
+    ParseClaudeLine(R"J({"type":"result","subtype":"success","session_id":"s","total_cost_usd":0.2,"usage":{"input_tokens":10,"cache_read_input_tokens":30,"cache_creation_input_tokens":20,"output_tokens":4}})J", events);
+    CHECK(events.back().usage.known && events.back().usage.inputTokens == 60 && events.back().usage.outputTokens == 4);
+    CHECK(events.back().costKnown && events.back().costCumulative);
+    events.clear(); ParseCodexLine(R"J({"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":70,"output_tokens":5}})J", events);
+    CHECK(events.back().usage.known && events.back().usage.inputTokens == 100 && events.back().usage.cacheReadTokens == 70 && !events.back().costKnown);
+    events.clear(); ParseCodexLine(R"J({"type":"turn.completed","usage":{"input_tokens":-1,"output_tokens":5}})J", events);
+    CHECK(!events.back().usage.known);
+    events.clear(); ParseClaudeLine(R"J({"type":"result","subtype":"error_max_budget_usd","session_id":"s","total_cost_usd":0.3,"usage":{"input_tokens":0,"output_tokens":0}})J", events);
+    CHECK(events.back().kind == TurnEvent::Kind::Failed && events.back().costKnown && events.back().usage.known);
+    TurnRequest request; request.maxBudgetUsd = 0.123456;
+    auto args = ClaudeBuildTurn(request).arguments;
+    CHECK(std::find(args.begin(), args.end(), "--max-budget-usd") != args.end() && std::find(args.begin(), args.end(), "0.123456") != args.end());
+    const std::string project = TempProject("team_usage"), path = JoinPath(project, ".oe/team/usage.jsonl");
+    TeamUsage ledger; ledger.Open(path);
+    Json record = Json::parse(R"J({"version":1,"date":"2026-10-05","agent":"a","backend":"claude","session":"s","tokensKnown":true,"costKnown":true,"inputTokens":60,"outputTokens":4,"cacheReadTokens":30,"cacheCreationTokens":20,"costUsd":0.2,"reportedCostKnown":true,"reportedCostUsd":0.2})J");
+    ledger.Append(record); record["agent"] = "b"; record["date"] = "2026-10-06"; ledger.Append(record);
+    TeamUsage reopened; reopened.Open(path);
+    CHECK(reopened.Read()["total"]["inputTokens"].asInt() == 120 && reopened.Read("a", "2026-10-05")["total"]["turns"].asInt() == 1);
+    CHECK(reopened.Baseline("claude", "s")["reportedCostUsd"].asNumber() == 0.2);
+    CHECK(WriteTextFile(path, "{broken"));
+    bool refused = false; try { reopened.Append(record); } catch (const ApiError& e) { refused = e.code == "usage_file_invalid"; }
+    std::string text; CHECK(refused && ReadTextFile(path, text) && text == "{broken");
+}
+
+TEST(TeamUsageTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_usage_turn"), dir = ProcessFixtureDir("team usage");
+    Backend backend; backend.id = "claude"; backend.displayName = "Fake Claude";
+    backend.executable = JoinPath(dir, "claude.cmd"); backend.models = {{"m", "M", true, 0}}; backend.parseLine = ParseClaudeLine;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable;
+        options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId, std::to_string(request.maxBudgetUsd)};
+        return options;
+    };
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" >nul\necho %*> \"%~dp0args.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    auto reply = [&](double cost) {
+        Json j = Json::parse(R"J({"type":"result","subtype":"success","is_error":false,"session_id":"cost-1","result":"ok","usage":{"input_tokens":1000,"cache_read_input_tokens":300,"cache_creation_input_tokens":100,"output_tokens":20}})J");
+        j["total_cost_usd"] = cost; CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), j.dump() + "\n"));
+    };
+    std::string error, text;
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.add", R"J({"name":"Mina","backend":"claude"})J")["ok"].asBool());
+        CHECK(!Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":-1}})J")["ok"].asBool());
+        reply(0.25); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        reply(0.40); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        Json total = Call(e, "team.usage", R"J({"id":"Mina","date":"today"})J")["result"]["total"];
+        CHECK(total["inputTokens"].asInt() == 2800 && std::abs(total["costUsd"].asNumber() - .40) < 1e-9);
+        const Json msgs = Call(e, "team.messages")["result"]["messages"];
+        CHECK(std::abs(msgs[msgs.size()-1]["turn"]["costUsd"].asNumber() - .15) < 1e-9);
+        CHECK(Call(e, "team.clear")["ok"].asBool());
+        CHECK(Call(e, "team.usage")["result"]["total"]["turns"].asInt() == 2);
+        reply(.45); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+    }
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0.02}})J")["ok"].asBool());
+        reply(.46); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir, "args.txt"), text) && text.find("cost-1") != std::string::npos && text.find("0.470000") != std::string::npos);
+        const Json total = Call(e, "team.usage")["result"]["total"];
+        CHECK(total["turns"].asInt() == 4 && total["inputTokens"].asInt() == 5600 && std::abs(total["costUsd"].asNumber() - .46) < 1e-9);
+    }
+    // Existing resumed sessions without a ledger baseline never bill lifetime spend as one turn.
+    CHECK(RemoveAll(JoinPath(project, ".oe/team/usage.jsonl")));
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0}})J")["ok"].asBool());
+        reply(.50); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(Call(e, "team.usage")["result"]["total"]["costReportedTurns"].asInt() == 0);
+        reply(.55); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(std::abs(Call(e, "team.usage")["result"]["total"]["costUsd"].asNumber() - .05) < 1e-9);
+    }
+    CHECK(RemoveAll(JoinPath(project, ".oe/team/usage.jsonl")));
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), {backend});
+        CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0.02}})J")["ok"].asBool());
+        reply(.01); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir, "args.txt"), text) && text.find("fresh") != std::string::npos && text.find("0.020000") != std::string::npos);
+    }
+    RemoveAll(dir);
+#endif
+}
+
 TEST(TeamChatPull) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)
@@ -9453,6 +9541,14 @@ TEST(NativeEditorTeam) {
         ++ticks;
         team->update();
     };
+    // The roster's usage row is rendered with measured data, not only the unknown state.
+    {
+        const std::time_t now = std::time(nullptr); char day[11];
+        std::strftime(day, sizeof(day), "%Y-%m-%d", std::gmtime(&now));
+        TeamUsage ledger; ledger.Open(JoinPath(project, ".oe/team/usage.jsonl"));
+        Json record = Json::parse(R"J({"version":1,"date":"","agent":"mina","backend":"good","session":"visual","tokensKnown":true,"costKnown":true,"inputTokens":1234,"outputTokens":56,"cacheReadTokens":1000,"cacheCreationTokens":0,"costUsd":0.0123,"reportedCostKnown":false,"reportedCostUsd":0})J");
+        record["date"] = day; ledger.Append(record);
+    }
     NativeEditor editor(e, nullptr, options);
     CHECK(editor.Init(&error));
     RenderTarget image;

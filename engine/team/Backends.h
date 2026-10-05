@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -28,9 +29,18 @@ struct TurnRequest {
     std::string systemPromptFile;  // standing context, for backends with `systemPromptFlag`
     std::string mcpConfigFile;     // {"mcpServers":{"ownengine":...}} file; empty = no editor to attach to
     std::string oeExecutable;      // the same MCP server for CLIs configured by flags: `<oe> mcp --connect <apiPort>`
+    double maxBudgetUsd = 0.0;     // Claude cumulative ceiling computed from the per-turn budget; 0 = disabled
     int apiPort = 0;               // 0 = no editor to attach to
     std::string agentId;           // passed on as `--agent <id>` so the editor shows who made an edit
 };
+
+// Input includes cache reads/creation. Unknown counters are not reported as measured zeroes.
+struct TokenUsage {
+    bool known = false;
+    uint64_t inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreationTokens = 0;
+};
+Json TokenUsageToJson(const TokenUsage& usage);
+TokenUsage TokenUsageFromJson(const Json& value);
 
 // One thing a CLI reported on its event stream, in the backend-neutral form TeamSession uses.
 struct TurnEvent {
@@ -46,6 +56,8 @@ struct TurnEvent {
     std::string text, detail, itemId;
     bool detailIsPath = false;  // detail is a file: shown relative to the project
     double costUsd = 0.0;
+    bool costKnown = false, costCumulative = false;
+    TokenUsage usage;
 };
 using TurnEvents = std::vector<TurnEvent>;
 
