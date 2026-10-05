@@ -37,6 +37,8 @@ struct TurnRequest {
 // Input includes cache reads/creation. Unknown counters are not reported as measured zeroes.
 struct TokenUsage {
     bool known = false;
+    uint64_t contextTokens = 0; // latest API input when supplied; otherwise conservative turn-total estimate
+    bool contextEstimated = true;
     uint64_t inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheCreationTokens = 0;
 };
 Json TokenUsageToJson(const TokenUsage& usage);

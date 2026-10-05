@@ -283,7 +283,7 @@ void NativeEditor::Impl::TeamPanel() {
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float line = ImGui::GetTextLineHeight();
-    const float rowHeight = line * 3.0f + style.ItemSpacing.y, avatarSize = line * 2.0f - 2.0f;
+    const float rowHeight = line * 4.0f + style.ItemSpacing.y, avatarSize = line * 2.0f - 2.0f;
     const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text), dimColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
     const std::string lead = team["lead"].asString("");
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -336,6 +336,7 @@ void NativeEditor::Impl::TeamPanel() {
             selectedAgent = id;
             if (ImGui::MenuItem(Tr("Edit"))) EditAgent(id);
             if (ImGui::MenuItem(Tr("Make Lead"), nullptr, false, lead != id)) Call("team.settings", ObjectOf({{"lead", Json(id)}}));
+            if (ImGui::MenuItem(Tr("Reset Conversation"), nullptr, false, !busy)) Call("team.reset", ObjectOf({{"id", Json(id)}}));
             if (ImGui::MenuItem(Tr("Stop"), nullptr, false, busy)) Call("team.cancel", ObjectOf({{"id", Json(id)}}));
             ImGui::Separator();
             if (ImGui::MenuItem(Tr("Delete"))) {
@@ -387,15 +388,17 @@ void NativeEditor::Impl::TeamPanel() {
         }
         const Json* usage = nullptr;
         for (const Json& item : teamUsage["agents"].items()) if (item["id"].asString() == id) usage = &item;
-        std::string usageLine = Tr("Usage unavailable");
+        std::string usageLine = Tr("Usage unavailable"), cacheLine;
         if (usage) {
-            usageLine = Format(Tr("%.0f in, %.0f out, %.0f cached"), (*usage)["inputTokens"].asNumber(), (*usage)["outputTokens"].asNumber(), (*usage)["cacheReadTokens"].asNumber());
+            usageLine = Format(Tr("%.0f in, %.0f out"), (*usage)["inputTokens"].asNumber(), (*usage)["outputTokens"].asNumber());
+            cacheLine = Format(Tr("%.0f cached"), (*usage)["cacheReadTokens"].asNumber());
             if ((*usage)["reportedTurns"].asNumber() < (*usage)["turns"].asNumber()) usageLine += " | " + std::string(Tr("Incomplete usage"));
-            if ((*usage)["costReportedTurns"].asNumber() == (*usage)["turns"].asNumber()) usageLine += Format(" | $%.4f", (*usage)["costUsd"].asNumber());
-            else usageLine += " | " + std::string(Tr("Cost unavailable"));
+            if ((*usage)["costReportedTurns"].asNumber() == (*usage)["turns"].asNumber()) cacheLine += Format(" | $%.4f", (*usage)["costUsd"].asNumber());
+            else cacheLine += " | " + std::string(Tr("Cost unavailable"));
         }
         dl->PushClipRect(ImVec2(textX, pos.y), ImVec2(pos.x + rowWidth, pos.y + rowHeight), true);
         dl->AddText(ImVec2(textX, pos.y + line * 2.0f + style.ItemSpacing.y * 0.5f), dimColor, usageLine.c_str());
+        dl->AddText(ImVec2(textX, pos.y + line * 3.0f + style.ItemSpacing.y * 0.5f), dimColor, cacheLine.c_str());
         dl->PopClipRect();
         ImGui::PopID();
         ++index;

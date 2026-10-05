@@ -98,6 +98,22 @@ const AgentProfile* FindById(const TeamStore& store, const std::string& id) {
     return nullptr;
 }
 
+void CheckSessionsFile(const std::string& path) {
+    if (!FileExists(path)) return;
+    std::error_code ec; const auto size = std::filesystem::file_size(std::filesystem::u8path(path), ec);
+    std::string bytes, error;
+    if (ec || size > 1024 * 1024 || !ReadTextFile(path, bytes)) throw ApiError("session_file_invalid", "cannot read sessions.json", "Repair .oe/team/sessions.json before resetting or saving conversations.");
+    const Json j = Json::parse(bytes, &error);
+    if (!error.empty() || !j.isObject()) throw ApiError("session_file_invalid", "invalid sessions.json", "Repair the file; unreadable sessions are never overwritten.");
+    for (const auto& member : j.members()) {
+        const Json& row = member.second;
+        const double seen = row["seen"].asNumber(0);
+        if (!row.isObject() || (row.has("seen") && !row["seen"].isNumber()) || seen < 0 || seen > 9007199254740991.0 || std::floor(seen) != seen ||
+            (row.has("session") && (!row["session"].isString() || !ValidSessionId(row["session"].asString()))) ||
+            (row.has("backend") && !row["backend"].isString())) throw ApiError("session_file_invalid", "invalid saved conversation", "Repair sessions.json before changing it.");
+    }
+}
+
 bool MessageFromJson(const Json& j, ChatMessage& message) {
     if (!j.isObject() || !j["id"].isNumber() || !j["from"].isString() || !j["text"].isString()) return false;
     message.id = static_cast<uint64_t>(std::max(0.0, j["id"].asNumber()));
@@ -275,6 +291,7 @@ void TeamSession::Open() {
                 const std::string session = member.second["session"].asString("");
                 if (ValidSessionId(session)) runtime.session = session;
                 runtime.sessionBackend = member.second["backend"].asString("");
+                runtime.contextTokens = usage_.LastContext(runtime.sessionBackend, runtime.session);
                 runtime.seen = static_cast<uint64_t>(std::max(0.0, member.second["seen"].asNumber(0.0)));
             }
         }
@@ -333,6 +350,8 @@ void TeamSession::Notice(const std::string& text, const std::string& about) {
 }
 
 void TeamSession::SaveSessions() {
+    try { CheckSessionsFile(JoinPath(Directory(), "sessions.json")); }
+    catch (const ApiError& e) { OE_LOG_WARN("team", "cannot save sessions: %s", e.what()); return; }
     Json root = Json::MakeObject();
     for (const auto& entry : agents_) {
         if (entry.second.session.empty() && entry.second.seen == 0) continue;
@@ -422,10 +441,18 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         for (const ChatAttachment& attachment : message->attachments) prompt += "  Attached " + attachment.type + ": " + attachment.path + "\n";
     }
 
+    const ChatMessage trigger = *unread.back();
+
     if (omitted > 0 && host_.apiPort > 0) {
         prompt += "\n" + std::to_string(omitted) + " chat messages omitted. Read team_messages when earlier context is needed.\n";
     }
 
+    if (store_.Settings().rotateAboveInputTokens > 0 && !runtime.session.empty() &&
+        runtime.contextTokens >= static_cast<uint64_t>(store_.Settings().rotateAboveInputTokens)) {
+        runtime.session.clear(); runtime.sessionBackend.clear(); runtime.contextTokens = 0;
+        Notice(agent.name + " started a fresh conversation: the input-size estimate reached rotateAboveInputTokens.", agent.id);
+        SaveSessions();
+    }
     if (runtime.sessionBackend != backend.id) runtime.session.clear();  // a conversation belongs to the CLI that made it
     const std::string tmp = JoinPath(Directory(), "tmp"), relativeTmp = ".oe/team/tmp/";
     CreateDirectories(tmp);
@@ -472,7 +499,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     ProcessOptions options = backend.buildTurn(request);
     options.workingDirectory = projectDir_;
     options.environment.emplace_back("OE_TEAM_AGENT", agent.id);
-    options.environment.emplace_back("OE_TEAM_HOP", std::to_string(unread.back()->hop));
+    options.environment.emplace_back("OE_TEAM_HOP", std::to_string(trigger.hop));
     options.pipeStdin = true;
 
     auto turn = std::make_unique<Turn>();
@@ -482,9 +509,9 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     turn->backend = &backend;
     turn->agentId = agent.id; turn->model = agent.model; turn->resumed = !request.sessionId.empty();
     turn->startedAt = PlatformTimeSeconds();
-    turn->task = Shorten(FirstLine(unread.back()->text), 120);
-    turn->replyTo = unread.back()->from;
-    turn->hop = unread.back()->hop;
+    turn->task = Shorten(FirstLine(trigger.text), 120);
+    turn->replyTo = trigger.from;
+    turn->hop = trigger.hop;
     turn->seenUpTo = seenUpTo;
     CreateDirectories(JoinPath(Directory(), "images"));  // where agents are told to save pictures
     turn->imagesBefore = ScanImages();
@@ -560,6 +587,7 @@ Json TeamSession::RecordTurn(const Turn& turn, const std::string& state) {
     record["agent"] = turn.agentId; record["backend"] = turn.backend->id; record["model"] = turn.model;
     record["session"] = turn.sessionId; record["state"] = state;
     record["tokensKnown"] = turn.usage.known;
+    record["contextTokens"] = turn.usage.contextTokens; record["contextEstimated"] = turn.usage.contextEstimated;
     record["inputTokens"] = turn.usage.inputTokens; record["outputTokens"] = turn.usage.outputTokens;
     record["cacheReadTokens"] = turn.usage.cacheReadTokens; record["cacheCreationTokens"] = turn.usage.cacheCreationTokens;
     record["reportedCostKnown"] = turn.costKnown; record["reportedCostUsd"] = turn.costUsd;
@@ -635,6 +663,7 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
         const int replyHop = reply.hop;
         Append(std::move(reply));
         runtime.session = turn->sessionId;
+        runtime.contextTokens = turn->usage.contextTokens;
         runtime.sessionBackend = turn->backend->id;
         runtime.seen = std::max(runtime.seen, turn->seenUpTo);
         runtime.lastError.clear();
@@ -875,6 +904,16 @@ void TeamSession::Forget(const std::string& id) {
     RemoveAll(JoinPath(JoinPath(Directory(), "tmp"), id + ".system.md"));
     RemoveAll(JoinPath(JoinPath(Directory(), "tmp"), id + ".mcp.json"));
     ++revision_;
+}
+
+void TeamSession::Reset(const std::string& idOrName) {
+    const AgentProfile* agent = store_.Find(idOrName);
+    if (!agent) throw ApiError("unknown_agent", "no agent '" + idOrName + "'", "team.list shows the agents.");
+    Runtime& runtime = agents_[agent->id];
+    if (runtime.turn || runtime.pending) throw ApiError("agent_busy", agent->name + " is busy", "Cancel that agent or wait before resetting its conversation.");
+    CheckSessionsFile(JoinPath(Directory(), "sessions.json"));
+    runtime.session.clear(); runtime.sessionBackend.clear(); runtime.contextTokens = 0;
+    SaveSessions(); ++revision_;
 }
 
 void TeamSession::Clear() {

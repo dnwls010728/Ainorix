@@ -17,6 +17,8 @@ bool ValidCount(const Json& value) {
 bool ValidRecord(const Json& j) {
     if (!j.isObject() || j["version"].asInt() != 1 || !j["agent"].isString() || !j["backend"].isString() ||
         !j["date"].isString() || j["date"].asString().size() != 10 || !j["tokensKnown"].isBool() || !j["costKnown"].isBool() || !j["session"].isString() || !j["reportedCostKnown"].isBool()) return false;
+    if (j.has("contextTokens") && !ValidCount(j["contextTokens"])) return false;
+    if (j.has("contextEstimated") && !j["contextEstimated"].isBool()) return false;
     for (const char* k : {"inputTokens", "cacheReadTokens", "cacheCreationTokens", "outputTokens"}) if (!ValidCount(j[k])) return false;
     const double reported = j["reportedCostUsd"].asNumber(-1);
     if (!j["reportedCostUsd"].isNumber() || !std::isfinite(reported) || reported < 0 || reported > 1e6) return false;
@@ -68,6 +70,16 @@ void TeamUsage::Append(const Json& record) {
         throw ApiError("write_failed", error_, "Check .oe/team/usage.jsonl permissions.");
     }
     bytes_ = next; records_.push_back(record);
+}
+uint64_t TeamUsage::LastContext(const std::string& backend, const std::string& session) const {
+    if (!error_.empty()) return 0; // errors remain visible through Read/Baseline; rotation is opt-in
+    for (auto it = records_.rbegin(); it != records_.rend(); ++it) {
+        if ((*it)["backend"].asString() != backend || (*it)["session"].asString() != session) continue;
+        if (!(*it)["tokensKnown"].asBool()) return 0;
+        const double n = (*it).has("contextTokens") ? (*it)["contextTokens"].asNumber(-1) : (*it)["inputTokens"].asNumber();
+        return n >= 0 && n <= 1e12 ? static_cast<uint64_t>(n) : 0;
+    }
+    return 0;
 }
 Json TeamUsage::Baseline(const std::string& backend, const std::string& session) const {
     if (!error_.empty()) throw ApiError("usage_file_invalid", error_, "Repair usage.jsonl and reopen the project.");

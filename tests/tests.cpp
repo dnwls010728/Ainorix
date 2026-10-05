@@ -8589,6 +8589,11 @@ TEST(TeamUsageParsingAndLedger) {
     TeamUsage reopened; reopened.Open(path);
     CHECK(reopened.Read()["total"]["inputTokens"].asInt() == 120 && reopened.Read("a", "2026-10-05")["total"]["turns"].asInt() == 1);
     CHECK(reopened.Baseline("claude", "s")["reportedCostUsd"].asNumber() == 0.2);
+    CHECK(reopened.LastContext("claude", "s") == 60); // legacy ledger fallback
+    record["contextTokens"] = 25; record["contextEstimated"] = false; reopened.Append(record);
+    CHECK(reopened.LastContext("claude", "s") == 25);
+    record["tokensKnown"] = false; reopened.Append(record);
+    CHECK(reopened.LastContext("claude", "s") == 0); // unknown latest usage must not revive an old estimate
     CHECK(WriteTextFile(path, "{broken"));
     bool refused = false; try { reopened.Append(record); } catch (const ApiError& e) { refused = e.code == "usage_file_invalid"; }
     std::string text; CHECK(refused && ReadTextFile(path, text) && text == "{broken");
@@ -8649,6 +8654,61 @@ TEST(TeamUsageTurns) {
         CHECK(Call(e, "team.update", R"J({"id":"mina","values":{"maxBudgetUsd":0.02}})J")["ok"].asBool());
         reply(.01); CHECK(Call(e, "team.send", R"J({"text":"Say ok","wait":10})J")["ok"].asBool());
         CHECK(ReadTextFile(JoinPath(dir, "args.txt"), text) && text.find("fresh") != std::string::npos && text.find("0.020000") != std::string::npos);
+    }
+    RemoveAll(dir);
+#endif
+}
+
+TEST(TeamResetAndRotation) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_reset"), dir = ProcessFixtureDir("team reset");
+    auto fake = [&](const char* id, bool slow) {
+        Backend b; b.id = id; b.displayName = id; b.executable = JoinPath(dir, std::string(id) + ".cmd");
+        b.models = {{"m", "M", true, 0}}; b.parseLine = ParseClaudeLine;
+        b.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options; options.executable = request.executable;
+            options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId}; return options;
+        };
+        std::string script = "@echo off\nfindstr \"^\" >nul\necho %*> \"%~dp0%OE_TEAM_AGENT%.args\"\n";
+        if (slow) script += "ping -n 30 127.0.0.1 >nul\n";
+        script += R"J(echo {"type":"result","subtype":"success","is_error":false,"session_id":"sess-%OE_TEAM_AGENT%","result":"ok","usage":{"input_tokens":1000,"cache_read_input_tokens":500,"output_tokens":20,"iterations":[{"input_tokens":10,"cache_read_input_tokens":490,"output_tokens":20}]}})J" "\n";
+        CHECK(WriteTextFile(b.executable, script)); return b;
+    };
+    const std::vector<Backend> backends = {fake("fast", false), fake("slow", true)};
+    std::string error, text;
+    {
+        Engine e; CHECK(e.Open(project, &error)); auto team = RegisterTeamCommands(e.Commands(), backends);
+        for (const char* a : {R"J({"name":"A","backend":"fast"})J",R"J({"name":"B","backend":"fast"})J",R"J({"name":"C","backend":"slow"})J"}) CHECK(Call(e,"team.add",a)["ok"].asBool());
+        CHECK(Call(e,"team.settings")["result"]["rotateAboveInputTokens"].asInt() == 0);
+        CHECK(!Call(e,"team.settings",R"J({"rotateAboveInputTokens":-1})J")["ok"].asBool());
+        for (const char* msg : {R"J({"text":"@a hello","wait":10})J",R"J({"text":"@b hello","wait":10})J"}) CHECK(Call(e,"team.send",msg)["ok"].asBool());
+        const Json chat = Call(e,"team.messages")["result"], usage = Call(e,"team.usage")["result"];
+        CHECK(Call(e,"team.reset",R"J({"id":"A"})J")["ok"].asBool());
+        CHECK(Call(e,"team.messages")["result"].dump() == chat.dump() && Call(e,"team.usage")["result"].dump() == usage.dump());
+        CHECK(ReadTextFile(JoinPath(project,".oe/team/sessions.json"),text));
+        CHECK(!Json::parse(text)["a"].has("session") && Json::parse(text)["b"]["session"].asString() == "sess-b");
+        CHECK(Call(e,"team.send",R"J({"text":"@a hello","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"a.args"),text) && text.find("fresh") != std::string::npos);
+        CHECK(Call(e,"team.send",R"J({"text":"@b hello","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"b.args"),text) && text.find("sess-b") != std::string::npos); // default off even with 1,500 input tokens
+        CHECK(Call(e,"team.send",R"J({"text":"@c work"})J")["ok"].asBool());
+        CHECK(Call(e,"team.reset",R"J({"id":"c"})J")["error"]["code"].asString() == "agent_busy");
+        CHECK(Call(e,"team.cancel",R"J({"id":"c"})J")["ok"].asBool());
+        CHECK(Call(e,"team.settings",R"J({"rotateAboveInputTokens":600})J")["ok"].asBool());
+        CHECK(Call(e,"team.send",R"J({"text":"@b below threshold","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"b.args"),text) && text.find("sess-b") != std::string::npos); // last API context is 500, not turn total 1,500
+        CHECK(Call(e,"team.settings",R"J({"rotateAboveInputTokens":500})J")["ok"].asBool());
+    }
+    {
+        Engine e; CHECK(e.Open(project,&error)); auto team = RegisterTeamCommands(e.Commands(),backends);
+        CHECK(Call(e,"team.settings")["result"]["rotateAboveInputTokens"].asInt() == 500);
+        CHECK(Call(e,"team.send",R"J({"text":"@b rotate","wait":10})J")["ok"].asBool());
+        CHECK(ReadTextFile(JoinPath(dir,"b.args"),text) && text.find("fresh") != std::string::npos);
+        CHECK(Call(e,"team.messages")["result"].dump().find("input-size estimate") != std::string::npos);
+        const std::string path=JoinPath(project,".oe/team/sessions.json"); CHECK(WriteTextFile(path,"{broken"));
+        CHECK(Call(e,"team.reset",R"J({"id":"a"})J")["error"]["code"].asString() == "session_file_invalid");
+        CHECK(ReadTextFile(path,text) && text == "{broken");
     }
     RemoveAll(dir);
 #endif

@@ -156,6 +156,7 @@ Everything is under `<project>/.oe/team/` (a dot folder: not packaged by `oe pac
 | `lead` | agent that receives messages with no mention; empty = such messages reach nobody. The first agent added to an empty team becomes the lead; removing the lead leaves it empty |
 | `maxConcurrent` | 1..8, default 3 |
 | `maxHops` | 0..16, default 4 |
+| `rotateAboveInputTokens` | 0 disables automatic conversation rotation (default); otherwise 1..2,000,000 input tokens |
 
 Limits: 16 agents per team, file ≤ 1 MiB. Ordered, pretty JSON; defaults are not written
 (DESIGN.md invariant 8). Writes are atomic (`WriteTextFileAtomic`): a change is validated, written,
@@ -359,6 +360,16 @@ A turn is one run of an agent's CLI in response to a message.
    the agent has seen) so the next turn resumes the same conversation, also after a restart. A
    failed turn drops the stored conversation, so a broken or expired one cannot fail every
    later turn; changing an agent's backend starts a new conversation.
+   `team.reset {id}` clears only that idle agent's conversation. It preserves the chat,
+   seen watermark, usage, profiles and other agents; busy/queued agents must be cancelled
+   or allowed to finish first. The roster context menu provides Reset Conversation.
+   With `rotateAboveInputTokens` enabled, the next addressed turn starts fresh when
+   the previous input-size estimate meets the threshold, and appends a notice.
+   Claude uses the last reported API iteration input (including caches); otherwise
+   the whole turn input is a conservative estimate. This is not the context-window
+   limit. Unknown usage cannot trigger rotation. The estimate survives reopening.
+   Rotation makes no model call of its own and may discard useful context or lose
+   cache savings, so it is disabled by default. Invalid sessions files are preserved.
 6. `team.cancel {id}` (the Stop button) kills the process tree and drops the agent's waiting
    message; the chat gets a "stopped" notice. Closing the tool cancels all turns (the job
    object ends them even if the tool crashes).
@@ -631,7 +642,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
 | `team.avatar` | `{id, preset}` or `{id, source}` | the profile |
-| `team.settings` | `{lead?, maxConcurrent?, maxHops?}` | team settings; without arguments it only reads |
+| `team.settings` | `{lead?, maxConcurrent?, maxHops?, rotateAboveInputTokens?}` | team settings; without arguments it only reads |
 
 Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |
@@ -639,6 +650,7 @@ Every `id` argument accepts the agent's id or its name.
 | `team.state` | | `{revision, running, agents}`: per agent state, activity, task, elapsed, tools, error and hint |
 | `team.messages` | `{after?, limit?}` | Read omitted chat on demand: `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
 | `team.usage` | `{id?, date?}` | per-agent/per-day totals with reportedTurns and costReportedTurns; date is YYYY-MM-DD or today (UTC), omit for all days |
+| `team.reset` | `{id}` | `{reset: true}`; clears only the selected idle agent's conversation; keeps chat/usage/profiles/other sessions |
 | `team.clear` | | stops every turn, empties the chat log and stored sessions |
 
 Errors follow the usual shape, with hints that say how to fix the call, for example
@@ -797,3 +809,15 @@ reset and profile removal. The ledger is bounded to 20,000 records/16 MiB;
 archive it and reopen when full. Unreadable or externally changed files are never
 overwritten. E1/E2/E4 remain reverted. E5 measures accounting accuracy, not a claim
 that provider spend falls because telemetry is shown; evidence is in TEAM_LOG.md.
+
+### E6 checkpoint — 2026-10-05
+
+Per-agent reset and optional input-size rotation are implemented. The threshold
+defaults to 0 and is omitted on disk; reset never calls a model. Reset preserves
+other agents, chat, usage and the selected agent's seen watermark. Busy and queued
+agents refuse reset. Stand-in tests cover manual reset, threshold boundaries,
+restart persistence and invalid-session-file preservation. The roster exposes
+Reset Conversation and displays usage on two lines so cost fits a narrow panel.
+Manual haiku measurements reduced resumed input from 86,138 to 38,049 tokens.
+Cold-cache reset cost increased; automatic rotation is optional, not a promise
+of lower cost on every turn. Full measurements and tradeoffs are in TEAM_LOG.md.

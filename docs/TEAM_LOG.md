@@ -482,3 +482,76 @@ was chosen. API regenerated, guides identical, original sample team files untouc
 Final E5 checks: build.bat passed without warnings; **201 tests, zero failed checks**.
 Usage and chat screenshots were visually reviewed. Original user edits remain
 unstaged; only E5 code/docs/tests are included in the milestone commit.
+
+
+## 2026-10-05 — E6 per-agent reset and optional rotation kept
+
+- [x] E6: team.reset {id}, roster Reset Conversation, persisted
+  rotateAboveInputTokens setting (0 disables it, default; upper bound 2,000,000).
+  Reset preserves chat, usage, profiles, seen watermark and other conversations.
+  Busy/queued agents refuse reset. No model call is made by reset itself.
+- [x] Stand-in TeamResetAndRotation covers selective reset, the other agent's
+  resume, busy refusal, disabled/default setting, threshold boundaries, persistence
+  across reopen and corrupt sessions.json preservation. Existing CLI parsing,
+  usage accounting, translations and headless editor tests remain passing.
+
+Claude's last reported usage iteration provides the final API input size,
+including cache creation/read. If absent (including current Codex events), the
+whole turn input is a conservative estimate. Unknown usage cannot trigger
+rotation. The estimate is persisted in usage.jsonl and restored on reopen.
+Rotation runs before the next addressed turn and records a fresh-conversation
+notice. It does not perform a summarization turn. The previous turn's size is
+an estimate, not a model context-window guarantee. Defaults are omitted on disk.
+The roster's usage is split across two lines so cached tokens and USD fit the
+default narrow panel; English/Korean/Japanese screenshot strings are covered.
+
+Manual cheap CLI: Claude Code 2.1.289, haiku
+(claude-haiku-4-5-20251001). All actual model runs were confined to
+build/scratch/team-e5-e6; no actual model is started by oe_tests.
+The fixed idle prompt was "Say ok and nothing else. Do not call tools.".
+The experiment reopened E5's scratch conversation, measured one resumed turn,
+reset only Lead, measured a fresh turn, enabled threshold 10,000, then measured
+the next automatically rotated turn. The scratch threshold was restored to 0.
+
+| Idle invocation | Input side | Output | Cache read | Cache creation | Per-turn USD |
+|---|---:|---:|---:|---:|---:|
+| Before: resumed | 86,138 | 43 | 76,535 | 9,594 | 0.0270655 |
+| After: manual reset | 38,049 | 47 | 20,645 | 17,395 | 0.0370985 |
+| After: automatic rotation | 38,049 | 98 | 38,040 | 0 | 0.0043030 |
+
+Resumed CLI cumulative cost was 0.2748470; the persisted prior 0.2477815
+was subtracted. Both fresh conversations have independent session ids and costs.
+Reset itself preserved messages, profiles and team.usage byte-equivalent API
+results. Input fell 55.83% (48,089 tokens), so E6 is retained for the measured
+input-size improvement and its selective-reset acceptance criterion.
+Cold-cache manual reset cost rose 37.07%; the later warm-cache automatic reset
+cost fell 84.10%. This is not evidence that every reset saves money. Rotation
+remains opt-in, and loses prior model context; no automatic summary is requested.
+No repeat run was selected to hide the cold-cache result.
+
+M2 rerun: same fresh Wickbound manifest and prompt SHA-256
+`e661600325da7711fd5cb441a98e12a79de0420619c5c562e87a9501a205f373`,
+Lead Claude/haiku/full plus inactive Other, maxConcurrent 3, explicit maxHops 0,
+30 unrelated messages, no delegation, rotation disabled. Compared with E5:
+
+| Fresh Bat | Input side | Output | Cache read | Cache creation | USD | Wall seconds |
+|---|---:|---:|---:|---:|---:|---:|
+| E5 before | 777,283 | 7,982 | 718,345 | 58,823 | 0.2295055 | 87.946 |
+| E6 after | 406,060 | 9,064 | 346,534 | 59,467 | 0.1989664 | 92.579 |
+
+CLI counters and the usage ledger match exactly. The saved scene independently
+contains exactly one Bat root (383), Script.path scripts/run/bat.lua,
+RigidBody2D and Collider2D, and five children (384..388); the copied script's
+base speed is 3. Actual oe exec script.check reports errors 0 and warnings 0.
+The fresh Bat run never activated rotation, so the lower cost/input is recorded
+as model-run variation, not attributed to reset. No cheapest-model Codex turn
+was necessary; its accounting/rotation fallback is covered by stand-in events.
+
+Evidence (ignored scratch): e6-reset.json, e6-after/measurement.json,
+e6-after/.oe/team/raw-*.jsonl and usage.jsonl, e6-acceptance.json,
+build-e6-tests.log and tests-e6-final.log. Build warning-free; **202 tests,
+zero failed checks**. The roster screenshot was visually checked: input/output,
+cache read and $0.0123 fixture cost are visible at the default narrow width.
+API regenerated; TEAM §§3.1/5/8/11, both identical guides and three READMEs updated.
+Original sample/team settings and unrelated user changes are excluded from the
+commit. E1/E2/E4 remain reverted; this request completes only E5 and E6.

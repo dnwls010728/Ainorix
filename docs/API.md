@@ -1156,6 +1156,7 @@ Read or change the team settings; without arguments it only reads them.
 | `lead` | string |  | Agent (id or name) that receives messages without a mention; "" = nobody. |
 | `maxConcurrent` | integer |  | Agent turns that may run at the same time, 1..8 (default 3). |
 | `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 4). |
+| `rotateAboveInputTokens` | integer |  | Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000. |
 
 ### `team.send`
 
@@ -1189,6 +1190,14 @@ Team chat messages, oldest first: {messages, first, last} (first = oldest id sti
 |---|---|---|---|
 | `after` | integer |  | Only messages with a larger id (poll with the previous `last`). |
 | `limit` | integer |  | At most this many, 1..500 (default 100). |
+
+### `team.reset`
+
+Forget one idle agent's backend conversation. Chat, profiles, usage and other conversations are retained; never starts a model turn. Busy agents must be cancelled first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Agent id or name. |
 
 ### `team.usage`
 

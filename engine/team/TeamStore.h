@@ -28,6 +28,7 @@ struct AgentProfile {
 struct TeamSettings {
     std::string lead;       // agent id that receives messages without a mention; empty = nobody
     int maxConcurrent = 3;  // turns running at once, 1..8
+    int rotateAboveInputTokens = 0; // 0 = disabled; fresh conversation before next turn at/above this estimate
     int maxHops = 4;        // chained agent-to-agent turns per user message, 0..16
 };
 

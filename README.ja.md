@@ -84,6 +84,8 @@ oe render MyGame --frames 120 --out shot.png
 
 エージェント使用量: `team.usage`でエージェント/日別トークンとターン別費用を取得できます。Teamパネルは本日(UTC)の使用量を表示し、Claudeプロファイルに`maxBudgetUsd`を設定できます（0で無制限）。
 
+`team.reset {id}`（または一覧のReset Conversation）で待機中のエージェント一人の会話を初期化できます。チャットと使用量は保持します。`team.settings {rotateAboveInputTokens: N}`は入力サイズが閾値に達すると次のターンを新しい会話で開始します。既定値0は無効です。初期化でキャッシュの節約効果を失う場合があります。
+
 ## エディター
 
 `oe editor` はドッキングエディター(Dear ImGui + ImGuizmo、エンジンプロセス内で GPU 描画)を開きます。Hierarchy、

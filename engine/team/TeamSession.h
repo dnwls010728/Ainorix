@@ -79,6 +79,8 @@ public:
     void Forget(const std::string& id);
     // Stops every turn, empties the chat log and forgets all conversations.
     void Clear();
+    // Drop one idle agent's backend conversation; chat, usage and other agents stay intact.
+    void Reset(const std::string& idOrName);
     // Executable paths are looked up once; call after a CLI was installed.
     void RefreshBackends() { executables_.clear(); ++revision_; }
 
@@ -99,6 +101,7 @@ private:
         bool pending = false;       // has unread messages addressed to it and waits for a turn
         std::string session;        // the backend's conversation id
         std::string sessionBackend; // backend that conversation belongs to
+        uint64_t contextTokens = 0; // saved context estimate, used only when rotation is enabled
         uint64_t seen = 0;          // chat messages up to this id were given to the agent
         std::string lastError, lastHint;
     };

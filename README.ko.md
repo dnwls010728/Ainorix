@@ -81,6 +81,8 @@ oe render MyGame --frames 120 --out shot.png
 
 에이전트 사용량: `team.usage`로 에이전트/날짜별 토큰과 턴별 비용을 읽습니다. Team 패널은 오늘(UTC)의 사용량을 표시하며, Claude 프로필에 `maxBudgetUsd`를 설정할 수 있습니다(0은 제한 해제).
 
+`team.reset {id}`(또는 목록의 Reset Conversation)로 유휴 에이전트 한 명의 대화를 초기화합니다. 채팅과 사용량은 보존됩니다. `team.settings {rotateAboveInputTokens: N}`은 입력 크기가 임계값에 도달하면 다음 턴을 새 대화로 시작합니다. 기본값 0은 해제이며, 초기화로 캐시 절약 효과가 사라질 수 있습니다.
+
 ## 에디터
 
 `oe editor`는 도킹 에디터(Dear ImGui + ImGuizmo, 엔진 프로세스 안에서 GPU로 그림)를 엽니다. Hierarchy, 리플렉션으로

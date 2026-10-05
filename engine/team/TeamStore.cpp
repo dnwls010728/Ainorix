@@ -158,6 +158,7 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
     root["version"] = kTeamFileVersion;
     if (!settings.lead.empty()) root["lead"] = settings.lead;
     if (settings.maxConcurrent != defaults.maxConcurrent) root["maxConcurrent"] = settings.maxConcurrent;
+    if (settings.rotateAboveInputTokens != defaults.rotateAboveInputTokens) root["rotateAboveInputTokens"] = settings.rotateAboveInputTokens;
     if (settings.maxHops != defaults.maxHops) root["maxHops"] = settings.maxHops;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents) {
@@ -271,6 +272,7 @@ bool TeamStore::Open(const std::string& projectDir, std::string* error) {
         TeamSettings settings;
         settings.maxConcurrent = IntegerSetting(root, "maxConcurrent", 1, 8, settings.maxConcurrent);
         settings.maxHops = IntegerSetting(root, "maxHops", 0, 16, settings.maxHops);
+        settings.rotateAboveInputTokens = IntegerSetting(root, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
         settings.lead = root["lead"].asString("");
         const bool leadExists = std::any_of(agents.begin(), agents.end(), [&](const AgentProfile& a) { return a.id == settings.lead; });
         if (!settings.lead.empty() && !leadExists) throw Invalid("lead \"" + settings.lead + "\" is not an agent of the team");
@@ -460,6 +462,7 @@ void TeamStore::SetSettings(const Json& values) {
     TeamSettings settings = settings_;
     settings.maxConcurrent = IntegerSetting(values, "maxConcurrent", 1, 8, settings.maxConcurrent);
     settings.maxHops = IntegerSetting(values, "maxHops", 0, 16, settings.maxHops);
+    settings.rotateAboveInputTokens = IntegerSetting(values, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
     if (const Json* lead = values.find("lead")) {
         if (!lead->isString()) throw Invalid("lead must be an agent id or name, or \"\" for nobody");
         settings.lead = lead->asString().empty() ? std::string() : agents_[RequireIndex(lead->asString())].id;
@@ -489,6 +492,7 @@ Json TeamStore::ToJson() const {
     root["lead"] = settings_.lead;
     root["maxConcurrent"] = settings_.maxConcurrent;
     root["maxHops"] = settings_.maxHops;
+    root["rotateAboveInputTokens"] = settings_.rotateAboveInputTokens;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents_) list.push(AgentToJson(agent));
     root["agents"] = std::move(list);

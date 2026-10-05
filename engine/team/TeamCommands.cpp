@@ -207,7 +207,8 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
              Params()
                  .Opt("lead", "string", "Agent (id or name) that receives messages without a mention; \"\" = nobody.")
                  .Opt("maxConcurrent", "integer", "Agent turns that may run at the same time, 1..8 (default 3).")
-                 .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 4)."),
+                 .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 4).")
+                 .Opt("rotateAboveInputTokens", "integer", "Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
                  if (a.size() > 0) store.SetSettings(a);
@@ -215,6 +216,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  result["lead"] = store.Settings().lead;
                  result["maxConcurrent"] = store.Settings().maxConcurrent;
                  result["maxHops"] = store.Settings().maxHops;
+                 result["rotateAboveInputTokens"] = store.Settings().rotateAboveInputTokens;
                  return result;
              });
 
@@ -284,6 +286,12 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  const int limit = a["limit"].asInt(100);
                  if (limit < 1 || limit > 500 || a["after"].asNumber(0.0) < 0.0) throw ApiError("invalid_argument", "limit must be 1..500 and after must not be negative");
                  return state->Session(e).Messages(static_cast<uint64_t>(a["after"].asNumber(0.0)), a.has("after"), limit);
+             });
+
+    Register(registry, "team.reset", "Forget one idle agent's backend conversation. Chat, profiles, usage and other conversations are retained; never starts a model turn. Busy agents must be cancelled first.",
+             Params().Req("id", "string", kAgentRef), [state](Engine& e, const Json& a) {
+                 state->Session(e).Reset(a["id"].asString());
+                 Json result = Json::MakeObject(); result["reset"] = true; return result;
              });
 
     Register(registry, "team.usage", "Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-turn deltas, not Claude session totals; reportedTurns/costReportedTurns distinguish unknown usage from measured zero. Clearing chat retains usage.",

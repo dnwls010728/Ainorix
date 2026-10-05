@@ -17,6 +17,9 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Reset Conversation", "대화 초기화", "会話をリセット"},
+    {"%.0f in, %.0f out", "입력 %.0f, 출력 %.0f", "入力 %.0f、出力 %.0f"},
+    {"%.0f cached", "캐시 %.0f", "キャッシュ %.0f"},
     {"Usage today (UTC)", "오늘 사용량 (UTC)", "本日の使用量 (UTC)"},
     {"Usage unavailable", "사용량 정보 없음", "使用量不明"},
     {"Cost unavailable", "비용 정보 없음", "費用不明"},

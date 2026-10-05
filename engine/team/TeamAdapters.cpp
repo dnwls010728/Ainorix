@@ -74,7 +74,12 @@ TokenUsage ReadUsage(const Json& j, bool claude) {
         u.inputTokens += u.cacheReadTokens + u.cacheCreationTokens;
     } else if (j.has("cached_input_tokens") && !Count(j, "cached_input_tokens", u.cacheReadTokens)) return TokenUsage();
     if (u.cacheReadTokens > u.inputTokens) return TokenUsage();
-    u.known = true; return u;
+    u.known = true; u.contextTokens = u.inputTokens;
+    if (claude && j["iterations"].isArray() && j["iterations"].size() > 0) {
+        const TokenUsage last = ReadUsage(j["iterations"][j["iterations"].size() - 1], true);
+        if (last.known) { u.contextTokens = last.inputTokens; u.contextEstimated = false; }
+    }
+    return u;
 }
 void Cost(const Json& j, TurnEvent& event) {
     const Json* value = j.find("total_cost_usd"); const double cost = value ? value->asNumber(-1) : -1;
@@ -89,6 +94,7 @@ Json TokenUsageToJson(const TokenUsage& u) {
     if (u.known) {
         j["inputTokens"] = u.inputTokens; j["outputTokens"] = u.outputTokens;
         j["cacheReadTokens"] = u.cacheReadTokens; j["cacheCreationTokens"] = u.cacheCreationTokens;
+        j["contextTokens"] = u.contextTokens; j["contextEstimated"] = u.contextEstimated;
     }
     return j;
 }
@@ -97,6 +103,9 @@ TokenUsage TokenUsageFromJson(const Json& j) {
     if (!j["known"].asBool() || !Count(j, "inputTokens", u.inputTokens) || !Count(j, "outputTokens", u.outputTokens) ||
         !Count(j, "cacheReadTokens", u.cacheReadTokens) || !Count(j, "cacheCreationTokens", u.cacheCreationTokens) ||
         u.cacheReadTokens + u.cacheCreationTokens > u.inputTokens) return TokenUsage();
+    u.contextTokens = u.inputTokens;
+    if (j.has("contextTokens") && !Count(j, "contextTokens", u.contextTokens)) return TokenUsage();
+    u.contextEstimated = j["contextEstimated"].asBool(true);
     u.known = true; return u;
 }
 
