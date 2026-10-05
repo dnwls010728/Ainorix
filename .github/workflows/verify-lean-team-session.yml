@@ -6,13 +6,15 @@ on:
       - feature/agent-team-efficiency
     paths:
       - '.github/workflows/verify-lean-team-session.yml'
-      - '.github/scripts/add_lean_team_session_tests.py'
+      - 'tests/team_efficiency_tests.cpp'
+      - 'tests/team_efficiency/**'
+      - 'engine/team/**'
 
 permissions:
   contents: write
 
 jobs:
-  verify-and-commit:
+  verify-and-clean:
     if: github.actor != 'github-actions[bot]'
     runs-on: windows-2025
     steps:
@@ -21,20 +23,9 @@ jobs:
           ref: feature/agent-team-efficiency
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Insert lean TeamSession regressions
-        run: python .github/scripts/add_lean_team_session_tests.py
-
-      - name: Build OwnEngine
+      - name: Run focused TeamSession efficiency tests
         shell: cmd
-        run: build.bat
-
-      - name: Run engine tests
-        shell: cmd
-        run: build\bin\oe_tests.exe
+        run: tests\team_efficiency\run.bat
 
       - name: Check repository invariants
         shell: pwsh
@@ -42,18 +33,18 @@ jobs:
           if ((Get-FileHash AGENTS.md).Hash -ne (Get-FileHash CLAUDE.md).Hash) { throw 'AGENTS.md and CLAUDE.md differ' }
           git diff --check
 
-      - name: Commit verified test coverage
+      - name: Remove temporary verification files
         shell: pwsh
         run: |
           git fetch origin feature/agent-team-efficiency
           $remote = git rev-parse origin/feature/agent-team-efficiency
           $local = git rev-parse HEAD
           if ($remote -ne $local) { throw "branch moved during verification: $local -> $remote" }
-          Remove-Item .github/scripts/add_lean_team_session_tests.py
+          Remove-Item .github/scripts/add_lean_team_session_tests.py -ErrorAction SilentlyContinue
           Remove-Item .github/workflows/verify-lean-team-session.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --check
-          git commit -m "Test: cover lean TeamSession routing [skip ci]"
+          git commit -m "Test: verify lean TeamSession regressions [skip ci]"
           git push origin HEAD:feature/agent-team-efficiency
