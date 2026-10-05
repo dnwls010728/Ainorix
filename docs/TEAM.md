@@ -627,6 +627,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 
 Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |
+| `team.handoff` | `{to, task, attachments?, from?, wait?}` | same delivery result as `team.send`, but exactly one `to` agent is addressed; mentions in `task` are context text only |
 | `team.cancel` | `{id}` or `{all:true}` | `{cancelled: [ids]}` |
 | `team.state` | | `{revision, running, agents}`: per agent state, activity, task, elapsed, tools, error and hint |
 | `team.messages` | `{after?, limit?}` | `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
@@ -654,7 +655,7 @@ commands use `unknown_agent`, `name_taken`, `team_full`, `unknown_backend`, `inv
   `oe fake-agent` subcommand was needed: a `Backend` is injected through
   `RegisterTeamCommands(registry, backends)`). Covers routing (mention, `@all`, lead, sender
   excluded, nobody), prompt content and resume, context on stdin, the MCP config file, state and
-  activity of a running turn, queueing behind a busy agent and behind `maxConcurrent`, cancel,
+  activity of a running turn, structured single-recipient `team.handoff` (task mentions do not widen routing), queueing behind a busy agent and behind `maxConcurrent`, cancel,
   process crash (`error` state with the stderr tail), a failure the CLI reports, offline agents,
   the turn timeout, `wait`, removal of a running agent, restart and `team.clear`. Hop limit and
   images come with T7 and T6.

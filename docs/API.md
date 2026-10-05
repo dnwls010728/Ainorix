@@ -1167,6 +1167,18 @@ Post a message to the team chat and give a turn to every agent it addresses: @id
 | `from` | string |  | Sender: "user" (default) or an agent id. |
 | `wait` | number |  | Block up to this many seconds until the addressed agents have finished, then also return the new messages and the state (for one-shot `oe exec`; default 0 = return at once). |
 
+### `team.handoff`
+
+Give exactly one teammate a task. The `to` field is the only recipient; @mentions inside task are context text and do not wake other agents.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `to` | string | yes | Agent id or name. |
+| `task` | string | yes | Task for the teammate, at most 32 KiB (may be empty when files are attached). |
+| `attachments` | array |  | Files the teammate should look at: paths on this PC or relative to the project, at most 8, 32 MiB each. |
+| `from` | string |  | Sender: "user" (default) or an agent id. |
+| `wait` | number |  | Block up to this many seconds until the teammate has finished (default 0). |
+
 ### `team.cancel`
 
 Stop an agent's running turn (its process tree is killed) and drop its waiting message; the chat gets a notice.

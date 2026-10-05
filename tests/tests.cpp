@@ -8831,6 +8831,13 @@ TEST(TeamSessionTurns) {
         CHECK(Call(e, "team.remove", R"J({"id":"painter"})J")["ok"].asBool());
     }
 
+    // Explicit handoff is structural: mentions in task text are context, not extra recipients.
+    sent = Call(e, "team.handoff", R"J({"to":"Jun","task":"Review @mina and @all as context."})J");
+    CHECK(sent["ok"].asBool() && sent["result"]["message"]["text"].asString() == "Review @mina and @all as context.");
+    CHECK(sent["result"]["message"]["to"].size() == 1 && sent["result"]["message"]["to"][0].asString() == "jun");
+    CHECK(sent["result"]["started"].size() == 1 && sent["result"]["started"][0].asString() == "jun" && until(settled));
+    CHECK(fileText("jun.prompt.txt").find("[User] Review @mina and @all as context.") != std::string::npos);
+
     // Agent to agent: a teammate mentioned in a reply gets a turn; the chain a person's message
     // starts is cut after maxHops such turns.
     {

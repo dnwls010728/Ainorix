@@ -67,7 +67,9 @@ public:
     // pointed to; with attachments the text may be empty.
     // `hop`: 0 for the person; for a message an agent posts itself (team.send over the API) one
     // more than what its running turn answers. Above maxHops it is stored but starts no turn.
-    Json Send(const std::string& text, const std::string& from, const std::vector<std::string>& attachments = {}, int hop = 0);
+    // `directTo`: when non-empty, resolve exactly this agent id/name and ignore mentions in text.
+    Json Send(const std::string& text, const std::string& from, const std::vector<std::string>& attachments = {}, int hop = 0,
+              const std::string& directTo = std::string());
     // Hop of the message the agent's running turn answers; 0 when it has no turn.
     int TurnHop(const std::string& id) const;
     // Stops an agent's turn and drops its waiting message; `all` for everyone. Returns the ids stopped.

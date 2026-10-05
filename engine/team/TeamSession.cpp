@@ -703,7 +703,7 @@ int TeamSession::TurnHop(const std::string& id) const {
     return found != agents_.end() && found->second.turn ? found->second.turn->hop : 0;
 }
 
-Json TeamSession::Send(const std::string& text, const std::string& from, const std::vector<std::string>& attachments, int hop) {
+Json TeamSession::Send(const std::string& text, const std::string& from, const std::vector<std::string>& attachments, int hop, const std::string& directTo) {
     if (text.find_first_not_of(" \t\r\n") == std::string::npos && attachments.empty()) throw ApiError("invalid_argument", "the message is empty");
     if (attachments.size() > kMaxSendAttachments) throw ApiError("invalid_argument", "a message carries at most 8 attachments");
     if (!ValidTeamText(text, kMaxSendBytes)) throw ApiError("invalid_argument", "a chat message must be UTF-8 text of at most 32768 bytes");
@@ -711,14 +711,23 @@ Json TeamSession::Send(const std::string& text, const std::string& from, const s
     if (!store_.LoadError().empty()) throw ApiError("team_file_invalid", store_.LoadError(), "Repair or delete .oe/team/team.json.");
 
     const std::vector<AgentProfile>& roster = store_.Agents();
-    bool all = false;
-    std::vector<size_t> recipients = FindMentions(text, roster, all);
-    if (all) {
-        recipients.clear();
-        for (size_t i = 0; i < roster.size(); ++i) recipients.push_back(i);
-    } else if (recipients.empty()) {
+    std::vector<size_t> recipients;
+    if (!directTo.empty()) {
+        const AgentProfile* target = store_.Find(directTo);
+        if (!target) throw ApiError("unknown_agent", "no agent '" + directTo + "' in the team", "team.list shows the agents; use an id or a name.");
         for (size_t i = 0; i < roster.size(); ++i) {
-            if (roster[i].id == store_.Settings().lead) recipients.push_back(i);  // no mention: the lead
+            if (roster[i].id == target->id) recipients.push_back(i);
+        }
+    } else {
+        bool all = false;
+        recipients = FindMentions(text, roster, all);
+        if (all) {
+            recipients.clear();
+            for (size_t i = 0; i < roster.size(); ++i) recipients.push_back(i);
+        } else if (recipients.empty()) {
+            for (size_t i = 0; i < roster.size(); ++i) {
+                if (roster[i].id == store_.Settings().lead) recipients.push_back(i);  // no mention: the lead
+            }
         }
     }
     recipients.erase(std::remove_if(recipients.begin(), recipients.end(), [&](size_t i) { return roster[i].id == from; }), recipients.end());

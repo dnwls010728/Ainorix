@@ -29,7 +29,7 @@ Use `team.handoff` when exactly one specialist should take the next task instead
 oe exec <project> team.handoff '{"to":"core","task":"Review the renderer ownership model and report only architecture risks."}'
 ```
 
-The command resolves `to` by agent id or name and sends one addressed turn through the existing `TeamSession`, so attachment handling, offline reporting, session resume, concurrency and `maxHops` stay unchanged. To guarantee a single recipient with the current mention-based `TeamSession::Send` router, the task may mention the selected teammate but rejects another teammate mention or `@all` with `ambiguous_handoff`.
+The command resolves `to` by agent id or name and passes it as a structured recipient to `TeamSession::Send`. The task text is stored unchanged, so `@qa`, `@all`, or any other mention inside the task is context only and cannot widen the recipient set. Attachment handling, offline reporting, session resume, concurrency and `maxHops` stay unchanged.
 
 This is a compatibility step toward separating human-readable chat from executable tasks. It gives lean turns an explicit execution signal without changing the normal `team.send` path.
 
@@ -79,13 +79,13 @@ The explicit handoff routing and lean-policy switch have a small CLI-independent
 tests\team_efficiency\run.bat
 ```
 
-The runner configures the normal repository root and injects only the focused test target through `CMAKE_PROJECT_TOP_LEVEL_INCLUDES`; this preserves the root `CMAKE_SOURCE_DIR` assumptions used by the engine build. The test verifies the lean environment switch, id/name resolution, one-recipient routing text, rejection of another teammate / `@all`, unknown-agent handling, and registration of the `team.handoff` command.
+The runner configures the normal repository root and injects only the focused test target through `CMAKE_PROJECT_TOP_LEVEL_INCLUDES`; this preserves the root `CMAKE_SOURCE_DIR` assumptions used by the engine build. The test verifies the lean environment switch, id/name resolution, structured one-recipient routing even when task text contains other mentions or `@all`, unknown-agent handling, and registration of the `team.handoff` command.
 
 ## Follow-up engine work
 
 The next structural changes should be implemented separately:
 
-- split human-readable `ChatMessage` from executable `AgentTask`, so explicit routing no longer needs to encode the recipient as an `@mention` in stored chat text;
+- split human-readable `ChatMessage` from executable `AgentTask`, so scheduling, budgets and permissions can be attached to a task independently of the stored chat message;
 - record input, cached input and output tokens per turn and aggregate them per agent / chain / day;
 - add per-role tool policies and prevent nested sub-agent delegation unless explicitly enabled;
 - make the scheduler aware of write scopes so safe read-only QA can run beside an editor while conflicting writers queue;

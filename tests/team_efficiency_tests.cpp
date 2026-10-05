@@ -72,28 +72,20 @@ int main() {
     store.Add(Agent("Core"), lookup);
     store.Add(Agent("QA"), lookup);
 
-    CHECK(BuildTeamHandoffText(store, "Core", "Review the renderer") == "@core Review the renderer");
-    CHECK(BuildTeamHandoffText(store, "core", "Ask @core to inspect it") == "@core Ask @core to inspect it");
+    const std::vector<Backend> noBackends;
+    const TeamHost host;
+    TeamSession session(store, noBackends, host);
+    session.Open();
+    Json routed = session.Send("Review with @qa and @all as context", "user", {}, 0, "Core");
+    CHECK(routed["message"]["text"].asString() == "Review with @qa and @all as context");
+    CHECK(routed["message"]["to"].size() == 1 && routed["message"]["to"][0].asString() == "core");
+    CHECK(routed["offline"].size() == 1 && routed["offline"][0].asString() == "core");
+    routed = session.Send("QA only", "user", {}, 0, "qa");
+    CHECK(routed["message"]["to"].size() == 1 && routed["message"]["to"][0].asString() == "qa");
 
     bool rejected = false;
     try {
-        BuildTeamHandoffText(store, "Core", "Then ask @qa too");
-    } catch (const ApiError& e) {
-        rejected = e.code == "ambiguous_handoff";
-    }
-    CHECK(rejected);
-
-    rejected = false;
-    try {
-        BuildTeamHandoffText(store, "Core", "Ask @all");
-    } catch (const ApiError& e) {
-        rejected = e.code == "ambiguous_handoff";
-    }
-    CHECK(rejected);
-
-    rejected = false;
-    try {
-        BuildTeamHandoffText(store, "missing", "Do it");
+        session.Send("Do it", "user", {}, 0, "missing");
     } catch (const ApiError& e) {
         rejected = e.code == "unknown_agent";
     }

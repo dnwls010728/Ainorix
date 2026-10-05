@@ -80,25 +80,6 @@ const char* const kAgentRef = "Agent id or name.";
 
 }  // namespace
 
-std::string BuildTeamHandoffText(const TeamStore& store, const std::string& to, const std::string& task) {
-    const AgentProfile* target = store.Find(to);
-    if (!target) throw ApiError("unknown_agent", "no agent '" + to + "' in the team", "team.list shows the agents; use an id or a name.");
-
-    bool all = false;
-    const std::vector<size_t> mentioned = FindMentions(task, store.Agents(), all);
-    for (size_t index : mentioned) {
-        if (index >= store.Agents().size() || store.Agents()[index].id != target->id) {
-            throw ApiError("ambiguous_handoff", "a handoff task cannot mention another teammate",
-                           "Put context in plain text and use the `to` field as the only recipient.");
-        }
-    }
-    if (all) {
-        throw ApiError("ambiguous_handoff", "a handoff task cannot contain @all",
-                       "Use one explicit recipient in the `to` field.");
-    }
-    return "@" + target->id + (task.empty() ? std::string() : " " + task);
-}
-
 std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry) {
     std::vector<Backend> backends = BuiltinBackends();
     std::string error;
@@ -280,7 +261,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
              });
 
     Register(registry, "team.handoff",
-             "Give exactly one teammate a task. The `to` field is the recipient; task text may mention that same teammate but no other teammate or @all.",
+             "Give exactly one teammate a task. The `to` field is the only recipient; @mentions inside task are context text and do not wake other agents.",
              Params()
                  .Req("to", "string", kAgentRef)
                  .Req("task", "string", "Task for the teammate, at most 32 KiB (may be empty when files are attached).")
@@ -300,8 +281,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                      from = e.RemoteCallAgent();
                      hop = session.TurnHop(from) + 1;
                  }
-                 const std::string text = BuildTeamHandoffText(state->store, a["to"].asString(), a["task"].asString());
-                 Json result = session.Send(text, from, attachments, hop);
+                 Json result = session.Send(a["task"].asString(), from, attachments, hop, a["to"].asString());
                  const double wait = a["wait"].asNumber(0.0);
                  if (wait > 0.0) {
                      std::vector<std::string> ids;
