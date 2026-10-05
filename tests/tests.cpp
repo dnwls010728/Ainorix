@@ -51,6 +51,7 @@
 #include "script/ScriptHost.h"
 #if OE_TEAM
 #include "team/TeamCommands.h"
+#include "team/TeamContext.h"
 #include "team/TeamUsage.h"
 #include "team/TeamStore.h"
 #endif
@@ -8730,6 +8731,21 @@ TEST(TeamResetAndRotation) {
 #endif
 }
 
+TEST(TeamStableContext) {
+    AgentProfile agent; agent.id = "lead"; agent.name = "Lead"; agent.description = "Gameplay"; agent.instructions = "Check scripts.";
+    AgentProfile a; a.id = "a"; a.name = "Alpha";
+    AgentProfile b; b.id = "b"; b.name = "Beta";
+    const std::string prefix = BuildTeamStandingContext(agent, {b, a, agent}, "game");
+    CHECK(prefix == BuildTeamStandingContext(agent, {agent, a, b}, "game"));
+    a.description = "Now busy with another task."; // teammate role/state metadata does not invalidate the prefix
+    CHECK(prefix == BuildTeamStandingContext(agent, {a, b}, "game"));
+    CHECK(prefix.find("@a - Alpha") < prefix.find("@b - Beta"));
+    CHECK(prefix.find("@lead -") == std::string::npos && prefix.find("busy") == std::string::npos);
+    CHECK(BuildTeamStandingContext(agent, {}, "game").find("Alpha") == std::string::npos);
+    agent.instructions += " New instruction.";
+    CHECK(prefix != BuildTeamStandingContext(agent, {a, b}, "game"));
+}
+
 TEST(TeamChatPull) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)
@@ -8738,6 +8754,7 @@ TEST(TeamChatPull) {
     Backend backend;
     backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
     backend.models = {{"m", "M", true, 0}};
+    backend.systemPromptFlag = true;
     backend.buildTurn = [](const TurnRequest& request) {
         ProcessOptions options; options.executable = request.executable;
         options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId}; return options;
@@ -8753,6 +8770,8 @@ TEST(TeamChatPull) {
     CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
     CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
     const size_t baseline = prompt.size();
+    std::string stablePrefix;
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), stablePrefix));
     team->host.apiPort = 7777; team->host.oeExecutable = backend.executable;
     for (int i = 0; i < 30; ++i) {
         Json args = Json::MakeObject(); args["text"] = "@other unrelated-secret-" + std::to_string(i) + std::string(300, 'x');
@@ -8762,6 +8781,12 @@ TEST(TeamChatPull) {
     CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
     CHECK(prompt.find("unrelated-secret") == std::string::npos && prompt.find("30 chat messages omitted") != std::string::npos);
     CHECK(prompt.size() < baseline + 120 && prompt.find("team_messages") != std::string::npos);
+    std::string laterPrefix;
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), laterPrefix) && laterPrefix == stablePrefix);
+    Json brief = Json::parse(R"J({"to":"lead","goal":"task protocol only"})J");
+    CHECK(e.Call("team.delegate", brief)["ok"].asBool());
+    for (int i = 0; i < 500 && Call(e, "team.state")["result"]["running"].asInt(); ++i) { PlatformSleep(0.01); team->update(); }
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), laterPrefix) && laterPrefix == stablePrefix);
     CHECK(Call(e, "team.messages", R"J({"limit":100})J")["result"]["messages"].size() >= 34);
     // The next delivery does not count already skipped history again; resume remains intact.
     CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
@@ -9104,10 +9129,10 @@ TEST(TeamSessionTurns) {
     CHECK(fileText("mina.prompt.txt").find("[User] hello team") != std::string::npos && fileText("mina.prompt.txt").find("second line") != std::string::npos);
     CHECK(fileText("mina.args.txt").find(R"J("new" "m" "edit" ".oe/team/tmp/mina.system.md" ".oe/team/tmp/mina.mcp.json")J") == 0);
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.mcp.json"), text) && Json::parse(text)["mcpServers"].isObject() && Json::parse(text)["mcpServers"].size() == 0);
-    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("to acknowledge, accept work, confirm receipt or chat") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("never to accept work, acknowledge receipt, make small talk") != std::string::npos);
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text));
     CHECK(text.find("You are Mina (@mina)") == 0 && text.find("Gameplay.") != std::string::npos && text.find("- @jun - Jun") != std::string::npos);
-    CHECK(text.find("No editor is attached") != std::string::npos);
+    CHECK(text.find("Connection:") == std::string::npos && fileText("mina.prompt.txt").find("Connection: no API") != std::string::npos);
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/sessions.json"), text) && Json::parse(text)["mina"]["session"].asString() == "sess-1");
     CHECK(Json::parse(text)["mina"]["seen"].asInt() == 1 && Json::parse(text)["mina"]["backend"].asString() == "echo");
 
@@ -9122,7 +9147,7 @@ TEST(TeamSessionTurns) {
     const Json mcp = Json::parse(text)["mcpServers"]["ownengine"];
     CHECK(mcp["command"].asString() == backends[0].executable && mcp["args"].size() == 5 && mcp["args"][2].asString() == "7777");
     CHECK(mcp["args"][3].asString() == "--agent" && mcp["args"][4].asString() == "mina");  // the editor shows who made an edit
-    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("`ownengine` MCP server") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("Connection:") == std::string::npos && fileText("mina.prompt.txt").find("Connection: ownengine MCP") != std::string::npos);
     team->host.apiPort = 0;
 
     // A CLI without a system prompt flag gets context once, on stdin, and only its addressed messages.

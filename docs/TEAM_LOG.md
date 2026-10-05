@@ -610,3 +610,27 @@ be checked once in the final k=3 suite rather than run per implementation step.
 CMake's CONFIGURE_DEPENDS team source glob automatically includes TeamTasks.cpp.
 API, TEAM §§3.1/5/8/11, identical guides and all three READMEs updated. Original
 sample team.json files and unrelated net/OnlineRPG changes are not staged.
+
+## 2026-10-05 — E4 restored with shared chat/task prefix
+
+- [x] E4: BuildTeamStandingContext is the sole role/project prefix builder for
+  both chat and fresh task turns. Role/instructions, sorted callable ids/names
+  and project facts only; no runtime states, connection state, time or counts.
+  Permissions follow canCall and the lead exception. Dynamic chat/task protocol,
+  unread messages, connection and task/deadline details follow the prefix.
+- Restored TeamContext from rejected-e4 and integrated it with the retained E2
+  task path instead of shipping a chat-only prefix. Existing E1/E3/E5/E6 remain.
+- TeamStableContext checks byte identity with roster ordering/teammate metadata
+  changes, omission of non-callable targets and intentional instruction changes.
+  TeamChatPull checks actual generated system-file byte identity across connection,
+  history and a subsequent fresh task; task protocol and report instructions remain
+  present after the prefix. Native CLI cache counters will be measured in the final
+  suite, rather than used as a one-run keep gate.
+
+build.bat warning-free; 206 tests, zero failed checks. An initial missing test
+include and running-test executable lock were corrected before this final build;
+no failed build or old executable is counted as the final result. API regenerated;
+TEAM §§3.1/5/8/11 and identical agent guides updated. No original sample team file
+or unrelated net/OnlineRPG edit is staged. Measurements are next: M1/M2, a/b/c,
+k=3, UTF-8 raw capture, medians/ranges and independent Bat acceptance. No provider
+model was run during these engine/stand-in tests.

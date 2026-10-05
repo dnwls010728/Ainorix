@@ -1,4 +1,5 @@
 #include "team/TeamSession.h"
+#include "team/TeamContext.h"
 
 #include <algorithm>
 #include <cmath>
@@ -376,36 +377,12 @@ void TeamSession::SaveSessions() {
 }
 
 std::string TeamSession::StandingContext(const AgentProfile& agent) const {
-    std::string text = "You are " + agent.name + " (@" + agent.id + "), a member of an AI agent team that works on the game project in this directory.\n";
-    if (!agent.description.empty()) text += "Your role: " + agent.description + "\n";
-    if (!agent.instructions.empty()) text += "\n## Your instructions\n\n" + agent.instructions + "\n";
-    text += "\n## Team chat\n\nThe person (\"User\") and your teammates talk to you through the team chat of the OwnEngine editor. Each turn you receive "
-            "the chat messages since your last turn. Your final message of the turn is posted to the chat as your reply: keep it short, say what you "
-            "did and what you did not verify. Writing @id of a teammate in that final message HANDS THE WORK ON: the teammate gets a turn and sees "
-            "your message (@all calls everyone), only when maxHops is enabled. Use @mentions only to hand work back or ask a question, never "
-            "to acknowledge, accept work, confirm receipt or chat. Do it when someone else must continue, with what they should do; write the name without @ when "
-            "you only talk about them, or the chain goes on for nothing. Files attached to a message are listed under it as paths relative to the "
-            "project directory: open them to look at them (images included).\n\n## Team\n\n";
+    std::vector<AgentProfile> callable;
     for (const AgentProfile& mate : store_.Agents()) {
-        text += "- @" + mate.id + " - " + mate.name + (mate.id == agent.id ? " (you)" : "") + (mate.description.empty() ? "" : ": " + mate.description) + "\n";
+        if (mate.id != agent.id && (agent.id == store_.Settings().lead ||
+            std::find(agent.canCall.begin(), agent.canCall.end(), mate.id) != agent.canCall.end())) callable.push_back(mate);
     }
-    text += "\n## Project\n\nProject directory: " + projectDir_ + " (your working directory). Read AGENTS.md there, if present, for how the engine is driven.\n"
-            "Save images you produce in .oe/team/images/ so they appear in the chat.\n";
-    if (host_.apiPort > 0) {
-        text += "The editor showing this project is open: the `ownengine` MCP server controls it (scene, components, screenshots, simulation). "
-                "Prefer its tools over editing scene files; your edits appear in the editor at once.\n";
-        text += "Delegate work with team_delegate, one step per task. Give the exact goal and success check, pass the person's requirements "
-                "verbatim and add no constraints. Check the worker's evidence against acceptance yourself; done is not verified. "
-                "Only the lead or targets listed in your canCall profile may be called.\n";
-        text += "Your allowed task targets: ";
-        if (agent.id == store_.Settings().lead) text += "all teammates";
-        else if (agent.canCall.empty()) text += "none";
-        else for (const std::string& target : agent.canCall) text += target + " ";
-        text += "\n";
-    } else {
-        text += "No editor is attached to this turn: edit the project files, or run `oe exec` commands.\n";
-    }
-    return text;
+    return BuildTeamStandingContext(agent, std::move(callable), projectDir_);
 }
 
 void TeamSession::FailTurn(const std::string& id, Runtime& runtime, const std::string& message, const std::string& hint) {
@@ -504,17 +481,19 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime, const J
             request.maxBudgetUsd = agent.maxBudgetUsd + (request.sessionId.empty() ? 0 : baseline["reportedCostUsd"].asNumber());
         }
     } catch (const ApiError& e) { return fail(e.what(), e.hint); }
-    std::string context = StandingContext(agent);
+    const std::string context = StandingContext(agent);
     if (task) {
-        context = "You are " + agent.name + ", a worker assigned one task in this project.\n";
-        if (!agent.description.empty()) context += "Role: " + agent.description + "\n";
-        if (!agent.instructions.empty()) context += agent.instructions + "\n";
-        context += "Work only on the task. Read project AGENTS.md if present. On failure, report the exact failure and stop; do not retry or invent work. "
-                   "Report changed files and command, result/exit code and trimmed output. Never claim success without verifying output.\n";
-        context += host_.apiPort > 0 ? "You MUST call the team_report tool to submit the result with {id,summary,changed,evidence:[{command,result,output}]}. Do not print report JSON in the final answer. Use the task id. "
-                                     "The ownengine MCP tools control this project. Do not post to team chat.\n" :
-                                     "No editor is attached. Return the report as final text; it will be stored unverified, not posted to chat.\n";
+        prompt += "\nTask protocol: work only on this task. On failure report the exact failure and stop; do not retry or invent work. "
+                  "Report changed files and command, result/exit code and trimmed output. Never claim success without verifying output.\n";
+        prompt += host_.apiPort > 0 ? "You MUST call the team_report tool to submit {id,summary,changed,evidence:[{command,result,output}]}. "
+                                     "Do not print report JSON in the final answer. Use the task id. Do not post to team chat.\n" :
+                                     "No API is attached. Return final text; the harness stores it unverified without posting to chat.\n";
+    } else {
+        prompt += "\nChat protocol: reply only to addressed messages; final text is posted to chat. Use team_delegate for one task step, "
+                  "passing exact requirements and acceptance verbatim; add no constraints. Check the returned evidence yourself: done is not verified.\n";
     }
+    prompt += host_.apiPort > 0 ? "\nConnection: ownengine MCP controls this project. Use its tools.\n" :
+                                 "\nConnection: no API attached; edit files or use oe exec.\n";
 
     if (backend.systemPromptFlag) {
         if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".system.md"), context, nullptr)) return fail( "cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
