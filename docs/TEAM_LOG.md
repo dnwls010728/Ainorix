@@ -234,3 +234,95 @@ SHA-256 checks confirmed the tests and API files exactly match their pre-E1 snap
 `CLAUDE.md` and `AGENTS.md` hashes match. `engine/team/` and Wickbound have no remaining
 changes from this task. Only measurement/rejection notes are retained. Stop here;
 E2 and later steps remain unimplemented and await the user's next instruction.
+
+## 2026-10-05 — E2 measured and rejected (no retained implementation)
+
+The user explicitly authorized E2 after E1 had been reverted. E2 was implemented
+and tested provisionally, then restored under §11.5–11.6's measurement/acceptance
+gate. E1 remains rejected; E3 and later were not started. There is no checked E2
+milestone or production task API in this commit.
+
+Provisional scope: versioned atomic task files; fresh worker conversations with
+short role/brief and no chat/resume; `team.delegate/report/task/tasks`; attributed
+worker evidence; `canCall` default none with lead access; recursive cancellation,
+absolute deadline, interrupted-task failure without retry; nonblocking command and
+blocking MCP I/O-thread polling; unverified final-text fallback without an API.
+Existing CMake `CONFIGURE_DEPENDS` glob included TeamTasks.cpp. API was regenerated
+and §§3.1, 5, 8 and the two identical agent guides updated provisionally, then all
+restored with the implementation. The discarded source/docs/tests are available
+only in ignored `build/scratch/team-e2/rejected-e2/`.
+
+CLI: Claude Code **2.1.289**, `haiku`, resolved model
+`claude-haiku-4-5-20251001`, full/bypassPermissions, streamed JSON. Codex was not
+run. All real turns were manual in copies under `build/scratch/team-e2/`; tests
+used stand-in `.cmd` backends only. No original sample or project team.json changed.
+Each condition used the same prompt bytes (SHA-256
+`4468214b1f7f58d9fb217f6f27863d675f016c8fa2752eee2a41a06651e62f0b`).
+
+Manifest: (a) one fresh standalone haiku CLI, native sub-agents permitted but none
+used; (c) Lead + Worker, both Claude/haiku/full, first added agent as lead,
+`maxConcurrent:3`, explicit `maxHops:0`, default empty canCall. Chat's default
+maxHops was not changed by E2. Host `oe mcp <scratch> --port <unused loopback port>`;
+parent stdin stayed open and each host was closed by its own handle/PID. API calls
+used no blocking `team.send` wait, so the worker could reach the editor.
+
+| Condition | New input | Cache creation | Cache read | Total input side | Output | USD | Wall seconds | Outcome |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| (a), fresh single agent | 257 | 49,391 | 1,874,346 | 1,923,994 | 13,792 | 0.3554336 | 189.457 | Bat acceptance passed |
+| (c), initial attempt | 101 | 51,874 | 606,794 | 658,769 | 8,913 | 0.2090934 | 82.043 | Invalid E2 comparison: `to:"@worker"` rejected, no task/worker started; lead did the work itself |
+| (c), fresh copy after target handling fix | 296 | 106,088 | 1,970,435 | 2,076,819 | 23,435 | 0.5266905 | 248.179 | Bat acceptance passed; E2 report contract failed; capture encoding fault |
+
+The first c run exposed inconsistent target syntax: team chat teaches `@id`, but
+delegate accepted only bare ids/names. The provisional implementation accepted
+an optional @ prefix and its stand-in test covered this. The second attempt was
+on a new copy, not an automatic task retry. It produced exactly one task, without
+engine retries. Per-process second-c result totals:
+
+| Agent | New input | Creation | Read | Output | USD |
+|---|---:|---:|---:|---:|---:|
+| Lead | 127 | 60,197 | 841,077 | 10,420 | 0.2567287 |
+| Worker | 169 | 45,891 | 1,129,358 | 13,015 | 0.2699618 |
+
+The worker's saved task prompt had no chat history and the lead's blocking tool
+returned the terminal record while API polling remained responsive. However,
+the worker printed a JSON `team_report` section in its final answer instead of
+calling the tool. It was correctly stored as `failed`, `reportReceived:false`,
+`verified:false`, summary “Worker finished without team.report; the task is
+unverified and failed.” This is a model/prompt failure of the handoff contract,
+not evidence of a successful report. The lead then checked the Bat itself.
+
+A separate harness fault affected the lead: the PowerShell capture proxy decoded
+some Unicode incorrectly, breaking the final JSON result string. Its numeric
+usage/cost prefix remained valid JSON; the Lead row above comes from that intact
+prefix, not an estimate. Worker result JSON was valid. Because the lead's full
+result was malformed, the engine did not receive a clean successful final turn.
+No measurement is presented as a clean E2 success or a causal before/after result.
+Do not reuse this text-decoding proxy; preserve raw UTF-8 bytes in a later harness.
+
+Independent checks on (a) and second (c): one Bat root, Script.path
+`scripts/run/bat.lua`, Collider2D and RigidBody2D, all five copied children
+(Shadow/Aura/Body/Flash/Eyes), prefab script path, base speed 3, and actual
+`oe exec <scratch> script.check {"path":"scripts/run/bat.lua"}` returned
+zero errors and warnings. The prior M2 (a)/(b) rows remain failed baselines;
+they cannot prove a quality-matched improvement over the old team.
+
+Second c was **1.481825x** the valid single-agent cost, within the approximate
+1.5x ceiling, but input was **+7.943%**, cost **+48.183%**, wall **+30.995%**.
+The required report did not arrive through MCP and the capture had a harness
+fault. There is no demonstrated improvement over a valid old-team baseline.
+Under the keep-only-on-improvement rule, all provisional E2 changes were removed
+and no favourable additional model run selected. A later E2 attempt needs an
+explicit tool-call report instruction, byte-preserving capture and a valid
+quality-matched before-team condition before claiming improvement.
+
+Provisional verification: `build.bat` succeeded without compiler warnings;
+**200 tests, 0 failed checks**, including TeamTaskRecords and TeamDelegationTurns.
+They covered persisted/interrupted/corrupt task records, bounded evidence, polling
+and transport errors, fresh workers preserving chat resume, no worker chat,
+permissions/@ target, attributed/duplicate/missing reports, cancellation and deadline.
+
+Final restoration verification: `build.bat` succeeded without compiler warnings;
+**198 tests, 0 failed checks**. Shared tests/API/TEAM/guides/CLI source matched their
+pre-E2 snapshot byte for byte. `engine/team/` has no remaining diff; both agent
+guides remain identical. Existing unrelated edits remain unstaged. Only this
+measurement/rejection record is committed for the E2 step.
