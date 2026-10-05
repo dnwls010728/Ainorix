@@ -108,3 +108,69 @@ line (docs/DESIGN.md §5).
       implemented and one decision is open (agent-to-agent turns on or off by default).
 - [ ] Later: interactive permission prompts in chat, Gemini CLI adapter, per-agent git worktrees,
       macOS/Linux process backend.
+
+## Usage baseline M — 2026-10-05
+
+Measured manually in `build/scratch/team-usage/`, with Claude Code **2.1.289**,
+`--model haiku` (resolved `claude-haiku-4-5-20251001`). Installed Codex:
+**0.159.3**; no Codex model was run. Real CLIs were not run by `oe_tests`.
+No editor/API was attached. Original samples and their local teams were unchanged.
+
+Input-side tokens below are new input + cache creation + cache reads, summed over
+the CLI result, including repeated cached context on tool iterations. Costs are
+reported USD list-price estimates from `total_cost_usd`, not subscription charges.
+
+| Condition | New input | Cache creation | Cache reads | Input-side total | Output | Cost USD | Turn duration |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| M1 before | 9 | 21,612 | 16,349 | 37,970 | 162 | 0.0456779 | 7.6 s (team); 3.052 s (CLI) |
+| M2 (a), standalone | 273 | 45,689 | 1,859,216 | 1,905,178 | 14,069 | 0.3479176 | 170.415 s (CLI) |
+| M2 (b), team before | 129 | 43,936 | 806,374 | 850,439 | 9,664 | 0.2169584 | 108.4 s (team); 103.527 s (CLI) |
+
+Durations come from the engine's turn wall clock and/or CLI `duration_ms`, as
+labelled; standalone process startup is excluded from its reported CLI duration.
+Raw JSON streams, prompts and command results remain in the ignored scratch folder.
+A PATH-local capture shim forwarded unchanged arguments/stdin to the real Claude
+executable and teed stdout for engine runs; it did not change user CLI configuration.
+
+Manifest:
+
+- M1: fresh `oe new` project, one agent `Solo`, Claude/haiku/full, empty instructions
+  and description, defaults maxConcurrent=3/maxHops=4. Exact message: `Say ok`.
+  Sent with `team.send {text: "Say ok", wait: 120}`.
+- M2 (a): fresh copy of Wickbound excluding `.oe`, standalone `claude -p --model
+  haiku --output-format stream-json --verbose --permission-mode bypassPermissions`.
+  Sub-agents were permitted on haiku but none were used.
+- M2 (b): another fresh copy excluding `.oe`; lead `Solo`, Claude/haiku/full,
+  empty instructions/description; `Reviewer`, Claude/haiku/full, empty instructions,
+  description `Verify script.check and task acceptance when asked.` Defaults
+  maxConcurrent=3/maxHops=4. Same task sent to the lead with wait=600. Reviewer
+  received no turn; neither run delegated. This measures the roster/prompt overhead,
+  not a forced multi-worker workflow. Both inherit the existing user CLI tools/skills.
+
+Exact common M2 task (the executable placeholder was replaced with the absolute
+built `oe.exe` path when running):
+
+> Add a Bat enemy. Copy the slime prefab and script, set speed 3, put one in scenes/run.scene.json, and make script.check clean. In this Wickbound version the slime is prefabs/enemy_gloom.prefab.json with scripts/run/enemy.lua: copy those to prefabs/enemy_bat.prefab.json and scripts/run/bat.lua. Keep the copied enemy behaviour and set its base speed to 3 in the copied script. The Bat prefab must use scripts/run/bat.lua. Put one instance named Bat in scenes/run.scene.json. Do not create new art. Verify the new script with <oe.exe> exec . script.check. Report changed files and verification output. You may use sub-agents on haiku only. Work only inside this scratch project; do not change the original sample or engine.
+
+The slime reference needed this fixed normalization: Wickbound has no file named
+`slime`, but `enemy_gloom` is its slime. Both conditions used the same normalization.
+
+Acceptance, independently checked: both created the copied prefab/script with base
+speed 3 and both `script.check {path:"scripts/run/bat.lua"}` results had zero errors
+and warnings. **Both failed the scene acceptance**: (a) wrote only a `Prefab` marker
+and Transform, without the prefab's entities/components; (b) wrote an unknown
+`PrefabInstance` component. `Prefab` remembers the source of an already-expanded
+instance; it does not instantiate it. Therefore neither scene contains a working
+Bat enemy. These are model faults, not successful cost baselines. Do not use their
+cost ratio (0.624x) as proof that the 1.5x quality-and-cost target is met, or apply the
+early-stop gate to a failed task. E1 may proceed; M2 needs successful runs before E2.
+
+Harness fault: the first standalone launch mistakenly used the repository working
+directory. It was terminated by its exact PID before completion and restarted in
+the scratch project. Its partial usage is unavailable and excluded; no source/sample
+changes remain: the aborted launch created one untracked Bat prefab in the original
+Wickbound folder; it was removed after confirming its path and creation time. No
+process was killed by image name.
+
+Validation: `build.bat` succeeded; `build/bin/oe_tests` passed **198 tests, 0 failed
+checks**. `CLAUDE.md` and `AGENTS.md` were not changed by this milestone.
