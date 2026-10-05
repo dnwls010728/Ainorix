@@ -99,6 +99,23 @@ const AgentProfile* FindById(const TeamStore& store, const std::string& id) {
     return nullptr;
 }
 
+std::string BlockedMentionNotice(const TeamStore& store, const std::string& from, const std::vector<size_t>& targets) {
+    const AgentProfile* caller = FindById(store, from);
+    std::string names, callableNames;
+    for (size_t i : targets) {
+        const AgentProfile& target = store.Agents()[i];
+        names += (names.empty() ? "" : ", ") + target.name;
+        if (caller && target.id != from && (from == store.Settings().lead ||
+            std::find(caller->canCall.begin(), caller->canCall.end(), target.id) != caller->canCall.end())) {
+            callableNames += (callableNames.empty() ? "" : ", ") + target.name;
+        }
+    }
+    std::string notice = "Not handed on to " + names + ": this chain already has " + std::to_string(store.Settings().maxHops) +
+        " agent-to-agent turns (maxHops). Enable with team.settings {maxHops: 2}, or mention them yourself to continue.";
+    if (!callableNames.empty()) notice += " To hand work to " + callableNames + ", call team_delegate; mentions are not delivered.";
+    return notice;
+}
+
 void CheckSessionsFile(const std::string& path) {
     if (!FileExists(path)) return;
     std::error_code ec; const auto size = std::filesystem::file_size(std::filesystem::u8path(path), ec);
@@ -740,10 +757,7 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
         runtime.lastError.clear();
         runtime.lastHint.clear();
         if (!mentioned.empty() && replyHop > store_.Settings().maxHops) {
-            std::string names;
-            for (size_t i : mentioned) names += (names.empty() ? "" : ", ") + roster[i].name;
-            Notice("Not handed on to " + names + ": this chain already has " + std::to_string(store_.Settings().maxHops) +
-                       " agent-to-agent turns (maxHops). Enable with team.settings {maxHops: 2}, or mention them yourself to continue.", id);
+            Notice(BlockedMentionNotice(store_, id, mentioned), id);
         } else {
             for (size_t i : mentioned) {
                 std::string hint;
@@ -922,10 +936,7 @@ Json TeamSession::Send(const std::string& text, const std::string& from, const s
     std::vector<std::string> waiting;
     // An agent's own message is part of the chain its turn belongs to: past maxHops nobody is called.
     if (hop > store_.Settings().maxHops && !recipients.empty()) {
-        std::string names;
-        for (size_t i : recipients) names += (names.empty() ? "" : ", ") + roster[i].name;
-        Notice("Not handed on to " + names + ": this chain already has " + std::to_string(store_.Settings().maxHops) +
-                   " agent-to-agent turns (maxHops). Enable with team.settings {maxHops: 2}, or mention them yourself to continue.", from);
+        Notice(BlockedMentionNotice(store_, from, recipients), from);
         Schedule();
         result["started"] = std::move(started);
         result["queued"] = std::move(queued);

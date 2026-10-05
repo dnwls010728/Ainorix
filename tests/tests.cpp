@@ -8796,6 +8796,64 @@ TEST(TeamChatPull) {
 #endif
 }
 
+TEST(TeamBlockedMentionGuidance) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_blocked_mentions"), dir = ProcessFixtureDir("team blocked mentions");
+    Backend backend;
+    backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
+    backend.models = {{"m", "M", true, 0}}; backend.systemPromptFlag = true;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable; return options;
+    };
+    backend.parseLine = ParseClaudeLine;
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"),
+        R"J({"type":"result","subtype":"success","is_error":false,"session_id":"blocked-1","result":"@target @other please implement."})J" "\n"));
+    Engine e; std::string error, prompt;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), {backend});
+    for (const char* name : {"Lead", "Worker", "Allowed", "Wrong", "Target", "Other"}) {
+        Json args = Json::MakeObject(); args["name"] = name; args["backend"] = "echo";
+        CHECK(e.Call("team.add", args)["ok"].asBool());
+    }
+    CHECK(Call(e, "team.update", R"J({"id":"allowed","values":{"canCall":["target"]}})J")["ok"].asBool());
+    CHECK(Call(e, "team.update", R"J({"id":"wrong","values":{"canCall":["lead"]}})J")["ok"].asBool());
+    CHECK(Call(e, "team.settings")["result"]["maxHops"].asInt() == 0);
+    auto notice = [&] { return Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"][0]; };
+    for (const char* id : {"lead", "worker", "allowed", "wrong"}) {
+        Json args = Json::MakeObject(); args["text"] = std::string("@") + id + " work"; args["wait"] = 10;
+        CHECK(e.Call("team.send", args)["ok"].asBool());
+        const Json message = notice(); const std::string text = message["text"].asString();
+        CHECK(message["kind"].asString() == "notice" && message["from"].asString() == id);
+        CHECK(text.find("team.settings {maxHops: 2}") != std::string::npos);
+        if (std::string(id) == "lead") CHECK(text.find("To hand work to Target, Other, call team_delegate") != std::string::npos);
+        else if (std::string(id) == "allowed") CHECK(text.find("To hand work to Target, call team_delegate") != std::string::npos);
+        else CHECK(text.find("team_delegate") == std::string::npos);
+        CHECK(Call(e, "team.state")["result"]["running"].asInt() == 0);
+        CHECK(!FileExists(JoinPath(dir, "target.prompt.txt")) && !FileExists(JoinPath(dir, "other.prompt.txt")));
+        const Json tasks = Call(e, "team.tasks")["result"];
+        CHECK(tasks.isArray() && tasks.size() == 0);
+    }
+    // Notices remain visible in the chat API, but the next prompt does not resend them to the author.
+    CHECK(Call(e, "team.send", R"J({"text":"@lead next","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "lead.prompt.txt"), prompt));
+    CHECK(prompt.find("[User] @lead next") != std::string::npos && prompt.find("Not handed on") == std::string::npos);
+    // The same guidance applies to agent-attributed API sends without scheduling a turn or retry.
+    for (const char* id : {"lead", "worker", "allowed", "wrong"}) {
+        auto posted = e.PostCall("team.send", Json::parse(R"J({"text":"@target @other work","from":"user"})J"), id);
+        e.RunPostedJobs();
+        const Json response = posted.get();
+        CHECK(response["ok"].asBool());
+        const Json sent = response["result"];
+        CHECK(sent["started"].size() == 0 && sent["queued"].size() == 0);
+        const std::string text = notice()["text"].asString();
+        CHECK((text.find("team_delegate") != std::string::npos) == (std::string(id) == "lead" || std::string(id) == "allowed"));
+    }
+    RemoveAll(dir);
+#endif
+}
+
 TEST(TeamLeanTurns) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)

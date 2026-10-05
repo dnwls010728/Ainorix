@@ -380,8 +380,14 @@ Agent-to-agent: when an agent's final message mentions a teammate, that teammate
 0 for the person's, and for a reply one more than the newest message its turn answered. A reply
 is handed on only while its hop is at most `maxHops`, so one message of the person is followed
 by its first turn plus at most `maxHops` agent-to-agent turns per branch; beyond that the
-mention is shown but not delivered, with a notice naming who was not called. `maxHops: 0`
-turns the feature off. This bounds loops and cost. The agent itself and offline teammates are
+mention is shown but not delivered, with a notice naming who was not called and explaining
+`team.settings {maxHops: 2}`. For targets the sender may call (`canCall`, or every teammate
+for the lead), the notice also says to hand work off by calling `team_delegate`; mentions
+are not delivered. Targets outside that permission get no delegation advice. The same
+notice applies to agent-attributed `team.send` calls. Notices are visible through
+`team.messages` and the chat UI, but excluded from subsequent turn prompts; there is no
+automatic retry or conversion to a task. `maxHops: 0` turns the feature off.
+This bounds loops and cost. The agent itself and offline teammates are
 skipped (an offline one with a notice). Because every `@id` in a reply calls someone, the
 standing context asks agents to write a name without `@` when they only talk about a teammate.
 

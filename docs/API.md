@@ -1162,7 +1162,7 @@ Read or change the team settings; without arguments it only reads them.
 
 ### `team.send`
 
-Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages.
+Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages. Agent mentions beyond maxHops are not delivered; the notice explains how to enable them and, for callable targets, use team_delegate.
 
 | arg | type | required | description |
 |---|---|---|---|

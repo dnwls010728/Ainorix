@@ -712,3 +712,28 @@ per-run measurement.json/seed-manifest.json, raw-standalone.jsonl or
 .oe/team/raw-*.jsonl and persisted usage/task records. Original sample settings,
 credentials and unrelated user edits are excluded from all commits. Both agent
 guides are identical; API regeneration is in each implementation milestone.
+
+
+### Blocked mention guidance follow-up - 2026-10-05
+
+Agent replies and agent-attributed team.send calls blocked by maxHops now retain
+the team.settings {maxHops: 2} hint and add team_delegate advice only for mentioned
+targets the sender may call. The lead may call every teammate; a worker with no
+canCall, or with permissions only for other targets, receives no delegation advice.
+Mixed-target notices name only permitted targets in the delegation advice.
+
+Notice delivery audited: Notice appends kind=notice with no recipients; StartTurn
+selects kind=message only and excludes the agent's own messages. Notices are readable
+through team.messages and visible in the chat UI, but do not enter the author's next
+turn prompt. This follow-up changes that existing human-visible notice only. It adds
+no model call, automatic retry, task conversion or new delivery mechanism.
+
+Stand-in test TeamBlockedMentionGuidance covers lead/empty canCall/allowed target/
+wrong target permissions, mixed mentions, attributed API sends, no scheduled worker
+or task, the unchanged enable hint and absence of notices from the next prompt.
+TEAM.md section 5 and regenerated API.md describe the behaviour.
+
+Validation: build.bat warning-free; build/bin/oe_tests passed all 207 tests
+(0 failed checks), including stand-in tests only for agent turns. Evidence retained
+in build/scratch/team-followups/build-notice-final.log and tests-notice-final.log.
+No headers or player runtime code changed. Agent guides remain byte-identical.

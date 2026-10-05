@@ -225,7 +225,8 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
 
     Register(registry, "team.send",
              "Post a message to the team chat and give a turn to every agent it addresses: @id or @name mentions, @all, otherwise the lead. "
-             "A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages.",
+             "A turn runs the agent's CLI as a child process; follow it with team.state and read the reply with team.messages. "
+             "Agent mentions beyond maxHops are not delivered; the notice explains how to enable them and, for callable targets, use team_delegate.",
              Params()
                  .Req("text", "string", "The message, at most 32 KiB (may be empty when files are attached). Mention agents as @id or @name.")
                  .OptWith("attachments", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":8,"description":"Files the agents should look at: paths on this PC or relative to the project, at most 8, 32 MiB each. A file outside the project is copied into .oe/team/attachments/."})J"))
