@@ -174,3 +174,63 @@ process was killed by image name.
 
 Validation: `build.bat` succeeded; `build/bin/oe_tests` passed **198 tests, 0 failed
 checks**. `CLAUDE.md` and `AGENTS.md` were not changed by this milestone.
+
+## E1 attempt — rejected on measurement, 2026-10-05
+
+- [x] M: baseline measurements recorded above, including M2 model failures.
+- [ ] E1: attempted and tested, then discarded; measured result did not satisfy the keep gate.
+
+Implemented provisionally: maxHops default 0 and an enable command in both blocked
+handoff notices; strictly typed `inheritUserTools` setting, default false and omitted
+from stored JSON when false; Claude `--strict-mcp-config` and
+`--disable-slash-commands`, with an atomic empty MCP configuration without an editor
+and opt-in restoration of user tools; no acknowledgement/acceptance/chat mentions in
+standing context; output-based 600 s idle timeout plus the existing 1800 s absolute
+cap. Chat resume behaviour remained intact; no E2 worker/task work was started.
+
+Codex investigation: installed **0.159.3** documents `--ignore-user-config` on both
+`exec` and `exec resume`; it skips CODEX_HOME/config.toml while retaining login there.
+The provisional adapter used it plus `-c skills.include_instructions=false`.
+The latter controls the automatic skills instruction block in the
+[official configuration schema](https://learn.chatgpt.com/docs/config-schema.json).
+This is **not complete skill isolation**: auto-discovered skills and project/system
+configuration may remain; no full equivalent to Claude's flags was established.
+`inheritUserTools:true` omitted both overrides. These adapter changes were discarded
+with the rest of E1; no real Codex model was run, no user config/auth file was changed.
+
+M1 after: fresh `oe new` scratch project, same Solo/Claude/haiku/full profile and
+exact `Say ok` message with wait=120, no editor, lean default. Both before and after
+used the same installed CLI and inherited the repository/user standing instructions.
+Raw result and team reply agree on the cost.
+
+| M1 | Input | Cache creation | Cache reads | Input-side total | Output | Cost USD | Team wall time | CLI duration |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Before | 9 | 21,612 | 16,349 | 37,970 | 162 | 0.0456779 | 7.6 s | 3.052 s |
+| After attempted E1 | 9 | 32,782 | 0 | 32,791 | 74 | 0.065943 | 5.3 s | 2.360 s |
+
+Input-side total fell **13.64%**, while reported cost rose **44.37%**. Tool/skill/MCP
+counts from init were **116/127/9 before**, **30/0/0 after**. The approximately
+19,000-token idle target was not met. Before included cache hits and after was cold;
+this prevents attributing the cost increase solely to the flags. It also means this
+measurement does not establish a cost improvement. No extra runs were used to select
+a favourable cache state. Under the user's keep-only-on-improvement rule, E1 was
+removed rather than presenting token reduction alone as a successful milestone.
+
+Verification of the provisional code: build succeeded without compiler warnings;
+`TeamStoreProfiles`, `TeamStreamParsers`, `TeamSessionTurns` and new stand-in-only
+`TeamLeanTurns` cover defaults, persistence/validation/omission, opt-in flags on
+new/resumed turns, an empty MCP config, no-ack context, blocked mentions, silence,
+stdout/stderr progress resetting idle, and the absolute cap despite progress.
+The first run had two incorrect test expectations: `team.send {wait}` includes error
+messages in `replies`. The assertions were corrected; no production change was needed.
+API documentation was regenerated, then restored with the rejected source/tests.
+The discarded source/API/test snapshot remains only under ignored
+`build/scratch/team-usage/rejected-e1/` for review. Earlier unrelated working-tree
+changes were preserved, including both identical agent instruction files.
+
+Final verification: provisional E1 passed **199 tests, 0 failed checks** after the
+assertion fix. Restored source passed `build.bat` and **198 tests, 0 failed checks**.
+SHA-256 checks confirmed the tests and API files exactly match their pre-E1 snapshots;
+`CLAUDE.md` and `AGENTS.md` hashes match. `engine/team/` and Wickbound have no remaining
+changes from this task. Only measurement/rejection notes are retained. Stop here;
+E2 and later steps remain unimplemented and await the user's next instruction.
