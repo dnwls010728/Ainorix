@@ -823,3 +823,22 @@ parent instruction file SHA-256/size, exact profiles and flags; per-run records 
 raw capture SHA-256, CLI result/init and ledger data. Local harness and console capture:
 build/scratch/team-followups/{outside-idle.py,outside-idle.log}. Inside comparison:
 build/scratch/team-restore/measurements/{idle-results.json,idle-summary.json}.
+
+### Explicit chat delegation protocol - 2026-10-05
+
+When maxHops is 0, chat turns for the lead or agents with nonempty canCall now add:
+"An @mention does not hand work to a teammate; only team_delegate does. To give a
+teammate a task, call team_delegate; do not answer with a mention."
+The clarification is absent when maxHops is above 0. All chat-protocol delegation
+advice is restricted to the lead/nonempty canCall; permissionless workers receive
+none. These instructions follow the stable prefix; BuildTeamStandingContext is
+unchanged. User text stays on stdin, never in command-line arguments.
+
+Validation: build.bat completed without warnings; all 208 tests passed (0 failed
+checks). New stand-in TeamChatDelegationProtocol covers lead/canCall/worker at
+maxHops 0 and 2 and identical prefix bytes. Existing TeamStableContext and
+TeamChatPull also pass. No actual model calls or measurements were performed.
+TEAM.md section 5 updated; section 11.1 already warns about parent CLAUDE.md loading.
+Command schemas unchanged, so API regeneration was skipped as requested. No headers
+changed. Agent guides remain identical; sample settings and unrelated user edits
+are untouched. Logs retained in build/scratch/team-chat-protocol/{build.log,tests.log}.

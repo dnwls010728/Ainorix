@@ -8796,6 +8796,52 @@ TEST(TeamChatPull) {
 #endif
 }
 
+TEST(TeamChatDelegationProtocol) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_chat_protocol"), dir = ProcessFixtureDir("team chat protocol");
+    Backend backend;
+    backend.id = "echo"; backend.displayName = "Echo"; backend.executable = JoinPath(dir, "echo.cmd");
+    backend.models = {{"m", "M", true, 0}}; backend.systemPromptFlag = true;
+    backend.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options; options.executable = request.executable; return options;
+    };
+    backend.parseLine = ParseClaudeLine;
+    CHECK(WriteTextFile(backend.executable, "@echo off\nfindstr \"^\" > \"%~dp0prompt.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"),
+        R"J({"type":"result","subtype":"success","is_error":false,"session_id":"protocol-1","result":"ok"})J" "\n"));
+    Engine e; std::string error, prompt;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), {backend});
+    team->host.apiPort = 7777; team->host.oeExecutable = backend.executable;
+    CHECK(Call(e, "team.add", R"J({"name":"Lead","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Worker","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Caller","backend":"echo","canCall":["worker"]})J")["ok"].asBool());
+    const std::string clarification = "An @mention does not hand work to a teammate; only team_delegate does. "
+        "To give a teammate a task, call team_delegate; do not answer with a mention.";
+    for (const char* id : {"lead", "caller", "worker"}) {
+        std::string firstPrefix;
+        for (int hops : {0, 2}) {
+            Json settings = Json::MakeObject(); settings["maxHops"] = hops;
+            CHECK(e.Call("team.settings", settings)["ok"].asBool());
+            Json args = Json::MakeObject(); args["text"] = std::string("@") + id + " Say ok"; args["wait"] = 10;
+            CHECK(e.Call("team.send", args)["ok"].asBool());
+            CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
+            const bool mayDelegate = std::string(id) != "worker";
+            CHECK((prompt.find(clarification) != std::string::npos) == (mayDelegate && hops == 0));
+            CHECK((prompt.find("Use team_delegate for one task step") != std::string::npos) == mayDelegate);
+            if (!mayDelegate) CHECK(prompt.find("team_delegate") == std::string::npos);
+            std::string prefix;
+            CHECK(ReadTextFile(JoinPath(project, std::string(".oe/team/tmp/") + id + ".system.md"), prefix));
+            CHECK(prefix.find(clarification) == std::string::npos && prefix.find("Chat protocol:") == std::string::npos);
+            if (hops == 0) firstPrefix = prefix;
+            else CHECK(prefix == firstPrefix);
+        }
+    }
+    RemoveAll(dir);
+#endif
+}
+
 TEST(TeamBlockedMentionGuidance) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)

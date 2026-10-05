@@ -486,6 +486,8 @@ combo: text there changed the dialog's width whenever another agent was chosen.
 
 ### 5.5 Task turns
 
+Chat turns tell the lead and agents with `canCall` to call `team_delegate` rather than answer with an `@mention` when `maxHops` is 0; this instruction follows the stable prefix and is omitted when mentions are enabled or the worker has no delegation permission.
+
 Delegation runs beside chat. Workers receive only role/project context and the
 bounded task brief, never chat history or a resume id; their final text/session
 never enters the chat conversation. `team_delegate` in the MCP bridge waits on

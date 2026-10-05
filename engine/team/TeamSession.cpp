@@ -506,8 +506,15 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime, const J
                                      "Do not print report JSON in the final answer. Use the task id. Do not post to team chat.\n" :
                                      "No API is attached. Return final text; the harness stores it unverified without posting to chat.\n";
     } else {
-        prompt += "\nChat protocol: reply only to addressed messages; final text is posted to chat. Use team_delegate for one task step, "
-                  "passing exact requirements and acceptance verbatim; add no constraints. Check the returned evidence yourself: done is not verified.\n";
+        prompt += "\nChat protocol: reply only to addressed messages; final text is posted to chat.\n";
+        if (agent.id == store_.Settings().lead || !agent.canCall.empty()) {
+            prompt += "Use team_delegate for one task step, passing exact requirements and acceptance verbatim; add no constraints. "
+                      "Check the returned evidence yourself: done is not verified.\n";
+            if (store_.Settings().maxHops == 0) {
+                prompt += "An @mention does not hand work to a teammate; only team_delegate does. "
+                          "To give a teammate a task, call team_delegate; do not answer with a mention.\n";
+            }
+        }
     }
     prompt += host_.apiPort > 0 ? "\nConnection: ownengine MCP controls this project. Use its tools.\n" :
                                  "\nConnection: no API attached; edit files or use oe exec.\n";
