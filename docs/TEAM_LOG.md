@@ -582,3 +582,31 @@ are postponed until E4, with k=3 per condition; the prior single-run rejection i
 historical and no longer a gate. Original sample team files and unrelated net/
 OnlineRPG edits are excluded from the commit. See scratch team-restore build-e1.log
 and tests-e1.log for checks.
+
+## 2026-10-05 — E2 restored with report fallback fixes
+
+- [x] E2 implementation and stand-in validation: bounded atomic task records,
+  team.delegate/report/task/tasks, canCall (none by default, lead may call everyone),
+  fresh worker conversation with no resume/chat, blocking MCP team_delegate on the
+  I/O thread, cancellation propagation, absolute deadlines and no automatic retry.
+- Reimplemented from rejected-e2, preserving E1/E3/E5/E6. Task usage enters the E5
+  ledger with taskId; costs use per-turn Claude deltas, not cumulative reply costs.
+- Fixed the discarded implementation: @id/id/name targets all accepted. Workers
+  explicitly MUST call team_report and MUST NOT print report JSON in their final
+  answer. Missing report after a successful turn becomes done + unverified:true,
+  final text as summary, with reportReceived:false/verified:false. CLI failures and
+  abnormal exits remain failed; absolute deadline expiry is timed_out. Idle timeout
+  kills a stalled backend as a failure, not an absolute deadline completion.
+- Child deadlines are capped to the caller's absolute deadline (including chat
+  turns); late reports are refused. Task requirements/duration never enter the
+  stable role prefix planned for E4. Reports never auto-verify acceptance.
+
+build.bat warning-free; 205 tests, zero failed checks. TeamTaskRecords and
+TeamDelegationTurns cover persistence/corruption, evidence validation/duplicates,
+blocking poll errors, permissions, target aliases, no chat/resume leakage,
+chat conversation preservation, attached no-report fallback, abnormal exit,
+parent cancellation and nested deadlines. Actual CLI/report/Bat acceptance will
+be checked once in the final k=3 suite rather than run per implementation step.
+CMake's CONFIGURE_DEPENDS team source glob automatically includes TeamTasks.cpp.
+API, TEAM §§3.1/5/8/11, identical guides and all three READMEs updated. Original
+sample team.json files and unrelated net/OnlineRPG changes are not staged.

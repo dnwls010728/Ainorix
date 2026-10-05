@@ -232,6 +232,10 @@ struct TeamSession::Turn {
     bool done = false, working = false, timedOut = false;
     bool idleTimedOut = false;
     std::string task, replyTo, activity = "Starting", finalText, lastText, failure, sessionId;
+    std::string taskId; // empty for a resumed chat turn
+    std::vector<std::string> childTasks; // cancelled with the delegating turn
+    double maxDurationSeconds = 1800.0;
+    double deadlineAt = 0.0;
     int hop = 0;  // of the message this turn answers
     double costUsd = 0.0;
     bool costKnown = false, costCumulative = false, resumed = false;
@@ -258,6 +262,7 @@ void TeamSession::Open() {
     lastMessageId_ = 0;
     projectDir_ = store_.ProjectDir();
     usage_.Open(JoinPath(Directory(), "usage.jsonl"));
+    tasks_.Open(JoinPath(Directory(), "tasks"));
     ++revision_;
 
     std::string text;
@@ -389,6 +394,14 @@ std::string TeamSession::StandingContext(const AgentProfile& agent) const {
     if (host_.apiPort > 0) {
         text += "The editor showing this project is open: the `ownengine` MCP server controls it (scene, components, screenshots, simulation). "
                 "Prefer its tools over editing scene files; your edits appear in the editor at once.\n";
+        text += "Delegate work with team_delegate, one step per task. Give the exact goal and success check, pass the person's requirements "
+                "verbatim and add no constraints. Check the worker's evidence against acceptance yourself; done is not verified. "
+                "Only the lead or targets listed in your canCall profile may be called.\n";
+        text += "Your allowed task targets: ";
+        if (agent.id == store_.Settings().lead) text += "all teammates";
+        else if (agent.canCall.empty()) text += "none";
+        else for (const std::string& target : agent.canCall) text += target + " ";
+        text += "\n";
     } else {
         text += "No editor is attached to this turn: edit the project files, or run `oe exec` commands.\n";
     }
@@ -408,11 +421,19 @@ void TeamSession::FailTurn(const std::string& id, Runtime& runtime, const std::s
     Append(std::move(error));
 }
 
-void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
-    runtime.pending = false;
+void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime, const Json* task) {
+    if (!task) runtime.pending = false;
+    auto fail = [&](const std::string& message, const std::string& hint) {
+        if (!task) FailTurn(agent.id, runtime, message, hint);
+        else {
+            tasks_.Finish((*task)["id"].asString(), "failed", message);
+            runtime.lastError = message;
+            runtime.lastHint = hint;
+        }
+    };
     std::string hint;
     const std::string offline = OfflineReason(agent, &hint);
-    if (!offline.empty()) return FailTurn(agent.id, runtime, agent.name + " cannot take a turn: " + offline + ".", hint);
+    if (!offline.empty()) return fail(agent.name + " cannot take a turn: " + offline + ".", hint);
     const Backend& backend = *FindBackend(agent.backend);
 
     // Delivery uses persisted recipients, including the message that scheduled this turn.
@@ -420,7 +441,14 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     std::vector<const ChatMessage*> unread;
     size_t omitted = 0;
     const uint64_t seenUpTo = lastMessageId_;
+    ChatMessage taskMessage;
+    if (task) {
+        taskMessage.from = (*task)["from"].asString();
+        taskMessage.text = (*task)["goal"].asString();
+        unread.push_back(&taskMessage);
+    }
     for (const ChatMessage& message : messages_) {
+        if (task) continue;
         if (message.id <= runtime.seen || message.kind != "message" || message.from == agent.id) continue;
         if (std::find(message.to.begin(), message.to.end(), agent.id) != message.to.end()) unread.push_back(&message);
         else ++omitted;
@@ -443,20 +471,21 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         prompt += "\n[" + (message->from == "user" ? std::string("User") : sender ? sender->name : message->from) + "] " + message->text + "\n";
         for (const ChatAttachment& attachment : message->attachments) prompt += "  Attached " + attachment.type + ": " + attachment.path + "\n";
     }
+    if (task) prompt = "Task brief (one step; preserve the exact requirements):\n" + task->dump(2) + "\n";
 
     const ChatMessage trigger = *unread.back();
 
-    if (omitted > 0 && host_.apiPort > 0) {
+    if (!task && omitted > 0 && host_.apiPort > 0) {
         prompt += "\n" + std::to_string(omitted) + " chat messages omitted. Read team_messages when earlier context is needed.\n";
     }
 
-    if (store_.Settings().rotateAboveInputTokens > 0 && !runtime.session.empty() &&
+    if (!task && store_.Settings().rotateAboveInputTokens > 0 && !runtime.session.empty() &&
         runtime.contextTokens >= static_cast<uint64_t>(store_.Settings().rotateAboveInputTokens)) {
         runtime.session.clear(); runtime.sessionBackend.clear(); runtime.contextTokens = 0;
         Notice(agent.name + " started a fresh conversation: the input-size estimate reached rotateAboveInputTokens.", agent.id);
         SaveSessions();
     }
-    if (runtime.sessionBackend != backend.id) runtime.session.clear();  // a conversation belongs to the CLI that made it
+    if (!task && runtime.sessionBackend != backend.id) runtime.session.clear();  // a conversation belongs to the CLI that made it
     const std::string tmp = JoinPath(Directory(), "tmp"), relativeTmp = ".oe/team/tmp/";
     CreateDirectories(tmp);
     TurnRequest request;
@@ -464,7 +493,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     request.model = agent.model;
     request.access = agent.access;
     request.inheritUserTools = store_.Settings().inheritUserTools;
-    request.sessionId = runtime.session;
+    request.sessionId = task ? "" : runtime.session;
     try {
         const Json baseline = usage_.Baseline(backend.id, request.sessionId);
         if (agent.maxBudgetUsd > 0) {
@@ -474,12 +503,23 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
             }
             request.maxBudgetUsd = agent.maxBudgetUsd + (request.sessionId.empty() ? 0 : baseline["reportedCostUsd"].asNumber());
         }
-    } catch (const ApiError& e) { return FailTurn(agent.id, runtime, e.what(), e.hint); }
-    const std::string context = StandingContext(agent);
+    } catch (const ApiError& e) { return fail(e.what(), e.hint); }
+    std::string context = StandingContext(agent);
+    if (task) {
+        context = "You are " + agent.name + ", a worker assigned one task in this project.\n";
+        if (!agent.description.empty()) context += "Role: " + agent.description + "\n";
+        if (!agent.instructions.empty()) context += agent.instructions + "\n";
+        context += "Work only on the task. Read project AGENTS.md if present. On failure, report the exact failure and stop; do not retry or invent work. "
+                   "Report changed files and command, result/exit code and trimmed output. Never claim success without verifying output.\n";
+        context += host_.apiPort > 0 ? "You MUST call the team_report tool to submit the result with {id,summary,changed,evidence:[{command,result,output}]}. Do not print report JSON in the final answer. Use the task id. "
+                                     "The ownengine MCP tools control this project. Do not post to team chat.\n" :
+                                     "No editor is attached. Return the report as final text; it will be stored unverified, not posted to chat.\n";
+    }
+
     if (backend.systemPromptFlag) {
-        if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".system.md"), context, nullptr)) return FailTurn(agent.id, runtime, "cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
+        if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".system.md"), context, nullptr)) return fail( "cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
         request.systemPromptFile = relativeTmp + agent.id + ".system.md";
-    } else if (runtime.session.empty()) {
+    } else if (task || runtime.session.empty()) {
         prompt = context + "\n---\n\n" + prompt;  // the CLI has no system prompt flag: said once, at the start of the conversation
     }
     std::string oe = host_.oeExecutable;
@@ -490,7 +530,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     Json config = Json::MakeObject();
     config["mcpServers"] = Json::MakeObject();
     if (host_.apiPort > 0) {
-        if (!FileExists(oe)) return FailTurn(agent.id, runtime, "Cannot configure the editor MCP server: oe executable is missing.", "Set TeamHost::oeExecutable to the built oe executable.");
+        if (!FileExists(oe)) return fail( "Cannot configure the editor MCP server: oe executable is missing.", "Set TeamHost::oeExecutable to the built oe executable.");
         Json server = Json::MakeObject();
         server["command"] = oe;
         Json arguments = Json::MakeArray();
@@ -503,19 +543,23 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     }
     // An empty config is intentional: lean Claude turns must not load unrelated user servers.
     if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".mcp.json"), config.dump(2) + "\n", nullptr)) {
-        return FailTurn(agent.id, runtime, "Cannot write the MCP config in .oe/team/tmp/.", "Check that the project folder is writable.");
+        return fail( "Cannot write the MCP config in .oe/team/tmp/.", "Check that the project folder is writable.");
     }
     request.mcpConfigFile = relativeTmp + agent.id + ".mcp.json";
     ProcessOptions options = backend.buildTurn(request);
     options.workingDirectory = projectDir_;
     options.environment.emplace_back("OE_TEAM_AGENT", agent.id);
     options.environment.emplace_back("OE_TEAM_HOP", std::to_string(trigger.hop));
+    if (task) {
+        options.environment.emplace_back("OE_TEAM_TASK", (*task)["id"].asString());
+        if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".task.md"), context + "\n" + prompt, nullptr)) return fail("Cannot write task prompt.", "Check that .oe/team/tmp is writable.");
+    }
     options.pipeStdin = true;
 
     auto turn = std::make_unique<Turn>();
     std::string error;
     turn->process = PlatformStartProcess(options, &error);
-    if (!turn->process) return FailTurn(agent.id, runtime, "Cannot start " + backend.displayName + ": " + error, "Call team.backends {refresh:true} to check the installation.");
+    if (!turn->process) return fail("Cannot start " + backend.displayName + ": " + error, "Call team.backends {refresh:true} to check the installation.");
     turn->backend = &backend;
     turn->agentId = agent.id; turn->model = agent.model; turn->resumed = !request.sessionId.empty();
     turn->startedAt = PlatformTimeSeconds();
@@ -524,6 +568,9 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     turn->replyTo = trigger.from;
     turn->hop = trigger.hop;
     turn->seenUpTo = seenUpTo;
+    turn->maxDurationSeconds = task ? std::min(host_.turnTimeoutSeconds, (*task)["maxDurationMs"].asNumber() / 1000.0) : host_.turnTimeoutSeconds;
+    turn->taskId = task ? (*task)["id"].asString() : "";
+    turn->deadlineAt = task && (*task).has("deadlineAt") ? (*task)["deadlineAt"].asNumber() : turn->startedAt + turn->maxDurationSeconds;
     CreateDirectories(JoinPath(Directory(), "images"));  // where agents are told to save pictures
     turn->imagesBefore = ScanImages();
     Turn* raw = turn.get();
@@ -598,6 +645,7 @@ Json TeamSession::RecordTurn(const Turn& turn, const std::string& state) {
     record["version"] = 1; record["time"] = NowUtc(); record["date"] = record["time"].asString().substr(0, 10);
     record["agent"] = turn.agentId; record["backend"] = turn.backend->id; record["model"] = turn.model;
     record["session"] = turn.sessionId; record["state"] = state;
+    if (!turn.taskId.empty()) record["taskId"] = turn.taskId;
     record["tokensKnown"] = turn.usage.known;
     record["contextTokens"] = turn.usage.contextTokens; record["contextEstimated"] = turn.usage.contextEstimated;
     record["inputTokens"] = turn.usage.inputTokens; record["outputTokens"] = turn.usage.outputTokens;
@@ -621,11 +669,18 @@ Json TeamSession::Usage(const std::string& agent, const std::string& date) const
 
 void TeamSession::StopTurn(Runtime& runtime) {
     if (!runtime.turn) return;
+    const auto children = runtime.turn->childTasks;
+    const std::string taskId = runtime.turn->taskId;
     runtime.turn->process->Kill();
     runtime.turn->thread.join();
     for (const auto& line : runtime.turn->lines) HandleLine(*runtime.turn, line.first, line.second);
     RecordTurn(*runtime.turn, "cancelled");
     runtime.turn.reset();
+    for (const std::string& id : children) CancelTask(id);
+    if (!taskId.empty()) {
+        try { tasks_.Finish(taskId, "cancelled", "The worker turn was cancelled."); }
+        catch (const ApiError& e) { OE_LOG_WARN("team", "cannot persist task cancellation: %s", e.what()); }
+    }
     ++revision_;
 }
 
@@ -636,7 +691,32 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
     turn->process->Running(&exitCode);
     const double seconds = PlatformTimeSeconds() - turn->startedAt;
     const bool pending = runtime.pending;
-    const Json accounting = RecordTurn(*turn, turn->timedOut ? "timed_out" : turn->done ? "done" : "failed");
+    const Json accounting = RecordTurn(*turn, turn->timedOut && !turn->idleTimedOut ? "timed_out" : turn->done && exitCode == 0 && !turn->timedOut ? "done" : "failed");
+    if (!turn->taskId.empty()) {
+        try {
+            const Json task = tasks_.Get(turn->taskId);
+            std::string state = "failed", summary;
+            if (turn->timedOut && !turn->idleTimedOut) { state = "timed_out"; summary = "The task exceeded its duration limit; it was not retried."; }
+            else if (!turn->done || exitCode != 0) summary = !turn->failure.empty() ? turn->failure : "Worker exited with code " + std::to_string(exitCode) + " before successful completion.";
+            else {
+                state = "done";
+                if (!task["reportReceived"].asBool()) summary = !turn->finalText.empty() ? turn->finalText : turn->lastText;
+            }
+            tasks_.Finish(turn->taskId, state, summary, seconds, accounting["costUsd"].asNumber(), turn->tools);
+            if (state != "done") {
+                for (const std::string& child : turn->childTasks) CancelTask(child);
+                runtime.lastError = summary;
+                runtime.lastHint = "Check the task evidence and fix the cause before delegating another task.";
+            }
+        } catch (const ApiError& e) {
+            for (const std::string& child : turn->childTasks) CancelTask(child);
+            runtime.lastError = e.what();
+            runtime.lastHint = e.hint;
+            OE_LOG_WARN("team", "cannot persist task result: %s", e.what());
+        }
+        ++revision_;
+        return; // worker text and session id never enter chat or resume state
+    }
     if (turn->done && !turn->timedOut) {
         ChatMessage reply;
         reply.from = id;
@@ -697,6 +777,7 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
             }
         }
     } else {
+        for (const std::string& child : turn->childTasks) CancelTask(child);
         std::string message = turn->idleTimedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(host_.idleTimeoutSeconds)) + " s without output (idle timeout)." :
                               turn->timedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(seconds)) + " s without finishing." :
                               !turn->failure.empty() ? turn->failure : turn->backend->displayName + " exited with code " + std::to_string(exitCode) + " before finishing the turn.";
@@ -745,9 +826,9 @@ void TeamSession::Update() {
         } else if (turn.done && now - turn.doneAt > kExitGraceSeconds) {
             turn.process->Kill();  // the CLI is done but something it started keeps the pipes open
         } else if (!turn.timedOut && !turn.done &&
-                   (now - turn.startedAt > host_.turnTimeoutSeconds || now - lastOutputAt > host_.idleTimeoutSeconds)) {
+                   (now >= turn.deadlineAt || now - lastOutputAt > host_.idleTimeoutSeconds)) {
             turn.timedOut = true;
-            turn.idleTimedOut = now - turn.startedAt <= host_.turnTimeoutSeconds;
+            turn.idleTimedOut = now < turn.deadlineAt;
             turn.process->Kill();
         }
     }
@@ -799,6 +880,10 @@ int TeamSession::TurnHop(const std::string& id) const {
 }
 
 Json TeamSession::Send(const std::string& text, const std::string& from, const std::vector<std::string>& attachments, int hop) {
+    auto sender = agents_.find(from);
+    if (sender != agents_.end() && sender->second.turn && !sender->second.turn->taskId.empty()) {
+        throw ApiError("task_chat_forbidden", "workers report through team.report, not team chat", "Call team.report with your task id and evidence.");
+    }
     if (text.find_first_not_of(" \t\r\n") == std::string::npos && attachments.empty()) throw ApiError("invalid_argument", "the message is empty");
     if (attachments.size() > kMaxSendAttachments) throw ApiError("invalid_argument", "a message carries at most 8 attachments");
     if (!ValidTeamText(text, kMaxSendBytes)) throw ApiError("invalid_argument", "a chat message must be UTF-8 text of at most 32768 bytes");
@@ -936,6 +1021,7 @@ void TeamSession::Reset(const std::string& idOrName) {
 void TeamSession::Clear() {
     for (auto& entry : agents_) StopTurn(entry.second);
     agents_.clear();
+    tasks_.Clear();
     messages_.clear();
     RemoveAll(JoinPath(Directory(), "chat.jsonl"));
     RemoveAll(JoinPath(Directory(), "sessions.json"));
@@ -948,6 +1034,60 @@ bool TeamSession::Busy(const std::vector<std::string>& ids) {
         if (ids.empty() || std::find(ids.begin(), ids.end(), entry.first) != ids.end()) return true;
     }
     return false;
+}
+
+Json TeamSession::Delegate(const Json& brief, const std::string& from) {
+    if (!store_.LoadError().empty()) throw ApiError("team_file_invalid", store_.LoadError(), "Repair .oe/team/team.json first.");
+    std::string targetName = brief["to"].asString("");
+    if (!targetName.empty() && targetName.front() == '@') targetName.erase(0, 1);
+    const AgentProfile* target = store_.Find(targetName);
+    if (!target) throw ApiError("unknown_agent", "no delegate target", "team.list shows the agents; pass to as an id or name.");
+    if (from != "user") {
+        const AgentProfile* caller = FindById(store_, from);
+        if (!caller) throw ApiError("unknown_agent", "unknown task sender");
+        auto active = agents_.find(from);
+        if (active == agents_.end() || !active->second.turn) throw ApiError("agent_idle", "only a running agent turn may delegate", "Send the agent a chat message first.");
+        if (from != store_.Settings().lead && std::find(caller->canCall.begin(), caller->canCall.end(), target->id) == caller->canCall.end()) {
+            throw ApiError("delegate_forbidden", from + " may not call " + target->id, "Set the caller's canCall profile, or delegate from the lead.");
+        }
+    }
+    if (from == target->id) throw ApiError("delegate_cycle", "an agent cannot delegate to itself");
+    Runtime& worker = agents_[target->id];
+    if (worker.turn || worker.pending) throw ApiError("agent_busy", target->name + " is already busy", "Choose an idle worker or wait for its turn to finish.");
+    int running = 0;
+    for (const auto& entry : agents_) running += entry.second.turn ? 1 : 0;
+    if (running >= store_.Settings().maxConcurrent) throw ApiError("team_busy", "no free worker slot", "Increase maxConcurrent, or delegate after another turn finishes.");
+    Json boundedBrief = brief;
+    const double now = PlatformTimeSeconds();
+    double deadline = now + std::min(host_.turnTimeoutSeconds, brief["maxDurationMs"].asNumber(1800000) / 1000.0);
+    if (from != "user") deadline = std::min(deadline, agents_[from].turn->deadlineAt);
+    if (deadline <= now) throw ApiError("task_deadline", "the caller's deadline has expired", "Do not retry automatically.");
+    boundedBrief["deadlineAt"] = deadline;
+    Json task = tasks_.Create(boundedBrief, from, target->id);
+    if (from != "user") agents_[from].turn->childTasks.push_back(task["id"].asString());
+    StartTurn(*target, worker, &task);
+    return tasks_.Get(task["id"].asString());
+}
+
+Json TeamSession::Report(const Json& report, const std::string& from) {
+    const std::string id = report["id"].asString("");
+    const Json task = tasks_.Get(id);
+    auto active = agents_.find(from);
+    if (from != task["to"].asString() || active == agents_.end() || !active->second.turn || active->second.turn->taskId != id) {
+        throw ApiError("report_forbidden", "only the assigned running worker may report this task", "Use team.report from that worker's attributed MCP connection.");
+    }
+    if (PlatformTimeSeconds() >= active->second.turn->deadlineAt) throw ApiError("task_deadline", "the task deadline has expired", "Do not retry automatically.");
+    tasks_.Report(id, report);
+    ++revision_;
+    return tasks_.Get(id);
+}
+
+void TeamSession::CancelTask(const std::string& id) {
+    for (auto& entry : agents_) {
+        if (entry.second.turn && entry.second.turn->taskId == id) { StopTurn(entry.second); return; }
+    }
+    try { tasks_.Finish(id, "cancelled", "The delegating turn was cancelled."); }
+    catch (const ApiError& e) { OE_LOG_WARN("team", "cannot persist task cancellation: %s", e.what()); }
 }
 
 Json TeamSession::State() {

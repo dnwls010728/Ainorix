@@ -21,7 +21,7 @@ constexpr size_t kMaxTeamFileBytes = 1024 * 1024;
 constexpr uintmax_t kMaxAvatarSourceBytes = 16 * 1024 * 1024;
 constexpr int kMaxAvatarSourcePixels = 8192;
 constexpr int kTeamFileVersion = 1;
-const char* const kAgentKeys[] = {"name", "avatar", "description", "instructions", "backend", "model", "access", "maxBudgetUsd"};
+const char* const kAgentKeys[] = {"name", "avatar", "description", "instructions", "backend", "model", "access", "maxBudgetUsd", "canCall"};
 
 std::string Lower(std::string text) {
     for (char& c : text) {
@@ -108,6 +108,16 @@ void ApplyValues(AgentProfile& agent, const Json& values, bool fromFile) {
             if (!member.second.isNumber() || !std::isfinite(n) || n < 0 || n > 1000 || (n > 0 && n < 0.000001)) throw Invalid("maxBudgetUsd must be 0 or 0.000001..1000");
             agent.maxBudgetUsd = n; continue;
         }
+        if (key == "canCall") {
+            if (!member.second.isArray() || member.second.size() > kMaxTeamAgents) throw Invalid("canCall must be an array of at most 16 agent ids");
+            agent.canCall.clear();
+            for (const Json& target : member.second.items()) {
+                if (!target.isString() || !ValidSlug(target.asString()) || target.asString() == "user" || target.asString() == "all" ||
+                    std::find(agent.canCall.begin(), agent.canCall.end(), target.asString()) != agent.canCall.end()) throw Invalid("canCall requires unique agent ids");
+                agent.canCall.push_back(target.asString());
+            }
+            continue;
+        }
         std::string* field = key == "name" ? &agent.name : key == "avatar" ? &agent.avatar : key == "description" ? &agent.description :
                              key == "instructions" ? &agent.instructions : key == "backend" ? &agent.backend : key == "model" ? &agent.model :
                              key == "access" ? &agent.access : (fromFile && key == "id") ? &agent.id : nullptr;
@@ -173,6 +183,10 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
         if (!agent.model.empty()) j["model"] = agent.model;
         if (agent.access != "edit") j["access"] = agent.access;
         if (agent.maxBudgetUsd > 0) j["maxBudgetUsd"] = agent.maxBudgetUsd;
+        if (!agent.canCall.empty()) {
+            j["canCall"] = Json::MakeArray();
+            for (const std::string& id : agent.canCall) j["canCall"].push(id);
+        }
         list.push(std::move(j));
     }
     root["agents"] = std::move(list);
@@ -409,6 +423,7 @@ std::string TeamStore::Remove(const std::string& idOrName) {
     const std::string id = agents_[index].id, uploaded = AvatarFile(agents_[index]);
     std::vector<AgentProfile> agents = agents_;
     agents.erase(agents.begin() + static_cast<std::ptrdiff_t>(index));
+    for (AgentProfile& agent : agents) agent.canCall.erase(std::remove(agent.canCall.begin(), agent.canCall.end(), id), agent.canCall.end());
     TeamSettings settings = settings_;
     if (settings.lead == id) settings.lead.clear();
     Commit(std::move(agents), std::move(settings));
@@ -492,6 +507,8 @@ Json TeamStore::AgentToJson(const AgentProfile& agent) const {
     j["model"] = agent.model;
     j["access"] = agent.access;
     j["maxBudgetUsd"] = agent.maxBudgetUsd;
+    j["canCall"] = Json::MakeArray();
+    for (const std::string& id : agent.canCall) j["canCall"].push(id);
     return j;
 }
 

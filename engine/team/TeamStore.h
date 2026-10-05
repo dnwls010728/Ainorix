@@ -23,6 +23,7 @@ struct AgentProfile {
     std::string model;         // model id of that backend, empty = the CLI's default
     double maxBudgetUsd = 0.0;    // Claude per-turn allowance; 0 = disabled, up to 1000 USD
     std::string access = "edit";  // read | edit | full (docs/TEAM.md §6)
+    std::vector<std::string> canCall; // task delegate targets by id; none by default, lead may call everyone
 };
 
 struct TeamSettings {

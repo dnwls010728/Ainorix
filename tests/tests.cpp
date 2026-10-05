@@ -8837,6 +8837,167 @@ TEST(TeamLeanTurns) {
 #endif
 }
 
+TEST(TeamTaskRecords) {
+    const std::string project = TempProject("team_tasks");
+    const std::string directory = JoinPath(project, ".oe/team/tasks");
+    TeamTasks tasks;
+    tasks.Open(directory);
+    Json brief = Json::parse(R"J({"goal":"Copy a prefab","acceptance":"script.check clean","files":["scripts/a.lua"],"context":"one step","maxDurationMs":500})J");
+    Json task = tasks.Create(brief, "lead", "worker");
+    const std::string id = task["id"].asString();
+    CHECK(task["state"].asString() == "running" && !task["verified"].asBool());
+    Json report = Json::parse(R"J({"summary":"Checked","changed":["scripts/a.lua"],"evidence":[{"command":"script.check","result":0,"output":"0 errors"}]})J");
+    report["evidence"][0]["output"] = std::string(5000, 'x');
+    tasks.Report(id, report);
+    CHECK(tasks.Get(id)["state"].asString() == "running" && tasks.Get(id)["evidence"][0]["output"].asString().size() == 4096);
+    tasks.Finish(id, "done", "", 1.0, 0.1, 2);
+    CHECK(tasks.Get(id)["summary"].asString() == "Checked" && !tasks.Get(id)["verified"].asBool());
+    Json interrupted = tasks.Create(brief, "lead", "worker");
+    TeamTasks reopened;
+    reopened.Open(directory);
+    CHECK(reopened.Get(interrupted["id"].asString())["state"].asString() == "failed");
+    CHECK(reopened.Get(id)["state"].asString() == "done" && reopened.List().size() == 2);
+    auto rejects = [](const std::function<void()>& run, const char* code) {
+        try { run(); } catch (const ApiError& e) { return e.code == code; }
+        return false;
+    };
+    brief["files"][0] = "../outside.lua";
+    CHECK(rejects([&] { reopened.Create(brief, "lead", "worker"); }, "invalid_argument"));
+    CHECK(reopened.List().size() == 2);
+    CHECK(rejects([&] { reopened.Report(id, report); }, "task_closed"));
+    CHECK(WriteTextFile(JoinPath(directory, id + ".json"), "{broken"));
+    TeamTasks corrupt;
+    corrupt.Open(directory);
+    CHECK(rejects([&] { corrupt.Clear(); }, "task_file_invalid"));
+    std::string text;
+    CHECK(ReadTextFile(JoinPath(directory, id + ".json"), text) && text == "{broken");
+    // The blocking MCP wrapper polls through its caller and propagates transport errors.
+    Json envelope = Json::parse(R"J({"ok":true,"result":{"id":"task-1","state":"running"}})J");
+    int polls = 0;
+    Json final = AwaitTeamTask([&](const std::string& command, const Json& args) {
+        CHECK(command == "team.task" && args["id"].asString() == "task-1");
+        ++polls;
+        Json result = envelope;
+        if (polls == 2) result["result"]["state"] = "done";
+        return result;
+    }, envelope);
+    CHECK(polls == 2 && final["result"]["state"].asString() == "done");
+    CHECK(!AwaitTeamTask([](const std::string&, const Json&) { return Json::parse(R"J({"ok":false,"error":{"code":"connection_failed"}})J"); }, envelope)["ok"].asBool());
+}
+TEST(TeamDelegationTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_delegate");
+    const std::string dir = ProcessFixtureDir("team delegate");
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"session_id":"chat-1","result":"Done; @lead should not be called."})J" "\n"));
+    const std::string save = "findstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n";
+    auto fake = [&](const char* id, int delay) {
+        Backend backend;
+        backend.id = id; backend.displayName = id; backend.executable = JoinPath(dir, std::string(id) + ".cmd");
+        backend.models = {{"m", "M", true, 0}};
+        backend.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options;
+            options.executable = request.executable;
+            options.arguments = {request.sessionId.empty() ? "fresh" : request.sessionId};
+            return options;
+        };
+        backend.parseLine = ParseClaudeLine;
+        CHECK(WriteTextFile(backend.executable, "@echo off\n" + save + (delay ? "ping -n " + std::to_string(delay) + " 127.0.0.1 >nul\n" : "") + "type \"%~dp0reply.jsonl\"\n"));
+        return backend;
+    };
+    std::vector<Backend> backends = {fake("quick", 0), fake("slow", 30), fake("report", 3)};
+    Engine e;
+    std::string error, text;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), backends);
+    for (const char* profile : {R"J({"name":"Lead","backend":"slow"})J", R"J({"name":"Worker","backend":"quick"})J",
+                               R"J({"name":"Other","backend":"slow"})J", R"J({"name":"Reporter","backend":"report"})J"}) CHECK(Call(e, "team.add", profile)["ok"].asBool());
+    CHECK(Call(e, "team.settings", R"J({"maxHops":0})J")["ok"].asBool());
+    CHECK(Call(e, "team.get", R"J({"id":"other"})J")["result"]["canCall"].size() == 0);
+    CHECK(!Call(e, "team.update", R"J({"id":"other","values":{"canCall":["worker","worker"]}})J")["ok"].asBool());
+    CHECK(!Call(e, "team.update", R"J({"id":"other","values":{"canCall":["all"]}})J")["ok"].asBool());
+    auto remote = [&](const char* command, const Json& args, const char* agent) {
+        auto call = e.PostCall(command, args, agent);
+        e.RunPostedJobs();
+        return call.get();
+    };
+    auto settled = [&] {
+        const double end = PlatformTimeSeconds() + 10;
+        while (PlatformTimeSeconds() < end) { team->update(); if (!Call(e, "team.state")["result"]["running"].asInt()) return true; PlatformSleep(0.02); }
+        return false;
+    };
+    CHECK(Call(e, "team.send", R"J({"text":"@worker unrelated-secret-chat","wait":10})J")["ok"].asBool());
+    const size_t chatCount = Call(e, "team.messages")["result"]["messages"].size();
+    Json brief = Json::parse(R"J({"to":"@worker","goal":"copy only the bat prefab","acceptance":"script.check clean","files":["scripts/bat.lua"],"context":"brief-only"})J");
+    Json task = e.Call("team.delegate", brief)["result"];
+    CHECK(task["state"].asString() == "running" && settled());
+    Json read = Json::MakeObject(); read["id"] = task["id"];
+    task = e.Call("team.task", read)["result"];
+    CHECK(task["state"].asString() == "done" && !task["verified"].asBool() && !task["reportReceived"].asBool());
+    CHECK(Call(e, "team.messages")["result"]["messages"].size() == chatCount);
+    CHECK(ReadTextFile(JoinPath(dir, "worker.prompt.txt"), text) && text.find("unrelated-secret-chat") == std::string::npos && text.find("copy only the bat prefab") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/worker.task.md"), text) && text.find("unrelated-secret-chat") == std::string::npos && text.find("[User]") == std::string::npos);
+    CHECK(ReadTextFile(JoinPath(dir, "worker.args.txt"), text) && text.find("fresh") != std::string::npos && text.find("chat-1") == std::string::npos);
+    CHECK(Call(e, "team.send", R"J({"text":"@worker resume","wait":10})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(dir, "worker.args.txt"), text) && text.find("chat-1") != std::string::npos); // tasks preserve chat resume
+    CHECK(Call(e, "team.send", R"J({"text":"@other work"})J")["ok"].asBool());
+    CHECK(remote("team.delegate", brief, "other")["error"]["code"].asString() == "delegate_forbidden");
+    CHECK(Call(e, "team.update", R"J({"id":"other","values":{"canCall":["worker"]}})J")["ok"].asBool());
+    CHECK(remote("team.delegate", brief, "other")["ok"].asBool());
+    CHECK(Call(e, "team.cancel", R"J({"id":"other"})J")["ok"].asBool());
+    CHECK(settled());
+    // Cancelling the lead also cancels its task, independent of maxHops/canCall.
+    CHECK(Call(e, "team.send", R"J({"text":"@lead work"})J")["ok"].asBool());
+    brief["to"] = "other";
+    task = remote("team.delegate", brief, "lead")["result"];
+    read["id"] = task["id"];
+    CHECK(remote("team.send", Json::parse(R"J({"text":"@worker ack"})J"), "other")["error"]["code"].asString() == "task_chat_forbidden");
+    CHECK(remote("team.report", Json::parse(R"J({"id":"task-1","summary":"forged","changed":[],"evidence":[]})J"), "lead")["error"]["code"].asString() == "report_forbidden");
+    CHECK(Call(e, "team.cancel", R"J({"id":"lead"})J")["ok"].asBool() && settled());
+    CHECK(e.Call("team.task", read)["result"]["state"].asString() == "cancelled");
+    brief["maxDurationMs"] = 100;
+    task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    CHECK(settled() && e.Call("team.task", read)["result"]["state"].asString() == "timed_out");
+    // With an editor, a final text remains done and unverified; evidence must come from the assigned worker.
+    team->host.apiPort = 7777;
+    team->host.oeExecutable = backends[0].executable;
+    brief["to"] = "worker"; brief["maxDurationMs"] = 10000;
+    task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    CHECK(settled());
+    task = e.Call("team.task", read)["result"];
+    CHECK(task["state"].asString() == "done" && task["unverified"].asBool() && task["summary"].asString() == "Done; @lead should not be called.");
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/worker.task.md"), text) && text.find("MUST call the team_report tool") != std::string::npos && text.find("Do not print report JSON") != std::string::npos);
+    brief["to"] = "reporter";
+    task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    Json report = Json::parse(R"J({"summary":"Checked","changed":[],"evidence":[{"command":"script.check","result":0,"output":"0 errors"}]})J");
+    report["id"] = task["id"];
+    CHECK(remote("team.report", report, "worker")["error"]["code"].asString() == "report_forbidden");
+    CHECK(remote("team.report", report, "reporter")["result"]["state"].asString() == "running");
+    CHECK(remote("team.report", report, "reporter")["error"]["code"].asString() == "task_closed");
+    CHECK(settled());
+    task = e.Call("team.task", read)["result"];
+    CHECK(task["state"].asString() == "done" && task["reportReceived"].asBool() && !task["verified"].asBool());
+    CHECK(task["evidence"][0]["result"].asInt() == 0);
+    // Names and ids are both accepted; abnormal CLI exit cannot be called done.
+    std::string quickScript; CHECK(ReadTextFile(backends[0].executable, quickScript));
+    CHECK(WriteTextFile(backends[0].executable, quickScript + "exit /b 7\n"));
+    brief["to"] = "Worker"; task = e.Call("team.delegate", brief)["result"]; read["id"] = task["id"];
+    CHECK(settled() && e.Call("team.task", read)["result"]["state"].asString() == "failed");
+    CHECK(WriteTextFile(backends[0].executable, quickScript));
+    // A child cannot extend its parent's absolute deadline.
+    CHECK(Call(e, "team.update", R"J({"id":"reporter","values":{"canCall":["other"]}})J")["ok"].asBool());
+    brief["to"] = "reporter"; brief["maxDurationMs"] = 500;
+    const Json parent = e.Call("team.delegate", brief)["result"];
+    brief["to"] = "other"; brief["maxDurationMs"] = 10000;
+    const Json child = remote("team.delegate", brief, "reporter")["result"];
+    CHECK(child["deadlineAt"].asNumber() == parent["deadlineAt"].asNumber());
+    CHECK(settled());
+    CHECK(Call(e, "team.usage")["result"]["total"]["turns"].asInt() > 5);
+    CHECK(Call(e, "team.clear")["ok"].asBool() && Call(e, "team.tasks")["result"].size() == 0);
+    CHECK(RemoveAll(dir));
+#endif
+}
+
 TEST(TeamSessionTurns) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)

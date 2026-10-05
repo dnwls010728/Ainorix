@@ -10,6 +10,7 @@
 #include "team/Backends.h"
 #include "team/TeamStore.h"
 #include "team/TeamUsage.h"
+#include "team/TeamTasks.h"
 
 namespace oe {
 
@@ -94,6 +95,11 @@ public:
     Json Messages(uint64_t after, bool hasAfter, int limit);
     // True while one of these agents has a turn running or waiting (empty = any agent).
     bool Busy(const std::vector<std::string>& ids);
+    // Nonblocking task entry point; sender is the authenticated remote agent or "user".
+    Json Delegate(const Json& brief, const std::string& from);
+    Json Report(const Json& report, const std::string& from);
+    Json Task(const std::string& id) const { return tasks_.Get(id); }
+    Json Tasks() const { return tasks_.List(); }
 
 private:
     struct Turn;
@@ -114,7 +120,8 @@ private:
     ChatMessage& Append(ChatMessage message);
     void Notice(const std::string& text, const std::string& about);
     void Schedule();
-    void StartTurn(const AgentProfile& agent, Runtime& runtime);
+    void StartTurn(const AgentProfile& agent, Runtime& runtime, const Json* task = nullptr);
+    void CancelTask(const std::string& id); // also cancels tasks delegated by this worker
     void HandleLine(Turn& turn, const std::string& line, bool isStderr);
     void FinishTurn(const std::string& id, Runtime& runtime);
     void StopTurn(Runtime& runtime);
@@ -132,6 +139,7 @@ private:
     TeamStore& store_;
     const std::vector<Backend>& backends_;
     const TeamHost& host_;
+    TeamTasks tasks_;
     std::string projectDir_;
     std::deque<ChatMessage> messages_;
     uint64_t lastMessageId_ = 0;

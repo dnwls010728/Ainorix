@@ -83,6 +83,8 @@ installed on the PC (Claude Code, Codex) as child processes. Windows only, in pr
 
 Agent usage: `team.usage` reads agent/day token totals and per-turn cost. The Team panel shows today in UTC; Claude profiles can set `maxBudgetUsd` (0 disables it).
 
+Tasks run beside chat: `team.delegate/report/task/tasks` start fresh workers with bounded deadlines and evidence reports. `canCall` defaults to none; the lead may call everyone. A successful worker without a tool report is done but unverified.
+
 Use `team.reset {id}` (or Reset Conversation in the roster) to start fresh for one idle agent while keeping chat and usage. Optional `team.settings {rotateAboveInputTokens: N}` rotates the next turn at the input-size threshold; 0 disables it by default. Fresh context can lose cache savings.
 
 ## Editor

@@ -508,7 +508,10 @@ int CmdMcp(const Args& a) {
         int port = a.GetInt("--connect", 7777);
         const std::string agent = a.Get("--agent");  // a team agent's id: the editor shows who made each edit
         CommandCaller call = [port, agent](const std::string& command, const Json& args) { return RemoteCall(port, command, args, agent); };
-        return RunMcpServer(call, std::cin, std::cout);
+        return RunMcpServer([&call](const std::string& command, const Json& args) {
+            Json result = call(command, args);
+            return command == "team.delegate" ? AwaitTeamTask(call, std::move(result)) : result;
+        }, std::cin, std::cout);
     }
 
     Engine engine;
@@ -523,7 +526,11 @@ int CmdMcp(const Args& a) {
     std::atomic<bool> quit{false};
     // MCP I/O on a worker thread; engine work stays on the main thread.
     std::thread io([&] {
-        RunMcpServer([&engine](const std::string& c, const Json& args) { return engine.PostCall(c, args).get(); }, std::cin, std::cout);
+        CommandCaller call = [&engine](const std::string& c, const Json& args) { return engine.PostCall(c, args).get(); };
+        RunMcpServer([&call](const std::string& command, const Json& args) {
+            Json result = call(command, args);
+            return command == "team.delegate" ? AwaitTeamTask(call, std::move(result)) : result;
+        }, std::cin, std::cout);
         quit = true;
     });
     MainLoop(engine, nullptr, quit, false, team.get());

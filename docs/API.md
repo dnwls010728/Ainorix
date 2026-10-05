@@ -1109,6 +1109,7 @@ Add an agent to the team (at most 16). The id is generated from the name and nev
 | `model` | string |  | Model id of that backend; "" = the CLI's default (default: the backend's default model). |
 | `access` | string |  | read | edit (default) | full: what the agent may do without asking. |
 | `maxBudgetUsd` | number |  | Claude per-turn allowance: 0 disables it; 0.000001..1000 USD. The CLI may exceed it by one request. |
+| `canCall` | array |  | Agent ids this agent may delegate tasks to (default none); the lead may call everyone. |
 | `avatar` | string |  | "preset:<name>" from team.presets (default: the first preset no teammate uses). |
 
 ### `team.update`
@@ -1118,7 +1119,7 @@ Change some fields of an agent (partial update). Changing the backend without a 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | string | yes | Agent id or name. |
-| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, maxBudgetUsd, avatar ("preset:<name>"). |
+| `values` | object | yes | Fields to change: name, description, instructions, backend, model, access, maxBudgetUsd, canCall, avatar ("preset:<name>"). |
 
 ### `team.remove`
 
@@ -1170,9 +1171,45 @@ Post a message to the team chat and give a turn to every agent it addresses: @id
 | `from` | string |  | Sender: "user" (default) or an agent id. |
 | `wait` | number |  | Block up to this many seconds until the addressed agents have finished, then also return the new messages and the state (for one-shot `oe exec`; default 0 = return at once). |
 
+### `team.delegate`
+
+Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `to` | string | yes | Worker id or name; an optional @ prefix is accepted. |
+| `goal` | string | yes | Exact task goal, at most 16 KiB. |
+| `acceptance` | string |  | Success check, at most 8 KiB. |
+| `files` | array |  | Project-relative files to consult or change. |
+| `context` | string |  | Task-specific context, at most 16 KiB. |
+| `maxDurationMs` | integer |  | Absolute duration limit, 100..7200000 ms; default 1800000, capped by the host turn limit. |
+
+### `team.report`
+
+Submit evidence from the assigned running worker. The task stays running until the CLI finishes; a report never verifies acceptance automatically.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Task id from team.delegate. |
+| `summary` | string | yes | What happened, at most 8 KiB. |
+| `changed` | array | yes | Changed project-relative paths. |
+| `evidence` | array | yes | Actual command, result/exit code and output, trimmed to 4 KiB per record. Done is not verified. |
+
+### `team.task`
+
+Read one task record: running | done | failed | timed_out | cancelled, brief, report and turn cost. Never starts or retries a turn.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | string | yes | Task id. |
+
+### `team.tasks`
+
+Read stored task records (at most 256); reports remain unverified. Interrupted tasks fail on reopen and are never retried.
+
 ### `team.cancel`
 
-Stop an agent's running turn (its process tree is killed) and drop its waiting message; the chat gets a notice.
+Stop an agent's running turn and its delegated tasks (process trees are killed), and drop its waiting message; the chat gets a notice.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -1211,7 +1248,7 @@ Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-
 
 ### `team.clear`
 
-Stop every turn, empty the chat log and forget the agents' stored conversations. Profiles are kept.
+Stop every turn, empty the chat log and task records, and forget the agents' stored conversations. Profiles are kept.
 
 ## Component types
 

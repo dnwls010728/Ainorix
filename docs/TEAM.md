@@ -152,6 +152,7 @@ Everything is under `<project>/.oe/team/` (a dot folder: not packaged by `oe pac
 | `backend` | a backend id from §4; unknown ids keep loading and show as unavailable, but cannot be chosen through `team.add` / `team.update` |
 | `model` | a model id of that backend (`[A-Za-z0-9._:\[\]-]{1,64}`), or empty for the CLI's default |
 | `access` | `read` \| `edit` (default) \| `full`, see §6 |
+| `canCall` | callable agent ids; default none. The lead may delegate to everyone; other agents need explicit permission |
 | `maxBudgetUsd` | Claude per-turn allowance, 0 = disabled (omitted on disk), otherwise 0.000001..1000 USD. Unsupported on other backends |
 | `lead` | agent that receives messages with no mention; empty = such messages reach nobody. The first agent added to an empty team becomes the lead; removing the lead leaves it empty |
 | `maxConcurrent` | 1..8, default 3 |
@@ -644,7 +645,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.presets` | | avatar preset ids |
 | `team.list` | | `{version, revision, lead, maxConcurrent, maxHops, agents: [profile], error?}` |
 | `team.get` | `{id}` | one profile: every field, plus `avatarPath` (project-relative) for an uploaded picture |
-| `team.add` | `{name, description?, instructions?, backend?, model?, access?, maxBudgetUsd?, avatar?}` | the new profile (id generated; backend defaults to the first one, model to that backend's default) |
+| `team.add` | `{name, description?, instructions?, backend?, model?, access?, maxBudgetUsd?, canCall?, avatar?}` | the new profile (id generated; backend defaults to the first one, model to that backend's default) |
 | `team.update` | `{id, values}` | the profile; partial update like `component.set`. A new backend without a model resets the model |
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
@@ -657,6 +658,10 @@ Every `id` argument accepts the agent's id or its name.
 | `team.state` | | `{revision, running, agents}`: per agent state, activity, task, elapsed, tools, error and hint |
 | `team.messages` | `{after?, limit?}` | Read omitted chat on demand: `{messages, first, last}`: with `after`, the oldest messages with a larger id; without, the newest `limit` (default 100, at most 500). `first`/`last` are the oldest and newest ids in the log (`first` 0 = empty), so a viewer can drop what was cleared |
 | `team.usage` | `{id?, date?}` | per-agent/per-day totals with reportedTurns and costReportedTurns; date is YYYY-MM-DD or today (UTC), omit for all days |
+| `team.delegate` | `{to, goal, acceptance?, files?, context?, maxDurationMs?}` | fresh worker task; to accepts @id, id or name |
+| `team.report` | `{id, summary, changed, evidence}` | attributed worker evidence; never automatically verified |
+| `team.task` | `{id}` | task record and state |
+| `team.tasks` | | stored task records |
 | `team.reset` | `{id}` | `{reset: true}`; clears only the selected idle agent's conversation; keeps chat/usage/profiles/other sessions |
 | `team.clear` | | stops every turn, empties the chat log and stored sessions |
 
@@ -833,4 +838,25 @@ of lower cost on every turn. Full measurements and tradeoffs are in TEAM_LOG.md.
 
 Implemented and retained under the revised measurement policy. Build warning-free;
 203 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
+are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
+
+### Task turns (E2 restored)
+
+Delegation runs beside chat. Workers receive only role/project context and the
+bounded task brief, never chat history or a resume id; their final text/session
+never enters the chat conversation. `team_delegate` in the MCP bridge waits on
+its I/O thread while the engine/editor continues updating. The worker must call
+`team_report` to submit summary, changed paths and command/result/output evidence;
+printing JSON in the final answer does not submit a report. A successful turn
+without a tool report becomes done with unverified:true and its final text as
+summary. A report is also unverified until the caller checks acceptance.
+CLI errors/abnormal exits are failed; absolute deadline expiry is timed_out.
+Cancellation propagates down the caller's task tree; there is no automatic retry.
+Tasks cannot extend an ancestor deadline. Chat and task usage share the E5 ledger,
+including failures/cancellations and per-session Claude budget accounting.
+
+### E2 restoration — 2026-10-05
+
+Implemented and retained under the revised measurement policy. Build warning-free;
+205 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
 are recorded separately in TEAM_LOG.md; historical rejection entries are historical.
