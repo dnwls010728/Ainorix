@@ -7,7 +7,6 @@
 #include <cstdlib>
 
 namespace oe {
-namespace {
 
 bool LeanTeamTurnsEnabled() {
     const char* value = std::getenv("OE_TEAM_LEAN");
@@ -15,6 +14,8 @@ bool LeanTeamTurnsEnabled() {
     const std::string setting = value;
     return setting != "0" && setting != "false" && setting != "FALSE" && setting != "off" && setting != "OFF";
 }
+
+namespace {
 
 TurnEvent Event(TurnEvent::Kind kind, std::string text = std::string()) {
     TurnEvent event;
