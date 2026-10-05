@@ -8218,7 +8218,8 @@ TEST(TeamStoreProfiles) {
     auto code = [&](const char* command, const char* args) { return Call(e, command, args)["error"]["code"].asString(); };
 
     Json team = Call(e, "team.list")["result"];
-    CHECK(team["agents"].size() == 0 && team["lead"].asString() == "" && team["maxConcurrent"].asInt() == 3 && team["maxHops"].asInt() == 4);
+    CHECK(team["agents"].size() == 0 && team["lead"].asString() == "" && team["maxConcurrent"].asInt() == 3 && team["maxHops"].asInt() == 0);
+    CHECK(!team["inheritUserTools"].asBool());
     CHECK(!FileExists(file));  // reading creates nothing
     const double firstRevision = team["revision"].asNumber();
     Json presets = Call(e, "team.presets")["result"];
@@ -8295,6 +8296,10 @@ TEST(TeamStoreProfiles) {
     CHECK(code("team.settings", R"J({"maxConcurrent":9})J") == "invalid_argument" && code("team.settings", R"J({"maxHops":-1})J") == "invalid_argument");
     CHECK(code("team.settings", R"J({"lead":"ghost"})J") == "unknown_agent");
     CHECK(Call(e, "team.settings")["result"]["maxConcurrent"].asInt() == 2);
+    CHECK(code("team.settings", R"J({"inheritUserTools":1})J") == "invalid_argument");
+    CHECK(Call(e, "team.settings", R"J({"inheritUserTools":true})J")["result"]["inheritUserTools"].asBool());
+    CHECK(ReadTextFile(file, text) && Json::parse(text)["inheritUserTools"].asBool());
+    CHECK(Call(e, "team.list")["result"]["inheritUserTools"].asBool());
 
     // Another session (the editor next to `oe exec`) sees the same team and its changes.
     {
@@ -8303,6 +8308,7 @@ TEST(TeamStoreProfiles) {
         RegisterTeamCommands(other.Commands(), BuiltinBackends());
         team = Call(other, "team.list")["result"];
         CHECK(team["agents"].size() == 3 && team["lead"].asString() == "agent" && team["maxConcurrent"].asInt() == 2 && team["maxHops"].asInt() == 0);
+        CHECK(team["inheritUserTools"].asBool());
         CHECK(team["agents"][0]["name"].asString() == "Mina" && team["agents"][0]["instructions"].asString() == "Work only in scripts/.\nRun script.check.");
         PlatformSleep(0.05);  // file times tell a changed file
         CHECK(Call(other, "team.remove", R"J({"id":"준"})J")["result"]["removed"].asString() == "agent");
@@ -8510,33 +8516,39 @@ TEST(TeamStreamParsers) {
     ProcessOptions options = ClaudeBuildTurn(request);
     CHECK(options.executable == request.executable);
     CHECK(options.arguments == (std::vector<std::string>{"-p", "--output-format", "stream-json", "--verbose", "--model", "sonnet", "--append-system-prompt-file",
-                                                         ".oe/team/tmp/mina.system.md", "--permission-mode", "acceptEdits"}));
+                                                         ".oe/team/tmp/mina.system.md", "--permission-mode", "acceptEdits", "--strict-mcp-config", "--disable-slash-commands"}));
     request.model.clear();
     request.access = "read";
     request.sessionId = "abc-123";
     request.mcpConfigFile = ".oe/team/tmp/mina.mcp.json";
+    request.apiPort = 7777;
     options = ClaudeBuildTurn(request);
     CHECK(options.arguments == (std::vector<std::string>{"-p", "--output-format", "stream-json", "--verbose", "--append-system-prompt-file", ".oe/team/tmp/mina.system.md",
-                                                         "--permission-mode", "plan", "--mcp-config", ".oe/team/tmp/mina.mcp.json", "--strict-mcp-config", "--resume", "abc-123"}));
+                                                         "--permission-mode", "plan", "--strict-mcp-config", "--disable-slash-commands", "--mcp-config", ".oe/team/tmp/mina.mcp.json", "--resume", "abc-123"}));
     request.access = "edit";
     options = ClaudeBuildTurn(request);
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp__ownengine") != options.arguments.end());
     request.access = "full";
     options = ClaudeBuildTurn(request);
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "bypassPermissions") != options.arguments.end());
+    request.inheritUserTools = true;
+    options = ClaudeBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--strict-mcp-config") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--disable-slash-commands") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--mcp-config") != options.arguments.end());
 
     request = TurnRequest();
     request.executable = "C:/npm/codex.cmd";
     request.model = "gpt-6.1-sol";
     options = CodexBuildTurn(request);
-    CHECK(options.arguments == (std::vector<std::string>{"exec", "--json", "--skip-git-repo-check", "-m", "gpt-6.1-sol", "-c", "sandbox_mode='workspace-write'", "-"}));
+    CHECK(options.arguments == (std::vector<std::string>{"exec", "--json", "--skip-git-repo-check", "--ignore-user-config", "-c", "skills.include_instructions=false", "-m", "gpt-6.1-sol", "-c", "sandbox_mode='workspace-write'", "-"}));
     request.model.clear();
     request.access = "full";
     request.sessionId = "01a101f0-7fc8";
     request.oeExecutable = "C:/Program Files/oe/oe.exe";
     request.apiPort = 7777;
     options = CodexBuildTurn(request);
-    CHECK(options.arguments == (std::vector<std::string>{"exec", "resume", "--json", "--skip-git-repo-check", "-c", "sandbox_mode='danger-full-access'", "-c",
+    CHECK(options.arguments == (std::vector<std::string>{"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config", "-c", "skills.include_instructions=false", "-c", "sandbox_mode='danger-full-access'", "-c",
                                                          "mcp_servers.ownengine.command='C:/Program Files/oe/oe.exe'", "-c",
                                                          "mcp_servers.ownengine.args=['mcp','--connect','7777']", "-c",
                                                          "mcp_servers.ownengine.default_tools_approval_mode='approve'", "01a101f0-7fc8", "-"}));
@@ -8548,6 +8560,10 @@ TEST(TeamStreamParsers) {
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "mcp_servers.ownengine.default_tools_approval_mode='approve'") == options.arguments.end());
     CHECK(std::find(options.arguments.begin(), options.arguments.end(), "sandbox_mode='read-only'") != options.arguments.end());
     for (const std::string& argument : options.arguments) CHECK(argument.find_first_of("\"%!") == std::string::npos);
+    request.inheritUserTools = true;
+    options = CodexBuildTurn(request);
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "--ignore-user-config") == options.arguments.end());
+    CHECK(std::find(options.arguments.begin(), options.arguments.end(), "skills.include_instructions=false") == options.arguments.end());
     CHECK(ValidSessionId("01a101f0-7fc8_x") && !ValidSessionId("") && !ValidSessionId("a b") && !ValidSessionId("a'b") && !ValidSessionId(std::string(65, 'a')));
 
     // Mentions: ids and names without regard to case, the longest match, not inside a word.
@@ -8755,6 +8771,72 @@ TEST(TeamChatPull) {
 #endif
 }
 
+TEST(TeamLeanTurns) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_lean");
+    const std::string dir = ProcessFixtureDir("team lean");
+    const std::string executable = JoinPath(dir, "agent.cmd");
+    CHECK(WriteTextFile(executable, "@echo off\nfindstr \"^\" >nul\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n"
+                                   "type \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"lean-1"})J" "\n"));
+    auto backends = BuiltinBackends();
+    for (Backend& backend : backends) {
+        backend.executable = executable;
+        backend.parseLine = ParseClaudeLine; // both stand-ins emit the same recorded result
+    }
+    Engine e;
+    std::string error, text;
+    CHECK(e.Open(project, &error));
+    auto team = RegisterTeamCommands(e.Commands(), backends);
+    CHECK(Call(e, "team.add", R"J({"name":"Claude","backend":"claude","model":"haiku"})J")["ok"].asBool());
+    CHECK(Call(e, "team.add", R"J({"name":"Codex","backend":"codex","model":"cheap"})J")["ok"].asBool());
+    for (bool inherit : {false, true}) {
+        Json settings = Json::MakeObject();
+        settings["inheritUserTools"] = inherit;
+        CHECK(e.Call("team.settings", settings)["ok"].asBool());
+        for (const char* id : {"claude", "codex"}) {
+            Json args = Json::MakeObject();
+            args["text"] = std::string("@") + id + " say ok";
+            args["wait"] = 10;
+            Json sent = e.Call("team.send", args);
+            CHECK(sent["ok"].asBool() && sent["result"]["replies"].size() == 1);
+            CHECK(ReadTextFile(JoinPath(dir, std::string(id) + ".args.txt"), text));
+            if (std::string(id) == "claude") {
+                CHECK((text.find("--strict-mcp-config") != std::string::npos) == !inherit);
+                CHECK((text.find("--disable-slash-commands") != std::string::npos) == !inherit);
+                CHECK(text.find(".oe/team/tmp/claude.mcp.json") != std::string::npos);
+            } else {
+                CHECK((text.find("--ignore-user-config") != std::string::npos) == !inherit);
+                CHECK((text.find("skills.include_instructions=false") != std::string::npos) == !inherit);
+            }
+            CHECK((text.find("lean-1") != std::string::npos) == inherit); // second chat turn resumes
+        }
+    }
+    CHECK(Call(e, "team.settings", R"J({"inheritUserTools":false})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/team.json"), text) && !Json::parse(text).has("inheritUserTools") && !Json::parse(text).has("maxHops"));
+    // Periodic unrecognized stdout and stderr both reset idle, but never the absolute cap.
+    CHECK(WriteTextFile(executable, "@echo off\nfindstr \"^\" >nul\n"
+                                   "for /l %%i in (1,1,4) do (\necho progress\necho progress 1>&2\nping -n 2 127.0.0.1 >nul\n)\n"
+                                   "type \"%~dp0reply.jsonl\"\n"));
+    team->host.idleTimeoutSeconds = 2.5;
+    team->host.turnTimeoutSeconds = 10.0;
+    CHECK(Call(e, "team.send", R"J({"text":"@claude active","wait":10})J")["result"]["replies"].size() == 1);
+    team->host.turnTimeoutSeconds = 1.5;
+    Json sent = Call(e, "team.send", R"J({"text":"@claude capped","wait":10})J");
+    CHECK(sent["result"]["replies"].size() == 1 && sent["result"]["replies"][0]["kind"].asString() == "error");
+    Json messages = Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"];
+    CHECK(messages.size() == 1 && messages[0]["text"].asString().find("without finishing") != std::string::npos);
+    team->host.turnTimeoutSeconds = 10.0;
+    team->host.idleTimeoutSeconds = 0.4;
+    sent = Call(e, "team.send", R"J({"text":"@claude silent","wait":10})J");
+    CHECK(sent["result"]["replies"].size() == 1 && sent["result"]["replies"][0]["kind"].asString() == "error");
+    messages = Call(e, "team.messages", R"J({"limit":1})J")["result"]["messages"];
+    CHECK(messages.size() == 1 && messages[0]["text"].asString().find("idle timeout") != std::string::npos);
+    CHECK(RemoveAll(dir));
+#endif
+}
+
 TEST(TeamSessionTurns) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)
@@ -8859,7 +8941,9 @@ TEST(TeamSessionTurns) {
     CHECK(stateOf("mina")["state"].asString() == "idle" && stateOf("mina")["tools"].asInt() == 0);
     // What the CLI got: the prompt on stdin, only generated values as arguments, the context as a file.
     CHECK(fileText("mina.prompt.txt").find("[User] hello team") != std::string::npos && fileText("mina.prompt.txt").find("second line") != std::string::npos);
-    CHECK(fileText("mina.args.txt").find(R"J("new" "m" "edit" ".oe/team/tmp/mina.system.md" "nomcp")J") == 0);
+    CHECK(fileText("mina.args.txt").find(R"J("new" "m" "edit" ".oe/team/tmp/mina.system.md" ".oe/team/tmp/mina.mcp.json")J") == 0);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.mcp.json"), text) && Json::parse(text)["mcpServers"].isObject() && Json::parse(text)["mcpServers"].size() == 0);
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text) && text.find("to acknowledge, accept work, confirm receipt or chat") != std::string::npos);
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/mina.system.md"), text));
     CHECK(text.find("You are Mina (@mina)") == 0 && text.find("Gameplay.") != std::string::npos && text.find("- @jun - Jun") != std::string::npos);
     CHECK(text.find("No editor is attached") != std::string::npos);
@@ -8886,7 +8970,7 @@ TEST(TeamSessionTurns) {
     text = fileText("jun.prompt.txt");
     CHECK(text.find("You are Jun (@jun)") == 0 && text.find("Be brief.") != std::string::npos && text.find("[User] @Jun hi") != std::string::npos);
     CHECK(text.find("[User] hello team") == std::string::npos && text.find("[Mina] Done it.") == std::string::npos);
-    CHECK(fileText("jun.args.txt").find(R"J("new" "m" "edit" "nofile" "nomcp")J") == 0);
+    CHECK(fileText("jun.args.txt").find(R"J("new" "m" "edit" "nofile" ".oe/team/tmp/jun.mcp.json")J") == 0);
     CHECK(Call(e, "team.send", R"J({"text":"@jun more"})J")["ok"].asBool() && until(settled));
     text = fileText("jun.prompt.txt");
     CHECK(text.find("You are Jun") == std::string::npos && text.find("[User] @jun more") != std::string::npos && text.find("@Jun hi") == std::string::npos);
@@ -9026,6 +9110,11 @@ TEST(TeamSessionTurns) {
         auto result = [](const char* answer) { return std::string(R"J({"type":"result","subtype":"success","is_error":false,"result":")J") + answer + R"J(","session_id":"s2"})J" + "\n"; };
         CHECK(WriteTextFile(JoinPath(dir, "ping.jsonl"), result("Done my part. Your turn @pong, and @ping is me.")) && WriteTextFile(JoinPath(dir, "pong.jsonl"), result("Back to @Ping.")));
         CHECK(Call(e, "team.add", R"J({"name":"Ping","backend":"ping"})J")["ok"].asBool() && Call(e, "team.add", R"J({"name":"Pong","backend":"pong"})J")["ok"].asBool());
+        // Default maxHops=0: even an explicit mention in an agent reply starts no teammate.
+        CHECK(Call(e, "team.settings")["result"]["maxHops"].asInt() == 0);
+        CHECK(Call(e, "team.send", R"J({"text":"@ping default"})J")["ok"].asBool() && until(settled));
+        CHECK(lastMessage()["kind"].asString() == "notice" && lastMessage()["text"].asString().find("team.settings {maxHops: 2}") != std::string::npos);
+        CHECK(fileText("pong.prompt.txt").empty());
         CHECK(Call(e, "team.settings", R"J({"maxHops":2})J")["ok"].asBool());
         const int base = lastMessage()["id"].asInt();
         sent = Call(e, "team.send", R"J({"text":"@ping start"})J");
@@ -9082,6 +9171,10 @@ TEST(TeamSessionTurns) {
     }));
     CHECK(lastMessage()["kind"].asString() == "error" && lastMessage()["from"].asString() == "sloth" && stateOf("sloth")["state"].asString() == "error");
     team->host.turnTimeoutSeconds = 1800.0;
+    team->host.idleTimeoutSeconds = 0.3;
+    CHECK(Call(e, "team.send", R"J({"text":"@sloth silent"})J")["ok"].asBool() && until(settled));
+    CHECK(lastMessage()["kind"].asString() == "error" && lastMessage()["text"].asString().find("idle timeout") != std::string::npos);
+    team->host.idleTimeoutSeconds = 600.0;
 
     // `wait` blocks until the reply is there (one-shot use from `oe exec`).
     sent = Call(e, "team.send", R"J({"text":"@mina quick","wait":30})J");

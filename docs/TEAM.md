@@ -155,7 +155,8 @@ Everything is under `<project>/.oe/team/` (a dot folder: not packaged by `oe pac
 | `maxBudgetUsd` | Claude per-turn allowance, 0 = disabled (omitted on disk), otherwise 0.000001..1000 USD. Unsupported on other backends |
 | `lead` | agent that receives messages with no mention; empty = such messages reach nobody. The first agent added to an empty team becomes the lead; removing the lead leaves it empty |
 | `maxConcurrent` | 1..8, default 3 |
-| `maxHops` | 0..16, default 4 |
+| `maxHops` | 0..16, default 0 (off); a blocked handoff notice gives `team.settings {maxHops: 2}` |
+| `inheritUserTools` | false by default; opt in to user MCP servers and skills. Codex user-config isolation is partial |
 | `rotateAboveInputTokens` | 0 disables automatic conversation rotation (default); otherwise 1..2,000,000 input tokens |
 
 Limits: 16 agents per team, file ≤ 1 MiB. Ordered, pretty JSON; defaults are not written
@@ -350,6 +351,11 @@ A turn is one run of an agent's CLI in response to a message.
    (`oe editor`, `oe mcp --port`), an MCP server entry that starts `oe mcp --connect <port>`
    (`.oe/team/tmp/<id>.mcp.json` for Claude, `-c` overrides for Codex; `--agent <id>` is T5).
    Without an API port (`oe exec`, `oe mcp` on stdio only) the agent works on the files.
+   Claude defaults to `--strict-mcp-config --disable-slash-commands`, using an empty
+   MCP config when unattached. Codex defaults to `--ignore-user-config` and
+   `-c skills.include_instructions=false`; discovered project/system skills may remain.
+   `inheritUserTools:true` omits these restrictions. Never mention a teammate merely
+   to accept, acknowledge receipt, make small talk or talk about them.
 5. Usage is recorded atomically in `.oe/team/usage.jsonl`, with agent/backend/session,
    UTC date, input/output/cache tokens and per-turn cost. Claude reports session-cumulative
    cost: the persisted prior result is subtracted. Missing baselines/counters and Codex
@@ -375,7 +381,8 @@ A turn is one run of an agent's CLI in response to a message.
    object ends them even if the tool crashes).
 7. A turn ends with an `error` message when the CLI reports a failure, exits without a result
    (the text carries the exit code and the end of its stderr), cannot be started, or runs
-   longer than 30 minutes (`TeamHost::turnTimeoutSeconds`). If the result arrived but the
+   longer than 30 minutes (`TeamHost::turnTimeoutSeconds`) or has no stdout/stderr
+   output for 10 minutes (`TeamHost::idleTimeoutSeconds`). Any output resets only the idle timer. If the result arrived but the
    process does not end within 5 s (something it started holds the pipes), the tree is killed.
 
 `team.send {wait: seconds}` blocks the command until the addressed agents are done and adds
@@ -642,7 +649,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
 | `team.avatar` | `{id, preset}` or `{id, source}` | the profile |
-| `team.settings` | `{lead?, maxConcurrent?, maxHops?, rotateAboveInputTokens?}` | team settings; without arguments it only reads |
+| `team.settings` | `{lead?, maxConcurrent?, maxHops?, inheritUserTools?, rotateAboveInputTokens?}` | team settings; without arguments it only reads |
 
 Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |
@@ -821,3 +828,9 @@ Reset Conversation and displays usage on two lines so cost fits a narrow panel.
 Manual haiku measurements reduced resumed input from 86,138 to 38,049 tokens.
 Cold-cache reset cost increased; automatic rotation is optional, not a promise
 of lower cost on every turn. Full measurements and tradeoffs are in TEAM_LOG.md.
+
+### E1 restoration — 2026-10-05
+
+Implemented and retained under the revised measurement policy. Build warning-free;
+203 stand-in/engine tests pass. E3/E5/E6 are preserved. Final k=3 measurements
+are recorded separately in TEAM_LOG.md; historical rejection entries are historical.

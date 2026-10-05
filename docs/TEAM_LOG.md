@@ -555,3 +555,30 @@ cache read and $0.0123 fixture cost are visible at the default narrow width.
 API regenerated; TEAM §§3.1/5/8/11, both identical guides and three READMEs updated.
 Original sample/team settings and unrelated user changes are excluded from the
 commit. E1/E2/E4 remain reverted; this request completes only E5 and E6.
+
+## 2026-10-05 — E1 restored under revised measurement policy
+
+- [x] E1: maxHops default 0, actionable blocked-mention notice; no acceptance,
+  receipt, courtesy or talk-about mentions. inheritUserTools false by default,
+  typed and omitted on disk. Claude strict MCP/disabled slash commands, including
+  atomic empty config when unattached. Codex --ignore-user-config plus
+  skills.include_instructions=false; opt-in removes both restrictions.
+- Restored from rejected-e1 and merged with E3 addressed-chat/seen handling,
+  E5 token/budget accounting and E6 reset/rotation. No later feature was discarded.
+- Idle timeout 600 seconds resets on any stdout/stderr line; the absolute 1800
+  seconds does not reset. Stand-in TeamLeanTurns checks flags, opt-in, resume,
+  config files, periodic stdout/stderr, idle expiry and absolute cap. Default
+  maxHops routing is disabled, with an enable command in the notice.
+
+Codex investigation is unchanged from the previous log: installed 0.159.3 supports
+--ignore-user-config on exec and exec resume, retaining CODEX_HOME login.
+skills.include_instructions=false suppresses the automatic instruction block.
+Project/system/discovered skills may remain: this is partial isolation, not a
+complete Claude equivalent. No user auth/config was changed and no real model
+was invoked for this implementation stage.
+
+build.bat warning-free; 203 tests, zero failed checks. API regenerated. Measurements
+are postponed until E4, with k=3 per condition; the prior single-run rejection is
+historical and no longer a gate. Original sample team files and unrelated net/
+OnlineRPG edits are excluded from the commit. See scratch team-restore build-e1.log
+and tests-e1.log for checks.

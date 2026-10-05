@@ -1086,7 +1086,7 @@ Names of the built-in profile pictures (use as avatar "preset:<name>").
 
 ### `team.list`
 
-The project's agent team: settings (lead, maxConcurrent, maxHops), a revision that changes with every edit, and all agent profiles.
+The project's agent team: settings (lead, maxConcurrent, maxHops, inheritUserTools), a revision that changes with every edit, and all agent profiles.
 
 ### `team.get`
 
@@ -1155,7 +1155,8 @@ Read or change the team settings; without arguments it only reads them.
 |---|---|---|---|
 | `lead` | string |  | Agent (id or name) that receives messages without a mention; "" = nobody. |
 | `maxConcurrent` | integer |  | Agent turns that may run at the same time, 1..8 (default 3). |
-| `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 4). |
+| `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off). |
+| `inheritUserTools` | boolean |  | Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain. |
 | `rotateAboveInputTokens` | integer |  | Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000. |
 
 ### `team.send`

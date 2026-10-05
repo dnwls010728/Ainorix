@@ -22,6 +22,7 @@ struct TeamHost {
     int apiPort = 0;                    // the tool's HTTP API port agents attach to with `oe mcp --connect`; 0 = none
     std::string oeExecutable;           // the `oe` program that serves MCP for agents; default: next to the running program
     double turnTimeoutSeconds = 1800.0; // a turn running longer is stopped and reported as an error
+    double idleTimeoutSeconds = 600.0;  // stopped after this much silence on stdout and stderr
 };
 
 // A file that travels with a chat message: one the person attached, or an image an agent's

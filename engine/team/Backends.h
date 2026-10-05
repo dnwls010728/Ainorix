@@ -27,7 +27,8 @@ struct TurnRequest {
     std::string access = "edit";   // read | edit | full, mapped to the CLI's permission system
     std::string sessionId;         // the backend's own conversation id to resume; empty = new
     std::string systemPromptFile;  // standing context, for backends with `systemPromptFlag`
-    std::string mcpConfigFile;     // {"mcpServers":{"ownengine":...}} file; empty = no editor to attach to
+    std::string mcpConfigFile;     // ownengine server, or an empty mcpServers object without an editor
+    bool inheritUserTools = false; // restore user CLI tools/skills instead of the lean default
     std::string oeExecutable;      // the same MCP server for CLIs configured by flags: `<oe> mcp --connect <apiPort>`
     double maxBudgetUsd = 0.0;     // Claude cumulative ceiling computed from the per-turn budget; 0 = disabled
     int apiPort = 0;               // 0 = no editor to attach to

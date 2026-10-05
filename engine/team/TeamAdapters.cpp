@@ -126,10 +126,10 @@ ProcessOptions ClaudeBuildTurn(const TurnRequest& request) {
     if (!request.systemPromptFile.empty()) add({"--append-system-prompt-file", request.systemPromptFile});
     // docs/TEAM.md §6: a headless turn cannot ask, so the mode decides what is refused.
     add({"--permission-mode", request.access == "read" ? "plan" : request.access == "full" ? "bypassPermissions" : "acceptEdits"});
+    if (!request.inheritUserTools) add({"--strict-mcp-config", "--disable-slash-commands"});
     if (!request.mcpConfigFile.empty()) {
-        // Strict: the agent drives this editor, not another engine server from the user's own config.
-        add({"--mcp-config", request.mcpConfigFile, "--strict-mcp-config"});
-        if (request.access == "edit") add({"--allowedTools", "mcp__ownengine"});
+        add({"--mcp-config", request.mcpConfigFile});
+        if (request.access == "edit" && request.apiPort > 0) add({"--allowedTools", "mcp__ownengine"});
     }
     if (request.maxBudgetUsd > 0) {
         std::ostringstream number; number.imbue(std::locale::classic()); number << std::fixed << std::setprecision(6) << request.maxBudgetUsd;
@@ -179,6 +179,9 @@ ProcessOptions CodexBuildTurn(const TurnRequest& request) {
     const bool resume = !request.sessionId.empty();
     if (resume) add({"resume"});
     add({"--json", "--skip-git-repo-check"});
+    // Codex 0.159.3 supports this on exec and resume, retaining auth in CODEX_HOME.
+    // It removes user-configured MCP/plugins; auto-discovered skills are not fully isolated.
+    if (!request.inheritUserTools) add({"--ignore-user-config", "-c", "skills.include_instructions=false"});
     if (!request.model.empty()) add({"-m", request.model});
     // Values are TOML; an npm-installed Codex is a .cmd shim that refuses double quotes, so
     // strings use TOML's single-quoted form. `exec resume` has no -s flag: the config key works for both.

@@ -131,7 +131,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
         return list;
     });
 
-    Register(registry, "team.list", "The project's agent team: settings (lead, maxConcurrent, maxHops), a revision that changes with every edit, and all agent profiles.",
+    Register(registry, "team.list", "The project's agent team: settings (lead, maxConcurrent, maxHops, inheritUserTools), a revision that changes with every edit, and all agent profiles.",
              Params(), [state](Engine& e, const Json&) {
                  TeamStore& store = state->Store(e);
                  Json result = store.ToJson();
@@ -207,7 +207,8 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
              Params()
                  .Opt("lead", "string", "Agent (id or name) that receives messages without a mention; \"\" = nobody.")
                  .Opt("maxConcurrent", "integer", "Agent turns that may run at the same time, 1..8 (default 3).")
-                 .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 4).")
+                 .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off).")
+                 .Opt("inheritUserTools", "boolean", "Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain.")
                  .Opt("rotateAboveInputTokens", "integer", "Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
@@ -217,6 +218,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  result["maxConcurrent"] = store.Settings().maxConcurrent;
                  result["maxHops"] = store.Settings().maxHops;
                  result["rotateAboveInputTokens"] = store.Settings().rotateAboveInputTokens;
+                 result["inheritUserTools"] = store.Settings().inheritUserTools;
                  return result;
              });
 

@@ -225,10 +225,12 @@ struct TeamSession::Turn {
     std::mutex mutex;
     std::vector<std::pair<std::string, bool>> lines;  // (line, isStderr); guarded by mutex
     bool eof = false;                                  // guarded by mutex
+    double lastOutputAt = 0.0;                        // guarded by mutex; any stdout/stderr line
 
     const Backend* backend = nullptr;
     double startedAt = 0.0, doneAt = -1.0, eofAt = -1.0;
     bool done = false, working = false, timedOut = false;
+    bool idleTimedOut = false;
     std::string task, replyTo, activity = "Starting", finalText, lastText, failure, sessionId;
     int hop = 0;  // of the message this turn answers
     double costUsd = 0.0;
@@ -375,7 +377,8 @@ std::string TeamSession::StandingContext(const AgentProfile& agent) const {
     text += "\n## Team chat\n\nThe person (\"User\") and your teammates talk to you through the team chat of the OwnEngine editor. Each turn you receive "
             "the chat messages since your last turn. Your final message of the turn is posted to the chat as your reply: keep it short, say what you "
             "did and what you did not verify. Writing @id of a teammate in that final message HANDS THE WORK ON: the teammate gets a turn and sees "
-            "your message (@all calls everyone). Do it when someone else must continue, with what they should do; write the name without @ when "
+            "your message (@all calls everyone), only when maxHops is enabled. Use @mentions only to hand work back or ask a question, never "
+            "to acknowledge, accept work, confirm receipt or chat. Do it when someone else must continue, with what they should do; write the name without @ when "
             "you only talk about them, or the chain goes on for nothing. Files attached to a message are listed under it as paths relative to the "
             "project directory: open them to look at them (images included).\n\n## Team\n\n";
     for (const AgentProfile& mate : store_.Agents()) {
@@ -460,6 +463,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     request.executable = Executable(backend);
     request.model = agent.model;
     request.access = agent.access;
+    request.inheritUserTools = store_.Settings().inheritUserTools;
     request.sessionId = runtime.session;
     try {
         const Json baseline = usage_.Baseline(backend.id, request.sessionId);
@@ -483,19 +487,25 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         oe = JoinPath(ExecutableDirectory(), "oe.exe");
         if (!FileExists(oe)) oe = JoinPath(ExecutableDirectory(), "oe");
     }
-    if (host_.apiPort > 0 && FileExists(oe)) {
+    Json config = Json::MakeObject();
+    config["mcpServers"] = Json::MakeObject();
+    if (host_.apiPort > 0) {
+        if (!FileExists(oe)) return FailTurn(agent.id, runtime, "Cannot configure the editor MCP server: oe executable is missing.", "Set TeamHost::oeExecutable to the built oe executable.");
         Json server = Json::MakeObject();
         server["command"] = oe;
         Json arguments = Json::MakeArray();
         for (const std::string& argument : {std::string("mcp"), std::string("--connect"), std::to_string(host_.apiPort), std::string("--agent"), agent.id}) arguments.push(argument);
         server["args"] = std::move(arguments);
-        Json config = Json::MakeObject();
         config["mcpServers"]["ownengine"] = std::move(server);
-        if (WriteTextFileAtomic(JoinPath(tmp, agent.id + ".mcp.json"), config.dump(2) + "\n", nullptr)) request.mcpConfigFile = relativeTmp + agent.id + ".mcp.json";
         request.oeExecutable = oe;
         request.apiPort = host_.apiPort;
         request.agentId = agent.id;
     }
+    // An empty config is intentional: lean Claude turns must not load unrelated user servers.
+    if (!WriteTextFileAtomic(JoinPath(tmp, agent.id + ".mcp.json"), config.dump(2) + "\n", nullptr)) {
+        return FailTurn(agent.id, runtime, "Cannot write the MCP config in .oe/team/tmp/.", "Check that the project folder is writable.");
+    }
+    request.mcpConfigFile = relativeTmp + agent.id + ".mcp.json";
     ProcessOptions options = backend.buildTurn(request);
     options.workingDirectory = projectDir_;
     options.environment.emplace_back("OE_TEAM_AGENT", agent.id);
@@ -509,6 +519,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
     turn->backend = &backend;
     turn->agentId = agent.id; turn->model = agent.model; turn->resumed = !request.sessionId.empty();
     turn->startedAt = PlatformTimeSeconds();
+    turn->lastOutputAt = turn->startedAt;
     turn->task = Shorten(FirstLine(trigger.text), 120);
     turn->replyTo = trigger.from;
     turn->hop = trigger.hop;
@@ -525,6 +536,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime) {
         while (raw->process->ReadLine(line, isStderr)) {
             std::lock_guard<std::mutex> lock(raw->mutex);
             raw->lines.emplace_back(line, isStderr);
+            raw->lastOutputAt = PlatformTimeSeconds();
         }
         std::lock_guard<std::mutex> lock(raw->mutex);
         raw->eof = true;
@@ -672,7 +684,7 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
             std::string names;
             for (size_t i : mentioned) names += (names.empty() ? "" : ", ") + roster[i].name;
             Notice("Not handed on to " + names + ": this chain already has " + std::to_string(store_.Settings().maxHops) +
-                       " agent-to-agent turns (maxHops). Mention them yourself to continue.", id);
+                       " agent-to-agent turns (maxHops). Enable with team.settings {maxHops: 2}, or mention them yourself to continue.", id);
         } else {
             for (size_t i : mentioned) {
                 std::string hint;
@@ -685,7 +697,8 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
             }
         }
     } else {
-        std::string message = turn->timedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(seconds)) + " s without finishing." :
+        std::string message = turn->idleTimedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(host_.idleTimeoutSeconds)) + " s without output (idle timeout)." :
+                              turn->timedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(seconds)) + " s without finishing." :
                               !turn->failure.empty() ? turn->failure : turn->backend->displayName + " exited with code " + std::to_string(exitCode) + " before finishing the turn.";
         if (turn->failure.empty()) {
             for (const std::string& line : turn->stderrTail) message += "\n" + line;
@@ -715,10 +728,12 @@ void TeamSession::Update() {
         Turn& turn = *runtime.turn;
         std::vector<std::pair<std::string, bool>> lines;
         bool eof = false;
+        double lastOutputAt = turn.startedAt;
         {
             std::lock_guard<std::mutex> lock(turn.mutex);
             lines.swap(turn.lines);
             eof = turn.eof;
+            lastOutputAt = turn.lastOutputAt;
         }
         for (const auto& line : lines) HandleLine(turn, line.first, line.second);
         if (eof) {
@@ -729,8 +744,10 @@ void TeamSession::Update() {
             else if (now - turn.eofAt > kExitGraceSeconds) turn.process->Kill();
         } else if (turn.done && now - turn.doneAt > kExitGraceSeconds) {
             turn.process->Kill();  // the CLI is done but something it started keeps the pipes open
-        } else if (!turn.timedOut && !turn.done && now - turn.startedAt > host_.turnTimeoutSeconds) {
+        } else if (!turn.timedOut && !turn.done &&
+                   (now - turn.startedAt > host_.turnTimeoutSeconds || now - lastOutputAt > host_.idleTimeoutSeconds)) {
             turn.timedOut = true;
+            turn.idleTimedOut = now - turn.startedAt <= host_.turnTimeoutSeconds;
             turn.process->Kill();
         }
     }
@@ -844,7 +861,7 @@ Json TeamSession::Send(const std::string& text, const std::string& from, const s
         std::string names;
         for (size_t i : recipients) names += (names.empty() ? "" : ", ") + roster[i].name;
         Notice("Not handed on to " + names + ": this chain already has " + std::to_string(store_.Settings().maxHops) +
-                   " agent-to-agent turns (maxHops). Mention them yourself to continue.", from);
+                   " agent-to-agent turns (maxHops). Enable with team.settings {maxHops: 2}, or mention them yourself to continue.", from);
         Schedule();
         result["started"] = std::move(started);
         result["queued"] = std::move(queued);

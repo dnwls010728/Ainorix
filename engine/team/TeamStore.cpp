@@ -160,6 +160,7 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
     if (settings.maxConcurrent != defaults.maxConcurrent) root["maxConcurrent"] = settings.maxConcurrent;
     if (settings.rotateAboveInputTokens != defaults.rotateAboveInputTokens) root["rotateAboveInputTokens"] = settings.rotateAboveInputTokens;
     if (settings.maxHops != defaults.maxHops) root["maxHops"] = settings.maxHops;
+    if (settings.inheritUserTools) root["inheritUserTools"] = true;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents) {
         Json j = Json::MakeObject();
@@ -186,6 +187,13 @@ int IntegerSetting(const Json& values, const char* key, int minimum, int maximum
         throw Invalid(std::string(key) + " must be an integer from " + std::to_string(minimum) + " to " + std::to_string(maximum));
     }
     return static_cast<int>(number);
+}
+
+bool BooleanSetting(const Json& values, const char* key, bool current) {
+    const Json* value = values.find(key);
+    if (!value) return current;
+    if (!value->isBool()) throw Invalid(std::string(key) + " must be a boolean");
+    return value->asBool();
 }
 
 }  // namespace
@@ -273,6 +281,7 @@ bool TeamStore::Open(const std::string& projectDir, std::string* error) {
         settings.maxConcurrent = IntegerSetting(root, "maxConcurrent", 1, 8, settings.maxConcurrent);
         settings.maxHops = IntegerSetting(root, "maxHops", 0, 16, settings.maxHops);
         settings.rotateAboveInputTokens = IntegerSetting(root, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
+        settings.inheritUserTools = BooleanSetting(root, "inheritUserTools", settings.inheritUserTools);
         settings.lead = root["lead"].asString("");
         const bool leadExists = std::any_of(agents.begin(), agents.end(), [&](const AgentProfile& a) { return a.id == settings.lead; });
         if (!settings.lead.empty() && !leadExists) throw Invalid("lead \"" + settings.lead + "\" is not an agent of the team");
@@ -463,6 +472,7 @@ void TeamStore::SetSettings(const Json& values) {
     settings.maxConcurrent = IntegerSetting(values, "maxConcurrent", 1, 8, settings.maxConcurrent);
     settings.maxHops = IntegerSetting(values, "maxHops", 0, 16, settings.maxHops);
     settings.rotateAboveInputTokens = IntegerSetting(values, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
+    settings.inheritUserTools = BooleanSetting(values, "inheritUserTools", settings.inheritUserTools);
     if (const Json* lead = values.find("lead")) {
         if (!lead->isString()) throw Invalid("lead must be an agent id or name, or \"\" for nobody");
         settings.lead = lead->asString().empty() ? std::string() : agents_[RequireIndex(lead->asString())].id;
@@ -493,6 +503,7 @@ Json TeamStore::ToJson() const {
     root["maxConcurrent"] = settings_.maxConcurrent;
     root["maxHops"] = settings_.maxHops;
     root["rotateAboveInputTokens"] = settings_.rotateAboveInputTokens;
+    root["inheritUserTools"] = settings_.inheritUserTools;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents_) list.push(AgentToJson(agent));
     root["agents"] = std::move(list);
