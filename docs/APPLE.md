@@ -118,7 +118,7 @@ game, so it is built once in CI and committed.
   Unsigned output is still useful for the Simulator and for testing the
   layout. Never commit certificates, profiles or API keys.
 - Ship `game/` exactly like the desktop package (project files minus
-  AGENTS.md, dotfiles and `tools/`).
+  AGENTS.md, dotfiles, `tools/` and `server/`).
 
 ### Tests (`tests/tests.cpp`, run on every platform)
 

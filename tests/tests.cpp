@@ -19,7 +19,9 @@
 
 #include "api/HttpServer.h"
 #include "app/AndroidPackage.h"
+#include "app/DedicatedServer.h"
 #include "app/Engine.h"
+#include "app/CoordinateQueries.h"
 #include "app/Project.h"
 #include "assets/Assets.h"
 #include "audio/Wav.h"
@@ -49,11 +51,14 @@
 #include "scene/Components.h"
 #include "scene/TileGrid.h"
 #include "script/ScriptHost.h"
+#include "script/OfficialModules.h"
+#include "lua.h"
+#include "lauxlib.h"
 #if OE_TEAM
 #include "team/TeamCommands.h"
 #include "team/TeamContext.h"
-#include "team/TeamUsage.h"
 #include "team/TeamDefaults.h"
+#include "team/TeamUsage.h"
 #include "team/TeamStore.h"
 #endif
 #if OE_NATIVE_EDITOR
@@ -63,6 +68,21 @@
 #endif
 
 using namespace oe;
+
+namespace oe {
+struct OfficialAgreementTestAccess {
+    static uint64_t ContentHash(const Engine& engine) { return engine.ContentHash(); }
+    static void Fingerprint(Engine& engine, const std::string& record) {
+        engine.officialFingerprintRecordForTests_ = [record] { return record; };
+    }
+};
+struct OfficialLoaderTestAccess {
+    static lua_State* State(ScriptHost& host) { return host.State(); }
+};
+struct SceneEpochTestAccess {
+    static void Exhaust(Scene& scene) { scene.incarnation_ = std::numeric_limits<uint64_t>::max(); }
+};
+}  // namespace oe
 
 namespace {
 
@@ -1885,6 +1905,839 @@ TEST(SimulationReferenceSnapshotAcrossSceneChanges) {
     CHECK(e.GetScene().ToJson()==scene && e.GameData()==data && e.RuntimeScene()=="scenes/second.scene.json");
     e.Step(20); CHECK(e.GameData()==futureData); RemoveAll(project);
 }
+
+TEST(SceneEpochClearCopyAndReplacement) {
+    Scene scene;
+    CHECK(scene.Epoch() == 1 && scene.EpochString() == "0000000000000001");
+    EntityId id = scene.Create("Anchor");
+    scene.Add<Transform>(id).position = {1, 2, 3};
+    Json document = scene.ToJson();
+    CHECK(!document.has("epoch") && !document.has("incarnation"));
+    scene.Destroy(id);
+    CHECK(scene.Create("Later") > id && scene.Epoch() == 1);
+    scene.Clear();
+    CHECK(scene.Epoch() == 2 && scene.Create("Reused") == id);
+    std::string error;
+    CHECK(scene.FromJson(document, &error) && scene.Epoch() == 3);
+    for (const Json& invalid : {Json(), Json::MakeArray(), Json::MakeObject()}) {
+        CHECK(!scene.FromJson(invalid, &error));
+        CHECK(scene.Epoch() == 3 && scene.ToJson() == document);
+    }
+    Scene copy(scene), assigned;
+    assigned = scene;
+    CHECK(copy.Epoch() == scene.Epoch() && assigned.Epoch() == scene.Epoch());
+    copy.Get<Transform>(id)->position.x = 9;
+    CHECK(scene.Get<Transform>(id)->position.x == 1);
+    Scene donor;
+    donor.Create("Donor");
+    scene.ReplaceWith(donor);
+    CHECK(scene.Epoch() == 4 && scene.ToJson() == donor.ToJson() && donor.Epoch() == 1);
+    scene.ReplaceWith(scene);
+    CHECK(scene.Epoch() == 5 && scene.ToJson() == donor.ToJson());
+    SceneEpochTestAccess::Exhaust(scene);
+    CHECK(scene.EpochString() == "ffffffffffffffff");
+    for (int operation = 0; operation < 3; ++operation) {
+        bool refused = false;
+        try {
+            if (operation == 0) scene.Clear();
+            else if (operation == 1) scene.ReplaceWith(donor);
+            else scene.FromJson(document, &error);
+        } catch (const std::overflow_error&) { refused = true; }
+        CHECK(refused && scene.Epoch() == std::numeric_limits<uint64_t>::max());
+        CHECK(scene.ToJson() == donor.ToJson());
+    }
+}
+
+// Keep the M1a-1 scenarios while exercising the official private handle registry.
+const char* kEpochHandleFixture = R"LUA(
+    local entities = require('oe.entities')
+    function makeHandle(id)
+        return entities.find(scene.name(id))
+    end
+    function validHandle(h, kind)
+        local ok = pcall(function()
+            entities.id(h)
+            if kind then entities.get(h, kind) end
+        end)
+        return ok
+    end
+)LUA";
+
+Json EpochEval(Engine& engine, const std::string& code) {
+    Json args = Json::MakeObject(); args["code"] = code;
+    Json result = engine.Call("script.eval", args);
+    CHECK(result["ok"].asBool());
+    return result["result"]["value"];
+}
+
+TEST(LuaHandlesRejectDestroyedAndReplacedWorlds) {
+    const std::string project = TempProject("epoch_replacement");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    e.GetScene().Clear();
+    EntityId anchor = e.GetScene().Create("Anchor"); e.GetScene().Add<Transform>(anchor);
+    CHECK(WriteTextFile(JoinPath(project, "scenes/epoch.scene.json"), e.GetScene().ToJson().dump()));
+    CHECK(Call(e, "sim.step", R"({"frames":1})")["ok"].asBool());
+    EpochEval(e, kEpochHandleFixture);
+    CHECK(EpochEval(e, "h = makeHandle(scene.find('Anchor')); return validHandle(h, 'Transform')").asBool());
+    CHECK(EpochEval(e, "scene.remove(scene.find('Anchor'), 'Transform'); return not validHandle(h, 'Transform')").asBool());
+    CHECK(EpochEval(e, "scene.destroy(scene.find('Anchor')); return not validHandle(h)").asBool());
+    CHECK(EpochEval(e, "scene.create('Anchor', {Transform={}}); return not validHandle(h)").asBool());
+    CHECK(EpochEval(e, "h = makeHandle(scene.find('Anchor')); return validHandle(h)").asBool());
+    const uint64_t before = e.GetScene().Epoch();
+    EpochEval(e, "game.loadScene('scenes/epoch.scene.json')"); e.Step(1);
+    CHECK(e.GetScene().Epoch() == before + 1);
+    CHECK(EpochEval(e, "return not validHandle(h) and scene.find('Anchor') == 1").asBool());
+    EpochEval(e, "h = makeHandle(scene.find('Anchor')); game.loadScene('scenes/epoch.scene.json')"); e.Step(1);
+    CHECK(e.GetScene().Epoch() == before + 2);
+    CHECK(EpochEval(e, "return not validHandle(h) and scene.find('Anchor') == 1").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(LuaHandlesRestoreWithNativeSnapshots) {
+    const std::string project = TempProject("epoch_snapshot");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    e.GetScene().Create("Anchor");
+    CHECK(WriteTextFile(JoinPath(project, "scenes/epoch.scene.json"), e.GetScene().ToJson().dump()));
+    // Queries must neither mutate the scene nor start Lua before recording.
+    const Json scene = e.GetScene().ToJson(); const uint64_t frame = e.Frame();
+    CHECK(Call(e, "scene.epoch")["result"]["epoch"].asString() == e.GetScene().EpochString());
+    CHECK(e.GetScene().ToJson() == scene && e.Frame() == frame);
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    EpochEval(e, kEpochHandleFixture);
+    EpochEval(e, "h = makeHandle(scene.find('Anchor')); local saved = h; savedWorks = function() return validHandle(saved) end");
+    CHECK(Call(e, "sim.save_state", R"({"slot":"epoch"})")["ok"].asBool());
+    const uint64_t savedEpoch = e.GetScene().Epoch();
+    const int futureId = EpochEval(e, "local id = scene.create('Future'); future = makeHandle(id); return id").asInt();
+    EpochEval(e, "game.loadScene('scenes/epoch.scene.json')"); e.Step(1);
+    CHECK(e.GetScene().Epoch() != savedEpoch && !EpochEval(e, "savedWorks()").asBool());
+    CHECK(Call(e, "sim.load_state", R"({"slot":"epoch"})")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == savedEpoch);
+    CHECK(EpochEval(e, "return savedWorks() and future == nil").asBool());
+    CHECK(EpochEval(e, "local id = scene.create('NewBranch'); branch = makeHandle(id); return id").asInt() == futureId);
+    CHECK(EpochEval(e, "return validHandle(branch) and not validHandle({id=2, epoch=scene.epoch()})").asBool());
+    CHECK(Call(e, "sim.load_state", R"({"slot":"epoch"})")["ok"].asBool());
+    CHECK(EpochEval(e, "return savedWorks() and branch == nil and future == nil").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(LuaHandleSessionAndEditorReplacement) {
+    const std::string project = TempProject("epoch_editor");
+    Engine e, other; std::string error;
+    CHECK(e.Open(project, &error) && other.Open(project, &error));
+    CHECK(e.GetScene().Epoch() == other.GetScene().Epoch());
+    EpochEval(e, kEpochHandleFixture); EpochEval(other, kEpochHandleFixture);
+    CHECK(EpochEval(e, "h = makeHandle(scene.find('Player')); return validHandle(h)").asBool());
+    CHECK(!EpochEval(other, "validHandle({id=scene.find('Player'), epoch=scene.epoch()})").asBool());
+    uint64_t before = e.GetScene().Epoch();
+    CHECK(Call(e, "sim.stop")["ok"].asBool());  // No play snapshot: session changes, epoch need not change.
+    CHECK(e.GetScene().Epoch() == before && EpochEval(e, "h == nil and validHandle == nil").asBool());
+    EpochEval(e, kEpochHandleFixture);
+    EpochEval(e, "h = makeHandle(scene.find('Player'))");
+    CHECK(Call(e, "entity.rename", R"({"id":"Player","name":"Renamed"})")["ok"].asBool());
+    CHECK(Call(e, "history.undo")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == before + 1);
+    // Read-only stopped-editor probes preserve redo; no recording is active here.
+    CHECK(!e.Scripts().Eval("validHandle(h)", kNullEntity)["value"].asBool());
+    CHECK(Call(e, "history.redo")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == before + 2);
+    CHECK(!e.Scripts().Eval("validHandle(h)", kNullEntity)["value"].asBool());
+    CHECK(Call(e, "prefab.create", R"({"id":"Renamed","path":"prefabs/epoch.prefab.json"})")["ok"].asBool());
+    before = e.GetScene().Epoch();
+    CHECK(Call(e, "prefab.edit", R"({"path":"prefabs/epoch.prefab.json"})")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == before + 1 && e.Scripts().Eval("h == nil", kNullEntity)["value"].asBool());
+    CHECK(Call(e, "prefab.close")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == before + 2 && EpochEval(e, "h == nil").asBool());
+    before = e.GetScene().Epoch();
+    CHECK(Call(e, "sim.step", R"({"frames":1})")["ok"].asBool());
+    EpochEval(e, kEpochHandleFixture); EpochEval(e, "h = makeHandle(scene.find('Renamed'))");
+    CHECK(Call(e, "sim.stop")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == before + 1 && EpochEval(e, "h == nil").asBool());
+    before = e.GetScene().Epoch();
+    CHECK(Call(e, "scene.load", R"({"path":"scenes/main.scene.json"})")["ok"].asBool());
+    CHECK(e.GetScene().Epoch() == before + 1 && EpochEval(e, "h == nil").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(OfficialLuaRequireAliasesAndReservedNames) {
+    const std::string project = TempProject("official_aliases");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    CHECK(WriteTextFile(JoinPath(project, "oe/ui.lua"), "error('project shadow ran')"));
+    CHECK(WriteTextFile(JoinPath(project, "oe/unknown.lua"), "return 'shadow'"));
+    CHECK(EpochEval(e, "local m = require('oe.ui'); return m == require('oe/ui') and m == require('oe/ui.lua')").asBool());
+    for (const std::string& name : {"oe", "oe.", "oe/", "oe//ui", "oe.ui.lua", "oe/UI.lua", "OE.UI", "Oe/ui",
+                                   "oe\\ui", "oe\\ui.lua", "oe/ui.extra", "oe.ui/sub", "oe/../scripts/x.lua", "./oe/ui.lua",
+                                   "@oe/ui.lua", "C:/oe/ui.lua", "oe.unknown", "oe/unknown.lua"}) {
+        CHECK(EpochEval(e, "local ok = pcall(require, " + Json(name).dump() + "); return not ok").asBool());
+    }
+    CHECK(EpochEval(e, "local m = require('oe.entities'); local h = m.find('Player', 'Transform'); h:set('Transform', {position={y=7}}); return h:get('Transform').position.x").asNumber() == 0);
+    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.y == 7);
+    CHECK(EpochEval(e, "local m=require('oe.entities'); return m.tryFind('Missing','UIText') == nil and m.tryFind('Player','UIText') == nil").asBool());
+    CHECK(EpochEval(e, "local m=require('oe.entities'); local ok,msg=pcall(m.find,'Player','UnknownCapability'); return m.tryFind('Player','UnknownCapability') == nil and not ok and msg:find('Player',1,true) ~= nil and msg:find('UnknownCapability',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "local ok,msg=pcall(require('oe.entities').find,'Missing','UIText'); return not ok and msg:find('Missing',1,true) ~= nil and msg:find('UIText',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "local m=require('oe.entities'); local h=m.find('Player','Transform'); scene.remove(scene.find('Player'),'Transform'); local ok,msg=pcall(m.id,h); return not ok and msg:find('Player',1,true) ~= nil and msg:find('Transform',1,true) ~= nil").asBool());
+    RemoveAll(project);
+}
+
+// Synthetic immutable descriptors exercise the production loader without shipping fixture modules.
+int OfficialCycleFixtureRequire(lua_State* L) {
+    auto& host = **static_cast<ScriptHost**>(lua_getextraspace(L));
+    const char* name = luaL_checkstring(L, 1);
+    const OfficialModule a{"oe.cycle_a", "@oe/cycle_a.lua", "return fixtureRequire('b')"};
+    const OfficialModule b{"oe.cycle_b", "@oe/cycle_b.lua", "return fixtureRequire('a')"};
+    if (!host.LoadOfficialModule(std::string(name) == "a" ? a : b)) return lua_error(L);
+    return 1;
+}
+
+TEST(OfficialLuaRequireCycleFailureAndBudget) {
+    const std::string project = TempProject("official_failures");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    auto& host = e.Scripts(); lua_State* L = OfficialLoaderTestAccess::State(host);
+    lua_pushcfunction(L, OfficialCycleFixtureRequire); lua_setglobal(L, "fixtureRequire");
+    auto load = [&](const OfficialModule& module, const std::string& expected) {
+        const int top = lua_gettop(L); host.ArmBudget();
+        CHECK(!host.LoadOfficialModule(module));
+        const char* message = lua_tostring(L, -1);
+        CHECK(message && std::string(message).find(expected) != std::string::npos);
+        lua_settop(L, top);
+    };
+    const OfficialModule cycle{"oe.cycle_a", "@oe/cycle_a.lua", "return fixtureRequire('b')"};
+    load(cycle, "cyclic official import"); load(cycle, "@oe/cycle_a.lua");
+    load({"oe.retry", "@oe/retry.lua", "local ="}, "@oe/retry.lua:1");
+    load({"oe.retry", "@oe/retry.lua", "error('broken')"}, "broken");
+    host.ArmBudget(); CHECK(host.LoadOfficialModule({"oe.retry", "@oe/retry.lua", "return 42"}));
+    CHECK(lua_tointeger(L, -1) == 42); lua_pop(L, 1);
+    load({"oe.budget", "@oe/budget.lua", "while true do end"}, "instruction budget");
+    load({"oe.binary", "@oe/binary.lua", std::string("\x1bLua", 4)}, "binary chunk");
+    for (const std::string& value : {"false", "nil"}) {
+        OfficialModule module{"oe.cached_" + value, "@oe/cached.lua", "return " + value};
+        host.ArmBudget(); CHECK(host.LoadOfficialModule(module));
+        CHECK((lua_toboolean(L, -1) != 0) == (value == "nil")); lua_pop(L, 1);
+        module.source = "error('cache lost')";
+        CHECK(host.LoadOfficialModule(module));
+        CHECK((lua_toboolean(L, -1) != 0) == (value == "nil")); lua_pop(L, 1);
+    }
+    RemoveAll(project);
+}
+
+TEST(OfficialLuaSourceToolsAreReadOnly) {
+    const std::string project = TempProject("official_tools");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    CHECK(WriteTextFile(JoinPath(project, "oe/ui.lua"), "return 'shadow'"));
+    CHECK(WriteTextFile(JoinPath(project, "OE/other.lua"), "return 'shadow'"));
+    Json list = Call(e, "script.list");
+    CHECK(list["ok"].asBool() && list["result"]["reservedConflicts"].size() == 2);
+    int embedded = 0;
+    for (const Json& file : list["result"]["files"].items()) {
+        if (file["origin"].asString() == "embedded") {
+            ++embedded; CHECK(file["readOnly"].asBool() && file["path"].asString().rfind("@oe/", 0) == 0);
+        } else CHECK(!IsOfficialRoot(file["path"].asString()));
+    }
+    CHECK(static_cast<size_t>(embedded) == OfficialManifest().size());
+    for (const auto& module : OfficialManifest()) {
+        Json args = Json::MakeObject(); args["path"] = module.path;
+        Json read = e.Call("script.read", args);
+        CHECK(read["ok"].asBool() && read["result"]["source"].asString() == module.source);
+        CHECK(read["result"]["readOnly"].asBool());
+        Json check = e.Call("script.check", args);
+        CHECK(check["ok"].asBool() && check["result"]["errors"].asInt() == 0 && check["result"]["warnings"].asInt() == 0);
+        CHECK(e.Call("script.params", args)["result"].size() == 0);
+        args["source"] = "return 1"; CHECK(!e.Call("script.write", args)["ok"].asBool());
+        args["source"] = "return require('does.not.exist')";
+        CHECK(e.Call("script.check", args)["result"]["errors"].asInt() == 0);  // Compile only, no import execution.
+    }
+    for (const std::string& path : {"oe.ui", "oe/ui.lua", "OE/UI.lua", "./oe/ui.lua", "scripts/../oe/ui.lua",
+                                   "@oe/UI.lua", "@oe\\ui.lua", "@OE/ui.lua", "@other/ui.lua"}) {
+        Json args = Json::MakeObject(); args["path"] = path;
+        for (const char* command : {"script.read", "script.check", "script.params"}) CHECK(!e.Call(command, args)["ok"].asBool());
+        args["source"] = "return 1";
+        CHECK(!e.Call("script.write", args)["ok"].asBool());
+        CHECK(!e.Call("script.check", args)["ok"].asBool());
+    }
+    // Inspection must leave the engine's live VM unopened, so recording can still start.
+    CHECK(Call(e, "sim.record_state")["ok"].asBool()); RemoveAll(project);
+}
+
+TEST(OfficialLuaProjectImportsAndReloadCompatibility) {
+    const std::string project = TempProject("official_reload");
+    Engine e; std::string error; CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    CHECK(WriteTextFile(JoinPath(project, "scripts/lib/plain.lua"), "return {value=1}"));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/oe/ui.lua"), "return 9"));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/nil.lua"), "return nil"));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/false.lua"), "return false"));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/attached.lua"), "local widgets=require('oe.ui'); return {onUpdate=function(self) game.set('loaded',widgets == require('oe.ui')) end}"));
+    EntityId id = e.GetScene().Create("Attached"); e.GetScene().Add<Script>(id).path = "scripts/attached.lua";
+    CHECK(WriteTextFile(JoinPath(project, "scenes/official.scene.json"), e.GetScene().ToJson().dump()));
+    e.Step(1);
+    CHECK(e.GameData()["loaded"].asBool());
+    CHECK(EpochEval(e, "official = require('oe.ui'); plain=require('scripts.lib.plain'); return plain == require('scripts/lib/plain.lua') and require('scripts.oe.ui') == 9 and require('scripts.nil') == true and require('scripts.false') == false").asBool());
+    CHECK(WriteTextFile(JoinPath(project, "scripts/lib/plain.lua"), "return {value=2}"));
+    CHECK(Call(e, "script.reload")["ok"].asBool());
+    CHECK(EpochEval(e, "return official == require('oe.ui') and require('scripts.lib.plain').value == 2").asBool());
+    EpochEval(e, "h=require('oe.entities').find('Attached'); game.loadScene('scenes/official.scene.json')"); e.Step(1);
+    CHECK(EpochEval(e, "local ok=pcall(require('oe.entities').id,h); return not ok and official == require('oe.ui')").asBool());
+    e.Stop(); CHECK(EpochEval(e, "require('scripts.lib.plain').value").asInt() == 2);
+    RemoveAll(project);
+}
+
+// A distinct timestamp without sleeps, including the Wasm filesystem.
+static void ReloadFixtureWrite(const std::string& path, const std::string& source) {
+    auto previous = std::filesystem::last_write_time(path);
+    CHECK(WriteTextFile(path, source));
+    std::filesystem::last_write_time(path, previous + std::chrono::seconds(1));
+}
+
+TEST(RequiredLuaReloadDependenciesStateAndCallbacks) {
+    std::string project = TempProject("required_reload_state"), error; Engine e;
+    CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    const std::string helper = JoinPath(project,"scripts/helper.lua");
+    CHECK(WriteTextFile(helper,"local M={}; local n=0; function M.value() n=n+1; return 10+n end; function M.own() return M end; return M"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/middle.lua"),"local H=require('scripts.helper'); return {value=function() return H.value() end, helper=H}"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/forward.lua"),"return require('scripts.helper')"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/attached.lua"),R"LUA(
+local M=require('scripts.middle')
+return {onStart=function(self)
+ self.starts=(self.starts or 0)+1; self.held=M; self.state=42; self.ticks=0; self.rpc=0
+ timer.every(1/60,function() self.ticks=self.ticks+1 end)
+ net.on('reload-test',function() self.rpc=self.rpc+1 end)
+end, onUpdate=function(self) self.value=M.value() end}
+)LUA"));
+    EntityId id=e.GetScene().Create("Attached"); e.GetScene().Add<Script>(id).path="scripts/attached.lua";
+    e.Step(1);
+    auto eval=[&](const std::string& code) { return e.Scripts().Eval(code,id)["value"]; };
+    CHECK(eval("return self.value == 11 and self.starts == 1 and self.state == 42").asBool());
+    CHECK(EpochEval(e,"official=require('oe.ui'); old=require('scripts.helper').value; forward=require('scripts.forward'); return true").asBool());
+    ReloadFixtureWrite(helper,"local M={}; local n=0; function M.value() n=n+1; return 20+n end; function M.own() return M end; return M");
+    Json result=Call(e,"script.reload")["result"];
+    CHECK(result["required"].size()==3 && result["reloaded"].size()==1 && result["failed"].size()==0);
+    CHECK(eval("return self.held == require('scripts.middle') and self.held.helper == require('scripts.helper') and self.held.helper.own() == self.held.helper").asBool());
+    e.Step(1); CHECK(eval("return self.value == 21 and self.starts == 1 and self.state == 42 and self.ticks == 1").asBool());
+    CHECK(EpochEval(e,"return official == require('oe.ui') and forward == require('scripts.helper') and old() == 12").asBool());
+    e.Scripts().DispatchRpc(1,"reload-test",Json::MakeArray()); CHECK(eval("return self.rpc").asInt()==1);
+    CHECK(WriteTextFile(JoinPath(project,"scripts/other.lua"),"return {state=99}"));
+    EpochEval(e,"other=require('scripts.other'); other.state=123");
+    ReloadFixtureWrite(helper,"local M={}; function M.value() return 30 end; function M.own() return M end; return M");
+    CHECK(e.Scripts().PollHotReload().size()==1); e.Step(1);
+    CHECK(eval("return self.value == 30 and self.starts == 1 and self.ticks == 2").asBool());
+    CHECK(EpochEval(e,"return other.state == 123 and official == require('oe.ui')").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(RequiredLuaReloadFailureCycleBudgetAndSideEffects) {
+    std::string project=TempProject("required_reload_failure"),error; Engine e;
+    CHECK(e.Open(project,&error)); e.GetScene().Clear();
+    std::string helper=JoinPath(project,"scripts/helper.lua");
+    CHECK(WriteTextFile(helper,"return {value=7}"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/attached.lua"),"local H=require('scripts.helper'); return {onUpdate=function(self) self.value=H.value end}"));
+    EntityId id=e.GetScene().Create("Attached"); e.GetScene().Add<Script>(id).path="scripts/attached.lua"; e.Step(1);
+    auto value=[&] { return e.Scripts().Eval("return self.value",id)["value"].asInt(); };
+    auto reject=[&](const std::string& source,const std::string& expected) {
+        e.Scripts().ClearErrors(); ReloadFixtureWrite(helper,source);
+        Json report=Call(e,"script.reload")["result"];
+        CHECK(report["failed"].size()==1 && report["reloaded"].size()==0);
+        CHECK(!e.Scripts().Errors().empty());
+        CHECK(e.Scripts().Errors().back().message.find(expected)!=std::string::npos);
+        CHECK(value()==7 && EpochEval(e,"return require('scripts.helper').value").asInt()==7);
+    };
+    reject("return {", "expected");
+    reject("marker=123; require('scripts.helper'); return {value=8}", "cyclic project import");
+    CHECK(EpochEval(e,"return marker == nil").asBool());
+    reject("while true do end", "instruction budget");
+    reject("pcall(function() scene.create('Forbidden') end); return {value=8}", "forbidden call");
+    CHECK(e.GetScene().FindByName("Forbidden")==kNullEntity);
+    reject("timer.every(1,function() end); return {value=8}", "reload initializers");
+    reject("math.random(); return {value=8}", "reload initializers");
+    EpochEval(e,"savedCreate=scene.create; savedWrap=coroutine.wrap(function() scene.create('Escaped') end)");
+    reject("local previous=scene; scene={}; savedCreate('Escaped'); scene=previous; return {value=8}", "reload initializers");
+    reject("savedWrap(); return {value=8}", "reload initializers");
+    reject("coroutine.wrap(function() scene.create('Escaped') end)(); return {value=8}", "reload initializers");
+    CHECK(e.GetScene().FindByName("Escaped")==kNullEntity);
+    ReloadFixtureWrite(helper,"return {value=9}"); e.Scripts().ClearErrors();
+    CHECK(Call(e,"script.reload")["result"]["failed"].size()==0); e.Step(1); CHECK(value()==9);
+    const std::string bridge=JoinPath(project,"scripts/bridge.lua");
+    CHECK(WriteTextFile(bridge,"return require('oe.ui')"));
+    EpochEval(e,"official=require('oe.ui'); bridge=require('scripts.bridge')");
+    ReloadFixtureWrite(bridge,"return {replacement=true}"); e.Scripts().ClearErrors();
+    CHECK(Call(e,"script.reload")["result"]["failed"].size()==1);
+    CHECK(EpochEval(e,"return official == bridge and official == require('oe.ui') and type(official.find)=='function'").asBool());
+    CHECK(e.Scripts().Errors().back().message.find("shared module export")!=std::string::npos);
+    ReloadFixtureWrite(bridge,"return require('oe.ui')"); e.Scripts().ClearErrors();
+    CHECK(Call(e,"script.reload")["result"]["failed"].size()==0);
+    // A later attachment failure must undo an already successful helper replacement.
+    const std::string attached=JoinPath(project,"scripts/attached.lua");
+    ReloadFixtureWrite(helper,"return {value=10}");
+    ReloadFixtureWrite(attached,"return {");
+    CHECK(Call(e,"script.reload")["result"]["failed"].size()==1);
+    CHECK(EpochEval(e,"return require('scripts.helper').value").asInt()==9 && value()==9);
+    ReloadFixtureWrite(attached,"local H=require('scripts.helper'); return {onUpdate=function(self) self.value=H.value end}");
+    e.Scripts().ClearErrors(); CHECK(Call(e,"script.reload")["result"]["failed"].size()==0);
+    e.Step(1); CHECK(value()==10);
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(RequiredLuaReloadRecordingAndNativeRestoration) {
+    std::string project=TempProject("required_reload_recording"),error; Engine e;
+    CHECK(e.Open(project,&error)); e.GetScene().Clear();
+    CHECK(WriteTextFile(JoinPath(project,"scripts/helper.lua"),"return {value=3}"));
+    CHECK(WriteTextFile(JoinPath(project,"scripts/attached.lua"),"local H=require('scripts.helper'); return {onStart=function(self) self.starts=1 end,onUpdate=function(self) self.n=(self.n or 0)+H.value end}"));
+    EntityId id=e.GetScene().Create("Attached"); e.GetScene().Add<Script>(id).path="scripts/attached.lua";
+    e.RecordState(); e.Step(1); auto saved=e.SaveState(); e.Step(3);
+    Json future=e.Scripts().Eval("return {self.n,self.starts}",id)["value"];
+    CHECK(Call(e,"script.reload")["error"]["code"].asString()=="state_recording");
+    CHECK(e.Scripts().ReloadAll().empty() && e.Scripts().ReloadReport()["skipped"][0].asString()=="recording");
+    CHECK(e.Scripts().PollHotReload("scripts/helper.lua").empty());
+    e.LoadState(*saved); e.Step(3); CHECK(e.Scripts().Eval("return {self.n,self.starts}",id)["value"]==future);
+    CHECK(EpochEval(e,"return require('scripts.helper').value == 3").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(OfficialLuaUIForwardsFocusPrimitives) {
+    const std::string project = TempProject("official_focus");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    EntityId id = e.GetScene().Create("Field"); e.GetScene().Add<UIInput>(id);
+    CHECK(EpochEval(e, "local native=ui; local ui=require('oe.ui'); return ui.focus == native.focus and ui.focused == native.focused and _G.ui == native").asBool());
+    CHECK(EpochEval(e, "local ui=require('oe.ui'); field=ui.find('Field','UIInput'); ui.focus(field:id()); return ui.focused()").asInt() == static_cast<int>(id));
+    CHECK(EpochEval(e, "local ui=require('oe.ui'); ui.set(field,'UIInput',{text='hello'}); return ui.get(field,'UIInput').text").asString() == "hello");
+    CHECK(EpochEval(e, "local ui=require('oe.ui'); ui.focus(nil); return ui.focused() == nil").asBool());
+    CHECK(EpochEval(e, "scene.destroy(field:id()); local ok=pcall(require('oe.ui').get,field,'UIInput'); return not ok").asBool());
+    RemoveAll(project);
+}
+
+
+
+TEST(CoordinateProjectionRayPlaneAndCanvas) {
+    Engine e; std::string error; const std::string project = TempProject("coordinate_queries");
+    CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    EntityId cam = e.GetScene().Create("Camera"); e.GetScene().Add<Camera>(cam); e.GetScene().Add<Transform>(cam);
+    e.GetScene().Get<Transform>(cam)->position = Vec3(0, 0, 5);
+    auto query = [&](const char* op, const char* args) {
+        Json response = e.Call(op, Json::parse(args)); CHECK(response["ok"].asBool()); return response["result"];
+    };
+    Json center = query("camera.worldToScreen", R"({"camera":"Camera","position":{"x":0,"y":0,"z":0},"view":{"width":640,"height":480}})");
+    CHECK(std::fabs(center["x"].asFloat() - 320) < 0.05f && std::fabs(center["y"].asFloat() - 240) < 0.05f);
+    CHECK(center["status"].asString() == "visible" && std::fabs(center["depth"].asFloat() - 5) < 1e-5f);
+    CHECK(query("camera.worldToScreen", R"({"camera":"Camera","position":{"x":100,"y":0,"z":0}})")["status"].asString() == "outside");
+    CHECK(query("camera.worldToScreen", R"({"camera":"Camera","position":{"x":0,"y":0,"z":6}})")["status"].asString() == "behind");
+    CHECK(query("camera.worldToScreen", R"({"camera":"Camera","position":{"x":0,"y":0,"z":5}})")["x"].isNull());
+    CHECK(query("camera.worldToScreen", R"({"camera":"Camera","position":{"x":0,"y":0,"z":-2000}})")["status"].asString() == "outside");
+    CHECK(!e.Call("camera.screenRay", Json::parse(R"({"screen":{"x":1,"y":2}})"))["ok"].asBool());
+    CHECK(!e.Call("camera.screenRay", Json::parse(R"({"camera":"Camera","screen":{"x":1,"y":2},"view":{"width":0,"height":5}})"))["ok"].asBool());
+    Json a = Json::parse(R"({"camera":"Camera","screen":{"x":320,"y":240},"view":{"width":640,"height":480},"plane":{"point":{"x":0,"y":0,"z":0},"normal":{"x":0,"y":0,"z":1}}})");
+    Json hit = e.Call("camera.screenToPlane", a)["result"];
+    CHECK(hit["hit"].asBool() && std::fabs(hit["point"]["z"].asFloat()) < 1e-3f);
+    a["plane"]["normal"] = Json::parse(R"({"x":1,"y":0,"z":0})");
+    CHECK(e.Call("camera.screenToPlane", a)["result"]["reason"].asString() == "parallel");
+    a["plane"]["normal"] = Json::parse(R"({"x":0,"y":0,"z":1})"); a["plane"]["point"]["z"] = 10;
+    CHECK(e.Call("camera.screenToPlane", a)["result"]["reason"].asString() == "backward");
+    a["plane"]["normal"]["z"] = 0; CHECK(!e.Call("camera.screenToPlane", a)["ok"].asBool());
+    // Both projection modes and view sizes round-trip through the actual inverse matrix.
+    for (const char* mode : {"perspective", "orthographic"}) for (int width : {640, 1600}) {
+        e.GetScene().Get<Camera>(cam)->projection = mode;
+        Json request = Json::parse(R"({"camera":"Camera","position":{"x":0.7,"y":0.25,"z":0.1}})");
+        request["view"] = Json::parse(R"({"width":640,"height":480})"); request["view"]["width"] = width;
+        Json projected = e.Call("camera.worldToScreen", request)["result"];
+        Json rayRequest = Json::MakeObject(); rayRequest["camera"] = cam; rayRequest["screen"] = projected; rayRequest["view"] = request["view"];
+        Json response = e.Call("camera.screenRay", rayRequest); CHECK(response["ok"].asBool()); Json ray = response["result"];
+        Vec3 origin(ray["origin"]["x"].asFloat(), ray["origin"]["y"].asFloat(), ray["origin"]["z"].asFloat());
+        Vec3 direction(ray["direction"]["x"].asFloat(), ray["direction"]["y"].asFloat(), ray["direction"]["z"].asFloat());
+        CHECK(Length(Cross(Vec3(0.7f, 0.25f, 0.1f) - origin, direction)) < 1e-3f);
+        CHECK(std::fabs(Length(direction) - 1) < 1e-5f);
+    }
+    auto parent = e.GetScene().Create("Parent"); e.GetScene().Add<Transform>(parent); CHECK(e.GetScene().SetParent(cam, parent, &error));
+    e.GetScene().Get<Transform>(parent)->position = Vec3(3, 2, -1);
+    e.GetScene().Get<Transform>(parent)->rotation = Vec3(17, 36, 11);
+    e.GetScene().Get<Transform>(cam)->rotation = Vec3(-10, 21, 8);
+    Vec3 point = e.GetScene().WorldMatrix(cam).TransformPoint(Vec3(0, 0, -7));
+    Json request = Json::MakeObject(); request["camera"] = cam;
+    request["position"] = Json::parse(R"({"x":0,"y":0,"z":0})");
+    request["position"]["x"] = point.x; request["position"]["y"] = point.y; request["position"]["z"] = point.z;
+    for (const char* mode : {"perspective", "orthographic"}) {
+        e.GetScene().Get<Camera>(cam)->projection = mode;
+        Json result = e.Call("camera.worldToScreen", request)["result"];
+        CHECK(std::fabs(result["x"].asFloat() - e.Input().viewWidth * 0.5f) < 0.05f);
+        CHECK(std::fabs(result["y"].asFloat() - e.Input().viewHeight * 0.5f) < 0.05f);
+        Json rayRequest = Json::MakeObject(); rayRequest["camera"] = cam; rayRequest["screen"] = result;
+        Json response = e.Call("camera.screenRay", rayRequest); CHECK(response["ok"].asBool()); Json ray = response["result"];
+        Vec3 origin(ray["origin"]["x"].asFloat(), ray["origin"]["y"].asFloat(), ray["origin"]["z"].asFloat());
+        Vec3 direction(ray["direction"]["x"].asFloat(), ray["direction"]["y"].asFloat(), ray["direction"]["z"].asFloat());
+        CHECK(Length(Cross(point - origin, direction)) < 1e-3f);
+    }
+    Json canvas = query("ui.screenToCanvas", R"({"screen":{"x":500,"y":400},"view":{"width":1000,"height":800}})");
+    CHECK(std::fabs(canvas["height"].asFloat() - 720) < 0.01f && canvas["canvas"].isNull());
+    auto canvasId = e.GetScene().Create("Canvas"); auto& c = e.GetScene().Add<UICanvas>(canvasId);
+    c.referenceWidth = 720; c.referenceHeight = 1280;
+    for (float match : {0.0f, 0.5f, 1.0f}) {
+        c.match = match;
+        canvas = query("ui.screenToCanvas", R"({"canvas":"Canvas","screen":{"x":270,"y":480},"view":{"width":540,"height":960}})");
+        CHECK(std::fabs(canvas["scale"].asFloat() - UIScale(e.GetScene(), 540, 960)) < 1e-5f);
+        CHECK(std::fabs(canvas["x"].asFloat() - 360) < 0.05f && std::fabs(canvas["y"].asFloat() - 640) < 0.05f);
+    }
+    for (float match : {0.0f, 0.5f, 1.0f}) {
+        c.match = match;
+        canvas = query("ui.screenToCanvas", R"({"screen":{"x":800,"y":450},"view":{"width":1600,"height":900}})");
+        const float scale = UIScale(e.GetScene(), 1600, 900);
+        CHECK(std::fabs(canvas["x"].asFloat() - 800 / scale) < 0.05f && std::fabs(canvas["y"].asFloat() - 450 / scale) < 0.05f);
+    }
+    auto second = e.GetScene().Create("Second"); e.GetScene().Add<UICanvas>(second);
+    CHECK(!e.Call("ui.screenToCanvas", Json::parse(R"({"canvas":"Second","screen":{"x":1,"y":2}})"))["ok"].asBool());
+    CHECK(EpochEval(e, "local w=require('oe.ui'); return w.screenToCanvas==ui.screenToCanvas and camera.worldToScreen~=nil").asBool());
+    RemoveAll(project);
+}
+
+TEST(CoordinateQueriesRasterAndRecordedFuture) {
+    Engine e; std::string error; std::string project = TempProject("coordinate_readonly");
+    CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    auto cam = e.GetScene().Create("Camera"); e.GetScene().Add<Camera>(cam); e.GetScene().Add<Transform>(cam);
+    e.GetScene().Get<Transform>(cam)->position = Vec3(0, 0, 5);
+    auto cube = e.GetScene().Create("Cube"); e.GetScene().Add<MeshRenderer>(cube); e.GetScene().Add<Transform>(cube);
+    e.GetScene().Get<Transform>(cube)->position = Vec3(0.7f, 0.25f, 0);
+    RenderView view; CHECK(MakeSceneView(e.GetScene(), 640.0f / 480, view));
+    RenderTarget target; target.Resize(640, 480); e.Renderer().Render(e.GetScene(), view, target);
+    Json a = Json::parse(R"({"camera":"Camera","position":{"x":0.7,"y":0.25,"z":0},"view":{"width":640,"height":480}})");
+    Json projected = e.Call("camera.worldToScreen", a)["result"];
+    int x = static_cast<int>(projected["x"].asFloat()), y = static_cast<int>(projected["y"].asFloat());
+    CHECK(target.ids[static_cast<size_t>(y * 640 + x)] == cube);
+    const auto frame = e.Frame(); const auto epoch = e.GetScene().Epoch(); Json original = e.GetScene().ToJson(), data = e.GameData();
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    EpochEval(e, "timer.every(1/60,function() game.set('n',math.random()) end)");
+    CHECK(Call(e, "sim.save_state", R"({"slot":"queries"})")["ok"].asBool());
+    e.Step(5); Json future = e.GameData(), futureScene = e.GetScene().ToJson();
+    CHECK(Call(e, "sim.load_state", R"({"slot":"queries"})")["ok"].asBool());
+    for (int n = 0; n < 50; ++n) CHECK(e.Call("camera.worldToScreen", a)["ok"].asBool());
+    CHECK(EpochEval(e, "for i=1,50 do camera.worldToScreen({camera='Camera',position={x=0,y=0,z=0}});camera.screenRay({camera='Camera',screen={x=100,y=100}});camera.screenToPlane({camera='Camera',screen={x=100,y=100},plane={point={x=0,y=0,z=0},normal={x=0,y=0,z=1}}});ui.screenToCanvas({screen={x=100,y=100}}) end return true").asBool());
+    CHECK(e.Frame() == frame && e.GetScene().Epoch() == epoch && e.GetScene().ToJson() == original && e.GameData() == data);
+    e.Step(5); CHECK(e.GameData() == future && e.GetScene().ToJson() == futureScene);
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+
+TEST(OfficialLuaInputMathFocusPauseAndRecording) {
+    const std::string project = TempProject("official_input");
+    const char* source = R"(
+local I=require('oe.input')
+local keys=I.localSource()
+local actions={move={kind='vector',left={'A','Left'},right={'D','Right'},up={'W','Up'},down={'S','Down'},axisX='LeftX',axisY='LeftY'},jump={kind='button',keys={'Space','GamepadA'}}}
+local P={}
+function P:onUpdate(dt)
+ local v=I.read(keys,actions,'move');local b=I.read(keys,actions,'jump')
+ game.set('move',v);game.set('button',b);game.set('dt',dt)
+ game.set('position',(game.get('position') or 0)+v.x*dt)
+end
+return P
+)";
+    CHECK(WriteTextFile(JoinPath(project, "scripts/probe.lua"), source));
+    Engine e; std::string error; CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    auto actor = e.GetScene().Create("Actor"); e.GetScene().Add<Script>(actor).path = "scripts/probe.lua";
+    auto field = e.GetScene().Create("Chat"); e.GetScene().Add<UIInput>(field);
+    auto stick = e.GetScene().Create("Stick"); auto& j = e.GetScene().Add<UIJoystick>(stick);
+    j.anchor = "top-left"; j.x = 600; j.y = 300; j.width = j.height = 200;
+    CHECK(Call(e, "sim.record_state")["ok"].asBool()); e.Step(1);
+    CHECK(e.GameData()["move"]["x"].asFloat() == 0 && e.GameData()["move"]["y"].asFloat() == 0);
+    CHECK(EpochEval(e, R"(
+local m=require('oe.math')
+assert(m.clamp(-2,0,1)==0 and m.clamp(2,0,1)==1 and m.lerp(2,4,2)==6)
+assert(m.distance({x=0,y=0},{x=3,y=4})==5)
+local z=m.normalize({});assert(z.x==0 and z.y==0 and z.z==0)
+local v=m.normalize({x=3,y=4});assert(math.abs(v.x-.6)<1e-12 and math.abs(v.y-.8)<1e-12)
+local huge=m.normalize({x=1e308,y=1e308});assert(huge.x>0 and huge.x<1)
+assert(not pcall(m.clamp,1,2,0) and not pcall(m.normalize,{x=0/0}) and not pcall(m.normalize,{x=false}))
+return true
+)").asBool());
+    Call(e, "input.key", R"({"key":"D","down":true})"); Call(e, "input.key", R"({"key":"W","down":true})"); e.Step(1);
+    CHECK(std::fabs(e.GameData()["move"]["x"].asFloat() - std::sqrt(0.5f)) < 1e-6f);
+    Call(e, "input.key", R"({"key":"D","down":false})"); Call(e, "input.key", R"({"key":"W","down":false})");
+    Call(e, "input.axis", R"({"name":"LeftX","value":0.575})"); e.Step(1);
+    CHECK(std::fabs(e.GameData()["move"]["x"].asFloat() - 0.5f) < 1e-6f);
+    Call(e, "input.axis", R"({"name":"LeftX","value":0.15})"); e.Step(1); CHECK(e.GameData()["move"]["x"].asFloat() == 0);
+    Call(e, "input.axis", R"({"name":"LeftX","value":0.575})"); Call(e, "input.key", R"({"key":"D","down":true})"); e.Step(1);
+    CHECK(e.GameData()["move"]["x"].asFloat() == 1);
+    Call(e, "input.key", R"({"key":"Space","down":true})"); e.Step(1);
+    CHECK(e.GameData()["button"]["held"].asBool() && e.GameData()["button"]["pressed"].asBool());
+    e.Step(1); CHECK(e.GameData()["button"]["held"].asBool() && !e.GameData()["button"]["pressed"].asBool());
+    e.SetUIFocus(field); e.Step(1);
+    CHECK(std::fabs(e.GameData()["move"]["x"].asFloat() - 0.5f) < 1e-6f && !e.GameData()["button"]["held"].asBool());
+    Call(e, "input.key", R"({"key":"GamepadA","down":true})"); e.Step(1); CHECK(e.GameData()["button"]["held"].asBool());
+    e.SetUIFocus(kNullEntity); Call(e, "input.key", R"({"key":"D","down":false})");
+    Call(e, "game.pause", R"({"paused":true})"); double position = e.GameData()["position"].asNumber(); e.Step(2);
+    CHECK(e.GameData()["dt"].asFloat() == 0 && e.GameData()["position"].asNumber() == position);
+    CHECK(Call(e, "input.touch", R"({"id":1,"x":750,"y":400,"width":1280,"height":720})")["ok"].asBool()); e.Step(1);
+    CHECK(std::fabs(e.GameData()["move"]["x"].asFloat() - (0.5f - 0.15f)/0.85f) < 1e-6f);
+    Call(e, "input.touch", R"({"id":1,"down":false})"); Call(e, "game.pause", R"({"paused":false})"); e.Step(1);
+    CHECK(e.GameData()["move"]["x"].asFloat() == 0);
+    Call(e, "input.axis", R"({"name":"LeftX","value":0.575})");
+    CHECK(Call(e, "sim.save_state", R"({"slot":"input"})")["ok"].asBool()); e.Step(12); Json future = e.GameData();
+    Call(e, "input.key", R"({"key":"D","down":true})"); e.Step(3);
+    CHECK(Call(e, "sim.load_state", R"({"slot":"input"})")["ok"].asBool()); e.Step(12); CHECK(e.GameData() == future);
+    CHECK(e.Scripts().Errors().empty()); e.Stop(); RemoveAll(project);
+}
+
+TEST(OfficialLuaInputDeclaredPlayerSources) {
+    for (const char* mode : {"lockstep", "rollback", "authoritative"}) {
+        const std::string project = NetworkProject("official_input_players", "loopback");
+        std::string text, error; CHECK(ReadTextFile(JoinPath(project,"project.json"), text)); Json config = Json::parse(text);
+        config["network"]["mode"] = mode; config["network"]["actions"] = Json::parse("[\"D\"]");
+        config["network"]["axes"] = Json::parse("[\"LeftX\"]");
+        CHECK(WriteTextFile(JoinPath(project,"project.json"), config.dump()));
+        CHECK(WriteTextFile(JoinPath(project,"scripts/probe.lua"), R"(
+local I=require('oe.input');local localKeys=I.localSource();local P={}
+function P:onUpdate()
+ local s=net.state();if not s.sync or s.sync.state~='running' then
+  assert(not pcall(function() return I.playerSource(1,{actions={'D'}}).down('D') end));return
+ end
+ local a={move={kind='vector',right={'D'},axisX='LeftX'}}
+ for id=1,2 do
+  local p=I.playerSource(id,{actions={'D'},axes={'LeftX'}})
+  game.set('move'..id,I.read(p,a,'move').x)
+  assert(not pcall(p.down,'Q') and not pcall(p.axis,'LeftY'))
+  assert(p.mouse==nil and not pcall(localKeys.down,'Q'))
+  -- Even an incorrectly widened allowlist cannot recover undeclared device keys from the wire.
+  assert(not I.playerSource(id,{actions={'Q'}}).down('Q'))
+ end
+end
+return P
+)"));
+        Engine host, client; CHECK(host.Open(project,&error) && client.Open(project,&error));
+        for (Engine* e : {&host,&client}) { e->GetScene().Clear(); auto id=e->GetScene().Create("Probe"); e->GetScene().Add<Script>(id).path="scripts/probe.lua"; }
+        CHECK(Call(host,"net.host",R"({"room":"input-players","seed":42})")["ok"].asBool());
+        CHECK(Call(client,"net.join",R"({"address":"input-players"})")["ok"].asBool()); NetworkSteps(host,client,30);
+        Call(host,"net.ready",R"({"ready":true})"); Call(client,"net.ready",R"({"ready":true})"); NetworkSteps(host,client,20);
+        CHECK(Call(host,"net.start")["ok"].asBool()); NetworkSteps(host,client,40);
+        if (std::string(mode)=="rollback") CHECK(Call(host,"net.simulate",R"({"latencyFrames":3})")["ok"].asBool());
+        Call(host,"input.key",R"({"key":"D","down":true})"); Call(host,"input.key",R"({"key":"Q","down":true})");
+        Call(client,"input.axis",R"({"name":"LeftX","value":0.575})"); NetworkSteps(host,client,80);
+        for (Engine* e : {&host,&client}) {
+            CHECK(e->GameData()["move1"].asFloat() == ((std::string(mode)=="authoritative" && e==&client) ? 0 : 1));
+            CHECK(std::fabs(e->GameData()["move2"].asFloat()-0.5f) < 1e-4f);
+            CHECK(e->Scripts().Errors().empty()); CHECK(Call(*e,"net.desync_report")["result"].size()==0);
+        }
+        if (std::string(mode)=="rollback") {
+            CHECK(host.NetworkCall("state",Json())["sync"]["rollbacks"].asNumber() +
+                  client.NetworkCall("state",Json())["sync"]["rollbacks"].asNumber() > 0);
+        }
+        host.Stop(); client.Stop(); RemoveAll(project);
+    }
+}
+
+TEST(TextMeasurementMatchesRenderedLayout) {
+    Engine e; std::string error; const std::string project = TempProject("text_measurement");
+    CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    CHECK(CopyFileTo(TestSourceDir() + "/games/DongleZoo/assets/fonts/Jua-Regular.ttf", JoinPath(project, "assets/fonts/body.ttf")));
+    auto id = e.GetScene().Create("Label"); UIText& text = e.GetScene().Add<UIText>(id);
+    text.x = 0; text.y = 0; text.size = 23.4f;
+    auto measure = [&](float wrap, int height) {
+        Json a = Json::MakeObject(); a["text"] = text.text;
+        a["style"] = Json::MakeObject(); a["style"]["font"] = text.font; a["style"]["size"] = text.size;
+        a["style"]["letterSpacing"] = text.letterSpacing; a["style"]["lineSpacing"] = text.lineSpacing;
+        a["style"]["bold"] = text.bold; a["style"]["rich"] = text.richText; a["wrapWidth"] = wrap;
+        a["view"] = Json::parse(R"({"width":1280,"height":720})"); a["view"]["height"] = height;
+        Json result = e.Call("ui.measureText", a); CHECK(result["ok"].asBool()); return result["result"];
+    };
+    for (const char* font : {"default", "pixel", "assets/fonts/body.ttf", "assets/fonts/missing.ttf"})
+        for (const std::string& value : {std::string(""), std::string("AV Hello"), std::string(u8"한글 日本語"),
+                                      std::string("one two\nthree four five"), std::string("<color=red><b>Wide</b></color> narrow")})
+            for (int height : {540, 720, 900}) for (float wrap : {0.0f, 63.0f}) {
+                text.font = font; text.text = value; text.width = wrap; text.height = 0;
+                text.letterSpacing = 1.2f; text.lineSpacing = 1.3f; text.bold = true;
+                Json metrics = measure(wrap, height);
+                auto rects = LayoutUI(e.GetScene(), 1280, height, &e.Assets()); CHECK(rects.size() == 1);
+                float scale = UIScale(e.GetScene(), 1280, height);
+                CHECK(std::fabs(metrics["height"].asFloat() - rects[0].h / scale) < 0.01f);
+                if (wrap == 0) CHECK(std::fabs(metrics["width"].asFloat() - rects[0].w / scale) < 0.01f);
+                CHECK(metrics["lineWidths"].size() == static_cast<size_t>(metrics["lines"].asInt()));
+                float widest = 0; for (const auto& line : metrics["lineWidths"].items()) widest = std::max(widest, line.asFloat());
+                CHECK(std::fabs(widest - metrics["width"].asFloat()) < 0.01f);
+            }
+    text.font = "pixel"; text.text = "HH"; text.size = 32; text.bold = false; text.richText = false;
+    text.width = 0; text.letterSpacing = 0; text.lineSpacing = 1;
+    Json plain = measure(0, 720); CHECK(plain["width"].asFloat() == 44 && plain["height"].asFloat() == 28);
+    text.bold = true; Json bold = measure(0, 720); CHECK(bold["width"].asFloat() == 48);
+    text.font = "default"; text.bold = false; Json regular = measure(0, 720);
+    text.bold = true; CHECK(measure(0, 720)["width"].asFloat() > regular["width"].asFloat());
+    text.font = "assets/fonts/missing.ttf"; text.bold = false; CHECK(measure(0, 720)["width"] == regular["width"]);
+    text.font = "default"; text.text = "<b>HH</b>"; text.richText = true; Json rich = measure(0, 720);
+    text.text = "HH"; text.bold = true; CHECK(measure(0, 720)["width"] == rich["width"]);
+    text.bold = false; text.font = "pixel"; Json before = measure(0, 720);
+    auto quads = BuildUIQuads(e.GetScene(), 1280, 720, &e.Assets()); CHECK(!quads.empty());
+    text.outlineWidth = 2; text.shadowDistance = 3; text.visibleCharacters = 1;
+    CHECK(measure(0, 720) == before);
+    auto rects = LayoutUI(e.GetScene(), 1280, 720, &e.Assets());
+    CHECK(std::fabs(rects[0].w - before["width"].asFloat()) < 0.01f);
+    // Effective canvas changes use the same scale/rounding as actual text layout.
+    auto canvas = e.GetScene().Create("Canvas"); auto& c = e.GetScene().Add<UICanvas>(canvas);
+    c.referenceWidth = 720; c.referenceHeight = 1280; c.match = 0.5f;
+    Json scaled = measure(0, 900); rects = LayoutUI(e.GetScene(), 1280, 900, &e.Assets());
+    CHECK(std::fabs(scaled["height"].asFloat() - rects[0].h / UIScale(e.GetScene(), 1280, 900)) < 0.01f);
+    Json request = Json::MakeObject(); request["text"] = std::string(65536, 'x'); request["style"] = Json::parse(R"({"font":"pixel","size":8})");
+    CHECK(e.Call("ui.measureText", request)["ok"].asBool()); request["text"] = std::string(65537, 'x');
+    CHECK(!e.Call("ui.measureText", request)["ok"].asBool());
+    CHECK(!Call(e, "ui.measureText", R"({"text":"x","style":{"rich":1}})")["ok"].asBool());
+    CHECK(!Call(e, "ui.measureText", R"({"text":"x","style":{"minSize":10}})")["ok"].asBool());
+    CHECK(!Call(e, "ui.measureText", R"({"text":"x","style":{"font":"../outside.ttf"}})")["ok"].asBool());
+    CHECK(!Call(e, "ui.measureText", R"({"text":"x","wrapWidth":-1})")["ok"].asBool());
+    RemoveAll(project);
+}
+
+TEST(TextMeasurementCacheOrderAndRecordedFuture) {
+    Engine e; std::string error; const std::string project = TempProject("text_recording"); CHECK(e.Open(project, &error));
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    EpochEval(e, "timer.every(1/60,function() game.set('n',math.random()) end)");
+    Json a = Json::parse(R"({"text":"<b>AV</b> abc\nwrapped text","style":{"size":26,"rich":true},"wrapWidth":80})");
+    Json first = e.Call("ui.measureText", a)["result"];
+    CHECK(Call(e, "sim.save_state", R"({"slot":"text"})")["ok"].asBool());
+    e.Step(5); Json future = e.GameData(), futureScene = e.GetScene().ToJson();
+    CHECK(Call(e, "sim.load_state", R"({"slot":"text"})")["ok"].asBool());
+    Json scene = e.GetScene().ToJson(), data = e.GameData(); auto frame = e.Frame(); auto epoch = e.GetScene().Epoch();
+    // Warming unrelated glyphs/font sizes/pages cannot change cached advances or line breaks.
+    Json warm = a; warm["text"] = u8"ΩЖمرحبا한글日本語abcdefghijklmnopqrstuvwxyz";
+    for (int n = 0; n < 50; ++n) { warm["style"]["size"] = 30 + n; CHECK(e.Call("ui.measureText", warm)["ok"].asBool()); }
+    CHECK(e.Call("ui.measureText", a)["result"] == first);
+    CHECK(EpochEval(e, "local w=require('oe.ui'); for i=1,50 do w.measureText({text='<b>hello</b>',style={size=26},wrapWidth=80}) end return w.measureText==ui.measureText").asBool());
+    CHECK(e.Frame() == frame && e.GetScene().Epoch() == epoch && e.GameData() == data && e.GetScene().ToJson() == scene);
+    e.Step(5); CHECK(e.GameData() == future && e.GetScene().ToJson() == futureScene);
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(OfficialLuaWidgetCapabilitiesAndAmbiguity) {
+    const std::string project = TempProject("widget_capabilities");
+    Engine e; std::string error; CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    auto label = e.GetScene().Create("Label"); e.GetScene().Add<UIText>(label);
+    auto panel = e.GetScene().Create("Panel"); e.GetScene().Add<UIPanel>(panel);
+    CHECK(e.GetScene().SetParent(label, panel, &error));
+    auto multi = e.GetScene().Create("Multi"); e.GetScene().Add<UIText>(multi); e.GetScene().Add<UIButton>(multi);
+    auto field = e.GetScene().Create("Field"); e.GetScene().Add<UIInput>(field);
+    CHECK(EpochEval(e, "w=require('oe.ui'); return w.tryFind('Missing')==nil and w.tryFind('Panel','UIText')==nil").asBool());
+    CHECK(EpochEval(e, "local ok,err=pcall(w.find,'Missing'); return not ok and err:find('Missing',1,true) and err:find('UI component',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "local ok,err=pcall(w.find,'Multi'); return not ok and err:find('Multi',1,true) and err:find('ambiguous',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "label=w.find('Multi','UIText'); label:text('explicit'); return label:get().text=='explicit'").asBool());
+    CHECK(EpochEval(e, "p=w.find('Panel'); local ok,err=pcall(p.text,p,'bad'); return not ok and err:find('Panel',1,true) and err:find('text capability',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "local ok,err=pcall(p.focus,p); return not ok and err:find('focus capability',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "child=w.find('Label'); child:text('kept'); local width=child:get().width; child:set({opacity=0.5}); p:hide(); return not p:visible() and child:visible() and child:get().text=='kept' and child:get().width==width").asBool());
+    CHECK(EpochEval(e, "p:show(); f=w.find('Field'); f:text('typed'); f:focus(); return w.focused()==f:id() and f:get().text=='typed'").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(OfficialLuaWidgetsRestoreAndRejectReplacement) {
+    const std::string project = TempProject("widget_lifetime");
+    Engine e; std::string error; CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    auto label = e.GetScene().Create("Label"); e.GetScene().Add<UIText>(label);
+    CHECK(WriteTextFile(JoinPath(project, "scenes/widgets.scene.json"), e.GetScene().ToJson().dump()));
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    EpochEval(e, "w=require('oe.ui'); h=w.find('Label'); h:text('saved'); closure=function() return h:get().text end");
+    CHECK(Call(e, "sim.save_state", R"({"slot":"widgets"})")["ok"].asBool());
+    CHECK(EpochEval(e, "scene.remove(h:id(),'UIText'); local ok,err=pcall(h.get,h); return not ok and err:find('UIText',1,true) ~= nil").asBool());
+    CHECK(Call(e, "sim.load_state", R"({"slot":"widgets"})")["ok"].asBool());
+    CHECK(EpochEval(e, "return closure()=='saved' and w==require('oe.ui')").asBool());
+    CHECK(EpochEval(e, "scene.destroy(h:id()); local ok,err=pcall(h.hide,h); return not ok and err:find('destroyed',1,true) ~= nil").asBool());
+    CHECK(Call(e, "sim.load_state", R"({"slot":"widgets"})")["ok"].asBool());
+    EpochEval(e, "game.loadScene('scenes/widgets.scene.json')"); e.Step(1);
+    CHECK(EpochEval(e, "local ok,err=pcall(h.text,h,'wrong'); return not ok and err:find('world was replaced',1,true) ~= nil").asBool());
+    CHECK(EpochEval(e, "fresh=w.find('Label'); fresh:text('new world'); return fresh:get().text=='new world'").asBool());
+    CHECK(Call(e, "sim.load_state", R"({"slot":"widgets"})")["ok"].asBool());
+    CHECK(EpochEval(e, "return closure()=='saved' and fresh==nil").asBool());
+    CHECK(e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
+TEST(OfficialLuaManifestFingerprintIsStable) {
+    auto modules = OfficialManifest();
+    const std::string digest = OfficialManifestDigest(modules, kOfficialPrimitiveRevision);
+    CHECK(digest == OfficialManifestDigest() && digest.size() == 16);
+    std::reverse(modules.begin(), modules.end());
+    for (auto& module : modules) {
+        module.path = "C:/different/source/metadata.lua";
+        std::string crlf;
+        for (char c : module.source) crlf += c == '\n' ? "\r\n" : std::string(1, c);
+        module.source = crlf;
+    }
+    CHECK(OfficialManifestDigest(modules, kOfficialPrimitiveRevision) == digest);
+    CHECK(OfficialManifestDigest(modules, kOfficialPrimitiveRevision + 1) != digest);
+    modules[0].source += "\n-- changed source\n";
+    CHECK(OfficialManifestDigest(modules, kOfficialPrimitiveRevision) != digest);
+    Scene scene; scene.Clear(); CHECK(OfficialManifestDigest() == digest);
+    const std::string project = TempProject("official_fingerprint");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    const auto hash = OfficialAgreementTestAccess::ContentHash(e);
+    e.GetScene().Clear(); CHECK(OfficialAgreementTestAccess::ContentHash(e) == hash);
+    // Rewrite identical bytes to change filesystem metadata without changing resource content.
+    std::string source; const auto path = ListFiles(JoinPath(project, "scripts"), ".lua", true).front();
+    CHECK(ReadTextFile(path, source) && WriteTextFile(path, source));
+    CHECK(OfficialAgreementTestAccess::ContentHash(e) == hash);
+    OfficialAgreementTestAccess::Fingerprint(e, "");  // Exact old-runtime project-only manifest.
+    CHECK(OfficialAgreementTestAccess::ContentHash(e) != hash);
+    RemoveAll(project);
+}
+
+TEST(OfficialLuaBlueprintMismatchBarriers) {
+    CHECK(SessionConfig{}.version == 4);
+    for (const char* mode : {"lockstep", "rollback", "authoritative"}) {
+        for (int variant = 0; variant < 3; ++variant) {  // Match, changed official bytes, legacy v4 runtime.
+            const std::string project = NetworkProject("official_barrier", "loopback");
+            std::string text, error; CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+            Json settings = Json::parse(text); settings["network"]["mode"] = mode;
+            CHECK(WriteTextFile(JoinPath(project, "project.json"), settings.dump()));
+            Engine host, client; CHECK(host.Open(project, &error) && client.Open(project, &error));
+            host.GetScene().Clear(); client.GetScene().Clear();
+            if (variant) OfficialAgreementTestAccess::Fingerprint(client,
+                variant == 1 ? "official-lua-v1:1:0000000000000000\n" : "");
+            CHECK(Call(host, "net.host", R"({"room":"official-barrier","seed":17})")["ok"].asBool());
+            CHECK(Call(client, "net.join", R"({"address":"official-barrier"})")["ok"].asBool());
+            NetworkSteps(host, client, 30);
+            CHECK(Call(host, "net.ready", R"({"ready":true})")["ok"].asBool());
+            CHECK(Call(client, "net.ready", R"({"ready":true})")["ok"].asBool()); NetworkSteps(host, client, 20);
+            CHECK(Call(host, "net.start")["ok"].asBool()); NetworkSteps(host, client, 30);
+            Json state = client.NetworkCall("state", Json())["sync"];
+            if (!variant) {
+                CHECK(state["state"].asString() == "running");
+                CHECK(host.Scripts().PollHotReload().empty());
+                CHECK(host.Scripts().ReloadReport()["skipped"][0].asString() == "recording" ||
+                      host.Scripts().ReloadReport()["skipped"][0].asString() == "match_active");
+                CHECK(Call(host, "script.reload")["error"]["code"].asString() == "state_recording");
+            }
+            else CHECK(state["state"].asString() != "running" && state["error"].asString().find("mismatch") != std::string::npos);
+            host.Stop(); client.Stop(); RemoveAll(project);
+        }
+    }
+    const std::string project = NetworkProject("official_late_barrier", "loopback");
+    std::string text, error; CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json settings = Json::parse(text); settings["network"]["mode"] = "authoritative"; settings["network"]["lateJoin"] = true;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), settings.dump()));
+    Engine server, good, bad; for (Engine* e : {&server, &good, &bad}) { CHECK(e->Open(project, &error)); e->GetScene().Clear(); }
+    OfficialAgreementTestAccess::Fingerprint(bad, "official-lua-v1:1:0000000000000000\n");
+    CHECK(Call(server, "net.serve", R"({"room":"official-late","seed":17})")["ok"].asBool());
+    server.Step(10);
+    CHECK(Call(good, "net.join", R"({"address":"official-late"})")["ok"].asBool()); NetworkSteps(server, good, 30);
+    CHECK(Call(good, "net.ready", R"({"ready":true})")["ok"].asBool()); NetworkSteps(server, good, 30);
+    CHECK(good.NetworkCall("state", Json())["sync"]["state"].asString() == "running");
+    CHECK(Call(bad, "net.join", R"({"address":"official-late"})")["ok"].asBool()); NetworkSteps(server, good, 30, &bad);
+    CHECK(Call(bad, "net.ready", R"({"ready":true})")["ok"].asBool()); NetworkSteps(server, good, 30, &bad);
+    Json rejected = bad.NetworkCall("state", Json())["sync"];
+    CHECK(rejected["state"].asString() != "running" && rejected["error"].asString().find("mismatch") != std::string::npos);
+    server.Stop(); good.Stop(); bad.Stop(); RemoveAll(project);
+}
+
+TEST(OfficialLuaRecordingRestoresCacheAndHandles) {
+    const std::string project = TempProject("official_recording");
+    Engine e; std::string error; CHECK(e.Open(project, &error)); e.GetScene().Clear();
+    e.GetScene().Create("Anchor");
+    const uint64_t frame = e.Frame(), epoch = e.GetScene().Epoch(); const Json scene = e.GetScene().ToJson();
+    CHECK(Call(e, "scene.epoch")["result"]["epoch"].asString() == e.GetScene().EpochString());
+    CHECK(e.Frame() == frame && e.GetScene().Epoch() == epoch && e.GetScene().ToJson() == scene);
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    EpochEval(e, "entities=require('oe.entities'); cached=require('oe.ui'); h=entities.find('Anchor'); local n=0; saved=function() return h:id() end; timer.every(1/60,function() n=n+math.random(1,3); game.set('n',n) end)");
+    CHECK(Call(e, "sim.save_state", R"({"slot":"official"})")["ok"].asBool());
+    e.Step(3); const Json futureData = e.GameData();
+    EpochEval(e, "futureId=scene.create('Future'); futureHandle=entities.find('Future'); futureClosure=function() return futureHandle:id() end");
+    CHECK(Call(e, "sim.load_state", R"({"slot":"official"})")["ok"].asBool());
+    CHECK(EpochEval(e, "return cached == require('oe/ui.lua') and entities == require('oe.entities') and saved() == 1 and futureHandle == nil and futureClosure == nil and futureId == nil").asBool());
+    e.Step(3); CHECK(e.GameData() == futureData);
+    CHECK(EpochEval(e, "local id=scene.create('Branch'); return id").asInt() == 2);
+    CHECK(Call(e, "sim.load_state", R"({"slot":"official"})")["ok"].asBool());
+    CHECK(EpochEval(e, "return saved() == 1 and scene.find('Branch') == nil and cached == require('oe.ui')").asBool());
+    OfficialAgreementTestAccess::Fingerprint(e, "official-lua-v1:2:changed\n");
+    CHECK(Call(e, "sim.load_state", R"({"slot":"official"})")["error"]["code"].asString() == "state_resource");
+    CHECK(e.GetScene().Epoch() == epoch && e.Scripts().Errors().empty()); RemoveAll(project);
+}
+
 TEST(SimulationNativeSnapshotBudgetAndBranching) {
     double worst = 0;
     for (const char* sample : {"Hello", "Dungeon", "Platformer", "FPS"}) {
@@ -2200,6 +3053,10 @@ TEST(NetworkEngineNativeSessionTcpUdp) {
         {
             Engine host, client;
             CHECK(host.Open(project, &error) && client.Open(project, &error));
+            // This socket/RPC fixture is not an offline game: its template controller
+            // now explicitly rejects local gameplay reads during a network session.
+            CHECK(Call(host, "component.remove", R"({"id":"Player","type":"Script"})")["ok"].asBool());
+            CHECK(Call(client, "component.remove", R"({"id":"Player","type":"Script"})")["ok"].asBool());
             NetworkReceiver(host); NetworkReceiver(client);
             Json hosted = Call(host, "net.host", R"({"seed":99})");
             CHECK(hosted["ok"].asBool());
@@ -2789,6 +3646,24 @@ int CountPlayed(Engine& e, const char* path) {
     Json state = Call(e, "audio.state", "{}");
     for (const Json& ev : state["result"]["played"].items()) n += ev["path"].asString() == path;
     return n;
+}
+
+TEST(TemplateScriptParametersAndChecks) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("template_script_contract"), &error));
+    for (const char* name : {"bob", "coin", "game_manager", "play_again", "player_controller", "rotator"}) {
+        Json args = Json::MakeObject();
+        args["path"] = std::string("scripts/") + name + ".lua";
+        const Json diagnostics = e.Call("script.check", args)["result"];
+        CHECK(diagnostics["errors"].asInt() == 0 && diagnostics["warnings"].asInt() == 0);
+    }
+    const Json params = Call(e, "script.params", R"({"path":"scripts/player_controller.lua"})")["result"];
+    auto defaultValue = [&](const char* name) {
+        for (const Json& param : params.items()) if (param["name"].asString() == name) return param["default"].asNumber();
+        return -1.0;
+    };
+    CHECK(defaultValue("speed") == 4 && defaultValue("jumpSpeed") == 5 && defaultValue("gravity") == 12);
 }
 
 TEST(TemplateGamePlaythrough) {
@@ -5240,6 +6115,7 @@ return M
     CHECK(scene.Get<UIDropdown>(scene.FindByName("Level"))->selected == 0);
 }
 
+#if OE_NATIVE_EDITOR
 TEST(EditorAddPresetsAreValid) {
     // Every entry of the editor's Add menu must be creatable (a broken JSON literal once made "UI Toggle" fail).
     Engine e;
@@ -5258,6 +6134,8 @@ TEST(EditorAddPresetsAreValid) {
         CHECK(made["ok"].asBool());
     }
 }
+
+#endif
 
 TEST(UIInputEditingSkinsAndLongLists) {
     Engine e;
@@ -8210,7 +9088,6 @@ TEST(TeamBackendDetection) {
     CHECK(RemoveAll(dir));
 #endif
 }
-TEST(TeamStoreProfiles) {
 TEST(DefaultTeamForNewProject) {
     const std::string project = TempProject("default_team");  // CreateProject itself writes no team
     const std::string file = JoinPath(project, ".oe/team/team.json");
@@ -8252,6 +9129,7 @@ TEST(DefaultTeamForNewProject) {
     CHECK(ReadTextFile(JoinPath(broken, ".oe/team/team.json"), kept) && kept == "{ not json");
 }
 
+TEST(TeamStoreProfiles) {
     const std::string project = TempProject("team_store");
     const std::string file = JoinPath(project, ".oe/team/team.json");
     std::string error, text;
@@ -11036,6 +11914,50 @@ TEST(HostBridgeAndViewSize) {
     RemoveAll(dir);
 }
 
+TEST(DongleZooModuleSnapshotsAndCatalog) {
+    // Explicit service aliases and extracted methods must survive native branch restore.
+    const std::string project = TestSourceDir() + "/games/DongleZoo";
+    Engine e;
+    std::string error, source;
+    CHECK(e.Open(project, &error));
+    // A pre-split version-1 save is still loaded through the unchanged Meta sanitizer.
+    CHECK(Call(e, "save.set", R"({"key":"donglezoo.save.v1","value":{"version":1,"coins":321,"best":45,"settings":{"locale":"ko"},"items":{"hammer":3,"shake":2,"wand":1}}})")["ok"].asBool());
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    CHECK(Call(e, "time.date", R"({"set":"2031-03-03"})")["ok"].asBool());
+    e.Step(3);
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["entity"] = "App";
+        args["code"] = code;
+        Json result = e.Call("script.eval", args);
+        CHECK(result["ok"].asBool());
+        return result["result"]["value"];
+    };
+    CHECK(eval("return self.services.Meta.data.coins == 321 and self.services.Meta.data.best == 45 and self.services.Meta.data.items.hammer == 3 and self.services.I.getLocale() == 'ko'").asBool());
+    CHECK(ReadTextFile(JoinPath(project, "config/shop.json"), source));
+    CHECK(eval("return self.services.D.PRODUCTS") == Json::parse(source)["products"]);
+    CHECK(eval("return self.services.Scoring.mergePoints(10, 1) == 10 and self.services.Scoring.mergePoints(10, 2) == 13 and self.services.Scoring.mergePoints(10, 99) == 25").asBool());
+    eval("self:onAction('play'); self.cur=1; self.nxt=1; self:drop()");
+    CHECK(Call(e, "sim.save_state", R"({"slot":"zoo"})")["ok"].asBool());
+    e.Step(45);
+    const Json future = e.GetScene().ToJson();
+    eval("self.score=999; self.services.Meta.data.coins=999; self.branchOnly=true");
+    CHECK(Call(e, "sim.load_state", R"({"slot":"zoo"})")["ok"].asBool());
+    CHECK(eval("return self.score == 0 and self.services.Meta.data.coins == 321 and self.branchOnly == nil and self.services.Meta == require('scripts.lib.meta') and self.services.Board == require('scripts.lib.board') and self.services.Scoring == require('scripts.app.scoring')").asBool());
+    e.Step(45);
+    CHECK(e.GetScene().ToJson() == future);
+    // Attached App reload retains its owner/context and does not run onStart again.
+    // Recording intentionally forbids resource reload: exercise this on a fresh tool session.
+    Engine live;
+    CHECK(live.Open(project, &error));
+    live.Step(3);
+    CHECK(Call(live, "script.eval", R"({"entity":"App","code":"self.score=17; self.ownerContext=self.services"})")["ok"].asBool());
+    CHECK(Call(live, "script.reload")["ok"].asBool());
+    CHECK(Call(live, "script.eval", R"({"entity":"App","code":"return self.score == 17 and self.ownerContext == self.services"})")["result"]["value"].asBool());
+    CHECK(Call(live, "script.errors")["result"].size() == 0);
+    CHECK(Call(e, "script.errors")["result"].size() == 0);
+}
+
 TEST(DongleZooGame) {
     // The merge puzzle in games/DongleZoo, played like a user: menu, aiming and dropping with the
     // pointer, merging, items, game over with a rewarded continue, coins, missions and the daily gift.
@@ -11255,6 +12177,463 @@ TEST(DongleZooGame) {
     };
     Engine a, b;
     CHECK(play(a) == play(b));
+}
+
+TEST(NetworkAuthoritativeLateJoin) {
+    // network.lateJoin: a dedicated server runs its world without players, admits whoever joins and
+    // gets ready while it runs, keeps running when they leave, and takes them back.
+    std::string project = AuthorityProject("authority_latejoin", "loopback", true), text, error;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json config = Json::parse(text);
+    config["network"]["lateJoin"] = true; config["network"]["maxPlayers"] = 4;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    Engine server, a, b;
+    for (Engine* e : {&server, &a, &b}) {
+        CHECK(e->Open(project, &error)); e->GetScene().Clear();
+        CHECK(Call(*e, "entity.create", R"({"name":"Remote","components":{"Transform":{},"Script":{"path":"scripts/drift.lua"},"NetSync":{"fields":{"Transform.position":{"onChange":true}}}}})")["ok"].asBool());
+    }
+    auto steps = [&](int count) { for (int i = 0; i < count; ++i) { server.Step(1); a.Step(1); b.Step(1); } };
+    auto sync = [](Engine& e) { return e.NetworkCall("state", Json())["sync"]["state"].asString(); };
+    auto avatar = [](Engine& e, int player) {
+        for (const auto& kv : e.GetScene().Pool<NetPlayer>()) if (kv.second.player == player) return kv.first;
+        return kNullEntity;
+    };
+    auto x = [](Engine& e, EntityId id) { const Transform* t = e.GetScene().Get<Transform>(id); return t ? t->position.x : -1.0f; };
+    const char* join = R"({"address":"late-room"})";
+
+    CHECK(Call(server, "net.serve", R"({"seed":71,"room":"late-room"})")["ok"].asBool());
+    steps(60);
+    CHECK(sync(server) == "running" && server.Frame() >= 50);  // the world started without anybody
+    CHECK(server.GetScene().Pool<NetPlayer>().empty());
+
+    // Joining alone is only the lobby: the player enters the world when it is ready.
+    CHECK(Call(a, "net.join", join)["ok"].asBool()); steps(40);
+    CHECK(a.NetworkCall("state", Json())["state"].asString() == "lobby" && sync(a) != "running");
+    CHECK(server.GetScene().Pool<NetPlayer>().empty());
+    CHECK(Call(a, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(60);
+    CHECK(sync(a) == "running" && sync(server) == "running");
+    CHECK(server.GetScene().Pool<NetPlayer>().size() == 1 && avatar(server, 2) != kNullEntity && avatar(a, 2) != kNullEntity);
+    CHECK(x(a, a.GetScene().FindByName("Remote")) > 1.5f);  // the world it entered is the server's, not a fresh one
+    a.Input().down.insert("W"); steps(60);
+    CHECK(x(server, avatar(server, 2)) > 30 && x(a, avatar(a, 2)) > 30);
+
+    // A second player arrives much later; both see each other (the first one's roster predates it).
+    CHECK(Call(b, "net.join", join)["ok"].asBool()); steps(30);
+    CHECK(Call(b, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(80);
+    CHECK(sync(b) == "running" && sync(a) == "running");
+    CHECK(server.GetScene().Pool<NetPlayer>().size() == 2 && a.GetScene().Pool<NetPlayer>().size() == 2 && b.GetScene().Pool<NetPlayer>().size() == 2);
+    CHECK(avatar(a, 3) != kNullEntity && x(b, avatar(b, 2)) > 60);
+    b.Input().down.insert("W"); steps(40);
+    CHECK(x(server, avatar(server, 3)) > 15);
+
+    // One leaves: its avatar goes, the other keeps playing. Then the last one: the server stays up.
+    CHECK(Call(a, "net.leave")["ok"].asBool()); a.Input().down.clear(); steps(120);
+    CHECK(server.GetScene().Pool<NetPlayer>().size() == 1 && b.GetScene().Pool<NetPlayer>().size() == 1 && sync(b) == "running");
+    CHECK(Call(b, "net.leave")["ok"].asBool()); steps(200);
+    CHECK(sync(server) == "running" && server.GetScene().Pool<NetPlayer>().empty());
+    uint64_t frame = server.Frame(); steps(30); CHECK(server.Frame() == frame + 30);
+
+    // And somebody comes back into the same world.
+    CHECK(Call(a, "net.join", join)["ok"].asBool()); steps(30);
+    CHECK(Call(a, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(80);
+    CHECK(sync(a) == "running" && a.GetScene().Pool<NetPlayer>().size() == 1 && server.GetScene().Pool<NetPlayer>().size() == 1);
+    CHECK(x(a, a.GetScene().FindByName("Remote")) > 8.0f);
+    for (Engine* e : {&server, &a, &b}) CHECK(e->Scripts().Errors().empty());
+
+    // game.quit only raises a flag for the game runtime; stopping the session clears it.
+    CHECK(!Call(b, "game.state")["result"]["quitRequested"].asBool());
+    CHECK(Call(b, "game.quit")["ok"].asBool() && Call(b, "game.state")["result"]["quitRequested"].asBool());
+    b.Stop(); CHECK(!Call(b, "game.state")["result"]["quitRequested"].asBool());
+    server.Stop(); a.Stop(); RemoveAll(project);
+}
+
+TEST(NetworkScriptAdmission) {
+    // network.admission "script": a ready lobby player enters the running world only after the game
+    // called net.admit; the game may also kick from its own rules (a server checking a ticket).
+    std::string project = AuthorityProject("authority_admission", "loopback", true), text, error;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json config = Json::parse(text);
+    config["network"]["maxPlayers"] = 4; config["network"]["admission"] = "script";
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    { Engine refused; CHECK(!refused.Open(project, &error) && error.find("lateJoin") != std::string::npos); }
+    config["network"]["lateJoin"] = true;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/gate.lua"), R"(
+local M = {}
+local seen = {}
+function M:onUpdate()
+  if not net.isServer() then return end
+  for _, id in ipairs(net.players()) do
+    if id ~= 1 and not seen[id] then
+      seen[id] = true
+      local name = net.name(id)
+      if name == 'good' then net.admit(id) elseif name == 'bad' then net.kick({player = id, reason = 'no ticket'}) end
+    end
+  end
+end
+return M
+)"));
+    Engine server, good, bad, waiting;
+    for (Engine* e : {&server, &good, &bad, &waiting}) {
+        CHECK(e->Open(project, &error)); e->GetScene().Clear();
+        CHECK(Call(*e, "entity.create", R"({"name":"Gate","components":{"Script":{"path":"scripts/gate.lua"}}})")["ok"].asBool());
+    }
+    auto steps = [&](int count) { for (int i = 0; i < count; ++i) { server.Step(1); good.Step(1); bad.Step(1); waiting.Step(1); } };
+    auto sync = [](Engine& e) { return e.NetworkCall("state", Json())["sync"]["state"].asString(); };
+    auto avatar = [](Engine& e, int player) {
+        for (const auto& kv : e.GetScene().Pool<NetPlayer>()) if (kv.second.player == player) return kv.first;
+        return kNullEntity;
+    };
+    CHECK(!Call(server, "net.serve", R"({"room":"gate-room","minPlayers":1})")["ok"].asBool());  // players only enter through net.admit
+    CHECK(Call(server, "net.serve", R"({"seed":5,"room":"gate-room"})")["ok"].asBool());
+    steps(30);
+    CHECK(sync(server) == "running");
+
+    // Nobody admitted it: ready, but it stays in the lobby without an avatar.
+    CHECK(Call(waiting, "net.join", R"({"address":"gate-room","name":"somebody"})")["ok"].asBool()); steps(30);
+    CHECK(Call(waiting, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(90);
+    CHECK(waiting.NetworkCall("state", Json())["state"].asString() == "lobby" && sync(waiting) != "running");
+    CHECK(server.GetScene().Pool<NetPlayer>().empty());
+
+    // The script admits "good" (before it is even ready) and kicks "bad".
+    CHECK(Call(good, "net.join", R"({"address":"gate-room","name":"good"})")["ok"].asBool());
+    CHECK(Call(bad, "net.join", R"({"address":"gate-room","name":"bad"})")["ok"].asBool()); steps(40);
+    CHECK(server.GetScene().Pool<NetPlayer>().empty());  // admitted, not ready yet
+    CHECK(Call(good, "net.ready", R"({"ready":true})")["ok"].asBool());
+    if (bad.NetworkCall("state", Json())["state"].asString() == "lobby") Call(bad, "net.ready", R"({"ready":true})");
+    steps(120);
+    CHECK(sync(good) == "running" && server.GetScene().Pool<NetPlayer>().size() == 1 && avatar(server, 3) != kNullEntity);
+    CHECK(bad.NetworkCall("state", Json())["state"].asString() != "lobby" && sync(bad) != "running");
+    CHECK(sync(waiting) != "running" && avatar(server, 2) == kNullEntity);
+
+    // Tools admit with the command; unknown players and clients are refused.
+    CHECK(!Call(server, "net.admit", R"({"player":9})")["ok"].asBool());
+    CHECK(!Call(good, "net.admit", R"({"player":2})")["ok"].asBool());
+    CHECK(Call(server, "net.admit", R"({"player":2})")["ok"].asBool()); steps(90);
+    CHECK(sync(waiting) == "running" && avatar(server, 2) != kNullEntity && server.GetScene().Pool<NetPlayer>().size() == 2);
+
+    // An admission does not outlive the visit: the same player id is gone, a new one waits again.
+    CHECK(Call(waiting, "net.leave")["ok"].asBool()); steps(120);
+    CHECK(server.GetScene().Pool<NetPlayer>().size() == 1);
+    CHECK(Call(waiting, "net.join", R"({"address":"gate-room","name":"somebody"})")["ok"].asBool()); steps(30);
+    CHECK(Call(waiting, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(90);
+    CHECK(sync(waiting) != "running" && server.GetScene().Pool<NetPlayer>().size() == 1);
+    for (Engine* e : {&server, &good, &waiting}) CHECK(e->Scripts().Errors().empty());
+    for (Engine* e : {&server, &good, &bad, &waiting}) e->Stop();
+    RemoveAll(project);
+}
+
+TEST(LinksAndLaunchArgs) {
+    // link.*: framed TCP from a game to a service that is not an engine session (u32 length, u16 type,
+    // payload); game.arg: launch parameters; a project's server/ folder is not game data.
+    const std::string dir = TempProject("links");
+    const uint64_t socketsLive = PlatformNetSocketsLive();
+    std::string error;
+    {
+        Engine e;
+        CHECK(e.Open(dir, &error));
+        auto eval = [&](const std::string& code) {
+            Json args = Json::MakeObject();
+            args["code"] = code;
+            return e.Call("script.eval", args)["result"]["value"];
+        };
+
+        // Launch parameters survive the play session; names and sizes are bounded.
+        CHECK(Call(e, "game.args", R"({"set":{"channel":"2","map":"town"}})")["result"]["channel"].asString() == "2");
+        CHECK(!Call(e, "game.args", R"({"set":{"bad name":"x"}})")["ok"].asBool());
+        CHECK(WriteTextFile(dir + "/key.txt", "c0ffee\r\n"));
+        CHECK(ApplyLaunchArg(e, "key=" + dir + "/key.txt", true, &error) && ApplyLaunchArg(e, "port=7001", false, &error));
+        CHECK(!ApplyLaunchArg(e, "novalue", false, &error) && !ApplyLaunchArg(e, "key=" + dir + "/missing.txt", true, &error));
+        e.Step(1);
+        CHECK(eval("return game.arg('channel') .. game.arg('map') .. game.arg('key') .. game.arg('port')").asString() == "2townc0ffee7001");
+        CHECK(eval("return game.arg('nothing') == nil").asBool());
+        e.Stop(); e.Step(1);
+        CHECK(eval("return game.arg('map')").asString() == "town");
+
+#ifndef __EMSCRIPTEN__
+        // A service: the engine's own framed TCP listener stands in for a login or lobby server.
+        TcpTransport service;
+        NetAddress any; any.port = 0;
+        CHECK(service.Listen(any, &error));
+        const int port = service.LocalAddress().port;
+        uint64_t tick = 0;
+        std::vector<TransportEvent> events;
+        auto pump = [&](int count) { for (int i = 0; i < count; ++i) { service.Poll(++tick, events); e.Step(1); } };
+        auto frame = [](uint16_t type, const std::vector<uint8_t>& payload) {
+            std::vector<uint8_t> bytes = {static_cast<uint8_t>(type & 0xff), static_cast<uint8_t>(type >> 8)};
+            bytes.insert(bytes.end(), payload.begin(), payload.end());
+            return bytes;
+        };
+
+        CHECK(eval("return link.poll(1) == nil").asBool());
+        CHECK(eval("local id, why = link.open{address = 'not an address', port = 80} return id == nil and #why > 0").asBool());
+        CHECK(eval("local id, why = link.open{port = 0} return id == nil and #why > 0").asBool());
+        CHECK(eval("ID = link.open{address = '127.0.0.1', port = " + std::to_string(port) + "} return ID").asInt() == 1);
+        CHECK(eval("return link.poll(ID).state").asString() == "connecting");
+        pump(20);
+        CHECK(eval("local p = link.poll(ID) return p.state .. #p.messages .. p.error").asString() == "open0");
+        PeerId client = 0;
+        for (const TransportEvent& event : events) if (event.type == TransportEvent::Type::Connected) client = event.peer;
+        CHECK(client != 0);
+
+        // Game -> service: a table travels as binary Json, a string as its bytes, nothing as an empty payload.
+        events.clear();
+        CHECK(eval("return link.send(ID, 7, {hello = 'world', n = 3}) and link.send(ID, 8, 'raw\\0bytes') and link.send(ID, 65535)").asBool());
+        pump(10);
+        std::vector<TransportEvent> data;
+        for (const TransportEvent& event : events) if (event.type == TransportEvent::Type::Data) data.push_back(event);
+        CHECK(data.size() == 3);
+        if (data.size() == 3) {
+            Json value;
+            CHECK(data[0].bytes.size() > 2 && data[0].bytes[0] == 7 && data[0].bytes[1] == 0);
+            CHECK(DecodeJson(data[0].bytes.data() + 2, data[0].bytes.size() - 2, value) && value["hello"].asString() == "world" && value["n"].asInt() == 3);
+            CHECK(data[1].bytes.size() == 11 && data[1].bytes[0] == 8 && std::string(data[1].bytes.begin() + 2, data[1].bytes.end()) == std::string("raw\0bytes", 9));
+            CHECK(data[2].bytes.size() == 2 && data[2].bytes[0] == 0xff && data[2].bytes[1] == 0xff);
+        }
+
+        // Service -> game, in order; link.decode turns binary Json back into a value.
+        std::vector<uint8_t> encoded;
+        Json answer = Json::MakeObject(); answer["ok"] = true; answer["name"] = "Guest0001";
+        CHECK(EncodeJson(answer, encoded, 1024));
+        std::vector<uint8_t> first = frame(300, encoded), second = frame(9, {'x', 0, 'z'});
+        CHECK(service.Send(client, first.data(), first.size()) && service.Send(client, second.data(), second.size()));
+        pump(10);
+        Json got = eval("local p = link.poll(ID) local v = link.decode(p.messages[1].data) "
+                        "return {#p.messages, p.messages[1].type, v.ok, v.name, p.messages[2].type, #p.messages[2].data, link.decode(p.messages[2].data) == nil, #link.poll(ID).messages}");
+        CHECK(got[0].asInt() == 2 && got[1].asInt() == 300 && got[2].asBool() && got[3].asString() == "Guest0001");
+        CHECK(got[4].asInt() == 9 && got[5].asInt() == 3 && got[6].asBool() && got[7].asInt() == 0);
+        CHECK(eval("return link.decode(link.encode({a = {1, 2, 3}})).a[3]").asInt() == 3);
+
+        // The same through commands, for tools and tests.
+        Json opened = Call(e, "link.open", ("{\"port\":" + std::to_string(port) + "}").c_str());
+        CHECK(opened["ok"].asBool() && opened["result"]["id"].asInt() == 2);
+        events.clear(); pump(20);
+        PeerId tool = 0;
+        for (const TransportEvent& event : events) if (event.type == TransportEvent::Type::Connected) tool = event.peer;
+        CHECK(tool != 0 && Call(e, "link.poll", R"({"id":2})")["result"]["state"].asString() == "open");
+        events.clear();
+        CHECK(Call(e, "link.send", R"({"id":2,"type":5,"hex":"01ff"})")["result"]["bytes"].asInt() == 2);
+        CHECK(Call(e, "link.send", R"({"id":2,"type":6,"value":{"a":1}})")["ok"].asBool());
+        CHECK(!Call(e, "link.send", R"({"id":2,"type":70000})")["ok"].asBool() && !Call(e, "link.send", R"({"id":2,"type":1,"hex":"0g"})")["ok"].asBool());
+        CHECK(!Call(e, "link.send", R"({"id":77,"type":1})")["ok"].asBool());
+        pump(10);
+        data.clear();
+        for (const TransportEvent& event : events) if (event.type == TransportEvent::Type::Data && event.peer == tool) data.push_back(event);
+        CHECK(data.size() == 2 && data[0].bytes == std::vector<uint8_t>({5, 0, 1, 0xff}));
+        CHECK(service.Send(tool, first.data(), first.size()));
+        pump(10);
+        Json polled = Call(e, "link.poll", R"({"id":2})")["result"];
+        CHECK(polled["messages"].size() == 1 && polled["messages"][0]["type"].asInt() == 300 && polled["messages"][0]["value"]["name"].asString() == "Guest0001");
+        CHECK(polled["messages"][0]["size"].asInt() == static_cast<int>(encoded.size()) && polled["messages"][0]["hex"].asString().size() == encoded.size() * 2);
+        CHECK(Call(e, "link.state")["result"].size() == 2);
+
+        // Bounds: a payload above 65534 bytes is refused, at most 8 links.
+        CHECK(eval("local ok, why = link.send(ID, 1, string.rep('x', 65535)) return ok == false and #why > 0").asBool());
+        CHECK(eval("return link.send(ID, 1, string.rep('x', 65534))").asBool());
+        CHECK(eval("local n = 0 for i = 1, 8 do if link.open{port = " + std::to_string(port) + "} then n = n + 1 end end return n").asInt() == 6);
+        CHECK(Call(e, "link.state")["result"].size() == 8);
+
+        // The service closes a connection: the game sees it, with a reason, and makes room by closing.
+        CHECK(service.Disconnect(tool));
+        pump(20);
+        polled = Call(e, "link.poll", R"({"id":2})")["result"];
+        CHECK(polled["state"].asString() == "closed" && !polled["error"].asString().empty());
+        CHECK(eval("local ok, why = link.send(2, 1, 'x') return ok == false and #why > 0").asBool());
+        CHECK(eval("return link.open{port = " + std::to_string(port) + "}").asInt() == 9);  // took the closed link's slot
+        CHECK(eval("return link.close(ID) and not link.close(ID) and link.poll(ID) == nil").asBool());
+        CHECK(!Call(e, "link.poll", R"({"id":1})")["ok"].asBool());
+
+        // Nothing listens: the link closes with an error instead of staying "connecting" for ever.
+        service.Disconnect(client);
+        NetAddress free; free.port = 0;
+        int dead = 0;
+        { TcpTransport other; CHECK(other.Listen(free, &error)); dead = other.LocalAddress().port; }
+        Json refused = Call(e, "link.open", ("{\"port\":" + std::to_string(dead) + "}").c_str());
+        CHECK(refused["ok"].asBool());
+        pump(400);
+        CHECK(Call(e, "link.poll", ("{\"id\":" + std::to_string(refused["result"]["id"].asInt()) + "}").c_str())["result"]["state"].asString() == "closed");
+
+        // Links live as long as the play session's Lua state.
+        e.Stop();
+        CHECK(Call(e, "link.state")["result"].size() == 0);
+#else
+        CHECK(eval("local id, why = link.open{port = 7777} return id == nil and #why > 0").asBool());
+#endif
+        CHECK(e.Scripts().Errors().empty());
+    }
+    CHECK(PlatformNetSocketsLive() == socketsLive);
+
+    // Lockstep and rollback matches have no links: every peer must compute the same frames.
+    {
+        const std::string project = SyncProject("links_lockstep", "loopback");
+        Engine host, client;
+        SyncPrepare(host, client, project, "loopback"); NetworkSteps(host, client, 20);
+        Json refused = Call(host, "link.open", R"({"port":7777})");
+        CHECK(!refused["ok"].asBool() && refused["error"]["code"].asString() == "link_unavailable");
+        host.Stop(); client.Stop(); RemoveAll(project);
+    }
+
+    // server/ is the project's back end, never game data.
+    CHECK(WriteTextFile(dir + "/server/login/main.cpp", "int main() {}") && WriteTextFile(dir + "/scripts/server_rules.lua", "return {}"));
+    bool rules = false;
+    for (const std::string& file : GameFiles(dir)) { CHECK(file.rfind("server/", 0) != 0); rules = rules || file == "scripts/server_rules.lua"; }
+    CHECK(rules);
+    RemoveAll(dir);
+}
+
+TEST(OnlineRPGGame) {
+    // games/OnlineRPG played like a user: offline, then as the client of an authoritative match
+    // (tests/online_rpg_test.py covers the login and channel server processes).
+    // The client part also covers local input in a match: an undeclared key (Enter), typing into a
+    // UIInput and a click on a UIButton work on a predicting client, and typing sends no game action.
+    const std::string project = TestSourceDir() + "/games/OnlineRPG";
+    Engine host; std::string error;
+    CHECK(host.Open(project, &error));
+    for (const std::string& file : GameFiles(project)) {
+        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
+        Json args = Json::MakeObject();
+        args["path"] = file;
+        Json result = host.Call("script.check", args)["result"];
+        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
+    }
+    Json edit = host.GetScene().ToJson();
+    auto key = [](Engine& engine, const char* name, bool down) {
+        Json args = Json::MakeObject(); args["key"] = name; args["down"] = down;
+        CHECK(engine.Call("input.key", args)["ok"].asBool());
+    };
+    auto avatar = [](Engine& engine, int player) {
+        for (const auto& kv : engine.GetScene().Pool<NetPlayer>()) if (kv.second.player == player) return kv.first;
+        return kNullEntity;
+    };
+    auto position = [&](Engine& engine, int player) {
+        const Transform* t = engine.GetScene().Get<Transform>(avatar(engine, player));
+        return t ? t->position : Vec3{};
+    };
+    // `who` holds the keys of `player`; the host steps the session (and every local peer).
+    auto walk = [&](Engine& who, int player, float x, float z) {
+        for (int tick = 0; tick < 400; ++tick) {
+            Vec3 p = position(who, player);
+            if (std::fabs(p.x - x) < 0.15f && std::fabs(p.z - z) < 0.15f) break;
+            key(who, "A", p.x > x + 0.1f); key(who, "D", p.x < x - 0.1f);
+            key(who, "W", p.z > z + 0.1f); key(who, "S", p.z < z - 0.1f);
+            host.Step(1);
+        }
+        for (const char* name : {"W", "A", "S", "D"}) key(who, name, false);
+        host.Step(10);
+    };
+    auto tap = [&](Engine& who, const char* name) { key(who, name, true); host.Step(2); key(who, name, false); };
+    auto items = [](Engine& engine) {
+        int count = 0;
+        for (const auto& kv : engine.GetScene().Pool<Tag>()) count += kv.second.tags == "item";
+        return count;
+    };
+    auto lastChat = [](Engine& engine) {
+        const Json& lines = engine.GameData()["chat"];
+        return lines.size() ? lines[lines.size() - 1].asString() : std::string();
+    };
+    const char* slot1 = R"({"x":1006,"y":140,"width":1280,"height":720})";
+    const std::string hello = "\xEC\x95\x88\xEB\x85\x95 wasd";  // Korean "annyeong" + letters that are movement keys
+
+    // A speech bubble showing `text` (plates are handed out per frame, so any of them may hold it).
+    auto bubble = [](Engine& engine, const std::string& text) {
+        for (int plate = 1; plate <= 8; ++plate) {
+            const UIPanel* panel = engine.GetScene().Get<UIPanel>(engine.GetScene().FindByName("Bubble " + std::to_string(plate)));
+            const UIText* label = engine.GetScene().Get<UIText>(engine.GetScene().FindByName("Bubble Text " + std::to_string(plate)));
+            if (panel && label && panel->visible && label->text == text) return true;
+        }
+        return false;
+    };
+    auto titleShown = [](Engine& engine) { return engine.GetScene().Get<UIPanel>(engine.GetScene().FindByName("Title Panel"))->visible; };
+
+    // ----- Title: nothing is played until the player chooses; "Play offline" starts a world of one -----
+    host.Step(5);
+    CHECK(titleShown(host) && host.GetScene().Pool<NetPlayer>().empty() && items(host) == 0);
+    CHECK(Call(host, "input.click", R"({"x":640,"y":436,"width":1280,"height":720})")["ok"].asBool()); host.Step(5);
+    // ----- Offline: one avatar, ten items; pick up, chat, drop -----
+    CHECK(!titleShown(host) && host.GetScene().Pool<NetPlayer>().size() == 1 && items(host) == 10);
+    CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Name 1"))->text == "P1");
+    walk(host, 1, -2.5f, 3.9f);  // a potion lies at (-2.5, 3.5)
+    CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Prompt"))->visible);
+    tap(host, "E"); host.Step(3);
+    CHECK(host.GameData()["bag1"][0]["key"].asString() == "potion" && items(host) == 9);
+    CHECK(host.GetScene().Get<UIButton>(host.GetScene().FindByName("Slot 1"))->icon == "assets/ui/potion.png");
+    Vec3 before = position(host, 1);
+    tap(host, "Enter");
+    CHECK(host.TextInputActive());
+    { Json args = Json::MakeObject(); args["text"] = hello; CHECK(host.Call("input.text", args)["ok"].asBool()); }
+    key(host, "D", true); host.Step(20); key(host, "D", false);
+    CHECK(position(host, 1).x == before.x);  // the keyboard types
+    tap(host, "Enter"); host.Step(3);
+    CHECK(!host.TextInputActive() && lastChat(host) == "P1: " + hello);
+    CHECK(bubble(host, hello));
+    CHECK(Call(host, "input.click", slot1)["ok"].asBool()); host.Step(5);
+    CHECK(host.GameData()["bag1"].size() == 0 && items(host) == 10);
+    CHECK(Call(host, "script.errors")["result"].size() == 0);
+    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
+
+    // ----- Match: the host is the server and player 1, the peer is client and player 2 -----
+    CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
+    host.Step(120);
+    Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) return;
+    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
+    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2 && client->GetScene().Pool<NetPlayer>().size() == 2);
+    CHECK(items(host) == 10 && items(*client) == 10 && !titleShown(host) && !titleShown(*client));
+    CHECK(lastChat(*client) == "Player 2 joined.");  // names come from the session (net.name)
+    // Another player's avatar keeps its facing and its walk cycle while it walks. A correction replays
+    // the client's frames with remote avatars at other positions than the interpolated ones it shows;
+    // that must not turn or restart the sprite.
+    {
+        auto art = [](Engine& engine, EntityId parent) {
+            for (const auto& kv : engine.GetScene().Pool<Sprite>()) if (engine.GetScene().Record(kv.first)->parent == parent) return kv.first;
+            return kNullEntity;
+        };
+        key(host, "A", true); host.Step(20);
+        int turned = 0, wrongClip = 0, backwards = 0;
+        float lastX = 1e9f;
+        std::set<int> frames;
+        for (int tick = 0; tick < 60; ++tick) {
+            host.Step(1);
+            EntityId sprite = art(*client, avatar(*client, 1));
+            CHECK(sprite != kNullEntity); if (sprite == kNullEntity) break;
+            turned += !client->GetScene().Get<Sprite>(sprite)->flipX;
+            wrongClip += client->GetScene().Get<SpriteAnimation>(sprite)->clip != "walk_side";
+            frames.insert(client->GetScene().Get<Sprite>(sprite)->frame);
+            const float x = position(*client, 1).x;  // walking left: the shown position never jumps back
+            backwards += x > lastX + 1e-4f;
+            lastX = x;
+        }
+        CHECK(turned == 0 && wrongClip == 0 && backwards == 0);
+        CHECK(frames.size() == 4);  // the four frames of the cycle, none skipped by restarts
+        key(host, "A", false); host.Step(30);
+        EntityId sprite = art(*client, avatar(*client, 1));
+        CHECK(sprite != kNullEntity && client->GetScene().Get<SpriteAnimation>(sprite)->clip == "idle_side");
+        CHECK(sprite != kNullEntity && client->GetScene().Get<Sprite>(sprite)->flipX);
+    }
+    walk(*client, 2, 3.0f, 4.4f);  // a herb lies at (3, 4)
+    CHECK(std::fabs(position(host, 2).x - 3.0f) < 0.3f);  // the server moved the client's avatar
+    tap(*client, "E"); host.Step(40);
+    CHECK(host.GameData()["bag2"][0]["key"].asString() == "herb" && host.GameData()["bagShown"].isNull());
+    CHECK(client->GameData()["bagShown"][0]["key"].asString() == "herb");
+    CHECK(items(host) == 9 && items(*client) == 9);
+    // Chat from the client: Enter is not a network action, the text is typed locally, and the held
+    // movement key is not sent while the field has the focus.
+    before = position(host, 2);
+    tap(*client, "Enter");
+    CHECK(client->TextInputActive());
+    { Json args = Json::MakeObject(); args["text"] = hello; CHECK(client->Call("input.text", args)["ok"].asBool()); }
+    key(*client, "A", true); host.Step(30); key(*client, "A", false);
+    CHECK(client->GetScene().Get<UIInput>(client->GetScene().FindByName("Chat Input"))->text == hello);  // survives corrections
+    CHECK(position(host, 2).x == before.x);
+    tap(*client, "Enter"); host.Step(40);
+    CHECK(lastChat(host) == "Player 2: " + hello && lastChat(*client) == "Player 2: " + hello);
+    CHECK(client->GetScene().Get<UIInput>(client->GetScene().FindByName("Chat Input"))->text.empty());
+    CHECK(bubble(*client, hello) && bubble(host, hello));
+    // Dropping through the bag button on the client.
+    CHECK(Call(*client, "input.click", slot1)["ok"].asBool()); host.Step(40);
+    CHECK(host.GameData()["bag2"].size() == 0 && client->GameData()["bagShown"].size() == 0);
+    CHECK(items(host) == 10 && items(*client) == 10);
+    for (Engine* peer : {&host, client}) CHECK(Call(*peer, "script.errors")["result"].size() == 0);
+    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
 }
 
 int main() {

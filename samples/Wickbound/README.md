@@ -96,3 +96,13 @@ shown), English and Korean text, settings and save data.
 - `sounds/`: rendered by `tools/make_audio.py` from the original's synthesizer definitions.
 - `assets/fonts/Jua-Regular.ttf`: Jua, SIL Open Font License 1.1 (`assets/fonts/OFL-Jua.txt`).
 - `assets/icons/`: Noto Emoji images, Apache License 2.0 (github.com/googlefonts/noto-emoji).
+
+## M3 input helper pilot (2026-10-06)
+
+run/player.lua now reads its named keyboard move through embedded oe.input.
+WASD/arrows and diagonal speed are preserved. Keyboard takes precedence over the
+existing drag-anywhere origin-following stick, which remains project-owned, including
+its dead band, thumb snap and pause reset. Pad axes remain unused in this pilot to
+preserve controls. Movement speed, damage, weapons and progression are unchanged.
+Validation evidence is in docs/LUA_USABILITY.md 6.6; input injection still uses the
+engine's existing key/axis/touch commands.

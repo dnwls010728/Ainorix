@@ -1,16 +1,20 @@
 #include "script/ScriptHost.h"
 
+#include <algorithm>
 #include <cstring>
 #include <exception>
 
 #include "app/Engine.h"
+#include "app/CoordinateQueries.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "net/JsonCodec.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/Components.h"
 #include "scene/TileGrid.h"
+#include "script/OfficialModules.h"
 
 // Lua is compiled as C++ (see CMakeLists.txt), so its headers are included
 // without extern "C" and Lua errors unwind C++ destructors.
@@ -27,6 +31,7 @@ constexpr int kMaxHookTicks = 2000;    // 20M instructions per callback
 constexpr size_t kMaxErrors = 200;
 const char* kScriptMetaKey = "oe.ScriptMeta";
 const char* kLoadedKey = "oe.loaded";
+const char* kOfficialLoadingKey = "oe.officialLoading";
 std::string PopMessage(lua_State* L);
 Vec3 CheckVec3(lua_State* L, int idx);
 
@@ -36,7 +41,11 @@ Scene& SceneOf(lua_State* L) { return Host(L).GetEngine().GetScene(); }
 // Runs a binding body, turning C++ exceptions into Lua errors. Lua's own
 // errors (luaL_error etc.) are not std::exceptions and pass straight through.
 template <class F>
-int Guard(lua_State* L, F&& body) {
+int Guard(lua_State* L, F&& body, bool allowReload = false) {
+    if (Host(L).Reloading() && !allowReload) {
+        Host(L).RejectReloadCall();
+        return luaL_error(L, "reload initializers must not call engine bindings; use owner lifecycle methods");
+    }
     std::string error;
     try {
         return body();
@@ -46,7 +55,14 @@ int Guard(lua_State* L, F&& body) {
     return luaL_error(L, "%s", error.c_str());
 }
 
-void BudgetHook(lua_State* L, lua_Debug*) {
+void BudgetHook(lua_State* L, lua_Debug* info) {
+    if (info->event == LUA_HOOKCALL || info->event == LUA_HOOKTAILCALL) {
+        lua_getinfo(L, "f", info);
+        bool blocked = Host(L).ReloadCallBlocked(lua_topointer(L, -1)) || Host(L).ReloadNativeBlocked(lua_tocfunction(L, -1));
+        lua_pop(L, 1);
+        if (blocked) { Host(L).RejectReloadCall(); luaL_error(L, "reload initializers must not call engine bindings, timers/tweens or RNG; use owner lifecycle methods"); }
+        return;
+    }
     if (++Host(L).budgetTicks > kMaxHookTicks) {
         luaL_error(L, "script exceeded its instruction budget (%d instructions) - infinite loop?", kHookInterval * kMaxHookTicks);
     }
@@ -305,6 +321,14 @@ int L_SceneExists(lua_State* L) {
     return 1;
 }
 
+int L_SceneEpoch(lua_State* L) {
+    return Guard(L, [&] {
+        const std::string epoch = SceneOf(L).EpochString();
+        lua_pushlstring(L, epoch.data(), epoch.size());
+        return 1;
+    });
+}
+
 int L_SceneName(lua_State* L) {
     EntityId id = CheckEntity(L, 1);
     lua_pushstring(L, SceneOf(L).Record(id)->name.c_str());
@@ -536,12 +560,47 @@ int L_GamePause(lua_State* L) {
     return 0;
 }
 
+// game.quit(): asks the game window to close (after this frame).
+int L_GameQuit(lua_State* L) {
+    Host(L).GetEngine().RequestQuit();
+    return 0;
+}
+
+// game.arg(name) -> the launch parameter given with --set name=value, or nil.
+int L_GameArg(lua_State* L) {
+    const auto& args = Host(L).GetEngine().LaunchArgs();
+    auto it = args.find(luaL_checkstring(L, 1));
+    if (it == args.end()) lua_pushnil(L);
+    else lua_pushlstring(L, it->second.data(), it->second.size());
+    return 1;
+}
+
 int L_GamePaused(lua_State* L) {
     lua_pushboolean(L, Host(L).GetEngine().GamePaused());
     return 1;
 }
 
 // ui.focus(id?) gives a button or slider the keyboard/gamepad focus (nil clears it); ui.focused() -> id or nil.
+int L_WorldToScreen(lua_State* L) {
+    return Guard(L, [&]() { PushJson(L, QueryCoordinates(Host(L).GetEngine(), "camera.worldToScreen", ToJson(L, 1))); return 1; });
+}
+
+int L_ScreenRay(lua_State* L) {
+    return Guard(L, [&]() { PushJson(L, QueryCoordinates(Host(L).GetEngine(), "camera.screenRay", ToJson(L, 1))); return 1; });
+}
+
+int L_ScreenToPlane(lua_State* L) {
+    return Guard(L, [&]() { PushJson(L, QueryCoordinates(Host(L).GetEngine(), "camera.screenToPlane", ToJson(L, 1))); return 1; });
+}
+
+int L_MeasureText(lua_State* L) {
+    return Guard(L, [&]() { PushJson(L, QueryCoordinates(Host(L).GetEngine(), "ui.measureText", ToJson(L, 1))); return 1; });
+}
+
+int L_ScreenToCanvas(lua_State* L) {
+    return Guard(L, [&]() { PushJson(L, QueryCoordinates(Host(L).GetEngine(), "ui.screenToCanvas", ToJson(L, 1))); return 1; });
+}
+
 int L_UIFocus(lua_State* L) {
     Host(L).GetEngine().SetUIFocus(lua_isnoneornil(L, 1) ? kNullEntity : CheckEntity(L, 1));
     return 0;
@@ -1093,41 +1152,33 @@ int L_Print(lua_State* L) {
 
 // require("lib.util") loads <project>/lib/util.lua once per session.
 int L_Require(lua_State* L) {
-    std::string name = luaL_checkstring(L, 1);
-    for (char c : name) {
-        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '/' || c == '-';
-        if (!ok) luaL_error(L, "invalid module name '%s'", name.c_str());
-    }
-    if (name.find("..") != std::string::npos) luaL_error(L, "invalid module name '%s'", name.c_str());
-    std::string path = name;
-    if (path.size() < 4 || path.compare(path.size() - 4, 4, ".lua") != 0) {
-        for (char& c : path) {
-            if (c == '.') c = '/';
+    return Guard(L, [&] {
+        size_t size = 0;
+        const char* bytes = luaL_checklstring(L, 1, &size);
+        std::string name(bytes, size);
+        std::string official = ParseOfficialImport(name);
+        if (!official.empty()) {
+            const auto* module = FindOfficialModule(official);
+            if (!module) return luaL_error(L, "official module not found: %s (no project fallback)", official.c_str());
+            if (!Host(L).LoadOfficialModule(*module)) return lua_error(L);
+            return 1;
         }
-        path += ".lua";
-    }
-    lua_getfield(L, LUA_REGISTRYINDEX, kLoadedKey);
-    lua_getfield(L, -1, path.c_str());
-    if (!lua_isnil(L, -1)) return 1;
-    lua_pop(L, 1);
-    bool ok = false;
-    {
-        std::string err;
-        try {
-            ok = Host(L).LoadFile(path);
-        } catch (const std::exception& e) {
-            err = e.what();
+        for (char c : name) {
+            bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '/' || c == '-';
+            if (!ok) luaL_error(L, "invalid module name '%s'", name.c_str());
         }
-        if (!err.empty()) luaL_error(L, "%s", err.c_str());
-    }
-    if (!ok) lua_error(L);  // message is on the stack
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_pushboolean(L, 1);
-    }
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -3, path.c_str());
-    return 1;
+        if (name.find("..") != std::string::npos) luaL_error(L, "invalid module name '%s'", name.c_str());
+        std::string path = name;
+        if (path.size() < 4 || path.compare(path.size() - 4, 4, ".lua") != 0) {
+            for (char& c : path) {
+                if (c == '.') c = '/';
+            }
+            path += ".lua";
+        }
+        path = RelativePath(ResolveProjectScriptPath(Host(L).GetEngine(), path), Host(L).GetEngine().ProjectDir());
+        if (!Host(L).LoadProjectModule(path)) return lua_error(L);
+        return 1;
+    }, true);
 }
 
 const char* kPrelude = R"LUA(
@@ -1308,6 +1359,7 @@ return {__index = Script}
 void SetFuncs(lua_State* L, const char* table, const luaL_Reg* funcs) {
     lua_newtable(L);
     luaL_setfuncs(L, funcs, 0);
+    for (const luaL_Reg* entry = funcs; entry->name; ++entry) Host(L).RegisterReloadBinding(entry->func);
     lua_setglobal(L, table);
 }
 
@@ -1387,6 +1439,18 @@ int L_NetOn(lua_State* L) {
     });
 }
 int L_NetSender(lua_State* L) { lua_pushinteger(L, Host(L).NetSender()); return 1; }
+// net.name(player) -> the name that player joined with (net.join {name}), or nil for an unknown id.
+int L_NetName(lua_State* L) {
+    return Guard(L, [&] {
+        const lua_Integer wanted = luaL_checkinteger(L, 1);
+        const Json players = Host(L).GetEngine().NetworkCall("players", Json::MakeObject());
+        for (const Json& player : players.items()) {
+            if (static_cast<lua_Integer>(player["id"].asNumber()) != wanted) continue;
+            lua_pushstring(L, player["name"].asString().c_str()); return 1;
+        }
+        lua_pushnil(L); return 1;
+    });
+}
 int L_NetOperation(lua_State* L, const char* operation) {
     return Guard(L, [&] {
         Json args = lua_isnoneornil(L, 1) ? Json::MakeObject() : ToJson(L, 1);
@@ -1400,7 +1464,121 @@ int L_NetJoin(lua_State* L) { return L_NetOperation(L, "join"); }
 int L_NetLeave(lua_State* L) { return L_NetOperation(L, "leave"); }
 int L_NetReady(lua_State* L) { return L_NetOperation(L, "ready"); }
 int L_NetKick(lua_State* L) { return L_NetOperation(L, "kick"); }
+// net.admit(player): network.admission "script" - lets a ready lobby player into the running world.
+int L_NetAdmit(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["player"] = static_cast<int64_t>(luaL_checkinteger(L, 1));
+        Host(L).GetEngine().NetworkCall("admit", args);
+        return 0;
+    });
+}
 int L_NetStart(lua_State* L) { return L_NetOperation(L, "start"); }
+
+// ----- link: framed TCP to services outside the engine session (net/Link.h) ----
+uint32_t CheckLink(lua_State* L, int index) {
+    const lua_Integer id = luaL_checkinteger(L, index);
+    return id > 0 && id <= UINT32_MAX ? static_cast<uint32_t>(id) : 0;
+}
+// link.open {address=, port=} -> id, or nil + message.
+int L_LinkOpen(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "address");
+    lua_getfield(L, 1, "port");
+    const std::string address = luaL_optstring(L, -2, "127.0.0.1");
+    const lua_Integer port = luaL_optinteger(L, -1, 0);
+    std::string error;
+    uint32_t id = 0;
+    try {
+        id = Host(L).GetEngine().OpenLink(address, port >= 0 && port <= 65535 ? static_cast<uint32_t>(port) : 0);
+    } catch (const std::exception& e) {
+        error = e.what();
+    }
+    if (id) { lua_pushinteger(L, id); return 1; }
+    lua_pushnil(L);
+    lua_pushstring(L, error.c_str());
+    return 2;
+}
+// Payload of link.send / link.encode: a string goes as it is, nil is empty, anything else is binary Json.
+bool LinkPayload(lua_State* L, int index, std::vector<uint8_t>& bytes) {
+    if (lua_isnoneornil(L, index)) return true;
+    if (lua_type(L, index) == LUA_TSTRING) {
+        size_t size = 0;
+        const char* text = lua_tolstring(L, index, &size);
+        bytes.assign(text, text + size);
+        return size <= LinkSet::kMaxPayloadBytes;
+    }
+    return EncodeJson(ToJson(L, index), bytes, LinkSet::kMaxPayloadBytes);
+}
+// link.send(id, type, payload?) -> true, or false + message.
+int L_LinkSend(lua_State* L) {
+    return Guard(L, [&] {
+        const uint32_t id = CheckLink(L, 1);
+        const lua_Integer type = luaL_checkinteger(L, 2);
+        if (type < 0 || type > 65535) return luaL_error(L, "link message type must be 0..65535");
+        std::vector<uint8_t> bytes;
+        std::string error;
+        bool ok = LinkPayload(L, 3, bytes);
+        if (!ok) error = "link payload exceeds 65534 bytes, nests deeper than 16 or holds a non-finite number";
+        else ok = Host(L).GetEngine().Links().Send(id, static_cast<uint16_t>(type), bytes.data(), bytes.size(), &error);
+        lua_pushboolean(L, ok);
+        if (ok) return 1;
+        lua_pushstring(L, error.c_str());
+        return 2;
+    });
+}
+// link.poll(id) -> {state=, error=, messages={ {type=, data=<string>}, ... }}, or nil for an unknown id.
+int L_LinkPoll(lua_State* L) {
+    return Guard(L, [&] {
+        LinkSet& links = Host(L).GetEngine().Links();
+        const uint32_t id = CheckLink(L, 1);
+        const std::string state = links.State(id);
+        if (state.empty()) { lua_pushnil(L); return 1; }
+        lua_createtable(L, 0, 3);
+        lua_pushstring(L, state.c_str());
+        lua_setfield(L, -2, "state");
+        lua_pushstring(L, links.Error(id).c_str());
+        lua_setfield(L, -2, "error");
+        std::vector<LinkSet::Message> messages = links.Take(id);
+        lua_createtable(L, static_cast<int>(messages.size()), 0);
+        int i = 0;
+        for (const LinkSet::Message& message : messages) {
+            lua_createtable(L, 0, 2);
+            lua_pushinteger(L, message.type);
+            lua_setfield(L, -2, "type");
+            lua_pushlstring(L, reinterpret_cast<const char*>(message.payload.data()), message.payload.size());
+            lua_setfield(L, -2, "data");
+            lua_rawseti(L, -2, ++i);
+        }
+        lua_setfield(L, -2, "messages");
+        return 1;
+    });
+}
+int L_LinkClose(lua_State* L) {
+    lua_pushboolean(L, Host(L).GetEngine().Links().Close(CheckLink(L, 1)));
+    return 1;
+}
+// link.encode(value) -> string (binary Json), or nil when it exceeds the bounds.
+int L_LinkEncode(lua_State* L) {
+    return Guard(L, [&] {
+        luaL_checkany(L, 1);
+        std::vector<uint8_t> bytes;
+        if (!EncodeJson(ToJson(L, 1), bytes, LinkSet::kMaxPayloadBytes)) { lua_pushnil(L); return 1; }
+        lua_pushlstring(L, reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        return 1;
+    });
+}
+// link.decode(data) -> value, or nil when the bytes are not binary Json (a nil value decodes to nil too).
+int L_LinkDecode(lua_State* L) {
+    return Guard(L, [&] {
+        size_t size = 0;
+        const char* data = luaL_checklstring(L, 1, &size);
+        Json value;
+        if (!DecodeJson(reinterpret_cast<const uint8_t*>(data), size, value)) { lua_pushnil(L); return 1; }
+        PushJson(L, value);
+        return 1;
+    });
+}
 int L_NetDesyncReport(lua_State* L) { return L_NetOperation(L, "desync_report"); }
 int L_NetStats(lua_State* L) { return L_NetOperation(L, "stats"); }
 
@@ -1415,7 +1593,7 @@ std::string PopMessage(lua_State* L) {
 
 // ----- ScriptHost -------------------------------------------------------------
 
-ScriptHost::ScriptHost(Engine& engine) : engine_(engine) {}
+ScriptHost::ScriptHost(Engine& engine) : engine_(engine), heap_(std::make_shared<SnapshotHeap>()) {}
 
 ScriptHost::~ScriptHost() {
     if (L_) lua_close(L_);
@@ -1453,11 +1631,12 @@ void ScriptHost::Open() {
     lua_pop(L, 1);
 
     lua_register(L, "print", L_Print);
+    RegisterReloadBinding(L_Print); RegisterReloadBinding(L_ReportError);
     lua_register(L, "require", L_Require);
     const luaL_Reg sceneFuncs[] = {{"get", L_SceneGet},     {"set", L_SceneSet},       {"add", L_SceneAdd},       {"remove", L_SceneRemove},
                                    {"has", L_SceneHas},     {"create", L_SceneCreate}, {"instantiate", L_SceneInstantiate}, {"send", L_SceneSend}, {"broadcast", L_SceneBroadcast}, {"destroy", L_SceneDestroy}, {"find", L_SceneFind},
                                    {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"children", L_SceneChildren}, {"child", L_SceneChild}, {"all", L_SceneAll},
-                                   {"withTag", L_SceneWithTag}, {nullptr, nullptr}};
+                                   {"withTag", L_SceneWithTag}, {"epoch", L_SceneEpoch}, {nullptr, nullptr}};
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
@@ -1475,19 +1654,24 @@ void ScriptHost::Open() {
     SetFuncs(L, "draw", drawFuncs);
     const luaL_Reg audioFuncs[] = {{"play", L_AudioPlay}, {"stop", L_AudioStop}, {"stopAll", L_AudioStopAll}, {nullptr, nullptr}};
     SetFuncs(L, "audio", audioFuncs);
-    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {nullptr, nullptr}};
+    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {"quit", L_GameQuit}, {"arg", L_GameArg}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
-    const luaL_Reg uiFuncs[] = {{"focus", L_UIFocus}, {"focused", L_UIFocused}, {nullptr, nullptr}};
+    const luaL_Reg uiFuncs[] = {{"focus", L_UIFocus}, {"focused", L_UIFocused}, {"screenToCanvas", L_ScreenToCanvas}, {"measureText", L_MeasureText}, {nullptr, nullptr}};
     SetFuncs(L, "ui", uiFuncs);
+    const luaL_Reg cameraFuncs[] = {{"worldToScreen", L_WorldToScreen}, {"screenRay", L_ScreenRay}, {"screenToPlane", L_ScreenToPlane}, {nullptr, nullptr}};
+    SetFuncs(L, "camera", cameraFuncs);
     const luaL_Reg hostFuncs[] = {{"call", L_HostCall}, {"poll", L_HostPoll}, {"language", L_HostLanguage}, {nullptr, nullptr}};
     SetFuncs(L, "host", hostFuncs);
     const luaL_Reg saveFuncs[] = {{"get", L_SaveGet}, {"set", L_SaveSet}, {"delete", L_SaveDelete}, {"flush", L_SaveFlush}, {nullptr, nullptr}};
     SetFuncs(L, "save", saveFuncs);
     const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
         {"entities", L_NetEntities}, {"localPlayer", L_NetLocalPlayer}, {"players", L_NetPlayers}, {"state", L_NetState}, {"rpc", L_NetRpc},
-        {"on", L_NetOn}, {"sender", L_NetSender}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave},
-        {"start", L_NetStart}, {"desync_report", L_NetDesyncReport}, {"ready", L_NetReady}, {"kick", L_NetKick}, {"stats", L_NetStats}, {nullptr, nullptr}};
+        {"on", L_NetOn}, {"sender", L_NetSender}, {"name", L_NetName}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave},
+        {"start", L_NetStart}, {"desync_report", L_NetDesyncReport}, {"ready", L_NetReady}, {"kick", L_NetKick}, {"admit", L_NetAdmit}, {"stats", L_NetStats}, {nullptr, nullptr}};
     SetFuncs(L, "net", netFuncs);
+    const luaL_Reg linkFuncs[] = {{"open", L_LinkOpen}, {"send", L_LinkSend}, {"poll", L_LinkPoll}, {"close", L_LinkClose},
+                                  {"encode", L_LinkEncode}, {"decode", L_LinkDecode}, {nullptr, nullptr}};
+    SetFuncs(L, "link", linkFuncs);
     lua_register(L, "__oe_error", L_ReportError);
     const luaL_Reg physicsFuncs[] = {{"raycast", L_PhysicsRaycast}, {"overlapSphere", L_PhysicsOverlapSphere},
                                      {"addImpulse", L_PhysicsAddImpulse}, {"contacts", L_PhysicsContacts}, {nullptr, nullptr}};
@@ -1501,12 +1685,41 @@ void ScriptHost::Open() {
 
     lua_newtable(L);
     lua_setfield(L, LUA_REGISTRYINDEX, kLoadedKey);
+    lua_newtable(L);  // A heap-owned sentinel: included in native Lua snapshots.
+    lua_setfield(L, LUA_REGISTRYINDEX, kOfficialLoadingKey);
 
     if (luaL_loadbufferx(L, kPrelude, std::strlen(kPrelude), "=prelude", "t") != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
         OE_LOG_ERROR("script", "prelude failed: %s", PopMessage(L).c_str());
         lua_newtable(L);
     }
     lua_setfield(L, LUA_REGISTRYINDEX, kScriptMetaKey);
+
+    // Keep protected Lua closures alive even if projects overwrite their global tables.
+    lua_newtable(L); int protectedTable = lua_gettop(L); int protectedIndex = 0;
+    // Preserve protected identities even if a project later aliases/overwrites globals.
+    for (const char* name : {"timer", "tween", "coroutine"}) {
+        lua_getglobal(L, name); lua_pushnil(L);
+        while (lua_next(L, -2)) {
+            if (lua_isfunction(L, -1)) {
+                reloadProtected_.insert(lua_topointer(L, -1));
+                lua_pushvalue(L, -1); lua_rawseti(L, protectedTable, ++protectedIndex);
+                if (lua_iscfunction(L, -1)) RegisterReloadBinding(lua_tocfunction(L, -1));
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_setfield(L, LUA_REGISTRYINDEX, "oe.reloadProtected");
+    lua_getglobal(L, "math");
+    for (const char* name : {"random", "randomseed"}) {
+        lua_getfield(L, -1, name); RegisterReloadBinding(lua_tocfunction(L, -1)); lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    // coroutine.wrap returns another C function, not the exported wrap primitive.
+    // Capture its immutable implementation identity without ever running the thread.
+    lua_getglobal(L, "coroutine"); lua_getfield(L, -1, "wrap");
+    lua_pushcfunction(L, [](lua_State*) -> int { return 0; }); lua_call(L, 1, 1);
+    RegisterReloadBinding(lua_tocfunction(L, -1)); lua_pop(L, 2);
 
     lua_sethook(L, BudgetHook, LUA_MASKCOUNT, kHookInterval);
 }
@@ -1563,6 +1776,7 @@ void ScriptHost::Reset() {
         L_ = nullptr;
     }
     modules_.clear();
+    required_.clear(); sources_.clear(); dependencies_.clear(); loadStack_.clear(); reloadExports_.clear(); reloadBlocked_.clear(); reloadProtected_.clear(); reloadNative_.clear();
     instances_.clear();
     netHandlers_.clear(); netSender_ = 0; netDepth_ = 0;
     if (heap_) heap_ = std::make_shared<SnapshotHeap>();
@@ -1625,16 +1839,142 @@ void ScriptHost::DispatchNetwork(const std::vector<SessionEvent>& events) {
 
 bool ScriptHost::LoadFile(const std::string& path) {
     lua_State* L = State();
-    std::string full = engine_.ResolvePath(path);
+    std::string full = ResolveProjectScriptPath(engine_, path);
     std::string source;
     if (!ReadTextFile(full, source)) {
         lua_pushfstring(L, "cannot read script '%s'", path.c_str());
         return false;
     }
+    sources_[path] = source;
     std::string chunkName = "@" + RelativePath(full, engine_.ProjectDir());
     if (luaL_loadbufferx(L, source.data(), source.size(), chunkName.c_str(), "t") != LUA_OK) return false;
-    ArmBudget();
+    if (!reloading_ && loadStack_.empty()) ArmBudget();
+    dependencies_[path].clear();
+    loadStack_.push_back(path);
+    struct PopLoad { std::vector<std::string>& stack; ~PopLoad() { stack.pop_back(); } } pop{loadStack_};
     return lua_pcall(L, 0, 1, 0) == LUA_OK;
+}
+
+namespace {
+void RebindExport(lua_State* L, int value, int fresh, int old, std::set<const void*>& seen, int depth = 0) {
+    value = lua_absindex(L, value); fresh = lua_absindex(L, fresh); old = lua_absindex(L, old);
+    if (depth > 64 || seen.size() > 100000) throw ApiError("script_reload", "module export graph exceeds reload traversal limits");
+    if (!lua_istable(L, value) && !lua_isfunction(L, value)) return;
+    if (!lua_checkstack(L, 8)) throw ApiError("script_reload", "insufficient Lua stack for module exports");
+    if (!seen.insert(lua_topointer(L, value)).second) return;
+    if (lua_isfunction(L, value) && !lua_iscfunction(L, value)) {
+        for (int n = 1;; ++n) {
+            const char* name = lua_getupvalue(L, value, n);
+            if (!name) break;
+            if (lua_rawequal(L, -1, fresh)) { lua_pop(L, 1); lua_pushvalue(L, old); lua_setupvalue(L, value, n); }
+            else { if (std::strcmp(name, "_ENV") != 0) RebindExport(L, -1, fresh, old, seen, depth + 1); lua_pop(L, 1); }
+        }
+    } else if (lua_istable(L, value)) {
+        lua_pushnil(L);
+        while (lua_next(L, value)) {
+            if (lua_rawequal(L, -1, fresh)) {
+                lua_pop(L, 1); lua_pushvalue(L, -1); lua_pushvalue(L, old); lua_rawset(L, value);
+            } else { RebindExport(L, -1, fresh, old, seen, depth + 1); lua_pop(L, 1); }
+        }
+    }
+}
+void RefillTable(lua_State* L, int fresh, int old) {
+    fresh = lua_absindex(L, fresh); old = lua_absindex(L, old);
+    if (lua_rawequal(L, fresh, old)) return;  // A forwarding export already has the stable identity.
+    std::set<const void*> seen; RebindExport(L, fresh, fresh, old, seen);
+    lua_pushnil(L);
+    while (lua_next(L, old)) { lua_pop(L, 1); lua_pushvalue(L, -1); lua_pushnil(L); lua_rawset(L, old); }
+    lua_pushnil(L);
+    while (lua_next(L, fresh)) { lua_pushvalue(L, -2); lua_insert(L, -2); lua_rawset(L, old); }
+    if (lua_getmetatable(L, fresh)) lua_setmetatable(L, old);
+    else { lua_pushnil(L); lua_setmetatable(L, old); }
+}
+}
+
+bool ScriptHost::LoadProjectModule(const std::string& path) {
+    lua_State* L = State();
+    std::string caller = loadStack_.empty() ? "" : loadStack_.back();
+    if (caller.empty()) {
+        lua_Debug frame;
+        for (int level = 1; lua_getstack(L, level, &frame); ++level) {
+            lua_getinfo(L, "S", &frame);
+            if (frame.source && frame.source[0] == '@' && frame.source[1] != '@') { caller = frame.source + 1; break; }
+        }
+    }
+    if (!caller.empty()) dependencies_[caller].insert(path);
+    const std::string key = "project:" + path;
+    lua_getfield(L, LUA_REGISTRYINDEX, kLoadedKey); int cache = lua_gettop(L);
+    lua_getfield(L, cache, key.c_str());
+    if (!lua_isnil(L, -1)) {
+        lua_getfield(L, LUA_REGISTRYINDEX, kOfficialLoadingKey);
+        bool loading = lua_rawequal(L, -1, -2); lua_pop(L, 1); lua_remove(L, cache);
+        if (loading) { lua_pop(L, 1); lua_pushfstring(L, "cyclic project import: %s", path.c_str()); return false; }
+        return true;
+    }
+    lua_pop(L, 1); lua_getfield(L, LUA_REGISTRYINDEX, kOfficialLoadingKey); lua_setfield(L, cache, key.c_str());
+    bool ok = false;
+    try { ok = LoadFile(path); } catch (const std::exception& error) { lua_pushstring(L, error.what()); }
+    if (ok && lua_isnil(L, -1)) { lua_pop(L, 1); lua_pushboolean(L, 1); }
+    auto previous = reloadExports_.find(path);
+    if (ok && previous != reloadExports_.end()) {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, previous->second);
+        if (lua_istable(L, -1) && lua_istable(L, -2)) {
+            // Refilling an alias must not modify immutable official exports or an
+            // unrelated project's export. Changing that alias boundary needs a new VM.
+            if (!lua_rawequal(L, -1, -2)) {
+                const int old = lua_gettop(L);
+                lua_pushnil(L);
+                while (lua_next(L, cache)) {
+                    const char* other = lua_tostring(L, -2);
+                    bool shared = other && lua_rawequal(L, -1, old) && key != other;
+                    lua_pop(L, 1);
+                    if (shared) throw ApiError("script_reload", "cannot replace a shared module export; restart the session to change an alias boundary");
+                }
+            }
+            RefillTable(L, -2, -1); lua_remove(L, -2);
+        }
+        else lua_pop(L, 1);
+    }
+    if (ok) { lua_pushvalue(L, -1); required_[path] = FileModifiedTime(engine_.ResolvePath(path)); }
+    else lua_pushnil(L);
+    lua_setfield(L, cache, key.c_str()); lua_remove(L, cache);
+    return ok;
+}
+
+bool ScriptHost::LoadOfficialModule(const OfficialModule& module) {
+    lua_State* L = State();
+    const int top = lua_gettop(L);
+    const std::string key = "embedded:" + module.name;
+    const std::string chunk = "@" + module.path;
+    lua_getfield(L, LUA_REGISTRYINDEX, kLoadedKey);
+    const int cache = lua_gettop(L);
+    lua_getfield(L, cache, key.c_str());
+    if (!lua_isnil(L, -1)) {
+        lua_getfield(L, LUA_REGISTRYINDEX, kOfficialLoadingKey);
+        bool loading = lua_rawequal(L, -1, -2) != 0;
+        lua_pop(L, 1);
+        lua_remove(L, cache);
+        if (loading) {
+            lua_pop(L, 1);
+            lua_pushfstring(L, "cyclic official import: %s", module.path.c_str());
+            return false;
+        }
+        return true;
+    }
+    lua_pop(L, 1);
+    lua_getfield(L, LUA_REGISTRYINDEX, kOfficialLoadingKey);
+    lua_setfield(L, cache, key.c_str());
+    // The first @ is Lua's chunk marker, the second belongs to the canonical virtual path.
+    bool ok = luaL_loadbufferx(L, module.source.data(), module.source.size(), chunk.c_str(), "t") == LUA_OK;
+    // Inherit the caller's budget; nested official imports must not reset it.
+    if (ok) ok = lua_pcall(L, 0, 1, 0) == LUA_OK;
+    if (ok && lua_isnil(L, -1)) { lua_pop(L, 1); lua_pushboolean(L, 1); }
+    if (ok) lua_pushvalue(L, -1);
+    else lua_pushnil(L);  // A failure, including a nested cycle, must permit a retry.
+    lua_setfield(L, cache, key.c_str());
+    lua_remove(L, cache);
+    // One export/error above the original stack, including when entered recursively.
+    return ok && lua_gettop(L) == top + 1;
 }
 
 bool ScriptHost::ReloadModule(const std::string& path, Module& module) {
@@ -1704,38 +2044,92 @@ int ScriptHost::GetModule(const std::string& path) {
 
 std::vector<std::string> ScriptHost::PollHotReload(const std::string& changedPath) {
     std::vector<std::string> reloaded;
-    if (!L_) return reloaded;
-    for (auto& kv : modules_) {
-        int64_t mtime = 0;
-        try {
-            mtime = FileModifiedTime(engine_.ResolvePath(kv.first));
-        } catch (const std::exception&) {
+    reloadReport_ = Json::MakeObject();
+    for (const char* name : {"reloaded", "required", "failed", "skipped"}) reloadReport_[name] = Json::MakeArray();
+    std::string reason = engine_.ScriptReloadBlockReason();
+    if (!reason.empty() || !L_) { reloadReport_["skipped"].push(reason.empty() ? "no_lua_session" : reason); return reloaded; }
+    auto changed = [&](const std::string& path, int64_t before) {
+        int64_t now = 0; try { now = FileModifiedTime(engine_.ResolvePath(path)); } catch (const std::exception&) {}
+        if (forceReload_ && required_.count(path)) {
+            std::string source; if (!ReadTextFile(engine_.ResolvePath(path), source) || source != sources_[path]) return true;
         }
-        // API writes know which file changed even when the filesystem gives
-        // consecutive writes the same timestamp (observed on Android).
-        if (mtime == kv.second.mtime && kv.first != changedPath) continue;
-        if (ReloadModule(kv.first, kv.second)) {
-            reloaded.push_back(kv.first);
-            OE_LOG_INFO("script", "reloaded %s", kv.first.c_str());
+        return now != before || path == changedPath;
+    };
+    std::set<std::string> affected;
+    for (const auto& entry : required_) if (changed(entry.first, entry.second)) affected.insert(entry.first);
+    for (const auto& entry : modules_) if (forceReload_ || changed(entry.first, entry.second.mtime)) affected.insert(entry.first);
+    bool more = true;
+    while (more) {
+        more = false;
+        for (const auto& entry : dependencies_) if (!affected.count(entry.first)) {
+            for (const auto& dep : entry.second) if (affected.count(dep)) { affected.insert(entry.first); more = true; break; }
         }
     }
-    // Give instances of reloaded modules another chance.
-    for (auto it = instances_.begin(); it != instances_.end();) {
-        bool hit = false;
-        for (const std::string& p : reloaded) hit = hit || p == it->second.path;
-        if (hit && it->second.ref < 0) {
-            it = instances_.erase(it);
-            continue;
-        }
-        if (hit) it->second.faulted = false;
-        ++it;
+    if (affected.empty()) return reloaded;
+    auto before = SaveState();
+    reloading_ = true; reloadViolation_ = false; reloadBlocked_ = reloadProtected_;
+    // Block engine functions even when a module captured an unguarded binding earlier.
+    const int top = lua_gettop(L_);
+    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "particles", "trail", "physics", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
+        lua_getglobal(L_, global);
+        if (lua_istable(L_, -1)) { lua_pushnil(L_); while (lua_next(L_, -2)) { if (lua_isfunction(L_, -1)) reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1); } }
+        lua_pop(L_, 1);
     }
+    lua_getglobal(L_, "__oe_error"); reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1);
+    lua_getglobal(L_, "math");
+    for (const char* name : {"random", "randomseed"}) { lua_getfield(L_, -1, name); reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1); }
+    lua_pop(L_, 1);
+    lua_sethook(L_, BudgetHook, LUA_MASKCOUNT | LUA_MASKCALL, kHookInterval); ArmBudget();
+    lua_getfield(L_, LUA_REGISTRYINDEX, kLoadedKey); int cache = lua_gettop(L_);
+    for (const auto& path : affected) if (required_.count(path)) {
+        const std::string key = "project:" + path;
+        lua_getfield(L_, cache, key.c_str()); reloadExports_[path] = luaL_ref(L_, LUA_REGISTRYINDEX);
+        lua_pushnil(L_); lua_setfield(L_, cache, key.c_str());
+    }
+    lua_settop(L_, top);
+    std::string failed;
+    bool ok = true;
+    try {
+    for (const auto& path : affected) if (required_.count(path)) {
+        failed = path;
+        if (!LoadProjectModule(path)) { RecordError(path, kNullEntity, PopMessage(L_)); ok = false; break; }
+        lua_pop(L_, 1); reloadReport_["required"].push(path);
+    }
+    if (ok) for (const auto& path : affected) {
+        auto it = modules_.find(path); if (it == modules_.end()) continue;
+        failed = path;
+        if (!ReloadModule(path, it->second)) { ok = false; break; }
+        reloaded.push_back(path);
+    }
+    } catch (const std::exception& error) {
+        RecordError(failed, kNullEntity, error.what()); ok = false;
+    }
+    if (ok && reloadViolation_) { RecordError(failed, kNullEntity, "reload initializer attempted a forbidden call"); ok = false; }
+    reloading_ = false; reloadBlocked_.clear();
+    if (!ok) {
+        std::vector<ScriptError> errors = errors_;
+        LoadState(*before); errors_ = std::move(errors);
+        reloaded.clear(); reloadReport_["required"] = Json::MakeArray(); reloadReport_["failed"].push(failed);
+    } else {
+        for (const auto& entry : reloadExports_) luaL_unref(L_, LUA_REGISTRYINDEX, entry.second);
+        for (auto it = instances_.begin(); it != instances_.end();) {
+            bool hit = std::find(reloaded.begin(), reloaded.end(), it->second.path) != reloaded.end();
+            if (hit && it->second.ref < 0) { it = instances_.erase(it); continue; }
+            if (hit) it->second.faulted = false;
+            ++it;
+        }
+        for (const auto& path : reloaded) reloadReport_["reloaded"].push(path);
+    }
+    reloadExports_.clear(); lua_settop(L_, top);
+    lua_sethook(L_, BudgetHook, LUA_MASKCOUNT, kHookInterval);
     return reloaded;
 }
 
 std::vector<std::string> ScriptHost::ReloadAll() {
-    for (auto& kv : modules_) kv.second.mtime = -1;
-    return PollHotReload();
+    forceReload_ = true;
+    auto result = PollHotReload();
+    forceReload_ = false;
+    return result;
 }
 
 bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other, const bool* flag,
@@ -2011,6 +2405,11 @@ struct ScriptHost::Snapshot {
     SnapshotHeap::Image image;
     lua_State* state = nullptr;
     std::map<std::string, Module> modules;
+    std::map<std::string, int64_t> required;
+    std::map<std::string, std::string> sources;
+    std::map<std::string, std::set<std::string>> dependencies;
+    bool enabled = false;
+    std::set<const void*> protectedFunctions;
     std::map<EntityId, Instance> instances;
     std::vector<ScriptError> errors;
     std::map<std::string, int> handlers;
@@ -2019,14 +2418,15 @@ struct ScriptHost::Snapshot {
     float dt = 0;
 };
 void ScriptHost::EnableSnapshots() {
-    if (heap_) return;
+    if (snapshotsEnabled_) return;
     if (L_) throw ApiError("state_recording", "native recording must begin before Lua execution");
-    heap_ = std::make_shared<SnapshotHeap>();
+    snapshotsEnabled_ = true;
 }
 std::shared_ptr<const ScriptHost::Snapshot> ScriptHost::SaveState() const {
     auto snapshot = std::make_shared<Snapshot>();
     snapshot->heap = heap_; snapshot->state = L_;
     if (heap_) snapshot->image = heap_->Capture();
+    snapshot->protectedFunctions = reloadProtected_; snapshot->sources = sources_; snapshot->required = required_; snapshot->dependencies = dependencies_; snapshot->enabled = snapshotsEnabled_;
     snapshot->modules = modules_; snapshot->instances = instances_; snapshot->errors = errors_;
     snapshot->handlers = netHandlers_; snapshot->sender = netSender_; snapshot->budget = budgetTicks; snapshot->dt = currentDt;
     return snapshot;
@@ -2036,6 +2436,7 @@ void ScriptHost::LoadState(const Snapshot& state) {
     // Do not lua_close a discarded speculative branch: finalizers can have effects.
     // Its blocks are released by the heap when restoring the captured live set.
     heap_ = state.heap; heap_->Restore(state.image); L_ = state.state;
+    reloadProtected_ = state.protectedFunctions; sources_ = state.sources; required_ = state.required; dependencies_ = state.dependencies; snapshotsEnabled_ = state.enabled;
     modules_ = state.modules; instances_ = state.instances; errors_ = state.errors;
     netHandlers_ = state.handlers; netSender_ = state.sender; netDepth_ = 0;
     budgetTicks = state.budget; currentDt = state.dt;

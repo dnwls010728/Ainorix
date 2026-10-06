@@ -248,3 +248,15 @@ Android players. Both ABIs still need an NDK rebuild and device execution for pr
 The M8 environment has no Android SDK/NDK/device. Follow the dedicated-server, touch input,
 score/reset and disconnect checklist in [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md), then
 update runtime/android/README.md with the tested source, SDK/ABI and device results.
+
+## Lua M1a-3 runtime verification (2026-10-06)
+
+The M8 rebuild deferral above is now resolved for both arm64-v8a and x86_64:
+build_android.bat used build/android-sdk/ndk/android-ndk-r28c (28.2.13676358),
+API 26 and static libc++. The refreshed players include Scene epoch, official Lua sources
+and the ContentHash agreement record, plus the current working-tree networking source.
+An isolated OfficialSmoke APK includes both ABIs (14,336,681 bytes); debug signing,
+apksigner v2/v3 verification, aapt2 badging and zipalign -c -P 16 4 pass.
+The library sizes and source provenance are recorded in runtime/android/README.md.
+No device/emulator was available: Lua import, UI, networking and 16 KB device execution
+remain unverified. A connected device/emulator is required to close those execution checks.

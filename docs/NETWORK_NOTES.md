@@ -386,7 +386,10 @@ remains explicit and must precede frame zero and any Lua execution. Snapshots ar
 owned by their originating Engine; they are not a portable save format. Project resources stay
 immutable, hot reload is disabled during recording, and restoring changed resources is refused.
 
-Lua uses an address-stable allocator only when recording is enabled. An image retains the live
+Lua uses an address-stable allocator in every VM (required-module transactional reload,
+LUA_USABILITY.md 6.10). Ordinary frames still take no images or journal; recording remains
+explicit and must precede Lua execution. An actual offline reload captures a temporary
+image for failure recovery and is forbidden during recording/active matches. An image retains the live
 blocks and their bytes, preserving closures, timers, coroutines, GC state and RNG without running
 Lua during restore. Discarded speculative branches do not invoke finalizers. Scene images clone
 all component pools, including hidden runtime values, and entity allocation cursors. Jolt saves
@@ -483,7 +486,8 @@ and journals incoming callbacks within a bounded 256-event window. Client audio 
 PCM until acknowledged and preserves confirmed output across corrections. Save writes remain
 deferred as in rollback. Hot reload and external scene/Lua edits are disabled during the match.
 
-This milestone uses a frozen scene/roster (departures are handled, see M7): late join and synchronized scene transitions require
+This milestone uses a frozen scene/roster (departures are handled, see M7; joining a running match came later as
+`network.lateJoin`, see the audit follow-up): without it, late join and synchronized scene transitions require
 leaving/stopping, opening the same scene and starting another ready barrier. M7 adds the dedicated server,
 editor Players×N/Network panel and network fault commands; M8 samples/platform verification
 remain unchecked. Neither absence of SDKs nor source portability is a device/browser execution test.
@@ -702,6 +706,74 @@ A review of M1–M8 against this document found the defects below; each fix has 
 - [x] Validation for the four lines above: Windows Release 154 tests and Wasm/Node 141 tests, zero
       failed checks; `tests/network_server_test.py` and `tests/network_web_test.js` pass;
       `runtime/web` rebuilt for protocol v4. The packaged browser match was not repeated.
-- [ ] Android runtimes (`runtime/android/`) predate networking entirely (source 0ea84f2) and
-      cannot join protocol v4 sessions; POSIX native build and tests remain unverified (no WSL or
-      Linux toolchain on this host). Unchanged from M8c.
+- [x] Local input in authoritative matches (2026-10-04, for `games/OnlineRPG`): a client's `input_` during a match was
+      only the decoded stream sample, so UI clicks, `UIInput` typing and undeclared keys did not exist on clients, and
+      text typed with `input.text` stayed in the device input forever. `Engine::MergeLocalInput` now adds the device's
+      pointer, touches, wheel, text and undeclared keys after `ApplyInputs` (clients and listen hosts, not dedicated
+      servers); `authorityLocal_` keeps that device input per unacknowledged input frame (pruned with the
+      acknowledgement, cleared on start/reset) and replays merge it again, so focus and typed text survive corrections;
+      `SampleNetworkInput` drops keyboard keys while a `UIInput` has the focus. Lockstep/rollback input is unchanged.
+      Test `OnlineRPGGame`; `tests/online_rpg_test.py` with real processes. `runtime/web` rebuilt; Android not.
+- [x] Late join for authoritative matches (2026-10-04, for `games/OnlineRPG`): `network.lateJoin: true`. The host does
+      not seal its session at the start; every tick `Engine::AdmitAuthorityPlayers` invites lobby players that are
+      ready and not yet participants (`Authority::Admit`): the newcomer gets the ordinary Begin (blueprint, schema,
+      roster including itself), answers Ready, and the host adds it to the roster, sends Go to it alone and
+      spawns its `playerPrefab` (`SpawnAuthorityPlayer`, shared with the match start). The client runs its usual
+      start (scene from its play snapshot, replicated entities from the first full snapshot; its input frames start
+      at 1, independent of the server frame). Invitations unanswered for `waitFrames` ticks are dropped; a player
+      that leaves the lobby first is forgotten. Clients do not learn later roster changes, so with `lateJoin` they
+      do not check snapshot owners against their roster. `net.serve` accepts `minPlayers` 0 (the default with
+      `lateJoin`): the world starts at once, and `DropAuthorityPlayers` no longer stops a late-join match when the
+      last remote player leaves. Limits unchanged: 64 participants, ids never reused (bounded by INT32_MAX).
+      Test `NetworkAuthoritativeLateJoin` (server alone, join without ready stays in the lobby, two staggered
+      players, both leave, rejoin); `tests/online_rpg_test.py` with real TCP processes.
+- [x] A stopped authoritative match froze the peer: `PollAuthority` returned false for every state but idle, so after
+      the server vanished no script or UI ran again and the game could not even say so. Only the ready barrier
+      (`preparing`) holds frames back now; a stopped peer simulates locally. `game.quit` (Lua + command) lets a game
+      close its window; `oe run` and the packaged player honour it, tools report `game.state.quitRequested`.
+- [x] Loopback hosts created connections with `received = 0`, so once the host had run 600 frames every new
+      loopback peer was dropped as silent before its handshake finished (`started`/`received` now both start at the
+      current frame). Real sockets set it on accept and were not affected.
+- [x] Validation for the three lines above: Windows Release 196 tests, zero failed checks; `runtime/web` rebuilt, not
+      run in a browser; Android runtimes not rebuilt.
+- [x] Generic support for games with their own back end (2026-10-05, ONLINERPG_SERVERS.md S1). (1) `LinkSet`
+      (`engine/net/Link.h`): up to 8 outbound connections on one `TcpTransport`, so the wire is its framing with a
+      `u16` type in front of the payload; pumped once per `SimulateFrame` (only when a link exists: no socket and
+      no poll otherwise), closed in `ResetRuntime` because the ids live in the Lua state. Refused while a
+      lockstep/rollback match is active and on a predicting client (a replay would open twice); host and stopped
+      peers may use them. Lua `link.open/send/poll/close/encode/decode`, commands `link.*`. (2) Launch
+      parameters: `Engine::SetLaunchArg`, CLI `--set name=value` / `--set-file name=path` on every `oe` command
+      that opens a project and on the packaged player, Lua `game.arg`, command `game.args`. (3)
+      `network.admission: "script"` + `net.admit`: `AdmitAuthorityPlayers` invites only players in `admitted_`
+      (pruned to the lobby each tick, cleared with the authority); `net.serve` refuses `minPlayers` > 0 with it.
+      `net.kick` is now allowed inside the world on an authoritative host (its state is never hash-compared).
+      (4) `GameFiles` and `ContentHash` skip a project's `server/` folder. Tests `NetworkScriptAdmission`,
+      `LinksAndLaunchArgs` (a `TcpTransport` listener as the service); Windows Release 198 tests, zero failed checks.
+      Limits: IPv4 literals only, no TLS, no TCP in browsers, session protocol unchanged (v4).
+- [x] Android runtime compilation refreshed for both ABIs on 2026-10-06 (Lua M1a-3), including protocol v4 networking; APK signed and externally validated.
+- [ ] Android device networking/import execution and POSIX native build/tests remain unverified; no device/emulator or Linux toolchain was used. Runtime compilation does not verify a session on Android.
+
+### Official Lua agreement (M1a-3, 2026-10-06)
+
+ContentHash unconditionally prefixes the project manifest with
+`official-lua-v1:<primitiveRevision>:<digest>\n` (`engine/app/EngineSync.cpp:77`).
+OfficialModules computes a sorted, LF-normalized, length-prefixed source fingerprint;
+primitive-contract revision is currently 1. Paths, timestamps and local Scene epochs
+are excluded. Bump the primitive revision when semantics used by the official helpers change.
+FNV64 is a compatibility fingerprint, not authentication.
+
+Lockstep/rollback (`EngineSync.cpp:103`) and authority (`EngineAuthority.cpp:72`) already
+consume the same ContentHash. Authority's late-join barrier compares that same blueprint
+(`engine/net/sync/Authority.cpp:89`, `:112`). Session protocol remains v4, with no new
+wire fields or message types. Matching runtimes start; changed sources/revisions and an
+old v4 project-only fingerprint are refused by the existing mismatch messages. A lobby
+connection alone does not prove compatibility. Tests use a private friend provider in
+Engine, with no CLI/Lua/launch-option override.
+
+Recording must still be enabled before Lua execution/physics creation. Saved NativeState
+restores the Lua heap, cached official exports, closures and private handles together with
+Scene epoch. Loading against a different embedded fingerprint returns the existing
+state_resource error before restoration (`EngineSync.cpp:225`). No hidden handle registry
+or new snapshot field is needed. Desktop 221 and Wasm 186 tests pass, including all three
+OfficialLua agreement tests and existing frame-sync/native snapshot regressions. Android
+players were rebuilt and packaged, but device execution is unverified.

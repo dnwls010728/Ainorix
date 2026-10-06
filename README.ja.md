@@ -143,6 +143,7 @@ Assets はグリッド/リスト表示、名前・パス検索、件数付きの
 | `samples/HD2D`, `samples/Water` | 被写界深度のある 3D 世界のピクセルアートスプライト、シェーダーグラフで作った海 |
 | `samples/ShaderLab`, `samples/WuwaToon`, `samples/VFXLab` | サーフェスシェーダーグラフ、トゥーンシェーディングの研究、パーティクルとトレイルのエフェクト |
 | `samples/NetCoop`, `NetDuel`, `NetArena`, `NetChase` | ロックステップ協力、ロールバック対戦、権威サーバーのアリーナと三人称レース。ゲーム内ロビー付き |
+| `games/OnlineRPG` | HD-2D 表現のオンライン RPG プロトタイプ（ログインサーバー + いつでも入れるチャンネルサーバー）: 地面のアイテム、拾う、バッグ、捨てる、チャットと吹き出し — 設計ドキュメント: [docs/ONLINERPG.md](docs/ONLINERPG.md) |
 | `games/DongleZoo` | 出荷可能なスマートフォン向け縦画面マージパズル: ショップ、ミッション、ホストブリッジ経由の広告と課金 — 設計ドキュメント: [docs/DONGLEZOO.md](docs/DONGLEZOO.md) |
 
 ## リポジトリ構成

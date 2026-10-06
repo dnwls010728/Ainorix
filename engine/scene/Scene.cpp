@@ -1,12 +1,19 @@
 #include "scene/Scene.h"
 
 #include <algorithm>
+#include <limits>
+#include <stdexcept>
 
 #include "core/Log.h"
 #include "scene/Components.h"
 
 namespace oe {
 namespace {
+uint64_t NextEpoch(uint64_t current) {
+    if (current == std::numeric_limits<uint64_t>::max())
+        throw std::overflow_error("scene epoch exhausted; create a new scene/session");
+    return current + 1;
+}
 // Behaviour components that moved out of the engine into project scripts. Files that still name
 // them keep loading: the component is skipped with a warning that says what replaces it.
 const char* RemovedComponentHint(const std::string& type) {
@@ -23,6 +30,7 @@ Scene& Scene::operator=(const Scene& other) {
     std::vector<std::unique_ptr<IComponentPool>> pools;
     for (const auto& pool : other.pools_) pools.push_back(pool->Clone());
     pools_ = std::move(pools); entities_ = other.entities_; nextId_ = other.nextId_; name = other.name;
+    incarnation_ = other.incarnation_;
     return *this;
 }
 
@@ -33,10 +41,32 @@ Scene::Scene() {
 }
 
 void Scene::Clear() {
+    incarnation_ = NextEpoch(incarnation_);
     entities_.clear();
     for (auto& p : pools_) p->Clear();
     nextId_ = 1;
     name = "Untitled";
+}
+
+std::string Scene::EpochString() const {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string result(16, '0');
+    uint64_t value = incarnation_;
+    for (size_t i = result.size(); i > 0; --i) {
+        result[i - 1] = digits[value & 15];
+        value >>= 4;
+    }
+    return result;
+}
+
+void Scene::ReplaceWith(const Scene& source) {
+    const uint64_t next = NextEpoch(incarnation_);
+    Scene replacement(source);  // Clone before touching the receiver, including self-replacement.
+    entities_.swap(replacement.entities_);
+    pools_.swap(replacement.pools_);
+    name.swap(replacement.name);
+    nextId_ = replacement.nextId_;
+    incarnation_ = next;
 }
 
 EntityId Scene::Create(const std::string& entityName, EntityId parent, EntityId forcedId) {

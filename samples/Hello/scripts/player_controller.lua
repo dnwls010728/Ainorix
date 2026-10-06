@@ -1,6 +1,13 @@
 -- Simple player movement: W/A/S/D or arrow keys move on the XZ plane, Space jumps.
 -- With a CharacterBody the physics engine moves the entity; without one it lands at y = half its height.
 -- params: { "speed": 4, "jumpSpeed": 5, "gravity": 12 }
+local controls = require("oe.input")
+local vectors = require("oe.math")
+local actions = {
+  move = { kind = "vector", left = { "A", "Left" }, right = { "D", "Right" },
+           up = { "W", "Up" }, down = { "S", "Down" } },
+  jump = { kind = "button", keys = { "Space" } },
+}
 local Player = {}
 
 function Player:onStart()
@@ -8,41 +15,35 @@ function Player:onStart()
   self.jumpSpeed = self.params.jumpSpeed or 5
   self.gravity = self.params.gravity or 12
   self.vy = 0
+  self.source = controls.localSource() -- this template is offline, not player-stream input
 end
 
 function Player:onUpdate(dt)
   local t = self:get("Transform")
   local pos = t.position
 
-  local mx, mz = 0, 0
-  if input.down("W") or input.down("Up") then mz = mz - 1 end
-  if input.down("S") or input.down("Down") then mz = mz + 1 end
-  if input.down("A") or input.down("Left") then mx = mx - 1 end
-  if input.down("D") or input.down("Right") then mx = mx + 1 end
-  local len = math.sqrt(mx * mx + mz * mz)
+  local move = controls.read(self.source, actions, "move")
+  local wish = vectors.normalize({ x = move.x, z = -move.y }) -- up on input maps to forward (-Z)
+  local jump = controls.read(self.source, actions, "jump")
 
   -- With a CharacterBody, express intent as velocity and let physics move us
   -- (walls, slopes, gravity and landing are handled by the engine).
   if self:has("CharacterBody") then
-    local vx, vz = 0, 0
-    if len > 0 then
-      vx = mx / len * self.speed
-      vz = mz / len * self.speed
-    end
+    local vx, vz = wish.x * self.speed, wish.z * self.speed
     local vy = self:velocity().y
-    if self:grounded() and (input.pressed("Space") or input.down("Space")) then vy = self.jumpSpeed end
+    if self:grounded() and (jump.pressed or jump.held) then vy = self.jumpSpeed end
     self:setVelocity(vx, vy, vz)
     return
   end
 
-  if len > 0 then
-    pos.x = pos.x + mx / len * self.speed * dt
-    pos.z = pos.z + mz / len * self.speed * dt
+  if wish.x ~= 0 or wish.z ~= 0 then
+    pos.x = pos.x + wish.x * self.speed * dt
+    pos.z = pos.z + wish.z * self.speed * dt
   end
 
   local groundY = 0.5 * t.scale.y
   local grounded = pos.y <= groundY + 1e-4
-  if grounded and (input.pressed("Space") or input.down("Space")) and self.vy <= 0 then
+  if grounded and (jump.pressed or jump.held) and self.vy <= 0 then
     self.vy = self.jumpSpeed
     grounded = false
   end

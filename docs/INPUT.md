@@ -30,6 +30,82 @@ GamepadDPadDown, GamepadDPadLeft and GamepadDPadRight. pressed is true only on
 the first simulation step after a new press. Input is transient, not scene undo
 or saved scene data.
 
+## Official input and math composition (M3)
+
+The embedded oe.input module supplies named project-defined actions without changing
+input injection, wire declarations, or the global input table. Define actions in Lua:
+
+```lua
+local controls = require("oe.input")
+local actions = {
+    move = {kind="vector", left={"A","Left"}, right={"D","Right"},
+            up={"W","Up"}, down={"S","Down"}, axisX="LeftX", axisY="LeftY"},
+    jump = {kind="button", keys={"Space","GamepadA"}},
+}
+local source = controls.localSource() -- offline; fails during a network session
+local move = controls.read(source, actions, "move") -- {x,y,z=0}, +Y up
+local jump = controls.read(source, actions, "jump") -- {held,pressed}
+```
+
+Aliases in one direction are ORed, opposite directions subtract, processed axes add,
+and only vectors longer than 1 are normalized. Smaller analog magnitudes survive.
+UIJoystick and a physical pad share axis names; a held UI stick writes those same axes,
+so the module does not add a second stick value. The native scalar 0.15 dead zone is
+applied once by input.axis/input.player.axis; the module applies none. Digital and
+analog directions sum, potentially cancel, and cap to 1. +Y is up; map movement onto
+XZ with z=-move.y. Screen/touch Y grows downward. Binding axes are optional; Wickbound
+uses keyboard only and retains its project-specific drag-anywhere stick.
+
+Buttons OR each alias's held and first-frame pressed values independently. Repeated
+reads do not consume input. Engine onUpdate keyboard suppression while UIInput is
+focused already applies; mouse/gamepad remain active. The same suppression happens
+before network sampling. Tool script.eval outside onUpdate is not a suppressed
+input callback. Modules do not pause: scripts/UI still run at dt=0 and the gameplay
+caller decides whether to move. They do not inspect/consume touches or pointer data.
+
+For network gameplay, explicitly select the entity's player and mirror the project's
+network.actions/network.axes declarations (literal engine key names, not named Lua
+actions). Only include bound declared names; an undeclared alias fails even if another
+alias is held. Example for NetArena, which declares WASD and LeftX/LeftY:
+
+```lua
+local declarations = {actions={"W","A","S","D","Space","R"}, axes={"LeftX","LeftY"}}
+local actions = {move={kind="vector",left={"A"},right={"D"},up={"W"},down={"S"},
+                      axisX="LeftX",axisY="LeftY"}}
+local source = controls.playerSource(self:get("NetPlayer").player, declarations)
+local move = controls.read(source, actions, "move")
+```
+
+playerSource captures native input.player(id) closures and copies allowlists into its
+Lua heap closures. It supplies only down/pressed/axis, rejects undeclared reads and
+non-running matches (including none/idle/lobby), and never reads device-local mouse/touches/undeclared keys.
+Unknown players are neutral. Lockstep/rollback peers have all streams; authoritative
+servers have player streams and clients have their own stream (remote is neutral).
+localSource refuses any non-none/non-idle session at read time, even if cached before
+joining. Lobby UI uses existing global input rather than the gameplay source API.
+Neither source guesses a player/role. Declarations remain a project author obligation:
+this is an ergonomic boundary, not a security sandbox against arbitrary project Lua
+or forged allowlists. Existing global input APIs stay available for local UI.
+
+Tables/actions are caller-owned. Shared modules retain no mutable owner state or
+native registry; closures and imported cache are in the recorded Lua heap. Enable
+sim.record_state before require/evaluation. A caller may cache its explicit source
+on the script instance; no subscriptions or cleanup are needed. Project helper reload
+follows SCRIPTING.md Hot reload: instance fields survive, affected module-local state
+resets, and captured functions/callbacks may retain old code. Official exports stay immutable.
+
+| oe.math operation | Contract |
+|---|---|
+| clamp(value, low, high) | Inclusive finite bounds; inverted bounds error |
+| lerp(a, b, t) | a+(b-a)*t, t is not clamped |
+| distance(a, b) | Euclidean length using {x,y,z}; omitted coordinates zero |
+| normalize(v) | Fresh unit {x,y,z}, or exact zero for zero vector; finite coordinates required |
+
+The module does not introduce positional-array vectors, RNG/time consumption, mutable
+native caches, or scene changes. normalize rescales before squaring to handle very
+large finite coordinates. Arithmetic overflow in distance/lerp follows Lua numbers;
+use finite representable gameplay ranges.
+
 ## Physical device adapters
 
 Each player window maps one controller to the logical input contract. Windows

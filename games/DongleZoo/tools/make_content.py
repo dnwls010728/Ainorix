@@ -9,6 +9,7 @@ stay consistent. Run from the project folder:
 import json
 import os
 import re
+import argparse
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 FONT = "assets/fonts/Jua-Regular.ttf"
@@ -21,7 +22,6 @@ RADII = [0.26, 0.34, 0.45, 0.52, 0.66, 0.80, 0.92, 1.08, 1.25, 1.43, 1.62]
 SPRITE_SCALE = 2 * 256 / 200
 ITEMS = ["hammer", "shake", "wand"]
 THEMES = ["meadow", "beach", "night"]
-PRODUCTS = ["no_ads", "coins_s", "coins_l"]
 DAILY = [50, 60, 80, 100, 120, 150, 300]
 
 # Sprite sorting layers
@@ -37,6 +37,53 @@ STYLES = {  # background, text, border
     "pink": ("#ff8fb0", "#ffffff", "#ffc7d8"),
     "plain": ("#fff3dc", INK, "#ffdca0"),
 }
+
+
+def project_data(name):
+    with open(os.path.join(ROOT, "config", name + ".json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def lua_data(value):
+    """Serialize the JSON data subset as UTF-8 Lua literals in source order."""
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "nil"
+    if isinstance(value, (int, float)):
+        return json.dumps(value, allow_nan=False)
+    if isinstance(value, list):
+        return "{ " + ", ".join(lua_data(v) for v in value) + " }"
+    return "{ " + ", ".join("[" + lua_data(k) + "] = " + lua_data(v) for k, v in value.items()) + " }"
+
+
+def shop_data():
+    catalog = project_data("shop")
+    products = catalog["products"]
+    ids = set()
+    for product in products:
+        sku = product["id"]
+        if not isinstance(sku, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", sku) or sku in ids:
+            raise ValueError("Product IDs must be unique lowercase names: " + repr(sku))
+        ids.add(sku)
+        for field in ("name", "desc"):
+            for locale in ("en", "ko"):
+                if not isinstance(product[field][locale], str):
+                    raise ValueError("Product " + sku + " needs EN/KO " + field)
+        if not isinstance(product["price"], str):
+            raise ValueError("Product " + sku + " needs a display price")
+        if sku != "no_ads" and (type(product.get("coins")) is not int or product["coins"] <= 0):
+            raise ValueError("Coin packs need a positive integer coins reward: " + sku)
+    path = os.path.join(ROOT, "scripts", "config", "shop.lua")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("-- Generated from config/shop.json by tools/make_content.py; do not hand edit.\nreturn { products = {\n")
+        for product in products:
+            f.write("  " + lua_data(product) + ",\n")
+        f.write("} }\n")
+    return products
 
 
 def rgb(hexcolor):
@@ -210,6 +257,8 @@ def dialog(ui, name, w, h, title_key=None, title_name=None, close=True):
 # ---------------------------------------------------------------- scene
 
 def scene():
+    products = shop_data()
+    layout = project_data("layout")
     d = Doc()
     ui = UI(d)
 
@@ -282,7 +331,7 @@ def scene():
         ui.text("Pop%d" % i, None, "", 0, 0, 34, "#ffffff", anchor="top", outline=5, opacity=0)
 
     # ----- pause
-    box = dialog(ui, "pause", 520, 560, "pause.title", close=False)
+    box = dialog(ui, "pause", layout["pause"]["width"], 560, "pause.title", close=False)
     ui.button("Pause:resume", box, "", 0, -70, 380, 100, "primary", "resume", size=44, key="pause.resume")
     ui.button("Pause:restart", box, "", 0, 50, 380, 92, "green", "restart", size=40, key="pause.restart")
     ui.button("Pause:home", box, "", 0, 162, 380, 92, "blue", "home", size=40, key="pause.home")
@@ -312,8 +361,16 @@ def scene():
         b = ui.button("Theme:%s:btn" % th, card, "", 0, -14, 164, 60, "primary", "theme", th, anchor="bottom", size=28)
         ui.image("Theme:%s:coin" % th, b, UIA + "coin.png", 12, 0, 34, 34, anchor="left")
     ui.text(None, box, "", 0, 486, 30, INK_DIM, anchor="top", key="shop.store")
-    for i, p in enumerate(PRODUCTS):
-        row = ui.panel(None, box, 0, 532 + i * 148, 600, 134, CREAM2, anchor="top", radius=26, border=4)
+    # Preserve the shipped three-row layout exactly; larger catalogs scroll inside it.
+    product_parent, product_y = box, 532
+    if len(products) > 3:
+        product_parent = ui.panel("Shop:products", box, 0, 532, 600, 430,
+                                  anchor="top", opacity=0, clip=True)
+        ui.comp(product_parent, "UIScroll", {"direction": "vertical", "barColor": rgb(INK_DIM)})
+        product_y = 0
+    for i, product in enumerate(products):
+        p = product["id"]
+        row = ui.panel(None, product_parent, 0, product_y + i * 148, 600, 134, CREAM2, anchor="top", radius=26, border=4)
         ui.image(None, row, UIA + ("noads.png" if p == "no_ads" else "coin.png"), 20, 0, 80, 80, anchor="left")
         ui.text("Product:%s:name" % p, row, "", 118, -24, 32, INK, anchor="left", w=280, h=40, align="left")
         ui.text("Product:%s:desc" % p, row, "", 118, 24, 21, INK_DIM, anchor="left", w=290, h=52, align="left", wrap=True)
@@ -399,5 +456,9 @@ def scene():
 
 
 if __name__ == "__main__":
-    prefabs()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--scene-only", action="store_true", help="Regenerate scene and shop Lua, preserving prefabs.")
+    args = parser.parse_args()
+    if not args.scene_only:
+        prefabs()
     print("entities:", scene())

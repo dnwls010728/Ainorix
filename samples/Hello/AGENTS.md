@@ -16,3 +16,16 @@ A two-level coin collecting game: walk into the coins (W/A/S/D, Space jumps), cl
 - Sounds:  `oe exec . audio.generate '{"path":"sounds/jump.wav","preset":"jump"}'` synthesizes effects.
 - Live:    `oe mcp .` exposes every command as an MCP tool (screenshots come back as images).
 - Human:   `oe editor .` opens the editor (it serves the same API on http://127.0.0.1:7777; attach with `oe mcp --connect 7777`); `oe run .` plays in a window.
+
+- Common edits: see `EDITING.md`. Player `Script.params` speed/jumpSpeed/gravity keep
+  literal defaults for inspector and script.params inference; stages/UI remain scene data.
+- Player code uses `require("oe.input")` with an explicit offline `localSource()` and
+  named move/jump bindings, then `require("oe.math").normalize` for XZ direction.
+  Do not use playerSource unless intentionally converting this project to network play.
+- HUD uses `require("oe.ui")`: `widgets.find("Message", "UIText")`, `widget:text(...)`,
+  `widget:set({...})`, `widget:show()`. Select the component explicitly; optional widgets
+  use tryFind. Handles belong to this scene/session and never silently re-find replacements.
+- Official modules are embedded; do not copy them into this project or shadow oe.*.
+  Apply project helper edits with script.reload; failures retain previous code. Keep engine
+  calls out of module initializers. Instance fields/computed labels keep their current values;
+  restart Play when onStart needs to run again.

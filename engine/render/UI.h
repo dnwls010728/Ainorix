@@ -95,6 +95,14 @@ float SliderValueAt(const UISlider& slider, const UIRect& rect, float px, float 
 int UIInputOffsetAt(const Scene& scene, const UIRect& rect, float px, float py, int width, int height, AssetManager* assets = nullptr);
 int UIInputOffsetVertical(const Scene& scene, const UIRect& rect, int offset, int dir, int width, int height, AssetManager* assets = nullptr);
 
+// Text layout lengths in reference pixels, excluding paint effects and fitting.
+struct TextMetrics {
+    float width = 0, height = 0;
+    std::vector<float> lineWidths;
+};
+// Uses the renderer's exact shaping at effective scale; wrapWidth is reference pixels (0 = no wrap).
+TextMetrics MeasureText(const UIText& text, float scale, float wrapWidth, AssetManager* assets = nullptr);
+
 // Pixel size of a string in a font at a font size in pixels (no wrapping).
 void MeasureText(const std::string& text, float size, float* w, float* h, const std::string& font = "pixel", AssetManager* assets = nullptr);
 

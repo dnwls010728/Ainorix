@@ -1529,6 +1529,16 @@ float SliderValueAt(const UISlider& s, const UIRect& r, float px, float py) {
     return Clamp(v, std::min(s.min, s.max), std::max(s.min, s.max));
 }
 
+TextMetrics MeasureText(const UIText& text, float scale, float wrapWidth, AssetManager* assets) {
+    ShapedText shaped = Shape(ParseRich(text.text, text.richText, text.color, text.bold), ResolveFont(text.font, assets),
+                             text.size * scale, text.letterSpacing * scale, text.lineSpacing, wrapWidth * scale);
+    TextMetrics result;
+    result.width = shaped.width / scale;
+    result.height = shaped.height / scale;
+    for (float width : shaped.lineWidths) result.lineWidths.push_back(width / scale);
+    return result;
+}
+
 void MeasureText(const std::string& text, float size, float* w, float* h, const std::string& font, AssetManager* assets) {
     ShapedText t = Shape(ParseRich(text, false, Color(), false), ResolveFont(font, assets), size, 0.0f, 1.0f, 0.0f);
     *w = t.width;

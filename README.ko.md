@@ -140,6 +140,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | `samples/HD2D`, `samples/Water` | 피사계 심도가 있는 3D 세계의 픽셀 아트 스프라이트, 셰이더 그래프로 만든 바다 |
 | `samples/ShaderLab`, `samples/WuwaToon`, `samples/VFXLab` | 표면 셰이더 그래프, 툰 셰이딩 연구, 파티클과 트레일 이펙트 |
 | `samples/NetCoop`, `NetDuel`, `NetArena`, `NetChase` | 락스텝 협동, 롤백 대전, 권위 서버 아레나와 3인칭 레이스. 게임 내 로비 포함 |
+| `games/OnlineRPG` | HD-2D 그래픽의 온라인 RPG 프로토타입(로그인 서버 + 언제든 입장 가능한 채널 서버): 바닥 아이템, 줍기, 가방, 버리기, 채팅과 말풍선 — 설계 문서: [docs/ONLINERPG.md](docs/ONLINERPG.md) |
 | `games/DongleZoo` | 출시 가능한 세로형 모바일 머지 퍼즐: 상점, 미션, 호스트 브리지를 통한 광고와 결제 — 설계 문서: [docs/DONGLEZOO.md](docs/DONGLEZOO.md) |
 
 ## 저장소 구조

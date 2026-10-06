@@ -105,6 +105,13 @@ bool SessionConfig::Parse(const Json& project, SessionConfig& out, std::string* 
         return fail("snapshotRate must be 1..60, interpolationFrames 0..30, predictionFrames 8..64");
     if (json.has("playerPrefab") && !json["playerPrefab"].isString()) return fail("playerPrefab must be a project-relative path");
     config.playerPrefab = json["playerPrefab"].asString();
+    if (json.has("lateJoin") && (!json["lateJoin"].isBool() || (json["lateJoin"].asBool() && config.mode != "authoritative")))
+        return fail("lateJoin must be a boolean and needs mode authoritative");
+    config.lateJoin = json["lateJoin"].asBool();
+    if (json.has("admission") && !json["admission"].isString()) return fail("network.admission must be \"auto\" or \"script\"");
+    config.admission = json["admission"].asString("auto");
+    if (config.admission != "auto" && config.admission != "script") return fail("network.admission must be \"auto\" or \"script\"");
+    if (config.admission == "script" && !config.lateJoin) return fail("network.admission \"script\" needs lateJoin");
     if (config.playerPrefab.size() > 256 || config.playerPrefab.find("..") != std::string::npos ||
         config.playerPrefab.find(':') != std::string::npos || (!config.playerPrefab.empty() && (config.playerPrefab[0] == '/' || config.playerPrefab[0] == '\\')))
         return fail("playerPrefab must stay inside the project");
@@ -292,7 +299,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         if (!host_) SetState("error", "session protocol/game/mode/tick mismatch; use matching project settings and engine builds");
         else {
             if (!connections_.count(peer) && config_.transport == "loopback" && !sealed_ && kind == 1 && connections_.size() < kMaxConnections) {
-                Connection connection; connection.started = frame_; connections_[peer] = connection;
+                Connection connection; connection.started = connection.received = frame_; connections_[peer] = connection;
             }
             if (!connections_.count(peer)) return;
             Connection& connection = connections_.at(peer);
@@ -309,7 +316,8 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
             // Native peer ids are allocated by bounded TCP accept, never by UDP packets.
             if (sealed_ || config_.transport != "loopback" || connections_.size() >= kMaxConnections) { ++rejected_; return; }
             it = connections_.emplace(peer, Connection{}).first;
-            it->second.started = frame_;
+            // Both clocks start now: a host that has run for a while must not see a new loopback peer as silent since frame 0.
+            it->second.started = it->second.received = frame_;
         }
         Connection& connection = it->second;
         if (connection.nonce && connection.nonce != nonce) { ++rejected_; return; }

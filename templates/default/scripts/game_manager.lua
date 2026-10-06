@@ -2,15 +2,16 @@
 -- and when all are collected either loads params.nextScene or shows the win
 -- screen with the "Play Again" button.
 -- params: { "nextScene": "scenes/level2.scene.json" }   ("" = last level)
+local widgets = require("oe.ui")
 local Game = {}
 
 function Game:onStart()
   self.total = #scene.withTag("coin")
   self.collected = 0
   self.best = save.get("highScore", 0)
-  self.score = scene.find("Score")
-  self.message = scene.find("Message")
-  self.playAgain = scene.find("Play Again")
+  self.score = widgets.tryFind("Score", "UIText")
+  self.message = widgets.find("Message", "UIText")
+  self.playAgain = widgets.tryFind("Play Again", "UIButton")
   self.player = scene.find("Player")
   if self.player then self.spawn = scene.get(self.player, "Transform").position end
   self:refresh()
@@ -33,7 +34,7 @@ function Game:refresh()
   local total = game.get("total") or 0
   if total > 0 then text = text .. string.format("\nTotal: %d", total) end
   if self.best > 0 then text = text .. string.format("\nBest: %d", self.best) end
-  scene.set(self.score, "UIText", { text = text })
+  self.score:text(text)
 end
 
 function Game:onCoinCollected(coin)
@@ -52,11 +53,11 @@ function Game:onCoinCollected(coin)
   audio.play("sounds/success.wav")
   local nextScene = self.params.nextScene or ""
   if nextScene ~= "" then
-    scene.set(self.message, "UIText", { text = "Level clear!", visible = true })
+    self.message:set({ text = "Level clear!", visible = true })
     timer.after(1.5, function() game.loadScene(nextScene) end)
   else
-    scene.set(self.message, "UIText", { text = "You win!", visible = true })
-    if self.playAgain then scene.set(self.playAgain, "UIButton", { visible = true }) end
+    self.message:set({ text = "You win!", visible = true })
+    if self.playAgain then self.playAgain:show() end
   end
 end
 

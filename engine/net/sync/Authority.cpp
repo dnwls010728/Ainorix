@@ -77,10 +77,22 @@ bool Authority::SendMessage(uint32_t player, uint8_t kind, const Json& body) {
     state_ = "stopped"; error_ = "authoritative send queue is full"; return false;
 }
 void Authority::Broadcast(uint8_t kind, const Json& body) { for (uint32_t player : roster_) if (player != local_) SendMessage(player, kind, body); }
-void Authority::Begin() {
+Json Authority::BeginBody(const std::vector<uint32_t>& players) const {
     Json body = Json::MakeObject(); body["blueprint"] = std::to_string(blueprint_); body["schema"] = config_.sync.ToJson();
-    body["players"] = Json::MakeArray(); for (uint32_t player : roster_) body["players"].push(player);
-    body["snapshotRate"] = config_.snapshotRate; body["predictionFrames"] = config_.predictionFrames; Broadcast(BeginMessage, body);
+    body["players"] = Json::MakeArray(); for (uint32_t player : players) body["players"].push(player);
+    body["snapshotRate"] = config_.snapshotRate; body["predictionFrames"] = config_.predictionFrames; return body;
+}
+void Authority::Begin() { Broadcast(BeginMessage, BeginBody(roster_)); }
+bool Authority::Admit(uint32_t player) {
+    if (!host_ || !Running() || player <= 1 || joining_.count(player) || std::find(roster_.begin(), roster_.end(), player) != roster_.end() ||
+        roster_.size() + joining_.size() >= config_.maxPlayers) return false;
+    // The newcomer runs the same barrier as at a match start, alone: Begin (blueprint, schema), its Ready, Go.
+    std::vector<uint32_t> players = roster_; players.insert(std::upper_bound(players.begin(), players.end(), player), player);
+    joining_[player] = tick_;
+    return SendMessage(player, BeginMessage, BeginBody(players));
+}
+void Authority::Retain(const std::set<uint32_t>& present) {
+    for (auto it = joining_.begin(); it != joining_.end();) it = present.count(it->first) ? std::next(it) : joining_.erase(it);
 }
 bool Authority::Start(const std::vector<uint32_t>& roster, std::string* error) {
     if (!host_ || Active() || roster.empty() || roster.size() > config_.maxPlayers || roster.front() != 1 || !std::is_sorted(roster.begin(), roster.end()) || std::adjacent_find(roster.begin(), roster.end()) != roster.end()) {
@@ -103,6 +115,10 @@ void Authority::Receive(uint32_t sender, const std::vector<uint8_t>& bytes) {
         for (const auto& item : body["players"].items()) { uint64_t id; if (!Unsigned(item, UINT32_MAX - 2, id) || !id) { reject(); return; } roster.push_back(static_cast<uint32_t>(id)); }
         if (roster.empty() || roster.front() != 1 || !std::is_sorted(roster.begin(), roster.end()) || std::adjacent_find(roster.begin(), roster.end()) != roster.end() || std::find(roster.begin(), roster.end(), local_) == roster.end()) { reject(); return; }
         roster_ = roster; epoch_ = epoch; state_ = "preparing"; preparing_ = tick_; SendMessage(1, ReadyMessage, Json::MakeObject()); return;
+    }
+    if (kind == ReadyMessage && host_ && Running() && epoch == epoch_ && joining_.erase(sender)) {
+        roster_.insert(std::upper_bound(roster_.begin(), roster_.end(), sender), sender); joined_.push_back(sender);
+        SendMessage(sender, GoMessage, Json::MakeObject()); return;
     }
     if (epoch != epoch_ || !Active() || std::find(roster_.begin(), roster_.end(), sender) == roster_.end()) { reject(); return; }
     if (kind == StopMessage && (host_ || sender == 1)) { Stop(body["reason"].asString("peer stopped")); return; }
@@ -150,7 +166,13 @@ void Authority::Receive(uint32_t sender, const std::vector<uint8_t>& bytes) {
     }
     reject();
 }
-void Authority::Tick(uint64_t tick) { tick_ = tick; if (state_ == "preparing" && tick - preparing_ >= config_.sync.waitFrames) Stop("authoritative ready barrier timed out"); }
+void Authority::Tick(uint64_t tick) {
+    tick_ = tick; if (state_ == "preparing" && tick - preparing_ >= config_.sync.waitFrames) Stop("authoritative ready barrier timed out");
+    for (auto it = joining_.begin(); it != joining_.end();) {
+        if (tick - it->second < config_.sync.waitFrames) { ++it; continue; }
+        dropped_.push_back(it->first); it = joining_.erase(it);  // never answered: the caller removes it from the session
+    }
+}
 bool Authority::TakeStart() { bool start = start_; start_ = false; return start; }
 uint64_t Authority::Submit(const FrameInput& input) {
     if (host_ || !Running() || !CanPredict() || !Valid(input)) return 0;
@@ -182,7 +204,7 @@ void Authority::Snapshot(uint64_t frame, const std::map<uint32_t, Json>& worlds)
 void Authority::Drop(uint32_t player) {
     if (!host_ || !Running() || player == local_) return;
     roster_.erase(std::remove(roster_.begin(), roster_.end(), player), roster_.end());
-    inputs_.erase(player); processed_.erase(player); held_.erase(player); peers_.erase(player); ready_.erase(player);
+    inputs_.erase(player); processed_.erase(player); held_.erase(player); peers_.erase(player); ready_.erase(player); joining_.erase(player);
 }
 std::vector<Authority::Update> Authority::DrainUpdates() { auto updates = std::move(updates_); updates_.clear(); return updates; }
 void Authority::Stop(const std::string& reason) {

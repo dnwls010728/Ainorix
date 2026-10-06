@@ -124,3 +124,12 @@ device, so no Android build/device result is claimed for M8.
 
 See [NETWORK.md](NETWORK.md) for the design and [NETWORK_NOTES.md](NETWORK_NOTES.md) for milestone status and limits, [SCRIPTING.md](SCRIPTING.md)
 for Lua contracts, and [PLATFORMS.md](PLATFORMS.md) / [ANDROID.md](ANDROID.md) for adapters.
+
+## M3 input composition pilot (2026-10-06)
+
+NetArena player.lua uses oe.input's named move binding and explicit local/player
+sources. Its network literal actions and LeftX/LeftY declarations are unchanged;
+only those declared names enter the source. Sum/cap, +Y-up to negative Z, speed 4,
+world limits, collection/scoring/reset rules are preserved. NetCoop/NetDuel/NetChase
+are read-only in this milestone. See LUA_USABILITY.md 6.6 and INPUT.md for contracts
+and actual before/after, suite, runtime and browser evidence.

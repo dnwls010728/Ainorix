@@ -766,23 +766,29 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     return stats;
 }
 
+bool MakeCameraView(const Scene& scene, EntityId id, float aspect, RenderView& out) {
+    const Camera* camera = scene.Get<Camera>(id);
+    if (!camera) return false;
+    const Camera& cam = *camera;
+    Mat4 world = scene.WorldMatrix(id);
+    Vec3 eye = world.TransformPoint(Vec3(0, 0, 0));
+    Vec3 fwd = Normalize(world.TransformDir(Vec3(0, 0, -1)));
+    Vec3 up = Normalize(world.TransformDir(Vec3(0, 1, 0)));
+    out.view = Mat4::LookAt(eye, eye + fwd, up);
+    out.proj = cam.projection == "orthographic" ? Mat4::Orthographic(std::max(0.01f, cam.orthoSize), aspect, cam.nearPlane, cam.farPlane)
+                                                : Mat4::Perspective(Radians(cam.fov), aspect, cam.nearPlane, cam.farPlane);
+    out.eye = eye;
+    out.clearColor = cam.clearColor;
+    out.cameraEntity = id;
+    const PostProcess* post = scene.Get<PostProcess>(id);
+    out.postProcess = post ? *post : PostProcess{};
+    return true;
+}
+
 bool MakeSceneView(const Scene& scene, float aspect, RenderView& out) {
     for (const auto& kv : scene.Pool<Camera>()) {
         if (!kv.second.active) continue;
-        const Camera& cam = kv.second;
-        Mat4 world = scene.WorldMatrix(kv.first);
-        Vec3 eye = world.TransformPoint(Vec3(0, 0, 0));
-        Vec3 fwd = Normalize(world.TransformDir(Vec3(0, 0, -1)));
-        Vec3 up = Normalize(world.TransformDir(Vec3(0, 1, 0)));
-        out.view = Mat4::LookAt(eye, eye + fwd, up);
-        out.proj = cam.projection == "orthographic" ? Mat4::Orthographic(std::max(0.01f, cam.orthoSize), aspect, cam.nearPlane, cam.farPlane)
-                                                    : Mat4::Perspective(Radians(cam.fov), aspect, cam.nearPlane, cam.farPlane);
-        out.eye = eye;
-        out.clearColor = cam.clearColor;
-        out.cameraEntity = kv.first;
-        const PostProcess* post = scene.Get<PostProcess>(kv.first);
-        out.postProcess = post ? *post : PostProcess{};
-        return true;
+        return MakeCameraView(scene, kv.first, aspect, out);
     }
     out = MakeLookAtView(Vec3(6, 5, 8), Vec3(0, 0, 0), 60.0f, aspect);
     out.drawUI = true;  // still the game view, just without a camera entity

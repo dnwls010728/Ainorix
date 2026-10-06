@@ -85,8 +85,9 @@ std::vector<std::string> GameFiles(const std::string& projectDir) {
         std::string rel = RelativePath(src, projectDir);
         bool hidden = rel.empty() || rel[0] == '.' || rel.find("/.") != std::string::npos;
         // tools/ holds development helpers (e.g. art generators) and web/ files for the web page
-        // (`oe package --web` puts them next to index.html), not game data.
-        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md" || rel.rfind("tools/", 0) == 0 || rel.rfind("web/", 0) == 0) continue;
+        // (`oe package --web` puts them next to index.html), not game data. server/ is the project's own
+        // back end (sources, databases, keys of services the game talks to): it never ships to players.
+        if (hidden || rel == "AGENTS.md" || rel == "CLAUDE.md" || rel.rfind("tools/", 0) == 0 || rel.rfind("web/", 0) == 0 || rel.rfind("server/", 0) == 0) continue;
         files.push_back(rel);
     }
     std::sort(files.begin(), files.end());

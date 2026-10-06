@@ -7,6 +7,7 @@
 #include "core/FileSystem.h"
 #include "core/Image.h"
 #include "script/ScriptHost.h"
+#include "script/OfficialModules.h"
 
 namespace oe {
 namespace {
@@ -74,12 +75,13 @@ void Engine::CaptureCheckpoint() {
     }
 }
 uint64_t Engine::ContentHash() const {
-    std::string manifest;
+    std::string manifest = officialFingerprintRecordForTests_ ? officialFingerprintRecordForTests_() :
+        "official-lua-v1:" + std::to_string(kOfficialPrimitiveRevision) + ":" + OfficialManifestDigest() + "\n";
     auto files = ListFiles(projectDir_, "", true); std::sort(files.begin(), files.end());
     size_t count = 0;
     for (const auto& path : files) {
         std::string relative = RelativePath(path, projectDir_);
-        if (relative == "project.json" || relative == "AGENTS.md" || relative == "CLAUDE.md" || relative.compare(0, 6, "tools/") == 0 ||
+        if (relative == "project.json" || relative == "AGENTS.md" || relative == "CLAUDE.md" || relative.compare(0, 6, "tools/") == 0 || relative.compare(0, 7, "server/") == 0 ||
             relative.front() == '.' || relative.find("/.") != std::string::npos) continue;
         if (++count > 4096) throw ApiError("state_resource", "reference synchronization supports at most 4096 project files");
         std::vector<uint8_t> bytes;

@@ -142,6 +142,7 @@ Run any of them with `oe run <path>` or open it with `oe editor <path>`.
 | `samples/HD2D`, `samples/Water` | Pixel-art sprites in a lit 3D world with depth of field; a rolling sea from a shader graph |
 | `samples/ShaderLab`, `samples/WuwaToon`, `samples/VFXLab` | Surface shader graphs, a toon shading study, particle and trail effects |
 | `samples/NetCoop`, `NetDuel`, `NetArena`, `NetChase` | Lockstep co-op, rollback versus, authoritative arena and third-person race, with in-game lobbies |
+| `games/OnlineRPG` | An online RPG prototype in the HD-2D look with a login server and channel servers players enter at any time: ground items, pick-up, bag, drop, chat and speech bubbles — design document: [docs/ONLINERPG.md](docs/ONLINERPG.md) |
 | `games/DongleZoo` | A shippable portrait merge puzzle for phones: shop, missions, ads and purchases through the host bridge — design document: [docs/DONGLEZOO.md](docs/DONGLEZOO.md) |
 
 ## Repository layout

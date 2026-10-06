@@ -226,6 +226,7 @@ void Engine::EnableAudioOutput() {
 void Engine::ResetRuntime() {
     networkButtonKeys_.clear();
     debugLines_.clear();
+    links_.Clear();  // their ids lived in the Lua state that goes away
     scripts_->Reset();
     physics_->Reset();
     audio_->Reset();
@@ -291,10 +292,17 @@ void Engine::Stop() {
     input_.lookX = input_.lookY = 0.0f;
     gameData_ = Json::MakeObject();
     gamePaused_ = false;
+    quitRequested_ = false;
     frame_ = 0;
     simTime_ = 0;
     Touch();
     OE_LOG_INFO("sim", "stop (scene restored)");
+}
+
+std::string Engine::ScriptReloadBlockReason() const {
+    if (journal_) return "recording";
+    if ((sync_ && sync_->Active()) || (authority_ && authority_->Active())) return "match_active";
+    return {};
 }
 
 void Engine::Step(int frames) {
@@ -339,6 +347,7 @@ void Engine::SimulateFrame() {
         if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
     }
     if (dedicated_) input_ = deviceInput_ = InputState{};
+    if (links_.Count()) links_.Pump();
     AutoStartNetwork();
     if (!PollAuthority() || !PollSync()) return;
     if (autoStart_ && (!authority_ || !authority_->Running()) && (!sync_ || !sync_->Running())) return;
@@ -456,6 +465,13 @@ std::set<EntityId> Engine::HeldInputButtons(const InputState& input, bool includ
 InputState Engine::SampleNetworkInput() {
     // Only declared actions enter the wire; local pointer coordinates never enter the world.
     InputState sample = input_;
+    if (TextInputActive()) {
+        // The keyboard types into the focused UIInput: none of it is a game action (chat while standing still).
+        auto keyboard = [](const std::string& key) { return key.compare(0, 5, "Mouse") != 0 && key.compare(0, 7, "Gamepad") != 0; };
+        for (auto* held : {&sample.down, &sample.pressedThisFrame}) {
+            for (auto it = held->begin(); it != held->end();) it = keyboard(*it) ? held->erase(it) : std::next(it);
+        }
+    }
     std::set<std::string> keys;
     for (EntityId id : HeldInputButtons(input_, true)) keys.insert(scene_.Get<UIButton>(id)->key);
     for (const auto& key : keys) {
@@ -467,6 +483,16 @@ InputState Engine::SampleNetworkInput() {
     if (networkConfig_.sync.look[0]) sample.axes["RightX"] = sample.lookX;
     if (networkConfig_.sync.look[1]) sample.axes["RightY"] = sample.lookY;
     return sample;
+}
+
+void Engine::MergeLocalInput(const InputState& device) {
+    const auto& declared = networkConfig_.sync.keys;
+    auto local = [&](const std::string& key) { return std::find(declared.begin(), declared.end(), key) == declared.end(); };
+    for (const std::string& key : device.down) if (local(key)) input_.down.insert(key);
+    for (const std::string& key : device.pressedThisFrame) if (local(key)) input_.pressedThisFrame.insert(key);
+    input_.mouseX = device.mouseX; input_.mouseY = device.mouseY;
+    input_.viewWidth = device.viewWidth; input_.viewHeight = device.viewHeight;
+    input_.wheel = device.wheel; input_.touches = device.touches; input_.text = device.text;
 }
 
 void Engine::SetLook(float x, float y) {
@@ -1049,7 +1075,7 @@ bool Engine::BeginPrefabEdit(const std::string& path, std::string* error) {
     prefabBackup_->undo = std::move(undo_);
     prefabBackup_->redo = std::move(redo_);
     prefabBackup_->mergeKey = lastMergeKey_;
-    scene_ = std::move(isolated);
+    scene_.ReplaceWith(isolated);
     prefabPath_ = path;
     scenePath_.clear();
     ResetHistory();
@@ -1225,6 +1251,31 @@ bool Engine::HostCall(const std::string& name, const Json& data) {
     if (hostCalls_.size() >= kMaxHostCalls) hostCalls_.erase(hostCalls_.begin());
     hostCalls_.push_back({name, data, frame_, handled});
     return handled;
+}
+
+uint32_t Engine::OpenLink(const std::string& address, uint32_t port) {
+    if (sync_ && sync_->Active())
+        throw ApiError("link_unavailable", "links are not available in a lockstep or rollback match", "Every peer must compute the same frames; use links before the match or in an authoritative game.");
+    if (authority_ && authority_->Running() && network_ && !network_->IsHost())
+        throw ApiError("link_unavailable", "a client cannot open a link while it predicts a match", "Open links before joining, or on the server and pass results by RPC.");
+    NetAddress target;
+    target.host = address;
+    target.port = static_cast<uint16_t>(port);
+    std::string error;
+    uint32_t id = port >= 1 && port <= 65535 ? links_.Open(target, &error) : 0;
+    if (!id) throw ApiError("link_open", error.empty() ? "link port must be 1..65535" : error, "Pass a numeric IPv4 address and a port; at most 8 links, close the ones you no longer need. Browsers have no TCP.");
+    return id;
+}
+
+bool Engine::SetLaunchArg(const std::string& name, const std::string& value, std::string* error) {
+    auto fail = [&](const char* message) { if (error) *error = message; return false; };
+    if (name.empty() || name.size() > 64) return fail("a launch parameter name has 1..64 characters");
+    for (char c : name)
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '.' && c != '-') return fail("a launch parameter name uses letters, digits, '_', '.' and '-'");
+    if (value.size() > 4096) return fail("a launch parameter value has at most 4096 bytes");
+    if (!launchArgs_.count(name) && launchArgs_.size() >= kMaxLaunchArgs) return fail("at most 64 launch parameters");
+    launchArgs_[name] = value;
+    return true;
 }
 
 void Engine::PushHostMessage(const std::string& name, const Json& data) {
