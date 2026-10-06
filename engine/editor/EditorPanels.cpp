@@ -694,8 +694,8 @@ void NativeEditor::Impl::AssetsPanel() {
     ImGui::TextDisabled("%s", countLabel.c_str());
     ImGui::Separator();
     ImGui::BeginChild("##assets", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
-    // A shallow dock must show filenames immediately, rather than only the top of a preview card.
-    const bool useGrid = assetGrid && ImGui::GetContentRegionAvail().y >= font * 6;
+    // Honor the explicit view selection even in shallow docks; cards remain scrollable.
+    const bool useGrid = assetGrid;
     const float available = ImGui::GetContentRegionAvail().x;
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const int columns = useGrid ? std::max(1, static_cast<int>((available + gap) / (font * 9 + gap))) : 1;

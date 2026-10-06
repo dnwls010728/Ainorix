@@ -11311,9 +11311,10 @@ TEST(NativeEditorAssetBrowser) {
         NativeEditor::Options options; options.language = "en";
         NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
         RenderTarget image;
+        int windowHeight = 900;
         auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
             for (int i = 0; i < count; ++i) {
-                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 900, 1, Engine::kFixedDt);
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, windowHeight, 1, Engine::kFixedDt);
                 CHECK(editor.DrawToImage(image));
             }
         };
@@ -11329,7 +11330,7 @@ TEST(NativeEditorAssetBrowser) {
         CHECK(assetsWindow && assetsWindow->DockTabIsVisible);
         if (!assetsWindow) return;
         const float font = ImGui::GetFontSize(), row = ImGui::GetFrameHeightWithSpacing();
-        const ImVec2 origin = assetsWindow->WorkRect.Min;
+        ImVec2 origin = assetsWindow->WorkRect.Min;
         const ImGuiStyle& style = ImGui::GetStyle();
         const float gridWidth = ImGui::CalcTextSize("Grid").x + style.FramePadding.x * 2;
         const float listWidth = ImGui::CalcTextSize("List").x + style.FramePadding.x * 2;
@@ -11339,6 +11340,36 @@ TEST(NativeEditorAssetBrowser) {
         CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/assets-list-test.png"), image.ToImage()));
         click(ImVec2(gridX + gridWidth * 0.5f, origin.y + row + row * 0.4f));
         CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("AssetGrid=1") != std::string::npos);
+        // A shallow Assets dock must still change its actual layout, not only the saved preference.
+        windowHeight = 600;
+        frames(5);
+        const ImVec2 splitter(assetsWindow->Pos.x + assetsWindow->Size.x * 0.5f, assetsWindow->Pos.y - 2);
+        frames(1, {move(splitter), button(true)});
+        frames(3, {move(ImVec2(splitter.x, splitter.y + 80))});
+        frames(3, {button(false)});
+        auto assetContent = [&]() -> ImGuiWindow* {
+            for (ImGuiWindow* window : GImGui->Windows)
+                if (window->Active && window->ParentWindow == assetsWindow && std::strstr(window->Name, "##assets")) return window;
+            return nullptr;
+        };
+        ImGuiWindow* shallow = assetContent();
+        CHECK(shallow && shallow->InnerRect.GetHeight() < font * 6);
+        const float gridContentHeight = shallow ? shallow->ContentSize.y : 0;
+        const ImVec2 shallowOrigin = assetsWindow->WorkRect.Min;
+        click(ImVec2(gridX + gridWidth + style.ItemSpacing.x + listWidth * 0.5f, shallowOrigin.y + row + row * 0.4f));
+        frames(3);
+        CHECK(assetContent() && assetContent()->ContentSize.y != gridContentHeight);
+        click(ImVec2(gridX + gridWidth * 0.5f, shallowOrigin.y + row + row * 0.4f));
+        frames(3);
+        CHECK(assetContent() && assetContent()->ContentSize.y == gridContentHeight);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/assets-shallow-grid-test.png"), image.ToImage()));
+        const ImVec2 restoreSplitter(splitter.x, assetsWindow->Pos.y - 2);
+        frames(1, {move(restoreSplitter), button(true)});
+        frames(3, {move(ImVec2(restoreSplitter.x, restoreSplitter.y - 80))});
+        frames(3, {button(false)});
+        windowHeight = 900;
+        frames(5);
+        origin = assetsWindow->WorkRect.Min;
         // Search through typed input, then drag the whole preview card, not only its filename.
         click(ImVec2(origin.x + font * 3, origin.y + row * 0.4f));
         std::vector<WindowEvent> text;
