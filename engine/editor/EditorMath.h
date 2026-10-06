@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "core/Math.h"
@@ -109,6 +110,22 @@ inline float Grid2DStep(float unitsPerPixel, float minPixels = 10.0f) {
 // drawn at ten times that (where the next finer level starts to appear).
 constexpr float kGrid2DMinPixels = 8.0f;
 inline float Grid2DAlpha(float cellPixels) { return Clamp((cellPixels - kGrid2DMinPixels) / (kGrid2DMinPixels * 9.0f), 0.0f, 1.0f); }
+
+// Inverse-project the actual camera clip box, preserving perspective/orthographic and parent transforms.
+// Corners 0..3 are near, 4..7 far; each face goes bottom-left, bottom-right, top-right, top-left.
+inline bool CameraFrustumCorners(const Mat4& view, const Mat4& projection, std::array<Vec3, 8>& corners) {
+    const Mat4 inverse = (projection * view).Inverse();
+    for (int i = 0; i < 8; ++i) {
+        const int face = i % 4;
+        const Vec4 clip(face == 1 || face == 2 ? 1.0f : -1.0f, face >= 2 ? 1.0f : -1.0f, i >= 4 ? 1.0f : -1.0f, 1);
+        const Vec4 world = inverse * clip;
+        if (!std::isfinite(world.w) || std::fabs(world.w) < 1e-8f) return false;
+        const Vec3 point = world.xyz() * (1.0f / world.w);
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) return false;
+        corners[static_cast<size_t>(i)] = point;
+    }
+    return true;
+}
 
 // World-space ray through a pixel of a view (x, y from the top-left).
 inline void ScreenRay(const Mat4& view, const Mat4& proj, float x, float y, float width, float height, Vec3& origin, Vec3& dir) {

@@ -10478,6 +10478,38 @@ TEST(EditorMathDecompose) {
     CHECK(std::fabs(NearestAngle(350.0f, 0.0f) + 10.0f) < 1e-4f);
 }
 
+TEST(EditorCameraFrustumCorners) {
+    Scene scene;
+    const EntityId parent = scene.Create("Camera parent"), id = scene.Create("Camera");
+    scene.Add<Transform>(parent).position = Vec3(2, 3, -4);
+    scene.Get<Transform>(parent)->rotation = Vec3(15, 30, 5);
+    scene.Add<Transform>(id).position = Vec3(1, 0, 2);
+    CHECK(scene.SetParent(id, parent, nullptr));
+    Camera& camera = scene.Add<Camera>(id);
+    camera.nearPlane = 0.5f; camera.farPlane = 20;
+    camera.fov = 65; camera.orthoSize = 4;
+    for (const char* projection : {"perspective", "orthographic"}) {
+        camera.projection = projection;
+        for (float aspect : {0.6f, 1.0f, 16.0f / 9.0f}) {
+            RenderView view;
+            CHECK(MakeCameraView(scene, id, aspect, view));
+            std::array<Vec3, 8> corners;
+            CHECK(CameraFrustumCorners(view.view, view.proj, corners));
+            for (size_t i = 0; i < corners.size(); ++i) {
+                const Vec4 clip = view.proj * view.view * Vec4(corners[i], 1);
+                const size_t face = i % 4;
+                CHECK(std::fabs(clip.x / clip.w - (face == 1 || face == 2 ? 1.0f : -1.0f)) < 1e-4f);
+                CHECK(std::fabs(clip.y / clip.w - (face >= 2 ? 1.0f : -1.0f)) < 1e-4f);
+                CHECK(std::fabs(clip.z / clip.w - (i >= 4 ? 1.0f : -1.0f)) < 1e-4f);
+                const Vec4 local = view.view * Vec4(corners[i], 1);
+                CHECK(std::fabs(local.z + (i >= 4 ? camera.farPlane : camera.nearPlane)) < 0.001f);
+            }
+            const float nearWidth = Length(corners[1] - corners[0]), farWidth = Length(corners[5] - corners[4]);
+            CHECK(std::fabs(farWidth / nearWidth - (camera.projection == "orthographic" ? 1.0f : 40.0f)) < 0.01f);
+        }
+    }
+}
+
 TEST(EditorCameraRays) {
     EditorCamera cam;
     cam.target = Vec3(1, 0, -2);
@@ -11300,6 +11332,165 @@ TEST(NativeEditorTeamChat) {
 #endif
 }
 #endif
+
+TEST(NativeEditorLightGuides) {
+    const std::string project = TempProject("editor_light_guides");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(Call(engine, "entity.create", R"({"name":"Light parent","components":{"Transform":{"position":[0,1,0],"rotation":[-25,35,0],"scale":[2,2,2]}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Range bulb","parent":"Light parent","components":{"Transform":{},"PointLight":{"range":2}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Direction sun","parent":"Light parent","components":{"Transform":{},"DirectionalLight":{}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Flat light","parent":"Light parent","components":{"Transform":{},"Light2D":{"radius":2,"inner":0.5}}})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&]() {
+            for (int i = 0; i < 5; ++i) {
+                editor.Update({}, 1280, 720, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames();
+        const Json before = engine.GetScene().ToJson();
+        const auto undo = engine.UndoDepth();
+        for (const char* name : {"Range bulb", "Direction sun", "Flat light"}) {
+            editor.Select(engine.GetScene().FindByName(name));
+            frames();
+            CHECK(WritePng(JoinPath(OE_SOURCE_DIR, std::string("build/light-guide-") + name + ".png"), image.ToImage()));
+            CHECK(engine.GetScene().ToJson() == before && engine.UndoDepth() == undo);
+        }
+        CHECK(Call(engine, "component.set", R"({"id":"Flat light","type":"Light2D","values":{"enabled":false}})")["ok"].asBool());
+        frames();
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/light-guide-disabled.png"), image.ToImage()));
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NativeEditorCameraBounds) {
+    const std::string project = TempProject("editor_camera_bounds");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(Call(engine, "component.set", R"({"id":"Main Camera","type":"Transform","values":{"position":[0,2,3],"rotation":[-20,0,0]}})")["ok"].asBool());
+    CHECK(Call(engine, "component.set", R"({"id":"Main Camera","type":"Camera","values":{"nearPlane":1,"farPlane":8,"orthoSize":2}})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&]() {
+            for (int i = 0; i < 5; ++i) {
+                editor.Update({}, 1280, 720, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames();
+        const uint64_t unselected = image.Hash();
+        editor.Select(engine.GetScene().FindByName("Main Camera"));
+        for (const char* projection : {"perspective", "orthographic"}) {
+            Json request = Json::parse(R"({"id":"Main Camera","type":"Camera","values":{}})");
+            request["values"]["projection"] = Json(projection);
+            CHECK(engine.Call("component.set", request)["ok"].asBool());
+            const Json before = engine.GetScene().ToJson();
+            const auto undo = engine.UndoDepth();
+            frames();
+            CHECK(image.Hash() != unselected);
+            CHECK(WritePng(JoinPath(OE_SOURCE_DIR, std::string("build/camera-bounds-") + projection + ".png"), image.ToImage()));
+            CHECK(engine.GetScene().ToJson() == before && engine.UndoDepth() == undo);
+        }
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NativeEditorSceneCompass) {
+    const std::string project = TempProject("editor_scene_compass");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames(8);
+        const Json sceneBefore = engine.GetScene().ToJson();
+        const auto selectedBefore = editor.Selected();
+        const auto undoBefore = engine.UndoDepth();
+        EditorCamera camera;
+        auto readCamera = [&]() {
+            const std::string ini = ImGui::SaveIniSettingsToMemory();
+            const size_t angles = ini.find("CameraAngles="), target = ini.find("Camera=");
+            CHECK(angles != std::string::npos && target != std::string::npos);
+            if (angles != std::string::npos)
+                CHECK(std::sscanf(ini.c_str() + angles, "CameraAngles=%f,%f,%f", &camera.yaw, &camera.pitch, &camera.distance) == 3);
+            if (target != std::string::npos)
+                CHECK(std::sscanf(ini.c_str() + target, "Camera=%f,%f,%f", &camera.target.x, &camera.target.y, &camera.target.z) == 3);
+        };
+        readCamera();
+        const Vec3 targetBefore = camera.target;
+        const float distanceBefore = camera.distance;
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/scene-compass-perspective.png"), image.ToImage()));
+        // Choose each visible endpoint using the same camera-space world directions as the screenshot.
+        auto clickAxis = [&](Vec3 direction) {
+            const auto rect = editor.SceneViewRect();
+            const float size = ImGui::GetFontSize() * 5.5f;
+            const ImVec2 center(rect[0] + rect[2] - 8 - size * 0.5f, rect[1] + 8 + size * 0.5f);
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove;
+            move.x = center.x + Dot(direction, camera.Right()) * size * 0.32f;
+            move.y = center.y - Dot(direction, camera.Up()) * size * 0.32f;
+            WindowEvent press; press.type = WindowEvent::Type::MouseButton; press.button = 0; press.down = true;
+            WindowEvent release = press; release.down = false;
+            frames(2, {move}); frames(1, {press}); frames(3, {release});
+            readCamera();
+            CHECK(Near(camera.target, targetBefore, 1e-4f));
+            CHECK(std::fabs(camera.distance - distanceBefore) < 1e-4f);
+        };
+        clickAxis(Vec3(1, 0, 0)); CHECK(Near(camera.Forward(), Vec3(-1, 0, 0), 1e-4f));
+        clickAxis(Vec3(0, 0, 1)); CHECK(Near(camera.Forward(), Vec3(0, 0, -1), 1e-4f));
+        clickAxis(Vec3(0, 1, 0)); CHECK(camera.pitch == -89.0f);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/scene-compass-top.png"), image.ToImage()));
+        clickAxis(Vec3(-1, 0, 0)); CHECK(Near(camera.Forward(), Vec3(1, 0, 0), 1e-4f));
+        clickAxis(Vec3(0, 0, -1)); CHECK(Near(camera.Forward(), Vec3(0, 0, 1), 1e-4f));
+        clickAxis(Vec3(0, -1, 0)); CHECK(camera.pitch == 89.0f);
+        // 2D has no compass hit target; restoring 3D brings it back.
+        for (bool mode2D : {true, false}) {
+            const auto viewRect = editor.SceneViewRect();
+            float toggleX = viewRect[0] + 6;
+            for (const char* label : {"Grid", "Colliders", "Icons"})
+                toggleX += ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2 + 3;
+            WindowEvent toggleMove; toggleMove.type = WindowEvent::Type::MouseMove;
+            toggleMove.x = toggleX + (ImGui::CalcTextSize("2D").x + ImGui::GetStyle().FramePadding.x * 2) * 0.5f;
+            toggleMove.y = viewRect[1] + 6 + ImGui::GetFontSize() * 0.5f;
+            WindowEvent togglePress; togglePress.type = WindowEvent::Type::MouseButton; togglePress.button = 0; togglePress.down = true;
+            WindowEvent toggleRelease = togglePress; toggleRelease.down = false;
+            frames(2, {toggleMove}); frames(1, {togglePress}); frames(3, {toggleRelease});
+            CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find(mode2D ? "Camera2D=1" : "Camera2D=0") != std::string::npos);
+            ImGuiWindow* window = ImGui::FindWindowByName("###Scene");
+            CHECK(window != nullptr);
+            if (!window) continue;
+            const auto rect = editor.SceneViewRect();
+            const float size = ImGui::GetFontSize() * 5.5f;
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove;
+            move.x = rect[0] + rect[2] - size; move.y = rect[1] + 16;
+            WindowEvent press; press.type = WindowEvent::Type::MouseButton; press.button = 0; press.down = true;
+            WindowEvent release = press; release.down = false;
+            frames(2, {move}); frames(1, {press});
+            CHECK(GImGui->ActiveId == window->GetID(mode2D ? "##sceneview" : "##scenecompass"));
+            frames(3, {release});
+            if (mode2D) CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/scene-compass-hidden-2d.png"), image.ToImage()));
+        }
+
+        CHECK(engine.GetScene().ToJson() == sceneBefore && engine.UndoDepth() == undoBefore);
+        CHECK(editor.Selected() == selectedBefore && !engine.Dirty());
+    }
+    CHECK(RemoveAll(project));
+}
 
 TEST(NativeEditorAssetBrowser) {
     const std::string project = TempProject("editor_asset_browser");

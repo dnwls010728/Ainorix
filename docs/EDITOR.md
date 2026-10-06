@@ -24,6 +24,12 @@ The layout (docking), panel visibility, interface size and language, gizmo/snap 
 
 ## Controls
 
+Selected lights have world-space guides: PointLight uses three great circles at its `range`; DirectionalLight uses parallel arrows along world local -Z (its reach is infinite); Light2D shows outer `radius` and inner falloff boundary in the game camera plane. Parent transforms affect position/direction, but scale does not enlarge light radii. Zero-intensity/disabled lights use gray guides. Existing unselected Light2D outer rings follow the Icons toggle; selected light guides remain visible with Icons off. These guides do not appear in the Game view or packaged player.
+
+Selecting a Camera shows its near/far clip volume in cyan in the Scene view: a frustum for Perspective, a rectangular box for Orthographic. It uses the renderer camera matrix (including parent transforms), FOV/orthoSize and near/far planes. The aspect matches the visible Game view, or the logical project view when Game is hidden; resizing may take one frame to update. This is an editor overlay and does not change the scene or packaged game.
+
+The Scene view has an X/Y/Z compass at the top-right (red/green/blue). Click a labeled end or its opposite hollow end to look from that side, preserving the orbit target and zoom. Top/bottom views retain the existing 89-degree pitch limit to avoid a singular world-up camera basis. Axis clicks change only the editor camera, without scene edits or undo entries. The compass is hidden in 2D mode and in very small views.
+
 | Where | Input | Action |
 |---|---|---|
 | Scene | Right mouse drag | look around; with WASD / Q E fly, Shift faster, wheel = fly speed |

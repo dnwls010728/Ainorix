@@ -2,6 +2,7 @@
 // icons, asset drops) and the Game view (game camera, input forwarding).
 // Both are GpuRenderer::RenderToTexture images drawn as ImGui images.
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -58,6 +59,63 @@ bool OverlayToggle(const char* label, bool* value, const char* tip) {
     if (pressed) *value = !*value;
     HelpTooltip(tip);
     return pressed;
+}
+
+// The view compass uses the same basis as the free camera, independent of scene entities.
+bool SceneCompass(EditorCamera& cam, ImVec2 origin, float size) {
+    const ImVec2 saved = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(origin);
+    ImGui::InvisibleButton("##scenecompass", ImVec2(size, size));
+    const bool hovered = ImGui::IsItemHovered();
+    const bool clicked = ImGui::IsItemClicked();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 center(origin.x + size * 0.5f, origin.y + size * 0.5f);
+    const float radius = size * 0.115f, arm = size * 0.32f;
+    struct Endpoint { int axis; int sign; ImVec2 point; float depth; };
+    std::array<Endpoint, 6> ends;
+    const Vec3 right = cam.Right(), up = cam.Up(), forward = cam.Forward();
+    for (int i = 0; i < 6; ++i) {
+        const int axis = i / 2, sign = i % 2 == 0 ? 1 : -1;
+        const Vec3 dir = (axis == 0 ? Vec3(1, 0, 0) : axis == 1 ? Vec3(0, 1, 0) : Vec3(0, 0, 1)) * static_cast<float>(sign);
+        ends[static_cast<size_t>(i)] = {axis, sign,
+            ImVec2(center.x + Dot(dir, right) * arm, center.y - Dot(dir, up) * arm), -Dot(dir, forward)};
+    }
+    std::stable_sort(ends.begin(), ends.end(), [](const Endpoint& a, const Endpoint& b) { return a.depth < b.depth; });
+    int hot = -1;
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    for (int i = 0; i < 6; ++i) {
+        const ImVec2 d(mouse.x - ends[static_cast<size_t>(i)].point.x, mouse.y - ends[static_cast<size_t>(i)].point.y);
+        if (hovered && d.x * d.x + d.y * d.y <= radius * radius) hot = i;
+    }
+    dl->AddCircleFilled(center, size * 0.48f, IM_COL32(18, 21, 27, hovered ? 190 : 130));
+    const ImU32 colors[] = {IM_COL32(246, 74, 92, 255), IM_COL32(145, 213, 54, 255), IM_COL32(65, 145, 255, 255)};
+    const char* labels[] = {"X", "Y", "Z"};
+    for (int i = 0; i < 6; ++i) {
+        const Endpoint& end = ends[static_cast<size_t>(i)];
+        const ImU32 color = colors[end.axis];
+        if (end.sign > 0) dl->AddLine(center, end.point, color, 2.5f);
+        dl->AddCircleFilled(end.point, radius, end.sign > 0 ? color : IM_COL32(36, 40, 48, 255));
+        dl->AddCircle(end.point, radius, hot == i ? IM_COL32(255, 255, 255, 255) : color, 0, hot == i ? 2.0f : 1.0f);
+        if (end.sign > 0) {
+            const ImVec2 text = ImGui::CalcTextSize(labels[end.axis]);
+            dl->AddText(ImVec2(end.point.x - text.x * 0.5f, end.point.y - text.y * 0.5f), IM_COL32(15, 20, 26, 255), labels[end.axis]);
+        }
+    }
+    if (hovered) HelpTooltip(Tr("Click an axis to view the scene from that direction"));
+    if (clicked && hot >= 0) {
+        const Endpoint& end = ends[static_cast<size_t>(hot)];
+        cam.Set2D(false);
+        cam.pitch = 0;
+        if (end.axis == 0) cam.yaw = end.sign > 0 ? 90.0f : -90.0f;
+        else if (end.axis == 2) cam.yaw = end.sign > 0 ? 0.0f : 180.0f;
+        else {
+            // Keep the existing camera's pole limit, so the world-up view basis stays well defined.
+            cam.yaw = 0;
+            cam.pitch = end.sign > 0 ? -89.0f : 89.0f;
+        }
+    }
+    ImGui::SetCursorScreenPos(saved);
+    return hovered;
 }
 
 }  // namespace
@@ -126,23 +184,6 @@ void NativeEditor::Impl::SceneOverlays(ImDrawList* dl) {
         ImVec2 ts = ImGui::CalcTextSize(letter);
         dl->AddText(ImVec2(s.x - ts.x * 0.5f, s.y - ts.y * 0.5f), sel ? IM_COL32(20, 20, 20, 255) : col, letter);
         if (hover) dl->AddText(ImVec2(s.x + r + 4, s.y - ts.y * 0.5f), IM_COL32(230, 232, 238, 255), row.name.c_str());
-    }
-    // Light2D: the reach of each 2D light as a ring in its entity's XY plane.
-    for (const auto& kv : scene.Pool<Light2D>()) {
-        const Light2D& light = kv.second;
-        const Mat4 world = scene.WorldMatrix(kv.first);
-        const Vec3 center = world.TransformPoint(Vec3(0, 0, 0));
-        const ImU32 color = IsSelected(kv.first) ? IM_COL32(255, 158, 26, 255) : IM_COL32(255, 220, 120, light.enabled ? 170 : 70);
-        ImVec2 previous;
-        bool havePrevious = false;
-        for (int i = 0; i <= 48; ++i) {
-            const float a = static_cast<float>(i) / 48.0f * 6.2831853f;
-            ImVec2 point;
-            const bool ok = Project(vp, center + Vec3(std::cos(a) * light.radius, std::sin(a) * light.radius, 0), sceneImagePos, sceneImageSize, point);
-            if (ok && havePrevious) dl->AddLine(previous, point, color, 1.5f);
-            previous = point;
-            havePrevious = ok;
-        }
     }
     markerHover = hovered;
 }
@@ -346,6 +387,73 @@ void NativeEditor::Impl::ScenePanel() {
         TilesetLookup tilesets = engine.Assets().Tilesets();
         AppendColliderLines(scene, view.lines, &tilesets);
     }
+    // Light ranges are in world units, independent of Transform.scale, as in GatherLights.
+    auto ring = [&](const Vec3& center, const Vec3& right, const Vec3& up, float radius, Color color) {
+        if (!std::isfinite(radius) || radius <= 0) return;
+        Vec3 previous = center + right * radius;
+        for (int i = 1; i <= 48; ++i) {
+            const float angle = static_cast<float>(i) / 48.0f * 2 * kPi;
+            const Vec3 point = center + (right * std::cos(angle) + up * std::sin(angle)) * radius;
+            view.lines.push_back({previous, point, color});
+            previous = point;
+        }
+    };
+    const EntityId lightId = Primary();
+    const Mat4 lightWorld = scene.Exists(lightId) ? scene.WorldMatrix(lightId) : Mat4::Identity();
+    const Vec3 lightCenter = lightWorld.TransformPoint(Vec3());
+    if (const PointLight* light = scene.Get<PointLight>(lightId)) {
+        const Color color = light->intensity > 0 ? Color(1, 0.7f, 0.2f) : Color(0.45f, 0.45f, 0.45f);
+        const float radius = std::max(0.01f, light->range);
+        ring(lightCenter, Vec3(1, 0, 0), Vec3(0, 1, 0), radius, color);
+        ring(lightCenter, Vec3(1, 0, 0), Vec3(0, 0, 1), radius, color);
+        ring(lightCenter, Vec3(0, 1, 0), Vec3(0, 0, 1), radius, color);
+    }
+    if (const DirectionalLight* light = scene.Get<DirectionalLight>(lightId)) {
+        // Infinite reach: draw parallel rays, never a misleading finite range box.
+        const Vec3 direction = Normalize(lightWorld.TransformDir(Vec3(0, 0, -1)));
+        const Vec3 right = Normalize(Cross(direction, std::fabs(direction.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0)));
+        const Color color = light->intensity > 0 ? Color(1, 0.85f, 0.35f) : Color(0.45f, 0.45f, 0.45f);
+        for (int i = -1; i <= 1; ++i) {
+            const Vec3 start = lightCenter + right * (static_cast<float>(i) * 0.65f);
+            const Vec3 tip = start + direction * 2.5f;
+            view.lines.push_back({start, tip, color});
+            view.lines.push_back({tip, tip - direction * 0.4f + right * 0.2f, color});
+            view.lines.push_back({tip, tip - direction * 0.4f - right * 0.2f, color});
+        }
+    }
+    // Darkness2D is rendered in the game camera plane, not the light entity's rotated/scaled plane.
+    const Mat4 gameCameraWorld = sceneCam.view.Inverse();
+    const Vec3 lightRight = Normalize(gameCameraWorld.TransformDir(Vec3(1, 0, 0)));
+    const Vec3 lightUp = Normalize(gameCameraWorld.TransformDir(Vec3(0, 1, 0)));
+    for (const auto& kv : scene.Pool<Light2D>()) {
+        const bool selected = IsSelected(kv.first);
+        if (!showIcons && !selected) continue;
+        const Light2D& light = kv.second;
+        const Color color = !light.enabled || light.strength <= 0 ? Color(0.4f, 0.4f, 0.4f)
+            : selected ? Color(1, 0.7f, 0.2f) : Color(0.8f, 0.7f, 0.4f);
+        const Vec3 center = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
+        ring(center, lightRight, lightUp, light.radius, color);
+        if (selected) ring(center, lightRight, lightUp, light.radius * Clamp(light.inner, 0.0f, 0.99f), color * 0.7f);
+    }
+    // The selected camera's clip volume uses its renderer matrix, not an approximate FOV shape.
+    // Match the Game view aspect (previous frame while resizing); hidden Game uses the logical project view.
+    if (scene.Get<Camera>(Primary())) {
+        const InputState& input = engine.Input();
+        const float cameraAspect = showGame && gameImageSize.x > 0 && gameImageSize.y > 0
+            ? gameImageSize.x / gameImageSize.y
+            : static_cast<float>(std::max(1, input.viewWidth)) / static_cast<float>(std::max(1, input.viewHeight));
+        RenderView cameraView;
+        std::array<Vec3, 8> corners;
+        if (MakeCameraView(scene, Primary(), cameraAspect, cameraView) && CameraFrustumCorners(cameraView.view, cameraView.proj, corners)) {
+            const Color color(0.35f, 0.85f, 1.0f);
+            for (size_t i = 0; i < 4; ++i) {
+                const size_t next = (i + 1) % 4;
+                view.lines.push_back({corners[i], corners[next], color});
+                view.lines.push_back({corners[i + 4], corners[next + 4], color});
+                view.lines.push_back({corners[i], corners[i + 4], color});
+            }
+        }
+    }
     engine.AppendDebugLines(view.lines);
     sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kSceneSlot);
     sceneViewMat = view.view;
@@ -356,10 +464,15 @@ void NativeEditor::Impl::ScenePanel() {
     sceneImageSize = ImVec2(static_cast<float>(w), static_cast<float>(h));
     // ImGuizmo only grabs the mouse when no ImGui item is hovered, so while the
     // pointer is on the gizmo the view is a plain (non-interactive) item.
+    const float compassSize = ImGui::GetFontSize() * 5.5f;
+    const ImVec2 compassPos(pos.x + sceneImageSize.x - compassSize - 8, pos.y + 8);
+    const bool showCompass = !cam.mode2D && sceneImageSize.x > compassSize + ImGui::GetFontSize() * 20 && sceneImageSize.y > compassSize + 16;
+    const bool compassHot = showCompass && ImGui::IsWindowHovered() &&
+        ImGui::IsMouseHoveringRect(compassPos, compassPos + ImVec2(compassSize, compassSize));
     const bool painting = TilePainting();
     bool gizmoHot = !painting && gizmoOp != GizmoOp::None && Primary() != kNullEntity && !sceneButtonActive && (ImGuizmo::IsUsing() || ImGuizmo::IsOver());
     bool clickedLeft = false, clickedRight = false;
-    if (gizmoHot) {
+    if (gizmoHot || compassHot) {
         ImGui::Dummy(sceneImageSize);
         sceneHovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(pos, pos + sceneImageSize);
         sceneButtonActive = false;
@@ -374,7 +487,8 @@ void NativeEditor::Impl::ScenePanel() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     bool flip = FlipViews();
     dl->AddImage(ViewTexture(tex), pos, pos + sceneImageSize, ImVec2(0, flip ? 1.0f : 0.0f), ImVec2(1, flip ? 0.0f : 1.0f));
-    SceneCameraInput(io);
+    if (!compassHot) SceneCameraInput(io);
+    else { sceneLooking = false; scenePressPending = false; }
 
     // Assets dropped into the view.
     if (ImGui::BeginDragDropTarget()) {
@@ -384,14 +498,17 @@ void NativeEditor::Impl::ScenePanel() {
         ImGui::EndDragDropTarget();
     }
 
+    if (showCompass) SceneCompass(cam, compassPos, compassSize);
+
     SceneOverlays(dl);
     if (painting) {
         // Tile brush: clicks paint the selected tilemap instead of selecting.
         gizmoUsing = false;
-        TileSceneInput(dl, clickedLeft && !io.KeyAlt, clickedRight);
+        if (!compassHot) TileSceneInput(dl, clickedLeft && !io.KeyAlt, clickedRight);
     } else {
         tileStroke = TileStroke::None;
-        SceneGizmo();
+        if (!compassHot || gizmoWasUsing) SceneGizmo();
+        else gizmoUsing = false;
     }
 
     // Click (not drag) selects: markers first, then the pixel's entity.
@@ -438,7 +555,7 @@ void NativeEditor::Impl::ScenePanel() {
     if (InPlaySession()) {
         const char* t = Tr(Playing() ? "Playing - edits are undone on Stop" : "Paused - edits are undone on Stop");
         ImVec2 ts = ImGui::CalcTextSize(t);
-        dl->AddText(ImVec2(pos.x + sceneImageSize.x - ts.x - 10, pos.y + 8), IM_COL32(255, 200, 90, 230), t);
+        dl->AddText(ImVec2(pos.x + sceneImageSize.x - ts.x - 10, pos.y + (showCompass ? compassSize + 16 : 8)), IM_COL32(255, 200, 90, 230), t);
     }
     ImGui::End();
 }

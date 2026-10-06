@@ -229,6 +229,8 @@ const Entry kCatalog[] = {
     {"Drop a script on an entity", "스크립트는 엔티티에 놓으세요", "スクリプトはエンティティにドロップしてください"},
     {"Nothing to place for %s", "%s은(는) 배치할 수 없습니다", "%s は配置できません"},
 
+    {"Click an axis to view the scene from that direction", "축을 클릭하면 해당 방향에서 씬을 봅니다", "軸をクリックすると、その方向からシーンを表示します"},
+
     // ----- Hierarchy
     {"Search", "검색", "検索"},
     {"Create an entity", "엔티티 만들기", "エンティティを作成"},
