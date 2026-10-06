@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "app/Engine.h"
+#include "app/CoordinateQueries.h"
 #include "app/Project.h"
 #include "app/AssetPreview.h"
 #include "assets/Assets.h"
@@ -13,6 +14,7 @@
 #include "core/FileSystem.h"
 #include "core/Image.h"
 #include "core/Log.h"
+#include "net/JsonCodec.h"
 #include "render/GpuRenderer.h"
 #include "render/Material.h"
 #include "render/Mesh.h"
@@ -26,6 +28,7 @@
 #include "scene/TileGrid.h"
 #include "script/ScriptCheck.h"
 #include "script/ScriptHost.h"
+#include "script/OfficialModules.h"
 
 namespace oe {
 
@@ -342,11 +345,13 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      .Req("command", "string", "input.*, state/diagnostic query or render.screenshot.")
                      .Opt("args", "object", "Command arguments."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("peer_call", a); });
-    Register(r, "net.serve", "Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically.",
+    Register(r, "net.serve", "Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically. "
+             "With network.lateJoin the world starts at once, ready players enter it while it runs and it keeps running empty.",
              Params().Opt("name", "string", "Server name; default Player.")
                      .Opt("port", "integer", "Listen port: 0..65535; zero chooses an available port.")
                      .Opt("seed", "integer", "Session seed; default 1.")
-                     .Opt("minPlayers", "integer", "Minimum ready remote players: 1..63; default 1."), false,
+                     .Opt("room", "string", "Loopback transport: room name; default the project's gameId.")
+                     .Opt("minPlayers", "integer", "Minimum ready remote players before the match starts: 1..63, default 1 (with network.lateJoin: 0..63, default 0)."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("serve", a); });
     Register(r, "net.entities", "Inspect authoritative network entity ids, local ids, owners and received replication fields.", Params(), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("entities", a); });
@@ -367,6 +372,9 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     Register(r, "net.kick", "Host removes a remote player with a bounded graceful close.",
              Params().Req("player", "integer", "Remote player id from net.players.").Opt("reason", "string", "1..64 printable bytes; default kicked."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("kick", a); });
+    Register(r, "net.admit", "Server with network.admission \"script\": let a ready lobby player into the running world (Lua net.admit).",
+             Params().Req("player", "integer", "Remote player id from net.players."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("admit", a); });
     Register(r, "net.rpc", "Send a bounded reliable RPC, or call its Lua handler locally in none mode.",
              Params().Req("name", "string", "Handler name: 1..64 printable bytes.")
                      .Opt("target", "string", "server/owner/all/others or decimal player id; default server.")
@@ -624,6 +632,13 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              });
 
     // ----- scene -------------------------------------------------------------
+    Register(r, "scene.epoch", "Read the opaque runtime world epoch (not a portable identity or gameplay value).", Params(), false,
+             [](Engine& e, const Json&) {
+                 Json out = Json::MakeObject();
+                 out["epoch"] = e.GetScene().EpochString();
+                 return out;
+             });
+
     Register(r, "scene.summary", "Compact list of entities: id, name, parent, component names.", Params(), false,
              [](Engine& e, const Json&) { return SceneSummary(e); });
 
@@ -957,6 +972,26 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return out;
              });
 
+    for (const std::string operation : {"camera.worldToScreen", "camera.screenRay", "camera.screenToPlane", "ui.screenToCanvas"}) {
+        Params params;
+        if (operation != "ui.screenToCanvas") params.Req("camera", "entity", "Explicit Camera entity id or unique name.");
+        else params.Opt("canvas", "entity", "Single effective UICanvas id/name; omitted uses first canvas or fallback.");
+        if (operation == "camera.worldToScreen") params.Req("position", "object", "Finite world point {x,y,z}.");
+        else params.Req("screen", "object", "Logical view pixel point {x,y}, top-left origin; not clamped.");
+        if (operation == "camera.screenToPlane") params.Req("plane", "object", "World plane {point:{x,y,z},normal:{x,y,z}}; nonzero normal.");
+        params.Opt("view", "object", "{width,height} integers 1..16384; omitted uses local input.viewSize state.");
+        Register(r, operation.c_str(), "Read-only presentation coordinate query; local view dependent. See SCRIPTING.md for result schema and simulation restrictions.",
+                 params, false, [operation](Engine& e, const Json& a) { return QueryCoordinates(e, operation, a); });
+    }
+
+    Register(r, "ui.measureText", "Read-only text layout in reference pixels at effective view scale; actual renderer shaping, excluding paint effects and fitting.",
+             Params().Req("text", "string", "UTF-8 string, at most 65536 bytes.")
+                 .Opt("style", "object", "font, size, letterSpacing, lineSpacing, bold, rich; defaults match UIText.")
+                 .Opt("wrapWidth", "number", "Reference pixels; omitted/zero = no wrap; maximum 65536.")
+                 .Opt("view", "object", "Logical {width,height}; omitted uses local input.viewSize().")
+                 .Opt("canvas", "entity", "Single effective UICanvas; omitted uses first canvas/fallback."),
+             false, [](Engine& e, const Json& a) { return QueryCoordinates(e, "ui.measureText", a); });
+
     Register(r, "ui.layout", "Where every visible UI element is on a screen of the given size (pixels, top-left origin), in draw order. Use the centers with input.click.",
              Params()
                  .Opt("width", "integer", "Screen width (default 640, like render.screenshot).")
@@ -1194,13 +1229,10 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return e.Scripts().Eval(a["code"].asString(), id);
              });
 
-    Register(r, "script.reload", "Reload all loaded Lua modules now (running instances keep their state).", Params(), false,
+    Register(r, "script.reload", "Reload project dependencies and attached modules transactionally; keep instance state and official exports.", Params(), false,
              [](Engine& e, const Json&) {
-                 Json list = Json::MakeArray();
-                 for (const std::string& p : e.Scripts().ReloadAll()) list.push(p);
-                 Json out = Json::MakeObject();
-                 out["reloaded"] = list;
-                 return out;
+                 e.Scripts().ReloadAll();
+                 return e.Scripts().ReloadReport();
              });
 
     Register(r, "script.errors", "Script errors (load, runtime, eval) with file:line, entity and frame.",
@@ -1218,12 +1250,19 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return list;
              });
 
-    Register(r, "script.list", "Lua files in the project, which entities use them, and the running script state.", Params(), false,
+    Register(r, "script.list", "Project and embedded Lua sources, users, runtime state, and reserved namespace conflicts.", Params(), false,
              [](Engine& e, const Json&) {
-                 Json files = Json::MakeArray();
+                 Json files = Json::MakeArray(), conflicts = Json::MakeArray();
                  for (const std::string& f : ListFiles(e.ProjectDir(), ".lua", true)) {
                      std::string rel = RelativePath(f, e.ProjectDir());
                      if (rel.rfind("build/", 0) == 0) continue;
+                     if (IsOfficialRoot(rel)) {
+                         Json conflict = Json::MakeObject();
+                         conflict["path"] = rel;
+                         conflict["hint"] = "Reserved oe/ namespace; move project helpers under scripts/.";
+                         conflicts.push(conflict);
+                         continue;
+                     }
                      Json j = Json::MakeObject();
                      j["path"] = rel;
                      Json users = Json::MakeArray();
@@ -1233,35 +1272,47 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      j["entities"] = users;
                      files.push(j);
                  }
+                 for (const auto& module : OfficialManifest()) {
+                     Json j = Json::MakeObject();
+                     j["path"] = module.path; j["origin"] = "embedded"; j["readOnly"] = true;
+                     j["entities"] = Json::MakeArray(); files.push(j);
+                 }
                  Json out = e.Scripts().Status();
                  out["files"] = files;
+                 out["reservedConflicts"] = conflicts;
                  return out;
              });
 
-    Register(r, "script.read", "Read a Lua file from the project.", Params().Req("path", "string", "e.g. \"scripts/player.lua\"."), false,
+    Register(r, "script.read", "Read project or embedded Lua source without executing it.",
+             Params().Req("path", "string", "Project path or canonical virtual path, e.g. @oe/ui.lua."), false,
              [](Engine& e, const Json& a) {
-                 std::string path = e.ResolvePath(a["path"].asString());
-                 std::string text;
-                 if (!ReadTextFile(path, text)) throw ApiError("not_found", "cannot read " + a["path"].asString(), "Call script.list to see script files.");
+                 ScriptSource source = ResolveScriptSource(e, a["path"].asString());
                  Json out = Json::MakeObject();
-                 out["path"] = a["path"].asString();
-                 out["source"] = text;
+                 out["path"] = source.path;
+                 out["source"] = source.source;
+                 if (source.embedded) { out["origin"] = "embedded"; out["readOnly"] = true; }
                  return out;
              });
 
     // Source for script.check / script.params: `source` text, else the file at `path`.
     auto scriptSource = [](Engine& e, const Json& a, std::string& chunk) {
         chunk = a["path"].asString("source");
-        if (a.has("source")) return a["source"].asString("");
+        if (a.has("source")) {
+            if (a.has("path")) {
+                if (!chunk.empty() && chunk[0] == '@') ResolveOfficialSource(chunk);
+                else ResolveProjectScriptPath(e, chunk);
+            }
+            return a["source"].asString("");
+        }
         if (!a.has("path")) throw ApiError("missing_argument", "pass path or source", "e.g. {\"path\": \"scripts/player.lua\"}");
-        std::string text;
-        if (!ReadTextFile(e.ResolvePath(chunk), text)) throw ApiError("not_found", "cannot read " + chunk, "Call script.list to see script files.");
-        return text;
+        ScriptSource source = ResolveScriptSource(e, chunk);
+        chunk = source.path;
+        return source.source;
     };
 
     Register(r, "script.check", "Check a Lua script without running it: syntax errors and suspicious globals (missing local, typos), with line numbers.",
              Params()
-                 .Opt("path", "string", "Script file, e.g. \"scripts/player.lua\" (also names the chunk in messages).")
+                 .Opt("path", "string", "Project or canonical virtual source path, e.g. @oe/ui.lua (also names the diagnostic chunk).")
                  .Opt("source", "string", "Lua source to check instead of the file (e.g. unsaved edits)."),
              false, [scriptSource](Engine& e, const Json& a) {
                  std::string chunk;
@@ -1286,7 +1337,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
 
     Register(r, "script.params", "Parameters a script reads from its Script component (self.params.x or default): name, type, default, options, description.",
              Params()
-                 .Opt("path", "string", "Script file, e.g. \"scripts/player.lua\".")
+                 .Opt("path", "string", "Project or canonical virtual source path, e.g. @oe/ui.lua.")
                  .Opt("source", "string", "Lua source to analyze instead of the file."),
              false, [scriptSource](Engine& e, const Json& a) {
                  std::string chunk;
@@ -1314,7 +1365,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json& a) {
                  std::string rel = a["path"].asString();
                  if (rel.size() < 5 || rel.compare(rel.size() - 4, 4, ".lua") != 0) throw ApiError("invalid_path", "script path must end with .lua");
-                 std::string path = e.ResolvePath(rel);
+                 std::string path = ResolveProjectScriptPath(e, rel);
                  if (!WriteTextFile(path, a["source"].asString())) throw ApiError("write_failed", "cannot write " + rel);
                  Json out = Json::MakeObject();
                  out["path"] = rel;
@@ -1438,7 +1489,121 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["sceneName"] = e.GetScene().name;
                  out["data"] = e.GameData();
                  out["frame"] = static_cast<uint64_t>(e.Frame());
+                 out["quitRequested"] = e.QuitRequested();
                  return out;
+             });
+
+    Register(r, "game.quit", "Ask the game window to close, like game.quit() in Lua: oe run and the packaged player end, "
+             "tools and the editor only report it as game.state.quitRequested (cleared by sim.stop).",
+             Params(), false, [](Engine& e, const Json&) {
+                 e.RequestQuit();
+                 Json out = Json::MakeObject();
+                 out["quitRequested"] = true;
+                 return out;
+             });
+
+    Register(r, "game.args", "Launch parameters of this process (--set name=value; Lua game.arg(name)): which server it is, where its "
+             "services are. They survive sim.stop and match starts. Omit set to read them.",
+             Params().Opt("set", "object", "Names (letters, digits, _ . -; 1..64) to string values of at most 4096 bytes."), false,
+             [](Engine& e, const Json& a) {
+                 if (a.has("set")) {
+                     if (!a["set"].isObject()) throw ApiError("bad_args", "set must be an object of strings", "Pass e.g. {\"set\":{\"channel\":\"1\"}}.");
+                     for (const auto& item : a["set"].members()) {
+                         std::string error;
+                         const std::string value = item.second.isString() ? item.second.asString() : item.second.dump();
+                         if (!e.SetLaunchArg(item.first, value, &error)) throw ApiError("bad_args", error, "Use short names and string values.");
+                     }
+                 }
+                 Json out = Json::MakeObject();
+                 for (const auto& item : e.LaunchArgs()) out[item.first] = item.second;
+                 return out;
+             });
+
+    // ----- Links: framed TCP to services outside the engine session ---------
+    auto linkId = [](const Json& a) {
+        const double id = a["id"].asNumber(0);
+        return id >= 1 && id <= 4294967295.0 && std::floor(id) == id ? static_cast<uint32_t>(id) : 0u;
+    };
+    auto linkState = [](Engine& e, uint32_t id) {
+        e.Links().Pump();
+        if (e.Links().State(id).empty()) throw ApiError("link_unknown", "no such link", "Use the id from link.open; links close on sim.stop and when a match starts.");
+        Json out = Json::MakeObject();
+        out["id"] = id;
+        out["state"] = e.Links().State(id);
+        out["error"] = e.Links().Error(id);
+        return out;
+    };
+    Json linkValueSchema = Json::MakeObject();  // any JSON type
+    linkValueSchema["description"] = "JSON value encoded as binary Json (what Lua link.send does with a table).";
+    Register(r, "link.open", "Open an outbound framed TCP connection (Lua link.open) to a service that is not an engine session, e.g. a login "
+             "or lobby server. Wire: u32 length, u16 type, payload (little endian). Connecting is asynchronous: poll for the state.",
+             Params().Opt("address", "string", "Numeric IPv4 address; default 127.0.0.1.").Req("port", "integer", "TCP port: 1..65535."), false,
+             [linkState](Engine& e, const Json& a) {
+                 const double port = a["port"].asNumber(0);
+                 return linkState(e, e.OpenLink(a["address"].asString("127.0.0.1"), port >= 1 && port <= 65535 && std::floor(port) == port ? static_cast<uint32_t>(port) : 0));
+             });
+    Register(r, "link.send", "Queue one message on a link. The payload is `value` (any JSON, sent as the engine's binary Json), `text` (raw bytes "
+             "of the string) or `hex`; none sends an empty payload.",
+             Params().Req("id", "integer", "Link id from link.open.").Req("type", "integer", "Message type: 0..65535.")
+                     .OptWith("value", linkValueSchema)
+                     .Opt("text", "string", "Raw payload bytes.").Opt("hex", "string", "Raw payload bytes as hexadecimal digits."), false,
+             [linkId, linkState](Engine& e, const Json& a) {
+                 const double type = a["type"].asNumber(-1);
+                 if (type < 0 || type > 65535 || std::floor(type) != type) throw ApiError("link_send", "type must be 0..65535", "Message types are 16-bit numbers agreed with the service.");
+                 std::vector<uint8_t> bytes;
+                 if (a.has("hex")) {
+                     const std::string hex = a["hex"].asString();
+                     auto digit = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; };
+                     if (hex.size() % 2) throw ApiError("link_send", "hex needs an even number of digits", "Two digits per byte, e.g. \"01ff\".");
+                     for (size_t i = 0; i < hex.size(); i += 2) {
+                         const int high = digit(hex[i]), low = digit(hex[i + 1]);
+                         if (high < 0 || low < 0) throw ApiError("link_send", "hex holds a character that is not a hexadecimal digit", "Two digits per byte, e.g. \"01ff\".");
+                         bytes.push_back(static_cast<uint8_t>(high * 16 + low));
+                     }
+                 } else if (a.has("text")) {
+                     const std::string text = a["text"].asString();
+                     bytes.assign(text.begin(), text.end());
+                 } else if (a.has("value") && !EncodeJson(a["value"], bytes, LinkSet::kMaxPayloadBytes)) {
+                     throw ApiError("link_send", "value exceeds the binary Json bounds", "At most 65534 bytes, depth 16, finite numbers.");
+                 }
+                 std::string error;
+                 const uint32_t id = linkId(a);
+                 if (!e.Links().Send(id, static_cast<uint16_t>(type), bytes.data(), bytes.size(), &error))
+                     throw ApiError("link_send", error, "Check link.state: the link must be connecting or open, the payload at most 65534 bytes.");
+                 Json out = linkState(e, id);
+                 out["bytes"] = static_cast<uint64_t>(bytes.size());
+                 return out;
+             });
+    Register(r, "link.poll", "State of a link (connecting, open, closed + error) and the messages received since the last poll (Lua link.poll). "
+             "Each message has type, size, hex and, when the payload is binary Json, value.",
+             Params().Req("id", "integer", "Link id from link.open."), false, [linkId, linkState](Engine& e, const Json& a) {
+                 const uint32_t id = linkId(a);
+                 Json out = linkState(e, id);
+                 Json messages = Json::MakeArray();
+                 for (const LinkSet::Message& message : e.Links().Take(id)) {
+                     Json item = Json::MakeObject();
+                     item["type"] = message.type;
+                     item["size"] = static_cast<uint64_t>(message.payload.size());
+                     std::string hex;
+                     for (uint8_t byte : message.payload) { hex += "0123456789abcdef"[byte >> 4]; hex += "0123456789abcdef"[byte & 15]; }
+                     item["hex"] = hex;
+                     Json value;
+                     if (!message.payload.empty() && DecodeJson(message.payload.data(), message.payload.size(), value)) item["value"] = value;
+                     messages.push(item);
+                 }
+                 out["messages"] = messages;
+                 return out;
+             });
+    Register(r, "link.close", "Close and forget a link (Lua link.close); unsent bytes are dropped.",
+             Params().Req("id", "integer", "Link id from link.open."), false, [linkId](Engine& e, const Json& a) {
+                 Json out = Json::MakeObject();
+                 out["closed"] = e.Links().Close(linkId(a));
+                 return out;
+             });
+    Register(r, "link.state", "Every link of this engine: id, address, port, state, error, unread messages, unsent bytes.", Params(), false,
+             [](Engine& e, const Json&) {
+                 e.Links().Pump();
+                 return e.Links().Status();
              });
 
     Register(r, "game.pause", "Gameplay pause of the play session (like game.pause in Lua): scripts and UI keep running with dt = 0, "

@@ -1,0 +1,111 @@
+{
+  "format": "ownengine.prefab",
+  "version": 1,
+  "name": "Player",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            6
+          ]
+        },
+        "NetPlayer": {
+          "player": 1
+        },
+        "Tag": {
+          "tags": "idle_down,"
+        },
+        "NetSync": {
+          "owner": 0,
+          "predict": true,
+          "fields": {
+            "Transform.position": {
+              "onChange": true
+            },
+            "Tag.tags": {
+              "onChange": true
+            }
+          }
+        },
+        "Script": {
+          "path": "scripts/player.lua",
+          "params": {
+            "speed": 3.2
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Art",
+      "parent": 1,
+      "components": {
+        "Transform": {},
+        "Sprite": {
+          "texture": "assets/textures/hero.png",
+          "pixelsPerUnit": 32,
+          "pivotY": 0,
+          "lit": true,
+          "castShadows": true,
+          "columns": 4,
+          "rows": 3
+        },
+        "SpriteAnimation": {
+          "clip": "idle_down",
+          "clips": {
+            "idle_down": {
+              "frames": [
+                0
+              ],
+              "fps": 1
+            },
+            "walk_down": {
+              "frames": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "fps": 8
+            },
+            "idle_side": {
+              "frames": [
+                4
+              ],
+              "fps": 1
+            },
+            "walk_side": {
+              "frames": [
+                4,
+                5,
+                6,
+                7
+              ],
+              "fps": 8
+            },
+            "idle_up": {
+              "frames": [
+                8
+              ],
+              "fps": 1
+            },
+            "walk_up": {
+              "frames": [
+                8,
+                9,
+                10,
+                11
+              ],
+              "fps": 8
+            }
+          }
+        }
+      }
+    }
+  ]
+}

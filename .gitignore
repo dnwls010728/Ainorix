@@ -10,3 +10,5 @@ out/
 dist/
 # per-project editor layout/preferences written by the native editor
 .oe/
+__pycache__/
+*.pyc

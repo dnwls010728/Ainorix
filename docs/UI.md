@@ -251,7 +251,9 @@ function Name:onSubmit(text) save.set("name", text) end
 - Tools type with `input.text {text}` after focusing the field (`input.click` on it, or `ui.focus {id}`); the editing
   keys go through `input.key` (`Backspace`, `Delete`, `Home`, `End`, `Left`, `Shift`, `Control` + `A`...).
 - Typing is local input: do not edit a `UIInput` during a lockstep/rollback match (use it in the lobby, send the result
-  with an RPC).
+  with an RPC). In an **authoritative** match it works on every peer (chat fields): the text stays on the device, the
+  keyboard is kept out of the network input stream while the field has the focus, and what the player submits goes to
+  the server by RPC (`games/OnlineRPG/scripts/chatbox.lua`).
 - Phones: Android shows the on-screen keyboard while a field has the focus (`Window::SetTextInput`) and takes the
   characters the keyboard sends as key presses — Latin letters, digits, punctuation. Composed text (Korean, Japanese,
   swipe typing) needs a Java `InputConnection` and does not arrive yet. The web player reports key presses (no IME

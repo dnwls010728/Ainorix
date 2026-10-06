@@ -66,6 +66,8 @@ Non-goals (for now)
   "interpolationFrames": 6,
   "predictionFrames": 32,
   "playerPrefab": "prefabs/player.prefab.json",
+  "lateJoin": false,
+  "admission": "auto | script",
   "bind": "127.0.0.1",
   "port": 7778
 }
@@ -77,6 +79,16 @@ Non-goals (for now)
 | `lockstep` | RTS, co-op, turn-based, small sessions | all peers simulate; only **inputs** are exchanged; frame N runs when all inputs for N arrived | tiny | determinism (have), desync hash check |
 | `rollback` | fighting/action versus, 2–4 players | like lockstep, but predicts missing inputs and re-simulates on mismatch | tiny | fast `SaveState/LoadState` |
 | `authoritative` | FPS, many players, dedicated server | server simulates; clients send inputs, receive **state snapshots**, interpolate, predict own player | scales with changed state | replication rules |
+
+`lateJoin` (authoritative only): the host keeps accepting players while the match runs, and a dedicated server is a
+persistent world that starts without players and survives being empty (see NETWORK_NOTES.md, audit follow-up).
+
+`admission` (with `lateJoin`): `auto` admits every ready lobby player; with `script` a player waits in the lobby
+until the server's Lua called `net.admit(id)`, so the game can verify it first. A server's scripts may also call
+`net.kick`. The engine stops there: accounts, tickets, channel lists and persistence are services of the game,
+reached with `link` (framed TCP from Lua, SCRIPTING.md) and told apart per process with launch parameters
+(`oe serve-game ... --set channel=2`, `game.arg`). `games/OnlineRPG/server/` is such a back end
+([ONLINERPG_SERVERS.md](ONLINERPG_SERVERS.md)); a project's `server/` folder is never packaged.
 
 Pick by game: lockstep is the cheapest and fits the engine best; rollback needs the snapshot
 work; authoritative is the way for many players and cheat resistance. All use the same session,

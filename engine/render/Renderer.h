@@ -80,6 +80,9 @@ private:
 // output is identical for any value; tests use it to prove that.
 void SetMaxRenderThreads(int threads);
 
+// Builds the same render matrices for an explicit camera; false if it lacks Camera.
+bool MakeCameraView(const Scene& scene, EntityId camera, float aspect, RenderView& out);
+
 // Builds the view from the scene's first active camera. Returns false (and a
 // sensible default view) when the scene has no camera.
 bool MakeSceneView(const Scene& scene, float aspect, RenderView& out);

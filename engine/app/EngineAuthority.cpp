@@ -57,7 +57,8 @@ const FieldInfo* Field(const std::string& key, const ComponentType*& type) {
 }
 void Engine::ResetAuthority() {
     authority_.reset(); initialAuthorityEntities_.clear(); authorityIds_.clear(); replicatedEntities_.clear(); nextAuthorityId_ = 1;
-    predictionStates_.clear(); authorityWorlds_.clear(); authorityEvents_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = 0;
+    predictionStates_.clear(); authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = 0;
+    admitted_.clear();
 }
 bool Engine::PredictEntity(EntityId id) const {
     if (!authority_ || !authority_->Running() || !network_ || network_->IsHost()) return true;
@@ -149,7 +150,8 @@ void Engine::ValidateReplicatedWorld(const Json& world) const {
             throw ApiError("network_snapshot", "invalid snapshot metadata");
         double owner = record["owner"].asNumber(-1);
         if (!std::isfinite(owner) || owner < 0 || owner > INT32_MAX || std::floor(owner) != owner ||
-            (owner && std::find(authority_->Players().begin(), authority_->Players().end(), static_cast<uint32_t>(owner)) == authority_->Players().end())) throw ApiError("network_snapshot", "invalid snapshot owner");
+            // With late join the roster a client knows is the one of its own arrival; owners may be newer.
+            (owner && !networkConfig_.lateJoin && std::find(authority_->Players().begin(), authority_->Players().end(), static_cast<uint32_t>(owner)) == authority_->Players().end())) throw ApiError("network_snapshot", "invalid snapshot owner");
         std::string prefab = record["prefab"].asString(); if (!prefab.empty()) ResolvePath(prefab);
         EntityId id = probe.Create("Probe"); probeIds[netId] = id;
         if (record.has("player")) {
@@ -244,22 +246,17 @@ bool Engine::PollAuthority() {
         if (authority_->Active()) {
             // Clients follow the server: a shrinking roster only changes what it replicates.
             if (!network_->Connected()) authority_->Stop("match participant disconnected");
-            else if (network_->IsHost()) DropAuthorityPlayers();
+            else if (network_->IsHost()) { DropAuthorityPlayers(); AdmitAuthorityPlayers(); }
         }
         if (authority_->TakeStart()) {
             std::string error; scene_.FromJson(*playSnapshot_, &error); ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
             frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
             journal_.reset(); snapshots_.clear(); checkpoints_.clear(); predictionStates_.clear(); replicatedEntities_.clear(); authorityIds_.clear(); nextAuthorityId_ = 1;
-            authorityWorlds_.clear(); authorityEvents_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
+            authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
             uiHovered_ = uiPressed_ = uiFocus_ = 0; heldKeys_.clear(); heldButtons_.clear();
             saves_.FreezeReads(true); saves_.DeferFlush(true);
             if (network_->IsHost()) {
-                for (uint32_t player : authority_->Players()) {
-                    if (dedicated_ && player == 1) continue;
-                    EntityId id = 0; for (const auto& entry : scene_.Pool<NetPlayer>()) if (static_cast<uint32_t>(entry.second.player) == player) { id = entry.first; break; }
-                    if (!id && !networkConfig_.playerPrefab.empty()) { id = InstantiatePrefabFile(networkConfig_.playerPrefab, 0); scene_.Add<NetSync>(id).prefab = networkConfig_.playerPrefab; }
-                    if (id) { scene_.Add<NetPlayer>(id).player = static_cast<int>(player); scene_.Add<NetSync>(id).owner = static_cast<int>(player); }
-                }
+                for (uint32_t player : authority_->Players()) SpawnAuthorityPlayer(player);
                 ReplicatedWorld(1);
                 std::map<uint32_t, Json> worlds; for (uint32_t player : authority_->Players()) if (player != 1) worlds[player] = ReplicatedWorld(player);
                 authority_->Snapshot(0, worlds);
@@ -269,9 +266,12 @@ bool Engine::PollAuthority() {
                 for (EntityId id : ids) scene_.Destroy(id);
                 RecordState(); predictionStates_[0] = CaptureNative(false);
             }
-            network_->Seal();
+            // A late-join host keeps its lobby open: players connect, get ready and are admitted while it runs.
+            if (!network_->IsHost() || !networkConfig_.lateJoin) network_->Seal();
         }
-        if (!authority_->Running()) return authority_->State()["state"].asString() == "idle";
+        // Only the ready barrier holds the frame back. A stopped match (server gone, kicked, error) leaves
+        // the peer simulating locally again, so its scripts and UI can tell the player (onNetState, popups).
+        if (!authority_->Running()) return !authority_->Active();
         auto updates = authority_->DrainUpdates();
         if (!updates.empty()) {
             for (const auto& update : updates) authorityWorlds_.push_back(update);
@@ -292,6 +292,8 @@ bool Engine::PollAuthority() {
             for (const auto& input : authority_->PendingInputs()) {
                 if (input.first <= update.acknowledged) continue;
                 authorityInput_ = input.first; ApplyInputs({{network_->LocalPlayer(), input.second}});
+                // Local UI replays with the pointer, text and keys it had, so focus and typed text survive a correction.
+                auto local = authorityLocal_.find(input.first); if (local != authorityLocal_.end()) MergeLocalInput(local->second);
                 input_.mouseLocked = raw.mouseLocked;  // replayed local scripts see the real lock, with no mouse motion
                 audio_->SetOutputMode(false, true); SimulateWorld(); predictionStates_[input.first] = CaptureNative(false);
             }
@@ -299,15 +301,22 @@ bool Engine::PollAuthority() {
             audio_->Confirm(update.acknowledged); outputConfirmed_ = update.acknowledged;
             predictionStates_.erase(predictionStates_.begin(), predictionStates_.lower_bound(update.acknowledged));
             authorityEvents_.erase(authorityEvents_.begin(), authorityEvents_.lower_bound(update.acknowledged));
+            authorityLocal_.erase(authorityLocal_.begin(), authorityLocal_.upper_bound(update.acknowledged));
             authorityRemoteFrame_ = std::max(authorityRemoteFrame_, update.frame > networkConfig_.interpolationFrames ? update.frame - networkConfig_.interpolationFrames : 0);
             replayMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); ++authorityCorrections_;
         }
         if (!network_->IsHost() && !authority_->CanPredict()) { InterpolateAuthority(); return false; }
-        FrameInput sample = Sample(SampleNetworkInput(), networkConfig_.sync); deviceInput_ = input_; input_.pressedThisFrame.clear(); deviceInput_.pressedThisFrame.clear();
-        if (network_->IsHost()) ApplyInputs(authority_->Consume(sample));
+        FrameInput sample = Sample(SampleNetworkInput(), networkConfig_.sync);
+        const InputState device = input_;
+        deviceInput_ = input_; input_.pressedThisFrame.clear();
+        // The frame consumes the device's edges and typed text; what stays held is sampled again next tick.
+        deviceInput_.pressedThisFrame.clear(); deviceInput_.text.clear(); deviceInput_.wheel = 0.0f;
+        for (InputState::Touch& touch : deviceInput_.touches) touch.began = false;
+        if (network_->IsHost()) { ApplyInputs(authority_->Consume(sample)); if (!dedicated_) MergeLocalInput(device); }
         else {
             authorityInput_ = authority_->Submit(sample); if (!authorityInput_) return false;
-            ApplyInputs({{network_->LocalPlayer(), sample}}); InterpolateAuthority(); audio_->SetOutputMode(false, true);
+            ApplyInputs({{network_->LocalPlayer(), sample}}); MergeLocalInput(device); authorityLocal_[authorityInput_] = device;
+            InterpolateAuthority(); audio_->SetOutputMode(false, true);
         }
         // Server state is never hash-compared, so local scripts (cameras) may keep relative mouse
         // look. It is not part of any player's input stream: send what the server needs by RPC.
@@ -350,6 +359,26 @@ std::vector<PhysicsEvent> Engine::StepAuthorityPhysics(float dt) {
     for (EntityId id : addedColliders2D) scene_.Pool<Collider2D>().erase(id);
     return events;
 }
+void Engine::SpawnAuthorityPlayer(uint32_t player) {
+    if (dedicated_ && player == 1) return;
+    EntityId id = 0; for (const auto& entry : scene_.Pool<NetPlayer>()) if (static_cast<uint32_t>(entry.second.player) == player) { id = entry.first; break; }
+    if (!id && !networkConfig_.playerPrefab.empty()) { id = InstantiatePrefabFile(networkConfig_.playerPrefab, 0); scene_.Add<NetSync>(id).prefab = networkConfig_.playerPrefab; }
+    if (id) { scene_.Add<NetPlayer>(id).player = static_cast<int>(player); scene_.Add<NetSync>(id).owner = static_cast<int>(player); }
+}
+void Engine::AdmitAuthorityPlayers() {
+    if (!networkConfig_.lateJoin || !authority_->Running()) return;
+    std::set<uint32_t> present;
+    const Json lobby = network_->Players();
+    for (const Json& player : lobby.items()) {
+        uint32_t id = static_cast<uint32_t>(player["id"].asNumber()); present.insert(id);
+        // Ready is the player's request to enter the world (its scene is loaded); Admit ignores participants.
+        // With script admission the game decides first (net.admit), e.g. after checking a ticket.
+        if (id != 1 && player["ready"].asBool() && (networkConfig_.admission != "script" || admitted_.count(id))) authority_->Admit(id);
+    }
+    for (auto it = admitted_.begin(); it != admitted_.end();) it = present.count(*it) ? std::next(it) : admitted_.erase(it);
+    authority_->Retain(present);
+    for (uint32_t player : authority_->TakeJoined()) SpawnAuthorityPlayer(player);
+}
 void Engine::DropAuthorityPlayers() {
     for (uint32_t player : authority_->TakeDropped()) { std::string error; network_->Kick(player, "send queue overflow", &error); }
     std::set<uint32_t> present;
@@ -359,7 +388,8 @@ void Engine::DropAuthorityPlayers() {
     for (uint32_t player : authority_->Players()) if (player != 1 && !present.count(player)) gone.push_back(player);
     if (gone.empty()) return;
     // The ready barrier needs its whole roster; a match without remote participants is over.
-    if (!authority_->Running() || gone.size() + 1 >= authority_->Players().size()) { authority_->Stop("match participant disconnected"); return; }
+    // A late-join server is a place players come back to: it keeps running empty.
+    if (!authority_->Running() || (!networkConfig_.lateJoin && gone.size() + 1 >= authority_->Players().size())) { authority_->Stop("match participant disconnected"); return; }
     for (uint32_t player : gone) {
         authority_->Drop(player);
         std::vector<EntityId> avatars;

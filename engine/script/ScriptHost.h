@@ -13,6 +13,7 @@
 struct lua_State;
 
 namespace oe {
+struct OfficialModule;
 
 class Engine;
 struct PhysicsEvent;
@@ -74,6 +75,13 @@ public:
     uint32_t NetSender() const { return netSender_; }
     // Reloads every loaded module regardless of timestamps.
     std::vector<std::string> ReloadAll();
+    const Json& ReloadReport() const { return reloadReport_; }
+    bool LoadProjectModule(const std::string& path);
+    bool Reloading() const { return reloading_; }
+    void RejectReloadCall() { reloadViolation_ = true; }
+    void RegisterReloadBinding(int (*function)(lua_State*)) { reloadNative_.insert(function); }
+    bool ReloadNativeBlocked(int (*function)(lua_State*)) const { return reloadNative_.count(function) != 0; }
+    bool ReloadCallBlocked(const void* function) const { return reloadBlocked_.count(function) != 0; }
 
     // Runs a chunk of Lua. Expressions are returned ("1 + 2" -> 3).
     // `self` is bound to the entity's script instance (or a plain entity
@@ -97,6 +105,8 @@ public:
     // Loads a project Lua file in the sandbox and leaves its return value
     // on the Lua stack. Returns false (error message on the stack) on failure.
     bool LoadFile(const std::string& path);
+    // Leaves one export or error on the stack; immutable descriptors may be synthetic in tests.
+    bool LoadOfficialModule(const OfficialModule& module);
     void ArmBudget() { budgetTicks = 0; }
     // Pushes the entity's live script instance; false if it has none.
     bool PushInstance(EntityId id);
@@ -106,6 +116,7 @@ public:
     float currentDt = 0.0f;
 
 private:
+    friend struct OfficialLoaderTestAccess;  // Synthetic source tests do not expose a runtime override.
     struct Module {
         int ref = -1;  // LUA_NOREF
         int64_t mtime = 0;
@@ -129,6 +140,19 @@ private:
     Engine& engine_;
     lua_State* L_ = nullptr;
     std::shared_ptr<SnapshotHeap> heap_;
+    bool snapshotsEnabled_ = false;
+    bool reloading_ = false;
+    bool reloadViolation_ = false;
+    std::map<std::string, std::string> sources_;
+    bool forceReload_ = false;
+    std::map<std::string, int64_t> required_;
+    std::map<std::string, std::set<std::string>> dependencies_;
+    std::vector<std::string> loadStack_;
+    std::map<std::string, int> reloadExports_;
+    std::set<const void*> reloadBlocked_;
+    std::set<int (*)(lua_State*)> reloadNative_;
+    std::set<const void*> reloadProtected_;
+    Json reloadReport_;
     std::map<std::string, Module> modules_;
     std::map<EntityId, Instance> instances_;
     std::vector<ScriptError> errors_;

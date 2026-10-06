@@ -20,6 +20,12 @@ struct SessionConfig {
     SyncConfig sync;
     uint32_t maxPlayers = 4, tickRate = 60, snapshotRate = 20, interpolationFrames = 6, predictionFrames = 32;
     std::string playerPrefab;
+    // Authoritative only: the host keeps its lobby open during the match and admits ready players into
+    // the running world; a dedicated server starts at once and keeps running without players.
+    bool lateJoin = false;
+    // With lateJoin: "auto" admits every ready lobby player; "script" waits until the game called
+    // net.admit(player), so a server can check who it is first (a ticket, a ban list).
+    std::string admission = "auto";
     // Validates all supplied settings, including the bounded input schema and fixed tick rate.
     static bool Parse(const Json& project, SessionConfig& out, std::string* error);
 };

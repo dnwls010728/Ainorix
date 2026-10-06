@@ -4,6 +4,9 @@
 local B = require("scripts.lib.balance")
 local W = require("scripts.lib.world")
 
+local Controls = require("oe.input")
+local moveActions = {move={kind="vector", left={"A","Left"}, right={"D","Right"}, up={"W","Up"}, down={"S","Down"}}}
+local localInput = Controls.localSource()
 local Player = {}
 
 local STICK_RADIUS = 56 -- reference pixels
@@ -38,11 +41,8 @@ end
 
 -- Keyboard, or a drag-anywhere virtual joystick (mouse / first finger).
 function Player:readMove()
-  local x, y = 0, 0
-  if input.down("A") or input.down("Left") then x = x - 1 end
-  if input.down("D") or input.down("Right") then x = x + 1 end
-  if input.down("W") or input.down("Up") then y = y + 1 end
-  if input.down("S") or input.down("Down") then y = y - 1 end
+  local move = Controls.read(localInput, moveActions, "move")
+  local x, y = move.x, move.y
 
   local s = self.stick
   local mx, my = input.mouse()
@@ -70,9 +70,7 @@ function Player:readMove()
       if m > 0.6 then m = 1 end -- snap to full speed so thumbs do not have to stretch
       x, y = (dx / d) * m, (dy / d) * m
     end
-  elseif x ~= 0 or y ~= 0 then
-    local d = sqrt(x * x + y * y)
-    x, y = x / d, y / d
+
   end
   return x, y
 end

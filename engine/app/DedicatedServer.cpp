@@ -4,12 +4,25 @@
 #include <csignal>
 #include <exception>
 #include "app/Engine.h"
+#include "core/FileSystem.h"
 #include "platform/Platform.h"
 
 namespace oe {
 namespace {
 volatile std::sig_atomic_t g_stopServer = 0;
 void StopServer(int) { g_stopServer = 1; }
+}
+bool ApplyLaunchArg(Engine& engine, const std::string& assignment, bool fromFile, std::string* error) {
+    const size_t split = assignment.find('=');
+    if (split == std::string::npos || split == 0) { if (error) *error = "expected name=value"; return false; }
+    std::string value = assignment.substr(split + 1);
+    if (fromFile) {
+        std::string text;
+        if (!ReadTextFile(value, text)) { if (error) *error = "cannot read " + value; return false; }
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ' || text.back() == '\t')) text.pop_back();
+        value = std::move(text);
+    }
+    return engine.SetLaunchArg(assignment.substr(0, split), value, error);
 }
 Json RunDedicatedServer(Engine& engine, const Json& arguments, uint64_t maxTicks,
                         const std::function<void(const Json&)>& started) {

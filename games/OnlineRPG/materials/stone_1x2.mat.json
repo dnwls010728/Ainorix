@@ -1,0 +1,9 @@
+{
+  "baseTexture": "assets/textures/stone.png",
+  "pixelArt": true,
+  "roughness": 1,
+  "tiling": [
+    1.0,
+    2.0
+  ]
+}

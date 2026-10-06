@@ -43,6 +43,7 @@ namespace {
 struct Args {
     std::vector<std::string> positional;
     std::map<std::string, std::string> flags;
+    std::vector<std::pair<std::string, std::string>> sets;  // --set / --set-file (repeatable): flag, "name=value"
     bool Has(const std::string& f) const { return flags.count(f) > 0; }
     std::string Get(const std::string& f, const std::string& def = "") const {
         auto it = flags.find(f);
@@ -59,7 +60,9 @@ Args ParseArgs(int argc, char** argv, int start) {
     Args a;
     for (int i = start; i < argc; ++i) {
         std::string s = argv[i];
-        if (s.rfind("--", 0) == 0) {
+        if (s == "--set" || s == "--set-file") {
+            a.sets.push_back({s, i + 1 < argc ? argv[++i] : ""});
+        } else if (s.rfind("--", 0) == 0) {
             bool takesValue = false;
             for (const char* f : kValueFlags) takesValue = takesValue || s == f;
             a.flags[s] = takesValue && i + 1 < argc ? argv[++i] : "1";
@@ -89,6 +92,14 @@ int Fail(const std::string& code, const std::string& message, const std::string&
 
 bool OpenOrFail(Engine& engine, const Args& a, int& exitCode) {
     if (a.Has("--save-dir")) engine.Saves().Configure(a.Get("--save-dir"));
+    // Launch parameters the game reads with game.arg(name).
+    for (const auto& set : a.sets) {
+        std::string error;
+        if (!ApplyLaunchArg(engine, set.second, set.first == "--set-file", &error)) {
+            exitCode = Fail("invalid_argument", set.first + " " + set.second + ": " + error, "Use --set name=value or --set-file name=path (the file's text becomes the value).");
+            return false;
+        }
+    }
     std::string path = a.positional.empty() ? "." : a.positional[0];
     std::string err;
     if (!engine.Open(path, &err)) {
@@ -139,6 +150,7 @@ void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, boo
         engine.RunPostedJobs();
         if (team) team->update();
         if (window && !window->PumpEvents(engine.Input())) break;
+        if (window && engine.QuitRequested()) break;  // game.quit
         double now = PlatformTimeSeconds();
         engine.Tick(now - last);
         last = now;
@@ -193,7 +205,10 @@ int CmdHelp() {
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
                  "  serve-game [path] [--port P --min-players N --seed S --frames N --api-port P]\n"
-                 "                                    Dedicated 60 Hz game server, no window/audio (Ctrl+C stops)\n"
+                 "                                    Dedicated 60 Hz game server, no window/audio (Ctrl+C stops);\n"
+                 "                                    with network.lateJoin it runs without players and admits them any time\n"
+                 "  --set name=value / --set-file name=path (any command that opens a project, repeatable):\n"
+                 "                                    launch parameters the game reads with game.arg(name)\n"
                  "  serve <dir> [--port 8080] [--no-browser]\n"
                  "                                    Serve a web package (oe package --web) on http://127.0.0.1\n"
                  "  exec [path] <command> [json] [--save]\n"
@@ -229,6 +244,11 @@ int CmdNew(const Args& a) {
     Json out = Json::MakeObject();
     out["ok"] = true;
     out["project"] = AbsolutePath(dir);
+    if (!a.Has("--no-team")) {  // docs/TEAM.md §3.3: a new project starts with the default agent team
+        std::string teamError;
+        if (SeedDefaultTeam(dir, &teamError)) out["team"] = "default";
+        else OE_LOG_WARN("project", "default team not created: %s", teamError.c_str());
+    }
     out["next"] = "oe editor " + dir;
     PrintJson(out);
     return 0;
@@ -244,11 +264,6 @@ int CmdRender(const Args& a) {
     RenderTarget rt;
     rt.Resize(a.GetInt("--width", 640), a.GetInt("--height", 360));
     float aspect = static_cast<float>(rt.width) / static_cast<float>(rt.height);
-    if (!a.Has("--no-team")) {  // docs/TEAM.md §3.3: a new project starts with the default agent team
-        std::string teamError;
-        if (SeedDefaultTeam(dir, &teamError)) out["team"] = "default";
-        else OE_LOG_WARN("project", "default team not created: %s", teamError.c_str());
-    }
     RenderView view;
     bool hasCamera = MakeSceneView(engine.GetScene(), aspect, view);
     bool custom = a.Has("--eye") || a.Has("--target");
@@ -341,6 +356,7 @@ int CmdExec(const Args& a) {
     RegisterTeamCommands(engine.Commands());
     Args openArgs;
     openArgs.flags = a.flags;
+    openArgs.sets = a.sets;
     openArgs.positional.push_back(path);
     int code = 0;
     if (!OpenOrFail(engine, openArgs, code)) return code;

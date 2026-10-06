@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -28,6 +29,12 @@ public:
     Scene& operator=(const Scene&);
 
     void Clear();
+    // Runtime world identity: copied by snapshots, advanced by replacement, never serialized.
+    uint64_t Epoch() const { return incarnation_; }
+    // Opaque fixed-width spelling shared by Lua and command queries.
+    std::string EpochString() const;
+    // Adopt content while advancing this scene's identity rather than importing the source epoch.
+    void ReplaceWith(const Scene& source);
     // Replay must preserve allocation gaps from entities deleted before frame zero.
     EntityId AllocationCursor() const { return nextId_; }
     void RestoreAllocationCursor(EntityId cursor) { if (cursor >= nextId_) nextId_ = cursor; }
@@ -73,12 +80,14 @@ public:
     std::string name = "Untitled";
 
 private:
+    friend struct SceneEpochTestAccess;  // Exercises exhaustion without a runtime epoch setter.
     template <class T>
     static size_t Index() { return static_cast<size_t>(ComponentTypeIndex<T>::value); }
 
     std::map<EntityId, EntityRecord> entities_;
     std::vector<std::unique_ptr<IComponentPool>> pools_;
     EntityId nextId_ = 1;
+    uint64_t incarnation_ = 1;
 };
 
 }  // namespace oe

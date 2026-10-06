@@ -13,6 +13,7 @@
 #include "app/SaveStore.h"
 #include "audio/AudioSystem.h"
 #include "core/Json.h"
+#include "net/Link.h"
 #include "net/Session.h"
 #include "net/sync/Authority.h"
 #include "render/Renderer.h"
@@ -81,6 +82,7 @@ public:
     // Advances the simulation by real elapsed time while playing (fixed steps).
     void Tick(double realDt);
     bool Playing() const { return playing_; }
+    std::string ScriptReloadBlockReason() const;
     bool InPlaySession() const { return playSnapshot_ != nullptr; }
     uint64_t Frame() const { return frame_; }
     // Increments on every scene change (edits, undo, loads, simulation steps).
@@ -127,6 +129,21 @@ public:
     static constexpr size_t kMaxHostMessages = 256;
     static constexpr size_t kMaxHostCalls = 64;
 
+    // ----- Links (Lua link.*, commands link.*) ---------------------------------
+    // Outbound framed TCP to services that are not engine sessions (net/Link.h). Device state like
+    // the host bridge: pumped once per frame, closed whenever the play session's Lua state is reset
+    // (sim.stop, a match start). Lockstep/rollback matches and predicting clients have none.
+    LinkSet& Links() { return links_; }
+    // Throws ApiError when links are unavailable in the current match or the endpoint is invalid.
+    uint32_t OpenLink(const std::string& address, uint32_t port);
+
+    // ----- Launch parameters (--set name=value, Lua game.arg) ------------------
+    // Set by whoever starts the process (which channel a server is, where its services are). They
+    // are not game data: they survive sim.stop, scene changes and match starts.
+    bool SetLaunchArg(const std::string& name, const std::string& value, std::string* error);
+    const std::map<std::string, std::string>& LaunchArgs() const { return launchArgs_; }
+    static constexpr size_t kMaxLaunchArgs = 64;
+
     // ----- Game runtime (valid during a play session) -------------------------
     // Data that survives scene changes (score, lives...). Reset when the
     // session ends. Scripts use game.get/game.set; tools read game.state.
@@ -145,6 +162,10 @@ public:
     std::string ClipboardText() const;
     void SetClipboardText(const std::string& text);
     void SetGamePaused(bool paused) { gamePaused_ = paused; }
+    // game.quit: the game asks its window to close. Game runtimes (oe run, the packaged player) end their
+    // loop; tools and the editor only report it (game.state). Cleared when the play session stops.
+    void RequestQuit() { quitRequested_ = true; }
+    bool QuitRequested() const { return quitRequested_; }
     // Save slots survive sim.stop and scene transitions; memory-only by default.
     SaveStore& Saves() { return saves_; }
     // Loads another scene at the end of the current frame, keeping the Lua
@@ -230,6 +251,9 @@ public:
     void RunPostedJobs();
 
 private:
+    friend struct OfficialAgreementTestAccess;
+    // Private test seam for controlled mixed-build barriers; never exposed through commands/Lua.
+    std::function<std::string()> officialFingerprintRecordForTests_;
     void SimulateFrame();
     void ResetLocalPeers();
     void AdvanceLocalPeers();
@@ -278,7 +302,15 @@ private:
     void UpdateUIFocus(const std::vector<UIRect>& rects, std::vector<UIEvent>& events);
     // UIButton.key: buttons held by the mouse or any finger hold their key down.
     std::set<EntityId> HeldInputButtons(const InputState& input, bool includeClick);
+    // Host: creates (or adopts a preplaced) NetPlayer entity for a participant from network.playerPrefab.
+    void SpawnAuthorityPlayer(uint32_t player);
+    // Late-join host: invites ready lobby players into the running match and spawns those that arrived.
+    void AdmitAuthorityPlayers();
     InputState SampleNetworkInput();
+    // Authoritative match: adds what only this device knows (pointer, typed text, touches, keys the project did
+    // not declare as network actions) to the decoded local input, so local UI and scripts keep working. The
+    // server never sees it; declared actions stay exactly what the input stream carries.
+    void MergeLocalInput(const InputState& device);
     void UpdateButtonKeys();
     // UIJoystick: sticks held by the mouse or a finger drive their axes in `input`.
     void UpdateJoysticks(InputState& input);
@@ -304,6 +336,7 @@ private:
     std::vector<std::unique_ptr<Engine>> localPeers_;
     std::string previewTransport_;
     bool dedicated_ = false, autoStart_ = false;
+    bool quitRequested_ = false;
     uint32_t minimumPlayers_ = 1;
     std::unique_ptr<FrameSync> sync_;
     std::unique_ptr<Authority> authority_;
@@ -314,6 +347,8 @@ private:
     std::map<uint64_t, std::shared_ptr<const NativeState>> predictionStates_;
     std::deque<Authority::Update> authorityWorlds_;
     std::map<uint64_t, std::vector<SessionEvent>> authorityEvents_;
+    std::map<uint64_t, InputState> authorityLocal_;  // device-only input per unacknowledged input frame, for replays
+    std::set<uint32_t> admitted_;  // network.admission "script": lobby players the game let in (net.admit)
     uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0;
     std::map<uint32_t, InputState> playerInputs_;
     FrameInputs frameInputs_;
@@ -362,6 +397,8 @@ private:
     std::vector<HostMessage> hostInbox_;
     std::vector<HostCallRecord> hostCalls_;  // most recent kMaxHostCalls, for host.state
     std::string userLanguage_ = "en";
+    LinkSet links_;
+    std::map<std::string, std::string> launchArgs_;
     bool gamePaused_ = false;
     SaveStore saves_;
     struct TimedLine {

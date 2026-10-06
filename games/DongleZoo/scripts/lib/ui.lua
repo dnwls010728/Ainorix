@@ -3,45 +3,27 @@ local I = require("scripts.lib.i18n")
 
 local UI = {}
 
-local cache = {}
+local widgets = require("oe.ui")
 
--- Entity id by name (names are unique in the scene).
+-- Fresh acquisition avoids keeping numeric IDs across world replacement.
 function UI.id(name)
-  local id = cache[name]
-  if not id or not scene.exists(id) then
-    id = scene.find(name)
-    cache[name] = id
-  end
-  return id
+  local widget = widgets.tryFind(name)
+  return widget and widget:id()
 end
 
-local KINDS = { "UIText", "UIButton", "UIPanel", "UIImage", "UISlider" }
-local kinds = {}
-
-local function kindOf(id)
-  local k = kinds[id]
-  if k then return k end
-  for _, name in ipairs(KINDS) do
-    if scene.has(id, name) then
-      kinds[id] = name
-      return name
-    end
-  end
-end
-UI.kind = kindOf
-
--- Sets fields on the entity's UI component, whichever kind it is.
 function UI.set(name, values)
-  local id = UI.id(name)
-  if id then scene.set(id, kindOf(id), values) end
+  local widget = widgets.tryFind(name)
+  if widget then widget:set(values) end
 end
 
 function UI.show(name, visible)
-  UI.set(name, { visible = visible and true or false })
+  local widget = widgets.tryFind(name)
+  if widget then widget:show(visible and true or false) end
 end
 
 function UI.text(name, text)
-  UI.set(name, { text = text })
+  local widget = widgets.tryFind(name)
+  if widget then widget:text(text) end
 end
 
 local colors = {}
@@ -74,11 +56,11 @@ function UI.fmt(n)
   return (out:gsub("^,", ""))
 end
 
--- Rough width of a text in reference pixels (Latin letters about half an em, CJK about one).
-function UI.textWidth(str, size)
-  local w = 0
-  for _, c in utf8.codes(str) do w = w + (c < 0x2e80 and 0.52 or 0.94) * size end
-  return w
+-- Actual renderer layout width; style comes from the toast label, not character categories.
+function UI.textWidth(str, size, style)
+  style = style or { font = "assets/fonts/Jua-Regular.ttf" }
+  return widgets.measureText({ text = str, style = { font = style.font, size = size,
+    letterSpacing = style.letterSpacing, lineSpacing = style.lineSpacing, bold = style.bold, rich = style.richText } }).width
 end
 
 -- ---------------------------------------------------------------- toasts
@@ -92,7 +74,7 @@ local function drawToasts()
     UI.show("Toast" .. i, t ~= nil)
     if t then
       local a = math.min(1, t.life / 0.3)
-      UI.set("Toast" .. i, { width = math.min(660, UI.textWidth(t.text, 30) + 72), opacity = a })
+      UI.set("Toast" .. i, { width = math.min(660, UI.textWidth(t.text, 30, widgets.find("Toast" .. i .. ":text"):get()) + 72), opacity = a })
       UI.set("Toast" .. i .. ":text", { text = t.text, opacity = a })
     end
   end

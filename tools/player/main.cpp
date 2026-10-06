@@ -60,6 +60,7 @@ struct Player {
     bool Frame() {
         engine.UseSystemClipboard(true);
         if (!window->PumpEvents(engine.Input())) return false;
+        if (engine.QuitRequested()) return false;  // game.quit
         for (auto& message : PlatformHostPoll()) {
             std::string parseError;
             Json data = Json::parse(message.second, &parseError);
@@ -104,7 +105,7 @@ void WebFrame(void* arg) {
 
 // Plays the game in `dir` until the window closes (web: starts the browser
 // loop and returns). Returns the process exit code.
-int RunPlayer(const std::string& dir) {
+int RunPlayer(const std::string& dir, const std::vector<std::pair<bool, std::string>>& sets = {}) {
     Json project;
     std::string text, err;
     if (ReadTextFile(JoinPath(dir, "project.json"), text)) project = Json::parse(text, &err);
@@ -115,6 +116,11 @@ int RunPlayer(const std::string& dir) {
     // Heap allocated: on the web main() returns while the loop keeps running.
     auto* player = new Player();
     Engine& engine = player->engine;
+    for (const auto& set : sets) {
+        if (ApplyLaunchArg(engine, set.second, set.first, &err)) continue;
+        PlatformShowError(title, "Cannot start the game.\n\n--set " + set.second + ": " + err);
+        return 1;
+    }
     if (!engine.Open(dir, &err)) {
         PlatformShowError(title, "Cannot start the game.\n\n" + err + "\n\nExpected the game data in:\n" + dir);
         return 1;
@@ -206,12 +212,18 @@ void android_main(android_app* app) {
 int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
     std::string dir = argc > 1 ? argv[1] : "/game";  // the page loader unpacks game.pak there
+    return RunPlayer(dir);
 #else
     std::string dir = JoinPath(ExecutableDirectory(), "game");
     bool server = false; Json arguments = Json::MakeObject(); uint64_t ticks = 0; std::string argumentError;
+    std::vector<std::pair<bool, std::string>> sets;  // --set-file?, name=value (launch parameters, game.arg)
     for (int i = 1; i < argc; ++i) {
         std::string flag = argv[i];
         if (flag == "--server") server = true;
+        else if (flag == "--set" || flag == "--set-file") {
+            if (++i >= argc) { argumentError = flag + " needs name=value"; break; }
+            sets.push_back({flag == "--set-file", argv[i]});
+        }
         else if (flag == "--port" || flag == "--min-players" || flag == "--seed" || flag == "--frames") {
             if (++i >= argc) { argumentError = flag + " needs a value"; break; }
             std::string error; Json value = Json::parse(argv[i], &error); double n = value.asNumber(-1);
@@ -226,6 +238,8 @@ int main(int argc, char** argv) {
     if (server || !argumentError.empty()) {
         PlatformAttachParentConsole();
         Engine engine; std::string error; Json result;
+        for (const auto& set : sets)
+            if (argumentError.empty() && !ApplyLaunchArg(engine, set.second, set.first, &error)) argumentError = "--set " + set.second + ": " + error;
         if (!argumentError.empty() || !engine.Open(dir, &error)) {
             result["ok"] = false; result["error"]["code"] = "player_server";
             result["error"]["message"] = argumentError.empty() ? error : argumentError;
@@ -233,7 +247,7 @@ int main(int argc, char** argv) {
         std::string text = result.dump(); std::fputs(text.c_str(), stdout); std::fputc('\n', stdout); std::fflush(stdout);
         return result["ok"].asBool() ? 0 : 1;
     }
+    return RunPlayer(dir, sets);
 #endif
-    return RunPlayer(dir);
 }
 #endif

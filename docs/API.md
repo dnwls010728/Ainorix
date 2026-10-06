@@ -58,14 +58,15 @@ Route input or diagnostic commands to a preview peer; returns that command's JSO
 
 ### `net.serve`
 
-Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically.
+Start a headless dedicated session; slot 1 is the server and ready remote peers start the match automatically. With network.lateJoin the world starts at once, ready players enter it while it runs and it keeps running empty.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `name` | string |  | Server name; default Player. |
 | `port` | integer |  | Listen port: 0..65535; zero chooses an available port. |
 | `seed` | integer |  | Session seed; default 1. |
-| `minPlayers` | integer |  | Minimum ready remote players: 1..63; default 1. |
+| `room` | string |  | Loopback transport: room name; default the project's gameId. |
+| `minPlayers` | integer |  | Minimum ready remote players before the match starts: 1..63, default 1 (with network.lateJoin: 0..63, default 0). |
 
 ### `net.entities`
 
@@ -108,6 +109,14 @@ Host removes a remote player with a bounded graceful close.
 |---|---|---|---|
 | `player` | integer | yes | Remote player id from net.players. |
 | `reason` | string |  | 1..64 printable bytes; default kicked. |
+
+### `net.admit`
+
+Server with network.admission "script": let a ready lobby player into the running world (Lua net.admit).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `player` | integer | yes | Remote player id from net.players. |
 
 ### `net.rpc`
 
@@ -268,6 +277,10 @@ Read engine log entries newer than a sequence number.
 | `limit` | integer |  | Max entries (default 200). |
 
 ## scene
+
+### `scene.epoch`
+
+Read the opaque runtime world epoch (not a portable identity or gameplay value).
 
 ### `scene.summary`
 
@@ -509,7 +522,62 @@ Click the game view at a pixel (as seen in a screenshot of the given size). Trig
 | `width` | integer |  | Width of the image the coordinates refer to (default 640, like render.screenshot). |
 | `height` | integer |  | Height of that image (default 360). |
 
+## camera
+
+### `camera.worldToScreen`
+
+Read-only presentation coordinate query; local view dependent. See SCRIPTING.md for result schema and simulation restrictions.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `position` | object | yes | Finite world point {x,y,z}. |
+| `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
+
+### `camera.screenRay`
+
+Read-only presentation coordinate query; local view dependent. See SCRIPTING.md for result schema and simulation restrictions.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
+| `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
+
+### `camera.screenToPlane`
+
+Read-only presentation coordinate query; local view dependent. See SCRIPTING.md for result schema and simulation restrictions.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
+| `plane` | object | yes | World plane {point:{x,y,z},normal:{x,y,z}}; nonzero normal. |
+| `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
+
 ## ui
+
+### `ui.screenToCanvas`
+
+Read-only presentation coordinate query; local view dependent. See SCRIPTING.md for result schema and simulation restrictions.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `canvas` | entity |  | Single effective UICanvas id/name; omitted uses first canvas or fallback. |
+| `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
+| `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
+
+### `ui.measureText`
+
+Read-only text layout in reference pixels at effective view scale; actual renderer shaping, excluding paint effects and fitting.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `text` | string | yes | UTF-8 string, at most 65536 bytes. |
+| `style` | object |  | font, size, letterSpacing, lineSpacing, bold, rich; defaults match UIText. |
+| `wrapWidth` | number |  | Reference pixels; omitted/zero = no wrap; maximum 65536. |
+| `view` | object |  | Logical {width,height}; omitted uses local input.viewSize(). |
+| `canvas` | entity |  | Single effective UICanvas; omitted uses first canvas/fallback. |
 
 ### `ui.layout`
 
@@ -617,7 +685,7 @@ Run Lua code in the game's script state and return the result (expressions are r
 
 ### `script.reload`
 
-Reload all loaded Lua modules now (running instances keep their state).
+Reload project dependencies and attached modules transactionally; keep instance state and official exports.
 
 ### `script.errors`
 
@@ -629,15 +697,15 @@ Script errors (load, runtime, eval) with file:line, entity and frame.
 
 ### `script.list`
 
-Lua files in the project, which entities use them, and the running script state.
+Project and embedded Lua sources, users, runtime state, and reserved namespace conflicts.
 
 ### `script.read`
 
-Read a Lua file from the project.
+Read project or embedded Lua source without executing it.
 
 | arg | type | required | description |
 |---|---|---|---|
-| `path` | string | yes | e.g. "scripts/player.lua". |
+| `path` | string | yes | Project path or canonical virtual path, e.g. @oe/ui.lua. |
 
 ### `script.check`
 
@@ -645,7 +713,7 @@ Check a Lua script without running it: syntax errors and suspicious globals (mis
 
 | arg | type | required | description |
 |---|---|---|---|
-| `path` | string |  | Script file, e.g. "scripts/player.lua" (also names the chunk in messages). |
+| `path` | string |  | Project or canonical virtual source path, e.g. @oe/ui.lua (also names the diagnostic chunk). |
 | `source` | string |  | Lua source to check instead of the file (e.g. unsaved edits). |
 
 ### `script.params`
@@ -654,7 +722,7 @@ Parameters a script reads from its Script component (self.params.x or default): 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `path` | string |  | Script file, e.g. "scripts/player.lua". |
+| `path` | string |  | Project or canonical virtual source path, e.g. @oe/ui.lua. |
 | `source` | string |  | Lua source to analyze instead of the file. |
 
 ### `script.write`
@@ -742,6 +810,63 @@ Deliver a message from the embedding app to the game, as its ad SDK or store wou
 ### `game.state`
 
 Runtime scene and game data (game.set values) of the current play session.
+
+### `game.quit`
+
+Ask the game window to close, like game.quit() in Lua: oe run and the packaged player end, tools and the editor only report it as game.state.quitRequested (cleared by sim.stop).
+
+### `game.args`
+
+Launch parameters of this process (--set name=value; Lua game.arg(name)): which server it is, where its services are. They survive sim.stop and match starts. Omit set to read them.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `set` | object |  | Names (letters, digits, _ . -; 1..64) to string values of at most 4096 bytes. |
+
+## link
+
+### `link.open`
+
+Open an outbound framed TCP connection (Lua link.open) to a service that is not an engine session, e.g. a login or lobby server. Wire: u32 length, u16 type, payload (little endian). Connecting is asynchronous: poll for the state.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `address` | string |  | Numeric IPv4 address; default 127.0.0.1. |
+| `port` | integer | yes | TCP port: 1..65535. |
+
+### `link.send`
+
+Queue one message on a link. The payload is `value` (any JSON, sent as the engine's binary Json), `text` (raw bytes of the string) or `hex`; none sends an empty payload.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer | yes | Link id from link.open. |
+| `type` | integer | yes | Message type: 0..65535. |
+| `value` |  |  | JSON value encoded as binary Json (what Lua link.send does with a table). |
+| `text` | string |  | Raw payload bytes. |
+| `hex` | string |  | Raw payload bytes as hexadecimal digits. |
+
+### `link.poll`
+
+State of a link (connecting, open, closed + error) and the messages received since the last poll (Lua link.poll). Each message has type, size, hex and, when the payload is binary Json, value.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer | yes | Link id from link.open. |
+
+### `link.close`
+
+Close and forget a link (Lua link.close); unsent bytes are dropped.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer | yes | Link id from link.open. |
+
+### `link.state`
+
+Every link of this engine: id, address, port, state, error, unread messages, unsent bytes.
+
+## game
 
 ### `game.pause`
 

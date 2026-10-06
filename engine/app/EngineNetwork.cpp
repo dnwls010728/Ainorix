@@ -15,7 +15,9 @@ uint32_t Number(const Json& args, const char* key, uint32_t fallback, uint32_t l
 }
 
 Json Engine::NetworkCall(const std::string& command, const Json& args) {
-    if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && inWorld_ &&
+    // An authoritative host is never hash-compared: its game rules may remove a player (a failed check, a ban).
+    const bool hostRules = command == "kick" && authority_ && authority_->Active() && network_ && network_->IsHost();
+    if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && inWorld_ && !hostRules &&
         (command == "host" || command == "join" || command == "leave" || command == "kick" || command == "ready" || command == "start"))
         throw ApiError("match_control", "session controls cannot run in a synchronized game callback", "Control the lobby/session from tools; keep match updates deterministic.");
     auto state = [&] {
@@ -88,8 +90,12 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
     }
     if (command == "serve") {
         if (inWorld_ || InPlaySession()) throw ApiError("network_server", "dedicated serving requires an idle engine", "Use sim.stop first.");
-        uint32_t minimum = Number(args, "minPlayers", 1, 1, 63);
+        // A late-join server starts its world at once (0 players); otherwise at least one must be ready.
+        const uint32_t least = networkConfig_.lateJoin ? 0 : 1;
+        uint32_t minimum = Number(args, "minPlayers", least, least, 63);
         if (minimum >= networkConfig_.maxPlayers) throw ApiError("network_server", "minPlayers exceeds available remote slots", "maxPlayers includes the reserved server slot 1.");
+        if (minimum && networkConfig_.admission == "script")
+            throw ApiError("network_server", "script admission needs a world that starts without players", "Omit minPlayers: players enter through net.admit.");
         NetworkCall("host", args);
         dedicated_ = true; autoStart_ = true; minimumPlayers_ = minimum;
         std::string error; network_->Ready(true, &error); Play();
@@ -126,7 +132,8 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         if (networkConfig_.mode == "authoritative") {
             EnsureAuthority(true); if (!authority_->Start(roster, &error)) throw ApiError("network_start", error);
         } else { EnsureSync(true); if (!sync_->Start(roster, &error)) throw ApiError("network_start", error); }
-        network_->Seal(); return state();
+        if (networkConfig_.mode != "authoritative" || !networkConfig_.lateJoin) network_->Seal();
+        return state();
     }
     if (command == "players") {
         if (network_) return network_->Players();
@@ -194,6 +201,17 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         Json result = Json::MakeObject(); result["queued"] = networkConfig_.mode != "none"; return result;
     }
     if (command == "ready" && networkConfig_.mode == "none") return state();
+    if (command == "admit") {
+        if (networkConfig_.admission != "script" || !network_ || !network_->IsHost())
+            throw ApiError("network_admit", "admit needs a host with network.admission \"script\"", "Set network.lateJoin and network.admission in project.json; only the server admits.");
+        const uint32_t wanted = Number(args, "player", 0, 2, UINT32_MAX - 2);
+        bool present = false;
+        const Json lobby = network_->Players();
+        for (const Json& player : lobby.items()) present = present || static_cast<uint32_t>(player["id"].asNumber()) == wanted;
+        if (!present) throw ApiError("network_admit", "no such player in the lobby", "Use the id from onPlayerJoined or net.players.");
+        admitted_.insert(wanted);
+        Json out = Json::MakeObject(); out["player"] = wanted; out["admitted"] = true; return out;
+    }
     if (!network_) throw ApiError("network_inactive", "no active network session", "Use net.host or net.join first.");
     bool ok = false;
     if (command == "ready") ok = network_->Ready(args["ready"].asBool(), &error);

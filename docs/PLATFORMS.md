@@ -109,3 +109,8 @@ existing parent console while preserving redirected stdout/stderr; it never crea
 a console. It is a no-op on other platforms. Windows Release execution is verified.
 The web runtime is refreshed for M8; POSIX/Android server execution and Android runtime
 rebuild/device validation still need toolchains/devices.
+
+Lua M1a-3 (2026-10-06) refreshes the web JS/Wasm and both Android player ABIs.
+The packaged web import was exercised in the Codex in-app Chromium browser;
+Android APK compilation, signing and alignment were checked, without device execution.
+POSIX/server device checks above remain open; see the runtime READMEs for exact build evidence.

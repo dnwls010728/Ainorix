@@ -24,7 +24,7 @@ animal. The goal is to grow from a chick to a whale.
   playing with children.
 - Platforms: Android (portrait only), web (H5 portals and an own page). The Windows build is for development and checks.
 - Screen: designed for 720×1280. Narrow screens (9:19.5 and similar) get more empty space above the jar; wide ones
-  (tablets, PC) show background at the sides. At every ratio the jar fills the screen width (`layout` in `scripts/app.lua`).
+  (tablets, PC) show background at the sides. At every ratio the jar fills the screen width (`layout` in `scripts/app/screens.lua`).
 
 ## 4. Core play
 
@@ -53,7 +53,9 @@ animal. The goal is to grow from a chick to a whale.
 - Combo: merges within 1 second of each other multiply points by (1 + 0.25 × (combo − 1)), up to +150%.
 - Jar: inner width 6.6 units, 8.4 units from the floor to the dashed line. The largest whale is about 49% of the jar width.
 
-All numbers are in one file, `scripts/lib/defs.lua`.
+Balance tables stay in `scripts/lib/defs.lua`; the pure combo rule is `scripts/app/scoring.lua`.
+Shop products are authored only in `config/shop.json`, and pause width in `config/layout.json`.
+See [EDITING.md](../games/DongleZoo/EDITING.md) for common edits and generation steps.
 
 ### Helper items
 
@@ -136,6 +138,37 @@ player through the engine's **host bridge** (`host.call` / `host.poll`,
 3. Store listing: target age, "contains ads", privacy policy (stating that nothing is collected), portrait screenshots.
 4. On a physical device: touch, sound, returning from the background, saves.
 
+## Project structure and editing
+
+| File under scripts/ | Lines | Responsibility |
+|---|---:|---|
+| `app.lua` | 92 | Startup, onUpdate order, action routing |
+| `app/gameplay.lua` | 302 | Drop/merge/items/danger |
+| `app/screens.lua` | 322 | Layout, home/HUD/dialogs, settings |
+| `app/rewards.lua` | 139 | Finalization/gifts/store/ad actions |
+| `app/effects.lua` | 54 | Visual effects and lifetimes |
+| `app/scoring.lua` | 8 | Pure combo multiplier/cap/rounding |
+
+The sole App script owns run state and passes services explicitly. Stateless method
+modules import no siblings/services; existing board/save/audio/i18n/UI/ads modules keep
+their implementation and native-snapshot lifecycle. Product IDs/EN/KO names/description,
+display price and coin rewards live only in config/shop.json. Python emits the Lua table
+and scene rows together; four or more rows use the engine's existing UIScroll. A new
+coin pack needs no hand-authored scene/action/layout change, but a new reward type or
+real store SKU needs its own implementation/provisioning.
+
+`python games/DongleZoo/tools/make_content.py --scene-only` overwrites
+scripts/config/shop.lua and scenes/main.scene.json, preserving prefabs. Full generation
+also overwrites piece/effect prefabs. Direct scene edits do not survive generation.
+make_art overwrites procedural textures, import_art installs illustrated animals/icon
+afterward, make_audio overwrites audio; none is needed for a label/product/scoring edit.
+The edit map and remaining prefab/defs geometry coordination are in EDITING.md.
+Required project helpers now reload transactionally through script.reload/automatic polling
+without Stop/Play for stateless gameplay/data edits (LUA_USABILITY.md 6.10). Attached App
+state and top-level service table identities survive; onStart is not rerun. Stateful module
+locals reset, existing callbacks/captured functions may remain old, and cached labels/locale
+need explicit refresh. See EDITING.md for the i18n refresh and stateful-module restart limits.
+
 ## 10. Implementation status (work log)
 
 - [x] Core play: aim, drop, merge, combo, danger line, game over (Box2D, `scripts/lib/board.lua`)
@@ -158,3 +191,69 @@ player through the engine's **host bridge** (`host.call` / `host.poll`,
       through JNI) + AdMob, Play Billing.
 - [ ] Play testing on a device and balancing (drop weights, coin prices); a full game played by hand.
 - [ ] iOS (engine platform track, [APPLE.md](APPLE.md)).
+
+## Lua UI pilot (M1b, 2026-10-06)
+
+scripts/lib/ui.lua now delegates named acquisition, partial field updates, text and
+visibility to the embedded oe.ui module. Raw numeric ID/kind caches were removed:
+fresh acquisition prevents a name cache from targeting a reused ID after replacement.
+Project localization (t: tags), runtime label overwrite, RGB/number formatting, toast
+state and approximate textWidth remain unchanged. No app.lua split or game rule change
+is included. Visibility changes only the widget; native ancestor hiding handles the subtree.
+
+Menu/play/pause software hashes match their pre-migration captures exactly; game tests
+and the complete 223-test desktop suite pass. Resume label, generated pause width/title
+and combo multiplier edits were exercised then restored. Counts and screenshot evidence:
+LUA_USABILITY.md 6.3. Web and both Android runtime ABIs were rebuilt with the new official
+digest; M1b browser/device execution remains unverified. No commit was created.
+
+## Coordinate pilot (M2a, 2026-10-06)
+
+App:pointer converts normalized mouse input to logical pixels and calls explicit-camera
+camera.screenToPlane on the existing z=0 play plane. App:toUI composes worldToScreen with
+screenToCanvas, retaining the top-anchor centered X offset. App:layout still owns the
+project's jar/camera/canvas fitting policy; score, save, localization, textWidth and app.lua
+structure are unchanged. Menu/play/pause/drop hashes match the preserved legacy executable
+and formulas; maximum sampled pointer coordinate difference is about 4.4e-8 world units.
+Evidence and runtime/test results are in LUA_USABILITY.md 6.4 and its M2a work log.
+
+## Text measurement pilot (M2b, 2026-10-06)
+
+UI.textWidth delegates to oe.ui.measureText with the toast label's actual font/spacing/
+bold/rich style and existing size 30; the character-category estimate is removed. Existing
+pill maximum width 660 and padding 72, life/fade/localization/scoring/save behavior remain.
+English/Korean pills now track Jua's real glyph advances; Japanese still uses missing-glyph
+boxes because the bundled game font/default fallback lacks those glyphs. No font coverage
+is added. Six language capture comparisons, actual popup edit task and test/runtime results
+are recorded in LUA_USABILITY.md 6.5/8. app.lua is unchanged by M2b.
+
+
+### M4 readability pilot (2026-10-07)
+
+- [x] App split, explicit service/owner contract, pure scoring rule and EDITING.md.
+- [x] Single-source shop JSON + generated Lua/scene; measured fourth coin pack purchase.
+- [x] All 13 preservation checkpoints have identical PNG/frame hashes, run/save/tag state
+  and host call order; fixed date 2031-03-03. Native old-save/native-restore/reload test passes.
+- [x] Actual Resume EN/KO, product, combo-factor and popup width/title edits verified and
+  reverted; player speed N/A. Counts and prior comparison: LUA_USABILITY.md 6.7.
+- [x] Native build and 231 tests exit 0; 15 Lua checks errors/warnings 0; desktop package
+  Play/quit and actual web menu→Play smoke pass. Runtime rebuild unnecessary (project only).
+- [x] Required-helper live reload limitation superseded by the engine work in 6.10;
+  stateless scoring/data edits reload live, with stateful/closure limits documented.
+  Android device/real storefront/full packaged replay were not checked in this unit.
+
+No engine/official module/template or save-schema changes. Generation's original catalog
+produces identical semantic scene; final scene/prefab contents are preserved. Initial
+generator CLI/test-setup corrections and complete execution evidence are recorded in
+LUA_USABILITY.md 6.7/8 and ignored build/m4 artifacts. No commit.
+
+### Required-only module reload verification (2026-10-07)
+
+- [x] Persistent oe script session: scoring factor edit/reload/restore without Stop/Play;
+  13 -> 15 direct points and 125 -> 150 actual merge gain. Same services/Scoring table,
+  frame, prior score, probe field, coins and board count; script.errors empty; bytes restored.
+- [x] Replay rerun: all 13 M4 checkpoint PNG/frame hashes and complete JSON state/save/host/
+  localization-tag/scene summary match the recorded after-replay baseline exactly.
+- [x] Native build/full 235 tests exit 0, including DongleZooGame and network/snapshot/render
+  regressions. No game scripts, save schema, generators or scene files permanently changed.
+- Runtime execution evidence and remaining device limitations: LUA_USABILITY.md 6.10/8.
