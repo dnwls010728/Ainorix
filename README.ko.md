@@ -93,6 +93,8 @@ oe render MyGame --frames 120 --out shot.png
 있는 Console, History, Network, Team 패널이 있습니다. 드래그 한 번이 실행 취소 한 단계이고, 프리팹은 격리해서
 편집하며, 인터페이스는 영어, 한국어, 일본어를 지원합니다. 자세한 내용과 단축키: [docs/EDITOR.md](docs/EDITOR.md).
 
+Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 종류 필터를 지원합니다. 낮은 패널은 이름이 보이도록 간결한 목록으로 표시됩니다.
+
 ## 기능
 
 | 영역 | 내용 | 문서 |

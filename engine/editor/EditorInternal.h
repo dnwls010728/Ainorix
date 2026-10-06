@@ -171,6 +171,8 @@ struct NativeEditor::Impl {
     EntityId anchorRow = kNullEntity;  // shift-click range start
     EntityId scrollToRow = kNullEntity;
     std::string assetFilter;
+    std::string assetKindFilter;  // empty = all asset kinds
+    bool assetGrid = true;
     std::string selectedAsset;
     std::vector<ScriptTab> scripts;
     int focusScript = -1;
