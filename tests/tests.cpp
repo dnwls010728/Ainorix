@@ -10423,6 +10423,74 @@ TEST(NativeEditorTeamChat) {
 }
 #endif
 
+TEST(NativeEditorAssetBrowser) {
+    const std::string project = TempProject("editor_asset_browser");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(Call(engine, "script.write", R"({"path":"scripts/browser_probe.lua","source":"browser_probe_global = 3\n"})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto move = [](ImVec2 pos) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseMove; event.x = pos.x; event.y = pos.y; return event;
+        };
+        auto button = [](bool down) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.button = 0; event.down = down; return event;
+        };
+        auto click = [&](ImVec2 pos) { frames(1, {move(pos), button(true)}); frames(1, {button(false)}); };
+        frames(8);
+        ImGuiWindow* assetsWindow = ImGui::FindWindowByName("###Assets");
+        CHECK(assetsWindow && assetsWindow->DockTabIsVisible);
+        if (!assetsWindow) return;
+        const float font = ImGui::GetFontSize(), row = ImGui::GetFrameHeightWithSpacing();
+        const ImVec2 origin = assetsWindow->WorkRect.Min;
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float gridWidth = ImGui::CalcTextSize("Grid").x + style.FramePadding.x * 2;
+        const float listWidth = ImGui::CalcTextSize("List").x + style.FramePadding.x * 2;
+        const float gridX = origin.x + font * 9 + style.ItemSpacing.x;
+        click(ImVec2(gridX + gridWidth + style.ItemSpacing.x + listWidth * 0.5f, origin.y + row + row * 0.4f));
+        CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("AssetGrid=0") != std::string::npos);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/assets-list-test.png"), image.ToImage()));
+        click(ImVec2(gridX + gridWidth * 0.5f, origin.y + row + row * 0.4f));
+        CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("AssetGrid=1") != std::string::npos);
+        // Search through typed input, then drag the whole preview card, not only its filename.
+        click(ImVec2(origin.x + font * 3, origin.y + row * 0.4f));
+        std::vector<WindowEvent> text;
+        for (char character : std::string("browser_probe")) {
+            WindowEvent event; event.type = WindowEvent::Type::Text; event.codepoint = static_cast<uint32_t>(character);
+            text.push_back(event);
+        }
+        frames(3, text);
+        ImGuiWindow* content = nullptr;
+        for (ImGuiWindow* window : GImGui->Windows)
+            if (window->Active && window->ParentWindow == assetsWindow && std::strstr(window->Name, "##assets")) content = window;
+        CHECK(content != nullptr);
+        if (!content) return;
+        CHECK(content->ScrollMax.y < font); // the search reduced many project files to one card, with at most padding overflow
+        const ImVec2 card(content->WorkRect.Min.x + font * 3, content->WorkRect.Min.y + font * 2);
+        frames(1, {move(card), button(true)});
+        frames(2, {move(ImVec2(card.x + 30, card.y + 10))});
+        const ImGuiPayload* payload = ImGui::GetDragDropPayload();
+        CHECK(payload && payload->IsDataType("OE_ASSET"));
+        if (payload) CHECK(std::string(static_cast<const char*>(payload->Data), static_cast<size_t>(payload->DataSize)) == "scripts/browser_probe.lua");
+        frames(3, {button(false)});
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/assets-search-test.png"), image.ToImage()));
+        frames(20); // avoid treating the previous drag press as part of the double-click
+        click(card); click(card); frames(25);
+        CHECK(editor.ScriptProblems("scripts/browser_probe.lua").size() == 1);
+        CHECK(!engine.Dirty()); // browsing, switching views and editing a tab do not change the scene
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorHeadless) {
     Engine e;
     std::string err;

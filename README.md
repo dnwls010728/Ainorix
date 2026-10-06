@@ -94,6 +94,7 @@ Inspector generated from reflection, Scene view with move/rotate/scale gizmos an
 view that hands keyboard and mouse to the game, Assets with thumbnails and drag-and-drop import, a Lua code editor
 with live error marks, Console with a command line, History, Network and Team panels. One drag is one undo step,
 prefabs are edited in isolation, and the interface is available in English, Korean and Japanese.
+Assets offers Grid/List views, filename/path search and kind filters with counts. Shallow panels use compact rows so filenames stay visible.
 Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 
 ## Features

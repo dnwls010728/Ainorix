@@ -10,6 +10,7 @@
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 #include "render/GpuRenderer.h"
+#include "render/Mesh.h"
 #include "imgui_internal.h"
 
 #include "app/Engine.h"
@@ -632,50 +633,86 @@ void NativeEditor::Impl::AssetsPanel() {
         ImGui::End();
         return;
     }
-    if (ImGui::Button(Tr("Refresh"))) RefreshAssets(true);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
-    ImGui::InputTextWithHint("##filter", Tr("Search"), &assetFilter);
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", Tr("Drop files on the window to import. Drag assets into the Scene, Hierarchy or Inspector."));
-    ImGui::Separator();
-    ImGui::BeginChild("##assets");
     std::map<std::string, std::vector<std::string>> byKind;
     for (const Json& a : assets.items()) {
         std::string p = a["path"].asString("");
-        if (ContainsNoCase(p, assetFilter)) byKind[a["kind"].asString("other")].push_back(p);
+        byKind[a["kind"].asString("other")].push_back(p);
     }
     const char* order[] = {"scene", "prefab", "script", "model", "texture", "material", "audio", "font"};
     std::vector<std::string> kinds(std::begin(order), std::end(order));
     for (const auto& kv : byKind) {
         if (std::find(kinds.begin(), kinds.end(), kv.first) == kinds.end()) kinds.push_back(kv.first);
     }
+    const float font = ImGui::GetFontSize();
+    // Keep the toolbar usable when the panel is docked into a narrow column.
+    ImGui::SetNextItemWidth(std::max(font * 4, ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x));
+    ImGui::InputTextWithHint("##filter", Tr("Search assets by name or path"), &assetFilter);
+    ImGui::SameLine();
+    if (ImGui::Button("?")) ImGui::OpenPopup("##assethelp");
+    if (ImGui::BeginPopup("##assethelp")) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + font * 22);
+        ImGui::TextUnformatted(Tr("Drop files on the window to import. Drag assets into the Scene, Hierarchy or Inspector."));
+        ImGui::PopTextWrapPos();
+        ImGui::EndPopup();
+    }
+    ImGui::SetNextItemWidth(font * 9);
+    if (ImGui::BeginCombo("##assetkind", assetKindFilter.empty() ? Tr("All assets") : KindLabel(assetKindFilter))) {
+        if (ImGui::Selectable(Tr("All assets"), assetKindFilter.empty())) assetKindFilter.clear();
+        for (const std::string& kind : kinds) {
+            auto it = byKind.find(kind);
+            if (it == byKind.end()) continue;
+            const std::string label = std::string(KindLabel(kind)) + " (" + std::to_string(it->second.size()) + ")";
+            if (ImGui::Selectable(label.c_str(), assetKindFilter == kind)) assetKindFilter = kind;
+        }
+        ImGui::EndCombo();
+    }
+    const float actionsWidth = ImGui::CalcTextSize(Tr("Grid")).x + ImGui::CalcTextSize(Tr("List")).x +
+        ImGui::CalcTextSize(Tr("Refresh")).x + ImGui::GetStyle().FramePadding.x * 6 + ImGui::GetStyle().ItemSpacing.x * 3;
+    if (ImGui::GetContentRegionAvail().x > font * 9 + actionsWidth) ImGui::SameLine();
+    // Buttons use frame padding and a centered baseline, matching the adjacent combo and Refresh button.
+    auto viewButton = [&](const char* label, bool grid) {
+        if (assetGrid == grid) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        const bool clicked = ImGui::Button(label);
+        if (assetGrid == grid) ImGui::PopStyleColor();
+        if (clicked) assetGrid = grid;
+    };
+    viewButton(Tr("Grid"), true);
+    ImGui::SameLine();
+    viewButton(Tr("List"), false);
+    ImGui::SameLine();
+    if (ImGui::Button(Tr("Refresh"))) RefreshAssets(true);
+
+    size_t matched = 0;
+    for (const auto& kv : byKind) {
+        if (!assetKindFilter.empty() && assetKindFilter != kv.first) continue;
+        for (const std::string& path : kv.second) if (ContainsNoCase(path, assetFilter)) ++matched;
+    }
+    const std::string countLabel = Format(Tr("%d / %d assets"), static_cast<int>(matched), static_cast<int>(assets.size()));
+    const float contentRight = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+    if (contentRight - ImGui::GetItemRectMax().x > ImGui::CalcTextSize(countLabel.c_str()).x + ImGui::GetStyle().ItemSpacing.x)
+        ImGui::SameLine();
+    ImGui::TextDisabled("%s", countLabel.c_str());
+    ImGui::Separator();
+    ImGui::BeginChild("##assets", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
+    // A shallow dock must show filenames immediately, rather than only the top of a preview card.
+    const bool useGrid = assetGrid && ImGui::GetContentRegionAvail().y >= font * 6;
+    const float available = ImGui::GetContentRegionAvail().x;
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+    const int columns = useGrid ? std::max(1, static_cast<int>((available + gap) / (font * 9 + gap))) : 1;
+    const float itemWidth = std::max(1.0f, (available - gap * static_cast<float>(columns - 1)) / static_cast<float>(columns));
+    const float itemHeight = useGrid ? font * 6.6f : font * 3.4f;
+    int index = 0;
     for (const std::string& kind : kinds) {
         auto it = byKind.find(kind);
-        if (it == byKind.end()) continue;
-        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-        char header[64];
-        std::snprintf(header, sizeof(header), "%s (%d)###%s", KindLabel(kind), static_cast<int>(it->second.size()), kind.c_str());
-        if (!ImGui::TreeNodeEx(header, ImGuiTreeNodeFlags_SpanAvailWidth)) continue;
+        if (it == byKind.end() || (!assetKindFilter.empty() && assetKindFilter != kind)) continue;
+        std::sort(it->second.begin(), it->second.end());
         for (const std::string& path : it->second) {
+            if (!ContainsNoCase(path, assetFilter)) continue;
+            if (index++ % columns != 0) ImGui::SameLine(0, gap);
             ImGui::PushID(path.c_str());
-            const bool previewable = kind == "texture" || kind == "model" || kind == "material" || kind == "prefab" || kind == "scene";
-            if (showThumbnails && previewable) {
-                const float side = ImGui::GetFrameHeight() * 1.8f;
-                if (ImGui::IsRectVisible(ImVec2(side, side))) {
-                    auto image = AssetThumbnail(path);
-                    if (image) {
-                        ImGui::Image(ViewTexture(engine.Gpu()->ImageView(image)), ImVec2(side, side));
-                        HelpTooltip(path);
-                    } else ImGui::Dummy(ImVec2(side, side));
-                } else ImGui::Dummy(ImVec2(side, side));
-                ImGui::SameLine();
-            }
-            ImGui::PushStyleColor(ImGuiCol_Text, KindColor(kind));
-            ImGui::Bullet();
-            ImGui::PopStyleColor();
-            ImGui::SameLine();
-            if (ImGui::Selectable(FileName(path).c_str(), selectedAsset == path, ImGuiSelectableFlags_AllowDoubleClick)) {
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            const bool visible = ImGui::IsRectVisible(ImVec2(itemWidth, itemHeight));
+            if (ImGui::Selectable("##asset", selectedAsset == path, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(itemWidth, itemHeight))) {
                 selectedAsset = path;
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     if (kind == "scene") RequestAction({PendingAction::Kind::LoadScene, path});
@@ -691,6 +728,7 @@ void NativeEditor::Impl::AssetsPanel() {
                 ImGui::EndDragDropSource();
             }
             if (ImGui::BeginPopupContextItem("##assetctx")) {
+                selectedAsset = path;
                 if (kind == "scene" && ImGui::MenuItem(Tr("Open"))) RequestAction({PendingAction::Kind::LoadScene, path});
                 if (kind == "script" && ImGui::MenuItem(Tr("Edit"))) OpenScript(path);
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Instantiate"))) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
@@ -704,12 +742,66 @@ void NativeEditor::Impl::AssetsPanel() {
                 }
                 ImGui::EndPopup();
             }
+            if (visible) {
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                const bool isSelected = selectedAsset == path;
+                const float padding = font * 0.5f;
+                const ImVec2 end(pos.x + itemWidth, pos.y + itemHeight);
+                draw->AddRect(pos, end, ImGui::GetColorU32(isSelected ? ImGuiCol_ButtonActive : ImGuiCol_Border), 4);
+                const float side = useGrid ? font * 3.5f : itemHeight - padding * 2;
+                const ImVec2 preview(useGrid ? pos.x + (itemWidth - side) * 0.5f : pos.x + padding, pos.y + padding);
+                draw->AddRectFilled(preview, ImVec2(preview.x + side, preview.y + side), IM_COL32(24, 27, 33, 255), 3);
+                const bool previewable = kind == "texture" || kind == "model" || kind == "material" || kind == "prefab" || kind == "scene";
+                auto image = showThumbnails && previewable ? AssetThumbnail(path) : nullptr;
+                if (image) {
+                    const float scale = side / static_cast<float>(std::max(image->width, image->height));
+                    const ImVec2 size(static_cast<float>(image->width) * scale, static_cast<float>(image->height) * scale);
+                    const ImVec2 start(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f);
+                    draw->AddImage(ViewTexture(engine.Gpu()->ImageView(image)), start, start + size);
+                } else {
+                    const char* symbol = kind == "script" ? "</>" : kind == "audio" ? "SND" : kind == "font" ? "Aa" : "FILE";
+                    const ImVec2 size = ImGui::CalcTextSize(symbol);
+                    draw->AddText(ImVec2(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f),
+                                  ImGui::GetColorU32(KindColor(kind)), symbol);
+                }
+                const float textX = useGrid ? pos.x + padding : preview.x + side + padding;
+                const float textY = useGrid ? preview.y + side + padding * 0.7f : pos.y + padding;
+                const float right = end.x - padding;
+                // Clip at UTF-8 boundaries; the tooltip retains the complete filename and path.
+                auto label = [&](std::string text, float y, ImU32 color) {
+                    if (ImGui::CalcTextSize(text.c_str()).x > right - textX) {
+                        while (!text.empty() && ImGui::CalcTextSize((text + "...").c_str()).x > right - textX) {
+                            size_t last = text.size() - 1;
+                            while (last > 0 && (static_cast<unsigned char>(text[last]) & 0xc0) == 0x80) --last;
+                            text.resize(last);
+                        }
+                        text += "...";
+                    }
+                    draw->PushClipRect(ImVec2(textX, pos.y), ImVec2(right, end.y), true);
+                    draw->AddText(ImVec2(textX, y), color, text.c_str());
+                    draw->PopClipRect();
+                };
+                label(FileName(path), textY, ImGui::GetColorU32(ImGuiCol_Text));
+                const size_t slash = path.find_last_of('/');
+                const std::string detail = useGrid ? KindLabel(kind) :
+                    std::string(KindLabel(kind)) + "  /  " + (slash == std::string::npos ? "." : path.substr(0, slash));
+                label(detail, textY + font * 1.25f, ImGui::GetColorU32(useGrid ? KindColor(kind) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)));
+            }
             ImGui::PopID();
         }
-        ImGui::TreePop();
     }
     if (assets.size() == 0) ImGui::TextDisabled("%s", Tr("The project has no assets yet."));
+    else if (matched == 0) {
+        ImGui::TextUnformatted(Tr("No matching assets."));
+        if (ImGui::Button(Tr("Clear filters"))) { assetFilter.clear(); assetKindFilter.clear(); }
+    }
     ImGui::EndChild();
+    ImGui::Separator();
+    if (selectedAsset.empty()) ImGui::TextDisabled("%s", Tr("Select an asset to see its path."));
+    else {
+        ImGui::TextUnformatted(selectedAsset.c_str());
+        HelpTooltip(selectedAsset);
+    }
     ImGui::End();
 }
 
