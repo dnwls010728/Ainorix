@@ -321,7 +321,18 @@ struct Targets {
 };
 
 void SgLog(const char* tag, uint32_t level, uint32_t item, const char* message, uint32_t line, const char*, void*) {
-    const char* msg = message ? message : "(no message in release builds)";
+    const char* msg = message;
+    if (!msg) {
+        switch (item) {
+            case SG_LOGITEM_BUFFER_POOL_EXHAUSTED: msg = "BUFFER_POOL_EXHAUSTED: buffer pool exhausted"; break;
+            case SG_LOGITEM_IMAGE_POOL_EXHAUSTED: msg = "IMAGE_POOL_EXHAUSTED: image pool exhausted"; break;
+            case SG_LOGITEM_VIEW_POOL_EXHAUSTED: msg = "VIEW_POOL_EXHAUSTED: view pool exhausted"; break;
+            case SG_LOGITEM_SAMPLER_POOL_EXHAUSTED: msg = "SAMPLER_POOL_EXHAUSTED: sampler pool exhausted"; break;
+            case SG_LOGITEM_SHADER_POOL_EXHAUSTED: msg = "SHADER_POOL_EXHAUSTED: shader pool exhausted"; break;
+            case SG_LOGITEM_PIPELINE_POOL_EXHAUSTED: msg = "PIPELINE_POOL_EXHAUSTED: pipeline pool exhausted"; break;
+            default: msg = "(no message in release builds)"; break;
+        }
+    }
     if (level <= 1) OE_LOG_ERROR("gpu", "%s item %u line %u: %s", tag, item, line, msg);
     else if (level == 2) OE_LOG_WARN("gpu", "%s item %u line %u: %s", tag, item, line, msg);
 }
@@ -1354,6 +1365,7 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
 }
 
 sg_view GpuRenderer::ImageView(const std::shared_ptr<const Texture>& texture) { return impl_->UITextureFor(texture); }
+void GpuRenderer::CollectGarbage() { impl_->Evict(); }
 
 sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats) {
     int w = std::max(1, width), h = std::max(1, height);

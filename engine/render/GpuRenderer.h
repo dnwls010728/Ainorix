@@ -48,6 +48,8 @@ public:
     bool ReadTexture(int slot, RenderTarget& target);
     // A texture as a sampleable view (e.g. tileset thumbnails in the editor), kept while `texture` lives.
     sg_view ImageView(const std::shared_ptr<const Texture>& texture);
+    // Release cached copies whose CPU owners expired. Call between frames, before creating UI image views.
+    void CollectGarbage();
     // Size of the window swapchain (0 when headless or minimized).
     void WindowSize(int* width, int* height);
 

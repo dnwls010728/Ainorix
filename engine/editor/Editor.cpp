@@ -1537,6 +1537,8 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     m.height = std::max(1, height);
     m.dpiScale = dpiScale > 0 ? dpiScale : 1.0f;
     m.time += dt;
+    // Effects/Shaders can be the only visible viewport; their UI textures still need per-frame eviction.
+    m.engine.Gpu()->CollectGarbage();
     if (std::fabs(m.appliedScale - m.dpiScale * m.uiScale) > 1e-3f) m.ApplyStyle();
     m.ApplyEvents(events);
 

@@ -235,3 +235,16 @@ Without a window (Linux `null` platform, CI) the editor can still be rendered to
       English workflow and Korean/Japanese D3D11 screenshots inspected. CLI authoring/preview tested.
 - [ ] Linux/EGL and other editor platforms unverified. Web/Android player binaries need the existing
       Emscripten/NDK rebuild follow-up; editor itself is not linked into players.
+
+### Preview GPU resource lifetime fix (2026-10-08)
+
+- [x] Release old preview GPU copies every editor frame, including when Effects/Shader hides both
+      Scene and Game. Previously eviction ran only on scene rendering: each new preview accumulated
+      an image/view until sokol reported IMAGE_POOL_EXHAUSTED and VIEW_POOL_EXHAUSTED (`sg item 159`).
+      Release pool errors now name the failing pool instead of only reporting a numeric item.
+- [x] VFXLab CLI editor screenshot at 800x600 over 2200 frames reproduced 1403 GPU errors before the
+      fix, including 194 view-pool failures; the same run after the fix has zero GPU errors.
+      NativeEditorEffectsResourceLifetime tracks live images/views over 2200 frames with Scene hidden;
+      Windows Release build and the complete 275-test suite pass. Before/after screenshots inspected.
+- [ ] Other GPU backends unverified here. Prebuilt Web/Android players retain the previously recorded
+      SDK rebuild follow-up; the editor fix itself is desktop-only.

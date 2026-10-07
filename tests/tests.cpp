@@ -11138,6 +11138,40 @@ TEST(EditorShaderGraphOrderingAndValidation) {
     }
 }
 
+TEST(NativeEditorEffectsResourceLifetime) {
+    const std::string project = TempProject("editor_effects_resources"); Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    const Json scene = engine.GetScene().ToJson();
+    NativeEditor::Options options; options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); RenderTarget image;
+        auto frame = [&] {
+            editor.Update({}, 800, 600, 1, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        };
+        for (int i = 0; i < 4; ++i) frame();
+        CHECK(Call(engine, "vfx.edit", R"J({"path":"effects/preview.vfx.json","new":true,"preset":"fire"})J")["ok"].asBool());
+        editor.OpenEffect();
+        for (int i = 0; i < 32; ++i) frame();
+        ImGuiWindow* sceneWindow = ImGui::FindWindowByName("###Scene");
+        CHECK(sceneWindow && !sceneWindow->DockTabIsVisible);
+        const sg_total_stats baseline = sg_query_stats().total; const uint64_t since = Log::LastSeq();
+        uint32_t peakImages = baseline.images.alive, peakViews = baseline.views.alive;
+        // Cross both original pool limits, with Effects active and no Scene/Game render to evict caches.
+        for (int i = 0; i < 2200; ++i) {
+            frame(); const sg_total_stats stats = sg_query_stats().total;
+            peakImages = std::max(peakImages, stats.images.alive); peakViews = std::max(peakViews, stats.views.alive);
+        }
+        CHECK(peakImages <= baseline.images.alive + 4 && peakViews <= baseline.views.alive + 4);
+        CHECK(engine.GetScene().ToJson() == scene && !engine.InPlaySession());
+        for (const LogEntry& entry : Log::Since(since)) CHECK(entry.category != "gpu" || entry.level != LogLevel::Error);
+        std::printf("  Effects 2200 frames: GPU images %u..%u, views %u..%u\n",
+            baseline.images.alive, peakImages, baseline.views.alive, peakViews);
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorEffectsAuthoring) {
     const std::string project = TempProject("editor_effects"); Engine engine; std::string error;
     CHECK(engine.Open(project, &error)); CreateTestVfx(engine);

@@ -9,6 +9,12 @@ Two renderers draw the same scene description (`engine/render/RenderScene.h`: me
 
 GPU backends: **Direct3D 11** on Windows (hardware, falling back to WARP — the software D3D device built into Windows), **WebGL2** in the browser, **OpenGL ES 3 over EGL** on Linux (headless; Mesa's llvmpipe works without a GPU). Front-ends take `--renderer auto|gpu|software` (`auto` = GPU when available, otherwise software); `engine.info` reports both `renderer` (software) and `displayRenderer`. The test `GpuRendererMatchesSoftware` compares the two (mean channel difference below 1/255 on the Showcase).
 
+GPU texture/mesh caches follow their CPU owners. Scene rendering evicts expired owners, and the native
+editor also calls `GpuRenderer::CollectGarbage` between frames so an Effects/Shader workspace continues
+releasing old preview images while Scene/Game are hidden. Resource-pool failures include their names
+in Release logs: `sg item 159` is `VIEW_POOL_EXHAUSTED`, the sokol view pool limit, not a particle-field
+validation error. Pool sizes are fixed; preview lifetimes must stay bounded rather than increasing them.
+
 ## GPU pipeline and shaders
 
 ParticleEmitter uses shared camera-facing quads in both renderers, with lifetime
