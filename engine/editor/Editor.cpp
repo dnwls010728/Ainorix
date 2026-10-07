@@ -168,7 +168,15 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     float f = 0;
     int i = 0;
     float v[3];
-    if (std::sscanf(line, "UiScale=%f", &f) == 1) m->uiScale = Clamp(f, 0.6f, 2.5f);
+    WindowPlacement placement; int maximized = 0;
+    if (std::sscanf(line, "WindowPlacement=%d,%d,%d,%d,%d", &placement.x, &placement.y, &placement.width, &placement.height, &maximized) == 5) {
+        if (m->window && placement.width >= 320 && placement.height >= 180 && placement.width <= 32768 && placement.height <= 32768 &&
+            placement.x >= -100000 && placement.x <= 100000 && placement.y >= -100000 && placement.y <= 100000 &&
+            (maximized == 0 || maximized == 1)) {
+            placement.maximized = maximized != 0;
+            m->windowPlacementRestored = m->window->RestorePlacement(placement);
+        }
+    } else if (std::sscanf(line, "UiScale=%f", &f) == 1) m->uiScale = Clamp(f, 0.6f, 2.5f);
     else if (std::sscanf(line, "Grid=%d", &i) == 1) m->showGrid = i != 0;
     else if (std::sscanf(line, "Colliders=%d", &i) == 1) m->showColliders = i != 0;
     else if (std::sscanf(line, "Icons=%d", &i) == 1) m->showIcons = i != 0;
@@ -206,6 +214,17 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
         m->cam.distance = Clamp(v[2], 0.05f, 5000.0f);
     } else if (std::sscanf(line, "Camera2D=%d", &i) == 1) {
         m->cam.Set2D(i != 0);
+    } else {
+        float pose[6];
+        if (std::sscanf(line, "Camera3D=%f,%f,%f,%f,%f,%f", &pose[0], &pose[1], &pose[2], &pose[3], &pose[4], &pose[5]) == 6 &&
+            std::all_of(std::begin(pose), std::end(pose), [](float value) { return std::isfinite(value); })) {
+            m->cam.saved3D = {Vec3(pose[0], pose[1], pose[2]), pose[3], Clamp(pose[4], -89.0f, 89.0f), Clamp(pose[5], 0.05f, 5000.0f)};
+            m->cam.hasSaved3D = true;
+        } else if (std::sscanf(line, "Camera2DView=%f,%f,%f,%f", &pose[0], &pose[1], &pose[2], &pose[3]) == 4 &&
+            std::all_of(pose, pose + 4, [](float value) { return std::isfinite(value); })) {
+            m->cam.saved2D = {Vec3(pose[0], pose[1], pose[2]), 0, 0, Clamp(pose[3], 0.05f, 5000.0f)};
+            m->cam.hasSaved2D = true;
+        }
     }
 }
 
@@ -220,9 +239,21 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam, m->showTeamChat);
     buf->appendf("AssetGrid=%d\n", m->assetGrid);
+    WindowPlacement placement;
+    if (m->window && m->window->GetPlacement(placement))
+        buf->appendf("WindowPlacement=%d,%d,%d,%d,%d\n", placement.x, placement.y, placement.width, placement.height, placement.maximized ? 1 : 0);
     buf->appendf("GameAspect=%d\nFlySpeed=%.2f\nPanels=%d\nLanguage=%s\n", m->gameAspect, m->flySpeed, panels, EditorLanguageCode(GetEditorLanguage()));
     buf->appendf("Camera=%.4f,%.4f,%.4f\nCameraAngles=%.3f,%.3f,%.4f\nCamera2D=%d\n\n", m->cam.target.x, m->cam.target.y, m->cam.target.z, m->cam.yaw,
                  m->cam.pitch, m->cam.distance, m->cam.mode2D);
+    if (m->cam.hasSaved3D) {
+        const auto& pose = m->cam.saved3D;
+        buf->appendf("Camera3D=%.4f,%.4f,%.4f,%.3f,%.3f,%.4f\n", pose.target.x, pose.target.y, pose.target.z,
+                     pose.yaw, pose.pitch, pose.distance);
+    }
+    if (m->cam.mode2D || m->cam.hasSaved2D) {
+        const auto pose = m->cam.mode2D ? EditorCamera::OrbitState{m->cam.target, 0, 0, m->cam.distance} : m->cam.saved2D;
+        buf->appendf("Camera2DView=%.4f,%.4f,%.4f,%.4f\n", pose.target.x, pose.target.y, pose.target.z, pose.distance);
+    }
 }
 
 // Toolbar icons drawn as shapes, so they do not depend on font glyphs.
@@ -1456,6 +1487,9 @@ bool NativeEditor::Init(std::string* error) {
     m.componentTypes = m.Call("component.types", Json(), true)["result"];
     for (const Json& t : m.componentTypes.items()) m.typeByName[t["name"].asString("")] = &t;
     for (const Json& c : m.Call("api.list", Json(), true)["result"].items()) m.commandNames.push_back(c["name"].asString(""));
+    // Load after registering our settings handler, before deciding the initial native window state.
+    if (!m.options.layoutFile.empty()) ImGui::LoadIniSettingsFromDisk(m.options.layoutFile.c_str());
+    if (m.window && !m.windowPlacementRestored) m.window->Maximize();
     m.ready = true;
     m.Refresh(true);
     m.RefreshAssets(true);

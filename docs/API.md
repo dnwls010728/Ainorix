@@ -643,7 +643,7 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 |---|---|---|---|
 | `width` | integer |  | Image width in pixels (default 640). |
 | `height` | integer |  | Image height in pixels (default 360). |
-| `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees}. Default: the scene's active camera. |
+| `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees, projection:perspective|orthographic, orthoSize:half-height}. Free defaults: perspective, fov 60, orthoSize 5, clips 0.05..1000. Omit camera to use the scene's active camera. |
 | `grid` | boolean |  | Draw the editor ground grid (default false). |
 | `colliders` | boolean |  | Draw collider wireframes: green solid, yellow trigger, cyan character (default false). |
 | `ui` | boolean |  | Draw the in-game UI (default: true with the scene camera, false with a free camera). |
@@ -660,7 +660,7 @@ Return the entity visible at a pixel of a rendered view.
 |---|---|---|---|
 | `width` | integer |  | Image width in pixels (default 640). |
 | `height` | integer |  | Image height in pixels (default 360). |
-| `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees}. Default: the scene's active camera. |
+| `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees, projection:perspective|orthographic, orthoSize:half-height}. Free defaults: perspective, fov 60, orthoSize 5, clips 0.05..1000. Omit camera to use the scene's active camera. |
 | `grid` | boolean |  | Draw the editor ground grid (default false). |
 | `colliders` | boolean |  | Draw collider wireframes: green solid, yellow trigger, cyan character (default false). |
 | `ui` | boolean |  | Draw the in-game UI (default: true with the scene camera, false with a free camera). |

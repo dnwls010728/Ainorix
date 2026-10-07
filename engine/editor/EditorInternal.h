@@ -98,6 +98,7 @@ struct NativeEditor::Impl {
     Window* window;
     NativeEditor::Options options;
     bool ready = false;
+    bool windowPlacementRestored = false;
     double time = 0;  // editor clock (seconds since start)
     int width = 1280, height = 720;
     float dpiScale = 1.0f;

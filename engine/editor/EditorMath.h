@@ -56,6 +56,19 @@ struct EditorCamera {
     float distance = 11.0f;
     float fov = 60.0f;
     bool mode2D = false;    // looks along -Z, no rotation
+    // Keep the 3D orbit independent of edits made while viewing the XY plane.
+    struct OrbitState {
+        Vec3 target{0, 0.5f, 0};
+        float yaw = -35, pitch = -28, distance = 11;
+    } saved3D, saved2D;
+    bool hasSaved3D = false, hasSaved2D = false;
+
+    // Match the perspective footprint at the orbit target when first entering orthographic 2D.
+    float OrthoHalfHeight() const { return std::max(0.001f, distance * std::tan(Radians(fov) * 0.5f)); }
+    Mat4 Projection(float aspect) const {
+        return mode2D ? Mat4::Orthographic(OrthoHalfHeight(), aspect, 0.05f, 1000.0f)
+                      : Mat4::Perspective(Radians(fov), aspect, 0.05f, 1000.0f);
+    }
 
     Vec3 Forward() const {
         if (mode2D) return Vec3(0, 0, -1);
@@ -91,11 +104,27 @@ struct EditorCamera {
         distance = std::max(1.0f, radius * 2.5f);
     }
     void Set2D(bool on) {
-        mode2D = on;
+        if (on == mode2D) return;
         if (on) {
+            saved3D = {target, yaw, pitch, distance};
+            hasSaved3D = true;
+            if (hasSaved2D) {
+                target = saved2D.target;
+                distance = saved2D.distance;
+            }
             yaw = 0.0f;
             pitch = 0.0f;
+        } else {
+            saved2D = {target, 0, 0, distance};
+            hasSaved2D = true;
+            if (hasSaved3D) {
+                target = saved3D.target;
+                yaw = saved3D.yaw;
+                pitch = saved3D.pitch;
+                distance = saved3D.distance;
+            }
         }
+        mode2D = on;
     }
 };
 

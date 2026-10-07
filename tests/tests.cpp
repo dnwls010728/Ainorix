@@ -10478,6 +10478,85 @@ TEST(EditorMathDecompose) {
     CHECK(std::fabs(NearestAngle(350.0f, 0.0f) + 10.0f) < 1e-4f);
 }
 
+TEST(EditorCamera2DRestoresOrbit) {
+    EditorCamera camera;
+    camera.target = Vec3(3, 4, 5); camera.yaw = 78; camera.pitch = -22; camera.distance = 9;
+    const Vec3 originalEye = camera.Eye(), originalForward = camera.Forward();
+    camera.Set2D(true);
+    camera.Pan(100, 50, 720); camera.Zoom(3); camera.Frame(Vec3(-5, -6, 0), 2);
+    const Vec3 planeTarget = camera.target;
+    const float planeDistance = camera.distance;
+    camera.Set2D(true); // entering the same mode must not overwrite the saved orbit
+    CHECK(Near(camera.target, planeTarget, 1e-6f) && camera.distance == planeDistance);
+    camera.Set2D(false);
+    CHECK(Near(camera.target, Vec3(3, 4, 5), 1e-6f) && camera.distance == 9);
+    CHECK(Near(camera.Eye(), originalEye, 1e-6f) && Near(camera.Forward(), originalForward, 1e-6f));
+    camera.Orbit(12, 8); camera.Pan(20, -10, 720); camera.Zoom(-1);
+    const Vec3 nextEye = camera.Eye();
+    camera.Set2D(false);
+    CHECK(Near(camera.Eye(), nextEye, 1e-6f));
+    camera.Set2D(true);
+    CHECK(Near(camera.target, planeTarget, 1e-6f) && camera.distance == planeDistance);
+    CHECK(Near(camera.Forward(), Vec3(0, 0, -1), 1e-6f));
+    camera.Pan(-20, 15, 720); camera.Zoom(-2);
+    const Vec3 nextPlaneTarget = camera.target;
+    const float nextPlaneDistance = camera.distance;
+    camera.Set2D(false);
+    CHECK(Near(camera.Eye(), nextEye, 1e-6f));
+    camera.Set2D(true);
+    CHECK(Near(camera.target, nextPlaneTarget, 1e-6f) && camera.distance == nextPlaneDistance);
+    camera.Set2D(false);
+    CHECK(Near(camera.Eye(), nextEye, 1e-6f)); // refresh the saved pose on each new 3D -> 2D transition
+}
+
+TEST(FreeOrthographicCameraPicking) {
+    const std::string project = TempProject("free_ortho_pick");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(Call(engine, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Near cube","components":{"Transform":{"position":[-2,0,3]},"MeshRenderer":{"mesh":"cube"}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Far cube","components":{"Transform":{"position":[2,0,-3]},"MeshRenderer":{"mesh":"cube"}}})")["ok"].asBool());
+    Json args = Json::parse(R"({"width":400,"height":400,"x":100,"y":200,"camera":{"eye":[0,0,10],"target":[0,0,0],"projection":"orthographic","orthoSize":4}})");
+    CHECK(engine.Call("render.pick", args)["result"]["name"].asString() == "Near cube");
+    args["x"] = 300;
+    CHECK(engine.Call("render.pick", args)["result"]["name"].asString() == "Far cube");
+    // Count horizontal coverage through both cubes to check actual software pixels, not only matrix math.
+    int widths[2] = {0, 0};
+    for (int x = 65; x <= 135; ++x) {
+        args["x"] = x;
+        if (engine.Call("render.pick", args)["result"]["name"].asString() == "Near cube") ++widths[0];
+        args["x"] = x + 200;
+        if (engine.Call("render.pick", args)["result"]["name"].asString() == "Far cube") ++widths[1];
+    }
+    CHECK(widths[0] > 0 && widths[0] == widths[1]);
+    args["camera"]["orthoSize"] = 0;
+    CHECK(!engine.Call("render.pick", args)["ok"].asBool());
+    args["camera"]["orthoSize"] = 4;
+    args["camera"]["projection"] = "invalid";
+    CHECK(!engine.Call("render.pick", args)["ok"].asBool());
+    CHECK(RemoveAll(project));
+}
+
+TEST(Editor2DProjectionHasNoPerspective) {
+    EditorCamera camera;
+    camera.target = Vec3(0, 0, 0); camera.yaw = 0; camera.pitch = 0; camera.distance = 10;
+    const Mat4 view = Mat4::LookAt(camera.Eye(), camera.target, Vec3(0, 1, 0));
+    auto extent = [&](float z) {
+        const Mat4 projection = camera.Projection(1);
+        const Vec4 a = projection * view * Vec4(-0.5f, 0, z, 1), b = projection * view * Vec4(0.5f, 0, z, 1);
+        return b.x / b.w - a.x / a.w;
+    };
+    CHECK(extent(3) > extent(-3) * 1.5f);
+    camera.Set2D(true);
+    CHECK(std::fabs(extent(3) - extent(-3)) < 1e-6f);
+    Vec3 a, da, b, db;
+    ScreenRay(view, camera.Projection(1), 100, 100, 400, 400, a, da);
+    ScreenRay(view, camera.Projection(1), 300, 300, 400, 400, b, db);
+    CHECK(Near(da, db, 1e-6f) && Length(a - b) > 1);
+    camera.Set2D(false);
+    CHECK(extent(3) > extent(-3) * 1.5f);
+}
+
 TEST(EditorCameraFrustumCorners) {
     Scene scene;
     const EntityId parent = scene.Create("Camera parent"), id = scene.Create("Camera");
@@ -11332,6 +11411,137 @@ TEST(NativeEditorTeamChat) {
 #endif
 }
 #endif
+
+TEST(NativeEditor2DOrbitPersistence) {
+    const std::string project = TempProject("editor_2d_orbit");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en"; options.layoutFile = JoinPath(project, ".oe/editor.ini");
+    std::string original, planeView;
+    auto cameraLines = []() {
+        const std::string ini = ImGui::SaveIniSettingsToMemory();
+        const size_t begin = ini.find("Camera="), end = ini.find("Camera2D=", begin);
+        return begin != std::string::npos && end != std::string::npos ? ini.substr(begin, end - begin) : std::string();
+    };
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames(5);
+        original = cameraLines(); CHECK(!original.empty());
+        editor.SetSceneView2D(true);
+        frames(3);
+        const auto rect = editor.SceneViewRect();
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = rect[0] + rect[2] * 0.5f; move.y = rect[1] + rect[3] * 0.5f;
+        WindowEvent press; press.type = WindowEvent::Type::MouseButton; press.button = 2; press.down = true;
+        WindowEvent release = press; release.down = false;
+        frames(2, {move}); frames(1, {press});
+        move.x += 70; move.y -= 40;
+        frames(2, {move}); frames(3, {release});
+        planeView = cameraLines();
+        CHECK(planeView != original);
+        editor.SetSceneView2D(false); CHECK(cameraLines() == original);
+        editor.SetSceneView2D(true); CHECK(cameraLines() == planeView);
+        CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("Camera3D=") != std::string::npos);
+    }
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("Camera2D=1") != std::string::npos);
+        CHECK(cameraLines() == planeView);
+        editor.SetSceneView2D(false);
+        CHECK(cameraLines() == original);
+        RenderTarget image;
+        for (int i = 0; i < 5; ++i) {
+            editor.Update({}, 1280, 720, 1, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/scene-3d-restored.png"), image.ToImage()));
+    }
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("Camera2D=0") != std::string::npos);
+        editor.SetSceneView2D(true);
+        CHECK(cameraLines() == planeView); // stored 2D view survives closing in 3D too
+        editor.SetSceneView2D(false); CHECK(cameraLines() == original);
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NativeEditorWindowPlacementPersistence) {
+    struct PlacementWindow : Window {
+        WindowPlacement placement{40, 60, 1000, 700, false};
+        int maximizes = 0, restores = 0;
+        bool PumpEvents(InputState&) override { return true; }
+        void Present(const RenderTarget&) override {}
+        int Width() const override { return placement.width; }
+        int Height() const override { return placement.height; }
+        void SetTitle(const std::string&) override {}
+        void Maximize() override { ++maximizes; placement.maximized = true; }
+        bool GetPlacement(WindowPlacement& out) const override { out = placement; return true; }
+        bool RestorePlacement(const WindowPlacement& value) override { ++restores; placement = value; return true; }
+    } window;
+    const std::string project = TempProject("editor_window_placement");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    options.layoutFile = JoinPath(project, ".oe/editor.ini");
+    {
+        NativeEditor editor(engine, &window, options); CHECK(editor.Init(&error));
+        CHECK(window.maximizes == 1 && window.restores == 0); // first launch
+        window.placement = {120, 90, 1100, 760, false}; // user restores/resizes before closing
+    }
+    std::string savedIni;
+    CHECK(ReadTextFile(options.layoutFile, savedIni));
+    CHECK(savedIni.find("WindowPlacement=120,90,1100,760,0") != std::string::npos);
+    window.maximizes = 0; window.restores = 0;
+    {
+        NativeEditor editor(engine, &window, options); CHECK(editor.Init(&error));
+        CHECK(window.maximizes == 0 && window.restores == 1);
+        CHECK(!window.placement.maximized && window.placement.x == 120 && window.placement.width == 1100);
+        window.placement.maximized = true;
+    }
+    window.restores = 0;
+    {
+        NativeEditor editor(engine, &window, options); CHECK(editor.Init(&error));
+        CHECK(window.maximizes == 0 && window.restores == 1 && window.placement.maximized);
+        CHECK(window.placement.height == 760 && window.placement.y == 90);
+    }
+    CHECK(WriteTextFile(options.layoutFile, "[OwnEngine][Editor]\nWindowPlacement=0,0,-2,0,9\n"));
+    window.maximizes = 0; window.restores = 0;
+    {
+        NativeEditor editor(engine, &window, options); CHECK(editor.Init(&error));
+        CHECK(window.maximizes == 1 && window.restores == 0); // reject malformed saved placement
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NativeWindowPlacementRoundTrip) {
+    auto window = CreatePlatformWindow("OwnEngine placement test", 640, 480);
+    if (!window) return;
+    WindowPlacement saved;
+    if (!window->GetPlacement(saved)) return;
+    WindowPlacement requested = saved;
+    requested.width = 700; requested.height = 500; requested.maximized = false;
+    CHECK(window->RestorePlacement(requested));
+    WindowPlacement restored;
+    CHECK(window->GetPlacement(restored) && !restored.maximized);
+    CHECK(restored.width == 700 && restored.height == 500);
+    window->Maximize();
+    CHECK(window->GetPlacement(restored) && restored.maximized);
+    CHECK(restored.width == 700 && restored.height == 500); // maximize retains normal dimensions
+    requested.x = 99000; requested.y = 99000;
+    CHECK(window->RestorePlacement(requested));
+    CHECK(window->GetPlacement(restored) && !restored.maximized);
+    CHECK(restored.x != requested.x && restored.y != requested.y); // disconnected monitor recovery
+    CHECK(window->RestorePlacement(saved));
+}
 
 TEST(NativeEditorLightGuides) {
     const std::string project = TempProject("editor_light_guides");

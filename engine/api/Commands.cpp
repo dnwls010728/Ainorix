@@ -244,6 +244,15 @@ ViewRequest ParseView(Engine& e, const Json& args) {
     const Json& cam = args["camera"];
     if (cam.isObject()) {
         r.view = MakeLookAtView(ReadVec3(cam["eye"], Vec3(6, 5, 8)), ReadVec3(cam["target"], Vec3(0, 0, 0)), cam["fov"].asFloat(60.0f), aspect);
+        const std::string projection = cam["projection"].asString("perspective");
+        if (projection == "orthographic") {
+            const float size = cam["orthoSize"].asFloat(5.0f);
+            if (!std::isfinite(size) || size <= 0)
+                throw ApiError("invalid_argument", "camera.orthoSize must be finite and positive", "Set the half-height in world units.");
+            r.view.proj = Mat4::Orthographic(size, aspect, 0.05f, 1000.0f);
+        } else if (projection != "perspective") {
+            throw ApiError("invalid_argument", "camera.projection must be perspective or orthographic");
+        }
         RenderView sceneView;
         MakeSceneView(e.GetScene(), aspect, sceneView);
         r.view.clearColor = sceneView.clearColor;
@@ -266,7 +275,7 @@ ViewRequest ParseView(Engine& e, const Json& args) {
 Json CameraSchema() {
     Json cam = Json::MakeObject();
     cam["type"] = "object";
-    cam["description"] = "Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees}. Default: the scene's active camera.";
+    cam["description"] = "Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees, projection:perspective|orthographic, orthoSize:half-height}. Free defaults: perspective, fov 60, orthoSize 5, clips 0.05..1000. Omit camera to use the scene's active camera.";
     return cam;
 }
 

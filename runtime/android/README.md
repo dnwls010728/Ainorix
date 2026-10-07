@@ -233,3 +233,24 @@ unrelated network/codec missing-field initializer warnings; final incremental re
 had no reload-source warning. No new APK signing or device/emulator launch in this unit:
 기기 실행 미검증. ADB was not found in this SDK or on PATH.
 Final evidence: ignored build/reload/*release* and *reviewed-build* logs, artifacts.json.
+
+## Orthographic Scene-view support runtime refresh (2026-10-07)
+
+Source: main HEAD a822d27 plus the working-tree editor window-placement,
+independent 2D/3D view persistence and orthographic free-camera changes.
+The player-shared command parser now accepts `camera.projection: "orthographic"`
+and `orthoSize` for matching screenshots and picking; default perspective and
+scene-camera rendering are unchanged. Official Lua sources/digest are unchanged.
+Commands.cpp SHA256: `eacd7f7bab83df0c74963fa6ef8fcf1d571b4a02bb63ca27fca91de362231df4`.
+Native build and full suite: 245 tests, 0 failed checks, exit 0. The editor 2D
+screenshot was visually inspected. No new packaged browser or Android device
+execution was performed; Wasm tests were not rerun in this unit.
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,053,744 | cc87bb669326f93f763fed5964f5caf53fa8cfaf1c940b487923708a65584717 |
+| runtime/android/x86_64/liboe_player.so | 7,417,096 | 561fae039ecc1d8f6e7d0689685b78ba1f74a2b46538b1453566c9dabc32cacb |
+
+build_android.bat with ANDROID_HOME=build/android-sdk succeeded for both supported
+ABIs. arm64 grew by 1,856 bytes and x86_64 by 1,968 bytes for the shared command
+parser and rebuilt platform interface. Device/emulator execution remains unverified.
+Evidence: ignored build/orthographic-android-build.log.

@@ -56,6 +56,12 @@ struct FileDialogResult {
     std::string path, error;
 };
 
+// Restored outer window rectangle in screen pixels; minimized state is never persisted.
+struct WindowPlacement {
+    int x = 0, y = 0, width = 1600, height = 900;
+    bool maximized = false;
+};
+
 // Platform abstraction. Each target (Win32 today; Web, Android, iOS, macOS,
 // Linux and consoles later) provides one implementation of this header.
 // Everything above this layer is platform independent C++17.
@@ -85,6 +91,9 @@ public:
     // Pixels per 96-DPI unit of the monitor the window is on (1 = 100 %).
     virtual float DpiScale() const { return 1.0f; }
     virtual void Maximize() {}
+    // Desktop editor placement; unsupported platforms return false. Restore keeps the window on screen.
+    virtual bool GetPlacement(WindowPlacement& out) const { return false; }
+    virtual bool RestorePlacement(const WindowPlacement& placement) { return false; }
     // Headless/non-desktop targets return Unavailable; tools keep their path picker.
     virtual FileDialogResult ChooseFile(const FileDialogOptions& options) { return {}; }
 };

@@ -514,7 +514,6 @@ int CmdEditor(const Args& a) {
     }
     options.onFrame = team->update;  // agent turns advance every frame, whatever panel is open
     if (!a.Has("--mute")) engine.EnableAudioOutput();
-    window->Maximize();
     OE_LOG_INFO("editor", "native editor (%s)", engine.Gpu()->Name());
     return RunNativeEditor(engine, *window, options);
 #else

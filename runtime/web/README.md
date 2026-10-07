@@ -231,3 +231,24 @@ but byte-identical to M3. After final player build, configure tests ON and build
 oe_tests with Node. One existing unused ProcessFixtureDir warning. No new packaged browser
 smoke in this unit; Node does not verify physical/browser input.
 Final evidence: ignored build/reload/*release* and *reviewed-build* logs, artifacts.json.
+
+## Orthographic Scene-view support runtime refresh (2026-10-07)
+
+Source: main HEAD a822d27 plus the working-tree editor window-placement,
+independent 2D/3D view persistence and orthographic free-camera changes.
+The player-shared command parser now accepts `camera.projection: "orthographic"`
+and `orthoSize` for matching screenshots and picking; default perspective and
+scene-camera rendering are unchanged. Official Lua sources/digest are unchanged.
+Commands.cpp SHA256: `eacd7f7bab83df0c74963fa6ef8fcf1d571b4a02bb63ca27fca91de362231df4`.
+Native build and full suite: 245 tests, 0 failed checks, exit 0. The editor 2D
+screenshot was visually inspected. No new packaged browser or Android device
+execution was performed; Wasm tests were not rerun in this unit.
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,358,582 | 1f457fef76dafcf793ae7e720a82e7265235bcffd58e026874908115d539dd42 |
+
+build_web.bat, EMSDK=E:/emsdk, Release. Two initial link attempts failed in
+wasm-metadce (exit 3221225477); retry with BINARYEN_CORES=1 and build parallelism
+2 succeeded. Wasm grew by 1,457 bytes; JS is byte-identical. Evidence:
+ignored build/orthographic-web-build.log.

@@ -200,3 +200,5 @@ the reflected PostProcess component through Lua scene commands; see
 [POSTPROCESS.md](POSTPROCESS.md) for settings and verification.
 
 `samples/HD2D` ("Lantern Road"): pixel-art sprites turned to the camera by a script in a lit 3D world with shadow-casting sprites, a long lens and depth of field; see [2D.md](2D.md#sprites-in-a-3d-world-hd-2d).
+
+Free-camera overrides in `render.screenshot` and `render.pick` accept `projection: "orthographic"` with positive `orthoSize` (half the visible height in world units). Omitted projection remains perspective; free cameras use clip distances 0.05 and 1000. The editor uses this override for 2D picking, matching its orthographic Scene view.

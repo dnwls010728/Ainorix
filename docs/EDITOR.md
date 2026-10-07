@@ -20,7 +20,7 @@ the same session as the person. What was built when, and what is unverified, is 
 
 The theme is tuned for reading (`ApplyStyle` in `Editor.cpp`): 16 px text (Korean/Japanese glyphs merged 6 % larger to match Roboto), hints and secondary text at about 6:1 contrast, fields with a lighter fill and an outline, menu and tab bars clearly darker than the panels, the accent color only for what is selected or active (inspector section bars are neutral), an overline on the visible tab of every dock, guide lines between parents and children in the Hierarchy. View > Interface size scales all of it.
 
-The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). View > Reset Layout restores the default.
+The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). View > Reset Layout restores the default. The native window also restores its last normal position/size and maximized state from the same file. A first launch without saved placement starts maximized. Minimized windows reopen in their previous normal/maximized state; Windows clamps saved placement to an available monitor work area.
 
 ## Controls
 
@@ -28,7 +28,7 @@ Selected lights have world-space guides: PointLight uses three great circles at 
 
 Selecting a Camera shows its near/far clip volume in cyan in the Scene view: a frustum for Perspective, a rectangular box for Orthographic. It uses the renderer camera matrix (including parent transforms), FOV/orthoSize and near/far planes. The aspect matches the visible Game view, or the logical project view when Game is hidden; resizing may take one frame to update. This is an editor overlay and does not change the scene or packaged game.
 
-The Scene view has an X/Y/Z compass at the top-right (red/green/blue). Click a labeled end or its opposite hollow end to look from that side, preserving the orbit target and zoom. Top/bottom views retain the existing 89-degree pitch limit to avoid a singular world-up camera basis. Axis clicks change only the editor camera, without scene edits or undo entries. The compass is hidden in 2D mode and in very small views.
+The Scene view has an X/Y/Z compass at the top-right (red/green/blue). Click a labeled end or its opposite hollow end to look from that side, preserving the orbit target and zoom. Top/bottom views retain the existing 89-degree pitch limit to avoid a singular world-up camera basis. Axis clicks change only the editor camera, without scene edits or undo entries. The compass is hidden in 2D mode and in very small views. 2D and 3D remember independent views: toggling restores the last target/zoom for that mode, and the last rotation in 3D. 2D uses orthographic projection (no depth-dependent size); 3D uses perspective. Picking, asset drops, XY grid and transform gizmos match the active projection. The first 2D entry starts at the current 3D target/zoom. Both views are persisted in `editor.ini` and survive editor restarts.
 
 | Where | Input | Action |
 |---|---|---|

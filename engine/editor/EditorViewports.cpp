@@ -61,6 +61,16 @@ bool OverlayToggle(const char* label, bool* value, const char* tip) {
     return pressed;
 }
 
+// Picking and asset drops must use the same projection as the scene image.
+Json SceneCameraRequest(const EditorCamera& camera) {
+    Json request = ObjectOf({{"eye", Vec3Json(camera.Eye())}, {"target", Vec3Json(camera.target)}, {"fov", Json(camera.fov)}});
+    if (camera.mode2D) {
+        request["projection"] = "orthographic";
+        request["orthoSize"] = camera.OrthoHalfHeight();
+    }
+    return request;
+}
+
 // The view compass uses the same basis as the free camera, independent of scene entities.
 bool SceneCompass(EditorCamera& cam, ImVec2 origin, float size) {
     const ImVec2 saved = ImGui::GetCursorScreenPos();
@@ -196,7 +206,7 @@ void NativeEditor::Impl::SceneGizmo() {
         return;
     }
     Scene& scene = engine.GetScene();
-    ImGuizmo::SetOrthographic(false);
+    ImGuizmo::SetOrthographic(cam.mode2D);
     ImGuizmo::SetDrawlist();
     ImGuizmo::SetRect(sceneImagePos.x, sceneImagePos.y, sceneImageSize.x, sceneImageSize.y);
     ImGuizmo::OPERATION op = gizmoOp == GizmoOp::Translate ? ImGuizmo::TRANSLATE : gizmoOp == GizmoOp::Rotate ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
@@ -244,7 +254,7 @@ void NativeEditor::Impl::SceneGizmo() {
 }
 
 void NativeEditor::Impl::ScenePick(float x, float y, bool additive) {
-    Json camera = ObjectOf({{"eye", Vec3Json(cam.Eye())}, {"target", Vec3Json(cam.target)}, {"fov", Json(cam.fov)}});
+    Json camera = SceneCameraRequest(cam);
     Json r = Call("render.pick", ObjectOf({{"x", Json(static_cast<int>(x))},
                                            {"y", Json(static_cast<int>(y))},
                                            {"width", Json(static_cast<int>(sceneImageSize.x))},
@@ -270,7 +280,7 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
     hit = Vec3(round(hit.x), round(hit.y), round(hit.z));
     // Entity under the cursor, for assets that modify one.
     auto target = [&]() -> EntityId {
-        Json camera = ObjectOf({{"eye", Vec3Json(cam.Eye())}, {"target", Vec3Json(cam.target)}, {"fov", Json(cam.fov)}});
+        Json camera = SceneCameraRequest(cam);
         Json r = Call("render.pick", ObjectOf({{"x", Json(static_cast<int>(x))}, {"y", Json(static_cast<int>(y))},
                                                {"width", Json(static_cast<int>(sceneImageSize.x))}, {"height", Json(static_cast<int>(sceneImageSize.y))},
                                                {"camera", camera}}),
@@ -350,14 +360,15 @@ void NativeEditor::Impl::ScenePanel() {
     RenderView sceneCam;
     MakeSceneView(scene, aspect, sceneCam);
     RenderView view = MakeLookAtView(cam.Eye(), cam.target, cam.fov, aspect);
+    view.proj = cam.Projection(aspect);
     view.clearColor = sceneCam.clearColor;
     view.shaderTime = static_cast<float>(engine.SimTime());
     view.drawGrid = showGrid && !cam.mode2D;
     view.highlight = Primary();
     if (showGrid && cam.mode2D && cam.Eye().z > 1e-3f) {
         // 2D: a grid in the XY plane that follows the camera and coarsens with zoom.
-        // Sized by the eye's distance to that plane (the target may sit at another depth).
-        const float halfH = cam.Eye().z * std::tan(Radians(cam.fov) * 0.5f), halfW = halfH * aspect;
+        // Orthographic scale does not change with the grid's distance from the camera.
+        const float halfH = cam.OrthoHalfHeight(), halfW = halfH * aspect;
         // Like Unity's scene grid: decade levels (.., 0.1, 1, 10, ..) that fade in as their
         // cells grow on screen, so zooming never pops from one spacing to the next.
         const float unitsPerPixel = 2.0f * halfH / static_cast<float>(h);
@@ -426,14 +437,14 @@ void NativeEditor::Impl::ScenePanel() {
     const Vec3 lightRight = Normalize(gameCameraWorld.TransformDir(Vec3(1, 0, 0)));
     const Vec3 lightUp = Normalize(gameCameraWorld.TransformDir(Vec3(0, 1, 0)));
     for (const auto& kv : scene.Pool<Light2D>()) {
-        const bool selected = IsSelected(kv.first);
-        if (!showIcons && !selected) continue;
+        const bool lightSelected = IsSelected(kv.first);
+        if (!showIcons && !lightSelected) continue;
         const Light2D& light = kv.second;
         const Color color = !light.enabled || light.strength <= 0 ? Color(0.4f, 0.4f, 0.4f)
-            : selected ? Color(1, 0.7f, 0.2f) : Color(0.8f, 0.7f, 0.4f);
+            : lightSelected ? Color(1, 0.7f, 0.2f) : Color(0.8f, 0.7f, 0.4f);
         const Vec3 center = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
         ring(center, lightRight, lightUp, light.radius, color);
-        if (selected) ring(center, lightRight, lightUp, light.radius * Clamp(light.inner, 0.0f, 0.99f), color * 0.7f);
+        if (lightSelected) ring(center, lightRight, lightUp, light.radius * Clamp(light.inner, 0.0f, 0.99f), color * 0.7f);
     }
     // The selected camera's clip volume uses its renderer matrix, not an approximate FOV shape.
     // Match the Game view aspect (previous frame while resizing); hidden Game uses the logical project view.

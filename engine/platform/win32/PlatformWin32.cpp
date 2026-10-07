@@ -265,6 +265,36 @@ public:
     }
     float DpiScale() const override { return static_cast<float>(WindowDpi(hwnd_)) / 96.0f; }
     void Maximize() override { ShowWindow(hwnd_, SW_MAXIMIZE); }
+    bool GetPlacement(WindowPlacement& out) const override {
+        WINDOWPLACEMENT placement{}; placement.length = sizeof(placement);
+        if (!GetWindowPlacement(hwnd_, &placement)) return false;
+        MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+        // WINDOWPLACEMENT normal coordinates use the monitor workspace; our interface uses screen pixels.
+        const RECT& rect = placement.rcNormalPosition;
+        out.x = rect.left + monitor.rcWork.left - monitor.rcMonitor.left;
+        out.y = rect.top + monitor.rcWork.top - monitor.rcMonitor.top;
+        out.width = rect.right - rect.left; out.height = rect.bottom - rect.top;
+        out.maximized = placement.showCmd == SW_SHOWMAXIMIZED ||
+            (placement.showCmd == SW_SHOWMINIMIZED && (placement.flags & WPF_RESTORETOMAXIMIZED) != 0);
+        return true;
+    }
+    bool RestorePlacement(const WindowPlacement& placement) override {
+        if (placement.width < 320 || placement.height < 180 || placement.width > 32768 || placement.height > 32768 ||
+            placement.x < -100000 || placement.x > 100000 || placement.y < -100000 || placement.y > 100000) return false;
+        RECT requested{placement.x, placement.y, placement.x + placement.width, placement.y + placement.height};
+        MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
+        if (!GetMonitorInfoW(MonitorFromRect(&requested, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+        const RECT& work = monitor.rcWork;
+        const int width = std::min(placement.width, static_cast<int>(work.right - work.left));
+        const int height = std::min(placement.height, static_cast<int>(work.bottom - work.top));
+        const int x = std::max(static_cast<int>(work.left), std::min(placement.x, static_cast<int>(work.right) - width));
+        const int y = std::max(static_cast<int>(work.top), std::min(placement.y, static_cast<int>(work.bottom) - height));
+        ShowWindow(hwnd_, SW_RESTORE);
+        if (!SetWindowPos(hwnd_, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE)) return false;
+        if (placement.maximized) ShowWindow(hwnd_, SW_MAXIMIZE);
+        return true;
+    }
     FileDialogResult ChooseFile(const FileDialogOptions& options) override {
         std::vector<wchar_t> filename(32768, L'\0');
         const std::wstring initial = Widen(options.filename);
