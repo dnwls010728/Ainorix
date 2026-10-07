@@ -222,6 +222,15 @@ The editor only uses public commands (`Engine::Call`), so an agent attached with
 
 Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
 
+### Effects rendering fields (VFX phase 4)
+
+Effects exposes `material`, `mesh`, `batching`, death emitter/count, ribbon mode and two anchors through
+the existing grouped command-backed inspector. Material graphs remain authored in Shaders; their node
+menu includes `particleAge`, `particleRandom` and `particleSpeed`. The preview uses real material/mesh
+assets for rendering and Fit Preview. Local ribbon offsets work in isolation; external named anchors
+are resolved by the scene instance. Structure nodes/wires are planned separately in phase 4b.
+
+
 ### Effects authoring (VFX phase 3, 2026-10-08)
 
 - [x] Effects panel, module fields, typed parameters and curve/gradient controls; isolated playback,

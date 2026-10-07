@@ -20,6 +20,10 @@ Json VfxPresets(const std::string& tag) {
        "trails":[{"name":"swing","trail":{"lifetime":0.25,"minDistance":0.02,"width":0.5,"endWidth":0,"color":"#ccffff","endColor":"#3388ff","blend":"add","maxPoints":64}}]},
       {"name":"trail_projectile","intent":"A glowing ribbon follows a moving projectile.","tags":["trail","projectile"],"emitters":[],
        "trails":[{"name":"projectile","trail":{"lifetime":0.7,"minDistance":0.04,"width":0.34,"endWidth":0.02,"color":[0.6,1,0.75],"endColor":[0.1,0.5,1],"opacity":0.95,"blend":"add","maxPoints":96}}]}
+      ,{"name":"sword_slash","intent":"A swept blade ribbon, a crescent mesh and short sparks make a sword aura.","tags":["slash","sword","burst"],
+       "emitters":[{"name":"crescent","emitter":{"mesh":"crescent","batching":true,"burst":1,"rate":0,"loop":false,"lifetime":0.35,"speed":0,"gravity":[0,0,0],"startSize":3,"endSize":4,"startColor":[0.3,0.8,1],"endColor":[0.05,0.2,1],"blend":"add","maxParticles":4}},
+       {"name":"sparks","emitter":{"burst":18,"rate":0,"loop":false,"lifetime":0.45,"speed":2,"speedVariation":0.5,"spread":180,"gravity":[0,0,0],"align":"velocity","stretch":0.08,"blend":"add","batching":true,"startSize":0.08,"endSize":0.01,"startColor":[0.4,0.9,1],"maxParticles":32}}],
+       "trails":[{"name":"blade","trail":{"mode":"ribbon","baseOffset":[0,0,0],"tipOffset":[0,1.5,0],"duration":0.2,"lifetime":0.25,"blend":"add","color":[0.4,0.9,1],"endColor":[0.05,0.2,1],"minDistance":0.01}}]}
     ])J");
     Json out = Json::MakeArray();
     for (const Json& preset : presets.items()) {

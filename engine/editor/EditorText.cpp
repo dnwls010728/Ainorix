@@ -17,6 +17,16 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Tip Offset", "끝 오프셋", "先端オフセット"},
+    {"Base Offset", "시작 오프셋", "始点オフセット"},
+    {"Tip Anchor", "끝 앵커", "先端アンカー"},
+    {"Base Anchor", "시작 앵커", "始点アンカー"},
+    {"Ribbon Mode", "리본 모드", "リボンモード"},
+    {"Death Burst", "소멸 시 생성 수", "消滅時の生成数"},
+    {"Death Emitter", "소멸 시 이미터", "消滅時エミッター"},
+    {"Batch Particles", "파티클 배칭", "パーティクルのバッチ化"},
+    {"Mesh Scale", "메시 크기", "メッシュスケール"},
+    {"Particle Mesh", "파티클 메시", "パーティクルメッシュ"},
     {"Fit Preview", "미리보기 맞춤", "プレビューを合わせる"},
     {"Effects", "이펙트", "エフェクト"},
     {"Using start/end values", "시작·끝 값 사용 중", "開始・終了値を使用中"},

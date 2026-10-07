@@ -565,6 +565,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          p["position"] = Json(Json::Array{particle.position.x, particle.position.y, particle.position.z});
                          p["velocity"] = Json(Json::Array{particle.velocity.x, particle.velocity.y, particle.velocity.z});
                          p["rotation"] = particle.rotation;
+                         p["random"] = particle.random;
                          p["worldSpace"] = particle.worldSpace;
                          out["particles"].push(p);
                      }
@@ -620,7 +621,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  const Trail& trail = requireTrail(e, a);
                  Json out = Json::MakeObject();
                  out["count"] = static_cast<uint64_t>(trail.points.size());
-                 out["emitting"] = trail.emitting;
+                 out["emitting"] = TrailEmitting(trail);
                  out["maxPoints"] = trail.maxPoints;
                  if (a["points"].asBool()) {
                      out["points"] = Json::MakeArray();
@@ -628,6 +629,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          Json p = Json::MakeObject();
                          p["position"] = Json(Json::Array{point.position.x, point.position.y, point.position.z});
                          p["age"] = point.age;
+                         if (trail.mode == "ribbon") p["tip"] = Json(Json::Array{point.tip.x, point.tip.y, point.tip.z});
                          out["points"].push(p);
                      }
                  }

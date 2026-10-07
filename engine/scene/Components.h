@@ -87,6 +87,9 @@ struct Particle {
     float rotation = 0, spin = 0;  // degrees around the view axis, degrees per second
     float sizeScale = 1;           // sizeVariation factor, applied to sizeOverLife keys
     int frameOffset = 0;           // randomFrame: first flipbook frame of this particle
+    Mat4 meshBasis;    // world-space mesh orientation captured at birth
+    float random = 0;  // stable birth hash, no extra random draws
+    int depth = 0;     // bounded death-chain generation
     bool worldSpace = false;
 };
 
@@ -106,6 +109,12 @@ struct ParticleEmitter {
     Color startColor{1, 1, 1}, endColor{1, 1, 1};
     float startOpacity = 1, endOpacity = 0;
     std::string texture;
+    std::string material;  // optional .mat.json surface graph
+    std::string mesh;      // empty = billboard; otherwise static project/built-in mesh
+    Vec3 meshScale{1, 1, 1};
+    bool batching = false;  // opt-in atomic emitter draw; legacy per-particle sorting otherwise
+    std::string onDeath;   // named target emitter in the same VFX asset
+    int deathCount = 1;
     int frame = 0, columns = 1, rows = 1;
     std::string space = "local";
     int dimensions = 3;
@@ -159,6 +168,12 @@ struct ParticleEmitter {
         f.Add("endColor", &ParticleEmitter::endColor, "RGB tint at expiry.");
         range(f.Add("startOpacity", &ParticleEmitter::startOpacity, "Opacity at birth."), 0, 1);
         range(f.Add("endOpacity", &ParticleEmitter::endOpacity, "Opacity at expiry."), 0, 1);
+        f.Add("material", &ParticleEmitter::material, "Optional project-relative .mat.json, including surface graphs.");
+        f.Add("mesh", &ParticleEmitter::mesh, "Static project mesh or built-in name; empty uses camera-facing quads.");
+        f.Add("meshScale", &ParticleEmitter::meshScale, "Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation.");
+        f.Add("batching", &ParticleEmitter::batching, "Combine particles into one emitter draw, sorted internally; transparent emitters sort as whole groups.");
+        f.Add("onDeath", &ParticleEmitter::onDeath, "VFX asset only: named emitter receiving a burst at each expired particle position; maximum depth 4.");
+        range(f.Add("deathCount", &ParticleEmitter::deathCount, "Particles per death event, subject to target and system budgets."), 0, 256);
         f.Add("texture", &ParticleEmitter::texture, "Optional texture/sprite sheet; empty uses solid quads.");
         range(f.Add("frame", &ParticleEmitter::frame, "Sprite sheet frame, row-major."), 0, 1000000);
         range(f.Add("columns", &ParticleEmitter::columns, "Sprite sheet columns."), 1, 4096);
@@ -207,6 +222,7 @@ struct ParticleEmitter {
 struct TrailPoint {
     Vec3 position;
     float age = 0;
+    Vec3 tip;  // second world-space anchor in ribbon mode
 };
 
 struct Trail {
@@ -218,6 +234,12 @@ struct Trail {
     Color color{1, 1, 1}, endColor{1, 1, 1};
     float opacity = 1, endOpacity = 0;
     std::string texture;
+    std::string material;
+    std::string mode = "camera";  // ribbon sweeps base to tip, independent of camera
+    std::string baseAnchor, tipAnchor;  // optional unique entity names; empty uses owner
+    Vec3 baseOffset, tipOffset{0, 1, 0};
+    float duration = 0;  // finite emission window; zero keeps emitting
+    double elapsed = 0;  // runtime emission clock
     std::string blend = "alpha";
     int layer = 0;
     int maxPoints = 64;
@@ -233,6 +255,13 @@ struct Trail {
         f.Add("endColor", &Trail::endColor, "RGB tint at the oldest point.");
         range(f.Add("opacity", &Trail::opacity, "Opacity at the entity."), 0, 1);
         range(f.Add("endOpacity", &Trail::endOpacity, "Opacity at the oldest point."), 0, 1);
+        f.Add("material", &Trail::material, "Optional .mat.json surface material/graph.");
+        f.Add("mode", &Trail::mode, "camera faces the view; ribbon sweeps between two world-space anchors.").options = {"camera", "ribbon"};
+        f.Add("baseAnchor", &Trail::baseAnchor, "Unique scene entity name for blade base; empty uses owner/local block transform.");
+        f.Add("tipAnchor", &Trail::tipAnchor, "Unique scene entity name for blade tip; empty uses owner/local block transform.");
+        f.Add("baseOffset", &Trail::baseOffset, "Base offset in anchor coordinates.");
+        f.Add("tipOffset", &Trail::tipOffset, "Tip offset in anchor coordinates.");
+        range(f.Add("duration", &Trail::duration, "Seconds of emission, followed by drain; zero emits indefinitely."), 0, 600);
         f.Add("texture", &Trail::texture, "Optional image stretched over the ribbon: left edge at the entity, right edge at the oldest point. Empty = solid.");
         f.Add("blend", &Trail::blend, "alpha = normal; add = the ribbon brightens what is behind it (energy, fire).").options = {"alpha", "add"};
         f.Add("layer", &Trail::layer, "2D sorting layer, like Sprite.layer.");

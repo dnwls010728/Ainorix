@@ -34,6 +34,8 @@ struct MeshVertex {
     float tan[4];
     float joints[4];
     float weights[4];
+    float color[4];
+    float particle[4];
 };
 
 struct ColorVertex {
@@ -429,6 +431,8 @@ struct GpuRenderer::Impl {
                 d.layout.attrs[ATTR_oe_mesh_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
                 d.layout.attrs[ATTR_oe_mesh_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
                 d.layout.attrs[ATTR_oe_mesh_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_mesh_color0] = {0, offsetof(MeshVertex, color), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_mesh_particle0] = {0, offsetof(MeshVertex, particle), SG_VERTEXFORMAT_FLOAT4};
                 d.index_type = SG_INDEXTYPE_UINT32;
                 d.depth.pixel_format = kDepthFormat;
                 d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
@@ -505,6 +509,8 @@ struct GpuRenderer::Impl {
             d.layout.attrs[ATTR_oe_surface_aux_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
             d.layout.attrs[ATTR_oe_surface_aux_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
             d.layout.attrs[ATTR_oe_surface_aux_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_color0] = {0, offsetof(MeshVertex, color), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_particle0] = {0, offsetof(MeshVertex, particle), SG_VERTEXFORMAT_FLOAT4};
             d.index_type = SG_INDEXTYPE_UINT32;
             d.face_winding = SG_FACEWINDING_CCW;
             d.depth.pixel_format = kDepthFormat;
@@ -742,6 +748,10 @@ struct GpuRenderer::Impl {
         std::vector<uint32_t> indices;
         auto vertex = [&](uint32_t i, const Vec3& n) {
             MeshVertex v{};
+            const Vec4 color = i < m.colors.size() ? m.colors[i] : Vec4(1, 1, 1, 1);
+            const Vec4 data = i < m.particleData.size() ? m.particleData[i] : Vec4();
+            Put(v.color, color.x, color.y, color.z, color.w);
+            Put(v.particle, data.x, data.y, data.z, data.w);
             const Vec4 t = static_cast<size_t>(i) < m.tangents.size() ? m.tangents[i] : Vec4(1, 0, 0, 1);
             v.tan[0] = t.x;
             v.tan[1] = t.y;
@@ -840,6 +850,7 @@ struct GpuRenderer::Impl {
         Put(vertex.view_proj, viewProj);
         Put(vertex.model, item.world);
         Put(vertex.normal_mat, item.normalMatrix);
+        Put(vertex.item_particle, item.particleInput.x, item.particleInput.y, item.particleInput.z, item.particleInput.w);
         for (size_t j = 0; j < item.joints.size(); ++j) Put(vertex.joint_palette[j], item.joints[j]);
         sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
         oe_mesh_vs_graph_t vertexGraph{};
@@ -1031,6 +1042,7 @@ struct GpuRenderer::Impl {
                 Put(vu.view_proj, viewProj);
                 Put(vu.model, it.world);
                 Put(vu.normal_mat, it.normalMatrix);
+                Put(vu.item_particle, it.particleInput.x, it.particleInput.y, it.particleInput.z, it.particleInput.w);
                 for (size_t j = 0; j < it.joints.size(); ++j) Put(vu.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
                 oe_mesh_vs_graph_t vg{};

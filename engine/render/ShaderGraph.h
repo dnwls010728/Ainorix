@@ -11,7 +11,7 @@ namespace oe {
 
 // Stable instruction numbers are shared with the generated GPU shader evaluator.
 enum class ShaderOp { Constant, Uniform, UV, Position, Normal, Time, BaseColor, Texture,
-    Add, Subtract, Multiply, Divide, Min, Max, Sin, Cos, Floor, Fract, Abs, Clamp, Mix, Step, Dot, Normalize, Swizzle };
+    Add, Subtract, Multiply, Divide, Min, Max, Sin, Cos, Floor, Fract, Abs, Clamp, Mix, Step, Dot, Normalize, Swizzle, ParticleAge, ParticleRandom, ParticleSpeed };
 
 struct ShaderInstruction {
     ShaderOp op = ShaderOp::Constant;
@@ -37,6 +37,7 @@ struct ShaderGraph {
 
 struct ShaderInputs {
     Vec4 uv{}, position{}, normal{}, baseColor{1, 1, 1, 1};
+    Vec4 particle{};  // normalized age, stable random, world speed, reserved
     float time = 0;  // fixed simulation time, never wall-clock time
     std::function<Vec4(float, float)> texture;  // base texture sample at graph-provided UV
 };

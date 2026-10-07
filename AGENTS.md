@@ -45,6 +45,8 @@ Editor tools: Assets has responsive Grid/List views, filename/path search and ki
 
 Effects editor: View > Effects or double-click `.vfx.json`; grouped fields, curves/gradients, isolated fixed-step preview and scene placement. `vfx.edit/edit_state/edit_replace/undo/redo/save/close` share a validated draft and separate document history with attached agents. `vfx.set` edits the draft when its path is open; get/check/diff/preview/analyze read it, while scene instances use saved assets. Saving checks external disk conflicts. See docs/VFX.md and docs/EDITOR.md.
 
+Phase 4 effects: ParticleEmitter/Trail `material` binds surface graphs; particleAge/particleRandom/particleSpeed ops use vertex attributes (no uniform slots). ParticleEmitter `mesh`/`meshScale` and opt-in `batching` support static mesh effects; Trail `mode:ribbon` sweeps `baseAnchor`/`tipAnchor` or local offsets. Asset-only `onDeath`/`deathCount` links obey depth 4 and the system budget. `sword_slash` preset and VFXLab scenes/slash.scene.json demonstrate them. Transparency groups and mesh budgets: docs/VFX.md. Effects node view remains phase 4b.
+
 ## Code map
 
 - `engine/core` — Json (ordered, diff-friendly), Math, Log (ring buffer, stderr only), Image (PNG encoder, Base64), FileSystem, Zip (reader + aligned writer for APKs).

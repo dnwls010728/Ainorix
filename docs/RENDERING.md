@@ -23,6 +23,15 @@ runtime exit: it attempts to unroll the loop to accommodate implicit gradients. 
 VFXLab editor screenshot succeed on the tested D3D11 device. This change exposes diagnostics only;
 shader source and generated programs are unchanged.
 
+### Effect vertex streams
+
+Effect meshes can carry optional RGBA vertex colors and normalized particle age/random/world speed.
+Both renderers interpolate them with perspective-correct weights; absent colors are white and absent
+particle inputs are zero. Unbatched effects supply the same inputs through a dedicated per-draw value
+and keep shared GPU meshes rather than creating a GPU buffer per particle. `RenderItem.materialOverride` binds emitter/trail materials like mesh
+materials. Legacy billboards keep the shared-quad path; batching is opt-in because transparent emitter
+groups cannot interleave their particles with other draws. See [VFX.md](VFX.md) for limits and shader inputs.
+
 ## GPU pipeline and shaders
 
 ParticleEmitter uses shared camera-facing quads in both renderers, with lifetime

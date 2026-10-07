@@ -189,7 +189,7 @@ void UpdateParticles(Scene& scene, float dt) {
 }
 }  // namespace
 
-void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt) {
+void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths) {
     size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
     if (emitter.particles.size() > limit) emitter.particles.resize(limit);
     const float turbulence = std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) ? Clamp(emitter.turbulence, 0, 10000) : 0;
@@ -207,6 +207,8 @@ void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, ui
         particle.position += particle.velocity * dt;
         if (particle.spin != 0) particle.rotation += particle.spin * dt;
     }
+    if (deaths) for (const Particle& particle : emitter.particles)
+        if (particle.age >= particle.lifetime) deaths->push_back(particle);
     emitter.particles.erase(std::remove_if(emitter.particles.begin(), emitter.particles.end(),
         [](const Particle& particle) { return particle.age >= particle.lifetime; }), emitter.particles.end());
     if (!emitter.playing) return;
@@ -285,7 +287,7 @@ bool ParticleSettingsValid(const ParticleEmitter& emitter) {
            std::isfinite(emitter.drag) && std::isfinite(emitter.spread) && std::isfinite(emitter.startSize) && std::isfinite(emitter.endSize) &&
            std::isfinite(emitter.startOpacity) && std::isfinite(emitter.endOpacity) && finiteVector(emitter.direction) &&
            finiteVector(emitter.gravity) && finiteColor(emitter.startColor) && finiteColor(emitter.endColor) &&
-           finiteVector(emitter.shapeSize) && std::isfinite(emitter.radialSpeed) && std::isfinite(emitter.rotation) &&
+           finiteVector(emitter.meshScale) && finiteVector(emitter.shapeSize) && std::isfinite(emitter.radialSpeed) && std::isfinite(emitter.rotation) &&
            std::isfinite(emitter.rotationVariation) && std::isfinite(emitter.spin) && std::isfinite(emitter.spinVariation) &&
            std::isfinite(emitter.stretch) && std::isfinite(emitter.frameRate) && std::isfinite(emitter.delay) &&
            std::isfinite(emitter.duration) && std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) &&
@@ -435,11 +437,16 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
         if (emitter->spinVariation > 0) particle.spin += (ParticleRandom(*emitter, id) * 2 - 1) * emitter->spinVariation;
         if (emitter->randomFrame && emitter->frames > 1)
             particle.frameOffset = std::min(emitter->frames - 1, static_cast<int>(ParticleRandom(*emitter, id) * static_cast<float>(emitter->frames)));
+        if (!emitter->mesh.empty()) particle.meshBasis = world;
         particle.worldSpace = emitter->space == "world";
         if (particle.worldSpace) {
             particle.position = world.TransformPoint(particle.position);
             particle.velocity = world.TransformDir(particle.velocity);
         }
+        // Hash accepted birth index without consuming the established PRNG stream.
+        uint32_t hash = emitter->randomState ^ static_cast<uint32_t>(emitter->emitted + static_cast<uint64_t>(i));
+        hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15; hash *= 0x846ca68bu; hash ^= hash >> 16;
+        particle.random = static_cast<float>(hash >> 8) / 16777216.0f;
         emitter->particles.push_back(particle);
     }
     emitter->emitted += static_cast<uint64_t>(count);
@@ -458,7 +465,48 @@ void StepTrail(Trail& trail, const Vec3& position, float dt) {
     if (!trail.points.empty() && Length(position - trail.points.back().position) < step) return;
     const size_t limit = static_cast<size_t>(std::max(2, std::min(1024, trail.maxPoints)));
     if (trail.points.size() >= limit) trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(trail.points.size() - limit + 1));
-    trail.points.push_back({position, 0.0f});
+    trail.points.push_back({position, 0.0f, Vec3()});
+}
+
+bool TrailEmitting(const Trail& trail) {
+    return trail.emitting && (trail.duration <= 0 || trail.elapsed < static_cast<double>(trail.duration));
+}
+
+bool TrailAnchors(const Scene& scene, const Trail& trail, const Mat4& owner, Vec3& base, Vec3& tip) {
+    auto anchor = [&](const std::string& name, const Vec3& offset, Vec3& out) {
+        if (name.empty()) { out = owner.TransformPoint(offset); return true; }
+        EntityId id = kNullEntity;
+        for (const auto& pair : scene.Entities()) if (pair.second.name == name) {
+            if (id) return false;  // an ambiguous name cannot identify a blade anchor
+            id = pair.first;
+        }
+        if (!id) return false;
+        out = scene.WorldMatrix(id).TransformPoint(offset); return true;
+    };
+    if (trail.mode != "ribbon") { base = owner.TransformPoint(Vec3()); tip = base; return true; }
+    return anchor(trail.baseAnchor, trail.baseOffset, base) && anchor(trail.tipAnchor, trail.tipOffset, tip);
+}
+
+void StepAnchoredTrail(Trail& trail, const Vec3& base, const Vec3& tip, float dt) {
+    const bool authored = trail.emitting;
+    trail.emitting = TrailEmitting(trail);
+    if (trail.emitting) trail.elapsed += dt;
+    if (trail.mode != "ribbon") StepTrail(trail, base, dt);
+    else {
+        for (TrailPoint& point : trail.points) point.age += dt;
+        trail.points.erase(std::remove_if(trail.points.begin(), trail.points.end(), [&](const TrailPoint& p) {
+            return p.age >= Clamp(trail.lifetime, 0.01f, 60);
+        }), trail.points.end());
+        const bool finite = std::isfinite(base.x) && std::isfinite(base.y) && std::isfinite(base.z) &&
+                            std::isfinite(tip.x) && std::isfinite(tip.y) && std::isfinite(tip.z);
+        if (trail.emitting && finite && (trail.points.empty() ||
+            std::max(Length(base-trail.points.back().position), Length(tip-trail.points.back().tip)) >= trail.minDistance)) {
+            const size_t limit = static_cast<size_t>(std::clamp(trail.maxPoints, 2, 1024));
+            if (trail.points.size() >= limit) trail.points.erase(trail.points.begin());
+            trail.points.push_back({base, 0, tip});
+        }
+    }
+    trail.emitting = authored;
 }
 
 void UpdateLateSystems(Scene& scene, float dt) {
@@ -480,7 +528,13 @@ void UpdateLateSystems(Scene& scene, float dt) {
         Vec3 look = target + f.lookOffset - t->position;
         if (Length(look) > 1e-4f) t->rotation = EulerLookDirection(look);
     }
-    for (auto& pair : scene.Pool<Trail>()) StepTrail(pair.second, scene.WorldMatrix(pair.first).TransformPoint(Vec3()), dt);
+    for (auto& pair : scene.Pool<Trail>()) {
+        Vec3 base, tip;
+        if (!TrailAnchors(scene, pair.second, scene.WorldMatrix(pair.first), base, tip)) {
+            const bool emitting = pair.second.emitting; pair.second.emitting = false;
+            StepAnchoredTrail(pair.second, Vec3(), Vec3(), dt); pair.second.emitting = emitting;
+        } else StepAnchoredTrail(pair.second, base, tip, dt);
+    }
     UpdateVfxTrails(scene, dt);
 }
 

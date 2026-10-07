@@ -6,6 +6,7 @@
 #include <set>
 
 #include "app/Engine.h"
+#include "assets/Assets.h"
 #include "core/FileSystem.h"
 #include "scene/Components.h"
 #include "scene/Systems.h"
@@ -16,9 +17,9 @@ namespace {
 std::string ModuleOf(const std::string& name) {
     if (name.find("OverLife") != std::string::npos) return "Curves";
     if (name == "delay" || name == "duration" || name == "loop" || name == "playing" || name == "lifetime" || name == "lifetimeVariation") return "Timing";
-    if (name == "rate" || name == "burst" || name == "maxParticles" || name == "seed" || name == "emitting" || name == "maxPoints") return "Emission";
-    if (name == "shape" || name == "shapeSize" || name == "shapeEdge" || name == "dimensions" || name == "spread") return "Shape";
-    if (name == "texture" || name == "blend" || name == "layer" || name == "pixelArt" || name == "frame" || name == "frames" ||
+    if (name == "onDeath" || name == "deathCount" || name == "rate" || name == "burst" || name == "maxParticles" || name == "seed" || name == "emitting" || name == "maxPoints") return "Emission";
+    if (name == "mode" || name == "baseAnchor" || name == "tipAnchor" || name == "baseOffset" || name == "tipOffset" || name == "shape" || name == "shapeSize" || name == "shapeEdge" || name == "dimensions" || name == "spread") return "Shape";
+    if (name == "material" || name == "mesh" || name == "batching" || name == "texture" || name == "blend" || name == "layer" || name == "pixelArt" || name == "frame" || name == "frames" ||
         name == "columns" || name == "rows" || name == "frameRate" || name == "randomFrame") return "Render";
     if (name == "space" || name == "direction" || name == "gravity" || name == "drag" || name == "radialSpeed" ||
         name == "turbulence" || name == "turbulenceScale" || name == "speed" || name == "speedVariation" || name == "minDistance") return "Motion";
@@ -58,6 +59,8 @@ Json VfxSchema() {
     out["params"]["syntax"] = "params[name] = {default, min?, max?, doc, targets:[{to:'emitterName.field', scale?}]}";
     out["limits"]["duration"] = 60; out["limits"]["previewFrames"] = 16; out["limits"]["analysisSamples"] = 241;
     out["limits"]["particleSteps"] = 20000000;
+    out["limits"]["deathDepth"] = 4;
+    out["limits"]["meshVerticesPerEmitter"] = 1000000;
     return out;
 }
 
@@ -76,11 +79,21 @@ Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args) {
         const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");
         ValidateVfxSettings(type, mode == "merge" ? scene.GetComponent(id, type) : nullptr, block[trail ? "trail" : "emitter"]);
     }
+    int emitterIndex = 0, trailIndex = 0;
     for (const char* blocks : {"emitters", "trails"}) for (const Json& block : chosen[blocks].items()) {
         const bool trail = std::string(blocks) == "trails";
         const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");
-        if (mode == "replace") scene.RemoveComponent(id, type);
-        void* component = scene.AddComponent(id, type);
+        const int index = trail ? trailIndex++ : emitterIndex++;
+        EntityId target = id;
+        if (index > 0) {
+            const std::string name = scene.Record(id)->name + "_" + block["name"].asString();
+            target = kNullEntity;
+            for (EntityId child : scene.Children(id)) if (scene.Record(child)->name == name) target = child;
+            if (!target) target = scene.Create(name, id);
+            if (!scene.Get<Transform>(target)) scene.Add<Transform>(target);
+        }
+        if (mode == "replace") scene.RemoveComponent(target, type);
+        void* component = scene.AddComponent(target, type);
         const Json& values = block[trail ? "trail" : "emitter"];
         std::string error;
         if (!ApplyComponentJson(type, component, values, &error)) throw ApiError("invalid_vfx", error);
@@ -117,6 +130,21 @@ Json CheckVfx(Engine& engine, EntityId root) {
             if (!value) continue;
             found = true; ValidateVfxSettings(type, nullptr, ComponentToJson(type, value));
             const std::string texture = name == std::string("Trail") ? trail->texture : emitter->texture;
+            const std::string material = name == std::string("Trail") ? trail->material : emitter->material;
+            if (!material.empty()) {
+                engine.ResolvePath(material);
+                std::string error;
+                if (!engine.Assets().GetMaterial(material, &error))
+                    throw ApiError("invalid_vfx", "Invalid effect material: " + error, "Create or repair the .mat.json and its shader graph.");
+            }
+            if (emitter && name == std::string("ParticleEmitter") && !emitter->mesh.empty()) {
+                if (!GetBuiltinMesh(emitter->mesh)) engine.ResolvePath(emitter->mesh);
+                const auto mesh = engine.Assets().GetMesh(emitter->mesh);
+                if (!mesh || !mesh->joints.empty() || mesh->positions.size() > 65536 || mesh->indices.size() > 196608 ||
+                    mesh->positions.size() * static_cast<size_t>(emitter->maxParticles) > 1000000)
+                    throw ApiError("invalid_vfx", "Mesh particle geometry is missing, animated or exceeds its vertex budget",
+                        "Use a static mesh up to 65536 vertices/196608 indices and at most 1000000 vertices times maxParticles.");
+            }
             if (!texture.empty() && !FileExists(engine.ResolvePath(texture)))
                 warn(id, "missing_texture", "Effect texture does not exist.", "Import the texture or clear the texture field to use solid geometry.");
         }
@@ -142,7 +170,10 @@ Json CheckVfx(Engine& engine, EntityId root) {
                 warn(id, "stationary_world_space", "World-space emission has no movement driver on this entity.", "Use local space for attached effects, or move the owner/parent from gameplay; isolated previews accept motion keys.");
         }
         if (trail) {
-            if ((trail->width == 0 && trail->endWidth == 0) || (trail->opacity == 0 && trail->endOpacity == 0))
+            Vec3 base, tip;
+            if (!TrailAnchors(engine.GetScene(), *trail, engine.GetScene().WorldMatrix(id), base, tip))
+                warn(id, "missing_anchor", "Ribbon anchor entity is missing.", "Use unique existing entity names, or empty anchors with local offsets.");
+            if ((trail->mode != "ribbon" && trail->width == 0 && trail->endWidth == 0) || (trail->opacity == 0 && trail->endOpacity == 0))
                 warn(id, "invisible_effect", "Trail width or opacity is always zero.", "Set a positive width and opacity.");
             if (trail->points.size() > static_cast<size_t>(trail->maxPoints))
                 warn(id, "above_budget", "Trail points exceed the configured cap.", "Step once or call trail.clear.");

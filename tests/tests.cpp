@@ -7859,6 +7859,173 @@ TEST(SampleVfxAsset) {
     CHECK(hashes[0] == hashes[1]);
 }
 
+
+TEST(VfxParticleMaterialsAndBatching) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_material_batch"), &error));
+    Call(e,"scene.new",R"({"empty":true})");
+    CHECK(Call(e,"shader.create",R"({"path":"particle.shader.json","graph":{"nodes":[
+      {"op":"particleAge"},{"op":"particleRandom"},{"op":"particleSpeed"},
+      {"op":"constant","value":[0.2,0.2,0.2,0.2]},{"op":"multiply","args":[2,3]},
+      {"op":"add","args":[0,1]},{"op":"add","args":[5,4]},
+      {"op":"constant","value":[0.3,0.7,1,1]},{"op":"multiply","args":[6,7]},
+      {"op":"baseColor"},{"op":"multiply","args":[8,9]}],"color":10}})")["ok"].asBool());
+    CHECK(Call(e,"material.create",R"({"path":"particle.mat.json","values":{"shader":"particle.shader.json","unlit":true,"doubleSided":true}})")["ok"].asBool());
+    Call(e,"entity.create",R"({"name":"Effect","components":{"ParticleEmitter":{"material":"particle.mat.json",
+      "burst":64,"rate":0,"loop":false,"lifetime":1,"speed":0.5,"gravity":[0,0,0],"shape":"box","shapeSize":[1,1,0],
+      "dimensions":2,"startSize":0.3,"endSize":0.3,"startOpacity":0.7,"endOpacity":0.7,"maxParticles":64}}})");
+    Call(e,"sim.step",R"({"frames":12})");
+    const EntityId id=e.GetScene().FindByName("Effect");
+    const auto before=e.GetScene().Get<ParticleEmitter>(id)->randomState;
+    const auto individual=GatherRenderItems(e.GetScene(),&e.Assets());
+    CHECK(individual.size()==64 && individual.front().materialOverride && individual.front().particleInput.x>0 && individual.front().mesh->particleData.empty());
+    RenderView view=MakeLookAtView(Vec3(0,0,6),Vec3(),45,1); view.drawUI=false; view.clearColor=Color();
+    RenderTarget sw, batched, gpu; sw.Resize(160,160);batched.Resize(160,160);gpu.Resize(160,160);
+    e.Renderer().Render(e.GetScene(),view,sw);
+    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"batching":true}})");
+    const auto items=GatherRenderItems(e.GetScene(),&e.Assets());
+    CHECK(items.size()==1 && items[0].mesh->positions.size()==256 && items[0].mesh->particleData.size()==256);
+    CHECK(BuildDrawList(items,Vec3(0,0,6)).size()==1);
+    CHECK(e.GetScene().Get<ParticleEmitter>(id)->randomState==before);
+    e.Renderer().Render(e.GetScene(),view,batched);
+    SetMaxRenderThreads(1); e.Renderer().Render(e.GetScene(),view,gpu); CHECK(gpu.Hash()==batched.Hash());SetMaxRenderThreads(0);
+    double batchDifference=0;
+    for(size_t i=0;i<sw.color.size();++i) for(int c=0;c<3;++c)
+        batchDifference+=std::abs(static_cast<int>((sw.color[i]>>(8*c))&255)-static_cast<int>((batched.color[i]>>(8*c))&255));
+    CHECK(batchDifference/static_cast<double>(sw.color.size()*3)<0.1);
+    CHECK(CountId(batched,id)>200);
+    CHECK(Call(e,"vfx.check",R"({"id":"Effect"})")["ok"].asBool());
+    CHECK(WritePng("build/vfx-material-software.png",batched.ToImage(),true));
+    if(e.EnableGpu(nullptr,&error)) {
+        e.Gpu()->Render(e.GetScene(),view,gpu);double total=0;
+        for(size_t i=0;i<gpu.color.size();++i) for(int c=0;c<3;++c)
+            total+=std::abs(static_cast<int>((gpu.color[i]>>(8*c))&255)-static_cast<int>((batched.color[i]>>(8*c))&255));
+        const double mean=total/static_cast<double>(gpu.color.size()*3);
+        std::printf("  VFX material inputs/batching software/GPU mean %.3f\n",mean);CHECK(mean<1.5);
+        CHECK(WritePng("build/vfx-material-gpu.png",gpu.ToImage(),true));
+    }
+    // One draw for 1000 quads, plus measured CPU gathering cost (not a timing assertion).
+    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":1000,"batching":false,"material":""}})");
+    Call(e,"particles.clear",R"({"id":"Effect"})");Call(e,"particles.burst",R"({"id":"Effect","count":1000})");
+    auto start=std::chrono::steady_clock::now(); const auto separate=GatherRenderItems(e.GetScene(),&e.Assets());
+    const double plainMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"batching":true}})");
+    start=std::chrono::steady_clock::now(); const auto combined=GatherRenderItems(e.GetScene(),&e.Assets());
+    const double batchMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+    CHECK(separate.size()==1000 && combined.size()==1 && combined[0].mesh->positions.size()==4000);
+    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"batching":false,"material":"particle.mat.json"}})");
+    const auto shared=GatherRenderItems(e.GetScene(),&e.Assets());
+    CHECK(shared.size()==1000 && shared.front().materialOverride);
+    for(const auto& item:shared) CHECK(item.mesh.get()==GetBuiltinMesh("quad") && item.mesh->particleData.empty());
+    std::printf("  VFX 1000 quads: draws %zu / %zu, gather %.3f / %.3f ms (plain / batch)\n",
+        BuildDrawList(separate,Vec3(0,0,6)).size(),BuildDrawList(combined,Vec3(0,0,6)).size(),plainMs,batchMs);
+}
+
+TEST(VfxTwoAnchorRibbon) {
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_ribbon"),&error));Call(e,"scene.new",R"({"empty":true})");
+    Call(e,"entity.create",R"({"name":"Base","components":{"Transform":{"position":[-1,0,0]}}})");
+    Call(e,"entity.create",R"({"name":"Tip","components":{"Transform":{"position":[-1,2,0]}}})");
+    Call(e,"entity.create",R"({"name":"Blade","components":{"Trail":{"mode":"ribbon","baseAnchor":"Base","tipAnchor":"Tip",
+      "tipOffset":[0,0,0],"duration":0.2,"lifetime":0.3,"minDistance":0.01}}})");
+    for(int frame=0;frame<10;++frame) {
+        Json a=Json::parse(R"({"id":"Tip","type":"Transform","values":{}})");
+        a["values"]["position"]=Json(Json::Array{-1+static_cast<float>(frame)*0.2f,2,0});e.Call("component.set",a);
+        Call(e,"sim.step",R"({"frames":1})");
+    }
+    const EntityId id=e.GetScene().FindByName("Blade");const auto* trail=e.GetScene().Get<Trail>(id);
+    CHECK(trail->points.size()==10 && trail->points.front().tip.y==2);
+    const auto items=GatherRenderItems(e.GetScene(),&e.Assets());
+    CHECK(items.size()==1 && items[0].mesh->positions.size()==20);
+    CHECK(items[0].mesh->positions[0].x==-1 && items[0].mesh->positions[1].y==2);
+    const auto rotated=GatherRenderItems(e.GetScene(),&e.Assets(),Mat4::RotationY(0.6f));
+    CHECK(rotated[0].mesh->positions[1].x==items[0].mesh->positions[1].x);
+    CHECK(Call(e,"vfx.preview",R"({"id":"Blade","times":[0.1],"size":64,"motion":[[0,[0,0,0]],[0.2,[1,0,0]]]})")["ok"].asBool());
+    RenderView view=MakeLookAtView(Vec3(0,1,6),Vec3(0,1,0),45,1);view.drawUI=false;
+    RenderTarget sw,gpu;sw.Resize(128,128);gpu.Resize(128,128);e.Renderer().Render(e.GetScene(),view,sw);
+    CHECK(CountId(sw,id)>100);CHECK(WritePng("build/vfx-ribbon-software.png",sw.ToImage(),true));
+    if(e.EnableGpu(nullptr,&error)) {
+        e.Gpu()->Render(e.GetScene(),view,gpu);double total=0;
+        for(size_t i=0;i<gpu.color.size();++i) for(int c=0;c<3;++c)
+            total+=std::abs(static_cast<int>((gpu.color[i]>>(8*c))&255)-static_cast<int>((sw.color[i]>>(8*c))&255));
+        CHECK(total/static_cast<double>(gpu.color.size()*3)<1.5);
+        CHECK(WritePng("build/vfx-ribbon-gpu.png",gpu.ToImage(),true));
+    }
+    Call(e,"sim.step",R"({"frames":40})");CHECK(e.GetScene().Get<Trail>(id)->points.empty());
+}
+
+TEST(VfxDeathChainsAreBounded) {
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_deaths"),&error));Call(e,"scene.new",R"({"empty":true})");
+    Json document=Json::parse(R"({"format":"oe.vfx","version":1,"budget":{"maxParticles":5},"emitters":[
+      {"name":"source","emitter":{"burst":2,"rate":0,"loop":false,"lifetime":0.02,"speed":0,"gravity":[0,0,0],"onDeath":"child","deathCount":4}},
+      {"name":"child","emitter":{"playing":false,"rate":0,"loop":false,"lifetime":0.02,"speed":0,"gravity":[0,0,0],"onDeath":"child","deathCount":4}}]})");
+    CreateTestVfx(e,document);const auto spawn=Call(e,"vfx.spawn",R"({"path":"effects/sparks.vfx.json","position":[2,3,0],"autoDestroy":false})");
+    const EntityId id=static_cast<EntityId>(spawn["result"]["id"].asInt());
+    e.RecordState();Call(e,"sim.step",R"({"frames":3})");const auto* system=e.GetScene().Get<VFXSystem>(id);
+    CHECK(system && system->emitters[0].particles.empty() && system->emitters[1].particles.size()==5);
+    CHECK(system->emitters[1].particles[0].age==0 && system->emitters[1].particles[0].depth==1);
+    CHECK(system->emitters[1].particles[0].position.x==2 && system->emitters[1].particles[0].position.y==3);
+    const auto state=e.SaveState();
+    Call(e,"sim.step",R"({"frames":5})");
+    // Native restore retains per-particle generation and the source random stream.
+    e.LoadState(*state);
+    system=e.GetScene().Get<VFXSystem>(id);CHECK(system && system->emitters[1].particles[0].depth==1);
+    Call(e,"sim.step",R"({"frames":30})");system=e.GetScene().Get<VFXSystem>(id);
+    CHECK(system && system->emitters[1].particles.empty() && VfxFinished(*system));
+    CHECK(system->emitters[1].emitted==20);
+    e.Stop();document["emitters"][0]["emitter"]["onDeath"]="missing";
+    Json a=Json::MakeObject();a["path"]="effects/bad.vfx.json";a["vfx"]=document;
+    CHECK(e.Call("vfx.create",a)["error"]["code"].asString()=="invalid_vfx");
+}
+
+TEST(VfxSwordSlashPreset) {
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_sword"),&error));Call(e,"scene.new",R"({"empty":true})");
+    Call(e,"entity.create",R"({"name":"Sword"})");
+    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Sword","preset":"sword_slash"})")["ok"].asBool());
+    CHECK(e.GetScene().Pool<ParticleEmitter>().size()==2 && e.GetScene().Pool<Trail>().size()==1);
+    CHECK(Call(e,"vfx.from_entity",R"({"id":"Sword","path":"effects/slash.vfx.json"})")["ok"].asBool());
+    CHECK(Call(e,"vfx.check",R"({"path":"effects/slash.vfx.json"})")["result"]["ok"].asBool());
+    const Json a=Json::parse(R"({"path":"effects/slash.vfx.json","size":128,"times":[0.05,0.15,0.3,0.6],
+      "motion":[[0,[-1,0,0]],[0.2,[1,0,0]],[0.6,[1,0,0]]],"out":"build/slash.png"})");
+    const auto one=e.Call("vfx.preview",a),two=e.Call("vfx.preview",a);
+    CHECK(one["ok"].asBool() && one["result"]["hash"]==two["result"]["hash"]);
+    CHECK(Call(e,"vfx.analyze",R"({"path":"effects/slash.vfx.json","duration":1})")["result"]["finishedAt"].isNumber());
+    Call(e,"component.set",R"({"id":"Sword","type":"ParticleEmitter","values":{"space":"world"}})");
+    Call(e,"particles.burst",R"({"id":"Sword","count":1})");
+    const auto born=GatherRenderItems(e.GetScene(),&e.Assets());
+    Call(e,"component.set",R"({"id":"Sword","type":"Transform","values":{"rotation":[0,70,0]}})");
+    const auto moved=GatherRenderItems(e.GetScene(),&e.Assets());
+    CHECK(!born.empty() && born.front().mesh->positions==moved.front().mesh->positions);
+    CHECK(Call(e,"component.set",R"({"id":"Sword","type":"ParticleEmitter","values":{"mesh":"missing.glb"}})")["ok"].asBool());
+    CHECK(Call(e,"vfx.check",R"({"id":"Sword"})")["error"]["code"].asString()=="invalid_vfx");
+}
+
+
+TEST(SampleSwordSlashMaterials) {
+    Engine e;std::string error;CHECK(e.Open("samples/VFXLab",&error));
+    CHECK(Call(e,"scene.load",R"({"path":"scenes/slash.scene.json"})")["ok"].asBool());e.Step(8);
+    CHECK(Call(e,"script.errors")["result"].size()==0);
+    CHECK(Call(e,"vfx.check",R"({"path":"effects/sword_slash.vfx.json"})")["result"]["ok"].asBool());
+    const auto before=e.GetScene().ToJson();
+    Json args=Json::parse(R"({"path":"effects/sword_slash.vfx.json","size":128,"times":[0.05,0.15,0.3,0.6],
+      "motion":[[0,[-1,0,0]],[0.2,[1,0,0]],[0.6,[1,0,0]]],"out":"build/slash-test-sw.png"})");
+    const auto sw=e.Call("vfx.preview",args);CHECK(sw["ok"].asBool());
+    const auto again=e.Call("vfx.preview",args);CHECK(again["result"]["hash"]==sw["result"]["hash"]);
+    if(e.EnableGpu(nullptr,&error)) {
+        args["renderer"]="gpu";args["out"]="build/slash-test-gpu.png";
+        CHECK(e.Call("vfx.preview",args)["ok"].asBool());
+        const auto a=e.Assets().GetTexture("build/slash-test-sw.png"),b=e.Assets().GetTexture("build/slash-test-gpu.png");
+        CHECK(a && b && a->texels.size()==b->texels.size());
+        if(a && b && a->texels.size()==b->texels.size()) {
+            double total=0;for(size_t i=0;i<a->texels.size();++i) for(int c=0;c<3;++c)
+                total+=std::abs(static_cast<int>((a->texels[i]>>(8*c))&255)-static_cast<int>((b->texels[i]>>(8*c))&255));
+            const double mean=total/static_cast<double>(a->texels.size()*3);
+            std::printf("  sword slash material/ribbon/mesh software/GPU mean %.3f\n",mean);CHECK(mean<1.5);
+        }
+    }
+    CHECK(e.GetScene().ToJson()==before);
+    CHECK(Call(e,"vfx.analyze",R"({"path":"effects/sword_slash.vfx.json","duration":1})")["result"]["finishedAt"].isNumber());
+    std::filesystem::remove(e.ResolvePath("build/slash-test-sw.png"));std::filesystem::remove(e.ResolvePath("build/slash-test-gpu.png"));
+}
+
 TEST(VfxSchemaCoversReflection) {
     Engine e;
     const Json schema = Call(e, "vfx.schema")["result"];
@@ -7880,7 +8047,7 @@ TEST(VfxSchemaCoversReflection) {
 TEST(VfxPresetsAreValid) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_presets"), &error));
     const Json presets = Call(e, "vfx.presets")["result"];
-    CHECK(presets.size() == 8 && Call(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
+    CHECK(presets.size() == 9 && Call(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
     for (const Json& preset : presets.items()) {
         CHECK(!preset["intent"].asString().empty());
         Call(e, "scene.new", R"J({"empty":true})J");

@@ -24,8 +24,15 @@ std::string AssetPath(Engine& engine, const Json& args) {
 void TexturePaths(Engine& engine, const VfxAsset& asset, const Json& params = Json::MakeObject()) {
     std::vector<ParticleEmitter> emitters; std::vector<Trail> trails;
     ConfigureVfx(asset, params, emitters, trails);
-    for (const auto& emitter : emitters) if (!emitter.texture.empty()) engine.ResolvePath(emitter.texture);
-    for (const auto& trail : trails) if (!trail.texture.empty()) engine.ResolvePath(trail.texture);
+    for (const auto& emitter : emitters) {
+        if (!emitter.texture.empty()) engine.ResolvePath(emitter.texture);
+        if (!emitter.material.empty()) engine.ResolvePath(emitter.material);
+        if (!emitter.mesh.empty() && !GetBuiltinMesh(emitter.mesh)) engine.ResolvePath(emitter.mesh);
+    }
+    for (const auto& trail : trails) {
+        if (!trail.texture.empty()) engine.ResolvePath(trail.texture);
+        if (!trail.material.empty()) engine.ResolvePath(trail.material);
+    }
 }
 
 VfxAsset ReadAsset(Engine& engine, const std::string& path) {

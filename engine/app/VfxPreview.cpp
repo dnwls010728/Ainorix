@@ -88,6 +88,27 @@ struct IsolatedEffect {
             needed.insert(ancestor);
             if (needed.size() > 512) throw ApiError("invalid_range", "effect hierarchy is too deep", "Use a shorter parent chain.");
         }
+        std::vector<std::string> anchorNames;
+        for (EntityId current : selected) {
+            if (const Trail* trail = source.Get<Trail>(current)) {
+                anchorNames.push_back(trail->baseAnchor); anchorNames.push_back(trail->tipAnchor);
+            }
+            if (const VFXSystem* system = source.Get<VFXSystem>(current)) {
+                const Json* draft = engine.VfxDocument(system->asset);
+                const auto definition = draft ? std::make_shared<VfxAsset>(ParseVfxAsset(*draft)) : assets->GetVfx(system->asset);
+                if (definition) for (const auto& trail : definition->trails) {
+                    anchorNames.push_back(trail.trail.baseAnchor); anchorNames.push_back(trail.trail.tipAnchor);
+                }
+            }
+        }
+        for (const auto& name : anchorNames) {
+            EntityId anchor = name.empty() ? 0 : source.FindByName(name);
+            while (anchor) {
+                needed.insert(anchor);
+                if (needed.size()>512) throw ApiError("invalid_range", "too many preview anchors/ancestors", "Use a shorter hierarchy.");
+                anchor = source.Record(anchor)->parent;
+            }
+        }
         // Only transforms and selected effect settings enter the preview. Scripts, physics,
         // unrelated geometry and transient particles/points cannot affect it.
         for (EntityId current : needed) {
@@ -158,7 +179,7 @@ struct IsolatedEffect {
     }
     bool Finished() const {
         for (const auto& pair : scene.Pool<ParticleEmitter>()) if (!ParticlesFinished(pair.second)) return false;
-        for (const auto& pair : scene.Pool<Trail>()) if (pair.second.emitting || !pair.second.points.empty()) return false;
+        for (const auto& pair : scene.Pool<Trail>()) if (TrailEmitting(pair.second) || !pair.second.points.empty()) return false;
         for (const auto& pair : scene.Pool<VFXSystem>()) if (!VfxFinished(pair.second)) return false;
         return true;
     }
@@ -166,7 +187,7 @@ struct IsolatedEffect {
     size_t PointCount() const { size_t count = 0; for (const auto& pair : scene.Pool<Trail>()) count += pair.second.points.size(); for (const auto& pair : scene.Pool<VFXSystem>()) for (const auto& trail : pair.second.trails) count += trail.points.size(); return count; }
     Bounds Box(const Mat4& view = Mat4{}) const {
         Bounds bounds;
-        for (const RenderItem& item : GatherRenderItems(scene, nullptr, view)) for (int corner = 0; corner < 8; ++corner)
+        for (const RenderItem& item : GatherRenderItems(scene, assets, view)) for (int corner = 0; corner < 8; ++corner)
             bounds.Add(item.world.TransformPoint(Vec3((corner & 1) ? item.boundsMax.x : item.boundsMin.x,
                 (corner & 2) ? item.boundsMax.y : item.boundsMin.y, (corner & 4) ? item.boundsMax.z : item.boundsMin.z)));
         return bounds;

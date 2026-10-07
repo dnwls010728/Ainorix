@@ -1,0 +1,44 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Sword Aura",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.7,
+            6
+          ]
+        },
+        "Camera": {
+          "clearColor": [
+            0.02,
+            0.025,
+            0.04
+          ]
+        },
+        "PostProcess": {
+          "bloom": 0.5,
+          "bloomThreshold": 0.7
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Slash",
+      "components": {
+        "Transform": {},
+        "VFXSystem": {
+          "asset": "effects/sword_slash.vfx.json"
+        },
+        "Script": {
+          "path": "scripts/slash.lua"
+        }
+      }
+    }
+  ]
+}

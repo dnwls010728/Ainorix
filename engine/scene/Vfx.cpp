@@ -201,6 +201,11 @@ void ConfigureVfx(const VfxAsset& asset, const Json& overrides, std::vector<Part
             if (!FieldFromJson(*target.field, component, applied, &error)) throw ApiError("invalid_vfx", error);
         }
     }
+    for (const auto& emitter : emitters) if (!emitter.onDeath.empty()) {
+        bool found = false; for (const auto& target : asset.emitters) found = found || target.name == emitter.onDeath;
+        if (!found) throw ApiError("invalid_vfx", "unknown death target '" + emitter.onDeath + "'", "Use an emitter name from this asset.");
+    }
+
 }
 
 VfxAsset ParseVfxAsset(const Json& json) {
@@ -268,6 +273,11 @@ VfxAsset ParseVfxAsset(const Json& json) {
             if (mapping.has("scale") && (!mapping["scale"].isNumber() || !std::isfinite(mapping["scale"].asNumber()))) throw ApiError("invalid_range", "target scale must be finite");
         }
     }
+    for (const auto& block : asset.emitters) if (!block.emitter.onDeath.empty()) {
+        bool found = false;
+        for (const auto& target : asset.emitters) found = found || target.name == block.emitter.onDeath;
+        if (!found) throw ApiError("invalid_vfx", "unknown death target '" + block.emitter.onDeath + "'", "Use an emitter name in this asset; chains stop after depth 4.");
+    }
     std::vector<ParticleEmitter> emitters; std::vector<Trail> trails;
     ConfigureVfx(asset, Json::MakeObject(), emitters, trails);
     return asset;
@@ -316,8 +326,8 @@ bool RefreshVfx(VFXSystem& system, AssetManager& assets, std::string* error) {
 bool VfxFinished(const VFXSystem& system) {
     if (!system.definition || !system.started) return false;
     for (const auto& emitter : system.emitters)
-        if (!emitter.particles.empty() || (VfxPlaying(system) && !ParticlesFinished(emitter))) return false;
-    for (const auto& trail : system.trails) if (!trail.points.empty() || (VfxPlaying(system) && trail.emitting)) return false;
+        if (!emitter.particles.empty() || (VfxPlaying(system) && emitter.playing && !ParticlesFinished(emitter))) return false;
+    for (const auto& trail : system.trails) if (!trail.points.empty() || (VfxPlaying(system) && TrailEmitting(trail))) return false;
     return true;
 }
 
@@ -332,6 +342,7 @@ void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt) {
             remaining -= static_cast<int>(emitter.particles.size());
         }
         const Mat4 root = scene.WorldMatrix(pair.first);
+        std::vector<std::vector<Particle>> deaths(system.emitters.size());
         for (size_t i = 0; i < system.emitters.size(); ++i) {
             ParticleEmitter& emitter = system.emitters[i];
             size_t otherCount = 0;
@@ -339,8 +350,36 @@ void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt) {
             const int originalCap = emitter.maxParticles; const bool originalPlaying = emitter.playing;
             emitter.maxParticles = std::min(originalCap, std::max(0, system.definition->maxParticles - static_cast<int>(otherCount)));
             emitter.playing = originalPlaying && VfxPlaying(system);
-            StepEmitter(emitter, pair.first, root * system.definition->emitters[i].local, VfxSeedMix(i), dt);
+            StepEmitter(emitter, pair.first, root * system.definition->emitters[i].local, VfxSeedMix(i), dt, emitter.onDeath.empty() ? nullptr : &deaths[i]);
             emitter.maxParticles = originalCap; emitter.playing = originalPlaying;
+        }
+        // Queue death bursts only after all emitters stepped: targets never age a newborn
+        // on the same step, regardless of block order. Depth is carried by each particle.
+        for (size_t i = 0; VfxPlaying(system) && i < deaths.size(); ++i) {
+            const auto& source = system.emitters[i];
+            if (source.onDeath.empty() || source.deathCount <= 0) continue;
+            size_t targetIndex = system.emitters.size();
+            for (size_t j = 0; j < system.emitters.size(); ++j)
+                if (system.definition->emitters[j].name == source.onDeath) targetIndex = j;
+            if (targetIndex == system.emitters.size()) continue;
+            auto& target = system.emitters[targetIndex];
+            for (const Particle& particle : deaths[i]) {
+                if (particle.depth >= 4) continue;
+                size_t live = 0; for (const auto& block : system.emitters) live += block.particles.size();
+                const int cap = target.maxParticles;
+                target.maxParticles = std::min(cap, static_cast<int>(target.particles.size()) +
+                    std::max(0, system.definition->maxParticles - static_cast<int>(live)));
+                const Mat4 world = root * system.definition->emitters[i].local;
+                const Vec3 position = particle.worldSpace ? particle.position : world.TransformPoint(particle.position);
+                const std::string space = target.space; target.space = "world";
+                const size_t before = target.particles.size();
+                // Keep target orientation/shape, but place its origin at the death position.
+                Mat4 spawn = root * system.definition->emitters[targetIndex].local;
+                spawn.at(0,3) = position.x; spawn.at(1,3) = position.y; spawn.at(2,3) = position.z;
+                BurstEmitter(target, pair.first, spawn, VfxSeedMix(targetIndex), source.deathCount);
+                for (size_t k = before; k < target.particles.size(); ++k) target.particles[k].depth = particle.depth + 1;
+                target.space = space; target.maxParticles = cap;
+            }
         }
         system.started = true;
     }
@@ -355,7 +394,9 @@ void UpdateVfxTrails(Scene& scene, float dt) {
         for (size_t i = 0; i < system.trails.size(); ++i) {
             Trail& trail = system.trails[i]; const bool emitting = trail.emitting;
             trail.emitting = emitting && VfxPlaying(system);
-            StepTrail(trail, (root * system.definition->trails[i].local).TransformPoint(Vec3()), dt);
+            Vec3 base, tip;
+            if (!TrailAnchors(scene, trail, root * system.definition->trails[i].local, base, tip)) trail.emitting = false;
+            StepAnchoredTrail(trail, base, tip, dt);
             trail.emitting = emitting;
         }
         if (system.autoDestroy && !system.suppressDestroy && VfxFinished(system)) destroy.push_back(pair.first);

@@ -1665,6 +1665,12 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `endColor` | color | `[1,1,1]` | RGB tint at expiry. |
 | `startOpacity` | float | `1` | Opacity at birth. |
 | `endOpacity` | float | `0` | Opacity at expiry. |
+| `material` | string | `""` | Optional project-relative .mat.json, including surface graphs. |
+| `mesh` | string | `""` | Static project mesh or built-in name; empty uses camera-facing quads. |
+| `meshScale` | vec3 | `[1,1,1]` | Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation. |
+| `batching` | bool | `false` | Combine particles into one emitter draw, sorted internally; transparent emitters sort as whole groups. |
+| `onDeath` | string | `""` | VFX asset only: named emitter receiving a burst at each expired particle position; maximum depth 4. |
+| `deathCount` | int | `1` | Particles per death event, subject to target and system budgets. |
 | `texture` | string | `""` | Optional texture/sprite sheet; empty uses solid quads. |
 | `frame` | int | `0` | Sprite sheet frame, row-major. |
 | `columns` | int | `1` | Sprite sheet columns. |
@@ -2329,6 +2335,13 @@ Camera-facing ribbon left behind the entity as it moves (sword swings, projectil
 | `endColor` | color | `[1,1,1]` | RGB tint at the oldest point. |
 | `opacity` | float | `1` | Opacity at the entity. |
 | `endOpacity` | float | `0` | Opacity at the oldest point. |
+| `material` | string | `""` | Optional .mat.json surface material/graph. |
+| `mode` | string | `"camera"` | camera faces the view; ribbon sweeps between two world-space anchors. |
+| `baseAnchor` | string | `""` | Unique scene entity name for blade base; empty uses owner/local block transform. |
+| `tipAnchor` | string | `""` | Unique scene entity name for blade tip; empty uses owner/local block transform. |
+| `baseOffset` | vec3 | `[0,0,0]` | Base offset in anchor coordinates. |
+| `tipOffset` | vec3 | `[0,1,0]` | Tip offset in anchor coordinates. |
+| `duration` | float | `0` | Seconds of emission, followed by drain; zero emits indefinitely. |
 | `texture` | string | `""` | Optional image stretched over the ribbon: left edge at the entity, right edge at the oldest point. Empty = solid. |
 | `blend` | string | `"alpha"` | alpha = normal; add = the ribbon brightens what is behind it (energy, fire). |
 | `layer` | int | `0` | 2D sorting layer, like Sprite.layer. |

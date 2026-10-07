@@ -275,7 +275,7 @@ void NativeEditor::Impl::EffectsPreview() {
     ImGui::TextDisabled(Tr("Time: %.2f s"), effectsFrame * Engine::kFixedDt);
     if (ImGui::Button(Tr("Fit Preview"))) {
         Vec3 low(1e30f, 1e30f, 1e30f), high(-1e30f, -1e30f, -1e30f); bool found = false;
-        for (const RenderItem& item : GatherRenderItems(*effectsScene, nullptr, Mat4{})) for (int corner = 0; corner < 8; ++corner) {
+        for (const RenderItem& item : GatherRenderItems(*effectsScene, &engine.Assets(), Mat4{})) for (int corner = 0; corner < 8; ++corner) {
             const Vec3 p = item.world.TransformPoint(Vec3((corner & 1) ? item.boundsMax.x : item.boundsMin.x,
                 (corner & 2) ? item.boundsMax.y : item.boundsMin.y, (corner & 4) ? item.boundsMax.z : item.boundsMin.z));
             low = Vec3(std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z));
@@ -358,7 +358,12 @@ void NativeEditor::Impl::EffectsInspector() {
                 bool mapped = false;
                 for (const auto& parameter : document["params"].members()) for (const Json& target : parameter.second["targets"].items())
                     if (target["to"].asString() == blockName + "." + name) mapped = true;
-                ImGui::PushID(name.c_str()); ImGui::TextUnformatted(name.c_str());
+                static const std::map<std::string,const char*> labels = {{"material","Material"},{"mesh","Particle Mesh"},
+                    {"meshScale","Mesh Scale"},{"batching","Batch Particles"},{"onDeath","Death Emitter"},{"deathCount","Death Burst"},
+                    {"mode","Ribbon Mode"},{"baseAnchor","Base Anchor"},{"tipAnchor","Tip Anchor"},
+                    {"baseOffset","Base Offset"},{"tipOffset","Tip Offset"}};
+                const auto label = labels.find(name);
+                ImGui::PushID(name.c_str()); ImGui::TextUnformatted(label == labels.end() ? name.c_str() : Tr(label->second));
                 if (mapped) { ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("Controlled by parameter")); }
                 HelpTooltip(field["doc"].asString());
                 Json value = values.has(name) ? values[name] : field["default"];

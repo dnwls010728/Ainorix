@@ -17,6 +17,7 @@ struct AnimationClip;
 const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name);
 // Evaluates an immutable model's joint palette in model space, clamping channel times.
 std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time);
+struct Particle;
 struct ParticleEmitter;
 // Rejects non-finite birth settings before they enter simulation/rendering.
 bool ParticleSettingsValid(const ParticleEmitter& emitter);
@@ -27,7 +28,7 @@ int BurstParticles(Scene& scene, EntityId id, int count);
 // (effect entities can be destroyed). Looping emitters never finish.
 bool ParticlesFinished(const ParticleEmitter& emitter);
 // Shared fixed-step/birth implementation; seedMix zero preserves the plain component's exact stream.
-void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt);
+void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths = nullptr);
 int BurstEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, int count);
 
 // Keys of a ParticleEmitter sizeOverLife/colorOverLife/opacityOverLife field, ascending in
@@ -49,6 +50,11 @@ struct Trail;
 void ClearTrail(Trail& trail);
 // Shared trail aging/sampling at an explicit world-space head.
 void StepTrail(Trail& trail, const Vec3& position, float dt);
+// Resolve ribbon anchor names/offsets; missing names return false rather than drawing at the origin.
+bool TrailAnchors(const Scene& scene, const Trail& trail, const Mat4& owner, Vec3& base, Vec3& tip);
+// Step a camera trail or two-anchor ribbon with a shared finite emission window.
+void StepAnchoredTrail(Trail& trail, const Vec3& base, const Vec3& tip, float dt);
+bool TrailEmitting(const Trail& trail);
 
 // Logical key state. Key names: "W","A","S","D","Up","Down","Left","Right",
 // "Space","Shift","Escape", letters "A".."Z", digits "0".."9".

@@ -252,3 +252,20 @@ build_web.bat, EMSDK=E:/emsdk, Release. Two initial link attempts failed in
 wasm-metadce (exit 3221225477); retry with BINARYEN_CORES=1 and build parallelism
 2 succeeded. Wasm grew by 1,457 bytes; JS is byte-identical. Evidence:
 ignored build/orthographic-web-build.log.
+
+## VFX phase 4 rebuild (2026-10-08)
+
+The player includes VFXSystem assets, materials, normalized age/random/speed graph inputs, optional
+emitter batching, bounded death chains, two-anchor ribbons and static mesh particles. Unbatched
+particles keep shared GPU meshes and use a dedicated draw input; batching uses vertex RGBA/data.
+Legacy particle hashes remain unchanged. See docs/VFX_PHASE4.md for validation and known limits.
+
+Built with Emscripten 6.0.10, Release, BINARYEN_CORES=1 and parallelism 2. Node/WASM portable
+core: 230 tests, zero failures. Actual browser WebGL2 execution of these effects remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,677,178 | ebac03f51f5d5b6a3f7af13a1ac2e38b42c049c1b728c8ab640f6846659b67d8 |
+
+Commands.cpp SHA256: `9e32bd478583e35831c86902197af9d2458133654dae8ba999c392db624fed74`.

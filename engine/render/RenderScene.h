@@ -27,6 +27,7 @@ struct RenderItem {
     // MeshRenderer.shaderUniforms applied over the material's graph uniforms; used when hasShaderUniforms.
     std::array<Vec4, ShaderGraph::kMaxUniforms> shaderUniforms{};
     bool hasShaderUniforms = false;
+    Vec4 particleInput{};  // per-draw age/random/world speed for shared (unbatched) meshes
     float opacity = 1.0f;  // multiplies the material's opacity; < 1 makes it transparent
     bool blend = false;    // force alpha blending (sprites without a cutoff)
     bool additive = false; // blended additively (Sprite/ParticleEmitter blend: "add"); implies blend

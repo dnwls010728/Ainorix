@@ -333,9 +333,10 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       English curve/gradient workflow and Korean/Japanese D3D11 editor screenshots inspected.
       Web/Android prebuilt players still need the tracked Emscripten/NDK rebuild. Linux/EGL, Node/WASM
       and Android device execution remain unverified.
-- [ ] Phase 4: particle materials, shader inputs, batching, sub-emitters; software/GPU comparison.
+- [x] Phase 4 (2026-10-08): particle/trail materials, age/random/speed inputs, opt-in batching, bounded
+      death chains, two-anchor ribbons, static mesh particles and sword_slash preset/sample. Windows/
+      D3D11 comparison and portable-core tests; details, performance and limits: docs/VFX_PHASE4.md.
 - [ ] Phase 5 (optional): expression update rules.
-- [ ] Rebuild `runtime/web` and `runtime/android`: needs the Emscripten SDK (`EMSDK`) and the Android NDK;
-      run `build_web.bat` / `build_android.bat`, commit the runtimes, update `runtime/web/README.md`;
-      run the test suite under Node/WASM.
+- [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
+      Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.
 - [ ] Not verified anywhere yet: Android device execution of VFX assets; Linux/EGL rendering suite.

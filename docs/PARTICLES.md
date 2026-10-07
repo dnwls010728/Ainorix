@@ -129,7 +129,7 @@ Both renderers consume the same camera-facing unit quads from GatherRenderItems
 and the same transparent BuildDrawList. Each live particle uses a shared static
 quad, so the GPU mesh cache does not grow with births. Dimensions selects planar
 or cone emission; both modes face the current camera, including orthographic
-and editor views. Particle quads are unlit and do not cast shadows.
+and editor views. Particle quads are unlit by default; material overrides can enable lighting. They do not cast shadows.
 
 Size, RGB tint and opacity interpolate linearly between their birth snapshots
 over age/lifetime. Size is the square billboard width/height in world meters;
@@ -142,6 +142,13 @@ inset to avoid neighbouring-frame bleed. Empty texture gives a solid quad;
 missing textures give magenta quads. Texture alpha multiplies particle opacity.
 Opaque geometry precedes particles; blended draws sort back to front by bounds
 center distance. Entity id breaks ties, then stable birth order within an emitter.
+
+## Extended effect rendering
+
+Phase 4 adds emitter/trail materials, static mesh particles, optional emitter batching, normalized age/
+random/speed graph inputs, two-anchor blade ribbons and bounded asset death chains. See the complete
+field, ordering and budget contract in [VFX.md](VFX.md#materials-mesh-particles-ribbons-and-death-chains-phase-4).
+Legacy defaults retain the original particle hashes and draw ordering.
 
 ## Implementation status (work log)
 
@@ -196,10 +203,8 @@ P3.2 and P3.3 continue from that combined main.
 - [x] V3: samples/VFXLab (campfire, portal, fireworks, orb trail) with generated
       textures; SampleVfxLab runs it twice and compares frame hashes. Software and
       D3D11 PNGs at frames 132 and 200 were inspected. Windows passes 187 tests.
-- [ ] Rebuild runtime/web and runtime/android: engine C++ used by the player changed
-      and this host has no Emscripten SDK or Android NDK. Until then packaged web and
-      Android games ignore the V1/V2 fields and Trail. Also run the suite under
-      Node/WASM to confirm the new tests and the turbulence field match Windows.
-- [ ] Not done, candidates for later: sub-emitters (spawn on particle death), mesh
-      particles, lit or soft (depth-faded) particles, particle collision, an editor
-      preview that simulates the selected emitter while the game is stopped.
+- [x] Runtime rebuild (phase 4, 2026-10-08): web and both Android players now include the VFX toolkit
+      and assets. Portable core tests run under Node/WASM; see VFX_PHASE4.md for current evidence.
+- [x] Phase 4: materials (including lit graphs), static mesh particles, two-anchor ribbons, optional
+      batching and bounded asset death chains; Effects isolated preview shipped in phase 3. See VFX.md.
+- [ ] Candidates for later: soft/depth-faded particles and particle collision.

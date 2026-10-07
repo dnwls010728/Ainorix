@@ -214,6 +214,65 @@ are blocked during recording/network matches, like external VFX asset edits.
 The UI groups fields and exposes curves, gradients, isolated playback and scene placement.
 See [EDITOR.md](EDITOR.md) for controls and screenshot flags.
 
+## Materials, mesh particles, ribbons and death chains (phase 4)
+
+`ParticleEmitter.material` and `Trail.material` bind ordinary `.mat.json` assets, including graphs authored
+in Shaders. Particle materials use the emitter's texture when specified, otherwise the material's own
+base texture. Trail fades multiply the explicit trail image or the material's base texture. Materials can
+be lit (`unlit:false`); effects still cast no shadows. Missing materials/meshes are magenta at runtime;
+`vfx.check` reports broken material dependencies and missing/animated/oversized meshes.
+
+Three zero-argument graph operations are available in both vertex and fragment stages: `particleAge`
+(normalized age in 0..1), `particleRandom` (stable birth value in [0,1)) and `particleSpeed` (world meters
+per second). Outside particles they are zero; ribbons supply normalized point age and zero random/speed.
+Batched effects use vertex attributes; unbatched effects use a dedicated draw input with shared meshes.
+Neither consumes named graph uniforms, so all eight slots remain available. Random
+uses `hash = randomState XOR uint32(emitted + birthIndex)` after legacy birth draws, then xor-shift 16,
+multiply 0x7feb352d, xor-shift 15, multiply 0x846ca68b, xor-shift 16; upper 24 bits / 16777216.
+It does not consume another PRNG draw. Native snapshots retain this value and death-chain depth.
+
+Set `mesh` to a static project mesh or a built-in name (`crescent` is included), and `meshScale` to XYZ
+scale. Lifetime size multiplies this scale; emitter orientation and particle rotation/spin orient the
+mesh. World-space mesh particles capture emitter orientation at birth. Skinning/animation is excluded.
+The authoring limits are 65536 vertices and 196608 indices per source mesh and 1000000 source vertices
+multiplied by `maxParticles` per emitter. Runtime gathering also guards the live geometry budget.
+
+`batching:true` combines an emitter into a single mesh/draw with per-vertex color, opacity, age, random
+and speed. Particles sort internally back to front, but each emitter sorts as a whole relative to other
+transparent objects. Leave it false when overlapping transparent objects must interleave. Legacy
+billboards and their reference hashes keep their original per-particle draw path. Multi-material meshes
+without an explicit material override retain separate particle draws. Batching reduces draw submission,
+but rebuilding a CPU mesh costs more than collecting shared quads; it is not a universal CPU speedup.
+
+A `Trail` with `mode:"ribbon"` sweeps a surface from `baseOffset` to `tipOffset` in owner/block coordinates.
+Optional `baseAnchor` and `tipAnchor` identify unique scene entity names; offsets then use those entity
+coordinates. Missing or ambiguous names suppress new samples and produce a checker hint. Both endpoints
+are sampled, so a stationary blade base with a moving tip still leaves a ribbon. Camera rotation does
+not change the swept geometry. `duration` limits emission, then existing points drain for `lifetime`;
+zero keeps the old indefinite emission. `trail.state {points:true}` includes each ribbon point's `tip`.
+Isolated path/editor previews use local offsets; named external anchors belong to scene instances.
+Entity previews copy referenced anchor transforms without running their scripts.
+
+Within a `.vfx.json`, set an emitter's `onDeath` to another emitter's name and `deathCount` to 0..256.
+Death bursts are dispatched after every emitter has stepped, in source block/particle order, at the
+expired particle's world position. Newborns start at age zero regardless of target block order. The
+target's settings/orientation are used, but these births are always world-space. A target with
+`playing:false` receives explicit death bursts without automatic emission. All births obey the target
+cap and the shared system budget. Cycles are allowed but stop after generation depth 4. Stopping the
+system also suppresses death births while it drains. This link is asset-only; standalone components
+must be packed with `vfx.from_entity` to form a shared system.
+
+`sword_slash` is the ninth preset: a two-anchor ribbon, mesh crescent and sparks. Multi-emitter presets
+use the first emitter on the requested entity and reuse/create named child entities for later layers.
+`samples/VFXLab/effects/sword_slash.vfx.json` adds a scrolling texture and lifetime dissolve graph;
+`scenes/slash.scene.json` runs repeated sword sweeps through `scripts/slash.lua`. Regenerate its authored
+files with `python samples/VFXLab/tools/make_slash.py`. Use `vfx.preview` with motion keys, as with trails.
+
+Screen-space distortion/refraction is not implemented: surface graphs cannot sample the scene color,
+and the software surface sampler only exposes the base texture. The GPU composite samples the scene
+for postprocessing, but has no particle distortion pass. Soft/depth-faded particles remain optional
+future work. The Effects structure node view is the separate phase 4b.
+
 ## Implementation status (work log)
 
 - [x] Phase 1: six commands, eight portable presets, strict component authoring validation and bounded
@@ -255,5 +314,8 @@ See [EDITOR.md](EDITOR.md) for controls and screenshot flags.
       English curve/gradient workflow and Korean/Japanese D3D11 editor screenshots inspected.
       Web/Android prebuilt players still need the tracked Emscripten/NDK rebuild. Linux/EGL, Node/WASM
       and Android device execution remain unverified.
-- [ ] Platform follow-up: Linux/EGL and Android device verification. Web/Android prebuilt runtimes still
-      require the previously tracked particle V1/V2 rebuild; no SDK is available on this host.
+- [x] Phase 4 (2026-10-08): materials, age/random/speed graph inputs, opt-in batching, bounded death
+      chains, static mesh particles, two-anchor ribbons and sword_slash preset/sample. Details and
+      validation evidence are in [VFX_PHASE4.md](VFX_PHASE4.md).
+- [ ] Platform follow-up: Linux/EGL, browser WebGL2 and Android device execution of phase 4 effects.
+      Windows/D3D11 and Node/WASM tests cover the native and portable core; prebuilt players refreshed.

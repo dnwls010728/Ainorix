@@ -254,3 +254,20 @@ build_android.bat with ANDROID_HOME=build/android-sdk succeeded for both support
 ABIs. arm64 grew by 1,856 bytes and x86_64 by 1,968 bytes for the shared command
 parser and rebuilt platform interface. Device/emulator execution remains unverified.
 Evidence: ignored build/orthographic-android-build.log.
+
+## VFX phase 4 rebuild (2026-10-08)
+
+The player includes VFXSystem assets, materials, normalized age/random/speed graph inputs, optional
+emitter batching, bounded death chains, two-anchor ribbons and static mesh particles. Unbatched
+particles keep shared GPU meshes and use a dedicated draw input; batching uses vertex RGBA/data.
+Legacy particle hashes remain unchanged. See docs/VFX_PHASE4.md for validation and known limits.
+
+Built with Android NDK r28c, Release, for arm64-v8a and x86_64. Native Windows/D3D11 tests
+pass; Android device/emulator execution of these effects remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,409,776 | a0bf24b6ac836be34c91bc7bfeaa2f75b6daae8fe6b73ed557652fcf7faae66d |
+| runtime/android/x86_64/liboe_player.so | 7,828,920 | 56d02ef6d45bfffa2d7dc80bf3d66be28a72709271021aaa491b6db54ffa7d83 |
+
+Commands.cpp SHA256: `9e32bd478583e35831c86902197af9d2458133654dae8ba999c392db624fed74`.
