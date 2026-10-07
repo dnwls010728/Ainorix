@@ -5149,7 +5149,8 @@ TEST(ParticleSimulationAndCommands) {
     Call(e, "component.add", R"J({"id":"Effect","type":"Script","values":{"path":"scripts/burst.lua"}})J");
     Call(e, "sim.step", R"J({"frames":1})J");
     CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1 && e.Scripts().Errors().empty());
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"gravity":[0,1e100,0]}})J");
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"gravity":[0,1e100,0]}})J")["error"]["code"].asString() == "invalid_range");
+    e.GetScene().Get<ParticleEmitter>(id)->gravity.y = std::numeric_limits<float>::infinity();  // legacy/programmatic data still has a runtime guard
     CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["code"].asString() == "invalid_emitter");
 }
 
@@ -7539,15 +7540,18 @@ TEST(ParticleCurvesFlipbookAndAlignment) {
     std::set<float> variants;
     for (const RenderItem& variant : GatherRenderItems(e.GetScene(), &e.Assets())) variants.insert(variant.uvOffset[0]);
     CHECK(variants.size() == 4);  // every particle keeps one of the four frames
-    // Malformed curves stop emission with a message that says which one and how to write it.
+    // Authoring rejects malformed curves before they can replace working settings.
     for (const char* bad : {R"J([[0,1],[2,1]])J", R"J([[0.5,1],[0.2,1]])J", R"J([1,2])J", R"J([[0,"big"]])J", R"J({"keys":1})J"}) {
         Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
         args["values"]["sizeOverLife"] = Json::parse(bad);
-        CHECK(e.Call("component.set", args)["ok"].asBool());
-        Json result = Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
-        CHECK(result["error"]["code"].asString() == "invalid_emitter" && result["error"]["message"].asString().find("sizeOverLife") == 0);
+        const Json before = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->sizeOverLife;
+        Json result = e.Call("component.set", args);
+        CHECK(result["error"]["code"].asString() == "invalid_curve" && result["error"]["message"].asString().find("sizeOverLife") == 0);
+        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->sizeOverLife == before);
     }
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":[],"colorOverLife":[[0,"red"]]}})J");
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":[],"colorOverLife":[[0,"red"]]}})J")["error"]["code"].asString() == "invalid_curve");
+    // Old files remain loadable; the runtime guard still reports invalid legacy curves.
+    e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->colorOverLife = Json::parse(R"J([[0,"red"]])J");
     CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["message"].asString().find("colorOverLife") == 0);
     CHECK(!Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":"no"}})J")["ok"].asBool());
 }
@@ -7628,6 +7632,147 @@ TEST(TrailRibbon) {
     CHECK(Call(e, "trail.state", R"J({"id":"Plain"})J")["error"]["code"].asString() == "missing_component");
     Scene restored;
     CHECK(restored.FromJson(e.GetScene().ToJson(), &error) && restored.Get<Trail>(id)->points.empty());
+}
+
+TEST(VfxSchemaCoversReflection) {
+    Engine e;
+    const Json schema = Call(e, "vfx.schema")["result"];
+    CHECK(schema["components"].size() == 2 && schema["modules"].size() == 7);
+    for (const Json& component : schema["components"].items()) {
+        const ComponentType& type = *TypeRegistry::Find(component["name"].asString());
+        auto pool = type.makePool(); const void* defaults = pool->Add(1);
+        CHECK(component["fields"].size() == type.fields.size());
+        for (size_t i = 0; i < type.fields.size(); ++i) {
+            const FieldInfo& field = type.fields[i]; const Json& value = component["fields"][i];
+            CHECK(value["name"].asString() == field.name && value["type"].asString() == ToString(field.type));
+            CHECK(value["default"] == FieldToJson(field, defaults) && value["doc"].asString() == field.doc);
+            CHECK(!value["module"].asString().empty());
+            CHECK(value["min"].isNull() == !field.hasRange && value["max"].isNull() == !field.hasRange);
+        }
+    }
+}
+
+TEST(VfxPresetsAreValid) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_presets"), &error));
+    const Json presets = Call(e, "vfx.presets")["result"];
+    CHECK(presets.size() == 8 && Call(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
+    for (const Json& preset : presets.items()) {
+        CHECK(!preset["intent"].asString().empty());
+        Call(e, "scene.new", R"J({"empty":true})J");
+        Call(e, "entity.create", R"J({"name":"Effect"})J");
+        Json args = Json::parse(R"J({"id":"Effect"})J"); args["preset"] = preset["name"];
+        CHECK(e.Call("vfx.apply_preset", args)["ok"].asBool());
+        const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"));
+        CHECK(!emitter || ParticleSettingsValid(*emitter));
+        CHECK(Call(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
+    }
+    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"typo"})J")["error"]["code"].asString() == "unknown_preset");
+}
+
+TEST(VfxPresetUndoAndStrictValidation) {
+    Engine e; Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"texture":"custom.png","rate":1}}})J");
+    const Json original = e.GetScene().ToJson(); const size_t undo = e.UndoDepth();
+    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"sparks","mode":"merge"})J")["ok"].asBool());
+    CHECK(e.UndoDepth() == undo + 1 && e.GetScene().Get<ParticleEmitter>(1)->texture == "custom.png");
+    CHECK(Call(e, "history.undo")["ok"].asBool() && e.GetScene().ToJson() == original);
+    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"sparks"})J")["ok"].asBool());
+    CHECK(e.GetScene().Get<ParticleEmitter>(1)->texture.empty());
+    const Json before = e.GetScene().ToJson(); const size_t depth = e.UndoDepth();
+    Json result = Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"rate":20,"lifetim":2}})J");
+    CHECK(result["error"]["code"].asString() == "unknown_field" && result["error"]["hint"].asString().find("lifetime") != std::string::npos);
+    CHECK(e.GetScene().ToJson() == before && e.UndoDepth() == depth);
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"rate":10001}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"seed":1e100}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"burst":1.5}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"opacityOverLife":[[0,2]]}})J")["error"]["code"].asString() == "invalid_curve");
+    CHECK(Call(e, "component.add", R"J({"id":"Effect","type":"Trail","values":{"width":-1}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(e.GetScene().ToJson() == before);
+}
+
+TEST(VfxPreviewIsDeterministic) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_deterministic"), &error));
+    Call(e, "entity.create", R"J({"name":"Effect"})J");
+    Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fireworks"})J");
+    const char* args = R"J({"id":"Effect","times":[0.1,0.3,0.6,1],"size":64,"inline":false})J";
+    SetMaxRenderThreads(1); const Json first = Call(e, "vfx.preview", args);
+    CHECK(first["ok"].asBool());
+    SetMaxRenderThreads(8); const Json second = Call(e, "vfx.preview", args);
+    CHECK(first == second && first == Call(e, "vfx.preview", args)); SetMaxRenderThreads(16);
+    CHECK(first["result"]["width"].asInt() == 256 && first["result"]["frames"][0]["count"].asInt() == 70);
+    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","times":[0.1,0.1]})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","out":"../outside.png"})J")["error"]["code"].asString() == "path_outside_project");
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":10000}})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","times":[60],"inline":false})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(Call(e, "vfx.analyze", R"J({"id":"Effect","duration":60})J")["error"]["code"].asString() == "invalid_range");
+}
+
+TEST(VfxAnalyzeReportsFinished) {
+    Engine e; Call(e, "scene.new", R"J({"empty":true})J"); Call(e, "entity.create", R"J({"name":"Effect"})J");
+    Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"hit_burst"})J");
+    const Json result = Call(e, "vfx.analyze", R"J({"id":"Effect","duration":1,"step":0.1})J");
+    CHECK(result["ok"].asBool()); const Json& stats = result["result"];
+    CHECK(stats["peakCount"].asInt() == 16 && stats["budgetRatio"].asNumber() == 0.5);
+    CHECK(stats["finishedAt"].asNumber() >= 0.5 && stats["finishedAt"].asNumber() < 0.55);
+    CHECK(stats["samples"].items().back()["count"].asInt() == 0);
+    Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fire"})J");
+    CHECK(Call(e, "vfx.analyze", R"J({"id":"Effect","duration":1})J")["result"]["finishedAt"].isNull());
+    CHECK(Call(e, "vfx.analyze", R"J({"id":"Effect","duration":60,"step":0.016666666666666666})J")["error"]["code"].asString() == "invalid_range");
+}
+
+TEST(VfxCheckFindsInvisibleEffect) {
+    Engine e; Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"startOpacity":0,"endOpacity":0,"texture":"missing.png","playing":false,"loop":false,"lifetime":40}}})J");
+    const Json result = Call(e, "vfx.check", R"J({"id":"Effect"})J"); CHECK(result["ok"].asBool());
+    std::set<std::string> codes;
+    for (const Json& warning : result["result"]["warnings"].items()) {
+        codes.insert(warning["code"].asString()); CHECK(!warning["hint"].asString().empty());
+    }
+    CHECK(codes.count("invisible_effect") && codes.count("missing_texture") && codes.count("never_finishes") && codes.count("long_lifetime"));
+    Call(e, "entity.create", R"J({"name":"Empty"})J");
+    CHECK(Call(e, "vfx.check", R"J({"id":"Empty"})J")["error"]["code"].asString() == "no_emitter");
+}
+
+TEST(VfxPreviewDoesNotMutateScene) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_readonly"), &error));
+    Call(e, "entity.create", R"J({"name":"Effect"})J"); Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fireworks"})J");
+    Call(e, "sim.step", R"J({"frames":10})J");
+    const Json scene = e.GetScene().ToJson(), state = Call(e, "sim.state")["result"];
+    const Json particles = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    const uint64_t epoch = e.GetScene().Epoch(); const size_t errors = e.Scripts().Errors().size();
+    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","size":32,"inline":false})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.analyze", R"J({"id":"Effect","duration":0.5,"render":true})J")["ok"].asBool());
+    CHECK(e.GetScene().ToJson() == scene && Call(e, "sim.state")["result"] == state && e.GetScene().Epoch() == epoch);
+    CHECK(Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"] == particles && e.Scripts().Errors().size() == errors);
+}
+
+TEST(VfxAgentLoop) {
+    Engine e; std::string error; const std::string project = TempProject("vfx_agent_loop"); CHECK(e.Open(project, &error));
+    Call(e, "entity.create", R"J({"name":"Effect"})J");
+    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"hit_burst"})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"burst":24,"maxParticles":48,"lifetime":0.3,"startColor":"#33aaff"}})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
+    const Json preview = Call(e, "vfx.preview", R"J({"id":"Effect","times":[0.1,0.2,0.4,0.6],"size":96,"out":"preview.png"})J");
+    CHECK(preview["ok"].asBool() && FileExists(JoinPath(project, "preview.png")));
+    const Json stats = Call(e, "vfx.analyze", R"J({"id":"Effect","duration":1,"render":true})J")["result"];
+    CHECK(stats["peakCount"].asInt() == 24 && stats["budgetRatio"].asNumber() == 0.5 && stats["finishedAt"].asNumber() < 0.35);
+    CHECK(stats["samples"][1]["meanLuminance"].asNumber() > stats["samples"][0]["meanLuminance"].asNumber());
+    CHECK(CopyFileTo(JoinPath(project, "preview.png"), "build/vfx-agent-loop.png")); CHECK(RemoveAll(JoinPath(project, "preview.png")));
+}
+
+TEST(VfxTrailMotionAndHierarchy) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_trail_motion"), &error)); Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Parent","components":{"Transform":{"position":[100,0,0]}}})J");
+    CHECK(Call(e, "entity.set_parent", R"J({"id":"Effect","parent":"Parent"})J")["ok"].asBool());
+    Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"trail_projectile"})J");
+    const char* args = R"J({"id":"Effect","times":[0.1,0.3,0.6,1],"size":64,"inline":false,"motion":[[0,[0,0,0]],[1,[4,1,0]]]})J";
+    const Json preview = Call(e, "vfx.preview", args); CHECK(preview["ok"].asBool());
+    CHECK(preview["result"]["frames"][2]["pointCount"].asInt() > 10);
+    CHECK(preview["result"]["frames"][2]["bbox"]["min"][0].asNumber() > 99);
+    CHECK(Call(e, "vfx.preview", args) == preview);
+    CHECK(e.GetScene().Get<Trail>(1)->points.empty() && e.GetScene().Get<Transform>(1)->position.x == 0);
+    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","size":64,"inline":false,"motion":[[0,[0,0,0]],[0,[1,0,0]]]})J")["error"]["code"].asString() == "invalid_vfx");
 }
 
 TEST(SampleVfxLab) {

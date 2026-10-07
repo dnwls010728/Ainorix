@@ -4,6 +4,10 @@
 This document is the contract and the reference for their fields; status and verification are in the work log at
 the end.
 
+For presets, strict authoring validation, isolated contact sheets and numeric analysis through `vfx.*`,
+see [VFX.md](VFX.md). ParticleEmitter/Trail `component.add/set` now reject bad ranges and curves before editing;
+legacy file loading and runtime guards remain compatible.
+
 ## Simulation contract
 
 ParticleEmitter defines rate (particles/second), initial burst, lifetime,
