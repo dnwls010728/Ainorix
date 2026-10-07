@@ -321,6 +321,12 @@ struct Targets {
 };
 
 void SgLog(const char* tag, uint32_t level, uint32_t item, const char* message, uint32_t line, const char*, void*) {
+    // sokol emits a marker at warning level, then the actual compiler text at info level.
+    // Preserve that diagnostic instead of dropping its text in Release logs.
+    if (item == SG_LOGITEM_D3D11_SHADER_COMPILATION_OUTPUT) {
+        if (message) OE_LOG_WARN("gpu", "D3D11 shader compiler: %s", message);
+        return;
+    }
     const char* msg = message;
     if (!msg) {
         switch (item) {

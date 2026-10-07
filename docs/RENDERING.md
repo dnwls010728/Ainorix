@@ -15,6 +15,14 @@ releasing old preview images while Scene/Game are hidden. Resource-pool failures
 in Release logs: `sg item 159` is `VIEW_POOL_EXHAUSTED`, the sokol view pool limit, not a particle-field
 validation error. Pool sizes are fixed; preview lifetimes must stay bounded rather than increasing them.
 
+D3D11 shader compiler diagnostics are logged with their actual text, including in Release builds.
+Sokol emits `D3D11_SHADER_COMPILATION_OUTPUT` (item 40) first as a marker and then sends the diagnostic
+at info level; the engine preserves the text as a warning instead of dropping it. The current HLSL
+compiler reports X3570 for the shadow comparison sampling inside the directional-light loop with a
+runtime exit: it attempts to unroll the loop to accommodate implicit gradients. Compilation and the
+VFXLab editor screenshot succeed on the tested D3D11 device. This change exposes diagnostics only;
+shader source and generated programs are unchanged.
+
 ## GPU pipeline and shaders
 
 ParticleEmitter uses shared camera-facing quads in both renderers, with lifetime
