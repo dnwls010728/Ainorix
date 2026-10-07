@@ -173,8 +173,8 @@ Undo, runtime and hot reload:
 
 An Effects panel built on the phase 1/2 commands, modeled on the Shaders panel: grouped module inspector,
 curve and gradient widgets for `sizeOverLife`/`colorOverLife`/`opacityOverLife`, a preview viewport that
-runs an isolated scene while the game is stopped (loop, scrub, live count against budget), save through
-`vfx.set`, drag an asset into the scene to create a `VFXSystem`. Edits go only through `Impl::Call`.
+runs an isolated scene while the game is stopped (loop, scrub, live count against budget), edits through
+`vfx.set` with explicit `vfx.save`, drag an asset into the scene to create a `VFXSystem`. Edits go only through `Impl::Call`.
 UI text through `Tr()` with Korean and Japanese rows in `EditorText.cpp`. Agents attached with
 `--connect` edit the same document and appear as notices.
 
@@ -318,7 +318,21 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       See docs/VFX.md for hashes and verification details. API, scripting, READMEs and agent guides updated.
       Web/Android rebuild attempts could not find Emscripten/NDK; prebuilt binaries were not refreshed.
       Linux/EGL, Node/WASM, Android device and multiplayer VFX integration remain unverified.
-- [ ] Phase 3: Effects panel, preview viewport, translations, `docs/EDITOR.md`.
+- [x] Phase 3 (2026-10-08): Effects workspace with module groups, typed parameters, scalar curves/color
+      gradients, isolated 60 Hz playback/loop/scrub/motion/counts, scene placement and asset drag/drop.
+      Shared Engine authoring document exposes edit/edit_state/edit_replace/undo/redo/save/close;
+      vfx.set routes active-path patches to its draft, with 64-edit history, drag coalescing and explicit
+      atomic save. Dirty close/switch/quit prompts and external disk conflict protection preserve work.
+      Preview/check/get/diff/analyze can read unsaved drafts, while live instances use saved assets.
+      Attached-agent changes update the panel and appear as notices. English/Korean/Japanese labels
+      and wrapping controls, editor screenshot flag, API/area docs, all READMEs and agent guides updated.
+      Warning-free Windows Release build and all 274 tests pass: two document tests plus native window
+      events for fields, curves, gradients, separate undo/save, remote notices, dirty prompts, placement
+      and asset-card drag into Scene. Legacy particle hashes remain unchanged. Actual nine-call CLI
+      document workflow passed, including an unsaved 160px four-frame preview: 0bd1c245bd6ac6a4.
+      English curve/gradient workflow and Korean/Japanese D3D11 editor screenshots inspected.
+      Web/Android prebuilt players still need the tracked Emscripten/NDK rebuild. Linux/EGL, Node/WASM
+      and Android device execution remain unverified.
 - [ ] Phase 4: particle materials, shader inputs, batching, sub-emitters; software/GPU comparison.
 - [ ] Phase 5 (optional): expression update rules.
 - [ ] Rebuild `runtime/web` and `runtime/android`: needs the Emscripten SDK (`EMSDK`) and the Android NDK;

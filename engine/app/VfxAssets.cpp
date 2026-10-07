@@ -30,7 +30,8 @@ void TexturePaths(Engine& engine, const VfxAsset& asset, const Json& params = Js
 
 VfxAsset ReadAsset(Engine& engine, const std::string& path) {
     Json args = Json::MakeObject(); args["path"] = path; AssetPath(engine, args);
-    const VfxAsset asset = ParseVfxAsset(engine.ReadProjectJson(path));
+    const Json* document = engine.VfxDocument(path);
+    const VfxAsset asset = ParseVfxAsset(document ? *document : engine.ReadProjectJson(path));
     TexturePaths(engine, asset);
     return asset;
 }
@@ -73,6 +74,10 @@ Json Semantic(const VfxAsset& asset) {
 }
 }  // namespace
 
+Json SaveVfxDocument(Engine& engine, const std::string& path, const Json& document) {
+    return WriteAsset(engine, path, document);
+}
+
 void ValidateVfxSystem(Engine& engine, const void* current, const Json& values) {
     VFXSystem candidate = current ? *static_cast<const VFXSystem*>(current) : VFXSystem{};
     std::string error;
@@ -108,7 +113,10 @@ Json VfxAssetCall(Engine& engine, const std::string& operation, const Json& args
         return result;
     }
     const std::string path = AssetPath(engine, args);
-    if (operation == "create") return WriteAsset(engine, path, args["vfx"]);
+    if (operation == "create") {
+        if (engine.VfxDocument(path)) throw ApiError("vfx_editing", "asset is open in the Effects document", "Use vfx.set and vfx.save, or close the document first.");
+        return WriteAsset(engine, path, args["vfx"]);
+    }
     if (operation == "from_entity") {
         const EntityId root = args["id"].isString() ? engine.GetScene().FindByName(args["id"].asString()) : static_cast<EntityId>(args["id"].asInt());
         Scene& scene = engine.GetScene();
@@ -142,6 +150,7 @@ Json VfxAssetCall(Engine& engine, const std::string& operation, const Json& args
             for (float number : local.m) block["matrix"].push(number);
             json[trail ? "trails" : "emitters"].push(block);
         }
+        if (engine.VfxDocument(path)) throw ApiError("vfx_editing", "export would overwrite the open Effects document", "Choose another path or close the document first.");
         return WriteAsset(engine, path, json);
     }
     const VfxAsset asset = ReadAsset(engine, path);
@@ -161,6 +170,11 @@ Json VfxAssetCall(Engine& engine, const std::string& operation, const Json& args
                 found = true; for (const auto& pair : args["values"].members()) block[key][pair.first] = pair.second;
             }
             if (!found) throw ApiError("no_emitter", "asset block does not exist", "Call vfx.get to list block names.");
+        }
+        if (engine.VfxDocument(path)) {
+            Json edit = Json::MakeObject(); edit["vfx"] = json;
+            if (args.has("merge")) edit["merge"] = args["merge"];
+            return engine.VfxDocumentCall("replace", edit)["document"];
         }
         return WriteAsset(engine, path, json);
     }

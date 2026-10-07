@@ -206,6 +206,36 @@ struct NativeEditor::Impl {
     void ShaderArrange();
     bool SaveShader();
     bool SaveShaderMaterial();
+    // Effects document is owned by Engine commands, so remote agents share its history.
+    bool showEffects = false, focusEffects = false, effectsEditorFocused = false;
+    Json effectsState, effectsDocument, effectsSchema, effectsPresets;
+    std::string effectsPath, effectsNewPath = "effects/new.vfx.json", effectsPreset = "fire", effectsError;
+    int effectsBlock = 0, effectsDragSerial = 0;
+    int effectsModule = 0;
+    std::map<std::string, int> effectsCurveKeys;
+    float effectsCurveRange = 1;
+    bool effectsPrompt = false, effectsPendingNew = false, effectsPendingClose = false;
+    std::string effectsPendingPath;
+    PendingAction effectsPendingAction;
+    std::unique_ptr<Scene> effectsScene;
+    std::shared_ptr<const Texture> effectsImage;
+    EntityId effectsRoot = 0;
+    int effectsFrame = 0, effectsCycleFrames = 180;
+    bool effectsPlaying = true, effectsLoop = true, effectsMotion = false;
+    double effectsAccumulator = 0, effectsLastTime = 0;
+    float effectsZoom = 6;
+    Vec3 effectsTarget{0, 1, 0};
+    std::map<std::string, std::array<float, 4>> effectsRects;  // automation: actual interactive widget bounds
+    void OpenEffect(const std::string& path, bool create = false);
+    void EffectsPanel();
+    void EffectsModals();
+    void EffectsInspector();
+    void EffectsPreview();
+    void ResetEffectsPreview();
+    bool EffectsSave();
+    void EffectsReplace(const Json& document, const std::string& merge = {});
+    std::string EffectsMerge(const std::string& control);
+    void EffectsRect(const std::string& name);
     std::string addComponentFilter;
     std::map<std::string, int> dragSerial;  // inspector drag -> undo merge group
     int gizmoSerial = 0;

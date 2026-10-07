@@ -107,7 +107,10 @@ struct IsolatedEffect {
             if (VFXSystem* system = scene.Get<VFXSystem>(current)) {
                 system->autoDestroy = false;
                 std::string error;
-                if (!RefreshVfx(*system, *assets, &error)) throw ApiError("invalid_vfx", error);
+                if (const Json* document = engine.VfxDocument(system->asset)) {
+                    system->definition = std::make_shared<VfxAsset>(ParseVfxAsset(*document));
+                    ConfigureVfx(*system->definition, system->params, system->emitters, system->trails);
+                } else if (!RefreshVfx(*system, *assets, &error)) throw ApiError("invalid_vfx", error);
                 capacity += static_cast<uint64_t>(system->definition->maxParticles);
                 for (const auto& trail : system->trails) capacity += static_cast<uint64_t>(trail.maxPoints);
             }
@@ -149,7 +152,8 @@ struct IsolatedEffect {
     }
     void Step(int frame) {
         Move(static_cast<double>(frame) * Engine::kFixedDt);
-        UpdateSystems(scene, input, static_cast<float>(Engine::kFixedDt), assets);
+        // All definitions are captured at request start, including an unsaved authoring document.
+        UpdateSystems(scene, input, static_cast<float>(Engine::kFixedDt));
         UpdateLateSystems(scene, static_cast<float>(Engine::kFixedDt));
     }
     bool Finished() const {

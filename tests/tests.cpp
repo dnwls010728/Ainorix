@@ -7805,6 +7805,47 @@ TEST(VfxAssetPreviewAndPack) {
     CHECK(e.GetScene().ToJson() == scene);
 }
 
+TEST(VfxDocumentHistoryAndUnsavedPreview) {
+    Engine e; std::string error; const std::string project = TempProject("vfx_document"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
+    const Json scene = e.GetScene().ToJson(); const size_t history = e.UndoDepth();
+    std::string before, after; CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), before));
+    CHECK(Call(e, "vfx.edit", R"J({"path":"effects/sparks.vfx.json"})J")["ok"].asBool());
+    const Json original = Call(e, "vfx.edit_state")["result"]["document"];
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":3},"merge":"drag"})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":4},"merge":"drag"})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.edit_state")["result"]["undo"].asInt() == 1);
+    CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), after) && after == before);
+    CHECK(Call(e, "vfx.get", R"J({"path":"./effects/sparks.vfx.json"})J")["result"]["emitters"][0]["emitter"]["speed"].asInt() == 4);
+    CHECK(Call(e, "vfx.undo")["result"]["document"] == original);
+    CHECK(Call(e, "vfx.redo")["result"]["document"]["emitters"][0]["emitter"]["speed"].asInt() == 4);
+    CHECK(Call(e, "vfx.close")["error"]["code"].asString() == "unsaved_vfx");
+    CHECK(Call(e, "vfx.edit", R"J({"path":"effects/new.vfx.json","new":true})J")["error"]["code"].asString() == "unsaved_vfx");
+    CHECK(Call(e, "vfx.save")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), after) && after != before);
+    CHECK(!Call(e, "vfx.edit_state")["result"]["dirty"].asBool());
+    CHECK(Call(e, "vfx.edit", R"J({"path":"effects/new.vfx.json","new":true,"preset":"hit_burst"})J")["ok"].asBool());
+    CHECK(!FileExists(JoinPath(project, "effects/new.vfx.json")));
+    const Json preview = Call(e, "vfx.preview", R"J({"path":"effects/new.vfx.json","times":[0.1],"size":32,"inline":false})J");
+    CHECK(preview["ok"].asBool() && preview["result"]["frames"][0]["count"].asInt() == 16);
+    CHECK(!FileExists(JoinPath(project, "effects/new.vfx.json")) && e.GetScene().ToJson() == scene && e.UndoDepth() == history);
+    CHECK(Call(e, "vfx.close", R"J({"discard":true})J")["ok"].asBool()); RemoveAll(project);
+}
+
+TEST(VfxDocumentValidationAndSaveConflict) {
+    Engine e; std::string error; const std::string project = TempProject("vfx_document_conflict"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
+    CHECK(Call(e, "vfx.edit", R"J({"path":"effects/sparks.vfx.json"})J")["ok"].asBool());
+    const Json state = Call(e, "vfx.edit_state");
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"lifetim":2}})J")["error"]["code"].asString() == "unknown_field");
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"texture":"../escape.png"}})J")["error"]["code"].asString() == "path_outside_project");
+    CHECK(Call(e, "vfx.edit_state") == state);
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":5}})J")["ok"].asBool());
+    CHECK(WriteTextFile(JoinPath(project, "effects/sparks.vfx.json"), TestVfxDocument().dump()));
+    CHECK(Call(e, "vfx.save")["error"]["code"].asString() == "asset_changed");
+    CHECK(Call(e, "vfx.edit_state")["result"]["dirty"].asBool());
+    CHECK(Call(e, "vfx.edit", R"J({"path":"effects/sparks.vfx.json","discard":true})J")["ok"].asBool());
+    CHECK(!Call(e, "vfx.edit_state")["result"]["dirty"].asBool()); RemoveAll(project);
+}
+
 TEST(SampleVfxAsset) {
     uint64_t hashes[2]{};
     for (int run = 0; run < 2; ++run) {
@@ -11095,6 +11136,109 @@ TEST(EditorShaderGraphOrderingAndValidation) {
         if (op == "swizzle") node["value"] = Json(Json::Array{0, 1, 2, 3});
         document["nodes"].push(node); CHECK(OrderEditorShaderGraph(document, ordered, &error));
     }
+}
+
+TEST(NativeEditorEffectsAuthoring) {
+    const std::string project = TempProject("editor_effects"); Engine engine; std::string error;
+    CHECK(engine.Open(project, &error)); CreateTestVfx(engine);
+    CHECK(Call(engine, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"startColor":"#ff8800","endColor":"#1a33cc"}})J")["ok"].asBool());
+    CHECK(Call(engine, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); RenderTarget image;
+        auto frames = [&](int count, const std::vector<WindowEvent>& events = std::vector<WindowEvent>()) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1440, 1000, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto point = [&](const std::string& name) {
+            const auto rect = editor.EffectsControlRect(name); CHECK(rect[2] > 0 && rect[3] > 0);
+            return ImVec2(rect[0] + rect[2] * 0.5f, rect[1] + rect[3] * 0.5f);
+        };
+        auto mouse = [&](ImVec2 p, bool down) {
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = p.x; move.y = p.y;
+            WindowEvent button = move; button.type = WindowEvent::Type::MouseButton; button.button = 0; button.down = down;
+            frames(2, {move}); frames(2, {button});
+        };
+        auto click = [&](const std::string& name) { const ImVec2 p = point(name); mouse(p, true); mouse(p, false); frames(2); };
+        frames(3); editor.OpenEffect("effects/sparks.vfx.json"); frames(4);
+        const Json original = editor.EffectsDocument(); const Json scene = engine.GetScene().ToJson(); const size_t history = engine.UndoDepth();
+        std::string saved, unchanged; CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), saved));
+        const ImVec2 burst = point("field:rate"); mouse(burst, true);
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = burst.x + 60; move.y = burst.y; frames(3, {move});
+        mouse(ImVec2(move.x, move.y), false);
+        CHECK(editor.EffectsDocument() != original && engine.UndoDepth() == history && engine.GetScene().ToJson() == scene);
+        CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), unchanged) && unchanged == saved);
+        frames(3, CtrlChord(WindowKey::Z)); CHECK(editor.EffectsDocument() == original);
+        frames(3, CtrlChord(WindowKey::Y)); CHECK(editor.EffectsDocument() != original);
+        frames(3, CtrlChord(WindowKey::S)); CHECK(!Call(engine, "vfx.edit_state")["result"]["dirty"].asBool());
+        click("module"); click("module:Curves"); click("create:sizeOverLife");
+        CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["sizeOverLife"].size() == 2);
+        WindowEvent wheel; wheel.type = WindowEvent::Type::MouseWheel; wheel.y = -4; frames(4, {wheel});
+        click("add:sizeOverLife"); CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["sizeOverLife"].size() == 3);
+        const Json curveBefore = editor.EffectsDocument(); const auto graph = editor.EffectsControlRect("curve:sizeOverLife");
+        const ImVec2 key(graph[0] + graph[2] * 0.5f, graph[1] + graph[3] * 0.5f); mouse(key, true);
+        move.x = key.x + 20; move.y = key.y - 15; frames(3, {move}); mouse(ImVec2(move.x, move.y), false);
+        CHECK(editor.EffectsDocument() != curveBefore);
+        CHECK(WritePng(JoinPath(TestSourceDir(), "build/effects-curves.png"), image.ToImage()));
+        wheel.y = -3; frames(4, {wheel}); click("create:colorOverLife");
+        CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["colorOverLife"].size() == 2);
+        CHECK(WritePng(JoinPath(TestSourceDir(), "build/effects-gradient.png"), image.ToImage()));
+        click("save"); click("play"); click("timeline");
+        CHECK(engine.GetScene().ToJson() == scene && !engine.InPlaySession());
+        // An attached agent edits the same document and the panel reflects its change next frame.
+        auto remote = engine.PostCall("vfx.set", Json::parse(R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":7}})J"), "test-agent");
+        engine.RunPostedJobs(); CHECK(remote.get()["ok"].asBool()); frames(3);
+        CHECK(editor.LastNotice().find("vfx.set") != std::string::npos);
+        CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["speed"].asInt() == 7);
+        Json create = Json::MakeObject(); create["path"] = "effects/other.vfx.json"; create["vfx"] = TestVfxDocument();
+        CHECK(engine.Call("vfx.create", create)["ok"].asBool());
+        editor.OpenEffect("effects/other.vfx.json"); frames(4); click("prompt:cancel");
+        CHECK(Call(engine, "vfx.edit_state")["result"]["path"].asString() == "effects/sparks.vfx.json");
+        editor.OpenEffect("effects/other.vfx.json"); frames(4); click("prompt:discard");
+        CHECK(Call(engine, "vfx.edit_state")["result"]["path"].asString() == "effects/other.vfx.json");
+        click("place"); CHECK(engine.GetScene().Entities().size() == 1 && engine.UndoDepth() == history + 1);
+        CHECK(Call(engine, "history.undo")["ok"].asBool() && engine.GetScene().ToJson() == scene);
+        CHECK(WritePng(JoinPath(TestSourceDir(), "build/effects-editor-workflow.png"), image.ToImage()));
+        // Drag the asset card through the actual ImGui payload into the Scene viewport.
+        ImGuiWindow* sceneWindow = ImGui::FindWindowByName("###Scene");
+        CHECK(sceneWindow && sceneWindow->DockNode && sceneWindow->DockNode->TabBar);
+        if (sceneWindow && sceneWindow->DockNode && sceneWindow->DockNode->TabBar) {
+            ImGuiTabBar* tabs = sceneWindow->DockNode->TabBar;
+            for (const ImGuiTabItem& tab : tabs->Tabs) if (tab.Window == sceneWindow) {
+                const ImVec2 p(tabs->BarRect.Min.x + tab.Offset - tabs->ScrollingAnim + tab.Width * 0.5f, tabs->BarRect.GetCenter().y);
+                mouse(p, true); mouse(p, false); break;
+            }
+            frames(3);
+            ImGuiWindow* assetsWindow = ImGui::FindWindowByName("###Assets"); CHECK(assetsWindow);
+            if (assetsWindow) {
+                const ImVec2 search = ImVec2(assetsWindow->WorkRect.Min.x + 45, assetsWindow->WorkRect.Min.y + ImGui::GetFrameHeight() * 0.5f);
+                mouse(search, true); mouse(search, false);
+                std::vector<WindowEvent> text;
+                for (char character : std::string("sparks.vfx.json")) {
+                    WindowEvent event; event.type = WindowEvent::Type::Text; event.codepoint = static_cast<uint32_t>(character); text.push_back(event);
+                }
+                frames(3, text);
+                CHECK(WritePng(JoinPath(TestSourceDir(), "build/effects-asset-search.png"), image.ToImage()));
+                ImGuiWindow* content = nullptr;
+                for (ImGuiWindow* window : GImGui->Windows)
+                    if (window->Active && window->ParentWindow == assetsWindow && std::strstr(window->Name, "##assets")) content = window;
+                CHECK(content);
+                if (content) {
+                    const ImVec2 card = ImVec2(content->WorkRect.Min.x + 50, content->WorkRect.Min.y + 40); mouse(card, true);
+                    move.x = card.x + 30; move.y = card.y + 10; frames(3, {move});
+                    const ImGuiPayload* payload = ImGui::GetDragDropPayload(); CHECK(payload && payload->IsDataType("OE_ASSET"));
+                    const auto view = editor.SceneViewRect(); const ImVec2 drop(view[0] + view[2] * 0.5f, view[1] + view[3] * 0.5f);
+                    move.x = drop.x; move.y = drop.y; frames(3, {move}); mouse(drop, false); frames(3);
+                    CHECK(engine.GetScene().Entities().size() == 1 && engine.GetScene().Get<VFXSystem>(editor.Selected()));
+                    CHECK(engine.UndoDepth() == history + 1 && Call(engine, "history.undo")["ok"].asBool());
+                }
+            }
+        }
+    }
+    RemoveAll(project);
 }
 
 TEST(NativeEditorShaderNodeDragging) {

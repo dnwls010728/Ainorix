@@ -158,8 +158,7 @@ singular root and ignores scripts, meshes, lights and other placement components
 
 Preview/check/analyze accept exactly one `id` or `path`. Linked entity previews use authored instance
 parameters and restart transient simulation; runtime controls are excluded. Preview-only motion keys
-also work on assets. Asset writes have no scene undo; use source control for document history until
-phase 3's isolated editor authoring workflow. Runtime controls have no scene undo and leave authored
+also work on assets. Asset writes have no scene undo; an open Effects document has its own history and explicit save. Runtime controls have no scene undo and leave authored
 scene JSON unchanged; their parameters/playback/RNG/particles/points are copied by native snapshots.
 External controls and asset writes are blocked while recording or in a network match, while deterministic
 Lua gameplay can control instances. `vfx.state` never modifies the live instance.
@@ -186,7 +185,34 @@ cleanup; scripts can still call manual burst/clear while paused.
 VFXLab keeps `scenes/main.scene.json` as the component reference and adds `scenes/assets.scene.json`,
 whose campfire links `effects/campfire.vfx.json`. The `intensity` parameter scales three emission rates.
 Regenerate both paths with `python samples/VFXLab/tools/make_scene.py`. See [SCRIPTING.md](SCRIPTING.md)
-for the Lua bindings. Effects panel, particle materials/batching and sub-emitters remain later phases.
+for the Lua bindings. The Effects panel provides visual authoring; particle materials/batching and sub-emitters remain later phases.
+
+## Shared Effects document
+
+The native Effects panel and attached command callers use one isolated authoring document per Engine.
+Standalone CLI processes each own a separate session: use `oe script` for multiple document commands,
+or `--connect` to share the editor session.
+
+| Command | Result |
+|---|---|
+| `vfx.edit {path,new?,preset?,discard?}` | Open a validated document; `new:true` starts an unsaved preset at a nonexistent path. Dirty switching requires save or explicit discard. |
+| `vfx.edit_state {}` | Read `{open,path,document,dirty,undo,redo}`. |
+| `vfx.set {path,emitter,values,merge?}` | Edit the open draft when paths resolve to the same asset; other paths still write immediately. `trail` or `params` are alternative patch modes. |
+| `vfx.edit_replace {vfx,merge?}` | Validate/replace the full draft, including block structure, budget and transforms. |
+| `vfx.undo {}`, `vfx.redo {}` | Move through up to 64 document edits. Consecutive equal nonempty merge keys coalesce dragging. |
+| `vfx.save {}` | Atomically save after checking that the original disk text has not changed; external changes return `asset_changed`. |
+| `vfx.close {discard?}` | Close; dirty documents require explicit discard or save. |
+
+`vfx.get`, `vfx.check`, `vfx.diff`, `vfx.preview` and `vfx.analyze` read the draft when the path is open,
+including a new path that has not been saved. Preview captures definitions at request start and never
+reloads them mid-simulation. Scene instances use saved assets until explicit save and normal asset hot
+reload; source draft edits do not create scene history or change the scene's dirty flag. `vfx.create`
+and `vfx.from_entity` refuse to overwrite the currently open asset. Document changes use the engine's
+revision notification, so attached callers and the UI see the same validated values. Document commands
+are blocked during recording/network matches, like external VFX asset edits.
+
+The UI groups fields and exposes curves, gradients, isolated playback and scene placement.
+See [EDITOR.md](EDITOR.md) for controls and screenshot flags.
 
 ## Implementation status (work log)
 
@@ -214,6 +240,20 @@ for the Lua bindings. Effects panel, particle materials/batching and sub-emitter
       scripting guide, all READMEs and identical AGENTS.md/CLAUDE.md updated.
       Rebuild attempts returned Emscripten not found / Android NDK not found; shipped Web/Android
       binaries still require rebuilding before these assets can be used on those targets.
-- [ ] Phase 3: Effects panel and visual authoring widgets.
+- [x] Phase 3 (2026-10-08): Effects workspace with module groups, typed parameters, scalar curves/color
+      gradients, isolated 60 Hz playback/loop/scrub/motion/counts, scene placement and asset drag/drop.
+      Shared Engine authoring document exposes edit/edit_state/edit_replace/undo/redo/save/close;
+      vfx.set routes active-path patches to its draft, with 64-edit history, drag coalescing and explicit
+      atomic save. Dirty close/switch/quit prompts and external disk conflict protection preserve work.
+      Preview/check/get/diff/analyze can read unsaved drafts, while live instances use saved assets.
+      Attached-agent changes update the panel and appear as notices. English/Korean/Japanese labels
+      and wrapping controls, editor screenshot flag, API/area docs, all READMEs and agent guides updated.
+      Warning-free Windows Release build and all 274 tests pass: two document tests plus native window
+      events for fields, curves, gradients, separate undo/save, remote notices, dirty prompts, placement
+      and asset-card drag into Scene. Legacy particle hashes remain unchanged. Actual nine-call CLI
+      document workflow passed, including an unsaved 160px four-frame preview: 0bd1c245bd6ac6a4.
+      English curve/gradient workflow and Korean/Japanese D3D11 editor screenshots inspected.
+      Web/Android prebuilt players still need the tracked Emscripten/NDK rebuild. Linux/EGL, Node/WASM
+      and Android device execution remain unverified.
 - [ ] Platform follow-up: Linux/EGL and Android device verification. Web/Android prebuilt runtimes still
       require the previously tracked particle V1/V2 rebuild; no SDK is available on this host.

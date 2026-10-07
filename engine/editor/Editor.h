@@ -74,6 +74,11 @@ public:
     void OpenShader(const std::string& path = {});
     // Current unsaved node document (document indices, before topological export).
     Json ShaderDocument() const;
+    // Open a reusable effect in the shared document workspace; an empty path opens the Effects panel.
+    void OpenEffect(const std::string& path = {});
+    // Snapshot of the shared Effects document and bounds for event-driven widget automation.
+    Json EffectsDocument() const;
+    std::array<float, 4> EffectsControlRect(const std::string& name) const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).

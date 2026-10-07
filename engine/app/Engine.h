@@ -55,6 +55,10 @@ public:
     const std::string& ProjectDir() const { return projectDir_; }
     // Reads and parses a project JSON file (prefab, scene). Throws ApiError.
     Json ReadProjectJson(const std::string& path) const;
+    // Isolated VFX authoring document: commands share history, validation and atomic saves with the editor.
+    Json VfxDocumentCall(const std::string& operation, const Json& args);
+    // Active draft for a resolved asset path, or nullptr when that asset is not open.
+    const Json* VfxDocument(const std::string& path) const;
     // Instantiates a prefab file into the current scene. Throws ApiError.
     EntityId InstantiatePrefabFile(const std::string& path, EntityId parent);
     const std::string& ProjectName() const { return projectName_; }
@@ -321,6 +325,11 @@ private:
     void ResetHistory();
 
     Scene scene_;
+    std::string vfxEditPath_, vfxEditProject_, vfxEditFile_;
+    Json vfxEditDocument_, vfxEditSaved_;
+    std::vector<Json> vfxEditHistory_;
+    size_t vfxEditCursor_ = 0;
+    std::string vfxEditMerge_;
     InputState input_;
     std::unique_ptr<AssetManager> assets_;
     std::unique_ptr<IRenderer> renderer_;

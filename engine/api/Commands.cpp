@@ -324,13 +324,27 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    Register(r, "vfx.edit", "Open an isolated Effects document shared by editor and attached agents; scene history is unchanged.",
+             Params().Req("path", "string", "Project .vfx.json path.").Opt("new", "boolean", "Start an unsaved asset; path must not exist.")
+                 .Opt("preset", "string", "Preset for a new document (default fire).").Opt("discard", "boolean", "Explicitly discard previous unsaved document."), false,
+             [](Engine& e, const Json& a) { return e.VfxDocumentCall("edit", a); });
+    Register(r, "vfx.edit_replace", "Validate and replace the complete isolated document in one document history step.",
+             Params().Req("vfx", "object", "Complete oe.vfx document.").Opt("merge", "string", "Repeated edits with the same nonempty key coalesce."), false,
+             [](Engine& e, const Json& a) { return e.VfxDocumentCall("edit_replace", a); });
+    for (const char* operation : {"edit_state", "undo", "redo", "save", "close"}) {
+        const std::string op = operation; Params params;
+        if (op == "close") params.Opt("discard", "boolean", "Explicitly discard unsaved document changes.");
+        Register(r, ("vfx." + op).c_str(), "Inspect, undo/redo, atomically save or close the isolated Effects document.", params, false,
+                 [op](Engine& e, const Json& a) { return e.VfxDocumentCall(op == "edit_state" ? "state" : op, a); });
+    }
     for (const char* operation : {"create", "get", "list", "set", "diff", "from_entity"}) {
         Params params;
         const std::string op = operation;
         if (op != "list") params.Req("path", "string", "Project-relative .vfx.json asset path.");
         if (op == "create") params.Req("vfx", "object", "Version 1 oe.vfx document: named emitters/trails, params and budget.");
         if (op == "set") params.Opt("emitter", "string", "Emitter block name.").Opt("trail", "string", "Trail block name.")
-            .Opt("values", "object", "Partial block field patch.").Opt("params", "object", "Replace parameter definitions.");
+            .Opt("values", "object", "Partial block field patch.").Opt("params", "object", "Replace parameter definitions.")
+            .Opt("merge", "string", "Coalesce a drag in the open document history; ignored for direct file edits.");
         if (op == "diff") params.Opt("against", "string", "Reference .vfx.json; omitted compares named blocks with component defaults.");
         if (op == "from_entity") params.ReqWith("id", EntityRefSchema("Root of a ParticleEmitter/Trail subtree to pack."));
         Register(r, ("vfx." + op).c_str(), "Read or atomically author a reusable VFX asset; file edits do not enter scene undo.", params, false,

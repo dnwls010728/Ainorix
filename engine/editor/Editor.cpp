@@ -194,6 +194,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "Thumbnails=%d", &i) == 1) m->showThumbnails = i != 0;
     else if (std::sscanf(line, "AssetGrid=%d", &i) == 1) m->assetGrid = i != 0;
     else if (std::sscanf(line, "ShaderPanel=%d", &i) == 1) m->showShaders = i != 0;
+    else if (std::sscanf(line, "EffectsPanel=%d", &i) == 1) m->showEffects = i != 0;
     else if (std::sscanf(line, "NetworkLatency=%d", &i) == 1) m->networkLatency = std::max(0, std::min(30, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
     else if (std::strncmp(line, "Language=", 9) == 0 && !m->forceLanguage) SetEditorLanguage(ParseEditorLanguage(line + 9));
@@ -241,6 +242,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam, m->showTeamChat);
     buf->appendf("AssetGrid=%d\n", m->assetGrid);
     buf->appendf("ShaderPanel=%d\n", m->showShaders);
+    buf->appendf("EffectsPanel=%d\n", m->showEffects);
     WindowPlacement placement;
     if (m->window && m->window->GetPlacement(placement))
         buf->appendf("WindowPlacement=%d,%d,%d,%d,%d\n", placement.x, placement.y, placement.width, placement.height, placement.maximized ? 1 : 0);
@@ -517,7 +519,10 @@ void NativeEditor::Impl::PollLog() {
 // Commands from HTTP / MCP (agents): show edits as they land.
 void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args, const Json& result) {
     const Command* cmd = engine.Commands().Find(name);
-    if (!cmd || !cmd->mutates || !result["ok"].asBool()) return;
+    const bool effectsEdit = name == "vfx.edit" || name == "vfx.edit_replace" || name == "vfx.set" ||
+        name == "vfx.undo" || name == "vfx.redo" || name == "vfx.save" || name == "vfx.close" ||
+        name == "vfx.create" || name == "vfx.from_entity";
+    if (!cmd || (!cmd->mutates && !effectsEdit) || !result["ok"].asBool()) return;
     EntityId id = static_cast<EntityId>(result["result"]["id"].asNumber(0));
     const Json& a = args["id"];
     if (id == kNullEntity && a.isNumber()) id = static_cast<EntityId>(a.asNumber());
@@ -527,6 +532,7 @@ void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args,
         }
     }
     std::string what = name;
+    if (effectsEdit && args["path"].isString()) what += " " + args["path"].asString();
     if (id != kNullEntity) {
         const EntityRow* r = Row(id);
         what += " " + (r ? r->name : "#" + std::to_string(id));
@@ -682,6 +688,9 @@ void NativeEditor::Impl::CreatePreset(const char* key) {
 }
 
 void NativeEditor::Impl::RequestAction(PendingAction action) {
+    if (action.kind == PendingAction::Kind::Quit && engine.VfxDocumentCall("state", Json())["dirty"].asBool()) {
+        effectsPendingAction = action; effectsPrompt = true; showEffects = focusEffects = true; return;
+    }
     if (action.kind == PendingAction::Kind::Quit && !shaderDocument.isNull() &&
         (shaderDocument != shaderSaved || shaderMaterial != shaderMaterialSaved)) {
         showShaders = focusShaders = shaderOpenPrompt = shaderPendingQuit = true;
@@ -972,7 +981,7 @@ void NativeEditor::Impl::Shortcuts() {
     const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global)) TogglePlay();
     if (gameFocused && InPlaySession()) return;  // keys belong to the game
-    if (scriptEditorFocused || shaderEditorFocused) return;  // document editors own save/undo shortcuts
+    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused) return;  // document editors own save/undo shortcuts
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global)) Save();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global)) Undo();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global)) Redo();
@@ -1080,6 +1089,7 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::MenuItem(Tr("Console"), nullptr, &showConsole);
         ImGui::MenuItem(Tr("Scripts"), nullptr, &showScripts);
         if (ImGui::MenuItem(Tr("Shader Graph"), nullptr, showShaders)) { showShaders = true; focusShaders = true; }
+        if (ImGui::MenuItem(Tr("Effects"), nullptr, showEffects)) OpenEffect("");
         ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
         if (ImGui::MenuItem(Tr("History"), nullptr, showHistory)) { showHistory = true; requestHistoryFocus = true; }
         ImGui::MenuItem(Tr("Asset Thumbnails"), nullptr, &showThumbnails);
@@ -1254,6 +1264,10 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     layoutBuilt = true;
     if (!empty && !resetLayout) {
         // Add the new tab to an old layout without resetting the person's other panels.
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Effects"))) {
+            ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
+            if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Effects", scene->DockId);
+        }
         if (!ImGui::FindWindowSettingsByID(ImHashStr("###Shader Graph"))) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Shader Graph", scene->DockId);
@@ -1295,6 +1309,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Game", center);
     ImGui::DockBuilderDockWindow("###Scripts", center);
     ImGui::DockBuilderDockWindow("###Shader Graph", center);
+    ImGui::DockBuilderDockWindow("###Effects", center);
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderDockWindow("###History", bottom);
@@ -1563,12 +1578,15 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showScripts) m.ScriptsPanel();
     if (m.showShaders) m.ShadersPanel();
     else m.shaderEditorFocused = false;
+    if (m.showEffects) m.EffectsPanel();
+    else m.effectsEditorFocused = false;
     if (m.showTiles) m.TilesPanel();
     if (m.showNetwork) m.NetworkPanel();
     if (m.showHistory) m.HistoryPanel();
     if (m.teamAvailable && m.showTeam) m.TeamPanel();
     if (m.teamAvailable && m.showTeamChat) m.TeamChatPanel();
     if (m.showMetrics) ImGui::ShowMetricsWindow(&m.showMetrics);
+    m.EffectsModals();
     m.Modals();
     if (m.teamAvailable) m.TeamModals();
     if (m.teamAvailable) m.ImageViewer();
@@ -1696,6 +1714,12 @@ bool NativeEditor::GameViewFocused() const { return impl_->gameFocused; }
 void NativeEditor::OpenScript(const std::string& path) { impl_->OpenScript(path); }
 void NativeEditor::OpenShader(const std::string& path) { impl_->OpenShader(path); }
 Json NativeEditor::ShaderDocument() const { return impl_->shaderDocument; }
+void NativeEditor::OpenEffect(const std::string& path) { impl_->OpenEffect(path); }
+Json NativeEditor::EffectsDocument() const { return impl_->engine.VfxDocumentCall("state", Json())["document"]; }
+std::array<float, 4> NativeEditor::EffectsControlRect(const std::string& name) const {
+    const auto found = impl_->effectsRects.find(name);
+    return found == impl_->effectsRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
 
 std::vector<std::string> NativeEditor::OpenScripts() const {
     std::vector<std::string> paths;
