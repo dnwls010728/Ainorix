@@ -10,6 +10,7 @@
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 #include "ImGuizmo.h"
+#include "imgui_internal.h"
 #include "sokol_imgui.h"
 
 #include "app/Engine.h"
@@ -53,12 +54,24 @@ bool Project(const Mat4& viewProj, const Vec3& p, ImVec2 pos, ImVec2 size, ImVec
 
 // Small overlay button row drawn on top of a view image.
 bool OverlayToggle(const char* label, bool* value, const char* tip) {
-    ImGui::PushStyleColor(ImGuiCol_Button, *value ? ImVec4(0.22f, 0.38f, 0.66f, 0.9f) : ImVec4(0.1f, 0.11f, 0.13f, 0.75f));
+    ImGui::PushStyleColor(ImGuiCol_Button, *value ? ImVec4(0.18f, 0.36f, 0.60f, 0.98f) : ImVec4(0.1f, 0.11f, 0.13f, 0.96f));
     bool pressed = ImGui::SmallButton(label);
     ImGui::PopStyleColor();
     if (pressed) *value = !*value;
+    if (*value) {
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x + 2, b.y - 1), ImVec2(b.x - 2, b.y - 1),
+                                          ImGui::GetColorU32(ImGuiCol_CheckMark), 2.0f);
+    }
     HelpTooltip(tip);
     return pressed;
+}
+
+// Text over scene geometry needs its own background regardless of the game's colors.
+void ViewportLabel(ImDrawList* draw, ImVec2 at, const char* text, ImU32 color) {
+    const ImVec2 size = ImGui::CalcTextSize(text);
+    draw->AddRectFilled(at - ImVec2(4, 3), at + size + ImVec2(4, 3), IM_COL32(18, 21, 27, 240), 3.0f);
+    draw->AddText(at, color, text);
 }
 
 // Picking and asset drops must use the same projection as the scene image.
@@ -193,7 +206,7 @@ void NativeEditor::Impl::SceneOverlays(ImDrawList* dl) {
         dl->AddCircle(s, r, col, 0, hover ? 2.5f : 1.5f);
         ImVec2 ts = ImGui::CalcTextSize(letter);
         dl->AddText(ImVec2(s.x - ts.x * 0.5f, s.y - ts.y * 0.5f), sel ? IM_COL32(20, 20, 20, 255) : col, letter);
-        if (hover) dl->AddText(ImVec2(s.x + r + 4, s.y - ts.y * 0.5f), IM_COL32(230, 232, 238, 255), row.name.c_str());
+        if (hover) ViewportLabel(dl, ImVec2(s.x + r + 4, s.y - ts.y * 0.5f), row.name.c_str(), IM_COL32(238, 240, 245, 255));
     }
     markerHover = hovered;
 }
@@ -226,7 +239,7 @@ void NativeEditor::Impl::SceneGizmo() {
     bool using_ = ImGuizmo::IsUsing();
     if (using_ && !gizmoWasUsing) ++gizmoSerial;  // one undo step per drag
     gizmoWasUsing = using_;
-    gizmoUsing = using_ || ImGuizmo::IsOver();
+    gizmoUsing = using_ || ImGuizmo::IsOver(op);
     if (!changed) return;
 
     Mat4 newWorld;
@@ -448,6 +461,7 @@ void NativeEditor::Impl::ScenePanel() {
     }
     // The selected camera's clip volume uses its renderer matrix, not an approximate FOV shape.
     // Match the Game view aspect (previous frame while resizing); hidden Game uses the logical project view.
+    std::vector<Vec3> cameraFootprint;
     if (scene.Get<Camera>(Primary())) {
         const InputState& input = engine.Input();
         const float cameraAspect = showGame && gameImageSize.x > 0 && gameImageSize.y > 0
@@ -455,7 +469,10 @@ void NativeEditor::Impl::ScenePanel() {
             : static_cast<float>(std::max(1, input.viewWidth)) / static_cast<float>(std::max(1, input.viewHeight));
         RenderView cameraView;
         std::array<Vec3, 8> corners;
-        if (MakeCameraView(scene, Primary(), cameraAspect, cameraView) && CameraFrustumCorners(cameraView.view, cameraView.proj, corners)) {
+        const bool cameraValid = MakeCameraView(scene, Primary(), cameraAspect, cameraView);
+        if (cameraValid && cam.mode2D) {
+            cameraFootprint = CameraPlaneFootprint(cameraView.view, cameraView.proj);
+        } else if (cameraValid && !cam.mode2D && CameraFrustumCorners(cameraView.view, cameraView.proj, corners)) {
             const Color color(0.35f, 0.85f, 1.0f);
             for (size_t i = 0; i < 4; ++i) {
                 const size_t next = (i + 1) % 4;
@@ -473,21 +490,49 @@ void NativeEditor::Impl::ScenePanel() {
     ImVec2 pos = ImGui::GetCursorScreenPos();
     sceneImagePos = pos;
     sceneImageSize = ImVec2(static_cast<float>(w), static_cast<float>(h));
-    // ImGuizmo only grabs the mouse when no ImGui item is hovered, so while the
-    // pointer is on the gizmo the view is a plain (non-interactive) item.
+    // Give ImGuizmo the current pointer before the view's button can claim it.
+    // IsOver() without an operation reports the previous frame's hover state.
     const float compassSize = ImGui::GetFontSize() * 5.5f;
     const ImVec2 compassPos(pos.x + sceneImageSize.x - compassSize - 8, pos.y + 8);
     const bool showCompass = !cam.mode2D && sceneImageSize.x > compassSize + ImGui::GetFontSize() * 20 && sceneImageSize.y > compassSize + 16;
     const bool compassHot = showCompass && ImGui::IsWindowHovered() &&
         ImGui::IsMouseHoveringRect(compassPos, compassPos + ImVec2(compassSize, compassSize));
     const bool painting = TilePainting();
-    bool gizmoHot = !painting && gizmoOp != GizmoOp::None && Primary() != kNullEntity && !sceneButtonActive && (ImGuizmo::IsUsing() || ImGuizmo::IsOver());
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    bool flip = FlipViews();
+    dl->AddImage(ViewTexture(tex), pos, pos + sceneImageSize, ImVec2(0, flip ? 1.0f : 0.0f), ImVec2(1, flip ? 0.0f : 1.0f));
+    // In 2D the range is an editing guide, not geometry at the near/far planes.
+    // Draw it above sprites with a dark outline that also reads on a bright sky.
+    if (!cameraFootprint.empty()) {
+        std::vector<ImVec2> outline;
+        for (const Vec3& point : cameraFootprint) {
+            ImVec2 screen;
+            if (Project(sceneProjMat * sceneViewMat, point, pos, sceneImageSize, screen)) outline.push_back(screen);
+        }
+        if (outline.size() == cameraFootprint.size()) {
+            dl->PushClipRect(pos, pos + sceneImageSize, true);
+            dl->AddPolyline(outline.data(), static_cast<int>(outline.size()), IM_COL32(18, 21, 27, 240), 4.0f, ImDrawFlags_Closed);
+            dl->AddPolyline(outline.data(), static_cast<int>(outline.size()), IM_COL32(110, 225, 255, 255), 2.0f, ImDrawFlags_Closed);
+            dl->PopClipRect();
+        }
+    }
+    ImGui::Dummy(sceneImageSize);
+    gizmoUsing = false;
+    if (!painting && (!compassHot || gizmoWasUsing)) {
+        // ImGuizmo also checks last frame's hovered item. The scene background
+        // must not block a handle entered and pressed in the same event batch.
+        ImGuiContext& context = *ImGui::GetCurrentContext();
+        const ImGuiID previousHover = context.HoveredIdPreviousFrame;
+        if (previousHover == ImGui::GetID("##sceneview")) context.HoveredIdPreviousFrame = 0;
+        SceneGizmo();
+        context.HoveredIdPreviousFrame = previousHover;
+    }
     bool clickedLeft = false, clickedRight = false;
-    if (gizmoHot || compassHot) {
-        ImGui::Dummy(sceneImageSize);
+    if (gizmoUsing || compassHot) {
         sceneHovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(pos, pos + sceneImageSize);
         sceneButtonActive = false;
     } else {
+        ImGui::SetCursorScreenPos(pos);
         ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton("##sceneview", sceneImageSize, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
         sceneHovered = ImGui::IsItemHovered();
@@ -495,9 +540,6 @@ void NativeEditor::Impl::ScenePanel() {
         clickedRight = ImGui::IsItemClicked(ImGuiMouseButton_Right);
         sceneButtonActive = ImGui::IsItemActive();
     }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    bool flip = FlipViews();
-    dl->AddImage(ViewTexture(tex), pos, pos + sceneImageSize, ImVec2(0, flip ? 1.0f : 0.0f), ImVec2(1, flip ? 0.0f : 1.0f));
     if (!compassHot) SceneCameraInput(io);
     else { sceneLooking = false; scenePressPending = false; }
 
@@ -518,8 +560,6 @@ void NativeEditor::Impl::ScenePanel() {
         if (!compassHot) TileSceneInput(dl, clickedLeft && !io.KeyAlt, clickedRight);
     } else {
         tileStroke = TileStroke::None;
-        if (!compassHot || gizmoWasUsing) SceneGizmo();
-        else gizmoUsing = false;
     }
 
     // Click (not drag) selects: markers first, then the pixel's entity.
@@ -561,12 +601,12 @@ void NativeEditor::Impl::ScenePanel() {
     // Help line (bottom-left) while flying.
     if (sceneLooking) {
         std::string text = Format(Tr("Fly: WASD / QE   Shift: faster   Wheel: speed %.1f m/s"), flySpeed);
-        dl->AddText(ImVec2(pos.x + 8, pos.y + sceneImageSize.y - ImGui::GetFontSize() - 8), IM_COL32(230, 232, 238, 220), text.c_str());
+        ViewportLabel(dl, ImVec2(pos.x + 8, pos.y + sceneImageSize.y - ImGui::GetFontSize() - 8), text.c_str(), IM_COL32(238, 240, 245, 255));
     }
     if (InPlaySession()) {
         const char* t = Tr(Playing() ? "Playing - edits are undone on Stop" : "Paused - edits are undone on Stop");
         ImVec2 ts = ImGui::CalcTextSize(t);
-        dl->AddText(ImVec2(pos.x + sceneImageSize.x - ts.x - 10, pos.y + (showCompass ? compassSize + 16 : 8)), IM_COL32(255, 200, 90, 230), t);
+        ViewportLabel(dl, ImVec2(pos.x + sceneImageSize.x - ts.x - 10, pos.y + (showCompass ? compassSize + 16 : 8)), t, IM_COL32(255, 213, 128, 255));
     }
     ImGui::End();
 }

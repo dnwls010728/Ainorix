@@ -45,7 +45,7 @@ void EntityKindTag(const EntityRow& r) {
     else if (r.Has("AudioSource")) tag = "SND", col = ImVec4(0.6f, 0.85f, 1.0f, 1);
     if (!*tag) return;
     ImGui::SameLine(0, 4);
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.78f);
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.88f);
     ImGui::TextColored(col, "%s", tag);
     ImGui::PopFont();
 }
@@ -57,6 +57,7 @@ const char* KindLabel(const std::string& kind) {
     if (kind == "model") return Tr("Models");
     if (kind == "texture") return Tr("Textures");
     if (kind == "material") return Tr("Materials");
+    if (kind == "shader") return Tr("Shaders");
     if (kind == "audio") return Tr("Sounds");
     if (kind == "font") return Tr("Fonts");
     return Tr("Other");
@@ -385,7 +386,9 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(Humanize(field).c_str());
+    ImGui::PopTextWrapPos();
     HelpTooltip(schema["description"].asString(""));
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -414,8 +417,23 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         Vec3 v = JsonVec3(value);
         float f[3] = {v.x, v.y, v.z};
         float speed = field == "rotation" ? 0.5f : (field == "scale" ? 0.01f : 0.02f);
-        changed = ImGui::DragFloat3(label.c_str(), f, speed, 0, 0, "%.3g");
-        dragMerge();
+        const float available = ImGui::GetContentRegionAvail().x;
+        const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+        const bool stacked = available < ImGui::GetFontSize() * 9.5f;
+        const ImVec4 axisColors[] = {{1.0f, 0.64f, 0.64f, 1}, {0.65f, 0.92f, 0.68f, 1}, {0.65f, 0.80f, 1.0f, 1}};
+        const char* formats[] = {"X %.3g", "Y %.3g", "Z %.3g"};
+        for (int axis = 0; axis < 3; ++axis) {
+            if (axis > 0 && !stacked) ImGui::SameLine(0, gap);
+            ImGui::PushID(axis);
+            ImGui::SetNextItemWidth(stacked ? available : (available - gap * 2) / 3);
+            ImGui::PushStyleColor(ImGuiCol_Text, axisColors[axis]);
+            const bool edited = ImGui::DragFloat(label.c_str(), &f[axis], speed, 0, 0, formats[axis]);
+            ImGui::PopStyleColor();
+            HelpTooltip(Format("%s: %.7g", axis == 0 ? "X" : axis == 1 ? "Y" : "Z", static_cast<double>(f[axis])));
+            if (edited || ImGui::IsItemActivated()) dragMerge();
+            changed |= edited;
+            ImGui::PopID();
+        }
         if (changed) newValue = Vec3Json(Vec3(f[0], f[1], f[2]));
     } else if (oeType == "color") {
         Vec3 v = JsonVec3(value, Vec3(1, 1, 1));
@@ -546,7 +564,9 @@ void NativeEditor::Impl::InspectorPanel() {
     EntityId id = Primary();
     if (id != kNullEntity && selectedId != id) Refresh(true);
     if (id == kNullEntity || !selected.isObject()) {
-        ImGui::TextDisabled("%s", Tr("Select an entity in the Hierarchy or the Scene view."));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", Tr("Select an entity in the Hierarchy or the Scene view."));
+        ImGui::PopStyleColor();
         ImGui::End();
         return;
     }
@@ -598,9 +618,13 @@ void NativeEditor::Impl::InspectorPanel() {
                 std::string path = kv.second["path"].asString("");
                 if (!path.empty() && ImGui::Button(Tr("Edit Script"))) OpenScript(path);
             }
-            if (ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
-                ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.38f);
-                ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+            if (type == "MeshRenderer") {
+                std::string path = kv.second["material"].asString("");
+                if (!path.empty() && ImGui::Button(Tr("Edit Material"))) OpenShader(path);
+            }
+            if (ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.34f);
+                ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.66f);
                 for (const auto& f : (*typeInfo)["schema"]["properties"].members()) {
                     ImGui::PushID(f.first.c_str());
                     if (type == "Script" && f.first == "params") ScriptParamsRows(id, kv.second);
@@ -717,10 +741,11 @@ void NativeEditor::Impl::AssetsPanel() {
                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     if (kind == "scene") RequestAction({PendingAction::Kind::LoadScene, path});
                     else if (kind == "script") OpenScript(path);
+                    else if (kind == "shader" || kind == "material") OpenShader(path);
                     else if (kind == "prefab") Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 }
             }
-            const char* hint = kind == "scene" ? Tr("Double-click to open") : kind == "script" ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
+            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material") ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
             HelpTooltip(hint ? path + "\n" + hint : path);
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload(kAssetPayload, path.data(), path.size());
@@ -731,6 +756,7 @@ void NativeEditor::Impl::AssetsPanel() {
                 selectedAsset = path;
                 if (kind == "scene" && ImGui::MenuItem(Tr("Open"))) RequestAction({PendingAction::Kind::LoadScene, path});
                 if (kind == "script" && ImGui::MenuItem(Tr("Edit"))) OpenScript(path);
+                if ((kind == "shader" || kind == "material") && ImGui::MenuItem(Tr("Edit Graph"))) OpenShader(path);
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Instantiate"))) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Edit Prefab"), nullptr, false, !InPlaySession()))
                     RequestAction({PendingAction::Kind::EditPrefab, path});
@@ -815,10 +841,19 @@ void NativeEditor::Impl::ConsolePanel() {
     static const char* levels[] = {"debug", "info", "warn", "error"};
     const char* labels[] = {Tr("Debug"), Tr("Info"), Tr("Warnings"), Tr("Errors")};
     for (int i = 0; i < 4; ++i) {
+        if (i > 0) {
+            const float nextWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(labels[i]).x;
+            const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+            if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + nextWidth <= right) ImGui::SameLine();
+        }
         ImGui::Checkbox(labels[i], &logShow[i]);
-        ImGui::SameLine();
     }
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+    const float autoWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(Tr("Auto-scroll")).x;
+    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + autoWidth <= right) ImGui::SameLine();
+    ImGui::Checkbox(Tr("Auto-scroll"), &logAutoScroll);
+    const float clearWidth = ImGui::CalcTextSize(Tr("Clear")).x + ImGui::GetStyle().FramePadding.x * 2;
+    ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 3, ImGui::GetContentRegionAvail().x - clearWidth - ImGui::GetStyle().ItemSpacing.x));
     ImGui::InputTextWithHint("##logfilter", Tr("Filter"), &logFilter);
     ImGui::SameLine();
     if (ImGui::Button(Tr("Clear"))) {
@@ -826,8 +861,6 @@ void NativeEditor::Impl::ConsolePanel() {
         warnCount = errorCount = 0;
         Call("script.errors", ObjectOf({{"clear", Json(true)}}), true);
     }
-    ImGui::SameLine();
-    ImGui::Checkbox(Tr("Auto-scroll"), &logAutoScroll);
 
     float inputHeight = ImGui::GetFrameHeightWithSpacing();
     ImGui::BeginChild("##log", ImVec2(0, -inputHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
@@ -841,7 +874,7 @@ void NativeEditor::Impl::ConsolePanel() {
         if (!logFilter.empty() && !ContainsNoCase(l.message, logFilter) && !ContainsNoCase(l.category, logFilter)) continue;
         ImVec4 col = li == 3 ? ImVec4(1, 0.45f, 0.4f, 1) : li == 2 ? ImVec4(0.95f, 0.78f, 0.35f, 1) : li == 0 ? ImVec4(0.66f, 0.69f, 0.75f, 1) : ImVec4(0.90f, 0.91f, 0.94f, 1);
         ImGui::PushStyleColor(ImGuiCol_Text, col);
-        ImGui::TextUnformatted(("[" + l.category + "] " + l.message).c_str());
+        ImGui::TextUnformatted((std::string(labels[li]) + " [" + l.category + "] " + l.message).c_str());
         ImGui::PopStyleColor();
         if (ImGui::BeginPopupContextItem(("##l" + std::to_string(l.seq)).c_str())) {
             if (ImGui::MenuItem(Tr("Copy"))) ImGui::SetClipboardText(l.message.c_str());
