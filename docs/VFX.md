@@ -271,7 +271,49 @@ files with `python samples/VFXLab/tools/make_slash.py`. Use `vfx.preview` with m
 Screen-space distortion/refraction is not implemented: surface graphs cannot sample the scene color,
 and the software surface sampler only exposes the base texture. The GPU composite samples the scene
 for postprocessing, but has no particle distortion pass. Soft/depth-faded particles remain optional
-future work. The Effects structure node view is the separate phase 4b.
+future work. Effects also provides the structure graph described below.
+
+## Effects structure graph
+
+Open a `.vfx.json` in Effects and enable **Structure Graph**. It shows Emitter, Trail, Material,
+Param and Output nodes, plus read-only Anchor reference nodes for unique named scene transforms.
+This is a view of the existing asset document, not a per-particle behaviour graph.
+
+- Add Emitter / Add Trail create document blocks. Target Field chooses the extra component input
+  shown on blocks; existing parameter targets remain visible. Add Parameter creates a typed default
+  and its first target on the selected block. Parameter definitions, names and target scales remain
+  editable in the inspector; existing scales are preserved when adding a wire.
+- Drag a Material output onto `material`; double-click the Material card to open its material and
+  source graph in Shaders. Material Reference adds an existing project material to the palette.
+- Drag an Emitter output onto another emitter's `trigger` to set the source's `onDeath`. The source
+  has one death target; the target can receive several sources. `deathCount` stays a component field.
+- Anchor Reference lists unique scene names with Transform. Connect an Anchor to a Trail's
+  `baseAnchor` / `tipAnchor`. These are scene references; the isolated preview uses local offsets.
+- Drag a Param output onto a component field. The command validator rejects missing fields, wrong
+  types and invalid ranges without changing the draft. Controlled fields reject direct reference
+  wires until their parameter target is disconnected. Refused wires outline the target card and show
+  the command hint (also on hover).
+- Right-click an input to disconnect. A trigger input removes all incoming death references;
+  disconnecting a parameter's final target removes its definition, because assets forbid orphans.
+  Undo restores the document and those references. Output edits the shared `maxParticles` budget.
+- Emitter / Trail modules expand in the node in their fixed order. Their fields, booleans, curves and
+  gradients reuse the field inspector controls. Drag the header to move a node; middle-drag pans;
+  the wheel zooms. Auto Arrange resets positions; Fit Graph frames every card. The normal field view
+  retains the full preview controls; the graph keeps a compact independent preview alongside it.
+
+Every document edit uses `vfx.edit_replace` or `vfx.set`, sharing draft validation, attached-agent
+updates and document undo/redo/save. Node positions, pan/zoom and unused palette references are stored
+atomically in `.oe/vfx-layout/<asset-path-hash>.json`, with the asset path checked on load. Positions
+are keyed by block/parameter name or reference path. Missing layouts use automatic positions; invalid
+layouts report a notice and fall back. Layout edits never dirty the asset or change `vfx.diff`.
+The shared `EditorNodeCanvas` owns only pan/zoom, card dragging, pin hit areas and wire drawing;
+shader and effect documents retain their own semantics.
+
+For an automated screenshot:
+
+```text
+oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph --frames 20 --screenshot build/effects-graph.png
+```
 
 ## Implementation status (work log)
 
@@ -317,5 +359,7 @@ future work. The Effects structure node view is the separate phase 4b.
 - [x] Phase 4 (2026-10-08): materials, age/random/speed graph inputs, opt-in batching, bounded death
       chains, static mesh particles, two-anchor ribbons and sword_slash preset/sample. Details and
       validation evidence are in [VFX_PHASE4.md](VFX_PHASE4.md).
+- [x] Phase 4b (2026-10-08): shared shader/effect canvas, structure nodes and reference wires, in-node
+      module fields, compact preview and `.oe/` layout sidecars. Verification: [VFX_PHASE4B.md](VFX_PHASE4B.md).
 - [ ] Platform follow-up: Linux/EGL, browser WebGL2 and Android device execution of phase 4 effects.
       Windows/D3D11 and Node/WASM tests cover the native and portable core; prebuilt players refreshed.

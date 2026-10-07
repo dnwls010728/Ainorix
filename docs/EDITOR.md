@@ -228,7 +228,7 @@ Effects exposes `material`, `mesh`, `batching`, death emitter/count, ribbon mode
 the existing grouped command-backed inspector. Material graphs remain authored in Shaders; their node
 menu includes `particleAge`, `particleRandom` and `particleSpeed`. The preview uses real material/mesh
 assets for rendering and Fit Preview. Local ribbon offsets work in isolation; external named anchors
-are resolved by the scene instance. Structure nodes/wires are planned separately in phase 4b.
+are resolved by the scene instance. Structure Graph adds reference nodes and wires backed by the same document; see [VFX.md](VFX.md#effects-structure-graph).
 
 
 ### Effects authoring (VFX phase 3, 2026-10-08)
@@ -257,3 +257,15 @@ are resolved by the scene instance. Structure nodes/wires are planned separately
       Windows Release build and the complete 275-test suite pass. Before/after screenshots inspected.
 - [ ] Other GPU backends unverified here. Prebuilt Web/Android players retain the previously recorded
       SDK rebuild follow-up; the editor fix itself is desktop-only.
+
+### Effects structure graph (phase 4b, 2026-10-08)
+
+- [x] Structure Graph toggle; emitter/trail modules expand with the existing fields and curve widgets.
+      Material, parameter, death-trigger and scene-anchor wires use shared document commands. Output
+      edits the total budget. Invalid wires preserve the draft and show the command hint.
+- [x] Material double-click opens Shaders; unused material/anchor references are palette entries.
+      Header drag, middle-mouse pan, wheel zoom, arrangement and fit use EditorNodeCanvas, also used
+      by Shaders. Asset layout lives only in `.oe/vfx-layout/`; `--effects-graph` selects this view in
+      screenshot mode. Field view remains available. See [VFX.md](VFX.md#effects-structure-graph).
+- [x] Warning-free Windows build, all 282 tests and D3D11 screenshots; details in [VFX_PHASE4B.md](VFX_PHASE4B.md).
+- [ ] Other desktop GPU backends unverified.

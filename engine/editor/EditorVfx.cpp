@@ -2,6 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
+#include <iomanip>
+#include "editor/EditorNodeCanvas.h"
+#include "editor/EditorVfxGraph.h"
 
 #include "app/Engine.h"
 #include "assets/Assets.h"
@@ -199,7 +203,7 @@ std::string NativeEditor::Impl::EffectsMerge(const std::string& control) {
 void NativeEditor::Impl::EffectsReplace(const Json& document, const std::string& merge) {
     Json args = ObjectOf({{"vfx", document}}); if (!merge.empty()) args["merge"] = merge;
     Json result = Call("vfx.edit_replace", args);
-    if (Ok(result)) effectsError.clear(); else effectsError = result["error"]["message"].asString();
+    if (Ok(result)) effectsError.clear(); else effectsError = result["error"]["message"].asString() + "\n" + result["error"]["hint"].asString();
 }
 
 void NativeEditor::Impl::OpenEffect(const std::string& path, bool create) {
@@ -227,14 +231,16 @@ void NativeEditor::Impl::ResetEffectsPreview() {
     effectsFrame = 0; effectsAccumulator = 0; effectsLastTime = time;
 }
 
-void NativeEditor::Impl::EffectsPreview() {
+void NativeEditor::Impl::EffectsPreview(bool compact) {
     ImGui::TextUnformatted(Tr("Isolated Preview"));
     if (ImGui::Button(Tr(effectsPlaying ? "Pause" : "Play"))) effectsPlaying = !effectsPlaying;
     EffectsRect("play"); SameLineIfFits(Tr("Restart"));
     if (ImGui::Button(Tr("Restart"))) ResetEffectsPreview(); EffectsRect("restart"); SameLineIfFits(Tr("Loop Preview"), true);
     ImGui::Checkbox(Tr("Loop Preview"), &effectsLoop); EffectsRect("loop");
-    if (ImGui::Checkbox(Tr("Preview Motion"), &effectsMotion)) ResetEffectsPreview(); EffectsRect("motion");
-    ImGui::TextUnformatted(Tr("Timeline"));
+    if (!compact) {
+        if (ImGui::Checkbox(Tr("Preview Motion"), &effectsMotion)) ResetEffectsPreview(); EffectsRect("motion");
+        ImGui::TextUnformatted(Tr("Timeline"));
+    }
     ImGui::SetNextItemWidth(-FLT_MIN);
     int frame = effectsFrame;
     const bool scrub = ImGui::SliderInt("##timeline", &frame, 0, effectsCycleFrames, "%d", ImGuiSliderFlags_AlwaysClamp);
@@ -266,27 +272,30 @@ void NativeEditor::Impl::EffectsPreview() {
         }
     }
     effectsLastTime = time;
-    const auto& system = *effectsScene->Get<VFXSystem>(effectsRoot);
-    size_t count = 0, points = 0;
-    for (const auto& emitter : system.emitters) count += emitter.particles.size();
-    for (const auto& trail : system.trails) points += trail.points.size();
-    ImGui::Text(Tr("Particles: %d / %d   Trail points: %d"), static_cast<int>(count), cap, static_cast<int>(points));
-    ImGui::ProgressBar(cap ? static_cast<float>(count) / cap : 0, ImVec2(-FLT_MIN, 5), "");
-    ImGui::TextDisabled(Tr("Time: %.2f s"), effectsFrame * Engine::kFixedDt);
-    if (ImGui::Button(Tr("Fit Preview"))) {
-        Vec3 low(1e30f, 1e30f, 1e30f), high(-1e30f, -1e30f, -1e30f); bool found = false;
-        for (const RenderItem& item : GatherRenderItems(*effectsScene, &engine.Assets(), Mat4{})) for (int corner = 0; corner < 8; ++corner) {
-            const Vec3 p = item.world.TransformPoint(Vec3((corner & 1) ? item.boundsMax.x : item.boundsMin.x,
-                (corner & 2) ? item.boundsMax.y : item.boundsMin.y, (corner & 4) ? item.boundsMax.z : item.boundsMin.z));
-            low = Vec3(std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z));
-            high = Vec3(std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)); found = true;
+    if (!compact) {
+        const auto& system = *effectsScene->Get<VFXSystem>(effectsRoot);
+        size_t count = 0, points = 0;
+        for (const auto& emitter : system.emitters) count += emitter.particles.size();
+        for (const auto& trail : system.trails) points += trail.points.size();
+        ImGui::Text(Tr("Particles: %d / %d   Trail points: %d"), static_cast<int>(count), cap, static_cast<int>(points));
+        ImGui::ProgressBar(cap ? static_cast<float>(count) / cap : 0, ImVec2(-FLT_MIN, 5), "");
+        ImGui::TextDisabled(Tr("Time: %.2f s"), effectsFrame * Engine::kFixedDt);
+        if (ImGui::Button(Tr("Fit Preview"))) {
+            Vec3 low(1e30f, 1e30f, 1e30f), high(-1e30f, -1e30f, -1e30f); bool found = false;
+            for (const RenderItem& item : GatherRenderItems(*effectsScene, &engine.Assets(), Mat4{})) for (int corner = 0; corner < 8; ++corner) {
+                const Vec3 p = item.world.TransformPoint(Vec3((corner & 1) ? item.boundsMax.x : item.boundsMin.x,
+                    (corner & 2) ? item.boundsMax.y : item.boundsMin.y, (corner & 4) ? item.boundsMax.z : item.boundsMin.z));
+                low = Vec3(std::min(low.x, p.x), std::min(low.y, p.y), std::min(low.z, p.z));
+                high = Vec3(std::max(high.x, p.x), std::max(high.y, p.y), std::max(high.z, p.z)); found = true;
+            }
+            if (found) { effectsTarget = (low + high) * 0.5f; effectsZoom = Clamp(Length(high - low) * 1.75f, 0.5f, 30); }
         }
-        if (found) { effectsTarget = (low + high) * 0.5f; effectsZoom = Clamp(Length(high - low) * 1.75f, 0.5f, 30); }
+        EffectsRect("fit");
+        ImGui::TextUnformatted(Tr("Preview Distance"));
+        ImGui::SetNextItemWidth(-FLT_MIN); ImGui::SliderFloat("##distance", &effectsZoom, 0.5f, 30, "%.1f");
     }
-    EffectsRect("fit");
-    ImGui::TextUnformatted(Tr("Preview Distance"));
-    ImGui::SetNextItemWidth(-FLT_MIN); ImGui::SliderFloat("##distance", &effectsZoom, 0.5f, 30, "%.1f");
-    const float previewWidth = std::max(120.0f, ImGui::GetContentRegionAvail().x);
+    const float previewWidth = compact ? std::max(64.0f, std::min(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - 4)) :
+        std::max(120.0f, ImGui::GetContentRegionAvail().x);
     const int pixels = std::max(128, std::min(384, static_cast<int>(previewWidth)));
     RenderTarget target; target.Resize(pixels, pixels);
     RenderView view = MakeLookAtView(effectsTarget + Vec3(0, 0, effectsZoom), effectsTarget, 45, 1);
@@ -295,7 +304,17 @@ void NativeEditor::Impl::EffectsPreview() {
     auto image = std::make_shared<Texture>(); image->width = pixels; image->height = pixels; image->texels = std::move(target.color);
     effectsImage = image;
     ImGui::Image(ViewTexture(engine.Gpu()->ImageView(effectsImage)), ImVec2(previewWidth, previewWidth)); EffectsRect("preview");
-    ImGui::TextWrapped("%s", Tr("Preview is independent of the game. Motion moves the root for trails; changes restart the preview."));
+    if (!compact) ImGui::TextWrapped("%s", Tr("Preview is independent of the game. Motion moves the root for trails; changes restart the preview."));
+}
+
+void NativeEditor::Impl::EffectsParameterValue(const std::string& name, float fieldWidth) {
+    Json document = effectsDocument;
+    const Json& spec = document["params"][name];
+    Json value = spec["default"];
+    ImGui::SetNextItemWidth(fieldWidth > 0 ? fieldWidth : -FLT_MIN);
+    const bool changed = ValueWidget(ParameterField(value, spec, document, effectsSchema), value);
+    EffectsRect("param:" + name); const std::string merge = EffectsMerge("param:" + name);
+    if (changed) { document["params"][name]["default"] = value; EffectsReplace(document, merge); }
 }
 
 void NativeEditor::Impl::EffectsInspector() {
@@ -303,11 +322,7 @@ void NativeEditor::Impl::EffectsInspector() {
     ImGui::TextUnformatted(Tr("Parameters"));
     for (const auto& parameter : document["params"].members()) {
         ImGui::PushID(parameter.first.c_str()); ImGui::TextUnformatted(parameter.first.c_str());
-        Json value = parameter.second["default"];
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const bool changed = ValueWidget(ParameterField(value, parameter.second, document, effectsSchema), value);
-        EffectsRect("param:" + parameter.first); const std::string merge = EffectsMerge("param:" + parameter.first);
-        if (changed) { document["params"][parameter.first]["default"] = value; EffectsReplace(document, merge); }
+        EffectsParameterValue(parameter.first);
         HelpTooltip(parameter.second["doc"].asString());
         ImGui::PopID();
     }
@@ -331,10 +346,8 @@ void NativeEditor::Impl::EffectsInspector() {
     if (total == 0) return;
     effectsBlock = std::max(0, std::min(total - 1, effectsBlock));
     const bool trail = effectsBlock >= emitterCount; const int index = trail ? effectsBlock - emitterCount : effectsBlock;
-    const char* array = trail ? "trails" : "emitters", *key = trail ? "trail" : "emitter";
+    const char* array = trail ? "trails" : "emitters";
     const std::string blockName = document[array][index]["name"].asString();
-    const Json& values = document[array][index][key];
-    const Json& component = effectsSchema["components"][trail ? 1 : 0];
     ImGui::SeparatorText(blockName.c_str());
     ImGui::SetNextItemWidth(-FLT_MIN);
     const std::string moduleLabel = effectsSchema["modules"][effectsModule].asString();
@@ -348,6 +361,18 @@ void NativeEditor::Impl::EffectsInspector() {
         }
         ImGui::EndCombo();
     }
+    EffectsBlockFields();
+}
+
+void NativeEditor::Impl::EffectsBlockFields() {
+    const Json document = effectsDocument;
+    const int emitterCount = static_cast<int>(document["emitters"].size());
+    const bool trail = effectsBlock >= emitterCount;
+    const int index = trail ? effectsBlock - emitterCount : effectsBlock;
+    const char* array = trail ? "trails" : "emitters", *key = trail ? "trail" : "emitter";
+    const std::string blockName = document[array][index]["name"].asString();
+    const Json& values = document[array][index][key];
+    const Json& component = effectsSchema["components"][trail ? 1 : 0];
     for (const Json& module : effectsSchema["modules"].items()) {
         if (module != effectsSchema["modules"][effectsModule]) continue;
         ImGui::PushID(module.asString().c_str());
@@ -396,6 +421,13 @@ void NativeEditor::Impl::EffectsPanel() {
     effectsEditorFocused = false; effectsRects.clear();
     effectsState = Call("vfx.edit_state", Json(), true)["result"];
     if (effectsState["document"] != effectsDocument || effectsState["path"].asString() != effectsPath) {
+        if (effectsState["path"].asString() != effectsPath) {
+            if (effectsLayoutDirty) EffectsGraphLayout(true);
+            effectsLayoutPath.clear(); effectsGraphPositions.clear(); effectsGraphModules.clear(); effectsGraphMaterials.clear(); effectsGraphAnchors.clear();
+            effectsGraphLink.clear(); effectsGraphHint.clear(); effectsGraphSelected.clear();
+            effectsGraphPan = ImVec2(24, 24); effectsGraphZoom = 0.8f;
+        }
+        effectsGraphHint.clear(); effectsGraphErrorNode.clear();
         effectsDocument = effectsState["document"]; effectsPath = effectsState["path"].asString();
         if (!effectsDocument.isNull()) {
             try { ResetEffectsPreview(); } catch (const std::exception& error) { effectsError = error.what(); effectsScene.reset(); }
@@ -466,15 +498,19 @@ void NativeEditor::Impl::EffectsPanel() {
         ImGui::EndCombo();
     }
     if (ImGui::Button(Tr("Add Emitter"))) {
-        Json document = effectsDocument; Json block = ObjectOf({{"name", "emitter" + std::to_string(effectsDragSerial++)}, {"emitter", Json::MakeObject()}});
+        Json document = effectsDocument; Json block = ObjectOf({{"name", UniqueEditorVfxName(document, "emitter")}, {"emitter", Json::MakeObject()}});
         document["emitters"].push(block); EffectsReplace(document);
     }
     EffectsRect("add-emitter"); SameLineIfFits(Tr("Add Trail"));
     if (ImGui::Button(Tr("Add Trail"))) {
-        Json document = effectsDocument; Json block = ObjectOf({{"name", "trail" + std::to_string(effectsDragSerial++)}, {"trail", Json::MakeObject()}});
+        Json document = effectsDocument; Json block = ObjectOf({{"name", UniqueEditorVfxName(document, "trail")}, {"trail", Json::MakeObject()}});
         document["trails"].push(block); EffectsReplace(document);
     }
     EffectsRect("add-trail");
+    SameLineIfFits(Tr("Structure Graph")); ImGui::Checkbox(Tr("Structure Graph"), &effectsGraph); EffectsRect("graph-toggle");
+    if (effectsGraph) {
+        EffectsGraph(); ImGui::End(); return;
+    }
     const float available = ImGui::GetContentRegionAvail().x;
     const float previewWidth = std::min(310.0f, available * 0.42f);
     ImGui::BeginChild("##effectproperties", ImVec2(std::max(150.0f, available - previewWidth - 8), 0), ImGuiChildFlags_Borders);

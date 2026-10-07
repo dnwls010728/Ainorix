@@ -200,7 +200,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --team --chat --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --team --chat --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -468,7 +468,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         if (i == 4 && a.Has("--agent")) editor.EditAgent(a.Get("--agent") == "new" ? "" : a.Get("--agent"));  // the profile dialog
         if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (i == 2 && a.Has("--shader")) editor.OpenShader(a.Get("--shader"));
-        if (i == 2 && a.Has("--effects")) editor.OpenEffect(a.Get("--effects"));
+        if (i == 2 && a.Has("--effects")) { editor.OpenEffect(a.Get("--effects")); editor.SetEffectsGraph(a.Has("--effects-graph")); }
         if (!editor.DrawToImage(rt)) return Fail("render_failed", "cannot read back the editor frame");
     }
     std::string out = AbsolutePath(a.Get("--screenshot"));

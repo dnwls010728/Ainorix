@@ -65,6 +65,7 @@
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
 #include "editor/EditorShaderGraph.h"
+#include "editor/EditorVfxGraph.h"
 #include "editor/EditorText.h"
 #include "imgui_internal.h"
 #include "ImGuizmo.h"
@@ -11303,6 +11304,121 @@ TEST(EditorShaderGraphOrderingAndValidation) {
         if (op == "swizzle") node["value"] = Json(Json::Array{0, 1, 2, 3});
         document["nodes"].push(node); CHECK(OrderEditorShaderGraph(document, ordered, &error));
     }
+}
+
+
+TEST(EditorVfxReferencesMatchCommands) {
+    const std::string project = TempProject("vfx_graph_commands"); Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    Json document = TestVfxDocument();
+    document["emitters"].push(Json::parse(R"({"name":"child","emitter":{"playing":false}})"));
+    document["trails"] = Json::parse(R"([{"name":"blade","trail":{"mode":"ribbon"}}])");
+    CreateTestVfx(engine, document);
+    CHECK(Call(engine, "vfx.edit", R"({"path":"effects/sparks.vfx.json"})")["ok"].asBool());
+    auto draft = [&] { return Call(engine, "vfx.edit_state")["result"]["document"]; };
+    const Json original = draft();
+    const EditorVfxGraph graph = BuildEditorVfxGraph(original, {"materials/slash.mat.json"}, {"Hand"});
+    auto node = [&](const std::string& id) -> const EditorVfxNode& {
+        for (const auto& n : graph.nodes) if (n.id == id) return n;
+        CHECK(false); return graph.nodes[0];
+    };
+    auto compare = [&](const std::string& source, const std::string& target, const std::string& field, const Json& patch) {
+        Json candidate; std::string hint;
+        CHECK(PatchEditorVfxWire(draft(), &node(source), node(target), field, candidate, hint));
+        Json replace = Json::MakeObject(); replace["vfx"] = candidate;
+        CHECK(engine.Call("vfx.edit_replace", replace)["ok"].asBool()); const Json wired = draft();
+        CHECK(Call(engine, "vfx.undo")["ok"].asBool());
+        CHECK(engine.Call("vfx.set", patch)["ok"].asBool()); CHECK(draft() == wired);
+        CHECK(Call(engine, "vfx.undo")["ok"].asBool()); CHECK(draft() == original);
+    };
+    compare("material:materials/slash.mat.json", "block:sparks", "material",
+        Json::parse(R"({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"material":"materials/slash.mat.json"}})"));
+    compare("block:sparks", "block:child", "trigger",
+        Json::parse(R"({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"onDeath":"child"}})"));
+    compare("anchor:Hand", "block:blade", "baseAnchor",
+        Json::parse(R"({"path":"effects/sparks.vfx.json","trail":"blade","values":{"baseAnchor":"Hand"}})"));
+    Json patch = Json::parse(R"({"path":"effects/sparks.vfx.json"})"); patch["params"] = original["params"];
+    patch["params"]["intensity"]["targets"].push(Json::parse(R"({"to":"child.rate"})"));
+    compare("param:intensity", "block:child", "rate", patch);
+    Json candidate; std::string hint;
+    CHECK(!PatchEditorVfxWire(original, &node("material:materials/slash.mat.json"), node("block:sparks"), "rate", candidate, hint));
+    CHECK(!hint.empty()); CHECK(draft() == original);
+    // Type errors come from the shared command validator and leave the draft/history unchanged.
+    CHECK(PatchEditorVfxWire(original, &node("param:intensity"), node("block:sparks"), "material", candidate, hint));
+    Json replace = Json::MakeObject(); replace["vfx"] = candidate;
+    const Json refusal = engine.Call("vfx.edit_replace", replace);
+    CHECK(!refusal["ok"].asBool() && !refusal["error"]["hint"].asString().empty()); CHECK(draft() == original);
+    CHECK(PatchEditorVfxWire(original, nullptr, node("block:sparks"), "burst", candidate, hint));
+    CHECK(candidate["params"].size() == 0); // no orphan parameter definitions
+    RemoveAll(project);
+}
+
+TEST(NativeEditorEffectsGraph) {
+    const std::string project = TempProject("editor_effects_graph"); Engine engine; std::string error;
+    CHECK(engine.Open(project, &error)); CreateTestVfx(engine);
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    Json unchanged; std::array<float, 4> moved{};
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); RenderTarget image;
+        auto frames = [&](int count, const std::vector<WindowEvent>& events = std::vector<WindowEvent>()) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 1000, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto point = [&](const std::string& name) {
+            const auto rect = editor.EffectsControlRect(name); CHECK(rect[2] > 0 && rect[3] > 0);
+            return ImVec2(rect[0] + rect[2] * 0.5f, rect[1] + rect[3] * 0.5f);
+        };
+        auto mouse = [&](ImVec2 p, bool down, int button = 0) {
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = p.x; move.y = p.y;
+            WindowEvent press = move; press.type = WindowEvent::Type::MouseButton; press.button = button; press.down = down;
+            frames(2, {move}); frames(2, {press});
+        };
+        auto click = [&](const std::string& name) { const ImVec2 p = point(name); mouse(p, true); mouse(p, false); frames(2); };
+        auto wire = [&](const std::string& from, const std::string& to) {
+            const ImVec2 source = point(from), target = point(to); mouse(source, true);
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = target.x; move.y = target.y;
+            frames(3, {move}); mouse(target, false); frames(2);
+        };
+        frames(3); editor.OpenEffect("effects/sparks.vfx.json"); editor.SetEffectsGraph(true); frames(4);
+        const Json original = editor.EffectsDocument();
+        const Json diff = Call(engine, "vfx.diff", R"({"path":"effects/sparks.vfx.json"})");
+        const ImVec2 card = point("node:block:sparks"); mouse(card, true);
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = card.x + 32; move.y = card.y + 18;
+        frames(3, {move}); mouse(ImVec2(move.x, move.y), false); frames(3);
+        moved = editor.EffectsControlRect("node:block:sparks");
+        CHECK(std::fabs(moved[0] + moved[2] * 0.5f - card.x - 32) < 1);
+        CHECK(editor.EffectsDocument() == original && !Call(engine, "vfx.edit_state")["result"]["dirty"].asBool());
+        CHECK(Call(engine, "vfx.diff", R"({"path":"effects/sparks.vfx.json"})") == diff);
+        CHECK(ListFiles(JoinPath(project, ".oe/vfx-layout"), ".json", false).size() == 1);
+        wire("output:param:intensity", "input:block:sparks:rate");
+        CHECK(editor.EffectsDocument()["params"]["intensity"]["targets"].size() == 2);
+        CHECK(editor.EffectsDocument()["params"]["intensity"]["targets"][0]["scale"].asInt() == 12);
+        click("undo"); CHECK(editor.EffectsDocument() == original);
+        wire("output:param:intensity", "input:block:sparks:material");
+        CHECK(editor.EffectsDocument() == original && !editor.LastNotice().empty());
+        click("add-emitter"); CHECK(editor.EffectsDocument()["emitters"].size() == 2);
+        click("undo"); CHECK(editor.EffectsDocument() == original);
+        click("module:block:sparks:Curves"); frames(3);
+        CHECK(WritePng(JoinPath(TestSourceDir(), "build/phase4b-node-workflow.png"), image.ToImage()));
+        unchanged = editor.EffectsDocument();
+        moved = editor.EffectsControlRect("node:block:sparks");
+        const auto canvas = editor.EffectsControlRect("graph-canvas"); moved[0] -= canvas[0]; moved[1] -= canvas[1];
+    }
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        for (int i = 0; i < 3; ++i) editor.Update({}, 1600, 1000, 1, Engine::kFixedDt);
+        editor.OpenEffect(); editor.SetEffectsGraph(true);
+        for (int i = 0; i < 6; ++i) editor.Update({}, 1600, 1000, 1, Engine::kFixedDt);
+        CHECK(editor.EffectsDocument() == unchanged);
+        auto restored = editor.EffectsControlRect("node:block:sparks");
+        const auto canvas = editor.EffectsControlRect("graph-canvas"); restored[0] -= canvas[0]; restored[1] -= canvas[1];
+        std::printf("  Graph restore: %.2f %.2f / %.2f %.2f\n", moved[0], moved[1], restored[0], restored[1]);
+        CHECK(std::fabs(restored[0] - moved[0]) < 1 && std::fabs(restored[1] - moved[1]) < 1);
+    }
+    RemoveAll(project);
 }
 
 TEST(NativeEditorEffectsResourceLifetime) {

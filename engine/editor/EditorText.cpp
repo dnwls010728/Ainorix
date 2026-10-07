@@ -17,6 +17,24 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Structure Graph", "구조 그래프", "構造グラフ"},
+    {"Auto Arrange", "자동 배치", "自動配置"},
+    {"Material Reference", "재질 참조", "マテリアル参照"},
+    {"Anchor Reference", "앵커 참조", "アンカー参照"},
+    {"Target Field", "연결할 필드", "接続先フィールド"},
+    {"Add Parameter", "파라미터 추가", "パラメーターを追加"},
+    {"Emitter", "이미터", "エミッター"},
+    {"Trail", "트레일", "トレイル"},
+    {"Param", "파라미터", "パラメーター"},
+    {"Anchor", "앵커", "アンカー"},
+    {"Output", "출력", "出力"},
+    {"Cannot read node layout.", "노드 배치를 읽을 수 없습니다.", "ノード配置を読み込めません。"},
+    {"Invalid node layout; using automatic positions.", "노드 배치가 잘못되어 자동 배치합니다.", "ノード配置が無効なため自動配置を使用します。"},
+    {"Drag output to input. Right-click an input to disconnect; its last target removes the parameter. Middle mouse pans; wheel zooms.", "출력에서 입력으로 드래그하여 연결. 입력 우클릭으로 해제하며 마지막 연결 해제 시 파라미터 삭제. 가운데 버튼으로 이동, 휠로 확대.", "出力から入力へドラッグして接続。入力の右クリックで解除し、最後の接続を解除するとパラメーターを削除。中ボタンで移動、ホイールで拡大。"},
+    {"Connect references to an emitter or trail input.", "이미터 또는 트레일 입력에 참조를 연결하세요.", "エミッターまたはトレイル入力に参照を接続してください。"},
+    {"Disconnect the existing parameter target first.", "기존 파라미터 연결을 먼저 해제하세요.", "既存のパラメーター接続を先に解除してください。"},
+    {"Use Material for material, Anchor for ribbon anchors, Emitter for trigger, or Param for a component field.", "재질에는 Material, 리본 앵커에는 Anchor, 소멸 생성에는 Emitter, 컴포넌트 필드에는 Param을 연결하세요.", "マテリアルにはMaterial、リボンのアンカーにはAnchor、消滅生成にはEmitter、フィールドにはParamを接続してください。"},
+
     {"Tip Offset", "끝 오프셋", "先端オフセット"},
     {"Base Offset", "시작 오프셋", "始点オフセット"},
     {"Tip Anchor", "끝 앵커", "先端アンカー"},

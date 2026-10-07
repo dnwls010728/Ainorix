@@ -333,9 +333,15 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       English curve/gradient workflow and Korean/Japanese D3D11 editor screenshots inspected.
       Web/Android prebuilt players still need the tracked Emscripten/NDK rebuild. Linux/EGL, Node/WASM
       and Android device execution remain unverified.
+- [x] Phase 4 prep (2026-10-08): shared EditorNodeCanvas pan/zoom/drag/pins/wires extracted
+      without changing Shader document semantics; shader editor tests and D3D11 screenshot verified.
+      Effects layout uses `.oe/vfx-layout/` sidecars outside asset content and document history.
 - [x] Phase 4 (2026-10-08): particle/trail materials, age/random/speed inputs, opt-in batching, bounded
       death chains, two-anchor ribbons, static mesh particles and sword_slash preset/sample. Windows/
       D3D11 comparison and portable-core tests; details, performance and limits: docs/VFX_PHASE4.md.
+- [x] Phase 4b (2026-10-08): Effects structure graph, expandable fixed modules, material/parameter/
+      death/anchor reference wires, budget node, shared document undo and layout sidecars. Warning-free
+      Windows build and all 282 tests pass; D3D11 graph screenshots inspected. See docs/VFX_PHASE4B.md.
 - [ ] Phase 5 (optional): expression update rules.
 - [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
       Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.

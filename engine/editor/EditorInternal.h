@@ -207,6 +207,18 @@ struct NativeEditor::Impl {
     bool SaveShader();
     bool SaveShaderMaterial();
     // Effects document is owned by Engine commands, so remote agents share its history.
+    bool effectsGraph = false, effectsGraphFit = false, effectsLayoutDirty = false;
+    std::string effectsLayoutPath, effectsGraphSelected, effectsGraphLink, effectsGraphHint, effectsGraphErrorNode;
+    std::string effectsGraphField = "rate";
+    std::map<std::string, ImVec2> effectsGraphPositions;
+    std::map<std::string, int> effectsGraphModules;
+    std::vector<std::string> effectsGraphMaterials, effectsGraphAnchors;
+    ImVec2 effectsGraphPan{24, 24};
+    float effectsGraphZoom = 0.8f;
+    void EffectsGraph();
+    void EffectsBlockFields();
+    void EffectsParameterValue(const std::string& name, float fieldWidth = 0);
+    void EffectsGraphLayout(bool save);
     bool showEffects = false, focusEffects = false, effectsEditorFocused = false;
     Json effectsState, effectsDocument, effectsSchema, effectsPresets;
     std::string effectsPath, effectsNewPath = "effects/new.vfx.json", effectsPreset = "fire", effectsError;
@@ -230,7 +242,7 @@ struct NativeEditor::Impl {
     void EffectsPanel();
     void EffectsModals();
     void EffectsInspector();
-    void EffectsPreview();
+    void EffectsPreview(bool compact = false);
     void ResetEffectsPreview();
     bool EffectsSave();
     void EffectsReplace(const Json& document, const std::string& merge = {});
