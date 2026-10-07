@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/Json.h"
 
 #include "platform/Platform.h"
 #include "render/Renderer.h"
@@ -67,6 +68,12 @@ public:
     void SetSceneView2D(bool on);
     // Opens a project script in the Scripts panel (code editor).
     void OpenScript(const std::string& path);
+    // Project-relative paths of the current script tabs, including unsaved buffers awaiting a close decision.
+    std::vector<std::string> OpenScripts() const;
+    // Open a shader/material in the node workspace; empty path starts a new surface graph.
+    void OpenShader(const std::string& path = {});
+    // Current unsaved node document (document indices, before topological export).
+    Json ShaderDocument() const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).

@@ -95,6 +95,11 @@ view that hands keyboard and mouse to the game, Assets with thumbnails and drag-
 with live error marks, Console with a command line, History, Network and Team panels. One drag is one undo step,
 prefabs are edited in isolation, and the interface is available in English, Korean and Japanese.
 Assets offers Grid/List views, filename/path search and kind filters with counts. Shallow panels use compact rows so filenames stay visible.
+The interface uses 17 px text, stronger selection/focus contrast, labeled X/Y/Z fields that adapt to panel width, and Console severity labels with wrapping filters. View > Interface size adjusts the scale.
+Script tabs have a close/close others/close all context menu with unsaved-change protection. Lua completion suggests API members and file identifiers while typing (Ctrl+Space requests suggestions; Tab/Enter inserts them).
+
+The Shader Graph workspace edits surface nodes and uniforms, previews the surface, creates shader-linked materials, and applies them to selected meshes. Open shader/material assets from Assets or View > Shader Graph ([guide](docs/SHADER_EDITOR.md)).
+
 Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 
 ## Features

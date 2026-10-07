@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <vector>
 
 #include "core/Math.h"
 
@@ -154,6 +155,39 @@ inline bool CameraFrustumCorners(const Mat4& view, const Mat4& projection, std::
         corners[static_cast<size_t>(i)] = point;
     }
     return true;
+}
+
+// Intersect the finite camera clip volume with the XY editing plane. Unlike
+// projecting all eight corners, this outlines only content visible on that plane.
+inline std::vector<Vec3> CameraPlaneFootprint(const Mat4& view, const Mat4& projection, float planeZ = 0) {
+    std::array<Vec3, 8> corners;
+    if (!CameraFrustumCorners(view, projection, corners)) return {};
+    std::vector<Vec3> points;
+    auto add = [&](Vec3 point) {
+        point.z = planeZ;
+        for (const Vec3& existing : points) if (Length(existing - point) < 1e-4f) return;
+        points.push_back(point);
+    };
+    auto edge = [&](const Vec3& a, const Vec3& b) {
+        const float da = a.z - planeZ, db = b.z - planeZ;
+        if (std::fabs(da) < 1e-5f) add(a);
+        if (std::fabs(db) < 1e-5f) add(b);
+        if ((da < 0 && db > 0) || (da > 0 && db < 0)) add(a + (b - a) * (da / (da - db)));
+    };
+    for (size_t i = 0; i < 4; ++i) {
+        const size_t next = (i + 1) % 4;
+        edge(corners[i], corners[next]);
+        edge(corners[i + 4], corners[next + 4]);
+        edge(corners[i], corners[i + 4]);
+    }
+    if (points.size() < 3) return {};
+    Vec3 center;
+    for (const Vec3& point : points) center = center + point;
+    center = center * (1.0f / static_cast<float>(points.size()));
+    std::sort(points.begin(), points.end(), [&](const Vec3& a, const Vec3& b) {
+        return std::atan2(a.y - center.y, a.x - center.x) < std::atan2(b.y - center.y, b.x - center.x);
+    });
+    return points;
 }
 
 // World-space ray through a pixel of a view (x, y from the top-left).

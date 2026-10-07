@@ -14,6 +14,7 @@
 #include "core/Log.h"
 #include "script/ScriptHost.h"
 
+
 namespace oe {
 
 namespace {
@@ -44,15 +45,15 @@ const TextEditor::Palette& CodePalette() {
         auto set = [&p](C c, ImU32 v) { p[static_cast<size_t>(c)] = v; };
         set(C::background, IM_COL32(24, 26, 31, 255));
         set(C::text, IM_COL32(220, 223, 228, 255));
-        set(C::keyword, IM_COL32(198, 120, 221, 255));
-        set(C::declaration, IM_COL32(198, 120, 221, 255));
-        set(C::number, IM_COL32(209, 154, 102, 255));
+        set(C::keyword, IM_COL32(216, 157, 237, 255));
+        set(C::declaration, IM_COL32(216, 157, 237, 255));
+        set(C::number, IM_COL32(232, 183, 137, 255));
         set(C::string, IM_COL32(152, 195, 121, 255));
         set(C::punctuation, IM_COL32(171, 178, 191, 255));
         set(C::identifier, IM_COL32(220, 223, 228, 255));
-        set(C::knownIdentifier, IM_COL32(97, 175, 239, 255));
-        set(C::comment, IM_COL32(142, 152, 168, 255));  // comments are read, not skipped: 6:1 on the background
-        set(C::lineNumber, IM_COL32(124, 132, 148, 255));
+        set(C::knownIdentifier, IM_COL32(133, 198, 250, 255));
+        set(C::comment, IM_COL32(169, 181, 197, 255));
+        set(C::lineNumber, IM_COL32(157, 168, 185, 255));
         set(C::currentLineNumber, IM_COL32(200, 204, 212, 255));
         set(C::currentLineHighlight, IM_COL32(255, 255, 255, 10));
         set(C::currentLineHighlightBorder, IM_COL32(255, 255, 255, 18));
@@ -68,6 +69,83 @@ size_t Glyphs(const std::string& s) {
     size_t n = 0;
     for (unsigned char c : s) n += (c & 0xC0) != 0x80;
     return n;
+}
+
+using CompletionTables = std::map<std::string, std::set<std::string>>;
+
+// Read the actual sandbox API, without executing project code or creating a play session.
+std::shared_ptr<const CompletionTables> LuaCompletionTables() {
+    static auto catalog = [] {
+        Engine metadataEngine;
+        EntityId entity = metadataEngine.GetScene().Create("Autocomplete");
+        ScriptHost host(metadataEngine);
+        // Trusted metadata query in an isolated engine: no project modules or gameplay callbacks.
+        Json values = host.Eval(R"LUA(
+local result = {}
+local function members(value)
+  local names = {}
+  for key in pairs(value) do
+    if type(key) == "string" and key:sub(1, 2) ~= "__" then names[#names + 1] = key end
+  end
+  return names
+end
+result[""] = members(_G)
+for name, value in pairs(_G) do
+  if type(value) == "table" and name ~= "_G" then result[name] = members(value) end
+end
+if self then result.self = members(getmetatable(self).__index) end
+return result
+)LUA", entity)["value"];
+        auto tables = std::make_shared<CompletionTables>();
+        for (const auto& value : values.members()) {
+            for (const Json& name : value.second.items()) (*tables)[value.first].insert(name.asString());
+        }
+        (*tables)[""].insert("self");
+        return tables;
+    }();
+    return catalog;
+}
+
+void ConfigureCompletion(TextEditor& editor) {
+    auto tables = LuaCompletionTables();
+    TextEditor* code = &editor;  // Heap-owned editor stays stable when the tab vector moves.
+    TextEditor::AutoCompleteConfig config;
+    // Activating in the input frame avoids a stale word start when typing across a member separator.
+    config.triggerDelay = std::chrono::milliseconds(0);
+    config.noSuggestionsLabel = Tr("No suggestions");
+    config.callback = [code, tables](TextEditor::AutoCompleteState& state) {
+        state.suggestions.clear();
+        if (state.inComment || state.inString || state.inNumber) return;
+        std::set<std::string> candidates;
+        std::string line = code->GetLineText(state.searchTermStart.line);
+        size_t at = 0, glyph = 0;
+        while (at < line.size() && glyph < state.searchTermStart.index) {
+            ++at;
+            while (at < line.size() && (static_cast<unsigned char>(line[at]) & 0xC0) == 0x80) ++at;
+            ++glyph;
+        }
+        auto identifier = [](unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                                        (c >= '0' && c <= '9') || c == '_'; };
+        if (at && (line[at - 1] == '.' || line[at - 1] == ':')) {
+            size_t end = at - 1, start = end;
+            while (start && identifier(static_cast<unsigned char>(line[start - 1]))) --start;
+            // Only known global tables and self have an inferred type; arbitrary Lua objects do not.
+            if (start && (line[start - 1] == '.' || line[start - 1] == ':')) return;
+            auto table = tables->find(line.substr(start, end - start));
+            if (table != tables->end()) candidates = table->second;
+        } else {
+            if (state.language) {
+                candidates.insert(state.language->keywords.begin(), state.language->keywords.end());
+                candidates.insert(tables->at("").begin(), tables->at("").end());
+            }
+            code->IterateIdentifiers([&](const std::string& name) { candidates.insert(name); });
+        }
+        for (const std::string& name : candidates) {
+            if (name.compare(0, 2, "__") != 0 && name != state.searchTerm && name.compare(0, state.searchTerm.size(), state.searchTerm) == 0)
+                state.suggestions.push_back(name);
+        }
+    };
+    editor.SetAutoCompleteConfig(&config);
 }
 
 // script.check warnings come in English from the engine; show them in the interface language.
@@ -122,6 +200,7 @@ void NativeEditor::Impl::OpenScript(const std::string& path) {
     ed.SetCompletePairedGlyphs(true);
     ed.SetShowWhitespacesEnabled(false);
     ed.SetText(t.saved);
+    ConfigureCompletion(ed);
     t.undoIndex = ed.GetUndoIndex();
     CheckScript(t);
     scripts.push_back(std::move(t));
@@ -200,7 +279,20 @@ void NativeEditor::Impl::ScriptsPanel() {
                 ed.SetFocus();
             }
             std::string label = FileName(t.path) + "###" + t.path;
-            if (!ImGui::BeginTabItem(label.c_str(), &t.open, flags)) continue;
+            bool active = ImGui::BeginTabItem(label.c_str(), &t.open, flags);
+            if (ImGui::BeginPopupContextItem()) {
+                ImGui::TextDisabled("%s", t.path.c_str());
+                ImGui::Separator();
+                ImGui::BeginDisabled(!closingScripts.empty());
+                if (ImGui::MenuItem(Tr("Close Tab"))) t.open = false;
+                if (ImGui::MenuItem(Tr("Close Other Tabs"))) {
+                    for (ScriptTab& other : scripts) if (other.path != t.path) other.open = false;
+                }
+                if (ImGui::MenuItem(Tr("Close All Tabs"))) for (ScriptTab& other : scripts) other.open = false;
+                ImGui::EndDisabled();
+                ImGui::EndPopup();
+            }
+            if (!active) continue;
 
             // Runtime errors for this file (changes rebuild the markers).
             std::vector<ScriptDiagnostic> runtime;
@@ -242,6 +334,9 @@ void NativeEditor::Impl::ScriptsPanel() {
             ImGui::SameLine();
             if (ImGui::Button(Tr("Find / Replace"))) ed.OpenFindReplaceWindow();
             HelpTooltip("Ctrl+F");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", Tr("Autocomplete"));
+            HelpTooltip(Tr("Ctrl+Space: suggestions; Up/Down: select; Tab/Enter: insert; Esc: dismiss."));
             ImGui::SameLine();
             int errors = 0, warnings = 0;
             for (const ScriptDiagnostic& d : t.diagnostics) (d.error ? errors : warnings) += 1;
@@ -323,9 +418,57 @@ void NativeEditor::Impl::ScriptsPanel() {
         }
         ImGui::EndTabBar();
     }
-    // Closing a tab with unsaved edits keeps it open (Revert first to discard them).
-    scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [](const ScriptTab& t) { return !t.open && !t.modified; }), scripts.end());
+    if (closingScripts.empty()) {
+        for (const ScriptTab& t : scripts) if (!t.open) closingScripts.push_back(t.path);
+        if (!closingScripts.empty()) {
+            bool dirty = std::any_of(scripts.begin(), scripts.end(), [&](const ScriptTab& t) {
+                return t.modified && std::find(closingScripts.begin(), closingScripts.end(), t.path) != closingScripts.end();
+            });
+            if (dirty) ImGui::OpenPopup(TrId("Close Scripts").c_str());
+            else {
+                scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [](const ScriptTab& t) { return !t.open; }), scripts.end());
+                closingScripts.clear();
+                focusScript = -1;
+            }
+        }
+    }
     for (ScriptTab& t : scripts) t.open = true;
+    bool close = false;
+    if (ImGui::BeginPopupModal(TrId("Close Scripts").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(Tr("Save modified scripts before closing?"));
+        for (const ScriptTab& t : scripts) {
+            if (t.modified && std::find(closingScripts.begin(), closingScripts.end(), t.path) != closingScripts.end())
+                ImGui::BulletText("%s", t.path.c_str());
+        }
+        if (ImGui::Button(Tr("Save and Close"))) {
+            close = true;
+            for (ScriptTab& t : scripts) {
+                if (!t.modified || std::find(closingScripts.begin(), closingScripts.end(), t.path) == closingScripts.end()) continue;
+                std::string source = t.editor->GetText();
+                if (!Ok(Call("script.write", ObjectOf({{"path", Json(t.path)}, {"source", Json(source)}})))) { close = false; break; }
+                t.saved = source;
+                t.modified = false;
+                paramSchemas.erase(t.path);
+                CheckScript(t);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(Tr("Discard and Close"))) close = true;
+        ImGui::SameLine();
+        if (ImGui::Button(Tr("Cancel"))) {
+            closingScripts.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        if (close) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (close) {
+        scripts.erase(std::remove_if(scripts.begin(), scripts.end(), [&](const ScriptTab& t) {
+            return std::find(closingScripts.begin(), closingScripts.end(), t.path) != closingScripts.end();
+        }), scripts.end());
+        closingScripts.clear();
+        focusScript = -1;
+    }
     ImGui::End();
 }
 

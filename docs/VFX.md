@@ -115,6 +115,9 @@ belong to the preview request, not the component or gameplay simulation.
       D3D11 3f0b16a1e8477484, analysis 53e15b08e391bab0 (peak 62, nine samples), moving orb/trail
       559f75cedb007766. Software, GPU and trail contact sheets were inspected. API reference and
       English/Korean/Japanese READMEs are updated; AGENTS.md and CLAUDE.md match.
+      The earlier editor workflow/shader graph branch is also integrated into this checkout;
+      the combined Windows Release build passes all 261 tests, including node dragging and material
+      authoring. A Korean ShaderLab editor screenshot was inspected after integration.
 - [ ] Phase 2: reusable assets, VFXSystem, runtime control, Lua, hot reload and budgets.
 - [ ] Phase 3: Effects panel and visual authoring widgets.
 - [ ] Platform follow-up: Linux/EGL and Android device verification. Web/Android prebuilt runtimes still

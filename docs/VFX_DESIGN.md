@@ -300,6 +300,9 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       software/D3D11 campfire and moving-trail contact sheets were inspected. See docs/VFX.md for
       the exact preview hashes and limits. No new editor UI is part of this phase. Linux/EGL,
       Node/WASM and Android device execution remain unverified; prebuilt runtimes are not rebuilt.
+      Earlier editor workflow/shader graph commits are integrated as well, preserving the existing
+      user work in this checkout. The combined Release build passes all 261 tests; Korean ShaderLab
+      editor screenshot verified after integration.
 - [ ] Phase 2: `VFXSystem`, `.vfx.json`, `StepEmitter` split, asset commands, Lua API, hot reload, samples
       migration, tests. Existing hashes unchanged.
 - [ ] Phase 3: Effects panel, preview viewport, translations, `docs/EDITOR.md`.

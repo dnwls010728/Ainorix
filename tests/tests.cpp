@@ -63,8 +63,10 @@
 #endif
 #if OE_NATIVE_EDITOR
 #include "editor/Editor.h"
+#include "editor/EditorShaderGraph.h"
 #include "editor/EditorText.h"
 #include "imgui_internal.h"
+#include "ImGuizmo.h"
 #endif
 
 using namespace oe;
@@ -10734,6 +10736,48 @@ TEST(EditorCameraFrustumCorners) {
     }
 }
 
+TEST(EditorCameraPlaneFootprint) {
+    Scene scene;
+    const EntityId id = scene.Create("Camera");
+    scene.Add<Transform>(id).position = Vec3(2, 3, 10);
+    Camera& camera = scene.Add<Camera>(id);
+    camera.nearPlane = 1; camera.farPlane = 20; camera.fov = 90; camera.orthoSize = 4;
+    for (const char* projection : {"perspective", "orthographic"}) {
+        camera.projection = projection;
+        for (float aspect : {0.6f, 1.0f, 16.0f / 9.0f}) {
+            RenderView view; CHECK(MakeCameraView(scene, id, aspect, view));
+            const auto points = CameraPlaneFootprint(view.view, view.proj);
+            CHECK(points.size() == 4);
+            const float halfHeight = camera.projection == "perspective" ? 10.0f : 4.0f;
+            for (const Vec3& point : points) {
+                CHECK(point.z == 0);
+                CHECK(std::fabs(std::fabs(point.x - 2) - halfHeight * aspect) < 0.001f);
+                CHECK(std::fabs(std::fabs(point.y - 3) - halfHeight) < 0.001f);
+            }
+            CHECK(CameraPlaneFootprint(view.view, view.proj, 11).empty()); // behind the camera
+            CHECK(CameraPlaneFootprint(view.view, view.proj, -20).empty()); // beyond the far plane
+            CHECK(CameraPlaneFootprint(view.view, view.proj, 9).size() == 4); // coincides with near
+            CHECK(CameraPlaneFootprint(view.view, view.proj, -10).size() == 4); // coincides with far
+        }
+    }
+    // A rotated child camera may produce a clipped polygon rather than a rectangle.
+    const EntityId parent = scene.Create("Parent");
+    scene.Add<Transform>(parent).rotation = Vec3(30, 20, 15);
+    CHECK(scene.SetParent(id, parent, nullptr));
+    for (const char* projection : {"perspective", "orthographic"}) {
+        camera.projection = projection;
+        RenderView view; CHECK(MakeCameraView(scene, id, 16.0f / 9.0f, view));
+        const auto points = CameraPlaneFootprint(view.view, view.proj);
+        CHECK(points.size() >= 3 && points.size() <= 6);
+        for (const Vec3& point : points) {
+            CHECK(point.z == 0);
+            const Vec4 clip = view.proj * view.view * Vec4(point, 1);
+            CHECK(clip.w > 0 && std::fabs(clip.x / clip.w) <= 1.0001f && std::fabs(clip.y / clip.w) <= 1.0001f);
+            CHECK(std::fabs(clip.z / clip.w) <= 1.0001f);
+        }
+    }
+}
+
 TEST(EditorCameraRays) {
     EditorCamera cam;
     cam.target = Vec3(1, 0, -2);
@@ -10846,6 +10890,239 @@ TEST(EditorTranslations) {
     SetEditorLanguage(EditorLanguage::English);
 }
 
+TEST(EditorShaderGraphOrderingAndValidation) {
+    Json graph = Json::parse(R"({"uniforms":{"gain":0.5},"nodes":[{"op":"multiply","args":[1,2]},
+        {"op":"constant","value":[0.2,0.4,0.8,1]},{"op":"uniform","name":"gain"}],"color":0,"emissive":1})");
+    Json ordered; std::string error;
+    CHECK(OrderEditorShaderGraph(graph, ordered, &error));
+    ShaderGraph compiled; CHECK(CompileShaderGraph(ordered, compiled, &error));
+    ShaderSurface surface = EvaluateShaderGraph(compiled, ShaderInputs(), compiled.defaults);
+    CHECK(std::fabs(surface.color.x - 0.1f) < 0.0001f && std::fabs(surface.color.z - 0.4f) < 0.0001f && std::fabs(surface.emissive.y - 0.4f) < 0.0001f);
+    Json before = graph;
+    CHECK(!ConnectEditorShaderGraph(graph, 0, 0, 0, &error)); CHECK(graph == before && error.find("cycle") != std::string::npos);
+    CHECK(ConnectEditorShaderGraph(graph, 2, 0, 0, &error)); CHECK(OrderEditorShaderGraph(graph, ordered, &error));
+    RemoveEditorShaderNode(graph, 2); CHECK(graph["nodes"][0]["args"][0].asInt() == -1);
+    Json sentinel = ordered; CHECK(!OrderEditorShaderGraph(graph, ordered, &error)); CHECK(ordered == sentinel);
+    // The palette's arities produce valid graphs for every supported operation.
+    for (const std::string& op : EditorShaderOperations()) {
+        Json document = Json::parse(R"({"uniforms":{"gain":1},"nodes":[{"op":"constant","value":1}],"color":1})");
+        Json node = Json::MakeObject(); node["op"] = op;
+        if (EditorShaderArity(op)) { node["args"] = Json::MakeArray(); for (int i = 0; i < EditorShaderArity(op); ++i) node["args"].push(0); }
+        if (op == "constant") node["value"] = 1;
+        if (op == "uniform") node["name"] = "gain";
+        if (op == "swizzle") node["value"] = Json(Json::Array{0, 1, 2, 3});
+        document["nodes"].push(node); CHECK(OrderEditorShaderGraph(document, ordered, &error));
+    }
+}
+
+TEST(NativeEditorShaderNodeDragging) {
+    std::string project = TempProject("shader_node_drag"), error;
+    Engine engine; CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", error.c_str()); RemoveAll(project); return;
+    }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); RenderTarget image;
+        auto frames = [&](std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < 3; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto move = [&](ImVec2 point) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseMove; event.x = point.x; event.y = point.y; frames({event});
+        };
+        auto button = [&](bool down) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.button = 0; event.down = down; frames({event});
+        };
+        auto canvas = [&]() -> ImGuiWindow* {
+            for (ImGuiWindow* window : GImGui->Windows)
+                if (window->Active && std::strstr(window->Name, "##shadercanvas")) return window;
+            return nullptr;
+        };
+        // Read the rendered card, rather than exposing or directly mutating layout internals.
+        auto cardPosition = [&](bool surface = false) {
+            ImGuiWindow* window = canvas(); CHECK(window);
+            ImVec2 position(FLT_MAX, FLT_MAX);
+            ImU32 color = surface ? IM_COL32(48, 91, 84, 255) : IM_COL32(52, 69, 93, 255);
+            if (window) for (const ImDrawVert& vertex : window->DrawList->VtxBuffer) if (vertex.col == color) {
+                position.x = std::min(position.x, vertex.pos.x); position.y = std::min(position.y, vertex.pos.y);
+            }
+            CHECK(position.x != FLT_MAX); return position;
+        };
+        auto checkDrag = [&](ImVec2 start, bool surface = false) {
+            ImVec2 before = cardPosition(surface);
+            move(start); button(true);
+            move(ImVec2(start.x + 12, start.y + 10));
+            // Continue well outside the original card while holding the same button.
+            move(ImVec2(start.x + 220, start.y + 80));
+            button(false);
+            ImVec2 after = cardPosition(surface);
+            CHECK(std::fabs(after.x - before.x - 220) < 0.1f && std::fabs(after.y - before.y - 80) < 0.1f);
+            move(ImVec2(start.x + 260, start.y + 100));
+            ImVec2 released = cardPosition(surface);
+            CHECK(std::fabs(released.x - after.x) < 0.1f && std::fabs(released.y - after.y) < 0.1f);
+        };
+        auto arrange = [&]() {
+            ImGuiWindow* window = ImGui::FindWindowByName("###Shader Graph"); CHECK(window);
+            if (!window) return;
+            float x = window->DC.CursorStartPos.x + ImGui::CalcTextSize("Add Node").x + ImGui::GetStyle().FramePadding.x * 2 +
+                      ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize("Arrange Nodes").x * 0.5f + ImGui::GetStyle().FramePadding.x;
+            move(ImVec2(x, window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() * 0.5f));
+            button(true); button(false);
+        };
+        frames(); editor.OpenShader(); frames();
+        Json original = editor.ShaderDocument();
+        ImVec2 position = cardPosition(); checkDrag(ImVec2(position.x + 60, position.y + 55));
+        arrange();
+        position = cardPosition(); checkDrag(ImVec2(position.x + 45, position.y + 12));
+        arrange();
+        // Zoom around the card, then drag its body again: screen displacement must stay exact.
+        position = cardPosition(); move(ImVec2(position.x + 40, position.y + 50));
+        WindowEvent wheel; wheel.type = WindowEvent::Type::MouseWheel; wheel.y = -3; frames({wheel});
+        position = cardPosition(); checkDrag(ImVec2(position.x + 30, position.y + 35));
+        arrange();
+        position = cardPosition(true); checkDrag(ImVec2(position.x + 40, position.y + 50), true);
+        CHECK(editor.ShaderDocument() == original);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/shader-node-drag.png"), image.ToImage()));
+    }
+    RemoveAll(project);
+}
+
+TEST(NativeEditorShaderGraphAndMaterialWorkflow) {
+    std::string project = TempProject("shader_workspace"), error;
+    Engine engine; CHECK(engine.Open(project, &error));
+    Json graph = Json::parse(R"({"nodes":[{"op":"baseColor"},{"op":"constant","value":[0.5,0.6,0.7,1]},
+        {"op":"multiply","args":[0,1]}],"color":2})");
+    Json args = Json::MakeObject(); args["path"] = "materials/probe.shader.json"; args["graph"] = graph;
+    CHECK(engine.Call("shader.create", args)["ok"].asBool());
+    engine.GetScene().Clear();
+    Json mesh = Call(engine, "entity.create", R"({"name":"Target","components":{"Transform":{},"MeshRenderer":{"mesh":"sphere","shaderUniforms":{"old":2}}}})");
+    EntityId target = static_cast<EntityId>(mesh["result"]["id"].asInt());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto mouse = [&](ImVec2 point, int button, bool down) {
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = point.x; move.y = point.y;
+            WindowEvent event = move; event.type = WindowEvent::Type::MouseButton; event.button = button; event.down = down;
+            frames(3, {move}); frames(3, {event});
+        };
+        auto click = [&](ImVec2 point, int button = 0) { mouse(point, button, true); mouse(point, button, false); };
+        auto child = [&](const char* name) -> ImGuiWindow* {
+            for (ImGuiWindow* window : GImGui->Windows) if (window->Active && std::strstr(window->Name, name)) return window;
+            return nullptr;
+        };
+        auto pin = [&](int node, bool output, int input = 0) {
+            ImGuiWindow* canvas = child("##shadercanvas"); CHECK(canvas);
+            ImVec2 position = node == 1 ? ImVec2(0, 150) : node == 2 ? ImVec2(230, 0) : ImVec2(0, 0);
+            ImVec2 origin = canvas ? canvas->DC.CursorStartPos : ImVec2();
+            return ImVec2(origin.x + 24 + (position.x + (output ? 190.0f : 0)) * 0.8f,
+                          origin.y + 24 + (position.y + (output ? 24.0f : 54.0f + input * 23.0f)) * 0.8f);
+        };
+        frames(4); editor.OpenShader("materials/probe.shader.json"); editor.Select(target); frames(4);
+        CHECK(editor.ShaderDocument()["nodes"].size() == 3);
+        CHECK(!editor.ShaderDocument().has("normal") && !editor.ShaderDocument().has("emissive"));
+        Json original = editor.ShaderDocument();
+        // Dragging a wire edits only the document; cycles are rejected without changing it.
+        mouse(pin(2, true), 0, true); mouse(pin(2, false), 0, false);
+        CHECK(editor.ShaderDocument() == original && editor.LastNotice().find("cycle") != std::string::npos);
+        mouse(pin(1, true), 0, true); mouse(pin(2, false), 0, false);
+        CHECK(editor.ShaderDocument()["nodes"][2]["args"][0].asInt() == 1);
+        frames(3, CtrlChord(WindowKey::S));
+        CHECK(Call(engine, "shader.check", R"({"path":"materials/probe.shader.json"})")["ok"].asBool());
+        std::string saved; CHECK(ReadTextFile(JoinPath(project, "materials/probe.shader.json"), saved));
+        // Disconnecting blocks save and leaves the valid file intact; undo is local to the graph.
+        click(pin(2, false), 1); frames(3, CtrlChord(WindowKey::S));
+        std::string after; CHECK(ReadTextFile(JoinPath(project, "materials/probe.shader.json"), after)); CHECK(after == saved);
+        frames(3, CtrlChord(WindowKey::Z)); CHECK(editor.ShaderDocument()["nodes"][2]["args"][0].asInt() == 1);
+        ImGuiWindow* window = ImGui::FindWindowByName("###Shader Graph"); CHECK(window);
+        auto materialAction = [&](bool apply, const char* materialPath = "materials/probe.mat.json") {
+            float width = std::max(100.0f, window->WorkRect.Max.x - window->DC.CursorStartPos.x - 340);
+            const char* saveLabel = FileExists(JoinPath(project, materialPath)) ? "Save Material" : "Create Material";
+            float saveWidth = ImGui::CalcTextSize(saveLabel).x + ImGui::GetStyle().FramePadding.x * 2;
+            float x = window->DC.CursorStartPos.x + width + ImGui::GetStyle().ItemSpacing.x;
+            if (apply) x += saveWidth + ImGui::GetStyle().ItemSpacing.x;
+            float buttonWidth = apply ? ImGui::CalcTextSize("Apply to Selected Mesh").x + ImGui::GetStyle().FramePadding.x * 2 : saveWidth;
+            click(ImVec2(x + buttonWidth * 0.5f, window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() * 2 + ImGui::GetFrameHeight() * 0.5f));
+        };
+        materialAction(false); CHECK(FileExists(JoinPath(project, "materials/probe.mat.json")));
+        materialAction(true); CHECK(engine.GetScene().Get<MeshRenderer>(target)->material == "materials/probe.mat.json");
+        CHECK(engine.GetScene().Get<MeshRenderer>(target)->shaderUniforms.size() == 0);
+        CHECK(Call(engine, "history.undo")["ok"].asBool());
+        CHECK(engine.GetScene().Get<MeshRenderer>(target)->material.empty() && engine.GetScene().Get<MeshRenderer>(target)->shaderUniforms.has("old"));
+        CHECK(Call(engine, "history.redo")["ok"].asBool()); frames(3);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/shader-editor-workflow.png"), image.ToImage()));
+        Json preview = Call(engine, "asset.preview", R"({"path":"materials/probe.mat.json","size":64,"pixels":true})");
+        CHECK(preview["ok"].asBool() && preview["result"]["pixels"].size() == 4096);
+        ShaderGraph compiled; CHECK(CompileShaderGraph(Json::parse(saved), compiled, &error));
+        ShaderSurface surface = EvaluateShaderGraph(compiled, ShaderInputs(), compiled.defaults);
+        CHECK(std::fabs(surface.color.x - 0.25f) < 0.0001f && std::fabs(surface.color.y - 0.36f) < 0.0001f);
+        // A dirty graph prompts before switching files. Cancelling keeps the edited document.
+        click(pin(2, false), 1); Json dirty = editor.ShaderDocument(); editor.OpenShader(""); frames(3);
+        ImGuiWindow* prompt = child("###Save Shader Changes?"); CHECK(prompt);
+        if (prompt) {
+            float x = prompt->DC.CursorStartPos.x;
+            for (const char* text : {"Save", "Don't Save"}) x += ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ItemSpacing.x;
+            click(ImVec2(x + ImGui::CalcTextSize("Cancel").x * 0.5f + ImGui::GetStyle().FramePadding.x,
+                         prompt->InnerRect.Max.y - ImGui::GetStyle().WindowPadding.y - ImGui::GetFrameHeight() * 0.5f));
+        }
+        CHECK(editor.ShaderDocument() == dirty);
+        // Discarding starts a fresh graph; add a literal from the palette and wire it to the surface.
+        editor.OpenShader(""); frames(3); prompt = child("###Save Shader Changes?"); CHECK(prompt);
+        if (prompt) {
+            float x = prompt->DC.CursorStartPos.x + ImGui::CalcTextSize("Save").x + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ItemSpacing.x;
+            click(ImVec2(x + ImGui::CalcTextSize("Don't Save").x * 0.5f + ImGui::GetStyle().FramePadding.x,
+                         prompt->InnerRect.Max.y - ImGui::GetStyle().WindowPadding.y - ImGui::GetFrameHeight() * 0.5f));
+        }
+        CHECK(editor.ShaderDocument()["nodes"].size() == 1);
+        click(ImVec2(window->DC.CursorStartPos.x + ImGui::CalcTextSize("Add Node").x * 0.5f + ImGui::GetStyle().FramePadding.x,
+                     window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() * 0.5f));
+        CHECK(!GImGui->OpenPopupStack.empty());
+        if (!GImGui->OpenPopupStack.empty()) {
+            ImGuiWindow* palette = GImGui->OpenPopupStack.back().Window; CHECK(palette);
+            if (palette) click(ImVec2(palette->DC.CursorStartPos.x + 35, palette->DC.CursorStartPos.y + ImGui::GetTextLineHeightWithSpacing() * 0.5f));
+        }
+        CHECK(editor.ShaderDocument()["nodes"].size() == 2);
+        ImGuiWindow* canvas = child("##shadercanvas"); CHECK(canvas);
+        if (canvas) {
+            ImVec2 origin = canvas->DC.CursorStartPos;
+            mouse(ImVec2(origin.x + 24 + 230 * 0.8f, origin.y + 24 + 74 * 0.8f), 0, true);
+            mouse(ImVec2(origin.x + 24 + 230 * 0.8f, origin.y + 24 + 54 * 0.8f), 0, false);
+        }
+        CHECK(editor.ShaderDocument()["color"].asInt() == 1);
+        materialAction(false, "materials/new.mat.json"); CHECK(FileExists(JoinPath(project, "materials/new.mat.json")));
+        CHECK(Call(engine, "shader.check", R"({"path":"materials/new.shader.json"})")["ok"].asBool());
+        editor.OpenShader("materials/new.mat.json"); frames(3);
+        CHECK(editor.ShaderDocument()["nodes"].size() == 2);
+        if (canvas) click(ImVec2(canvas->DC.CursorStartPos.x + 24 + 230 * 0.8f,
+                                canvas->DC.CursorStartPos.y + 24 + 54 * 0.8f), 1);
+        Json beforeQuit = editor.ShaderDocument();
+        WindowEvent close; close.type = WindowEvent::Type::Close; frames(3, {close});
+        CHECK(!editor.QuitRequested()); prompt = child("###Save Shader Changes?"); CHECK(prompt);
+        if (prompt) {
+            float x = prompt->DC.CursorStartPos.x;
+            for (const char* text : {"Save", "Don't Save"}) x += ImGui::CalcTextSize(text).x + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ItemSpacing.x;
+            click(ImVec2(x + ImGui::CalcTextSize("Cancel").x * 0.5f + ImGui::GetStyle().FramePadding.x,
+                         prompt->InnerRect.Max.y - ImGui::GetStyle().WindowPadding.y - ImGui::GetFrameHeight() * 0.5f));
+        }
+        CHECK(!editor.QuitRequested() && editor.ShaderDocument() == beforeQuit);
+    }
+    {
+        NativeEditor reopened(engine, nullptr, options); CHECK(reopened.Init(&error));
+        reopened.OpenShader("materials/new.mat.json");
+        CHECK(reopened.ShaderDocument()["nodes"].size() == 2 && reopened.ShaderDocument()["color"].asInt() == 1);
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorScriptProblems) {
     Engine e;
     std::string err;
@@ -10875,6 +11152,128 @@ TEST(NativeEditorScriptProblems) {
     CHECK(warn.size() == 2 && warn[0].rfind("warning 3:", 0) == 0 && warn[1].rfind("warning 4:", 0) == 0);
     std::vector<std::string> broken = ed.ScriptProblems("scripts/broken.lua");
     CHECK(broken.size() == 1 && broken[0].rfind("error 4:", 0) == 0);
+    // A bare return is valid; the later return is where Lua can prove the chunk is invalid.
+    Json args = Json(Json::Object{{"path", Json("scripts/broken.lua")}, {"source", Json("local T = {}\nreturn\n\nreturn T")}});
+    Json diagnostics = e.Call("script.check", args)["result"]["diagnostics"];
+    CHECK(diagnostics.size() == 1 && diagnostics[0]["line"].asInt() == 4);
+}
+
+TEST(NativeEditorScriptCompletionAndTabMenus) {
+    std::string project = TempProject("editor_completion"), error;
+    Engine engine; CHECK(engine.Open(project, &error));
+    for (const char* path : {"scripts/one.lua", "scripts/two.lua", "scripts/three.lua"}) {
+        CHECK(engine.Call("script.write", Json(Json::Object{{"path", Json(path)}, {"source", Json("-- completion probe\n")}}))["ok"].asBool());
+    }
+    engine.GetScene().Clear();  // Completion, including self methods, must also work in an empty scene.
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1.0f, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto key = [&](WindowKey value) { frames(3, {KeyEvent(value, true), KeyEvent(value, false)}); };
+        auto type = [&](const char* text) {
+            std::vector<WindowEvent> events;
+            for (const char* c = text; *c; ++c) {
+                WindowEvent event; event.type = WindowEvent::Type::Text; event.codepoint = static_cast<unsigned char>(*c);
+                events.push_back(event);
+            }
+            frames(3, events);
+        };
+        auto click = [&](ImVec2 position, int button = 0) {
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = position.x; move.y = position.y;
+            WindowEvent down = move; down.type = WindowEvent::Type::MouseButton; down.button = button; down.down = true;
+            WindowEvent up = down; up.down = false;
+            frames(3, {move}); frames(3, {down, up});
+        };
+        auto popup = [&]() -> ImGuiWindow* {
+            if (GImGui->OpenPopupStack.empty()) return nullptr;
+            return GImGui->OpenPopupStack.back().Window;
+        };
+        auto tabMenu = [&](const char* path) {
+            ImGuiWindow* window = ImGui::FindWindowByName("###Scripts"); CHECK(window);
+            ImGuiTabBar* bar = window ? ImGui::TabBarFindByID(window->GetID("##scripts")) : nullptr; CHECK(bar);
+            if (!bar) return;
+            for (ImGuiTabItem& tab : bar->Tabs) {
+                if (std::string(ImGui::TabBarGetTabName(bar, &tab)).find(path) != std::string::npos) {
+                    click(ImVec2(bar->BarRect.Min.x + tab.Offset - bar->ScrollingAnim + tab.Width * 0.4f,
+                                 bar->BarRect.GetCenter().y), 1);
+                    break;
+                }
+            }
+            CHECK(popup());
+        };
+        auto menu = [&](const char* label) {
+            ImGuiWindow* window = popup(); CHECK(window); if (!window) return;
+            int row = std::strcmp(label, "Close Tab") == 0 ? 0 : std::strcmp(label, "Close Other Tabs") == 0 ? 1 : 2;
+            float height = ImGui::GetFontSize() + ImGui::GetStyle().ItemSpacing.y;
+            click(ImVec2(window->Pos.x + window->Size.x * 0.5f,
+                         window->DC.CursorStartPos.y + ImGui::GetFontSize() * 1.5f + ImGui::GetStyle().ItemSpacing.y * 2 + 1 + height * row));
+        };
+        auto modalButton = [&](const char* label) {
+            ImGuiWindow* window = popup(); CHECK(window); if (!window) return;
+            float x = window->Pos.x + ImGui::GetStyle().WindowPadding.x;
+            for (const char* button : {"Save and Close", "Discard and Close", "Cancel"}) {
+                float width = ImGui::CalcTextSize(button).x + ImGui::GetStyle().FramePadding.x * 2;
+                if (std::strcmp(label, button) == 0) {
+                    click(ImVec2(x + width * 0.5f, window->Pos.y + window->Size.y - ImGui::GetStyle().WindowPadding.y -
+                                 (ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2) * 0.5f));
+                    return;
+                }
+                x += width + ImGui::GetStyle().ItemSpacing.x;
+            }
+        };        frames(4);
+        editor.OpenScript("scripts/one.lua"); editor.OpenScript("scripts/two.lua"); editor.OpenScript("scripts/three.lua"); frames(4);
+        // Close Others applies to the right-clicked tab, not the currently active tab.
+        tabMenu("scripts/one.lua");
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/script-tab-menu.png"), image.ToImage()));
+        menu("Close Other Tabs"); CHECK(editor.OpenScripts() == std::vector<std::string>{"scripts/one.lua"});
+        editor.OpenScript("scripts/one.lua"); frames(3); frames(3, CtrlChord(WindowKey::End));
+        type("input."); type("pr");
+        frames(3);
+        CHECK(popup());
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/script-completion.png"), image.ToImage()));
+        key(WindowKey::Enter); frames(3, CtrlChord(WindowKey::S));
+        std::string saved = engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/one.lua")}}))["result"]["source"].asString();
+        CHECK(saved == "-- completion probe\ninput.pressed\n");
+        // Accepting a completion is undoable as one insertion; discard must keep disk content.
+        frames(3, CtrlChord(WindowKey::Z));
+        tabMenu("scripts/one.lua"); menu("Close All Tabs"); CHECK(editor.OpenScripts().size() == 1);
+        CHECK(popup() && std::strstr(popup()->Name, "###Close Scripts"));
+        modalButton("Cancel"); CHECK(editor.OpenScripts().size() == 1);
+        tabMenu("scripts/one.lua"); menu("Close Tab"); modalButton("Discard and Close"); CHECK(editor.OpenScripts().empty());
+        CHECK(engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/one.lua")}}))["result"]["source"].asString() == saved);
+        editor.OpenScript("scripts/two.lua"); frames(3); frames(3, CtrlChord(WindowKey::End)); type("particles."); type("bu");
+        frames(3); key(WindowKey::Tab);
+        tabMenu("scripts/two.lua"); menu("Close Tab"); modalButton("Save and Close");
+        CHECK(editor.OpenScripts().empty());
+        CHECK(engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/two.lua")}}))["result"]["source"].asString() == "-- completion probe\nparticles.burst\n");
+        editor.OpenScript("scripts/one.lua"); editor.OpenScript("scripts/two.lua"); frames(3);
+        tabMenu("scripts/one.lua"); menu("Close All Tabs"); CHECK(editor.OpenScripts().empty());
+        editor.OpenScript("scripts/three.lua"); frames(3); frames(3, CtrlChord(WindowKey::End));
+        type("local currentScore = 2"); key(WindowKey::Escape); key(WindowKey::Enter);
+        type("currentS"); frames(3, CtrlChord(WindowKey::Space)); frames(3); CHECK(popup()); key(WindowKey::Tab);
+        key(WindowKey::Enter); type("self:"); type("ge"); key(WindowKey::Tab);
+        key(WindowKey::Enter); type("math.si"); frames(3, CtrlChord(WindowKey::Space)); frames(3); CHECK(popup()); key(WindowKey::Tab);
+        key(WindowKey::Enter); type("-- input."); type("pr"); frames(3, CtrlChord(WindowKey::Space)); CHECK(!popup());
+        key(WindowKey::Enter); type("local text = '"); type("input.pr"); frames(3, CtrlChord(WindowKey::Space)); CHECK(!popup());
+        frames(3, CtrlChord(WindowKey::S));
+        saved = engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/three.lua")}}))["result"]["source"].asString();
+        CHECK(saved.find("\ncurrentScore\n") != std::string::npos);
+        CHECK(saved.find("\nself:get\n") != std::string::npos && saved.find("\nmath.sin\n") != std::string::npos);
+        CHECK(engine.GetScene().Entities().empty() && engine.Frame() == 0 && !engine.InPlaySession());
+        // Cancelling a bulk close keeps both clean and modified tabs in the pending set.
+        type("x"); editor.OpenScript("scripts/one.lua"); frames(3);
+        tabMenu("scripts/three.lua"); menu("Close All Tabs"); CHECK(editor.OpenScripts().size() == 2);
+        modalButton("Cancel"); CHECK(editor.OpenScripts().size() == 2);
+        tabMenu("scripts/three.lua"); menu("Close All Tabs"); modalButton("Discard and Close"); CHECK(editor.OpenScripts().empty());
+    }
+    RemoveAll(project);
 }
 
 
@@ -11944,6 +12343,167 @@ TEST(NativeEditorAssetBrowser) {
         CHECK(!engine.Dirty()); // browsing, switching views and editing a tab do not change the scene
     }
     RemoveAll(project);
+}
+
+TEST(NativeEditorInspectorAxisEditing) {
+    const std::string project = TempProject("editor_inspector_axes");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(Call(engine, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Probe","components":{"Transform":{}}})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        const EntityId probe = engine.GetScene().FindByName("Probe");
+        editor.Select(probe);
+        RenderTarget image;
+        int width = 1600;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), width, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto move = [](float x, float y) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseMove; event.x = x; event.y = y; return event;
+        };
+        auto button = [](bool down) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.button = 0; event.down = down; return event;
+        };
+        for (int size : {1600, 900}) {
+            width = size; frames(6);
+            ImGuiWindow* inspector = ImGui::FindWindowByName("###Inspector");
+            CHECK(inspector != nullptr);
+            if (!inspector) continue;
+            if (size == 900) {
+                const float splitX = inspector->Pos.x - ImGui::GetStyle().DockingSeparatorSize * 0.5f;
+                const float splitY = inspector->Pos.y + inspector->Size.y * 0.5f;
+                frames(2, {move(splitX, splitY)});
+                frames(1, {button(true)});
+                frames(3, {move(splitX + 120, splitY)});
+                frames(3, {button(false)});
+            }
+            const ImGuiID component = ImHashStr("Transform", 0, inspector->ID);
+            ImGuiTable* table = ImGui::TableFindByID(ImHashStr("##fields", 0, component));
+            CHECK(table != nullptr);
+            if (!table) continue;
+            const ImGuiTableColumn& column = table->Columns[1];
+            const float available = column.WorkMaxX - column.WorkMinX;
+            const bool stacked = available < ImGui::GetFontSize() * 9.5f;
+            CHECK(stacked == (size == 900));
+            const float axisWidth = stacked ? available : (available - ImGui::GetStyle().ItemInnerSpacing.x * 2) / 3;
+            const float x = column.WorkMinX + axisWidth * 0.5f;
+            const float y = table->OuterRect.Min.y + ImGui::GetStyle().CellPadding.y + ImGui::GetFrameHeight() * 0.5f;
+            const size_t history = engine.UndoDepth();
+            frames(2, {move(x, y)});
+            frames(1, {button(true)});
+            for (int step = 1; step <= 4; ++step) frames(1, {move(x + static_cast<float>(step) * 10, y)});
+            frames(2, {button(false)});
+            const Vec3 position = engine.GetScene().Get<Transform>(probe)->position;
+            CHECK(position.x > 0.1f && position.y == 0 && position.z == 0);
+            CHECK(engine.UndoDepth() == history + 1);
+            CHECK(Call(engine, "history.undo")["ok"].asBool());
+            CHECK(Near(engine.GetScene().Get<Transform>(probe)->position, Vec3(), 1e-6f));
+            frames(2);
+            CHECK(WritePng(JoinPath(OE_SOURCE_DIR, size == 1600 ? "build/inspector-wide.png" : "build/inspector-narrow.png"), image.ToImage()));
+        }
+        ImGuiWindow* console = ImGui::FindWindowByName("###Console");
+        CHECK(console != nullptr);
+        if (console) {
+            ImGui::FocusWindow(console);
+            frames(6);
+            CHECK(console->DockTabIsVisible);
+            CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/console-readable-narrow.png"), image.ToImage()));
+        }
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(NativeEditorPauseAndGizmoInput) {
+    const std::string project = TempProject("editor_pause_gizmo");
+    Engine engine; std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(Call(engine, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Probe","components":{"Transform":{},"MeshRenderer":{}}})")["ok"].asBool());
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count, std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 720, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto move = [](float x, float y) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseMove; event.x = x; event.y = y; return event;
+        };
+        auto button = [](bool down) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.button = 0; event.down = down; return event;
+        };
+        frames(5);
+        frames(6, CtrlChord(WindowKey::P));
+        CHECK(engine.Playing());
+        ImGuiWindow* toolbar = ImGui::FindWindowByName("##Toolbar");
+        CHECK(toolbar != nullptr);
+        const float h = ImGui::GetFrameHeight();
+        const float pauseX = (1280.0f - (h * 1.25f * 3 + 4)) * 0.5f + h * 1.25f * 1.5f + 2;
+        const float pauseY = toolbar ? toolbar->Pos.y + toolbar->Size.y * 0.5f : 40;
+        auto pauseClick = [&]() {
+            frames(1, {move(pauseX, pauseY), button(true)});
+            frames(1, {button(false)});
+        };
+        pauseClick(); CHECK(!engine.Playing());
+        const uint64_t pausedFrame = engine.Frame();
+        frames(10); CHECK(engine.Frame() == pausedFrame);
+        pauseClick(); CHECK(engine.Playing());
+        frames(3); CHECK(engine.Frame() > pausedFrame);
+        frames(6, CtrlChord(WindowKey::P));
+        CHECK(!engine.InPlaySession());
+        const EntityId probe = engine.GetScene().FindByName("Probe");
+        CHECK(probe != kNullEntity);
+        ImGuiWindow* sceneWindow = ImGui::FindWindowByName("###Scene");
+        CHECK(sceneWindow != nullptr);
+        if (sceneWindow) {
+            ImGui::FocusWindow(sceneWindow);
+            frames(3);
+            CHECK(sceneWindow->DockTabIsVisible);
+        }
+        editor.Select(probe); editor.SetSceneView2D(true);
+        frames(3, {KeyEvent(WindowKey::F, true), KeyEvent(WindowKey::F, false)});
+        const auto rect = editor.SceneViewRect();
+        const float cx = rect[0] + rect[2] * 0.5f, cy = rect[1] + rect[3] * 0.5f;
+        for (WindowKey key : {WindowKey::W, WindowKey::E, WindowKey::R}) {
+            frames(3, {KeyEvent(key, true), KeyEvent(key, false)});
+            const ImGuizmo::OPERATION operation = key == WindowKey::W ? ImGuizmo::TRANSLATE
+                : key == WindowKey::E ? ImGuizmo::ROTATE : ImGuizmo::SCALE;
+            float hitX = cx;
+            bool found = false;
+            for (int offset = 10; offset < 150 && !found; offset += 2) {
+                hitX = cx + static_cast<float>(offset);
+                frames(1, {move(hitX, cy)});
+                found = ImGuizmo::IsOver(operation);
+            }
+            CHECK(found);
+            if (!found) continue;
+            // No hover frame at the handle: move and press arrive together.
+            frames(2, {move(rect[0] + 10, rect[1] + rect[3] - 10)});
+            CHECK(!ImGuizmo::IsOver());
+            const Json before = engine.GetScene().EntityToJson(probe);
+            frames(1, {move(hitX, cy), button(true)});
+            CHECK(ImGuizmo::IsUsing());
+            frames(2, {move(hitX + 20, cy - 20)});
+            frames(2, {button(false)});
+            CHECK(!ImGuizmo::IsUsing());
+            CHECK(engine.GetScene().EntityToJson(probe).dump() != before.dump());
+            CHECK(Call(engine, "history.undo")["ok"].asBool());
+            frames(2);
+        }
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-gizmo-input.png"), image.ToImage()));
+    }
+    CHECK(RemoveAll(project));
 }
 
 TEST(NativeEditorHeadless) {
