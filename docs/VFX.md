@@ -1,4 +1,4 @@
-# Headless VFX authoring
+# VFX assets and headless authoring
 
 Create, tune and verify existing `ParticleEmitter` and `Trail` effects through the same command API
 used by CLI, HTTP and MCP. No play session or editor window is needed. The simulation and rendering
@@ -31,12 +31,12 @@ on the first fixed step. Software PNG/hash output is identical with one or multi
 
 | Command | Behavior |
 |---|---|
-| `vfx.schema {}` | Reflection-derived fields, seven module groups, limits and the planned phase-2 parameter syntax |
+| `vfx.schema {}` | Reflection-derived fields, seven module groups, limits and the parameter/target syntax |
 | `vfx.presets {tag?}` | Preset names, intent, tags and emitter/trail blocks |
 | `vfx.apply_preset {id,preset,mode?}` | One undoable edit on the named entity; default `replace` resets only the affected component, including transient state. `merge` patches preset fields and preserves unspecified settings/state. Other components and children remain intact. Adds Transform when needed. |
-| `vfx.check {id}` | Validate the entity and its descendants; return `ok:true` plus actionable `warnings`. Invalid settings return an API error. |
-| `vfx.preview {id,times?,size?,renderer?,camera?,motion?,out?,inline?}` | Restart an isolated copy and return a contact sheet, actual sampled times, per-tile counts/bounds/hashes and the sheet hash. PNG path when `out` is supplied; otherwise `png_base64`. |
-| `vfx.analyze {id,duration?,step?,render?,camera?,motion?}` | Restart an isolated copy; return completion time, particle peak/time, point peak, capacity ratio, sampled counts/bounds and a metrics hash. Optional software-frame mean luminance. |
+| `vfx.check {id|path}` | Validate the entity and its descendants; return `ok:true` plus actionable `warnings`. Invalid settings return an API error. |
+| `vfx.preview {id|path,times?,size?,renderer?,camera?,motion?,out?,inline?}` | Restart an isolated copy and return a contact sheet, actual sampled times, per-tile counts/bounds/hashes and the sheet hash. PNG path when `out` is supplied; otherwise `png_base64`. |
+| `vfx.analyze {id|path,duration?,step?,render?,camera?,motion?}` | Restart an isolated copy; return completion time, particle peak/time, point peak, capacity ratio, sampled counts/bounds and a metrics hash. Optional software-frame mean luminance. |
 
 `component.add` and `component.set` strictly validate ParticleEmitter/Trail authoring edits before
 reflection can clamp values. Unknown fields return `unknown_field` with a nearest-name suggestion;
@@ -106,6 +106,88 @@ oversized geometry returns a range error with a shorter-duration/smaller-scale h
 Without motion, a newly restarted trail is stationary and its preview has no ribbon. These motion keys
 belong to the preview request, not the component or gameplay simulation.
 
+## Reusable assets
+
+A `*.vfx.json` groups named emitter/trail settings and intent-level parameter definitions. `VFXSystem`
+links an owner to that asset; no child emitter entities are created. The existing ParticleEmitter/Trail
+components and prefab effects remain supported. Create a document with `vfx.create {path,vfx}`:
+
+```json
+{
+  "format": "oe.vfx", "version": 1, "name": "Impact",
+  "emitters": [{"name": "sparks", "emitter": {
+    "loop": false, "burst": 16, "rate": 0, "lifetime": 0.4, "maxParticles": 32
+  }}],
+  "params": {"strength": {"default": 1, "min": 0, "max": 2,
+    "doc": "Scale the impact particle count.",
+    "targets": [{"to": "sparks.burst", "scale": 16}]}},
+  "budget": {"maxParticles": 32}
+}
+```
+
+Block and parameter names are unique ASCII letters/digits/underscore/hyphen, 1..64 characters;
+block names are unique across emitters and trails. Documents allow 1..32 total blocks, 32 parameters,
+32 targets per parameter, and at most 1 MiB. Settings use component reflection and omit default fields
+on save. Unknown fields give nearest-name hints and their JSON location; ranges, enums and curves
+are checked before any file or scene edit. Target mappings override a field, multiplying numeric
+values by optional `scale`. Parameter bounds and the target field's own constraints both apply.
+Targets use `blockName.fieldName`; parameter definitions and instance overrides must be objects.
+
+Each block accepts an optional local `transform:{position,rotation,scale}`. Trails follow the owner's
+world transform plus this offset; world-space particles retain their birth positions, while local-space
+particles follow the block transform. `vfx.from_entity` writes a 16-number column-major affine `matrix`
+instead, preserving nested/nonuniform transforms exactly. A block cannot contain both representations.
+Root position is the placement, so exported offsets are relative to the selected root. Packing rejects a
+singular root and ignores scripts, meshes, lights and other placement components.
+
+| Command | Behavior |
+|---|---|
+| `vfx.create {path,vfx}` | Validate and atomically write the canonical document; replaces an existing asset. |
+| `vfx.get {path}`, `vfx.list {}` | Read canonical asset JSON or list project-relative asset paths. |
+| `vfx.set {path,emitter,values}` | Partially patch one named emitter; use `trail` for a trail. |
+| `vfx.set {path,params}` | Replace parameter definitions. |
+| `vfx.diff {path,against?}` | Return `{field,before,after}` changes using block names; default comparison is component defaults and identity offsets. `against` accepts another asset path. |
+| `vfx.from_entity {id,path}` | Pack the selected ParticleEmitter/Trail subtree without changing the scene. |
+| `vfx.spawn {path,name?,parent?,position?,params?,autoDestroy?}` | Create Transform + linked VFXSystem in one scene undo step. Position is parent-local; autoDestroy defaults true. |
+| `vfx.state {id}` | Read effective params, playback/completion/error, aggregate counts/budget and per-block counts/emitted totals. |
+| `vfx.play {id,restart?}` | Restart blocks by default, preserving parameter overrides; `restart:false` resumes emission clocks. |
+| `vfx.stop {id,kill?}` | Stop automatic emission and drain particles/trail points; `kill:true` empties them immediately. |
+| `vfx.burst {id,emitter?,count?}` | Manually emit one named emitter or all in asset order. Default count is each configured burst. Counts respect both caps. Manual births do not consume the startup burst. |
+| `vfx.clear {id}` | Empty particles and trail points, retaining clocks, RNG and playback. Suppress autoDestroy until play/stop/burst so an empty instance can be reused. |
+| `vfx.set_param {id,name,value}` | Set a validated transient parameter override. Use component.set on VFXSystem.params for a saved instance override. |
+
+Preview/check/analyze accept exactly one `id` or `path`. Linked entity previews use authored instance
+parameters and restart transient simulation; runtime controls are excluded. Preview-only motion keys
+also work on assets. Asset writes have no scene undo; use source control for document history until
+phase 3's isolated editor authoring workflow. Runtime controls have no scene undo and leave authored
+scene JSON unchanged; their parameters/playback/RNG/particles/points are copied by native snapshots.
+External controls and asset writes are blocked while recording or in a network match, while deterministic
+Lua gameplay can control instances. `vfx.state` never modifies the live instance.
+
+`budget.maxParticles` is a total cap (0..40000, default 10000), in addition to each emitter's cap.
+Emitters consume available capacity in asset order; overflowing births are dropped. Lowering the budget
+trims later emitters first on the next step. Capacity freed by a later emitter becomes available to earlier
+emitters on the following step. Index zero retains the legacy RNG seed, so an identity one-emitter asset
+with the same owner id matches its plain component frame for frame. Later indices use independent fixed
+seed mixes; changing block order changes these streams. No wall-clock randomness enters simulation.
+
+Settings hot reload preserves active particles, birth snapshots, elapsed clocks, RNG and trail points when
+block names/order/counts stay the same. Live curves, texture and appearance update immediately; birth
+properties affect future particles. Structural changes restart all blocks. Invalid reloads keep the last
+valid runtime and expose the error in state; a corrected file clears it on the next reload/step. Changing
+the linked path resets transient controls after the new definition validates. Polling follows the existing
+asset reload rules and is disabled during recording/network replay.
+
+`autoDestroy` destroys the owner and its descendants only after all blocks finish. Looping emitters and
+emitting trails prevent natural completion; stop them to drain. Delayed one-shots wait for startup and
+expiry. A stopped, never-started one-shot warns in check. `game.pause` freezes automatic simulation and
+cleanup; scripts can still call manual burst/clear while paused.
+
+VFXLab keeps `scenes/main.scene.json` as the component reference and adds `scenes/assets.scene.json`,
+whose campfire links `effects/campfire.vfx.json`. The `intensity` parameter scales three emission rates.
+Regenerate both paths with `python samples/VFXLab/tools/make_scene.py`. See [SCRIPTING.md](SCRIPTING.md)
+for the Lua bindings. Effects panel, particle materials/batching and sub-emitters remain later phases.
+
 ## Implementation status (work log)
 
 - [x] Phase 1: six commands, eight portable presets, strict component authoring validation and bounded
@@ -118,7 +200,20 @@ belong to the preview request, not the component or gameplay simulation.
       The earlier editor workflow/shader graph branch is also integrated into this checkout;
       the combined Windows Release build passes all 261 tests, including node dragging and material
       authoring. A Korean ShaderLab editor screenshot was inspected after integration.
-- [ ] Phase 2: reusable assets, VFXSystem, runtime control, Lua, hot reload and budgets.
+- [x] Phase 2 (2026-10-08): strict version-1 assets, sparse round trips, named parameter targets,
+      atomic asset commands and subtree export, linked VFXSystem with runtime controls, Lua bindings,
+      hot reload and total budgets, shared simulation/render gathering, autoDestroy and alternate VFXLab
+      campfire asset scene. Native snapshots retain runtime particles/points/RNG/controls; scene JSON
+      excludes them. External controls/writes are blocked during recording/network matches.
+      Windows Release build is warning-free; all 271 tests pass (ten additional asset/runtime tests).
+      Single-emitter frame-by-frame software parity and native restore tested; legacy 2D/3D hashes remain
+      eeb1529ca41029c9 / 4ea73d9e1b71d479. Actual asset CLI checks, previews, analysis and alternate scene
+      rendering passed. Inspected software/D3D11 192px contact sheets: 0efdfb4b39ef66d2 /
+      e14f3901d15e0d63. Two-second analysis: d0190970a65b1f8a (peak 67 of 208, nine samples).
+      Alternate asset scene at frame 132, 640x360: 2c41322aa12063c8, inspected. API reference,
+      scripting guide, all READMEs and identical AGENTS.md/CLAUDE.md updated.
+      Rebuild attempts returned Emscripten not found / Android NDK not found; shipped Web/Android
+      binaries still require rebuilding before these assets can be used on those targets.
 - [ ] Phase 3: Effects panel and visual authoring widgets.
 - [ ] Platform follow-up: Linux/EGL and Android device verification. Web/Android prebuilt runtimes still
       require the previously tracked particle V1/V2 rebuild; no SDK is available on this host.

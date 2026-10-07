@@ -14,6 +14,8 @@
 #include "render/RenderScene.h"
 #include "scene/Components.h"
 #include "scene/Systems.h"
+#include "scene/Vfx.h"
+#include "assets/Assets.h"
 
 namespace oe {
 namespace {
@@ -57,6 +59,7 @@ struct Bounds {
 
 struct IsolatedEffect {
     Scene scene;
+    AssetManager* assets = nullptr;
     EntityId root;
     Vec3 origin;
     InputState input;
@@ -65,8 +68,15 @@ struct IsolatedEffect {
     std::vector<Vec3> motionPositions;
 
     IsolatedEffect(Engine& engine, EntityId id, const Json& args, int frames, int passes) : root(id) {
-        CheckVfx(engine, id);
-        const Scene& source = engine.GetScene();
+        assets = &engine.Assets();
+        Scene assetSource;
+        if (args.has("path")) {
+            CheckVfxAsset(engine, args["path"].asString());
+            id = assetSource.Create("VFX"); root = id;
+            assetSource.Add<Transform>(id);
+            auto& system = assetSource.Add<VFXSystem>(id); system.asset = args["path"].asString();
+        } else CheckVfx(engine, id);
+        const Scene& source = args.has("path") ? assetSource : engine.GetScene();
         std::set<EntityId> selected{id}; std::vector<EntityId> pending{id};
         while (!pending.empty()) {
             const EntityId current = pending.back(); pending.pop_back();
@@ -85,7 +95,7 @@ struct IsolatedEffect {
             scene.Create(record.name, record.parent, current);
             if (const Transform* transform = source.Get<Transform>(current)) scene.Add<Transform>(current) = *transform;
             if (!selected.count(current)) continue;
-            for (const char* name : {"ParticleEmitter", "Trail"}) {
+            for (const char* name : {"ParticleEmitter", "Trail", "VFXSystem"}) {
                 const ComponentType& type = *TypeRegistry::Find(name);
                 const void* original = source.GetComponent(current, type);
                 if (!original) continue;
@@ -94,6 +104,13 @@ struct IsolatedEffect {
                     throw ApiError("invalid_vfx", error);
             }
             if (const ParticleEmitter* emitter = scene.Get<ParticleEmitter>(current)) capacity += static_cast<uint64_t>(emitter->maxParticles);
+            if (VFXSystem* system = scene.Get<VFXSystem>(current)) {
+                system->autoDestroy = false;
+                std::string error;
+                if (!RefreshVfx(*system, *assets, &error)) throw ApiError("invalid_vfx", error);
+                capacity += static_cast<uint64_t>(system->definition->maxParticles);
+                for (const auto& trail : system->trails) capacity += static_cast<uint64_t>(trail.maxPoints);
+            }
             // Trail gather builds a mesh/texture; count it in the bounded work estimate too.
             if (const Trail* trail = scene.Get<Trail>(current)) capacity += static_cast<uint64_t>(trail->maxPoints);
         }
@@ -132,16 +149,17 @@ struct IsolatedEffect {
     }
     void Step(int frame) {
         Move(static_cast<double>(frame) * Engine::kFixedDt);
-        UpdateSystems(scene, input, static_cast<float>(Engine::kFixedDt));
+        UpdateSystems(scene, input, static_cast<float>(Engine::kFixedDt), assets);
         UpdateLateSystems(scene, static_cast<float>(Engine::kFixedDt));
     }
     bool Finished() const {
         for (const auto& pair : scene.Pool<ParticleEmitter>()) if (!ParticlesFinished(pair.second)) return false;
         for (const auto& pair : scene.Pool<Trail>()) if (pair.second.emitting || !pair.second.points.empty()) return false;
+        for (const auto& pair : scene.Pool<VFXSystem>()) if (!VfxFinished(pair.second)) return false;
         return true;
     }
-    size_t Count() const { size_t count = 0; for (const auto& pair : scene.Pool<ParticleEmitter>()) count += pair.second.particles.size(); return count; }
-    size_t PointCount() const { size_t count = 0; for (const auto& pair : scene.Pool<Trail>()) count += pair.second.points.size(); return count; }
+    size_t Count() const { size_t count = 0; for (const auto& pair : scene.Pool<ParticleEmitter>()) count += pair.second.particles.size(); for (const auto& pair : scene.Pool<VFXSystem>()) for (const auto& emitter : pair.second.emitters) count += emitter.particles.size(); return count; }
+    size_t PointCount() const { size_t count = 0; for (const auto& pair : scene.Pool<Trail>()) count += pair.second.points.size(); for (const auto& pair : scene.Pool<VFXSystem>()) for (const auto& trail : pair.second.trails) count += trail.points.size(); return count; }
     Bounds Box(const Mat4& view = Mat4{}) const {
         Bounds bounds;
         for (const RenderItem& item : GatherRenderItems(scene, nullptr, view)) for (int corner = 0; corner < 8; ++corner)
@@ -251,6 +269,7 @@ Json AnalyzeVfx(Engine& engine, EntityId id, const Json& args) {
     out["step"] = static_cast<double>(interval) * Engine::kFixedDt; out["finishedAt"] = Json(); out["samples"] = Json::MakeArray();
     size_t peak = 0, pointPeak = 0; int peakFrame = 0; uint64_t budget = 0;
     for (const auto& pair : effect.scene.Pool<ParticleEmitter>()) budget += static_cast<uint64_t>(pair.second.maxParticles);
+    for (const auto& pair : effect.scene.Pool<VFXSystem>()) budget += static_cast<uint64_t>(pair.second.definition->maxParticles);
     Bounds bounds; std::vector<int> samples;
     for (int frame = 0; frame <= end; ++frame) {
         if (frame) effect.Step(frame);

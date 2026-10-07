@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "scene/Components.h"
 #include "scene/Systems.h"
+#include "scene/Vfx.h"
 #include "scene/TileGrid.h"
 
 namespace oe {
@@ -383,10 +384,8 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
     }
     // Each particle shares the static quad. Stable birth order also resolves equal-distance blends.
     const float axes[3][3] = {{right.x, right.y, right.z}, {up.x, up.y, up.z}, {normal.x, normal.y, normal.z}};
-    for (const auto& kv : scene.Pool<ParticleEmitter>()) {
-        const ParticleEmitter& emitter = kv.second;
-        if (emitter.particles.empty()) continue;
-        const Mat4 emitterWorld = scene.WorldMatrix(kv.first);
+    auto gatherEmitter = [&](EntityId owner, const ParticleEmitter& emitter, const Mat4& emitterWorld) {
+        if (emitter.particles.empty()) return;
         std::shared_ptr<const Texture> texture;
         if (!emitter.texture.empty() && assets) texture = assets->GetTexture(emitter.texture);
         const int columns = std::max(1, std::min(4096, emitter.columns)), rows = std::max(1, std::min(4096, emitter.rows));
@@ -408,7 +407,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             Vec3 center = particle.worldSpace ? particle.position : emitterWorld.TransformPoint(particle.position);
             if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)) continue;
             RenderItem it;
-            it.id = kv.first;
+            it.id = owner;
             it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
             it.textureOverride = texture;
             if (colorCurve.Empty()) {
@@ -471,18 +470,20 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.normalMatrix = it.world.Inverse().Transposed();
             items.push_back(std::move(it));
         }
-    }
+    };
+    for (const auto& kv : scene.Pool<ParticleEmitter>()) gatherEmitter(kv.first, kv.second, scene.WorldMatrix(kv.first));
+    for (const auto& kv : scene.Pool<VFXSystem>()) if (kv.second.definition)
+        for (size_t i = 0; i < kv.second.emitters.size(); ++i)
+            gatherEmitter(kv.first, kv.second.emitters[i], scene.WorldMatrix(kv.first) * kv.second.definition->emitters[i].local);
     // Trails: one ribbon mesh per entity in world coordinates, rebuilt every frame from its path and
     // turned toward the camera. The fade along its length comes from the texture (TrailTexture).
-    for (const auto& kv : scene.Pool<Trail>()) {
-        const Trail& trail = kv.second;
+    auto gatherTrail = [&](EntityId owner, const Trail& trail, const Vec3& head, bool emitting) {
         std::vector<TrailPoint> path = trail.points;
-        if (trail.emitting) {  // the ribbon always reaches the entity, also between path points
-            const Vec3 head = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
+        if (emitting) {  // the ribbon always reaches the entity, also between path points
             if (std::isfinite(head.x) && std::isfinite(head.y) && std::isfinite(head.z) &&
                 (path.empty() || Length(head - path.back().position) > 1e-5f)) path.push_back({head, 0.0f});
         }
-        if (path.size() < 2 || !std::isfinite(trail.width) || !std::isfinite(trail.endWidth)) continue;
+        if (path.size() < 2 || !std::isfinite(trail.width) || !std::isfinite(trail.endWidth)) return;
         std::shared_ptr<const Texture> image;
         if (!trail.texture.empty() && assets) image = assets->GetTexture(trail.texture);
         const bool missing = !trail.texture.empty() && !image;
@@ -514,7 +515,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         mesh->ComputeBounds();
         mesh->ComputeTangents();
         RenderItem it;
-        it.id = kv.first;
+        it.id = owner;
         it.mesh = mesh;
         it.textureOverride = fade;
         it.tint = missing ? Color(1, 0, 1) : Color(1, 1, 1);
@@ -526,7 +527,14 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.doubleSided = true;
         it.sortLayer = trail.layer;
         items.push_back(std::move(it));
-    }
+    };
+    for (const auto& kv : scene.Pool<Trail>())
+        gatherTrail(kv.first, kv.second, scene.WorldMatrix(kv.first).TransformPoint(Vec3()), kv.second.emitting);
+    for (const auto& kv : scene.Pool<VFXSystem>()) if (kv.second.definition)
+        for (size_t i = 0; i < kv.second.trails.size(); ++i)
+            gatherTrail(kv.first, kv.second.trails[i],
+                        (scene.WorldMatrix(kv.first) * kv.second.definition->trails[i].local).TransformPoint(Vec3()),
+                        VfxPlaying(kv.second) && kv.second.trails[i].emitting);
     std::stable_sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) { return a.id < b.id; });
     for (RenderItem& item : items) {
         item.boundsMin = item.mesh->boundsMin;

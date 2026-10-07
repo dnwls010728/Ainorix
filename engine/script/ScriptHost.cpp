@@ -754,6 +754,39 @@ int L_ParticlesState(lua_State* L) {
     });
 }
 
+// VFX bindings share the command registry, including validation and runtime-only controls.
+int VfxLuaCall(lua_State* L, const char* operation) {
+    return Guard(L, [&] {
+        const std::string op = operation;
+        Json args = Json::MakeObject();
+        if (op == "spawn") {
+            args = lua_istable(L, 2) ? ToJson(L, 2) : Json::MakeObject();
+            args["path"] = luaL_checkstring(L, 1);
+        } else {
+            if (op == "play" || op == "stop") args = lua_istable(L, 2) ? ToJson(L, 2) : Json::MakeObject();
+            args["id"] = CheckEntity(L, 1);
+            if (op == "set_param") { args["name"] = luaL_checkstring(L, 2); args["value"] = ToJson(L, 3); }
+            if (op == "burst" && !lua_isnoneornil(L, 2)) {
+                if (lua_istable(L, 2)) { args = ToJson(L, 2); args["id"] = CheckEntity(L, 1); }
+                else args["count"] = static_cast<int64_t>(luaL_checkinteger(L, 2));
+            }
+        }
+        const Json result = Host(L).GetEngine().Call("vfx." + op, args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        if (op == "spawn") lua_pushinteger(L, result["result"]["id"].asInt());
+        else if (op == "burst") lua_pushinteger(L, result["result"]["accepted"].asInt());
+        else PushJson(L, result["result"]);
+        return 1;
+    });
+}
+int L_VfxSpawn(lua_State* L) { return VfxLuaCall(L, "spawn"); }
+int L_VfxPlay(lua_State* L) { return VfxLuaCall(L, "play"); }
+int L_VfxStop(lua_State* L) { return VfxLuaCall(L, "stop"); }
+int L_VfxBurst(lua_State* L) { return VfxLuaCall(L, "burst"); }
+int L_VfxClear(lua_State* L) { return VfxLuaCall(L, "clear"); }
+int L_VfxSet(lua_State* L) { return VfxLuaCall(L, "set_param"); }
+int L_VfxState(lua_State* L) { return VfxLuaCall(L, "state"); }
+
 // trail.clear(id): forget the ribbon's path (teleports).
 int L_TrailClear(lua_State* L) {
     return Guard(L, [&] {
@@ -1642,6 +1675,9 @@ void ScriptHost::Open() {
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {"state", L_ParticlesState}, {nullptr, nullptr}};
     SetFuncs(L, "particles", particleFuncs);
+    const luaL_Reg vfxFuncs[] = {{"spawn", L_VfxSpawn}, {"play", L_VfxPlay}, {"stop", L_VfxStop},
+        {"burst", L_VfxBurst}, {"clear", L_VfxClear}, {"set", L_VfxSet}, {"state", L_VfxState}, {nullptr, nullptr}};
+    SetFuncs(L, "vfx", vfxFuncs);
     const luaL_Reg trailFuncs[] = {{"clear", L_TrailClear}, {nullptr, nullptr}};
     SetFuncs(L, "trail", trailFuncs);
     const luaL_Reg inputFuncs[] = {{"player", L_InputPlayer}, {"axis", L_InputAxis}, {"down", L_InputDown}, {"pressed", L_InputPressed}, {"mouse", L_InputMouse},
@@ -2070,7 +2106,7 @@ std::vector<std::string> ScriptHost::PollHotReload(const std::string& changedPat
     reloading_ = true; reloadViolation_ = false; reloadBlocked_ = reloadProtected_;
     // Block engine functions even when a module captured an unguarded binding earlier.
     const int top = lua_gettop(L_);
-    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "particles", "trail", "physics", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
+    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "particles", "vfx", "trail", "physics", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
         lua_getglobal(L_, global);
         if (lua_istable(L_, -1)) { lua_pushnil(L_); while (lua_next(L_, -2)) { if (lua_isfunction(L_, -1)) reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1); } }
         lua_pop(L_, 1);

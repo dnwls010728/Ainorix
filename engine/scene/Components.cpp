@@ -42,6 +42,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<NetSync>();
     TypeRegistry::Register<NetPlayer>();
     TypeRegistry::Register<Trail>();
+    TypeRegistry::Register<VFXSystem>();
 }
 
 }  // namespace oe

@@ -26,6 +26,9 @@ int BurstParticles(Scene& scene, EntityId id, int count);
 // True once a non-looping emitter has emitted everything it will and its particles are gone
 // (effect entities can be destroyed). Looping emitters never finish.
 bool ParticlesFinished(const ParticleEmitter& emitter);
+// Shared fixed-step/birth implementation; seedMix zero preserves the plain component's exact stream.
+void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt);
+int BurstEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, int count);
 
 // Keys of a ParticleEmitter sizeOverLife/colorOverLife/opacityOverLife field, ascending in
 // t (0..1). Scalars are in x; colors in xyz.
@@ -44,6 +47,8 @@ bool ParseParticleCurve(const Json& keys, bool color, ParticleCurve& out, std::s
 struct Trail;
 // Forgets a Trail's path (teleports, respawns).
 void ClearTrail(Trail& trail);
+// Shared trail aging/sampling at an explicit world-space head.
+void StepTrail(Trail& trail, const Vec3& position, float dt);
 
 // Logical key state. Key names: "W","A","S","D","Up","Down","Left","Right",
 // "Space","Shift","Escape", letters "A".."Z", digits "0".."9".

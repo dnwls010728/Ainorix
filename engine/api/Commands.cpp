@@ -324,6 +324,35 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    for (const char* operation : {"create", "get", "list", "set", "diff", "from_entity"}) {
+        Params params;
+        const std::string op = operation;
+        if (op != "list") params.Req("path", "string", "Project-relative .vfx.json asset path.");
+        if (op == "create") params.Req("vfx", "object", "Version 1 oe.vfx document: named emitters/trails, params and budget.");
+        if (op == "set") params.Opt("emitter", "string", "Emitter block name.").Opt("trail", "string", "Trail block name.")
+            .Opt("values", "object", "Partial block field patch.").Opt("params", "object", "Replace parameter definitions.");
+        if (op == "diff") params.Opt("against", "string", "Reference .vfx.json; omitted compares named blocks with component defaults.");
+        if (op == "from_entity") params.ReqWith("id", EntityRefSchema("Root of a ParticleEmitter/Trail subtree to pack."));
+        Register(r, ("vfx." + op).c_str(), "Read or atomically author a reusable VFX asset; file edits do not enter scene undo.", params, false,
+                 [op](Engine& e, const Json& a) { return VfxAssetCall(e, op, a); });
+    }
+    Register(r, "vfx.spawn", "Create a linked VFXSystem with validated parameters in one scene undo step.",
+             Params().Req("path", "string", "Project .vfx.json asset.").Opt("name", "string", "Owner entity name.")
+                 .OptWith("parent", EntityRefSchema("Optional parent; position is local to parent."))
+                 .Opt("position", "array", "Local [x,y,z].").Opt("params", "object", "Named parameter overrides.")
+                 .Opt("autoDestroy", "boolean", "Destroy owner after all emission and particles/trails finish (default true)."), true,
+             [](Engine& e, const Json& a) { return VfxRuntimeCall(e, "spawn", 0, a); });
+    for (const char* operation : {"play", "stop", "burst", "clear", "set_param", "state"}) {
+        const std::string op = operation; Params params;
+        params.ReqWith("id", EntityRefSchema("VFXSystem owner id or name."));
+        if (op == "play") params.Opt("restart", "boolean", "Restart all blocks (default true); false resumes their clocks.");
+        if (op == "stop") params.Opt("kill", "boolean", "Clear particles and trails immediately (default false: drain).");
+        if (op == "burst") params.Opt("emitter", "string", "One named emitter; omitted targets all in asset order.")
+            .Opt("count", "integer", "Births per selected emitter, 0..10000; omitted uses each configured burst.");
+        if (op == "set_param") params.Req("name", "string", "Parameter name.").ReqWith("value", Json::MakeObject());
+        Register(r, ("vfx." + op).c_str(), "Control or inspect linked VFX runtime; controls do not create scene undo entries.", params, false,
+                 [op](Engine& e, const Json& a) { return VfxRuntimeCall(e, op, RequireEntity(e, a), a); });
+    }
     Register(r, "vfx.schema", "Discover particle/trail fields, fixed-order modules, defaults, ranges and authoring limits.", Params(), false,
              [](Engine&, const Json&) { return VfxSchema(); });
     Register(r, "vfx.presets", "List portable effect presets with intent sentences and tags.", Params().Opt("tag", "string", "Filter by an exact tag."), false,
@@ -333,10 +362,10 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  .Opt("mode", "string", "replace resets the affected component (default); merge preserves unspecified settings."), true,
              [](Engine& e, const Json& a) { return ApplyVfxPreset(e, RequireEntity(e, a), a); });
     Register(r, "vfx.check", "Validate settings in an effect subtree and report actionable warnings without stepping it.",
-             Params().ReqWith("id", EntityRefSchema("Effect root id or name; includes descendants.")), false,
-             [](Engine& e, const Json& a) { return CheckVfx(e, RequireEntity(e, a)); });
+             Params().OptWith("id", EntityRefSchema("Effect root id or name; includes descendants.")).Opt("path", "string", "Alternative .vfx.json asset source."), false,
+             [](Engine& e, const Json& a) { if (a.has("id") == a.has("path")) throw ApiError("invalid_vfx", "provide exactly one id or path"); return a.has("path") ? CheckVfxAsset(e, a["path"].asString()) : CheckVfx(e, RequireEntity(e, a)); });
     Register(r, "vfx.preview", "Restart an isolated effect and render a contact sheet with one shared camera; does not run gameplay scripts.",
-             Params().ReqWith("id", EntityRefSchema("Effect root id or name."))
+             Params().OptWith("id", EntityRefSchema("Effect root id or name.")).Opt("path", "string", "Alternative .vfx.json asset source.")
                  .Opt("times", "array", "1..16 increasing seconds within 0..60; rounded to 60 Hz. Default [0.1,0.3,0.6,1].")
                  .Opt("size", "integer", "Square tile size 32..512 (default 256); up to four columns.")
                  .Opt("renderer", "string", "software (default, deterministic) or gpu (hardware dependent).")
@@ -344,15 +373,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  .Opt("motion", "array", "2..32 keys [[seconds,[x,y,z]],...] of root offsets in parent coordinates; no gameplay scripts.")
                  .Opt("out", "string", "Write contact-sheet PNG inside the project.")
                  .Opt("inline", "boolean", "Return png_base64 (default true when out is absent)."), false,
-             [](Engine& e, const Json& a) { return PreviewVfx(e, RequireEntity(e, a), a); });
+             [](Engine& e, const Json& a) { if (a.has("id") == a.has("path")) throw ApiError("invalid_vfx", "provide exactly one id or path"); return PreviewVfx(e, a.has("id") ? RequireEntity(e, a) : 0, a); });
     Register(r, "vfx.analyze", "Measure a restarted isolated effect at fixed steps; peaks and completion examine every frame.",
-             Params().ReqWith("id", EntityRefSchema("Effect root id or name."))
+             Params().OptWith("id", EntityRefSchema("Effect root id or name.")).Opt("path", "string", "Alternative .vfx.json asset source.")
                  .Opt("duration", "number", "1/60..60 seconds (default 5), rounded to 60 Hz.")
                  .Opt("step", "number", "Sample interval >=1/60 second (default 0.25); at most 241 samples.")
                  .Opt("render", "boolean", "Include mean luminance of 128x128 software frames (default false).")
                  .Opt("camera", "object", "Optional eye/target vec3, fov, projection and orthoSize for luminance frames.")
                  .Opt("motion", "array", "Root offsets [[seconds,[x,y,z]],...] for trail/moving-owner analysis."), false,
-             [](Engine& e, const Json& a) { return AnalyzeVfx(e, RequireEntity(e, a), a); });
+             [](Engine& e, const Json& a) { if (a.has("id") == a.has("path")) throw ApiError("invalid_vfx", "provide exactly one id or path"); return AnalyzeVfx(e, a.has("id") ? RequireEntity(e, a) : 0, a); });
     const struct { const char* name; const char* summary; } netQueries[] = {
         {"state", "Read network configuration, role, lobby state and connection error; none mode starts no networking."},
         {"players", "List lobby players in id order, or the local player in none mode."},
@@ -884,6 +913,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  const ComponentType& t = RequireType(a["type"]);
                  Scene& s = e.GetScene();
                  bool existed = s.GetComponent(id, t) != nullptr;
+                 if (t.name == "VFXSystem") ValidateVfxSystem(e, s.GetComponent(id, t), a.has("values") ? a["values"] : Json::MakeObject());
                  ValidateVfxSettings(t, s.GetComponent(id, t), a.has("values") ? a["values"] : Json::MakeObject());
                  void* c = s.AddComponent(id, t);
                  std::string err;
@@ -903,6 +933,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  Scene& s = e.GetScene();
                  void* c = s.GetComponent(id, t);
                  if (!c) throw ApiError("component_missing", "entity " + std::to_string(id) + " has no " + t.name + " component", "Use component.add to add it first.");
+                 if (t.name == "VFXSystem") ValidateVfxSystem(e, c, a["values"]);
                  ValidateVfxSettings(t, c, a["values"]);
                  // Validate on a copy first so a bad field does not leave a half-applied edit.
                  Json backup = ComponentToJson(t, c);

@@ -71,6 +71,10 @@ end
 |---|---|
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
 | `animation.play(id, clip, options?)` | Play a glTF clip on MeshRenderer; add Animator if needed. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
+| `vfx.spawn(path, options?)` | Create a linked .vfx.json effect; returns owner id. Options: name, parent, position, params, autoDestroy (default true). See [VFX.md](VFX.md). |
+| `vfx.play(id, {restart=true}?)`, `vfx.stop(id, {kill=false}?)` | Restart/resume emission or stop and drain; kill empties particles/trails. |
+| `vfx.burst(id, countOrOptions?)`, `vfx.clear(id)` | Accepted manual births, capped per emitter/system; options may include emitter and count. Clear keeps clocks/RNG and playback. |
+| `vfx.set(id, name, value)`, `vfx.state(id)` | Validated transient parameter override; effective params, playback/completion/error, counts, budget and named block statistics. Controls preserve authored scene JSON and native snapshot state. |
 | `particles.burst(id, count)` | Emit up to 0..10000 particles immediately on ParticleEmitter; returns accepted births, respecting capacity even while paused. Attached scripts can use `self:burst(count)`. See [PARTICLES.md](PARTICLES.md) |
 | `particles.state(id)` | `{count, emitted, playing, loop, maxParticles, finished}`; `finished` is true once a non-looping emitter has emitted everything and its particles are gone (destroy one-shot effects then). |
 | `trail.clear(id)` | Forget a Trail's path, e.g. after teleporting the entity, so no ribbon joins the old and new place. |

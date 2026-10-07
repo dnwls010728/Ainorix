@@ -1,10 +1,12 @@
 #pragma once
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "scene/Reflect.h"
 
 namespace oe {
+struct VfxAsset;
 
 // Built-in components. To add one: declare a struct with kTypeName, kDoc and
 // Reflect(), then register it in RegisterBuiltinComponents(). Serialization,
@@ -236,6 +238,31 @@ struct Trail {
         f.Add("layer", &Trail::layer, "2D sorting layer, like Sprite.layer.");
         range(f.Add("maxPoints", &Trail::maxPoints, "Most path points kept; the oldest are dropped first."), 2, 1024);
         f.Add("emitting", &Trail::emitting, "Add new points while true; false lets the existing ribbon fade out.");
+    }
+};
+
+// A linked effect's authored fields; all instance arrays/counters are transient and copied by snapshots.
+struct VFXSystem {
+    static constexpr const char* kTypeName = "VFXSystem";
+    static constexpr const char* kDoc = "Live-linked .vfx.json effect with named parameters, independent emitters and a shared particle budget.";
+    std::string asset;  // project-relative .vfx.json
+    Json params = Json::MakeObject();  // named instance overrides
+    bool playing = true;  // enable automatic emission; existing particles/points still age
+    bool autoDestroy = false;  // destroy the owner once finished
+    std::shared_ptr<const VfxAsset> definition;  // immutable cached definition retained in native snapshots
+    std::string loadedPath, error;  // last successful source and current reload diagnostic
+    Json appliedParams;  // last validated overrides; avoids per-frame configuration work
+    Json runtimeParams = Json::MakeObject();  // Lua/command overrides excluded from authored scene JSON
+    bool playbackOverride = false, runtimePlaying = true;  // runtime controls leave authored playing unchanged
+    std::vector<ParticleEmitter> emitters;
+    std::vector<Trail> trails;
+    bool started = false;
+    bool suppressDestroy = false;  // a clear operation can leave an empty reusable instance
+    static void Reflect(FieldList& f) {
+        f.Add("asset", &VFXSystem::asset, "Project-relative effect asset (*.vfx.json).");
+        f.Add("params", &VFXSystem::params, "Named parameter overrides defined by the effect asset; unknown names/ranges are errors.");
+        f.Add("playing", &VFXSystem::playing, "Automatic emission switch; existing particles and trail points keep aging while false.");
+        f.Add("autoDestroy", &VFXSystem::autoDestroy, "Destroy the owner and its children after the effect finishes (vfx.spawn defaults to true).");
     }
 };
 

@@ -303,8 +303,21 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       Earlier editor workflow/shader graph commits are integrated as well, preserving the existing
       user work in this checkout. The combined Release build passes all 261 tests; Korean ShaderLab
       editor screenshot verified after integration.
-- [ ] Phase 2: `VFXSystem`, `.vfx.json`, `StepEmitter` split, asset commands, Lua API, hot reload, samples
-      migration, tests. Existing hashes unchanged.
+- [x] Phase 2 (2026-10-08): `VFXSystem`, strict sparse `.vfx.json`, shared StepEmitter/BurstEmitter/
+      StepTrail and particle/trail gather, asset commands and atomic subtree packing, named parameters,
+      transient runtime controls and Lua API, hot reload, system budgets and autoDestroy. VFXLab keeps
+      its component scene and adds campfire.vfx.json plus assets.scene.json. Native snapshots copy
+      particles, trail points, RNG, elapsed clocks and runtime controls; JSON saves only authored fields.
+      Local TRS or exact affine matrices retain block offsets. Settings reload preserves runtime unless
+      block names/order/counts change; malformed reload retains the last valid definition and reports
+      an error. Asset files stay outside scene undo; editor document history belongs to phase 3.
+      Warning-free Windows Release build, all 271 tests pass (ten new tests, including single-emitter
+      frame parity, params, hot reload recovery, budget/drain, Lua, packing, previews and native restores).
+      Legacy reference hashes unchanged: 2D eeb1529ca41029c9, 3D 4ea73d9e1b71d479. Actual software/
+      D3D11 asset contact sheets and alternate scene screenshots inspected; CLI analysis passed.
+      See docs/VFX.md for hashes and verification details. API, scripting, READMEs and agent guides updated.
+      Web/Android rebuild attempts could not find Emscripten/NDK; prebuilt binaries were not refreshed.
+      Linux/EGL, Node/WASM, Android device and multiplayer VFX integration remain unverified.
 - [ ] Phase 3: Effects panel, preview viewport, translations, `docs/EDITOR.md`.
 - [ ] Phase 4: particle materials, shader inputs, batching, sub-emitters; software/GPU comparison.
 - [ ] Phase 5 (optional): expression update rules.

@@ -6,6 +6,7 @@
 #include "assets/Assets.h"
 #include "core/Log.h"
 #include "scene/Components.h"
+#include "scene/Vfx.h"
 
 namespace oe {
 
@@ -184,53 +185,54 @@ Vec3 TurbulenceAt(const Vec3& position, float scale, uint32_t seed) {
 }
 
 void UpdateParticles(Scene& scene, float dt) {
-    for (auto& kv : scene.Pool<ParticleEmitter>()) {
-        ParticleEmitter& emitter = kv.second;
-        size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
-        if (emitter.particles.size() > limit) emitter.particles.resize(limit);
-        const float turbulence = std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) ? Clamp(emitter.turbulence, 0, 10000) : 0;
-        const float turbulenceScale = Clamp(emitter.turbulenceScale, 0.001f, 1000);
-        const uint32_t turbulenceSeed = static_cast<uint32_t>(emitter.seed) ^ (kv.first * 0x9e3779b9u);
-        for (Particle& particle : emitter.particles) {
-            particle.age += dt;
-            particle.velocity += particle.gravity * dt;
-            if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
-                Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
-                if (emitter.dimensions == 2) push.z = 0;
-                particle.velocity += push;
-            }
-            if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
-            particle.position += particle.velocity * dt;
-            if (particle.spin != 0) particle.rotation += particle.spin * dt;
-        }
-        emitter.particles.erase(std::remove_if(emitter.particles.begin(), emitter.particles.end(),
-            [](const Particle& particle) { return particle.age >= particle.lifetime; }), emitter.particles.end());
-        if (!emitter.playing) continue;
-        // Emission runs on the time played before this step, so delay 0 starts on the first one.
-        const double local = emitter.elapsed - static_cast<double>(Clamp(emitter.delay, 0, 600));
-        emitter.elapsed += dt;
-        if (local < 0) continue;
-        const double duration = std::isfinite(emitter.duration) ? static_cast<double>(Clamp(emitter.duration, 0, 600)) : 0;
-        if (duration > 0 && emitter.loop) {
-            const int64_t cycle = static_cast<int64_t>(std::floor(local / duration));
-            if (cycle > emitter.cycle) {  // a new cycle fires the burst again
-                emitter.cycle = cycle;
-                emitter.initialBurstEmitted = false;
-            }
-        }
-        if (!emitter.initialBurstEmitted) {
-            emitter.initialBurstEmitted = true;
-            BurstParticles(scene, kv.first, emitter.burst);
-        }
-        const bool rateActive = duration > 0 ? (emitter.loop || local < duration) : emitter.loop;
-        if (!rateActive || !std::isfinite(emitter.rate)) continue;
-        emitter.carry += static_cast<double>(Clamp(emitter.rate, 0, 10000)) * dt;
-        int births = static_cast<int>(std::floor(emitter.carry));
-        emitter.carry -= births;
-        BurstParticles(scene, kv.first, births);
-    }
+    for (auto& pair : scene.Pool<ParticleEmitter>()) StepEmitter(pair.second, pair.first, scene.WorldMatrix(pair.first), 0, dt);
 }
 }  // namespace
+
+void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt) {
+    size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
+    if (emitter.particles.size() > limit) emitter.particles.resize(limit);
+    const float turbulence = std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) ? Clamp(emitter.turbulence, 0, 10000) : 0;
+    const float turbulenceScale = Clamp(emitter.turbulenceScale, 0.001f, 1000);
+    const uint32_t turbulenceSeed = static_cast<uint32_t>(emitter.seed) ^ (owner * 0x9e3779b9u) ^ seedMix;
+    for (Particle& particle : emitter.particles) {
+        particle.age += dt;
+        particle.velocity += particle.gravity * dt;
+        if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
+            Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
+            if (emitter.dimensions == 2) push.z = 0;
+            particle.velocity += push;
+        }
+        if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
+        particle.position += particle.velocity * dt;
+        if (particle.spin != 0) particle.rotation += particle.spin * dt;
+    }
+    emitter.particles.erase(std::remove_if(emitter.particles.begin(), emitter.particles.end(),
+        [](const Particle& particle) { return particle.age >= particle.lifetime; }), emitter.particles.end());
+    if (!emitter.playing) return;
+    // Emission runs on the time played before this step, so delay 0 starts on the first one.
+    const double local = emitter.elapsed - static_cast<double>(Clamp(emitter.delay, 0, 600));
+    emitter.elapsed += dt;
+    if (local < 0) return;
+    const double duration = std::isfinite(emitter.duration) ? static_cast<double>(Clamp(emitter.duration, 0, 600)) : 0;
+    if (duration > 0 && emitter.loop) {
+        const int64_t cycle = static_cast<int64_t>(std::floor(local / duration));
+        if (cycle > emitter.cycle) {  // a new cycle fires the burst again
+            emitter.cycle = cycle;
+            emitter.initialBurstEmitted = false;
+        }
+    }
+    if (!emitter.initialBurstEmitted) {
+        emitter.initialBurstEmitted = true;
+        BurstEmitter(emitter, owner, world, seedMix, emitter.burst);
+    }
+    const bool rateActive = duration > 0 ? (emitter.loop || local < duration) : emitter.loop;
+    if (!rateActive || !std::isfinite(emitter.rate)) return;
+    emitter.carry += static_cast<double>(Clamp(emitter.rate, 0, 10000)) * dt;
+    int births = static_cast<int>(std::floor(emitter.carry));
+    emitter.carry -= births;
+    BurstEmitter(emitter, owner, world, seedMix, births);
+}
 
 const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name) {
     for (const AnimationClip& clip : mesh.clips) if (clip.name == name) return &clip;
@@ -349,7 +351,12 @@ void ClearTrail(Trail& trail) { trail.points.clear(); }
 
 int BurstParticles(Scene& scene, EntityId id, int count) {
     ParticleEmitter* emitter = scene.Get<ParticleEmitter>(id);
-    if (!emitter || count <= 0) return 0;
+    return emitter ? BurstEmitter(*emitter, id, scene.WorldMatrix(id), 0, count) : 0;
+}
+
+int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_t seedMix, int count) {
+    ParticleEmitter* emitter = &value;
+    if (count <= 0) return 0;
     if (!ParticleSettingsValid(*emitter)) {
         if (!emitter->invalidSettingsReported) OE_LOG_WARN("particles", "entity %u: emission skipped; particle settings must be finite", id);
         emitter->invalidSettingsReported = true;
@@ -359,7 +366,10 @@ int BurstParticles(Scene& scene, EntityId id, int count) {
     const size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter->maxParticles)));
     const size_t available = emitter->particles.size() < limit ? limit - emitter->particles.size() : 0;
     count = static_cast<int>(std::min(available, static_cast<size_t>(count)));
-    Mat4 world = scene.WorldMatrix(id);
+    if (emitter->randomState == 0 && seedMix != 0) {
+        emitter->randomState = static_cast<uint32_t>(emitter->seed) ^ (id * 0x9e3779b9u) ^ 0x85ebca6bu ^ seedMix;
+        if (emitter->randomState == 0) emitter->randomState = 0x6d2b79f5u;
+    }
     for (int i = 0; i < count; ++i) {
         Particle particle;
         particle.velocity = ParticleDirection(*emitter, id) * emitter->speed;
@@ -436,6 +446,21 @@ int BurstParticles(Scene& scene, EntityId id, int count) {
     return count;
 }
 
+void StepTrail(Trail& trail, const Vec3& position, float dt) {
+    const float lifetime = std::isfinite(trail.lifetime) ? Clamp(trail.lifetime, 0.01f, 60) : 0.01f;
+    for (TrailPoint& point : trail.points) point.age += dt;
+    size_t expired = 0;  // points are oldest first
+    while (expired < trail.points.size() && trail.points[expired].age >= lifetime) ++expired;
+    trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(expired));
+    if (!trail.emitting) return;
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) return;
+    const float step = std::isfinite(trail.minDistance) ? Clamp(trail.minDistance, 0.001f, 100) : 0.001f;
+    if (!trail.points.empty() && Length(position - trail.points.back().position) < step) return;
+    const size_t limit = static_cast<size_t>(std::max(2, std::min(1024, trail.maxPoints)));
+    if (trail.points.size() >= limit) trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(trail.points.size() - limit + 1));
+    trail.points.push_back({position, 0.0f});
+}
+
 void UpdateLateSystems(Scene& scene, float dt) {
     for (auto& kv : scene.Pool<CameraFollow>()) {
         const CameraFollow& f = kv.second;
@@ -455,22 +480,8 @@ void UpdateLateSystems(Scene& scene, float dt) {
         Vec3 look = target + f.lookOffset - t->position;
         if (Length(look) > 1e-4f) t->rotation = EulerLookDirection(look);
     }
-    for (auto& kv : scene.Pool<Trail>()) {
-        Trail& trail = kv.second;
-        const float lifetime = std::isfinite(trail.lifetime) ? Clamp(trail.lifetime, 0.01f, 60) : 0.01f;
-        for (TrailPoint& point : trail.points) point.age += dt;
-        size_t expired = 0;  // points are oldest first
-        while (expired < trail.points.size() && trail.points[expired].age >= lifetime) ++expired;
-        trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(expired));
-        if (!trail.emitting) continue;
-        const Vec3 position = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
-        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z)) continue;
-        const float step = std::isfinite(trail.minDistance) ? Clamp(trail.minDistance, 0.001f, 100) : 0.001f;
-        if (!trail.points.empty() && Length(position - trail.points.back().position) < step) continue;
-        const size_t limit = static_cast<size_t>(std::max(2, std::min(1024, trail.maxPoints)));
-        if (trail.points.size() >= limit) trail.points.erase(trail.points.begin(), trail.points.begin() + static_cast<std::ptrdiff_t>(trail.points.size() - limit + 1));
-        trail.points.push_back({position, 0.0f});
-    }
+    for (auto& pair : scene.Pool<Trail>()) StepTrail(pair.second, scene.WorldMatrix(pair.first).TransformPoint(Vec3()), dt);
+    UpdateVfxTrails(scene, dt);
 }
 
 void UpdateSpriteAnimations(Scene& scene, float dt) {
@@ -505,6 +516,7 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
 void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets) {
     if (assets) UpdateAnimators(scene, *assets, dt);
     UpdateParticles(scene, dt);
+    UpdateVfxSystems(scene, assets, dt);
     UpdateSpriteAnimations(scene, dt);
     input.pressedThisFrame.clear();
     input.text.clear();

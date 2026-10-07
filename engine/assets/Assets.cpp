@@ -13,6 +13,7 @@
 #include "render/Material.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "scene/Vfx.h"
 
 #if defined(_MSC_VER)
 #pragma warning(push, 0)
@@ -480,6 +481,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".prefab.json")) return "prefab";
     if (EndsWith(p, ".mat.json")) return "material";
     if (EndsWith(p, ".shader.json")) return "shader";
+    if (EndsWith(p, ".vfx.json")) return "vfx";
     if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
@@ -560,6 +562,32 @@ AssetManager::Entry<ShaderGraph> AssetManager::LoadShader(const std::string& pat
     } catch (const std::exception& ex) { entry.error = ex.what(); }
     if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), entry.error.c_str());
     return entry;
+}
+
+AssetManager::Entry<VfxAsset> AssetManager::LoadVfx(const std::string& path) {
+    Entry<VfxAsset> entry;
+    try {
+        const std::string full = engine_.ResolvePath(path);
+        entry.mtime = FileModifiedTime(full);
+        std::string text, parseError;
+        if (KindOf(path) != "vfx") entry.error = "VFX asset path must end in .vfx.json";
+        else if (!ReadTextFile(full, text)) entry.error = "cannot read VFX asset '" + path + "'";
+        else if (text.size() > 1024 * 1024) entry.error = "VFX asset exceeds 1 MiB";
+        else {
+            const Json json = Json::parse(text, &parseError);
+            if (!parseError.empty()) entry.error = parseError;
+            else entry.asset = std::make_shared<VfxAsset>(ParseVfxAsset(json));
+        }
+    } catch (const std::exception& ex) { entry.error = ex.what(); }
+    if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), entry.error.c_str());
+    return entry;
+}
+
+std::shared_ptr<const VfxAsset> AssetManager::GetVfx(const std::string& path, std::string* error) {
+    auto it = vfx_.find(path);
+    if (it == vfx_.end()) it = vfx_.emplace(path, LoadVfx(path)).first;
+    if (error) *error = it->second.error;
+    return it->second.asset;
 }
 
 std::shared_ptr<const ShaderGraph> AssetManager::GetShader(const std::string& path, std::string* error) {
@@ -681,6 +709,12 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
+    for (auto& kv : vfx_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            kv.second = LoadVfx(kv.first);
+            changed.push_back(kv.first);
+        }
+    }
     // Materials hold texture/graph pointers, so dependency changes reload them too.
     bool texturesChanged = !changed.empty();
     for (auto& kv : materials_) {
@@ -707,6 +741,7 @@ std::vector<std::string> AssetManager::PollChanges() {
 }
 
 void AssetManager::Forget(const std::string& path) {
+    vfx_.erase(path);
     if (KindOf(path) == "shader") {
         shaders_.erase(path);
         materials_.clear();
@@ -719,6 +754,7 @@ void AssetManager::Forget(const std::string& path) {
 }
 
 void AssetManager::Clear() {
+    vfx_.clear();
     shaders_.clear();
     meshes_.clear();
     textures_.clear();
@@ -732,6 +768,13 @@ Json AssetManager::Info(const std::string& path) {
     out["path"] = path;
     std::string kind = GetBuiltinMesh(path) ? "model" : KindOf(path);
     out["kind"] = kind;
+    if (kind == "vfx") {
+        std::string error; const auto asset = GetVfx(path, &error);
+        if (!asset) throw ApiError("invalid_vfx", error, "Validate the asset with vfx.check.");
+        out["emitters"] = static_cast<uint64_t>(asset->emitters.size());
+        out["trails"] = static_cast<uint64_t>(asset->trails.size());
+        out["budget"] = asset->maxParticles;
+    }
     if (!GetBuiltinMesh(path)) {
         std::string full = engine_.ResolvePath(path);
         std::vector<unsigned char> bytes;

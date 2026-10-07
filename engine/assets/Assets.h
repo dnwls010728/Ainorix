@@ -13,6 +13,7 @@
 namespace oe {
 
 class Engine;
+struct VfxAsset;
 
 // Decoders (stb_image / cgltf). `baseDir` resolves external files of .gltf.
 bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::string* error);
@@ -35,6 +36,8 @@ public:
     std::shared_ptr<const Material> GetMaterial(const std::string& path, std::string* error = nullptr);
     // Portable surface graph (*.shader.json); validated and cached including failures.
     std::shared_ptr<const ShaderGraph> GetShader(const std::string& path, std::string* error = nullptr);
+    // Linked effects (*.vfx.json), including cached failures and hot reload.
+    std::shared_ptr<const VfxAsset> GetVfx(const std::string& path, std::string* error = nullptr);
     // UI font: "default" (built-in Roboto) or a .ttf/.otf/.ttc path. nullptr + error on failure.
     std::shared_ptr<FontFace> GetFont(const std::string& path, std::string* error = nullptr);
     // Tileset file (*.tileset.json: image, grid, tile rules). nullptr + error on failure.
@@ -64,6 +67,7 @@ private:
     Entry<Material> LoadMaterial(const std::string& path);
     Entry<ShaderGraph> LoadShader(const std::string& path);
     Entry<Tileset> LoadTileset(const std::string& path);
+    Entry<VfxAsset> LoadVfx(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
         std::string error;
@@ -77,6 +81,7 @@ private:
     std::map<std::string, Entry<Material>> materials_;
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;
+    std::map<std::string, Entry<VfxAsset>> vfx_;
     std::map<std::string, FontEntry> fonts_;
 };
 

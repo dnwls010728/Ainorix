@@ -50,6 +50,7 @@
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
 #include "scene/TileGrid.h"
+#include "scene/Vfx.h"
 #include "script/ScriptHost.h"
 #include "script/OfficialModules.h"
 #include "lua.h"
@@ -7634,6 +7635,187 @@ TEST(TrailRibbon) {
     CHECK(Call(e, "trail.state", R"J({"id":"Plain"})J")["error"]["code"].asString() == "missing_component");
     Scene restored;
     CHECK(restored.FromJson(e.GetScene().ToJson(), &error) && restored.Get<Trail>(id)->points.empty());
+}
+
+Json TestVfxDocument() {
+    return Json::parse(R"J({"format":"oe.vfx","version":1,"emitters":[{"name":"sparks","emitter":{
+        "loop":false,"burst":12,"rate":0,"lifetime":0.4,"speed":2,"spread":35,"seed":17,"maxParticles":32}}],
+        "params":{"intensity":{"default":1,"min":0,"max":2,"targets":[{"to":"sparks.burst","scale":12}]}}})J");
+}
+
+void CreateTestVfx(Engine& engine, const Json& document = TestVfxDocument()) {
+    Json args = Json::MakeObject(); args["path"] = "effects/sparks.vfx.json"; args["vfx"] = document;
+    const Json result = engine.Call("vfx.create", args); CHECK(result["ok"].asBool());
+    if (!result["ok"].asBool()) std::printf("  VFX create: %s\n", result.dump().c_str());
+}
+
+TEST(VfxAssetRoundTrip) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_asset_roundtrip"), &error));
+    const Json before = e.GetScene().ToJson(); const size_t depth = e.UndoDepth();
+    Json doc = TestVfxDocument(); doc["emitters"][0]["emitter"]["playing"] = true;
+    CreateTestVfx(e, doc);
+    const Json result = Call(e, "vfx.get", R"J({"path":"effects/sparks.vfx.json"})J"); CHECK(result["ok"].asBool());
+    CHECK(!result["result"]["emitters"][0]["emitter"].has("playing"));
+    CHECK(ParseVfxAsset(result["result"]).json == result["result"]);
+    CHECK(Call(e, "vfx.list")["result"].size() == 1);
+    CHECK(e.GetScene().ToJson() == before && e.UndoDepth() == depth);
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":3}})J")["ok"].asBool());
+    const Json diff = Call(e, "vfx.diff", R"J({"path":"effects/sparks.vfx.json"})J"); CHECK(diff["ok"].asBool());
+    bool speed = false; for (const Json& change : diff["result"].items()) if (change["field"].asString() == "sparks.speed") speed = true;
+    CHECK(speed);
+    Json invalid = Json::MakeObject(); invalid["path"] = "../outside.vfx.json"; invalid["vfx"] = doc;
+    CHECK(e.Call("vfx.create", invalid)["error"]["code"].asString() == "path_outside_project");
+}
+
+TEST(VfxUnknownFieldHint) {
+    Engine e; std::string error; const std::string project = TempProject("vfx_unknown"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
+    std::string before, after; CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), before));
+    const Json failure = Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"lifetim":2}})J");
+    CHECK(failure["error"]["code"].asString() == "unknown_field" && failure["error"]["hint"].asString().find("lifetime") != std::string::npos);
+    CHECK(failure["error"]["message"].asString().find("emitters[0].emitter") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(project, "effects/sparks.vfx.json"), after) && before == after);
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","params":{"intensity":3}})J")["error"]["code"].asString() == "invalid_range");
+    const Json scene = e.GetScene().ToJson();
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","params":{"typo":1}})J")["error"]["code"].asString() == "unknown_field");
+    CHECK(e.GetScene().ToJson() == scene);
+}
+
+TEST(VfxSystemMatchesEmitter) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_parity"), &error)); CreateTestVfx(e);
+    const Json spawn = Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","autoDestroy":false})J"); CHECK(spawn["ok"].asBool());
+    const EntityId id = static_cast<EntityId>(spawn["result"]["id"].asInt());
+    Scene plain; plain.Create("Reference", 0, id); plain.Add<Transform>(id);
+    plain.Add<ParticleEmitter>(id) = e.GetScene().Get<VFXSystem>(id)->emitters[0];
+    Scene linked; linked.Create("Linked", 0, id); linked.Add<Transform>(id); linked.Add<VFXSystem>(id) = *e.GetScene().Get<VFXSystem>(id);
+    SoftwareRenderer renderer; RenderView view = MakeLookAtView(Vec3(0, 1, 5), Vec3(), 45, 1); view.drawUI = false;
+    RenderTarget a, b; a.Resize(64, 64); b.Resize(64, 64); InputState input;
+    for (int frame = 0; frame < 40; ++frame) {
+        UpdateSystems(plain, input, 1.0f / 60); UpdateLateSystems(plain, 1.0f / 60);
+        UpdateSystems(linked, input, 1.0f / 60, &e.Assets()); UpdateLateSystems(linked, 1.0f / 60);
+        const auto& original = *plain.Get<ParticleEmitter>(id); const auto& system = *linked.Get<VFXSystem>(id);
+        CHECK(original.randomState == system.emitters[0].randomState && original.emitted == system.emitters[0].emitted);
+        CHECK(original.particles.size() == system.emitters[0].particles.size());
+        for (size_t i = 0; i < original.particles.size(); ++i) {
+            CHECK(original.particles[i].position == system.emitters[0].particles[i].position);
+            CHECK(original.particles[i].velocity == system.emitters[0].particles[i].velocity);
+        }
+        renderer.Render(plain, view, a); renderer.Render(linked, view, b); CHECK(a.Hash() == b.Hash());
+    }
+}
+
+TEST(VfxParams) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_params"), &error)); CreateTestVfx(e);
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Effect","params":{"intensity":2},"autoDestroy":false})J")["ok"].asBool());
+    const size_t undo = e.UndoDepth(); const EntityId id = e.GetScene().FindByName("Effect");
+    const Json authored = e.GetScene().ToJson();
+    CHECK(e.GetScene().Get<VFXSystem>(id)->emitters[0].burst == 24);
+    CHECK(Call(e, "vfx.set_param", R"J({"id":"Effect","name":"intensity","value":0.5})J")["ok"].asBool());
+    CHECK(e.GetScene().Get<VFXSystem>(id)->emitters[0].burst == 6 && e.UndoDepth() == undo);
+    CHECK(e.GetScene().ToJson() == authored);
+    CHECK(Call(e, "vfx.burst", R"J({"id":"Effect"})J")["result"]["accepted"].asInt() == 6);
+    CHECK(Call(e, "vfx.state", R"J({"id":"Effect"})J")["result"]["params"]["intensity"].asNumber() == 0.5);
+    const Json state = Call(e, "vfx.state", R"J({"id":"Effect"})J");
+    CHECK(!Call(e, "component.set", R"J({"id":"Effect","type":"VFXSystem","values":{"params":{"typo":1}}})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.state", R"J({"id":"Effect"})J") == state);
+    CHECK(Call(e, "vfx.clear", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 0);
+    CHECK(Call(e, "vfx.play", R"J({"id":"Effect"})J")["ok"].asBool()); e.Step(1);
+    CHECK(Call(e, "vfx.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 6);
+}
+
+TEST(VfxHotReload) {
+    Engine e; std::string error; const std::string project = TempProject("vfx_hot_reload"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Effect","autoDestroy":false})J")["ok"].asBool()); e.Step(2);
+    const EntityId id = e.GetScene().FindByName("Effect"); const auto initial = *e.GetScene().Get<VFXSystem>(id);
+    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":8}})J")["ok"].asBool());
+    e.Step(1); auto* system = e.GetScene().Get<VFXSystem>(id);
+    CHECK(system->emitters[0].speed == 8 && system->emitters[0].randomState == initial.emitters[0].randomState);
+    CHECK(system->emitters[0].emitted == initial.emitters[0].emitted && system->emitters[0].particles.size() == initial.emitters[0].particles.size());
+    CHECK(WriteTextFileAtomic(JoinPath(project, "effects/sparks.vfx.json"), "{bad", &error));
+    CHECK(!e.Assets().PollChanges().empty()); e.Step(1);
+    CHECK(!system->error.empty() && system->emitters[0].speed == 8);  // keep the last valid runtime
+    Json document = TestVfxDocument(); document["emitters"][0]["emitter"]["speed"] = 5;
+    CHECK(WriteTextFileAtomic(JoinPath(project, "effects/sparks.vfx.json"), document.dump(), &error));
+    CHECK(!e.Assets().PollChanges().empty()); e.Step(1); CHECK(system->error.empty() && system->emitters[0].speed == 5);
+    CHECK(Call(e, "vfx.state", R"J({"id":"Effect"})J")["ok"].asBool());
+}
+
+TEST(VfxSpawnAutoDestroy) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_destroy"), &error)); CreateTestVfx(e);
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"OneShot"})J")["ok"].asBool()); e.Step(1);
+    CHECK(e.GetScene().FindByName("OneShot") != 0); e.Step(30); CHECK(e.GetScene().FindByName("OneShot") == 0);
+    Json document = TestVfxDocument(); document["emitters"][0]["emitter"]["loop"] = true;
+    document["emitters"][0]["emitter"]["rate"] = 60; document["emitters"].push(document["emitters"][0]);
+    document["emitters"][1]["name"] = "second"; document["budget"]["maxParticles"] = 15; CreateTestVfx(e, document);
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Loop"})J")["ok"].asBool()); e.Step(10);
+    CHECK(Call(e, "vfx.state", R"J({"id":"Loop"})J")["result"]["count"].asInt() == 15);
+    CHECK(Call(e, "vfx.burst", R"J({"id":"Loop","count":100})J")["result"]["accepted"].asInt() == 0);
+    CHECK(Call(e, "vfx.stop", R"J({"id":"Loop"})J")["ok"].asBool()); e.Step(30); CHECK(e.GetScene().FindByName("Loop") == 0);
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Kill"})J")["ok"].asBool()); e.Step(1);
+    CHECK(Call(e, "vfx.stop", R"J({"id":"Kill","kill":true})J")["result"]["count"].asInt() == 0); e.Step(1);
+    CHECK(e.GetScene().FindByName("Kill") == 0);
+}
+
+TEST(VfxLua) {
+    Engine e; std::string error; const std::string project = TempProject("vfx_lua"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(WriteTextFile(JoinPath(project, "scripts/vfx.lua"), R"L(local Effect = {}
+function Effect:onStart()
+    local id = vfx.spawn("effects/sparks.vfx.json", {name="LuaFX", autoDestroy=false, position={1,2,0}})
+    vfx.set(id, "intensity", 0.5)
+    game.set("births", vfx.burst(id))
+    game.set("count", vfx.state(id).count)
+    vfx.stop(id, {kill=true})
+    vfx.play(id)
+end
+return Effect)L"));
+    CHECK(Call(e, "entity.create", R"J({"name":"Controller","components":{"Script":{"path":"scripts/vfx.lua"}}})J")["ok"].asBool());
+    CHECK(Call(e, "script.check", R"J({"path":"scripts/vfx.lua"})J")["result"]["warnings"].size() == 0);
+    e.Step(1); CHECK(e.Scripts().Errors().empty()); CHECK(e.GameData()["births"].asInt() == 6 && e.GameData()["count"].asInt() == 6);
+    CHECK(Call(e, "vfx.state", R"J({"id":"LuaFX"})J")["result"]["count"].asInt() == 6);
+}
+
+TEST(VfxNativeSnapshots) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_snapshots"), &error)); CreateTestVfx(e);
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Effect","autoDestroy":false})J")["ok"].asBool());
+    e.RecordState(); e.Step(5); const auto state = e.SaveState(); e.Step(8);
+    CHECK(Call(e, "vfx.burst", R"J({"id":"Effect","count":1})J")["error"]["code"].asString() == "state_recording");
+    const Json future = Call(e, "vfx.state", R"J({"id":"Effect"})J"); const auto* system = e.GetScene().Get<VFXSystem>(1);
+    const Vec3 position = system->emitters[0].particles[0].position;
+    e.LoadState(*state); e.Step(8); CHECK(Call(e, "vfx.state", R"J({"id":"Effect"})J") == future);
+    CHECK(e.GetScene().Get<VFXSystem>(1)->emitters[0].particles[0].position == position);
+    const Json serialized = e.GetScene().EntityToJson(1)["components"]["VFXSystem"];
+    CHECK(!serialized.has("emitters") && !serialized.has("definition") && !serialized.has("randomState"));
+}
+
+TEST(VfxAssetPreviewAndPack) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_pack"), &error)); CreateTestVfx(e);
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Root","components":{"Transform":{"position":[5,1,0]}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Moving Trail","parent":"Root","components":{"Transform":{"position":[2,0,0]},"Trail":{}}})J")["ok"].asBool());
+    const Json scene = e.GetScene().ToJson();
+    CHECK(Call(e, "vfx.from_entity", R"J({"id":"Root","path":"effects/trail.vfx.json"})J")["ok"].asBool());
+    const Json packed = Call(e, "vfx.get", R"J({"path":"effects/trail.vfx.json"})J")["result"];
+    CHECK(packed["trails"][0]["name"].asString() == "Moving_Trail" && packed["trails"][0]["matrix"][12].asInt() == 2);
+    CHECK(Call(e, "vfx.check", R"J({"path":"effects/trail.vfx.json"})J")["ok"].asBool());
+    const char* preview = R"J({"path":"effects/sparks.vfx.json","size":32,"times":[0.1,0.3],"inline":false})J";
+    Json first = Call(e, "vfx.preview", preview); CHECK(first["ok"].asBool() && first == Call(e, "vfx.preview", preview));
+    CHECK(Call(e, "vfx.analyze", R"J({"path":"effects/sparks.vfx.json","duration":1})J")["result"]["peakCount"].asInt() == 12);
+    CHECK(Call(e, "vfx.analyze", R"J({"path":"effects/trail.vfx.json","duration":0.5,"motion":[[0,[0,0,0]],[1,[2,0,0]]]})J")["result"]["peakPointCount"].asInt() > 1);
+    CHECK(e.GetScene().ToJson() == scene);
+}
+
+TEST(SampleVfxAsset) {
+    uint64_t hashes[2]{};
+    for (int run = 0; run < 2; ++run) {
+        Engine e; std::string error; CHECK(e.Open(TestSourceDir() + "/samples/VFXLab", &error));
+        CHECK(Call(e, "scene.load", R"J({"path":"scenes/assets.scene.json"})J")["ok"].asBool()); e.Step(132);
+        CHECK(e.Scripts().Errors().empty());
+        CHECK(Call(e, "vfx.state", R"J({"id":"Campfire"})J")["result"]["count"].asInt() > 40);
+        RenderTarget target; target.Resize(320, 180); e.RenderGameView(target); hashes[run] = target.Hash();
+        CHECK(Call(e, "asset.info", R"J({"path":"effects/campfire.vfx.json"})J")["result"]["kind"].asString() == "vfx");
+    }
+    CHECK(hashes[0] == hashes[1]);
 }
 
 TEST(VfxSchemaCoversReflection) {

@@ -19,4 +19,11 @@ Json CheckVfx(Engine& engine, EntityId id);
 // Restarts the effect in an isolated scene and returns a contact sheet or numeric analysis.
 Json PreviewVfx(Engine& engine, EntityId id, const Json& args);
 Json AnalyzeVfx(Engine& engine, EntityId id, const Json& args);
+// Asset authoring and linked runtime operations; arguments follow the command registry.
+Json VfxAssetCall(Engine& engine, const std::string& operation, const Json& args);
+Json VfxRuntimeCall(Engine& engine, const std::string& operation, EntityId id, const Json& args);
+// Validate a linked component before publishing an authoring edit.
+void ValidateVfxSystem(Engine& engine, const void* current, const Json& values);
+// Read-only check of an asset path, including effective defaults and textures.
+Json CheckVfxAsset(Engine& engine, const std::string& path, const Json& params = Json::MakeObject());
 }  // namespace oe

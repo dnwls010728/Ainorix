@@ -107,3 +107,30 @@ with open(full, "w", encoding="utf-8", newline="\n") as f:
     json.dump({"format": "ownengine.scene", "version": 1, "name": "VFXLab", "entities": entities}, f, indent=2)
     f.write("\n")
 print("wrote %d entities" % len(entities))
+
+# Keep the original component scene as a reference; offer the same campfire through a reusable asset.
+import copy
+asset_entities = copy.deepcopy(entities)
+fire_entity = next(entity for entity in asset_entities if entity["name"] == "Campfire")
+blocks = []
+for entity in asset_entities:
+    if entity.get("parent") == fire_entity["id"] and "ParticleEmitter" in entity["components"]:
+        blocks.append({"name": entity["name"].lower(), "transform": entity["components"]["Transform"],
+                       "emitter": entity["components"]["ParticleEmitter"]})
+removed = {entity["id"] for entity in asset_entities
+           if entity.get("parent") == fire_entity["id"] and "ParticleEmitter" in entity["components"]}
+asset_entities = [entity for entity in asset_entities if entity["id"] not in removed]
+fire_entity["components"]["VFXSystem"] = {"asset": "effects/campfire.vfx.json", "params": {"intensity": 1}}
+asset = {"format": "oe.vfx", "version": 1, "name": "Campfire", "description": "Warm flames, rising smoke and velocity-aligned embers.",
+         "emitters": blocks, "params": {
+             "intensity": {"default": 1, "min": 0, "max": 3, "doc": "Scale all campfire emission rates.",
+                           "targets": [{"to": block["name"] + ".rate", "scale": block["emitter"]["rate"]} for block in blocks]}},
+         "budget": {"maxParticles": 208}}
+for path, document in [("effects/campfire.vfx.json", asset),
+                       ("scenes/assets.scene.json", {"format": "ownengine.scene", "version": 1, "name": "VFXLab Assets", "entities": asset_entities})]:
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(document, file, indent=2)
+        file.write("\n")
+print("wrote campfire asset and alternate asset scene")
