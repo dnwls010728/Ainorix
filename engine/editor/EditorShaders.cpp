@@ -248,7 +248,8 @@ void NativeEditor::Impl::ShaderCanvas() {
         std::string title = surface ? Tr("Surface Output") : std::to_string(n) + "  " + shaderDocument["nodes"][n]["op"].asString();
         draw->AddText(p + ImVec2(10, 9) * shaderZoom, IM_COL32(240, 243, 248, 255), title.c_str());
         ImGui::PushID(n); ImGui::SetCursorScreenPos(p + ImVec2(8, 2) * shaderZoom);
-        ImGui::InvisibleButton("##node", ImVec2(170, 32) * shaderZoom);
+        // The whole card is draggable; leave the pin hit areas outside its bounds.
+        ImGui::InvisibleButton("##node", ImVec2(174 * shaderZoom, end.y - p.y - 4 * shaderZoom));
         if (ImGui::IsItemClicked() && !surface) shaderSelected = n;
         if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) position += io.MouseDelta / shaderZoom;
         for (int pin = 0; pin < pins; ++pin) {

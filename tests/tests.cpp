@@ -10770,6 +10770,81 @@ TEST(EditorShaderGraphOrderingAndValidation) {
     }
 }
 
+TEST(NativeEditorShaderNodeDragging) {
+    std::string project = TempProject("shader_node_drag"), error;
+    Engine engine; CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", error.c_str()); RemoveAll(project); return;
+    }
+    {
+        NativeEditor::Options options; options.language = "en";
+        NativeEditor editor(engine, nullptr, options); CHECK(editor.Init(&error)); RenderTarget image;
+        auto frames = [&](std::vector<WindowEvent> events = {}) {
+            for (int i = 0; i < 3; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto move = [&](ImVec2 point) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseMove; event.x = point.x; event.y = point.y; frames({event});
+        };
+        auto button = [&](bool down) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.button = 0; event.down = down; frames({event});
+        };
+        auto canvas = [&]() -> ImGuiWindow* {
+            for (ImGuiWindow* window : GImGui->Windows)
+                if (window->Active && std::strstr(window->Name, "##shadercanvas")) return window;
+            return nullptr;
+        };
+        // Read the rendered card, rather than exposing or directly mutating layout internals.
+        auto cardPosition = [&](bool surface = false) {
+            ImGuiWindow* window = canvas(); CHECK(window);
+            ImVec2 position(FLT_MAX, FLT_MAX);
+            ImU32 color = surface ? IM_COL32(48, 91, 84, 255) : IM_COL32(52, 69, 93, 255);
+            if (window) for (const ImDrawVert& vertex : window->DrawList->VtxBuffer) if (vertex.col == color) {
+                position.x = std::min(position.x, vertex.pos.x); position.y = std::min(position.y, vertex.pos.y);
+            }
+            CHECK(position.x != FLT_MAX); return position;
+        };
+        auto checkDrag = [&](ImVec2 start, bool surface = false) {
+            ImVec2 before = cardPosition(surface);
+            move(start); button(true);
+            move(ImVec2(start.x + 12, start.y + 10));
+            // Continue well outside the original card while holding the same button.
+            move(ImVec2(start.x + 220, start.y + 80));
+            button(false);
+            ImVec2 after = cardPosition(surface);
+            CHECK(std::fabs(after.x - before.x - 220) < 0.1f && std::fabs(after.y - before.y - 80) < 0.1f);
+            move(ImVec2(start.x + 260, start.y + 100));
+            ImVec2 released = cardPosition(surface);
+            CHECK(std::fabs(released.x - after.x) < 0.1f && std::fabs(released.y - after.y) < 0.1f);
+        };
+        auto arrange = [&]() {
+            ImGuiWindow* window = ImGui::FindWindowByName("###Shader Graph"); CHECK(window);
+            if (!window) return;
+            float x = window->DC.CursorStartPos.x + ImGui::CalcTextSize("Add Node").x + ImGui::GetStyle().FramePadding.x * 2 +
+                      ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize("Arrange Nodes").x * 0.5f + ImGui::GetStyle().FramePadding.x;
+            move(ImVec2(x, window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() * 0.5f));
+            button(true); button(false);
+        };
+        frames(); editor.OpenShader(); frames();
+        Json original = editor.ShaderDocument();
+        ImVec2 position = cardPosition(); checkDrag(ImVec2(position.x + 60, position.y + 55));
+        arrange();
+        position = cardPosition(); checkDrag(ImVec2(position.x + 45, position.y + 12));
+        arrange();
+        // Zoom around the card, then drag its body again: screen displacement must stay exact.
+        position = cardPosition(); move(ImVec2(position.x + 40, position.y + 50));
+        WindowEvent wheel; wheel.type = WindowEvent::Type::MouseWheel; wheel.y = -3; frames({wheel});
+        position = cardPosition(); checkDrag(ImVec2(position.x + 30, position.y + 35));
+        arrange();
+        position = cardPosition(true); checkDrag(ImVec2(position.x + 40, position.y + 50), true);
+        CHECK(editor.ShaderDocument() == original);
+        CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/shader-node-drag.png"), image.ToImage()));
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorShaderGraphAndMaterialWorkflow) {
     std::string project = TempProject("shader_workspace"), error;
     Engine engine; CHECK(engine.Open(project, &error));

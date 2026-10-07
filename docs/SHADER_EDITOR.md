@@ -10,10 +10,10 @@ material assets. No platform shader source or new renderer is required.
 2. **Add Node** offers all 25 portable operations. Drag an output pin to an input pin;
    right-click an input to disconnect it. Connect a node to the **Surface Output** card's
    `color`, `emissive`, `normal`, or `offset` input. Cycles are rejected immediately.
-3. Click a node's header to edit its constant, uniform, or swizzle in **Node Properties**.
+3. Click a node's header or body to edit its constant, uniform, or swizzle in **Node Properties**.
    **Uniform Defaults** adds named scalar defaults; its context menu switches scalar/vector
    values or removes a uniform. A uniform node chooses one of the declared names.
-4. Move cards by their headers, pan with the middle mouse button, and zoom with the wheel.
+4. Move cards by dragging their headers or bodies, pan with the middle mouse button, and zoom with the wheel.
    **Arrange Nodes** lays out dependency levels; **Fit Graph** shows the whole canvas.
    Node positions are workspace layout, not serialized into the portable graph file.
 5. Enter a `.shader.json` project path and **Save Shader** (Ctrl+S). The editor topologically
@@ -61,5 +61,8 @@ oe editor samples/ShaderLab --shader materials/pulse.shader.json --screenshot bu
 - [x] Windows Release build and all 251 tests pass, including graph validation and the
       event-driven create/save/apply/reopen and unsaved-change workflows. English and
       Korean D3D11 editor screenshots inspected; documentation and translations updated.
+- [x] Card bodies and headers both accept dragging, with input/output pins reserved for
+      wiring. Event-driven header/body/output-card drags, movement outside the original
+      card, release and zoom checks pass; all 252 Windows tests pass.
 - [ ] Linux/EGL editor build and visual verification were not available in this Windows
       environment. Build with CMake/Ninja and inspect the same ShaderLab workspace there.
