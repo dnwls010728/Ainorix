@@ -45,6 +45,7 @@ end
 
 local MOUNTAIN_BASE = {{0.5, 0.61, 0.7}, {0.31, 0.45, 0.4}, {0.18, 0.32, 0.25}}
 local MOUNTAIN_MIX = {0.42, 0.55, 0.7}
+local MOON_DIR = normalize({-0.35, 0.55, -0.7})
 local MOTE_DAY, MOTE_NIGHT = {1, 0.86, 0.45}, {0.35, 1, 0.3}
 
 function Game:onStart()
@@ -64,6 +65,7 @@ function Game:onStart()
   self.water = scene.find("Water")
   self.plants = scene.find("Plants")
   self.motes = scene.find("Motes")
+  self.moon, self.moonGlow = scene.find("Moon"), scene.find("MoonGlow")
   self.mountains = scene.withTag("mountains")
   self.smoke = scene.withTag("smoke")
   self.shafts = scene.withTag("shaft")
@@ -203,6 +205,12 @@ function Game:onUpdate(dt)
     scene.set(id, "Transform", {position = {eye[1], p.y, eye[3]}})
   end
   scene.set(self.motes, "Transform", {position = {f[1], f[2] + 1.2, f[3]}})
+  local moonAt = {eye[1] + MOON_DIR[1] * 160, eye[2] + MOON_DIR[2] * 160, eye[3] + MOON_DIR[3] * 160}
+  local facing = lookRotation(MOON_DIR)  -- the sprite's front (+Z) looks back at the camera
+  scene.set(self.moon, "Transform", {position = moonAt, rotation = facing})
+  scene.set(self.moon, "Sprite", {opacity = clamp(a.stars, 0, 1)})
+  scene.set(self.moonGlow, "Transform", {position = moonAt, rotation = facing})
+  scene.set(self.moonGlow, "Sprite", {opacity = clamp(a.stars * 0.5, 0, 1)})
   scene.set(self.plants, "MeshRenderer", {shaderUniforms = {hero = {hero.x, hero.y, hero.z, 0}}})
   self:placeShafts(a.sunDir, eye)
 

@@ -107,6 +107,9 @@ PROMPTS = {
                            "peaks fading to #a0a0aa at the bottom), gentle shading only, no trees."),
     "mountains_near": strip("A nearer hill ridge silhouette with a serrated line of tiny conifer tree tips along its crest, "
                             "filled in light grey (#d6d6dc at the top fading to #a0a0aa at the bottom)."),
+    "moon": ("Asset type: ONE round full moon disc for a night sky, logical size 32x32 pixels (may be enlarged only with uniform "
+             "square pixel blocks). Pale cream-white moon (#fff8e0 to #d8d0b8) with a few soft grey craters and maria, crisp pixel-art "
+             "circle edge, no outline, no glow or halo, no stars. Genuine transparent background, no text, frame or watermark."),
     "clouds": ("Asset type: seamlessly tileable 256x256 greyscale cloud coverage texture for a sky shader: soft fluffy cumulus "
                "cloud shapes in white on black, about 40 percent coverage, varied sizes, soft painterly edges. Tiles seamlessly "
                "in both axes. Fully opaque, no text, border or frame."),

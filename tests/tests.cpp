@@ -9844,6 +9844,38 @@ TEST(FogGradingHemisphereAndSpriteEmission) {
         std::printf("  fog/grading/hemisphere/emission software/GPU mean difference %.4f\n", mean);
         CHECK(mean < 2.5);
     } else std::printf("  SKIP GPU comparison (%s)\n", err.c_str());
+    // Sprite.material: a fog:false material keeps a sprite clear in full fog; a graph offset moves its quad.
+    set("Camera", "PostProcess", R"J({"fog":1,"fogStart":0,"fogEnd":0.01,"fogColor":[1,0,1],"saturation":1,"contrast":1,"shadowTint":[1,1,1],"highlightTint":[1,1,1]})J");
+    set("Board", "Sprite", R"J({"lit":false,"emission":0})J");
+    RenderTarget fogged, clearSprite;
+    render(fogged);
+    set("Board", "Sprite", R"J({"material":"materials/nofog.mat.json"})J");
+    render(clearSprite);
+    int boardMagenta = 0, boardClear = 0;
+    for (size_t i = 0; i < fogged.color.size(); ++i) {
+        if (fogged.ids[i] != board) continue;
+        boardMagenta += (fogged.color[i] & 0xFFFFFF) == 0xFF00FF;
+        boardClear += clearSprite.ids[i] == board && (clearSprite.color[i] & 0xFFFFFF) != 0xFF00FF;
+    }
+    CHECK(boardMagenta > 50 && boardClear == boardMagenta);
+    set("Camera", "PostProcess", R"J({"fog":0})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/lift.shader.json","graph":{"format":"ownengine.shader","nodes":[{"op":"baseColor"},{"op":"constant","value":[0,1,0,0]}],"color":0,"offset":1}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"materials/lift.mat.json","values":{"shader":"materials/lift.shader.json"}})J")["ok"].asBool());
+    set("Board", "Sprite", R"J({"material":"materials/lift.mat.json"})J");
+    RenderTarget lifted;
+    render(lifted);
+    int topBefore = h, topAfter = h;
+    for (int y = h - 1; y >= 0; --y) for (int x = 0; x < w; ++x) {
+        if (clearSprite.ids[static_cast<size_t>(y) * w + static_cast<size_t>(x)] == board) topBefore = y;
+        if (lifted.ids[static_cast<size_t>(y) * w + static_cast<size_t>(x)] == board) topAfter = y;
+    }
+    CHECK(topAfter < topBefore - 3);  // lifted 1 m: higher on screen
+    set("Board", "Sprite", R"J({"material":"materials/missing.mat.json"})J");
+    RenderTarget broken;
+    render(broken);
+    bool magentaBoard = false;
+    for (size_t i = 0; i < broken.color.size(); ++i) magentaBoard = magentaBoard || (broken.ids[i] == board && (broken.color[i] & 0xFFFFFF) == 0xFF00FF);
+    CHECK(magentaBoard);
     // COLOR_0 vertex colors (the RPG terrain carries per-tile tints).
     CHECK(CopyFileTo(TestSourceDir() + "/games/RPG/assets/models/terrain.glb", JoinPath(e.ProjectDir(), "assets/models/terrain.glb")));
     const auto terrain = e.Assets().GetMesh("assets/models/terrain.glb", &err);

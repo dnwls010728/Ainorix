@@ -410,6 +410,18 @@ def plants_graph():
     return g.doc(color=g.add("baseColor"), offset=offset)
 
 
+def tree_graph():
+    """Tree billboards sway at the crown (uv v = 0 at the image top). The phase follows the world position slowly
+    enough that both top corners of one sprite move together while trees across the map stay out of step."""
+    g = Graph({})
+    p, t, uv = g.add("position"), g.add("time"), g.add("uv")
+    k = g.add("subtract", g.c(1), g.swz(uv, [1, 1, 1, 1]))
+    phase = g.add("dot", p, g.c([0.15, 0, 0.11, 0]))
+    wave = g.add("sin", g.add("add", g.add("multiply", t, g.c(1.3)), phase))
+    offset = g.add("multiply", g.add("multiply", wave, g.c([0.06, 0, 0.02, 0])), g.add("multiply", k, k))
+    return g.doc(color=g.add("baseColor"), offset=offset)
+
+
 def sky_graph():
     """Sky dome: horizon-to-zenith gradient, sun disc and halo (HDR, blooms), stars from the base texture."""
     g = Graph({"cameraPosition": [0, 0, 0, 1], "horizon": [0.8, 0.89, 0.95, 1], "zenith": [0.25, 0.51, 0.86, 1],
@@ -822,6 +834,13 @@ def scene(world, props, lamps, chimneys):
                                        "MeshRenderer": {"mesh": "assets/models/mountain_ring.glb", "material": "materials/mountains_%s.mat.json" % tex,
                                                         "castShadows": False, "unlit": True},
                                        "Tag": {"tags": "mountains"}})
+    # the moon: a disc and a soft halo far inside the sky dome, shown at night by scripts/game.lua
+    add("MoonGlow", {"Transform": {"position": [cx, 100, cz - 120]},
+                                 "Sprite": {"texture": TEX + "glow.png", "material": "materials/moon.mat.json", "width": 34, "height": 34,
+                                            "alphaCutoff": 0, "pixelArt": False, "blend": "add", "color": [0.4, 0.5, 0.8], "opacity": 0}})
+    add("Moon", {"Transform": {"position": [cx, 100, cz - 120]},
+                 "Sprite": {"texture": TEX + "moon.png", "material": "materials/moon.mat.json", "width": 7, "height": 7,
+                            "alphaCutoff": 0, "pixelArt": True, "color": [1.6, 1.55, 1.4], "opacity": 0}})
     add("Terrain", {"MeshRenderer": {"mesh": "assets/models/terrain.glb", "material": "materials/terrain.mat.json"}})
     add("Water", {"Transform": {"position": [N / 2 - 0.5, 0.78, N / 2 - 0.5], "scale": [700, 1, 700]},
                   "MeshRenderer": {"mesh": "plane", "material": "materials/water.mat.json", "castShadows": False, "unlit": True}})
@@ -856,7 +875,7 @@ def scene(world, props, lamps, chimneys):
         e = add(art.capitalize() + str(k + 1), {
             "Transform": {"position": [round(x, 3), y, round(z, 3)]},
             "Sprite": {"texture": TEX + art + ".png", "pixelsPerUnit": SPRITE_PPU[art], "pivotY": 0, "lit": True, "emission": 0.22, "castShadows": True,
-                       "flipX": (k * 7919) % 3 == 0},
+                       "flipX": (k * 7919) % 3 == 0, **({"material": "materials/tree.mat.json"} if blob >= 1 else {})},
             "Tag": {"tags": "billboard"}})
         blob_shadow(e, blob)
     characters = [("Hero", "hero", cx, cz + 1, 0), ("Villager", "npc_villager", cx + 2, cz - 1, 0),
@@ -908,6 +927,9 @@ def materials():
     for tex in ("far", "near"):
         write_json("materials/mountains_%s.mat.json" % tex, {"baseTexture": TEX + "mountains_%s.png" % tex, "unlit": True,
                                                               "doubleSided": True, "fog": False, "alphaMode": "blend"})
+    write_json("materials/tree.mat.json", {"roughness": 1, "shader": "materials/tree.shader.json"})
+    write_json("materials/moon.mat.json", {"unlit": True, "fog": False})
+    write_json("materials/tree.shader.json", tree_graph())
     write_json("materials/ground.shader.json", cloud_shadow_graph())
     write_json("materials/plants.shader.json", plants_graph())
     write_json("materials/sky.shader.json", sky_graph())

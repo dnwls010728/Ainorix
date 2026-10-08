@@ -28,7 +28,7 @@ CELL_W, CELL_H, FIGURE_H = 32, 48, 45
 SHEETS = ["hero", "npc_villager", "npc_farmer", "npc_girl"]
 SPRITES = {  # name: (width, height) of the texture; the figure is fitted inside, bottom-centred
     "oak": (72, 80), "oak_lime": (72, 80), "oak_autumn": (72, 80), "oak_blossom": (72, 80),
-    "pine": (46, 90), "birch": (52, 80), "bush": (32, 20), "bush_berry": (32, 20), "rock": (26, 18), "lamp": (14, 36),
+    "pine": (46, 90), "birch": (52, 80), "bush": (32, 20), "bush_berry": (32, 20), "rock": (26, 18), "lamp": (14, 36), "moon": (32, 32),
 }
 TEXTURES = {"grass_top": (32, 32), "grass_side": (32, 32), "earth": (32, 32), "stone": (32, 32), "sand": (32, 32),
             "cobble": (32, 32), "plaster": (32, 32), "roof": (32, 32), "door": (16, 24), "window": (16, 16)}
@@ -151,6 +151,9 @@ def sheet(name):
     save(name, outline(palette(out, 40)))
 
 
+NO_OUTLINE = {"moon"}  # soft-edged sky disc
+
+
 def sprite(name, size):
     img = load(name)
     part, mask = figure(img, (0, 0, img.shape[1], img.shape[0]))
@@ -159,7 +162,8 @@ def sprite(name, size):
     small = reduce(part, mask, max(1, int(round(mask.shape[1] * scale))), max(1, int(round(mask.shape[0] * scale))))
     canvas = np.zeros((h, w, 4), np.float32)
     place(canvas, small, w / 2, h)
-    save(name, outline(palette(canvas, 28)))
+    canvas = palette(canvas, 28)
+    save(name, canvas if name in NO_OUTLINE else outline(canvas))
 
 
 def plants():

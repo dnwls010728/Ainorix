@@ -348,7 +348,7 @@ Commands.cpp SHA256: `524d9d4927ff3f93bc59578fc897c4d747f0791d5e90402b904d1f9283
 
 Players gain per-surface distance fog (`PostProcess.fog*`, material `fog: false`), ACES tone mapping,
 colour grading (`saturation`, `contrast`, `shadowTint`, `highlightTint`), hemisphere ambient
-(`DirectionalLight.hemisphere/groundAmbient`), `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket` /
+(`DirectionalLight.hemisphere/groundAmbient`), `Sprite.emission`, `Sprite.material`, glTF `COLOR_0` and the `LeftBracket` /
 `RightBracket` key names, used by games/RPG (docs/RPG.md). Built from branch claude/rpg-village on main 7cc9d8b
 with Emscripten 6.0.10, Release, BINARYEN_CORES=1, parallelism 2. Windows 307 tests pass. JS is
 byte-identical to the previous build. Browser GPU, Android devices and Linux/EGL execution remain unverified.
@@ -356,4 +356,4 @@ byte-identical to the previous build. Browser GPU, Android devices and Linux/EGL
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
-| runtime/web/oe_player.wasm | 4,951,165 | 2b03a6a5be8800dc1bd61522c5ef47c169dd54094cecc862fa11a5c1e60a4b98 |
+| runtime/web/oe_player.wasm | 4,952,310 | 1d43af71f0b825e5ebaab64792640e54f25144f392863c102d946b33ec19e496 |

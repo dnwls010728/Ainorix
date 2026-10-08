@@ -2198,6 +2198,7 @@ Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at t
 | field | type | default | description |
 |---|---|---|---|
 | `texture` | string | `""` | Image file (.png with transparency). A sprite sheet is a grid of equally sized frames. |
+| `material` | string | `""` | Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. `texture` stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. Empty = the default sprite material. |
 | `color` | color | `[1,1,1]` | Tint multiplied with the image. |
 | `frame` | int | `0` | Frame index in the sheet, row by row from the top-left (SpriteAnimation sets it). |
 | `columns` | int | `1` | Frames per row in the sheet. |

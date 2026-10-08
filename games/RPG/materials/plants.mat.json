@@ -3,6 +3,12 @@
   "pixelArt": true,
   "roughness": 1,
   "alphaMode": "mask",
+  "emissive": [
+    0.18,
+    0.18,
+    0.18
+  ],
+  "emissiveTexture": "assets/textures/plants.png",
   "alphaCutoff": 0.5,
   "doubleSided": true,
   "shader": "materials/plants.shader.json"

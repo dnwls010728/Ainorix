@@ -284,6 +284,14 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.additive = sp.blend == "add";
         it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
         if (!sp.texture.empty() && assets) it.textureOverride = assets->GetTexture(sp.texture);
+        if (!sp.material.empty() && assets) {
+            it.materialOverride = assets->GetMaterial(sp.material);
+            if (!it.materialOverride) {  // broken material file: magenta, like a missing mesh
+                it.tint = Color(1, 0, 1);
+                it.unlit = true;
+                it.error = true;
+            }
+        }
         const Texture* tex = it.textureOverride.get();
         if (!sp.texture.empty() && !tex) {
             it.tint = Color(1, 0, 1);  // missing image: magenta, like missing meshes

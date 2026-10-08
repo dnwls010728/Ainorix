@@ -341,6 +341,7 @@ struct Sprite {
     static constexpr const char* kTypeName = "Sprite";
     static constexpr const char* kDoc = "Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at the entity. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.";
     std::string texture;
+    std::string material;
     Color color{1, 1, 1};
     int frame = 0;
     int columns = 1;
@@ -364,6 +365,10 @@ struct Sprite {
     bool visible = true;
     static void Reflect(FieldList& f) {
         f.Add("texture", &Sprite::texture, "Image file (.png with transparency). A sprite sheet is a grid of equally sized frames.");
+        f.Add("material", &Sprite::material,
+              "Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. "
+              "`texture` stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. "
+              "Empty = the default sprite material.");
         f.Add("color", &Sprite::color, "Tint multiplied with the image.");
         f.Add("frame", &Sprite::frame, "Frame index in the sheet, row by row from the top-left (SpriteAnimation sets it).");
         f.Add("columns", &Sprite::columns, "Frames per row in the sheet.");

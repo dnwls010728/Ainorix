@@ -13,7 +13,7 @@ express the prototype, and replace every procedural picture with newly generated
 | `house.ts` half-timber houses | `assets/models/houses.glb` (atlas, unit-tiled faces) + `windows.glb` with `window.shader.json` (`glow` uniform) |
 | water `ShaderMaterial` with shore-distance texture | `water.shader.json` on a 700 m plane, `shore.png` (4-texel deep border, clamped), unlit, tinted by a `light` uniform |
 | `sky.ts` dome (gradient, sun, clouds, stars, moon) + 3 ridge cylinders | `sky.shader.json` (gradient, sun disc/halo, stars from `stars.png`), a separate `clouds.shader.json` dome (48-node graph limit), `mountain_ring.glb` x3, materials with `fog: false` |
-| `Billboard` (Y-axis sprites, blob shadow, emissive 0.22) | `Sprite {lit, castShadows, emission: 0.22}` + child blob `Sprite`, turned by `game.lua` (tag `billboard`) |
+| `Billboard` (Y-axis sprites, blob shadow, emissive 0.22, tree sway) | `Sprite {lit, castShadows, emission: 0.22}` + child blob `Sprite`, turned by `game.lua` (tag `billboard`); trees add `material: materials/tree.mat.json` (sway graph) |
 | `Particles` (motes/fireflies, chimney smoke, footstep dust), `LightShafts` | `effects/motes|smoke|dust.vfx.json` (`vfx.set` colour/size, `vfx.burst`), seven additive shaft sprites oriented along the sun ray |
 | `post.ts` bloom, tilt-shift bokeh, grade (split tone, saturation, contrast, vignette), ACES | `PostProcess`: bloom, depth-based DOF, `toneMapping: aces`, `saturation`, `contrast`, `shadowTint`, `highlightTint`, vignette |
 | `THREE.Fog` sharing the haze colour | `PostProcess.fog/fogColor/fogStart/fogEnd` (per surface) |
@@ -33,7 +33,7 @@ the port names the plaza "윈더미어 광장".
   material `fog: false`.
 - `PostProcess.saturation`, `contrast`, `shadowTint`, `highlightTint` and `toneMapping: "aces"`.
 - `DirectionalLight.hemisphere` + `groundAmbient`.
-- `Sprite.emission`.
+- `Sprite.emission` and `Sprite.material`.
 - glTF `COLOR_0` vertex colours.
 - Game key names `LeftBracket` / `RightBracket` (Windows, web, Android).
 
@@ -41,8 +41,8 @@ All defaults keep earlier frames bit-identical; `FogGradingHemisphereAndSpriteEm
 
 ## Art
 
-`tools/art_prompts.py` -> `tools/art_prompts.json` (28 prompts: 4 character sheets, 6 trees, 2 bushes, rock, plants
-strip, lamp, 6 terrain textures, plaster/roof/door/window, 2 mountain strips, clouds). `tools/gen_art.py` runs one
+`tools/art_prompts.py` -> `tools/art_prompts.json` (29 prompts: 4 character sheets, 6 trees, 2 bushes, rock, plants
+strip, lamp, 6 terrain textures, plaster/roof/door/window, 2 mountain strips, clouds, moon). `tools/gen_art.py` runs one
 `codex exec` per prompt in a read-only sandbox (the Windows workspace sandbox of the Codex plugin failed with
 "helper_unknown_error: setup refresh had errors", so Codex only calls its image tool and the script copies the result
 from `~/.codex/generated_images/`). `tools/import_art.py` crops figures by their alpha, reduces them with
@@ -57,6 +57,9 @@ shadow, shore distance, shaft gradient, star field) and the atlases are computed
 - [x] World generator, scene, materials, graphs, effects; Lua director and hero.
 - [x] Test `RPGVillageGame`; D3D11 screenshots at dawn, noon, golden hour, dusk, night and the opening shot inspected.
 - [x] Web and Android players rebuilt (see runtime READMEs).
-- [ ] Not ported: the prototype's chromatic aberration and film grain, true tilt-shift (DOF is depth based), tree sway
-      (sprites have no vertex graph), moon disc.
+- [x] Tree sway: engine `Sprite.material`; trees use `materials/tree.shader.json` (crown offset, slow world-space phase).
+- [x] Moon: `Moon` + `MoonGlow` sprites (Codex `moon.png`, `materials/moon.mat.json` with `fog: false`) placed by
+      `game.lua` 160 m along the prototype's moon direction, faded in with the stars. The sky graph has no room for it
+      (46 of 48 nodes).
+- [ ] Not ported: the prototype's chromatic aberration and film grain, true tilt-shift (DOF is depth based).
 - [ ] Not run: browser GPU, Android device, Linux/EGL.
