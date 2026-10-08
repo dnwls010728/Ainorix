@@ -176,12 +176,36 @@ struct NativeEditor::Impl {
     bool assetGrid = true;
     std::string selectedAsset;
     std::vector<ScriptTab> scripts;
+    std::vector<std::string> closingScripts;  // Paths survive tab moves while the unsaved-changes prompt is open.
     int focusScript = -1;
     bool scriptEditorFocused = false;  // keys belong to the code editor (no scene shortcuts)
     double lastScriptErrorsPoll = -1;
     Json scriptErrors = Json::MakeArray();
     void CheckScript(ScriptTab& tab);
     void UpdateScriptMarkers(ScriptTab& tab);
+    // One graph workspace; nodes use document indices until topological export.
+    bool showShaders = false, focusShaders = false, shaderEditorFocused = false, shaderFit = false;
+    Json shaderDocument, shaderSaved, shaderMaterial = Json::MakeObject(), shaderMaterialSaved;
+    std::string shaderPath, shaderSavePath, shaderMaterialPath, shaderExistingMaterial, shaderError;
+    std::string shaderUniformName = "parameter";
+    std::vector<ImVec2> shaderPositions;
+    ImVec2 shaderPan{30, 30}, shaderOutputPos{260, 30};
+    float shaderZoom = 1.0f;
+    int shaderSelected = -1, shaderLink = -1;
+    std::vector<Json> shaderHistory;
+    size_t shaderHistoryIndex = 0;
+    bool shaderPendingOpen = false, shaderOpenPrompt = false, shaderPendingQuit = false;
+    std::string shaderPendingPath;
+    std::shared_ptr<const Texture> shaderPreview;
+    std::string shaderPreviewKey;
+    void OpenShader(const std::string& path, bool discard = false);
+    void ShadersPanel();
+    void ShaderCanvas();
+    void ShaderProperties();
+    void ShaderRecord();
+    void ShaderArrange();
+    bool SaveShader();
+    bool SaveShaderMaterial();
     std::string addComponentFilter;
     std::map<std::string, int> dragSerial;  // inspector drag -> undo merge group
     int gizmoSerial = 0;

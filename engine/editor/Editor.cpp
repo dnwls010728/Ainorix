@@ -31,7 +31,7 @@ extern const size_t kDefaultFontSize;
 
 namespace {
 
-constexpr float kBaseFontSize = 16.0f;
+constexpr float kBaseFontSize = 17.0f;
 // Korean/Japanese system fonts draw smaller and thinner than Roboto at the same size: merged a
 // little larger so mixed text reads as one size.
 constexpr float kCjkFontScale = 1.06f;
@@ -193,6 +193,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "TeamChatPanel=%d", &i) == 1) m->showTeamChat = i != 0;
     else if (std::sscanf(line, "Thumbnails=%d", &i) == 1) m->showThumbnails = i != 0;
     else if (std::sscanf(line, "AssetGrid=%d", &i) == 1) m->assetGrid = i != 0;
+    else if (std::sscanf(line, "ShaderPanel=%d", &i) == 1) m->showShaders = i != 0;
     else if (std::sscanf(line, "NetworkLatency=%d", &i) == 1) m->networkLatency = std::max(0, std::min(30, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
     else if (std::strncmp(line, "Language=", 9) == 0 && !m->forceLanguage) SetEditorLanguage(ParseEditorLanguage(line + 9));
@@ -239,6 +240,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam, m->showTeamChat);
     buf->appendf("AssetGrid=%d\n", m->assetGrid);
+    buf->appendf("ShaderPanel=%d\n", m->showShaders);
     WindowPlacement placement;
     if (m->window && m->window->GetPlacement(placement))
         buf->appendf("WindowPlacement=%d,%d,%d,%d,%d\n", placement.x, placement.y, placement.width, placement.height, placement.maximized ? 1 : 0);
@@ -270,6 +272,10 @@ bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, boo
     if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tooltip);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
+    if (active) {
+        const ImU32 accent = ImGui::GetColorU32(ImGuiCol_CheckMark);
+        ImGui::GetWindowDrawList()->AddRect(mn, mx, accent, ImGui::GetStyle().FrameRounding, 2.0f);
+    }
     ImVec2 c((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
     float r = h * 0.26f;
     ImU32 col = ImGui::GetColorU32(enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
@@ -439,13 +445,14 @@ bool NativeEditor::Impl::InPlaySession() const { return sim["inPlaySession"].asB
 bool NativeEditor::Impl::Dirty() const { return sim["dirty"].asBool(false); }
 
 void NativeEditor::Impl::Refresh(bool force) {
+    // Simulation controls do not edit the scene revision, and must never be throttled.
+    sim = Call("sim.state", Json(), true)["result"];
     uint64_t rev = engine.Revision();
     if (!force && rev == seenRevision) return;
     // While the game runs every frame is a new revision: 10 refreshes a second are plenty.
     if (!force && Playing() && time - lastRefresh < 0.1) return;
     seenRevision = rev;
     lastRefresh = time;
-    sim = Call("sim.state", Json(), true)["result"];
     Json summary = Call("scene.summary", Json(), true)["result"];
     sceneName = summary["name"].asString("");
     scenePath = summary["path"].asString("");
@@ -675,6 +682,12 @@ void NativeEditor::Impl::CreatePreset(const char* key) {
 }
 
 void NativeEditor::Impl::RequestAction(PendingAction action) {
+    if (action.kind == PendingAction::Kind::Quit && !shaderDocument.isNull() &&
+        (shaderDocument != shaderSaved || shaderMaterial != shaderMaterialSaved)) {
+        showShaders = focusShaders = shaderOpenPrompt = shaderPendingQuit = true;
+        shaderPendingOpen = false;
+        return;
+    }
     if (InPlaySession()) {  // back to the edit-time scene first: that is what gets saved or dropped
         Call("sim.stop", Json());
         ReleaseGameInput();
@@ -795,14 +808,15 @@ void NativeEditor::Impl::ApplyStyle() {
     st.ItemInnerSpacing = ImVec2(6, 4);
     st.CellPadding = ImVec2(6, 3);
     st.IndentSpacing = 18.0f;
-    st.ScrollbarSize = 13.0f;
-    st.GrabMinSize = 12.0f;
+    st.ScrollbarSize = 16.0f;
+    st.GrabMinSize = 14.0f;
+    st.DisabledAlpha = 0.65f;
     st.WindowBorderSize = 1.0f;
     st.PopupBorderSize = 1.0f;
     st.FrameBorderSize = 1.0f;
     st.TabBarBorderSize = 1.0f;
-    st.TabBarOverlineSize = 2.0f;
-    st.DockingSeparatorSize = 3.0f;
+    st.TabBarOverlineSize = 3.0f;
+    st.DockingSeparatorSize = 4.0f;
     st.SeparatorTextBorderSize = 2.0f;
     st.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesToNodes;  // parent-child guides in the Hierarchy
     st.TreeLinesSize = 1.0f;
@@ -810,11 +824,11 @@ void NativeEditor::Impl::ApplyStyle() {
     const ImVec4 bg(0.075f, 0.08f, 0.095f, 1.0f), panel(0.13f, 0.14f, 0.165f, 1.0f), frame(0.205f, 0.22f, 0.255f, 1.0f);
     const ImVec4 accent(0.30f, 0.58f, 1.0f, 1.0f), accentDim(0.22f, 0.40f, 0.72f, 1.0f);
     c[ImGuiCol_Text] = ImVec4(0.93f, 0.94f, 0.96f, 1.0f);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.63f, 0.66f, 0.72f, 1.0f);  // hints and secondary text: 6:1 on the panel
+    c[ImGuiCol_TextDisabled] = ImVec4(0.72f, 0.75f, 0.80f, 1.0f);
     c[ImGuiCol_WindowBg] = panel;
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_PopupBg] = ImVec4(0.105f, 0.115f, 0.14f, 0.99f);
-    c[ImGuiCol_Border] = ImVec4(0.30f, 0.325f, 0.375f, 0.75f);  // outlines of fields, popups and notices
+    c[ImGuiCol_Border] = ImVec4(0.40f, 0.435f, 0.50f, 0.8f);
     c[ImGuiCol_FrameBg] = frame;
     c[ImGuiCol_FrameBgHovered] = ImVec4(0.25f, 0.27f, 0.315f, 1.0f);
     c[ImGuiCol_FrameBgActive] = ImVec4(0.27f, 0.31f, 0.39f, 1.0f);
@@ -825,36 +839,36 @@ void NativeEditor::Impl::ApplyStyle() {
     c[ImGuiCol_ScrollbarGrab] = ImVec4(0.36f, 0.385f, 0.44f, 1.0f);
     c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.46f, 0.49f, 0.56f, 1.0f);
     c[ImGuiCol_ScrollbarGrabActive] = accentDim;
-    c[ImGuiCol_CheckMark] = ImVec4(0.55f, 0.76f, 1.0f, 1.0f);
+    c[ImGuiCol_CheckMark] = ImVec4(0.65f, 0.84f, 1.0f, 1.0f);
     c[ImGuiCol_SliderGrab] = ImVec4(0.38f, 0.56f, 0.92f, 1.0f);
     c[ImGuiCol_SliderGrabActive] = accent;
     c[ImGuiCol_Button] = ImVec4(0.235f, 0.25f, 0.295f, 1.0f);
     c[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.33f, 0.40f, 1.0f);
     c[ImGuiCol_ButtonActive] = accentDim;
-    c[ImGuiCol_Header] = ImVec4(0.19f, 0.31f, 0.52f, 1.0f);  // selected rows and section bars
+    c[ImGuiCol_Header] = ImVec4(0.18f, 0.36f, 0.60f, 1.0f);
     c[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.27f, 0.36f, 1.0f);
     c[ImGuiCol_HeaderActive] = ImVec4(0.24f, 0.40f, 0.68f, 1.0f);
-    c[ImGuiCol_Separator] = ImVec4(0.24f, 0.26f, 0.30f, 1.0f);
+    c[ImGuiCol_Separator] = ImVec4(0.34f, 0.375f, 0.44f, 1.0f);
     c[ImGuiCol_SeparatorHovered] = accentDim;
     c[ImGuiCol_SeparatorActive] = accent;
     c[ImGuiCol_ResizeGrip] = ImVec4(0.30f, 0.33f, 0.38f, 0.6f);
     c[ImGuiCol_Tab] = bg;
     c[ImGuiCol_TabHovered] = ImVec4(0.22f, 0.27f, 0.36f, 1.0f);
-    c[ImGuiCol_TabSelected] = panel;
+    c[ImGuiCol_TabSelected] = ImVec4(0.20f, 0.26f, 0.35f, 1.0f);
     c[ImGuiCol_TabSelectedOverline] = accent;
     c[ImGuiCol_TabDimmed] = bg;
-    c[ImGuiCol_TabDimmedSelected] = panel;
-    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.40f, 0.46f, 0.56f, 1.0f);  // which tab shows, also in unfocused docks
+    c[ImGuiCol_TabDimmedSelected] = ImVec4(0.19f, 0.215f, 0.265f, 1.0f);
+    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.58f, 0.67f, 0.80f, 1.0f);
     c[ImGuiCol_TreeLines] = ImVec4(0.30f, 0.325f, 0.375f, 1.0f);
     c[ImGuiCol_TableHeaderBg] = ImVec4(0.17f, 0.185f, 0.215f, 1.0f);
     c[ImGuiCol_TableBorderStrong] = ImVec4(0.26f, 0.28f, 0.33f, 1.0f);
     c[ImGuiCol_TableBorderLight] = ImVec4(0.20f, 0.215f, 0.25f, 1.0f);
-    c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.025f);
+    c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.04f);
     c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
     c[ImGuiCol_DockingPreview] = ImVec4(accent.x, accent.y, accent.z, 0.5f);
     c[ImGuiCol_DockingEmptyBg] = bg;
     c[ImGuiCol_TextSelectedBg] = ImVec4(accent.x, accent.y, accent.z, 0.35f);
-    c[ImGuiCol_NavCursor] = accent;
+    c[ImGuiCol_NavCursor] = ImVec4(0.75f, 0.90f, 1.0f, 1.0f);
     c[ImGuiCol_DragDropTarget] = ImVec4(1.0f, 0.62f, 0.1f, 1.0f);
     st.ScaleAllSizes(scale);
     st.FontSizeBase = kBaseFontSize;
@@ -958,7 +972,7 @@ void NativeEditor::Impl::Shortcuts() {
     const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global)) TogglePlay();
     if (gameFocused && InPlaySession()) return;  // keys belong to the game
-    if (scriptEditorFocused) return;              // and to the code editor (it saves with Ctrl+S itself)
+    if (scriptEditorFocused || shaderEditorFocused) return;  // document editors own save/undo shortcuts
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global)) Save();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global)) Undo();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global)) Redo();
@@ -1065,6 +1079,7 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::MenuItem(Tr("Assets"), nullptr, &showAssets);
         ImGui::MenuItem(Tr("Console"), nullptr, &showConsole);
         ImGui::MenuItem(Tr("Scripts"), nullptr, &showScripts);
+        if (ImGui::MenuItem(Tr("Shader Graph"), nullptr, showShaders)) { showShaders = true; focusShaders = true; }
         ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
         if (ImGui::MenuItem(Tr("History"), nullptr, showHistory)) { showHistory = true; requestHistoryFocus = true; }
         ImGui::MenuItem(Tr("Asset Thumbnails"), nullptr, &showThumbnails);
@@ -1239,6 +1254,10 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     layoutBuilt = true;
     if (!empty && !resetLayout) {
         // Add the new tab to an old layout without resetting the person's other panels.
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Shader Graph"))) {
+            ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
+            if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Shader Graph", scene->DockId);
+        }
         if (!ImGui::FindWindowSettingsByID(ImHashStr("###Network"))) {
             ImGuiWindowSettings* inspector = ImGui::FindWindowSettingsByID(ImHashStr("###Inspector"));
             if (inspector && inspector->DockId) ImGui::DockBuilderDockWindow("###Network", inspector->DockId);
@@ -1275,6 +1294,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Scene", center);
     ImGui::DockBuilderDockWindow("###Game", center);
     ImGui::DockBuilderDockWindow("###Scripts", center);
+    ImGui::DockBuilderDockWindow("###Shader Graph", center);
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderDockWindow("###History", bottom);
@@ -1541,6 +1561,8 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showAssets) m.AssetsPanel();
     if (m.showConsole) m.ConsolePanel();
     if (m.showScripts) m.ScriptsPanel();
+    if (m.showShaders) m.ShadersPanel();
+    else m.shaderEditorFocused = false;
     if (m.showTiles) m.TilesPanel();
     if (m.showNetwork) m.NetworkPanel();
     if (m.showHistory) m.HistoryPanel();
@@ -1672,6 +1694,14 @@ bool NativeEditor::SetNetworkPlayers(int players) {
 bool NativeEditor::GameViewFocused() const { return impl_->gameFocused; }
 
 void NativeEditor::OpenScript(const std::string& path) { impl_->OpenScript(path); }
+void NativeEditor::OpenShader(const std::string& path) { impl_->OpenShader(path); }
+Json NativeEditor::ShaderDocument() const { return impl_->shaderDocument; }
+
+std::vector<std::string> NativeEditor::OpenScripts() const {
+    std::vector<std::string> paths;
+    for (const ScriptTab& tab : impl_->scripts) paths.push_back(tab.path);
+    return paths;
+}
 
 std::vector<std::string> NativeEditor::ScriptProblems(const std::string& path) const {
     std::vector<std::string> out;
