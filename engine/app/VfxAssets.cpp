@@ -263,6 +263,7 @@ Json VfxRuntimeCall(Engine& engine, const std::string& operation, EntityId id, c
             if (args.has("emitter") && system->definition->emitters[i].name != args["emitter"].asString()) continue;
             auto& emitter = system->emitters[i];
             const int count = std::min(args["count"].asInt(emitter.burst), std::max(0, system->definition->maxParticles - static_cast<int>(live)));
+            emitter.expressionSystemTime=system->expressionTime;
             const int births = BurstEmitter(emitter, id, scene.WorldMatrix(id) * system->definition->emitters[i].local, VfxSeedMix(i), count);
             accepted += births; live += static_cast<size_t>(births);
         }
@@ -271,6 +272,7 @@ Json VfxRuntimeCall(Engine& engine, const std::string& operation, EntityId id, c
     Json result = Json::MakeObject(); result["id"] = id; result["asset"] = system->asset;
     if (operation != "state") engine.Touch();
     result["playing"] = VfxPlaying(*system); result["finished"] = VfxFinished(*system); result["error"] = system->error;
+    result["systemTime"]=system->expressionTime;
     result["params"] = Json::MakeObject();
     const Json params = EffectiveVfxParams(*system);
     if (system->definition) for (const auto& param : system->definition->json["params"].members())

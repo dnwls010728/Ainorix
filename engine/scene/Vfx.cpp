@@ -1,4 +1,5 @@
 #include "scene/Vfx.h"
+#include "scene/VfxExpression.h"
 
 #include <algorithm>
 #include <cmath>
@@ -65,7 +66,7 @@ void ValidateFields(const ComponentType& type, void* value, const Json& values) 
             } else if (field->type != FieldType::Color || !v.isString() || v.asString().empty()) rangeError();
         }
         std::string error;
-        if (field->type == FieldType::Json) {
+        if (field->type == FieldType::Json && field->name != "expressions") {
             ParticleCurve curve;
             const bool vector = field->name == "positionOverLife" || field->name == "velocityOverLife" ||
                 field->name == "rotationOverLife" || field->name == "scaleOverLife";
@@ -86,18 +87,25 @@ void ValidateFields(const ComponentType& type, void* value, const Json& values) 
         const auto& emitter = *static_cast<ParticleEmitter*>(value);
         if (emitter.shapeSize.x < 0 || emitter.shapeSize.y < 0 || emitter.shapeSize.z < 0)
             throw ApiError("invalid_range", "shapeSize must be nonnegative", "Use a radius or nonnegative half extents.");
+        VfxExpressionError expressionError;
+        if (!PrepareVfxExpressions(emitter,&expressionError)) throw ApiError(expressionError.code,"expressions: "+expressionError.message,expressionError.hint);
         if (!ParticleSettingsValid(emitter)) throw ApiError("invalid_vfx", "invalid particle settings", "Check fields and curves with vfx.schema.");
     }
 }
 
 }  // namespace
 
-void ValidateVfxSettings(const ComponentType& type, const void* current, const Json& values) {
+void ValidateVfxSettings(const ComponentType& type, const void* current, const Json& values, const Json* expressionParams) {
     if (type.name != "ParticleEmitter" && type.name != "Trail") return;
     auto pool = type.makePool();
     void* copy = pool->Add(1);
     std::string error;
     if (current) ApplyComponentJson(type, copy, ComponentToJson(type, current), &error);
+    if (type.name == "ParticleEmitter") {
+        auto& emitter=*static_cast<ParticleEmitter*>(copy);
+        if (expressionParams) emitter.expressionParams=*expressionParams;
+        else if (current) emitter.expressionParams=static_cast<const ParticleEmitter*>(current)->expressionParams;
+    }
     ValidateFields(type, copy, values);
 }
 
@@ -184,6 +192,9 @@ void ConfigureVfx(const VfxAsset& asset, const Json& overrides, std::vector<Part
     emitters.clear(); trails.clear();
     for (const auto& block : asset.emitters) emitters.push_back(block.emitter);
     for (const auto& block : asset.trails) trails.push_back(block.trail);
+    Json expressionParams=Json::MakeObject();
+    for (const auto& parameter : parameters.members()) expressionParams[parameter.first]=overrides.has(parameter.first)?overrides[parameter.first]:parameter.second["default"];
+    for (auto& emitter : emitters) { emitter.expressionParams=expressionParams; emitter.expressionInSystem=true; }
     for (const auto& parameter : parameters.members()) {
         const Json& spec = parameter.second;
         const Json& value = overrides.has(parameter.first) ? overrides[parameter.first] : spec["default"];
@@ -207,6 +218,17 @@ void ConfigureVfx(const VfxAsset& asset, const Json& overrides, std::vector<Part
             if (!FieldFromJson(*target.field, component, applied, &error)) throw ApiError("invalid_vfx", error);
         }
     }
+    int instructionCost=0;int64_t stepCost=0;
+    for (auto& emitter : emitters) {
+        VfxExpressionError error;
+        if (!PrepareVfxExpressions(emitter,&error)) throw ApiError(error.code,error.message,error.hint);
+        if (emitter.expressionProgram) {
+            const int cost=emitter.expressionProgram->birthCost+emitter.expressionProgram->updateCost;
+            instructionCost+=cost;stepCost+=static_cast<int64_t>(emitter.maxParticles)*5*cost;
+        }
+    }
+    if (instructionCost>VfxExpressionSet::kEffectInstructions || stepCost>VfxExpressionSet::kStepInstructions)
+        throw ApiError("expression_budget","effect expression budget exceeded","Use at most 512 instructions per asset and 1000000 worst-case instructions/step; reduce block capacities or expression cost.");
     for (const auto& emitter : emitters) if (!emitter.onDeath.empty()) {
         bool found = false; for (const auto& target : asset.emitters) found = found || target.name == emitter.onDeath;
         if (!found) throw ApiError("invalid_vfx", "unknown death target '" + emitter.onDeath + "'", "Use an emitter name from this asset.");
@@ -223,6 +245,8 @@ VfxAsset ParseVfxAsset(const Json& json) {
         throw ApiError("invalid_vfx", std::string("vfx.") + key + " must be a bounded string", "Use text up to 4096 bytes.");
     VfxAsset asset; asset.json = json;
     asset.json["emitters"] = Json::MakeArray(); asset.json["trails"] = Json::MakeArray();
+    Json expressionDefaults=Json::MakeObject();
+    for (const auto& parameter : json["params"].members()) expressionDefaults[parameter.first]=parameter.second["default"];
     std::set<std::string> names;
     for (const char* key : {"emitters", "trails"}) {
         if (json.has(key) && (!json[key].isArray() || json[key].size() > 32)) throw ApiError("invalid_range", std::string("vfx.") + key, "Use arrays of at most 32 blocks.");
@@ -235,8 +259,8 @@ VfxAsset ParseVfxAsset(const Json& json) {
             const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");
             const char* settings = trail ? "trail" : "emitter";
             const Json values = block.has(settings) ? block[settings] : Json::MakeObject();
-            try { ValidateVfxSettings(type, nullptr, values); }
-            catch (const ApiError& ex) { throw ApiError(ex.code, location + "." + settings + ": " + ex.what(), ex.hint); }
+            try { ValidateVfxSettings(type, nullptr, values, &expressionDefaults); }
+            catch (const ApiError& ex) { throw ApiError(ex.code, location + "." + settings + " (" + name + "): " + ex.what(), ex.hint); }
             const Mat4 local = LocalMatrix(block, location);
             Json canonical = block;
             std::string error;
@@ -247,6 +271,7 @@ VfxAsset ParseVfxAsset(const Json& json) {
             } else {
                 VfxEmitterDefinition definition; definition.name = name; definition.local = local;
                 ApplyComponentJson(type, &definition.emitter, values, &error);
+                definition.emitter.expressionParams=expressionDefaults;
                 canonical[settings] = Sparse(type, &definition.emitter); asset.emitters.push_back(definition);
             }
             asset.json[key].push(canonical);
@@ -266,8 +291,8 @@ VfxAsset ParseVfxAsset(const Json& json) {
         if (!NameValid(parameter.first)) throw ApiError("invalid_vfx", "invalid parameter name", "Use the same naming rules as blocks.");
         const Json& spec = parameter.second;
         Keys(spec, {"default", "min", "max", "doc", "targets"}, "params." + parameter.first);
-        if (!spec.has("default") || !spec["targets"].isArray() || spec["targets"].size() == 0 || spec["targets"].size() > 32)
-            throw ApiError("invalid_vfx", "parameter needs default and 1..32 targets", "Use {default:1,targets:[{to:'flames.rate',scale:40}]}.");
+        if (!spec.has("default") || !spec["targets"].isArray() || spec["targets"].size() > 32)
+            throw ApiError("invalid_vfx", "parameter needs default and 0..32 targets", "Use {default:1,targets:[{to:'flames.rate',scale:40}]}.");
         if (spec.has("doc") && !spec["doc"].isString()) throw ApiError("invalid_vfx", "parameter doc must be text");
         for (const char* bound : {"min", "max"}) if (spec.has(bound) && (!spec["default"].isNumber() || !spec[bound].isNumber() || !std::isfinite(spec[bound].asNumber())))
             throw ApiError("invalid_range", "numeric parameter bounds must be finite", "Use min/max only with a numeric default.");
@@ -317,11 +342,15 @@ bool RefreshVfx(VFXSystem& system, AssetManager& assets, std::string* error) {
         for (size_t i = 0; i < emitters.size(); ++i) restart = restart || definition->emitters[i].name != system.definition->emitters[i].name;
         for (size_t i = 0; i < trails.size(); ++i) restart = restart || definition->trails[i].name != system.definition->trails[i].name;
     }
-    if (restart) { system.emitters = std::move(emitters); system.trails = std::move(trails); system.started = false; }
+    if (restart) { system.emitters = std::move(emitters); system.trails = std::move(trails); system.started = false; system.expressionTime=0; }
     else {
         std::string ignored;
         const ComponentType& emitterType = *TypeRegistry::Find("ParticleEmitter"), &trailType = *TypeRegistry::Find("Trail");
-        for (size_t i = 0; i < emitters.size(); ++i) ApplyComponentJson(emitterType, &system.emitters[i], ComponentToJson(emitterType, &emitters[i]), &ignored);
+        for (size_t i = 0; i < emitters.size(); ++i) {
+            ApplyComponentJson(emitterType, &system.emitters[i], ComponentToJson(emitterType, &emitters[i]), &ignored);
+            system.emitters[i].expressionParams=emitters[i].expressionParams;system.emitters[i].expressionInSystem=true;
+            system.emitters[i].expressionProgram=emitters[i].expressionProgram;
+        }
         for (size_t i = 0; i < trails.size(); ++i) ApplyComponentJson(trailType, &system.trails[i], ComponentToJson(trailType, &trails[i]), &ignored);
     }
     system.definition = definition; system.loadedPath = system.asset; system.appliedParams = params; system.error.clear();
@@ -356,6 +385,7 @@ void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt) {
             const int originalCap = emitter.maxParticles; const bool originalPlaying = emitter.playing;
             emitter.maxParticles = std::min(originalCap, std::max(0, system.definition->maxParticles - static_cast<int>(otherCount)));
             emitter.playing = originalPlaying && VfxPlaying(system);
+            emitter.expressionSystemTime=system.expressionTime;
             StepEmitter(emitter, pair.first, root * system.definition->emitters[i].local, VfxSeedMix(i), dt, emitter.onDeath.empty() ? nullptr : &deaths[i]);
             emitter.maxParticles = originalCap; emitter.playing = originalPlaying;
         }
@@ -387,6 +417,7 @@ void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt) {
                 target.space = space; target.maxParticles = cap;
             }
         }
+        system.expressionTime+=dt;
         system.started = true;
     }
 }

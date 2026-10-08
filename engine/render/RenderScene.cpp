@@ -409,6 +409,8 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             float t = Clamp(particle.age / particle.lifetime, 0, 1);
             float size = sizeCurve.Empty() ? particle.startSize * (1 - t) + particle.endSize * t : sizeCurve.Sample(t).x * particle.sizeScale;
             float opacity = opacityCurve.Empty() ? particle.startOpacity * (1 - t) + particle.endOpacity * t : opacityCurve.Sample(t).x;
+            if (particle.hasExpressionSize) size=particle.expressionSize;
+            if (particle.hasExpressionOpacity) opacity=particle.expressionOpacity;
             if (!std::isfinite(size) || size <= 0 || !std::isfinite(opacity) || opacity <= 0) continue;
             Vec3 center = particle.worldSpace ? particle.position : emitterWorld.TransformPoint(particle.position);
             if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)) continue;
@@ -423,6 +425,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 const Vec3 c = colorCurve.Sample(t);
                 it.tint = Color(c.x, c.y, c.z);
             }
+            if (particle.hasExpressionColor) it.tint=Color(particle.expressionColor.x,particle.expressionColor.y,particle.expressionColor.z);
             it.opacity = Clamp(opacity, 0, 1);
             it.sortLayer = emitter.layer;
             it.additive = emitter.blend == "add";

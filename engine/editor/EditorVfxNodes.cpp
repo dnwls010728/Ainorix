@@ -152,7 +152,7 @@ void NativeEditor::Impl::EffectsGraph() {
     {
         EditorNodeCanvas canvas("##effectcanvas", effectsGraphPan, effectsGraphZoom);
         effectsRects["graph-canvas"] = {canvas.origin.x, canvas.origin.y, canvas.size.x, canvas.size.y};
-        auto dimensions = [&](const EditorVfxNode& node) { return ImVec2(240, node.block < 0 ? 90.0f : 80.0f + static_cast<float>(node.inputs.size()) * 23 + 7 * 22 + (effectsGraphModules[node.id] >= 0 ? 180 : 0)); };
+        auto dimensions = [&](const EditorVfxNode& node) { return ImVec2(240, node.block < 0 ? 90.0f : 80.0f + static_cast<float>(node.inputs.size()) * 23 + static_cast<float>(effectsSchema["modules"].size()) * 22 + (effectsGraphModules[node.id] >= 0 ? 180 : 0)); };
         if (effectsGraphFit && !graph.nodes.empty()) {
             ImVec2 low = effectsGraphPositions.begin()->second, high = low;
             for (const auto& node : graph.nodes) {

@@ -282,3 +282,17 @@ unused ProcessFixtureDir warning remains. Device/browser GPU execution remains u
 |---|---:|---|
 | runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
 | runtime/web/oe_player.wasm | 4,734,722 | e94db0c29e7239a1c40ed7c1516efd3cbd6a4f56328afc97cc3b082db220ba0f |
+
+## VFX expressions rebuild (phase 5b, 2026-10-08)
+
+Players include typed Birth/Update expressions, own bounded math, cached programs, parameter inputs
+and conservative instruction budgets. Contract: docs/VFX_PHASE5B.md. Windows/Node assert the same
+math and software-preview hashes; all 239 Node tests pass. Device/browser GPU execution remains
+unverified. Toolchains: Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,803,292 | d2a340496cae0d3cfc6304a74f59f5919e36e50dace0b082f6e897988fbb0a82 |
+
+Commands.cpp SHA256: `e9777ebc426db0bf619d384f6c28522ba625809c22eab950e52bc9aa6e62fa29`.

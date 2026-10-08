@@ -167,6 +167,17 @@ Control or inspect linked VFX runtime; controls do not create scene undo entries
 |---|---|---|---|
 | `id` | integer \| string | yes | VFXSystem owner id or name. |
 
+### `vfx.expression_eval`
+
+Compile and evaluate a bounded VFX expression without changing the scene; returns its type, value and instruction cost.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `source` | string | yes | Expression source, 1..1024 bytes. |
+| `type` | string |  | scalar (default) or vector. |
+| `inputs` | object |  | Finite scalar/vector inputs from vfx.schema.expressions; omitted values use deterministic defaults. |
+| `params` | object |  | Numeric scalar/three-vector parameter values, up to 32 entries. |
+
 ### `vfx.schema`
 
 Discover particle/trail fields, fixed-order modules, defaults, ranges and authoring limits.
@@ -1668,6 +1679,7 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `material` | string | `""` | Optional project-relative .mat.json, including surface graphs. |
 | `mesh` | string | `""` | Static project mesh or built-in name; empty uses camera-facing quads. |
 | `meshScale` | vec3 | `[1,1,1]` | Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation. |
+| `expressions` | json | `{}` | Typed source text {birth:{channel:text},update:{channel:text}}; vfx.schema.expressions defines inputs, operations and budgets. |
 | `positionOffset` | vec3 | `[0,0,0]` | Birth offset in emitter coordinates; captured before local/world conversion. |
 | `rotation3D` | vec3 | `[0,0,0]` | Birth XYZ Euler rotation in degrees, added to lifetime rotation and legacy Z spin. |
 | `scale` | vec3 | `[1,1,1]` | Nonnegative birth XYZ multiplier; multiplied once by scaleOverLife, scalar size and meshScale (meshes only). |

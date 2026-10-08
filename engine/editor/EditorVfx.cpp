@@ -16,6 +16,7 @@
 #include "render/Mesh.h"
 #include "render/RenderScene.h"
 #include "scene/Vfx.h"
+#include "scene/VfxExpression.h"
 
 namespace oe {
 namespace {
@@ -75,7 +76,8 @@ bool ValueWidget(const Json& field, Json& value) {
 Json ParameterField(const Json& value, const Json& spec, const Json& document, const Json& schema) {
     Json field = Json::MakeObject();
     field["type"] = value.isBool() ? "bool" : value.isNumber() ? "float" : value.isString() ? "string" : "json";
-    const std::string target = spec["targets"][0]["to"].asString();
+    if (value.isArray() && value.size()==3) field["type"]="vec3";
+    const std::string target = spec["targets"].size()>0 ? spec["targets"][0]["to"].asString() : std::string();
     const size_t separator = target.find('.');
     if (separator != std::string::npos && !value.isNumber()) {
         const std::string block = target.substr(0, separator), property = target.substr(separator + 1);
@@ -191,6 +193,47 @@ bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys
     return changed;
 }
 
+bool ExpressionWidget(NativeEditor::Impl& editor,const std::string& block,Json& expressions) {
+    int& stage=editor.effectsCurveKeys["expression:stage"];
+    int& channel=editor.effectsCurveKeys["expression:channel"];
+    const char* stages[]={"birth","update"};const auto& names=VfxChannelNames();
+    ImGui::TextUnformatted(Tr("Expression Stage"));ImGui::SetNextItemWidth(-FLT_MIN);
+    if(ImGui::BeginCombo("##expressionstage",Tr(stage?"Update":"Birth"))) {
+        for(int i=0;i<2;++i) if(ImGui::Selectable(Tr(i?"Update":"Birth"),stage==i)) stage=i;
+        ImGui::EndCombo();
+    }
+    editor.EffectsRect("expression-stage");
+    ImGui::TextUnformatted(Tr("Channel"));ImGui::SetNextItemWidth(-FLT_MIN);
+    if(ImGui::BeginCombo("##expressionchannel",names[static_cast<size_t>(channel)])) {
+        for(size_t i=0;i<names.size();++i) {
+            if(ImGui::Selectable(names[i],channel==static_cast<int>(i))) channel=static_cast<int>(i);
+            editor.EffectsRect(std::string("expression-channel:")+names[i]);
+        }
+        ImGui::EndCombo();
+    }
+    editor.EffectsRect("expression-channel");
+    const char* name=names[static_cast<size_t>(channel)];
+    const std::string id=editor.effectsPath+":"+block+":"+stages[stage]+":"+name;
+    const std::string canonical=static_cast<const Json&>(expressions)[stages[stage]][name].asString();
+    auto found=editor.effectsExpressionText.find(id);
+    if(found==editor.effectsExpressionText.end()) found=editor.effectsExpressionText.emplace(id,std::make_pair(canonical,canonical)).first;
+    auto& text=found->second;
+    if(text.first!=canonical) text=std::make_pair(canonical,canonical);
+    ImGui::TextDisabled("%s",Tr(channel<5?"Vector expression (vec3)":"Scalar expression"));
+    ImGui::InputTextMultiline("##expression",&text.second,ImVec2(-FLT_MIN,110));editor.EffectsRect("expression-source");
+    bool changed=false;
+    if(ImGui::Button(Tr("Apply Expression"))) {
+        if(text.second.empty()) {expressions[stages[stage]].erase(name);}
+        else expressions[stages[stage]][name]=text.second;
+        changed=true;
+    }
+    editor.EffectsRect("expression-apply");ImGui::SameLine();
+    if(ImGui::Button(Tr("Clear Expression"))) {expressions[stages[stage]].erase(name);text.second.clear();changed=true;}
+    editor.EffectsRect("expression-clear");
+    ImGui::TextWrapped("%s",Tr("Expressions use normalized age, stable random and named parameters. See vfx.schema for inputs and snippets."));
+    return changed;
+}
+
 bool VectorCurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys) {
     bool changed = false;
     const bool scale = name == "scaleOverLife";
@@ -285,7 +328,10 @@ void NativeEditor::Impl::EffectsPreview(bool compact) {
     // One scrub is bounded by the headless authoring work limit. Playback advances at most eight steps per frame.
     uint64_t work = static_cast<uint64_t>(cap);
     for (const auto& trail : effectsScene->Get<VFXSystem>(effectsRoot)->trails) work += static_cast<uint64_t>(trail.maxPoints);
-    const int maxFrame = std::min(effectsCycleFrames, static_cast<int>(20000000 / std::max<uint64_t>(1, work)));
+    uint64_t expressionWork=0;
+    for (const auto& emitter : effectsScene->Get<VFXSystem>(effectsRoot)->emitters) expressionWork+=VfxExpressionWork(emitter);
+    const int maxFrame = std::min({effectsCycleFrames, static_cast<int>(20000000 / std::max<uint64_t>(1, work)),
+        static_cast<int>(100000000 / std::max<uint64_t>(1,expressionWork))});
     auto step = [&] {
         ++effectsFrame;
         effectsScene->Get<Transform>(effectsRoot)->position = effectsMotion ? Vec3(std::sin(effectsFrame / 30.0f) * 1.5f, 0, 0) : Vec3();
@@ -432,7 +478,8 @@ void NativeEditor::Impl::EffectsBlockFields() {
                 Json value = values.has(name) ? values[name] : field["default"];
                 ImGui::SetNextItemWidth(-FLT_MIN); ImGui::BeginDisabled(mapped);
                 bool changed = false;
-                if (name == "sizeOverLife" || name == "colorOverLife" || name == "opacityOverLife") {
+                if (name == "expressions") changed=ExpressionWidget(*this,blockName,value);
+                else if (name == "sizeOverLife" || name == "colorOverLife" || name == "opacityOverLife") {
                     const std::string suffix = name == "sizeOverLife" ? "Size" : name == "colorOverLife" ? "Color" : "Opacity";
                     auto base = [&](const std::string& property) {
                         if (values.has(property)) return values[property];
@@ -446,7 +493,7 @@ void NativeEditor::Impl::EffectsBlockFields() {
                     const std::string birth = name.substr(0, 7);
                     changed = CurveWidget(*this, name, value, values.has(birth) ? values[birth] : Json(0), values.has(birth) ? values[birth] : Json(0), true);
                 } else changed = ValueWidget(field, value);
-                EffectsRect("field:" + name); const std::string merge = EffectsMerge(blockName + "." + name);
+                EffectsRect("field:" + name); const std::string merge = name == "expressions" ? std::string() : EffectsMerge(blockName + "." + name);
                 ImGui::EndDisabled();
                 if (changed) {
                     Json patch = ObjectOf({{name.c_str(), value}});
@@ -466,6 +513,7 @@ void NativeEditor::Impl::EffectsPanel() {
     if (effectsState["document"] != effectsDocument || effectsState["path"].asString() != effectsPath) {
         if (effectsState["path"].asString() != effectsPath) {
             if (effectsLayoutDirty) EffectsGraphLayout(true);
+            effectsExpressionText.clear();
             effectsLayoutPath.clear(); effectsGraphPositions.clear(); effectsGraphModules.clear(); effectsGraphMaterials.clear(); effectsGraphAnchors.clear();
             effectsGraphLink.clear(); effectsGraphHint.clear(); effectsGraphSelected.clear();
             effectsGraphPan = ImVec2(24, 24); effectsGraphZoom = 0.8f;

@@ -31,9 +31,21 @@ work in vertex displacement, both renderers, and batching, without taking graph 
 `particles.state {id,particles:true}` includes evaluated scale/rotation/custom, birth inputs,
 `integratedPosition`, accepted birth `index` and immutable accepted batch `count`. Native snapshots
 retain these values; scene JSON excludes them. Hot reload updates curves while preserving live birth
-inputs. Expressions and value-node authoring are planned for 5b/5c; phase 5a supplies channels and curves.
+inputs. Bounded expression text now drives Birth/Update channels; value nodes remain phase 5c.
 Rain/snow ground-height killing remains a later candidate; finite lifetime can end falling particles.
 Verification and limits: [VFX_PHASE5A.md](VFX_PHASE5A.md).
+
+## Typed expressions
+
+Effects > Expressions edits Birth/Update channel text with explicit Apply/Clear and document undo.
+Use `expressions:{update:{position:"vec3(cos(age*2*pi),age*2,sin(age*2*pi))"}}` to animate motion without
+scripts. Birth channels capture initial values once; Update channels replace curves and preserve the
+separate physics integration base. Numeric asset parameters are read as `param.name`; `targets:[]`
+is valid for expression-only parameters. Scalar/vector types, own bounded math and conservative
+instruction budgets keep evaluation portable and bounded. `vfx.expression_eval` checks a source with
+supplied inputs; `vfx.check` reports compiled/reserved costs. `vfx.schema.expressions` lists inputs,
+functions, limits and reusable snippets. Open `effects/spiral_expressions.vfx.json` or
+`scenes/expressions.scene.json` in VFXLab. Full contract and evidence: [VFX_PHASE5B.md](VFX_PHASE5B.md).
 
 ## Agent recipe
 
@@ -397,3 +409,6 @@ oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph 
       Details and evidence: [VFX_PHASE5A.md](VFX_PHASE5A.md).
 - [ ] Platform follow-up: Linux/EGL, browser WebGL2 and Android device execution of phase 4 effects.
       Windows/D3D11 and Node/WASM tests cover the native and portable core; prebuilt players refreshed.
+
+- [x] Phase 5b (2026-10-08): typed Birth/Update expressions, deterministic math, located errors,
+      numeric budgets, diagnostics and Effects source editing. See [VFX_PHASE5B.md](VFX_PHASE5B.md).

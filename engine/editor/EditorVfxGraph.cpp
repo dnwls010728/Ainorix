@@ -1,4 +1,5 @@
 #include "editor/EditorVfxGraph.h"
+#include "scene/VfxExpression.h"
 #include <algorithm>
 #include <set>
 
@@ -84,10 +85,23 @@ bool PatchEditorVfxWire(const Json& document, const EditorVfxNode* source, const
         std::vector<std::string> empty;
         for (auto& entry : candidate["params"].members()) {
             auto& mappings = entry.second["targets"].items();
+            const size_t before=mappings.size();
             mappings.erase(std::remove_if(mappings.begin(), mappings.end(), [&](const Json& mapping) {
                 return mapping["to"].asString() == target.name + "." + field;
             }), mappings.end());
-            if (mappings.empty()) empty.push_back(entry.first);
+            if (before>0 && mappings.empty()) {
+                Json defaults=Json::MakeObject();
+                for (const auto& parameter : document["params"].members()) defaults[parameter.first]=parameter.second["default"];
+                bool referenced=false;
+                for (const Json& block : document["emitters"].items()) {
+                    VfxExpressionSet compiled;VfxExpressionError error;
+                    if (!CompileVfxExpressions(block["emitter"].has("expressions")?block["emitter"]["expressions"]:Json::MakeObject(),defaults,compiled,&error)) continue;
+                    for (const auto* programs : {&compiled.birth,&compiled.update}) for (const auto& program : *programs)
+                        for (const auto& instruction : program.code)
+                            referenced=referenced || (instruction.op==VfxExprOp::Parameter && instruction.name==entry.first);
+                }
+                if (!referenced) empty.push_back(entry.first);
+            }
         }
         for (const std::string& name : empty) candidate["params"].erase(name);
         if (field == "trigger") {

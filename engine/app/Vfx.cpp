@@ -1,8 +1,10 @@
 #include "app/Vfx.h"
+#include "scene/VfxExpression.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <set>
 
 #include "app/Engine.h"
@@ -15,6 +17,7 @@
 namespace oe {
 namespace {
 std::string ModuleOf(const std::string& name) {
+    if (name == "expressions") return "Expressions";
     if (name.find("OverLife") != std::string::npos) return "Curves";
     if (name == "delay" || name == "duration" || name == "loop" || name == "playing" || name == "lifetime" || name == "lifetimeVariation") return "Timing";
     if (name == "onDeath" || name == "deathCount" || name == "rate" || name == "burst" || name == "maxParticles" || name == "seed" || name == "emitting" || name == "maxPoints") return "Emission";
@@ -39,7 +42,7 @@ std::set<EntityId> EffectIds(const Scene& scene, EntityId root) {
 
 Json VfxSchema() {
     Json out = Json::MakeObject();
-    out["modules"] = Json(Json::Array{"Emission", "Shape", "Motion", "Appearance", "Curves", "Timing", "Render"});
+    out["modules"] = Json(Json::Array{"Emission", "Shape", "Motion", "Appearance", "Curves", "Timing", "Render", "Expressions"});
     out["components"] = Json::MakeArray();
     for (const char* name : {"ParticleEmitter", "Trail"}) {
         const ComponentType& type = *TypeRegistry::Find(name);
@@ -65,6 +68,7 @@ Json VfxSchema() {
     out["channels"]["custom"] = "custom0..3 captured at birth; scalar curves replace values; particleCustom0..3 material ops; finite -65504..65504; no graph uniform slots";
     out["channels"]["index"] = "zero-based accepted birth order per emitter, reset by clear; count is accepted batch size captured at birth";
     out["channels"]["order"] = "age, velocity curve, gravity/turbulence/drag, velocity integration, position offset, rotation/scale/custom curves, expiry, births";
+    out["expressions"]=VfxExpressionSchema();
     out["params"]["available"] = true;
     out["params"]["syntax"] = "params[name] = {default, min?, max?, doc, targets:[{to:'emitterName.field', scale?}]}";
     out["limits"]["duration"] = 60; out["limits"]["previewFrames"] = 16; out["limits"]["analysisSamples"] = 241;
@@ -72,6 +76,43 @@ Json VfxSchema() {
     out["limits"]["deathDepth"] = 4;
     out["limits"]["meshVerticesPerEmitter"] = 1000000;
     return out;
+}
+
+Json EvaluateVfxExpressionCall(const Json& args) {
+    const std::string type=args["type"].asString("scalar");
+    if(type!="scalar" && type!="vector") throw ApiError("invalid_expression","type must be scalar or vector");
+    Json params=args.has("params")?args["params"]:Json::MakeObject();
+    if(!params.isObject() || params.size()>32) throw ApiError("invalid_range","params needs an object of at most 32 numeric entries");
+    auto finite=[](const Json& v){return v.isNumber() && std::isfinite(v.asFloat()) && std::abs(v.asFloat())<=65504;};
+    for(const auto& param:params.members()) {
+        if(param.second.isArray() && param.second.size()==3) {for(const Json& v:param.second.items()) if(!finite(v)) throw ApiError("invalid_range","parameter vector must be finite within +/-65504");}
+        else if(!finite(param.second)) throw ApiError("invalid_range","parameter must be scalar or vec3 within +/-65504");
+    }
+    VfxExpressionInputs input;input.params=&params;
+    const Json values=args.has("inputs")?args["inputs"]:Json::MakeObject();
+    if(!values.isObject()) throw ApiError("invalid_expression","inputs must be an object");
+    const std::map<std::string,float VfxExpressionInputs::*> scalars={
+        {"age",&VfxExpressionInputs::age},{"lifetime",&VfxExpressionInputs::lifetime},{"emitterTime",&VfxExpressionInputs::emitterTime},
+        {"systemTime",&VfxExpressionInputs::systemTime},{"index",&VfxExpressionInputs::index},{"count",&VfxExpressionInputs::count},
+        {"random",&VfxExpressionInputs::random},{"speed",&VfxExpressionInputs::speed},{"birthSize",&VfxExpressionInputs::birthSize},{"birthOpacity",&VfxExpressionInputs::birthOpacity}};
+    const std::map<std::string,Vec3 VfxExpressionInputs::*> vectors={{"birthPosition",&VfxExpressionInputs::birthPosition},
+        {"birthVelocity",&VfxExpressionInputs::birthVelocity},{"birthRotation",&VfxExpressionInputs::birthRotation},
+        {"birthScale",&VfxExpressionInputs::birthScale},{"birthColor",&VfxExpressionInputs::birthColor}};
+    for(const auto& entry:values.members()) {
+        const auto scalar=scalars.find(entry.first);const auto vector=vectors.find(entry.first);
+        if(scalar!=scalars.end()) {if(!finite(entry.second)) throw ApiError("invalid_range",entry.first+" must be a finite scalar within +/-65504");input.*(scalar->second)=entry.second.asFloat();}
+        else if(vector!=vectors.end()) {
+            if(!entry.second.isArray() || entry.second.size()!=3) throw ApiError("invalid_expression",entry.first+" must be a vec3");
+            for(const Json& v:entry.second.items()) if(!finite(v)) throw ApiError("invalid_range","vector input must be finite within +/-65504");
+            input.*(vector->second)=Vec3(entry.second[0].asFloat(),entry.second[1].asFloat(),entry.second[2].asFloat());
+        } else throw ApiError("invalid_expression","unknown input '"+entry.first+"'","Use vfx.schema.expressions.inputs.");
+    }
+    VfxExpressionProgram program;VfxExpressionError error;
+    if(!CompileVfxExpression(args["source"].asString(),type=="vector"?VfxValueType::Vector:VfxValueType::Scalar,params,program,&error))
+        throw ApiError(error.code,error.message,error.hint);
+    const Vec3 value=EvaluateVfxExpression(program,input);Json out=Json::MakeObject();
+    out["type"]=type;out["value"]=type=="vector"?Json(Json::Array{value.x,value.y,value.z}):Json(value.x);
+    out["instructions"]=static_cast<int>(program.code.size());return out;
 }
 
 Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args) {
@@ -116,6 +157,7 @@ Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args) {
 
 Json CheckVfx(Engine& engine, EntityId root) {
     Json out = Json::MakeObject(); out["ok"] = true; out["warnings"] = Json::MakeArray();
+    int instructions=0;uint64_t work=0;
     bool found = false;
     auto warn = [&](EntityId id, const char* code, const char* message, const char* hint) {
         Json warning = Json::MakeObject(); warning["code"] = code; warning["message"] = message; warning["hint"] = hint;
@@ -126,6 +168,7 @@ Json CheckVfx(Engine& engine, EntityId root) {
             found = true;
             ValidateVfxSystem(engine, system, Json::MakeObject());
             Json checked = CheckVfxAsset(engine, system->asset, EffectiveVfxParams(*system));
+            instructions+=checked["expressionInstructions"].asInt();work+=static_cast<uint64_t>(checked["expressionStepInstructions"].asNumber());
             for (const Json& warning : checked["warnings"].items()) { Json item = warning; item["id"] = id; out["warnings"].push(item); }
             uint64_t live = 0;
             for (const auto& block : system->emitters) live += block.particles.size();
@@ -138,7 +181,7 @@ Json CheckVfx(Engine& engine, EntityId root) {
             const ComponentType& type = *TypeRegistry::Find(name);
             const void* value = engine.GetScene().GetComponent(id, type);
             if (!value) continue;
-            found = true; ValidateVfxSettings(type, nullptr, ComponentToJson(type, value));
+            found = true; ValidateVfxSettings(type, value, ComponentToJson(type, value));
             const std::string texture = name == std::string("Trail") ? trail->texture : emitter->texture;
             const std::string material = name == std::string("Trail") ? trail->material : emitter->material;
             if (!material.empty()) {
@@ -159,13 +202,16 @@ Json CheckVfx(Engine& engine, EntityId root) {
                 warn(id, "missing_texture", "Effect texture does not exist.", "Import the texture or clear the texture field to use solid geometry.");
         }
         if (emitter) {
+            PrepareVfxExpressions(*emitter);
+            if (emitter->expressionProgram) instructions+=emitter->expressionProgram->birthCost+emitter->expressionProgram->updateCost;
+            work+=VfxExpressionWork(*emitter);
             auto allZero = [](const Json& keys, float a, float b) {
                 if (keys.size() == 0) return a <= 0 && b <= 0;
                 for (const Json& key : keys.items()) if (key[1].asFloat() > 0) return false;
                 return true;
             };
-            if (allZero(emitter->sizeOverLife, emitter->startSize, emitter->endSize) ||
-                allZero(emitter->opacityOverLife, emitter->startOpacity, emitter->endOpacity))
+            if ((allZero(emitter->sizeOverLife, emitter->startSize, emitter->endSize) && !emitter->expressions["birth"].has("size") && !emitter->expressions["update"].has("size")) ||
+                (allZero(emitter->opacityOverLife, emitter->startOpacity, emitter->endOpacity) && !emitter->expressions["birth"].has("opacity") && !emitter->expressions["update"].has("opacity")))
                 warn(id, "invisible_effect", "Size or opacity is zero throughout the particle lifetime.", "Give size and opacity a positive value or curve key.");
             if (emitter->maxParticles == 0 || (emitter->burst == 0 && (emitter->rate == 0 || (!emitter->loop && emitter->duration == 0))))
                 warn(id, "no_births", "This emitter has no automatic births.", "Set burst, enable loop and rate, or use a finite duration with rate.");
@@ -191,6 +237,7 @@ Json CheckVfx(Engine& engine, EntityId root) {
         }
     }
     if (!found) throw ApiError("no_emitter", "entity subtree has no ParticleEmitter or Trail", "Apply a preset or add ParticleEmitter/Trail first.");
+    out["expressionInstructions"]=instructions;out["expressionStepInstructions"]=static_cast<double>(work);
     return out;
 }
 }  // namespace oe

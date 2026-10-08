@@ -22,7 +22,7 @@ struct VfxAsset {
     int maxParticles = 10000;
 };
 // Strict reflection-based authoring validation (throws ApiError with a recovery hint).
-void ValidateVfxSettings(const ComponentType& type, const void* current, const Json& values);
+void ValidateVfxSettings(const ComponentType& type, const void* current, const Json& values, const Json* expressionParams = nullptr);
 // Parses/validates version 1, names, settings and parameter targets; throws ApiError on caller errors.
 VfxAsset ParseVfxAsset(const Json& json);
 // Evaluates overrides into authored settings, leaving runtime arrays empty; validates every resulting field.

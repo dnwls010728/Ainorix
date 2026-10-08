@@ -222,6 +222,16 @@ The editor only uses public commands (`Engine::Call`), so an agent attached with
 
 Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
 
+### Effects expression source (phase 5b)
+
+Select Expressions in an effect block (Fields or expanded Structure Graph module). Choose Birth/Update,
+a channel and type source. Apply Expression validates the whole draft; Clear Expression restores the
+channel's field/curve behavior. Each application is one undo step. Invalid text stays editable and
+shows block/channel/line/column errors without changing the draft. Remote patches and undo refresh
+the displayed source. Expression-only parameters accept empty targets and vec3 controls. Disconnecting
+a field retains parameters used by expressions. Open `effects/spiral_expressions.vfx.json` in VFXLab for a script-free proof.
+Language and limits: [VFX_PHASE5B.md](VFX_PHASE5B.md).
+
 ### Effects motion curves (phase 5a)
 
 Motion exposes Birth Offset; Appearance exposes Birth Rotation, Birth Scale, Particle Pivot and
@@ -285,3 +295,8 @@ are resolved by the scene instance. Structure Graph adds reference nodes and wir
 
 - [x] Vector axis controls, signed curves, translated birth/pivot labels and material custom ops.
 - [x] Native event coverage for vector-axis drag and document undo/redo. See [VFX_PHASE5A.md](VFX_PHASE5A.md).
+
+### Effects expressions (2026-10-08)
+
+- [x] Translated Birth/Update channel source widget, explicit Apply/Clear, individual document history
+      and native event verification. See [VFX_PHASE5B.md](VFX_PHASE5B.md).

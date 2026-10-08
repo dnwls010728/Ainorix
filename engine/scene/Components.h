@@ -7,6 +7,7 @@
 
 namespace oe {
 struct VfxAsset;
+struct VfxExpressionSet;
 
 // Built-in components. To add one: declare a struct with kTypeName, kDoc and
 // Reflect(), then register it in RegisterBuiltinComponents(). Serialization,
@@ -91,6 +92,9 @@ struct Particle {
     Vec3 integratedPosition; // physics position without the non-accumulating lifetime offset
     Vec3 rotation3D, axisScale{1, 1, 1}; // evaluated extra Euler rotation and scale multiplier
     Vec4 initialCustom{}, custom{}; // captured and evaluated material attributes
+    Vec3 expressionBirthPosition, expressionBirthVelocity; // captured emitter coordinates for expressions
+    Vec3 expressionColor; float expressionSize = 0, expressionOpacity = 0; // evaluated appearance overrides
+    bool hasExpressionColor = false, hasExpressionSize = false, hasExpressionOpacity = false;
     Mat4 birthBasis; // emitter frame captured for world-space motion curves
     uint64_t index = 0; // accepted birth order, independent of channel evaluation
     int birthCount = 0; // accepted particles in this birth batch, immutable
@@ -125,6 +129,11 @@ struct ParticleEmitter {
     Json rotationOverLife = Json::MakeArray(), scaleOverLife = Json::MakeArray(); // additive degrees / scale multipliers
     Json custom0OverLife = Json::MakeArray(), custom1OverLife = Json::MakeArray(); // scalar material data keys
     Json custom2OverLife = Json::MakeArray(), custom3OverLife = Json::MakeArray();
+    Json expressions = Json::MakeObject(); // canonical birth/update expression source text
+    Json expressionParams = Json::MakeObject(); // runtime parameter values, not serialized
+    mutable std::shared_ptr<const VfxExpressionSet> expressionProgram; // immutable compiled cache, shared by snapshots
+    bool expressionInSystem = false; // distinguishes zero-parameter linked effects from standalone emitters
+    double expressionSystemTime = 0; // fixed-step parent system clock (standalone uses emitter elapsed)
     bool batching = false;  // opt-in atomic emitter draw; legacy per-particle sorting otherwise
     std::string onDeath;   // named target emitter in the same VFX asset
     int deathCount = 1;
@@ -184,6 +193,7 @@ struct ParticleEmitter {
         f.Add("material", &ParticleEmitter::material, "Optional project-relative .mat.json, including surface graphs.");
         f.Add("mesh", &ParticleEmitter::mesh, "Static project mesh or built-in name; empty uses camera-facing quads.");
         f.Add("meshScale", &ParticleEmitter::meshScale, "Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation.");
+        f.Add("expressions", &ParticleEmitter::expressions, "Typed source text {birth:{channel:text},update:{channel:text}}; vfx.schema.expressions defines inputs, operations and budgets.");
         f.Add("positionOffset", &ParticleEmitter::positionOffset, "Birth offset in emitter coordinates; captured before local/world conversion.");
         f.Add("rotation3D", &ParticleEmitter::rotation3D, "Birth XYZ Euler rotation in degrees, added to lifetime rotation and legacy Z spin.");
         f.Add("scale", &ParticleEmitter::scale, "Nonnegative birth XYZ multiplier; multiplied once by scaleOverLife, scalar size and meshScale (meshes only).");
@@ -314,6 +324,7 @@ struct VFXSystem {
     bool playbackOverride = false, runtimePlaying = true;  // runtime controls leave authored playing unchanged
     std::vector<ParticleEmitter> emitters;
     std::vector<Trail> trails;
+    double expressionTime = 0; // fixed-step parent clock, retained by native snapshots
     bool started = false;
     bool suppressDestroy = false;  // a clear operation can leave an empty reusable instance
     static void Reflect(FieldList& f) {

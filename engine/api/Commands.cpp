@@ -367,6 +367,11 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Register(r, ("vfx." + op).c_str(), "Control or inspect linked VFX runtime; controls do not create scene undo entries.", params, false,
                  [op](Engine& e, const Json& a) { return VfxRuntimeCall(e, op, RequireEntity(e, a), a); });
     }
+    Register(r,"vfx.expression_eval","Compile and evaluate a bounded VFX expression without changing the scene; returns its type, value and instruction cost.",
+        Params().Req("source","string","Expression source, 1..1024 bytes.").Opt("type","string","scalar (default) or vector.")
+            .Opt("inputs","object","Finite scalar/vector inputs from vfx.schema.expressions; omitted values use deterministic defaults.")
+            .Opt("params","object","Numeric scalar/three-vector parameter values, up to 32 entries."),false,
+        [](Engine&,const Json& a){return EvaluateVfxExpressionCall(a);});
     Register(r, "vfx.schema", "Discover particle/trail fields, fixed-order modules, defaults, ranges and authoring limits.", Params(), false,
              [](Engine&, const Json&) { return VfxSchema(); });
     Register(r, "vfx.presets", "List portable effect presets with intent sentences and tags.", Params().Opt("tag", "string", "Filter by an exact tag."), false,

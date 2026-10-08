@@ -54,6 +54,13 @@ Effects editor: View > Effects or double-click `.vfx.json`; grouped fields, curv
 
 Phase 4 effects: ParticleEmitter/Trail `material` binds surface graphs; particleAge/particleRandom/particleSpeed ops use vertex attributes (no uniform slots). ParticleEmitter `mesh`/`meshScale` and opt-in `batching` support static mesh effects; Trail `mode:ribbon` sweeps `baseAnchor`/`tipAnchor` or local offsets. Asset-only `onDeath`/`deathCount` links obey depth 4 and the system budget. `sword_slash` preset and VFXLab scenes/slash.scene.json demonstrate them. Transparency groups and mesh budgets: docs/VFX.md. Effects node view remains phase 4b.
 
+VFX expressions: ParticleEmitter.expressions stores typed Birth/Update source, read as scalar/vec3
+with fixed-step birth inputs and param.name. vfx.expression_eval is read-only, vfx.schema.expressions
+publishes snippets/limits and vfx.check reports instruction costs. Effects > Expressions edits the
+shared draft with explicit Apply/Clear and individual undo. Runtime cache is scene/app internal;
+VfxExpression.h/.cpp owns bounded compilation and deterministic math. VFXLab expressions.scene.json
+proves it without gameplay scripts; full contract: docs/VFX_PHASE5B.md. Value nodes await the 5b+ gate.
+
 ## Code map
 
 - `engine/core` — Json (ordered, diff-friendly), Math, Log (ring buffer, stderr only), Image (PNG encoder, Base64), FileSystem, Zip (reader + aligned writer for APKs).

@@ -15,6 +15,7 @@
 #include "scene/Components.h"
 #include "scene/Systems.h"
 #include "scene/Vfx.h"
+#include "scene/VfxExpression.h"
 #include "assets/Assets.h"
 
 namespace oe {
@@ -138,6 +139,17 @@ struct IsolatedEffect {
             // Trail gather builds a mesh/texture; count it in the bounded work estimate too.
             if (const Trail* trail = scene.Get<Trail>(current)) capacity += static_cast<uint64_t>(trail->maxPoints);
         }
+        uint64_t expressionWork=0;
+        for (const auto& emitter : scene.Pool<ParticleEmitter>()) {
+            VfxExpressionError error;
+            if (!PrepareVfxExpressions(emitter.second,&error)) throw ApiError(error.code,error.message,error.hint);
+            expressionWork+=VfxExpressionWork(emitter.second);
+        }
+        for (const auto& system : scene.Pool<VFXSystem>())
+            for (const auto& emitter : system.second.emitters) expressionWork+=VfxExpressionWork(emitter);
+        if (expressionWork*static_cast<uint64_t>(std::max(1,frames))*static_cast<uint64_t>(passes)>100000000)
+            throw ApiError("expression_budget","VFX request exceeds 100000000 reserved expression instructions",
+                "Reduce duration/times, maxParticles or expression complexity.");
         // Entity ids need not follow hierarchy order. Restore links only after all records exist.
         for (EntityId current : needed) scene.Record(current)->parent = source.Record(current)->parent;
         for (EntityId current : selected) {

@@ -14,6 +14,8 @@ AI 에이전트가 사람만큼 쉽게 조작하고 검증할 수 있도록 만�
 |---|---|
 | ![Showcase 렌더](docs/images/showcase.png) | glTF 여우(플레이어 조작, 추적 카메라), 절차적 텍스처, 그림자, 점광원. 결정적인 소프트웨어 렌더러의 출력입니다. 게임 창, 웹 빌드, 에디터 뷰는 같은 장면을 GPU 렌더러로 그립니다. |
 
+VFX 생성·갱신 채널을 수식으로 제어할 수 있습니다. 이펙트 > 수식에서 입력·검증·되돌리기를 지원하며, `vfx.expression_eval`로 결과와 계산 비용을 확인합니다. VFXLab의 `effects/spiral_expressions.vfx.json` 또는 `scenes/expressions.scene.json`에서 확인하세요. [명세와 검증](docs/VFX_PHASE5B.md).
+
 ## 무엇이 다른가
 
 - **모든 것이 하나의 API.** 씬 편집, 시뮬레이션, 입력, 스크린샷, 에셋 등 모든 기능이 JSON 스키마를 가진 명령이며

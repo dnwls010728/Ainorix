@@ -432,6 +432,8 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
 - [x] Phase 5a (2026-10-08): captured birth state and accepted index/count, non-accumulating
       position/velocity curves, XYZ rotation/scale, pivot and four material custom channels;
       signed/vector Effects curves and a curve-only ice pillar proof. See docs/VFX_PHASE5A.md.
+- [x] Phase 5b (2026-10-08): typed Birth/Update source, own bounded math, numeric budgets,
+      located errors, snippets, Effects editing and portable proof hashes. See docs/VFX_PHASE5B.md.
 - [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
       Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.
 - [ ] Not verified anywhere yet: Android device execution of VFX assets; Linux/EGL rendering suite.

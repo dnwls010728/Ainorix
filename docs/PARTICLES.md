@@ -8,6 +8,12 @@ For presets, strict authoring validation, isolated contact sheets and numeric an
 see [VFX.md](VFX.md). ParticleEmitter/Trail `component.add/set` now reject bad ranges and curves before editing;
 legacy file loading and runtime guards remain compatible.
 
+## VFX expressions
+
+`expressions` stores typed Birth/Update source text; present channels replace curves, while Update
+position remains a non-accumulating offset and Update velocity precedes forces. See
+[VFX_PHASE5B.md](VFX_PHASE5B.md) for inputs, clocks, size variation, numeric/cost bounds and tests.
+
 ## VFX motion channels
 
 ParticleEmitter now captures `positionOffset` (emitter-space meters), `rotation3D` (XYZ degrees),
@@ -226,3 +232,5 @@ P3.2 and P3.3 continue from that combined main.
       batching and bounded asset death chains; Effects isolated preview shipped in phase 3. See VFX.md.
 - [x] Phase 5a motion channels, pivot and custom attributes; see [VFX_PHASE5A.md](VFX_PHASE5A.md).
 - [ ] Candidates for later: soft/depth-faded particles and particle collision.
+
+- [x] Phase 5b expressions, cached programs and fixed-step evaluation; see [VFX_PHASE5B.md](VFX_PHASE5B.md).

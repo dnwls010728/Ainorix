@@ -225,6 +225,7 @@ struct NativeEditor::Impl {
     int effectsBlock = 0, effectsDragSerial = 0;
     int effectsModule = 0;
     std::map<std::string, int> effectsCurveKeys;
+    std::map<std::string,std::pair<std::string,std::string>> effectsExpressionText; // canonical/pending source per channel
     float effectsCurveRange = 1;
     bool effectsPrompt = false, effectsPendingNew = false, effectsPendingClose = false;
     std::string effectsPendingPath;

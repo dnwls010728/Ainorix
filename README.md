@@ -12,6 +12,8 @@ CLI, HTTP and MCP — an agent and a person can work in the same session at the 
 |---|---|
 | ![Showcase render](docs/images/showcase.png) | A glTF fox (player controls, follow camera), procedural textures, shadows and point lights, drawn by the deterministic software renderer. The game window, the web build and the editor views draw the same scene with the GPU renderer. |
 
+Typed VFX expressions now animate Birth/Update channels without gameplay scripts. Effects > Expressions edits source with validation and undo; `vfx.expression_eval` diagnoses typed results/costs. Try VFXLab `effects/spiral_expressions.vfx.json` or `scenes/expressions.scene.json`. [Contract and verification](docs/VFX_PHASE5B.md).
+
 ## Why it is different
 
 - **One API for everything.** Scene edits, simulation, input, screenshots, assets, packaging helpers: each is a

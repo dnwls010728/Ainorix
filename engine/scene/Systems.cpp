@@ -1,4 +1,5 @@
 #include "scene/Systems.h"
+#include "scene/VfxExpression.h"
 
 #include <algorithm>
 #include <array>
@@ -191,6 +192,56 @@ void UpdateParticles(Scene& scene, float dt) {
 }  // namespace
 
 namespace {
+VfxExpressionInputs ExpressionInputs(const ParticleEmitter& emitter, const Particle& p) {
+    VfxExpressionInputs input;
+    input.age = Clamp(p.age / p.lifetime, 0, 1); input.lifetime = p.lifetime;
+    input.emitterTime = static_cast<float>(emitter.elapsed); input.systemTime = static_cast<float>(emitter.expressionInSystem ? emitter.expressionSystemTime : emitter.elapsed);
+    input.index = static_cast<float>(p.index); input.count = static_cast<float>(p.birthCount); input.random = p.random;
+    input.speed = Length(p.velocity); input.birthPosition = p.expressionBirthPosition; input.birthVelocity = p.expressionBirthVelocity;
+    input.birthRotation = p.initialRotation; input.birthScale = p.initialScale;
+    input.birthColor = Vec3(p.startColor.r,p.startColor.g,p.startColor.b); input.birthSize = p.sizeScale > 0 ? p.startSize / p.sizeScale : 0; input.birthOpacity = p.startOpacity;
+    input.params = &emitter.expressionParams; return input;
+}
+void UpdateExpressionChannels(const ParticleEmitter& emitter, Particle& p, const VfxExpressionInputs& input) {
+    p.hasExpressionColor = p.hasExpressionSize = p.hasExpressionOpacity = false;
+    if (!emitter.expressionProgram) return;
+    const auto& programs = emitter.expressionProgram->update;
+    auto value = [&](size_t channel) { return EvaluateVfxExpression(programs[channel],input); };
+    auto present = [&](size_t channel) { return !programs[channel].code.empty(); };
+    auto coordinates = [&](Vec3 v) { return p.worldSpace ? p.birthBasis.TransformDir(v) : v; };
+    if (present(0)) p.position = p.integratedPosition + coordinates(value(0));
+    if (present(2)) p.rotation3D = p.initialRotation + value(2);
+    if (present(3)) { const Vec3 multiplier = value(3); p.axisScale = Mul(p.initialScale,Vec3(std::max(0.0f,multiplier.x),std::max(0.0f,multiplier.y),std::max(0.0f,multiplier.z))); }
+    if (present(4)) { p.hasExpressionColor=true;p.expressionColor=value(4); }
+    if (present(5)) { p.hasExpressionSize=true;p.expressionSize=std::max(0.0f,value(5).x)*p.sizeScale; }
+    if (present(6)) { p.hasExpressionOpacity=true;p.expressionOpacity=Clamp(value(6).x,0,1); }
+    float custom[] = {p.custom.x,p.custom.y,p.custom.z,p.custom.w};
+    for (size_t i=0;i<4;++i) if (present(7+i)) custom[i]=value(7+i).x;
+    p.custom=Vec4(custom[0],custom[1],custom[2],custom[3]);
+}
+void BirthExpressionChannels(const ParticleEmitter& emitter, Particle& p) {
+    if (!emitter.expressionProgram) return;
+    const VfxExpressionInputs input=ExpressionInputs(emitter,p);
+    const auto& programs=emitter.expressionProgram->birth;
+    for (size_t channel=0;channel<programs.size();++channel) {
+        if (programs[channel].code.empty()) continue;
+        const Vec3 v=EvaluateVfxExpression(programs[channel],input);
+        switch (static_cast<VfxChannel>(channel)) {
+            case VfxChannel::Position: p.position=v; break;
+            case VfxChannel::Velocity: p.velocity=v; break;
+            case VfxChannel::Rotation: p.initialRotation=v; break;
+            case VfxChannel::Scale: p.initialScale=Vec3(std::max(0.0f,v.x),std::max(0.0f,v.y),std::max(0.0f,v.z)); break;
+            case VfxChannel::Color: p.startColor=p.endColor=Color(v.x,v.y,v.z); break;
+            case VfxChannel::Size: p.startSize=p.endSize=std::max(0.0f,v.x)*p.sizeScale; break;
+            case VfxChannel::Opacity: p.startOpacity=p.endOpacity=Clamp(v.x,0,1); break;
+            case VfxChannel::Custom0: p.initialCustom.x=v.x; break;
+            case VfxChannel::Custom1: p.initialCustom.y=v.x; break;
+            case VfxChannel::Custom2: p.initialCustom.z=v.x; break;
+            case VfxChannel::Custom3: p.initialCustom.w=v.x; break;
+            default: break;
+        }
+    }
+}
 struct MotionCurves {
     ParticleCurve position, velocity, rotation, scale;
     std::array<ParticleCurve, 4> custom;
@@ -221,6 +272,11 @@ struct MotionCurves {
 }
 
 void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths) {
+    VfxExpressionError expressionError;
+    if (!PrepareVfxExpressions(emitter,&expressionError)) {
+        if (!emitter.invalidSettingsReported) OE_LOG_WARN("particles", "entity %u: %s",owner,expressionError.message.c_str());
+        emitter.invalidSettingsReported=true; return;
+    }
     size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
     if (emitter.particles.size() > limit) emitter.particles.resize(limit);
     const float turbulence = std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) ? Clamp(emitter.turbulence, 0, 10000) : 0;
@@ -229,7 +285,12 @@ void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, ui
     const MotionCurves curves(emitter);
     for (Particle& particle : emitter.particles) {
         particle.age += dt;
+        const VfxExpressionInputs expressionInput=ExpressionInputs(emitter,particle);
         if (!curves.velocity.Empty()) particle.velocity = curves.Coordinates(particle, curves.velocity.Sample(Clamp(particle.age / particle.lifetime, 0, 1)));
+        if (emitter.expressionProgram && !emitter.expressionProgram->update[1].code.empty()) {
+            const Vec3 prescribed=EvaluateVfxExpression(emitter.expressionProgram->update[1],expressionInput);
+            particle.velocity=curves.Coordinates(particle,prescribed);
+        }
         particle.velocity += particle.gravity * dt;
         if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
             Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
@@ -240,6 +301,7 @@ void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, ui
         particle.integratedPosition += particle.velocity * dt;
         if (particle.spin != 0) particle.rotation += particle.spin * dt;
         curves.Evaluate(particle);
+        UpdateExpressionChannels(emitter,particle,expressionInput);
     }
     if (deaths) for (const Particle& particle : emitter.particles)
         if (particle.age >= particle.lifetime) deaths->push_back(particle);
@@ -313,6 +375,7 @@ std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* c
 }
 
 bool ParticleSettingsValid(const ParticleEmitter& emitter) {
+    if (!PrepareVfxExpressions(emitter)) return false;
     auto finiteVector = [](const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
     auto boundedVector = [&](const Vec3& v) { return finiteVector(v) && std::abs(v.x) <= 65504 && std::abs(v.y) <= 65504 && std::abs(v.z) <= 65504; };
     auto finiteColor = [](const Color& c) { return std::isfinite(c.r) && std::isfinite(c.g) && std::isfinite(c.b); };
@@ -509,6 +572,16 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
             particle.frameOffset = std::min(emitter->frames - 1, static_cast<int>(ParticleRandom(*emitter, id) * static_cast<float>(emitter->frames)));
         if (!emitter->mesh.empty()) particle.meshBasis = world;
         particle.position += emitter->positionOffset;
+        particle.index = emitter->emitted + static_cast<uint64_t>(i); particle.birthCount = count;
+        particle.initialRotation=emitter->rotation3D;particle.initialScale=emitter->scale;
+        particle.initialCustom=Vec4(emitter->custom0,emitter->custom1,emitter->custom2,emitter->custom3);
+        particle.expressionBirthPosition=particle.position;particle.expressionBirthVelocity=particle.velocity;
+        // Hash accepted birth index without consuming the established PRNG stream.
+        uint32_t hash = emitter->randomState ^ static_cast<uint32_t>(emitter->emitted + static_cast<uint64_t>(i));
+        hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15; hash *= 0x846ca68bu; hash ^= hash >> 16;
+        particle.random = static_cast<float>(hash >> 8) / 16777216.0f;
+        BirthExpressionChannels(*emitter,particle);
+        particle.expressionBirthPosition=particle.position;particle.expressionBirthVelocity=particle.velocity;
         particle.worldSpace = emitter->space == "world";
         if (particle.worldSpace) {
             particle.position = world.TransformPoint(particle.position);
@@ -516,16 +589,15 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
         }
         particle.birthPosition = particle.integratedPosition = particle.position;
         particle.initialVelocity = particle.velocity;
-        particle.initialRotation = emitter->rotation3D; particle.initialScale = emitter->scale;
-        particle.initialCustom = Vec4(emitter->custom0, emitter->custom1, emitter->custom2, emitter->custom3);
         particle.birthBasis = world; particle.index = emitter->emitted + static_cast<uint64_t>(i); particle.birthCount = count;
         if (!curves.velocity.Empty()) particle.velocity = curves.Coordinates(particle, curves.velocity.Sample(0));
         particle.initialVelocity = particle.velocity;
         curves.Evaluate(particle);
-        // Hash accepted birth index without consuming the established PRNG stream.
-        uint32_t hash = emitter->randomState ^ static_cast<uint32_t>(emitter->emitted + static_cast<uint64_t>(i));
-        hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15; hash *= 0x846ca68bu; hash ^= hash >> 16;
-        particle.random = static_cast<float>(hash >> 8) / 16777216.0f;
+        const VfxExpressionInputs expressionInput=ExpressionInputs(*emitter,particle);
+        if (emitter->expressionProgram && !emitter->expressionProgram->update[1].code.empty()) {
+            particle.velocity=curves.Coordinates(particle,EvaluateVfxExpression(emitter->expressionProgram->update[1],expressionInput));
+        }
+        UpdateExpressionChannels(*emitter,particle,expressionInput);
         emitter->particles.push_back(particle);
     }
     emitter->emitted += static_cast<uint64_t>(count);

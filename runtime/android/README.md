@@ -283,3 +283,17 @@ Device/browser GPU execution remains unverified.
 |---|---:|---|
 | runtime/android/arm64-v8a/liboe_player.so | 7,458,096 | 338dfb0b4ea84f5ca6aaeea12e8fd238496541b2c19c317ef3e6cf8a759803d2 |
 | runtime/android/x86_64/liboe_player.so | 7,885,816 | 522953612cb25ce4d3d188a3edbdb4b8daca34809fa04572ae1b32a558154de1 |
+
+## VFX expressions rebuild (phase 5b, 2026-10-08)
+
+Players include typed Birth/Update expressions, own bounded math, cached programs, parameter inputs
+and conservative instruction budgets. Contract: docs/VFX_PHASE5B.md. Windows/Node assert the same
+math and software-preview hashes; all 239 Node tests pass. Device/browser GPU execution remains
+unverified. Toolchains: Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,539,280 | eec339f5c070589867b768faf2acbb90eabbbfba6f2cee070256686141934d58 |
+| runtime/android/x86_64/liboe_player.so | 7,976,856 | 46f6d3fbf9f26fce2f41c6cadd2b60e076076756845f829c1f452cf352873528 |
+
+Commands.cpp SHA256: `e9777ebc426db0bf619d384f6c28522ba625809c22eab950e52bc9aa6e62fa29`.
