@@ -8,6 +8,23 @@ For presets, strict authoring validation, isolated contact sheets and numeric an
 see [VFX.md](VFX.md). ParticleEmitter/Trail `component.add/set` now reject bad ranges and curves before editing;
 legacy file loading and runtime guards remain compatible.
 
+## VFX motion channels
+
+ParticleEmitter now captures `positionOffset` (emitter-space meters), `rotation3D` (XYZ degrees),
+`scale` (nonnegative XYZ multipliers) and `custom0..3` at birth. Normalized-age vector curves
+`positionOverLife`, `velocityOverLife`, `rotationOverLife` and `scaleOverLife` share these channels
+between quads and meshes. The position curve offsets separately integrated motion; velocity replaces
+velocity before forces each step; rotation adds to birth XYZ rotation inside legacy Z spin; scale
+multiplies birth scale, legacy scalar size and meshScale once. `pivot` fixes an unscaled geometry point
+at the center before rotation/scaling. Four signed scalar custom curves replace their birth values;
+materials use zero-argument `particleCustom0..3` ops through a dedicated attribute stream.
+
+World-space position/velocity curves use the emitter matrix captured at birth; local particles keep
+following the owner. Full semantics, examples, limits and hot reload behavior are in
+[VFX.md](VFX.md#motion-channels-and-pivot). Native saves/rollback copy the captured and evaluated
+state, accepted birth `index`, immutable accepted batch `count` and stable random; JSON only saves
+settings. Empty curves and default birth values preserve legacy emission RNG and frame hashes.
+
 ## Simulation contract
 
 ParticleEmitter defines rate (particles/second), initial burst, lifetime,
@@ -207,4 +224,5 @@ P3.2 and P3.3 continue from that combined main.
       and assets. Portable core tests run under Node/WASM; see VFX_PHASE4.md for current evidence.
 - [x] Phase 4: materials (including lit graphs), static mesh particles, two-anchor ribbons, optional
       batching and bounded asset death chains; Effects isolated preview shipped in phase 3. See VFX.md.
+- [x] Phase 5a motion channels, pivot and custom attributes; see [VFX_PHASE5A.md](VFX_PHASE5A.md).
 - [ ] Candidates for later: soft/depth-faded particles and particle collision.

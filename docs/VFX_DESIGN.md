@@ -429,6 +429,9 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
 - [ ] Phase 5 (optional): VFX position/rotation/axis-scale curves and bounded typed expressions;
       value-node/text views of the same document; ice-pillar preset/sample without scripted visual
       transforms. Requested scope recorded (2026-10-08); stages 5a-5d and acceptance criteria above.
+- [x] Phase 5a (2026-10-08): captured birth state and accepted index/count, non-accumulating
+      position/velocity curves, XYZ rotation/scale, pivot and four material custom channels;
+      signed/vector Effects curves and a curve-only ice pillar proof. See docs/VFX_PHASE5A.md.
 - [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
       Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.
 - [ ] Not verified anywhere yet: Android device execution of VFX assets; Linux/EGL rendering suite.

@@ -475,6 +475,15 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.world.at(0, 3) = center.x;
             it.world.at(1, 3) = center.y;
             it.world.at(2, 3) = center.z;
+            if (!(particle.rotation3D == Vec3()) || !(particle.axisScale == Vec3(1, 1, 1)) || !(emitter.pivot == Vec3())) {
+                // Rotate in unscaled billboard axes, then apply size/stretch once on the geometry.
+                for (int axis = 0; axis < 3; ++axis) {
+                    it.world.at(axis, 0) = turned[0][axis];
+                    it.world.at(axis, 1) = turned[1][axis];
+                }
+                it.world = it.world * Mat4::RotationEuler(particle.rotation3D) *
+                    Mat4::Scale(Vec3(size * particle.axisScale.x, length * particle.axisScale.y, size * particle.axisScale.z)) * Mat4::Translation(emitter.pivot * -1);
+            }
             if (!emitter.mesh.empty() && sourceMesh) {
                 // Static mesh particles retain emitter orientation; lifetime size scales all axes.
                 Mat4 basis = particle.worldSpace ? particle.meshBasis : emitterWorld;
@@ -485,6 +494,10 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 }
                 basis.at(0,3)=center.x; basis.at(1,3)=center.y; basis.at(2,3)=center.z;
                 it.world = basis * Mat4::RotationEuler(Vec3(0,0,particle.rotation)) * Mat4::Scale(emitter.meshScale * size);
+                if (!(particle.rotation3D == Vec3()) || !(particle.axisScale == Vec3(1, 1, 1)) || !(emitter.pivot == Vec3()))
+                    it.world = basis * Mat4::RotationEuler(Vec3(0,0,particle.rotation)) * Mat4::RotationEuler(particle.rotation3D) *
+                        Mat4::Scale(Vec3(emitter.meshScale.x * size * particle.axisScale.x, emitter.meshScale.y * size * particle.axisScale.y,
+                            emitter.meshScale.z * size * particle.axisScale.z)) * Mat4::Translation(emitter.pivot * -1);
                 it.mesh = sourceMesh;
             }
             if ((!emitter.material.empty() && !material) || (!emitter.mesh.empty() && !sourceMesh)) {
@@ -493,12 +506,15 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.normalMatrix = it.world.Inverse().Transposed();
             const Vec3 velocity = particle.worldSpace ? particle.velocity : emitterWorld.TransformDir(particle.velocity);
             it.particleInput = Vec4(t, particle.random, Length(velocity), 0);
+            it.particleCustom = particle.custom;
             if (emitter.batching) {
                 auto mesh = std::make_shared<Mesh>(*it.mesh);
                 const Vec4 data = it.particleInput;
                 it.particleInput = Vec4();
+                it.particleCustom = Vec4();
                 mesh->colors.assign(mesh->positions.size(), Vec4(it.tint.r,it.tint.g,it.tint.b,it.opacity));
                 mesh->particleData.assign(mesh->positions.size(), data);
+                mesh->particleCustom.assign(mesh->positions.size(), particle.custom);
                 for (size_t vertex=0; vertex<mesh->positions.size(); ++vertex) {
                     mesh->positions[vertex] = it.world.TransformPoint(mesh->positions[vertex]);
                     if (vertex < mesh->normals.size()) mesh->normals[vertex] = Normalize(it.normalMatrix.TransformDir(mesh->normals[vertex]));
@@ -532,6 +548,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 mesh->uvs.insert(mesh->uvs.end(),part.uvs.begin(),part.uvs.end());
                 mesh->colors.insert(mesh->colors.end(),part.colors.begin(),part.colors.end());
                 mesh->particleData.insert(mesh->particleData.end(),part.particleData.begin(),part.particleData.end());
+                mesh->particleCustom.insert(mesh->particleCustom.end(),part.particleCustom.begin(),part.particleCustom.end());
                 for (uint32_t vertex : part.indices) mesh->indices.push_back(vertex+offset);
             }
             mesh->materials = items[first].mesh->materials;
@@ -657,6 +674,7 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
         input.uv = Vec4((u * item.uvScale[0] + item.uvOffset[0]) * material.tiling[0] + material.offset[0],
                         (v * item.uvScale[1] + item.uvOffset[1]) * material.tiling[1] + material.offset[1], 0, 0);
         input.particle = item.particleInput + (vertex < m.particleData.size() ? m.particleData[vertex] : Vec4());
+        input.custom = item.particleCustom + (vertex < m.particleCustom.size() ? m.particleCustom[vertex] : Vec4());
         input.baseColor = Vec4(material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
         if (vertex < m.colors.size()) {
             const Vec4 c = m.colors[vertex];

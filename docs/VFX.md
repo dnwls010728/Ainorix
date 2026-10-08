@@ -4,6 +4,37 @@ Create, tune and verify existing `ParticleEmitter` and `Trail` effects through t
 used by CLI, HTTP and MCP. No play session or editor window is needed. The simulation and rendering
 contract remains in [PARTICLES.md](PARTICLES.md); the larger implementation plan is [VFX_DESIGN.md](VFX_DESIGN.md).
 
+## Motion channels and pivot
+
+Effects can animate mesh and billboard particles without gameplay scripts. Use `positionOffset`,
+`rotation3D`, `scale` and `custom0..3` for captured birth inputs, and `positionOverLife`,
+`velocityOverLife`, `rotationOverLife`, `scaleOverLife`, `custom0OverLife` through `custom3OverLife`
+for normalized-age curves. `vfx.schema.channels` publishes units, composition and fixed evaluation order.
+Vector keys are `[[age,[x,y,z]],...]`; signed vectors are accepted, scale must be nonnegative.
+Values are finite and bounded to -65504..65504; each curve has at most 16 ascending keys.
+
+Position curves add an offset to separately integrated physics, without accumulating last frame's
+curve displacement. World particles use the captured emitter frame; local particles follow their owner.
+Velocity curves replace velocity before gravity, turbulence and drag every step; they are a prescribed
+velocity, so gravity does not accumulate across steps while that curve is active. Removing the curve
+resumes normal integration from the last velocity. XYZ rotation adds to captured `rotation3D` inside
+legacy Z spin. Axis scale multiplies captured `scale`, then legacy scalar size and `meshScale` once.
+Existing size/color/opacity curves retain their established behavior.
+
+`pivot` is an unscaled geometry point fixed at the particle center. A cube's base is `[0,-0.5,0]`:
+keep scalar size at 1 and animate only scale Y to grow vertically with constant width. The curve-only
+proof is `samples/VFXLab/effects/ice_pillar_curves.vfx.json`; load `scenes/channels.scene.json`, or open
+that asset in Effects. Curves offers X/Y/Z selection and signed scalar plots, sharing document undo.
+Its material reads `particleCustom0` and `particleCustom3` for glow/dissolve; all four material ops also
+work in vertex displacement, both renderers, and batching, without taking graph uniform slots.
+
+`particles.state {id,particles:true}` includes evaluated scale/rotation/custom, birth inputs,
+`integratedPosition`, accepted birth `index` and immutable accepted batch `count`. Native snapshots
+retain these values; scene JSON excludes them. Hot reload updates curves while preserving live birth
+inputs. Expressions and value-node authoring are planned for 5b/5c; phase 5a supplies channels and curves.
+Rain/snow ground-height killing remains a later candidate; finite lifetime can end falling particles.
+Verification and limits: [VFX_PHASE5A.md](VFX_PHASE5A.md).
+
 ## Agent recipe
 
 Start with `vfx.schema` for reflected field names, types, defaults, ranges, options and fixed-order
@@ -361,5 +392,8 @@ oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph 
       validation evidence are in [VFX_PHASE4.md](VFX_PHASE4.md).
 - [x] Phase 4b (2026-10-08): shared shader/effect canvas, structure nodes and reference wires, in-node
       module fields, compact preview and `.oe/` layout sidecars. Verification: [VFX_PHASE4B.md](VFX_PHASE4B.md).
+- [x] Phase 5a (2026-10-08): captured birth state, non-accumulating position/velocity curves, XYZ
+      rotation/scale, pivot and four material custom channels, signed/vector Effects curves.
+      Details and evidence: [VFX_PHASE5A.md](VFX_PHASE5A.md).
 - [ ] Platform follow-up: Linux/EGL, browser WebGL2 and Android device execution of phase 4 effects.
       Windows/D3D11 and Node/WASM tests cover the native and portable core; prebuilt players refreshed.

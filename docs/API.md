@@ -427,7 +427,7 @@ Live particle count, accepted births, finished (a non-looping emitter is done an
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | ParticleEmitter entity. |
-| `particles` | boolean |  | Include age, lifetime, position, velocity, rotation and worldSpace. |
+| `particles` | boolean |  | Include evaluated channels, captured birth inputs, index/count, stable random and worldSpace. |
 
 ### `particles.burst`
 
@@ -1668,6 +1668,14 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `material` | string | `""` | Optional project-relative .mat.json, including surface graphs. |
 | `mesh` | string | `""` | Static project mesh or built-in name; empty uses camera-facing quads. |
 | `meshScale` | vec3 | `[1,1,1]` | Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation. |
+| `positionOffset` | vec3 | `[0,0,0]` | Birth offset in emitter coordinates; captured before local/world conversion. |
+| `rotation3D` | vec3 | `[0,0,0]` | Birth XYZ Euler rotation in degrees, added to lifetime rotation and legacy Z spin. |
+| `scale` | vec3 | `[1,1,1]` | Nonnegative birth XYZ multiplier; multiplied once by scaleOverLife, scalar size and meshScale (meshes only). |
+| `pivot` | vec3 | `[0,0,0]` | Unscaled mesh/billboard geometry point fixed at the particle center under scale and rotation. |
+| `custom0` | float | `0` | Birth material custom0; captured per particle, not a shader uniform. |
+| `custom1` | float | `0` | Birth material custom1; captured per particle, not a shader uniform. |
+| `custom2` | float | `0` | Birth material custom2; captured per particle, not a shader uniform. |
+| `custom3` | float | `0` | Birth material custom3; captured per particle, not a shader uniform. |
 | `batching` | bool | `false` | Combine particles into one emitter draw, sorted internally; transparent emitters sort as whole groups. |
 | `onDeath` | string | `""` | VFX asset only: named emitter receiving a burst at each expired particle position; maximum depth 4. |
 | `deathCount` | int | `1` | Particles per death event, subject to target and system budgets. |
@@ -1701,6 +1709,14 @@ Deterministic 2D/3D billboard particles; initial burst and continuous rate, boun
 | `sizeOverLife` | json | `[]` | Size keys [[t, meters], ...] with t ascending in 0..1; replaces startSize/endSize when not empty (sizeVariation still scales it). At most 16 keys. |
 | `colorOverLife` | json | `[]` | Color keys [[t, [r, g, b]] or [t, "#rrggbb"], ...]; replaces startColor/endColor when not empty. At most 16 keys. |
 | `opacityOverLife` | json | `[]` | Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys. |
+| `positionOverLife` | json | `[]` | Vector keys [[age,[x,y,z]],...], meters in emitter coordinates; additive offset on integrated motion, never accumulated. |
+| `velocityOverLife` | json | `[]` | Vector keys in emitter meters/second; replaces velocity each step before gravity/drag. Empty retains integrated velocity. |
+| `rotationOverLife` | json | `[]` | Vector keys in degrees; added to captured rotation3D and legacy Z rotation/spin. |
+| `scaleOverLife` | json | `[]` | Nonnegative XYZ multiplier keys; normalized age 0..1, up to 16 keys. Empty means [1,1,1]. |
+| `custom0OverLife` | json | `[]` | Scalar keys for particleCustom0; replaces the birth value over normalized age, at most 16 keys. |
+| `custom1OverLife` | json | `[]` | Scalar keys for particleCustom1; replaces the birth value over normalized age, at most 16 keys. |
+| `custom2OverLife` | json | `[]` | Scalar keys for particleCustom2; replaces the birth value over normalized age, at most 16 keys. |
+| `custom3OverLife` | json | `[]` | Scalar keys for particleCustom3; replaces the birth value over normalized age, at most 16 keys. |
 | `turbulence` | float | `0` | Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers). |
 | `turbulenceScale` | float | `1` | Noise cells per meter: small = wide swirls, large = jitter. |
 | `pixelArt` | bool | `true` | Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke). |

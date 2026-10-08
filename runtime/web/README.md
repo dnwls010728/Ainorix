@@ -269,3 +269,16 @@ core: 230 tests, zero failures. Actual browser WebGL2 execution of these effects
 | runtime/web/oe_player.wasm | 4,677,178 | ebac03f51f5d5b6a3f7af13a1ac2e38b42c049c1b728c8ab640f6846659b67d8 |
 
 Commands.cpp SHA256: `9e32bd478583e35831c86902197af9d2458133654dae8ba999c392db624fed74`.
+
+## VFX motion channels rebuild (phase 5a, 2026-10-08)
+
+Players include captured birth state, motion/XYZ scale curves, pivots and four custom material
+attributes in both rendering paths and batching. See docs/VFX_PHASE5A.md for the contract and validation.
+Built with Emscripten 6.0.10, Release, parallelism 2 and BINARYEN_CORES=1.
+All 234 Node/WASM tests pass, including the same curve-proof hash as Windows. The existing
+unused ProcessFixtureDir warning remains. Device/browser GPU execution remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,734,722 | e94db0c29e7239a1c40ed7c1516efd3cbd6a4f56328afc97cc3b082db220ba0f |

@@ -271,3 +271,15 @@ pass; Android device/emulator execution of these effects remains unverified.
 | runtime/android/x86_64/liboe_player.so | 7,828,920 | 56d02ef6d45bfffa2d7dc80bf3d66be28a72709271021aaa491b6db54ffa7d83 |
 
 Commands.cpp SHA256: `9e32bd478583e35831c86902197af9d2458133654dae8ba999c392db624fed74`.
+
+## VFX motion channels rebuild (phase 5a, 2026-10-08)
+
+Players include captured birth state, motion/XYZ scale curves, pivots and four custom material
+attributes in both rendering paths and batching. See docs/VFX_PHASE5A.md for the contract and validation.
+Built with Android NDK r28c, Release, parallelism 2, for arm64-v8a and x86_64.
+Device/browser GPU execution remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,458,096 | 338dfb0b4ea84f5ca6aaeea12e8fd238496541b2c19c317ef3e6cf8a759803d2 |
+| runtime/android/x86_64/liboe_player.so | 7,885,816 | 522953612cb25ce4d3d188a3edbdb4b8daca34809fa04572ae1b32a558154de1 |

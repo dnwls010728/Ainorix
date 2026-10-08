@@ -106,6 +106,7 @@ struct Mesh {
     std::vector<Vec3> normals;      // one per position
     std::vector<float> uvs;         // two per position
     std::vector<Vec4> colors;       // optional RGBA per vertex; empty means white
+    std::vector<Vec4> particleCustom; // optional four per-particle material attributes
     std::vector<Vec4> particleData; // optional normalized age/random/world speed per vertex
     std::vector<Vec4> tangents;     // xyz tangent (+u), w: bitangent sign; from ComputeTangents
     std::vector<uint32_t> indices;  // triangle list, counter-clockwise front faces

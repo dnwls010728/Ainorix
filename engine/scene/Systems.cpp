@@ -1,6 +1,7 @@
 #include "scene/Systems.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "assets/Assets.h"
@@ -189,14 +190,46 @@ void UpdateParticles(Scene& scene, float dt) {
 }
 }  // namespace
 
+namespace {
+struct MotionCurves {
+    ParticleCurve position, velocity, rotation, scale;
+    std::array<ParticleCurve, 4> custom;
+    explicit MotionCurves(const ParticleEmitter& emitter) {
+        ParseParticleVectorCurve(emitter.positionOverLife, position, nullptr);
+        ParseParticleVectorCurve(emitter.velocityOverLife, velocity, nullptr);
+        ParseParticleVectorCurve(emitter.rotationOverLife, rotation, nullptr);
+        ParseParticleVectorCurve(emitter.scaleOverLife, scale, nullptr);
+        const Json* keys[] = {&emitter.custom0OverLife, &emitter.custom1OverLife, &emitter.custom2OverLife, &emitter.custom3OverLife};
+        for (int i = 0; i < 4; ++i) ParseParticleCurve(*keys[i], false, custom[static_cast<size_t>(i)], nullptr);
+    }
+    Vec3 Coordinates(const Particle& particle, Vec3 value) const {
+        return particle.worldSpace ? particle.birthBasis.TransformDir(value) : value;
+    }
+    void Evaluate(Particle& particle) const {
+        const float t = Clamp(particle.age / particle.lifetime, 0, 1);
+        particle.position = position.Empty() ? particle.integratedPosition :
+            particle.integratedPosition + Coordinates(particle, position.Sample(t));
+        particle.rotation3D = particle.initialRotation + (rotation.Empty() ? Vec3() : rotation.Sample(t));
+        const Vec3 multiplier = scale.Empty() ? Vec3(1, 1, 1) : scale.Sample(t);
+        particle.axisScale = Vec3(particle.initialScale.x * multiplier.x, particle.initialScale.y * multiplier.y, particle.initialScale.z * multiplier.z);
+        const float birth[] = {particle.initialCustom.x, particle.initialCustom.y, particle.initialCustom.z, particle.initialCustom.w};
+        float values[4];
+        for (int i = 0; i < 4; ++i) values[i] = custom[static_cast<size_t>(i)].Empty() ? birth[i] : custom[static_cast<size_t>(i)].Sample(t).x;
+        particle.custom = Vec4(values[0], values[1], values[2], values[3]);
+    }
+};
+}
+
 void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths) {
     size_t limit = static_cast<size_t>(std::max(0, std::min(10000, emitter.maxParticles)));
     if (emitter.particles.size() > limit) emitter.particles.resize(limit);
     const float turbulence = std::isfinite(emitter.turbulence) && std::isfinite(emitter.turbulenceScale) ? Clamp(emitter.turbulence, 0, 10000) : 0;
     const float turbulenceScale = Clamp(emitter.turbulenceScale, 0.001f, 1000);
     const uint32_t turbulenceSeed = static_cast<uint32_t>(emitter.seed) ^ (owner * 0x9e3779b9u) ^ seedMix;
+    const MotionCurves curves(emitter);
     for (Particle& particle : emitter.particles) {
         particle.age += dt;
+        if (!curves.velocity.Empty()) particle.velocity = curves.Coordinates(particle, curves.velocity.Sample(Clamp(particle.age / particle.lifetime, 0, 1)));
         particle.velocity += particle.gravity * dt;
         if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
             Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
@@ -204,8 +237,9 @@ void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, ui
             particle.velocity += push;
         }
         if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
-        particle.position += particle.velocity * dt;
+        particle.integratedPosition += particle.velocity * dt;
         if (particle.spin != 0) particle.rotation += particle.spin * dt;
+        curves.Evaluate(particle);
     }
     if (deaths) for (const Particle& particle : emitter.particles)
         if (particle.age >= particle.lifetime) deaths->push_back(particle);
@@ -280,7 +314,21 @@ std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* c
 
 bool ParticleSettingsValid(const ParticleEmitter& emitter) {
     auto finiteVector = [](const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+    auto boundedVector = [&](const Vec3& v) { return finiteVector(v) && std::abs(v.x) <= 65504 && std::abs(v.y) <= 65504 && std::abs(v.z) <= 65504; };
     auto finiteColor = [](const Color& c) { return std::isfinite(c.r) && std::isfinite(c.g) && std::isfinite(c.b); };
+    const Json* vectors[] = {&emitter.positionOverLife, &emitter.velocityOverLife, &emitter.rotationOverLife, &emitter.scaleOverLife};
+    ParticleCurve vector;
+    for (const Json* keys : vectors) if (!ParseParticleVectorCurve(*keys, vector, nullptr)) return false;
+    for (const Vec3& value : vector.values) if (value.x < 0 || value.y < 0 || value.z < 0) return false;
+    const Json* custom[] = {&emitter.custom0OverLife, &emitter.custom1OverLife, &emitter.custom2OverLife, &emitter.custom3OverLife};
+    for (const Json* keys : custom) {
+        if (!ParseParticleCurve(*keys, false, vector, nullptr)) return false;
+        for (const Vec3& value : vector.values) if (std::abs(value.x) > 65504) return false;
+    }
+    if (!boundedVector(emitter.positionOffset) || !boundedVector(emitter.rotation3D) || !boundedVector(emitter.scale) || !boundedVector(emitter.pivot) ||
+        emitter.scale.x < 0 || emitter.scale.y < 0 || emitter.scale.z < 0 || !std::isfinite(emitter.custom0) || !std::isfinite(emitter.custom1) ||
+        !std::isfinite(emitter.custom2) || !std::isfinite(emitter.custom3) ||
+        std::abs(emitter.custom0) > 65504 || std::abs(emitter.custom1) > 65504 || std::abs(emitter.custom2) > 65504 || std::abs(emitter.custom3) > 65504) return false;
     ParticleCurve curve;
     return std::isfinite(emitter.rate) && std::isfinite(emitter.lifetime) && std::isfinite(emitter.speed) &&
            std::isfinite(emitter.speedVariation) && std::isfinite(emitter.lifetimeVariation) && std::isfinite(emitter.sizeVariation) &&
@@ -305,6 +353,27 @@ Vec3 ParticleCurve::Sample(float t) const {
         return values[i - 1] * (1 - k) + values[i] * k;
     }
     return values.back();
+}
+
+bool ParseParticleVectorCurve(const Json& keys, ParticleCurve& out, std::string* error) {
+    out.times.clear(); out.values.clear();
+    auto fail = [&](const char* message) {
+        if (error) *error = message;
+        out.times.clear(); out.values.clear(); return false;
+    };
+    if (keys.isNull()) return true;
+    if (!keys.isArray() || keys.size() > ParticleCurve::kMaxKeys) return fail("expected up to 16 [age,[x,y,z]] keys");
+    for (const Json& key : keys.items()) {
+        if (!key.isArray() || key.size() != 2 || !key[0].isNumber() || !std::isfinite(key[0].asFloat()) ||
+            key[0].asFloat() < 0 || key[0].asFloat() > 1 || (!out.times.empty() && key[0].asFloat() < out.times.back()))
+            return fail("key age must be finite, ascending and in 0..1");
+        if (!key[1].isArray() || key[1].size() != 3) return fail("vector key value must be [x,y,z]");
+        for (const Json& coordinate : key[1].items())
+            if (!coordinate.isNumber() || !std::isfinite(coordinate.asFloat()) || std::abs(coordinate.asFloat()) > 65504)
+                return fail("vector values must be finite numbers in -65504..65504");
+        out.times.push_back(key[0].asFloat()); out.values.emplace_back(key[1][0].asFloat(), key[1][1].asFloat(), key[1][2].asFloat());
+    }
+    return true;
 }
 
 bool ParseParticleCurve(const Json& keys, bool color, ParticleCurve& out, std::string* error) {
@@ -372,6 +441,7 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
         emitter->randomState = static_cast<uint32_t>(emitter->seed) ^ (id * 0x9e3779b9u) ^ 0x85ebca6bu ^ seedMix;
         if (emitter->randomState == 0) emitter->randomState = 0x6d2b79f5u;
     }
+    const MotionCurves curves(*emitter);
     for (int i = 0; i < count; ++i) {
         Particle particle;
         particle.velocity = ParticleDirection(*emitter, id) * emitter->speed;
@@ -438,11 +508,20 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
         if (emitter->randomFrame && emitter->frames > 1)
             particle.frameOffset = std::min(emitter->frames - 1, static_cast<int>(ParticleRandom(*emitter, id) * static_cast<float>(emitter->frames)));
         if (!emitter->mesh.empty()) particle.meshBasis = world;
+        particle.position += emitter->positionOffset;
         particle.worldSpace = emitter->space == "world";
         if (particle.worldSpace) {
             particle.position = world.TransformPoint(particle.position);
             particle.velocity = world.TransformDir(particle.velocity);
         }
+        particle.birthPosition = particle.integratedPosition = particle.position;
+        particle.initialVelocity = particle.velocity;
+        particle.initialRotation = emitter->rotation3D; particle.initialScale = emitter->scale;
+        particle.initialCustom = Vec4(emitter->custom0, emitter->custom1, emitter->custom2, emitter->custom3);
+        particle.birthBasis = world; particle.index = emitter->emitted + static_cast<uint64_t>(i); particle.birthCount = count;
+        if (!curves.velocity.Empty()) particle.velocity = curves.Coordinates(particle, curves.velocity.Sample(0));
+        particle.initialVelocity = particle.velocity;
+        curves.Evaluate(particle);
         // Hash accepted birth index without consuming the established PRNG stream.
         uint32_t hash = emitter->randomState ^ static_cast<uint32_t>(emitter->emitted + static_cast<uint64_t>(i));
         hash ^= hash >> 16; hash *= 0x7feb352du; hash ^= hash >> 15; hash *= 0x846ca68bu; hash ^= hash >> 16;

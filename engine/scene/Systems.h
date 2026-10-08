@@ -44,6 +44,9 @@ struct ParticleCurve {
 // Parses [[t, value], ...]; `color` takes [r, g, b] or "#rrggbb" values, otherwise a number.
 // An empty array gives an empty curve; malformed keys return false with a message.
 bool ParseParticleCurve(const Json& keys, bool color, ParticleCurve& out, std::string* error);
+// Strict XYZ keys, including signed motion/rotation values; no color-string syntax.
+bool ParseParticleVectorCurve(const Json& keys, ParticleCurve& out, std::string* error);
+
 
 struct Trail;
 // Forgets a Trail's path (teleports, respawns).

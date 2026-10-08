@@ -66,6 +66,7 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 model;
     mat4 normal_mat;
     mat4 joint_palette[64];
+    vec4 item_custom; // custom attributes on shared meshes
     vec4 item_particle; // shared-mesh particle inputs; batched inputs are in particle0
 };
 
@@ -88,9 +89,11 @@ in vec4 joint_indices;
 in vec4 joint_weights;
 in vec4 color0;
 in vec4 particle0;
+in vec4 custom0;
 
 out vec4 v_color;
 out vec4 v_particle;
+out vec4 v_custom;
 out vec3 v_wpos;
 out vec3 v_nrm;
 out vec4 v_tan;
@@ -117,6 +120,10 @@ vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
         else if (code.x == 25) value = vec4(particle0.x + item_particle.x);
         else if (code.x == 26) value = vec4(particle0.y + item_particle.y);
         else if (code.x == 27) value = vec4(particle0.z + item_particle.z);
+        else if (code.x == 28) value = vec4(custom0.x + item_custom.x);
+        else if (code.x == 29) value = vec4(custom0.y + item_custom.y);
+        else if (code.x == 30) value = vec4(custom0.z + item_custom.z);
+        else if (code.x == 31) value = vec4(custom0.w + item_custom.w);
         else if (code.x == 7) value = vec4(1.0);  // no texture in the vertex stage
         else value = GraphOp(code.x, a, b, c, vgraph_value[i]);
         registers[i] = GraphFinite(value);
@@ -142,6 +149,7 @@ void main() {
     v_uv = texcoord;
     v_color = color0;
     v_particle = particle0 + item_particle;
+    v_custom = custom0 + item_custom;
     gl_Position = view_proj * wp;
 }
 @end
@@ -189,6 +197,10 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
         else if (code.x == 25) value = vec4(v_particle.x);
         else if (code.x == 26) value = vec4(v_particle.y);
         else if (code.x == 27) value = vec4(v_particle.z);
+        else if (code.x == 31) value = vec4(v_custom.w);
+        else if (code.x == 30) value = vec4(v_custom.z);
+        else if (code.x == 29) value = vec4(v_custom.y);
+        else if (code.x == 28) value = vec4(v_custom.x);
         // Explicit level zero matches the software texture sampler and avoids
         // undefined implicit derivatives in data-dependent instruction flow.
         else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
@@ -230,6 +242,7 @@ layout(binding=5) uniform texture2D occlusion_tex;
 
 in vec4 v_color;
 in vec4 v_particle;
+in vec4 v_custom;
 in vec3 v_wpos;
 in vec3 v_nrm;
 in vec4 v_tan;
@@ -450,6 +463,7 @@ layout(binding=0) uniform texture2D base_tex;
 layout(binding=0) uniform sampler base_smp;
 in vec4 v_color;
 in vec4 v_particle;
+in vec4 v_custom;
 in vec3 v_wpos;
 in vec3 v_nrm;
 in vec4 v_tan;

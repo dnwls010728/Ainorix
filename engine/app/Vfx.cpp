@@ -21,7 +21,7 @@ std::string ModuleOf(const std::string& name) {
     if (name == "mode" || name == "baseAnchor" || name == "tipAnchor" || name == "baseOffset" || name == "tipOffset" || name == "shape" || name == "shapeSize" || name == "shapeEdge" || name == "dimensions" || name == "spread") return "Shape";
     if (name == "material" || name == "mesh" || name == "batching" || name == "texture" || name == "blend" || name == "layer" || name == "pixelArt" || name == "frame" || name == "frames" ||
         name == "columns" || name == "rows" || name == "frameRate" || name == "randomFrame") return "Render";
-    if (name == "space" || name == "direction" || name == "gravity" || name == "drag" || name == "radialSpeed" ||
+    if (name == "positionOffset" || name == "space" || name == "direction" || name == "gravity" || name == "drag" || name == "radialSpeed" ||
         name == "turbulence" || name == "turbulenceScale" || name == "speed" || name == "speedVariation" || name == "minDistance") return "Motion";
     return "Appearance";
 }
@@ -55,6 +55,16 @@ Json VfxSchema() {
         }
         out["components"].push(component);
     }
+    out["channels"]["curveTime"] = "normalized age in 0..1; endpoint clamp; linear interpolation; at most 16 keys";
+    out["channels"]["vectorCurve"] = "[[age,[x,y,z]],...] (signed finite values within -65504..65504; scale nonnegative)";
+    out["channels"]["position"] = "positionOffset is an emitter-space birth offset; positionOverLife is added to integratedPosition without accumulating previous offsets. World particles use the captured birth emitter basis; local particles follow their owner.";
+    out["channels"]["velocity"] = "velocityOverLife replaces velocity in emitter m/s before gravity, turbulence and drag each step. Empty curves preserve integrated velocity.";
+    out["channels"]["rotation"] = "rotation3D + rotationOverLife in XYZ degrees, composed inside legacy Z rotation/spin; billboard axes or captured mesh emitter axes";
+    out["channels"]["scale"] = "scale * scaleOverLife per axis, then legacy scalar size and meshScale each once; empty scale curve multiplies by one";
+    out["channels"]["pivot"] = "unscaled geometry point mapped to particle center before scale/rotation; cube base is [0,-0.5,0]";
+    out["channels"]["custom"] = "custom0..3 captured at birth; scalar curves replace values; particleCustom0..3 material ops; finite -65504..65504; no graph uniform slots";
+    out["channels"]["index"] = "zero-based accepted birth order per emitter, reset by clear; count is accepted batch size captured at birth";
+    out["channels"]["order"] = "age, velocity curve, gravity/turbulence/drag, velocity integration, position offset, rotation/scale/custom curves, expiry, births";
     out["params"]["available"] = true;
     out["params"]["syntax"] = "params[name] = {default, min?, max?, doc, targets:[{to:'emitterName.field', scale?}]}";
     out["limits"]["duration"] = 60; out["limits"]["previewFrames"] = 16; out["limits"]["analysisSamples"] = 241;

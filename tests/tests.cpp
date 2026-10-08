@@ -7921,6 +7921,135 @@ TEST(VfxParticleMaterialsAndBatching) {
         BuildDrawList(separate,Vec3(0,0,6)).size(),BuildDrawList(combined,Vec3(0,0,6)).size(),plainMs,batchMs);
 }
 
+TEST(VfxMotionChannelsAndNativeRestore) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_motion_channels"), &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    CHECK(Call(e, "entity.create", R"({"name":"Effect","components":{"ParticleEmitter":{
+      "rate":0,"loop":false,"lifetime":2,"speed":1,"spread":0,"direction":[1,0,0],"gravity":[0,0,0],
+      "positionOffset":[0,1,0],"rotation3D":[0,10,0],"scale":[2,1,3],"custom0":-2,"custom1":3,"custom2":4,"custom3":5,
+      "positionOverLife":[[0,[0,0,0]],[1,[0,4,0]]],"rotationOverLife":[[0,[0,0,0]],[1,[0,80,0]]],
+      "scaleOverLife":[[0,[1,0.1,1]],[1,[1,2,1]]],"custom0OverLife":[[0,-2],[1,2]]}}})")["ok"].asBool());
+    CHECK(Call(e, "particles.burst", R"({"id":"Effect","count":2})")["result"]["accepted"].asInt() == 2);
+    const EntityId id = e.GetScene().FindByName("Effect");
+    auto state = [&] { return Call(e, "particles.state", R"({"id":"Effect","particles":true})")["result"]; };
+    CHECK(state()["particles"][1]["index"].asInt() == 1 && state()["particles"][1]["count"].asInt() == 2);
+    e.RecordState(); e.Step(30); const auto checkpoint = e.SaveState(); e.Step(30);
+    const Json future = state(); const Json& p = future["particles"][0];
+    CHECK(std::abs(p["position"][0].asFloat() - 1) < 1e-4f && std::abs(p["position"][1].asFloat() - 3) < 1e-4f);
+    CHECK(p["birthPosition"][1].asFloat() == 1 && std::abs(p["integratedPosition"][1].asFloat() - 1) < 1e-4f);
+    CHECK(std::abs(p["rotation3D"][1].asFloat() - 50) < 1e-3f && std::abs(p["scale"][1].asFloat() - 1.05f) < 1e-4f);
+    CHECK(std::abs(p["custom"][0].asFloat()) < 1e-4f && p["custom"][3].asFloat() == 5);
+    e.LoadState(*checkpoint); e.Step(30); CHECK(state() == future);
+    CHECK(!e.GetScene().EntityToJson(id)["components"]["ParticleEmitter"].has("integratedPosition"));
+    e.Stop();
+    CHECK(Call(e, "component.set", R"({"id":"Effect","type":"ParticleEmitter","values":{"positionOverLife":[],"velocityOverLife":[[0,[0,2,0]],[1,[0,2,0]]]}})")["ok"].asBool());
+    Call(e,"particles.burst",R"({"id":"Effect","count":1})");
+    e.Step(1); const Json next = state()["particles"][0];
+    CHECK(std::abs(next["position"][1].asFloat() - 1.033333f) < 1e-4f); // removed offset never accumulates into physics
+    CHECK(std::abs(next["velocity"][1].asFloat() - 2) < 1e-4f);
+}
+
+TEST(VfxWorldChannelsAndStrictValidation) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_world_channels"), &error)); Call(e,"scene.new",R"({"empty":true})");
+    Call(e,"entity.create",R"({"name":"Effect","components":{"Transform":{"rotation":[0,0,90]},"ParticleEmitter":{
+      "rate":0,"loop":false,"lifetime":2,"speed":0,"gravity":[0,0,0],"space":"world",
+      "positionOverLife":[[0,[0,0,0]],[1,[2,0,0]]]}}})");
+    Call(e,"particles.burst",R"({"id":"Effect","count":1})");
+    Call(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"rotation":[0,0,0],"position":[9,0,0]}})");e.Step(60);
+    const auto* particle = &e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->particles[0];
+    CHECK(std::abs(particle->position.x) < 1e-4f && std::abs(particle->position.y - 1) < 1e-4f);
+    const Json before = e.GetScene().ToJson();
+    for (const char* values : {R"({"positionOverLife":[[0,"#ff0000"]]})", R"({"velocityOverLife":[[0,[1,2]]]})",
+      R"({"rotationOverLife":[[1,[0,0,0]],[0,[1,2,3]]]})", R"({"scaleOverLife":[[0,[1,-1,1]]]})",
+      R"({"custom0OverLife":[[0,65505]]})", R"({"scale":[-1,1,1]})", R"({"pivot":[0,70000,0]})"}) {
+        Json args = Json::parse(R"({"id":"Effect","type":"ParticleEmitter"})"); args["values"] = Json::parse(values);
+        CHECK(!e.Call("component.set",args)["ok"].asBool()); CHECK(e.GetScene().ToJson() == before);
+    }
+    CHECK(Call(e,"vfx.schema")["result"]["channels"]["position"].asString().find("without accumulating") != std::string::npos);
+}
+
+TEST(VfxPivotScaleAndCustomMaterial) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_pivot_custom"), &error)); Call(e,"scene.new",R"({"empty":true})");
+    CHECK(Call(e,"shader.create",R"({"path":"custom.shader.json","graph":{"nodes":[
+      {"op":"particleCustom0"},{"op":"particleCustom1"},{"op":"particleCustom2"},{"op":"particleCustom3"},
+      {"op":"add","args":[0,1]},{"op":"add","args":[2,3]},{"op":"add","args":[4,5]},
+      {"op":"constant","value":[0.1,0.3,0.5,0.5]},{"op":"multiply","args":[6,7]},
+      {"op":"constant","value":[0.05,0,0,0]},{"op":"multiply","args":[3,9]}],"color":8,"offset":10}})")["ok"].asBool());
+    CHECK(Call(e,"material.create",R"({"path":"custom.mat.json","values":{"shader":"custom.shader.json","unlit":true,"doubleSided":true}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Effect","components":{"ParticleEmitter":{
+      "material":"custom.mat.json","mesh":"cube","meshScale":[0.6,3,0.6],"pivot":[0,-0.5,0],
+      "burst":1,"rate":0,"loop":false,"lifetime":2,"speed":0,"gravity":[0,0,0],"startSize":1,"endSize":1,
+      "scaleOverLife":[[0,[1,0.1,1]],[1,[1,1,1]]],"custom0":0.1,"custom1":0.2,"custom2":0.3,"custom3":0.4}}})")["ok"].asBool());
+    e.Step(30); const EntityId id=e.GetScene().FindByName("Effect");
+    auto items=GatherRenderItems(e.GetScene(),&e.Assets());CHECK(items.size()==1);
+    CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,-0.5f,0)).y)<1e-5f);
+    CHECK(std::abs(Length(items[0].world.TransformDir(Vec3(1,0,0)))-0.6f)<1e-5f);
+    CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,0.5f,0)).y - (0.1f + 0.9f * e.GetScene().Get<ParticleEmitter>(id)->particles[0].age / 2) * 3)<1e-4f);
+    CHECK(items[0].particleCustom.w==0.4f && items[0].mesh->particleCustom.empty());
+    RenderView view=MakeLookAtView(Vec3(3,2,5),Vec3(0,1,0),45,1);view.drawUI=false;
+    RenderTarget sw,batch,gpu;sw.Resize(128,128);batch.Resize(128,128);gpu.Resize(128,128);
+    e.Renderer().Render(e.GetScene(),view,sw);CHECK(CountId(sw,id)>50);
+    for(bool batching : {false,true}) {
+        Json args=Json::parse(R"({"id":"Effect","type":"ParticleEmitter","values":{}})");args["values"]["batching"]=batching;
+        CHECK(e.Call("component.set",args)["ok"].asBool());
+        items=GatherRenderItems(e.GetScene(),&e.Assets());
+        if(batching) CHECK(items[0].mesh->particleCustom.size()==items[0].mesh->positions.size() && items[0].mesh->particleCustom[0].w==0.4f);
+        e.Renderer().Render(e.GetScene(),view,batch);double total=0;
+        for(size_t i=0;i<batch.color.size();++i) for(int c=0;c<3;++c)
+            total+=std::abs(static_cast<int>((batch.color[i]>>(8*c))&255)-static_cast<int>((sw.color[i]>>(8*c))&255));
+        CHECK(total/static_cast<double>(sw.color.size()*3)<0.1);
+        if(e.EnableGpu(nullptr,&error)) {
+            e.Gpu()->Render(e.GetScene(),view,gpu);total=0;
+            for(size_t i=0;i<gpu.color.size();++i) for(int c=0;c<3;++c)
+                total+=std::abs(static_cast<int>((gpu.color[i]>>(8*c))&255)-static_cast<int>((batch.color[i]>>(8*c))&255));
+            const double mean=total/static_cast<double>(gpu.color.size()*3);
+            std::printf("  pivot/custom (%s) software/GPU mean %.3f\n",batching?"batched":"individual",mean);CHECK(mean<1.5);
+        }
+    }
+    CHECK(WritePng("build/vfx-custom-software.png",sw.ToImage(),true));
+    CHECK(WritePng("build/vfx-custom-gpu.png",gpu.ToImage(),true));
+    // Identical vector channels also drive billboards; the pivot remains mapped to the center.
+    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"mesh":"","batching":false,"rotationOverLife":[[0,[0,0,0]],[1,[0,0,80]]]}})");e.Step(30);
+    items=GatherRenderItems(e.GetScene(),&e.Assets());CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,-0.5f,0)).y)<1e-5f);
+    CHECK(std::abs(Length(items[0].world.TransformDir(Vec3(1,0,0)))-1)<1e-5f);
+}
+
+TEST(VfxChannelAssetReloadAndPreview) {
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_channel_reload"),&error));Call(e,"scene.new",R"({"empty":true})");
+    Json document=Json::parse(R"({"format":"oe.vfx","version":1,"emitters":[{"name":"pillar","emitter":{
+      "burst":1,"rate":0,"loop":false,"lifetime":2,"speed":0,"gravity":[0,0,0],"mesh":"cube","pivot":[0,-0.5,0],
+      "startSize":1,"endSize":1,"scale":[1,2,1],"scaleOverLife":[[0,[1,0.1,1]],[1,[1,1,1]]],"custom1":-3}}]})");
+    CreateTestVfx(e,document);Call(e,"vfx.spawn",R"({"path":"effects/sparks.vfx.json","name":"Effect","autoDestroy":false})");e.Step(20);
+    const EntityId id=e.GetScene().FindByName("Effect");const Particle before=e.GetScene().Get<VFXSystem>(id)->emitters[0].particles[0];
+    CHECK(Call(e,"vfx.set",R"({"path":"effects/sparks.vfx.json","emitter":"pillar","values":{"scale":[9,9,9],"custom1":4,"positionOverLife":[[0,[0,1,0]],[1,[0,1,0]]]}})")["ok"].asBool());e.Step(1);
+    const Particle after=e.GetScene().Get<VFXSystem>(id)->emitters[0].particles[0];
+    CHECK(after.initialScale==before.initialScale && after.initialCustom.y==-3 && after.birthPosition==before.birthPosition);
+    CHECK(after.age>before.age && after.random==before.random && after.index==before.index && after.birthCount==before.birthCount);
+    CHECK(after.position.y==1 && after.integratedPosition.y==0);
+    Json invalid=Json::parse(R"({"path":"effects/sparks.vfx.json","emitter":"pillar","values":{"scaleOverLife":[[0,[1,-1,1]]]}})");
+    CHECK(!e.Call("vfx.set",invalid)["ok"].asBool());e.Step(1);CHECK(e.GetScene().Get<VFXSystem>(id)->emitters[0].particles[0].position.y==1);
+    Engine sample;CHECK(sample.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    CHECK(Call(sample,"vfx.check",R"({"path":"effects/ice_pillar_curves.vfx.json"})")["result"]["ok"].asBool());
+    const char* args=R"({"path":"effects/ice_pillar_curves.vfx.json","times":[0.1,0.5,1.5,2.3],"size":128,"inline":false})";
+    const Json first=Call(sample,"vfx.preview",args);CHECK(first["ok"].asBool() && first==Call(sample,"vfx.preview",args));
+    CHECK(first["result"]["hash"].asString()=="2620de22f4505b16"); // same gate under Windows and Node/WASM
+    CHECK(Call(sample,"scene.load",R"({"path":"scenes/channels.scene.json"})")["ok"].asBool());
+    sample.Step(40);CHECK(sample.GetScene().FindByName("Ground")!=kNullEntity && sample.Scripts().Errors().empty());
+    const Json analysis=Call(sample,"vfx.analyze",R"({"path":"effects/ice_pillar_curves.vfx.json","duration":3})");
+    CHECK(analysis["ok"].asBool() && analysis["result"]["peakCount"].asInt()==33 && analysis["result"]["finishedAt"].asFloat()>2.3f);
+    // Custom channels leave every material uniform slot available and have independent values.
+    const float expected[]={-0.2f,0.3f,0.7f,0.9f};
+    for(int channel=0;channel<4;++channel) {
+        Json graph=Json::parse(R"({"uniforms":{},"nodes":[{"op":"particleCustom0"}],"color":0})");
+        for(int i=0;i<8;++i)graph["uniforms"]["slot"+std::to_string(i)]=0;
+        graph["nodes"][0]["op"]="particleCustom"+std::to_string(channel);
+        ShaderGraph compiled;CHECK(CompileShaderGraph(graph,compiled,&error));ShaderInputs inputs;
+        inputs.custom=Vec4(expected[0],expected[1],expected[2],expected[3]);
+        CHECK(EvaluateShaderGraph(compiled,inputs,compiled.defaults).color.x==expected[channel]);
+        CHECK(compiled.uniformNames.size()==8);
+    }
+}
+
 TEST(VfxTwoAnchorRibbon) {
     Engine e;std::string error;CHECK(e.Open(TempProject("vfx_ribbon"),&error));Call(e,"scene.new",R"({"empty":true})");
     Call(e,"entity.create",R"({"name":"Base","components":{"Transform":{"position":[-1,0,0]}}})");
@@ -11455,6 +11584,35 @@ TEST(NativeEditorEffectsResourceLifetime) {
     RemoveAll(project);
 }
 
+TEST(NativeEditorEffectsVectorCurves) {
+    const std::string project=TempProject("editor_vector_curves");Engine engine;std::string error;CHECK(engine.Open(project,&error));CreateTestVfx(engine);
+    if(!engine.EnableGpu(nullptr,&error)){RemoveAll(project);return;}
+    NativeEditor::Options options;options.language="en";
+    {
+        NativeEditor editor(engine,nullptr,options);CHECK(editor.Init(&error));RenderTarget image;
+        auto frames=[&](int count,const std::vector<WindowEvent>& events=std::vector<WindowEvent>()){
+            for(int i=0;i<count;++i){editor.Update(i==0?events:std::vector<WindowEvent>(),1440,1200,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}
+        };
+        auto mouse=[&](ImVec2 p,bool down){WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=p.x;move.y=p.y;
+            WindowEvent button=move;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=down;frames(2,{move});frames(2,{button});};
+        auto click=[&](const std::string& name){const auto r=editor.EffectsControlRect(name);CHECK(r[2]>0 && r[3]>0);const ImVec2 p(r[0]+r[2]*0.5f,r[1]+r[3]*0.5f);mouse(p,true);mouse(p,false);frames(3);};
+        frames(3);editor.OpenEffect("effects/sparks.vfx.json");frames(4);click("module");click("module:Curves");
+        // Scroll to the new vector channels after the three established scalar/color curves.
+        WindowEvent wheel;wheel.type=WindowEvent::Type::MouseWheel;wheel.y=-5;frames(4,{wheel});
+        click("create:positionOverLife");CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["positionOverLife"].size()==2);
+        click("axis:positionOverLife:1");
+        const auto r=editor.EffectsControlRect("curve:positionOverLife");CHECK(r[2]>0);
+        const ImVec2 key(r[0]+r[2]*0.99f,r[1]+r[3]*0.5f);mouse(key,true);
+        WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=key.x-10;move.y=key.y-30;frames(3,{move});mouse(ImVec2(move.x,move.y),false);frames(3);
+        const Json edited=editor.EffectsDocument();CHECK(edited["emitters"][0]["emitter"]["positionOverLife"][1][1][1].asFloat()>0);
+        CHECK(edited["emitters"][0]["emitter"]["positionOverLife"][1][1][0].asFloat()==0);
+        frames(3,CtrlChord(WindowKey::Z));CHECK(editor.EffectsDocument()!=edited);
+        frames(3,CtrlChord(WindowKey::Y));CHECK(editor.EffectsDocument()==edited);
+        CHECK(WritePng(JoinPath(TestSourceDir(),"build/effects-vector-curves.png"),image.ToImage()));
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorEffectsAuthoring) {
     const std::string project = TempProject("editor_effects"); Engine engine; std::string error;
     CHECK(engine.Open(project, &error)); CreateTestVfx(engine);
@@ -11495,12 +11653,21 @@ TEST(NativeEditorEffectsAuthoring) {
         CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["sizeOverLife"].size() == 2);
         WindowEvent wheel; wheel.type = WindowEvent::Type::MouseWheel; wheel.y = -4; frames(4, {wheel});
         click("add:sizeOverLife"); CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["sizeOverLife"].size() == 3);
+        auto revealCurve = [&](const std::string& name) {
+            for (int i = 0; i < 16; ++i) {
+                const auto r = editor.EffectsControlRect(name); const float center = r[1] + r[3] * 0.5f;
+                if (center >= 320 && center <= 580) break;
+                WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = 450; move.y = 450; frames(2, {move});
+                WindowEvent scroll; scroll.type = WindowEvent::Type::MouseWheel; scroll.y = center < 320 ? 1.0f : -1.0f; frames(3, {scroll});
+            }
+        };
+        revealCurve("curve:sizeOverLife");
         const Json curveBefore = editor.EffectsDocument(); const auto graph = editor.EffectsControlRect("curve:sizeOverLife");
         const ImVec2 key(graph[0] + graph[2] * 0.5f, graph[1] + graph[3] * 0.5f); mouse(key, true);
         move.x = key.x + 20; move.y = key.y - 15; frames(3, {move}); mouse(ImVec2(move.x, move.y), false);
         CHECK(editor.EffectsDocument() != curveBefore);
         CHECK(WritePng(JoinPath(TestSourceDir(), "build/effects-curves.png"), image.ToImage()));
-        wheel.y = -3; frames(4, {wheel}); click("create:colorOverLife");
+        wheel.y = -3; frames(4, {wheel}); revealCurve("create:colorOverLife"); click("create:colorOverLife");
         CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["colorOverLife"].size() == 2);
         CHECK(WritePng(JoinPath(TestSourceDir(), "build/effects-gradient.png"), image.ToImage()));
         click("save"); click("play"); click("timeline");

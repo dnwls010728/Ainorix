@@ -90,7 +90,7 @@ Json ParameterField(const Json& value, const Json& spec, const Json& document, c
     return field;
 }
 
-bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys, const Json& start, const Json& end) {
+bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys, const Json& start, const Json& end, bool signedValue = false) {
     const bool color = name == "colorOverLife";
     bool changed = false;
     if (keys.size() == 0) {
@@ -108,9 +108,10 @@ bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(origin, origin + size, IM_COL32(22, 27, 36, 255), 3);
     float maximum = name == "opacityOverLife" ? 1 : 0.1f;
-    for (const Json& key : keys.items()) if (!color) maximum = std::max(maximum, key[1].asFloat() * 1.2f);
+    for (const Json& key : keys.items()) if (!color) maximum = std::max(maximum, (signedValue ? std::abs(key[1].asFloat()) : key[1].asFloat()) * 1.2f);
     if (ImGui::IsItemActivated()) editor.effectsCurveRange = maximum;
     if (ImGui::IsItemActive()) maximum = editor.effectsCurveRange;
+    auto normalized = [&](float v) { return signedValue ? (v / maximum + 1) * 0.5f : v / maximum; };
     if (color) {
         for (int pixel = 0; pixel < static_cast<int>(size.x); ++pixel) {
             const Vec3 c = curve.Sample(static_cast<float>(pixel) / size.x);
@@ -121,8 +122,8 @@ bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys
         for (int grid = 1; grid < 4; ++grid)
             draw->AddLine(origin + ImVec2(0, size.y * grid / 4), origin + ImVec2(size.x, size.y * grid / 4), IM_COL32(45, 51, 64, 255));
         for (int pixel = 1; pixel < static_cast<int>(size.x); ++pixel) {
-            const float a = curve.Sample(static_cast<float>(pixel - 1) / size.x).x / maximum;
-            const float b = curve.Sample(static_cast<float>(pixel) / size.x).x / maximum;
+            const float a = normalized(curve.Sample(static_cast<float>(pixel - 1) / size.x).x);
+            const float b = normalized(curve.Sample(static_cast<float>(pixel) / size.x).x);
             draw->AddLine(origin + ImVec2(static_cast<float>(pixel - 1), size.y * (1 - a)),
                           origin + ImVec2(static_cast<float>(pixel), size.y * (1 - b)), IM_COL32(107, 203, 247, 255), 2);
         }
@@ -144,12 +145,12 @@ bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys
         const float low = key > 0 ? keys[key - 1][0].asFloat() + 0.001f : 0;
         const float high = key + 1 < count ? keys[key + 1][0].asFloat() - 0.001f : 1;
         if (low <= high) keys[key][0] = Clamp((ImGui::GetIO().MousePos.x - origin.x) / size.x, low, high);
-        if (!color) keys[key][1] = Clamp((1 - (ImGui::GetIO().MousePos.y - origin.y) / size.y) * maximum, 0, maximum);
+        if (!color) keys[key][1] = Clamp(((1 - (ImGui::GetIO().MousePos.y - origin.y) / size.y) * (signedValue ? 2 : 1) - (signedValue ? 1 : 0)) * maximum, signedValue ? -maximum : 0, maximum);
         changed = true;
     }
     editor.EffectsMerge("curve:" + name);
     for (int key = 0; key < count; ++key) {
-        const ImVec2 point = origin + ImVec2(keys[key][0].asFloat() * size.x, color ? size.y - 5 : size.y * (1 - keys[key][1].asFloat() / maximum));
+        const ImVec2 point = origin + ImVec2(keys[key][0].asFloat() * size.x, color ? size.y - 5 : size.y * (1 - normalized(keys[key][1].asFloat())));
         draw->AddCircleFilled(point, 5, key == selectedKey ? IM_COL32(255, 211, 95, 255) : IM_COL32(219, 232, 243, 255));
     }
     ImGui::TextDisabled("0                         1");
@@ -165,7 +166,7 @@ bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys
     } else {
         ImGui::TextUnformatted(Tr("Key Value")); ImGui::SetNextItemWidth(-FLT_MIN);
         float value = keys[key][1].asFloat();
-        if (ImGui::DragFloat("##keyvalue", &value, 0.01f, 0, name == "opacityOverLife" ? 1.0f : 10000.0f,
+        if (ImGui::DragFloat("##keyvalue", &value, 0.01f, signedValue ? -65504.0f : 0, name == "opacityOverLife" ? 1.0f : 65504.0f,
                              "%.3g", ImGuiSliderFlags_AlwaysClamp)) { keys[key][1] = value; changed = true; }
     }
     editor.EffectsRect("key:" + name);
@@ -185,7 +186,42 @@ bool CurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys
     editor.EffectsRect("add:" + name); editor.EffectsMerge("add:" + name); ImGui::EndDisabled(); ImGui::SameLine();
     if (ImGui::Button(Tr("Remove Key"))) { keys.items().erase(keys.items().begin() + key); changed = true; }
     editor.EffectsRect("remove:" + name); editor.EffectsMerge("remove:" + name); ImGui::SameLine();
-    if (ImGui::Button(Tr("Use Start/End"))) { keys = Json::MakeArray(); changed = true; }
+    const bool vectorCurve = name == "positionOverLife" || name == "velocityOverLife" || name == "rotationOverLife" || name == "scaleOverLife";
+    if (ImGui::Button(Tr(vectorCurve || signedValue ? "Use Birth Values" : "Use Start/End"))) { keys = Json::MakeArray(); changed = true; }
+    return changed;
+}
+
+bool VectorCurveWidget(NativeEditor::Impl& editor, const std::string& name, Json& keys) {
+    bool changed = false;
+    const bool scale = name == "scaleOverLife";
+    if (keys.size() == 0) {
+        ImGui::TextDisabled("%s", Tr("Using birth values"));
+        if (ImGui::Button(Tr("Create Curve"))) {
+            const Json value(Json::Array{scale ? 1 : 0, scale ? 1 : 0, scale ? 1 : 0});
+            keys = Json(Json::Array{Json(Json::Array{0, value}), Json(Json::Array{1, value})});
+            changed = true;
+        }
+        editor.EffectsRect("create:" + name); return changed;
+    }
+    ParticleCurve vector; std::string error;
+    if (!ParseParticleVectorCurve(keys, vector, &error)) { ImGui::TextWrapped("%s", error.c_str()); return false; }
+    int& axis = editor.effectsCurveKeys["axis:" + name];
+    for (int i = 0; i < 3; ++i) {
+        if (i) ImGui::SameLine();
+        if (ImGui::RadioButton(i == 0 ? "X" : i == 1 ? "Y" : "Z", axis == i)) axis = i;
+        editor.EffectsRect("axis:" + name + ":" + std::to_string(i));
+    }
+    Json scalar = Json::MakeArray();
+    for (const Json& key : keys.items()) scalar.push(Json(Json::Array{key[0], key[1][axis]}));
+    if (CurveWidget(editor, name, scalar, scale ? Json(1) : Json(0), scale ? Json(1) : Json(0), !scale)) {
+        Json next = Json::MakeArray();
+        for (const Json& key : scalar.items()) {
+            const Vec3 sampled = vector.Sample(key[0].asFloat());
+            Json value(Json::Array{sampled.x, sampled.y, sampled.z}); value[axis] = key[1];
+            next.push(Json(Json::Array{key[0], value}));
+        }
+        keys = next; changed = true;
+    }
     return changed;
 }
 }
@@ -386,7 +422,9 @@ void NativeEditor::Impl::EffectsBlockFields() {
                 static const std::map<std::string,const char*> labels = {{"material","Material"},{"mesh","Particle Mesh"},
                     {"meshScale","Mesh Scale"},{"batching","Batch Particles"},{"onDeath","Death Emitter"},{"deathCount","Death Burst"},
                     {"mode","Ribbon Mode"},{"baseAnchor","Base Anchor"},{"tipAnchor","Tip Anchor"},
-                    {"baseOffset","Base Offset"},{"tipOffset","Tip Offset"}};
+                    {"baseOffset","Base Offset"},{"tipOffset","Tip Offset"},
+                    {"positionOffset","Birth Offset"},{"rotation3D","Birth Rotation"},{"scale","Birth Scale"},{"pivot","Particle Pivot"},
+                    {"positionOverLife","Position Curve"},{"velocityOverLife","Velocity Curve"},{"rotationOverLife","Rotation Curve"},{"scaleOverLife","Axis Scale Curve"}};
                 const auto label = labels.find(name);
                 ImGui::PushID(name.c_str()); ImGui::TextUnformatted(label == labels.end() ? name.c_str() : Tr(label->second));
                 if (mapped) { ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("Controlled by parameter")); }
@@ -402,6 +440,11 @@ void NativeEditor::Impl::EffectsBlockFields() {
                         return Json();
                     };
                     changed = CurveWidget(*this, name, value, base("start" + suffix), base("end" + suffix));
+                } else if (name == "positionOverLife" || name == "velocityOverLife" || name == "rotationOverLife" || name == "scaleOverLife") {
+                    changed = VectorCurveWidget(*this, name, value);
+                } else if (name.compare(0, 6, "custom") == 0 && name.find("OverLife") != std::string::npos) {
+                    const std::string birth = name.substr(0, 7);
+                    changed = CurveWidget(*this, name, value, values.has(birth) ? values[birth] : Json(0), values.has(birth) ? values[birth] : Json(0), true);
                 } else changed = ValueWidget(field, value);
                 EffectsRect("field:" + name); const std::string merge = EffectsMerge(blockName + "." + name);
                 ImGui::EndDisabled();

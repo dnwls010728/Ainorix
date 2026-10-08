@@ -222,6 +222,17 @@ The editor only uses public commands (`Engine::Call`), so an agent attached with
 
 Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
 
+### Effects motion curves (phase 5a)
+
+Motion exposes Birth Offset; Appearance exposes Birth Rotation, Birth Scale, Particle Pivot and
+`custom0..3`. Curves includes Position, Velocity, Rotation and Axis Scale curves, with X/Y/Z radio
+controls sharing one set of age keys. Adding/moving a key samples the other axes at its new age;
+removing a key removes it for all three axes. Signed position/velocity/rotation/custom plots accept
+negative values; scale stays nonnegative. Use Birth Values clears a channel curve. Edits, undo,
+redo, saving and attached-agent patches use the same draft commands in either Fields or Structure Graph.
+Shaders lists `particleCustom0..3` alongside age/random/speed inputs. Open
+`effects/ice_pillar_curves.vfx.json` in VFXLab to inspect growth, hold and material dissolve.
+
 ### Effects rendering fields (VFX phase 4)
 
 Effects exposes `material`, `mesh`, `batching`, death emitter/count, ribbon mode and two anchors through
@@ -269,3 +280,8 @@ are resolved by the scene instance. Structure Graph adds reference nodes and wir
       screenshot mode. Field view remains available. See [VFX.md](VFX.md#effects-structure-graph).
 - [x] Warning-free Windows build, all 282 tests and D3D11 screenshots; details in [VFX_PHASE4B.md](VFX_PHASE4B.md).
 - [ ] Other desktop GPU backends unverified.
+
+### Effects motion channels (2026-10-08)
+
+- [x] Vector axis controls, signed curves, translated birth/pivot labels and material custom ops.
+- [x] Native event coverage for vector-axis drag and document undo/redo. See [VFX_PHASE5A.md](VFX_PHASE5A.md).

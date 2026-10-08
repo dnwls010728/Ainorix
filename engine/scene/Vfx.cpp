@@ -67,9 +67,15 @@ void ValidateFields(const ComponentType& type, void* value, const Json& values) 
         std::string error;
         if (field->type == FieldType::Json) {
             ParticleCurve curve;
-            if (!ParseParticleCurve(v, field->name == "colorOverLife", curve, &error))
-                    throw ApiError("invalid_curve", field->name + ": " + error, "Use up to 16 keys [[t,value],...] with t nondecreasing in 0..1.");
+            const bool vector = field->name == "positionOverLife" || field->name == "velocityOverLife" ||
+                field->name == "rotationOverLife" || field->name == "scaleOverLife";
+            if (!(vector ? ParseParticleVectorCurve(v, curve, &error) : ParseParticleCurve(v, field->name == "colorOverLife", curve, &error)))
+                    throw ApiError("invalid_curve", field->name + ": " + error, vector ? "Use up to 16 keys [[t,[x,y,z]],...] with t nondecreasing in 0..1." : "Use up to 16 keys [[t,value],...] with t nondecreasing in 0..1.");
             for (const Vec3& key : curve.values) {
+                if (field->name == "scaleOverLife" && (key.x < 0 || key.y < 0 || key.z < 0))
+                    throw ApiError("invalid_curve", "scaleOverLife must be nonnegative", "Use nonnegative XYZ multipliers.");
+                if (field->name.compare(0, 6, "custom") == 0 && std::abs(key.x) > 65504)
+                    throw ApiError("invalid_curve", "custom curve exceeds finite range", "Use values within -65504..65504.");
                 if ((field->name == "sizeOverLife" && key.x < 0) || (field->name == "opacityOverLife" && (key.x < 0 || key.x > 1)))
                     throw ApiError("invalid_curve", field->name + " has an invalid value", "Sizes must be nonnegative; opacity must be 0..1.");
             }

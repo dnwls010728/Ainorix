@@ -87,6 +87,13 @@ struct Particle {
     float rotation = 0, spin = 0;  // degrees around the view axis, degrees per second
     float sizeScale = 1;           // sizeVariation factor, applied to sizeOverLife keys
     int frameOffset = 0;           // randomFrame: first flipbook frame of this particle
+    Vec3 birthPosition, initialVelocity, initialRotation, initialScale{1, 1, 1}; // captured birth inputs
+    Vec3 integratedPosition; // physics position without the non-accumulating lifetime offset
+    Vec3 rotation3D, axisScale{1, 1, 1}; // evaluated extra Euler rotation and scale multiplier
+    Vec4 initialCustom{}, custom{}; // captured and evaluated material attributes
+    Mat4 birthBasis; // emitter frame captured for world-space motion curves
+    uint64_t index = 0; // accepted birth order, independent of channel evaluation
+    int birthCount = 0; // accepted particles in this birth batch, immutable
     Mat4 meshBasis;    // world-space mesh orientation captured at birth
     float random = 0;  // stable birth hash, no extra random draws
     int depth = 0;     // bounded death-chain generation
@@ -112,6 +119,12 @@ struct ParticleEmitter {
     std::string material;  // optional .mat.json surface graph
     std::string mesh;      // empty = billboard; otherwise static project/built-in mesh
     Vec3 meshScale{1, 1, 1};
+    Vec3 positionOffset{}, rotation3D{}, scale{1, 1, 1}, pivot{}; // birth offset/rotation/scale; unscaled geometry pivot
+    float custom0 = 0, custom1 = 0, custom2 = 0, custom3 = 0; // birth material data
+    Json positionOverLife = Json::MakeArray(), velocityOverLife = Json::MakeArray(); // vector keys, emitter coordinates
+    Json rotationOverLife = Json::MakeArray(), scaleOverLife = Json::MakeArray(); // additive degrees / scale multipliers
+    Json custom0OverLife = Json::MakeArray(), custom1OverLife = Json::MakeArray(); // scalar material data keys
+    Json custom2OverLife = Json::MakeArray(), custom3OverLife = Json::MakeArray();
     bool batching = false;  // opt-in atomic emitter draw; legacy per-particle sorting otherwise
     std::string onDeath;   // named target emitter in the same VFX asset
     int deathCount = 1;
@@ -171,6 +184,14 @@ struct ParticleEmitter {
         f.Add("material", &ParticleEmitter::material, "Optional project-relative .mat.json, including surface graphs.");
         f.Add("mesh", &ParticleEmitter::mesh, "Static project mesh or built-in name; empty uses camera-facing quads.");
         f.Add("meshScale", &ParticleEmitter::meshScale, "Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation.");
+        f.Add("positionOffset", &ParticleEmitter::positionOffset, "Birth offset in emitter coordinates; captured before local/world conversion.");
+        f.Add("rotation3D", &ParticleEmitter::rotation3D, "Birth XYZ Euler rotation in degrees, added to lifetime rotation and legacy Z spin.");
+        f.Add("scale", &ParticleEmitter::scale, "Nonnegative birth XYZ multiplier; multiplied once by scaleOverLife, scalar size and meshScale (meshes only).");
+        f.Add("pivot", &ParticleEmitter::pivot, "Unscaled mesh/billboard geometry point fixed at the particle center under scale and rotation.");
+        range(f.Add("custom0", &ParticleEmitter::custom0, "Birth material custom0; captured per particle, not a shader uniform."), -65504, 65504);
+        range(f.Add("custom1", &ParticleEmitter::custom1, "Birth material custom1; captured per particle, not a shader uniform."), -65504, 65504);
+        range(f.Add("custom2", &ParticleEmitter::custom2, "Birth material custom2; captured per particle, not a shader uniform."), -65504, 65504);
+        range(f.Add("custom3", &ParticleEmitter::custom3, "Birth material custom3; captured per particle, not a shader uniform."), -65504, 65504);
         f.Add("batching", &ParticleEmitter::batching, "Combine particles into one emitter draw, sorted internally; transparent emitters sort as whole groups.");
         f.Add("onDeath", &ParticleEmitter::onDeath, "VFX asset only: named emitter receiving a burst at each expired particle position; maximum depth 4.");
         range(f.Add("deathCount", &ParticleEmitter::deathCount, "Particles per death event, subject to target and system budgets."), 0, 256);
@@ -212,6 +233,14 @@ struct ParticleEmitter {
               "Color keys [[t, [r, g, b]] or [t, \"#rrggbb\"], ...]; replaces startColor/endColor when not empty. At most 16 keys.");
         f.Add("opacityOverLife", &ParticleEmitter::opacityOverLife,
               "Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys.");
+        f.Add("positionOverLife", &ParticleEmitter::positionOverLife, "Vector keys [[age,[x,y,z]],...], meters in emitter coordinates; additive offset on integrated motion, never accumulated.");
+        f.Add("velocityOverLife", &ParticleEmitter::velocityOverLife, "Vector keys in emitter meters/second; replaces velocity each step before gravity/drag. Empty retains integrated velocity.");
+        f.Add("rotationOverLife", &ParticleEmitter::rotationOverLife, "Vector keys in degrees; added to captured rotation3D and legacy Z rotation/spin.");
+        f.Add("scaleOverLife", &ParticleEmitter::scaleOverLife, "Nonnegative XYZ multiplier keys; normalized age 0..1, up to 16 keys. Empty means [1,1,1].");
+        f.Add("custom0OverLife", &ParticleEmitter::custom0OverLife, "Scalar keys for particleCustom0; replaces the birth value over normalized age, at most 16 keys.");
+        f.Add("custom1OverLife", &ParticleEmitter::custom1OverLife, "Scalar keys for particleCustom1; replaces the birth value over normalized age, at most 16 keys.");
+        f.Add("custom2OverLife", &ParticleEmitter::custom2OverLife, "Scalar keys for particleCustom2; replaces the birth value over normalized age, at most 16 keys.");
+        f.Add("custom3OverLife", &ParticleEmitter::custom3OverLife, "Scalar keys for particleCustom3; replaces the birth value over normalized age, at most 16 keys.");
         range(f.Add("turbulence", &ParticleEmitter::turbulence, "Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers)."), 0, 10000);
         range(f.Add("turbulenceScale", &ParticleEmitter::turbulenceScale, "Noise cells per meter: small = wide swirls, large = jitter."), 0.001f, 1000);
         f.Add("pixelArt", &ParticleEmitter::pixelArt, "Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke).");
