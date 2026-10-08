@@ -253,11 +253,11 @@ function Name:onSubmit(text) save.set("name", text) end
 - Typing is local input: do not edit a `UIInput` during a lockstep/rollback match (use it in the lobby, send the result
   with an RPC). In an **authoritative** match it works on every peer (chat fields): the text stays on the device, the
   keyboard is kept out of the network input stream while the field has the focus, and what the player submits goes to
-  the server by RPC (`games/OnlineRPG/scripts/chatbox.lua`).
+  the server by RPC.
 - Phones: Android shows the on-screen keyboard while a field has the focus (`Window::SetTextInput`) and takes the
   characters the keyboard sends as key presses — Latin letters, digits, punctuation. Composed text (Korean, Japanese,
   swipe typing) needs a Java `InputConnection` and does not arrive yet. The web player reports key presses (no IME
-  composition, no on-screen keyboard on phones). See the work log below.
+  composition, no on-screen keyboard on phones). See Status below.
 
 ### Drop-downs
 
@@ -328,7 +328,7 @@ Android and web players report every active finger. Web fingers retain DOM
 identifiers and press order, and `began` is true only for their first simulation
 step. The first finger also acts as MouseLeft; releasing another finger cannot
 release that mouse press. See [TOUCH.md](TOUCH.md) for cancellation/focus rules
-and the browser verification work log.
+and its open items.
 
 Health bar: a `UISlider {interactable: false, handle: false}` or a `UIImage {fill, fillOrigin}` (with a
 texture, e.g. a gradient). Set the value from Lua: `scene.set(scene.find("HP"), "UISlider", {value = hp})`.
@@ -353,18 +353,8 @@ texture, e.g. a gradient). Set the value from Lua: `scene.set(scene.find("HP"), 
 - In the editor, the Add menu has Text, Button, Panel, Image, Slider, Progress Bar and Menu (vertical layout);
   with a UI element selected, new UI goes inside it.
 
-## Implementation status (work log)
+## Status
 
-- [x] `UIButton`: textured/9-slice background, state textures, icon, label alignment, toggles and radio
-      groups (`onToggle`), `clickOn: release`. Test `UIButtonLooksIconToggleAndRelease`.
-- [x] Keyboard/gamepad focus (`UICanvas.navigation`, `ui.focus`, Lua `ui.focus/focused`), `UIText.minSize`. Test
-      `UINavigationFocusAndTextShrink`.
-- [x] `UIInput`, `UIDropdown`, `UIJoystick`, `input.text`, Backspace as a game key (Windows, web, editor). Test
-      `UIInputDropdownAndJoystick`; checked in software screenshots on Windows.
-- [x] `UIInput` caret, selection, clipboard (`ui.clipboard`, `PlatformClipboardText`), `multiline`, keyboard hidden from
-      scripts while typing; `UIDropdown` long lists (wheel, drag, thumb); images for `UIPanel`, `UISlider`, `UIInput`,
-      `UIDropdown`, `UIJoystick` (`ReflectUISkin`). Tests `UIInputEditingSkinsAndLongLists`, `EditorAddPresetsAreValid`
-      (the Add menu's "UI Toggle" entry was broken JSON).
 - [ ] Web: the `PlatformWeb.cpp` text path (KeyboardEvent.key -> `InputState::text`) compiles and `runtime/web` was
       rebuilt, but it was not run: package a project with a `UIInput`, `oe serve` it and type in a browser. Phones in
       a browser get no on-screen keyboard (needs a focused hidden `<input>` element); the clipboard is internal.

@@ -90,7 +90,7 @@ game, so it is built once in CI and committed.
 - `.github/workflows/apple.yml` — `macos-latest`: build (null first, then
   macos), run `oe_tests`, build the runtimes and upload them as artifacts; an
   iOS job builds for the Simulator, boots one, installs a packaged
-  `samples/Hello`, takes a screenshot and uploads it. Whether the runner VM
+  a project made with `oe new`, takes a screenshot and uploads it. Whether the runner VM
   exposes a Metal device is unknown: if not, GPU tests must skip cleanly
   (as on Android without a window) and the software renderer is used.
 
@@ -122,7 +122,7 @@ game, so it is built once in CI and committed.
 
 ### Tests (`tests/tests.cpp`, run on every platform)
 
-- `MacAppBundleLayout` / `IosIpaLayout`: package `samples/Hello` with a
+- `MacAppBundleLayout` / `IosIpaLayout`: package a project made with `oe new` with a
   stand-in runtime file, unzip, check paths, executable bit and the parsed
   `Info.plist` keys (pure C++, runs on Windows/Linux CI too — the Android
   `AndroidApk` test is the model).

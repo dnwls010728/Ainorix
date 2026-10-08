@@ -3,6 +3,9 @@
 The design is in [TEAM.md](TEAM.md) (section numbers such as "§5.1" refer to it). Continue from the first unchecked
 line (docs/DESIGN.md §5).
 
+Measurements dated up to 2026-10-08 ran on copies of the Wickbound sample, which has since been removed from the
+repository; the M2 fixed task now runs on `games/RPG` (TEAM.md §11.5), so later numbers are not directly comparable.
+
 ## Done
 
 - [x] T1: `platform/Process.h` + Win32 implementation, `engine/team/` (`oe_team`): backend descriptors, detection, Codex model discovery, user overrides, `team.backends`.

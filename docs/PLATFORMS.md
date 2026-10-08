@@ -47,7 +47,7 @@ Native DNS and IPv6 are not implemented in M3. Browser URL resolution is handled
 |---|---|---|
 | Win32 | `platform/net/NativeSockets.cpp`: WinSock, non-blocking I/O, zero-timeout WSAPoll for connect, NODELAY | Windows Release; localhost UDP/TCP, 64 KiB channel messages, source/truncation checks, malformed frames, queue bounds, disconnect and UDP-to-TCP fallback |
 | POSIX (null/macOS/Android) | Same file: BSD sockets, fcntl, zero-timeout poll, NODELAY, SIGPIPE suppression | Implemented but not compiled/run in the current Windows environment; no installed WSL distribution or NDK |
-| Web | `platform/web/NetworkWeb.cpp`: binary WebSocket client, bounded JS-to-Wasm copying, callback queues | Emscripten 6.0.10 Release build; Wasm/Node suite (123 tests) and a real packaged NetArena browser/native-WebSocket match, plus JS bridge bounds/cleanup |
+| Web | `platform/web/NetworkWeb.cpp`: binary WebSocket client, bounded JS-to-Wasm copying, callback queues | Emscripten 6.0.10 Release build; Wasm/Node suite (123 tests) and packaged browser clients against a native server|
 
 `net/SocketTransports.h` keeps framing, per-peer queues and lifecycle events portable. UDP peers
 must be registered explicitly; TCP accept assigns transport ids and exposes the accepted source
@@ -92,11 +92,11 @@ Console SDKs are under NDA, so their code cannot live in this public tree. The l
 M5 lockstep/native rollback and M6 authoritative replication share this transport layer.
 I/O ticks continue while game frames wait for input; protocol v4 clients require the refreshed
 runtime/web player. Windows localhost TCP/UDP tests each run 10000 frames. M8 verifies Wasm
-loopback/sample/snapshot tests and a real WebGL2 NetArena browser client against a native
+loopback/snapshot tests and a real WebGL2 browser client against a native
 WebSocket dedicated server (join/ready, movement, touch Collect/Reset, replicated score/HUD).
 The browser cannot host sockets or join raw TCP/UDP. Native WebSocket clients remain unsupported;
 use a WebSocket server for browsers and TCP/UDP for native/Android clients.
-POSIX/Android execution remains unverified. See [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md)
+POSIX/Android execution remains unverified.
 for launch and platform reproduction steps. On-screen keys are sampled into declared actions
 before sync input capture; pointer coordinates remain local and are not replayed.
 

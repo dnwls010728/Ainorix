@@ -203,7 +203,7 @@ measurement-result cache is added. Caller-owned Lua cache keys must include text
 resource revision, size/spacing/bold/rich, wrapWidth and effective scale; invalidate on
 view/canvas/font changes and keep cache state in the snapshot-compatible Lua heap.
 Outline/shadow/typewriter should not alter those layout keys. A message can outlive a
-view resize: OnlineRPG remeasures its at-most-eight visible bubbles at current scale.
+view resize: remeasure visible speech bubbles at the current scale.
 Measurements are presentation-only under the exact quoted rule above; cached local results
 do not acquire an authoritative or peer-deterministic simulation contract.
 
@@ -283,8 +283,7 @@ and authoritative late join. Old v4 runtimes may connect to a lobby but cannot s
 with these players. This fingerprint is compatibility metadata, not cryptographic authentication.
 Standalone recording also rejects a changed fingerprint with the existing state_resource error.
 Desktop, web and both Android ABI players were rebuilt on 2026-10-06; web import was exercised
-in a packaged browser build, while Android device execution remains unverified. See
-[LUA_USABILITY.md](LUA_USABILITY.md#8-work-log) for release verification.
+in a packaged browser build, while Android device execution remains unverified.
 
 ## Official input and math composition (M3)
 
@@ -309,8 +308,7 @@ UIJoystick and a physical pad share axis names; a held UI stick writes those sam
 so the module does not add a second stick value. The native scalar 0.15 dead zone is
 applied once by input.axis/input.player.axis; the module applies none. Digital and
 analog directions sum, potentially cancel, and cap to 1. +Y is up; map movement onto
-XZ with z=-move.y. Screen/touch Y grows downward. Binding axes are optional; Wickbound
-uses keyboard only and retains its project-specific drag-anywhere stick.
+XZ with z=-move.y. Screen/touch Y grows downward. Binding axes are optional; a keyboard-only game can leave them out.
 
 Buttons OR each alias's held and first-frame pressed values independently. Repeated
 reads do not consume input. Engine onUpdate keyboard suppression while UIInput is
@@ -322,7 +320,7 @@ caller decides whether to move. They do not inspect/consume touches or pointer d
 For network gameplay, explicitly select the entity's player and mirror the project's
 network.actions/network.axes declarations (literal engine key names, not named Lua
 actions). Only include bound declared names; an undeclared alias fails even if another
-alias is held. Example for NetArena, which declares WASD and LeftX/LeftY:
+alias is held. Example for a game that declares WASD and LeftX/LeftY:
 
 ```lua
 local declarations = {actions={"W","A","S","D","Space","R"}, axes={"LeftX","LeftY"}}
@@ -561,7 +559,7 @@ With `network.mode: "authoritative"`, put `NetSync` on replicated entities and `
 controlled entities. `network.playerPrefab` can spawn one per ready player automatically.
 The server owns state; a client's frame-tagged inputs only enter its authenticated player stream.
 For example, a player script reads `input.player(self:get("NetPlayer").player)`. The template `player_controller.lua` reads the local controls, so a networked game uses its own player script.
-On an authoritative client, scripts on replicated (NetSync) entities it does not own do not run; put cosmetic motion of such an entity on a plain entity's script (`samples/NetChase/scripts/spin.lua` spins the `Target` crystal from an entity `Target Spin`).
+On an authoritative client, scripts on replicated (NetSync) entities it does not own do not run; put cosmetic motion of such an entity on a plain entity's script.
 
 Clients predict their owned entities, interpolate remote replicated entities and continue running
 local/unreplicated scripts (UI/cameras). Guard server-only level/spawn/score logic with
@@ -579,7 +577,7 @@ enough: the player enters when the server's script called `net.admit(id)`, typic
 client sent (its join name carrying a ticket, verified over a `link`); `net.kick {player=, reason=}` may be called
 from the server's scripts to refuse it. An admission is for one visit. When a match stops because the server is gone, a client's
 scripts keep running locally: check `net.state()` (`state: "error"`, `sync.state: "stopped"`) or `onNetState` and tell
-the player (`games/OnlineRPG/scripts/connect.lua`).
+the player.
 
 Mouse look in an authoritative match: `input.mouseDelta()`, `input.lockMouse()` and `input.mouseLocked()`
 work in local scripts (cameras), but raw mouse motion is not part of any player's input stream. A correction
@@ -587,8 +585,7 @@ restores Lua state and game data to the acknowledged frame and replays without m
 in `self`, in `game.set` or sent by RPC is taken back on every snapshot. Store it with `input.setLook(x, y)`
 instead (each -1..1, kept on the device outside checkpoints, ignored during replays) and declare `LookX`
 and/or `LookY` in `network.axes`: they use the RightX/RightY wire slots without a dead zone. Read it with
-`input.look()` or `input.player(id).look()` (returns x, y). `samples/NetChase/scripts/camera.lua` adds the
-mouse delta to the look each frame and `player.lua` turns it into the facing on the server and in prediction.
+`input.look()` or `input.player(id).look()` (returns x, y). lua` turns it into the facing on the server and in prediction.
 Lockstep and rollback matches carry the look axes too but still hide `mouseDelta`/`lockMouse` from scripts.
 
 Local input in an authoritative match: declared actions and axes are what the input stream carries (the same on the
@@ -598,7 +595,7 @@ text (`UIInput`) and keys that are not declared actions (`input.pressed("Enter")
 menu). It is never sent; tell the server with `net.rpc`. Corrections replay it with the frames it belonged to. While a
 `UIInput` has the focus the keyboard is also left out of the stream, so typing does not move the player. With
 networking enabled but no session (`net.state().state == "idle"`) `net.rpc` has nobody to send to and raises an error;
-`games/OnlineRPG/scripts/lib/session.lua` shows a wrapper that calls the handler directly offline.
+A small wrapper can call the handler directly when offline.
 
 `net.rpc("owner", "notice", self.id, "Hit!")` routes to the entity's NetSync.owner (0 means server).
 The handler receives the routing entity argument too: `net.on("notice", function(entityId, text)
@@ -616,9 +613,6 @@ and `net.serve` are tool commands; they do not add Lua callbacks or bindings.
 
 ### Playable network examples
 
-See `samples/NetCoop/scripts/game.lua` for a shared lockstep score, NetDuel for rollback
-competition, and NetArena for server-only scoring with NetSync HUD/target fields. Their
-player scripts read declared `input.player(id)` actions; offline practice uses ordinary input.
 Lobby buttons call net.host/join/ready/start before the match. Start restores the shared
 edit-time world, so local lobby messages never enter the deterministic match hash. During
 a match, gameplay uses synchronized reset actions rather than a local session control.
@@ -628,7 +622,6 @@ sampling, including short click pulses. Coordinates and gestures are local devic
 rollback/prediction replays only the recorded actions. NetPlayer/NetSync fields are reserved
 replication metadata and must not be included in NetSync.fields. Ordinary reflected fields
 such as Transform.position, MeshRenderer.color and UIText.text may be selected.
-See [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md) for host/client/device setup.
 
 
 ## Default project examples and editing
@@ -647,6 +640,6 @@ updates. Scene transitions reacquire handles; there is no global handle cache. S
 coin/rotation/bob/restart scripts keep their existing scene/self operations.
 
 [EDITING.md](../templates/default/EDITING.md) maps actual game edits to params, scene UI,
-coin score/count and verification. samples/Hello is regenerated from this template.
+coin score/count and verification. `tests/fixtures/Hello` is a generated copy of this template used by tests.
 Required-only helper caching and widget single-component visibility limits remain as
 documented above; no optional dialog/effect owner framework was added.

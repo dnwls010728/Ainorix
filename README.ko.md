@@ -8,19 +8,11 @@ AI 에이전트가 사람만큼 쉽게 조작하고 검증할 수 있도록 만�
 에디터가 하는 모든 일은 하나의 레지스트리에 등록된 명령이고, 같은 명령을 CLI, HTTP, MCP로 호출할 수 있습니다.
 그래서 에이전트와 사람이 같은 세션에서 동시에 작업할 수 있습니다.
 
-![네이티브 에디터 - Showcase 샘플](docs/images/native-editor.png)
+![네이티브 에디터 - games/RPG](docs/images/native-editor.png)
 
-| 게임 뷰 (`oe render samples/Showcase`) | |
+| 게임 뷰 (`oe render games/RPG --renderer gpu --frames 460`) | |
 |---|---|
-| ![Showcase 렌더](docs/images/showcase.png) | glTF 여우(플레이어 조작, 추적 카메라), 절차적 텍스처, 그림자, 점광원. 결정적인 소프트웨어 렌더러의 출력입니다. 게임 창, 웹 빌드, 에디터 뷰는 같은 장면을 GPU 렌더러로 그립니다. |
-
-VFX 생성·갱신 채널을 수식으로 제어할 수 있습니다. 이펙트 > 수식에서 입력·검증·되돌리기를 지원하며, `vfx.expression_eval`로 결과와 계산 비용을 확인합니다. VFXLab의 `effects/spiral_expressions.vfx.json` 또는 `scenes/expressions.scene.json`에서 확인하세요. [명세와 검증](docs/VFX_PHASE5B.md).
-
-VFXLab에 스크립트 없이 동작하는 얼음 기둥·회오리·보호막·충격파·비/눈·힐링 효과 6종이 추가됐습니다. 같은 이름의 이펙트 에셋 또는 씬을 열어 확인하세요. [예제와 검증 기록](docs/VFX_PHASE5B_PLUS.md).
-
-이펙트의 **값 노드**에서 생성·갱신 수식을 편집할 수 있습니다. 컴파일러 검증·되돌리기·수식 편집을 공유하며, 에이전트는 `vfx.expression_graph` / `vfx.expression_source`를 사용합니다. [사용법과 제한](docs/VFX_PHASE5C.md).
-
-6종 표현식 이펙트를 기본 프리셋으로 제공합니다. 이펙트 > 새 이펙트 또는 `vfx.create {path,preset}`으로 생성하면 메시·텍스처·머티리얼이 프로젝트에 함께 설치됩니다. [사용법과 제한](docs/VFX_PHASE5D.md).
+| ![HD-2D 마을](docs/images/rpg.png) | `games/RPG`, HD-2D 마을: 생성된 복셀 지형 위의 픽셀 아트 빌보드, 모델링된 집, 흔들리는 풀과 나무, 낮밤 순환, 안개, 블룸, 컬러 그레이딩, 피사계 심도. 소프트웨어 렌더러는 같은 장면을 테스트와 해시용으로 결정적으로 그립니다. |
 
 ## 무엇이 다른가
 
@@ -31,7 +23,7 @@ VFXLab에 스크립트 없이 동작하는 얼음 기둥·회오리·보호막·
   플랫폼에서 같은 프레임 해시를 냅니다. 에이전트가 게임을 진행시키고, 입력을 넣고, 스크린샷을 찍어 직접 확인합니다.
 - **설치할 것이 없음.** Windows에서는 Visual Studio 2022만 있으면 됩니다. Lua, Jolt Physics, Box2D, sokol_gfx,
   stb, cgltf, Dear ImGui가 저장소에 포함되어 있고, 웹과 Android 플레이어 런타임은 `runtime/`에 미리 빌드되어 있습니다.
-- **엔진이냐 프로젝트냐.** Lua 스크립트로 표현할 수 있는 동작은 엔진 컴포넌트가 아니라 프로젝트(템플릿, 샘플)에
+- **엔진이냐 프로젝트냐.** Lua 스크립트로 표현할 수 있는 동작은 엔진 컴포넌트가 아니라 프로젝트(템플릿, 게임)에
   둡니다. 엔진에는 스크립트가 할 수 없는 것과 두 렌더러 및 결정적 코어가 일치해야 하는 것만 남깁니다.
 
 ## 빠른 시작
@@ -75,7 +67,7 @@ oe render MyGame --frames 120 --out shot.png
 
 | 방법 | 사용법 |
 |---|---|
-| MCP (Claude Code 등) | `oe mcp <project>`: 모든 명령이 도구가 되고 스크린샷은 이미지로 돌아옵니다. 엔진을 빌드하면 [.mcp.json](.mcp.json)이 `samples/Hello`를 연결합니다 |
+| MCP (Claude Code 등) | `oe mcp <project>`: 모든 명령이 도구가 되고 스크린샷은 이미지로 돌아옵니다. 엔진을 빌드하면 [.mcp.json](.mcp.json)이 `games/RPG`를 연결합니다 |
 | 사람이 연 에디터에 연결 | `oe mcp --connect 7777`, MCP 없이는 `oe exec --connect 7777 <command> [json]`, `oe script --connect 7777`. 편집 내용이 에디터에 바로 보입니다 |
 | CLI와 스크립트 | `oe exec`, `oe script` (JSON 입출력, 실패 시 종료 코드 1) |
 | HTTP | `POST http://127.0.0.1:7777/api/call`, 본문 `{"command": "...", "args": {...}}` |
@@ -107,13 +99,12 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 스크립트 탭 우클릭으로 닫기·다른 탭 닫기·전체 닫기를 선택하며, 미저장 변경은 확인 후 처리합니다. 입력 중 Lua API와 파일 내 이름을 자동완성으로 제안합니다(Ctrl+Space: 목록, Tab/Enter: 삽입).
 셰이더 그래프에서 노드 연결·유니폼 편집·표면 미리보기를 제공하며, 셰이더에 연결된 머티리얼을 생성해 선택한 메시에 적용합니다. 에셋의 셰이더·머티리얼을 열거나 보기 > 셰이더 그래프를 선택하세요([안내](docs/SHADER_EDITOR.md)).
 
-
 ## 기능
 
 | 영역 | 내용 | 문서 |
 |---|---|---|
 | 렌더링 | 하나의 씬을 그리는 두 렌더러: GPU(sokol_gfx: D3D11, WebGL2, GLES3, MSAA, 필터링된 그림자)와 결정적인 멀티스레드 소프트웨어 렌더러. glTF 모델, PBR 머티리얼, 투명, 점광원/방향광, 그림자 | [RENDERING](docs/RENDERING.md) |
-| 포스트 프로세싱과 셰이더 | 노출과 톤 매핑, 블룸, 비네트, FXAA, 피사계 심도. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`) | [POSTPROCESS](docs/POSTPROCESS.md), [TOON](docs/TOON.md) |
+| 포스트 프로세싱과 셰이더 | 노출과 Reinhard/ACES 톤 매핑, 블룸, 비네트, FXAA, 피사계 심도, 거리 안개, 컬러 그레이딩. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`), 스프라이트에도 적용 가능 | [POSTPROCESS](docs/POSTPROCESS.md) |
 | 애니메이션 | 두 렌더러에서 동작하는 glTF 스켈레탈 애니메이션(관절 64개까지), `Animator`, Lua 재생 | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
 | VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |
@@ -124,7 +115,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 스크립팅 | 플레이 세션마다 샌드박스된 Lua 5.4, 핫 리로드, 파일과 줄 번호가 있는 오류, 정적 검사, 트윈 | [SCRIPTING](docs/SCRIPTING.md) |
 | 입력 | 키보드, 마우스, 멀티 터치, 게임패드(6축, 공통 데드존). 모두 API로 주입 가능 | [INPUT](docs/INPUT.md), [TOUCH](docs/TOUCH.md) |
 | 세이브 | `save.get/set/delete/flush` 슬롯. 도구 세션은 `--save-dir`가 없으면 메모리에만 저장 | [SAVE](docs/SAVE.md) |
-| 네트워킹 | 선택 사항: 로비와 RPC, 락스텝, 롤백, 예측과 보간을 가진 권위 서버 복제. UDP, TCP, WebSocket. 전용 서버 | [NETWORK](docs/NETWORK.md), [NETWORK_SAMPLES](docs/NETWORK_SAMPLES.md) |
+| 네트워킹 | 선택 사항: 로비와 RPC, 락스텝, 롤백, 예측과 보간을 가진 권위 서버 복제. UDP, TCP, WebSocket. 전용 서버 | [NETWORK](docs/NETWORK.md) |
 
 ## 플랫폼
 
@@ -140,22 +131,14 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 플레이어가 쓰는 엔진 C++를 바꾼 뒤에는 런타임을 다시 빌드합니다: `build_web.bat`(Emscripten SDK 필요,
 `set EMSDK=...`)과 `build_android.bat`(Android NDK 필요). 그 뒤 `runtime/`을 커밋합니다.
 
-## 샘플과 게임
-
-`oe run <경로>`로 실행하거나 `oe editor <경로>`로 엽니다.
+## 예제 게임
 
 | 프로젝트 | 보여주는 것 |
 |---|---|
-| `samples/Hello` | `oe new` 템플릿: 두 레벨짜리 코인 게임 |
-| `samples/Showcase` | 렌더링: 애니메이션되는 glTF 여우, 그림자, 점광원, 포스트 프로세싱 프리셋 |
-| `samples/Platformer`, `samples/Dungeon` | Box2D 기반 2D 횡스크롤과 탑다운 액션: 타일맵, 오토타일, 스프라이트 애니메이션 |
-| `samples/Wickbound` | 완성된 10분짜리 서바이버 로그라이트: 스크립트가 붙은 프리팹, 2D 조명, 메뉴와 대화상자, 세이브 |
-| `samples/FPS` | 1인칭 슈터: 마우스 룩, 히트스캔, 움직이는 표적 |
-| `samples/HD2D`, `samples/Water` | 피사계 심도가 있는 3D 세계의 픽셀 아트 스프라이트, 셰이더 그래프로 만든 바다 |
-| `samples/ShaderLab`, `samples/WuwaToon`, `samples/VFXLab` | 표면 셰이더 그래프, 툰 셰이딩 연구, 파티클과 트레일 이펙트 |
-| `samples/NetCoop`, `NetDuel`, `NetArena`, `NetChase` | 락스텝 협동, 롤백 대전, 권위 서버 아레나와 3인칭 레이스. 게임 내 로비 포함 |
-| `games/OnlineRPG` | HD-2D 그래픽의 온라인 RPG 프로토타입(로그인 서버 + 언제든 입장 가능한 채널 서버): 바닥 아이템, 줍기, 가방, 버리기, 채팅과 말풍선 — 설계 문서: [docs/ONLINERPG.md](docs/ONLINERPG.md) |
-| `games/DongleZoo` | 출시 가능한 세로형 모바일 머지 퍼즐: 상점, 미션, 호스트 브리지를 통한 광고와 결제 — 설계 문서: [docs/DONGLEZOO.md](docs/DONGLEZOO.md) |
+| `games/RPG` | three.js 프로토타입을 옮긴 HD-2D 마을: 생성된 복셀 지형, 모델링된 목조 가옥, 빌보드, 흔들리는 풀과 나무, 하늘·구름·달·산, 물, 파티클, 낮밤 순환, 궤도 카메라. 모든 그림은 이미지 생성으로 만들었습니다. 설계 노트: [docs/RPG.md](docs/RPG.md) |
+
+`oe run games/RPG`로 실행하거나 `oe editor games/RPG`로 엽니다. `oe new <dir>`는 `templates/default`로 작은 시작용
+게임을 만듭니다.
 
 ## 저장소 구조
 
@@ -175,7 +158,7 @@ engine/team       에이전트 팀 (게임에 링크되지 않음)
 engine/platform   Platform.h + win32, web, android, null 구현
 tools/oe          CLI          tools/player   게임 런타임          tools/shaders  셰이더 재생성
 tests/            자체 테스트 (WebAssembly로도 실행)
-templates/        `oe new`가 복사하는 것          samples/, games/   위 표 참고
+templates/        `oe new`가 복사하는 것          games/   예제 게임
 runtime/          미리 빌드된 웹, Android 플레이어 런타임
 third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
@@ -190,7 +173,7 @@ third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear Im
 | [docs/DESIGN.md](docs/DESIGN.md) | 불변 조건, 코드 위치, 코드 스타일, 완료의 정의, 세션 간 인계 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 계층 구조 |
 | [docs/API.md](docs/API.md) | 모든 명령과 컴포넌트. `oe api --markdown`으로 생성 |
-| 기능 문서 | [기능](#기능) 표 참고. 기능 설명과 사용법으로 시작하고, 끝에 완료/미검증 항목을 적은 작업 로그가 있음 |
+| 기능 문서 | [기능](#기능) 표 참고. 기능 설명과 사용법으로 시작하고, 끝에 미해결 항목이 있음 |
 | [docs/PLATFORMS.md](docs/PLATFORMS.md), [docs/ANDROID.md](docs/ANDROID.md), [docs/APPLE.md](docs/APPLE.md) | 플랫폼 상태와 포팅 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 기능 로드맵과 우선순위 작업 목록 |
 | [docs/NETWORK_NOTES.md](docs/NETWORK_NOTES.md), [docs/TEAM_LOG.md](docs/TEAM_LOG.md) | 기능 문서에서 분리한 작업 로그와 구현 노트 |
@@ -207,6 +190,3 @@ third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear Im
 
 MIT — [LICENSE](LICENSE). `third_party/`의 코드는 각자의 라이선스를 따릅니다(MIT, zlib, 퍼블릭 도메인, Roboto 폰트는
 Apache 2.0).
-
-VFX 6단계: 씬 파티클은 `.vfx.json` + `VFXSystem`으로 통합했습니다. `ParticleEmitter`는 내부 설정·실행 상태만 담당합니다.
-독립 `particles.*`와 `self:burst`는 제거했습니다. 직접 사용하는 `Trail`은 유지합니다. [통합·이관 안내](docs/VFX_PHASE6.md).

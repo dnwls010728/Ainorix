@@ -50,19 +50,10 @@ in [POSTPROCESS.md](POSTPROCESS.md). No runtime C++ or shader backend changed he
 Headless inspection:
 
 ```bat
-oe editor samples/ShaderLab --shader materials/pulse.shader.json --screenshot build/shader.png --lang ko
+oe editor games/RPG --shader materials/water.shader.json --screenshot build/shader.png --lang ko
 ```
 
-## Implementation status (work log)
+## Status
 
-- [x] Graph workspace: asset entry points, node canvas, connections, values and outputs.
-- [x] Graph validation, local undo/redo, saving and unsaved-change protection.
-- [x] Live surface preview, material creation/editing and assignment to selected meshes.
-- [x] Windows Release build and all 251 tests pass, including graph validation and the
-      event-driven create/save/apply/reopen and unsaved-change workflows. English and
-      Korean D3D11 editor screenshots inspected; documentation and translations updated.
-- [x] Card bodies and headers both accept dragging, with input/output pins reserved for
-      wiring. Event-driven header/body/output-card drags, movement outside the original
-      card, release and zoom checks pass; all 252 Windows tests pass.
-- [ ] Linux/EGL editor build and visual verification were not available in this Windows
-      environment. Build with CMake/Ninja and inspect the same ShaderLab workspace there.
+- [ ] Linux/EGL editor build and visual check of the Shaders workspace.
+

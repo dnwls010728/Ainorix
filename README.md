@@ -6,19 +6,11 @@ A small C++17 game engine built so that AI agents can drive and verify it as eas
 Everything the editor does is a command in one registry, and the same commands are reachable from the
 CLI, HTTP and MCP — an agent and a person can work in the same session at the same time.
 
-![Native editor - Showcase sample](docs/images/native-editor.png)
+![Native editor - games/RPG](docs/images/native-editor.png)
 
-| Game view (`oe render samples/Showcase`) | |
+| Game view (`oe render games/RPG --renderer gpu --frames 460`) | |
 |---|---|
-| ![Showcase render](docs/images/showcase.png) | A glTF fox (player controls, follow camera), procedural textures, shadows and point lights, drawn by the deterministic software renderer. The game window, the web build and the editor views draw the same scene with the GPU renderer. |
-
-Typed VFX expressions now animate Birth/Update channels without gameplay scripts. Effects > Expressions edits source with validation and undo; `vfx.expression_eval` diagnoses typed results/costs. Try VFXLab `effects/spiral_expressions.vfx.json` or `scenes/expressions.scene.json`. [Contract and verification](docs/VFX_PHASE5B.md).
-
-VFXLab now also includes six script-free effect proofs: ice pillar, tornado, shield dome, shockwave, rain/snow and healing aura. Open their matching effect assets or scenes. [Examples and recorded checks](docs/VFX_PHASE5B_PLUS.md).
-
-Effects now includes **Value Nodes** for Birth/Update expressions, with compiler validation, shared undo and source editing. Agents use `vfx.expression_graph` / `vfx.expression_source`. [Usage and limits](docs/VFX_PHASE5C.md).
-
-Six expression effects are now portable built-in presets: create them in Effects > New Effect or with `vfx.create {path,preset}`. Meshes, textures and materials install into the project automatically. [Release usage and limits](docs/VFX_PHASE5D.md).
+| ![HD-2D village](docs/images/rpg.png) | `games/RPG`, an HD-2D village: pixel-art billboards in a generated voxel world with modelled houses, swaying grass and trees, a day/night cycle, fog, bloom, colour grading and depth of field. The software renderer draws the same scene deterministically for tests and hashes. |
 
 ## Why it is different
 
@@ -31,7 +23,7 @@ Six expression effects are now portable built-in presets: create them in Effects
 - **Nothing to install.** Visual Studio 2022 is the only requirement on Windows. Lua, Jolt Physics, Box2D,
   sokol_gfx, stb, cgltf and Dear ImGui are vendored; the web and Android player runtimes are prebuilt in
   `runtime/`.
-- **Engine or project.** Behaviour a Lua script can express lives in the project (templates and samples), not in
+- **Engine or project.** Behaviour a Lua script can express lives in the project (templates and games), not in
   engine components. The engine keeps what scripts cannot do and what both renderers and the deterministic core
   must agree on.
 
@@ -76,7 +68,7 @@ oe render MyGame --frames 120 --out shot.png
 
 | Method | How |
 |---|---|
-| MCP (Claude Code and others) | `oe mcp <project>`: every command is a tool and screenshots come back as images. [.mcp.json](.mcp.json) connects `samples/Hello` once the engine is built |
+| MCP (Claude Code and others) | `oe mcp <project>`: every command is a tool and screenshots come back as images. [.mcp.json](.mcp.json) connects `games/RPG` once the engine is built |
 | Attach to a person's editor | `oe mcp --connect 7777`, or without MCP `oe exec --connect 7777 <command> [json]` and `oe script --connect 7777`; the edits show up live in the editor |
 | CLI and scripts | `oe exec`, `oe script` (JSON in and out, exit code 1 on failure) |
 | HTTP | `POST http://127.0.0.1:7777/api/call` with `{"command": "...", "args": {...}}` |
@@ -115,10 +107,10 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 | Area | What is there | Doc |
 |---|---|---|
 | Rendering | Two renderers for one scene: GPU (sokol_gfx: D3D11, WebGL2, GLES3; MSAA, filtered shadows) and a deterministic multithreaded software renderer. glTF models, PBR metallic-roughness materials, transparency, point and directional lights, shadows | [RENDERING](docs/RENDERING.md) |
-| Post-processing and shaders | Exposure and tone mapping, bloom, vignette, FXAA, depth of field; surface shader graphs (`.shader.json`) with color, emission, vertex offset and normal outputs | [POSTPROCESS](docs/POSTPROCESS.md), [TOON](docs/TOON.md) |
+| Post-processing and shaders | Exposure with Reinhard/ACES tone mapping, bloom, vignette, FXAA, depth of field, distance fog, colour grading; surface shader graphs (`.shader.json`) with color, emission, vertex offset and normal outputs, also on sprites | [POSTPROCESS](docs/POSTPROCESS.md) |
 | Animation | glTF skeletal animation (TRS, skins, up to 64 joints) in both renderers, `Animator`, Lua playback | [ANIMATION](docs/ANIMATION.md) |
-| Particles | Deterministic emitters with birth shapes, lifetime curves, flipbooks, turbulence, velocity alignment; `Trail` ribbons | [PARTICLES](docs/PARTICLES.md) |
-| VFX authoring | Reusable `.vfx.json` assets and linked VFXSystem, named parameters, Lua control, hot reload and total budgets; Effects panel with grouped fields, curves/gradients, isolated playback, document undo and a reference node graph; 15 presets (including sword slash and six expression effects), particle materials/mesh batching, two-anchor ribbons and bounded death chains, validation and `vfx.*` preview/analysis Axis motion curves, base pivots and four custom material channels support curve-only effects such as growing ice pillars. | [VFX](docs/VFX.md) |
+| Particles | Deterministic emitters (in `.vfx.json` assets) with birth shapes, lifetime curves, flipbooks, turbulence, velocity alignment; `Trail` ribbons | [PARTICLES](docs/PARTICLES.md) |
+| VFX authoring | Reusable `.vfx.json` assets and linked VFXSystem, named parameters, Lua control, hot reload and total budgets; Effects panel with grouped fields, curves/gradients, isolated playback, document undo and a reference node graph; 15 presets (including sword slash and six expression effects), particle materials/mesh batching, two-anchor ribbons and bounded death chains, validation and `vfx.*` preview/analysis; axis motion curves, pivots, custom material channels and typed expressions with value nodes | [VFX](docs/VFX.md) |
 | Physics | 3D with Jolt and 2D with Box2D: rigid bodies, triggers, character controllers, one-way platforms, collision layers, raycasts; deterministic | [PHYSICS](docs/PHYSICS.md) |
 | 2D | Sprites and sheet animation, text tilemaps with tileset files, autotiling and per-tile collision, 2D lights and darkness, HD-2D sprites in a lit 3D world | [2D](docs/2D.md) |
 | UI | Text (TrueType, rich text, auto-shrink), panels, buttons (toggles, radio groups, icons), images, sliders, text fields, drop-downs, on-screen joystick, layouts, scroll views, entrance motion, keyboard/gamepad focus; every element takes 9-slice images instead of colors | [UI](docs/UI.md) |
@@ -126,7 +118,7 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 | Scripting | Sandboxed Lua 5.4 per play session, hot reload, errors with file and line, static checks, tweens | [SCRIPTING](docs/SCRIPTING.md) |
 | Input | Keyboard, mouse, multi-touch, gamepads (six axes, shared dead zone), all injectable through the API | [INPUT](docs/INPUT.md), [TOUCH](docs/TOUCH.md) |
 | Save data | Slots with `save.get/set/delete/flush`; memory-only in tool sessions unless `--save-dir` is given | [SAVE](docs/SAVE.md) |
-| Networking | Opt-in: lobbies and RPC, lockstep, rollback, authoritative replication with prediction and interpolation; UDP, TCP, WebSocket; dedicated server | [NETWORK](docs/NETWORK.md), [NETWORK_SAMPLES](docs/NETWORK_SAMPLES.md) |
+| Networking | Opt-in: lobbies and RPC, lockstep, rollback, authoritative replication with prediction and interpolation; UDP, TCP, WebSocket; dedicated server | [NETWORK](docs/NETWORK.md) |
 
 ## Platforms
 
@@ -142,22 +134,14 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 After changing engine C++ that the player uses, rebuild the runtimes: `build_web.bat` (needs the Emscripten SDK,
 `set EMSDK=...`) and `build_android.bat` (needs the Android NDK), then commit `runtime/`.
 
-## Samples and games
-
-Run any of them with `oe run <path>` or open it with `oe editor <path>`.
+## Example game
 
 | Project | What it shows |
 |---|---|
-| `samples/Hello` | The `oe new` template: a two-level coin game |
-| `samples/Showcase` | Rendering: textured glTF fox with animation, shadows, point lights, post-processing presets |
-| `samples/Platformer`, `samples/Dungeon` | 2D side-scroller and top-down action on Box2D: tilemaps, autotiling, sprite animation |
-| `samples/Wickbound` | A complete 10-minute survivor roguelite: prefabs with scripts, 2D lighting, menus and dialogs, save data |
-| `samples/FPS` | First-person shooter: mouse look, hitscan, moving targets |
-| `samples/HD2D`, `samples/Water` | Pixel-art sprites in a lit 3D world with depth of field; a rolling sea from a shader graph |
-| `samples/ShaderLab`, `samples/WuwaToon`, `samples/VFXLab` | Surface shader graphs, a toon shading study, particle and trail effects |
-| `samples/NetCoop`, `NetDuel`, `NetArena`, `NetChase` | Lockstep co-op, rollback versus, authoritative arena and third-person race, with in-game lobbies |
-| `games/OnlineRPG` | An online RPG prototype in the HD-2D look with a login server and channel servers players enter at any time: ground items, pick-up, bag, drop, chat and speech bubbles — design document: [docs/ONLINERPG.md](docs/ONLINERPG.md) |
-| `games/DongleZoo` | A shippable portrait merge puzzle for phones: shop, missions, ads and purchases through the host bridge — design document: [docs/DONGLEZOO.md](docs/DONGLEZOO.md) |
+| `games/RPG` | An HD-2D village ported from a three.js prototype: a generated voxel terrain, modelled half-timbered houses, billboards, swaying grass and trees, sky, clouds, moon and mountains, water, particles, a day/night cycle and an orbit camera. All pictures were made with image generation. Design notes: [docs/RPG.md](docs/RPG.md) |
+
+Run it with `oe run games/RPG` or open it with `oe editor games/RPG`. `oe new <dir>` creates a small starting game
+from `templates/default`.
 
 ## Repository layout
 
@@ -176,8 +160,8 @@ engine/editor     native editor (never linked into games)
 engine/team       agent team (never linked into games)
 engine/platform   Platform.h + win32, web, android, null implementations
 tools/oe          CLI          tools/player   game runtime          tools/shaders  shader regeneration
-tests/            self tests (also run as WebAssembly)
-templates/        what `oe new` copies          samples/, games/   see above
+tests/            self tests (also run as WebAssembly) and their fixture projects
+templates/        what `oe new` copies          games/   the example game
 runtime/          prebuilt web and Android player runtimes
 third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
@@ -193,7 +177,7 @@ A longer map of the code is in [AGENTS.md](AGENTS.md); the structure is drawn in
 | [docs/DESIGN.md](docs/DESIGN.md) | Invariants, where code goes, code style, definition of done, hand-over between sessions |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the layers fit together |
 | [docs/API.md](docs/API.md) | Every command and component, generated by `oe api --markdown` |
-| Feature docs | The table under [Features](#features): each starts with what the feature is and how to use it, and ends with a work log of what is done and what is not verified |
+| Feature docs | The table under [Features](#features): each starts with what the feature is and how to use it, and ends with its open items |
 | [docs/PLATFORMS.md](docs/PLATFORMS.md), [docs/ANDROID.md](docs/ANDROID.md), [docs/APPLE.md](docs/APPLE.md) | Platform status and porting |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Feature roadmap and the prioritized task list |
 | [docs/NETWORK_NOTES.md](docs/NETWORK_NOTES.md), [docs/TEAM_LOG.md](docs/TEAM_LOG.md) | Work logs and implementation notes that outgrew their feature doc |
@@ -211,6 +195,3 @@ dependencies; and a change is reported with what was and was not verified.
 
 MIT — see [LICENSE](LICENSE). Third-party code in `third_party/` keeps its own licenses (MIT, zlib, public domain,
 Apache 2.0 for the Roboto font).
-
-VFX phase 6: scene particles use `.vfx.json` + `VFXSystem`; `ParticleEmitter` is internal settings/runtime only.
-Standalone `particles.*`/`self:burst` are removed. Direct `Trail` remains available. See [consolidation and migration](docs/VFX_PHASE6.md).

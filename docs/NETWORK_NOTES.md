@@ -4,6 +4,11 @@ The design rules and the surface for games are in [NETWORK.md](NETWORK.md); read
 log (docs/DESIGN.md §5) and the notes written while each milestone was implemented: wire formats, bounds, recording
 contracts, limits and what was verified on which platform. Section numbers such as "§7" refer to NETWORK.md.
 
+Entries are history. They mention sample projects, games, scripts and docs that have since been removed from the
+repository (`samples/*`, `games/OnlineRPG`, `games/DongleZoo`, `NETWORK_SAMPLES.md`, `ONLINERPG_SERVERS.md`,
+`tests/network_browser_fixture.py`, `tests/online_rpg_test.py`); the engine behaviour they describe is still covered by
+the `Network*`, `Link*` and snapshot tests in `tests/tests.cpp`.
+
 ## Implementation status (work log)
 
 Definition of done for every milestone: code + tests green + docs/API.md regenerated if commands

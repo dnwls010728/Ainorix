@@ -52,13 +52,13 @@ task conflict, follow the task but say which rule you broke and why (PR descript
 | Rendering | both renderers (`render/SoftwareRenderer.cpp`, `render/GpuRenderer.cpp`, `shaders/Shaders.glsl` + regenerated `.h`) | `docs/RENDERING.md` |
 | Platform / OS feature | `engine/platform/<name>/` behind `Platform.h` | `docs/PLATFORMS.md`, `CMakeLists.txt` |
 | CLI-only tooling (packaging, process launching) | `tools/oe/main.cpp`; portable logic it needs (formats, encoders) in `engine/app` or `engine/core` so tests reach it | `oe help` text, README command list |
-| Default project | `templates/default/`, then regenerate `samples/Hello` | `TemplateGamePlaythrough` test |
+| Default project | `templates/default/` (`tests/fixtures/Hello` is a generated copy used by tests: regenerate it with `oe new`) | `TemplateGamePlaythrough` test |
 
 **Engine or project?** Before adding a component, a field or a system, ask whether a project script
 could do it. Behaviour and presentation choices that Lua can express through the existing API
 (spinning or moving an entity, player controls, sprites that face the camera, spawn patterns, game
 rules) belong to the project: put them in `templates/default/scripts/` when every new game wants them,
-otherwise in the sample that needs them. The engine keeps what scripts cannot do, or what must be
+otherwise in the game that needs them. The engine keeps what scripts cannot do, or what must be
 identical in both renderers and in the deterministic core: rendering, physics, audio, UI layout,
 networking, asset loading, and systems that have to run at a point in the frame scripts cannot reach
 (`CameraFollow` runs after physics). `Rotator`, `Velocity`, `PlayerController` and `Sprite.billboard`
@@ -119,6 +119,9 @@ Large features are built so that another agent can continue at any point:
    A feature doc starts with what the feature is and how to use it; the work log is its **last** section.
    When the log and its implementation notes outgrow the doc, they move to a file beside it
    (`docs/NETWORK_NOTES.md`, `docs/TEAM_LOG.md`) and the doc links to it.
+   When the feature is complete, replace the log with a short **Status** section that keeps only what is still
+   open or unverified; the milestone history stays in git. Contracts discovered along the way belong in the
+   doc's reference sections, not in the log.
 2. Commit and push after every milestone and tick its line in the same commit. Never leave
    finished work only in a working tree.
 3. When something cannot be done or checked in the current environment, leave an unchecked line
@@ -135,7 +138,8 @@ Large features are built so that another agent can continue at any point:
 - PR description: summary, per-feature sections, how it was verified, what was not verified,
   follow-ups. Use `.github/pull_request_template.md`.
 - Do not commit build outputs (`build/`, `dist/`), local paths, credentials or keystores. The
-  only committed binaries are the prebuilt runtimes in `runtime/` and sample assets.
+  only committed binaries are the prebuilt runtimes in `runtime/`, game and test-fixture assets, and the
+  embedded VFX preset files in `engine/app/vfx-presets/`.
 
 ## 7. Reporting
 

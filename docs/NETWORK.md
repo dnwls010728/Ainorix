@@ -87,8 +87,8 @@ persistent world that starts without players and survives being empty (see NETWO
 until the server's Lua called `net.admit(id)`, so the game can verify it first. A server's scripts may also call
 `net.kick`. The engine stops there: accounts, tickets, channel lists and persistence are services of the game,
 reached with `link` (framed TCP from Lua, SCRIPTING.md) and told apart per process with launch parameters
-(`oe serve-game ... --set channel=2`, `game.arg`). `games/OnlineRPG/server/` is such a back end
-([ONLINERPG_SERVERS.md](ONLINERPG_SERVERS.md)); a project's `server/` folder is never packaged.
+(`oe serve-game ... --set channel=2`, `game.arg`). A project's `server/` folder holds such a back end and
+is never packaged.
 
 Pick by game: lockstep is the cheapest and fits the engine best; rollback needs the snapshot
 work; authoritative is the way for many players and cheat resistance. All use the same session,
@@ -228,9 +228,8 @@ hosting cannot accept connections).
   hashes equal at every checked frame. Same test over loopback and real localhost TCP/UDP sockets.
 - Rollback: forced misprediction; after re-simulation the hash equals a never-predicted run.
 - Authoritative: server + clients converge; prediction error bounded; spawn/despawn order stable.
-- Samples are acceptance tests: `samples/NetCoop` (lockstep co-op), `samples/NetDuel` (rollback
-  versus) and `samples/NetArena` (authoritative). They replaced the originally planned networked
-  Platformer/FPS variants; see [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md).
+- Acceptance: the engine tests run lockstep, rollback and authoritative matches over loopback and real sockets
+  (`Network*` tests in `tests/tests.cpp`).
 - Everything also runs as WebAssembly where applicable (`node build-web/bin/oe_tests.js`).
 
 ## 11. Status and details
@@ -248,5 +247,4 @@ The work log and the notes written while each milestone was built live in
 | Dedicated server, WebSocket, editor previews, platform verification | M7, M8a/M8b |
 | Later corrections | Audit follow-up |
 
-Using the feature from a game: §8 above, [SCRIPTING.md](SCRIPTING.md) (Lua `net.*`) and the sample games in
-[NETWORK_SAMPLES.md](NETWORK_SAMPLES.md).
+Using the feature from a game: §8 above and [SCRIPTING.md](SCRIPTING.md) (Lua `net.*`).

@@ -5,29 +5,10 @@ owns a memory store by default, including render, script, MCP and test sessions.
 An explicit `--save-dir` enables JSON files outside the project, without exposing
 arbitrary file paths through commands or Lua. Slots are independent objects.
 
-## Implementation status (work log)
+## Status
 
-- [x] P1.1: Memory/directory stores, validated JSON values and slots, atomic file
-      replacement, command and Lua APIs, CLI opt-in, restart/corruption tests.
-      Windows Release build and all 65 tests pass, including three save tests
-      and TemplateGamePlaythrough. CLI script/exec across processes restores
-      score 123; default exec remains empty in memory mode. Existing editor
-      C4458 warnings remain. Non-Windows build checks follow in P1.2.
-- [x] P1.2: Player defaults: Windows user data, Android internal data, browser
-      localStorage; platform build and runtime verification.
-      Windows player launches restore counters 0/1 then 1/2. Browser reload
-      restores 0/1 then 1/2 (visible HUD and Lua logs). Windows tests pass;
-      WebAssembly and Android arm64-v8a/x86_64 Release players build. Null
-      backend passes a Clang C++17 syntax/warnings check using the NDK toolchain.
-- [x] P1.3: User documentation, regenerated API, optional template high score,
-      refreshed prebuilt runtimes where toolchains exist; record remaining checks.
-      Template/sample records survive Play Again and sim.stop; the HUD was
-      inspected after collecting three coins (Best: 3). Windows 65 tests pass;
-      WebAssembly/Node 61 tests pass (GPU comparisons skip without a canvas).
-      The web and both Android prebuilt runtimes are refreshed.
-- [ ] Android save/restart on a device: no adb device was connected. Install a
-      save-probe APK, force-stop/relaunch, and check the internal slot JSON.
-- [ ] Native Linux full build/runtime: only the null source syntax check ran.
+- [ ] Android save/restart on a device (force-stop, relaunch, check the slot JSON).
+- [ ] Native Linux full build/runtime check.
 
 ## Player defaults
 

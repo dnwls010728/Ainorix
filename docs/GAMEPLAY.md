@@ -53,7 +53,6 @@ Names and payloads are the game's own protocol with its host (JSON-compatible ta
 `window.OEHost = { call: function (name, data) { ...; return true; } }` and answers with
 `Module.oeHostSend(name, data)`. Put that script in the project's `web/host.js`: `oe package --web` copies the `web/`
 folder next to `index.html` (it is not part of the game data) and loads `host.js` before the player.
-`games/DongleZoo/web/host.js` connects rewarded and interstitial ads to Google's H5 Games Ads this way.
 Windows and Android have no host yet (`host.call` returns false); a store SDK layer would implement
 `PlatformHostCall` / `PlatformHostPoll` (`engine/platform/Platform.h`).
 
