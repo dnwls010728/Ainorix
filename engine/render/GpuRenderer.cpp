@@ -917,7 +917,7 @@ struct GpuRenderer::Impl {
                     hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
                 }
             }
-            ExtendOffsetBounds(items, draws, view.shaderTime, lo, hi);
+            ExtendOffsetBounds(items, draws, lo, hi);
             if (anyCaster && lo.x <= hi.x) {
                 shadows = true;
                 fit = FitShadow(lo, hi, lights.dirs[0].dir, settings.shadowMapSize);

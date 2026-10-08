@@ -870,6 +870,7 @@ Json AssetManager::Info(const std::string& path) {
         out["emissive"] = graph->emissive;
         out["normal"] = graph->normal;
         out["offset"] = graph->offset;
+        if (graph->maxOffset >= 0) out["maxOffset"] = graph->maxOffset;
         out["uniforms"] = Json::MakeArray();
         for (const std::string& name : graph->uniformNames) out["uniforms"].push(name);
     } else if (kind == "font") {

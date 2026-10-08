@@ -29,6 +29,10 @@ struct ShaderGraph {
     // Optional outputs: `normal` replaces the world-space lighting normal per fragment;
     // `offset` moves each vertex in world space (evaluated per vertex, see ShaderVertexOffset).
     int normal = -1, offset = -1;
+    // Optional `maxOffset`: the largest distance (world units) `offset` moves a vertex, declared
+    // by the author like a cull margin. Renderers grow shadow bounds by it instead of running the
+    // vertex stage on the CPU; -1 = not declared (kDefaultOffsetMargin in RenderScene.h is used).
+    float maxOffset = -1;
     // Slots of the reserved uniforms `cameraPosition` (xyz, w = 1) and `lightDirection`
     // (unit vector toward the first directional light, w = 0); -1 = not declared. The
     // renderers fill them per frame (BuildDrawList), replacing defaults and overrides.

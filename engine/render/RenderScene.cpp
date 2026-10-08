@@ -702,14 +702,22 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
     }
 }
 
-void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, float time, Vec3& lo, Vec3& hi) {
+float OffsetMargin(const Material& material) {
+    if (!material.shader || material.shader->offset < 0) return 0;
+    return material.shader->maxOffset >= 0 ? material.shader->maxOffset : kDefaultOffsetMargin;
+}
+
+void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi) {
     for (const DrawCall& draw : draws) {
-        if (items[draw.item].unlit) continue;
-        ForEachVertexOffset(items[draw.item], draw, time, [&](uint32_t, const Vec3& wpos, const Vec3& offset) {
-            const Vec3 p = wpos + offset;
-            lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
-            hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
-        });
+        const RenderItem& it = items[draw.item];
+        if (it.unlit || !draw.material.shader || draw.material.shader->offset < 0) continue;
+        const float margin = OffsetMargin(draw.material);
+        const Vec3 &a = it.boundsMin, &b = it.boundsMax;
+        for (int c = 0; c < 8; ++c) {
+            const Vec3 p = it.world.TransformPoint(Vec3(c & 1 ? b.x : a.x, c & 2 ? b.y : a.y, c & 4 ? b.z : a.z));
+            lo = Vec3(std::min(lo.x, p.x - margin), std::min(lo.y, p.y - margin), std::min(lo.z, p.z - margin));
+            hi = Vec3(std::max(hi.x, p.x + margin), std::max(hi.y, p.y + margin), std::max(hi.z, p.z + margin));
+        }
     }
 }
 

@@ -255,6 +255,16 @@ depth-of-field depth pass and the editor selection outline. The displacement is
 render-only: physics, `physics.raycast` picking and `boundsMin`/`boundsMax` do not
 know about it. Shared vertices need a mesh with enough vertices, so use `plane64`
 (see [RENDERING.md](RENDERING.md)) rather than the 4-vertex `plane`.
+
+The shadow map is fitted to the scene bounds without running the vertex stage on
+the CPU (as Unreal's `Max World Position Offset Displacement` or Godot's
+`extra_cull_margin`): each displaced item's bounds are widened by a margin. The
+optional `"maxOffset": <number>` (world units, 0..65504, only with `offset`)
+declares the largest distance the graph moves a vertex; without it the margin is
+1 world unit. A graph that moves vertices further than its margin can have its
+shadow cut where it reaches past every other object of the scene, so declare
+`maxOffset` for large displacements. `shader.create`, `shader.check` and
+`asset.info` report a declared `maxOffset`.
 `shader.create`, `shader.check` and `asset.info` report `normal` and `offset`
 (-1 = absent). Prebuilt web and Android players older than this change ignore both
 outputs and reject graphs with more than 32 nodes until they are rebuilt.

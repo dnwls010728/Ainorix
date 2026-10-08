@@ -539,7 +539,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
             hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
         }
-        ExtendOffsetBounds(items, draws, view.shaderTime, lo, hi);
+        ExtendOffsetBounds(items, draws, lo, hi);
         if (anyCaster && lo.x <= hi.x) {
             ShadowMap& sm = lighting.shadow;
             sm.enabled = true;

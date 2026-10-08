@@ -75,9 +75,16 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
 // submesh uses. Does nothing for materials without such a graph.
 void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float time,
                          const std::function<void(uint32_t, const Vec3&, const Vec3&)>& fn);
-// Grows lo..hi (world space) to the places graph offsets move the vertices of lit items to, so
-// the shadow map both renderers fit to the scene bounds also covers displaced surfaces.
-void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, float time, Vec3& lo, Vec3& hi);
+// Cull margin (world units) of a draw whose graph has an `offset` output: the graph's declared
+// `maxOffset`, else kDefaultOffsetMargin; 0 for materials without such a graph.
+constexpr float kDefaultOffsetMargin = 1.0f;
+float OffsetMargin(const Material& material);
+// Grows lo..hi (world space) by the bounds of lit displaced items widened by their margin, so the
+// shadow map both renderers fit to the scene bounds also covers displaced surfaces. Like the
+// bounds margins of other engines it never runs the vertex stage on the CPU (that cost grew
+// with the vertex count every frame); a graph moving vertices further than it declares can
+// leave its shadow cut at the edge of the map.
+void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi);
 
 struct RenderDirLight {
     Vec3 dir;  // direction the light travels

@@ -1993,6 +1993,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         result["emissive"] = graph.emissive;
         result["normal"] = graph.normal;
         result["offset"] = graph.offset;
+        if (graph.maxOffset >= 0) result["maxOffset"] = graph.maxOffset;
         result["uniforms"] = Json::MakeArray();
         for (const std::string& name : graph.uniformNames) result["uniforms"].push(name);
         return result;

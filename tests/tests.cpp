@@ -8726,6 +8726,10 @@ TEST(ShaderGraphVertexOffset) {
     CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"texture","args":[0]}],"color":1,"offset":1})J"), graph, &err));
     CHECK(err.find("texture") != std::string::npos);
     CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":3})J"), graph, &err));
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"maxOffset":0.5})J"), graph, &err) && graph.maxOffset == 0.5f);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0})J"), graph, &err) && graph.maxOffset == -1);
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"maxOffset":-1})J"), graph, &err));
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"maxOffset":1})J"), graph, &err) && err.find("requires") != std::string::npos);
     CHECK(GetBuiltinMesh("plane64")->positions.size() == 65 * 65 && GetBuiltinMesh("plane64")->TriangleCount() == 64 * 64 * 2);
 
     Engine e;
@@ -8788,6 +8792,24 @@ TEST(ShaderGraphVertexOffset) {
         CHECK(red(pixel(sideways, Vec3(3, 1, 0))) < red(pixel(plain, Vec3(3, 1, 0))) / 2);
         return plain;
     };
+    // Shadow bounds grow by the declared maxOffset (else the default margin) without running the
+    // vertex stage on the CPU; items without an offset graph add nothing.
+    CHECK(Call(e, "shader.create", R"J({"path":"bounded.shader.json","graph":{"uniforms":{"shift":[3,1,0,0]},
+        "nodes":[{"op":"constant","value":[1,0,0,1]},{"op":"uniform","name":"shift"}],"color":0,"offset":1,"maxOffset":4}})J")["result"]["maxOffset"].asNumber() == 4);
+    CHECK(Call(e, "material.create", R"J({"path":"bounded.mat.json","values":{"shader":"bounded.shader.json","doubleSided":true}})J")["ok"].asBool());
+    auto offsetBounds = [&](const char* material) {
+        const std::string args = std::string(R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":")J") + material + "\"}}";
+        Call(e, "component.set", args.c_str());
+        const std::vector<RenderItem> items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+        Vec3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+        ExtendOffsetBounds(items, BuildDrawList(items, view.eye), lo, hi);
+        return std::make_pair(lo, hi);
+    };
+    const auto byDefault = offsetBounds("moved.mat.json"), declared = offsetBounds("bounded.mat.json");
+    CHECK(std::fabs((byDefault.second.x - byDefault.first.x) - (4 + 2 * kDefaultOffsetMargin)) < 1e-4f);
+    CHECK(std::fabs((declared.first.y + 4) - (byDefault.first.y + kDefaultOffsetMargin)) < 1e-4f);
+    CHECK(std::fabs(declared.second.x - declared.first.x - 12) < 1e-4f);
+    CHECK(offsetBounds("").first.x > 1e29f);
     const RenderTarget software = check(e.Renderer(), "software");
     // Depth of field reads the moved surface's depth (GPU: its own depth pass).
     CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"moved.mat.json"}})J")["ok"].asBool());
