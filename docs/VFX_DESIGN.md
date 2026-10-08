@@ -243,12 +243,96 @@ Each phase ends with the Definition of Done in DESIGN.md section 4 and a commit 
 - Tests: `GpuRendererMatchesSoftware` for the new ops, performance numbers recorded in the work log.
 - Difficulty: high. Risks: software/GPU parity, the 8-uniform limit, performance.
 
-### Phase 5 (optional): text-expression update rules
+### Phase 5 (optional): VFX motion, transform curves and bounded expressions
 
-Only if a need is proven. A bounded expression language over named inputs (`t`, `age`, `rand`, `speed`,
-...) evaluated per particle, e.g. `size = 0.3 * sin(t * 3.14)`, with a node canvas as a view of the text,
-not the source of truth. Reuse the `ShaderGraph` compile/validation approach with its own op subset and
-instruction budget. Must stay deterministic (same saturation rules as `EvaluateShaderGraph`).
+The concrete use case is an ice pillar erupting from the ground, with frost, fragments and a dissolve
+inside one `.vfx.json`. An artist should author the pillar's visual motion in Effects without a project
+Lua script moving a separate entity. Gameplay may spawn the effect or set parameters; damage, solid
+obstacles and authoritative physics remain gameplay responsibilities. This phase extends the existing
+mesh-particle system, rather than adding an ice-specific component or general entity behaviour system.
+Implementation remains optional; this section records the requested scope, not completed capabilities.
+
+#### Authoring scope
+
+- Per-particle position/offset, velocity, rotation and independent X/Y/Z scale over time. Existing
+  scalar size, color and opacity curves remain available. Mesh pillars can grow vertically while
+  keeping their width, rise from below ground, hold their shape, then shrink or dissolve. A mesh with
+  its pivot at the base, or an explicit pivot/offset, must keep that base on the ground during growth.
+- Birth values belong to initialization; time-dependent curves and expressions belong to a fixed
+  update stage. Define input/output units, local/world space, rotation composition, and whether each
+  channel replaces or offsets its base value before implementation. In particular, an absolute
+  position curve must evaluate from captured birth data, not repeatedly add last frame's offset;
+  velocity integration must not also apply the same displacement a second time. Define how vector
+  scale combines with authored meshScale and the existing scalar size curve, applying each once.
+- Expose emitter/system time in seconds, normalized particle age, lifetime, captured birth position,
+  initial velocity/rotation/scale, speed, a stable per-particle random value and named parameters.
+  Random inputs must be seeded, retained and independent of expression evaluation count; enabling
+  a visual expression must not consume extra draws from the legacy emission RNG stream.
+- Reuse scalar curve/gradient authoring and add vector/axis curves where needed. Provide a bounded
+  expression language with scalar/vector types, constants, parameter reads, arithmetic, clamp/lerp,
+  curve sampling and a small deterministic math subset. For example, vertical scale can follow a
+  rise/hold/fall curve while X/Z stay at one. Attribute names here describe the intended channels;
+  the final serialized field names and type rules must ship in `vfx.schema` and the API docs.
+- Reuse `ShaderGraph`'s compile/validation approach with a dedicated operation subset and instruction
+  budget. Specify finite-value handling, division by zero, saturation and unsupported operations.
+  No arbitrary Lua/C++, filesystem access, recursion, unbounded loops or scene mutation in an
+  expression. These rules are part of deterministic CPU simulation; GPU compute is not required.
+- Extend the phase 4b canvas with constant, math, vector, curve, particle-input and attribute-output
+  nodes. Value wires are permitted only after the expression compiler/runtime exists. The nodes and
+  text editor share one canonical, serialized expression text; typed syntax trees and bytecode are
+  derived compiler output, not additional authored documents. Neither view maintains independent
+  runtime logic. Reject unsupported text-to-node conversions explicitly and preserve the document. Reference nodes/material editing from phase 4b continue to work alongside them.
+- Mesh pillars, frost, fragments and trails remain ordinary named blocks with existing budgets,
+  delay/duration/lifetime and bounded sub-emitter links. Dissolve, UV animation and emission remain
+  in Shaders, using the existing particle material inputs. Do not create a second shader editor here.
+
+#### Integration and implementation order
+
+1. **5a — channels and curves:** define the serialized contract and fixed evaluation order; add
+   birth-state capture and position/rotation/vector-scale curves, reflected schemas and headless
+   validation. Preserve legacy behaviour and hashes when the new fields are absent.
+2. **5b — expressions:** implement the bounded typed compiler and deterministic evaluator, expose
+   errors with block/channel/source locations and actionable hints, and make `vfx.check`, `vfx.preview`
+   and `vfx.analyze` work on the same program as live simulation.
+3. **5c — value nodes:** add the node/text views and typed connections to Effects through existing
+   shared-document commands, including undo/redo, drag coalescing, attached-agent edits and sidecar
+   layout. No editor-only evaluation or additional source of truth.
+4. **5d — ice-pillar acceptance:** add a reusable preset and VFXLab sample, verify the sequence below,
+   document limits, and rebuild the Web/Android players before shipping their changed runtime.
+
+- Likely files: a dedicated expression compiler/evaluator under `engine/scene/`, `Vfx.*`, particle
+  state and stepping in `Components.h` / `Systems.cpp`, VFX schemas/commands, particle gathering in
+  `RenderScene.cpp`, both renderers where transform data requires it, Effects node/curve UI, tests and
+  VFX/API/editor documentation. Reuse shared shader/compiler utilities without merging VFX simulation
+  with surface shader evaluation. Confirm the actual file split before implementation.
+- Runtime birth data, evaluated state and any expression clocks/counters must survive native
+  snapshots/rollback, but transient values must not leak into scene JSON. Define hot-reload rules for
+  program and channel changes; invalid reloads retain the last valid effect and report the error.
+  Existing assets without expressions continue to load and simulate unchanged.
+- Software and GPU rendering must use the same evaluated transforms, including axis scale and pivot
+  handling, with correct bounds for culling, preview camera fit and analysis. Preserve material inputs,
+  mesh batching, total particle budgets and bounded death chains from phase 4.
+
+#### Acceptance and tests
+
+A single `ice_pillar.vfx.json` must spawn a mesh pillar below/on the ground, raise or grow it along Y,
+hold it briefly, emit frost/fragments, then dissolve or shrink and drain. The pillar's base remains on
+the ground when growing; its X/Z width does not unintentionally expand. Its visual sequence runs in
+`vfx.preview` without gameplay scripts and is editable from Effects curves/value nodes. A sample script
+may trigger `vfx.spawn` or change parameters, but must not animate the pillar's transform.
+
+- Cover per-axis transforms/pivot, normalized-age curves, local/world space, scalar/vector types,
+  invalid expressions/wires, operation budgets and non-finite results through commands.
+- Compare repeated fixed-step previews and native snapshot/rollback restores, including stable random
+  inputs. Gate legacy particle hashes and verify software/GPU parity within the existing tolerance;
+  exercise both individual and batched mesh rendering, bounds and analysis.
+- Drive the editor's node/text/curve edits, refusal hints, undo/redo and agent updates with native
+  events. Equivalent text and node edits must produce the same document and simulation; layout edits
+  must still leave dirty state and `vfx.diff` unchanged.
+- Record preview frames and `vfx.check` / `vfx.analyze` results for the complete ice-pillar sequence.
+  Refresh and test changed portable runtimes; report device/backend checks that were not executed.
+- Difficulty: high. Risks: ambiguous channel composition, frame-dependent offset accumulation,
+  expression/node semantic drift, cross-platform math, snapshot state and renderer/batching parity.
 
 ### Optional later: GPU cosmetic simulation
 
@@ -342,7 +426,9 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
 - [x] Phase 4b (2026-10-08): Effects structure graph, expandable fixed modules, material/parameter/
       death/anchor reference wires, budget node, shared document undo and layout sidecars. Warning-free
       Windows build and all 282 tests pass; D3D11 graph screenshots inspected. See docs/VFX_PHASE4B.md.
-- [ ] Phase 5 (optional): expression update rules.
+- [ ] Phase 5 (optional): VFX position/rotation/axis-scale curves and bounded typed expressions;
+      value-node/text views of the same document; ice-pillar preset/sample without scripted visual
+      transforms. Requested scope recorded (2026-10-08); stages 5a-5d and acceptance criteria above.
 - [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
       Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.
 - [ ] Not verified anywhere yet: Android device execution of VFX assets; Linux/EGL rendering suite.
