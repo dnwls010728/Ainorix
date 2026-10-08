@@ -50,8 +50,19 @@ and screenshots, and the web/Android runtimes are rebuilt when the step is done.
       ~12.95 ms (its cost is pixel shading, see step 6); same frame bit for bit.
       The shadow pass culls nothing yet because the shadow map still covers the
       whole scene (step 5).
-- [ ] 4. Instanced sprites: consecutive draws of the same quad and material are
-      drawn with one instanced call.
+- [x] 4. Dynamic batching (as Unity's): consecutive draws of small static meshes
+      (≤ 64 vertices: sprites, particle quads) whose materials differ only in color
+      and opacity are copied into one world-space vertex stream per frame and drawn
+      with one call, in the scene and shadow passes. No new shaders: the per-item
+      values move into the vertices (position/normal/tangent in world space, sprite
+      frame in the uv, tint and opacity in color0, particle inputs in
+      particle0/custom0). RPG: 171 → 92 scene draws, same frame (max channel
+      difference 4), GPU time unchanged; no measurable frame-time change on the
+      reference desktop (the gain is CPU/driver time on GLES3/WebGL2). Fewer draws
+      exposed a stall: D3D11 queued the editor's offscreen frame until the readback,
+      so `GpuDevice::Flush()` now starts the GPU right after `RenderToTexture`
+      (D3D11 `Flush`; no-op elsewhere). Without it batching cost ~1.5 ms in the
+      editor benchmark.
 - [ ] 5. Shadow map fitted to the camera view (shadow distance) instead of the
       whole scene.
 - [ ] 6. Shader graphs compiled to HLSL / GLSL ES at load time (one program per

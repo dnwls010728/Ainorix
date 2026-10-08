@@ -167,10 +167,148 @@ struct GpuTexture {
     }
 };
 
-// A streamed vertex buffer rewritten every frame (lines, UI).
+// Where a draw's geometry lives: its mesh's buffers, or a range of this frame's batch streams.
+struct MeshBinding {
+    sg_buffer vbuf{}, ibuf{};
+    int vbufOffset = 0, ibufOffset = 0;  // bytes
+    int firstIndex = 0, indexCount = 0;
+};
+
+MeshBinding Binding(const GpuMesh& mesh, const Submesh& sub) {
+    MeshBinding b;
+    b.vbuf = mesh.vbuf;
+    b.ibuf = mesh.ibuf;
+    b.firstIndex = static_cast<int>(sub.firstIndex);
+    b.indexCount = static_cast<int>(sub.indexCount);
+    return b;
+}
+
+void Bind(sg_bindings& b, const MeshBinding& mesh) {
+    b.vertex_buffers[0] = mesh.vbuf;
+    b.vertex_buffer_offsets[0] = mesh.vbufOffset;
+    b.index_buffer = mesh.ibuf;
+    b.index_buffer_offset = mesh.ibufOffset;
+}
+
+void Draw(const MeshBinding& mesh) { sg_draw(mesh.firstIndex, mesh.indexCount, 1); }
+
+// Dynamic batching (as Unity does for small meshes): a run of consecutive draws of small static
+// meshes (sprites, particle quads) whose materials differ at most in color and opacity is copied
+// into one world-space vertex stream per frame and drawn with one call. The per-item values the
+// shaders take as uniforms move into the vertices: position, normal and tangent in world space,
+// uv with the sprite frame applied, color * base color / opacity in color0, particle inputs and
+// custom channels added to particle0/custom0. The batch draws with identity transforms, a white
+// base color and the identity uv rect, which gives each vertex what its own draw would compute.
+constexpr size_t kBatchVertices = 64, kBatchIndices = 192, kBatchDraws = 1024;
+
+struct DrawPiece {
+    size_t draw = 0;  // first draw of the piece (draw list index)
+    int batch = -1;   // >= 0: the piece is batches[batch]
+};
+struct DrawBatch {
+    DrawCall call;     // the first draw's, with a white base color and opacity 1
+    RenderItem item;   // identity transforms and uv rect, no joints
+    MeshBinding mesh;  // range of the frame's batch streams
+};
+struct DrawBatches {
+    std::vector<DrawBatch> batches;
+    std::vector<MeshVertex> vertices;
+    std::vector<uint32_t> indices;
+};
+
+bool SameBatchMaterial(const Material& a, const Material& b) {
+    return a.baseTexture == b.baseTexture && a.metallic == b.metallic && a.roughness == b.roughness &&
+           a.metallicRoughnessTexture == b.metallicRoughnessTexture && a.normalTexture == b.normalTexture &&
+           a.normalScale == b.normalScale && a.occlusionTexture == b.occlusionTexture && a.occlusionStrength == b.occlusionStrength &&
+           a.emissive == b.emissive && a.emissiveIntensity == b.emissiveIntensity && a.emissiveTexture == b.emissiveTexture &&
+           a.alphaMode == b.alphaMode && a.alphaCutoff == b.alphaCutoff && a.doubleSided == b.doubleSided && a.additive == b.additive &&
+           a.unlit == b.unlit && a.pixelArt == b.pixelArt && a.fog == b.fog && a.tiling[0] == b.tiling[0] && a.tiling[1] == b.tiling[1] &&
+           a.offset[0] == b.offset[0] && a.offset[1] == b.offset[1] && a.shader == b.shader &&
+           std::memcmp(a.shaderUniforms.data(), b.shaderUniforms.data(), sizeof(a.shaderUniforms)) == 0;
+}
+
+bool Batchable(const RenderItem& item, const Submesh& sub) {
+    return item.joints.empty() && !item.flat && item.mesh->positions.size() <= kBatchVertices && sub.indexCount <= kBatchIndices;
+}
+
+MeshVertex BatchVertex(const Mesh& m, uint32_t i, const RenderItem& item, const Material& material) {
+    MeshVertex v{};
+    const Vec3 p = item.world.TransformPoint(m.positions[i]);
+    const Vec3 n = item.normalMatrix.TransformDir(i < m.normals.size() ? m.normals[i] : Vec3(0, 1, 0));
+    const Vec4 t = i < m.tangents.size() ? m.tangents[i] : Vec4(1, 0, 0, 1);
+    const Vec3 tw = item.world.TransformDir(t.xyz());
+    const Vec4 c = i < m.colors.size() ? m.colors[i] : Vec4(1, 1, 1, 1);
+    const Vec4 data = (i < m.particleData.size() ? m.particleData[i] : Vec4()) + item.particleInput;
+    const Vec4 custom = (i < m.particleCustom.size() ? m.particleCustom[i] : Vec4()) + item.particleCustom;
+    const size_t uv = static_cast<size_t>(i) * 2;
+    v.pos[0] = p.x;
+    v.pos[1] = p.y;
+    v.pos[2] = p.z;
+    v.nrm[0] = n.x;
+    v.nrm[1] = n.y;
+    v.nrm[2] = n.z;
+    v.uv[0] = (uv + 1 < m.uvs.size() ? m.uvs[uv] : 0.0f) * item.uvScale[0] + item.uvOffset[0];
+    v.uv[1] = (uv + 1 < m.uvs.size() ? m.uvs[uv + 1] : 0.0f) * item.uvScale[1] + item.uvOffset[1];
+    Put(v.tan, tw.x, tw.y, tw.z, t.w);
+    Put(v.color, c.x * material.baseColor.r, c.y * material.baseColor.g, c.z * material.baseColor.b, c.w * material.opacity);
+    Put(v.particle, data.x, data.y, data.z, data.w);
+    Put(v.custom, custom.x, custom.y, custom.z, custom.w);
+    return v;
+}
+
+// Splits `order` (draw list indices, in drawing order) into single draws and batches; batch geometry
+// is appended to `out`. Only consecutive draws are joined, so the drawing order stays the same.
+std::vector<DrawPiece> PlanBatches(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws,
+                                   const std::vector<size_t>& order, DrawBatches& out) {
+    std::vector<DrawPiece> pieces;
+    for (size_t i = 0; i < order.size();) {
+        const DrawCall& first = draws[order[i]];
+        const RenderItem& head = items[first.item];
+        size_t j = i + 1;
+        if (Batchable(head, head.mesh->submeshes[first.submesh])) {
+            while (j < order.size() && j - i < kBatchDraws) {
+                const DrawCall& next = draws[order[j]];
+                const RenderItem& it = items[next.item];
+                if (!Batchable(it, it.mesh->submeshes[next.submesh]) || next.blend != first.blend ||
+                    !SameBatchMaterial(next.material, first.material)) break;
+                ++j;
+            }
+        }
+        if (j - i < 2) {
+            pieces.push_back({order[i], -1});
+            ++i;
+            continue;
+        }
+        DrawBatch batch;
+        batch.call = first;
+        batch.call.material.baseColor = Color(1, 1, 1);
+        batch.call.material.opacity = 1.0f;
+        batch.item.mesh = head.mesh;  // a valid mesh; the batch's geometry is in the streams
+        const size_t firstVertex = out.vertices.size(), firstIndex = out.indices.size();
+        batch.mesh.vbufOffset = static_cast<int>(firstVertex * sizeof(MeshVertex));
+        batch.mesh.ibufOffset = static_cast<int>(firstIndex * sizeof(uint32_t));
+        for (size_t k = i; k < j; ++k) {
+            const DrawCall& dc = draws[order[k]];
+            const RenderItem& it = items[dc.item];
+            const Mesh& m = *it.mesh;
+            const Submesh& sub = m.submeshes[dc.submesh];
+            const uint32_t base = static_cast<uint32_t>(out.vertices.size() - firstVertex);
+            for (uint32_t v = 0; v < m.positions.size(); ++v) out.vertices.push_back(BatchVertex(m, v, it, dc.material));
+            for (uint32_t x = 0; x < sub.indexCount; ++x) out.indices.push_back(base + m.indices[sub.firstIndex + x]);
+        }
+        batch.mesh.indexCount = static_cast<int>(out.indices.size() - firstIndex);
+        pieces.push_back({order[i], static_cast<int>(out.batches.size())});
+        out.batches.push_back(std::move(batch));
+        i = j;
+    }
+    return pieces;
+}
+
+// A streamed vertex (or index) buffer rewritten every frame (lines, UI, batches).
 struct StreamBuffer {
     sg_buffer buf{};
     size_t capacity = 0;
+    bool index = false;
     // Writes `bytes` and returns false when there is nothing to draw.
     bool Write(const void* data, size_t bytes) {
         if (bytes == 0) return false;
@@ -179,7 +317,8 @@ struct StreamBuffer {
             capacity = std::max<size_t>(bytes, std::max<size_t>(capacity * 2, 64 * 1024));
             sg_buffer_desc d{};
             d.size = capacity;
-            d.usage.vertex_buffer = true;
+            d.usage.vertex_buffer = !index;
+            d.usage.index_buffer = index;
             d.usage.write_transient = true;
             d.label = "oe-stream";
             buf = sg_make_buffer(&d);
@@ -395,7 +534,7 @@ struct GpuRenderer::Impl {
     sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
-    StreamBuffer lines, ui;
+    StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
     Targets offscreen, window;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
 
@@ -715,6 +854,8 @@ struct GpuRenderer::Impl {
         panelTargets.clear();
         lines.Destroy();
         ui.Destroy();
+        batchVertices.Destroy();
+        batchIndices.Destroy();
     }
 
     void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view) {
@@ -902,7 +1043,18 @@ struct GpuRenderer::Impl {
 
     // Draws `scene` into `t` (scene + mask images) and composites into the
     // output: the offscreen output image or the window swapchain.
-    void ApplySurface(const DrawCall& draw, const RenderItem& item, const GpuMesh& mesh,
+    // Writes this frame's batch geometry (one transient write per stream) and points the batches at it.
+    void UploadBatches(DrawBatches& batching) {
+        if (batching.batches.empty()) return;
+        batchVertices.Write(batching.vertices.data(), batching.vertices.size() * sizeof(MeshVertex));
+        batchIndices.Write(batching.indices.data(), batching.indices.size() * sizeof(uint32_t));
+        for (DrawBatch& batch : batching.batches) {
+            batch.mesh.vbuf = batchVertices.buf;
+            batch.mesh.ibuf = batchIndices.buf;
+        }
+    }
+
+    void ApplySurface(const DrawCall& draw, const RenderItem& item, const MeshBinding& mesh,
                       const Mat4& viewProj, float time, float cutoff, bool depthOut = false) {
         const Material& material = draw.material;
         oe_mesh_vs_params_t vertex{};
@@ -927,8 +1079,7 @@ struct GpuRenderer::Impl {
         PutGraph(uniforms, material, time);
         sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(uniforms));
         sg_bindings bindings{};
-        bindings.vertex_buffers[0] = mesh.vbuf;
-        bindings.index_buffer = mesh.ibuf;
+        Bind(bindings, mesh);
         bindings.views[VIEW_oe_base_tex] = texture.id ? texture : whiteTex;
         bindings.samplers[SMP_oe_base_smp] = material.pixelArt ? pixelArt : linearRepeat;
         sg_apply_bindings(&bindings);
@@ -981,6 +1132,34 @@ struct GpuRenderer::Impl {
                 fit = FitShadow(lo, hi, lights.dirs[0].dir, settings.shadowMapSize);
             }
         }
+
+        // ----- What each pass draws: culled draws in draw-list order, runs of small meshes batched
+        std::vector<size_t> shadowOrder, sceneOrder;
+        for (size_t k = 0; k < draws.size(); ++k) {
+            const RenderItem& it = items[draws[k].item];
+            // Transparent surfaces cast no shadow.
+            if (shadows && it.castShadows && !it.unlit && !draws[k].blend && BoxInFrustum(fit.viewProj, drawLo[k], drawHi[k], false))
+                shadowOrder.push_back(k);
+            if (inView[k]) sceneOrder.push_back(k);
+        }
+        DrawBatches batching;
+        const std::vector<DrawPiece> shadowPieces = PlanBatches(items, draws, shadowOrder, batching);
+        const std::vector<DrawPiece> scenePieces = PlanBatches(items, draws, sceneOrder, batching);
+        UploadBatches(batching);
+        // The item, draw call and geometry of a piece: the draw's own, or its batch's.
+        auto piece = [&](const DrawPiece& p, const DrawCall*& dc, const RenderItem*& it, MeshBinding& mesh) {
+            if (p.batch >= 0) {
+                const DrawBatch& batch = batching.batches[static_cast<size_t>(p.batch)];
+                dc = &batch.call;
+                it = &batch.item;
+                mesh = batch.mesh;
+            } else {
+                dc = &draws[p.draw];
+                it = &items[dc->item];
+                mesh = Binding(*gpuMeshes[dc->item], it->mesh->submeshes[dc->submesh]);
+            }
+        };
+
         if (shadows) {
             sg_pass pass{};
             pass.action.depth.load_action = SG_LOADACTION_CLEAR;
@@ -990,17 +1169,18 @@ struct GpuRenderer::Impl {
             pass.label = "oe-shadow";
             sg_begin_pass(&pass);
             int current = -1;
-            for (const DrawCall& dc : draws) {
-                const RenderItem& it = items[dc.item];
-                if (!it.castShadows || it.unlit || dc.blend) continue;  // transparent surfaces cast no shadow
-                const size_t k = static_cast<size_t>(&dc - draws.data());
-                if (!BoxInFrustum(fit.viewProj, drawLo[k], drawHi[k], false)) continue;
+            for (const DrawPiece& p : shadowPieces) {
+                const DrawCall* dcp;
+                const RenderItem* itp;
+                MeshBinding mesh;
+                piece(p, dcp, itp, mesh);
+                const DrawCall& dc = *dcp;
+                const RenderItem& it = *itp;
                 const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                 if (cutout || Displaced(dc.material)) {
                     Use(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
-                    ApplySurface(dc, it, *gpuMeshes[dc.item], fit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
-                    const Submesh& sub = it.mesh->submeshes[dc.submesh];
-                    sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+                    ApplySurface(dc, it, mesh, fit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
+                    Draw(mesh);
                     current = -1;
                     continue;
                 }
@@ -1014,11 +1194,9 @@ struct GpuRenderer::Impl {
                 sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
                 ApplySkin(UB_oe_pos_vs_skin, it);
                 sg_bindings b{};
-                b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
-                b.index_buffer = gpuMeshes[dc.item]->ibuf;
+                Bind(b, mesh);
                 sg_apply_bindings(&b);
-                const Submesh& sub = it.mesh->submeshes[dc.submesh];
-                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+                Draw(mesh);
             }
             sg_end_pass();
         }
@@ -1077,9 +1255,9 @@ struct GpuRenderer::Impl {
             if (t.dofMrt) {
                 // Background: the far plane, as the depth buffer's clear value gives the separate depth pass.
                 const float p22 = view.proj.at(2, 2), p23 = view.proj.at(2, 3);
-                const float far = view.proj.at(3, 3) == 1.0f ? (p23 - 1.0f) / p22 : p23 / (1.0f + p22);
+                const float farDepth = view.proj.at(3, 3) == 1.0f ? (p23 - 1.0f) / p22 : p23 / (1.0f + p22);
                 pass.action.colors[1].load_action = SG_LOADACTION_CLEAR;
-                pass.action.colors[1].clear_value = {far, 0.0f, 0.0f, 1.0f};
+                pass.action.colors[1].clear_value = {farDepth, 0.0f, 0.0f, 1.0f};
                 pass.action.colors[1].store_action = t.msaa > 1 ? SG_STOREACTION_DONTCARE : SG_STOREACTION_STORE;
                 pass.attachments.colors[1] = t.msaa > 1 ? t.dofDepthMsaaAtt : t.dofDepthAtt;
                 if (t.msaa > 1) pass.attachments.resolves[1] = t.dofDepthResolveAtt;
@@ -1115,9 +1293,13 @@ struct GpuRenderer::Impl {
             // Draw list order: opaque, then transparent back to front. Switching
             // pipelines drops uniforms, so the lights are re-applied each time.
             sg_pipeline current{};
-            for (const DrawCall& dc : draws) {
-                if (!inView[static_cast<size_t>(&dc - draws.data())]) continue;
-                const RenderItem& it = items[dc.item];
+            for (const DrawPiece& p : scenePieces) {
+                const DrawCall* dcp;
+                const RenderItem* itp;
+                MeshBinding mesh;
+                piece(p, dcp, itp, mesh);
+                const DrawCall& dc = *dcp;
+                const RenderItem& it = *itp;
                 const Material& m = dc.material;
                 const int blendMode = dc.blend ? (m.additive ? 2 : 1) : 0;
                 const int mrt = t.dofMrt ? 1 : 0;
@@ -1158,8 +1340,7 @@ struct GpuRenderer::Impl {
                 PutGraph(mu, m, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
-                b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
-                b.index_buffer = gpuMeshes[dc.item]->ibuf;
+                Bind(b, mesh);
                 b.views[VIEW_oe_base_tex] = base.id ? base : whiteTex;
                 b.views[VIEW_oe_shadow_tex] = shadowTex;
                 b.views[VIEW_oe_normal_tex] = normal.id ? normal : whiteTex;
@@ -1169,8 +1350,7 @@ struct GpuRenderer::Impl {
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;
                 b.samplers[SMP_oe_shadow_smp] = shadowCompare;
                 sg_apply_bindings(&b);
-                const Submesh& sub = it.mesh->submeshes[dc.submesh];
-                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+                Draw(mesh);
                 ++stats.drawCalls;
             }
 
@@ -1210,7 +1390,7 @@ struct GpuRenderer::Impl {
                     const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                     if (cutout || Displaced(dc.material)) {
                         Use(surfaceDepthPip[twoSided]);
-                        ApplySurface(dc, it, *gpuMeshes[dc.item], viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
+                        ApplySurface(dc, it, Binding(*gpuMeshes[dc.item], sub), viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
                     } else {
                         Use(sceneDepthPip[twoSided]);
                         oe_pos_vs_params_t u{};
@@ -1285,7 +1465,7 @@ struct GpuRenderer::Impl {
                                 Use(surfaceMask[stage][draw.material.doubleSided ? 1 : 0]);
                                 const float cutoff = draw.material.alphaMode == AlphaMode::Mask ? draw.material.alphaCutoff :
                                                      (draw.blend ? 0.5f : 0.0f);
-                                ApplySurface(draw, items[i], *gpuMeshes[i], viewProj, view.shaderTime, cutoff);
+                                ApplySurface(draw, items[i], Binding(*gpuMeshes[i], items[i].mesh->submeshes[draw.submesh]), viewProj, view.shaderTime, cutoff);
                                 const Submesh& sub = items[i].mesh->submeshes[draw.submesh];
                                 sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
                             }
@@ -1492,6 +1672,8 @@ sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view,
     Targets& t = impl_->panelTargets[slot];
     impl_->PrepareTargets(t, w, h, true, view);
     RenderStats s = impl_->Frame(scene, view, t, w, h, nullptr);
+    // The caller draws this image later in its own frame (editor panels): start the GPU on it now.
+    device_.Flush();
     if (stats) *stats = s;
     return t.outputTex;
 }

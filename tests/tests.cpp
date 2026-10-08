@@ -6123,6 +6123,55 @@ TEST(GpuFrustumCulling) {
     CHECK(error / static_cast<double>(sw.color.size() * 3) < 2.0);
 }
 
+TEST(GpuSpriteBatching) {
+    // Runs of sprites sharing a material are drawn as one batch; each keeps its own tint, opacity,
+    // frame, flip and transform, so the picture matches the software renderer's per-sprite draws.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gpu_batching"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "asset.generate_texture", R"J({"path":"assets/textures/c.png","pattern":"checker","size":64})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,3,9],"rotation":[-18,0,0]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-55,30,0]},"DirectionalLight":{"ambient":[0.3,0.3,0.3]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[20,1,20]},"MeshRenderer":{"mesh":"plane","color":[0.8,0.8,0.8]}}})J");
+    const int count = 24;
+    for (int i = 0; i < count; ++i) {
+        const float x = static_cast<float>(i % 6) * 1.6f - 4.0f, z = -static_cast<float>(i / 6) * 1.5f;
+        // Cut-out, lit, shadow-casting sprites (opaque list: batched in id order) with varying values.
+        const std::string args = Format(R"J({"name":"S%d","components":{"Transform":{"position":[%g,0,%g],"rotation":[0,%d,0]},
+            "Sprite":{"texture":"assets/textures/c.png","columns":2,"rows":2,"frame":%d,"flipX":%s,"width":1.2,"height":1.4,"pivotY":0,
+            "lit":true,"castShadows":true,"alphaCutoff":0.5,"color":[%g,%g,%g]}}})J", i, x, z, (i * 17) % 60 - 30, i % 4,
+            i % 3 == 0 ? "true" : "false", 0.4 + 0.025 * i, 1.0 - 0.03 * i, 0.5 + 0.02 * (i % 5));
+        CHECK(Call(e, "entity.create", args.c_str())["ok"].asBool());
+    }
+    for (int i = 0; i < 6; ++i) {  // soft-edged sprites with different opacity (blended, back to front)
+        const std::string args = Format(R"J({"name":"G%d","components":{"Transform":{"position":[%g,1.8,%g]},
+            "Sprite":{"texture":"assets/textures/c.png","width":0.8,"height":0.8,"opacity":%g,"color":[1,0.6,0.3]}}})J",
+            i, static_cast<float>(i) * 1.1f - 3.0f, 1.0f - static_cast<float>(i) * 0.4f, 0.3 + 0.1 * i);
+        CHECK(Call(e, "entity.create", args.c_str())["ok"].asBool());
+    }
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    const int w = 320, h = 200;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget sw, gpu;
+    sw.Resize(w, h);
+    gpu.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    const RenderStats stats = e.Gpu()->Render(e.GetScene(), view, gpu);
+    std::printf("  %d sprites + ground in %d draw calls\n", count + 6, stats.drawCalls);
+    CHECK(stats.drawCalls <= 4);
+    double error = 0;
+    for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+        error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+    error /= static_cast<double>(sw.color.size() * 3);
+    std::printf("  batched sprites software/GPU mean difference %.4f\n", error);
+    CHECK(error < 3.0);
+}
+
 TEST(UIGpuMatchesSoftware) {
     Engine e;
     std::string err;

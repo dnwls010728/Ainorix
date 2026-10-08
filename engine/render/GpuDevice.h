@@ -21,6 +21,9 @@ public:
     virtual sg_swapchain Swapchain() = 0;
     // Shows the frame drawn into Swapchain() (no-op on the web).
     virtual void Present() = 0;
+    // Hands the commands recorded so far to the GPU so it starts on them while the CPU goes on
+    // (an offscreen frame has no Present to do that). No-op where the API flushes by itself.
+    virtual void Flush() {}
     // Copies a single-sampled RGBA8 color-attachment image into `out`
     // (width*height pixels, top row first, 0xAABBGGRR like RenderTarget).
     virtual bool ReadPixels(sg_image image, int width, int height, uint32_t* out) = 0;
