@@ -13485,10 +13485,9 @@ TEST(NativeEditorAssetBrowser) {
         const float font = ImGui::GetFontSize(), row = ImGui::GetFrameHeightWithSpacing();
         ImVec2 origin = assetsWindow->WorkRect.Min;
         const ImGuiStyle& style = ImGui::GetStyle();
-        const float gridWidth = ImGui::CalcTextSize("Grid").x + style.FramePadding.x * 2;
-        const float listWidth = ImGui::CalcTextSize("List").x + style.FramePadding.x * 2;
+        const float gridWidth = ImGui::GetFrameHeight(), listWidth = gridWidth;  // square icon buttons, 2 px apart
         const float gridX = origin.x + font * 9 + style.ItemSpacing.x;
-        click(ImVec2(gridX + gridWidth + style.ItemSpacing.x + listWidth * 0.5f, origin.y + row + row * 0.4f));
+        click(ImVec2(gridX + gridWidth + 2 + listWidth * 0.5f, origin.y + row + row * 0.4f));
         CHECK(std::string(ImGui::SaveIniSettingsToMemory()).find("AssetGrid=0") != std::string::npos);
         CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/assets-list-test.png"), image.ToImage()));
         click(ImVec2(gridX + gridWidth * 0.5f, origin.y + row + row * 0.4f));

@@ -96,6 +96,8 @@ public:
     void FocusNetworkPanel();
     // Agent team (shown when the tool registered the team.* commands). Bring the Team panel forward.
     void FocusTeamPanel();
+    // Show the Console tab in front (screenshots of the log).
+    void FocusConsole();
     // Open the agent profile dialog for an agent id, or for a new agent (empty id).
     void EditAgent(const std::string& id);
     // Choose a backend in the open profile dialog as its combo does; false for a CLI that is

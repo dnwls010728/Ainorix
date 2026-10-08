@@ -138,6 +138,7 @@ struct NativeEditor::Impl {
     uint64_t logSeq = 0;
     double lastLogPoll = -1;
     bool logShow[4] = {true, true, true, true};  // debug, info, warn, error
+    bool requestConsoleFocus = false;
     std::string logFilter;
     bool logAutoScroll = true;
     std::string consoleInput;

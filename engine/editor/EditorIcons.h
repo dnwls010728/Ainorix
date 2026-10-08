@@ -63,6 +63,18 @@ constexpr const char* kIconFilm                  = "\xee\x83\x94";  // film U+E0
 constexpr const char* kIconAperture              = "\xee\x81\x84";  // aperture U+E044
 constexpr const char* kIconSquareDashed          = "\xee\x87\x8b";  // square-dashed U+E1CB
 constexpr const char* kIconMove3d                = "\xee\x8b\xa5";  // move-3d U+E2E5
+constexpr const char* kIconTrash2                = "\xee\x86\x8e";  // trash-2 U+E18E
+constexpr const char* kIconTriangleAlert         = "\xee\x86\x93";  // triangle-alert U+E193
+constexpr const char* kIconCircleX               = "\xee\x82\x88";  // circle-x U+E088
+constexpr const char* kIconInfo                  = "\xee\x83\xbe";  // info U+E0FE
+constexpr const char* kIconBug                   = "\xee\x88\x8c";  // bug U+E20C
+constexpr const char* kIconArrowDownToLine       = "\xee\x91\x9a";  // arrow-down-to-line U+E45A
+constexpr const char* kIconLayoutGrid            = "\xee\x84\x85";  // layout-grid U+E105
+constexpr const char* kIconList                  = "\xee\x84\x8c";  // list U+E10C
+constexpr const char* kIconRefreshCw             = "\xee\x85\x89";  // refresh-cw U+E149
+constexpr const char* kIconCircleHelp            = "\xee\x82\x82";  // circle-help U+E082
+constexpr const char* kIconCpu                   = "\xee\x82\xad";  // cpu U+E0AD
+constexpr const char* kIconGauge                 = "\xee\x86\xbf";  // gauge U+E1BF
 
 // A window or popup title with an icon in front: WithIcon(kIconFolder, TrId("Assets")). The `###` id
 // part of TrId stays the same, so docked layouts and settings keep working.

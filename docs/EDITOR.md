@@ -166,6 +166,7 @@ oe editor <project> --screenshot build/editor.png --2d --select Player  # 2D Sce
 oe editor <project> --screenshot build/editor.png --play --frames 60  # Game view after 1 s of play
 oe editor <project> --screenshot build/editor.png --game --select Start  # stopped Game view: UI editing with a selection
 oe editor <project> --screenshot build/editor.png --lang ja          # Japanese interface (default for screenshots: en)
+oe editor <project> --screenshot build/editor.png --console         # Console tab in front
 oe editor <project> --screenshot build/effects.png --effects effects/x.vfx.json # Effects workspace
 oe editor <project> --screenshot build/editor.png --script scripts/x.lua  # code editor with the script's problems
 oe editor <project> --screenshot build/editor.png --team --agent new  # Team panel and the agent profile dialog (--agent <id> edits one)

@@ -1301,33 +1301,52 @@ void NativeEditor::Impl::StatusBar(float barHeight) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
     bool open = ImGui::BeginViewportSideBar("##StatusBar", ImGui::GetMainViewport(), ImGuiDir_Down, barHeight, flags);
     if (open && ImGui::BeginMenuBar()) {
-        bool session = InPlaySession();
+        const bool session = InPlaySession();
+        const float gap = ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        // Each entry: a dim icon and its value; the play mode itself is shown in the toolbar.
+        auto item = [&](const char* icon, const std::string& text, bool first = false) {
+            if (!first) ImGui::SameLine(0, gap);
+            ImGui::TextDisabled("%s", icon);
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+            ImGui::TextUnformatted(text.c_str());
+        };
         if (session) {
-            ImGui::TextColored(Playing() ? ImVec4(0.45f, 0.85f, 0.55f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1), "%s", Tr(Playing() ? "PLAYING" : "PAUSED"));
-            ImGui::SameLine();
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetTextLineHeight();
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 4, p.y + ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + h * 0.5f), 3.5f,
+                                                        Playing() ? IM_COL32(96, 208, 128, 255) : IM_COL32(240, 176, 72, 255));
+            ImGui::Dummy(ImVec2(8, h));
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
         }
-        ImGui::Text(Tr("frame %llu"), static_cast<unsigned long long>(sim["frame"].asNumber(0)));
+        item(kIconFilm, Format(Tr("frame %llu"), static_cast<unsigned long long>(sim["frame"].asNumber(0))), true);
+        item(kIconBox, Format(Tr("%d entities"), static_cast<int>(rows.size())));
+        item(kIconGauge, Format("%d fps", fps));
+        item(kIconCpu, engine.Gpu() ? engine.Gpu()->Name() : "software");
+        if (!options.serverInfo.empty()) item(kIconNetwork, options.serverInfo);
         if (!engine.EditingPrefab().empty()) {
-            ImGui::SameLine(); ImGui::Text("%s", Format(Tr("Editing prefab: %s"), engine.EditingPrefab().c_str()).c_str());
+            item(kIconPackage, Format(Tr("Editing prefab: %s"), engine.EditingPrefab().c_str()));
             ImGui::SameLine(); if (ImGui::SmallButton(Tr("Close Prefab"))) RequestAction({PendingAction::Kind::ClosePrefab, ""});
         }
-        ImGui::SameLine();
-        ImGui::Text(Tr("|  %d entities  |  %d fps  |  %s"), static_cast<int>(rows.size()), fps, engine.Gpu() ? engine.Gpu()->Name() : "software");
-        if (!options.serverInfo.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("|  %s", options.serverInfo.c_str());
-        }
-        int runtimeErrors = sim["scriptErrors"].asInt(0);
-        std::string counts = (errorCount + runtimeErrors > 0 ? Format(Tr("%d errors"), errorCount + runtimeErrors) + "  " : std::string()) +
-                             (warnCount > 0 ? Format(Tr("%d warnings"), warnCount) : std::string());
-        if (!counts.empty()) {
-            ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetWindowWidth() - ImGui::CalcTextSize(counts.c_str()).x - 16));
-            ImGui::PushStyleColor(ImGuiCol_Text, errorCount + runtimeErrors > 0 ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1));
-            if (ImGui::Selectable(counts.c_str(), false, 0, ImGui::CalcTextSize(counts.c_str()))) {
-                showConsole = true;
-                ImGui::SetWindowFocus("###Console");
-            }
-            ImGui::PopStyleColor();
+
+        // Right: error and warning counts, each opening the Console.
+        const int errors = errorCount + sim["scriptErrors"].asInt(0);
+        const std::string errorText = errors > 0 ? WithIcon(kIconCircleX, Format(Tr("%d errors"), errors)) : std::string();
+        const std::string warnText = warnCount > 0 ? WithIcon(kIconTriangleAlert, Format(Tr("%d warnings"), warnCount)) : std::string();
+        const float countsWidth = (errors > 0 ? ImGui::CalcTextSize(errorText.c_str()).x + gap : 0.0f) +
+                                  (warnCount > 0 ? ImGui::CalcTextSize(warnText.c_str()).x + gap : 0.0f);
+        if (countsWidth > 0) {
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, ImGui::GetWindowWidth() - countsWidth - 4));
+            auto count = [&](const std::string& text, const ImVec4& color) {
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                if (ImGui::Selectable(text.c_str(), false, 0, ImGui::CalcTextSize(text.c_str()))) {
+                    showConsole = true;
+                    ImGui::SetWindowFocus("###Console");
+                }
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0, gap);
+            };
+            if (errors > 0) count(errorText, ImVec4(1, 0.45f, 0.4f, 1));
+            if (warnCount > 0) count(warnText, ImVec4(0.95f, 0.75f, 0.3f, 1));
         }
         ImGui::EndMenuBar();
     }

@@ -115,6 +115,33 @@ bool GhostIconButton(const char* id, const char* icon, float side, ImU32 hoverCo
     return pressed;
 }
 
+// A rounded filter chip: colored icon, label and an optional count (-1 = none). Lifted when on, outlined
+// and dimmed when off.
+std::string ChipText(const char* label, int count) { return count >= 0 ? Format("%s  %d", label, count) : std::string(label); }
+float ChipWidth(const char* label, int count) {
+    return ImGui::GetFontSize() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(ChipText(label, count).c_str()).x +
+           ImGui::GetStyle().FramePadding.x * 2.0f;
+}
+bool FilterChip(const char* id, const char* icon, ImU32 color, const char* label, int count, bool on) {
+    const float h = ImGui::GetFrameHeight(), w = ChipWidth(label, count), pad = ImGui::GetStyle().FramePadding.x;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 end(p.x + w, p.y + h);
+    if (on) draw->AddRectFilled(p, end, IM_COL32(255, 255, 255, hovered ? 34 : 22), h * 0.5f);
+    else draw->AddRect(p, end, IM_COL32(255, 255, 255, hovered ? 40 : 22), h * 0.5f);
+    const float y = p.y + (h - ImGui::GetFontSize()) * 0.5f;
+    draw->AddText(ImVec2(p.x + pad, y), on ? color : ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+    const float x = p.x + pad + ImGui::GetFontSize() + ImGui::GetStyle().ItemInnerSpacing.x;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(on ? ImGuiCol_Text : ImGuiCol_TextDisabled), label);
+    if (count >= 0) {
+        const float lx = x + ImGui::CalcTextSize(label).x + ImGui::CalcTextSize("  ").x;
+        draw->AddText(ImVec2(lx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), std::to_string(count).c_str());
+    }
+    return pressed;
+}
+
 const char* KindLabel(const std::string& kind) {
     if (kind == "scene") return Tr("Scenes");
     if (kind == "prefab") return Tr("Prefabs");
@@ -769,7 +796,7 @@ void NativeEditor::Impl::AssetsPanel() {
     ImGui::SetNextItemWidth(std::max(font * 4, ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x));
     ImGui::InputTextWithHint("##filter", WithIcon(kIconSearch, Tr("Search assets by name or path")).c_str(), &assetFilter);
     ImGui::SameLine();
-    if (ImGui::Button("?")) ImGui::OpenPopup("##assethelp");
+    if (GhostIconButton("##help", kIconCircleHelp, ImGui::GetFrameHeight(), ImGui::GetColorU32(ImGuiCol_Text))) ImGui::OpenPopup("##assethelp");
     if (ImGui::BeginPopup("##assethelp")) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + font * 22);
         ImGui::TextUnformatted(Tr("Drop files on the window to import. Drag assets into the Scene, Hierarchy or Inspector."));
@@ -787,21 +814,24 @@ void NativeEditor::Impl::AssetsPanel() {
         }
         ImGui::EndCombo();
     }
-    const float actionsWidth = ImGui::CalcTextSize(Tr("Grid")).x + ImGui::CalcTextSize(Tr("List")).x +
-        ImGui::CalcTextSize(Tr("Refresh")).x + ImGui::GetStyle().FramePadding.x * 6 + ImGui::GetStyle().ItemSpacing.x * 3;
+    // Grid/List as a two-icon segmented control, then Refresh; all square, frame-high buttons.
+    const float square = ImGui::GetFrameHeight();
+    const float actionsWidth = square * 3 + 2 + ImGui::GetStyle().ItemSpacing.x * 2;
     if (ImGui::GetContentRegionAvail().x > font * 9 + actionsWidth) ImGui::SameLine();
-    // Buttons use frame padding and a centered baseline, matching the adjacent combo and Refresh button.
-    auto viewButton = [&](const char* label, bool grid) {
-        if (assetGrid == grid) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        const bool clicked = ImGui::Button(label);
-        if (assetGrid == grid) ImGui::PopStyleColor();
+    auto viewButton = [&](const char* id, const char* icon, const char* tip, bool grid) {
+        ImGui::PushStyleColor(ImGuiCol_Button, assetGrid == grid ? ImVec4(1, 1, 1, 0.14f) : ImVec4(1, 1, 1, 0.03f));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(assetGrid == grid ? ImGuiCol_Text : ImGuiCol_TextDisabled));
+        const bool clicked = ImGui::Button((std::string(icon) + id).c_str(), ImVec2(square, square));
+        ImGui::PopStyleColor(2);
+        HelpTooltip(tip);
         if (clicked) assetGrid = grid;
     };
-    viewButton(Tr("Grid"), true);
+    viewButton("##grid", kIconLayoutGrid, Tr("Grid"), true);
+    ImGui::SameLine(0, 2);
+    viewButton("##list", kIconList, Tr("List"), false);
     ImGui::SameLine();
-    viewButton(Tr("List"), false);
-    ImGui::SameLine();
-    if (ImGui::Button(Tr("Refresh"))) RefreshAssets(true);
+    if (GhostIconButton("##refresh", kIconRefreshCw, square, ImGui::GetColorU32(ImGuiCol_Text))) RefreshAssets(true);
+    HelpTooltip(Tr("Refresh"));
 
     size_t matched = 0;
     for (const auto& kv : byKind) {
@@ -872,10 +902,12 @@ void NativeEditor::Impl::AssetsPanel() {
                 const bool isSelected = selectedAsset == path;
                 const float padding = font * 0.5f;
                 const ImVec2 end(pos.x + itemWidth, pos.y + itemHeight);
-                draw->AddRect(pos, end, ImGui::GetColorU32(isSelected ? ImGuiCol_ButtonActive : ImGuiCol_Border), 4);
+                // Soft cards; the selected one gets an accent wash and outline.
+                draw->AddRectFilled(pos, end, isSelected ? IM_COL32(92, 148, 255, 40) : IM_COL32(255, 255, 255, 8), 6);
+                if (isSelected) draw->AddRect(pos, end, IM_COL32(92, 148, 255, 160), 6);
                 const float side = useGrid ? font * 3.5f : itemHeight - padding * 2;
                 const ImVec2 preview(useGrid ? pos.x + (itemWidth - side) * 0.5f : pos.x + padding, pos.y + padding);
-                draw->AddRectFilled(preview, ImVec2(preview.x + side, preview.y + side), IM_COL32(24, 27, 33, 255), 3);
+                draw->AddRectFilled(preview, ImVec2(preview.x + side, preview.y + side), IM_COL32(0, 0, 0, 60), 4);
                 const bool previewable = kind == "texture" || kind == "model" || kind == "material" || kind == "prefab" || kind == "scene";
                 auto image = showThumbnails && previewable ? AssetThumbnail(path) : nullptr;
                 if (image) {
@@ -936,55 +968,79 @@ void NativeEditor::Impl::AssetsPanel() {
 
 // ----- Console -------------------------------------------------------------------
 
+void NativeEditor::FocusConsole() { impl_->showConsole = impl_->requestConsoleFocus = true; }
+
 void NativeEditor::Impl::ConsolePanel() {
+    if (requestConsoleFocus) {
+        ImGui::SetNextWindowFocus();
+        requestConsoleFocus = false;
+    }
     if (!ImGui::Begin(WithIcon(kIconTerminal, TrId("Console")).c_str(), &showConsole)) {
         ImGui::End();
         return;
     }
     static const char* levels[] = {"debug", "info", "warn", "error"};
     const char* labels[] = {Tr("Debug"), Tr("Info"), Tr("Warnings"), Tr("Errors")};
-    for (int i = 0; i < 4; ++i) {
-        if (i > 0) {
-            const float nextWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(labels[i]).x;
-            const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-            if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + nextWidth <= right) ImGui::SameLine();
-        }
-        ImGui::Checkbox(labels[i], &logShow[i]);
-    }
-    const float autoWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(Tr("Auto-scroll")).x;
-    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + autoWidth <= right) ImGui::SameLine();
-    ImGui::Checkbox(Tr("Auto-scroll"), &logAutoScroll);
-    const float clearWidth = ImGui::CalcTextSize(Tr("Clear")).x + ImGui::GetStyle().FramePadding.x * 2;
-    ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 3, ImGui::GetContentRegionAvail().x - clearWidth - ImGui::GetStyle().ItemSpacing.x));
-    ImGui::InputTextWithHint("##logfilter", Tr("Filter"), &logFilter);
-    ImGui::SameLine();
-    if (ImGui::Button(Tr("Clear"))) {
-        log.clear();
-        warnCount = errorCount = 0;
-        Call("script.errors", ObjectOf({{"clear", Json(true)}}), true);
-    }
-
-    float inputHeight = ImGui::GetFrameHeightWithSpacing();
-    ImGui::BeginChild("##log", ImVec2(0, -inputHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::PushFont(monoFont, 0.0f);
-    for (const LogLine& l : log) {
+    const char* icons[] = {kIconBug, kIconInfo, kIconTriangleAlert, kIconCircleX};
+    const ImVec4 colors[] = {ImVec4(0.66f, 0.69f, 0.75f, 1), ImVec4(0.58f, 0.74f, 1.0f, 1), ImVec4(0.95f, 0.78f, 0.35f, 1), ImVec4(1, 0.45f, 0.4f, 1)};
+    auto levelOf = [&](const LogLine& l) {
         int li = 1;
         for (int i = 0; i < 4; ++i) {
             if (l.level == levels[i]) li = i;
         }
+        return li;
+    };
+    int counts[4] = {};
+    for (const LogLine& l : log) ++counts[levelOf(l)];
+
+    // Level chips (with counts) and auto-scroll, wrapping onto a new row when the dock is narrow.
+    auto fits = [&](float width) {
+        const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+        return ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <= right;
+    };
+    for (int i = 0; i < 4; ++i) {
+        if (i > 0 && fits(ChipWidth(labels[i], counts[i]))) ImGui::SameLine(0, 4);
+        if (FilterChip(levels[i], icons[i], ImGui::ColorConvertFloat4ToU32(colors[i]), labels[i], counts[i], logShow[i])) logShow[i] = !logShow[i];
+    }
+    if (fits(ChipWidth(Tr("Auto-scroll"), -1))) ImGui::SameLine();
+    if (FilterChip("##autoscroll", kIconArrowDownToLine, IM_COL32(92, 148, 255, 255), Tr("Auto-scroll"), -1, logAutoScroll)) logAutoScroll = !logAutoScroll;
+    const float side = ImGui::GetFrameHeight();
+    ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 3, ImGui::GetContentRegionAvail().x - side - ImGui::GetStyle().ItemSpacing.x));
+    ImGui::InputTextWithHint("##logfilter", WithIcon(kIconSearch, Tr("Filter")).c_str(), &logFilter);
+    ImGui::SameLine();
+    if (GhostIconButton("##clear", kIconTrash2, side, ImGui::GetColorU32(ImGuiCol_Text))) {
+        log.clear();
+        warnCount = errorCount = 0;
+        Call("script.errors", ObjectOf({{"clear", Json(true)}}), true);
+    }
+    HelpTooltip(Tr("Clear"));
+
+    // Lines: level icon, dim category, message; on a slightly darker well.
+    float inputHeight = ImGui::GetFrameHeightWithSpacing();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.22f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, ImGui::GetStyle().FrameRounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+    ImGui::BeginChild("##log", ImVec2(0, -inputHeight), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    for (const LogLine& l : log) {
+        const int li = levelOf(l);
         if (!logShow[li]) continue;
         if (!logFilter.empty() && !ContainsNoCase(l.message, logFilter) && !ContainsNoCase(l.category, logFilter)) continue;
-        ImVec4 col = li == 3 ? ImVec4(1, 0.45f, 0.4f, 1) : li == 2 ? ImVec4(0.95f, 0.78f, 0.35f, 1) : li == 0 ? ImVec4(0.66f, 0.69f, 0.75f, 1) : ImVec4(0.90f, 0.91f, 0.94f, 1);
-        ImGui::PushStyleColor(ImGuiCol_Text, col);
-        ImGui::TextUnformatted((std::string(labels[li]) + " [" + l.category + "] " + l.message).c_str());
+        ImGui::TextColored(colors[li], "%s", icons[li]);
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::PushFont(monoFont, 0.0f);
+        ImGui::TextDisabled("%s", l.category.c_str());
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x * 2);
+        ImGui::PushStyleColor(ImGuiCol_Text, li == 1 ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : colors[li]);
+        ImGui::TextUnformatted(l.message.c_str());
         ImGui::PopStyleColor();
+        ImGui::PopFont();
         if (ImGui::BeginPopupContextItem(("##l" + std::to_string(l.seq)).c_str())) {
             if (ImGui::MenuItem(Tr("Copy"))) ImGui::SetClipboardText(l.message.c_str());
             ImGui::EndPopup();
         }
     }
-    ImGui::PopFont();
     if (logAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
 
@@ -1018,8 +1074,11 @@ void NativeEditor::Impl::ConsolePanel() {
         }
         return 0;
     };
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", kIconChevronRight);
+    ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGuiInputTextFlags f = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCompletion;
+    ImGuiInputTextFlags f =ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCompletion;
     if (ImGui::InputTextWithHint("##cmd", Tr("command.name {\"json\": \"args\"}   (Tab completes, Up/Down history)"), &consoleInput, f, callback, &ctx)) {
         RunConsoleCommand(consoleInput);
         consoleInput.clear();
