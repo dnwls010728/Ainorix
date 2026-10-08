@@ -14,6 +14,8 @@ CLI, HTTP and MCP — an agent and a person can work in the same session at the 
 
 Typed VFX expressions now animate Birth/Update channels without gameplay scripts. Effects > Expressions edits source with validation and undo; `vfx.expression_eval` diagnoses typed results/costs. Try VFXLab `effects/spiral_expressions.vfx.json` or `scenes/expressions.scene.json`. [Contract and verification](docs/VFX_PHASE5B.md).
 
+VFXLab now also includes six script-free effect proofs: ice pillar, tornado, shield dome, shockwave, rain/snow and healing aura. Open their matching effect assets or scenes. [Examples and recorded checks](docs/VFX_PHASE5B_PLUS.md).
+
 ## Why it is different
 
 - **One API for everything.** Scene edits, simulation, input, screenshots, assets, packaging helpers: each is a

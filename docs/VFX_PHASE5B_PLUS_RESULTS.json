@@ -1,0 +1,2004 @@
+{
+  "ice_pillar": {
+    "check": {
+      "ok": true,
+      "warnings": [],
+      "expressionInstructions": 163,
+      "expressionStepInstructions": 13185,
+      "path": "effects/ice_pillar.vfx.json",
+      "budget": 45
+    },
+    "software": {
+      "times": [
+        0.15,
+        0.75,
+        2.4,
+        3.1
+      ],
+      "frames": [
+        {
+          "t": 0.15,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.602474153,
+              -0.0172507167,
+              -0.551039994
+            ],
+            "max": [
+              0.602474153,
+              0.828000009,
+              0.551039934
+            ]
+          },
+          "hash": "52e78c0b14351892"
+        },
+        {
+          "t": 0.75,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.987128139,
+              0,
+              -0.957737207
+            ],
+            "max": [
+              0.987128019,
+              3.5999999,
+              0.957737088
+            ]
+          },
+          "hash": "2c67fac8bc6a9d51"
+        },
+        {
+          "t": 2.4,
+          "count": 13,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.567414939,
+              0,
+              -0.555729926
+            ],
+            "max": [
+              0.554008424,
+              3.5999999,
+              0.552188098
+            ]
+          },
+          "hash": "c2e6c9f9bc7c840f"
+        },
+        {
+          "t": 3.1,
+          "count": 12,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.42645752,
+              -0.102083668,
+              -1.42010832
+            ],
+            "max": [
+              1.42050612,
+              2.29973412,
+              1.42241299
+            ]
+          },
+          "hash": "dccce6f7e4aee759"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "software",
+      "hash": "02b95423f7c86736",
+      "path": "samples/VFXLab/build/proof-ice_pillar-software.png"
+    },
+    "gpu": {
+      "times": [
+        0.15,
+        0.75,
+        2.4,
+        3.1
+      ],
+      "frames": [
+        {
+          "t": 0.15,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.602474153,
+              -0.0172507167,
+              -0.551039994
+            ],
+            "max": [
+              0.602474153,
+              0.828000009,
+              0.551039934
+            ]
+          },
+          "hash": "0802b24a345ecd14"
+        },
+        {
+          "t": 0.75,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.987128139,
+              0,
+              -0.957737207
+            ],
+            "max": [
+              0.987128019,
+              3.5999999,
+              0.957737088
+            ]
+          },
+          "hash": "6c8f18706206124b"
+        },
+        {
+          "t": 2.4,
+          "count": 13,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.567414939,
+              0,
+              -0.555729926
+            ],
+            "max": [
+              0.554008424,
+              3.5999999,
+              0.552188098
+            ]
+          },
+          "hash": "50b4654281ec812c"
+        },
+        {
+          "t": 3.1,
+          "count": 12,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.42645752,
+              -0.102083668,
+              -1.42010832
+            ],
+            "max": [
+              1.42050612,
+              2.29973412,
+              1.42241299
+            ]
+          },
+          "hash": "dccf8df6ae7c049d"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "gpu (d3d11)",
+      "hash": "e63c40e7bbf710ed",
+      "path": "samples/VFXLab/build/proof-ice_pillar-gpu.png"
+    },
+    "analysis": {
+      "duration": 5,
+      "step": 0.5,
+      "finishedAt": 3.38333333,
+      "samples": [
+        {
+          "t": 0,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 0.5,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.824999988,
+              0,
+              -0.75
+            ],
+            "max": [
+              0.824999988,
+              2.90700102,
+              0.75
+            ]
+          }
+        },
+        {
+          "t": 1,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.14642847,
+              0,
+              -1.10714269
+            ],
+            "max": [
+              1.14642847,
+              3.5999999,
+              1.10714269
+            ]
+          }
+        },
+        {
+          "t": 1.5,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.46785676,
+              0,
+              -1.46428525
+            ],
+            "max": [
+              1.46785665,
+              3.5999999,
+              1.46428514
+            ]
+          }
+        },
+        {
+          "t": 2,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.400000006,
+              0,
+              -0.346410155
+            ],
+            "max": [
+              0.400000006,
+              3.5999999,
+              0.346410155
+            ]
+          }
+        },
+        {
+          "t": 2.5,
+          "count": 13,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.699473083,
+              0,
+              -0.679584503
+            ],
+            "max": [
+              0.673746884,
+              3.5999999,
+              0.672918916
+            ]
+          }
+        },
+        {
+          "t": 3,
+          "count": 13,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.31215966,
+              0,
+              -1.30003095
+            ],
+            "max": [
+              1.29524589,
+              3.5999999,
+              1.29354382
+            ]
+          }
+        },
+        {
+          "t": 3.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        }
+      ],
+      "peakCount": 33,
+      "peakAt": 0.15,
+      "peakPointCount": 0,
+      "budget": 45,
+      "budgetRatio": 0.733333333,
+      "hash": "38bb2b9438f67385"
+    }
+  },
+  "tornado": {
+    "check": {
+      "ok": true,
+      "warnings": [],
+      "expressionInstructions": 136,
+      "expressionStepInstructions": 46720,
+      "path": "effects/tornado.vfx.json",
+      "budget": 128
+    },
+    "software": {
+      "times": [
+        0.2,
+        1,
+        2.5,
+        3.8
+      ],
+      "frames": [
+        {
+          "t": 0.2,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.52965355,
+              -0.124089576,
+              -1.32500923
+            ],
+            "max": [
+              1.54910243,
+              3.73038197,
+              1.27327299
+            ]
+          },
+          "hash": "5dc84243bdb630a1"
+        },
+        {
+          "t": 1,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.41097283,
+              0.0178833902,
+              -1.24521101
+            ],
+            "max": [
+              1.49537945,
+              3.91858244,
+              1.24098527
+            ]
+          },
+          "hash": "c4d90eb7c0e9de61"
+        },
+        {
+          "t": 2.5,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.60641479,
+              0.238430262,
+              -1.08741105
+            ],
+            "max": [
+              1.58237267,
+              4.29234743,
+              1.28255212
+            ]
+          },
+          "hash": "e7f1e8d62a31cfde"
+        },
+        {
+          "t": 3.8,
+          "count": 65,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.38392901,
+              0.388700962,
+              -1.154598
+            ],
+            "max": [
+              1.54459727,
+              4.41379786,
+              1.37271249
+            ]
+          },
+          "hash": "dd9235b58d6e52d7"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "software",
+      "hash": "3e32ccc78664821e",
+      "path": "samples/VFXLab/build/proof-tornado-software.png"
+    },
+    "gpu": {
+      "times": [
+        0.2,
+        1,
+        2.5,
+        3.8
+      ],
+      "frames": [
+        {
+          "t": 0.2,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.52965355,
+              -0.124089576,
+              -1.32500923
+            ],
+            "max": [
+              1.54910243,
+              3.73038197,
+              1.27327299
+            ]
+          },
+          "hash": "1107bae290ee7220"
+        },
+        {
+          "t": 1,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.41097283,
+              0.0178833902,
+              -1.24521101
+            ],
+            "max": [
+              1.49537945,
+              3.91858244,
+              1.24098527
+            ]
+          },
+          "hash": "ea593cd4ef6455fd"
+        },
+        {
+          "t": 2.5,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.60641479,
+              0.238430262,
+              -1.08741105
+            ],
+            "max": [
+              1.58237267,
+              4.29234743,
+              1.28255212
+            ]
+          },
+          "hash": "e0362aa9a65b4e32"
+        },
+        {
+          "t": 3.8,
+          "count": 65,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.38392901,
+              0.388700962,
+              -1.154598
+            ],
+            "max": [
+              1.54459727,
+              4.41379786,
+              1.37271249
+            ]
+          },
+          "hash": "b575561538036b5f"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "gpu (d3d11)",
+      "hash": "f19c39596706333b",
+      "path": "samples/VFXLab/build/proof-tornado-gpu.png"
+    },
+    "analysis": {
+      "duration": 5,
+      "step": 0.5,
+      "finishedAt": 4.03333333,
+      "samples": [
+        {
+          "t": 0,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 0.5,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.61904979,
+              -0.084078081,
+              -1.11505163
+            ],
+            "max": [
+              1.62357104,
+              3.7692914,
+              1.05881917
+            ]
+          }
+        },
+        {
+          "t": 1,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.40436327,
+              0.0120519698,
+              -1.07966781
+            ],
+            "max": [
+              1.51598573,
+              3.93350077,
+              1.08543527
+            ]
+          }
+        },
+        {
+          "t": 1.5,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.6106298,
+              0.116874903,
+              -1.13322639
+            ],
+            "max": [
+              1.56828237,
+              4.06351709,
+              1.09889317
+            ]
+          }
+        },
+        {
+          "t": 2,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.600348,
+              0.17312485,
+              -1.09952557
+            ],
+            "max": [
+              1.47235894,
+              4.18953228,
+              1.09897399
+            ]
+          }
+        },
+        {
+          "t": 2.5,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.61019647,
+              0.229374796,
+              -0.915784836
+            ],
+            "max": [
+              1.59467077,
+              4.30672598,
+              1.11443925
+            ]
+          }
+        },
+        {
+          "t": 3,
+          "count": 128,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.57377601,
+              0.285624743,
+              -1.10400617
+            ],
+            "max": [
+              1.61834002,
+              4.45080137,
+              1.06677437
+            ]
+          }
+        },
+        {
+          "t": 3.5,
+          "count": 110,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.57550633,
+              0.341874689,
+              -1.05125248
+            ],
+            "max": [
+              1.55631459,
+              4.56525183,
+              1.0662818
+            ]
+          }
+        },
+        {
+          "t": 4,
+          "count": 33,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.41828859,
+              0.398124635,
+              -1.02066469
+            ],
+            "max": [
+              1.56489897,
+              4.49437428,
+              1.03388941
+            ]
+          }
+        },
+        {
+          "t": 4.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        }
+      ],
+      "peakCount": 128,
+      "peakAt": 0.0166666667,
+      "peakPointCount": 0,
+      "budget": 128,
+      "budgetRatio": 1,
+      "hash": "fd5edd8beb533025"
+    }
+  },
+  "shield_dome": {
+    "check": {
+      "ok": true,
+      "warnings": [],
+      "expressionInstructions": 37,
+      "expressionStepInstructions": 185,
+      "path": "effects/shield_dome.vfx.json",
+      "budget": 1
+    },
+    "software": {
+      "times": [
+        0.1,
+        0.6,
+        1.5,
+        2.8
+      ],
+      "frames": [
+        {
+          "t": 0.1,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.84499991,
+              1.12973668e-16,
+              -1.84499991
+            ],
+            "max": [
+              1.84499991,
+              1.84499991,
+              1.84499991
+            ]
+          },
+          "hash": "6347a3845d57ed2d"
+        },
+        {
+          "t": 0.6,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.75500369,
+              1.07462991e-16,
+              -1.75500369
+            ],
+            "max": [
+              1.75500369,
+              1.75500369,
+              1.75500369
+            ]
+          },
+          "hash": "24779ab8d8d6b78a"
+        },
+        {
+          "t": 1.5,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.80938208,
+              1.10792704e-16,
+              -1.80938208
+            ],
+            "max": [
+              1.80938208,
+              1.80938208,
+              1.80938208
+            ]
+          },
+          "hash": "b330b26798c7e5fa"
+        },
+        {
+          "t": 2.8,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.7119664,
+              1.04827712e-16,
+              -1.7119664
+            ],
+            "max": [
+              1.7119664,
+              1.7119664,
+              1.7119664
+            ]
+          },
+          "hash": "57a1961d6a196393"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "software",
+      "hash": "9a4eae825d7e99cd",
+      "path": "samples/VFXLab/build/proof-shield_dome-software.png"
+    },
+    "gpu": {
+      "times": [
+        0.1,
+        0.6,
+        1.5,
+        2.8
+      ],
+      "frames": [
+        {
+          "t": 0.1,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.84499991,
+              1.12973668e-16,
+              -1.84499991
+            ],
+            "max": [
+              1.84499991,
+              1.84499991,
+              1.84499991
+            ]
+          },
+          "hash": "52edcdb9591b9a91"
+        },
+        {
+          "t": 0.6,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.75500369,
+              1.07462991e-16,
+              -1.75500369
+            ],
+            "max": [
+              1.75500369,
+              1.75500369,
+              1.75500369
+            ]
+          },
+          "hash": "b87a5c1dc6196f24"
+        },
+        {
+          "t": 1.5,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.80938208,
+              1.10792704e-16,
+              -1.80938208
+            ],
+            "max": [
+              1.80938208,
+              1.80938208,
+              1.80938208
+            ]
+          },
+          "hash": "4057f41efee0edd4"
+        },
+        {
+          "t": 2.8,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.7119664,
+              1.04827712e-16,
+              -1.7119664
+            ],
+            "max": [
+              1.7119664,
+              1.7119664,
+              1.7119664
+            ]
+          },
+          "hash": "3a7bd68d336d73ab"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "gpu (d3d11)",
+      "hash": "449e43c0d0237e9d",
+      "path": "samples/VFXLab/build/proof-shield_dome-gpu.png"
+    },
+    "analysis": {
+      "duration": 5,
+      "step": 0.5,
+      "finishedAt": 3.03333333,
+      "samples": [
+        {
+          "t": 0,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 0.5,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.80938148,
+              1.10792664e-16,
+              -1.80938148
+            ],
+            "max": [
+              1.80938148,
+              1.80938148,
+              1.80938148
+            ]
+          }
+        },
+        {
+          "t": 1,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.79059231,
+              1.09642162e-16,
+              -1.79059231
+            ],
+            "max": [
+              1.79059231,
+              1.79059231,
+              1.79059231
+            ]
+          }
+        },
+        {
+          "t": 1.5,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.80938208,
+              1.10792704e-16,
+              -1.80938208
+            ],
+            "max": [
+              1.80938208,
+              1.80938208,
+              1.80938208
+            ]
+          }
+        },
+        {
+          "t": 2,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.79059172,
+              1.09642128e-16,
+              -1.79059172
+            ],
+            "max": [
+              1.79059172,
+              1.79059172,
+              1.79059172
+            ]
+          }
+        },
+        {
+          "t": 2.5,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.80938256,
+              1.1079273e-16,
+              -1.80938256
+            ],
+            "max": [
+              1.80938256,
+              1.80938256,
+              1.80938256
+            ]
+          }
+        },
+        {
+          "t": 3,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.79059136,
+              1.09642102e-16,
+              -1.79059136
+            ],
+            "max": [
+              1.79059136,
+              1.79059136,
+              1.79059136
+            ]
+          }
+        },
+        {
+          "t": 3.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        }
+      ],
+      "peakCount": 1,
+      "peakAt": 0.0166666667,
+      "peakPointCount": 0,
+      "budget": 1,
+      "budgetRatio": 1,
+      "hash": "163239c870c93379"
+    }
+  },
+  "shockwave": {
+    "check": {
+      "ok": true,
+      "warnings": [],
+      "expressionInstructions": 31,
+      "expressionStepInstructions": 155,
+      "path": "effects/shockwave.vfx.json",
+      "budget": 1
+    },
+    "software": {
+      "times": [
+        0.1,
+        0.4,
+        0.8,
+        1.25
+      ],
+      "frames": [
+        {
+          "t": 0.1,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.466666698,
+              0.0500000007,
+              -0.466666698
+            ],
+            "max": [
+              0.466666698,
+              0.0500000007,
+              0.466666698
+            ]
+          },
+          "hash": "87e1646a62ee3333"
+        },
+        {
+          "t": 0.4,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.06666684,
+              0.0500000007,
+              -1.06666684
+            ],
+            "max": [
+              1.06666684,
+              0.0500000007,
+              1.06666684
+            ]
+          },
+          "hash": "27eb14b02f4abd6e"
+        },
+        {
+          "t": 0.8,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.86666656,
+              0.0500000007,
+              -1.86666656
+            ],
+            "max": [
+              1.86666656,
+              0.0500000007,
+              1.86666656
+            ]
+          },
+          "hash": "3a204624a80df88d"
+        },
+        {
+          "t": 1.25,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -2.7666657,
+              0.0500000007,
+              -2.7666657
+            ],
+            "max": [
+              2.7666657,
+              0.0500000007,
+              2.7666657
+            ]
+          },
+          "hash": "c8d7fa2983a0db63"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "software",
+      "hash": "04864a5d06b57244",
+      "path": "samples/VFXLab/build/proof-shockwave-software.png"
+    },
+    "gpu": {
+      "times": [
+        0.1,
+        0.4,
+        0.8,
+        1.25
+      ],
+      "frames": [
+        {
+          "t": 0.1,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.466666698,
+              0.0500000007,
+              -0.466666698
+            ],
+            "max": [
+              0.466666698,
+              0.0500000007,
+              0.466666698
+            ]
+          },
+          "hash": "1978c353d0ca9910"
+        },
+        {
+          "t": 0.4,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.06666684,
+              0.0500000007,
+              -1.06666684
+            ],
+            "max": [
+              1.06666684,
+              0.0500000007,
+              1.06666684
+            ]
+          },
+          "hash": "91f0592746558547"
+        },
+        {
+          "t": 0.8,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.86666656,
+              0.0500000007,
+              -1.86666656
+            ],
+            "max": [
+              1.86666656,
+              0.0500000007,
+              1.86666656
+            ]
+          },
+          "hash": "2b5ac083370862c5"
+        },
+        {
+          "t": 1.25,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -2.7666657,
+              0.0500000007,
+              -2.7666657
+            ],
+            "max": [
+              2.7666657,
+              0.0500000007,
+              2.7666657
+            ]
+          },
+          "hash": "4ddb4d9d76c36b95"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "gpu (d3d11)",
+      "hash": "cb40f3d61c6f3eb8",
+      "path": "samples/VFXLab/build/proof-shockwave-gpu.png"
+    },
+    "analysis": {
+      "duration": 5,
+      "step": 0.5,
+      "finishedAt": 1.43333333,
+      "samples": [
+        {
+          "t": 0,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 0.5,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.26666713,
+              0.0500000007,
+              -1.26666713
+            ],
+            "max": [
+              1.26666713,
+              0.0500000007,
+              1.26666713
+            ]
+          }
+        },
+        {
+          "t": 1,
+          "count": 1,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -2.26666617,
+              0.0500000007,
+              -2.26666617
+            ],
+            "max": [
+              2.26666617,
+              0.0500000007,
+              2.26666617
+            ]
+          }
+        },
+        {
+          "t": 1.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 2,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 2.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 3,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 3.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        }
+      ],
+      "peakCount": 1,
+      "peakAt": 0.0166666667,
+      "peakPointCount": 0,
+      "budget": 1,
+      "budgetRatio": 1,
+      "hash": "ba6abe3eee89f02d"
+    }
+  },
+  "rain_snow": {
+    "check": {
+      "ok": true,
+      "warnings": [
+        {
+          "code": "stationary_world_space",
+          "message": "World-space emission has no movement driver on this entity.",
+          "hint": "Use local space for attached effects, or move the owner/parent from gameplay; isolated previews accept motion keys.",
+          "emitter": "rain",
+          "id": 2
+        },
+        {
+          "code": "stationary_world_space",
+          "message": "World-space emission has no movement driver on this entity.",
+          "hint": "Use local space for attached effects, or move the owner/parent from gameplay; isolated previews accept motion keys.",
+          "emitter": "snow",
+          "id": 3
+        }
+      ],
+      "expressionInstructions": 66,
+      "expressionStepInstructions": 15120,
+      "path": "effects/rain_snow.vfx.json",
+      "budget": 88
+    },
+    "software": {
+      "times": [
+        0.25,
+        1,
+        2.2,
+        3.8
+      ],
+      "frames": [
+        {
+          "t": 0.25,
+          "count": 39,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.26619244,
+              1.67654681,
+              -1.7970413
+            ],
+            "max": [
+              3.33477306,
+              3.07345414,
+              1.60725546
+            ]
+          },
+          "hash": "9e791e9afb5d6bc1"
+        },
+        {
+          "t": 1,
+          "count": 50,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.22985768,
+              -0.0734534487,
+              -1.68566453
+            ],
+            "max": [
+              3.48723817,
+              3.07345414,
+              1.79668617
+            ]
+          },
+          "hash": "a46ec4d14626fe1a"
+        },
+        {
+          "t": 2.2,
+          "count": 47,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -2.95876336,
+              0.0098798871,
+              -1.81351268
+            ],
+            "max": [
+              3.36229515,
+              2.58807588,
+              1.7254293
+            ]
+          },
+          "hash": "14d73795f5f485d1"
+        },
+        {
+          "t": 3.8,
+          "count": 8,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              0.308896899,
+              -0.0680732429,
+              -1.51762509
+            ],
+            "max": [
+              3.20945168,
+              0.668077767,
+              1.3871491
+            ]
+          },
+          "hash": "38e3f0ab860b6bf5"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "software",
+      "hash": "03702d310763eb04",
+      "path": "samples/VFXLab/build/proof-rain_snow-software.png"
+    },
+    "gpu": {
+      "times": [
+        0.25,
+        1,
+        2.2,
+        3.8
+      ],
+      "frames": [
+        {
+          "t": 0.25,
+          "count": 39,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.26619244,
+              1.67654681,
+              -1.7970413
+            ],
+            "max": [
+              3.33477306,
+              3.07345414,
+              1.60725546
+            ]
+          },
+          "hash": "bb7c24040434fd8e"
+        },
+        {
+          "t": 1,
+          "count": 50,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.22985768,
+              -0.0734534487,
+              -1.68566453
+            ],
+            "max": [
+              3.48723817,
+              3.07345414,
+              1.79668617
+            ]
+          },
+          "hash": "d4b47d76c278b344"
+        },
+        {
+          "t": 2.2,
+          "count": 47,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -2.95876336,
+              0.0098798871,
+              -1.81351268
+            ],
+            "max": [
+              3.36229515,
+              2.58807588,
+              1.7254293
+            ]
+          },
+          "hash": "44ac1177ddd499c2"
+        },
+        {
+          "t": 3.8,
+          "count": 8,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              0.308896899,
+              -0.0680732429,
+              -1.51762509
+            ],
+            "max": [
+              3.20945168,
+              0.668077767,
+              1.3871491
+            ]
+          },
+          "hash": "55724afd974ca6a4"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "gpu (d3d11)",
+      "hash": "1ef6bb500adaa86f",
+      "path": "samples/VFXLab/build/proof-rain_snow-gpu.png"
+    },
+    "analysis": {
+      "duration": 5,
+      "step": 0.5,
+      "finishedAt": 4.31666667,
+      "samples": [
+        {
+          "t": 0,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 0.5,
+          "count": 51,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.2565639,
+              0.418333888,
+              -1.75317883
+            ],
+            "max": [
+              3.36688447,
+              3.08166671,
+              1.57047415
+            ]
+          }
+        },
+        {
+          "t": 1,
+          "count": 50,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.22022915,
+              -0.0816661194,
+              -1.64993656
+            ],
+            "max": [
+              3.48550606,
+              3.08166671,
+              1.75282371
+            ]
+          }
+        },
+        {
+          "t": 1.5,
+          "count": 57,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -3.10882044,
+              -0.0816661194,
+              -1.63844025
+            ],
+            "max": [
+              3.38332272,
+              3.08166671,
+              1.69677949
+            ]
+          }
+        },
+        {
+          "t": 2,
+          "count": 54,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -2.94913483,
+              -0.0816661194,
+              -1.76965022
+            ],
+            "max": [
+              3.30308032,
+              2.83000016,
+              1.7266078
+            ]
+          }
+        },
+        {
+          "t": 2.5,
+          "count": 41,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              0.148244083,
+              -0.0499977395,
+              -1.59209156
+            ],
+            "max": [
+              3.38151717,
+              2.23000073,
+              1.60473025
+            ]
+          }
+        },
+        {
+          "t": 3,
+          "count": 19,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              0.503097117,
+              -0.0699977428,
+              -1.6630758
+            ],
+            "max": [
+              3.2410574,
+              1.63000143,
+              1.54305351
+            ]
+          }
+        },
+        {
+          "t": 3.5,
+          "count": 12,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              0.387828559,
+              -0.0699977428,
+              -1.56906259
+            ],
+            "max": [
+              3.28819728,
+              1.030002,
+              1.43058205
+            ]
+          }
+        },
+        {
+          "t": 4,
+          "count": 5,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              0.906132817,
+              -0.0699977428,
+              -1.43998337
+            ],
+            "max": [
+              2.46171117,
+              0.430002302,
+              1.19590366
+            ]
+          }
+        },
+        {
+          "t": 4.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        }
+      ],
+      "peakCount": 60,
+      "peakAt": 1.75,
+      "peakPointCount": 0,
+      "budget": 88,
+      "budgetRatio": 0.681818182,
+      "hash": "b7cd36d08174570e"
+    }
+  },
+  "healing_aura": {
+    "check": {
+      "ok": true,
+      "warnings": [],
+      "expressionInstructions": 90,
+      "expressionStepInstructions": 21600,
+      "path": "effects/healing_aura.vfx.json",
+      "budget": 48
+    },
+    "software": {
+      "times": [
+        0.2,
+        0.7,
+        1.5,
+        2.8
+      ],
+      "frames": [
+        {
+          "t": 0.2,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.21754909,
+              0.122317366,
+              -1.19520497
+            ],
+            "max": [
+              1.22763622,
+              0.330504775,
+              1.1844238
+            ]
+          },
+          "hash": "af24e2931a6a8592"
+        },
+        {
+          "t": 0.7,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.13950157,
+              0.602700174,
+              -1.08329344
+            ],
+            "max": [
+              1.14130175,
+              1.0791378,
+              1.09983087
+            ]
+          },
+          "hash": "8d8f66145b4e5b1c"
+        },
+        {
+          "t": 1.5,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.00609541,
+              1.3970964,
+              -0.925445557
+            ],
+            "max": [
+              1.00336277,
+              2.21667004,
+              0.9304654
+            ]
+          },
+          "hash": "d8833ee671a867d2"
+        },
+        {
+          "t": 2.8,
+          "count": 13,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.670716226,
+              2.77197862,
+              -0.646895766
+            ],
+            "max": [
+              0.670613706,
+              3.02130127,
+              0.641513526
+            ]
+          },
+          "hash": "aa2dd083d5249cb2"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "software",
+      "hash": "3b65781a0e97402d",
+      "path": "samples/VFXLab/build/proof-healing_aura-software.png"
+    },
+    "gpu": {
+      "times": [
+        0.2,
+        0.7,
+        1.5,
+        2.8
+      ],
+      "frames": [
+        {
+          "t": 0.2,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.21754909,
+              0.122317366,
+              -1.19520497
+            ],
+            "max": [
+              1.22763622,
+              0.330504775,
+              1.1844238
+            ]
+          },
+          "hash": "bd7c856ef2269f43"
+        },
+        {
+          "t": 0.7,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.13950157,
+              0.602700174,
+              -1.08329344
+            ],
+            "max": [
+              1.14130175,
+              1.0791378,
+              1.09983087
+            ]
+          },
+          "hash": "7d72c1d5b13932ca"
+        },
+        {
+          "t": 1.5,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.00609541,
+              1.3970964,
+              -0.925445557
+            ],
+            "max": [
+              1.00336277,
+              2.21667004,
+              0.9304654
+            ]
+          },
+          "hash": "e80bf40e726af60c"
+        },
+        {
+          "t": 2.8,
+          "count": 13,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.670716226,
+              2.77197862,
+              -0.646895766
+            ],
+            "max": [
+              0.670613706,
+              3.02130127,
+              0.641513526
+            ]
+          },
+          "hash": "b963c9ee2c3015d7"
+        }
+      ],
+      "width": 768,
+      "height": 192,
+      "columns": 4,
+      "tileSize": 192,
+      "renderer": "gpu (d3d11)",
+      "hash": "4626e9c9b9c1e195",
+      "path": "samples/VFXLab/build/proof-healing_aura-gpu.png"
+    },
+    "analysis": {
+      "duration": 5,
+      "step": 0.5,
+      "finishedAt": 2.96666667,
+      "samples": [
+        {
+          "t": 0,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 0.5,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.18572903,
+              0.407248765,
+              -1.09513664
+            ],
+            "max": [
+              1.1588937,
+              0.784835696,
+              1.09534156
+            ]
+          }
+        },
+        {
+          "t": 1,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.07629383,
+              0.89297998,
+              -0.987698436
+            ],
+            "max": [
+              1.10517693,
+              1.51885891,
+              0.987348616
+            ]
+          }
+        },
+        {
+          "t": 1.5,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -1.00320101,
+              1.39387989,
+              -0.865736187
+            ],
+            "max": [
+              1.0004735,
+              2.2195394,
+              0.870934963
+            ]
+          }
+        },
+        {
+          "t": 2,
+          "count": 48,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.867264688,
+              1.91227722,
+              -0.766355276
+            ],
+            "max": [
+              0.891971469,
+              2.89340711,
+              0.771851063
+            ]
+          }
+        },
+        {
+          "t": 2.5,
+          "count": 28,
+          "pointCount": 0,
+          "bbox": {
+            "min": [
+              -0.770452738,
+              2.44564319,
+              -0.682594061
+            ],
+            "max": [
+              0.719875991,
+              3.03660679,
+              0.671512604
+            ]
+          }
+        },
+        {
+          "t": 3,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 3.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 4.5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        },
+        {
+          "t": 5,
+          "count": 0,
+          "pointCount": 0,
+          "bbox": null
+        }
+      ],
+      "peakCount": 48,
+      "peakAt": 0.0166666667,
+      "peakPointCount": 0,
+      "budget": 48,
+      "budgetRatio": 1,
+      "hash": "397e13db113e373d"
+    }
+  }
+}

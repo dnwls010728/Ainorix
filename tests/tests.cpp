@@ -8191,6 +8191,122 @@ TEST(SampleVfxExpressionsPortablePreview) {
     CHECK(e.Scripts().Errors().empty() && e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Expression Spiral"))->emitters[0].particles.size()==48);
 }
 
+TEST(SampleVfxSixEffectAcceptance) {
+    struct Proof { const char* name; const char* times; const char* hash; int peak; float finish; };
+    const Proof proofs[] = {
+        {"ice_pillar","[0.15,0.75,2.4,3.1]","0bf48c34cf2faaf1",33,3.38333333f},
+        {"tornado","[0.2,1,2.5,3.8]","c6a97faaac61cf6c",128,4.03333333f},
+        {"shield_dome","[0.1,0.6,1.5,2.8]","85fee85f32cc80cf",1,3.03333333f},
+        {"shockwave","[0.1,0.4,0.8,1.25]","d608cae4d6ab83e3",1,1.43333333f},
+        {"rain_snow","[0.25,1,2.2,3.8]","4e838d294576e87e",60,4.31666667f},
+        {"healing_aura","[0.2,0.7,1.5,2.8]","2d453ad03fdce41d",48,2.96666667f}
+    };
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    for(const auto& proof : proofs) {
+        Json args=Json::MakeObject();args["path"]=std::string("effects/")+proof.name+".vfx.json";
+        const Json checked=e.Call("vfx.check",args);CHECK(checked["ok"].asBool() && checked["result"]["ok"].asBool());
+        CHECK(checked["result"]["warnings"].size()==(std::string(proof.name)=="rain_snow"?2:0));
+        args["times"]=Json::parse(proof.times);args["size"]=128;args["inline"]=false;
+        const Json first=e.Call("vfx.preview",args);CHECK(first["ok"].asBool() && first==e.Call("vfx.preview",args));
+        CHECK(first["result"]["hash"].asString()==proof.hash);
+        args.erase("times");args.erase("size");args.erase("inline");args["duration"]=5;args["step"]=0.5;
+        const Json analysis=e.Call("vfx.analyze",args);CHECK(analysis["ok"].asBool());
+        CHECK(analysis["result"]["peakCount"].asInt()==proof.peak);
+        CHECK(std::abs(analysis["result"]["finishedAt"].asFloat()-proof.finish)<1e-4f);
+        Json scene=Json::MakeObject();scene["path"]=std::string("scenes/")+proof.name+".scene.json";
+        CHECK(e.Call("scene.load",scene)["ok"].asBool());CHECK(e.GetScene().Pool<Script>().empty());
+        e.RecordState();e.Step(30);const auto state=e.SaveState();e.Step(20);
+        const Json future=Call(e,"vfx.state",R"({"id":"Effect"})");
+        RenderTarget target;target.Resize(128,128);e.RenderGameView(target);const auto hash=target.Hash();
+        e.LoadState(*state);e.Step(20);CHECK(Call(e,"vfx.state",R"({"id":"Effect"})")==future);
+        e.RenderGameView(target);CHECK(target.Hash()==hash);CHECK(e.Scripts().Errors().empty());e.Stop();
+    }
+}
+
+TEST(SampleVfxAcceptanceMotionAndMaterials) {
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    auto load=[&](const char* name) { e.Stop();Json a=Json::MakeObject();a["path"]=std::string("scenes/")+name+".scene.json";
+        CHECK(e.Call("scene.load",a)["ok"].asBool());e.Step(1); };
+    auto system=[&]() { return e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Effect")); };
+    load("ice_pillar");
+    for(int frames : {8,36,90}) {
+        e.Step(frames);const auto items=GatherRenderItems(e.GetScene(),&e.Assets());
+        bool found=false;for(const auto& item : items) if(item.id==e.GetScene().FindByName("Effect") && item.mesh->positions.size()==30) {
+            const Vec3 base=item.world.TransformPoint(Vec3(0,-0.5f,0));
+            CHECK(std::abs(base.y)<1e-5f);
+            CHECK(std::abs(Length(item.world.TransformDir(Vec3(1,0,0)))-0.8f)<1e-4f);
+            CHECK(std::abs(Length(item.world.TransformDir(Vec3(0,0,1)))-0.8f)<1e-4f);found=true;
+        }
+        CHECK(found);
+    }
+    load("tornado");e.Step(59);
+    for(const Particle& p : system()->emitters[0].particles) {
+        CHECK(std::abs(p.expressionBirthPosition.y-static_cast<float>(p.index)/p.birthCount*3.2f)<1e-4f);
+        const float radius=std::sqrt(p.position.x*p.position.x+p.position.z*p.position.z);
+        CHECK(std::abs(radius-(0.2f+p.birthPosition.y*0.3f))<0.003f);
+        CHECK(p.position.y>p.birthPosition.y);
+    }
+    load("shield_dome");e.Step(29);const Particle& shield=system()->emitters[0].particles[0];
+    CHECK(shield.axisScale.x>1.7f && shield.axisScale.x<1.9f && shield.axisScale.x==shield.axisScale.y && shield.axisScale.x==shield.axisScale.z);
+    load("shockwave");e.Step(29);const Particle before=system()->emitters[0].particles[0];e.Step(30);
+    CHECK(std::abs(system()->emitters[0].particles[0].axisScale.x-before.axisScale.x-1)<1e-4f);
+    load("rain_snow");e.Step(14);const Particle rain=system()->emitters[0].particles[0];
+    CHECK(rain.worldSpace && rain.birthPosition.y==3 && std::abs(rain.velocity.y+5)<1e-4f);
+    CHECK(Call(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"position":[20,10,0]}})")["ok"].asBool());
+    e.Step(1);CHECK(std::abs(system()->emitters[0].particles[0].position.x-rain.position.x)<1e-5f);
+    for(int frame=0;frame<260;++frame) {
+        for(const auto& emitter : system()->emitters) for(const auto& p : emitter.particles) {
+            const float floor=p.birthPosition.y-3;
+            CHECK(p.position.y>=floor-0.001f && p.position.y<=p.birthPosition.y+0.001f);
+            CHECK(std::abs(p.velocity.y+3/p.lifetime)<1e-4f);
+        }
+        e.Step(1);
+    }
+    CHECK(VfxFinished(*system()));
+    load("healing_aura");e.Step(59);const auto& particles=system()->emitters[0].particles;
+    float lo=100,hi=-100;for(const auto& p : particles) {
+        CHECK(p.position.y>0 && p.custom.x>0.3f && p.custom.z==p.random);
+        lo=std::min(lo,p.position.y);hi=std::max(hi,p.position.y);
+    }
+    CHECK(hi-lo>0.2f); // varied lifetime spreads the visible spiral vertically
+    auto graph=[&](const char* path) { std::string source;CHECK(ReadTextFile(TestSourceDir()+"/samples/VFXLab/"+path,source));
+        ShaderGraph g;CHECK(CompileShaderGraph(Json::parse(source),g,&error));return g; };
+    auto dome=graph("materials/vfx_shield.shader.json");auto uniforms=dome.defaults;
+    uniforms[dome.cameraUniform]=Vec4(0,0,5,1);ShaderInputs input;input.custom=Vec4(1,0,0,1);input.normal=Vec4(0,0,1,0);
+    const auto face=EvaluateShaderGraph(dome,input,uniforms);input.normal=Vec4(1,0,0,0);
+    const auto rim=EvaluateShaderGraph(dome,input,uniforms);CHECK(rim.color.w>face.color.w+0.5f);
+    input.custom.w=0;CHECK(EvaluateShaderGraph(dome,input,uniforms).color.w==0);
+    auto ring=graph("materials/vfx_shockwave.shader.json");input=ShaderInputs();input.custom=Vec4(1,0,0,0.4f);
+    input.uv.y=0.2f;const auto inner=EvaluateShaderGraph(ring,input,ring.defaults);
+    input.uv.y=0.8f;CHECK(EvaluateShaderGraph(ring,input,ring.defaults).color.w!=inner.color.w);
+    auto healing=graph("materials/vfx_healing.shader.json");input=ShaderInputs();input.texture=[](float,float){return Vec4(1,1,1,1);};
+    input.custom.x=0.3f;const auto dim=EvaluateShaderGraph(healing,input,healing.defaults);input.custom.x=1.5f;
+    CHECK(Length(EvaluateShaderGraph(healing,input,healing.defaults).emissive)>Length(dim.emissive)*4);
+}
+
+TEST(SampleVfxAcceptanceRenderParity) {
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    const bool gpu=e.EnableGpu(nullptr,&error);RenderTarget individual,batched,hardware;
+    individual.Resize(128,128);batched.Resize(128,128);hardware.Resize(128,128);
+    RenderView view=MakeLookAtView(Vec3(4,3,7),Vec3(0,1.5f,0),45,1);view.drawUI=false;
+    auto mean=[](const RenderTarget& a,const RenderTarget& b) { double sum=0;
+        for(size_t i=0;i<a.color.size();++i) for(int c=0;c<3;++c) sum+=std::abs(static_cast<int>((a.color[i]>>(8*c))&255)-static_cast<int>((b.color[i]>>(8*c))&255));
+        return sum/static_cast<double>(a.color.size()*3); };
+    for(const char* name : {"ice_pillar","tornado","shield_dome","shockwave","rain_snow","healing_aura"}) {
+        Json args=Json::MakeObject();args["path"]=std::string("scenes/")+name+".scene.json";CHECK(e.Call("scene.load",args)["ok"].asBool());
+        CHECK(Call(e,"entity.delete",R"({"id":"Ground"})")["ok"].asBool());e.Step(60);
+        auto* system=e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Effect"));
+        for(auto& emitter : system->emitters) emitter.batching=false;
+        e.Renderer().Render(e.GetScene(),view,individual);
+        if(gpu) { e.Gpu()->Render(e.GetScene(),view,hardware);std::printf("  %s individual software/GPU %.3f\n",name,mean(individual,hardware));if(std::string(name)=="shockwave") { WritePng("build/shockwave-parity-software.png",individual.ToImage(),true); WritePng("build/shockwave-parity-gpu.png",hardware.ToImage(),true); } CHECK(mean(individual,hardware)<2.0); }
+        for(auto& emitter : system->emitters) emitter.batching=true;
+        e.Renderer().Render(e.GetScene(),view,batched);
+        std::printf("  %s batching mean %.3f\n",name,mean(individual,batched));CHECK(mean(individual,batched)<0.5); // translucent blocks have independent depth sorting
+        if(gpu) { e.Gpu()->Render(e.GetScene(),view,hardware);std::printf("  %s batched software/GPU %.3f\n",name,mean(batched,hardware));CHECK(mean(batched,hardware)<2.0); }
+        e.Stop();
+    }
+}
+
 TEST(VfxTwoAnchorRibbon) {
     Engine e;std::string error;CHECK(e.Open(TempProject("vfx_ribbon"),&error));Call(e,"scene.new",R"({"empty":true})");
     Call(e,"entity.create",R"({"name":"Base","components":{"Transform":{"position":[-1,0,0]}}})");

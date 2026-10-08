@@ -118,4 +118,5 @@ single-precision resolution. Keep phase inputs small with fract when appropriate
       The pre-existing unused ProcessFixtureDir warning remains.
 - [x] Prebuilt Web and Android arm64-v8a/x86_64 players rebuilt; runtime README hashes refreshed.
 - [ ] Android device, browser GPU and Linux/EGL execution; run the sample and rendering suite there.
-- [ ] 5b+ text-only acceptance assets (ice pillar, tornado, shield, shockwave, rain/snow, healing aura).
+- [x] 5b+ text-only acceptance assets (ice pillar, tornado, shield, shockwave, rain/snow, healing aura).
+      Contracts, contact sheets and test evidence: [VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).

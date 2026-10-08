@@ -16,6 +16,8 @@ AI エージェントが人と同じくらい簡単に操作・検証できる�
 
 VFXの生成・更新チャンネルを式で制御できます。エフェクト > 式で入力・検証・元に戻す操作を行い、`vfx.expression_eval`で結果と計算コストを確認できます。VFXLabの`effects/spiral_expressions.vfx.json`または`scenes/expressions.scene.json`を開いてください。[仕様と検証](docs/VFX_PHASE5B.md)。
 
+VFXLabにスクリプトなしで動く氷柱・竜巻・シールド・衝撃波・雨/雪・回復エフェクトの6種類を追加しました。同名のエフェクトアセットまたはシーンを開いてください。[サンプルと検証記録](docs/VFX_PHASE5B_PLUS.md)。
+
 ## 何が違うのか
 
 - **すべてが 1 つの API。** シーン編集、シミュレーション、入力、スクリーンショット、アセットなど、どの機能も JSON

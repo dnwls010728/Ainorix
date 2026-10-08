@@ -1,0 +1,132 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Ice Pillar",
+  "description": "Phase 5b+ text-only acceptance proof; no gameplay transform script.",
+  "budget": {
+    "maxParticles": 45
+  },
+  "emitters": [
+    {
+      "name": "pillar",
+      "emitter": {
+        "burst": 1,
+        "rate": 0,
+        "maxParticles": 1,
+        "loop": false,
+        "lifetime": 3,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 1,
+        "endSize": 1,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "mesh": "assets/models/vfx_crystal.glb",
+        "meshScale": [
+          0.8,
+          3.6,
+          0.8
+        ],
+        "pivot": [
+          0,
+          -0.5,
+          0
+        ],
+        "material": "materials/ice_channels.mat.json",
+        "expressions": {
+          "update": {
+            "scale": "vec3(1,curve(age,0,0.01,0.2,1,1,1),1)",
+            "custom0": "curve(age,0,0.1,0.2,0.8,0.8,0.4,1,0)",
+            "custom3": "curve(age,0,1,0.75,1,1,0)"
+          }
+        }
+      }
+    },
+    {
+      "name": "frost",
+      "emitter": {
+        "burst": 32,
+        "rate": 0,
+        "maxParticles": 32,
+        "loop": false,
+        "lifetime": 1.4,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 0.2,
+        "endSize": 1,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "delay": 0.12,
+        "texture": "assets/textures/glow.png",
+        "blend": "add",
+        "startColor": [
+          0.25,
+          0.7,
+          1
+        ],
+        "expressions": {
+          "birth": {
+            "position": "vec3(cos(index*2*pi/max(count,1))*0.5,0.08,sin(index*2*pi/max(count,1))*0.5)"
+          },
+          "update": {
+            "position": "vec3(birthPosition.x*age*2,age*0.6,birthPosition.z*age*2)",
+            "size": "birthSize*(1-age)",
+            "opacity": "1-age"
+          }
+        }
+      }
+    },
+    {
+      "name": "fragments",
+      "emitter": {
+        "burst": 12,
+        "rate": 0,
+        "maxParticles": 12,
+        "loop": false,
+        "lifetime": 1.1,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          -3,
+          0
+        ],
+        "startSize": 0.16,
+        "endSize": 0.06,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "delay": 2.25,
+        "mesh": "assets/models/vfx_crystal.glb",
+        "material": "materials/ice_channels.mat.json",
+        "custom3": 1,
+        "custom0": 0.3,
+        "batching": true,
+        "expressions": {
+          "birth": {
+            "position": "vec3(cos(index*2*pi/max(count,1))*0.3,1+random*2,sin(index*2*pi/max(count,1))*0.3)",
+            "velocity": "vec3(cos(index*2*pi/max(count,1))*1.3,random*1.4,sin(index*2*pi/max(count,1))*1.3)",
+            "rotation": "vec3(random*180,index*30,random*90)"
+          },
+          "update": {
+            "rotation": "vec3(age*180,age*90,age*120)",
+            "opacity": "1-age",
+            "custom3": "1-age"
+          }
+        }
+      }
+    }
+  ]
+}

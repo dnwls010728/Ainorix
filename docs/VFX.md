@@ -47,6 +47,11 @@ supplied inputs; `vfx.check` reports compiled/reserved costs. `vfx.schema.expres
 functions, limits and reusable snippets. Open `effects/spiral_expressions.vfx.json` or
 `scenes/expressions.scene.json` in VFXLab. Full contract and evidence: [VFX_PHASE5B.md](VFX_PHASE5B.md).
 
+Six script-free acceptance effects are available in VFXLab: `ice_pillar`, `tornado`, `shield_dome`,
+`shockwave`, `rain_snow` and `healing_aura`. Open `effects/<name>.vfx.json` or
+`scenes/<name>.scene.json`. Contracts, contact sheets and recorded command results:
+[VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).
+
 ## Agent recipe
 
 Start with `vfx.schema` for reflected field names, types, defaults, ranges, options and fixed-order
@@ -412,3 +417,6 @@ oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph 
 
 - [x] Phase 5b (2026-10-08): typed Birth/Update expressions, deterministic math, located errors,
       numeric budgets, diagnostics and Effects source editing. See [VFX_PHASE5B.md](VFX_PHASE5B.md).
+
+- [x] Phase 5b+ (2026-10-08): six text-only acceptance effects, procedural meshes/materials, script-free
+      scenes and recorded headless/renderer proofs. See [VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).

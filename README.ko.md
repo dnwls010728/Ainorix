@@ -16,6 +16,8 @@ AI 에이전트가 사람만큼 쉽게 조작하고 검증할 수 있도록 만�
 
 VFX 생성·갱신 채널을 수식으로 제어할 수 있습니다. 이펙트 > 수식에서 입력·검증·되돌리기를 지원하며, `vfx.expression_eval`로 결과와 계산 비용을 확인합니다. VFXLab의 `effects/spiral_expressions.vfx.json` 또는 `scenes/expressions.scene.json`에서 확인하세요. [명세와 검증](docs/VFX_PHASE5B.md).
 
+VFXLab에 스크립트 없이 동작하는 얼음 기둥·회오리·보호막·충격파·비/눈·힐링 효과 6종이 추가됐습니다. 같은 이름의 이펙트 에셋 또는 씬을 열어 확인하세요. [예제와 검증 기록](docs/VFX_PHASE5B_PLUS.md).
+
 ## 무엇이 다른가
 
 - **모든 것이 하나의 API.** 씬 편집, 시뮬레이션, 입력, 스크린샷, 에셋 등 모든 기능이 JSON 스키마를 가진 명령이며

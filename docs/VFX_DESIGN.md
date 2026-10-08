@@ -434,6 +434,8 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       signed/vector Effects curves and a curve-only ice pillar proof. See docs/VFX_PHASE5A.md.
 - [x] Phase 5b (2026-10-08): typed Birth/Update source, own bounded math, numeric budgets,
       located errors, snippets, Effects editing and portable proof hashes. See docs/VFX_PHASE5B.md.
+- [x] Phase 5b+ gate (2026-10-08): six text-only effects, procedural meshes/materials and script-free
+      scenes; recorded preview/check/analyze and renderer/restore proofs. See docs/VFX_PHASE5B_PLUS.md.
 - [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
       Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.
 - [ ] Not verified anywhere yet: Android device execution of VFX assets; Linux/EGL rendering suite.
