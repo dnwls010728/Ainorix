@@ -212,7 +212,7 @@ Collider wireframes are separate: `render.screenshot {colliders:true}` (see PHYS
 
 ## Performance
 
-GPU: the game window renders at the window's resolution (`project.json` `window.renderScale` 0.25–1 renders the 3D image smaller and upscales it, UI stays sharp) and presents with vsync.
+GPU: the game window renders at the window's resolution (`project.json` `window.renderScale` 0.25–1 renders the 3D image smaller and upscales it, UI stays sharp) and presents with vsync. Frame-time measurement and the optimization work log: [RENDER_PERF.md](RENDER_PERF.md).
 
 Software: the main pass and the shadow pass are split into horizontal bands rendered on worker threads (one band per core, up to 16). Triangles use a consistent fill rule (a pixel on a shared edge belongs to exactly one of the two triangles, so there are no gaps or double-drawn pixels). Each pixel belongs to exactly one band and sees triangles in the same order, so the result does not depend on the number of threads (`SetMaxRenderThreads(1)` is used in tests to prove it). A small lit scene with a skinned model renders at 1280×720 in roughly 14 ms on an 8-core desktop.
 
