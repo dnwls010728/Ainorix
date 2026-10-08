@@ -17,6 +17,23 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Parameter", "파라미터", "パラメーター"},
+    {"Channel uses authored values until nodes are applied.", "노드 적용 전에는 기존 설정을 사용합니다.", "ノード適用前は既存の設定を使用します。"},
+    {"Remove Node", "노드 삭제", "ノードを削除"},
+    {"Curve inputs: time, then age/value pairs. Ages must be constant and ascending.", "곡선 입력: 시간 다음에 수명/값 쌍. 수명은 오름차순 상수여야 합니다.", "カーブ入力：時間と年齢/値の組。年齢は昇順の定数が必要です。"},
+    {"Expression Source", "수식 원문", "式のソース"},
+    {"Input", "입력", "入力"},
+    {"Axis", "축", "軸"},
+    {"Particle Input", "입자 입력", "パーティクル入力"},
+    {"Literal", "상수", "定数"},
+    {"Keep this expression in text view; conversion was refused.", "변환할 수 없는 수식입니다. 텍스트 보기에서 편집하세요.", "変換できない式です。テキスト表示で編集してください。"},
+    {"Connect values to channel output. Incomplete nodes stay pending. Assets store expression text only.", "값을 채널 출력에 연결하세요. 미완성 노드는 대기 상태로 남으며 에셋에는 수식만 저장됩니다.", "値をチャンネル出力に接続してください。未完成のノードは保留され、アセットには式だけが保存されます。"},
+    {"Channel Output", "채널 출력", "チャンネル出力"},
+    {"Reset Nodes", "노드 초기화", "ノードをリセット"},
+    {"Apply Nodes", "노드 적용", "ノードを適用"},
+    {"Add Value Node", "값 노드 추가", "値ノードを追加"},
+    {"Value nodes require a particle emitter.", "값 노드는 입자 이미터에서 사용합니다.", "値ノードにはパーティクルエミッターが必要です。"},
+    {"Value Nodes", "값 노드", "値ノード"},
     {"Structure Graph", "구조 그래프", "構造グラフ"},
     {"Auto Arrange", "자동 배치", "自動配置"},
     {"Material Reference", "재질 참조", "マテリアル参照"},

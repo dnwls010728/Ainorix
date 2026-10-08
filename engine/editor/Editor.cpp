@@ -1717,7 +1717,13 @@ void NativeEditor::OpenScript(const std::string& path) { impl_->OpenScript(path)
 void NativeEditor::OpenShader(const std::string& path) { impl_->OpenShader(path); }
 Json NativeEditor::ShaderDocument() const { return impl_->shaderDocument; }
 void NativeEditor::OpenEffect(const std::string& path) { impl_->OpenEffect(path); }
-void NativeEditor::SetEffectsGraph(bool on) { impl_->effectsGraph = on; }
+void NativeEditor::SetEffectsGraph(bool on) { impl_->effectsGraph = on; if(on) impl_->effectsValues=false; }
+void NativeEditor::SetEffectsValues(bool on,bool update,int channel) {
+    impl_->effectsValues=on;
+    if(on) impl_->effectsGraph=false;
+    impl_->effectsCurveKeys["expression:stage"]=update?1:0;
+    impl_->effectsCurveKeys["expression:channel"]=std::clamp(channel,0,10);
+}
 Json NativeEditor::EffectsDocument() const { return impl_->engine.VfxDocumentCall("state", Json())["document"]; }
 std::array<float, 4> NativeEditor::EffectsControlRect(const std::string& name) const {
     const auto found = impl_->effectsRects.find(name);

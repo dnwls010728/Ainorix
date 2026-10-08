@@ -41,7 +41,7 @@ bool EditorNodeCanvas::Card(ImVec2& position, ImVec2 dimensions, const char* tit
     draw->AddRectFilled(p, p + ImVec2(dimensions.x, 36) * zoom_, header, 5);
     draw->AddRect(p, end, selected ? IM_COL32(112, 202, 242, 255) : IM_COL32(98, 109, 127, 255), 5, 1.5f);
     if (headerOnly) draw->PushClipRect(p, p + ImVec2(dimensions.x - 10, 36) * zoom_, true);
-    draw->AddText(p + ImVec2(10, 9) * zoom_, IM_COL32(240, 243, 248, 255), title);
+    draw->AddText(ImGui::GetFont(), ImGui::GetFontSize() * zoom_, p + ImVec2(10, 9) * zoom_, IM_COL32(240, 243, 248, 255), title);
     if (headerOnly) draw->PopClipRect();
     ImGui::SetCursorScreenPos(p + ImVec2(8, 2) * zoom_);
     ImGui::InvisibleButton("##node", ImVec2((dimensions.x - 16) * zoom_, (headerOnly ? 32 : dimensions.y - 4) * zoom_));

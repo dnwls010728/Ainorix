@@ -80,6 +80,8 @@ public:
     Json EffectsDocument() const;
     // Switch between the Effects structure graph and its field view.
     void SetEffectsGraph(bool on);
+    // Select the Birth/Update value-node canvas and channel, as its toolbar does.
+    void SetEffectsValues(bool on, bool update = true, int channel = 7);
     std::array<float, 4> EffectsControlRect(const std::string& name) const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;

@@ -185,6 +185,13 @@ Platform requirements (`engine/platform/Platform.h`): `Window::SetEventMode` / `
 
 Adding a panel: a method on `NativeEditor::Impl` (declared in `EditorInternal.h`), called from `NativeEditor::Update`, docked in `DockLayout`, with a toggle in the View menu. Read data with `Call("...")` when the revision changes (`Refresh`), write with commands so undo and agents using the API stay in sync.
 
+## Effects value nodes
+
+Enable Value Nodes in Effects to edit Birth/Update channel expressions. Nodes compile into the same
+source used by the command-backed document; there is no editor evaluator. Complete edits share undo,
+while incomplete topology stays pending. Positions and framing live in `.oe/vfx-layout/` sidecars.
+Material graphs remain in Shaders. Usage and verification: [VFX_PHASE5C.md](VFX_PHASE5C.md).
+
 ## Implementation status (work log): P7
 
 - [x] P7.1: Command-backed hierarchy clipboard with subtree/reference remapping,
@@ -300,3 +307,8 @@ are resolved by the scene instance. Structure Graph adds reference nodes and wir
 
 - [x] Translated Birth/Update channel source widget, explicit Apply/Clear, individual document history
       and native event verification. See [VFX_PHASE5B.md](VFX_PHASE5B.md).
+
+### Effects value nodes (2026-10-08)
+
+- [x] Typed channel canvas, source/graph commands, shared history and independent layout.
+- [x] Native event tests and Korean/English D3D11 screenshots. See [VFX_PHASE5C.md](VFX_PHASE5C.md).

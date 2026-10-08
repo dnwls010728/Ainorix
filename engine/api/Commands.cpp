@@ -10,6 +10,7 @@
 #include "app/Project.h"
 #include "app/AssetPreview.h"
 #include "app/Vfx.h"
+#include "app/VfxExpressionGraph.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
 #include "core/FileSystem.h"
@@ -372,6 +373,14 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
             .Opt("inputs","object","Finite scalar/vector inputs from vfx.schema.expressions; omitted values use deterministic defaults.")
             .Opt("params","object","Numeric scalar/three-vector parameter values, up to 32 entries."),false,
         [](Engine&,const Json& a){return EvaluateVfxExpressionCall(a);});
+    Register(r,"vfx.expression_graph","Convert expression text to transient typed value nodes; unsupported conversion preserves source documents.",
+        Params().Req("source","string","Expression text, 1..1024 bytes.").Opt("type","string","scalar (default) or vector.")
+            .Opt("params","object","Numeric parameter defaults, up to 32 entries."),false,
+        [](Engine&,const Json& a){return VfxExpressionGraphCall(a,false);});
+    Register(r,"vfx.expression_source","Compile a transient value graph back to expression text; rejects cycles, invalid types and exceeded budgets.",
+        Params().Req("graph","object","oe.vfx.expression_graph version 1; nodes with op, args, literal/name/axis and integer output.")
+            .Opt("type","string","scalar (default) or vector.").Opt("params","object","Numeric parameter defaults, up to 32 entries."),false,
+        [](Engine&,const Json& a){return VfxExpressionGraphCall(a,true);});
     Register(r, "vfx.schema", "Discover particle/trail fields, fixed-order modules, defaults, ranges and authoring limits.", Params(), false,
              [](Engine&, const Json&) { return VfxSchema(); });
     Register(r, "vfx.presets", "List portable effect presets with intent sentences and tags.", Params().Opt("tag", "string", "Filter by an exact tag."), false,

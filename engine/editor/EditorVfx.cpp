@@ -514,6 +514,8 @@ void NativeEditor::Impl::EffectsPanel() {
         if (effectsState["path"].asString() != effectsPath) {
             if (effectsLayoutDirty) EffectsGraphLayout(true);
             effectsExpressionText.clear();
+            effectsValueKey.clear(); effectsValueGraph = Json(); effectsValueSelected = -1; effectsValueLink = -1;
+            effectsValuePan = ImVec2(24,24); effectsValueZoom = 0.8f;
             effectsLayoutPath.clear(); effectsGraphPositions.clear(); effectsGraphModules.clear(); effectsGraphMaterials.clear(); effectsGraphAnchors.clear();
             effectsGraphLink.clear(); effectsGraphHint.clear(); effectsGraphSelected.clear();
             effectsGraphPan = ImVec2(24, 24); effectsGraphZoom = 0.8f;
@@ -598,7 +600,16 @@ void NativeEditor::Impl::EffectsPanel() {
         document["trails"].push(block); EffectsReplace(document);
     }
     EffectsRect("add-trail");
-    SameLineIfFits(Tr("Structure Graph")); ImGui::Checkbox(Tr("Structure Graph"), &effectsGraph); EffectsRect("graph-toggle");
+    SameLineIfFits(Tr("Structure Graph"));
+    if(ImGui::Checkbox(Tr("Structure Graph"), &effectsGraph) && effectsGraph) effectsValues = false;
+    EffectsRect("graph-toggle");
+    SameLineIfFits(Tr("Value Nodes"));
+    if(ImGui::Checkbox(Tr("Value Nodes"), &effectsValues)) {
+        if(effectsValues) effectsGraph = false;
+        effectsValueFit = true;
+    }
+    EffectsRect("value-toggle");
+    if(effectsValues) { EffectsValues(); ImGui::End(); return; }
     if (effectsGraph) {
         EffectsGraph(); ImGui::End(); return;
     }

@@ -31,7 +31,7 @@ work in vertex displacement, both renderers, and batching, without taking graph 
 `particles.state {id,particles:true}` includes evaluated scale/rotation/custom, birth inputs,
 `integratedPosition`, accepted birth `index` and immutable accepted batch `count`. Native snapshots
 retain these values; scene JSON excludes them. Hot reload updates curves while preserving live birth
-inputs. Bounded expression text now drives Birth/Update channels; value nodes remain phase 5c.
+inputs. Bounded expression text now drives Birth/Update channels; value nodes are described in [VFX_PHASE5C.md](VFX_PHASE5C.md).
 Rain/snow ground-height killing remains a later candidate; finite lifetime can end falling particles.
 Verification and limits: [VFX_PHASE5A.md](VFX_PHASE5A.md).
 
@@ -51,6 +51,11 @@ Six script-free acceptance effects are available in VFXLab: `ice_pillar`, `torna
 `shockwave`, `rain_snow` and `healing_aura`. Open `effects/<name>.vfx.json` or
 `scenes/<name>.scene.json`. Contracts, contact sheets and recorded command results:
 [VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).
+
+Effects **Value Nodes** edits individual Birth/Update channel expressions through typed nodes,
+with the same document undo and validation as source editing. `vfx.expression_graph` and
+`vfx.expression_source` expose the conversion for agents. Assets retain source text only;
+positions stay in `.oe/` layout sidecars. See [VFX_PHASE5C.md](VFX_PHASE5C.md) for usage and limits.
 
 ## Agent recipe
 
@@ -420,3 +425,6 @@ oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph 
 
 - [x] Phase 5b+ (2026-10-08): six text-only acceptance effects, procedural meshes/materials, script-free
       scenes and recorded headless/renderer proofs. See [VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).
+
+- [x] Phase 5c (2026-10-08): compiler-backed value nodes, bounded graph/source commands, typed
+      validation, shared source/history and layout sidecars. See [VFX_PHASE5C.md](VFX_PHASE5C.md).

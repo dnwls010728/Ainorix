@@ -296,3 +296,18 @@ unverified. Toolchains: Emscripten 6.0.10 / Android NDK r28c, Release, paralleli
 | runtime/web/oe_player.wasm | 4,803,292 | d2a340496cae0d3cfc6304a74f59f5919e36e50dace0b082f6e897988fbb0a82 |
 
 Commands.cpp SHA256: `e9777ebc426db0bf619d384f6c28522ba625809c22eab950e52bc9aa6e62fa29`.
+
+## VFX value-node authoring rebuild (phase 5c, 2026-10-08)
+
+The compiler retains exact decimal literal spelling for transient graph conversion. Common commands
+now expose graph/source conversion with the existing runtime evaluator. Simulation and legacy hashes
+remain unchanged. All 244 Node/WASM tests pass. Desktop value-node editing is not part of the player.
+Built with Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2 and BINARYEN_CORES=1 for Web.
+Android devices, browser GPU and Linux/EGL execution remain unverified. See docs/VFX_PHASE5C.md.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,830,223 | bdbcf6a5e5ecff4a81b237fa1f5c05cb2e0d24316f5d55782901cfd1e67be133 |
+
+Commands.cpp SHA256: `bc3347cc460c58d067ce65920814b7f6984926421bae3169fc73ff740cd8f90d`.

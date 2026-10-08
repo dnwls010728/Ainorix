@@ -36,6 +36,7 @@ void NativeEditor::Impl::EffectsGraphLayout(bool save) {
         Json layout = ObjectOf({{"version", 1}, {"asset", effectsPath}, {"zoom", effectsGraphZoom},
             {"pan", Json(Json::Array{effectsGraphPan.x, effectsGraphPan.y})}, {"positions", Json::MakeObject()},
             {"materials", Json::MakeArray()}, {"anchors", Json::MakeArray()}});
+        layout["valuePan"] = Json(Json::Array{effectsValuePan.x,effectsValuePan.y}); layout["valueZoom"] = effectsValueZoom;
         for (const auto& position : effectsGraphPositions)
             layout["positions"][position.first] = Json(Json::Array{position.second.x, position.second.y});
         for (const std::string& material : effectsGraphMaterials) layout["materials"].push(material);
@@ -51,7 +52,7 @@ void NativeEditor::Impl::EffectsGraphLayout(bool save) {
     if (text.size() > 2 * 1024 * 1024) { Notify(Tr("Invalid node layout; using automatic positions."), true); return; }
     const Json layout = Json::parse(text, &error);
     if (!error.empty() || layout["version"].asInt() != 1 || layout["asset"].asString() != effectsPath ||
-        !layout["positions"].isObject() || layout["positions"].size() > 256 || !BoundedPoint(layout["pan"]) ||
+        !layout["positions"].isObject() || layout["positions"].size() > 4096 || !BoundedPoint(layout["pan"]) ||
         !layout["zoom"].isNumber() || !std::isfinite(layout["zoom"].asNumber()) ||
         layout["zoom"].asFloat() < 0.08f || layout["zoom"].asFloat() > 1.5f) {
         Notify(Tr("Invalid node layout; using automatic positions."), true); effectsGraphFit = true; return;
@@ -59,6 +60,10 @@ void NativeEditor::Impl::EffectsGraphLayout(bool save) {
     for (const auto& entry : layout["positions"].members()) if (entry.first.size() <= 4096 && BoundedPoint(entry.second))
         effectsGraphPositions[entry.first] = ImVec2(entry.second[0].asFloat(), entry.second[1].asFloat());
     effectsGraphPan = ImVec2(layout["pan"][0].asFloat(), layout["pan"][1].asFloat()); effectsGraphZoom = layout["zoom"].asFloat();
+    if(BoundedPoint(layout["valuePan"]) && layout["valueZoom"].isNumber() && std::isfinite(layout["valueZoom"].asNumber()) &&
+        layout["valueZoom"].asFloat()>=0.08f && layout["valueZoom"].asFloat()<=1.5f) {
+        effectsValuePan=ImVec2(layout["valuePan"][0].asFloat(),layout["valuePan"][1].asFloat());effectsValueZoom=layout["valueZoom"].asFloat();
+    }
     for (const char* key : {"materials", "anchors"}) {
         auto& references = std::string(key) == "materials" ? effectsGraphMaterials : effectsGraphAnchors;
         if (layout[key].isArray() && layout[key].size() <= 32) for (const Json& reference : layout[key].items())

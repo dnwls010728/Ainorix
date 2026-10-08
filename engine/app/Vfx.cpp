@@ -1,4 +1,5 @@
 #include "app/Vfx.h"
+#include "app/VfxExpressionGraph.h"
 #include "scene/VfxExpression.h"
 
 #include <algorithm>
@@ -69,6 +70,7 @@ Json VfxSchema() {
     out["channels"]["index"] = "zero-based accepted birth order per emitter, reset by clear; count is accepted batch size captured at birth";
     out["channels"]["order"] = "age, velocity curve, gravity/turbulence/drag, velocity integration, position offset, rotation/scale/custom curves, expiry, births";
     out["expressions"]=VfxExpressionSchema();
+    out["expressions"]["valueGraph"]=VfxExpressionGraphSchema();
     out["params"]["available"] = true;
     out["params"]["syntax"] = "params[name] = {default, min?, max?, doc, targets:[{to:'emitterName.field', scale?}]}";
     out["limits"]["duration"] = 60; out["limits"]["previewFrames"] = 16; out["limits"]["analysisSamples"] = 241;

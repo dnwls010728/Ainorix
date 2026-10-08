@@ -297,3 +297,18 @@ unverified. Toolchains: Emscripten 6.0.10 / Android NDK r28c, Release, paralleli
 | runtime/android/x86_64/liboe_player.so | 7,976,856 | 46f6d3fbf9f26fce2f41c6cadd2b60e076076756845f829c1f452cf352873528 |
 
 Commands.cpp SHA256: `e9777ebc426db0bf619d384f6c28522ba625809c22eab950e52bc9aa6e62fa29`.
+
+## VFX value-node authoring rebuild (phase 5c, 2026-10-08)
+
+The compiler retains exact decimal literal spelling for transient graph conversion. Common commands
+now expose graph/source conversion with the existing runtime evaluator. Simulation and legacy hashes
+remain unchanged. All 244 Node/WASM tests pass. Desktop value-node editing is not part of the player.
+Built with Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2 and BINARYEN_CORES=1 for Web.
+Android devices, browser GPU and Linux/EGL execution remain unverified. See docs/VFX_PHASE5C.md.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,573,120 | 52a35b25bbbabb9c9085b9908dbd10649450196ca96aa5342ee1c2021e6c26b2 |
+| runtime/android/x86_64/liboe_player.so | 8,015,256 | d68bc07328da449750b0b5b0f82b10f8e7aa196e07e0db7cb863380f495db9b7 |
+
+Commands.cpp SHA256: `bc3347cc460c58d067ce65920814b7f6984926421bae3169fc73ff740cd8f90d`.

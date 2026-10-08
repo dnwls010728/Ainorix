@@ -144,6 +144,7 @@ private:
         if (Take("(")) { const int value = Expression(0); if (!Take(")")) Fail("expected ')'"); return value; }
         Space();
         if (position_ < source_.size() && (Digit(source_[position_]) || source_[position_] == '.')) {
+            const size_t numberBegin = position_;
             float value = 0, place = 0.1f; bool decimal = false, digit = false;
             while (position_ < source_.size()) {
                 const char c = source_[position_];
@@ -156,7 +157,7 @@ private:
                 if (!std::isfinite(value) || value > 65504) Fail("literal must be within +/-65504");
             }
             if (!digit) Fail("expected number");
-            return Emit(VfxExprOp::Constant, VfxValueType::Scalar, {}, Vec3(value,value,value));
+            return Emit(VfxExprOp::Constant, VfxValueType::Scalar, {}, Vec3(value,value,value), source_.substr(numberBegin,position_-numberBegin));
         }
         const size_t begin = position_;
         while (position_ < source_.size() && (Identifier(source_[position_]) || Digit(source_[position_]) || source_[position_] == '.')) ++position_;
@@ -184,7 +185,7 @@ private:
         } else {
             static const std::vector<std::string> scalars = {"age","lifetime","emitterTime","systemTime","index","count","random","speed","birthSize","birthOpacity"};
             static const std::vector<std::string> vectors = {"birthPosition","birthVelocity","birthRotation","birthScale","birthColor"};
-            if (input == "pi") value = Emit(VfxExprOp::Constant,VfxValueType::Scalar,{},Vec3(kPi,kPi,kPi));
+            if (input == "pi") value = Emit(VfxExprOp::Constant,VfxValueType::Scalar,{},Vec3(kPi,kPi,kPi),"pi");
             else if (std::find(scalars.begin(),scalars.end(),input) != scalars.end()) value = Emit(VfxExprOp::Input,VfxValueType::Scalar,{}, {},input);
             else if (std::find(vectors.begin(),vectors.end(),input) != vectors.end()) value = Emit(VfxExprOp::Input,VfxValueType::Vector,{}, {},input);
             else Fail("unknown input '" + input + "'");

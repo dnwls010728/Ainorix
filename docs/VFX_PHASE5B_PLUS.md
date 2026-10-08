@@ -105,4 +105,5 @@ current. Android devices, browser GPU and Linux/EGL execution remain unverified.
 - [x] Software/D3D11 comparisons, batching and native restore.
 - [x] Editor screenshot and six script-free scene verification flows.
 - [ ] Device/browser GPU/Linux execution: run all six scenes and rendering suite on those targets.
-- [ ] Phase 5c value-node authoring, followed by phase 5d presets/release.
+- [x] Phase 5c value-node authoring: [VFX_PHASE5C.md](VFX_PHASE5C.md).
+- [ ] Phase 5d presets/release.

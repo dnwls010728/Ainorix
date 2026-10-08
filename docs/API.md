@@ -178,6 +178,26 @@ Compile and evaluate a bounded VFX expression without changing the scene; return
 | `inputs` | object |  | Finite scalar/vector inputs from vfx.schema.expressions; omitted values use deterministic defaults. |
 | `params` | object |  | Numeric scalar/three-vector parameter values, up to 32 entries. |
 
+### `vfx.expression_graph`
+
+Convert expression text to transient typed value nodes; unsupported conversion preserves source documents.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `source` | string | yes | Expression text, 1..1024 bytes. |
+| `type` | string |  | scalar (default) or vector. |
+| `params` | object |  | Numeric parameter defaults, up to 32 entries. |
+
+### `vfx.expression_source`
+
+Compile a transient value graph back to expression text; rejects cycles, invalid types and exceeded budgets.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `graph` | object | yes | oe.vfx.expression_graph version 1; nodes with op, args, literal/name/axis and integer output. |
+| `type` | string |  | scalar (default) or vector. |
+| `params` | object |  | Numeric parameter defaults, up to 32 entries. |
+
 ### `vfx.schema`
 
 Discover particle/trail fields, fixed-order modules, defaults, ranges and authoring limits.

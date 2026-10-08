@@ -16,6 +16,8 @@ Typed VFX expressions now animate Birth/Update channels without gameplay scripts
 
 VFXLab now also includes six script-free effect proofs: ice pillar, tornado, shield dome, shockwave, rain/snow and healing aura. Open their matching effect assets or scenes. [Examples and recorded checks](docs/VFX_PHASE5B_PLUS.md).
 
+Effects now includes **Value Nodes** for Birth/Update expressions, with compiler validation, shared undo and source editing. Agents use `vfx.expression_graph` / `vfx.expression_source`. [Usage and limits](docs/VFX_PHASE5C.md).
+
 ## Why it is different
 
 - **One API for everything.** Scene edits, simulation, input, screenshots, assets, packaging helpers: each is a

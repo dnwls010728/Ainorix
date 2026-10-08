@@ -8191,6 +8191,55 @@ TEST(SampleVfxExpressionsPortablePreview) {
     CHECK(e.Scripts().Errors().empty() && e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Expression Spiral"))->emitters[0].particles.size()==48);
 }
 
+TEST(VfxExpressionValueGraphCommands) {
+    const std::string project=TempProject("expression_graph");Engine e;std::string error;CHECK(e.Open(project,&error));
+    const Json scene=e.GetScene().ToJson();const size_t undo=e.UndoDepth();
+    Json args=Json::parse(R"J({"source":"select(age<0.5,vec3(sin(age*pi),param.offset.y,0.0000001),birthScale)","type":"vector","params":{"offset":[1,2,3]}})J");
+    const Json converted=e.Call("vfx.expression_graph",args);CHECK(converted["ok"].asBool());
+    CHECK(converted["result"]["source"].asString().find("0.0000001")!=std::string::npos);
+    Json exportArgs=args;exportArgs.erase("source");exportArgs["graph"]=converted["result"]["graph"];
+    const Json exported=e.Call("vfx.expression_source",exportArgs);CHECK(exported["ok"].asBool());
+    CHECK(exported["result"]["graph"]==converted["result"]["graph"]);
+    for(float age : {0.0f,0.25f,0.5f,1.0f}) {
+        args["inputs"]["age"]=age;const Json reference=e.Call("vfx.expression_eval",args);
+        Json evaluate=args;evaluate["source"]=exported["result"]["source"];
+        CHECK(e.Call("vfx.expression_eval",evaluate)==reference);
+    }
+    Json bad=exportArgs;bad["graph"]["nodes"][0]["op"]="add";bad["graph"]["nodes"][0]["args"]=Json(Json::Array{0,0});
+    CHECK(e.Call("vfx.expression_source",bad)["error"]["code"].asString()=="invalid_expression_graph");
+    bad=exportArgs;bad["graph"]["output"]=99999999;CHECK(!e.Call("vfx.expression_source",bad)["ok"].asBool());
+    bad=exportArgs;bad["graph"]["nodes"][0]["name"]="age) + 1";CHECK(!e.Call("vfx.expression_source",bad)["ok"].asBool());
+    bad=exportArgs;bad["type"]="scalar";CHECK(!e.Call("vfx.expression_source",bad)["ok"].asBool());
+    bad=exportArgs;bad["graph"]["nodes"][2]["op"]="native";CHECK(!e.Call("vfx.expression_source",bad)["ok"].asBool());
+    Json flat=Json::MakeObject();flat["source"]="age";for(int i=0;i<31;++i) flat["source"]=flat["source"].asString()+"+1";
+    CHECK(e.Call("vfx.expression_eval",flat)["ok"].asBool());
+    CHECK(e.Call("vfx.expression_graph",flat)["error"]["code"].asString()=="unsupported_expression_graph");
+    CHECK(e.GetScene().ToJson()==scene && e.UndoDepth()==undo);
+    RemoveAll(project);
+}
+
+TEST(VfxAcceptanceExpressionGraphsRoundTrip) {
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    for(const char* name : {"ice_pillar","tornado","shield_dome","shockwave","rain_snow","healing_aura"}) {
+        Json asset=Json::MakeObject();asset["path"]=std::string("effects/")+name+".vfx.json";
+        const Json document=e.Call("vfx.get",asset)["result"];Json params=Json::MakeObject();
+        for(const auto& entry:document["params"].members()) params[entry.first]=entry.second["default"];
+        for(const Json& emitter:document["emitters"].items()) for(const auto& stage:emitter["emitter"]["expressions"].members())
+            for(const auto& channel:stage.second.members()) {
+                bool vector=false;for(size_t i=0;i<5;++i) vector=vector || channel.first==VfxChannelNames()[i];
+                Json args=Json::MakeObject();args["source"]=channel.second;args["type"]=vector?"vector":"scalar";args["params"]=params;
+                const Json graph=e.Call("vfx.expression_graph",args);
+                if(!graph["ok"].asBool()) std::printf("  %s %s %s\n",name,channel.first.c_str(),graph.dump().c_str());
+                CHECK(graph["ok"].asBool());
+                Json exportArgs=args;exportArgs.erase("source");exportArgs["graph"]=graph["result"]["graph"];
+                CHECK(e.Call("vfx.expression_source",exportArgs)["ok"].asBool());
+                args["inputs"]=Json::parse(R"({"age":0.37,"lifetime":2,"index":7,"count":48,"random":0.23,"birthPosition":[0.2,1.5,-0.3]})");
+                const Json original=e.Call("vfx.expression_eval",args);args["source"]=graph["result"]["source"];
+                CHECK(e.Call("vfx.expression_eval",args)==original);
+            }
+    }
+}
+
 TEST(SampleVfxSixEffectAcceptance) {
     struct Proof { const char* name; const char* times; const char* hash; int peak; float finish; };
     const Proof proofs[] = {
@@ -11873,6 +11922,59 @@ TEST(NativeEditorEffectsExpressions) {
         click("expression-clear");CHECK(!editor.EffectsDocument()["emitters"][0]["emitter"]["expressions"]["birth"].has("position"));
         type("vec3(index,0,0)");click("expression-apply");
         CHECK(WritePng(JoinPath(TestSourceDir(),"build/effects-expressions-editor.png"),image.ToImage()));
+    }
+    RemoveAll(project);
+}
+
+TEST(NativeEditorEffectsValueNodes) {
+    const std::string project=TempProject("editor_value_nodes");Engine engine;std::string error;CHECK(engine.Open(project,&error));
+    Json document=TestVfxDocument();document["emitters"][0]["emitter"]["expressions"]["update"]["custom0"]="age*2";
+    document["params"]["toggle"]=Json::parse(R"({"default":true,"targets":[]})");CreateTestVfx(engine,document);
+    if(!engine.EnableGpu(nullptr,&error)) {RemoveAll(project);return;}
+    NativeEditor::Options options;options.language="en";std::array<float,4> moved{};
+    {
+        NativeEditor editor(engine,nullptr,options);CHECK(editor.Init(&error));RenderTarget image;
+        auto frames=[&](int count,const std::vector<WindowEvent>& events=std::vector<WindowEvent>()) {
+            for(int i=0;i<count;++i) {editor.Update(i==0?events:std::vector<WindowEvent>(),1600,1100,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}
+        };
+        auto point=[&](const std::string& name) {const auto r=editor.EffectsControlRect(name);CHECK(r[2]>0 && r[3]>0);return ImVec2(r[0]+r[2]*.5f,r[1]+r[3]*.5f);};
+        auto mouse=[&](ImVec2 p,bool down) {WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=p.x;move.y=p.y;
+            WindowEvent button=move;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=down;frames(2,{move});frames(2,{button});};
+        auto click=[&](const std::string& name) {const auto p=point(name);mouse(p,true);mouse(p,false);frames(3);};
+        auto drag=[&](const std::string& from,const std::string& to) {const auto a=point(from),b=point(to);mouse(a,true);
+            WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=b.x;move.y=b.y;frames(3,{move});mouse(b,false);frames(3);};
+        frames(3);editor.OpenEffect("effects/sparks.vfx.json");editor.SetEffectsValues(true,true,7);frames(5);
+        const Json original=editor.EffectsDocument();CHECK(Call(engine,"vfx.edit_state")["result"]["undo"].asInt()==0);
+        const auto header=point("value-node:1");mouse(header,true);WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=header.x+25;move.y=header.y+12;
+        frames(3,{move});mouse(ImVec2(move.x,move.y),false);frames(3);
+        moved=editor.EffectsControlRect("value-node:1");CHECK(editor.EffectsDocument()==original && !Call(engine,"vfx.edit_state")["result"]["dirty"].asBool());
+        click("value-node:1");const auto number=point("value-number");mouse(number,true);
+        move.x=number.x+30;move.y=number.y;frames(2,{move});move.x+=20;frames(2,{move});mouse(ImVec2(move.x,move.y),false);frames(3);
+        const Json edited=editor.EffectsDocument();CHECK(edited!=original);CHECK(Call(engine,"vfx.edit_state")["result"]["undo"].asInt()==1);
+        click("undo");CHECK(editor.EffectsDocument()==original);click("redo");CHECK(editor.EffectsDocument()==edited);
+        CHECK(Call(engine,"vfx.set",R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"expressions":{"update":{"custom0":"age*3"}}}})J")["ok"].asBool());frames(4);
+        const Json remote=editor.EffectsDocument();CHECK(remote["emitters"][0]["emitter"]["expressions"]["update"]["custom0"].asString()=="age*3");
+        drag("value-out:2","value-in:2:0");CHECK(editor.EffectsDocument()==remote);click("value-reset");
+        drag("value-out:1","value-in:3:0");CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["expressions"]["update"]["custom0"].asString()=="3");
+        click("undo");CHECK(editor.EffectsDocument()==remote);
+        click("value-add");click("value-palette:constant");drag("value-out:3","value-in:4:0");
+        CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["expressions"]["update"]["custom0"].asString()=="1");
+        click("undo");CHECK(editor.EffectsDocument()==remote);
+        // Wrong channel type preserves the shared source document.
+        click("value-channel");click("value-channel:position");frames(3);
+        const Json beforeType=editor.EffectsDocument();drag("value-out:0","value-in:4:0");CHECK(editor.EffectsDocument()==beforeType);
+        click("value-reset");editor.SetEffectsValues(true,true,7);frames(4);
+        click("graph-toggle");CHECK(editor.EffectsControlRect("value-node:1")[2]==0);
+        click("value-toggle");CHECK(editor.EffectsControlRect("value-node:1")[2]>0);
+        moved=editor.EffectsControlRect("value-node:1");
+        CHECK(WritePng(JoinPath(TestSourceDir(),"build/effects-value-nodes-editor.png"),image.ToImage()));
+    }
+    {
+        NativeEditor editor(engine,nullptr,options);CHECK(editor.Init(&error));RenderTarget image;
+        for(int i=0;i<3;++i) {editor.Update({},1600,1100,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}
+        editor.OpenEffect();editor.SetEffectsValues(true,true,7);
+        for(int i=0;i<5;++i) {editor.Update({},1600,1100,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}
+        const auto reloaded=editor.EffectsControlRect("value-node:1");std::printf("  value layout %.2f %.2f / %.2f %.2f\n",moved[0],moved[1],reloaded[0],reloaded[1]);CHECK(std::abs(reloaded[0]-moved[0])<1 && std::abs(reloaded[1]-moved[1])<1);
     }
     RemoveAll(project);
 }

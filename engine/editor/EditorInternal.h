@@ -216,6 +216,15 @@ struct NativeEditor::Impl {
     ImVec2 effectsGraphPan{24, 24};
     float effectsGraphZoom = 0.8f;
     void EffectsGraph();
+    bool effectsValues = false, effectsValueFit = false;
+    Json effectsValueGraph;
+    Json effectsValueParamTypes;
+    std::string effectsValueKey, effectsValueSource, effectsValueError;
+    int effectsValueSelected = -1, effectsValueLink = -1;
+    ImVec2 effectsValuePan{24,24};
+    float effectsValueZoom = 0.8f;
+    void EffectsValues();
+    bool EffectsValueApply(const Json& candidate, const std::string& merge = {});
     void EffectsBlockFields();
     void EffectsParameterValue(const std::string& name, float fieldWidth = 0);
     void EffectsGraphLayout(bool save);
