@@ -14,6 +14,30 @@ import math
 import os
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+import hashlib
+
+
+def vfx(settings):
+    """Write one reusable emitter asset; preserve the owner id and index-zero RNG seed."""
+    path = "effects/generated-" + hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12] + ".vfx.json"
+    defaults = {'startColor': [1, 1, 1], 'endColor': [1, 1, 1], 'speed': 1, 'startSize': 0.100000001, 'playing': True}
+    params = {}
+    for field, default in defaults.items():
+        value = settings.get(field, default)
+        if field in ("startColor", "endColor") and isinstance(value, str):
+            value = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        params[field] = {"default": value, "targets": [{"to": "emitter." + field}]}
+    asset = {"format": "oe.vfx", "version": 1, "name": "Generated effect",
+             "budget": {"maxParticles": settings.get("maxParticles", 256)},
+             "emitters": [{"name": "emitter", "emitter": settings}], "params": params}
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(asset, file, indent=2)
+        file.write("\n")
+    return {"asset": path}
+
 TEX = "assets/textures/"
 FONT = "assets/fonts/Jua-Regular.ttf"
 PPU = 32
@@ -130,10 +154,10 @@ for index, (x, z) in enumerate(((-4.6, 3.4), (4.6, 3.4), (-4.6, 8.6), (4.6, 8.6)
                                         "Script": {"path": "scripts/flicker.lua", "params": {"phase": index * 1.7}}}, lamp)
 for name, x, z in (("Fireflies Pond", -9.5, 8), ("Fireflies Meadow", 9, 6)):
     add(name, {"Transform": {"position": [x, 1.2, z]},
-               "ParticleEmitter": {"rate": 5, "lifetime": 5, "speed": 0.35, "spread": 180, "speedVariation": 0.6,
+               "VFXSystem": vfx({"rate": 5, "lifetime": 5, "speed": 0.35, "spread": 180, "speedVariation": 0.6,
                                    "gravity": [0, 0.02, 0], "startSize": 0.1, "endSize": 0.03,
                                    "startColor": [1.6, 1.5, 0.5], "endColor": [0.9, 1.3, 0.3], "startOpacity": 0.9,
-                                   "space": "world", "maxParticles": 40, "blend": "add", "seed": len(entities)}})
+                                   "space": "world", "maxParticles": 40, "blend": "add", "seed": len(entities)})})
 
 # Where players appear (by player number) and what lies on the ground when the world starts.
 for index in range(MAX_PLAYERS):

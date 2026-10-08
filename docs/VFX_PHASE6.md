@@ -17,10 +17,27 @@ steps against a single-emitter asset. The final old-path reference hashes are 2D
 `VfxSeedMix(index) = uint32(index) * 0x27d4eb2d`; index 0 is exactly zero, matching the old standalone
 step. Entity ids are retained in migrated scenes/prefabs so the owner contribution to RNG stays stable.
 
+## Content migration (6.2)
+
+Migrated 27 placed emitters across VFXLab, HD2D, Wickbound, DongleZoo and OnlineRPG, plus the dynamic
+HD2D crystal burst and both coin/hit effects in Dungeon/Platformer. Entity ids and transforms stay
+unchanged. Five content generators now write reusable emitter assets; regenerating cannot restore the
+retired scene component. Generated assets use deterministic settings hashes as filenames and expose
+color, speed, size and playing parameters for gameplay control. Existing grouped campfire and all six
+acceptance presets remain available. No sample is deleted; Trail remains a direct component here.
+
+32 isolated old/new contact sheets reproduce the same hashes and numeric peak/finish/bounds results,
+recorded in [VFX_PHASE6_CONTENT_RESULTS.json](VFX_PHASE6_CONTENT_RESULTS.json). The proof enables
+paused emitters and requests a 12/16-particle burst for normally manual-only effects; the shipped
+settings/defaults remain unchanged. Gameplay callers use vfx.set/burst/spawn; one-shot Dungeon,
+Platformer and crystal owners now disappear when their particles finish rather than on a later timer.
+All 303 Windows tests pass after migration, including Dungeon/Platformer, Wickbound, DongleZoo,
+VFXLab and OnlineRPG gameplay coverage. Pure content changes require packaging, not a player rebuild.
+
 ## Implementation status (work log)
 
 - [x] 6.1: run the old-path parity gate and capture final particle reference hashes/seed contract.
-- [ ] 6.2: migrate shipped content, generators and gameplay effect scripts; compare preview/analyze.
+- [x] 6.2: migrate shipped content, generators and gameplay effect scripts; compare preview/analyze.
 - [ ] 6.3: move fixtures and regression tests to assets; establish stable reference hashes.
 - [ ] 6.4: retire registration, scene stepping/gather and standalone commands/Lua; retain reflection.
 - [ ] 6.5: revise particle/API/editor/agent documentation and pre-release compatibility rule.

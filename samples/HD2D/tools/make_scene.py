@@ -8,6 +8,30 @@ import json
 import os
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+import hashlib
+
+
+def vfx(settings):
+    """Write one reusable emitter asset; preserve the owner id and index-zero RNG seed."""
+    path = "effects/generated-" + hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12] + ".vfx.json"
+    defaults = {'startColor': [1, 1, 1], 'endColor': [1, 1, 1], 'speed': 1, 'startSize': 0.100000001, 'playing': True}
+    params = {}
+    for field, default in defaults.items():
+        value = settings.get(field, default)
+        if field in ("startColor", "endColor") and isinstance(value, str):
+            value = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        params[field] = {"default": value, "targets": [{"to": "emitter." + field}]}
+    asset = {"format": "oe.vfx", "version": 1, "name": "Generated effect",
+             "budget": {"maxParticles": settings.get("maxParticles", 256)},
+             "emitters": [{"name": "emitter", "emitter": settings}], "params": params}
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(asset, file, indent=2)
+        file.write("\n")
+    return {"asset": path}
+
 TEX = "assets/textures/"
 PPU = 32
 
@@ -158,10 +182,10 @@ for index, (x, y, z) in enumerate(((-6.5, 0, 1.5), (8.5, 0, -1.2), (0, 0, -8.2),
 # Fireflies: additive particles drifting over the pond and the meadow.
 for name, x, z in (("Fireflies Pond", 13.5, 1), ("Fireflies Meadow", -9, 5)):
     add(name, {"Transform": {"position": [x, 1.2, z]},
-               "ParticleEmitter": {"rate": 5, "lifetime": 5, "speed": 0.35, "spread": 180, "speedVariation": 0.6,
+               "VFXSystem": vfx({"rate": 5, "lifetime": 5, "speed": 0.35, "spread": 180, "speedVariation": 0.6,
                                    "gravity": [0, 0.02, 0], "startSize": 0.1, "endSize": 0.03,
                                    "startColor": [1.6, 1.5, 0.5], "endColor": [0.9, 1.3, 0.3], "startOpacity": 0.9,
-                                   "space": "world", "maxParticles": 40, "blend": "add", "seed": len(entities)}})
+                                   "space": "world", "maxParticles": 40, "blend": "add", "seed": len(entities)})})
 
 # ----- UI ---------------------------------------------------------------------------------------
 outline = {"outlineWidth": 2, "outlineColor": [0.05, 0.04, 0.1]}

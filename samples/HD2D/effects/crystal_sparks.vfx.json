@@ -1,0 +1,44 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Crystal Sparks",
+  "budget": {
+    "maxParticles": 18
+  },
+  "emitters": [
+    {
+      "name": "emitter",
+      "emitter": {
+        "rate": 0,
+        "burst": 18,
+        "loop": false,
+        "lifetime": 0.7,
+        "lifetimeVariation": 0.4,
+        "speed": 2.4,
+        "speedVariation": 0.5,
+        "spread": 180,
+        "drag": 3,
+        "gravity": [
+          0,
+          -1.5,
+          0
+        ],
+        "startSize": 0.16,
+        "endSize": 0.02,
+        "startColor": [
+          0.6,
+          1.6,
+          1.8
+        ],
+        "endColor": [
+          0.3,
+          0.6,
+          1.4
+        ],
+        "space": "world",
+        "blend": "add",
+        "maxParticles": 18
+      }
+    }
+  ]
+}

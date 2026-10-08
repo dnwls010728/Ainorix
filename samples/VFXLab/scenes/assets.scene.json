@@ -271,75 +271,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/glow.png",
-          "pixelArt": false,
-          "space": "world",
-          "rate": 70,
-          "lifetime": 1.6,
-          "speed": 0.9,
-          "spread": 0,
-          "gravity": [
-            0,
-            0,
-            0
-          ],
-          "shape": "circle",
-          "shapeSize": [
-            1.1,
-            0,
-            0
-          ],
-          "shapeEdge": true,
-          "radialSpeed": -0.45,
-          "blend": "add",
-          "maxParticles": 160,
-          "sizeOverLife": [
-            [
-              0,
-              0.0
-            ],
-            [
-              0.15,
-              0.2
-            ],
-            [
-              1,
-              0.03
-            ]
-          ],
-          "colorOverLife": [
-            [
-              0,
-              [
-                0.3,
-                0.9,
-                1.0
-              ]
-            ],
-            [
-              1,
-              [
-                0.6,
-                0.25,
-                1.0
-              ]
-            ]
-          ],
-          "opacityOverLife": [
-            [
-              0,
-              1
-            ],
-            [
-              0.7,
-              0.8
-            ],
-            [
-              1,
-              0
-            ]
-          ]
+        "VFXSystem": {
+          "asset": "effects/generated-5f50ea4bde94.vfx.json"
         }
       },
       "parent": 12
@@ -355,74 +288,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/glow.png",
-          "pixelArt": false,
-          "space": "world",
-          "rate": 10,
-          "lifetime": 1.2,
-          "speed": 0.2,
-          "spread": 180,
-          "gravity": [
-            0,
-            0.6,
-            0
-          ],
-          "shape": "circle",
-          "shapeSize": [
-            0.6,
-            0,
-            0
-          ],
-          "blend": "add",
-          "maxParticles": 32,
-          "spinVariation": 90,
-          "sizeOverLife": [
-            [
-              0,
-              0.2
-            ],
-            [
-              0.5,
-              0.9
-            ],
-            [
-              1,
-              0.4
-            ]
-          ],
-          "colorOverLife": [
-            [
-              0,
-              [
-                0.2,
-                0.5,
-                1.0
-              ]
-            ],
-            [
-              1,
-              [
-                0.5,
-                0.2,
-                0.9
-              ]
-            ]
-          ],
-          "opacityOverLife": [
-            [
-              0,
-              0
-            ],
-            [
-              0.4,
-              0.3
-            ],
-            [
-              1,
-              0
-            ]
-          ]
+        "VFXSystem": {
+          "asset": "effects/generated-7c2964168d16.vfx.json"
         }
       },
       "parent": 12
@@ -451,71 +318,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/glow.png",
-          "pixelArt": false,
-          "space": "world",
-          "rate": 0,
-          "burst": 70,
-          "loop": true,
-          "duration": 2,
-          "lifetime": 1.3,
-          "lifetimeVariation": 0.4,
-          "speed": 5.5,
-          "speedVariation": 0.5,
-          "spread": 180,
-          "gravity": [
-            0,
-            -3.5,
-            0
-          ],
-          "drag": 1.6,
-          "blend": "add",
-          "maxParticles": 160,
-          "align": "velocity",
-          "stretch": 0.07,
-          "startSize": 0.11,
-          "endSize": 0.03,
-          "colorOverLife": [
-            [
-              0,
-              [
-                1.0,
-                1.0,
-                0.8
-              ]
-            ],
-            [
-              0.3,
-              [
-                1.0,
-                0.5,
-                0.9
-              ]
-            ],
-            [
-              1,
-              [
-                0.3,
-                0.3,
-                1.0
-              ]
-            ]
-          ],
-          "opacityOverLife": [
-            [
-              0,
-              1
-            ],
-            [
-              0.6,
-              0.9
-            ],
-            [
-              1,
-              0
-            ]
-          ]
+        "VFXSystem": {
+          "asset": "effects/generated-da18ce2c457f.vfx.json"
         }
       },
       "parent": 16
@@ -531,57 +335,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/glow.png",
-          "pixelArt": false,
-          "space": "world",
-          "rate": 0,
-          "burst": 1,
-          "loop": true,
-          "duration": 2,
-          "lifetime": 0.22,
-          "speed": 0,
-          "gravity": [
-            0,
-            0,
-            0
-          ],
-          "blend": "add",
-          "maxParticles": 4,
-          "sizeOverLife": [
-            [
-              0,
-              0.6
-            ],
-            [
-              0.3,
-              3.2
-            ],
-            [
-              1,
-              2.0
-            ]
-          ],
-          "startColor": [
-            1.0,
-            0.9,
-            0.8
-          ],
-          "endColor": [
-            1.0,
-            0.6,
-            0.9
-          ],
-          "opacityOverLife": [
-            [
-              0,
-              1
-            ],
-            [
-              1,
-              0
-            ]
-          ]
+        "VFXSystem": {
+          "asset": "effects/generated-6552349adb26.vfx.json"
         }
       },
       "parent": 16
@@ -597,70 +352,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/smoke.png",
-          "pixelArt": false,
-          "space": "world",
-          "columns": 2,
-          "rows": 2,
-          "frames": 4,
-          "randomFrame": true,
-          "rate": 0,
-          "burst": 7,
-          "loop": true,
-          "duration": 2,
-          "delay": 0.12,
-          "lifetime": 1.7,
-          "speed": 0.6,
-          "spread": 180,
-          "gravity": [
-            0,
-            0.15,
-            0
-          ],
-          "shape": "sphere",
-          "shapeSize": [
-            0.35,
-            0,
-            0
-          ],
-          "maxParticles": 24,
-          "rotationVariation": 180,
-          "spinVariation": 25,
-          "sizeOverLife": [
-            [
-              0,
-              0.6
-            ],
-            [
-              1,
-              1.7
-            ]
-          ],
-          "startColor": [
-            0.4,
-            0.38,
-            0.45
-          ],
-          "endColor": [
-            0.2,
-            0.2,
-            0.25
-          ],
-          "opacityOverLife": [
-            [
-              0,
-              0
-            ],
-            [
-              0.15,
-              0.3
-            ],
-            [
-              1,
-              0
-            ]
-          ]
+        "VFXSystem": {
+          "asset": "effects/generated-c98debb509bf.vfx.json"
         }
       },
       "parent": 16
@@ -727,45 +420,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/glow.png",
-          "pixelArt": false,
-          "space": "local",
-          "rate": 0,
-          "burst": 1,
-          "loop": true,
-          "duration": 0.5,
-          "lifetime": 0.5,
-          "speed": 0,
-          "gravity": [
-            0,
-            0,
-            0
-          ],
-          "blend": "add",
-          "maxParticles": 4,
-          "startSize": 0.55,
-          "endSize": 0.55,
-          "startColor": [
-            0.7,
-            1.0,
-            0.8
-          ],
-          "endColor": [
-            0.7,
-            1.0,
-            0.8
-          ],
-          "opacityOverLife": [
-            [
-              0,
-              0.9
-            ],
-            [
-              1,
-              0.9
-            ]
-          ]
+        "VFXSystem": {
+          "asset": "effects/generated-192c3f300358.vfx.json"
         }
       },
       "parent": 20
@@ -781,37 +437,8 @@
             0
           ]
         },
-        "ParticleEmitter": {
-          "texture": "assets/textures/glow.png",
-          "pixelArt": false,
-          "space": "world",
-          "rate": 30,
-          "lifetime": 0.8,
-          "lifetimeVariation": 0.4,
-          "speed": 0.5,
-          "speedVariation": 0.6,
-          "spread": 180,
-          "gravity": [
-            0,
-            -0.8,
-            0
-          ],
-          "blend": "add",
-          "maxParticles": 48,
-          "startSize": 0.1,
-          "endSize": 0,
-          "startColor": [
-            0.8,
-            1.0,
-            0.9
-          ],
-          "endColor": [
-            0.2,
-            0.6,
-            1.0
-          ],
-          "startOpacity": 1,
-          "endOpacity": 0
+        "VFXSystem": {
+          "asset": "effects/generated-7a53b2e594ea.vfx.json"
         }
       },
       "parent": 20

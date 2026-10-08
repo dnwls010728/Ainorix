@@ -11,6 +11,30 @@ import os
 import re
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+import hashlib
+
+
+def vfx(settings):
+    """Write one reusable emitter asset; preserve the owner id and index-zero RNG seed."""
+    path = "effects/generated-" + hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12] + ".vfx.json"
+    defaults = {'startColor': [1, 1, 1], 'endColor': [1, 1, 1], 'speed': 1, 'startSize': 0.100000001, 'playing': True}
+    params = {}
+    for field, default in defaults.items():
+        value = settings.get(field, default)
+        if field in ("startColor", "endColor") and isinstance(value, str):
+            value = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        params[field] = {"default": value, "targets": [{"to": "emitter." + field}]}
+    asset = {"format": "oe.vfx", "version": 1, "name": "Generated effect",
+             "budget": {"maxParticles": settings.get("maxParticles", 256)},
+             "emitters": [{"name": "emitter", "emitter": settings}], "params": params}
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(asset, file, indent=2)
+        file.write("\n")
+    return {"asset": path}
+
 U = 1 / 40  # world units per design pixel (same as scripts/lib/balance.lua)
 FX, SPR, ICON = "assets/fx/", "assets/sprites/", "assets/icons/"
 FONT = "assets/fonts/Jua-Regular.ttf"
@@ -180,10 +204,10 @@ def shot(kind, radius_px, extra):
 def bolt_parts(d, root):
     d.add("Glow", {"Sprite": glow(20 * U, "#ff9a3c", 0.9, L_PROJ)}, root)
     d.add("Core", {"Sprite": glow(9 * U, "#fff6d6", 1, L_PROJ, order=1)}, root)
-    d.add("Trail", {"ParticleEmitter": {
+    d.add("Trail", {"VFXSystem": vfx({
         "rate": 60, "lifetime": 0.18, "speed": 0, "gravity": [0, 0, 0], "startSize": 4.5 * U, "endSize": 1.5 * U,
         "startColor": rgb("#ff9a3c"), "endColor": rgb("#ff9a3c"), "space": "world", "dimensions": 2,
-        "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 16}}, root)
+        "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 16})}, root)
 
 
 def shard_parts(d, root):
@@ -244,11 +268,11 @@ def brazier_prefab():
         d.add("Beacon", {"Transform": {"position": [0, 6 * U, 0]}, "Sprite": glow(34 * U, "#ff9a3c", 0.3, L_EYES)}, root)
         d.add("Fire", {"Transform": {"position": [0, 10 * U, 0]}, "Sprite": glow(46 * U, "#ff9a3c", 0.9, L_GLOW, visible=False)}, root)
         d.add("FireCore", {"Transform": {"position": [0, 14 * U, 0]}, "Sprite": glow(22 * U, "#fff2b0", 1, L_GLOW, order=1, visible=False)}, root)
-        d.add("Sparks", {"Transform": {"position": [0, 12 * U, 0]}, "ParticleEmitter": {
+        d.add("Sparks", {"Transform": {"position": [0, 12 * U, 0]}, "VFXSystem": vfx({
             "rate": 15, "lifetime": 0.7, "lifetimeVariation": 0.4, "speed": 80 * U, "speedVariation": 0.4, "spread": 12,
             "gravity": [0, 0, 0], "startSize": 4 * U, "endSize": 1 * U, "startColor": rgb("#ffb347"), "endColor": rgb("#ff7a3c"),
             "space": "world", "dimensions": 2, "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 24,
-            "playing": False}}, root)
+            "playing": False})}, root)
 
     prefab("brazier", build)
 
@@ -262,10 +286,10 @@ def misc_prefabs():
     def orb(d):
         root = d.add("Orb", {"Sprite": glow(15 * 2.4 * U, "#ff6a2a", 0.9, L_PROJ)})
         d.add("Core", {"Sprite": glow(15 * 1.1 * U, "#fff2b0", 1, L_PROJ, order=1)}, root)
-        d.add("Trail", {"ParticleEmitter": {
+        d.add("Trail", {"VFXSystem": vfx({
             "rate": 24, "lifetime": 0.3, "speed": 0, "gravity": [0, 0, 0], "startSize": 6 * U, "endSize": 2 * U,
             "startColor": rgb("#ff9a3c"), "endColor": rgb("#ff9a3c"), "space": "world", "dimensions": 2,
-            "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 12}}, root)
+            "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 12})}, root)
 
     prefab("orb", orb)
 
@@ -278,18 +302,18 @@ def misc_prefabs():
 
     def pool(d):
         root = d.add("Pool", {"Script": script("run/pool.lua"), "Sprite": sprite(FX + "pool.png", 1, 1, L_POOL, opacity=0.55)})
-        d.add("Bubbles", {"ParticleEmitter": {
+        d.add("Bubbles", {"VFXSystem": vfx({
             "rate": 18, "lifetime": 0.5, "speed": 50 * U, "spread": 180, "direction": [0, 1, 0], "gravity": [0, 1.2, 0],
             "startSize": 4 * U, "endSize": 1 * U, "startColor": rgb("#ffc04a"), "endColor": rgb("#ffc04a"), "speedVariation": 1,
-            "space": "world", "dimensions": 2, "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 16}}, root)
+            "space": "world", "dimensions": 2, "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 16})}, root)
 
     prefab("pool", pool)
 
     def burst(d):
-        d.add("Burst", {"Script": script("fx/burst.lua"), "ParticleEmitter": {
+        d.add("Burst", {"Script": script("fx/burst.lua"), "VFXSystem": vfx({
             "rate": 0, "burst": 0, "loop": False, "lifetime": 0.8, "lifetimeVariation": 0.6, "speed": 4, "speedVariation": 0.7,
             "drag": 4, "spread": 180, "gravity": [0, 0, 0], "startSize": 5 * U, "endSize": 2 * U, "sizeVariation": 0.6,
-            "space": "world", "dimensions": 2, "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 64}})
+            "space": "world", "dimensions": 2, "texture": FX + "disc.png", "blend": "add", "layer": L_PART, "maxParticles": 64})})
 
     prefab("fx_burst", burst)
 

@@ -12,6 +12,30 @@ import re
 import argparse
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+import hashlib
+
+
+def vfx(settings):
+    """Write one reusable emitter asset; preserve the owner id and index-zero RNG seed."""
+    path = "effects/generated-" + hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12] + ".vfx.json"
+    defaults = {'startColor': [1, 1, 1], 'endColor': [1, 1, 1], 'speed': 1, 'startSize': 0.100000001, 'playing': True}
+    params = {}
+    for field, default in defaults.items():
+        value = settings.get(field, default)
+        if field in ("startColor", "endColor") and isinstance(value, str):
+            value = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        params[field] = {"default": value, "targets": [{"to": "emitter." + field}]}
+    asset = {"format": "oe.vfx", "version": 1, "name": "Generated effect",
+             "budget": {"maxParticles": settings.get("maxParticles", 256)},
+             "emitters": [{"name": "emitter", "emitter": settings}], "params": params}
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(asset, file, indent=2)
+        file.write("\n")
+    return {"asset": path}
+
 FONT = "assets/fonts/Jua-Regular.ttf"
 UIA, FX, ANI = "assets/ui/", "assets/fx/", "assets/animals/"
 
@@ -152,10 +176,10 @@ def prefabs():
         d.write("prefabs/piece_%02d.prefab.json" % (i + 1), "ownengine.prefab", "piece_%02d" % (i + 1))
 
     d = Doc()
-    d.add("Burst", {"ParticleEmitter": {
+    d.add("Burst", {"VFXSystem": vfx({
         "rate": 0, "burst": 0, "loop": False, "lifetime": 0.7, "lifetimeVariation": 0.5, "speed": 4, "speedVariation": 0.6,
         "drag": 3, "spread": 180, "gravity": [0, -5, 0], "startSize": 0.3, "endSize": 0.04, "sizeVariation": 0.5,
-        "space": "world", "dimensions": 2, "texture": FX + "star.png", "layer": L_FX, "maxParticles": 32}})
+        "space": "world", "dimensions": 2, "texture": FX + "star.png", "layer": L_FX, "maxParticles": 32})})
     d.write("prefabs/fx_burst.prefab.json", "ownengine.prefab", "fx_burst")
 
     d = Doc()

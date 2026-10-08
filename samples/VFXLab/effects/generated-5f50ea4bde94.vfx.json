@@ -1,0 +1,133 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Generated effect",
+  "budget": {
+    "maxParticles": 160
+  },
+  "emitters": [
+    {
+      "name": "emitter",
+      "emitter": {
+        "texture": "assets/textures/glow.png",
+        "pixelArt": false,
+        "space": "world",
+        "rate": 70,
+        "lifetime": 1.6,
+        "speed": 0.9,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "shape": "circle",
+        "shapeSize": [
+          1.1,
+          0,
+          0
+        ],
+        "shapeEdge": true,
+        "radialSpeed": -0.45,
+        "blend": "add",
+        "maxParticles": 160,
+        "sizeOverLife": [
+          [
+            0,
+            0.0
+          ],
+          [
+            0.15,
+            0.2
+          ],
+          [
+            1,
+            0.03
+          ]
+        ],
+        "colorOverLife": [
+          [
+            0,
+            [
+              0.3,
+              0.9,
+              1.0
+            ]
+          ],
+          [
+            1,
+            [
+              0.6,
+              0.25,
+              1.0
+            ]
+          ]
+        ],
+        "opacityOverLife": [
+          [
+            0,
+            1
+          ],
+          [
+            0.7,
+            0.8
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      }
+    }
+  ],
+  "params": {
+    "startColor": {
+      "default": [
+        1,
+        1,
+        1
+      ],
+      "targets": [
+        {
+          "to": "emitter.startColor"
+        }
+      ]
+    },
+    "endColor": {
+      "default": [
+        1,
+        1,
+        1
+      ],
+      "targets": [
+        {
+          "to": "emitter.endColor"
+        }
+      ]
+    },
+    "speed": {
+      "default": 0.9,
+      "targets": [
+        {
+          "to": "emitter.speed"
+        }
+      ]
+    },
+    "startSize": {
+      "default": 0.100000001,
+      "targets": [
+        {
+          "to": "emitter.startSize"
+        }
+      ]
+    },
+    "playing": {
+      "default": true,
+      "targets": [
+        {
+          "to": "emitter.playing"
+        }
+      ]
+    }
+  }
+}

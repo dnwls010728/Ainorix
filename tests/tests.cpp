@@ -4769,12 +4769,12 @@ TEST(SampleParticleEffects) {
             CHECK(e.Call("component.set", teleport)["ok"].asBool());
             Call(e, "sim.step", R"J({"frames":2})J");
             CHECK(!e.GetScene().Exists(coin));
-            CHECK(!e.GetScene().Pool<ParticleEmitter>().empty());
+            CHECK(!e.GetScene().Pool<VFXSystem>().empty());
             std::vector<EntityId> effects;
-            for (const auto& kv : e.GetScene().Pool<ParticleEmitter>()) {
+            for (const auto& kv : e.GetScene().Pool<VFXSystem>()) {
                 effects.push_back(kv.first);
-                CHECK(kv.second.space == "world" && kv.second.dimensions == 2 && !kv.second.loop);
-                CHECK(kv.second.emitted == 12 && kv.second.particles.size() == 12);
+                CHECK(kv.second.emitters[0].space == "world" && kv.second.emitters[0].dimensions == 2 && !kv.second.emitters[0].loop);
+                CHECK(kv.second.emitters[0].emitted == 12 && kv.second.emitters[0].particles.size() == 12);
             }
             Call(e, "sim.step", R"J({"frames":6})J");
             // Focus the active orthographic camera without waiting for its smoothing.
@@ -4799,8 +4799,8 @@ TEST(SampleParticleEffects) {
             hitArgs["code"] = hit;
             CHECK(e.Call("script.eval", hitArgs)["ok"].asBool());
             int hitEffects = 0;
-            for (const auto& kv : e.GetScene().Pool<ParticleEmitter>()) {
-                if (kv.second.emitted == 16) { ++hitEffects; effects.push_back(kv.first); }
+            for (const auto& kv : e.GetScene().Pool<VFXSystem>()) {
+                if (kv.second.emitters[0].emitted == 16) { ++hitEffects; effects.push_back(kv.first); }
             }
             CHECK(hitEffects == 2);
             Call(e, "sim.step", R"J({"frames":45})J");
@@ -8693,15 +8693,15 @@ TEST(SampleVfxLab) {
         CHECK(Call(e, "sim.step", R"J({"frames":132})J")["ok"].asBool());  // 0.2 s into the second fireworks cycle
         CHECK(e.Scripts().Errors().empty());
         for (const char* name : {"Flames", "Smoke", "Embers", "Rim", "Burst", "Puff", "Sparkles"}) {
-            const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name));
+            const ParticleEmitter* emitter = &e.GetScene().Get<VFXSystem>(e.GetScene().FindByName(name))->emitters[0];
             CHECK(emitter && ParticleSettingsValid(*emitter) && !emitter->particles.empty());
         }
-        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Burst"))->emitted == 140);
+        CHECK(e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Burst"))->emitters[0].emitted == 140);
         const EntityId orb = e.GetScene().FindByName("Orb");
         CHECK(e.GetScene().Get<Trail>(orb)->points.size() > 20);
         Call(e, "input.key", R"J({"key":"Space","down":true})J");
         Call(e, "sim.step", R"J({"frames":1})J");
-        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Burst"))->emitted > 140);  // capacity may drop some of the 70
+        CHECK(e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Burst"))->emitters[0].emitted > 140);  // capacity may drop some of the 70
         RenderTarget target;
         target.Resize(480, 270);
         e.RenderGameView(target);
