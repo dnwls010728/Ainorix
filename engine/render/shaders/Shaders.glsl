@@ -65,9 +65,13 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 view_proj;
     mat4 model;
     mat4 normal_mat;
-    mat4 joint_palette[64];
     vec4 item_custom; // custom attributes on shared meshes
     vec4 item_particle; // shared-mesh particle inputs; batched inputs are in particle0
+};
+
+// Skin joints (4 KB): uploaded for skinned meshes only, left over (unused) for the others.
+layout(binding=4) uniform mesh_vs_skin {
+    mat4 joint_palette[64];
 };
 
 // Vertex stage of a shader graph with an `offset` output (ShaderVertexOffset in ShaderGraph.cpp).
@@ -426,6 +430,9 @@ void main() {
 @hlsl_options fixup_clipspace
 layout(binding=0) uniform pos_vs_params {
     mat4 mvp;
+};
+
+layout(binding=2) uniform pos_vs_skin {
     mat4 joint_palette[64];
 };
 

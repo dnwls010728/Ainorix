@@ -884,6 +884,22 @@ struct GpuRenderer::Impl {
 
     // ----- Frame ------------------------------------------------------------------
 
+    // The joint palette has its own uniform block, uploaded for skinned items only. Unskinned vertices
+    // ignore it (zero weights), so after a pipeline switch it is filled once (zeros) and then left as is.
+    bool skinApplied = false;
+    void Use(sg_pipeline pipeline) {
+        sg_apply_pipeline(pipeline);
+        skinApplied = false;
+    }
+    void ApplySkin(int slot, const RenderItem& item) {
+        static_assert(sizeof(oe_mesh_vs_skin_t) == sizeof(oe_pos_vs_skin_t), "both skin blocks hold the same palette");
+        if (item.joints.empty() && skinApplied) return;
+        oe_mesh_vs_skin_t skin{};
+        for (size_t j = 0; j < item.joints.size(); ++j) Put(skin.joint_palette[j], item.joints[j]);
+        sg_apply_uniforms(slot, SG_RANGE(skin));
+        skinApplied = true;
+    }
+
     // Draws `scene` into `t` (scene + mask images) and composites into the
     // output: the offscreen output image or the window swapchain.
     void ApplySurface(const DrawCall& draw, const RenderItem& item, const GpuMesh& mesh,
@@ -895,8 +911,8 @@ struct GpuRenderer::Impl {
         Put(vertex.normal_mat, item.normalMatrix);
         Put(vertex.item_custom, item.particleCustom.x, item.particleCustom.y, item.particleCustom.z, item.particleCustom.w);
         Put(vertex.item_particle, item.particleInput.x, item.particleInput.y, item.particleInput.z, item.particleInput.w);
-        for (size_t j = 0; j < item.joints.size(); ++j) Put(vertex.joint_palette[j], item.joints[j]);
         sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
+        ApplySkin(UB_oe_mesh_vs_skin, item);
         oe_mesh_vs_graph_t vertexGraph{};
         PutVertexGraph(vertexGraph, material, item, time);
         sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vertexGraph));
@@ -970,7 +986,7 @@ struct GpuRenderer::Impl {
                 if (!it.castShadows || it.unlit || dc.blend) continue;  // transparent surfaces cast no shadow
                 const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                 if (cutout || Displaced(dc.material)) {
-                    sg_apply_pipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
+                    Use(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
                     ApplySurface(dc, it, *gpuMeshes[dc.item], fit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
                     const Submesh& sub = it.mesh->submeshes[dc.submesh];
                     sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
@@ -979,13 +995,13 @@ struct GpuRenderer::Impl {
                 }
                 int want = dc.material.doubleSided ? 1 : 0;
                 if (want != current) {
-                    sg_apply_pipeline(want ? shadowPipTwoSided : shadowPip);
+                    Use(want ? shadowPipTwoSided : shadowPip);
                     current = want;
                 }
                 oe_pos_vs_params_t u{};
                 Put(u.mvp, fit.viewProj * it.world);
-                for (size_t j = 0; j < it.joints.size(); ++j) Put(u.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                ApplySkin(UB_oe_pos_vs_skin, it);
                 sg_bindings b{};
                 b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
                 b.index_buffer = gpuMeshes[dc.item]->ibuf;
@@ -1095,7 +1111,7 @@ struct GpuRenderer::Impl {
                 const int mrt = t.dofMrt ? 1 : 0;
                 sg_pipeline pip = t.hdr ? hdrMeshPips[mrt][blendMode][m.doubleSided ? 1 : 0] : meshPips[mrt][blendMode][m.doubleSided ? 1 : 0];
                 if (pip.id != current.id) {
-                    sg_apply_pipeline(pip);
+                    Use(pip);
                     sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
                     current = pip;
                 }
@@ -1105,8 +1121,8 @@ struct GpuRenderer::Impl {
                 Put(vu.normal_mat, it.normalMatrix);
                 Put(vu.item_custom, it.particleCustom.x, it.particleCustom.y, it.particleCustom.z, it.particleCustom.w);
                 Put(vu.item_particle, it.particleInput.x, it.particleInput.y, it.particleInput.z, it.particleInput.w);
-                for (size_t j = 0; j < it.joints.size(); ++j) Put(vu.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
+                ApplySkin(UB_oe_mesh_vs_skin, it);
                 oe_mesh_vs_graph_t vg{};
                 PutVertexGraph(vg, m, it, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vg));
@@ -1146,7 +1162,7 @@ struct GpuRenderer::Impl {
             }
 
             if (haveLines) {
-                sg_apply_pipeline(t.hdr ? hdrLinePips[t.dofMrt ? 1 : 0] : linePips[t.dofMrt ? 1 : 0]);
+                Use(t.hdr ? hdrLinePips[t.dofMrt ? 1 : 0] : linePips[t.dofMrt ? 1 : 0]);
                 oe_line_params_t u{};
                 Put(u.view_proj, viewProj);
                 sg_apply_uniforms(UB_oe_line_params, SG_RANGE(u));
@@ -1180,14 +1196,14 @@ struct GpuRenderer::Impl {
                     const int twoSided = dc.material.doubleSided ? 1 : 0;
                     const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                     if (cutout || Displaced(dc.material)) {
-                        sg_apply_pipeline(surfaceDepthPip[twoSided]);
+                        Use(surfaceDepthPip[twoSided]);
                         ApplySurface(dc, it, *gpuMeshes[dc.item], viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
                     } else {
-                        sg_apply_pipeline(sceneDepthPip[twoSided]);
+                        Use(sceneDepthPip[twoSided]);
                         oe_pos_vs_params_t u{};
                         Put(u.mvp, viewProj * it.world);
-                        for (size_t j = 0; j < it.joints.size(); ++j) Put(u.joint_palette[j], it.joints[j]);
                         sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                        ApplySkin(UB_oe_pos_vs_skin, it);
                         sg_bindings b{};
                         b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
                         b.index_buffer = gpuMeshes[dc.item]->ibuf;
@@ -1203,7 +1219,7 @@ struct GpuRenderer::Impl {
                 blur.attachments.colors[0] = stage == 0 ? t.dofHorizontalAtt : t.dofVerticalAtt;
                 blur.label = stage == 0 ? "oe-dof-horizontal" : "oe-dof-vertical";
                 sg_begin_pass(&blur);
-                sg_apply_pipeline(dofPip[t.hdr ? 1 : 0]);
+                Use(dofPip[t.hdr ? 1 : 0]);
                 oe_dof_params_t du{};
                 Put(du.dof_lens, static_cast<float>(post.dofRadius), post.dofFocus, post.dofRange, post.dofFalloff);
                 Put(du.dof_proj, view.proj.at(2, 2), view.proj.at(2, 3), view.proj.at(3, 3) == 1.0f ? 1.0f : 0.0f, static_cast<float>(stage));
@@ -1241,7 +1257,7 @@ struct GpuRenderer::Impl {
             sg_begin_pass(&pass);
             if (outline) {
                 for (int stage = 0; stage < 2; ++stage) {
-                    sg_apply_pipeline(stage == 0 ? maskDepthPip : maskDrawPip);
+                    Use(stage == 0 ? maskDepthPip : maskDrawPip);
                     oe_solid_params_t su{};
                     Put(su.color, 1, 1, 1, 1);
                     sg_apply_uniforms(UB_oe_solid_params, SG_RANGE(su));
@@ -1253,7 +1269,7 @@ struct GpuRenderer::Impl {
                         if (surfaceAlpha) {
                             for (const DrawCall& draw : draws) {
                                 if (draw.item != i) continue;
-                                sg_apply_pipeline(surfaceMask[stage][draw.material.doubleSided ? 1 : 0]);
+                                Use(surfaceMask[stage][draw.material.doubleSided ? 1 : 0]);
                                 const float cutoff = draw.material.alphaMode == AlphaMode::Mask ? draw.material.alphaCutoff :
                                                      (draw.blend ? 0.5f : 0.0f);
                                 ApplySurface(draw, items[i], *gpuMeshes[i], viewProj, view.shaderTime, cutoff);
@@ -1262,12 +1278,12 @@ struct GpuRenderer::Impl {
                             }
                             continue;
                         }
-                        sg_apply_pipeline(stage == 0 ? maskDepthPip : maskDrawPip);
+                        Use(stage == 0 ? maskDepthPip : maskDrawPip);
                         sg_apply_uniforms(UB_oe_solid_params, SG_RANGE(su));
                         oe_pos_vs_params_t u{};
                         Put(u.mvp, viewProj * items[i].world);
-                        for (size_t j = 0; j < items[i].joints.size(); ++j) Put(u.joint_palette[j], items[i].joints[j]);
                         sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                        ApplySkin(UB_oe_pos_vs_skin, items[i]);
                         sg_bindings b{};
                         b.vertex_buffers[0] = gpuMeshes[i]->vbuf;
                         b.index_buffer = gpuMeshes[i]->ibuf;
@@ -1324,7 +1340,7 @@ struct GpuRenderer::Impl {
             pass.attachments.colors[0] = stage == 0 ? t.bloomHorizontalAtt : t.bloomVerticalAtt;
             pass.label = stage == 0 ? "oe-bloom-horizontal" : "oe-bloom-vertical";
             sg_begin_pass(&pass);
-            sg_apply_pipeline(bloomPip);
+            Use(bloomPip);
             oe_bloom_params_t bu{};
             Put(bu.bloom_filter, static_cast<float>(post.bloomRadius), post.bloomThreshold, static_cast<float>(stage), 0);
             sg_apply_uniforms(UB_oe_bloom_params, SG_RANGE(bu));
@@ -1343,7 +1359,7 @@ struct GpuRenderer::Impl {
             pass.attachments.colors[0] = t.fxaaAtt;
             pass.label = "oe-fxaa-source";
             sg_begin_pass(&pass);
-            sg_apply_pipeline(compositePip);
+            Use(compositePip);
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(t.width), static_cast<float>(t.height), 0, 0);
             Put(cu.bloom_strength, post.bloom, 0, 0, 0);
@@ -1373,7 +1389,7 @@ struct GpuRenderer::Impl {
             else pass.attachments.colors[0] = t.outputAtt;
             pass.label = "oe-composite";
             sg_begin_pass(&pass);
-            sg_apply_pipeline(compositePip);
+            Use(compositePip);
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
@@ -1396,7 +1412,7 @@ struct GpuRenderer::Impl {
             sg_apply_bindings(&b);
             sg_draw(0, 3, 1);
             if (haveUI) {
-                sg_apply_pipeline(uiPip);
+                Use(uiPip);
                 oe_ui_params_t uu{};
                 Put(uu.screen, 2.0f / static_cast<float>(outW), 2.0f / static_cast<float>(outH), 0, 0);
                 sg_apply_uniforms(UB_oe_ui_params, SG_RANGE(uu));
