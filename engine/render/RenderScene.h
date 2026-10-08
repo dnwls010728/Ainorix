@@ -111,6 +111,7 @@ struct RenderLights {
     std::vector<RenderPointLight> points;
     bool shadows = false;  // the first directional light casts shadows
     float shadowStrength = 0.75f;
+    float shadowDistance = 0.0f;  // > 0: the shadow map covers the camera's view up to this distance
 };
 
 // The camera view orients particle billboards; identity faces +Z for callers without a camera.
@@ -124,5 +125,12 @@ struct ShadowFit {
     float texelWorld = 0.01f;  // world size of one shadow map texel (size = mapSize)
 };
 ShadowFit FitShadow(const Vec3& lo, const Vec3& hi, const Vec3& lightDir, int mapSize);
+// DirectionalLight.shadowDistance > 0 (shadow distance as in other engines): fitted to the part of
+// the camera's view frustum up to `distance` (the receivers that can be seen), with the light's
+// depth range stretched toward the light over the scene box lo..hi so every caster between the
+// light and that part still casts. The map moves in whole texels, so shadows do not shimmer while
+// the camera moves. Falls back to FitShadow when the scene box is the smaller of the two.
+ShadowFit FitShadowToView(const Mat4& view, const Mat4& proj, float distance, const Vec3& lo, const Vec3& hi,
+                          const Vec3& lightDir, int mapSize);
 
 }  // namespace oe

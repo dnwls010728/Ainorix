@@ -6123,6 +6123,64 @@ TEST(GpuFrustumCulling) {
     CHECK(error / static_cast<double>(sw.color.size() * 3) < 2.0);
 }
 
+TEST(ShadowDistanceFitsTheView) {
+    const Vec3 dir = Normalize(Vec3(-0.4f, -1.0f, -0.3f));
+    const Mat4 view = Mat4::LookAt(Vec3(0, 5, 10), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    const Mat4 proj = Mat4::Perspective(60.0f * 3.14159265f / 180.0f, 1.5f, 0.1f, 500.0f);
+    const Vec3 lo(-200, -1, -200), hi(200, 10, 200);
+    const ShadowFit scene = FitShadow(lo, hi, dir, 2048);
+    const ShadowFit near = FitShadowToView(view, proj, 20.0f, lo, hi, dir, 2048);
+    CHECK(near.texelWorld < scene.texelWorld / 5);
+    // Whole texels: the world origin lands on a texel corner (no shimmer while the camera moves).
+    const Vec4 origin = near.viewProj * Vec4(0, 0, 0, 1);
+    CHECK(std::fabs(origin.x * 1024.0f - std::round(origin.x * 1024.0f)) < 1e-2f);
+    // A caster of the scene box far toward the light is still inside the light's depth range.
+    const Vec4 caster = near.viewProj * Vec4(Vec3(150, 9, 110), 1);
+    CHECK(caster.z > -1.0f && caster.z < 1.0f);
+    // A scene smaller than the view slice keeps the whole-scene fit.
+    const ShadowFit small = FitShadowToView(view, proj, 200.0f, Vec3(-1, 0, -1), Vec3(1, 1, 1), dir, 2048);
+    CHECK(small.texelWorld == FitShadow(Vec3(-1, 0, -1), Vec3(1, 1, 1), dir, 2048).texelWorld);
+
+    // Both renderers: the cube's shadow on a large ground with and without shadowDistance.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("shadow_distance"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,4,8],"rotation":[-26,0,0]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-60,30,0]},"DirectionalLight":{"ambient":[0.1,0.1,0.1],"shadowStrength":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[400,1,400]},"MeshRenderer":{"mesh":"plane","color":[1,1,1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{"position":[0,0.5,0]},"MeshRenderer":{"mesh":"cube","color":[1,0.2,0.2]}}})J");
+    Call(e, "entity.create", R"J({"name":"Far","components":{"Transform":{"position":[150,0.5,-150]},"MeshRenderer":{"mesh":"cube"}}})J");
+    const int w = 200, h = 150;
+    RenderView rv;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, rv);
+    // Ground just behind the box (away from the sun) is in its shadow.
+    const Vec3 dirLight = Normalize(e.GetScene().WorldMatrix(e.GetScene().FindByName("Sun")).TransformDir(Vec3(0, 0, -1)));
+    const Vec3 shaded = Vec3(0, 0, 0) + Vec3(dirLight.x, 0, dirLight.z) * (1.2f / std::max(0.2f, std::sqrt(dirLight.x * dirLight.x + dirLight.z * dirLight.z)));
+    auto green = [&](const RenderTarget& t, Vec3 world) {
+        const Vec4 clip = rv.proj * rv.view * Vec4(world, 1);
+        const int x = static_cast<int>((clip.x / clip.w * 0.5f + 0.5f) * w), y = static_cast<int>((0.5f - clip.y / clip.w * 0.5f) * h);
+        return static_cast<int>((t.color[static_cast<size_t>(y) * w + static_cast<size_t>(x)] >> 8) & 255);
+    };
+    auto shadowContrast = [&](IRenderer& r) {
+        RenderTarget t;
+        t.Resize(w, h);
+        r.Render(e.GetScene(), rv, t);
+        return std::make_pair(green(t, shaded), green(t, Vec3(-2.5f, 0, 1.5f)));
+    };
+    const auto wholeScene = shadowContrast(e.Renderer());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"DirectionalLight","values":{"shadowDistance":25}})J")["ok"].asBool());
+    const auto viewFit = shadowContrast(e.Renderer());
+    std::printf("  box shadow (software): whole scene %d/%d, shadowDistance %d/%d (shaded/lit)\n",
+                wholeScene.first, wholeScene.second, viewFit.first, viewFit.second);
+    CHECK(viewFit.first < viewFit.second / 2);
+    if (e.EnableGpu(nullptr, &err)) {
+        const auto gpu = shadowContrast(*e.Gpu());
+        std::printf("  box shadow (gpu): shadowDistance %d/%d\n", gpu.first, gpu.second);
+        CHECK(gpu.first < gpu.second / 2);
+    }
+}
+
 TEST(GpuSpriteBatching) {
     // Runs of sprites sharing a material are drawn as one batch; each keeps its own tint, opacity,
     // frame, flip and transform, so the picture matches the software renderer's per-sprite draws.

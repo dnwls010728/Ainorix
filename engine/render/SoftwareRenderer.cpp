@@ -544,7 +544,9 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             ShadowMap& sm = lighting.shadow;
             sm.enabled = true;
             sm.strength = shadowStrength;
-            ShadowFit fit = FitShadow(lo, hi, lighting.dirs[0].dir, sm.size);
+            ShadowFit fit = gathered.shadowDistance > 0.0f
+                ? FitShadowToView(view.view, view.proj, gathered.shadowDistance, lo, hi, lighting.dirs[0].dir, sm.size)
+                : FitShadow(lo, hi, lighting.dirs[0].dir, sm.size);
             sm.viewProj = fit.viewProj;
             sm.texelWorld = fit.texelWorld;
             sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);

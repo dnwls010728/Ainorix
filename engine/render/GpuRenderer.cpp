@@ -1129,7 +1129,9 @@ struct GpuRenderer::Impl {
             ExtendOffsetBounds(items, draws, lo, hi);
             if (anyCaster && lo.x <= hi.x) {
                 shadows = true;
-                fit = FitShadow(lo, hi, lights.dirs[0].dir, settings.shadowMapSize);
+                fit = lights.shadowDistance > 0.0f
+                    ? FitShadowToView(view.view, view.proj, lights.shadowDistance, lo, hi, lights.dirs[0].dir, settings.shadowMapSize)
+                    : FitShadow(lo, hi, lights.dirs[0].dir, settings.shadowMapSize);
             }
         }
 

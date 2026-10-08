@@ -63,7 +63,12 @@ and screenshots, and the web/Android runtimes are rebuilt when the step is done.
       so `GpuDevice::Flush()` now starts the GPU right after `RenderToTexture`
       (D3D11 `Flush`; no-op elsewhere). Without it batching cost ~1.5 ms in the
       editor benchmark.
-- [ ] 5. Shadow map fitted to the camera view (shadow distance) instead of the
-      whole scene.
+- [x] 5. Shadow map fitted to the camera view: opt-in `DirectionalLight.shadowDistance`
+      (`FitShadowToView`, both renderers; 0 keeps the whole-scene fit and every
+      existing frame). Sharper shadows and fewer shadow casters in large scenes.
+      Not enabled in RPG: its lit scene is ~120 units across, so the whole-scene
+      map is already fine, and a closer fit (40) made the shadow pass ~1 ms slower
+      because cut-out sprites cover more shadow texels, each running the graph
+      interpreter (step 6). Verified by ShadowDistanceFitsTheView.
 - [ ] 6. Shader graphs compiled to HLSL / GLSL ES at load time (one program per
       graph), the interpreter kept as fallback when compilation fails.
