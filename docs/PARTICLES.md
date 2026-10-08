@@ -1,12 +1,14 @@
 # Particle effects and trails (VFX)
 
-`ParticleEmitter` and `Trail` are simulated at the fixed step, deterministic, and drawn the same by both renderers.
+`VFXSystem` asset emitters and `Trail` are simulated at the fixed step, deterministic, and drawn the same by both renderers.
+ParticleEmitter remains an internal settings/runtime value. Its scene component and `particles.*` APIs
+were retired in [phase 6](VFX_PHASE6.md); author `.vfx.json` blocks through Effects or `vfx.create/set`.
 This document is the contract and the reference for their fields; status and verification are in the work log at
 the end.
 
 For presets, strict authoring validation, isolated contact sheets and numeric analysis through `vfx.*`,
-see [VFX.md](VFX.md). ParticleEmitter/Trail `component.add/set` now reject bad ranges and curves before editing;
-legacy file loading and runtime guards remain compatible.
+see [VFX.md](VFX.md). `vfx.create/set` and Trail `component.add/set` reject bad ranges and curves before editing.
+Old ParticleEmitter scene entries are skipped with a replacement hint; runtime guards still reject invalid values.
 
 ## VFX expressions
 
@@ -46,7 +48,7 @@ lost per second. They draw from the emitter's random stream only when non-zero, 
 `Sprite.layer`. The world stands still while the game is paused (`game.pause`): particles neither age nor move.
 
 An emitter starts its configured burst once on its first playing simulation
-step. loop:false disables continuous rate emission; explicit particles.burst
+step. loop:false disables continuous rate emission; explicit vfx.burst
 still works. playing:false pauses automatic emission; existing particles keep
 aging and moving. Newly emitted particles start at age zero; integration of
 existing particles happens before emission each fixed step. world-space
@@ -82,13 +84,13 @@ the older draws, so turning one on does not reshuffle the rest.
   keys. A non-empty curve replaces the start/end pair (sizeVariation still scales
   sizes). Colors are `[r, g, b]` or `"#rrggbb"`. Curves are live settings: editing one
   changes particles already alive. A malformed curve stops emission
-  (`particles.burst` answers `invalid_emitter` naming the curve).
+  (`vfx.burst` answers `invalid_emitter` naming the curve).
 - **Turbulence**: `turbulence` (m/s^2) pushes particles with a fixed value-noise field
   sampled at their position; `turbulenceScale` is cells per meter. The field uses
   integer hashes and float lerps only (no libm). It is a live setting.
 - **Timing**: `delay` holds back the initial burst and the rate. `duration` (0 = none)
   ends the rate after that many seconds; with `loop` the cycle repeats and fires the
-  burst again every `duration` seconds. `particles.state` reports `finished` once a
+  burst again every `duration` seconds. `vfx.state` emitter blocks report `finished` once a
   non-looping emitter has nothing left to emit and no live particles.
 - **Sampling**: `pixelArt: false` filters the texture smoothly (soft glows, smoke).
 
@@ -119,22 +121,20 @@ blend `alpha` or `add`, and sort like sprites (`layer`, then distance).
 
 ## API and scripting
 
-- particles.state {id, particles?}: count, emitted, playing, loop, maxParticles and
-  finished. particles:true includes age/lifetime, position/velocity, rotation and
-  worldSpace snapshots. Lua `particles.state(id)` returns the same table.
-- particles.burst {id, count}: immediate emission (0..10000), returning accepted.
-  Explicit bursts work while playing:false and do not re-arm the startup burst.
-- particles.clear {id, restart?}: clear particles, counters, fractional births, the
-  delay/duration clock and PRNG state. restart:true re-arms the startup burst for the next playing step;
-  otherwise it stays disarmed. Configured emitter settings are preserved.
-- Lua particles.burst(id, count), or self:burst(count) on an attached script,
-  returns accepted births and raises an error for missing emitters/bad counts.
+- `vfx.state {id,particles?}` returns system playback/params/count/budget and named emitter blocks.
+  Each block reports count, emitted, playing, loop, maxParticles and finished. With particles:true,
+  blocks include age/lifetime, position/velocity, birth inputs, evaluated motion/custom and worldSpace.
+  Lua: `vfx.state(id, {particles=true})`.
+- `vfx.burst {id,count?,emitter?}` emits 0..10000 births, capped by each emitter and the system budget.
+  Explicit bursts work while paused and do not rearm startup births. Lua: `vfx.burst(id,countOrOptions)`.
+- `vfx.clear {id,restart?}` empties particles and trails. Omitted restart retains clocks/RNG.
+  Supplied restart resets counters, fractional births, delay/duration clocks and RNG; true rearms
+  startup births, false consumes them. Settings/playback remain intact. Lua: `vfx.clear(id,{restart=true})`.
 
-Burst/clear change transient simulation state, like audio playback, and do not
-participate in scene undo. Reflected emitter settings serialize normally and
-component edits participate in undo. Particle coordinate snapshots, colors,
-sizes, opacity and gravity are captured at birth; world-space velocities include
-the spawn transform's scale/rotation.
+Runtime controls do not participate in scene undo. Asset settings serialize in `.vfx.json`; author
+with `vfx.set` or the Effects document history. VFXSystem component edits participate in scene undo.
+Particle coordinate snapshots, colors, sizes, opacity and gravity are captured at birth;
+world-space velocities include the spawn transform's scale/rotation.
 
 ## Sample gameplay effects
 
@@ -216,7 +216,7 @@ P3.2 and P3.3 continue from that combined main.
       shapeEdge, radialSpeed), rotation and spin, align velocity + stretch, flipbooks
       (frames, frameRate, randomFrame), sizeOverLife/colorOverLife/opacityOverLife
       curves, turbulence, delay/duration cycles, pixelArt switch, `finished` in
-      particles.state and Lua particles.state. Emitters that do not use a new field
+      emitter state diagnostics (now vfx.state and Lua vfx.state). Emitters that do not use a new field
       keep their random sequence and frame hashes (ParticleRenderers hashes unchanged).
       Tests: ParticleShapesRotationAndTiming, ParticleCurvesFlipbookAndAlignment.
 - [x] V2: Trail component (camera-facing ribbon, width/color/opacity fade, optional

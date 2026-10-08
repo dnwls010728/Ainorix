@@ -1,6 +1,6 @@
 # VFX assets and headless authoring
 
-Create, tune and verify existing `ParticleEmitter` and `Trail` effects through the same command API
+Create, tune and verify asset-backed `VFXSystem` and direct `Trail` effects through the same command API
 used by CLI, HTTP and MCP. No play session or editor window is needed. The simulation and rendering
 contract remains in [PARTICLES.md](PARTICLES.md); the larger implementation plan is [VFX_DESIGN.md](VFX_DESIGN.md).
 
@@ -12,7 +12,8 @@ Effects > New Effect and `vfx.edit {path,new:true,preset}` offer six complete ex
 All meshes/textures/materials install into a versioned project directory without sample dependencies.
 File conflicts are refused. Parameters and budgets are preserved. `vfx.apply_preset` attaches these six
 as linked VFXSystem components with scene undo; they require replace mode. Installed files survive undo.
-The original nine direct-component presets still support merge. [Release contract and limits](VFX_PHASE5D.md).
+All 15 presets attach linked assets. The original nine support merge into unparameterized assets;
+parameterized instances use named-block `vfx.set` edits or replace. [Consolidation contract](VFX_PHASE6.md).
 
 ## Motion channels and pivot
 
@@ -38,7 +39,7 @@ that asset in Effects. Curves offers X/Y/Z selection and signed scalar plots, sh
 Its material reads `particleCustom0` and `particleCustom3` for glow/dissolve; all four material ops also
 work in vertex displacement, both renderers, and batching, without taking graph uniform slots.
 
-`particles.state {id,particles:true}` includes evaluated scale/rotation/custom, birth inputs,
+`vfx.state {id,particles:true}` includes evaluated scale/rotation/custom, birth inputs,
 `integratedPosition`, accepted birth `index` and immutable accepted batch `count`. Native snapshots
 retain these values; scene JSON excludes them. Hot reload updates curves while preserving live birth
 inputs. Bounded expression text now drives Birth/Update channels; value nodes are described in [VFX_PHASE5C.md](VFX_PHASE5C.md).
@@ -75,18 +76,18 @@ module groups. `vfx.presets` lists eight texture-independent starting points wit
 Filter by an exact `tag`, such as `burst` or `trail`. These settings are derived from VFXLab; solid
 quads keep them portable. Import a soft glow/smoke texture for the desired final appearance.
 
-Feed these JSON lines to `oe script <project>` (add `--save` to persist authoring changes):
+Feed these JSON lines to `oe script <project>` (add `--save` to persist the scene; asset edits write immediately):
 
 ```json
-{"command":"entity.create","args":{"name":"Impact","components":{"Transform":{}}}}
-{"command":"vfx.apply_preset","args":{"id":"Impact","preset":"hit_burst"}}
-{"command":"component.set","args":{"id":"Impact","type":"ParticleEmitter","values":{"burst":24,"maxParticles":48,"lifetime":0.3,"startColor":"#33aaff"}}}
+{"command":"vfx.create","args":{"path":"effects/impact.vfx.json","preset":"hit_burst"}}
+{"command":"entity.create","args":{"name":"Impact","components":{"Transform":{},"VFXSystem":{"asset":"effects/impact.vfx.json"}}}}
+{"command":"vfx.set","args":{"path":"effects/impact.vfx.json","emitter":"hit","values":{"burst":24,"maxParticles":48,"lifetime":0.3,"startColor":"#33aaff"}}}
 {"command":"vfx.check","args":{"id":"Impact"}}
 {"command":"vfx.preview","args":{"id":"Impact","times":[0.1,0.2,0.4,0.6],"size":256,"out":"previews/impact.png"}}
 {"command":"vfx.analyze","args":{"id":"Impact","duration":1,"render":true}}
 ```
 
-Expect `peakCount:24`, `budgetRatio:0.5`, and completion shortly after 0.3 seconds. Inspect the PNG,
+Expect `peakCount:24`, `budgetRatio:0.75`, and completion shortly after 0.3 seconds. Inspect the PNG,
 then patch the fields and repeat. A count of zero at time zero is expected: startup emission happens
 on the first fixed step. Software PNG/hash output is identical with one or multiple render threads.
 
@@ -94,19 +95,18 @@ on the first fixed step. Software PNG/hash output is identical with one or multi
 
 | Command | Behavior |
 |---|---|
-| `vfx.schema {}` | Reflection-derived fields, seven module groups, limits and the parameter/target syntax |
+| `vfx.schema {}` | Reflection-derived fields, eight module groups (EmitterSettings is asset reflection, not a scene component), limits and the parameter/target syntax |
 | `vfx.presets {tag?}` | Preset names, intent, tags and emitter/trail blocks |
-| `vfx.apply_preset {id,preset,mode?}` | One undoable edit on the named entity; default `replace` resets only the affected component, including transient state. `merge` patches preset fields and preserves unspecified settings/state. Other components and children remain intact. Adds Transform when needed. |
+| `vfx.apply_preset {id,preset,mode?}` | One undoable edit on the named entity; default `replace` attaches a fresh linked asset and resets runtime. `merge` writes a separate asset with patched preset fields, preserving unspecified authored settings; parameterized assets require replace or named-block edits. Other components and children remain intact. Adds Transform when needed. |
 | `vfx.check {id|path}` | Validate the entity and its descendants; return `ok:true` plus actionable `warnings`. Invalid settings return an API error. |
 | `vfx.preview {id|path,times?,size?,renderer?,camera?,motion?,out?,inline?}` | Restart an isolated copy and return a contact sheet, actual sampled times, per-tile counts/bounds/hashes and the sheet hash. PNG path when `out` is supplied; otherwise `png_base64`. |
 | `vfx.analyze {id|path,duration?,step?,render?,camera?,motion?}` | Restart an isolated copy; return completion time, particle peak/time, point peak, capacity ratio, sampled counts/bounds and a metrics hash. Optional software-frame mean luminance. |
 
-`component.add` and `component.set` strictly validate ParticleEmitter/Trail authoring edits before
+`vfx.create` and `vfx.set` strictly validate emitter asset edits; `component.add/set` validate Trail before
 reflection can clamp values. Unknown fields return `unknown_field` with a nearest-name suggestion;
 invalid numeric ranges return `invalid_range`; malformed or negative-size/out-of-range-opacity curves
 return `invalid_curve`. Edits fail before changing any fields. Other component types retain their
-existing validation. Legacy scene loading remains unchanged, including runtime guards for invalid
-legacy particle settings. Empty curves use the existing start/end values.
+existing validation. Legacy ParticleEmitter scene entries are skipped with a migration hint. Empty curves use the existing start/end values.
 
 Warnings include zero size/opacity throughout life, no automatic births, a stopped one-shot that
 cannot finish, lifetime above 30 seconds, current live count above capacity, capacity far below
@@ -172,8 +172,10 @@ belong to the preview request, not the component or gameplay simulation.
 ## Reusable assets
 
 A `*.vfx.json` groups named emitter/trail settings and intent-level parameter definitions. `VFXSystem`
-links an owner to that asset; no child emitter entities are created. The existing ParticleEmitter/Trail
-components and prefab effects remain supported. Create a document with `vfx.create {path,vfx}`:
+links an owner to that asset; no child emitter entities are created. ParticleEmitter is an internal
+settings/runtime value, not a scene component. Old ParticleEmitter files load with a removal hint and
+skip that component; export them with a pre-removal build or author replacement assets. Direct Trail
+components remain supported. Create a document with `vfx.create {path,vfx}`:
 
 ```json
 {
@@ -210,13 +212,13 @@ singular root and ignores scripts, meshes, lights and other placement components
 | `vfx.set {path,emitter,values}` | Partially patch one named emitter; use `trail` for a trail. |
 | `vfx.set {path,params}` | Replace parameter definitions. |
 | `vfx.diff {path,against?}` | Return `{field,before,after}` changes using block names; default comparison is component defaults and identity offsets. `against` accepts another asset path. |
-| `vfx.from_entity {id,path}` | Pack the selected ParticleEmitter/Trail subtree without changing the scene. |
+| `vfx.from_entity {id,path}` | Pack the selected VFXSystem/Trail subtree, preserving relative matrices, parameter defaults/targets, expression references and death links. |
 | `vfx.spawn {path,name?,parent?,position?,params?,autoDestroy?}` | Create Transform + linked VFXSystem in one scene undo step. Position is parent-local; autoDestroy defaults true. |
-| `vfx.state {id}` | Read effective params, playback/completion/error, aggregate counts/budget and per-block counts/emitted totals. |
+| `vfx.state {id,particles?}` | Read effective params, playback/completion/error, aggregate counts/budget and per-block counts/emitted totals; particles:true adds detailed snapshots in each emitter block. |
 | `vfx.play {id,restart?}` | Restart blocks by default, preserving parameter overrides; `restart:false` resumes emission clocks. |
 | `vfx.stop {id,kill?}` | Stop automatic emission and drain particles/trail points; `kill:true` empties them immediately. |
 | `vfx.burst {id,emitter?,count?}` | Manually emit one named emitter or all in asset order. Default count is each configured burst. Counts respect both caps. Manual births do not consume the startup burst. |
-| `vfx.clear {id}` | Empty particles and trail points, retaining clocks, RNG and playback. Suppress autoDestroy until play/stop/burst so an empty instance can be reused. |
+| `vfx.clear {id,restart?}` | Empty particles and trail points. Omitted restart retains clocks/RNG; supplied restart resets counters/clocks/RNG and rearms startup births only when true. Playback/settings are retained. Suppress autoDestroy until play/stop/burst so an empty instance can be reused. |
 | `vfx.set_param {id,name,value}` | Set a validated transient parameter override. Use component.set on VFXSystem.params for a saved instance override. |
 
 Preview/check/analyze accept exactly one `id` or `path`. Linked entity previews use authored instance
@@ -279,7 +281,7 @@ See [EDITOR.md](EDITOR.md) for controls and screenshot flags.
 
 ## Materials, mesh particles, ribbons and death chains (phase 4)
 
-`ParticleEmitter.material` and `Trail.material` bind ordinary `.mat.json` assets, including graphs authored
+Emitter `material` and `Trail.material` bind ordinary `.mat.json` assets, including graphs authored
 in Shaders. Particle materials use the emitter's texture when specified, otherwise the material's own
 base texture. Trail fades multiply the explicit trail image or the material's base texture. Materials can
 be lit (`unlit:false`); effects still cast no shadows. Missing materials/meshes are magenta at runtime;

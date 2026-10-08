@@ -36,7 +36,10 @@ task conflict, follow the task but say which rule you broke and why (PR descript
    the HTTP server binds to 127.0.0.1; data read from files (scenes, paks, zips) is validated
    (sizes, offsets, paths — see `ExtractGamePak`).
 8. **Data stays diff-friendly.** Scenes, prefabs, tilesets and project files are ordered, pretty
-   JSON; default values are not written. Old files must keep loading.
+   JSON; default values are not written. Old files must keep loading unless an explicitly approved
+   pre-release consolidation removes a public feature. Such changes migrate shipped content/tests,
+   remove redundant APIs, document replacement paths and warn with a migration hint when old files
+   name removed components. Phase 6 retires ParticleEmitter scene components in favor of VFXSystem assets.
 
 ## 2. Where code goes
 

@@ -210,3 +210,6 @@ third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear Im
 
 MIT — [LICENSE](LICENSE)。`third_party/` のコードはそれぞれのライセンスに従います (MIT、zlib、パブリックドメイン、
 Roboto フォントは Apache 2.0)。
+
+VFX フェーズ6: シーンのパーティクルは `.vfx.json` + `VFXSystem` に統合。`ParticleEmitter` は内部の設定・実行状態として残ります。
+独立した `particles.*` と `self:burst` は削除。直接使う `Trail` は維持しています。[統合・移行ガイド](docs/VFX_PHASE6.md)。

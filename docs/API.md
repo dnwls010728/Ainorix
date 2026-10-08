@@ -99,7 +99,7 @@ Read or atomically author a reusable VFX asset; file edits do not enter scene un
 | arg | type | required | description |
 |---|---|---|---|
 | `path` | string | yes | Project-relative .vfx.json asset path. |
-| `id` | integer \| string | yes | Root of a ParticleEmitter/Trail subtree to pack. |
+| `id` | integer \| string | yes | Root of a VFXSystem/Trail subtree to pack. |
 
 ### `vfx.spawn` *(undoable edit)*
 
@@ -149,6 +149,7 @@ Control or inspect linked VFX runtime; controls do not create scene undo entries
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | VFXSystem owner id or name. |
+| `restart` | boolean |  | If supplied, reset clocks/RNG/counters; true also re-arms automatic births. Omitted only clears live particles/trails. |
 
 ### `vfx.set_param`
 
@@ -167,6 +168,7 @@ Control or inspect linked VFX runtime; controls do not create scene undo entries
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | VFXSystem owner id or name. |
+| `particles` | boolean |  | Include captured/evaluated particle snapshots per emitter. |
 
 ### `vfx.expression_eval`
 
@@ -213,7 +215,7 @@ List portable effect presets with intent sentences and tags.
 
 ### `vfx.apply_preset` *(undoable edit)*
 
-Apply a preset in one scene undo step; bundled presets install files and attach a VFXSystem.
+Apply a preset asset and attach a VFXSystem in one scene undo step; installed files survive undo.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -449,35 +451,6 @@ Play a named model clip; add Animator if needed. Defaults to restarting at the b
 | `speed` | number |  | Playback multiplier; negative = reverse. Keeps existing speed when omitted. |
 | `loop` | boolean |  | Repeat the clip. Keeps existing loop setting when omitted. |
 | `restart` | boolean |  | Reset time (default true); false preserves time. |
-
-## particles
-
-### `particles.state`
-
-Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.
-
-| arg | type | required | description |
-|---|---|---|---|
-| `id` | integer \| string | yes | ParticleEmitter entity. |
-| `particles` | boolean |  | Include evaluated channels, captured birth inputs, index/count, stable random and worldSpace. |
-
-### `particles.burst`
-
-Emit particles immediately, including on paused emitters. Excess births are dropped at capacity; runtime only.
-
-| arg | type | required | description |
-|---|---|---|---|
-| `id` | integer \| string | yes | ParticleEmitter entity. |
-| `count` | integer | yes | Number to emit, 0..10000. |
-
-### `particles.clear`
-
-Clear live particles and reset the random stream/counters. Optionally re-arm the initial burst; runtime only.
-
-| arg | type | required | description |
-|---|---|---|---|
-| `id` | integer \| string | yes | ParticleEmitter entity. |
-| `restart` | boolean |  | Re-arm initial burst for next playing step (default false). |
 
 ## trail
 
@@ -1673,86 +1646,6 @@ Fixed-step glTF TRS animation on the entity's MeshRenderer; clips are listed by 
 | `loop` | bool | `true` | Wrap time at the clip duration; otherwise clamp and stop at either endpoint. |
 | `playing` | bool | `true` | Advance time while true; false holds the current pose. |
 | `time` | float | `0` | Seconds into the clip; set to seek. Direct clip edits preserve time. |
-
-### ParticleEmitter
-
-Deterministic 2D/3D billboard particles; initial burst and continuous rate, bounded per emitter.
-
-| field | type | default | description |
-|---|---|---|---|
-| `rate` | float | `10` | Automatic particles per second while loop and playing are true. |
-| `burst` | int | `0` | Automatic initial burst on the first playing step. |
-| `lifetime` | float | `1` | Lifetime in seconds, captured at birth. |
-| `speed` | float | `1` | Initial speed in emitter coordinates, captured at birth. |
-| `spread` | float | `30` | Cone half-angle in degrees around direction; planar fan in 2D. |
-| `speedVariation` | float | `0` | 0..1: each particle starts between speed * (1 - variation) and speed. |
-| `lifetimeVariation` | float | `0` | 0..1: each particle lives between lifetime * (1 - variation) and lifetime. |
-| `sizeVariation` | float | `0` | 0..1: each particle's start and end size are scaled between (1 - variation) and 1. |
-| `drag` | float | `0` | Velocity lost per second (0 = none, 4 = slows to a stop quickly), captured at birth. |
-| `direction` | vec3 | `[0,1,0]` | Emission direction; zero falls back to +Y. 2D uses XY only. |
-| `gravity` | vec3 | `[0,-9.80000019,0]` | Acceleration in particle coordinates (world or local), captured at birth. |
-| `startSize` | float | `0.100000001` | Billboard size in meters at birth. |
-| `endSize` | float | `0` | Billboard size at expiry. |
-| `startColor` | color | `[1,1,1]` | RGB tint at birth. |
-| `endColor` | color | `[1,1,1]` | RGB tint at expiry. |
-| `startOpacity` | float | `1` | Opacity at birth. |
-| `endOpacity` | float | `0` | Opacity at expiry. |
-| `material` | string | `""` | Optional project-relative .mat.json, including surface graphs. |
-| `mesh` | string | `""` | Static project mesh or built-in name; empty uses camera-facing quads. |
-| `meshScale` | vec3 | `[1,1,1]` | Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation. |
-| `expressions` | json | `{}` | Typed source text {birth:{channel:text},update:{channel:text}}; vfx.schema.expressions defines inputs, operations and budgets. |
-| `positionOffset` | vec3 | `[0,0,0]` | Birth offset in emitter coordinates; captured before local/world conversion. |
-| `rotation3D` | vec3 | `[0,0,0]` | Birth XYZ Euler rotation in degrees, added to lifetime rotation and legacy Z spin. |
-| `scale` | vec3 | `[1,1,1]` | Nonnegative birth XYZ multiplier; multiplied once by scaleOverLife, scalar size and meshScale (meshes only). |
-| `pivot` | vec3 | `[0,0,0]` | Unscaled mesh/billboard geometry point fixed at the particle center under scale and rotation. |
-| `custom0` | float | `0` | Birth material custom0; captured per particle, not a shader uniform. |
-| `custom1` | float | `0` | Birth material custom1; captured per particle, not a shader uniform. |
-| `custom2` | float | `0` | Birth material custom2; captured per particle, not a shader uniform. |
-| `custom3` | float | `0` | Birth material custom3; captured per particle, not a shader uniform. |
-| `batching` | bool | `false` | Combine particles into one emitter draw, sorted internally; transparent emitters sort as whole groups. |
-| `onDeath` | string | `""` | VFX asset only: named emitter receiving a burst at each expired particle position; maximum depth 4. |
-| `deathCount` | int | `1` | Particles per death event, subject to target and system budgets. |
-| `texture` | string | `""` | Optional texture/sprite sheet; empty uses solid quads. |
-| `frame` | int | `0` | Sprite sheet frame, row-major. |
-| `columns` | int | `1` | Sprite sheet columns. |
-| `rows` | int | `1` | Sprite sheet rows. |
-| `space` | string | `"local"` | Local particles follow the emitter; world particles remain where spawned. |
-| `dimensions` | int | `3` | 2 = XY fan/planar motion; 3 = cone in 3D. |
-| `seed` | int | `1` | Fixed seed mixed with entity id; changes take effect after particles.clear. |
-| `maxParticles` | int | `256` | Maximum live particles per emitter; excess births are dropped. |
-| `blend` | string | `"alpha"` | alpha = normal; add = particles brighten what is behind them (sparks, fire). |
-| `layer` | int | `0` | 2D sorting layer, like Sprite.layer: particles draw in front of lower layers. |
-| `loop` | bool | `true` | Enable continuous rate births; false emits only the initial burst. |
-| `playing` | bool | `true` | Automatic emission switch; existing particles continue to age while false. |
-| `delay` | float | `0` | Seconds of playing before the initial burst and the rate start (layered effects: flash, then smoke). |
-| `duration` | float | `0` | 0 = no limit. Otherwise the rate emits for this many seconds after the delay; with loop the cycle repeats and re-fires the burst. |
-| `shape` | string | `"point"` | Where particles are born, in emitter coordinates: point, sphere (radius shapeSize.x), box (half extents shapeSize) or circle (radius shapeSize.x; in XY for 2D, on the ground plane XZ for 3D). |
-| `shapeSize` | vec3 | `[1,1,1]` | Sphere/circle radius in x, or box half extents, in meters. |
-| `shapeEdge` | bool | `false` | Spawn only on the shape's surface or rim (rings, shells). |
-| `radialSpeed` | float | `0` | Extra speed away from the emitter origin (negative = toward it), for particles born off the origin; captured at birth. |
-| `rotation` | float | `0` | Billboard rotation in degrees at birth, counter-clockwise on screen. |
-| `rotationVariation` | float | `0` | Each particle starts within +/- this many degrees of rotation. |
-| `spin` | float | `0` | Rotation speed in degrees per second, captured at birth. |
-| `spinVariation` | float | `0` | Each particle spins within +/- this many degrees per second of spin. |
-| `align` | string | `"camera"` | camera = upright billboards; velocity = the billboard's up axis follows the direction of travel on screen (sparks, rain). |
-| `stretch` | float | `0` | align velocity only: seconds of travel added to the billboard's length (0.05 = streaks). |
-| `frames` | int | `1` | Flipbook length: frames played from `frame` on, row-major. 1 = a single frame. |
-| `frameRate` | float | `0` | Flipbook frames per second, looping; 0 plays the frames once over the particle's lifetime. |
-| `randomFrame` | bool | `false` | Each particle starts at a random flipbook frame and keeps it when frameRate is 0 (a sheet of variants). |
-| `sizeOverLife` | json | `[]` | Size keys [[t, meters], ...] with t ascending in 0..1; replaces startSize/endSize when not empty (sizeVariation still scales it). At most 16 keys. |
-| `colorOverLife` | json | `[]` | Color keys [[t, [r, g, b]] or [t, "#rrggbb"], ...]; replaces startColor/endColor when not empty. At most 16 keys. |
-| `opacityOverLife` | json | `[]` | Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys. |
-| `positionOverLife` | json | `[]` | Vector keys [[age,[x,y,z]],...], meters in emitter coordinates; additive offset on integrated motion, never accumulated. |
-| `velocityOverLife` | json | `[]` | Vector keys in emitter meters/second; replaces velocity each step before gravity/drag. Empty retains integrated velocity. |
-| `rotationOverLife` | json | `[]` | Vector keys in degrees; added to captured rotation3D and legacy Z rotation/spin. |
-| `scaleOverLife` | json | `[]` | Nonnegative XYZ multiplier keys; normalized age 0..1, up to 16 keys. Empty means [1,1,1]. |
-| `custom0OverLife` | json | `[]` | Scalar keys for particleCustom0; replaces the birth value over normalized age, at most 16 keys. |
-| `custom1OverLife` | json | `[]` | Scalar keys for particleCustom1; replaces the birth value over normalized age, at most 16 keys. |
-| `custom2OverLife` | json | `[]` | Scalar keys for particleCustom2; replaces the birth value over normalized age, at most 16 keys. |
-| `custom3OverLife` | json | `[]` | Scalar keys for particleCustom3; replaces the birth value over normalized age, at most 16 keys. |
-| `turbulence` | float | `0` | Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers). |
-| `turbulenceScale` | float | `1` | Noise cells per meter: small = wide swirls, large = jitter. |
-| `pixelArt` | bool | `true` | Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke). |
 
 ### Camera
 

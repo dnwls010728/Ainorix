@@ -211,3 +211,6 @@ dependencies; and a change is reported with what was and was not verified.
 
 MIT — see [LICENSE](LICENSE). Third-party code in `third_party/` keeps its own licenses (MIT, zlib, public domain,
 Apache 2.0 for the Roboto font).
+
+VFX phase 6: scene particles use `.vfx.json` + `VFXSystem`; `ParticleEmitter` is internal settings/runtime only.
+Standalone `particles.*`/`self:burst` are removed. Direct `Trail` remains available. See [consolidation and migration](docs/VFX_PHASE6.md).

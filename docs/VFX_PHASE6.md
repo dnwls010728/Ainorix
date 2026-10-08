@@ -68,6 +68,6 @@ Final 2D `eeb1529ca41029c9` and 3D `4ea73d9e1b71d479` hashes are unchanged acros
 - [x] 6.2: migrate shipped content, generators and gameplay effect scripts; compare preview/analyze.
 - [x] 6.3: move fixtures and regression tests to assets; establish stable reference hashes.
 - [x] 6.4: retire registration, scene stepping/gather and standalone commands/Lua; retain reflection.
-- [ ] 6.5: revise particle/API/editor/agent documentation and pre-release compatibility rule.
+- [x] 6.5: revise particle/API/editor/agent documentation and pre-release compatibility rule.
 - [ ] 6.6: full Windows/Node suites and Web/Android player rebuilds.
 - [ ] Android device, browser GPU and Linux/EGL execution.
