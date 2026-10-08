@@ -44,8 +44,4 @@ Both renderers consume the same scene description (`render/RenderScene.h`, UI qu
 
 ## Roadmap
 
-- Scripting for gameplay (candidate: Lua or WebAssembly modules so scripts are sandboxed and hot-reloadable by agents).
-- Materials with custom shaders and post-processing effects on the GPU renderer (the composite pass is the hook); more sokol_gfx backends (Metal, Vulkan, WebGPU).
-- TTF fonts for the UI (non-ASCII text), UI layout containers. (Physics, audio, UI, prefabs: done — see [PHYSICS.md](PHYSICS.md), [GAMEPLAY.md](GAMEPLAY.md).)
-- Prefabs and multi-scene projects; asset pipeline with content hashes.
-- Android/Apple/console platform layers (Web and Windows are done; see [PLATFORMS.md](PLATFORMS.md)).
+See [ROADMAP.md](ROADMAP.md).

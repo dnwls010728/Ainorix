@@ -1,8 +1,8 @@
 # Web multi-touch
 
 The web player reports every finger to Lua (`input.touches()`) and to on-screen controls (`UIButton.key`,
-`UIJoystick`); the first finger also acts as the mouse so taps work like clicks. Status and browser checks are in
-the work log at the end.
+`UIJoystick`); the first finger also acts as the mouse so taps work like clicks. Open items are under Status at
+the end.
 
 ## Contract
 
@@ -23,32 +23,8 @@ remaining fingers continue through input.touches() without taking over the
 mouse; the next gesture after all fingers lift chooses a new first finger.
 This avoids synthesizing a second mouse click from an already-held finger.
 
-## Implementation status (work log)
+## Status
 
-P5 branches from integrated main; the independent P3 rendering and P4 input
-PRs are not prerequisites for web touch events.
+- [ ] Real multi-touch on mobile browsers, including dragging outside the canvas and switching away while
+      fingers are held.
 
-- [x] P5.1: Queue every changed browser touch, preserve identifiers and normalized
-      coordinates, report began for one simulation step, and retain first-finger
-      mouse compatibility. Test simultaneous controls, moves, release/cancel and
-      focus reset on native and WebAssembly builds.
-      Windows passes 73 tests; Node/WASM passes 69. WebTouchLifecycle covers
-      press order, identifiers, Lua began flags, simultaneous UIButton keys,
-      moves, unknown moves, secondary release, primary cancel, ID reuse and reset.
-- [x] P5.2: Rebuild the prebuilt web player and verify browser DOM touch events
-      reach Lua/UI; update feature docs and three READMEs.
-      An ignored packaged test project used synthetic DOM Touch/TouchEvent
-      events through the compiled Emscripten callbacks. Lua observed two
-      fingers (IDs 54 and 7), two begins and simultaneous Left/Space/MouseLeft.
-      Moving the second finger released only Space without another begin;
-      ending it retained Left/MouseLeft. Cancelling the first released all;
-      starting another pair then dispatching window blur cleared fingers/keys.
-      Canvas coordinates normalized correctly with a 640x360 CSS canvas and
-      higher-resolution drawing buffer; the WebGL2 screenshot was inspected.
-      The check also exposed captured child-element blur, fixed by listening
-      to non-capturing window blur. Clicking between page controls no longer
-      clears the gesture. This verifies synthetic DOM events, not touch hardware.
-      Native compilation emitted existing EditorTiles/Editor member-shadow
-      warnings; the changed platform/header/test code introduced no warnings.
-- [ ] Hardware follow-up: exercise real multi-touch on mobile browsers, including
-      dragging outside the canvas and switching away while fingers are held.

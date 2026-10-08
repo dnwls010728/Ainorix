@@ -2,9 +2,8 @@
 
 `VFXSystem` asset emitters and `Trail` are simulated at the fixed step, deterministic, and drawn the same by both renderers.
 ParticleEmitter remains an internal settings/runtime value. Its scene component and `particles.*` APIs
-were retired in [phase 6](VFX_PHASE6.md); author `.vfx.json` blocks through Effects or `vfx.create/set`.
-This document is the contract and the reference for their fields; status and verification are in the work log at
-the end.
+were retired ([VFX.md](VFX.md#single-particle-authoring-route)); author `.vfx.json` blocks through Effects or
+`vfx.create/set`. This document is the contract and the reference for their fields; open items are at the end.
 
 For presets, strict authoring validation, isolated contact sheets and numeric analysis through `vfx.*`,
 see [VFX.md](VFX.md). `vfx.create/set` and Trail `component.add/set` reject bad ranges and curves before editing.
@@ -14,7 +13,7 @@ Old ParticleEmitter scene entries are skipped with a replacement hint; runtime g
 
 `expressions` stores typed Birth/Update source text; present channels replace curves, while Update
 position remains a non-accumulating offset and Update velocity precedes forces. See
-[VFX_PHASE5B.md](VFX_PHASE5B.md) for inputs, clocks, size variation, numeric/cost bounds and tests.
+[VFX.md](VFX.md#expression-contract) for inputs, clocks, size variation and numeric/cost bounds.
 
 ## VFX motion channels
 
@@ -95,8 +94,7 @@ the older draws, so turning one on does not reshuffle the rest.
 - **Sampling**: `pixelArt: false` filters the texture smoothly (soft glows, smoke).
 
 A layered effect is a parent entity with one emitter per layer (flash, sparks, smoke
-with a `delay`); save it as a prefab and spawn it with `prefab.instantiate`. See
-`samples/VFXLab`.
+with a `delay`); in a `.vfx.json` the layers are emitter blocks of one asset.
 
 ## Trail
 
@@ -136,16 +134,6 @@ with `vfx.set` or the Effects document history. VFXSystem component edits partic
 Particle coordinate snapshots, colors, sizes, opacity and gravity are captured at birth;
 world-space velocities include the spawn transform's scale/rotation.
 
-## Sample gameplay effects
-
-Both samples expose scripts/effects.lua as require("scripts.effects").spawn(position,
-kind), with kind "coin" for gold sparkles or "hit" for red sparks. Coin collection,
-enemy hits and player damage call it; Platformer bonus blocks also produce sparkles.
-Each effect is a separate world-space emitter, so destroying the coin or enemy
-does not remove the burst. There are 12 coin particles or 16 hit particles, with
-0.5-second lifetimes and a 16-particle cap. The attached effects script destroys
-the effect entity after 0.65 seconds, avoiding an accumulation of empty emitters.
-
 ## Rendering contract
 
 Both renderers consume the same camera-facing unit quads from GatherRenderItems
@@ -170,67 +158,11 @@ center distance. Entity id breaks ties, then stable birth order within an emitte
 
 Phase 4 adds emitter/trail materials, static mesh particles, optional emitter batching, normalized age/
 random/speed graph inputs, two-anchor blade ribbons and bounded asset death chains. See the complete
-field, ordering and budget contract in [VFX.md](VFX.md#materials-mesh-particles-ribbons-and-death-chains-phase-4).
+field, ordering and budget contract in [VFX.md](VFX.md#materials-mesh-particles-ribbons-and-death-chains).
 Legacy defaults retain the original particle hashes and draw ordering.
 
-## Implementation status (work log)
+## Status
 
-P1, P2 and P3.1 were integrated into main directly at the user's request.
-P3.2 and P3.3 continue from that combined main.
+- [ ] Android device and Linux/EGL execution of particle and trail effects.
+- [ ] Candidates: soft/depth-faded particles, particle collision.
 
-- [x] P3.1: Reflected ParticleEmitter, bounded deterministic fixed-step simulation,
-      explicit state/burst/clear commands, Lua burst helpers and simulation tests.
-      Windows Release build and all 64 tests pass. ParticleSimulationAndCommands
-      covers startup burst, capacity/drop/shrink, expiry, paused emission,
-      world-space spawn positions, runtime serialization exclusion, fractional
-      rate, API errors and Lua/global/instance bursts. ParticleRandomStreamIsDeterministic
-      checks repeated seeds, changed seeds and cone/speed constraints.
-- [x] P3.2: Shared 2D/3D billboard draw items, lifetime size/color interpolation,
-      texture sheet frames and transparent ordering in both renderers; visual,
-      hash, thread-determinism and software/GPU comparison tests. Windows Release
-      passes 74 tests. ParticleBillboardDrawItems checks camera orientation,
-      interpolation, local/world positions, sheet UVs, sorting and expiry.
-      ParticleRenderers covers solid/textured quads, 2D/3D seeded frame hashes,
-      single/multi-thread equality and D3D11 comparison (mean channel difference
-      0.118/0.180 of 255; fully covered interiors differ by less than 2 of 255).
-      Software/GPU PNGs were inspected. Both Android ABI players rebuilt;
-      browser execution is covered below; Android device execution remains unverified.
-      Node/WASM passes 70 tests, including the same fixed particle frame hashes
-      as Windows (2D eeb1529ca41029c9; 3D 4ea73d9e1b71d479). GPU tests skip
-      in Node because there is no browser canvas. CLI script screenshots also
-      verified a world-space colored burst in software and D3D11.
-- [x] P3.3: Platformer/Dungeon coin/hit effects, API/docs/three READMEs, web and
-      Android runtimes rebuilt and available platform verification. Windows passes
-      75 tests and Node/WASM passes 71. SampleParticleEffects drives real coin
-      trigger collection in both samples, enemy/player hit callbacks, visible
-      orthographic particles, cleanup and repeatable scene/frame output.
-      Native PNGs were inspected. Packaged Platformer ran with WebGL2 and no
-      console errors; an ignored copy used a helper to move coins onto the player,
-      exercising the actual collection callback and displaying its particle burst.
-      The helper is not part of either sample. P3.2 runtimes are current because
-      this milestone changes only Lua, documentation and tests.
-- [ ] Hardware follow-up: run packaged samples on an Android device and verify
-      coin/hit bursts and expiry; run the rendering suite on Linux/EGL. No Android
-      device or Linux execution was available for this feature.
-- [x] V1: ParticleEmitter for effects work: birth shapes (point/sphere/box/circle,
-      shapeEdge, radialSpeed), rotation and spin, align velocity + stretch, flipbooks
-      (frames, frameRate, randomFrame), sizeOverLife/colorOverLife/opacityOverLife
-      curves, turbulence, delay/duration cycles, pixelArt switch, `finished` in
-      emitter state diagnostics (now vfx.state and Lua vfx.state). Emitters that do not use a new field
-      keep their random sequence and frame hashes (ParticleRenderers hashes unchanged).
-      Tests: ParticleShapesRotationAndTiming, ParticleCurvesFlipbookAndAlignment.
-- [x] V2: Trail component (camera-facing ribbon, width/color/opacity fade, optional
-      texture, additive blend), trail.state/trail.clear, Lua trail.clear. Both renderers
-      draw the same mesh; TrailRibbon measures a mean channel difference of 0.106 of
-      255 between software and D3D11.
-- [x] V3: samples/VFXLab (campfire, portal, fireworks, orb trail) with generated
-      textures; SampleVfxLab runs it twice and compares frame hashes. Software and
-      D3D11 PNGs at frames 132 and 200 were inspected. Windows passes 187 tests.
-- [x] Runtime rebuild (phase 4, 2026-10-08): web and both Android players now include the VFX toolkit
-      and assets. Portable core tests run under Node/WASM; see VFX_PHASE4.md for current evidence.
-- [x] Phase 4: materials (including lit graphs), static mesh particles, two-anchor ribbons, optional
-      batching and bounded asset death chains; Effects isolated preview shipped in phase 3. See VFX.md.
-- [x] Phase 5a motion channels, pivot and custom attributes; see [VFX_PHASE5A.md](VFX_PHASE5A.md).
-- [ ] Candidates for later: soft/depth-faded particles and particle collision.
-
-- [x] Phase 5b expressions, cached programs and fixed-step evaluation; see [VFX_PHASE5B.md](VFX_PHASE5B.md).

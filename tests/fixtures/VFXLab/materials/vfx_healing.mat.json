@@ -1,0 +1,7 @@
+{
+  "format": "ownengine.material",
+  "shader": "materials/vfx_healing.shader.json",
+  "unlit": true,
+  "doubleSided": true,
+  "alphaMode": "blend"
+}

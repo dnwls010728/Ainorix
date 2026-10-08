@@ -211,8 +211,7 @@ each other's changes.
 All have access `edit` (no escalation), `maxHops` stays 0, and `rotateAboveInputTokens` is 150000 so
 a long chat conversation starts fresh. The instructions are project-neutral (they point to the
 project's `AGENTS.md`) and say how to work with delegation: tasks end with `team_report` and evidence,
-an `@mention` does not hand work on. An agent whose CLI is not installed shows as offline. The
-Wickbound sample's own team is a tuned version of this one; it is local and git-ignored.
+an `@mention` does not hand work on. An agent whose CLI is not installed shows as offline.
 
 ## 4. Backends
 
@@ -816,8 +815,8 @@ never pushed. Goal: the fixed task of §11.5 costs at most about 1.5x one agent 
 
 Decided (§10, items 5 to 7): `maxHops` 0, delegation beside the chat, fresh worker turns.
 Model choice is configuration, not code: a Sonnet lead, Opus
-called by name for hard jobs, pictures through the agent whose backend `supportsImages`; the
-Wickbound `team.json` is local (git-ignored), so the settings are described in the log.
+called by name for hard jobs, pictures through the agent whose backend `supportsImages`; a project's
+`team.json` is local (git-ignored), so measured settings are described in the log.
 
 Left out until a measurement or a real collision asks for it (Buzz's own rule is to delete what
 does not pay rent): file claims between tasks, `owns` globs, independent QA tasks, `hardModel`
@@ -833,8 +832,9 @@ faults with reasons and retain model failures as quality results.
 
 - **M1 idle turn**: `oe exec <scratch> team.send '{"text":"Say ok","wait":120}'` on `haiku` in a
   scratch `oe new` project; read tokens from the CLI's `result` line, cost from `team.messages`.
-- **M2 fixed task**: "Add a Bat enemy" (copy the slime prefab and script, speed 3, one in
-  `scenes/run.scene.json`, `script.check` clean) on a copy of `samples/Wickbound`, k=3 at the end per
+- **M2 fixed task**: "Add a villager" (copy the `Farmer` entity with its blob shadow, place it on a free
+  plaza tile facing left, `script.check` clean, `RPGVillageGame` still passing) on a copy of `games/RPG`, k=3 at
+  the end per
   condition: (a) one Claude agent alone that may use sub-agents, (b) the team before, (c) the improved team
   after E4. Record tokens, cost, wall time and whether the acceptance lines held, in
   [TEAM_LOG.md](TEAM_LOG.md). Write each condition down the way Buzz's manifest does (agents,

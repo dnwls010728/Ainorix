@@ -1,0 +1,81 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Footstep dust",
+  "description": "Small puffs kicked up by the hero's steps (bursts from scripts/hero.lua).",
+  "emitters": [
+    {
+      "name": "dust",
+      "emitter": {
+        "texture": "assets/textures/glow.png",
+        "pixelArt": false,
+        "space": "world",
+        "shape": "sphere",
+        "shapeSize": [
+          0.12,
+          0,
+          0
+        ],
+        "rate": 0,
+        "lifetime": 0.8,
+        "speed": 0.5,
+        "spread": 60,
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "gravity": [
+          0,
+          -0.2,
+          0
+        ],
+        "drag": 1.5,
+        "maxParticles": 40,
+        "startSize": 0.18,
+        "endSize": 0.63,
+        "startColor": [
+          0.8,
+          0.68,
+          0.5
+        ],
+        "endColor": [
+          0.8,
+          0.68,
+          0.5
+        ],
+        "opacityOverLife": [
+          [
+            0,
+            0.38
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      }
+    }
+  ],
+  "params": {
+    "color": {
+      "default": [
+        0.8,
+        0.68,
+        0.5
+      ],
+      "doc": "Dust tint.",
+      "targets": [
+        {
+          "to": "dust.startColor"
+        },
+        {
+          "to": "dust.endColor"
+        }
+      ]
+    }
+  },
+  "budget": {
+    "maxParticles": 40
+  }
+}

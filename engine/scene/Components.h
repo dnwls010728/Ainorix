@@ -341,6 +341,7 @@ struct Sprite {
     static constexpr const char* kTypeName = "Sprite";
     static constexpr const char* kDoc = "Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at the entity. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.";
     std::string texture;
+    std::string material;
     Color color{1, 1, 1};
     int frame = 0;
     int columns = 1;
@@ -356,6 +357,7 @@ struct Sprite {
     float alphaCutoff = 0.5f;
     float opacity = 1.0f;
     bool lit = false;
+    float emission = 0.0f;
     std::string blend = "alpha";
     int layer = 0;
     int order = 0;
@@ -363,6 +365,10 @@ struct Sprite {
     bool visible = true;
     static void Reflect(FieldList& f) {
         f.Add("texture", &Sprite::texture, "Image file (.png with transparency). A sprite sheet is a grid of equally sized frames.");
+        f.Add("material", &Sprite::material,
+              "Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. "
+              "`texture` stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. "
+              "Empty = the default sprite material.");
         f.Add("color", &Sprite::color, "Tint multiplied with the image.");
         f.Add("frame", &Sprite::frame, "Frame index in the sheet, row by row from the top-left (SpriteAnimation sets it).");
         f.Add("columns", &Sprite::columns, "Frames per row in the sheet.");
@@ -381,6 +387,12 @@ struct Sprite {
         op.min = 0.0f;
         op.max = 1.0f;
         f.Add("lit", &Sprite::lit, "Apply scene lighting (default: full brightness, like classic 2D).");
+        FieldInfo& em = f.Add("emission", &Sprite::emission,
+                              "Lit sprites: this fraction of the image's own colour is added whatever the lighting, so sprites seen against "
+                              "the light (night, backlit) stay readable. 0 = none.");
+        em.hasRange = true;
+        em.min = 0.0f;
+        em.max = 4.0f;
         f.Add("blend", &Sprite::blend, "alpha = normal; add = the image brightens what is behind it (glows, fire, light beams) and is always blended.").options = {"alpha", "add"};
         f.Add("layer", &Sprite::layer,
               "2D sorting layer: sprites of a higher layer are drawn in front of lower ones at the same depth, whatever their "
@@ -480,10 +492,20 @@ struct PostProcess {
     float dofFocus = 10.0f;        // view depth in meters that is sharp
     float dofRange = 2.0f;         // depth on either side of dofFocus that stays sharp
     float dofFalloff = 8.0f;       // further depth over which the blur grows to dofRadius
+    float fog = 0.0f;              // largest fog amount reached at fogEnd; zero disables fog
+    Color fogColor{0.75f, 0.82f, 0.9f};
+    float fogStart = 20.0f;        // distance from the camera where fog begins
+    float fogEnd = 80.0f;          // distance where it reaches `fog`
+    float saturation = 1.0f;       // color grading after tone mapping; all neutral values skip it
+    float contrast = 1.0f;
+    Color shadowTint{1, 1, 1};
+    Color highlightTint{1, 1, 1};
     static void Reflect(FieldList& f) {
         FieldInfo& exposureField = f.Add("exposure", &PostProcess::exposure, "Scene brightness multiplier before tone mapping. 1 preserves brightness.");
         exposureField.hasRange = true; exposureField.min = 0; exposureField.max = 32;
-        f.Add("toneMapping", &PostProcess::toneMapping, "none (disabled) or reinhard (compress HDR channels as c / (1 + c)).").options = {"none", "reinhard"};
+        f.Add("toneMapping", &PostProcess::toneMapping,
+              "none (disabled), reinhard (compress HDR channels as c / (1 + c)) or aces (filmic curve, Narkowicz fit of ACES).")
+            .options = {"none", "reinhard", "aces"};
         FieldInfo& bloomStrength = f.Add("bloom", &PostProcess::bloom, "Blurred highlight strength before exposure/tone mapping. 0 disables bloom.");
         bloomStrength.hasRange = true; bloomStrength.min = 0; bloomStrength.max = 4;
         FieldInfo& threshold = f.Add("bloomThreshold", &PostProcess::bloomThreshold, "Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue.");
@@ -507,6 +529,21 @@ struct PostProcess {
         FieldInfo& falloff = f.Add("dofFalloff", &PostProcess::dofFalloff,
                                    "Depth of field: depth beyond dofRange over which the blur grows to dofRadius (minimum 0.01).");
         falloff.hasRange = true; falloff.min = 0.01f; falloff.max = 100000;
+        FieldInfo& fogField = f.Add("fog", &PostProcess::fog,
+                                    "Distance fog: amount of fogColor mixed into surfaces at fogEnd and beyond (0 disables). It grows linearly "
+                                    "from fogStart; additive surfaces fade out instead. Materials with fog: false (sky domes) are not fogged.");
+        fogField.hasRange = true; fogField.min = 0; fogField.max = 1;
+        f.Add("fogColor", &PostProcess::fogColor, "Fog color (usually the sky's horizon color).");
+        FieldInfo& fogStartField = f.Add("fogStart", &PostProcess::fogStart, "Fog: distance from the camera in meters where fog begins.");
+        fogStartField.hasRange = true; fogStartField.min = 0; fogStartField.max = 100000;
+        FieldInfo& fogEndField = f.Add("fogEnd", &PostProcess::fogEnd, "Fog: distance where the fog reaches its full amount (at least fogStart + 0.01).");
+        fogEndField.hasRange = true; fogEndField.min = 0; fogEndField.max = 100000;
+        FieldInfo& sat = f.Add("saturation", &PostProcess::saturation, "Color grading after tone mapping: 0 = grey, 1 = unchanged, above 1 = more vivid.");
+        sat.hasRange = true; sat.min = 0; sat.max = 4;
+        FieldInfo& con = f.Add("contrast", &PostProcess::contrast, "Color grading: contrast around mid grey 0.5; 1 = unchanged.");
+        con.hasRange = true; con.min = 0; con.max = 4;
+        f.Add("shadowTint", &PostProcess::shadowTint, "Color grading: multiplier for dark tones (split toning, e.g. cool shadows). White = unchanged.");
+        f.Add("highlightTint", &PostProcess::highlightTint, "Color grading: multiplier for bright tones (e.g. warm highlights). White = unchanged.");
     }
 };
 
@@ -556,12 +593,17 @@ struct DirectionalLight {
     Color color{1.0f, 0.97f, 0.9f};
     float intensity = 1.0f;
     Color ambient{0.18f, 0.2f, 0.25f};
+    bool hemisphere = false;
+    Color groundAmbient{0.1f, 0.09f, 0.08f};
     bool shadows = true;
     float shadowStrength = 0.75f;
     static void Reflect(FieldList& f) {
         f.Add("color", &DirectionalLight::color, "Light color.");
         f.Add("intensity", &DirectionalLight::intensity, "Brightness multiplier.");
-        f.Add("ambient", &DirectionalLight::ambient, "Ambient light added to every surface.");
+        f.Add("ambient", &DirectionalLight::ambient, "Ambient light added to every surface (with hemisphere: the light from the sky above).");
+        f.Add("hemisphere", &DirectionalLight::hemisphere,
+              "Hemisphere ambient: surfaces facing up get `ambient`, surfaces facing down get groundAmbient, blended by the normal.");
+        f.Add("groundAmbient", &DirectionalLight::groundAmbient, "Hemisphere ambient: light bounced from the ground, seen by downward faces.");
         f.Add("shadows", &DirectionalLight::shadows, "Cast shadows (first directional light only).");
         FieldInfo& s = f.Add("shadowStrength", &DirectionalLight::shadowStrength, "0 = no darkening, 1 = black shadows.");
         s.hasRange = true; s.min = 0.0f; s.max = 1.0f;

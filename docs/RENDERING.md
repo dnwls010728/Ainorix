@@ -7,7 +7,7 @@ Two renderers draw the same scene description (`engine/render/RenderScene.h`: me
 | **Software** (`SoftwareRenderer.cpp`) — the reference | `oe render`, `render.screenshot` (default), `render.pick`, frame hashes, tests | Deterministic, multi-threaded, no GPU: bit-identical images on every machine and for any thread count, so hashes work as test oracles |
 | **GPU** (`GpuRenderer.cpp`, sokol_gfx) | Game window (`oe run`, packaged `Name.exe`), web build, editor viewport, `render.screenshot {renderer:"gpu"}` | Real-time: 4× MSAA, 2048² hardware-filtered shadow map, mipmapped anisotropic textures, UI at full window resolution. Pixels differ slightly between GPUs/drivers |
 
-GPU backends: **Direct3D 11** on Windows (hardware, falling back to WARP — the software D3D device built into Windows), **WebGL2** in the browser, **OpenGL ES 3 over EGL** on Linux (headless; Mesa's llvmpipe works without a GPU). Front-ends take `--renderer auto|gpu|software` (`auto` = GPU when available, otherwise software); `engine.info` reports both `renderer` (software) and `displayRenderer`. The test `GpuRendererMatchesSoftware` compares the two (mean channel difference below 1/255 on the Showcase).
+GPU backends: **Direct3D 11** on Windows (hardware, falling back to WARP — the software D3D device built into Windows), **WebGL2** in the browser, **OpenGL ES 3 over EGL** on Linux (headless; Mesa's llvmpipe works without a GPU). Front-ends take `--renderer auto|gpu|software` (`auto` = GPU when available, otherwise software); `engine.info` reports both `renderer` (software) and `displayRenderer`. The test `GpuRendererMatchesSoftware` compares the two (mean channel difference below 1/255 on a lit test scene with a skinned model).
 
 GPU texture/mesh caches follow their CPU owners. Scene rendering evicts expired owners, and the native
 editor also calls `GpuRenderer::CollectGarbage` between frames so an Effects/Shader workspace continues
@@ -20,7 +20,7 @@ Sokol emits `D3D11_SHADER_COMPILATION_OUTPUT` (item 40) first as a marker and th
 at info level; the engine preserves the text as a warning instead of dropping it. The current HLSL
 compiler reports X3570 for the shadow comparison sampling inside the directional-light loop with a
 runtime exit: it attempts to unroll the loop to accommodate implicit gradients. Compilation and the
-VFXLab editor screenshot succeed on the tested D3D11 device. This change exposes diagnostics only;
+Effects editor screenshot succeed on the tested D3D11 device. This change exposes diagnostics only;
 shader source and generated programs are unchanged.
 
 ### Effect vertex streams
@@ -66,7 +66,7 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 
 Models and textures are cached and **hot-reloaded** when their files change (checked twice a second while playing and before every `sim.step`).
 
-Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
+Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. `COLOR_0` vertex colors (RGB or RGBA) multiply the material color in both renderers and reach shader graphs through `baseColor`. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
 
 ## MeshRenderer
 
@@ -130,10 +130,10 @@ The one-line docs for every field are also in the `invalid_material` error hint.
 Create and edit them with commands (both validate the values; errors are `invalid_material` with a hint listing the field names, `already_exists`, or `invalid_path` unless the path ends in `.mat.json`):
 
 ```bash
-oe exec samples/Hello material.create '{"path":"materials/gold.mat.json","values":{"baseColor":"#ffc857","metallic":1,"roughness":0.25}}' --save
-oe exec samples/Hello material.set '{"path":"materials/gold.mat.json","values":{"roughness":0.4}}'   # merges into the existing file
-oe exec samples/Hello component.set '{"id":"Ring","type":"MeshRenderer","values":{"material":"materials/gold.mat.json"}}' --save
-oe exec samples/Hello asset.info '{"path":"materials/gold.mat.json"}'
+oe exec <project> material.create '{"path":"materials/gold.mat.json","values":{"baseColor":"#ffc857","metallic":1,"roughness":0.25}}' --save
+oe exec <project> material.set '{"path":"materials/gold.mat.json","values":{"roughness":0.4}}'   # merges into the existing file
+oe exec <project> component.set '{"id":"Ring","type":"MeshRenderer","values":{"material":"materials/gold.mat.json"}}' --save
+oe exec <project> asset.info '{"path":"materials/gold.mat.json"}'
 ```
 
 `material.create {path, values?, overwrite?}` writes all fields with defaults plus your `values`; `material.set {path, values}` merges into an existing file. Material files are **hot-reloaded**, also when a texture they use changes.
@@ -143,7 +143,7 @@ oe exec samples/Hello asset.info '{"path":"materials/gold.mat.json"}'
 `MeshRenderer.shaderUniforms` sets values for the material's shader graph uniforms on this entity only
 (scripts may change them every frame); see [POSTPROCESS.md](POSTPROCESS.md#portable-surface-shader-graphs).
 
-A shader graph can also bend the surface: its optional `offset` output is added to every vertex's world position in the vertex stage (shadows, depth of field and the selection outline follow it; physics and picking do not), and its `normal` output replaces the lighting normal per fragment. Use the `plane64` built-in mesh for a flat surface with enough vertices; see the same POSTPROCESS.md section and `samples/Water`.
+A shader graph can also bend the surface: its optional `offset` output is added to every vertex's world position in the vertex stage (shadows, depth of field and the selection outline follow it; physics and picking do not), and its `normal` output replaces the lighting normal per fragment. Use the `plane64` built-in mesh for a flat surface with enough vertices; see the same POSTPROCESS.md section; `games/RPG` uses `offset` for swaying grass and trees.
 
 `MeshRenderer.material` is applied to every submesh. If it is empty, a model uses its own glTF materials and a built-in mesh (`cube`, `sphere`, ...) uses the default material (white, metallic 0, roughness 0.7, opaque). On top of that:
 
@@ -168,7 +168,7 @@ glTF models load their full materials: base color factor including alpha, base c
 
 ## Sprites and tilemaps (2D)
 
-`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id; a cutoff of 0 blends the image alpha instead, with `Sprite.opacity` on top) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default. Tilemaps never cast shadows; a sprite casts one only with `castShadows` (lit, cut-out), shaped by its image through the shadow-pass alpha test. A Sprite is always drawn along its entity rotation; facing the camera is a project script (`samples/HD2D/scripts/billboards.lua`). See [2D.md](2D.md#sprites-in-a-3d-world-hd-2d).
+`Sprite` and `Tilemap` become the same render items as meshes (a unit quad, or one mesh per tilemap rebuilt when the map changes) with three extra material inputs shared by both renderers: a UV rectangle (sheet frame, flips), an alpha cutoff (texels below it are discarded — no color, depth or pick id; a cutoff of 0 blends the image alpha instead, with `Sprite.opacity` on top) and nearest sampling for pixel art. The GPU shader interpolates UVs with `centroid` so MSAA edge samples never read outside the frame. Sprites/tilemaps are unlit by default. Tilemaps never cast shadows; a sprite casts one only with `castShadows` (lit, cut-out), shaped by its image through the shadow-pass alpha test. `Sprite.material` swaps the default sprite material for a `.mat.json` (the sprite's `texture` stays the base image, its cutoff/blend/lit/tint/emission still apply), so a shader graph can sway the quad with `offset` (graph `uv` includes the frame, v = 0 at the image top) or a material can set `fog: false`; a missing material renders magenta. A Sprite is always drawn along its entity rotation; facing the camera is a project script (the billboard loop in `games/RPG/scripts/game.lua`). See [2D.md](2D.md#sprites-in-a-3d-world-hd-2d).
 
 ## Lights and shadows
 
@@ -176,8 +176,10 @@ glTF models load their full materials: base color factor including alpha, base c
 - `PointLight`: color, intensity, `range` (quadratic falloff to zero at the range).
 - Lighting is per pixel with a physically based model (glTF metallic-roughness): GGX normal distribution, Smith-Schlick geometry, Schlick Fresnel; F0 is 0.04 for dielectrics and the base color for metals, and the diffuse part is `baseColor * (1 - metallic)`. Both renderers use the same math (`Lighting::Shade` in `SoftwareRenderer.cpp`, `mesh_fs` in `Shaders.glsl`).
 - Light colors include the factor pi and lighting happens on non-linear (display) colors, clamped, with no tone mapping or HDR yet, so a white diffuse surface lit head-on still shows exactly the light color.
+- Hemisphere ambient: with `DirectionalLight.hemisphere` the ambient light is `groundAmbient` for faces pointing down, `ambient` for faces pointing up, blended by `normal.y * 0.5 + 0.5` (outdoor scenes: blue sky above, warm bounce below). Off by default (one flat ambient color).
 - Ambient = `DirectionalLight.ambient` * (diffuse + environment reflection). There is no skybox or environment map yet: reflections are approximated by a hemisphere that is brighter above (sky) than below (ground). Very smooth metals therefore reflect only this approximation and the highlights of the lights. Ambient occlusion textures darken this ambient term only.
-- Emissive is added after lighting (also for unlit materials).
+- Emissive is added after lighting (also for unlit materials). `Sprite.emission` (lit sprites) turns the sprite's own image into emission at that fraction, so billboards seen against the light at night do not go black.
+- Distance fog (`PostProcess.fog`) is applied per surface after emission; materials with `"fog": false` skip it. See [POSTPROCESS.md](POSTPROCESS.md#fog-color-grading-and-aces).
 
 ## Cameras
 
@@ -195,7 +197,8 @@ Exposure and optional Reinhard tone mapping preserve HDR lighting/emissive value
 before conversion to display color in both renderers. Neutral settings retain
 the original frame hashes. Optional bloom extracts and blurs HDR highlights before
 tone mapping in both renderers. Optional depth of field (`dofRadius`, `dofFocus`,
-`dofRange`, `dofFalloff`) blurs surfaces by their view depth before bloom. FXAA and custom shader materials remain later P6 milestones;
+`dofRange`, `dofFalloff`) blurs surfaces by their view depth before bloom. Distance fog, ACES tone mapping and color grading
+(saturation, contrast, shadow/highlight tints) are further optional fields. FXAA and custom shader materials remain later P6 milestones;
 see [POSTPROCESS.md](POSTPROCESS.md) for controls and verification.
 
 ## Debug drawing
@@ -211,17 +214,10 @@ Collider wireframes are separate: `render.screenshot {colliders:true}` (see PHYS
 
 GPU: the game window renders at the window's resolution (`project.json` `window.renderScale` 0.25–1 renders the 3D image smaller and upscales it, UI stays sharp) and presents with vsync.
 
-Software: the main pass and the shadow pass are split into horizontal bands rendered on worker threads (one band per core, up to 16). Triangles use a consistent fill rule (a pixel on a shared edge belongs to exactly one of the two triangles, so there are no gaps or double-drawn pixels). Each pixel belongs to exactly one band and sees triangles in the same order, so the result does not depend on the number of threads (`SetMaxRenderThreads(1)` is used in tests to prove it). The Showcase sample renders at 1280×720 in roughly 14 ms on an 8-core desktop.
+Software: the main pass and the shadow pass are split into horizontal bands rendered on worker threads (one band per core, up to 16). Triangles use a consistent fill rule (a pixel on a shared edge belongs to exactly one of the two triangles, so there are no gaps or double-drawn pixels). Each pixel belongs to exactly one band and sees triangles in the same order, so the result does not depend on the number of threads (`SetMaxRenderThreads(1)` is used in tests to prove it). A small lit scene with a skinned model renders at 1280×720 in roughly 14 ms on an 8-core desktop.
 
-## Sample
+## Example game
 
-`samples/Showcase`: the Khronos "Fox" glTF (CC0 model, CC-BY rig — see `assets/models/CREDITS.md`) as a player-controlled character with a follow camera, procedural textures, a shadowing sun and two colored point lights.
-
-Camera effect presets use keys 1 Off, 2 Tone, 3 Bloom, 4 Vignette, 5 FXAA,
-6 All. Startup stays neutral; the HUD shows the selected mode. Presets use
-the reflected PostProcess component through Lua scene commands; see
-[POSTPROCESS.md](POSTPROCESS.md) for settings and verification.
-
-`samples/HD2D` ("Lantern Road"): pixel-art sprites turned to the camera by a script in a lit 3D world with shadow-casting sprites, a long lens and depth of field; see [2D.md](2D.md#sprites-in-a-3d-world-hd-2d).
+`games/RPG`: an HD-2D village with a generated voxel terrain (vertex colours, cloud-shadow graph), modelled houses, swaying grass and trees, a sky dome with clouds and stars, mountain backdrops, stylised water, particles and a day/night cycle driving the sun, hemisphere ambient, fog and colour grading; see [RPG.md](RPG.md).
 
 Free-camera overrides in `render.screenshot` and `render.pick` accept `projection: "orthographic"` with positive `orthoSize` (half the visible height in world units). Omitted projection remains perspective; free cameras use clip distances 0.05 and 1000. The editor uses this override for 2D picking, matching its orthographic Scene view.

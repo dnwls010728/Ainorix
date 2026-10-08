@@ -1,0 +1,7 @@
+{
+  "baseTexture": "assets/textures/stars.png",
+  "unlit": true,
+  "doubleSided": true,
+  "fog": false,
+  "shader": "materials/sky.shader.json"
+}

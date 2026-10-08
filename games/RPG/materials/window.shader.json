@@ -1,0 +1,73 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {
+    "glow": 0
+  },
+  "nodes": [
+    {
+      "op": "baseColor"
+    },
+    {
+      "op": "constant",
+      "value": 0.25
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        0
+      ],
+      "value": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        0
+      ],
+      "value": [
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        2,
+        3
+      ]
+    },
+    {
+      "op": "step",
+      "args": [
+        1,
+        4
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "glow"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        5,
+        6
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        0,
+        7
+      ]
+    }
+  ],
+  "color": 0,
+  "emissive": 8
+}

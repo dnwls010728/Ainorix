@@ -2,7 +2,8 @@
 
 Create, tune and verify asset-backed `VFXSystem` and direct `Trail` effects through the same command API
 used by CLI, HTTP and MCP. No play session or editor window is needed. The simulation and rendering
-contract remains in [PARTICLES.md](PARTICLES.md); the larger implementation plan is [VFX_DESIGN.md](VFX_DESIGN.md).
+contract remains in [PARTICLES.md](PARTICLES.md). The detailed contracts for motion channels, expressions,
+value nodes and the bundled presets are in the last sections of this file.
 
 ## Portable acceptance presets
 
@@ -13,7 +14,7 @@ All meshes/textures/materials install into a versioned project directory without
 File conflicts are refused. Parameters and budgets are preserved. `vfx.apply_preset` attaches these six
 as linked VFXSystem components with scene undo; they require replace mode. Installed files survive undo.
 All 15 presets attach linked assets. The original nine support merge into unparameterized assets;
-parameterized instances use named-block `vfx.set` edits or replace. [Consolidation contract](VFX_PHASE6.md).
+parameterized instances use named-block `vfx.set` edits or replace. See [Bundled presets](#bundled-presets).
 
 ## Motion channels and pivot
 
@@ -33,18 +34,16 @@ legacy Z spin. Axis scale multiplies captured `scale`, then legacy scalar size a
 Existing size/color/opacity curves retain their established behavior.
 
 `pivot` is an unscaled geometry point fixed at the particle center. A cube's base is `[0,-0.5,0]`:
-keep scalar size at 1 and animate only scale Y to grow vertically with constant width. The curve-only
-proof is `samples/VFXLab/effects/ice_pillar_curves.vfx.json`; load `scenes/channels.scene.json`, or open
-that asset in Effects. Curves offers X/Y/Z selection and signed scalar plots, sharing document undo.
-Its material reads `particleCustom0` and `particleCustom3` for glow/dissolve; all four material ops also
-work in vertex displacement, both renderers, and batching, without taking graph uniform slots.
+keep scalar size at 1 and animate only scale Y to grow vertically with constant width (the `ice_pillar`
+preset does this). In Effects, Curves offers X/Y/Z selection and signed scalar plots, sharing document undo.
+Materials read `particleCustom0..3` (glow, dissolve, ...); all four material ops also work in vertex
+displacement, both renderers, and batching, without taking graph uniform slots.
 
 `vfx.state {id,particles:true}` includes evaluated scale/rotation/custom, birth inputs,
 `integratedPosition`, accepted birth `index` and immutable accepted batch `count`. Native snapshots
 retain these values; scene JSON excludes them. Hot reload updates curves while preserving live birth
-inputs. Bounded expression text now drives Birth/Update channels; value nodes are described in [VFX_PHASE5C.md](VFX_PHASE5C.md).
-Rain/snow ground-height killing remains a later candidate; finite lifetime can end falling particles.
-Verification and limits: [VFX_PHASE5A.md](VFX_PHASE5A.md).
+inputs. Rain/snow ground-height killing remains a later candidate; finite lifetime can end falling particles.
+Full contract: [Motion channel contract](#motion-channel-contract).
 
 ## Typed expressions
 
@@ -55,26 +54,21 @@ separate physics integration base. Numeric asset parameters are read as `param.n
 is valid for expression-only parameters. Scalar/vector types, own bounded math and conservative
 instruction budgets keep evaluation portable and bounded. `vfx.expression_eval` checks a source with
 supplied inputs; `vfx.check` reports compiled/reserved costs. `vfx.schema.expressions` lists inputs,
-functions, limits and reusable snippets. Open `effects/spiral_expressions.vfx.json` or
-`scenes/expressions.scene.json` in VFXLab. Full contract and evidence: [VFX_PHASE5B.md](VFX_PHASE5B.md).
-
-Six script-free acceptance effects are available in VFXLab: `ice_pillar`, `tornado`, `shield_dome`,
-`shockwave`, `rain_snow` and `healing_aura`. Open `effects/<name>.vfx.json` or
-`scenes/<name>.scene.json`. Contracts, contact sheets and recorded command results:
-[VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).
+functions, limits and reusable snippets. The six bundled presets (`ice_pillar`, `tornado`, `shield_dome`,
+`shockwave`, `rain_snow`, `healing_aura`) are complete script-free expression examples.
+Full contract: [Expression contract](#expression-contract).
 
 Effects **Value Nodes** edits individual Birth/Update channel expressions through typed nodes,
 with the same document undo and validation as source editing. `vfx.expression_graph` and
 `vfx.expression_source` expose the conversion for agents. Assets retain source text only;
-positions stay in `.oe/` layout sidecars. See [VFX_PHASE5C.md](VFX_PHASE5C.md) for usage and limits.
+positions stay in `.oe/` layout sidecars. See [Value nodes](#value-nodes).
 
 ## Agent recipe
 
 Start with `vfx.schema` for reflected field names, types, defaults, ranges, options and fixed-order
 module groups. `vfx.presets` lists eight texture-independent starting points with intent sentences:
 `fire`, `smoke`, `sparks`, `hit_burst`, `portal_ring`, `fireworks`, `trail_swing`, `trail_projectile`.
-Filter by an exact `tag`, such as `burst` or `trail`. These settings are derived from VFXLab; solid
-quads keep them portable. Import a soft glow/smoke texture for the desired final appearance.
+Filter by an exact `tag`, such as `burst` or `trail`. Solid quads keep them portable. Import a soft glow/smoke texture for the desired final appearance.
 
 Feed these JSON lines to `oe script <project>` (add `--save` to persist the scene; asset edits write immediately):
 
@@ -113,9 +107,6 @@ cannot finish, lifetime above 30 seconds, current live count above capacity, cap
 rate times lifetime, missing texture, and world-space emission without a movement driver on the
 owner. Movement warnings are heuristics: parent scripts or external commands can still move it.
 Trail checks also explain that motion is required. Every warning includes a recovery hint.
-
-Phase 1 addresses existing entity subtrees. `.vfx.json` paths, live-linked VFX assets, system parameters,
-VFXSystem and Lua `vfx.*` are phase 2. The Effects panel is phase 3; these commands do not add editor UI.
 
 ## Preview and analysis contract
 
@@ -247,10 +238,7 @@ emitting trails prevent natural completion; stop them to drain. Delayed one-shot
 expiry. A stopped, never-started one-shot warns in check. `game.pause` freezes automatic simulation and
 cleanup; scripts can still call manual burst/clear while paused.
 
-VFXLab keeps `scenes/main.scene.json` as the component reference and adds `scenes/assets.scene.json`,
-whose campfire links `effects/campfire.vfx.json`. The `intensity` parameter scales three emission rates.
-Regenerate both paths with `python samples/VFXLab/tools/make_scene.py`. See [SCRIPTING.md](SCRIPTING.md)
-for the Lua bindings. The Effects panel provides visual authoring; particle materials/batching and sub-emitters remain later phases.
+See [SCRIPTING.md](SCRIPTING.md) for the Lua bindings and [EDITOR.md](EDITOR.md) for the Effects panel.
 
 ## Shared Effects document
 
@@ -279,7 +267,7 @@ are blocked during recording/network matches, like external VFX asset edits.
 The UI groups fields and exposes curves, gradients, isolated playback and scene placement.
 See [EDITOR.md](EDITOR.md) for controls and screenshot flags.
 
-## Materials, mesh particles, ribbons and death chains (phase 4)
+## Materials, mesh particles, ribbons and death chains
 
 Emitter `material` and `Trail.material` bind ordinary `.mat.json` assets, including graphs authored
 in Shaders. Particle materials use the emitter's texture when specified, otherwise the material's own
@@ -329,9 +317,7 @@ must be packed with `vfx.from_entity` to form a shared system.
 
 `sword_slash` is the ninth preset: a two-anchor ribbon, mesh crescent and sparks. Multi-emitter presets
 use the first emitter on the requested entity and reuse/create named child entities for later layers.
-`samples/VFXLab/effects/sword_slash.vfx.json` adds a scrolling texture and lifetime dissolve graph;
-`scenes/slash.scene.json` runs repeated sword sweeps through `scripts/slash.lua`. Regenerate its authored
-files with `python samples/VFXLab/tools/make_slash.py`. Use `vfx.preview` with motion keys, as with trails.
+Use `vfx.preview` with motion keys, as with trails.
 
 Screen-space distortion/refraction is not implemented: surface graphs cannot sample the scene color,
 and the software surface sampler only exposes the base texture. The GPU composite samples the scene
@@ -377,69 +363,281 @@ shader and effect documents retain their own semantics.
 For an automated screenshot:
 
 ```text
-oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph --frames 20 --screenshot build/effects-graph.png
+oe editor <project> --effects effects/x.vfx.json --effects-graph --frames 20 --screenshot build/effects-graph.png
 ```
 
-## Implementation status (work log)
+## Motion channel contract
 
-- [x] Phase 1: six commands, eight portable presets, strict component authoring validation and bounded
-      isolated preview/analysis. Windows Release build is warning-free; all 254 tests pass, including
-      nine VFX tests and unchanged ParticleRenderers hashes. The actual VFXLab CLI preset/patch/check/
-      preview/analyze loop passed twice with identical hashes: campfire software d597a3c59617fb55,
-      D3D11 3f0b16a1e8477484, analysis 53e15b08e391bab0 (peak 62, nine samples), moving orb/trail
-      559f75cedb007766. Software, GPU and trail contact sheets were inspected. API reference and
-      English/Korean/Japanese READMEs are updated; AGENTS.md and CLAUDE.md match.
-      The earlier editor workflow/shader graph branch is also integrated into this checkout;
-      the combined Windows Release build passes all 261 tests, including node dragging and material
-      authoring. A Korean ShaderLab editor screenshot was inspected after integration.
-- [x] Phase 2 (2026-10-08): strict version-1 assets, sparse round trips, named parameter targets,
-      atomic asset commands and subtree export, linked VFXSystem with runtime controls, Lua bindings,
-      hot reload and total budgets, shared simulation/render gathering, autoDestroy and alternate VFXLab
-      campfire asset scene. Native snapshots retain runtime particles/points/RNG/controls; scene JSON
-      excludes them. External controls/writes are blocked during recording/network matches.
-      Windows Release build is warning-free; all 271 tests pass (ten additional asset/runtime tests).
-      Single-emitter frame-by-frame software parity and native restore tested; legacy 2D/3D hashes remain
-      eeb1529ca41029c9 / 4ea73d9e1b71d479. Actual asset CLI checks, previews, analysis and alternate scene
-      rendering passed. Inspected software/D3D11 192px contact sheets: 0efdfb4b39ef66d2 /
-      e14f3901d15e0d63. Two-second analysis: d0190970a65b1f8a (peak 67 of 208, nine samples).
-      Alternate asset scene at frame 132, 640x360: 2c41322aa12063c8, inspected. API reference,
-      scripting guide, all READMEs and identical AGENTS.md/CLAUDE.md updated.
-      Rebuild attempts returned Emscripten not found / Android NDK not found; shipped Web/Android
-      binaries still require rebuilding before these assets can be used on those targets.
-- [x] Phase 3 (2026-10-08): Effects workspace with module groups, typed parameters, scalar curves/color
-      gradients, isolated 60 Hz playback/loop/scrub/motion/counts, scene placement and asset drag/drop.
-      Shared Engine authoring document exposes edit/edit_state/edit_replace/undo/redo/save/close;
-      vfx.set routes active-path patches to its draft, with 64-edit history, drag coalescing and explicit
-      atomic save. Dirty close/switch/quit prompts and external disk conflict protection preserve work.
-      Preview/check/get/diff/analyze can read unsaved drafts, while live instances use saved assets.
-      Attached-agent changes update the panel and appear as notices. English/Korean/Japanese labels
-      and wrapping controls, editor screenshot flag, API/area docs, all READMEs and agent guides updated.
-      Warning-free Windows Release build and all 274 tests pass: two document tests plus native window
-      events for fields, curves, gradients, separate undo/save, remote notices, dirty prompts, placement
-      and asset-card drag into Scene. Legacy particle hashes remain unchanged. Actual nine-call CLI
-      document workflow passed, including an unsaved 160px four-frame preview: 0bd1c245bd6ac6a4.
-      English curve/gradient workflow and Korean/Japanese D3D11 editor screenshots inspected.
-      Web/Android prebuilt players still need the tracked Emscripten/NDK rebuild. Linux/EGL, Node/WASM
-      and Android device execution remain unverified.
-- [x] Phase 4 (2026-10-08): materials, age/random/speed graph inputs, opt-in batching, bounded death
-      chains, static mesh particles, two-anchor ribbons and sword_slash preset/sample. Details and
-      validation evidence are in [VFX_PHASE4.md](VFX_PHASE4.md).
-- [x] Phase 4b (2026-10-08): shared shader/effect canvas, structure nodes and reference wires, in-node
-      module fields, compact preview and `.oe/` layout sidecars. Verification: [VFX_PHASE4B.md](VFX_PHASE4B.md).
-- [x] Phase 5a (2026-10-08): captured birth state, non-accumulating position/velocity curves, XYZ
-      rotation/scale, pivot and four material custom channels, signed/vector Effects curves.
-      Details and evidence: [VFX_PHASE5A.md](VFX_PHASE5A.md).
-- [ ] Platform follow-up: Linux/EGL, browser WebGL2 and Android device execution of phase 4 effects.
-      Windows/D3D11 and Node/WASM tests cover the native and portable core; prebuilt players refreshed.
+- Birth captures offset position, velocity, XYZ rotation, axis scale and four custom values alongside
+  existing size, color, opacity and stable random. Runtime `index` is the emitter's accepted birth order;
+  `count` is that call's accepted batch size, captured immutably. Clearing resets the birth index.
+- Existing particles step before new births. Each update advances age, optionally replaces velocity
+  from its curve, applies gravity/turbulence/drag, integrates a separate position, then evaluates
+  offset position, rotation, scale and custom curves, expires particles and performs emission.
+- Position curve is an additive displacement from separately integrated motion. It never modifies
+  that integration base. A removed curve removes its displacement on the next step. Velocity curve
+  is a prescribed velocity in emitter meters/second, replaced before forces each step; gravity does
+  not accumulate across steps with this curve enabled. Empty velocity curves keep normal integration.
+- World motion curves transform by the emitter matrix captured at birth; moving/rotating the owner
+  later leaves that frame intact. Local particles use local values and follow their current owner.
+  Rotation is extra XYZ Euler degrees inside legacy Z rotation/spin, in billboard or mesh axes.
+- Axis scale is birth `scale` multiplied by `scaleOverLife`; scalar lifetime size and meshScale apply
+  once. Geometry translates by negative `pivot` before scaling/rotation, fixing that point at its
+  particle center. Default transforms bypass the new matrix path and preserve legacy frame hashes.
+- Vector curves are `[[age,[x,y,z]],...]`, at most 16 keys, nondecreasing age within 0..1, linear
+  interpolation and endpoint clamp. Position/velocity/rotation are signed, scale is nonnegative.
+  Birth vectors and custom values/curves are finite within -65504..65504. New fields default to zero,
+  unit scale and empty curves. Existing scalar size/color/opacity rules remain unchanged.
+- `custom0..3` are captured values replaced by their signed scalar lifetime curves. Dedicated vertex
+  attributes carry them to materials; shared unbatched meshes use dedicated per-draw inputs as with
+  particleAge/Random/Speed. They consume no authored graph uniform slots. `particleCustom0..3`
+  are zero-argument graph operations available in both vertex and fragment stages. Ordinary meshes
+  and ribbons default to zero. Batching preserves one custom vector for every particle's vertices.
+- Native snapshots and rollback clone captured/evaluated values, integration base, accepted counters,
+  random stream and clocks. Scene JSON excludes transient state. Hot reload preserves live birth
+  values while replacing curves; a rejected asset edit leaves the valid runtime unchanged.
+- `vfx.schema.channels`, reflected docs and `vfx.state {id,particles:true}` expose the contract.
+  Effects fields and graph modules edit the shared draft; vector axes share one set of age keys.
+  Moving/adding a key resamples its other axes; removing a key removes it across axes.
 
-- [x] Phase 5b (2026-10-08): typed Birth/Update expressions, deterministic math, located errors,
-      numeric budgets, diagnostics and Effects source editing. See [VFX_PHASE5B.md](VFX_PHASE5B.md).
+## Expression contract
 
-- [x] Phase 5b+ (2026-10-08): six text-only acceptance effects, procedural meshes/materials, script-free
-      scenes and recorded headless/renderer proofs. See [VFX_PHASE5B_PLUS.md](VFX_PHASE5B_PLUS.md).
+Only source text is serialized, under the emitter's `expressions`:
 
-- [x] Phase 5c (2026-10-08): compiler-backed value nodes, bounded graph/source commands, typed
-      validation, shared source/history and layout sidecars. See [VFX_PHASE5C.md](VFX_PHASE5C.md).
+```json
+{
+  "birth": {"position": "vec3(index,0,0)", "custom0": "random"},
+  "update": {
+    "position": "vec3(cos(age*2*pi),age*param.height,sin(age*2*pi))",
+    "scale": "vec3(1,1-pow(1-age,3),1)",
+    "opacity": "curve(age,0,0,0.1,1,0.8,1,1,0)"
+  }
+}
+```
 
-- [x] Phase 5d (2026-10-08): portable six-effect presets, bundled dependencies, fresh-project creation,
-      shared drafts, linked placement and conflict refusal. See docs/VFX_PHASE5D.md.
+- Position, velocity, rotation, scale and color require `vec3`; size, opacity and custom0..3 require
+  scalars. Arithmetic broadcasts scalars to vectors; comparisons require scalars. Ordinary decimal
+  literals (including `.5`), unary +/-, parentheses and + - * / < <= > >= == != are supported.
+  Scientific literals, assignments, loops, strings, user functions and recursion are not supported.
+- Functions: vec3, min, max, abs, clamp, lerp, select, sin, cos, pow, exp, sqrt, floor, fract, dot,
+  length, curve. `select(condition,a,b)` evaluates both branches. `curve(t,t0,value0,...)` has 1..16
+  ascending literal ages in 0..1, same-type values, linear interpolation and endpoint clamping.
+- Inputs: normalized age, lifetime in seconds, emitterTime, systemTime, accepted index/batch count,
+  stable random, speed, birthPosition/Velocity/Rotation/Scale/Color, birthSize, birthOpacity and pi.
+  Vector inputs and vector parameters support `.x/.y/.z`; arbitrary expression postfix swizzles do not.
+  `param.name` reads asset numeric scalar/vec3 parameters; expression names use identifier characters
+  (ASCII letters, digits and underscores). Hyphenated legacy parameter names remain valid for field mappings.
+- All Birth channels read one frozen pre-expression context. Position/velocity replace shape/offset
+  position and initial velocity in emitter coordinates. Rotation/scale replace captured XYZ birth
+  values. Color/size/opacity replace start/end values. Custom channels replace captured custom values.
+  Outputs are then recaptured for Update; Birth never runs again on live particles after a parameter edit.
+- Update channels read one frozen context after age advances, before prescribed velocity/forces.
+  Newborns also evaluate Update at age zero. Update position is an offset on separately integrated
+  motion, rotation adds to captured XYZ rotation, scale multiplies captured scale, velocity replaces
+  velocity before gravity/turbulence/drag. Color/size/opacity/custom replace the corresponding curve
+  output. Missing expressions use existing curves and fields; legacy Z spin still applies.
+- Position/velocity vectors use emitter coordinates. World particles transform them by their captured
+  birth frame; local particles follow the owner. Speed is the magnitude of stored particle velocity,
+  before this step's Update velocity/forces (local-space speed for local particles). Birth size excludes
+  the captured sizeVariation multiplier; Birth and Update size each apply that multiplier exactly once.
+  Scale/size clamp nonnegative; opacity clamps 0..1. RGB and custom data allow signed/HDR values within
+  the finite instruction range. Standard material/color handling applies at rendering.
+- emitterTime follows the existing emitter emission clock; stopped emission freezes that clock.
+  systemTime is the parent VFXSystem clock sampled at step start, including during stopped emission
+  while particles age. Standalone emitters use emitterTime. Newborns see the emission clock at birth.
+  Pause freezes simulation clocks; clear does not reset them. Asset restart/new system resets them.
+- Cached immutable programs are internal, shared by native snapshots; current parameters and clocks
+  remain runtime values. Hot reload preserves captured birth values and replaces Update programs.
+  Scene JSON stores source only, not instructions/caches/particle state.
+
+`vfx.schema.expressions` publishes functions, inputs, limits and orbit, spiral, pulse, ease-out,
+rise/hold/fall and random-range snippets. `vfx.expression_eval {source,type?,inputs?,params?}` is a
+read-only diagnostic returning typed value and instruction count. `vfx.check` reports
+expressionInstructions and expressionStepInstructions. Errors identify block, stage/channel and
+line/column, with repair hints; rejected edits leave the valid draft and runtime untouched.
+
+### Numeric and cost bounds
+
+Each source has at most 1024 bytes, nesting 32 and 64 instructions; the sum is at most 256 per emitter
+and 512 per asset. Capacity reserves `sum(maxParticles * 5 * (birthCost + updateCost)) <= 1000000`
+instructions per step, conservatively covering initial Update evaluation and death-birth passes.
+This uses configured capacities, even when the global particle budget is lower. Command preview/analysis
+add a request bound of 100000000 reserved instructions across frames and passes; editor scrubbing uses
+the same bound. Existing particle-step and capacity limits still apply. Costs count compiled operations,
+not wall-clock time; all math functions have bounded internal work.
+
+Every instruction clamps to +/-65504. Division by zero, negative square root and negative fractional
+power return zero; NaN and subnormals become zero. `0^0` is 1, other zero-base powers are zero. Own
+float polynomial/Newton math avoids platform transcendental libraries and uses the engine's disabled
+floating-point contraction. exp below -20 returns zero and above 11.1 saturates. These are bounded
+visual approximations, not scientific math. Tests check sin absolute error below 0.0005 over 0..2*pi,
+pow below 0.00002 for bases 0.1..1.1/exponent 2.3, exp below 0.0001 for -4..4. Large angles lose normal
+single-precision resolution. Keep phase inputs small with fract when appropriate.
+
+## Value nodes
+
+Value nodes are an authoring view of the bounded expression compiler, not another evaluator. The effect
+document retains expression text only; node positions live in project `.oe/` sidecars. Edits compile back
+into source and use the shared VFX document commands and history. Unsupported conversions and invalid
+connections preserve the source document.
+
+Open a `.vfx.json` in Effects, enable **Value Nodes**, then choose its emitter, Birth/Update stage
+and channel. **Structure Graph** remains the block/reference view; Shaders remains the material editor.
+An unassigned channel displays a starter graph and keeps authored values until nodes are applied.
+
+- Drag a header to move its card. Middle mouse pans, wheel zooms; Fit Graph and Auto Arrange reset framing.
+  Header/body text scales with canvas zoom; the selected node's properties remain full size.
+- Add Value Node offers constants, particle inputs, parameters, scalar/vector math, vec3, component
+  reads and curves. Select a node for its literal/input/axis and indexed argument controls.
+- Connect output pins to argument pins or the green channel output. Right-click an input to disconnect.
+  Complete, valid edits apply through `vfx.edit_replace`; malformed or incomplete topology stays
+  pending with an error and does not alter the shared source document. Reset Nodes discards pending topology.
+- Literal text accepts unsigned decimals or `pi`; Negate represents negative values. Numeric dragging
+  coalesces into one document undo step per drag. Enter commits a literal edit. Remove Node deletes
+  a node and leaves affected inputs pending until reconnected.
+- Curve inputs are time followed by ascending constant age/value pairs. Add/Remove Key edits its
+  argument pairs; wire constant ages and scalar/vector values, matching the expression language.
+- Apply Nodes explicitly validates and commits the current graph. Source text can also be edited and
+  applied in the same view. Undo/Redo and remote `vfx.set` edits refresh nodes from the shared document.
+  Scalar/vector parameter type changes refresh compiler-derived node types. String/bool parameters
+  continue working in the effect document and are excluded from expression parameter pickers.
+- Save Effect saves the last validated source document. Incomplete pending topology is transient and
+  is not saved. Positions, pan and zoom live in `.oe/vfx-layout/`; moving nodes does not dirty the asset
+  or create document history. Layouts use block/stage/channel/compiler-index keys; after structural
+  text edits, Auto Arrange can reframe retained positions.
+
+```text
+oe editor <project> --effects effects/ice_pillar.vfx.json --effects-values
+```
+
+With the `ice_pillar` preset the screenshot flag selects Update custom3, showing the dissolve curve. Other channels are
+selected through the toolbar. Enable Value Nodes interactively to edit any emitter/channel.
+
+![Korean value-node workspace](images/effects-value-nodes-ko.png)
+
+### Value-node commands
+
+`vfx.schema.expressions.valueGraph` describes operations, inputs and limits. Read-only conversions:
+
+```json
+{"command":"vfx.expression_graph","args":{"source":"age*2","type":"scalar"}}
+{"command":"vfx.expression_source","args":{"type":"scalar","graph":{"format":"oe.vfx.expression_graph","version":1,"nodes":[{"op":"input","name":"age","args":[]},{"op":"constant","literal":"2","args":[]},{"op":"multiply","args":[0,1]}],"output":2}}}
+```
+
+Both return `source`, a compiler-derived typed `graph`, output `type` and compiled instruction count.
+Export also returns `nodeTypes` in the supplied graph's node order, including disconnected nodes.
+Graph nodes have `op`, integer `args`, plus `literal`, `name` or `axis` where applicable; `type` from
+conversion is advisory metadata, never trusted as a type declaration. Parameters use an optional
+`params` object of at most 32 numeric scalar/three-vector defaults. Node and output indices refer to
+this transient node array, with zero-based X/Y/Z axis indices for component reads.
+
+Graphs allow 1..64 nodes, depth at most 32. References, cycles and arities are checked, including
+unreachable nodes, then every node and the channel output are compiled by the runtime compiler.
+Sharing nodes expands to expression text; the resulting 1024-byte/64-instruction/depth limits still
+apply, and full-document replacement additionally checks emitter/effect/step budgets. No graph
+instructions bypass those limits and there is no graph interpreter in the editor.
+
+Numeric literal spelling, including tiny decimals and `pi`, is captured during compilation so
+conversion cannot introduce decimal-rounding drift. Recompiled operations, types, arguments,
+values and names must match exactly before a text conversion is accepted. Text layout/whitespace
+can normalize when a node edit is applied; layout-only changes do not rewrite source.
+
+Component reads require a named vector input or parameter, matching the current text grammar.
+The serializer uses explicit parentheses; valid text whose canonical expansion exceeds source/depth
+limits is refused with `unsupported_expression_graph`. Keep it in text view. Invalid graph fields,
+cycles, missing references, wrong types or budgets are rejected with a hint. Conversion commands
+never mutate the scene or isolated draft: an agent applies returned source through existing `vfx.set`
+or `vfx.edit_replace`, then uses the shared undo/save flow. No typed tree or bytecode goes into assets.
+
+## Bundled presets
+
+The six script-free expression effects are built-in presets: a fresh project can create them, and the
+executable installs their meshes, textures and surface materials. There are 15 presets in total;
+`vfx.presets {"tag":"acceptance"}` lists these six.
+
+Open **View > Effects**, click **New Effect**, choose a preset and a new `.vfx.json` path, then **Create**.
+The complete effect opens as an unsaved draft. **Save Effect** writes it; **Place in Scene** creates a
+linked `VFXSystem`. **Structure Graph** shows blocks/references; **Value Nodes** edits the selected
+Birth/Update expression. Source, nodes, agents and document undo share the same validated draft.
+Preset intent appears on hover; the expanded selector shows all 15 choices on a normal-height window.
+
+| Preset | Controls | System particle budget |
+|---|---|---:|
+| `ice_pillar` | Base-pivot growth, frost and fragments | 45 |
+| `tornado` | `height`, `rise` | 128 |
+| `shield_dome` | `radius`, rim pulse and fade | 1 |
+| `shockwave` | `speed`, radial growth and dissolve | 1 |
+| `rain_snow` | World-space rainfall and drifting snow | 88 |
+| `healing_aura` | `radius`, `height` | 48 |
+
+![Korean preset selector](images/effects-bundled-presets-ko.png)
+
+### Through commands
+
+```json
+{"command":"vfx.create","args":{"path":"effects/ice.vfx.json","preset":"ice_pillar"}}
+{"command":"vfx.check","args":{"path":"effects/ice.vfx.json"}}
+{"command":"vfx.preview","args":{"path":"effects/ice.vfx.json","times":[0.15,0.75,2.4,3.1],"size":128,"out":"build/ice.png"}}
+{"command":"vfx.spawn","args":{"path":"effects/ice.vfx.json","position":[0,0,0]}}
+```
+
+`vfx.create` accepts exactly one of `vfx` or `preset`. Explicit documents retain the previous file
+write behavior; the preset route refuses an existing destination with `already_exists`.
+`vfx.edit {path,new:true,preset}` creates a shared draft without writing the effect file.
+Numeric parameter definitions, defaults, ranges and total system budgets survive both routes.
+
+`vfx.apply_preset {id,preset}` attaches the six bundled presets as a `VFXSystem`, removing direct
+ParticleEmitter/Trail components on that owner. It is one scene undo step. Other child entities remain.
+Bundled presets require `mode:"replace"`; `merge` is rejected before installation. The original nine
+presets keep their direct-component replace/merge behavior. A direct preset replacement removes an
+existing VFXSystem on the owner, avoiding two effects there at once.
+
+### Installation and ownership
+
+The manifest `engine/app/vfx-presets/files.cmake` lists the six assets and their dependency files, whose
+sources live next to it in `engine/app/vfx-presets/` (effects, meshes, textures, materials and graphs).
+CMake normalizes JSON newlines and snapshots binary bytes; changing an embedded file rebuilds the generated
+source. No runtime file lookup occurs.
+
+References are remapped into `assets/vfx-presets/<bundle-hash>/`, retaining relative source paths
+inside that directory. Only reachable dependencies are installed, with transitive material/shader
+references. Identical files are reused. All destination conflicts are checked before installation;
+modified files produce `preset_conflict`, never an overwrite. A new bundle uses a new hash directory.
+The hash is a version namespace, not a security signature.
+
+Dependencies belong to the project and are included by normal packaging. Scene undo and draft discard
+retain these files, just like other authored assets. A failed disk write may leave unused dependencies,
+but does not publish a partially validated effect or change scene/document history. To customize the
+bundled linked asset, create a named copy with `vfx.create` and edit it with `vfx.set`/Effects; edits to
+shared installed dependencies intentionally prevent later automatic reuse until restored.
+
+### Release limits
+
+- CPU simulation, fixed 60 Hz; no GPU compute backend, particle physics collision, terrain sampling,
+  soft particles or screen refraction/distortion.
+- Rain/snow expire at a floor relative to their captured spawn frame, using fixed lifetime and velocity.
+  There is no height-kill channel or terrain collision. Moving the owner retains world-space particles.
+- Expression source is the serialized authority. 1024 bytes/channel, depth 32, 64 instructions/channel,
+  256/emitter, 512/asset and 1,000,000 reserved expression instructions/step; over-budget authoring fails.
+  Request simulation cost is bounded separately. Values saturate to finite +/-65504; NaN becomes zero.
+- Value nodes are a bounded view of expressions, not a free execution graph. Conversion can be refused
+  for unsupported/deep source while preserving the document. Simulation order remains fixed.
+- Static mesh particles and shader/custom channels are supported. Arbitrary skeletal mesh particles,
+  GPU sorting and GPU simulation remain future work. Transparent renderer comparisons are approximate.
+
+## Single particle authoring route
+
+ParticleEmitter is internal settings/runtime only: it is not a scene component, and old scene entries load
+with a VFXSystem migration hint (that component is skipped, the rest of the entity stays). Standalone
+`particles.*` commands, the Lua `particles` table and `self:burst` are removed; author `.vfx.json` blocks and
+attach `VFXSystem`. Direct `Trail` components remain. `VfxSeedMix(index) = uint32(index) * 0x27d4eb2d`; index
+0 is exactly zero, so a one-emitter asset reproduces the old standalone RNG stream for the same owner id.
+`vfx.from_entity` packs linked assets and direct trails, renaming parameters, expression references and
+death links, keeping relative matrices and authored overrides as defaults. DESIGN.md invariant 1.8 covers
+such approved pre-release consolidations.
+
+## Open items
+
+- Linux/EGL, browser WebGL2 and Android device execution of material/mesh/expression effects.
+- Direct `Trail` retirement (keep it or fold it into assets) is undecided.
+- Ground-height kill for rain/snow, soft particles, screen distortion, GPU simulation and sorting.

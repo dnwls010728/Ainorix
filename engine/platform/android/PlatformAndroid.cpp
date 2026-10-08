@@ -296,6 +296,8 @@ const char* KeyName(int32_t code) {
         case AKEYCODE_FORWARD_DEL: return "Delete";
         case AKEYCODE_MOVE_HOME: return "Home";
         case AKEYCODE_MOVE_END: return "End";
+        case AKEYCODE_LEFT_BRACKET: return "LeftBracket";
+        case AKEYCODE_RIGHT_BRACKET: return "RightBracket";
         default: return nullptr;
     }
 }

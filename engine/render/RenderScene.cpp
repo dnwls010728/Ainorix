@@ -127,6 +127,11 @@ Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
     m.baseColor = m.baseColor * tint;
     if (hasShaderUniforms && m.shader) m.shaderUniforms = shaderUniforms;
     if (textureOverride) m.baseTexture = textureOverride;
+    if (emission > 0.0f) {
+        m.emissive = m.baseColor * emission;
+        m.emissiveIntensity = 1.0f;
+        m.emissiveTexture = m.baseTexture;
+    }
     m.opacity *= Clamp(opacity, 0.0f, 1.0f);
     if (unlit) m.unlit = true;
     if (pointSample) m.pixelArt = true;
@@ -273,11 +278,20 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.alphaCutoff = std::max(0.0f, sp.alphaCutoff);
         it.blend = sp.alphaCutoff <= 0.0f;  // no cutoff: soft edges, alpha blended
         it.opacity = sp.opacity;
+        it.emission = sp.lit ? std::max(0.0f, sp.emission) : 0.0f;
         it.sortLayer = sp.layer;
         it.sortOrder = sp.order;
         it.additive = sp.blend == "add";
         it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
         if (!sp.texture.empty() && assets) it.textureOverride = assets->GetTexture(sp.texture);
+        if (!sp.material.empty() && assets) {
+            it.materialOverride = assets->GetMaterial(sp.material);
+            if (!it.materialOverride) {  // broken material file: magenta, like a missing mesh
+                it.tint = Color(1, 0, 1);
+                it.unlit = true;
+                it.error = true;
+            }
+        }
         const Texture* tex = it.textureOverride.get();
         if (!sp.texture.empty() && !tex) {
             it.tint = Color(1, 0, 1);  // missing image: magenta, like missing meshes
@@ -706,6 +720,8 @@ RenderLights GatherRenderLights(const Scene& scene) {
         l.dir = Normalize(scene.WorldMatrix(kv.first).TransformDir(Vec3(0, 0, -1)));
         l.color = kv.second.color * kv.second.intensity;
         lights.ambient = lights.ambient + kv.second.ambient;
+        lights.groundAmbient = lights.groundAmbient + (kv.second.hemisphere ? kv.second.groundAmbient : kv.second.ambient);
+        lights.hemisphere = lights.hemisphere || kv.second.hemisphere;
         if (lights.dirs.empty()) {
             lights.shadows = kv.second.shadows;
             lights.shadowStrength = kv.second.shadowStrength;

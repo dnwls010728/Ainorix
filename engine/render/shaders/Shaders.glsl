@@ -165,7 +165,8 @@ layout(binding=1) uniform mesh_material {
     vec4 pbr;         // x: metallic, y: roughness, z: normal scale, w: occlusion strength
     vec4 emissive;    // rgb: emissive * intensity, w: flat shading
     vec4 maps;        // x: normal map, y: metallic-roughness map, z: emissive map, w: occlusion map
-    vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets, y: 1 = surface_aux writes depth (depth of field)
+    vec4 color_range; // x: 1 for legacy RGBA8, 65504 for HDR float16 targets, y: 1 = surface_aux writes depth (depth of field),
+                      // z: fog mode (0 = none, 1 = mix toward fog color, 2 = additive: fade out)
     vec4 graph_control; // node count, color output, emissive output (-1 absent), simulation seconds
     vec4 graph_outputs; // x: normal output (-1 absent)
     vec4 graph_code[48]; // opcode and three prior-register indices
@@ -225,6 +226,9 @@ layout(binding=2) uniform mesh_lights {
     vec4 counts;         // x: directional lights, y: point lights, z: shadows on, w: shadow strength
     vec4 shadow_params;  // x: shadow texel size in world units, y: 1 / shadow map size, z: depth bias
     vec4 eye;            // camera position
+    vec4 ambient_ground; // rgb: hemisphere ambient of downward faces, w: 1 = hemisphere ambient on
+    vec4 fog_color;      // rgb: fog color, w: largest fog amount (0 = off)
+    vec4 fog_range;      // x: start distance, y: end distance
     vec4 dir_dir[4];     // direction the light travels
     vec4 dir_color[4];
     vec4 point_pos[16];  // xyz: position, w: range
@@ -366,7 +370,12 @@ void main() {
         float sky = 0.6 + 1.6 * (refl.y * 0.5 + 0.5);
         float fe = pow(1.0 - ndv, 5.0);
         vec3 fenv = f0 + (max(vec3(1.0 - r), f0) - f0) * fe;
-        color = ambient.rgb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
+        vec3 amb = ambient.rgb;
+        if (ambient_ground.w > 0.5) {
+            float up = n.y * 0.5 + 0.5;
+            amb = ambient_ground.rgb * (1.0 - up) + ambient.rgb * up;
+        }
+        color = amb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
         int dirs = int(counts.x);
         for (int i = 0; i < 4; i++) {
             if (i >= dirs) {
@@ -396,7 +405,12 @@ void main() {
     if (maps.z > 0.5) {
         em *= texture(sampler2D(emissive_tex, base_smp), uv).rgb;
     }
-    frag_color = vec4(clamp(color + em + graphEmission, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
+    vec3 outc = color + em + graphEmission;
+    if (color_range.z > 0.5 && fog_color.w > 0.0) {  // FogAmount in PostProcess.h
+        float f = fog_color.w * clamp((length(eye.xyz - v_wpos) - fog_range.x) / (fog_range.y - fog_range.x), 0.0, 1.0);
+        outc = color_range.z > 1.5 ? outc * (1.0 - f) : outc * (1.0 - f) + fog_color.rgb * f;
+    }
+    frag_color = vec4(clamp(outc, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
 }
 @end
 
@@ -615,6 +629,9 @@ layout(binding=0) uniform composite_params {
     vec4 tone_mapping;   // x: exposure multiplier, y: 1 = Reinhard, 0 = disabled
     vec4 bloom_strength; // x: blurred HDR highlight strength, before exposure
     vec4 post_stage;     // x: source already processed, y: FXAA enabled, zw: reciprocal source size
+    vec4 grade_shadow;   // rgb: shadow tint, w: 1 = color grading on
+    vec4 grade_high;     // rgb: highlight tint
+    vec4 grade_params;   // x: saturation, y: contrast
 };
 
 layout(binding=0) uniform texture2D scene_tex;
@@ -634,8 +651,19 @@ vec3 DisplayColor(vec2 uv) {
         c = clamp(c, 0.0, 65504.0);
     }
     c *= tone_mapping.x;
-    if (tone_mapping.y > 0.5) c = c / (vec3(1.0) + c);
+    if (tone_mapping.y > 1.5) c = c * (2.51 * c + 0.03) / (c * (2.43 * c + 0.59) + 0.14);
+    else if (tone_mapping.y > 0.5) c = c / (vec3(1.0) + c);
     c = clamp(c, 0.0, 1.0);
+    if (grade_shadow.w > 0.5) {  // Grade in PostProcess.h
+        const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
+        float t = clamp(dot(c, lw) / 0.9, 0.0, 1.0);
+        t = t * t * (3.0 - 2.0 * t);
+        c *= grade_shadow.rgb * (1.0 - t) + grade_high.rgb * t;
+        float l = dot(c, lw);
+        c = vec3(l) + (c - vec3(l)) * grade_params.x;
+        c = (c - 0.5) * grade_params.y + 0.5;
+        c = clamp(c, 0.0, 1.0);
+    }
     if (vignette.x > 0.0) {
         float t = clamp((length(uv * 2.0 - 1.0) - vignette.y) / vignette.z, 0.0, 1.0);
         c *= 1.0 - vignette.x * t * t * (3.0 - 2.0 * t);

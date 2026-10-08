@@ -138,125 +138,41 @@ stores and testing.
 - `tools/oe/main.cpp` (`CmdPackageAndroid`) — finds the runtime, SDK and Java, signs, installs.
 - `CMakeLists.txt` (`if(ANDROID)`), `build_android.sh`, `build_android.bat`.
 
-## Implementation status (work log)
+## Status
 
-This feature was built across several sessions. If a session stopped
-midway, continue from the first unchecked item; every checked item is
-committed and pushed on the branch.
+Both ABIs (arm64-v8a, x86_64) are built with NDK r28c and committed in `runtime/android/` (sizes and hashes in
+its README). `oe package --android` APKs and App Bundles pass `apksigner verify`, `aapt2 dump badging` and
+`zipalign -c -P 16 4`.
 
-- [x] Platform layer `engine/platform/android/` (NativeActivity window, EGL/GLES3 device, touch/keys/gamepad, AAudio, lifecycle, logcat)
-- [x] `CMakeLists.txt` Android branch (`liboe_player.so`) + `build_android.sh` / `build_android.bat`
-- [x] Player entry point `android_main` (game data extracted from `assets/game.pak`)
-- [x] `ExtractGamePak` (C++), `engine/core/Zip` (APK writer)
-- [x] `oe package --android`: binary manifest + resources.arsc written by oe (no aapt2), aligned APK, apksigner (debug keystore or `--keystore`), `--install`. Verified with `apksigner verify` + `aapt dump badging/xmltree/resources` using a stand-in .so
-- [x] Tests (`AndroidGamePakExtract`, `ZipWriterAlignment`, `AndroidApk`) + docs
-- [x] **Compile the runtime with the real NDK** (`build_android.bat`): NDK r28c (28.2.13676358), Release, API 26, `arm64-v8a` and `x86_64`. Fixed two existing Clang warnings; checked exported NativeActivity entry point and 16 KB ELF load-segment alignment.
-- [x] Prebuilt `runtime/android/<abi>/liboe_player.so` for both ABIs and `runtime/android/README.md`, so packaging needs no NDK. Real-library APK signing/alignment and AAB signing verified.
-- [x] Android 15 x86_64 emulator with WHPX and `-gpu host`: start, touch, `UIButton.key` press/release and `onClick`, portrait/landscape rotation, Home + return (same PID and script state), Back = Escape, logcat. AAudio opened at 48 kHz stereo; AudioFlinger showed an active track and pause/resume.
-- [ ] Physical-device checks: arm64 hardware, simultaneous fingers, speaker/headphone playback and reconnect, 16 KB device execution. The emulator's host audio driver could not initialize, so audible output is unverified.
-- [x] Android `oe_tests`: 58 tests passed on the emulator. CMake now builds the Android test executable with `OE_BUILD_TESTS=ON`; `OE_TEST_SOURCE_DIR` points at staged fixtures. Two GPU tests skip without a NativeActivity window; four native editor tests are not built on Android.
-- [x] Immersive mode: `oe_ANativeActivity_onCreate` (manifest `android.app.func_name`) hooks a pipe into the UI thread's looper; JNI `setSystemUiVisibility` + `layoutInDisplayCutoutMode` run there
-- [x] Multi-touch: `InputState.touches`, Lua `input.touches()`, API `input.touch`, `UIButton.key` (held by any finger/mouse = key down), Android fills every pointer
-- [x] Rebuild `runtime/web/` with Emscripten 6.0.10, including `UIButton.key` and the runtime fixes. `BINARYEN_CORES=1` avoids an optimizer crash on this Windows host.
-- [ ] Fill `input.touches` on the web platform (the current web touch handler only maps the first finger to the mouse).
-- [x] `.aab` (`oe package --android --aab`): proto manifest + `resources.pb` + `BundleConfig.pb`, jarsigner; validated with bundletool (`bundletool validate`, `build-apks --mode=universal`)
+- [ ] Run on a physical device: arm64 hardware, simultaneous fingers, speaker/headphone playback and
+      reconnect, 16 KB page-size execution, lifecycle, and the features newer than the last emulator run
+      (Light2D, shader graphs, fog/grading, host bridge, `input.viewSize`, networking).
+- [ ] Text entry: the soft keyboard and `KeyCharacterMap` text path is compiled but not run. Composed text
+      (Korean/Japanese IMEs, swipe typing) needs a Java view with an `InputConnection` (a dex in the APK).
+- [ ] Emulator SwiftShader modes capture black screenshots; use `-gpu host`.
 
-### Verification notes (2026-10-01)
-
-The SDK and NDK were downloaded from Google's official repository and their
-archive SHA-1 checksums verified. Build-tools 35.0.0 and emulator 37.3.2 were
-used with the AOSP API 35 x86_64 image (revision 2). Local toolchains, images,
-test projects and signing keys stay in ignored build folders.
-
-`samples/Hello` was packaged with both real ABIs. `apksigner verify --verbose`,
-`aapt dump badging`, `zipalign -c -P 16 -v 4` and `jarsigner -verify` passed.
-The test signing certificate is self-signed; this is not a Play upload test.
-
-A temporary template game with a Lua probe and `UIButton {key: "Left"}`
-confirmed `input.touches`, `onClick`, held/released keys and Escape through
-logcat. Its tick counter stopped while Home was active, resumed without
-`onStart` running again, and survived rotation and window surface recreation.
-Landscape and portrait screenshots were inspected. AAudio pause/resume was
-also visible in AudioFlinger's track history.
-
-The unused selection mask pass produced GLES framebuffer errors after the
-MSAA scene pass. Games now skip that pass when there is no highlighted entity;
-the composite binds a valid fallback texture. The GPU regression test checks
-selection removal and restoration on reused render targets.
-
-Android testing also exposed consecutive Lua API writes with identical file
-timestamps. `script.write` now forces the changed module to reload while
-preserving instance state. Test fixtures can use a device source directory
-and no longer require a writable POSIX `/tmp`. Windows-hosted WebAssembly
-tests also required drive-path handling and a lexical relative-path fallback.
-Final suites passed: Windows 62 tests, Android 58 tests, and WebAssembly/Node
-58 tests. Packaging with the local Android runtime temporarily set aside
-confirmed the committed `runtime/android/` fallback signs, installs and starts.
-Final suites passed: Windows 62 tests, Android 58 tests, and WebAssembly/Node
-58 tests. Packaging with the local Android runtime temporarily set aside
-confirmed the committed `runtime/android/` fallback signs, installs and starts.
-
-- [ ] Investigate emulator SwiftShader/SwiftShader indirect black output.
-  These modes started without Lua/GPU errors after the mask change but still
-  captured black screenshots. Use `-gpu host` for the verified emulator path.
-
-To repeat the Android test suite, configure an NDK build with
-`-DOE_BUILD_TESTS=ON`, build `oe_tests`, then stage the fixtures:
+To repeat the test suite on Android, configure an NDK build with `-DOE_BUILD_TESTS=ON`, build `oe_tests`,
+then stage it with its fixtures:
 
 ```sh
-adb shell mkdir -p /data/local/tmp/oe-tests/third_party
-adb push build-android/x86_64/bin/oe_tests samples templates AGENTS.md CLAUDE.md /data/local/tmp/oe-tests/
+adb shell mkdir -p /data/local/tmp/oe-tests/third_party /data/local/tmp/oe-tests/tests /data/local/tmp/oe-tests/games
+adb push build-android/x86_64/bin/oe_tests templates AGENTS.md CLAUDE.md /data/local/tmp/oe-tests/
+adb push tests/fixtures /data/local/tmp/oe-tests/tests/
+adb push games/RPG /data/local/tmp/oe-tests/games/
 adb push third_party/fonts /data/local/tmp/oe-tests/third_party/
 adb shell 'cd /data/local/tmp/oe-tests && chmod +x oe_tests && OE_TEST_SOURCE_DIR=/data/local/tmp/oe-tests ./oe_tests'
 ```
 
-Run from the repository root. Keep the working directory at the staged root
-so the engine can find `templates/`; test output is written beneath its
-`build/` folder. Add `adb -s <serial>` to select a device when several are connected.
-
-### Rebuild 2026-10-04
-
-Both ABIs were rebuilt with NDK r28c from the Dongle Zoo branch (host bridge, `input.viewSize`, VFX
-toolkit and everything pending since the 2026-10-02 runtime); the SDK build-tools and NDK were
-downloaded from dl.google.com into the ignored `build/android-sdk/` (`ANDROID_HOME` points there).
-`games/DongleZoo` packages as an APK and an App Bundle; `apksigner verify`, `aapt2 dump badging` and
-`zipalign -c -P 16 4` pass. `oe package --android` now reads `project.json` `android {package, ...}`
-reliably: the settings were read through a reference that a later lookup could invalidate, so the
-default `com.ownengine.<name>` id was used instead.
-
-- [ ] Text entry (`UIInput`): `AndroidWindow::SetTextInput` shows/hides the soft keyboard
-  (`InputMethodManager.showSoftInput` on the decor view, fallback `ANativeActivity_showSoftInput`) and
-  `KeyCharacterMap.get` turns key events into `InputState::text`; `AKEYCODE_DEL` is Backspace. Compiled, not
-  run. Composed text (Korean/Japanese IMEs, swipe typing) is not delivered to a NativeActivity as key events:
-  it needs a Java view with an `InputConnection`, which means shipping a dex in the APK. See docs/UI.md.
-- [ ] Run this runtime on a device or emulator (none on this host): start, touch, audio, lifecycle,
-  and the features newer than the last emulator run (Light2D, sorting layers, particles curves,
-  shader graphs, host bridge returning false, `input.viewSize`).
+Add `adb -s <serial>` to select a device when several are connected.
 
 ## Not done yet
 
-- An analog on-screen joystick component (buttons with `key` cover digital controls).
 - Options for the immersive mode / cutout (always on) and per-ABI bundle splits tuning.
 - Adaptive icons (`mipmap-anydpi` foreground/background), splash screen.
 - Compressed APK entries (everything is stored; game data that is already PNG/OGG gains little).
 
 
-## Networking runtime follow-up (M8)
 
-The networking source and native Windows/Web validation do not refresh the committed
-Android players. Both ABIs still need an NDK rebuild and device execution for protocol v4.
-The M8 environment has no Android SDK/NDK/device. Follow the dedicated-server, touch input,
-score/reset and disconnect checklist in [NETWORK_SAMPLES.md](NETWORK_SAMPLES.md), then
-update runtime/android/README.md with the tested source, SDK/ABI and device results.
 
-## Lua M1a-3 runtime verification (2026-10-06)
 
-The M8 rebuild deferral above is now resolved for both arm64-v8a and x86_64:
-build_android.bat used build/android-sdk/ndk/android-ndk-r28c (28.2.13676358),
-API 26 and static libc++. The refreshed players include Scene epoch, official Lua sources
-and the ContentHash agreement record, plus the current working-tree networking source.
-An isolated OfficialSmoke APK includes both ABIs (14,336,681 bytes); debug signing,
-apksigner v2/v3 verification, aapt2 badging and zipalign -c -P 16 4 pass.
-The library sizes and source provenance are recorded in runtime/android/README.md.
-No device/emulator was available: Lua import, UI, networking and 16 KB device execution
-remain unverified. A connected device/emulator is required to close those execution checks.
+

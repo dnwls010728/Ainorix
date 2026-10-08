@@ -1,0 +1,8 @@
+{
+  "baseTexture": "assets/textures/clouds.png",
+  "unlit": true,
+  "doubleSided": true,
+  "fog": false,
+  "alphaMode": "blend",
+  "shader": "materials/clouds.shader.json"
+}

@@ -39,7 +39,7 @@ operations when they are already clearer (coin tags, physics, player respawn).
 
 All template scene/script/prefab files are authored project files; there is no scene
 generator inside this game. Repository maintainers edit `templates/default/` and regenerate
-`samples/Hello` using `oe new`; do not maintain two independent template copies.
+`tests/fixtures/Hello` (its test copy) using `oe new`; do not maintain two independent template copies.
 `oe new` synthesizes sounds and optionally seeds an agent team. Apply project helper edits
 with `script.reload`; changed required modules and their dependent attached scripts reload
 without restarting Play. Keep module initializers free of engine calls (including queries);

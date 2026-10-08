@@ -4,46 +4,12 @@ Animation poses use fixed simulation time and the same model-space joint palette
 in the software and GPU renderers. Models remain immutable cached assets; each
 entity owns its playback state through a reflected Animator component.
 
-## Implementation status (work log)
+## Status
 
-P1 is implemented in PR #15, pending review. P2 starts independently from the
-latest main so the features remain separate PRs; it does not depend on save data.
+Skinned and rigid glTF animation plays in both renderers, including GPU shadow and selection passes; the
+web and Android players include it.
 
-- [x] P2.1: Validated glTF node hierarchy, joints/inverse bind matrices,
-      JOINTS_0/WEIGHTS_0 and named TRS animation channels; asset.info clip metadata;
-      compact synthetic loader tests plus the existing Fox asset.
-      Windows Release build and all 63 tests pass, including malformed joints,
-      times, weights, duplicate channels, palette limits, explicit inverse binds,
-      normalized integer rotations/weights and rigid animated child nodes.
-- [x] P2.2: Animator reflection/API/Lua playback; deterministic fixed-step clock,
-      quaternion/TRS pose evaluation and LINEAR/STEP/CUBICSPLINE interpolation.
-      animation.play/state and Lua animation.play/self:play share playback controls.
-      Windows Release build and all 65 tests pass, covering known interpolation
-      values, inverse binds, parent ordering, serialization/undo, seeking, pause,
-      endpoints, reverse loops, Lua errors and identical poses after replay.
-- [x] P2.3: Shared RenderScene palette; software vertex skinning and GPU vertex
-      shader skinning for scene, shadow and selection passes; regenerated shaders.
-      Windows/D3D11 build and all 66 tests pass. AnimatedSkinRenderers compares
-      Survey/Walk/Run in smooth and flat shading, checks changed pose hashes,
-      thread determinism, GPU cache stability and selection outlines. Walking
-      software/GPU screenshots inspected; poses and shadows agree. GLSL ES 3.0
-      and desktop GLSL generated alongside HLSL5; web/Android execution remains P2.4.
-- [x] P2.4: Fox Survey/Walk/Run demo, image/hash and GPU comparison tests, docs and
-      API refresh, web/Android prebuilt runtimes and available platform checks.
-      Showcase uses Survey while idle, Walk while moving and Run with Shift
-      (1.6x movement speed). ShowcaseAnimationControls verifies transitions and
-      matching hashes in independent sessions. Windows 67 tests and Node/WASM
-      63 tests pass (Node skips GPU execution); real CLI Walk screenshots inspected.
-      The animated control sequence produces c2490f29d87c6e87 on Windows and WASM.
-      WebGL2 packaged Showcase runs in the in-app browser with animated Fox and
-      shadows. Web plus Android arm64-v8a/x86_64 runtimes rebuilt without new warnings.
-      Offline HLSL compilation reports the same 18 existing X3570 shadow-sampling
-      loop warnings as the pre-skinning shader; vertex skinning adds no warning.
-- [ ] Android physical-device animation/rendering: adb lists no device. Install
-      the packaged Showcase APK and check idle/walk/run poses and shadows.
-- [ ] Full Linux/EGL runtime execution is not available on this Windows host.
-      Build the null/EGL backend and run oe_tests on Linux, including the animated
-      software/GPU comparison. Android cross-compilation checks portable engine code.
+- [ ] Android device and Linux/EGL execution of animated models (not available so far).
 
 ## Model contract
 

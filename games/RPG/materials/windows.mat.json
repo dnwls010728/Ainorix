@@ -1,0 +1,6 @@
+{
+  "baseTexture": "assets/textures/window.png",
+  "pixelArt": true,
+  "roughness": 0.6,
+  "shader": "materials/window.shader.json"
+}

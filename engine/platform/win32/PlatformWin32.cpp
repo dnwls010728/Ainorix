@@ -56,6 +56,8 @@ std::string KeyName(WPARAM vk) {
         case VK_DELETE: return "Delete";
         case VK_HOME: return "Home";
         case VK_END: return "End";
+        case VK_OEM_4: return "LeftBracket";
+        case VK_OEM_6: return "RightBracket";
         default: return std::string();
     }
 }

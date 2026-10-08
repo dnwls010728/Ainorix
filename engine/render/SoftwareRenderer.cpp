@@ -92,6 +92,9 @@ struct ShadowMap {
 
 struct Lighting {
     Color ambient{0, 0, 0};
+    Color groundAmbient{0, 0, 0};
+    bool hemisphere = false;
+    PostProcess fog;  // fog settings (normalized); fog == 0 disables it
     std::vector<RenderDirLight> dirs;
     std::vector<RenderPointLight> points;
     ShadowMap shadow;
@@ -119,7 +122,12 @@ struct Lighting {
         float fe = std::pow(1.0f - ndv, 5.0f);
         Color fr(std::max(1.0f - r, f0.r), std::max(1.0f - r, f0.g), std::max(1.0f - r, f0.b));
         Color fenv = f0 + (fr + f0 * -1.0f) * fe;
-        Color c = ambient * (diffuse + fenv * (sky * (1.0f - 0.75f * r))) * ao;
+        Color amb = ambient;
+        if (hemisphere) {  // mesh_fs: mix(ground, sky, n.y * 0.5 + 0.5)
+            const float up = n.y * 0.5f + 0.5f;
+            amb = groundAmbient * (1.0f - up) + ambient * up;
+        }
+        Color c = amb * (diffuse + fenv * (sky * (1.0f - 0.75f * r))) * ao;
         auto add = [&](const Vec3& l, const Color& radiance) {
             float ndl = Dot(n, l);
             if (ndl <= 0.0f) return;
@@ -377,6 +385,11 @@ private:
                 Color em = m.emissive * m.emissiveIntensity;
                 if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr);
                 out = out + em + shaderEmissive;
+                if (m.fog && lighting->fog.fog > 0) {  // mesh_fs: additive surfaces fade, others mix toward fogColor
+                    const Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
+                    const float f = FogAmount(lighting->fog, Length(lighting->eye - wpos));
+                    out = m.additive && mat.blend ? out * (1.0f - f) : out * (1.0f - f) + lighting->fog.fogColor * f;
+                }
                 if (mat.blend) {
                     alpha = Clamp(alpha, 0.0f, 1.0f);
                     if (m.additive) {  // glow: brightens the target and is never picked
@@ -494,6 +507,9 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     RenderLights gathered = GatherRenderLights(scene);
     Lighting lighting;
     lighting.ambient = gathered.ambient;
+    lighting.groundAmbient = gathered.groundAmbient;
+    lighting.hemisphere = gathered.hemisphere;
+    lighting.fog = post;
     lighting.dirs = gathered.dirs;
     lighting.points = gathered.points;
     lighting.eye = view.eye;
@@ -735,7 +751,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             }
         });
     }
-    if (!hdr.empty() || post.vignette > 0) {
+    const bool grading = UsesGrading(post);
+    if (!hdr.empty() || post.vignette > 0 || grading) {
         ParallelBands(target.height, [&](int, int y0, int y1) {
             for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
                 size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(target.width) + static_cast<size_t>(x);
@@ -746,6 +763,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                                                      static_cast<float>((c >> 8) & 255) / 255,
                                                      static_cast<float>((c >> 16) & 255) / 255) :
                                 ToneMap(hdr[pixel] + (bloom.empty() ? Color(0, 0, 0) : bloom[pixel] * post.bloom), post);
+                if (grading) display = Grade(display, post);
                 target.color[pixel] = Pack(display * factor);
             }
         });

@@ -1,0 +1,5 @@
+{
+  "baseTexture": "assets/textures/shore.png",
+  "unlit": true,
+  "shader": "materials/water.shader.json"
+}

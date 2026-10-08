@@ -1623,162 +1623,6 @@ TEST(NetworkLocalPreviewAndFaultControls) {
 }
 
 
-TEST(NetworkSampleGamesOfflineAndMultiplayer) {
-    for (const char* name : {"NetCoop", "NetDuel", "NetArena"}) {
-        std::string project = JoinPath(TestSourceDir(), std::string("samples/") + name), error;
-        Engine host; CHECK(host.Open(project, &error));
-        Json edit = host.GetScene().ToJson();
-        // The packaged player uses the same ordinary play path for offline practice.
-        CHECK(Call(host, "sim.step", R"({"frames":2})")["ok"].asBool());
-        CHECK(host.GetScene().Pool<NetPlayer>().size() == 1);
-        CHECK(Call(host, "script.errors")["result"].size() == 0);
-        for (int crystal = 0; crystal < 5; ++crystal) {
-            EntityId id = host.GetScene().Pool<NetPlayer>().begin()->first;
-            for (int tick = 0; tick < 150; ++tick) {
-                Vec3 p = host.GetScene().Get<Transform>(id)->position;
-                Vec3 t = host.GetScene().Get<Transform>(host.GetScene().FindByName("Target"))->position;
-                if (Length(p - t) < 0.8f) break;
-                for (const auto& key : std::vector<std::pair<const char*, bool>>{
-                         {"W", p.z > t.z + 0.1f}, {"S", p.z < t.z - 0.1f},
-                         {"A", p.x > t.x + 0.1f}, {"D", p.x < t.x - 0.1f}}) {
-                    Json input = Json::MakeObject(); input["key"] = key.first; input["down"] = key.second;
-                    CHECK(host.Call("input.key", input)["ok"].asBool());
-                }
-                host.Step(1);
-            }
-            for (const char* key : {"W", "A", "S", "D"}) {
-                Json release = Json::MakeObject(); release["key"] = key; release["down"] = false;
-                CHECK(host.Call("input.key", release)["ok"].asBool());
-            }
-            CHECK(Call(host, "input.key", R"({"key":"Space","down":true})")["ok"].asBool()); host.Step(1);
-            CHECK(Call(host, "input.key", R"({"key":"Space","down":false})")["ok"].asBool()); host.Step(1);
-        }
-        CHECK(host.GameData()["winner"].asString() == (std::string(name) == "NetCoop" ? "team" : "1"));
-        host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
-        CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
-        host.Step(180);
-        Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) continue;
-        CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
-        CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
-        CHECK(client->GetScene().Pool<NetPlayer>().size() == 2);
-        CHECK(Call(host, "script.errors")["result"].size() == 0);
-        CHECK(Call(*client, "script.errors")["result"].size() == 0);
-        CHECK(!host.GetScene().Get<UIButton>(host.GetScene().FindByName("Host"))->visible);
-        // Player 1 starts at (-2,2), walks to the first target and collects it.
-        CHECK(Call(host, "input.touch", R"({"id":1,"x":132,"y":533,"width":1280,"height":720})")["ok"].asBool()); host.Step(30);
-        CHECK(Call(host, "input.touch", R"({"id":1,"down":false})")["ok"].asBool()); host.Step(30);
-        CHECK(Call(host, "input.click", R"({"x":1125,"y":603,"width":1280,"height":720})")["ok"].asBool()); host.Step(8);
-        CHECK(Call(host, "input.key", R"({"key":"Space","down":false})")["ok"].asBool()); host.Step(100);
-        CHECK(host.GameData()["scores"][std::string(name) == "NetCoop" ? "team" : "1"].asNumber() == 1);
-        CHECK(host.GetScene().Get<Transform>(host.GetScene().FindByName("Target"))->position.x == 2);
-        // A remote input resets the round; authority sends the result through UIText.text.
-        CHECK(Call(*client, "input.touch", R"({"id":2,"x":1125,"y":533,"width":1280,"height":720})")["ok"].asBool()); host.Step(8);
-        CHECK(Call(*client, "input.touch", R"({"id":2,"down":false})")["ok"].asBool()); host.Step(100);
-        CHECK(host.GameData()["scores"].size() == 0);
-        CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Score"))->text ==
-              client->GetScene().Get<UIText>(client->GetScene().FindByName("Score"))->text);
-        for (Engine* peer : {&host, client}) {
-            CHECK(Call(*peer, "script.errors")["result"].size() == 0);
-            CHECK(Call(*peer, "net.desync_report")["result"].size() == 0);
-        }
-        host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
-    }
-}
-
-TEST(NetChaseThirdPersonSample) {
-    std::string project = JoinPath(TestSourceDir(), "samples/NetChase"), error;
-    Engine host; CHECK(host.Open(project, &error));
-    Json edit = host.GetScene().ToJson();
-    auto avatar = [](Engine& engine, int player) {
-        for (const auto& kv : engine.GetScene().Pool<NetPlayer>()) if (kv.second.player == player) return kv.first;
-        return kNullEntity;
-    };
-    auto position = [](Engine& engine, EntityId id) { return engine.GetScene().Get<Transform>(id)->position; };
-    auto camera = [&](Engine& engine) { return position(engine, engine.GetScene().FindByName("Camera")); };
-    // Offline practice: one avatar facing -Z, the camera behind and above it. The camera
-    // script runs before the spawned player's, so it settles a frame after the spawn.
-    CHECK(Call(host, "sim.step", R"({"frames":4})")["ok"].asBool());
-    CHECK(host.GetScene().Pool<NetPlayer>().size() == 1);
-    EntityId p1 = avatar(host, 1); CHECK(p1 != kNullEntity); if (p1 == kNullEntity) return;
-    CHECK(std::fabs((position(host, p1).z) - (9.0f)) < 1e-3f);
-    CHECK(std::fabs(camera(host).x - position(host, p1).x) < 1e-2f);
-    CHECK(std::fabs((camera(host).z - position(host, p1).z) - (5.5f)) < 1e-2f);
-    // The player is the toon character: every part and outline hull resolves its assets,
-    // and the view-dependent graph changes the picture when only the camera moves.
-    CHECK(host.GetScene().FindByName("Part_hair") != kNullEntity && host.GetScene().FindByName("Outline_coat") != kNullEntity);
-    CHECK(Call(host, "asset.info", R"({"path":"materials/coat-toon.mat.json"})")["ok"].asBool());
-    CHECK(Call(host, "shader.check", R"({"path":"materials/toon.shader.json"})")["ok"].asBool());
-    for (const RenderItem& item : GatherRenderItems(host.GetScene(), &host.Assets())) CHECK(!item.error);
-    {
-        RenderTarget shot; shot.Resize(640, 360);
-        host.RenderGameView(shot);
-        int player = 0;
-        for (EntityId id : shot.ids) player += id == p1;
-        CHECK(player > 150);  // the tinted coat on the root entity is on screen
-    }
-    // Running into the crystal scores and moves it along the fixed route.
-    CHECK(Call(host, "component.set", R"({"id":"Target","type":"Transform","values":{"position":[-3,0.7,6]}})")["ok"].asBool());
-    CHECK(Call(host, "input.key", R"({"key":"W","down":true})")["ok"].asBool()); host.Step(60);
-    CHECK(Call(host, "input.key", R"({"key":"W","down":false})")["ok"].asBool());
-    CHECK(position(host, p1).z < 5.0f);
-    CHECK(host.GameData()["scores"]["1"].asNumber() == 1);
-    CHECK(position(host, host.GetScene().FindByName("Target")).x == 8);
-    // Moving captured the mouse; moving it right turns the player and the camera stays behind.
-    CHECK(host.Input().mouseLocked);
-    CHECK(Call(host, "input.mouse", R"({"dx":450})")["ok"].asBool()); host.Step(2);
-    CHECK(std::fabs(host.GetScene().Get<Transform>(p1)->rotation.y - 90.0f) < 0.1f);
-    CHECK(std::fabs((camera(host).x - position(host, p1).x) + 5.5f) < 0.05f);
-    // A strafes to the player's left (-Z while facing +X) without turning.
-    float z = position(host, p1).z;
-    CHECK(Call(host, "input.key", R"({"key":"A","down":true})")["ok"].asBool()); host.Step(30);
-    CHECK(Call(host, "input.key", R"({"key":"A","down":false})")["ok"].asBool()); host.Step(2);
-    CHECK(position(host, p1).z < z - 2.0f);
-    CHECK(std::fabs(host.GetScene().Get<Transform>(p1)->rotation.y - 90.0f) < 0.1f);
-    CHECK(Call(host, "script.errors")["result"].size() == 0);
-    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
-
-    CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
-    host.Step(180);
-    Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) return;
-    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
-    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2);
-    CHECK(client->GetScene().Pool<NetPlayer>().size() == 2);
-    // Each peer's camera follows its own player.
-    EntityId hostP1 = avatar(host, 1), clientP2 = avatar(*client, 2), hostP2 = avatar(host, 2);
-    CHECK(hostP1 != kNullEntity && clientP2 != kNullEntity && hostP2 != kNullEntity);
-    if (hostP1 == kNullEntity || clientP2 == kNullEntity || hostP2 == kNullEntity) return;
-    CHECK(std::fabs((camera(host).x) - (-3.0f)) < 1e-2f);
-    CHECK(std::fabs((camera(*client).x) - (-1.0f)) < 1e-2f);
-    // The client's input moves its player on the server and in its own prediction.
-    CHECK(Call(*client, "input.key", R"({"key":"W","down":true})")["ok"].asBool()); host.Step(60);
-    CHECK(Call(*client, "input.key", R"({"key":"W","down":false})")["ok"].asBool()); host.Step(60);
-    CHECK(position(host, hostP2).z < 5.5f);
-    CHECK(std::fabs(position(*client, clientP2).z - position(host, hostP2).z) < 1e-3f);
-    CHECK(std::fabs((camera(*client).z - position(*client, clientP2).z) - (5.5f)) < 1e-2f);
-    CHECK(std::fabs((position(host, hostP1).z) - (9.0f)) < 1e-3f);
-    // The match captured the mouse. The turn travels in the input stream (LookX), so the
-    // server follows it and a prediction replay cannot take it back, even with latency.
-    CHECK(client->Input().mouseLocked);
-    CHECK(Call(*client, "input.mouse", R"({"dx":-150})")["ok"].asBool()); host.Step(30);
-    CHECK(std::fabs(client->GetScene().Get<Transform>(clientP2)->rotation.y - 210.0f) < 0.1f);
-    CHECK(std::fabs(host.GetScene().Get<Transform>(hostP2)->rotation.y - 210.0f) < 0.1f);
-    CHECK(std::fabs(host.GetScene().Get<Transform>(hostP1)->rotation.y - 180.0f) < 0.1f);
-    CHECK(Call(host, "net.simulate", R"({"latencyFrames":6})")["ok"].asBool()); host.Step(30);
-    for (int i = 0; i < 6; ++i) {
-        CHECK(Call(*client, "input.mouse", R"({"dx":-50})")["ok"].asBool()); host.Step(1);
-        // The camera turns on the same frame, before the server has seen the input.
-        CHECK(std::fabs(std::fmod(client->GetScene().Get<Transform>(client->GetScene().FindByName("Camera"))->rotation.y, 360.0f) - (30.0f + 10.0f * (i + 1))) < 0.1f);
-    }
-    host.Step(60);
-    CHECK(std::fabs(client->GetScene().Get<Transform>(clientP2)->rotation.y - 270.0f) < 0.1f);
-    CHECK(std::fabs(host.GetScene().Get<Transform>(hostP2)->rotation.y - 270.0f) < 0.1f);
-    for (Engine* peer : {&host, client}) {
-        CHECK(Call(*peer, "script.errors")["result"].size() == 0);
-        CHECK(Call(*peer, "net.desync_report")["result"].size() == 0);
-    }
-    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
-}
-
 TEST(NetworkDedicatedReadyBarrierAndCleanup) {
 #ifndef __EMSCRIPTEN__
     std::string project = AuthorityProject("dedicated", "tcp", true), error;
@@ -2563,7 +2407,7 @@ return P
 TEST(TextMeasurementMatchesRenderedLayout) {
     Engine e; std::string error; const std::string project = TempProject("text_measurement");
     CHECK(e.Open(project, &error)); e.GetScene().Clear();
-    CHECK(CopyFileTo(TestSourceDir() + "/games/DongleZoo/assets/fonts/Jua-Regular.ttf", JoinPath(project, "assets/fonts/body.ttf")));
+    CHECK(CopyFileTo(TestSourceDir() + "/games/RPG/assets/fonts/NanumMyeongjo-Bold.ttf", JoinPath(project, "assets/fonts/body.ttf")));
     auto id = e.GetScene().Create("Label"); UIText& text = e.GetScene().Add<UIText>(id);
     text.x = 0; text.y = 0; text.size = 23.4f;
     auto measure = [&](float wrap, int height) {
@@ -2781,9 +2625,9 @@ TEST(OfficialLuaRecordingRestoresCacheAndHandles) {
 
 TEST(SimulationNativeSnapshotBudgetAndBranching) {
     double worst = 0;
-    for (const char* sample : {"Hello", "Dungeon", "Platformer", "FPS"}) {
+    for (const char* sample : {"Hello", "Dungeon", "FPS"}) {
         Engine engine; std::string error;
-        CHECK(engine.Open(TestSourceDir() + "/samples/" + sample, &error));
+        CHECK(engine.Open(TestSourceDir() + "/tests/fixtures/" + sample, &error));
         engine.RecordState(); engine.Step(2000);
         auto state = engine.SaveState(); engine.Step(8);
         Json future = engine.GetScene().ToJson(), data = engine.GameData();
@@ -2795,7 +2639,7 @@ TEST(SimulationNativeSnapshotBudgetAndBranching) {
         }
         CHECK(engine.Scripts().Errors().empty());
     }
-    std::printf("  Native snapshot worst: %.3f ms (20 restores, four samples)\n", worst);
+    std::printf("  Native snapshot worst: %.3f ms (20 restores, three projects)\n", worst);
 #ifndef __EMSCRIPTEN__
     CHECK(worst < 16.67);
 #endif
@@ -3950,7 +3794,7 @@ TEST(AssetPreviewPixelsFramingAndIsolation) {
     CHECK(Call(e,"entity.create",R"({"name":"Cube","components":{"Transform":{},"MeshRenderer":{"color":[1,0,0],"unlit":true}}})")["ok"].asBool());
     CHECK(Call(e,"scene.save",R"({"path":"scenes/preview.scene.json"})")["ok"].asBool());
     CHECK(Call(e,"prefab.create",R"({"id":"Cube","path":"prefabs/preview.prefab.json"})")["ok"].asBool());
-    CHECK(CopyFileTo(TestSourceDir()+"/samples/Showcase/assets/models/fox.glb",JoinPath(e.ProjectDir(),"assets/fox.glb")));
+    CHECK(CopyFileTo(TestSourceDir()+"/tests/fixtures/Showcase/assets/models/fox.glb",JoinPath(e.ProjectDir(),"assets/fox.glb")));
     Image image; image.width=4; image.height=2; image.rgba.assign(32,0);
     for (int y=0;y<2;++y) for (int x=2;x<4;++x) {
         const size_t at=static_cast<size_t>((y*4+x)*4); image.rgba[at]=255; image.rgba[at+3]=255;
@@ -4500,7 +4344,7 @@ TEST(DungeonSamplePlays) {
     auto run = [](std::string* summary) {
         Engine e;
         std::string err;
-        CHECK(e.Open(TestSourceDir() + "/samples/Dungeon", &err));
+        CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Dungeon", &err));
         Call(e, "sim.step", R"J({"frames": 5})J");
         auto eval = [&](const char* code) {
             Json a = Json::MakeObject();
@@ -4550,7 +4394,7 @@ TEST(HD2DSamplePlays) {
     auto run = [](std::string* summary) {
         Engine e;
         std::string err;
-        CHECK(e.Open(TestSourceDir() + "/samples/HD2D", &err));
+        CHECK(e.Open(TestSourceDir() + "/tests/fixtures/HD2D", &err));
         Call(e, "sim.step", R"J({"frames": 5})J");
         auto eval = [&](const std::string& code) {
             Json a = Json::MakeObject();
@@ -4655,80 +4499,11 @@ TEST(HD2DSamplePlays) {
     CHECK(a == b);
 }
 
-TEST(WaterSamplePlays) {
-    // A sea whose shader graph lifts the vertices; Lua floats ride the same waves.
-    auto run = [](std::string* summary) {
-        Engine e;
-        std::string err;
-        CHECK(e.Open(TestSourceDir() + "/samples/Water", &err));
-        Call(e, "sim.step", R"J({"frames": 45})J");
-        auto eval = [&](const std::string& code) {
-            Json a = Json::MakeObject();
-            a["code"] = code;
-            return e.Call("script.eval", a)["result"]["value"];
-        };
-        const Scene& scene = e.GetScene();
-        ShaderGraph graph;
-        CHECK(CompileShaderGraph(e.ReadProjectJson("materials/water.shader.json"), graph, &err));
-        CHECK(graph.offset >= 0 && graph.normal >= 0);
-        const EntityId water = scene.FindByName("Water"), buoy = scene.FindByName("Buoy 1");
-        CHECK(scene.Get<MeshRenderer>(water)->mesh == "plane64");
-        // Height of the drawn surface at a world position: the graph's vertex stage with the entity's uniforms.
-        auto surface = [&](float x, float z) {
-            std::array<Vec4, ShaderGraph::kMaxUniforms> uniforms;
-            CHECK(ShaderUniforms(graph, scene.Get<MeshRenderer>(water)->shaderUniforms, uniforms, &err));
-            ShaderInputs inputs;
-            inputs.position = Vec4(x, 0, z, 1);
-            inputs.time = static_cast<float>(e.SimTime());
-            return ShaderVertexOffset(graph, inputs, uniforms).y;
-        };
-        auto buoyOnSurface = [&] {
-            const Vec3 p = scene.Get<Transform>(buoy)->position;
-            return std::fabs(p.y - 0.12f - surface(p.x, p.z)) < 2e-3f;
-        };
-        CHECK(buoyOnSurface());
-        const float before = scene.Get<Transform>(buoy)->position.y;
-        Call(e, "sim.step", R"J({"frames": 40})J");
-        CHECK(buoyOnSurface() && std::fabs(scene.Get<Transform>(buoy)->position.y - before) > 0.02f);
-        CHECK(std::fabs(scene.Get<Transform>(scene.FindByName("Boat"))->rotation.z) > 0.5f);  // leans with the slope
-
-        // Key 3: the storm's amplitudes ease in and reach the graph.
-        CHECK(eval("return game.get('seaState')").asString() == "Swell");
-        const float swell = scene.Get<MeshRenderer>(water)->shaderUniforms["amp"][0].asFloat();
-        CHECK(std::fabs(swell - 0.16f) < 1e-4f);
-        Call(e, "input.key", R"J({"key": "3", "down": true})J");
-        Call(e, "sim.step", R"J({"frames": 1})J");
-        Call(e, "input.key", R"J({"key": "3", "down": false})J");
-        Call(e, "sim.step", R"J({"frames": 300})J");
-        CHECK(eval("return game.get('seaState')").asString() == "Storm");
-        CHECK(scene.Get<UIText>(scene.FindByName("Title"))->text == "Sea state: Storm");
-        CHECK(scene.Get<MeshRenderer>(water)->shaderUniforms["amp"][0].asFloat() > 0.16f * 1.8f);
-        CHECK(buoyOnSurface());
-
-        // A / D orbit the camera around the scene.
-        const EntityId camera = scene.FindByName("Camera");
-        const Vec3 offset = scene.Get<CameraFollow>(camera)->offset;
-        Call(e, "input.key", R"J({"key": "D", "down": true})J");
-        Call(e, "sim.step", R"J({"frames": 40})J");
-        Call(e, "input.key", R"J({"key": "D", "down": false})J");
-        const Vec3 turned = scene.Get<CameraFollow>(camera)->offset;
-        CHECK(turned.x > offset.x + 3 && std::fabs(Length(Vec3(turned.x, 0, turned.z)) - Length(Vec3(offset.x, 0, offset.z))) < 1e-3f);
-
-        CHECK(e.Scripts().Errors().empty());
-        Json shot = Call(e, "render.screenshot", R"J({"width": 160, "height": 90, "inline": false})J");
-        *summary = shot["result"]["hash"].asString() + e.GetScene().ToJson().dump();
-    };
-    std::string a, b;
-    run(&a);
-    run(&b);
-    CHECK(a == b);
-}
-
 TEST(SampleGamepadControls) {
     auto run = [](const char* sample) {
         Engine e;
         std::string err;
-        CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+        CHECK(e.Open(TestSourceDir() + "/tests/fixtures/" + sample, &err));
         Call(e, "sim.step", R"J({"frames":60})J");
         float initialX = e.GetScene().Get<Transform>(e.GetScene().FindByName("Player"))->position.x;
         auto velocity = [&] {
@@ -4772,7 +4547,7 @@ TEST(SampleGamepadControls) {
         CHECK(e.Scripts().Errors().empty());
         return state;
     };
-    for (const char* sample : {"Platformer", "Dungeon"}) CHECK(run(sample) == run(sample));
+    CHECK(run("Dungeon") == run("Dungeon"));
 }
 
 // ----- assets & rendering ---------------------------------------------------------
@@ -4790,11 +4565,11 @@ double MeanLuma(const RenderTarget& rt) {
 }
 
 TEST(SampleParticleEffects) {
-    for (const char* sample : {"Platformer", "Dungeon"}) {
+    for (const char* sample : {"Dungeon"}) {
         auto run = [&](bool writeImage) {
             Engine e;
             std::string err;
-            CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
+            CHECK(e.Open(TestSourceDir() + "/tests/fixtures/" + sample, &err));
             EmitterCall(e, "sim.step", R"J({"frames":2})J");
             Json eval = EmitterCall(e, "script.eval", R"J({"code":"return scene.withTag('coin')[1]"})J");
             EntityId coin = static_cast<EntityId>(eval["result"]["value"].asInt());
@@ -5089,7 +4864,7 @@ TEST(AnimatorCommandsAndLua) {
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("animator"), &err));
-    CHECK(CopyFileTo(TestSourceDir() + "/samples/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
+    CHECK(CopyFileTo(TestSourceDir() + "/tests/fixtures/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
     Call(e, "scene.new", R"J({"empty":true})J");
     Call(e, "entity.create", R"J({"name":"Fox","components":{"MeshRenderer":{"mesh":"assets/models/fox.glb"}}})J");
     EntityId id = e.GetScene().FindByName("Fox");
@@ -5289,10 +5064,10 @@ TEST(DebugDrawing) {
 }
 
 TEST(ShowcaseFoxModel) {
-    // Completion check for rendering: the external glTF character (samples/Showcase) is drawn with its texture.
+    // Completion check for rendering: the external glTF character (tests/fixtures/Showcase) is drawn with its texture.
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Showcase", &err));
     Json info = Call(e, "asset.info", R"J({"path": "assets/models/fox.glb"})J")["result"];
     CHECK(info["triangles"].asInt() == 576 && info["textures"][0][0].asInt() == 1024);
     CHECK(info["joints"].asInt() == 24 && info["clips"].size() == 3);
@@ -5324,7 +5099,7 @@ TEST(ShowcaseAnimationControls) {
     auto play = []() {
         Engine e;
         std::string err;
-        CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+        CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Showcase", &err));
         EntityId fox = e.GetScene().FindByName("Fox");
         Call(e, "sim.step", R"J({"frames":1})J");
         CHECK(e.GetScene().Get<Animator>(fox)->clip == "Survey");
@@ -5356,7 +5131,7 @@ TEST(ShowcaseAnimationControls) {
 TEST(ShowcasePostProcessControls) {
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Showcase", &err));
     const EntityId camera = e.GetScene().FindByName("Main Camera");
     CHECK(!e.GetScene().Get<PostProcess>(camera)->fxaa);
     Call(e, "sim.step", R"J({"frames":1})J");
@@ -5419,232 +5194,11 @@ TEST(ShaderGraphSceneUniforms) {
     CHECK(draws[0].material.shaderUniforms[1].x == 9);
 }
 
-TEST(WuwaToonGraphBandsRimAndSpecular) {
-    Engine e; std::string error;
-    CHECK(e.Open(TestSourceDir()+"/samples/WuwaToon",&error));
-    CHECK(Call(e,"shader.check",R"({"path":"materials/toon.shader.json"})")["ok"].asBool());
-    CHECK(Call(e,"shader.check",R"({"path":"materials/normals.shader.json"})")["ok"].asBool());
-    ShaderGraph graph;
-    CHECK(CompileShaderGraph(e.ReadProjectJson("materials/toon.shader.json"),graph,&error));
-    CHECK(graph.instructions.size()<=32 && graph.uniformNames.size()<=8);
-    std::array<Vec4,ShaderGraph::kMaxUniforms> uniforms;
-    Json overrides=Json::parse(R"({"lightDir":[0,0,1,0],"shadowCut":0.12,"shadowTint":[0.5,0.25,0.75,1],
-      "cameraPos":[0,0,10,1],"rimStart":0.78,"rimColor":[0,0,0,0],"halfDir":[0,0,1,0],"specColor":[0,0,0,0]})");
-    ShaderInputs input; input.position=Vec4(0,0,0,1); input.baseColor=Vec4(0.8f,0.6f,0.4f,1);
-    auto expect=[&](float z,const Vec3& rgb) {
-        CHECK(ShaderUniforms(graph,overrides,uniforms,&error));
-        input.normal=Vec4(std::sqrt(std::max(0.0f,1-z*z)),0,z,0);
-        const ShaderSurface surface=EvaluateShaderGraph(graph,input,uniforms);
-        CHECK(std::fabs(surface.color.x-rgb.x)<1e-5f && std::fabs(surface.color.y-rgb.y)<1e-5f &&
-              std::fabs(surface.color.z-rgb.z)<1e-5f && surface.color.w==1);
-    };
-    expect(0.11f,Vec3(0.4f,0.15f,0.3f)); // below threshold: tinted shadow
-    expect(0.13f,Vec3(0.8f,0.6f,0.4f)); // above threshold: flat diffuse band
-    expect(0.7f,Vec3(0.8f,0.6f,0.4f)); // diffuse remains flat within its band
-    overrides["rimColor"]=Json(Json::Array{0.1,0.2,0.3,0});
-    expect(0.21f,Vec3(0.9f,0.8f,0.7f)); // 1-N.V > .78: colored rim
-    expect(0.23f,Vec3(0.8f,0.6f,0.4f)); // 1-N.V < .78: no rim
-    overrides["specColor"]=Json(Json::Array{0.2,0.1,0.05,0});
-    expect(0.96f,Vec3(0.8f,0.6f,0.4f));
-    expect(0.97f,Vec3(1.0f,0.7f,0.45f)); // quantized specular threshold .965
-}
-
-TEST(WuwaToonSampleControlsAndPackaging) {
-    Engine e; std::string error;
-    const std::string project=TestSourceDir()+"/samples/WuwaToon";
-    CHECK(e.Open(project,&error));
-    CHECK(Call(e,"script.check",R"({"path":"scripts/lab.lua"})")["ok"].asBool());
-    CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
-    RenderTarget toon, pbr, normals, reset;
-    for (RenderTarget* target : {&toon,&pbr,&normals,&reset}) target->Resize(240,135);
-    e.RenderGameView(toon);
-    RenderTarget surfaceToon, surfacePbr, surfaceNormals;
-    for (RenderTarget* target : {&surfaceToon,&surfacePbr,&surfaceNormals}) target->Resize(240,135);
-    auto renderSurface=[&](RenderTarget& target) {
-        RenderView view; MakeSceneView(e.GetScene(),240.0f/135,view); view.drawUI=false;
-        e.Renderer().Render(e.GetScene(),view,target);
-    };
-    renderSurface(surfaceToon);
-    const std::vector<std::string> parts={"skin","hair","coat","boots","trim","eyes","iris","ink","blush"};
-    auto checkMode=[&](const char* mode) {
-        for (const std::string& part : parts) {
-            const MeshRenderer* renderer=e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Part_"+part));
-            CHECK(renderer && renderer->material==(std::string(mode)=="normals"?"materials/normals.mat.json":
-                                                   "materials/"+part+"-"+mode+".mat.json"));
-        }
-    };
-    checkMode("toon");
-    int visible=0;
-    for (EntityId id : toon.ids) if (id && e.GetScene().Record(id)->name.find("Part_")==0) ++visible;
-    CHECK(visible>100);
-    auto key=[&](const char* name) {
-        Json args=Json::MakeObject(); args["key"]=name; args["down"]=true;
-        CHECK(e.Call("input.key",args)["ok"].asBool());
-        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
-        args["down"]=false; CHECK(e.Call("input.key",args)["ok"].asBool());
-        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
-    };
-    key("2"); checkMode("pbr"); e.RenderGameView(pbr); CHECK(pbr.Hash()!=toon.Hash()); renderSurface(surfacePbr);
-    key("3"); checkMode("normals"); e.RenderGameView(normals); CHECK(normals.Hash()!=pbr.Hash() && normals.Hash()!=toon.Hash());
-    renderSurface(surfaceNormals);
-    int changedPbr=0, changedNormals=0;
-    for (size_t i=0;i<surfaceToon.color.size();++i) {
-        const EntityId id=surfaceToon.ids[i];
-        if (!id || e.GetScene().Record(id)->name.find("Part_")!=0) continue;
-        changedPbr+=surfaceToon.color[i]!=surfacePbr.color[i];
-        changedNormals+=surfaceToon.color[i]!=surfaceNormals.color[i];
-    }
-    CHECK(changedPbr>100 && changedNormals>100); // the surfaces themselves change, independently of mode-label text
-    key("1"); checkMode("toon");
-    key("O"); CHECK(!e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
-    key("P"); CHECK(Call(e,"sim.step",R"({"frames":30})")["ok"].asBool());
-    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y>10);
-    key("R"); checkMode("toon"); e.RenderGameView(reset);
-    CHECK(reset.Hash()==toon.Hash());
-    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y==0);
-    const Json layout=Call(e,"ui.layout",R"({"width":1280,"height":720,"interactable":true})")["result"]["elements"];
-    auto button=[&](const char* name,bool touch) {
-        Json args=Json::MakeObject(); bool found=false;
-        for (const Json& item : layout.items()) if (item["name"].asString()==name) {
-            args["x"]=item["center"][0]; args["y"]=item["center"][1]; found=true;
-        }
-        CHECK(found); if (!found) return;
-        args["width"]=1280; args["height"]=720;
-        if (touch) { args["id"]=7; args["down"]=true; }
-        const Json dispatch=e.Call(touch?"input.touch":"input.click",args);
-        CHECK(dispatch["ok"].asBool());
-        if (!touch) CHECK(dispatch["result"]["buttonName"].asString()==name);
-        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
-        if (touch) {
-            const UIButton* control=e.GetScene().Get<UIButton>(e.GetScene().FindByName(name));
-            CHECK(control && !control->key.empty() && control->pressed);
-            args["down"]=false; CHECK(e.Call("input.touch",args)["ok"].asBool());
-            CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
-        }
-    };
-    button("Button_pbr",false); checkMode("pbr");
-    button("Button_normals",true); checkMode("normals");
-    button("Button_reset",true); checkMode("toon");
-    button("Button_outline",false);
-    CHECK(!e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
-    button("Button_outline",true);
-    CHECK(e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
-    button("Button_turntable",true);
-    CHECK(Call(e,"sim.step",R"({"frames":10})")["ok"].asBool());
-    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y>0);
-    button("Button_reset",false);
-    CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y==0);
-    // Real mouse presses deliver both the mapped key and onClick; primary-touch compatibility adds a third input source.
-    auto heldMouse=[&](const char* name,bool primaryTouch,const std::function<void()>& verify) {
-        Json pointer=Json::MakeObject(); bool found=false;
-        for (const Json& item : layout.items()) if (item["name"].asString()==name) {
-            pointer["x"]=item["center"][0]; pointer["y"]=item["center"][1]; found=true;
-        }
-        CHECK(found); if (!found) return;
-        pointer["width"]=1280; pointer["height"]=720;
-        CHECK(e.Call("input.mouse",pointer)["ok"].asBool());
-        CHECK(Call(e,"input.key",R"({"key":"MouseLeft","down":true})")["ok"].asBool());
-        if (primaryTouch) {
-            pointer["id"]=9; pointer["down"]=true;
-            CHECK(e.Call("input.touch",pointer)["ok"].asBool());
-        }
-        CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool()); verify();
-        CHECK(Call(e,"sim.step",R"({"frames":3})")["ok"].asBool()); verify();
-        CHECK(Call(e,"input.key",R"({"key":"MouseLeft","down":false})")["ok"].asBool());
-        if (primaryTouch) CHECK(Call(e,"input.touch",R"({"id":9,"down":false})")["ok"].asBool());
-        CHECK(Call(e,"sim.step",R"({"frames":2})")["ok"].asBool()); verify();
-    };
-    heldMouse("Button_outline",false,[&]() {
-        CHECK(!e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
-        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_outline"))->text=="Outline: OFF");
-    });
-    heldMouse("Button_outline",true,[&]() {
-        CHECK(e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Outline_skin"))->visible);
-        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_outline"))->text=="Outline: ON");
-    });
-    heldMouse("Button_turntable",false,[&]() {
-        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_turntable"))->text=="Spin: ON");
-        CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y>0);
-    });
-    const float stoppedAngle=e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y;
-    heldMouse("Button_turntable",true,[&]() {
-        CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Button_turntable"))->text=="Spin: OFF");
-        CHECK(e.GetScene().Get<Transform>(e.GetScene().FindByName("Character"))->rotation.y==stoppedAngle);
-    });
-    key("R"); checkMode("toon");
-    CHECK(e.Scripts().Errors().empty());
-    const std::vector<std::string> files=GameFiles(project);
-    for (const char* path : {"materials/toon.shader.json","materials/normals.shader.json","materials/skin-toon.mat.json",
-                             "assets/models/skin.glb","assets/models/hair.glb","scripts/lab.lua"})
-        CHECK(std::find(files.begin(),files.end(),path)!=files.end());
-    CHECK(WriteGamePak(project,files,"build/test_wuwa_toon/game.pak",&error));
-    std::vector<unsigned char> bytes; CHECK(ReadBinaryFile("build/test_wuwa_toon/game.pak",bytes));
-    CHECK(ExtractGamePak(bytes,"build/test_wuwa_toon/game",&error));
-    Engine packaged; CHECK(packaged.Open("build/test_wuwa_toon/game",&error));
-    CHECK(Call(packaged,"sim.step",R"({"frames":1})")["ok"].asBool());
-    packaged.RenderGameView(reset);
-    CHECK(reset.Hash()==toon.Hash() && packaged.Scripts().Errors().empty());
-    RemoveAll("build/test_wuwa_toon");
-}
-
-TEST(ShaderLabSampleControlsAndPackaging) {
-    Engine e;
-    std::string error;
-    const std::string project = TestSourceDir() + "/samples/ShaderLab";
-    CHECK(e.Open(project, &error));
-    for (const char* path : {"materials/pulse.shader.json", "materials/mask.shader.json"}) {
-        Json args = Json::MakeObject();
-        args["path"] = path;
-        CHECK(e.Call("shader.check", args)["ok"].asBool());
-    }
-    CHECK(Call(e, "script.check", R"J({"path":"scripts/effects.lua"})J")["ok"].asBool());
-    RenderTarget first, animated, replay;
-    for (RenderTarget* target : {&first, &animated, &replay}) target->Resize(160,90);
-    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
-    e.RenderGameView(first);
-    CHECK(Call(e, "sim.step", R"J({"frames":60})J")["ok"].asBool());
-    e.RenderGameView(animated);
-    CHECK(animated.Hash() != first.Hash());
-    CHECK(animated.ids == first.ids && animated.depth == first.depth);
-    const EntityId camera = e.GetScene().FindByName("Camera");
-    for (const char* key : {"2", "1"}) {
-        Json args = Json::MakeObject();
-        args["key"] = key;
-        args["down"] = true;
-        CHECK(e.Call("input.key", args)["ok"].asBool());
-        CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
-        const PostProcess* effect = e.GetScene().Get<PostProcess>(camera);
-        const bool hdr = std::string(key) == "2";
-        CHECK(effect && effect->exposure == (hdr ? 0.75f : 1));
-        CHECK(effect && effect->toneMapping == (hdr ? "reinhard" : "none"));
-        CHECK(effect && (effect->bloom > 0) == hdr);
-        args["down"] = false;
-        CHECK(e.Call("input.key", args)["ok"].asBool());
-        CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
-    }
-    CHECK(e.Scripts().Errors().empty());
-    const std::vector<std::string> files = GameFiles(project);
-    for (const char* path : {"materials/pulse.shader.json", "materials/mask.shader.json",
-                             "materials/pulse.mat.json", "materials/mask.mat.json", "scripts/effects.lua"})
-        CHECK(std::find(files.begin(), files.end(), path) != files.end());
-    CHECK(WriteGamePak(project, files, "build/test_shader_lab/game.pak", &error));
-    std::vector<unsigned char> bytes;
-    CHECK(ReadBinaryFile("build/test_shader_lab/game.pak", bytes));
-    CHECK(ExtractGamePak(bytes, "build/test_shader_lab/game", &error));
-    Engine packaged;
-    CHECK(packaged.Open("build/test_shader_lab/game", &error));
-    CHECK(Call(packaged, "sim.step", R"J({"frames":61})J")["ok"].asBool());
-    packaged.RenderGameView(replay);
-    CHECK(replay.Hash() == animated.Hash());
-    CHECK(packaged.Scripts().Errors().empty());
-    RemoveAll("build/test_shader_lab");
-}
-
 TEST(UIQuadsAreWhatSoftwareDraws) {
     // Both renderers draw UI from BuildUIQuads; the software result is the reference.
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Showcase", &err));
     std::vector<UIQuad> quads = BuildUIQuads(e.GetScene(), 640, 360, &e.Assets());
     CHECK(quads.size() > 50);  // one textured quad per glyph
     RenderTarget rt;
@@ -7889,7 +7443,7 @@ TEST(VfxDocumentValidationAndSaveConflict) {
 TEST(SampleVfxAsset) {
     uint64_t hashes[2]{};
     for (int run = 0; run < 2; ++run) {
-        Engine e; std::string error; CHECK(e.Open(TestSourceDir() + "/samples/VFXLab", &error));
+        Engine e; std::string error; CHECK(e.Open(TestSourceDir() + "/tests/fixtures/VFXLab", &error));
         CHECK(Call(e, "scene.load", R"J({"path":"scenes/assets.scene.json"})J")["ok"].asBool()); e.Step(132);
         CHECK(e.Scripts().Errors().empty());
         CHECK(Call(e, "vfx.state", R"J({"id":"Campfire"})J")["result"]["count"].asInt() > 40);
@@ -8067,7 +7621,7 @@ TEST(VfxChannelAssetReloadAndPreview) {
     CHECK(after.position.y==1 && after.integratedPosition.y==0);
     Json invalid=Json::parse(R"({"path":"effects/sparks.vfx.json","emitter":"pillar","values":{"scaleOverLife":[[0,[1,-1,1]]]}})");
     CHECK(!e.Call("vfx.set",invalid)["ok"].asBool());e.Step(1);CHECK(e.GetScene().Get<VFXSystem>(id)->emitters[0].particles[0].position.y==1);
-    Engine sample;CHECK(sample.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    Engine sample;CHECK(sample.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     CHECK(Call(sample,"vfx.check",R"({"path":"effects/ice_pillar_curves.vfx.json"})")["result"]["ok"].asBool());
     const char* args=R"({"path":"effects/ice_pillar_curves.vfx.json","times":[0.1,0.5,1.5,2.3],"size":128,"inline":false})";
     const Json first=Call(sample,"vfx.preview",args);CHECK(first["ok"].asBool() && first==Call(sample,"vfx.preview",args));
@@ -8214,7 +7768,7 @@ TEST(VfxExpressionsCostAndPreviewLimit) {
 }
 
 TEST(SampleVfxExpressionsPortablePreview) {
-    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     const char* args=R"({"path":"effects/spiral_expressions.vfx.json","times":[0.2,0.8,1.5,2.8],"size":128,"inline":false})";
     const Json first=EmitterCall(e,"vfx.preview",args);CHECK(first["ok"].asBool() && first==EmitterCall(e,"vfx.preview",args));
     CHECK(first["result"]["hash"].asString()=="b35ab4ebab9114ff");
@@ -8254,7 +7808,7 @@ TEST(VfxExpressionValueGraphCommands) {
 }
 
 TEST(VfxAcceptanceExpressionGraphsRoundTrip) {
-    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     for(const char* name : {"ice_pillar","tornado","shield_dome","shockwave","rain_snow","healing_aura"}) {
         Json asset=Json::MakeObject();asset["path"]=std::string("effects/")+name+".vfx.json";
         const Json document=e.Call("vfx.get",asset)["result"];Json params=Json::MakeObject();
@@ -8285,7 +7839,7 @@ TEST(SampleVfxSixEffectAcceptance) {
         {"rain_snow","[0.25,1,2.2,3.8]","4e838d294576e87e",60,4.31666667f},
         {"healing_aura","[0.2,0.7,1.5,2.8]","2d453ad03fdce41d",48,2.96666667f}
     };
-    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     for(const auto& proof : proofs) {
         Json args=Json::MakeObject();args["path"]=std::string("effects/")+proof.name+".vfx.json";
         const Json checked=e.Call("vfx.check",args);CHECK(checked["ok"].asBool() && checked["result"]["ok"].asBool());
@@ -8308,7 +7862,7 @@ TEST(SampleVfxSixEffectAcceptance) {
 }
 
 TEST(SampleVfxAcceptanceMotionAndMaterials) {
-    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     auto load=[&](const char* name) { e.Stop();Json a=Json::MakeObject();a["path"]=std::string("scenes/")+name+".scene.json";
         CHECK(e.Call("scene.load",a)["ok"].asBool());e.Step(1); };
     auto system=[&]() { return e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Effect")); };
@@ -8353,7 +7907,7 @@ TEST(SampleVfxAcceptanceMotionAndMaterials) {
         lo=std::min(lo,p.position.y);hi=std::max(hi,p.position.y);
     }
     CHECK(hi-lo>0.2f); // varied lifetime spreads the visible spiral vertically
-    auto graph=[&](const char* path) { std::string source;CHECK(ReadTextFile(TestSourceDir()+"/samples/VFXLab/"+path,source));
+    auto graph=[&](const char* path) { std::string source;CHECK(ReadTextFile(TestSourceDir()+"/tests/fixtures/VFXLab/"+path,source));
         ShaderGraph g;CHECK(CompileShaderGraph(Json::parse(source),g,&error));return g; };
     auto dome=graph("materials/vfx_shield.shader.json");auto uniforms=dome.defaults;
     uniforms[dome.cameraUniform]=Vec4(0,0,5,1);ShaderInputs input;input.custom=Vec4(1,0,0,1);input.normal=Vec4(0,0,1,0);
@@ -8369,7 +7923,7 @@ TEST(SampleVfxAcceptanceMotionAndMaterials) {
 }
 
 TEST(SampleVfxAcceptanceRenderParity) {
-    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     const bool gpu=e.EnableGpu(nullptr,&error);RenderTarget individual,batched,hardware;
     individual.Resize(128,128);batched.Resize(128,128);hardware.Resize(128,128);
     RenderView view=MakeLookAtView(Vec3(4,3,7),Vec3(0,1.5f,0),45,1);view.drawUI=false;
@@ -8471,7 +8025,7 @@ TEST(VfxSwordSlashPreset) {
 
 
 TEST(SampleSwordSlashMaterials) {
-    Engine e;std::string error;CHECK(e.Open("samples/VFXLab",&error));
+    Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/tests/fixtures/VFXLab",&error));
     CHECK(Call(e,"scene.load",R"({"path":"scenes/slash.scene.json"})")["ok"].asBool());e.Step(8);
     CHECK(Call(e,"script.errors")["result"].size()==0);
     CHECK(Call(e,"vfx.check",R"({"path":"effects/sword_slash.vfx.json"})")["result"]["ok"].asBool());
@@ -8596,7 +8150,7 @@ TEST(VfxBundledPresetsInFreshProject) {
     for (const auto& proof : proofs) {
         Json a=Json::MakeObject();a["path"]=std::string("effects/")+proof.name+".vfx.json";a["preset"]=proof.name;
         const Json made=e.Call("vfx.create",a);CHECK(made["ok"].asBool());
-        const Json original=ParseVfxAsset(Json::parse([&] {std::string text;ReadTextFile(TestSourceDir()+"/samples/VFXLab/"+a["path"].asString(),text);return text;}())).json;
+        const Json original=ParseVfxAsset(Json::parse([&] {std::string text;ReadTextFile(TestSourceDir()+"/tests/fixtures/VFXLab/"+a["path"].asString(),text);return text;}())).json;
         CHECK(made["result"]["params"]==original["params"] && made["result"]["budget"]==original["budget"]);
         for (size_t i=0;i<original["emitters"].size();++i)
             CHECK(made["result"]["emitters"][i]["emitter"]["expressions"]==original["emitters"][i]["emitter"]["expressions"]);
@@ -8780,7 +8334,7 @@ TEST(SampleVfxLab) {
     auto run = [&](bool writeImage) {
         Engine e;
         std::string error;
-        CHECK(e.Open(TestSourceDir() + "/samples/VFXLab", &error));
+        CHECK(e.Open(TestSourceDir() + "/tests/fixtures/VFXLab", &error));
         CHECK(EmitterCall(e, "sim.step", R"J({"frames":132})J")["ok"].asBool());  // 0.2 s into the second fireworks cycle
         CHECK(e.Scripts().Errors().empty());
         for (const char* name : {"Flames", "Smoke", "Embers", "Rim", "Burst", "Puff", "Sparkles"}) {
@@ -9088,144 +8642,6 @@ TEST(UIScrollMotionAndTweens) {
     CHECK(e.Scripts().Errors().empty());
 }
 
-TEST(WickboundSample) {
-    // The survivor roguelite built from engine pieces: prefab entities with their own scripts, Box2D
-    // colliders and sensors, Light2D darkness, UI scenes. Plays through the menu into a run and back.
-    Engine e;
-    std::string error;
-    const std::string project = TestSourceDir() + "/samples/Wickbound";
-    CHECK(e.Open(project, &error));
-    for (const std::string& file : GameFiles(project)) {
-        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
-        Json args = Json::MakeObject();
-        args["path"] = file;
-        Json result = e.Call("script.check", args)["result"];
-        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
-    }
-    CHECK(Call(e, "time.date", R"J({"set":"2030-05-05"})J")["ok"].asBool());
-    auto step = [&](int frames) {
-        Json args = Json::MakeObject();
-        args["frames"] = frames;
-        CHECK(e.Call("sim.step", args)["ok"].asBool());
-    };
-    auto eval = [&](const std::string& code) {
-        Json args = Json::MakeObject();
-        args["code"] = code;
-        return e.Call("script.eval", args)["result"]["value"];
-    };
-    auto click = [&](const char* name) {  // a real pointer click on the named button
-        Json layout = Call(e, "ui.layout", R"J({"width":1280,"height":720})J")["result"];
-        const EntityId id = e.GetScene().FindByName(name);
-        bool found = false;
-        for (const Json& element : (layout.has("elements") ? layout["elements"] : layout).items()) {
-            if (element["id"].asInt() != static_cast<int>(id)) continue;
-            Json args = Json::MakeObject();
-            args["x"] = element["center"][0]; args["y"] = element["center"][1]; args["width"] = 1280; args["height"] = 720;
-            CHECK(e.Call("input.click", args)["result"]["button"].asInt() == static_cast<int>(id));
-            found = true;
-        }
-        CHECK(found);
-        step(3);
-    };
-    auto action = [&](const char* target, const char* name, const char* arg) {
-        eval(std::string("scene.send(scene.find('") + target + "'), 'onAction', '" + name + "', " + arg + ")");
-        step(2);
-    };
-    const char* world = "local W = require('scripts.lib.world') ";
-    step(3);
-    CHECK(e.RuntimeScene() == "scenes/menu.scene.json");
-    RenderTarget title, run;
-    for (RenderTarget* target : {&title, &run}) target->Resize(320, 180);
-    e.RenderGameView(title);
-    // Daily gift: 50 Glims today, nothing more until the date changes, 75 on the next day (streak).
-    CHECK(eval("return require('scripts.lib.meta').dailyAvailable()").asBool());
-    action("Menu", "dailyOpen", "nil");
-    action("Menu", "dailyClaim", "nil");
-    CHECK(eval("return require('scripts.lib.meta').data.glims").asInt() == 50);
-    CHECK(!eval("return require('scripts.lib.meta').dailyAvailable()").asBool());
-    Call(e, "time.date", R"J({"set":"2030-05-06"})J");
-    CHECK(eval("return require('scripts.lib.meta').dailyAmount()").asInt() == 75);
-
-    action("Menu", "nav", "'play'");
-    click("Start");
-    step(3);
-    CHECK(e.RuntimeScene() == "scenes/run.scene.json");
-    CHECK(eval(std::string(world) + "return W.game.phase").asString() == "playing");
-    // The keeper is a CharacterBody2D with child entities: body sprite, lantern light, sensors and its first weapon.
-    Scene& scene = e.GetScene();
-    const EntityId player = scene.FindByName("Player");
-    CHECK(scene.Get<CharacterBody2D>(player) != nullptr);
-    CHECK(scene.Children(player).size() >= 7);
-    CHECK(scene.Get<Light2D>(scene.FindByName("Lantern")) != nullptr && scene.Get<Darkness2D>(scene.FindByName("Camera")) != nullptr);
-    CHECK(scene.Record(scene.FindByName("Weapon ember_bolt"))->parent == player);
-    const EntityId playerBody = static_cast<EntityId>(eval(std::string(world) + "return W.player.body").asInt());
-    const Sprite* keeperSprite = scene.Get<Sprite>(playerBody);
-    CHECK(keeperSprite && keeperSprite->columns >= 4 && keeperSprite->rows >= 2);
-    CHECK(keeperSprite->texture == "assets/sprites/animated/keeper_ada.png");
-    CHECK(scene.Get<SpriteAnimation>(playerBody)->clip == "idle");
-    CHECK(Call(e, "input.key", R"J({"key":"D","down":true})J")["ok"].asBool());
-    step(12);
-    CHECK(scene.Get<SpriteAnimation>(playerBody)->clip == "move");
-    bool inMoveClip = false;
-    for (const Json& frame : scene.Get<SpriteAnimation>(playerBody)->clips["move"]["frames"].items())
-        if (frame.asInt() == scene.Get<Sprite>(playerBody)->frame) inMoveClip = true;
-    CHECK(inMoveClip);
-    step(228);
-    CHECK(Call(e, "input.key", R"J({"key":"D","down":false})J")["ok"].asBool());
-    CHECK(e.Scripts().Errors().empty());
-    CHECK(scene.Get<Transform>(player)->position.x > 14);  // walked right at about 4.1 units/s
-    CHECK(eval(std::string(world) + "return #W.enemyList").asInt() > 0 && scene.Pool<RigidBody2D>().size() > 3);
-    e.RenderGameView(run);
-    CHECK(run.Hash() != title.Hash());
-    step(2);
-    CHECK(scene.Get<SpriteAnimation>(playerBody)->clip == "idle");
-    eval(std::string(world) + "for _, e in ipairs(W.enemyList) do if scene.has(e.body, 'SpriteAnimation') then e.stun = 0.5 break end end");
-    step(2);
-    CHECK(eval(std::string(world) + "for _, e in ipairs(W.enemyList) do if scene.has(e.body, 'SpriteAnimation') then return scene.get(e.body, 'SpriteAnimation').clip end end").asString() == "idle");
-    for (const RenderItem& item : GatherRenderItems(scene, &e.Assets())) CHECK(!item.error);
-    // An enemy placed on the keeper is seen by the Hurtbox sensor and hurts; the bolt weapon's trigger shots kill it.
-    eval(std::string(world) + "W.spawn('enemy_shade', W.player.x + 0.2, W.player.y, {kind = 'shade'})");
-    step(30);
-    CHECK(eval(std::string(world) + "return W.player.hp").asNumber() < 100);
-    step(180);
-    CHECK(eval(std::string(world) + "return W.game.kills").asInt() >= 1);
-    // A level-up pauses the world (game.pause) until a card is picked with key 1.
-    eval(std::string(world) + "W.game:gainXp(40)");
-    step(2);
-    CHECK(eval(std::string(world) + "return W.game.phase").asString() == "levelup");
-    CHECK(Call(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
-    const double frozen = eval(std::string(world) + "return W.game.time").asNumber();
-    const int frozenFrame = scene.Get<Sprite>(playerBody)->frame;
-    step(30);
-    CHECK(eval(std::string(world) + "return W.game.time").asNumber() == frozen);
-    CHECK(scene.Get<Sprite>(playerBody)->frame == frozenFrame);
-    for (int guard = 0; guard < 6 && eval(std::string(world) + "return W.game.phase").asString() == "levelup"; ++guard) {
-        CHECK(Call(e, "input.key", R"J({"key":"1","down":true})J")["ok"].asBool());
-        step(2);
-        CHECK(Call(e, "input.key", R"J({"key":"1","down":false})J")["ok"].asBool());
-        step(2);
-    }
-    CHECK(eval(std::string(world) + "return W.game.phase").asString() == "playing");
-    CHECK(!Call(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
-    // Standing in a brazier's trigger ring for three seconds lights it: a permanent Light2D.
-    eval(std::string(world) + "local b = W.braziers[1] scene.set(W.player.id, 'Transform', {position = {x = b.x, y = b.y}})");
-    step(200);
-    CHECK(eval(std::string(world) + "return W.game.braziersLit").asInt() == 1);
-    CHECK(eval(std::string(world) + "return scene.get(W.braziers[1].id, 'Light2D').strength").asNumber() == 1);
-    CHECK(!eval(std::string(world) + "return scene.has(scene.child(W.braziers[1].id, 'Body'), 'SpriteAnimation')").asBool());
-    CHECK(eval(std::string(world) + "return scene.get(scene.child(W.braziers[1].id, 'Fire'), 'Sprite').visible").asBool());
-    CHECK(e.Scripts().Errors().empty());
-    // Giving up returns to the menu scene with the result, and the run's Glims and achievement are saved.
-    eval(std::string(world) + "W.game:giveUp()");
-    step(3);
-    CHECK(e.RuntimeScene() == "scenes/menu.scene.json");
-    CHECK(e.GetScene().Get<UIPanel>(e.GetScene().FindByName("Screen:result"))->visible);
-    CHECK(eval("return require('scripts.lib.meta').data.stats.runs").asInt() == 1);
-    CHECK(eval("return require('scripts.lib.meta').data.achievements.first_light").asBool());
-    CHECK(eval("return require('scripts.lib.meta').data.glims").asInt() > 100);
-    CHECK(e.Scripts().Errors().empty());
-}
-
 TEST(ShaderGraphValidationAndReference) {
     Engine e;
     std::string error;
@@ -9483,12 +8899,12 @@ TEST(CameraFxaa) {
 }
 
 TEST(SpriteBillboardScript) {
-    // Facing the camera is project code: samples/HD2D/scripts/billboards.lua turns tagged sprites, the
+    // Facing the camera is project code: tests/fixtures/HD2D/scripts/billboards.lua turns tagged sprites, the
     // renderer only draws a Sprite along its entity's rotation.
     Engine e;
     std::string err, source;
     CHECK(e.Open(TempProject("sprite_billboards"), &err));
-    CHECK(ReadTextFile(TestSourceDir() + "/samples/HD2D/scripts/billboards.lua", source));
+    CHECK(ReadTextFile(TestSourceDir() + "/tests/fixtures/HD2D/scripts/billboards.lua", source));
     Json write = Json::MakeObject();
     write["path"] = "scripts/billboards.lua";
     write["source"] = source;
@@ -9669,7 +9085,7 @@ TEST(CameraDepthOfField) {
 TEST(GpuRendererMatchesSoftware) {
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/Showcase", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Showcase", &err));
     if (!e.EnableGpu(nullptr, &err)) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;
@@ -9725,11 +9141,176 @@ TEST(GpuRendererMatchesSoftware) {
     CHECK(!Call(e, "render.screenshot", R"J({"renderer": "vulkan", "inline": false})J")["ok"].asBool());
 }
 
+// PostProcess fog / color grading / ACES, DirectionalLight hemisphere ambient, Sprite.emission and the
+// material fog opt-out, in both renderers; glTF COLOR_0 vertex colors load into the mesh.
+TEST(FogGradingHemisphereAndSpriteEmission) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("fog_grading"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,3,9],"rotation":[-15,0,0]},"Camera":{"clearColor":[0,0,0]},"PostProcess":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-50,30,0]},"DirectionalLight":{"ambient":[0.3,0.3,0.3]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[30,1,40]},"MeshRenderer":{"mesh":"plane","color":[0.4,0.7,0.3]}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{"position":[-1.5,1,0]},"MeshRenderer":{"mesh":"cube","color":[0.9,0.3,0.2]}}})J");
+    CHECK(Call(e, "material.create", R"J({"path":"materials/nofog.mat.json","values":{"baseColor":[0.2,0.4,0.9],"fog":false}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Clear","components":{"Transform":{"position":[1.5,1,-2]},"MeshRenderer":{"mesh":"cube","material":"materials/nofog.mat.json"}}})J");
+    const int w = 128, h = 72;
+    auto render = [&](RenderTarget& t) {
+        RenderView view;
+        MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+        t.Resize(w, h);
+        e.Renderer().Render(e.GetScene(), view, t);
+        return view;
+    };
+    auto set = [&](const char* id, const char* type, const char* values) {
+        const std::string args = std::string(R"J({"id":")J") + id + R"J(","type":")J" + type + R"J(","values":)J" + values + "}";
+        CHECK(Call(e, "component.set", args.c_str())["ok"].asBool());
+    };
+    auto px = [&](const RenderTarget& t, int x, int y) { return t.color[static_cast<size_t>(y) * w + static_cast<size_t>(x)]; };
+    RenderTarget base, fog, again;
+    render(base);
+    // Neutral new fields keep the frame: fog 0 and grading at its defaults.
+    set("Camera", "PostProcess", R"J({"fogColor":[1,0,1],"fogStart":0,"fogEnd":1,"saturation":1,"contrast":1})J");
+    render(again);
+    CHECK(again.Hash() == base.Hash());
+    // Full fog from 1 m: every fogged surface turns magenta, the fog:false cube and the background do not.
+    set("Camera", "PostProcess", R"J({"fog":1})J");
+    render(fog);
+    const EntityId clear = e.GetScene().FindByName("Clear"), box = e.GetScene().FindByName("Box");
+    int magenta = 0, clearMagenta = 0, clearPixels = 0;
+    for (size_t i = 0; i < fog.color.size(); ++i) {
+        const uint32_t c = fog.color[i];
+        const bool isMagenta = (c & 255) == 255 && ((c >> 8) & 255) == 0 && ((c >> 16) & 255) == 255;
+        if (fog.ids[i] == clear) {
+            ++clearPixels;
+            clearMagenta += isMagenta;
+            CHECK(c == base.color[i]);
+        } else if (fog.ids[i] != kNullEntity) {
+            magenta += isMagenta;
+        } else {
+            CHECK(c == base.color[i]);
+        }
+    }
+    CHECK(clearPixels > 20 && clearMagenta == 0 && magenta > 1000);
+    // Partial fog grows with distance: the near ground bottom row is less fogged than far ground.
+    set("Camera", "PostProcess", R"J({"fog":0.8,"fogStart":5,"fogEnd":40})J");
+    render(fog);
+    auto green = [](uint32_t c) { return static_cast<int>((c >> 8) & 255); };
+    CHECK(green(px(fog, 64, 70)) > green(px(fog, 64, 40)));
+    set("Camera", "PostProcess", R"J({"fog":0})J");
+    // Saturation 0: grey everywhere; ACES differs from no tone mapping.
+    set("Camera", "PostProcess", R"J({"saturation":0})J");
+    render(again);
+    int coloured = 0;
+    for (uint32_t c : again.color) {
+        const int r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+        coloured += std::abs(r - g) > 1 || std::abs(g - b) > 1;
+    }
+    CHECK(coloured == 0);
+    set("Camera", "PostProcess", R"J({"saturation":1.2,"contrast":1.1,"shadowTint":[0.9,0.95,1.1],"highlightTint":[1.1,1,0.85]})J");
+    render(again);
+    CHECK(again.Hash() != base.Hash());
+    RenderTarget aces;
+    set("Camera", "PostProcess", R"J({"saturation":1,"contrast":1,"shadowTint":[1,1,1],"highlightTint":[1,1,1],"toneMapping":"aces"})J");
+    render(aces);
+    CHECK(aces.Hash() != base.Hash());
+    set("Camera", "PostProcess", R"J({"toneMapping":"none"})J");
+    render(again);
+    CHECK(again.Hash() == base.Hash());
+    // Hemisphere ambient: the box's downward-facing parts are not visible, but its sides (normal.y = 0) get the
+    // average of sky and ground, so a black ground ambient darkens them.
+    set("Sun", "DirectionalLight", R"J({"hemisphere":true,"groundAmbient":[0,0,0]})J");
+    render(again);
+    int boxDarker = 0, boxPixels = 0;
+    for (size_t i = 0; i < again.color.size(); ++i) {
+        if (again.ids[i] != box) continue;
+        ++boxPixels;
+        boxDarker += (again.color[i] & 255) < (base.color[i] & 255);
+    }
+    CHECK(boxPixels > 20 && boxDarker > boxPixels / 2);
+    set("Sun", "DirectionalLight", R"J({"hemisphere":false})J");
+    // Sprite.emission: a lit sprite with no light at all is black; emission brings back its own colour.
+    Call(e, "entity.create", R"J({"name":"Board","components":{"Transform":{"position":[0,1.5,3]},"Sprite":{"width":1,"height":1,"lit":true,"color":[1,0.5,0.25]}}})J");
+    set("Sun", "DirectionalLight", R"J({"intensity":0,"ambient":[0,0,0]})J");
+    RenderTarget dark, glow;
+    render(dark);
+    set("Board", "Sprite", R"J({"emission":1})J");
+    render(glow);
+    const EntityId board = e.GetScene().FindByName("Board");
+    int boardPixels = 0;
+    for (size_t i = 0; i < glow.color.size(); ++i) {
+        if (glow.ids[i] != board) continue;
+        ++boardPixels;
+        CHECK((dark.color[i] & 0xFFFFFF) == 0);
+        CHECK((glow.color[i] & 255) >= 250 && ((glow.color[i] >> 8) & 255) >= 124 && ((glow.color[i] >> 8) & 255) <= 131);
+    }
+    CHECK(boardPixels > 50);
+    set("Sun", "DirectionalLight", R"J({"intensity":1,"ambient":[0.3,0.3,0.3],"hemisphere":true,"groundAmbient":[0.1,0.05,0]})J");
+    set("Camera", "PostProcess", R"J({"fog":0.7,"fogStart":4,"fogEnd":30,"fogColor":[0.8,0.85,0.9],"saturation":1.15,"contrast":1.05,"shadowTint":[0.9,0.95,1.1],"highlightTint":[1.08,1,0.9]})J");
+    RenderTarget sw;
+    const RenderView view = render(sw);
+    if (e.EnableGpu(nullptr, &err)) {
+        RenderTarget gpu;
+        gpu.Resize(w, h);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double error = 0;
+        for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+            error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+        const double mean = error / static_cast<double>(sw.color.size() * 3);
+        std::printf("  fog/grading/hemisphere/emission software/GPU mean difference %.4f\n", mean);
+        CHECK(mean < 2.5);
+    } else std::printf("  SKIP GPU comparison (%s)\n", err.c_str());
+    // Sprite.material: a fog:false material keeps a sprite clear in full fog; a graph offset moves its quad.
+    set("Camera", "PostProcess", R"J({"fog":1,"fogStart":0,"fogEnd":0.01,"fogColor":[1,0,1],"saturation":1,"contrast":1,"shadowTint":[1,1,1],"highlightTint":[1,1,1]})J");
+    set("Board", "Sprite", R"J({"lit":false,"emission":0})J");
+    RenderTarget fogged, clearSprite;
+    render(fogged);
+    set("Board", "Sprite", R"J({"material":"materials/nofog.mat.json"})J");
+    render(clearSprite);
+    int boardMagenta = 0, boardClear = 0;
+    for (size_t i = 0; i < fogged.color.size(); ++i) {
+        if (fogged.ids[i] != board) continue;
+        boardMagenta += (fogged.color[i] & 0xFFFFFF) == 0xFF00FF;
+        boardClear += clearSprite.ids[i] == board && (clearSprite.color[i] & 0xFFFFFF) != 0xFF00FF;
+    }
+    CHECK(boardMagenta > 50 && boardClear == boardMagenta);
+    set("Camera", "PostProcess", R"J({"fog":0})J");
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/lift.shader.json","graph":{"format":"ownengine.shader","nodes":[{"op":"baseColor"},{"op":"constant","value":[0,1,0,0]}],"color":0,"offset":1}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"materials/lift.mat.json","values":{"shader":"materials/lift.shader.json"}})J")["ok"].asBool());
+    set("Board", "Sprite", R"J({"material":"materials/lift.mat.json"})J");
+    RenderTarget lifted;
+    render(lifted);
+    int topBefore = h, topAfter = h;
+    for (int y = h - 1; y >= 0; --y) for (int x = 0; x < w; ++x) {
+        if (clearSprite.ids[static_cast<size_t>(y) * w + static_cast<size_t>(x)] == board) topBefore = y;
+        if (lifted.ids[static_cast<size_t>(y) * w + static_cast<size_t>(x)] == board) topAfter = y;
+    }
+    CHECK(topAfter < topBefore - 3);  // lifted 1 m: higher on screen
+    set("Board", "Sprite", R"J({"material":"materials/missing.mat.json"})J");
+    RenderTarget broken;
+    render(broken);
+    bool magentaBoard = false;
+    for (size_t i = 0; i < broken.color.size(); ++i) magentaBoard = magentaBoard || (broken.ids[i] == board && (broken.color[i] & 0xFFFFFF) == 0xFF00FF);
+    CHECK(magentaBoard);
+    // COLOR_0 vertex colors (the RPG terrain carries per-tile tints).
+    CHECK(CopyFileTo(TestSourceDir() + "/games/RPG/assets/models/terrain.glb", JoinPath(e.ProjectDir(), "assets/models/terrain.glb")));
+    const auto terrain = e.Assets().GetMesh("assets/models/terrain.glb", &err);
+    if (terrain) {
+        CHECK(terrain->colors.size() == terrain->positions.size());
+        bool tinted = false;
+        for (const Vec4& c : terrain->colors) tinted = tinted || c.x != 1 || c.z != 1;
+        CHECK(tinted);
+    } else {
+        std::printf("  terrain.glb: %s\n", err.c_str());
+        CHECK(false);
+    }
+}
+
 TEST(AnimatedSkinRenderers) {
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("skin_renderers"), &err));
-    CHECK(CopyFileTo(TestSourceDir() + "/samples/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
+    CHECK(CopyFileTo(TestSourceDir() + "/tests/fixtures/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/models/fox.glb")));
     Call(e, "scene.new", R"J({"empty":true})J");
     Call(e, "entity.create", R"J({"name":"Fox","components":{"Transform":{"scale":[0.012,0.012,0.012]},"MeshRenderer":{"mesh":"assets/models/fox.glb","color":[1,1,1]},"Animator":{"clip":"Walk","playing":false}}})J");
     Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-65,25,0]},"DirectionalLight":{"shadowStrength":0.8}}})J");
@@ -9800,7 +9381,7 @@ TEST(AnimatedSkinRenderers) {
 
 TEST(WebGamePak) {
     // `oe package --web` data: the page unpacks game.pak into /game.
-    std::string dir = TestSourceDir() + "/samples/Hello";
+    std::string dir = TestSourceDir() + "/tests/fixtures/Hello";
     std::vector<std::string> files = GameFiles(dir);
     CHECK(std::find(files.begin(), files.end(), "project.json") != files.end());
     CHECK(std::find(files.begin(), files.end(), "AGENTS.md") == files.end());
@@ -9825,7 +9406,7 @@ TEST(WebGamePak) {
 
 TEST(AndroidGamePakExtract) {
     // The Android player unpacks assets/game.pak into its data folder.
-    std::string dir = TestSourceDir() + "/samples/Hello";
+    std::string dir = TestSourceDir() + "/tests/fixtures/Hello";
     std::vector<std::string> files = GameFiles(dir);
     std::string err;
     CHECK(WriteGamePak(dir, files, "build/test_android/game.pak", &err));
@@ -11574,7 +11155,7 @@ TEST(AgentInstructionsInSync) {
 TEST(ScriptCheckAndParams) {
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/FPS", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/FPS", &err));
     // Syntax error: line and message, nothing runs.
     Json r = e.Call("script.check", Json::parse(R"J({"path": "scripts/bad.lua", "source": "local T = {}\nfunction T:onUpdate()\n  print(1\nend\nreturn T"})J"));
     CHECK(r["ok"].asBool() && !r["result"]["ok"].asBool());
@@ -13915,7 +13496,7 @@ TEST(NativeEditorPauseAndGizmoInput) {
 TEST(NativeEditorHeadless) {
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/Hello", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Hello", &err));
     if (!e.EnableGpu(nullptr, &err)) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;
@@ -14085,7 +13666,7 @@ TEST(NativeEditorUIEditing) {
 TEST(NativeEditorTilePainting) {
     Engine e;
     std::string err;
-    CHECK(e.Open(TestSourceDir() + "/samples/Dungeon", &err));
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Dungeon", &err));
     if (!e.EnableGpu(nullptr, &err)) {
         std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
         return;
@@ -14457,56 +14038,13 @@ TEST(HostBridgeAndViewSize) {
     RemoveAll(dir);
 }
 
-TEST(DongleZooModuleSnapshotsAndCatalog) {
-    // Explicit service aliases and extracted methods must survive native branch restore.
-    const std::string project = TestSourceDir() + "/games/DongleZoo";
-    Engine e;
-    std::string error, source;
-    CHECK(e.Open(project, &error));
-    // A pre-split version-1 save is still loaded through the unchanged Meta sanitizer.
-    CHECK(Call(e, "save.set", R"({"key":"donglezoo.save.v1","value":{"version":1,"coins":321,"best":45,"settings":{"locale":"ko"},"items":{"hammer":3,"shake":2,"wand":1}}})")["ok"].asBool());
-    CHECK(Call(e, "sim.record_state")["ok"].asBool());
-    CHECK(Call(e, "time.date", R"({"set":"2031-03-03"})")["ok"].asBool());
-    e.Step(3);
-    auto eval = [&](const std::string& code) {
-        Json args = Json::MakeObject();
-        args["entity"] = "App";
-        args["code"] = code;
-        Json result = e.Call("script.eval", args);
-        CHECK(result["ok"].asBool());
-        return result["result"]["value"];
-    };
-    CHECK(eval("return self.services.Meta.data.coins == 321 and self.services.Meta.data.best == 45 and self.services.Meta.data.items.hammer == 3 and self.services.I.getLocale() == 'ko'").asBool());
-    CHECK(ReadTextFile(JoinPath(project, "config/shop.json"), source));
-    CHECK(eval("return self.services.D.PRODUCTS") == Json::parse(source)["products"]);
-    CHECK(eval("return self.services.Scoring.mergePoints(10, 1) == 10 and self.services.Scoring.mergePoints(10, 2) == 13 and self.services.Scoring.mergePoints(10, 99) == 25").asBool());
-    eval("self:onAction('play'); self.cur=1; self.nxt=1; self:drop()");
-    CHECK(Call(e, "sim.save_state", R"({"slot":"zoo"})")["ok"].asBool());
-    e.Step(45);
-    const Json future = e.GetScene().ToJson();
-    eval("self.score=999; self.services.Meta.data.coins=999; self.branchOnly=true");
-    CHECK(Call(e, "sim.load_state", R"({"slot":"zoo"})")["ok"].asBool());
-    CHECK(eval("return self.score == 0 and self.services.Meta.data.coins == 321 and self.branchOnly == nil and self.services.Meta == require('scripts.lib.meta') and self.services.Board == require('scripts.lib.board') and self.services.Scoring == require('scripts.app.scoring')").asBool());
-    e.Step(45);
-    CHECK(e.GetScene().ToJson() == future);
-    // Attached App reload retains its owner/context and does not run onStart again.
-    // Recording intentionally forbids resource reload: exercise this on a fresh tool session.
-    Engine live;
-    CHECK(live.Open(project, &error));
-    live.Step(3);
-    CHECK(Call(live, "script.eval", R"({"entity":"App","code":"self.score=17; self.ownerContext=self.services"})")["ok"].asBool());
-    CHECK(Call(live, "script.reload")["ok"].asBool());
-    CHECK(Call(live, "script.eval", R"({"entity":"App","code":"return self.score == 17 and self.ownerContext == self.services"})")["result"]["value"].asBool());
-    CHECK(Call(live, "script.errors")["result"].size() == 0);
-    CHECK(Call(e, "script.errors")["result"].size() == 0);
-}
-
-TEST(DongleZooGame) {
-    // The merge puzzle in games/DongleZoo, played like a user: menu, aiming and dropping with the
-    // pointer, merging, items, game over with a rewarded continue, coins, missions and the daily gift.
+TEST(RPGVillageGame) {
+    // The HD-2D village in games/RPG: scripts check clean, the opening shot hands control over, the hero
+    // walks over the terrain grid (not into houses or water), Q turns the camera and time of day drives
+    // the sun, lamps and clock.
     Engine e;
     std::string error;
-    const std::string project = TestSourceDir() + "/games/DongleZoo";
+    const std::string project = TestSourceDir() + "/games/RPG";
     CHECK(e.Open(project, &error));
     for (const std::string& file : GameFiles(project)) {
         if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
@@ -14515,8 +14053,6 @@ TEST(DongleZooGame) {
         Json result = e.Call("script.check", args)["result"];
         CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
     }
-    CHECK(Call(e, "time.date", R"J({"set":"2031-03-03"})J")["ok"].asBool());
-    const int W = 540, H = 960;
     auto step = [&](int frames) {
         Json args = Json::MakeObject();
         args["frames"] = frames;
@@ -14525,201 +14061,51 @@ TEST(DongleZooGame) {
     auto eval = [&](const std::string& code) {
         Json args = Json::MakeObject();
         args["code"] = code;
-        args["entity"] = "App";
+        args["entity"] = "Game";
         return e.Call("script.eval", args)["result"]["value"];
     };
-    auto click = [&](const char* name) {  // a real pointer click on the named button
+    auto key = [&](const char* name, bool down) {
         Json args = Json::MakeObject();
-        args["width"] = W; args["height"] = H;
-        Json layout = e.Call("ui.layout", args)["result"];
-        const EntityId id = e.GetScene().FindByName(name);
-        bool found = false;
-        for (const Json& element : layout["elements"].items()) {
-            if (element["id"].asInt() != static_cast<int>(id)) continue;
-            args["x"] = element["center"][0]; args["y"] = element["center"][1];
-            CHECK(e.Call("input.click", args)["result"]["button"].asInt() == static_cast<int>(id));
-            found = true;
-        }
-        CHECK(found);
-        step(3);
+        args["key"] = name;
+        args["down"] = down;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
     };
-    auto mouse = [&](float x, bool down) {
-        Json args = Json::MakeObject();
-        args["x"] = x; args["y"] = 500; args["width"] = W; args["height"] = H;
-        args["button"] = "MouseLeft"; args["down"] = down;
-        CHECK(e.Call("input.mouse", args)["ok"].asBool());
-    };
-    auto drop = [&](float x) {  // press, hold and release in the jar
-        mouse(x, true);
-        step(2);
-        mouse(x, false);
-        step(45);
-    };
-    const char* board = "local B = require('scripts.lib.board') ";
-    const char* meta = "local M = require('scripts.lib.meta') ";
-
-    step(5);
-    CHECK(eval("return self.mode").asString() == "home");
-    CHECK(eval("local w = input.viewSize() return w").asInt() == 540);
-    // The layout follows the screen shape: phones scale with the width, wide screens with the height.
-    CHECK(std::fabs(e.GetScene().Get<Camera>(e.GetScene().FindByName("Camera"))->orthoSize - 1280.0f / 96.0f / 2.0f) < 1e-3f);
-
-    // Daily gift, once per day.
-    click("Home:btn:daily");
-    CHECK(eval("return self.dialog").asString() == "daily");
-    click("Daily:claim");
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 50);
-    CHECK(!eval(std::string(meta) + "return M.dailyAvailable()").asBool());
-    click("Dlg:daily:close");
-    CHECK(eval("return self.dialog").isNull());
-
-    // Play: two chicks dropped on the same spot merge into a hamster worth one point.
-    click("Home:play");
-    CHECK(eval("return self.mode").asString() == "play");
-    eval("self.cur, self.nxt = 1, 1 self:refreshHolder()");
-    drop(150);
-    CHECK(eval(std::string(board) + "return B.count()").asInt() == 1);
-    eval("self.nxt = 4");
-    drop(150);
-    step(30);
-    CHECK(eval(std::string(board) + "return B.count()").asInt() == 1);
-    CHECK(eval(std::string(board) + "return B.pieces[B.order[1]].tier").asInt() == 2);
-    CHECK(eval("return self.score").asInt() == 1);
-    CHECK(eval(std::string(meta) + "return M.data.seen[2]").asBool());
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 70);  // +20 for a new friend
-    // The aimed animal lands where the pointer was, inside the jar walls.
-    drop(520);
-    step(40);
-    Json where = eval(std::string(board) + "local x, y = B.pos(B.order[2]) return {x, y}");
-    CHECK(where[0].asFloat() > 2.5f && where[0].asFloat() < 3.3f && where[1].asFloat() < -4.0f);
-
-    // Items: the hammer removes the tapped animal, shake keeps them all, the wand grows one.
-    const int before = eval(std::string(board) + "return B.count()").asInt();
-    click("Item:hammer");
-    CHECK(eval("return self.target").asString() == "hammer");
-    Json at = eval(std::string(board) + "local x, y = B.pos(B.order[1]) return {x, y, self.ortho, self.aspect, self.camY}");
-    {
-        // world -> screen pixels, the inverse of App:pointer()
-        const float ortho = at[2].asFloat(), aspect = at[3].asFloat(), camY = at[4].asFloat();
-        Json args = Json::MakeObject();
-        args["x"] = (at[0].asFloat() / (2 * ortho * aspect) + 0.5f) * W;
-        args["y"] = (0.5f - (at[1].asFloat() - camY) / (2 * ortho)) * H;
-        args["width"] = W; args["height"] = H; args["button"] = "MouseLeft"; args["down"] = true;
-        CHECK(e.Call("input.mouse", args)["ok"].asBool());
-        step(2);
-        args["down"] = false;
-        CHECK(e.Call("input.mouse", args)["ok"].asBool());
-        step(2);
-    }
-    CHECK(eval(std::string(board) + "return B.count()").asInt() == before - 1);
-    CHECK(eval(std::string(meta) + "return M.data.items.hammer").asInt() == 1);
-    CHECK(eval("return self.target").isNull());
-    click("Item:shake");
-    CHECK(eval(std::string(meta) + "return M.data.items.shake").asInt() == 1);
-    step(90);
-    CHECK(eval(std::string(board) + "return B.count()").asInt() == before - 1);
-
-    // Pause freezes the jar; resume continues.
-    click("HUD:pause");
-    CHECK(eval("return self.dialog").asString() == "pause" && eval("return game.paused()").asBool());
-    click("Pause:resume");
-    CHECK(!eval("return game.paused()").asBool());
-
-    // Animals resting above the line end the game after two seconds.
-    // (a balanced column of the three largest reaches past it)
-    eval(std::string(board) + "B.clear() B.spawn(11, 0, -3.38) self.score = 600");
-    step(30);
-    eval(std::string(board) + "B.spawn(10, 0, -0.3)");
-    step(30);
-    eval(std::string(board) + "B.spawn(9, 0, 2.4)");
-    for (int i = 0; i < 12 && eval("return self.mode").asString() == "play"; ++i) step(60);
-    CHECK(eval("return self.mode").asString() == "over");
-    step(80);
-    CHECK(eval("return self.dialog").asString() == "over");
-    const int score = eval("return self.score").asInt();
-    CHECK(score >= 600);
-
-    // Continue with a rewarded ad (demo overlay): the top of the jar is cleared, once per game.
-    click("Over:revive");
-    CHECK(eval("return require('scripts.lib.ads').busy()").asBool());
-    step(170);
-    CHECK(eval("return self.mode").asString() == "play" && eval("return self.revived").asBool());
-    eval("self:gameOver()");
-    step(80);
-    CHECK(eval("return self.dialog").asString() == "over");
-    CHECK(!e.GetScene().Get<UIButton>(e.GetScene().FindByName("Over:revive"))->visible);
-    const int coins = eval(std::string(meta) + "return M.data.coins").asInt();
-    CHECK(coins == 70 + score / 30);
-    CHECK(eval(std::string(meta) + "return M.data.best").asInt() == score);
-
-    // The same flow through a real host: the game waits for the SDK's answer.
-    CHECK(Call(e, "host.configure", R"J({"accept":["ads.rewarded"]})J")["ok"].asBool());
-    click("Over:double");
-    CHECK(eval("return require('scripts.lib.ads').busy()").asBool());
-    step(30);
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == coins);
-    CHECK(Call(e, "host.reply", R"J({"name":"ads.result","data":{"ok":true}})J")["ok"].asBool());
-    step(3);
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == coins + score / 30);
-    Json calls = Call(e, "host.state", "{}")["result"]["calls"];
-    CHECK(calls[static_cast<int>(calls.size()) - 1]["data"]["placement"].asString() == "double_coins");
-    CHECK(Call(e, "host.configure", R"J({"accept":[]})J")["ok"].asBool());
-
-    // Home, then the shop: a background costs coins and changes the scene.
-    click("Over:home");
-    CHECK(eval("return self.mode").asString() == "home" && eval(std::string(board) + "return B.count()").asInt() == 0);
-    eval(std::string(meta) + "M.data.coins = 900 self:refreshWallet()");
-    click("Home:btn:shop");
-    click("Theme:beach:btn");
-    CHECK(eval(std::string(meta) + "return M.data.theme").asString() == "beach");
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == 100);
-    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Background"))->texture == "assets/bg/beach.png");
-    click("Theme:night:btn");  // not enough coins
-    CHECK(eval(std::string(meta) + "return M.data.theme").asString() == "beach");
-    click("Dlg:shop:close");
-
-    // Missions: three per day, the same on that date; progress pays out once.
-    Json missions = eval(std::string(meta) + "return M.data.missions.ids");
-    CHECK(missions.size() == 3);
-    eval(std::string(meta) + "local id = M.data.missions.ids[1] M.data.missions.progress[id] = 99999");
-    click("Home:btn:missions");
-    click("Mission1:btn");
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() > 100);
-    const int afterMission = eval(std::string(meta) + "return M.data.coins").asInt();
-    eval("self:onAction('claimMission', 1)");
-    CHECK(eval(std::string(meta) + "return M.data.coins").asInt() == afterMission);
-    click("Dlg:missions:close");
-
-    // Language switch relabels the UI; the save keeps everything for the next launch.
-    click("Home:btn:settings");
-    const std::string label = e.GetScene().Get<UIButton>(e.GetScene().FindByName("Home:play"))->text;
-    click("Set:lang");
-    CHECK(e.GetScene().Get<UIButton>(e.GetScene().FindByName("Home:play"))->text != label);
-    Json saved = Call(e, "save.state", "{}")["result"];
-    CHECK(saved.dump().find("donglezoo.save.v1") != std::string::npos);
+    const EntityId hero = e.GetScene().FindByName("Hero");
+    const Vec3 start = e.GetScene().Get<Transform>(hero)->position;
+    key("W", true);
+    step(60);  // the opening shot keeps the hero still
+    CHECK(Length(e.GetScene().Get<Transform>(hero)->position - start) < 1e-4f);
+    CHECK(eval("return game.get('locked')").asBool());
+    step(240);
+    CHECK(!eval("return game.get('locked')").asBool());
+    step(60);
+    const Vec3 walked = e.GetScene().Get<Transform>(hero)->position;
+    CHECK(walked.z < start.z - 1.0f);  // forward = away from the camera (-z at yaw 0)
+    CHECK(e.GetScene().Get<Sprite>(hero)->frame / 4 == 2);  // back view row
+    step(600);  // straight north ends at the house across the plaza or a terrace step, never inside it
+    key("W", false);
+    const Vec3 stopped = e.GetScene().Get<Transform>(hero)->position;
+    CHECK(eval(std::string("return require('scripts.lib.terrain').height(") + std::to_string(static_cast<int>(std::floor(stopped.x + 0.5f))) +
+               "," + std::to_string(static_cast<int>(std::floor(stopped.z + 0.5f))) + ")").asNumber() >= 0);
+    key("Q", true);
+    step(1);
+    key("Q", false);
+    step(60);
+    CHECK(std::fabs(eval("return game.get('camYaw')").asNumber() - kPi / 4) < 0.02);
+    // Billboards turn with the camera.
+    CHECK(std::fabs(e.GetScene().Get<Transform>(e.GetScene().FindByName("Lamp1"))->rotation.y - 45.0f) < 1.5f);
+    // Night: lamps on, windows glowing, fireflies; the clock says so.
+    eval("self.tod = 0.85");
+    step(60);
+    const PointLight* lamp = e.GetScene().Get<PointLight>(e.GetScene().FindByName("Light"));
+    CHECK(lamp && lamp->intensity > 1.5f);
+    const MeshRenderer* windows = e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Windows"));
+    CHECK(windows && windows->shaderUniforms["glow"].asNumber() > 1.5);
+    CHECK(e.GetScene().Get<UIText>(e.GetScene().FindByName("Clock"))->text.find("밤") == 0);
+    eval("self.tod = 0.25");
+    step(60);
+    CHECK(e.GetScene().Get<PointLight>(e.GetScene().FindByName("Light"))->intensity < 0.1f);
     CHECK(Call(e, "script.errors", "{}")["result"].size() == 0);
-
-    // The whole session is deterministic: a second engine replaying the first inputs matches.
-    auto play = [&](Engine& engine) {
-        std::string openError;
-        CHECK(engine.Open(project, &openError));
-        Call(engine, "time.date", R"J({"set":"2031-03-03"})J");
-        Call(engine, "sim.step", R"J({"frames":5})J");
-        Call(engine, "script.eval", R"J({"code":"self:onAction('play')","entity":"App"})J");
-        for (int i = 0; i < 12; ++i) {
-            Json args = Json::MakeObject();
-            args["x"] = 60 + (i * 97) % 420; args["y"] = 500; args["width"] = W; args["height"] = H;
-            args["button"] = "MouseLeft"; args["down"] = true;
-            engine.Call("input.mouse", args);
-            Call(engine, "sim.step", R"J({"frames":2})J");
-            args["down"] = false;
-            engine.Call("input.mouse", args);
-            Call(engine, "sim.step", R"J({"frames":40})J");
-        }
-        return engine.GetScene().ToJson().dump();
-    };
-    Engine a, b;
-    CHECK(play(a) == play(b));
 }
 
 TEST(NetworkAuthoritativeLateJoin) {
@@ -15022,161 +14408,6 @@ TEST(LinksAndLaunchArgs) {
     for (const std::string& file : GameFiles(dir)) { CHECK(file.rfind("server/", 0) != 0); rules = rules || file == "scripts/server_rules.lua"; }
     CHECK(rules);
     RemoveAll(dir);
-}
-
-TEST(OnlineRPGGame) {
-    // games/OnlineRPG played like a user: offline, then as the client of an authoritative match
-    // (tests/online_rpg_test.py covers the login and channel server processes).
-    // The client part also covers local input in a match: an undeclared key (Enter), typing into a
-    // UIInput and a click on a UIButton work on a predicting client, and typing sends no game action.
-    const std::string project = TestSourceDir() + "/games/OnlineRPG";
-    Engine host; std::string error;
-    CHECK(host.Open(project, &error));
-    for (const std::string& file : GameFiles(project)) {
-        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
-        Json args = Json::MakeObject();
-        args["path"] = file;
-        Json result = host.Call("script.check", args)["result"];
-        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
-    }
-    Json edit = host.GetScene().ToJson();
-    auto key = [](Engine& engine, const char* name, bool down) {
-        Json args = Json::MakeObject(); args["key"] = name; args["down"] = down;
-        CHECK(engine.Call("input.key", args)["ok"].asBool());
-    };
-    auto avatar = [](Engine& engine, int player) {
-        for (const auto& kv : engine.GetScene().Pool<NetPlayer>()) if (kv.second.player == player) return kv.first;
-        return kNullEntity;
-    };
-    auto position = [&](Engine& engine, int player) {
-        const Transform* t = engine.GetScene().Get<Transform>(avatar(engine, player));
-        return t ? t->position : Vec3{};
-    };
-    // `who` holds the keys of `player`; the host steps the session (and every local peer).
-    auto walk = [&](Engine& who, int player, float x, float z) {
-        for (int tick = 0; tick < 400; ++tick) {
-            Vec3 p = position(who, player);
-            if (std::fabs(p.x - x) < 0.15f && std::fabs(p.z - z) < 0.15f) break;
-            key(who, "A", p.x > x + 0.1f); key(who, "D", p.x < x - 0.1f);
-            key(who, "W", p.z > z + 0.1f); key(who, "S", p.z < z - 0.1f);
-            host.Step(1);
-        }
-        for (const char* name : {"W", "A", "S", "D"}) key(who, name, false);
-        host.Step(10);
-    };
-    auto tap = [&](Engine& who, const char* name) { key(who, name, true); host.Step(2); key(who, name, false); };
-    auto items = [](Engine& engine) {
-        int count = 0;
-        for (const auto& kv : engine.GetScene().Pool<Tag>()) count += kv.second.tags == "item";
-        return count;
-    };
-    auto lastChat = [](Engine& engine) {
-        const Json& lines = engine.GameData()["chat"];
-        return lines.size() ? lines[lines.size() - 1].asString() : std::string();
-    };
-    const char* slot1 = R"({"x":1006,"y":140,"width":1280,"height":720})";
-    const std::string hello = "\xEC\x95\x88\xEB\x85\x95 wasd";  // Korean "annyeong" + letters that are movement keys
-
-    // A speech bubble showing `text` (plates are handed out per frame, so any of them may hold it).
-    auto bubble = [](Engine& engine, const std::string& text) {
-        for (int plate = 1; plate <= 8; ++plate) {
-            const UIPanel* panel = engine.GetScene().Get<UIPanel>(engine.GetScene().FindByName("Bubble " + std::to_string(plate)));
-            const UIText* label = engine.GetScene().Get<UIText>(engine.GetScene().FindByName("Bubble Text " + std::to_string(plate)));
-            if (panel && label && panel->visible && label->text == text) return true;
-        }
-        return false;
-    };
-    auto titleShown = [](Engine& engine) { return engine.GetScene().Get<UIPanel>(engine.GetScene().FindByName("Title Panel"))->visible; };
-
-    // ----- Title: nothing is played until the player chooses; "Play offline" starts a world of one -----
-    host.Step(5);
-    CHECK(titleShown(host) && host.GetScene().Pool<NetPlayer>().empty() && items(host) == 0);
-    CHECK(Call(host, "input.click", R"({"x":640,"y":436,"width":1280,"height":720})")["ok"].asBool()); host.Step(5);
-    // ----- Offline: one avatar, ten items; pick up, chat, drop -----
-    CHECK(!titleShown(host) && host.GetScene().Pool<NetPlayer>().size() == 1 && items(host) == 10);
-    CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Name 1"))->text == "P1");
-    walk(host, 1, -2.5f, 3.9f);  // a potion lies at (-2.5, 3.5)
-    CHECK(host.GetScene().Get<UIText>(host.GetScene().FindByName("Prompt"))->visible);
-    tap(host, "E"); host.Step(3);
-    CHECK(host.GameData()["bag1"][0]["key"].asString() == "potion" && items(host) == 9);
-    CHECK(host.GetScene().Get<UIButton>(host.GetScene().FindByName("Slot 1"))->icon == "assets/ui/potion.png");
-    Vec3 before = position(host, 1);
-    tap(host, "Enter");
-    CHECK(host.TextInputActive());
-    { Json args = Json::MakeObject(); args["text"] = hello; CHECK(host.Call("input.text", args)["ok"].asBool()); }
-    key(host, "D", true); host.Step(20); key(host, "D", false);
-    CHECK(position(host, 1).x == before.x);  // the keyboard types
-    tap(host, "Enter"); host.Step(3);
-    CHECK(!host.TextInputActive() && lastChat(host) == "P1: " + hello);
-    CHECK(bubble(host, hello));
-    CHECK(Call(host, "input.click", slot1)["ok"].asBool()); host.Step(5);
-    CHECK(host.GameData()["bag1"].size() == 0 && items(host) == 10);
-    CHECK(Call(host, "script.errors")["result"].size() == 0);
-    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
-
-    // ----- Match: the host is the server and player 1, the peer is client and player 2 -----
-    CHECK(Call(host, "net.spawn_local_peers", R"({"count":1,"seed":71})")["ok"].asBool());
-    host.Step(120);
-    Engine* client = host.LocalPeer(1); CHECK(client != nullptr); if (!client) return;
-    CHECK(Call(host, "net.state")["result"]["sync"]["state"].asString() == "running");
-    CHECK(host.GetScene().Pool<NetPlayer>().size() == 2 && client->GetScene().Pool<NetPlayer>().size() == 2);
-    CHECK(items(host) == 10 && items(*client) == 10 && !titleShown(host) && !titleShown(*client));
-    CHECK(lastChat(*client) == "Player 2 joined.");  // names come from the session (net.name)
-    // Another player's avatar keeps its facing and its walk cycle while it walks. A correction replays
-    // the client's frames with remote avatars at other positions than the interpolated ones it shows;
-    // that must not turn or restart the sprite.
-    {
-        auto art = [](Engine& engine, EntityId parent) {
-            for (const auto& kv : engine.GetScene().Pool<Sprite>()) if (engine.GetScene().Record(kv.first)->parent == parent) return kv.first;
-            return kNullEntity;
-        };
-        key(host, "A", true); host.Step(20);
-        int turned = 0, wrongClip = 0, backwards = 0;
-        float lastX = 1e9f;
-        std::set<int> frames;
-        for (int tick = 0; tick < 60; ++tick) {
-            host.Step(1);
-            EntityId sprite = art(*client, avatar(*client, 1));
-            CHECK(sprite != kNullEntity); if (sprite == kNullEntity) break;
-            turned += !client->GetScene().Get<Sprite>(sprite)->flipX;
-            wrongClip += client->GetScene().Get<SpriteAnimation>(sprite)->clip != "walk_side";
-            frames.insert(client->GetScene().Get<Sprite>(sprite)->frame);
-            const float x = position(*client, 1).x;  // walking left: the shown position never jumps back
-            backwards += x > lastX + 1e-4f;
-            lastX = x;
-        }
-        CHECK(turned == 0 && wrongClip == 0 && backwards == 0);
-        CHECK(frames.size() == 4);  // the four frames of the cycle, none skipped by restarts
-        key(host, "A", false); host.Step(30);
-        EntityId sprite = art(*client, avatar(*client, 1));
-        CHECK(sprite != kNullEntity && client->GetScene().Get<SpriteAnimation>(sprite)->clip == "idle_side");
-        CHECK(sprite != kNullEntity && client->GetScene().Get<Sprite>(sprite)->flipX);
-    }
-    walk(*client, 2, 3.0f, 4.4f);  // a herb lies at (3, 4)
-    CHECK(std::fabs(position(host, 2).x - 3.0f) < 0.3f);  // the server moved the client's avatar
-    tap(*client, "E"); host.Step(40);
-    CHECK(host.GameData()["bag2"][0]["key"].asString() == "herb" && host.GameData()["bagShown"].isNull());
-    CHECK(client->GameData()["bagShown"][0]["key"].asString() == "herb");
-    CHECK(items(host) == 9 && items(*client) == 9);
-    // Chat from the client: Enter is not a network action, the text is typed locally, and the held
-    // movement key is not sent while the field has the focus.
-    before = position(host, 2);
-    tap(*client, "Enter");
-    CHECK(client->TextInputActive());
-    { Json args = Json::MakeObject(); args["text"] = hello; CHECK(client->Call("input.text", args)["ok"].asBool()); }
-    key(*client, "A", true); host.Step(30); key(*client, "A", false);
-    CHECK(client->GetScene().Get<UIInput>(client->GetScene().FindByName("Chat Input"))->text == hello);  // survives corrections
-    CHECK(position(host, 2).x == before.x);
-    tap(*client, "Enter"); host.Step(40);
-    CHECK(lastChat(host) == "Player 2: " + hello && lastChat(*client) == "Player 2: " + hello);
-    CHECK(client->GetScene().Get<UIInput>(client->GetScene().FindByName("Chat Input"))->text.empty());
-    CHECK(bubble(*client, hello) && bubble(host, hello));
-    // Dropping through the bag button on the client.
-    CHECK(Call(*client, "input.click", slot1)["ok"].asBool()); host.Step(40);
-    CHECK(host.GameData()["bag2"].size() == 0 && client->GameData()["bagShown"].size() == 0);
-    CHECK(items(host) == 10 && items(*client) == 10);
-    for (Engine* peer : {&host, client}) CHECK(Call(*peer, "script.errors")["result"].size() == 0);
-    host.Stop(); CHECK(host.GetScene().ToJson().dump() == edit.dump());
 }
 
 int main() {

@@ -1,0 +1,7 @@
+{
+  "baseTexture": "assets/textures/mountains_far.png",
+  "unlit": true,
+  "doubleSided": true,
+  "fog": false,
+  "alphaMode": "blend"
+}

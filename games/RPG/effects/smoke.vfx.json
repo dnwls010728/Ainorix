@@ -1,0 +1,91 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Chimney smoke",
+  "description": "Slow smoke drifting with the wind.",
+  "emitters": [
+    {
+      "name": "smoke",
+      "emitter": {
+        "texture": "assets/textures/glow.png",
+        "pixelArt": false,
+        "space": "world",
+        "shape": "sphere",
+        "shapeSize": [
+          0.08,
+          0,
+          0
+        ],
+        "rate": 2,
+        "lifetime": 8,
+        "speed": 0.45,
+        "spread": 10,
+        "direction": [
+          0,
+          1,
+          0
+        ],
+        "gravity": [
+          0.22,
+          0,
+          0.07
+        ],
+        "drag": 0.05,
+        "turbulence": 0.25,
+        "turbulenceScale": 0.6,
+        "maxParticles": 24,
+        "startSize": 0.5,
+        "endSize": 2.1,
+        "startColor": [
+          0.85,
+          0.82,
+          0.8
+        ],
+        "endColor": [
+          0.85,
+          0.82,
+          0.8
+        ],
+        "opacityOverLife": [
+          [
+            0,
+            0
+          ],
+          [
+            0.15,
+            0.22
+          ],
+          [
+            0.5,
+            0.3
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      }
+    }
+  ],
+  "params": {
+    "color": {
+      "default": [
+        0.85,
+        0.82,
+        0.8
+      ],
+      "doc": "Smoke tint (follows the sky colour).",
+      "targets": [
+        {
+          "to": "smoke.startColor"
+        },
+        {
+          "to": "smoke.endColor"
+        }
+      ]
+    }
+  },
+  "budget": {
+    "maxParticles": 24
+  }
+}

@@ -2,7 +2,7 @@
 
 `PostProcess` on the active camera applies screen-space effects (exposure and tone mapping, bloom, vignette, depth
 of field, FXAA) in both renderers, and `.shader.json` surface graphs give materials programmable color, emission,
-vertex offset and normals. Status and verification are in the work log at the end.
+vertex offset and normals. Open items are listed under Status at the end.
 
 ## Initial contract
 
@@ -147,9 +147,8 @@ R32F targets; without them an error tells the caller to use the software
 renderer. Because the depth pass is not multisampled, MSAA edge pixels of a
 focused object can carry the background's depth and smear slightly.
 
-Verified by CameraDepthOfField (see the work log). The prebuilt web and Android
-players do not include depth of field yet, and WebGL2/GLES3/EGL execution of the
-new shaders is unverified. `samples/HD2D` uses it with a long lens.
+Verified by CameraDepthOfField. The prebuilt web and Android players include it;
+WebGL2/GLES3/EGL execution of the new shaders is unverified. `games/RPG` uses it with a long lens.
 
 ## FXAA controls
 
@@ -168,28 +167,29 @@ Disabling FXAA avoids its intermediate allocation/pass and preserves previous
 frame hashes. Depth and entity IDs are never filtered. Sampling across small
 features may soften them; pixel-art cameras should leave it disabled.
 
-## Showcase presets
+## Fog, color grading and ACES
 
-Run `oe run samples/Showcase`, or package it with `oe package samples/Showcase
---web`. Press 1 for neutral output, 2 for exposure/Reinhard, 3 for bloom,
-4 for vignette, 5 for FXAA, or 6 for all effects. The HUD displays the selected
-preset; movement and animation controls remain available. Presets replace all
-effect settings so switching back to Off cannot retain bloom or HDR targets.
-The initial scene keeps all effects neutral. Adjust preset values in
-`samples/Showcase/scripts/post_process.lua`; no engine rebuild is needed.
+Distance fog and color grading live on the same `PostProcess` component; all neutral defaults leave
+existing frames unchanged (the effects are skipped, not computed with neutral values).
 
-## HD2D sample
+- `fog` (0..1, 0 = off), `fogColor`, `fogStart`, `fogEnd`: each lit or unlit surface is mixed toward
+  `fogColor` by `fog * clamp((distance - fogStart) / (fogEnd - fogStart), 0, 1)`, where distance is
+  measured from the camera position to the surface point. It is applied per surface after lighting and
+  emission (`FogAmount` in `PostProcess.h`, `mesh_fs` in `Shaders.glsl`), so blended surfaces fog
+  correctly behind each other; additive surfaces (glows, `blend: add`) fade toward black instead of
+  adding fog color. The background clear color is not fogged; set it to `fogColor` for a horizon that
+  melts into the fog. A material can opt out with `"fog": false` (sky domes, mountain backdrops).
+- `saturation` (0 = grey, 1 = unchanged), `contrast` (around mid grey 0.5) and split toning
+  `shadowTint` / `highlightTint` (multipliers blended by luminance with a smoothstep up to 0.9) run
+  after tone mapping and before the vignette, on display color (`Grade` in `PostProcess.h`,
+  `composite_fs`).
+- `toneMapping: "aces"` is the Narkowicz fit of the ACES filmic curve
+  (`x(2.51x + 0.03) / (x(2.43x + 0.59) + 0.14)`) after `exposure`; it needs the HDR target like Reinhard.
 
-`oe run samples/HD2D`: pixel-art sprites turned to the camera by a script in a lit 3D world. Key 1
-toggles all camera effects (Reinhard exposure, bloom, vignette, depth of field)
-and key 2 toggles only depth of field, to compare with the plain scene.
+Verified by FogGradingHemisphereAndSpriteEmission (software checks per pixel, D3D11 mean difference
+0.58 against the software renderer). `games/RPG` drives all of them per time of day from Lua.
 
 ## Portable surface shader graphs
-
-`samples/WuwaToon` demonstrates a project-authored toon graph with independent
-skin/hair/clothing palettes, explicit studio light/camera uniforms, normal/PBR
-comparisons and original procedural silhouette geometry. See [TOON.md](TOON.md)
-for public reference provenance, runnable controls, verification and limits.
 
 A project authors a *.shader.json graph rather than platform-specific HLSL or
 GLSL. The graph is a programmable surface calculation (per-fragment color, emission
@@ -287,7 +287,7 @@ rendering view's world position (w = 1) and one that declares `lightDirection` r
 unit vector toward the first directional light (w = 0), every frame and in both renderers.
 Declared defaults and material overrides for these two names are replaced, so view- and
 light-dependent graphs follow a moving camera or sun without material edits
-(`samples/NetChase`). They still count toward the eight uniforms. Graphs without these
+They still count toward the eight uniforms. Graphs without these
 names are unaffected. Prebuilt web/Android players older than this change leave the
 declared defaults in place.
 
@@ -342,267 +342,15 @@ Graph files and their dependents reload through AssetManager.PollChanges;
 shader.create overwrite invalidates the graph/material caches immediately.
 Graph validation also appears through asset.info. Invalid material edits are
 validated before disk replacement. The web player includes graph binding and
-packaged ShaderLab execution is verified. Android player refresh remains open.
+packaged graph execution is verified.
 
-## ShaderLab sample
+## Status
 
-`oe run samples/ShaderLab` demonstrates time-driven cyan UV bands with emission
-and an orange procedural alpha mask casting a striped ground shadow. Press 1
-for neutral output or 2 for exposure/Reinhard/bloom; the matching on-screen
-buttons work with mouse/touch. Edit materials/pulse.shader.json to change the
-frequency/tint while the player or editor runs. Dependencies hot reload through
-the same asset path covered by ShaderMaterialRendering. Package with
-`oe package samples/ShaderLab --web` or the native packaging command. Graph and
-material assets are included in game.pak; extraction preserves the reference
-frame hash at a fixed simulation time.
+Implemented in both renderers: vignette, exposure with Reinhard/ACES tone mapping, bloom, depth of field,
+FXAA, distance fog, colour grading and surface shader graphs (colour, emission, normal and vertex offset
+outputs, `MeshRenderer.shaderUniforms`, reserved `cameraPosition`/`lightDirection`). The committed web and
+Android players include all of them.
 
-## Water sample
+- [ ] Execution on WebGL2, Android GLES3 and Linux/EGL of the newer shaders (depth of field, graph vertex
+      stage, fog and grading); only D3D11 and the software renderer are verified.
 
-`oe run samples/Water` is a rolling sea: one `plane64` scaled 44x44 whose graph
-`materials/water.shader.json` (47 nodes) sums four sine waves, one per register
-channel. `offset` lifts the vertices, `normal` gives per-pixel slopes so sun glitter
-comes from the ordinary PBR lighting, and `color` goes from trough to crest color
-plus foam. `scripts/waves.lua` holds the same wave table; `scripts/float.lua` makes
-buoys, crates and a boat ride and lean on the surface (it samples at
-`time.now() + dt` because the frame is drawn with the time after the step).
-`scripts/ocean.lua` eases between the sea states Calm/Swell/Storm (keys 1/2/3) and
-sends amplitudes and colors through `MeshRenderer.shaderUniforms` every frame.
-`scripts/orbit.lua` orbits the camera (A/D or arrows turn, W/S zoom, Q/E height).
-`python tools/make_scene.py` regenerates the scene, graph and material. WaterSamplePlays
-checks that a buoy's height equals the graph's vertex stage, the storm preset, the
-orbit camera and determinism.
-
-## Implementation status (work log)
-
-### Shader graph vertex offset and normal outputs (2026-10-04)
-
-- [x] Add the optional graph outputs `offset` (vertex displacement added to the
-      world position, evaluated per vertex) and `normal` (per-fragment world-space
-      lighting normal) in both renderers; the node limit rises from 32 to 48.
-      Displaced surfaces also move in the shadow map, the depth-of-field depth
-      pass and the selection outline. ShaderGraphVertexOffset covers compile
-      rules, the reference offset and software/D3D11 parity.
-- [x] Add the built-in mesh `plane64` (64x64 cells) and `samples/Water`, a rolling
-      sea driven by a 47-node graph. WaterSamplePlays passes; Windows passes 182
-      tests.
-- [ ] Rebuild the prebuilt web runtime and both Android players. Shipped players
-      ignore `offset`/`normal` and reject graphs with more than 32 nodes.
-- [ ] Verify the vertex-stage evaluator on WebGL2, GLES3 and Linux/EGL; only
-      D3D11 and the software renderer are checked.
-
-### Depth of field and HD-2D sprites (2026-10-04)
-
-- [x] Add `Sprite.billboard` (`none`/`upright`/`camera`) and `Sprite.castShadows`;
-      alpha-test every `mask` surface with a base texture or shader graph in the
-      shadow pass of both renderers. SpriteBillboards and SpriteCutoutShadows pass.
-      Later `Sprite.billboard` was removed from the engine: billboards moved to the
-      project script `samples/HD2D/scripts/billboards.lua` (tests:
-      `SpriteBillboardScript`, `HD2DSamplePlays`, `RemovedComponentsStillLoad`).
-- [x] Add PostProcess depth of field (`dofRadius`, `dofFocus`, `dofRange`,
-      `dofFalloff`) in both renderers: two separable gather passes before bloom,
-      software depth buffer or a GPU R32F depth pass. CameraDepthOfField covers
-      a focused cube untouched and a far cube soft, focus swap, worker-thread
-      determinism, unchanged depth/IDs, unaffected UI, serialization and
-      undo/redo and an orthographic camera. Software/D3D11 mean channel
-      difference is 0.62 of 255 with RGBA8 and 0.34 with Reinhard HDR.
-      Windows passes 179 tests.
-- [x] Add `samples/HD2D` ("Lantern Road") using billboards, sprite shadows and
-      depth of field; key 1 toggles all camera effects, key 2 only depth of field.
-- [ ] Rebuild the prebuilt web runtime (`build_web.bat`, Emscripten SDK) and both
-      Android players (`build_android.bat`, NDK). Shipped players do not yet have
-      sprite shadows or depth of field.
-- [ ] Verify execution of the new `scene_depth` and `dof` shaders on WebGL2,
-      GLES3 and Linux/EGL; only D3D11 and the software renderer are checked.
-
-### P6 completion pass (2026-10-03)
-
-- [x] Verify varying-alpha shadows against independent half-width geometry;
-      verify standard/graph material occlusion in both selection passes.
-      ShaderMaterialVaryingAlphaAndOcclusion passes on software/D3D11;
-      reference/GPU shadow mean channel difference is 0.0109 of 255.
-- [x] Add ShaderLab with animated UV bands, HDR emission, procedural alpha and
-      ground shadows. ShaderLabSampleControlsAndPackaging verifies fixed time,
-      presets, Lua errors and package extraction/render identity. Windows passes
-      137 tests; Node/WASM passes 125. CPU/D3D11 CLI images and packaged WebGL2 neutral/bloom images
-      were inspected; on-screen preset buttons also work without a keyboard.
-- [x] Recheck the neutral white capture discrepancy: a packaged white-cube
-      fixture shows the emitter in both the browser screenshot and exported
-      canvas PNG. The diagnostic page requests preserveDrawingBuffer for export;
-      without it, an asynchronous toDataURL can capture a cleared drawing buffer.
-      This does not establish the cause of the old screenshot, but no rendering
-      failure reproduces in the current player. No engine workaround was added.
-- [x] Confirm the committed web runtime already includes graphs from networking
-      M8; source/asset-only sample edits do not require another player build.
-- [ ] Rebuild both Android ABI players. No NDK or Android SDK is present on this
-      host; run build_android.bat with NDK r28c or newer before shipping graphs
-      or the integrated networking APIs on Android.
-- [ ] Android hardware and full Linux/EGL effect execution remain unavailable.
-      Run ShaderLab neutral/bloom on those targets and compare masked shadows.
-
-The portable P6 implementation and available desktop/browser verification are
-finished. P6 remains unchecked in ROADMAP until Android player refresh and the
-platform checks above are completed. P7 can proceed independently: it changes
-editor tooling and does not depend on those hardware checks.
-
-P6 started from integrated main. At the user's request, the completed P3-P5
-branches and P6 vignette/HDR milestones are combined through PRs #18-#21.
-The remaining P6 milestones continue on a new branch from the updated main;
-merging the completed work does not mark the full P6 feature complete.
-Combined verification passes 81 Windows tests and 77 Node/WASM tests. The web
-focus-reset merge preserves both touch and gamepad cleanup. Player runtimes
-are rebuilt from combined source 6d76ac9; device follow-ups remain open.
-The combined WebGL2 player also rechecks two simultaneous touch controls,
-secondary move/release with primary mouse held, and clearing all fingers/keys
-on window blur. This verifies the merged touch/gamepad focus-reset code.
-
-- [x] P6.1: Reflected PostProcess camera component and optional vignette in both
-      renderers. Preserve default frame hashes, picking/depth, UI and selection
-      overlays. Test API/serialization/undo and compare software/D3D11 output;
-      regenerate shaders/API and refresh player runtimes.
-      Windows Release passes 73 tests and Node/WASM passes 69. CameraPostProcessing
-      covers neutral-frame identity, changed edge color, unaffected center/opaque
-      UI/depth/IDs/selection outline, worker-thread determinism, serialization,
-      undo/redo and resetting effects when switching cameras. Software/D3D11
-      mean channel difference is 0.0122 of 255 on the comparison scene.
-      Real Showcase CLI screenshots were inspected: off f41d641b55beb483,
-      software vignette cac0b279d7c910b7, D3D11 c516b61d9ed5c27e.
-      Shaders regenerated with sokol-shdc; web and both Android ABI players
-      rebuilt. WebGL2 vignette is additionally verified in the P6.2b browser
-      fixture; Android GPU execution remains pending.
-- [x] P6.2: Exposure/tone mapping and bloom, including required color-buffer
-      precision, documented color-space behavior and available backend checks.
-      - [x] P6.2a: Preserve HDR lighting and emissive values through scene blending;
-            add exposure and optional Reinhard tone mapping in both renderers.
-            Windows passes 74 tests and Node/WASM passes 70. HdrCameraToneMapping
-            checks emissive values above 1, alpha blending before mapping,
-            neutral/HDR target transitions, GPU interior colors, UI separation,
-            worker determinism, API serialization and undo/redo. CLI screenshots
-            inspected: off f729ad6fed6de3b7, software 28784ac8a8dd0ddc,
-            D3D11 959887780e35a43c. Shader/API regeneration completed; web and
-            both Android ABI players rebuilt from 4650059. Browser WebGL2
-            execution confirms Reinhard color, switching back to neutral HDR-off
-            output, black scene at zero exposure with a readable white HUD,
-            and restoring Reinhard after zero exposure. Android device and
-            Linux/EGL execution remain unchecked.
-      - [x] P6.2b: Extract and blur highlights before tone mapping for optional bloom.
-            Use a bounded separable tent filter in scene pixels with identical
-            CPU/GPU extraction and edge clamping. Default strength zero preserves
-            existing hashes. Check bright/dim thresholds, hue, HUD/outline,
-            worker determinism, resize/toggle, D3D11 and packaged WebGL2 output;
-            regenerate shaders/API and refresh web/Android players.
-            Windows passes 82 tests; Node/WASM passes 78. CameraBloom covers
-            visible colored halos, below-threshold rejection, opaque UI/outline
-            separation, unchanged depth/IDs, worker determinism, serialization,
-            undo/redo, zero exposure, constant edge energy and GPU resize/toggle.
-            D3D11 mean channel difference stays below 0.60 of 255 for radii
-            1/8/32 at 128x72 and 97x55. CLI PNGs inspected: off b5ae0f043da78cdc,
-            software 789f48d2d9240334, D3D11 7d9d678c81fcfdac. Shaders/API
-            regenerated. Web and both Android ABI players rebuilt from 6c34dc6.
-            The packaged WebGL2 fixture shows bloom on/off, correct hue and
-            unchanged HUD, recreates targets when canvas size changes from
-            640x360 to 320x180 and back, and switches to vignette/neutral modes.
-            This also closes the WebGL2 vignette check from P6.1. Android device
-            and full Linux/EGL execution remain unchecked.
-- [x] P6.3: Optional FXAA and sample controls/demonstration; verify off/on output,
-      resolution changes and separation from UI/selection overlays.
-      - [x] P6.3a: CPU/GPU directional FXAA on post-processed RGBA8 scene color,
-            neutral-frame identity, diagonal edges, flat regions, UI/outline,
-            worker determinism and resize/toggle checks. Refresh shaders/API.
-            Windows passes 83 tests; Node/WASM passes 79. CameraFxaa covers API/serialization/undo,
-            diagonal smoothing, flat-color identity, unchanged depth/IDs and
-            opaque UI/selection outlines, worker determinism and GPU target
-            resize/toggle. D3D11 mean channel difference is below 0.32 of 255.
-            Real CLI images inspected: off 457ffd44e88c5760, software
-            c86ccc033505d8dc, D3D11 c21a168cde9909e4. Shaders/API regenerated.
-            Web and both Android ABI players rebuilt from 0ea84f2.
-            Packaged WebGL2 verification and sample controls remain in P6.3b.
-      - [x] P6.3b: Sample effect controls, real CLI/WebGL2 verification and
-            refreshed player runtimes.
-            Showcase camera presets: 1 Off, 2 Tone, 3 Bloom, 4 Vignette,
-            5 FXAA, 6 All. Complete settings are applied through Lua scene
-            commands, preserving neutral startup and restoring Off after All.
-            Windows passes 84 tests; Node/WASM passes 80. The sample script
-            passes script.check with zero errors/warnings. CLI PNGs inspected:
-            Off 07a6a4d1eba5c930, All 4d4ae159d978eb9b. Packaged WebGL2
-            execution verifies FXAA/All/Off, sharp HUD, 640x360 to 320x180 and
-            back, and matching live canvas/exported frame appearance. Player
-            binaries were refreshed from 0ea84f2; sample-only changes do not
-            require another engine rebuild. Device follow-ups remain open.
-- [x] P6.4: Custom shader materials through commands/assets, validation and
-      portable backend shader generation. Document the software reference
-      behavior and demonstrate a material in a sample.
-      - [x] P6.4a: Validate a project-authored surface shader graph, compile
-            bounded vector instructions and evaluate a CPU reference. Expose
-            graph creation/checking through commands with precise diagnostics.
-            shader.create/shader.check and asset.list kind shader are available.
-            Windows passes 85 tests; Node/WASM passes 81. Real CLI create/check
-            and asset.list commands succeed. ShaderGraphValidationAndReference covers
-            procedural UV stripes, uniform overrides, emissive output,
-            invalid references/cycles/types/outputs/swizzles, path containment,
-            overwrite rejection, invalid-write preservation, division by zero
-            finite saturation, texture/swizzle, fixed-time sine and instruction limits.
-            Material/GPU integration remains P6.4b. Player refresh is deferred
-            to P6.4c; shipped players still use source 0ea84f2.
-      - [x] P6.4b: Load graph assets from materials, apply per-material uniforms,
-            integrate fragment evaluation in both renderers, generate portable
-            backend shaders with sokol-shdc and preserve default materials.
-            - [x] Main fragment pass: cached graph assets, strict material
-                  shader/shaderUniforms fields, dependency hot reload, CPU/GPU
-                  vector instruction execution and fixed simulation time in
-                  CLI/API/player/editor views. Shaders regenerated.
-                  Windows passes 86 tests; Node/WASM passes 82.
-                  ShaderMaterialRendering verifies red/blue UV stripes,
-                  worker determinism, unchanged opaque depth/IDs, uniform
-                  edits, rejection without overwrite, graph hot reload,
-                  asset.info and exact standard-material restoration.
-                  Software/D3D11 mean channel difference is 0.5606 of 255.
-                  CLI images inspected: software c67b46e7be2ac459,
-                  D3D11 66d23d1087649f31.
-            - [x] Verify all instruction families with GPU comparisons,
-                  textured/HDR/time-driven surfaces and alpha behavior;
-                  extend graph alpha to shadow/selection passes as needed.
-                  - [x] Graph alpha in CPU shadow depth and GPU shadow/selection
-                        passes. Shared shader blocks keep auxiliary evaluation
-                        identical to main shading. Procedural masks remain
-                        enabled without a base texture; graph programs are
-                        retained even when their input opacity is zero.
-                        Windows passes 87 tests; Node/WASM passes 83.
-                        ShaderMaterialAlphaAndShadow
-                        verifies that alpha zero matches an absent object in
-                        color, CPU depth/IDs and GPU selection output; alpha one
-                        restores the object, outline and a visible ground
-                        shadow in both renderers. Disabling castShadows removes
-                        that ground shadow. CPU/D3D11 mean difference is 1.2367.
-                        CLI masked stripes/selection PNGs inspected: software
-                        7004187b216e5ce6, D3D11 e492f9db4088e1b0.
-                  - [x] ShaderMaterialInstructionFamilies covers all arithmetic
-                        operations with independent numeric expectations and
-                        software/D3D11 image comparisons. UV, world position,
-                        normal, base color, explicit texture sampling and fixed
-                        time inputs are compared, including a four-color texture
-                        and changes in time. Graph base/emissive values above 1
-                        and alpha blending are checked before exposure/Reinhard;
-                        graph alpha replaces even zero input opacity and keeps
-                        sub-0.5 fragments out of picking. Worst CPU/D3D11 mean
-                        difference is 1.4719 of 255. Windows passes 88 tests;
-                        Node/WASM passes 84 tests.
-                  - [x] Varying-alpha shadow masks and selection occlusion with
-                        mixed materials; packaged WebGL checks are P6.4c.
-                  - [x] Recover D3D compiler diagnostics with D3DCompile using
-                        the generated HLSL and engine compiler flags. Replacing
-                        indexed vector division with explicit channel expressions
-                        removes X3550 from both programs. The auxiliary program
-                        compiles without warnings; the main program retains the
-                        existing X3570 shadow-comparison derivative warning.
-      - [x] P6.4c: Sample procedural material, CPU/GPU image comparison,
-            hot reload/packaging, WebGL execution, docs and refreshed players.
-            Done in the completion pass at the top of this log (ShaderLab);
-            the Android player refresh is tracked there as an open line.
-- [ ] Hardware follow-up: Android device and full Linux/EGL effect execution.
-- [ ] Browser capture follow-up: the in-app whole-page capture omits the small
-      pure-white emitter in the neutral-mode fixture, although scene resolve,
-      composite, UI and 30 consecutive frame-end WebGL readbacks all report
-      RGBA (255,255,255,255) at its center with GL error 0. Bloom/tone/vignette
-      images show it normally. CSS filter is none and blend mode normal.
-      Compare exported canvas images and another browser capture path before
-      attributing this discrepancy to rendering; no engine failure is proven.

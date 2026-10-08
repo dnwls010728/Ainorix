@@ -1,0 +1,7 @@
+{
+  "baseTexture": "assets/textures/house_atlas.png",
+  "pixelArt": true,
+  "roughness": 0.95,
+  "doubleSided": true,
+  "shader": "materials/ground.shader.json"
+}

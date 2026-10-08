@@ -30,6 +30,7 @@ struct RenderItem {
     Vec4 particleCustom{}; // four per-draw material attributes for unbatched particles
     Vec4 particleInput{};  // per-draw age/random/world speed for shared (unbatched) meshes
     float opacity = 1.0f;  // multiplies the material's opacity; < 1 makes it transparent
+    float emission = 0.0f; // Sprite.emission: the base texture times tint * emission becomes emissive
     bool blend = false;    // force alpha blending (sprites without a cutoff)
     bool additive = false; // blended additively (Sprite/ParticleEmitter blend: "add"); implies blend
     // 2D draw order of transparent items: layer, then order, before distance to the eye (Sprite.layer/order).
@@ -91,6 +92,8 @@ struct RenderPointLight {
 
 struct RenderLights {
     Color ambient{0, 0, 0};
+    Color groundAmbient{0, 0, 0};  // hemisphere: ambient seen by downward faces (sum over lights)
+    bool hemisphere = false;       // a directional light asked for hemisphere ambient
     std::vector<RenderDirLight> dirs;  // never empty: a default light is added when the scene has none
     std::vector<RenderPointLight> points;
     bool shadows = false;  // the first directional light casts shadows
