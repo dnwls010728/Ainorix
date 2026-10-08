@@ -1,4 +1,5 @@
 #include "app/Vfx.h"
+#include "app/VfxPresetBundle.h"
 
 namespace oe {
 Json VfxPresets(const std::string& tag) {
@@ -26,7 +27,10 @@ Json VfxPresets(const std::string& tag) {
        "trails":[{"name":"blade","trail":{"mode":"ribbon","baseOffset":[0,0,0],"tipOffset":[0,1.5,0],"duration":0.2,"lifetime":0.25,"blend":"add","color":[0.4,0.9,1],"endColor":[0.05,0.2,1],"minDistance":0.01}}]}
     ])J");
     Json out = Json::MakeArray();
-    for (const Json& preset : presets.items()) {
+    Json catalog = presets;
+    const Json acceptance = VfxAcceptancePresets();
+    for (const Json& preset : acceptance.items()) catalog.push(preset);
+    for (const Json& preset : catalog.items()) {
         bool match = tag.empty();
         for (const Json& value : preset["tags"].items()) match = match || value.asString() == tag;
         if (match) out.push(preset);

@@ -4,6 +4,16 @@ Create, tune and verify existing `ParticleEmitter` and `Trail` effects through t
 used by CLI, HTTP and MCP. No play session or editor window is needed. The simulation and rendering
 contract remains in [PARTICLES.md](PARTICLES.md); the larger implementation plan is [VFX_DESIGN.md](VFX_DESIGN.md).
 
+## Portable acceptance presets
+
+Effects > New Effect and `vfx.edit {path,new:true,preset}` offer six complete expression presets:
+`ice_pillar`, `tornado`, `shield_dome`, `shockwave`, `rain_snow`, `healing_aura`.
+`vfx.presets {tag:"acceptance"}` discovers them; `vfx.create {path,preset}` writes a new asset.
+All meshes/textures/materials install into a versioned project directory without sample dependencies.
+File conflicts are refused. Parameters and budgets are preserved. `vfx.apply_preset` attaches these six
+as linked VFXSystem components with scene undo; they require replace mode. Installed files survive undo.
+The original nine direct-component presets still support merge. [Release contract and limits](VFX_PHASE5D.md).
+
 ## Motion channels and pivot
 
 Effects can animate mesh and billboard particles without gameplay scripts. Use `positionOffset`,
@@ -428,3 +438,6 @@ oe editor samples/VFXLab --effects effects/sword_slash.vfx.json --effects-graph 
 
 - [x] Phase 5c (2026-10-08): compiler-backed value nodes, bounded graph/source commands, typed
       validation, shared source/history and layout sidecars. See [VFX_PHASE5C.md](VFX_PHASE5C.md).
+
+- [x] Phase 5d (2026-10-08): portable six-effect presets, bundled dependencies, fresh-project creation,
+      shared drafts, linked placement and conflict refusal. See docs/VFX_PHASE5D.md.

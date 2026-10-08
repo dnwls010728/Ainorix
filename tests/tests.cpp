@@ -8483,7 +8483,7 @@ TEST(VfxSchemaCoversReflection) {
 TEST(VfxPresetsAreValid) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_presets"), &error));
     const Json presets = Call(e, "vfx.presets")["result"];
-    CHECK(presets.size() == 9 && Call(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
+    CHECK(presets.size() == 15 && Call(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
     for (const Json& preset : presets.items()) {
         CHECK(!preset["intent"].asString().empty());
         Call(e, "scene.new", R"J({"empty":true})J");
@@ -8495,6 +8495,87 @@ TEST(VfxPresetsAreValid) {
         CHECK(Call(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
     }
     CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"typo"})J")["error"]["code"].asString() == "unknown_preset");
+}
+
+TEST(VfxBundledPresetsInFreshProject) {
+    Engine e; std::string error; const std::string dir = TempProject("vfx_bundled"); CHECK(e.Open(dir, &error));
+    CHECK(Call(e,"vfx.presets",R"({"tag":"acceptance"})")["result"].size()==6);
+    CHECK(WriteTextFile(JoinPath(dir,"materials/ice_channels.mat.json"),"user material"));
+    struct Proof { const char* name; const char* times; const char* hash; };
+    const Proof proofs[] = {
+        {"ice_pillar","[0.15,0.75,2.4,3.1]","0bf48c34cf2faaf1"},
+        {"tornado","[0.2,1,2.5,3.8]","c6a97faaac61cf6c"},
+        {"shield_dome","[0.1,0.6,1.5,2.8]","85fee85f32cc80cf"},
+        {"shockwave","[0.1,0.4,0.8,1.25]","d608cae4d6ab83e3"},
+        {"rain_snow","[0.25,1,2.2,3.8]","4e838d294576e87e"},
+        {"healing_aura","[0.2,0.7,1.5,2.8]","2d453ad03fdce41d"}
+    };
+    for (const auto& proof : proofs) {
+        Json a=Json::MakeObject();a["path"]=std::string("effects/")+proof.name+".vfx.json";a["preset"]=proof.name;
+        const Json made=e.Call("vfx.create",a);CHECK(made["ok"].asBool());
+        const Json original=ParseVfxAsset(Json::parse([&] {std::string text;ReadTextFile(TestSourceDir()+"/samples/VFXLab/"+a["path"].asString(),text);return text;}())).json;
+        CHECK(made["result"]["params"]==original["params"] && made["result"]["budget"]==original["budget"]);
+        for (size_t i=0;i<original["emitters"].size();++i)
+            CHECK(made["result"]["emitters"][i]["emitter"]["expressions"]==original["emitters"][i]["emitter"]["expressions"]);
+        CHECK(e.Call("vfx.create",a)["error"]["code"].asString()=="already_exists");
+        a.erase("preset");CHECK(e.Call("vfx.check",a)["result"]["ok"].asBool());
+        a["times"]=Json::parse(proof.times);a["size"]=128;a["inline"]=false;
+        const Json preview=e.Call("vfx.preview",a);CHECK(preview["ok"].asBool());CHECK(preview["result"]["hash"].asString()==proof.hash);
+    }
+    std::string text;CHECK(ReadTextFile(JoinPath(dir,"materials/ice_channels.mat.json"),text) && text=="user material");
+    const size_t files=ListFiles(JoinPath(dir,"assets/vfx-presets"),"",true).size();
+    CHECK(Call(e,"vfx.create",R"({"path":"effects/second.vfx.json","preset":"ice_pillar"})")["ok"].asBool());
+    CHECK(ListFiles(JoinPath(dir,"assets/vfx-presets"),"",true).size()==files);
+    CHECK(Call(e,"vfx.create",R"({"path":"effects/old.vfx.json","preset":"fire"})")["ok"].asBool());
+    CHECK(Call(e,"vfx.create",R"({"path":"effects/both.vfx.json","preset":"fire","vfx":{}})")["error"]["code"].asString()=="invalid_vfx");
+    CHECK(Call(e,"vfx.create",R"({"path":"effects/neither.vfx.json"})")["error"]["code"].asString()=="invalid_vfx");
+    RemoveAll(dir);
+}
+
+TEST(VfxBundledPresetConflictAndUndo) {
+    Engine source;std::string error;const std::string sourceDir=TempProject("vfx_bundle_source");CHECK(source.Open(sourceDir,&error));
+    const Json made=Call(source,"vfx.create",R"({"path":"effects/shield.vfx.json","preset":"shield_dome"})");CHECK(made["ok"].asBool());
+    const std::string material=made["result"]["emitters"][0]["emitter"]["material"].asString();
+    std::string text;CHECK(ReadTextFile(JoinPath(sourceDir,material),text));const std::string shader=Json::parse(text)["shader"].asString();
+    Engine e;const std::string dir=TempProject("vfx_bundle_conflict");CHECK(e.Open(dir,&error));
+    CHECK(WriteTextFile(JoinPath(dir,shader),"edited shader"));
+    Call(e,"scene.new",R"({"empty":true})");Call(e,"entity.create",R"({"name":"Effect","components":{"ParticleEmitter":{"rate":1}}})");
+    const Json before=e.GetScene().ToJson();const size_t undo=e.UndoDepth();
+    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome","mode":"merge"})")["error"]["code"].asString()=="invalid_vfx");
+    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(e.GetScene().ToJson()==before && e.UndoDepth()==undo);
+    CHECK(!FileExists(JoinPath(dir,material)) && ListFiles(JoinPath(dir,"assets/vfx-presets"),"",true).size()==1);
+    CHECK(Call(e,"vfx.edit",R"({"path":"effects/draft.vfx.json","new":true,"preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(!Call(e,"vfx.edit_state")["result"]["open"].asBool());
+    CHECK(Call(e,"vfx.create",R"({"path":"effects/shield.vfx.json","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(!FileExists(JoinPath(dir,"effects/shield.vfx.json")));
+    CHECK(ReadTextFile(JoinPath(sourceDir,shader),text));CHECK(WriteTextFile(JoinPath(dir,shader),text));
+    const Json applied=Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})");CHECK(applied["ok"].asBool());
+    const EntityId id=e.GetScene().FindByName("Effect");CHECK(e.GetScene().Get<VFXSystem>(id) && !e.GetScene().Get<ParticleEmitter>(id));
+    CHECK(e.UndoDepth()==undo+1 && Call(e,"vfx.check",R"({"id":"Effect"})")["result"]["ok"].asBool());
+    CHECK(Call(e,"history.undo")["ok"].asBool() && e.GetScene().ToJson()==before);
+    CHECK(FileExists(JoinPath(dir,applied["result"]["asset"].asString())));
+    CHECK(Call(e,"history.redo")["ok"].asBool() && e.GetScene().Get<VFXSystem>(id));
+    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"fire"})")["ok"].asBool());
+    CHECK(!e.GetScene().Get<VFXSystem>(id) && e.GetScene().Get<ParticleEmitter>(id));
+    CHECK(WriteTextFile(JoinPath(dir,applied["result"]["asset"].asString()),"edited effect"));
+    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    RemoveAll(dir);RemoveAll(sourceDir);
+}
+
+TEST(VfxBundledPresetSharedDocument) {
+    Engine e;std::string error;const std::string dir=TempProject("vfx_bundle_document");CHECK(e.Open(dir,&error));
+    const Json draft=Call(e,"vfx.edit",R"({"path":"effects/draft.vfx.json","new":true,"preset":"healing_aura"})");CHECK(draft["ok"].asBool());
+    CHECK(draft["result"]["dirty"].asBool() && !FileExists(JoinPath(dir,"effects/draft.vfx.json")));
+    CHECK(draft["result"]["document"]["params"]["radius"]["default"].asFloat()==1.2f);
+    const Json changed=Call(e,"vfx.set",R"({"path":"effects/draft.vfx.json","emitter":"spiral","values":{"expressions":{"update":{"opacity":"1-age"}}}})");
+    CHECK(changed["ok"].asBool());CHECK(Call(e,"vfx.undo")["result"]["document"]==draft["result"]["document"]);
+    CHECK(Call(e,"vfx.redo")["ok"].asBool());CHECK(Call(e,"vfx.save")["ok"].asBool());CHECK(Call(e,"vfx.close")["ok"].asBool());
+    CHECK(Call(e,"vfx.spawn",R"({"path":"effects/draft.vfx.json","name":"Healing","params":{"radius":2}})")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":30})")["ok"].asBool());CHECK(Call(e,"vfx.state",R"({"id":"Healing"})")["result"]["count"].asInt()>0);
+    CHECK(Call(e,"vfx.edit",R"({"path":"effects/discard.vfx.json","new":true,"preset":"shockwave"})")["ok"].asBool());
+    CHECK(Call(e,"vfx.close",R"({"discard":true})")["ok"].asBool() && !FileExists(JoinPath(dir,"effects/discard.vfx.json")));
+    RemoveAll(dir);
 }
 
 TEST(VfxPresetUndoAndStrictValidation) {
@@ -11922,6 +12003,35 @@ TEST(NativeEditorEffectsExpressions) {
         click("expression-clear");CHECK(!editor.EffectsDocument()["emitters"][0]["emitter"]["expressions"]["birth"].has("position"));
         type("vec3(index,0,0)");click("expression-apply");
         CHECK(WritePng(JoinPath(TestSourceDir(),"build/effects-expressions-editor.png"),image.ToImage()));
+    }
+    RemoveAll(project);
+}
+
+TEST(NativeEditorEffectsBundledPresets) {
+    const std::string project=TempProject("editor_bundled_presets");Engine engine;std::string error;CHECK(engine.Open(project,&error));
+    if(!engine.EnableGpu(nullptr,&error)) {RemoveAll(project);return;}
+    {
+        NativeEditor::Options options;options.language="ko";NativeEditor editor(engine,nullptr,options);CHECK(editor.Init(&error));RenderTarget image;
+        auto frames=[&](int count,const std::vector<WindowEvent>& events=std::vector<WindowEvent>()) {
+            for(int i=0;i<count;++i) {editor.Update(i==0?events:std::vector<WindowEvent>(),1440,1000,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}
+        };
+        auto click=[&](const std::string& name) {
+            const auto r=editor.EffectsControlRect(name);CHECK(r[2]>0 && r[3]>0);
+            WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=r[0]+r[2]*.5f;move.y=r[1]+r[3]*.5f;
+            WindowEvent button=move;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;
+            frames(2,{move});frames(2,{button});button.down=false;frames(2,{button});frames(3);
+        };
+        frames(3);editor.OpenEffect("");frames(3);click("new");click("preset");
+        for(const char* name : {"ice_pillar","tornado","shield_dome","shockwave","rain_snow","healing_aura"}) {
+            const auto r=editor.EffectsControlRect(std::string("preset:")+name);CHECK(r[2]>0 && r[3]>0 && r[1]+r[3]<1000);
+        }
+        CHECK(WritePng("build/effects-bundled-presets-ko.png",image.ToImage(),true));
+        click("preset:healing_aura");click("new-create");
+        CHECK(editor.EffectsDocument()["name"].asString()=="Healing Aura");
+        CHECK(editor.EffectsDocument()["params"]["radius"]["default"].asFloat()==1.2f);
+        CHECK(!FileExists(JoinPath(project,"effects/new.vfx.json")));
+        CHECK(Call(engine,"vfx.save")["ok"].asBool());frames(3);click("place");
+        CHECK(!engine.GetScene().Pool<VFXSystem>().empty());
     }
     RemoveAll(project);
 }

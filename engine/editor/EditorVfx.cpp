@@ -540,12 +540,17 @@ void NativeEditor::Impl::EffectsPanel() {
     if (ImGui::Button(Tr("New Effect"))) ImGui::OpenPopup("##newvfx"); EffectsRect("new");
     if (ImGui::BeginPopup("##newvfx")) {
         ImGui::InputText(Tr("Asset Path"), &effectsNewPath);
-        if (ImGui::BeginCombo(Tr("Preset"), effectsPreset.c_str())) {
-            for (const Json& preset : effectsPresets.items()) if (ImGui::Selectable(preset["name"].asString().c_str(), effectsPreset == preset["name"].asString()))
-                effectsPreset = preset["name"].asString();
+        const bool presetOpen = ImGui::BeginCombo(Tr("Preset"), effectsPreset.c_str(), ImGuiComboFlags_HeightLargest);
+        EffectsRect("preset");
+        if (presetOpen) {
+            for (const Json& preset : effectsPresets.items()) {
+                if (ImGui::Selectable(preset["name"].asString().c_str(), effectsPreset == preset["name"].asString()))
+                    effectsPreset = preset["name"].asString();
+                EffectsRect("preset:" + preset["name"].asString()); HelpTooltip(preset["intent"].asString());
+            }
             ImGui::EndCombo();
         }
-        if (ImGui::Button(Tr("Create"))) { OpenEffect(effectsNewPath, true); ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button(Tr("Create"))) { OpenEffect(effectsNewPath, true); ImGui::CloseCurrentPopup(); } EffectsRect("new-create");
         ImGui::EndPopup();
     }
     SameLineIfFits(Tr("Open Effect"));

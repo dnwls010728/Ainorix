@@ -7,11 +7,15 @@
 namespace oe {
 class Engine;
 
-// Reflection-derived authoring schema and portable, texture-independent presets.
+// Reflection-derived authoring schema and portable presets with bundled dependencies.
 Json VfxSchema();
 // Headless expression compiler/evaluator diagnostic, isolated from scene state.
 Json EvaluateVfxExpressionCall(const Json& args);
 Json VfxPresets(const std::string& tag);
+// Create a complete preset document and install its dependencies without overwriting edits.
+Json VfxPresetDocument(Engine& engine, const std::string& name);
+// Materialize a bundled preset asset for linked scene placement; refuses modified destinations.
+std::string VfxPresetAsset(Engine& engine, const std::string& name);
 // Applies one preset to an entity atomically; the calling command supplies scene undo.
 Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args);
 // Checks a selected effect subtree without stepping or changing it.

@@ -426,7 +426,7 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
 - [x] Phase 4b (2026-10-08): Effects structure graph, expandable fixed modules, material/parameter/
       death/anchor reference wires, budget node, shared document undo and layout sidecars. Warning-free
       Windows build and all 282 tests pass; D3D11 graph screenshots inspected. See docs/VFX_PHASE4B.md.
-- [ ] Phase 5 (optional): VFX position/rotation/axis-scale curves and bounded typed expressions;
+- [x] Phase 5: VFX position/rotation/axis-scale curves and bounded typed expressions;
       value-node/text views of the same document; ice-pillar preset/sample without scripted visual
       transforms. Requested scope recorded (2026-10-08); stages 5a-5d and acceptance criteria above.
 - [x] Phase 5a (2026-10-08): captured birth state and accepted index/count, non-accumulating
@@ -438,6 +438,9 @@ Keep this last. One line per milestone; commit and tick it in the same commit.
       scenes; recorded preview/check/analyze and renderer/restore proofs. See docs/VFX_PHASE5B_PLUS.md.
 - [x] Phase 5c (2026-10-08): compiler-backed value nodes, graph/source commands, shared source/history
       and layout sidecars. See docs/VFX_PHASE5C.md.
+- [x] Phase 5d release (2026-10-08): six portable acceptance presets with embedded dependencies,
+      fresh-project creation, shared drafts, linked placement and conflict refusal; 303 Windows / 247
+      Node/WASM tests pass, Web/Android players rebuilt. See docs/VFX_PHASE5D.md.
 - [x] Rebuild `runtime/web` and `runtime/android` (2026-10-08): Emscripten and NDK players refreshed;
       Node/WASM suite verified. Runtime README files and docs/VFX_PHASE4.md record the evidence.
 - [ ] Not verified anywhere yet: Android device execution of VFX assets; Linux/EGL rendering suite.

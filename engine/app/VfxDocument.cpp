@@ -35,12 +35,7 @@ Json Engine::VfxDocumentCall(const std::string& operation, const Json& args) {
         Json document; std::string text;
         if (args["new"].asBool()) {
             if (FileExists(ResolvePath(path))) throw ApiError("already_exists", "asset already exists", "Open it without new:true or choose another path.");
-            document["format"] = "oe.vfx"; document["version"] = 1; document["name"] = "Effect";
-            const Json presets = VfxPresets(""); bool found = false;
-            for (const Json& preset : presets.items()) if (preset["name"].asString() == args["preset"].asString("fire")) {
-                document["emitters"] = preset["emitters"]; document["trails"] = preset["trails"]; found = true;
-            }
-            if (!found) throw ApiError("unknown_preset", "unknown VFX preset", "Call vfx.presets.");
+            document = VfxPresetDocument(*this, args["preset"].asString("fire"));
         } else {
             if (!ReadTextFile(ResolvePath(path), text)) throw ApiError("not_found", "cannot read " + path);
             std::string error; document = Json::parse(text, &error);

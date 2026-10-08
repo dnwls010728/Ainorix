@@ -342,7 +342,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         Params params;
         const std::string op = operation;
         if (op != "list") params.Req("path", "string", "Project-relative .vfx.json asset path.");
-        if (op == "create") params.Req("vfx", "object", "Version 1 oe.vfx document: named emitters/trails, params and budget.");
+        if (op == "create") params.Opt("vfx", "object", "Version 1 oe.vfx document; provide exactly one of vfx or preset.")
+            .Opt("preset", "string", "Name from vfx.presets; installs bundled dependencies and refuses existing asset paths.");
         if (op == "set") params.Opt("emitter", "string", "Emitter block name.").Opt("trail", "string", "Trail block name.")
             .Opt("values", "object", "Partial block field patch.").Opt("params", "object", "Replace parameter definitions.")
             .Opt("merge", "string", "Coalesce a drag in the open document history; ignored for direct file edits.");
@@ -385,9 +386,9 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine&, const Json&) { return VfxSchema(); });
     Register(r, "vfx.presets", "List portable effect presets with intent sentences and tags.", Params().Opt("tag", "string", "Filter by an exact tag."), false,
              [](Engine&, const Json& a) { return VfxPresets(a["tag"].asString()); });
-    Register(r, "vfx.apply_preset", "Apply a particle or trail preset to an entity in one undo step.",
+    Register(r, "vfx.apply_preset", "Apply a preset in one scene undo step; bundled presets install files and attach a VFXSystem.",
              Params().ReqWith("id", EntityRefSchema("Target entity id or name.")).Req("preset", "string", "Name from vfx.presets.")
-                 .Opt("mode", "string", "replace resets the affected component (default); merge preserves unspecified settings."), true,
+                 .Opt("mode", "string", "replace resets the affected component (default); merge preserves unspecified settings; bundled presets require replace."), true,
              [](Engine& e, const Json& a) { return ApplyVfxPreset(e, RequireEntity(e, a), a); });
     Register(r, "vfx.check", "Validate settings in an effect subtree and report actionable warnings without stepping it.",
              Params().OptWith("id", EntityRefSchema("Effect root id or name; includes descendants.")).Opt("path", "string", "Alternative .vfx.json asset source."), false,

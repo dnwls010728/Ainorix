@@ -125,6 +125,17 @@ Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args) {
     const std::string mode = args["mode"].asString("replace");
     if (mode != "replace" && mode != "merge") throw ApiError("invalid_vfx", "mode must be replace or merge", "replace resets the affected component; merge keeps unspecified settings.");
     Scene& scene = engine.GetScene();
+    if (chosen["bundled"].asBool()) {
+        if (mode != "replace") throw ApiError("invalid_vfx", "bundled presets require mode:replace", "Create a preset asset with vfx.create, then patch its named blocks with vfx.set.");
+        const std::string path = VfxPresetAsset(engine, chosen["name"].asString());
+        Json values = Json::MakeObject(); values["asset"] = path;
+        ValidateVfxSystem(engine, nullptr, values);
+        for (const char* type : {"ParticleEmitter", "Trail", "VFXSystem"}) scene.RemoveComponent(id, *TypeRegistry::Find(type));
+        scene.Add<VFXSystem>(id).asset = path;
+        if (!scene.Get<Transform>(id)) scene.Add<Transform>(id);
+        Json out = Json::MakeObject(); out["id"] = id; out["preset"] = chosen["name"]; out["mode"] = mode; out["asset"] = path;
+        out["appliedFields"] = Json(Json::Array{"VFXSystem.asset"}); return out;
+    }
     Json fields = Json::MakeArray();
     // Validate every block before touching the live entity.
     for (const char* blocks : {"emitters", "trails"}) for (const Json& block : chosen[blocks].items()) {
@@ -133,6 +144,7 @@ Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args) {
         ValidateVfxSettings(type, mode == "merge" ? scene.GetComponent(id, type) : nullptr, block[trail ? "trail" : "emitter"]);
     }
     int emitterIndex = 0, trailIndex = 0;
+    if (mode == "replace") scene.RemoveComponent(id, *TypeRegistry::Find("VFXSystem"));
     for (const char* blocks : {"emitters", "trails"}) for (const Json& block : chosen[blocks].items()) {
         const bool trail = std::string(blocks) == "trails";
         const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");

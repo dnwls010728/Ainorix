@@ -18,6 +18,8 @@ VFXLab now also includes six script-free effect proofs: ice pillar, tornado, shi
 
 Effects now includes **Value Nodes** for Birth/Update expressions, with compiler validation, shared undo and source editing. Agents use `vfx.expression_graph` / `vfx.expression_source`. [Usage and limits](docs/VFX_PHASE5C.md).
 
+Six expression effects are now portable built-in presets: create them in Effects > New Effect or with `vfx.create {path,preset}`. Meshes, textures and materials install into the project automatically. [Release usage and limits](docs/VFX_PHASE5D.md).
+
 ## Why it is different
 
 - **One API for everything.** Scene edits, simulation, input, screenshots, assets, packaging helpers: each is a
@@ -116,7 +118,7 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 | Post-processing and shaders | Exposure and tone mapping, bloom, vignette, FXAA, depth of field; surface shader graphs (`.shader.json`) with color, emission, vertex offset and normal outputs | [POSTPROCESS](docs/POSTPROCESS.md), [TOON](docs/TOON.md) |
 | Animation | glTF skeletal animation (TRS, skins, up to 64 joints) in both renderers, `Animator`, Lua playback | [ANIMATION](docs/ANIMATION.md) |
 | Particles | Deterministic emitters with birth shapes, lifetime curves, flipbooks, turbulence, velocity alignment; `Trail` ribbons | [PARTICLES](docs/PARTICLES.md) |
-| VFX authoring | Reusable `.vfx.json` assets and linked VFXSystem, named parameters, Lua control, hot reload and total budgets; Effects panel with grouped fields, curves/gradients, isolated playback, document undo and a reference node graph; nine presets (including sword slash), particle materials/mesh batching, two-anchor ribbons and bounded death chains, validation and `vfx.*` preview/analysis Axis motion curves, base pivots and four custom material channels support curve-only effects such as growing ice pillars. | [VFX](docs/VFX.md) |
+| VFX authoring | Reusable `.vfx.json` assets and linked VFXSystem, named parameters, Lua control, hot reload and total budgets; Effects panel with grouped fields, curves/gradients, isolated playback, document undo and a reference node graph; 15 presets (including sword slash and six expression effects), particle materials/mesh batching, two-anchor ribbons and bounded death chains, validation and `vfx.*` preview/analysis Axis motion curves, base pivots and four custom material channels support curve-only effects such as growing ice pillars. | [VFX](docs/VFX.md) |
 | Physics | 3D with Jolt and 2D with Box2D: rigid bodies, triggers, character controllers, one-way platforms, collision layers, raycasts; deterministic | [PHYSICS](docs/PHYSICS.md) |
 | 2D | Sprites and sheet animation, text tilemaps with tileset files, autotiling and per-tile collision, 2D lights and darkness, HD-2D sprites in a lit 3D world | [2D](docs/2D.md) |
 | UI | Text (TrueType, rich text, auto-shrink), panels, buttons (toggles, radio groups, icons), images, sliders, text fields, drop-downs, on-screen joystick, layouts, scroll views, entrance motion, keyboard/gamepad focus; every element takes 9-slice images instead of colors | [UI](docs/UI.md) |

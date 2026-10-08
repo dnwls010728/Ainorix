@@ -122,6 +122,12 @@ Json VfxAssetCall(Engine& engine, const std::string& operation, const Json& args
     const std::string path = AssetPath(engine, args);
     if (operation == "create") {
         if (engine.VfxDocument(path)) throw ApiError("vfx_editing", "asset is open in the Effects document", "Use vfx.set and vfx.save, or close the document first.");
+        if (args.has("vfx") == args.has("preset"))
+            throw ApiError("invalid_vfx", "provide exactly one vfx document or preset name", "Use {path,preset:'ice_pillar'} or {path,vfx:{...}}.");
+        if (args.has("preset")) {
+            if (FileExists(engine.ResolvePath(path))) throw ApiError("already_exists", "asset already exists", "Choose another path or edit the existing asset with vfx.set.");
+            return WriteAsset(engine, path, VfxPresetDocument(engine, args["preset"].asString()));
+        }
         return WriteAsset(engine, path, args["vfx"]);
     }
     if (operation == "from_entity") {

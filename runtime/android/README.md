@@ -312,3 +312,19 @@ Android devices, browser GPU and Linux/EGL execution remain unverified. See docs
 | runtime/android/x86_64/liboe_player.so | 8,015,256 | d68bc07328da449750b0b5b0f82b10f8e7aa196e07e0db7cb863380f495db9b7 |
 
 Commands.cpp SHA256: `bc3347cc460c58d067ce65920814b7f6984926421bae3169fc73ff740cd8f90d`.
+
+## VFX acceptance preset release (phase 5d, 2026-10-08)
+
+The six expression acceptance effects and their meshes/textures/materials now ship in the shared
+engine. `vfx.create {path,preset}`, shared Effects drafts and linked preset placement preserve
+parameters and budgets; dependency conflicts refuse overwrites. Fresh-project previews retain all six
+software reference hashes. All 247 Node/WASM tests pass. Windows/editor evidence is recorded in
+[the release report](../../docs/VFX_PHASE5D.md). Rebuilt with Emscripten 6.0.10 / NDK r28c, Release.
+Android devices, browser GPU and Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,669,696 | 6f0071dcb4e335281727bfe2dd0699821fdec0603bc2aea268ae9bf9836195a9 |
+| runtime/android/x86_64/liboe_player.so | 8,114,328 | 3ece61a7e6d6b70e243cde24e9c3735e6981bed8bd48ce83bd5c1ec9d561014d |
+
+Commands.cpp SHA256: `c93cd01e47925ba2f8ea60087c51c98a37ea137ec3fc61e966235192e3222d07`.

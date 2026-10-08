@@ -311,3 +311,19 @@ Android devices, browser GPU and Linux/EGL execution remain unverified. See docs
 | runtime/web/oe_player.wasm | 4,830,223 | bdbcf6a5e5ecff4a81b237fa1f5c05cb2e0d24316f5d55782901cfd1e67be133 |
 
 Commands.cpp SHA256: `bc3347cc460c58d067ce65920814b7f6984926421bae3169fc73ff740cd8f90d`.
+
+## VFX acceptance preset release (phase 5d, 2026-10-08)
+
+The six expression acceptance effects and their meshes/textures/materials now ship in the shared
+engine. `vfx.create {path,preset}`, shared Effects drafts and linked preset placement preserve
+parameters and budgets; dependency conflicts refuse overwrites. Fresh-project previews retain all six
+software reference hashes. All 247 Node/WASM tests pass. Windows/editor evidence is recorded in
+[the release report](../../docs/VFX_PHASE5D.md). Rebuilt with Emscripten 6.0.10 / NDK r28c, Release.
+Android devices, browser GPU and Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,921,115 | eee728a55e564efb4083986dfb1dd1d7f758a3cddfbb8908e341e1186c0081ba |
+
+Commands.cpp SHA256: `c93cd01e47925ba2f8ea60087c51c98a37ea137ec3fc61e966235192e3222d07`.

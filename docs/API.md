@@ -55,7 +55,8 @@ Read or atomically author a reusable VFX asset; file edits do not enter scene un
 | arg | type | required | description |
 |---|---|---|---|
 | `path` | string | yes | Project-relative .vfx.json asset path. |
-| `vfx` | object | yes | Version 1 oe.vfx document: named emitters/trails, params and budget. |
+| `vfx` | object |  | Version 1 oe.vfx document; provide exactly one of vfx or preset. |
+| `preset` | string |  | Name from vfx.presets; installs bundled dependencies and refuses existing asset paths. |
 
 ### `vfx.get`
 
@@ -212,13 +213,13 @@ List portable effect presets with intent sentences and tags.
 
 ### `vfx.apply_preset` *(undoable edit)*
 
-Apply a particle or trail preset to an entity in one undo step.
+Apply a preset in one scene undo step; bundled presets install files and attach a VFXSystem.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | Target entity id or name. |
 | `preset` | string | yes | Name from vfx.presets. |
-| `mode` | string |  | replace resets the affected component (default); merge preserves unspecified settings. |
+| `mode` | string |  | replace resets the affected component (default); merge preserves unspecified settings; bundled presets require replace. |
 
 ### `vfx.check`
 

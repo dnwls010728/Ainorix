@@ -1,5 +1,7 @@
 # Editor
 
+Effects > New Effect now lists 15 presets, including six complete expression effects. Dependencies install into the project on creation; save the draft, then Place in Scene. See [VFX phase 5d](VFX_PHASE5D.md).
+
 `oe editor <project>` opens the native editor: a Dear ImGui docking application drawn on the GPU in the engine
 process. It changes the scene only through commands, so an agent attached with `oe mcp --connect 7777` works in
 the same session as the person. What was built when, and what is unverified, is in the work log at the end.
