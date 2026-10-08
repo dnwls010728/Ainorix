@@ -28,10 +28,12 @@ Order: small independent steps first, the graph compiler last. Each step is
 verified with `oe_tests` (incl. `GpuRendererMatchesSoftware`), the RPG benchmark
 and screenshots, and the web/Android runtimes are rebuilt when the step is done.
 
-- [ ] 1. Depth of field reads the scene pass's depth: the scene pass writes view
+- [x] 1. Depth of field reads the scene pass's depth: the scene pass writes view
       depth to a second color target (MRT) instead of a separate depth pass that
       draws the scene again. Falls back to the depth pass where multisampled
-      RGBA16F targets are not renderable.
+      RGBA16F targets are not renderable. RPG 16.0 → 13.1 ms; the RPG frame is
+      unchanged (mean channel difference 0.014). WebGL2/GLES3 execution of the
+      MRT pass is unverified until the runtimes are rebuilt and run.
 - [ ] 2. Smaller per-draw uniforms: the 64-joint palette (4 KB) is uploaded only
       for skinned meshes. Also keeps the vertex stage under WebGL2's minimum of
       256 uniform vectors.

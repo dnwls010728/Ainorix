@@ -138,14 +138,18 @@ Depth comes from opaque and cut-out surfaces. Blended surfaces (soft-edged
 sprites, particles, anything with opacity below 1) write no depth and are blurred
 like whatever is behind them; pixels with nothing drawn count as the far plane.
 
-The software renderer uses its depth buffer directly. The GPU renderer adds one
-single-sample geometry pass that writes the depth buffer value into an R32F
-target, then runs the two blur passes in the scene format (shaders `scene_depth`
-and `dof` in `engine/render/shaders/Shaders.glsl`; helpers `DofViewDepth`,
-`DofCoc` and `DofWeight` in `engine/render/PostProcess.h`). It needs renderable
-R32F targets; without them an error tells the caller to use the software
-renderer. Because the depth pass is not multisampled, MSAA edge pixels of a
-focused object can carry the background's depth and smear slightly.
+The software renderer uses its depth buffer directly. The GPU renderer's scene
+pass writes each opaque or cut-out pixel's view depth into a second RGBA16F color
+target (multisampled like the scene and resolved; blended pipelines mask it off),
+then runs the two blur passes in the scene format (`mesh_fs` output `frag_depth`
+and shader `dof` in `engine/render/shaders/Shaders.glsl`; helpers `DofViewDepth`,
+`DofCoc` and `DofWeight` in `engine/render/PostProcess.h`). Resolved MSAA edge
+pixels average the depths of both sides. Where multisampled RGBA16F targets are
+not renderable it falls back to one extra single-sample geometry pass that writes
+the depth buffer value into an R32F target (shader `scene_depth`); MSAA edge
+pixels of a focused object can then carry the background's depth and smear
+slightly. Without renderable R32F targets either, an error tells the caller to
+use the software renderer.
 
 Verified by CameraDepthOfField. The prebuilt web and Android players include it;
 WebGL2/GLES3/EGL execution of the new shaders is unverified. `games/RPG` uses it with a long lens.
@@ -251,7 +255,7 @@ Two more optional outputs sit next to `color` and `emissive`:
   top of it. The `normal` input node still gives the geometric normal.
 
 Displaced surfaces are displaced consistently in the shadow map, the
-depth-of-field depth pass and the editor selection outline. The displacement is
+depth of field and the editor selection outline. The displacement is
 render-only: physics, `physics.raycast` picking and `boundsMin`/`boundsMax` do not
 know about it. Shared vertices need a mesh with enough vertices, so use `plane64`
 (see [RENDERING.md](RENDERING.md)) rather than the 4-vertex `plane`.

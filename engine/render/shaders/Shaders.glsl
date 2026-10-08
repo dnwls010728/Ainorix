@@ -229,6 +229,7 @@ layout(binding=2) uniform mesh_lights {
     vec4 ambient_ground; // rgb: hemisphere ambient of downward faces, w: 1 = hemisphere ambient on
     vec4 fog_color;      // rgb: fog color, w: largest fog amount (0 = off)
     vec4 fog_range;      // x: start distance, y: end distance
+    vec4 view_axis;      // xyz: camera forward; frag_depth = view depth along it (depth of field)
     vec4 dir_dir[4];     // direction the light travels
     vec4 dir_color[4];
     vec4 point_pos[16];  // xyz: position, w: range
@@ -252,7 +253,9 @@ in vec3 v_nrm;
 in vec4 v_tan;
 centroid in vec2 v_uv;
 
-out vec4 frag_color;
+layout(location=0) out vec4 frag_color;
+// View depth for depth of field when the pass has a second target (blended pipelines mask it off).
+layout(location=1) out vec4 frag_depth;
 
 const float PI = 3.14159265;
 
@@ -411,6 +414,7 @@ void main() {
         outc = color_range.z > 1.5 ? outc * (1.0 - f) : outc * (1.0 - f) + fog_color.rgb * f;
     }
     frag_color = vec4(clamp(outc, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
+    frag_depth = vec4(dot(v_wpos - eye.xyz, view_axis.xyz), 0.0, 0.0, 1.0);
 }
 @end
 
@@ -758,6 +762,7 @@ void main() {
 layout(binding=0) uniform dof_params {
     vec4 dof_lens; // x: largest radius in pixels (1..16), y: focus depth, z: sharp range, w: falloff
     vec4 dof_proj; // x: projection (2,2), y: projection (2,3), z: 1 = orthographic, w: 0 horizontal, 1 vertical
+    vec4 dof_mode; // x: 1 = the depth texture holds view depth (scene pass MRT), 0 = depth buffer values
 };
 layout(binding=0) uniform texture2D dof_source_tex;
 layout(binding=0) uniform sampler dof_source_smp;
@@ -766,7 +771,9 @@ layout(binding=1) uniform sampler dof_depth_smp;
 out vec4 frag_color;
 
 float DofDepth(ivec2 q) {
-    float ndc = texelFetch(sampler2D(dof_depth_tex, dof_depth_smp), q, 0).r * 2.0 - 1.0;
+    float stored = texelFetch(sampler2D(dof_depth_tex, dof_depth_smp), q, 0).r;
+    if (dof_mode.x > 0.5) return stored;
+    float ndc = stored * 2.0 - 1.0;
     return dof_proj.z > 0.5 ? (dof_proj.y - ndc) / dof_proj.x : dof_proj.y / (ndc + dof_proj.x);
 }
 
