@@ -52,20 +52,37 @@ bool Project(const Mat4& viewProj, const Vec3& p, ImVec2 pos, ImVec2 size, ImVec
     return true;
 }
 
-// Small overlay button row drawn on top of a view image.
+// Small overlay button row drawn on top of a view image: flat buttons, the ones that are on
+// lifted and bright, the others dimmed (OverlayBar draws the floating bar behind them).
 bool OverlayToggle(const char* label, bool* value, const char* tip) {
-    ImGui::PushStyleColor(ImGuiCol_Button, *value ? ImVec4(0.18f, 0.36f, 0.60f, 0.98f) : ImVec4(0.1f, 0.11f, 0.13f, 0.96f));
+    ImGui::PushStyleColor(ImGuiCol_Button, *value ? ImVec4(1.0f, 1.0f, 1.0f, 0.14f) : ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, *value ? 0.20f : 0.08f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.24f));
+    ImGui::PushStyleColor(ImGuiCol_Text, *value ? ImVec4(0.96f, 0.97f, 1.0f, 1.0f) : ImVec4(0.70f, 0.72f, 0.76f, 1.0f));
     bool pressed = ImGui::SmallButton(label);
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(4);
     if (pressed) *value = !*value;
-    if (*value) {
-        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x + 2, b.y - 1), ImVec2(b.x - 2, b.y - 1),
-                                          ImGui::GetColorU32(ImGuiCol_CheckMark), 2.0f);
-    }
     HelpTooltip(tip);
     return pressed;
 }
+
+// A rounded, translucent bar behind the overlay buttons drawn between Begin and End.
+struct OverlayBar {
+    ImDrawList* draw;
+    ImVec2 start;
+    explicit OverlayBar(ImVec2 at) : draw(ImGui::GetWindowDrawList()), start(at) {
+        ImGui::SetCursorScreenPos(at + ImVec2(4, 4));
+        draw->ChannelsSplit(2);
+        draw->ChannelsSetCurrent(1);
+    }
+    ~OverlayBar() {
+        const ImVec2 end = ImGui::GetItemRectMax() + ImVec2(4, 4);
+        draw->ChannelsSetCurrent(0);
+        draw->AddRectFilled(start, end, IM_COL32(20, 20, 23, 215), 7.0f);
+        draw->AddRect(start, end, IM_COL32(255, 255, 255, 18), 7.0f);
+        draw->ChannelsMerge();
+    }
+};
 
 // Text over scene geometry needs its own background regardless of the game's colors.
 void ViewportLabel(ImDrawList* draw, ImVec2 at, const char* text, ImU32 color) {
@@ -584,20 +601,22 @@ void NativeEditor::Impl::ScenePanel() {
     }
 
     // Overlay controls (top-left).
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + 6, pos.y + 6));
-    OverlayToggle(Tr("Grid"), &showGrid, Tr("Ground grid"));
-    ImGui::SameLine(0, 3);
-    OverlayToggle(Tr("Colliders"), &showColliders, Tr("Collider wireframes: green solid, yellow trigger, cyan character"));
-    ImGui::SameLine(0, 3);
-    OverlayToggle(Tr("Icons"), &showIcons, Tr("Markers for cameras, lights and sounds"));
-    ImGui::SameLine(0, 3);
-    bool mode2D = cam.mode2D;
-    if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);
-    if (Row(Primary()) && Row(Primary())->Has("Tilemap")) {
+    {
+        OverlayBar bar(ImVec2(pos.x + 8, pos.y + 8));
+        OverlayToggle(Tr("Grid"), &showGrid, Tr("Ground grid"));
         ImGui::SameLine(0, 3);
-        if (OverlayToggle(Tr("Paint Tiles"), &tilePaint, Tr("Paint the selected Tilemap (brush from the Tiles panel): left paint, right erase, Shift rectangle, Ctrl pick"))) {
-            showTiles = true;
-            if (tilePaint && !cam.mode2D) cam.Set2D(true);
+        OverlayToggle(Tr("Colliders"), &showColliders, Tr("Collider wireframes: green solid, yellow trigger, cyan character"));
+        ImGui::SameLine(0, 3);
+        OverlayToggle(Tr("Icons"), &showIcons, Tr("Markers for cameras, lights and sounds"));
+        ImGui::SameLine(0, 3);
+        bool mode2D = cam.mode2D;
+        if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);
+        if (Row(Primary()) && Row(Primary())->Has("Tilemap")) {
+            ImGui::SameLine(0, 3);
+            if (OverlayToggle(Tr("Paint Tiles"), &tilePaint, Tr("Paint the selected Tilemap (brush from the Tiles panel): left paint, right erase, Shift rectangle, Ctrl pick"))) {
+                showTiles = true;
+                if (tilePaint && !cam.mode2D) cam.Set2D(true);
+            }
         }
     }
     // Help line (bottom-left) while flying.

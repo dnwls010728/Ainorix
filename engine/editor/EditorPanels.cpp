@@ -422,15 +422,19 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         const float available = ImGui::GetContentRegionAvail().x;
         const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
         const bool stacked = available < ImGui::GetFontSize() * 9.5f;
-        const ImVec4 axisColors[] = {{1.0f, 0.64f, 0.64f, 1}, {0.65f, 0.92f, 0.68f, 1}, {0.65f, 0.80f, 1.0f, 1}};
-        const char* formats[] = {"X %.3g", "Y %.3g", "Z %.3g"};
+        // Plain values with a thin axis-colored mark at the left edge of each field.
+        const ImU32 axisColors[] = {IM_COL32(240, 104, 104, 255), IM_COL32(120, 210, 130, 255), IM_COL32(100, 156, 255, 255)};
+        const char* formats[] = {"%.3g", "%.3g", "%.3g"};
         for (int axis = 0; axis < 3; ++axis) {
             if (axis > 0 && !stacked) ImGui::SameLine(0, gap);
             ImGui::PushID(axis);
             ImGui::SetNextItemWidth(stacked ? available : (available - gap * 2) / 3);
-            ImGui::PushStyleColor(ImGuiCol_Text, axisColors[axis]);
             const bool edited = ImGui::DragFloat(label.c_str(), &f[axis], speed, 0, 0, formats[axis]);
-            ImGui::PopStyleColor();
+            {
+                const ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
+                const float inset = ImGui::GetStyle().FrameRounding * 0.5f;
+                ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(mn.x + 1.0f, mn.y + inset), ImVec2(mn.x + 3.0f, mx.y - inset), axisColors[axis], 1.0f);
+            }
             HelpTooltip(Format("%s: %.7g", axis == 0 ? "X" : axis == 1 ? "Y" : "Z", static_cast<double>(f[axis])));
             if (edited || ImGui::IsItemActivated()) dragMerge();
             changed |= edited;
@@ -594,9 +598,9 @@ void NativeEditor::Impl::InspectorPanel() {
         float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
         ImGui::SetNextItemOpen(true, ImGuiCond_Once);
         // Section bars are neutral: the accent color is kept for what is selected.
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.215f, 0.235f, 0.28f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.26f, 0.285f, 0.34f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.29f, 0.32f, 0.38f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(1.0f, 1.0f, 1.0f, 0.045f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.07f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(1.0f, 1.0f, 1.0f, 0.09f));
         bool open = ImGui::CollapsingHeader(type.c_str(), ImGuiTreeNodeFlags_AllowOverlap);
         ImGui::PopStyleColor(3);
         if (typeInfo) HelpTooltip((*typeInfo)["doc"].asString(""));
