@@ -10,7 +10,7 @@ express the prototype, and replace every procedural picture with newly generated
 |---|---|
 | `world.ts` voxel terrain (instanced boxes per tile/height) | `tools/make_world.py` ports the mulberry32 rng and value noise exactly, writes only the visible faces into `assets/models/terrain.glb` (one 6-cell atlas, per-tile tint in `COLOR_0`) |
 | `applyFx` cloud shadows / grass sway / hero push (patched built-in shaders) | surface graphs `materials/ground.shader.json` (fragment) and `plants.shader.json` (vertex `offset`, uniform `hero` set from Lua) |
-| `house.ts` half-timber houses | `assets/models/houses.glb` (atlas, unit-tiled faces) + `windows.glb` with `window.shader.json` (`glow` uniform) |
+| `house.ts` half-timber houses | `tools/make_houses.py`: one model per house (`house_N.glb`, entity `HouseN`) with stone plinth, modelled timber frame (posts, beams, studs around openings, braces), gable roof with thickness, eaves, rake, fascia, soffit and ridge cap (ridge along the longer side), gables with king post, framed windows with sills and tinted shutters, framed door with step and hood, capped chimney; per-house roof/plaster/shutter colours, one two-storey jettied house. Glass in `house_N_windows.glb` (child `Windows`, tag `windows`) with `window.shader.json` (`glow` uniform) |
 | water `ShaderMaterial` with shore-distance texture | `water.shader.json` on a 700 m plane, `shore.png` (4-texel deep border, clamped), unlit, tinted by a `light` uniform |
 | `sky.ts` dome (gradient, sun, clouds, stars, moon) + 3 ridge cylinders | `sky.shader.json` (gradient, sun disc/halo, stars from `stars.png`), a separate `clouds.shader.json` dome (48-node graph limit), `mountain_ring.glb` x3, materials with `fog: false` |
 | `Billboard` (Y-axis sprites, blob shadow, emissive 0.22, tree sway) | `Sprite {lit, castShadows, emission: 0.22}` + child blob `Sprite`, turned by `game.lua` (tag `billboard`); trees add `material: materials/tree.mat.json` (sway graph) |
@@ -57,6 +57,7 @@ shadow, shore distance, shaft gradient, star field) and the atlases are computed
 - [x] World generator, scene, materials, graphs, effects; Lua director and hero.
 - [x] Test `RPGVillageGame`; D3D11 screenshots at dawn, noon, golden hour, dusk, night and the opening shot inspected.
 - [x] Web and Android players rebuilt (see runtime READMEs).
+- [x] Houses rebuilt as separate, detailed models (`tools/make_houses.py`).
 - [x] Tree sway: engine `Sprite.material`; trees use `materials/tree.shader.json` (crown offset, slow world-space phase).
 - [x] Moon: `Moon` + `MoonGlow` sprites (Codex `moon.png`, `materials/moon.mat.json` with `fog: false`) placed by
       `game.lua` 160 m along the prototype's moon direction, faded in with the stars. The sky graph has no room for it

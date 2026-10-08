@@ -9,8 +9,9 @@ and the scattered trees/flowers come out the same every time.
 
 Outputs:
   assets/models/terrain.glb      visible faces of every column, one texture atlas, per-tile tint
-  assets/models/houses.glb       four half-timbered houses (walls, gables, roofs, chimneys, doors)
-  assets/models/windows.glb      their windows (glow at night through a shader graph uniform)
+  assets/models/house_N.glb      four half-timbered houses (tools/make_houses.py: timber frame, roofs with eaves,
+                                 gables, doors, shuttered windows, chimneys), one model each
+  assets/models/house_N_windows.glb  their glass (glows at night through a shader graph uniform)
   assets/models/plants.glb       grass tufts and flowers as crossed quads (sway + hero push graph)
   assets/models/mountain_ring.glb  open cylinder seen from inside, for the mountain backdrops
   assets/textures/{terrain_atlas,house_atlas,glow,blob,shore,shaft,stars}.png
@@ -23,8 +24,12 @@ import math
 import os
 import struct
 
+import sys
+
 import numpy as np
 from PIL import Image
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 TEX = "assets/textures/"
@@ -548,112 +553,58 @@ def terrain_model(world):
     return m.save("assets/models/terrain.glb", colors=True)
 
 
-HOUSE_CELLS = ["plaster", "roof", "stone", "door", "ridge", "wall"]
+HOUSE_CELLS = ["stone", "plaster", "roof_red", "roof_slate", "roof_brown", "wood", "shutter", "door"]
+HOUSES = [  # per footprint in build_terrain order: colours, storeys, chimney side
+    {"roof": "roof_red", "plaster": (1.0, 0.97, 0.9, 1), "shutter": (0.42, 0.68, 0.42, 1), "chimney": 1, "door_offset": -0.55},
+    {"roof": "roof_slate", "plaster": (1.0, 0.92, 0.78, 1), "shutter": (0.42, 0.58, 0.86, 1), "chimney": -1, "door_offset": 0.55},
+    {"roof": "roof_brown", "plaster": (1.0, 1.0, 1.0, 1), "shutter": (0.86, 0.44, 0.38, 1), "chimney": 1, "floors": 2, "pitch": 0.95},
+    {"roof": "roof_red", "plaster": (1.0, 0.9, 0.86, 1), "shutter": (0.36, 0.68, 0.66, 1), "chimney": 1, "pitch": 1.15},
+]
 
 
-def rot_x(p, angle):
-    c, s = math.cos(angle), math.sin(angle)
-    return (p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c)
-
-
-def tiled_face(m, atlas, cell, origin, u_axis, v_axis, u_len, v_len, normal, transform):
-    """A rectangle split into unit squares so a repeating texture can come from one atlas cell.
-    origin is the top-left corner seen from the front; v runs down."""
-    o, ua, va = np.array(origin, float), np.array(u_axis, float), np.array(v_axis, float)
-    nu, nv = max(1, math.ceil(u_len - 1e-6)), max(1, math.ceil(v_len - 1e-6))
-    for b in range(nv):
-        for a in range(nu):
-            u0, u1 = a, min(a + 1, u_len)
-            v0, v1 = b, min(b + 1, v_len)
-            corners = [o + ua * u0 + va * v0, o + ua * u0 + va * v1, o + ua * u1 + va * v1, o + ua * u1 + va * v0]
-            uvs = [atlas.uv(cell, 0, 0), atlas.uv(cell, 0, v1 - v0), atlas.uv(cell, u1 - u0, v1 - v0), atlas.uv(cell, u1 - u0, 0)]
-            m.quad([transform(tuple(c)) for c in corners], uvs, transform(normal, True))
-
-
-def box(m, atlas, size, center, cells, transform, repeat=None):
-    """Axis-aligned box (before `transform`); cells/repeat per face: +x, -x, +y, -y, +z, -z."""
-    sx, sy, sz = size
-    cx, cy, cz = center
-    hx, hy, hz = sx / 2, sy / 2, sz / 2
-    faces = [  # origin (top-left from outside), u axis, v axis, u length, v length, normal
-        ((cx + hx, cy + hy, cz + hz), (0, 0, -1), (0, -1, 0), sz, sy, (1, 0, 0)),
-        ((cx - hx, cy + hy, cz - hz), (0, 0, 1), (0, -1, 0), sz, sy, (-1, 0, 0)),
-        ((cx - hx, cy + hy, cz - hz), (1, 0, 0), (0, 0, 1), sx, sz, (0, 1, 0)),
-        ((cx - hx, cy - hy, cz + hz), (1, 0, 0), (0, 0, -1), sx, sz, (0, -1, 0)),
-        ((cx - hx, cy + hy, cz + hz), (1, 0, 0), (0, -1, 0), sx, sy, (0, 0, 1)),
-        ((cx + hx, cy + hy, cz - hz), (-1, 0, 0), (0, -1, 0), sx, sy, (0, 0, -1)),
-    ]
-    for k, (o, ua, va, ul, vl, n) in enumerate(faces):
-        sc = repeat[k] if repeat else (1, 1)
-        if cells[k] is None:
-            continue
-        o, ua, va = np.array(o), np.array(ua, float) * sc[0], np.array(va, float) * sc[1]
-        tiled_face(m, atlas, cells[k], o, ua, va, ul / sc[0], vl / sc[1], n, transform)
+def house_textures():
+    atlas = Atlas(HOUSE_CELLS)
+    atlas.put("stone", load_png("stone"))
+    plaster = load_png("plaster")[8:24, 8:24]  # the plain plaster between the painted beams, mirrored to tile
+    atlas.put("plaster", np.vstack([np.hstack([plaster, plaster[:, ::-1]]), np.hstack([plaster[::-1], plaster[::-1, ::-1]])]))
+    roof = load_png("roof")
+    lum = roof[..., :3].mean(-1, keepdims=True)
+    atlas.put("roof_red", roof)
+    slate = roof.copy()
+    slate[..., :3] = np.clip(lum * np.array([0.62, 0.7, 0.84]) * 1.3, 0, 1)
+    atlas.put("roof_slate", slate)
+    brown = roof.copy()
+    brown[..., :3] = np.clip(lum * np.array([0.9, 0.62, 0.42]) * 1.2, 0, 1)
+    atlas.put("roof_brown", brown)
+    door = Image.fromarray((load_png("door") * 255).astype(np.uint8))
+    square = np.asarray(door.resize((32, 32), Image.NEAREST)).astype(np.float32) / 255
+    atlas.put("door", square)
+    wood = np.asarray(door.rotate(90, expand=True).resize((32, 32), Image.NEAREST)).astype(np.float32) / 255
+    wood[..., :3] *= 0.8
+    atlas.put("wood", wood)
+    shutter = square.copy()
+    grey = shutter[..., :3].mean(-1, keepdims=True)
+    shutter[..., :3] = np.clip(0.35 + grey / max(float(grey.mean()), 1e-3) * 0.5, 0, 1)
+    atlas.put("shutter", shutter)
+    save_png(TEX + "house_atlas.png", atlas.image)
+    return atlas
 
 
 def houses_model(world):
-    atlas = Atlas(HOUSE_CELLS)
-    for name in ("plaster", "roof", "stone"):
-        atlas.put(name, load_png(name))
-    door = load_png("door")
-    atlas.put("door", np.asarray(Image.fromarray((door * 255).astype(np.uint8)).resize((32, 32), Image.NEAREST)).astype(np.float32) / 255)
-    atlas.fill("ridge", (0.35, 0.16, 0.13))
-    plaster = load_png("plaster")
-    atlas.fill("wall", tuple(float(v) for v in np.median(plaster[8:24, 8:24, :3].reshape(-1, 3), 0)))
-    save_png(TEX + "house_atlas.png", atlas.image)
-    m, win = MeshBuilder(), MeshBuilder()
-    chimneys = []
-    for i0, i1, j0, j1 in world["houses"]:
-        W, D = i1 - i0 + 1, j1 - j0 + 1
-        gx, gz, gy = (i0 + i1) / 2, (j0 + j1) / 2, 2.0
-        wall_h, roof_h, fh = 2.7, 1.6, 0.22
-
-        def at_house(p, direction=False):
-            return p if direction else (p[0] + gx, p[1] + gy, p[2] + gz)
-
-        box(m, atlas, (W + 0.08, fh, D + 0.08), (0, fh / 2, 0), ["stone"] * 6, at_house)
-        box(m, atlas, (W, wall_h, D), (0, fh + wall_h / 2, 0), ["plaster", "plaster", None, None, "plaster", "plaster"], at_house)
-        y0 = fh + wall_h
-        for s in (-1, 1):  # gables, plain plaster
-            z = s * D / 2 + s * 0.005
-            tri = [(-W / 2, y0, z), (W / 2, y0, z), (0, y0 + roof_h, z)]
-            m.quad([at_house(p) for p in tri], [atlas.uv("wall", 0.1, 0.9), atlas.uv("wall", 0.9, 0.9), atlas.uv("wall", 0.5, 0.1)], (0, 0, s))
-        slope = math.atan2(roof_h, D / 2)
-        slab_l = math.hypot(D / 2, roof_h) + 0.35
-        for s in (-1, 1):
-            cy, cz = y0 + roof_h / 2 + 0.06, s * D / 4 + s * 0.12
-
-            def slab(p, direction=False, s=s, cy=cy, cz=cz):
-                q = rot_x(p, s * slope)
-                return q if direction else at_house((q[0], q[1] + cy, q[2] + cz))
-
-            box(m, atlas, (W + 0.6, 0.12, slab_l), (0, 0, 0), ["ridge", "ridge", "roof", "ridge", "ridge", "ridge"], slab)
-        box(m, atlas, (W + 0.66, 0.1, 0.16), (0, y0 + roof_h + 0.1, 0), ["ridge"] * 6, at_house)
-        chim = (W / 2 - 0.55, y0 + roof_h * 0.8, -D / 4)
-        box(m, atlas, (0.45, 1.3, 0.45), chim, ["stone"] * 6, at_house)
-        chimneys.append((gx + chim[0], gy + chim[1] + 0.7, gz + chim[2]))
-        dz = D / 2 + 0.012
-        m.quad([at_house(p) for p in [(-0.375, fh + 1.55, dz), (-0.375, fh, dz), (0.375, fh, dz), (0.375, fh + 1.55, dz)]],
-               [atlas.uv("door", 0, 0), atlas.uv("door", 0, 1), atlas.uv("door", 1, 1), atlas.uv("door", 1, 0)], (0, 0, 1))
-
-        def window(x, z, normal):
-            n = np.array(normal, float)
-            right = np.cross((0, 1, 0), n)
-            c = np.array((x, fh + 1.7, z))
-            corners = [c - right * 0.36 + (0, 0.36, 0), c - right * 0.36 - (0, 0.36, 0), c + right * 0.36 - (0, 0.36, 0), c + right * 0.36 + (0, 0.36, 0)]
-            win.quad([at_house(tuple(p)) for p in corners], [(0, 0), (0, 1), (1, 1), (1, 0)], normal)
-
-        if W >= 3:
-            window(-W / 2 + 0.75, dz, (0, 0, 1))
-            window(W / 2 - 0.75, dz, (0, 0, 1))
-        else:
-            window(W / 2 - 0.65, dz, (0, 0, 1))
-        window(0, -dz, (0, 0, -1))
-        window(W / 2 + 0.012, 0, (1, 0, 0))
-        window(-W / 2 - 0.012, 0, (-1, 0, 0))
-    m.save("assets/models/houses.glb")
-    win.save("assets/models/windows.glb")
-    return chimneys
+    """One model per house (assets/models/house_N.glb) plus its glass (house_N_windows.glb), built by
+    tools/make_houses.py in the house's own frame. Returns placements and chimney tops in world space."""
+    import make_houses
+    atlas = house_textures()
+    houses = []
+    for k, (i0, i1, j0, j1) in enumerate(world["houses"]):
+        spec = dict(HOUSES[k], W=i1 - i0 + 1, D=j1 - j0 + 1)
+        body, glass = MeshBuilder(), MeshBuilder()
+        chimney, _ = make_houses.build(body, glass, atlas, spec)
+        body.save("assets/models/house_%d.glb" % (k + 1), colors=True)
+        glass.save("assets/models/house_%d_windows.glb" % (k + 1))
+        pos = ((i0 + i1) / 2, 2.0, (j0 + j1) / 2)
+        houses.append({"position": pos, "chimney": (pos[0] + chimney[0], pos[1] + chimney[1], pos[2] + chimney[2])})
+    return houses
 
 
 def plants_model(plants):
@@ -810,7 +761,7 @@ def terrain_lua(world):
                "return Terrain\n")
 
 
-def scene(world, props, lamps, chimneys):
+def scene(world, props, lamps, houses):
     cx, cz = world["center"]
     heights, at = world["heights"], world["at"]
     add("Game", {"Script": {"path": "scripts/game.lua", "params": {"startTime": 0.46, "daySeconds": 320, "skipIntro": False}}})
@@ -844,9 +795,13 @@ def scene(world, props, lamps, chimneys):
     add("Terrain", {"MeshRenderer": {"mesh": "assets/models/terrain.glb", "material": "materials/terrain.mat.json"}})
     add("Water", {"Transform": {"position": [N / 2 - 0.5, 0.78, N / 2 - 0.5], "scale": [700, 1, 700]},
                   "MeshRenderer": {"mesh": "plane", "material": "materials/water.mat.json", "castShadows": False, "unlit": True}})
-    add("Houses", {"MeshRenderer": {"mesh": "assets/models/houses.glb", "material": "materials/houses.mat.json"}})
-    add("Windows", {"MeshRenderer": {"mesh": "assets/models/windows.glb", "material": "materials/windows.mat.json", "castShadows": False,
-                                     "shaderUniforms": {"glow": 0.5}}})
+    for k, house in enumerate(houses):
+        h = add("House%d" % (k + 1), {"Transform": {"position": list(house["position"])},
+                                       "MeshRenderer": {"mesh": "assets/models/house_%d.glb" % (k + 1), "material": "materials/houses.mat.json"}})
+        add("Windows", {"MeshRenderer": {"mesh": "assets/models/house_%d_windows.glb" % (k + 1), "material": "materials/windows.mat.json",
+                                         "castShadows": False, "shaderUniforms": {"glow": 0.5}},
+                        "Tag": {"tags": "windows"}}, h)
+    chimneys = [house["chimney"] for house in houses]
     add("Plants", {"MeshRenderer": {"mesh": "assets/models/plants.glb", "material": "materials/plants.mat.json", "castShadows": False}})
     for k, c in enumerate(chimneys):
         add("Smoke%d" % (k + 1), {"Transform": {"position": [round(v, 3) for v in c]}, "VFXSystem": {"asset": "effects/smoke.vfx.json"},
@@ -942,14 +897,14 @@ def main():
     world = build_terrain()
     props, plants, lamps = scatter(world)
     verts = terrain_model(world)
-    chimneys = houses_model(world)
+    houses = houses_model(world)
     plant_verts = plants_model(plants)
     mountain_ring_model()
     technical_textures(world)
     materials()
     effects()
     terrain_lua(world)
-    scene(world, props, lamps, chimneys)
+    scene(world, props, lamps, houses)
     print("terrain %d vertices, %d props, %d plants (%d vertices), %d entities" % (verts, len(props), len(plants), plant_verts, len(entities)))
 
 

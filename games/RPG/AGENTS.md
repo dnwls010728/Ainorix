@@ -14,7 +14,8 @@ zooms, R/F tilt, T stops/starts time, `[` / `]` scrub the time of day.
   Params: `startTime` (0 dawn, 0.25 noon, 0.5 golden hour, 0.68 dusk, 0.85 night), `daySeconds`, `skipIntro`.
 - `scripts/hero.lua`: grid movement over `scripts/lib/terrain.lua` (generated heights, `#` = blocked), step up/down one
   block, 4x3 sheet animation (rows down/right/up, left = mirrored), footstep dust bursts.
-- Generated content: `python tools/make_world.py` writes `assets/models/*.glb`, the atlases and technical textures
+- Generated content: `python tools/make_world.py` writes `assets/models/*.glb` (houses come from
+  `tools/make_houses.py`, one model per house; colours/storeys in `HOUSES` of make_world.py), the atlases and technical textures
   (glow, blob shadow, shore map, shaft, stars), `materials/*` (materials + shader graphs), `effects/*.vfx.json`,
   `scripts/lib/terrain.lua` and `scenes/main.scene.json`. Edit the script and rerun it rather than the generated files.
 - Art: every picture came from Codex image generation. `tools/art_prompts.py` writes the prompts,

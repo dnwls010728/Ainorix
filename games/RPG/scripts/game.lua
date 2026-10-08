@@ -61,7 +61,7 @@ function Game:onStart()
   self.sun = scene.find("Sun")
   self.sky = scene.find("Sky")
   self.clouds = scene.find("Clouds")
-  self.windows = scene.find("Windows")
+  self.windows = scene.withTag("windows")
   self.water = scene.find("Water")
   self.plants = scene.find("Plants")
   self.motes = scene.find("Motes")
@@ -135,7 +135,7 @@ function Game:applyAtmosphere(a, eye)
     local tint = mul3(MOUNTAIN_BASE[i], tone)
     scene.set(id, "MeshRenderer", {color = mix3(a.haze, tint, MOUNTAIN_MIX[i])})
   end
-  scene.set(self.windows, "MeshRenderer", {shaderUniforms = {glow = 0.15 + 1.6 * a.lamp}})
+  for _, id in ipairs(self.windows) do scene.set(id, "MeshRenderer", {shaderUniforms = {glow = 0.15 + 1.6 * a.lamp}}) end
   scene.set(self.water, "MeshRenderer", {shaderUniforms = {light = {tone[1], tone[2], tone[3], 1}}})
   for _, id in ipairs(self.halos) do scene.set(id, "Sprite", {opacity = clamp(a.lamp * 0.7, 0, 1)}) end
   local shaft = clamp(a.shaft * (1 - a.stars * 0.7) * 0.16, 0, 1)
