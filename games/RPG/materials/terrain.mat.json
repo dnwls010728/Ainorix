@@ -1,0 +1,6 @@
+{
+  "baseTexture": "assets/textures/terrain_atlas.png",
+  "pixelArt": true,
+  "roughness": 1,
+  "shader": "materials/ground.shader.json"
+}

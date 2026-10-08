@@ -1,0 +1,106 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Motes",
+  "description": "Pollen drifting in the sun by day, glowing fireflies at night. Follows the camera focus.",
+  "emitters": [
+    {
+      "name": "motes",
+      "emitter": {
+        "texture": "assets/textures/glow.png",
+        "pixelArt": false,
+        "space": "world",
+        "shape": "box",
+        "shapeSize": [
+          15,
+          2.4,
+          15
+        ],
+        "rate": 34,
+        "lifetime": 5,
+        "lifetimeVariation": 0.4,
+        "speed": 0.25,
+        "spread": 180,
+        "gravity": [
+          0.05,
+          0.03,
+          0
+        ],
+        "turbulence": 0.6,
+        "turbulenceScale": 0.35,
+        "blend": "add",
+        "maxParticles": 200,
+        "startSize": 0.16,
+        "endSize": 0.16,
+        "sizeVariation": 0.5,
+        "startColor": [
+          1,
+          0.86,
+          0.45
+        ],
+        "endColor": [
+          1,
+          0.86,
+          0.45
+        ],
+        "opacityOverLife": [
+          [
+            0,
+            0
+          ],
+          [
+            0.2,
+            0.9
+          ],
+          [
+            0.5,
+            0.35
+          ],
+          [
+            0.75,
+            0.95
+          ],
+          [
+            1,
+            0
+          ]
+        ]
+      }
+    }
+  ],
+  "params": {
+    "color": {
+      "default": [
+        1,
+        0.86,
+        0.45
+      ],
+      "doc": "Mote colour (warm pollen, green fireflies).",
+      "targets": [
+        {
+          "to": "motes.startColor"
+        },
+        {
+          "to": "motes.endColor"
+        }
+      ]
+    },
+    "size": {
+      "default": 0.16,
+      "min": 0,
+      "max": 1,
+      "doc": "Mote size.",
+      "targets": [
+        {
+          "to": "motes.startSize"
+        },
+        {
+          "to": "motes.endSize"
+        }
+      ]
+    }
+  },
+  "budget": {
+    "maxParticles": 200
+  }
+}

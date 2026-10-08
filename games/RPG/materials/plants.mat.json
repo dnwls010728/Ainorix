@@ -1,0 +1,9 @@
+{
+  "baseTexture": "assets/textures/plants.png",
+  "pixelArt": true,
+  "roughness": 1,
+  "alphaMode": "mask",
+  "alphaCutoff": 0.5,
+  "doubleSided": true,
+  "shader": "materials/plants.shader.json"
+}

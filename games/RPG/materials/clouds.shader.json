@@ -1,0 +1,351 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {
+    "cameraPosition": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "sunDir": [
+      -0.5,
+      0.6,
+      0.4,
+      0
+    ],
+    "cloudLit": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "cloudShade": [
+      0.66,
+      0.72,
+      0.85,
+      1
+    ]
+  },
+  "nodes": [
+    {
+      "op": "position"
+    },
+    {
+      "op": "uniform",
+      "name": "cameraPosition"
+    },
+    {
+      "op": "subtract",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        2,
+        3
+      ]
+    },
+    {
+      "op": "normalize",
+      "args": [
+        4
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        5
+      ],
+      "value": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        5
+      ],
+      "value": [
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.14
+    },
+    {
+      "op": "add",
+      "args": [
+        6,
+        8
+      ]
+    },
+    {
+      "op": "divide",
+      "args": [
+        7,
+        9
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.12
+    },
+    {
+      "op": "multiply",
+      "args": [
+        10,
+        11
+      ]
+    },
+    {
+      "op": "time"
+    },
+    {
+      "op": "constant",
+      "value": [
+        0.004,
+        0.0015,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        13,
+        14
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        12,
+        15
+      ]
+    },
+    {
+      "op": "texture",
+      "args": [
+        16
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        17
+      ],
+      "value": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0
+    },
+    {
+      "op": "constant",
+      "value": 1
+    },
+    {
+      "op": "constant",
+      "value": 0.42
+    },
+    {
+      "op": "subtract",
+      "args": [
+        18,
+        21
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 3.2
+    },
+    {
+      "op": "multiply",
+      "args": [
+        22,
+        23
+      ]
+    },
+    {
+      "op": "clamp",
+      "args": [
+        24,
+        19,
+        20
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "sunDir"
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        26
+      ],
+      "value": [
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.03
+    },
+    {
+      "op": "multiply",
+      "args": [
+        27,
+        28
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        16,
+        29
+      ]
+    },
+    {
+      "op": "texture",
+      "args": [
+        30
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        31
+      ],
+      "value": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        18,
+        32
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 3
+    },
+    {
+      "op": "multiply",
+      "args": [
+        33,
+        34
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.55
+    },
+    {
+      "op": "add",
+      "args": [
+        35,
+        36
+      ]
+    },
+    {
+      "op": "clamp",
+      "args": [
+        37,
+        19,
+        20
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "cloudShade"
+    },
+    {
+      "op": "uniform",
+      "name": "cloudLit"
+    },
+    {
+      "op": "mix",
+      "args": [
+        39,
+        40,
+        38
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 5
+    },
+    {
+      "op": "multiply",
+      "args": [
+        6,
+        42
+      ]
+    },
+    {
+      "op": "clamp",
+      "args": [
+        43,
+        19,
+        20
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        25,
+        44
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "op": "mix",
+      "args": [
+        41,
+        45,
+        46
+      ]
+    }
+  ],
+  "color": 47
+}

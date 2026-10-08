@@ -1,0 +1,343 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {
+    "cameraPosition": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "horizon": [
+      0.8,
+      0.89,
+      0.95,
+      1
+    ],
+    "zenith": [
+      0.25,
+      0.51,
+      0.86,
+      1
+    ],
+    "sunDir": [
+      -0.5,
+      0.6,
+      0.4,
+      0
+    ],
+    "sunColor": [
+      1,
+      0.95,
+      0.88,
+      0
+    ]
+  },
+  "nodes": [
+    {
+      "op": "position"
+    },
+    {
+      "op": "uniform",
+      "name": "cameraPosition"
+    },
+    {
+      "op": "constant",
+      "value": [
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        3,
+        2
+      ]
+    },
+    {
+      "op": "normalize",
+      "args": [
+        4
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        5
+      ],
+      "value": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0
+    },
+    {
+      "op": "constant",
+      "value": 1
+    },
+    {
+      "op": "clamp",
+      "args": [
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 1.43
+    },
+    {
+      "op": "multiply",
+      "args": [
+        9,
+        10
+      ]
+    },
+    {
+      "op": "clamp",
+      "args": [
+        11,
+        7,
+        8
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "horizon"
+    },
+    {
+      "op": "uniform",
+      "name": "zenith"
+    },
+    {
+      "op": "mix",
+      "args": [
+        13,
+        14,
+        12
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "sunDir"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        16,
+        2
+      ]
+    },
+    {
+      "op": "dot",
+      "args": [
+        5,
+        17
+      ]
+    },
+    {
+      "op": "max",
+      "args": [
+        18,
+        7
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        19,
+        19
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        20,
+        20
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        21,
+        21
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        22,
+        22
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        23,
+        23
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.9993
+    },
+    {
+      "op": "step",
+      "args": [
+        25,
+        19
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 12
+    },
+    {
+      "op": "multiply",
+      "args": [
+        26,
+        27
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.45
+    },
+    {
+      "op": "multiply",
+      "args": [
+        24,
+        29
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        28,
+        30
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.12
+    },
+    {
+      "op": "multiply",
+      "args": [
+        22,
+        32
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        31,
+        33
+      ]
+    },
+    {
+      "op": "uniform",
+      "name": "sunColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        35,
+        34
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        15,
+        36
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        5
+      ],
+      "value": [
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        6,
+        8
+      ]
+    },
+    {
+      "op": "divide",
+      "args": [
+        38,
+        39
+      ]
+    },
+    {
+      "op": "texture",
+      "args": [
+        40
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        41
+      ],
+      "value": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        16
+      ],
+      "value": [
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        42,
+        43
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        37,
+        44
+      ]
+    }
+  ],
+  "color": 45
+}

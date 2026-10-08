@@ -1,0 +1,266 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {},
+  "nodes": [
+    {
+      "op": "position"
+    },
+    {
+      "op": "time"
+    },
+    {
+      "op": "constant",
+      "value": [
+        0.21,
+        0,
+        0.17,
+        0
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        0,
+        2
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        0.32,
+        0,
+        -0.21,
+        0
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        1,
+        4
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        3,
+        5
+      ]
+    },
+    {
+      "op": "sin",
+      "args": [
+        6
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        7
+      ],
+      "value": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "swizzle",
+      "args": [
+        7
+      ],
+      "value": [
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        8,
+        9
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        0.11,
+        0,
+        0.11,
+        0
+      ]
+    },
+    {
+      "op": "dot",
+      "args": [
+        0,
+        11
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.14
+    },
+    {
+      "op": "multiply",
+      "args": [
+        1,
+        13
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        12,
+        14
+      ]
+    },
+    {
+      "op": "sin",
+      "args": [
+        15
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.6
+    },
+    {
+      "op": "multiply",
+      "args": [
+        16,
+        17
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        10,
+        18
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0
+    },
+    {
+      "op": "constant",
+      "value": 1
+    },
+    {
+      "op": "constant",
+      "value": 0.15
+    },
+    {
+      "op": "subtract",
+      "args": [
+        19,
+        22
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 1.0526315789473684
+    },
+    {
+      "op": "multiply",
+      "args": [
+        23,
+        24
+      ]
+    },
+    {
+      "op": "clamp",
+      "args": [
+        25,
+        20,
+        21
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        26,
+        26
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 3
+    },
+    {
+      "op": "constant",
+      "value": 2
+    },
+    {
+      "op": "multiply",
+      "args": [
+        29,
+        26
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        28,
+        30
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        27,
+        31
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.17
+    },
+    {
+      "op": "multiply",
+      "args": [
+        32,
+        33
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        21,
+        34
+      ]
+    },
+    {
+      "op": "baseColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        36,
+        35
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "op": "mix",
+      "args": [
+        36,
+        37,
+        38
+      ]
+    }
+  ],
+  "color": 39
+}
