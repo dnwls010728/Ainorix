@@ -62,6 +62,15 @@ Windows Release: 305 tests, zero failed checks. The two new retirement/packing t
 hints, removed commands/Lua, parameter/expression/death remapping, relative matrices and runtime options.
 Final 2D `eeb1529ca41029c9` and 3D `4ea73d9e1b71d479` hashes are unchanged across repeated runs.
 
+## Validation and player rebuilds (6.6)
+
+Windows Release: 305 tests, zero failed checks. Node/Wasm (Emsdk Node, `OE_BUILD_TESTS=ON` in
+build-web): 249 tests, zero failed checks. The web player (Emscripten 6.0.10, Release,
+BINARYEN_CORES=1) and both Android players (NDK r28c, arm64-v8a and x86_64) were rebuilt from main
+d5a0141 with no source changes; the refreshed binaries and hashes are recorded in
+[runtime/web/README.md](../runtime/web/README.md) and [runtime/android/README.md](../runtime/android/README.md).
+Android devices, browser GPU and Linux/EGL execution were not run.
+
 ## Implementation status (work log)
 
 - [x] 6.1: run the old-path parity gate and capture final particle reference hashes/seed contract.
@@ -69,5 +78,5 @@ Final 2D `eeb1529ca41029c9` and 3D `4ea73d9e1b71d479` hashes are unchanged acros
 - [x] 6.3: move fixtures and regression tests to assets; establish stable reference hashes.
 - [x] 6.4: retire registration, scene stepping/gather and standalone commands/Lua; retain reflection.
 - [x] 6.5: revise particle/API/editor/agent documentation and pre-release compatibility rule.
-- [ ] 6.6: full Windows/Node suites and Web/Android player rebuilds.
+- [x] 6.6: full Windows/Node suites and Web/Android player rebuilds.
 - [ ] Android device, browser GPU and Linux/EGL execution.

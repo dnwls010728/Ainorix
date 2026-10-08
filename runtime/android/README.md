@@ -328,3 +328,17 @@ Android devices, browser GPU and Linux/EGL execution remain unverified.
 | runtime/android/x86_64/liboe_player.so | 8,114,328 | 3ece61a7e6d6b70e243cde24e9c3735e6981bed8bd48ce83bd5c1ec9d561014d |
 
 Commands.cpp SHA256: `c93cd01e47925ba2f8ea60087c51c98a37ea137ec3fc61e966235192e3222d07`.
+
+## VFX phase 6 rebuild (2026-10-08)
+
+Players author particles only through linked `VFXSystem` assets (standalone ParticleEmitter scene
+component, `particles.*` commands, Lua `particles` and `self:burst` retired; see docs/VFX_PHASE6.md).
+Built from main d5a0141 with Android NDK r28c, Release, parallelism 2. Windows 305 tests and
+Node/Wasm 249 tests pass. Android devices, browser GPU and Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,682,240 | 38abefe9ebe7e7adc28eaf43adb444dcbb3581d470707633f5c600ce0772e6ae |
+| runtime/android/x86_64/liboe_player.so | 8,133,800 | 7e14a75723bd879d5bc42bf4119d45970f5edb465e8bee45d7d6bd441a873374 |
+
+Commands.cpp SHA256: `524d9d4927ff3f93bc59578fc897c4d747f0791d5e90402b904d1f928361a00f`.

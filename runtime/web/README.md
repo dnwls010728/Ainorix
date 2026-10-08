@@ -327,3 +327,19 @@ Android devices, browser GPU and Linux/EGL execution remain unverified.
 | runtime/web/oe_player.wasm | 4,921,115 | eee728a55e564efb4083986dfb1dd1d7f758a3cddfbb8908e341e1186c0081ba |
 
 Commands.cpp SHA256: `c93cd01e47925ba2f8ea60087c51c98a37ea137ec3fc61e966235192e3222d07`.
+
+## VFX phase 6 rebuild (2026-10-08)
+
+Players author particles only through linked `VFXSystem` assets: the standalone ParticleEmitter scene
+component, `particles.*` commands, the Lua `particles` table and `self:burst` are retired, and
+`vfx.clear {restart}` / `vfx.state {particles:true}` follow docs/VFX_PHASE6.md. Built from main
+d5a0141 with Emscripten 6.0.10, Release, BINARYEN_CORES=1, parallelism 2. Windows 305 tests and
+Node/Wasm 249 tests pass with zero failed checks. JS is byte-identical to phase 5d. Android devices,
+browser GPU and Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,937,034 | cba63fd25fc346cc988007e1fd0816a80d01ca9f70c849d11a87dd06b949517d |
+
+Commands.cpp SHA256: `524d9d4927ff3f93bc59578fc897c4d747f0791d5e90402b904d1f928361a00f`.
