@@ -186,9 +186,6 @@ Vec3 TurbulenceAt(const Vec3& position, float scale, uint32_t seed) {
     return Vec3(ValueNoise(p, seed), ValueNoise(p, seed + 1), ValueNoise(p, seed + 2));
 }
 
-void UpdateParticles(Scene& scene, float dt) {
-    for (auto& pair : scene.Pool<ParticleEmitter>()) StepEmitter(pair.second, pair.first, scene.WorldMatrix(pair.first), 0, dt);
-}
 }  // namespace
 
 namespace {
@@ -483,11 +480,6 @@ bool ParticlesFinished(const ParticleEmitter& emitter) {
 
 void ClearTrail(Trail& trail) { trail.points.clear(); }
 
-int BurstParticles(Scene& scene, EntityId id, int count) {
-    ParticleEmitter* emitter = scene.Get<ParticleEmitter>(id);
-    return emitter ? BurstEmitter(*emitter, id, scene.WorldMatrix(id), 0, count) : 0;
-}
-
 int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_t seedMix, int count) {
     ParticleEmitter* emitter = &value;
     if (count <= 0) return 0;
@@ -720,7 +712,6 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
 
 void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets) {
     if (assets) UpdateAnimators(scene, *assets, dt);
-    UpdateParticles(scene, dt);
     UpdateVfxSystems(scene, assets, dt);
     UpdateSpriteAnimations(scene, dt);
     input.pressedThisFrame.clear();

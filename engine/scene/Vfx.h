@@ -21,6 +21,8 @@ struct VfxAsset {
     std::vector<VfxTrailDefinition> trails;
     int maxParticles = 10000;
 };
+// Reflection for emitter asset values, intentionally absent from the scene component registry.
+const ComponentType& VfxEmitterType();
 // Strict reflection-based authoring validation (throws ApiError with a recovery hint).
 void ValidateVfxSettings(const ComponentType& type, const void* current, const Json& values, const Json* expressionParams = nullptr);
 // Parses/validates version 1, names, settings and parameter targets; throws ApiError on caller errors.

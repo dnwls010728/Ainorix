@@ -117,7 +117,7 @@ struct IsolatedEffect {
             scene.Create(record.name, record.parent, current);
             if (const Transform* transform = source.Get<Transform>(current)) scene.Add<Transform>(current) = *transform;
             if (!selected.count(current)) continue;
-            for (const char* name : {"ParticleEmitter", "Trail", "VFXSystem"}) {
+            for (const char* name : {"Trail", "VFXSystem"}) {
                 const ComponentType& type = *TypeRegistry::Find(name);
                 const void* original = source.GetComponent(current, type);
                 if (!original) continue;
@@ -125,7 +125,6 @@ struct IsolatedEffect {
                 if (!ApplyComponentJson(type, scene.AddComponent(current, type), ComponentToJson(type, original), &error))
                     throw ApiError("invalid_vfx", error);
             }
-            if (const ParticleEmitter* emitter = scene.Get<ParticleEmitter>(current)) capacity += static_cast<uint64_t>(emitter->maxParticles);
             if (VFXSystem* system = scene.Get<VFXSystem>(current)) {
                 system->autoDestroy = false;
                 std::string error;
@@ -140,11 +139,6 @@ struct IsolatedEffect {
             if (const Trail* trail = scene.Get<Trail>(current)) capacity += static_cast<uint64_t>(trail->maxPoints);
         }
         uint64_t expressionWork=0;
-        for (const auto& emitter : scene.Pool<ParticleEmitter>()) {
-            VfxExpressionError error;
-            if (!PrepareVfxExpressions(emitter.second,&error)) throw ApiError(error.code,error.message,error.hint);
-            expressionWork+=VfxExpressionWork(emitter.second);
-        }
         for (const auto& system : scene.Pool<VFXSystem>())
             for (const auto& emitter : system.second.emitters) expressionWork+=VfxExpressionWork(emitter);
         if (expressionWork*static_cast<uint64_t>(std::max(1,frames))*static_cast<uint64_t>(passes)>100000000)
@@ -190,12 +184,11 @@ struct IsolatedEffect {
         UpdateLateSystems(scene, static_cast<float>(Engine::kFixedDt));
     }
     bool Finished() const {
-        for (const auto& pair : scene.Pool<ParticleEmitter>()) if (!ParticlesFinished(pair.second)) return false;
         for (const auto& pair : scene.Pool<Trail>()) if (TrailEmitting(pair.second) || !pair.second.points.empty()) return false;
         for (const auto& pair : scene.Pool<VFXSystem>()) if (!VfxFinished(pair.second)) return false;
         return true;
     }
-    size_t Count() const { size_t count = 0; for (const auto& pair : scene.Pool<ParticleEmitter>()) count += pair.second.particles.size(); for (const auto& pair : scene.Pool<VFXSystem>()) for (const auto& emitter : pair.second.emitters) count += emitter.particles.size(); return count; }
+    size_t Count() const { size_t count = 0; for (const auto& pair : scene.Pool<VFXSystem>()) for (const auto& emitter : pair.second.emitters) count += emitter.particles.size(); return count; }
     size_t PointCount() const { size_t count = 0; for (const auto& pair : scene.Pool<Trail>()) count += pair.second.points.size(); for (const auto& pair : scene.Pool<VFXSystem>()) for (const auto& trail : pair.second.trails) count += trail.points.size(); return count; }
     Bounds Box(const Mat4& view = Mat4{}) const {
         Bounds bounds;
@@ -305,7 +298,6 @@ Json AnalyzeVfx(Engine& engine, EntityId id, const Json& args) {
     Json out = Json::MakeObject(); out["duration"] = static_cast<double>(end) * Engine::kFixedDt;
     out["step"] = static_cast<double>(interval) * Engine::kFixedDt; out["finishedAt"] = Json(); out["samples"] = Json::MakeArray();
     size_t peak = 0, pointPeak = 0; int peakFrame = 0; uint64_t budget = 0;
-    for (const auto& pair : effect.scene.Pool<ParticleEmitter>()) budget += static_cast<uint64_t>(pair.second.maxParticles);
     for (const auto& pair : effect.scene.Pool<VFXSystem>()) budget += static_cast<uint64_t>(pair.second.definition->maxParticles);
     Bounds bounds; std::vector<int> samples;
     for (int frame = 0; frame <= end; ++frame) {

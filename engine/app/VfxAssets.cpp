@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <map>
 
 #include "app/Engine.h"
 #include "assets/Assets.h"
@@ -68,7 +69,7 @@ Json Semantic(const VfxAsset& asset) {
     Json result = Json::MakeObject(); result["$params"] = asset.json["params"]; result["$budget"] = asset.maxParticles;
     for (size_t i = 0; i < asset.emitters.size(); ++i) {
         const std::string& name = asset.emitters[i].name;
-        result[name] = ComponentToJson(*TypeRegistry::Find("ParticleEmitter"), &asset.emitters[i].emitter);
+        result[name] = ComponentToJson(VfxEmitterType(), &asset.emitters[i].emitter);
         Json matrix = Json::MakeArray(); for (float value : asset.emitters[i].local.m) matrix.push(value);
         result[name]["matrix"] = matrix;
     }
@@ -96,20 +97,23 @@ void ValidateVfxSystem(Engine& engine, const void* current, const Json& values) 
 
 Json CheckVfxAsset(Engine& engine, const std::string& path, const Json& params) {
     const auto asset = ReadAsset(engine, path);
-    // Reuse the component checker in a temporary engine scene, never touching the caller's scene.
-    Engine isolated; std::string error;
-    if (!isolated.Open(engine.ProjectDir(), &error)) throw ApiError("invalid_project", error);
-    isolated.NewScene("VFX check");
-    const EntityId root = isolated.GetScene().Create("VFX");
     std::vector<ParticleEmitter> emitters; std::vector<Trail> trails;
     ConfigureVfx(asset, params, emitters, trails);
-    for (size_t i = 0; i < emitters.size(); ++i) {
-        EntityId id = isolated.GetScene().Create(asset.emitters[i].name, root); isolated.GetScene().Add<ParticleEmitter>(id) = emitters[i];
+    Json result = Json::MakeObject(); result["ok"] = true; result["warnings"] = Json::MakeArray();
+    int instructions = 0; double work = 0;
+    for (int kind = 0; kind < 2; ++kind) {
+        const size_t size = kind ? trails.size() : emitters.size();
+        for (size_t i = 0; i < size; ++i) {
+            const Json checked = CheckVfxValues(engine, kind ? nullptr : &emitters[i], kind ? &trails[i] : nullptr);
+            instructions += checked["expressionInstructions"].asInt(); work += checked["expressionStepInstructions"].asNumber();
+            for (const auto& warning : checked["warnings"].items()) {
+                Json item = warning; item["emitter"] = kind ? asset.trails[i].name : asset.emitters[i].name;
+                result["warnings"].push(item);
+            }
+        }
     }
-    for (size_t i = 0; i < trails.size(); ++i) {
-        EntityId id = isolated.GetScene().Create(asset.trails[i].name, root); isolated.GetScene().Add<Trail>(id) = trails[i];
-    }
-    Json result = CheckVfx(isolated, root); result["path"] = path; result["budget"] = asset.maxParticles;
+    result["expressionInstructions"] = instructions; result["expressionStepInstructions"] = work;
+    result["path"] = path; result["budget"] = asset.maxParticles;
     return result;
 }
 
@@ -147,22 +151,68 @@ Json VfxAssetCall(Engine& engine, const std::string& operation, const Json& args
             for (EntityId child : scene.Children(id)) if (selected.insert(child).second) pending.push_back(child);
             if (selected.size() > 256) throw ApiError("invalid_range", "effect subtree exceeds 256 entities");
         }
-        for (EntityId id : selected) for (const char* typeName : {"ParticleEmitter", "Trail"}) {
-            const auto& type = *TypeRegistry::Find(typeName); const void* value = scene.GetComponent(id, type);
-            if (!value) continue;
-            std::string name = scene.Record(id)->name;
-            for (char& character : name) if (!((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-                (character >= '0' && character <= '9') || character == '_' || character == '-')) character = '_';
-            name = name.substr(0, 48); if (name.empty()) name = "effect";
-            if (names.count(name)) name += "_" + std::to_string(id) + (std::string(typeName) == "Trail" ? "_trail" : "_particles");
-            names.insert(name);
-            Json block = Json::MakeObject(); block["name"] = name;
-            const bool trail = std::string(typeName) == "Trail";
-            block[trail ? "trail" : "emitter"] = ComponentToJson(type, value);
-            block["matrix"] = Json::MakeArray(); const Mat4 local = inverse * scene.WorldMatrix(id);
+        json["params"] = Json::MakeObject(); int budget = 0;
+        auto matrix = [&](Json& block, const Mat4& local) {
+            block.erase("transform"); block["matrix"] = Json::MakeArray();
             for (float number : local.m) block["matrix"].push(number);
-            json[trail ? "trails" : "emitters"].push(block);
+        };
+        for (EntityId id : selected) {
+            if (const auto* system = scene.Get<VFXSystem>(id)) {
+                const auto asset = ParseVfxAsset(engine.ReadProjectJson(system->asset));
+                budget += asset.maxParticles;
+                std::map<std::string, std::string> blocks, params;
+                for (const char* key : {"emitters", "trails"}) for (const auto& block : asset.json[key].items())
+                    blocks[block["name"].asString()] = "e" + std::to_string(id) + "_b" + std::to_string(blocks.size());
+                for (const auto& param : asset.json["params"].members())
+                    params[param.first] = "e" + std::to_string(id) + "_p" + std::to_string(params.size());
+                for (const auto& param : asset.json["params"].members()) {
+                    Json definition = param.second;
+                    if (system->params.has(param.first)) definition["default"] = system->params[param.first];
+                    for (auto& target : definition["targets"].items()) {
+                        const std::string to = target["to"].asString(); const size_t dot = to.find('.');
+                        target["to"] = blocks.at(to.substr(0, dot)) + to.substr(dot);
+                    }
+                    json["params"][params.at(param.first)] = definition;
+                }
+                for (int kind = 0; kind < 2; ++kind) {
+                    const char* key = kind ? "trails" : "emitters";
+                    for (size_t i = 0; i < asset.json[key].size(); ++i) {
+                        Json block = asset.json[key][i]; block["name"] = blocks.at(block["name"].asString());
+                        const Mat4 local = inverse * scene.WorldMatrix(id) * (kind ? asset.trails[i].local : asset.emitters[i].local);
+                        matrix(block, local);
+                        if (!kind) {
+                            auto& settings = block["emitter"];
+                            if (settings.has("onDeath") && !settings["onDeath"].asString().empty()) settings["onDeath"] = blocks.at(settings["onDeath"].asString());
+                            if (settings.has("expressions")) for (auto& stage : settings["expressions"].members()) for (auto& channel : stage.second.members()) {
+                                const std::string source = channel.second.asString(); std::string rewritten;
+                                for (size_t at = 0; at < source.size();) {
+                                    if (source.compare(at, 6, "param.") == 0) {
+                                        size_t end = at + 6;
+                                        while (end < source.size() && ((source[end] >= 'a' && source[end] <= 'z') ||
+                                               (source[end] >= 'A' && source[end] <= 'Z') || (source[end] >= '0' && source[end] <= '9') || source[end] == '_')) ++end;
+                                        const auto found = params.find(source.substr(at + 6, end - at - 6));
+                                        if (found != params.end()) { rewritten += "param." + found->second; at = end; continue; }
+                                    }
+                                    rewritten += source[at++];
+                                }
+                                channel.second = rewritten;
+                            }
+                        }
+                        json[key].push(block);
+                    }
+                }
+            }
+            if (const auto* trail = scene.Get<Trail>(id)) {
+                std::string name = scene.Record(id)->name;
+                for (char& c : name) if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) c = '_';
+                name = name.substr(0, 48); if (name.empty()) name = "effect";
+                if (names.count(name)) name += "_" + std::to_string(id) + "_trail";
+                names.insert(name); Json block = Json::MakeObject(); block["name"] = name;
+                block["trail"] = ComponentToJson(*TypeRegistry::Find("Trail"), trail);
+                matrix(block, inverse * scene.WorldMatrix(id)); json["trails"].push(block);
+            }
         }
+        json["budget"]["maxParticles"] = budget;
         if (engine.VfxDocument(path)) throw ApiError("vfx_editing", "export would overwrite the open Effects document", "Choose another path or close the document first.");
         return WriteAsset(engine, path, json);
     }
@@ -254,7 +304,14 @@ Json VfxRuntimeCall(Engine& engine, const std::string& operation, EntityId id, c
     } else if (operation == "stop" || operation == "clear") {
         if (operation == "stop") { system->playbackOverride = true; system->runtimePlaying = false; system->started = true; system->suppressDestroy = false; }
         if (operation == "clear" || args["kill"].asBool()) {
-            for (auto& emitter : system->emitters) emitter.particles.clear();
+            for (auto& emitter : system->emitters) {
+                emitter.particles.clear();
+                if (operation == "clear" && args.has("restart")) {
+                    emitter.randomState = 0; emitter.carry = 0; emitter.emitted = 0; emitter.elapsed = 0; emitter.cycle = 0;
+                    emitter.initialBurstEmitted = !args["restart"].asBool();
+                }
+            }
+            if (operation == "clear" && args.has("restart")) system->expressionTime = 0;
             for (auto& trail : system->trails) trail.points.clear();
             if (operation == "clear") system->suppressDestroy = true;
         }
@@ -264,6 +321,14 @@ Json VfxRuntimeCall(Engine& engine, const std::string& operation, EntityId id, c
         bool found = !args.has("emitter"); int accepted = 0;
         for (const auto& block : system->definition->emitters) if (block.name == args["emitter"].asString()) found = true;
         if (!found) throw ApiError("no_emitter", "unknown emitter", "Call vfx.state to list names.");
+        for (size_t i = 0; i < system->emitters.size(); ++i) {
+            if (args.has("emitter") && system->definition->emitters[i].name != args["emitter"].asString()) continue;
+            if (!ParticleSettingsValid(system->emitters[i])) {
+                try { ValidateVfxSettings(VfxEmitterType(), &system->emitters[i], ComponentToJson(VfxEmitterType(), &system->emitters[i])); }
+                catch (const ApiError& error) { throw ApiError("invalid_emitter", error.what(), "Correct the asset with vfx.set."); }
+                throw ApiError("invalid_emitter", "emitter settings/curves must be finite and valid", "Correct the asset with vfx.set.");
+            }
+        }
         size_t live = 0; for (const auto& emitter : system->emitters) live += emitter.particles.size();
         for (size_t i = 0; i < system->emitters.size(); ++i) {
             if (args.has("emitter") && system->definition->emitters[i].name != args["emitter"].asString()) continue;
@@ -287,7 +352,7 @@ Json VfxRuntimeCall(Engine& engine, const std::string& operation, EntityId id, c
     if (system->definition) {
         result["budget"] = system->definition->maxParticles;
         for (size_t i = 0; i < system->emitters.size(); ++i) {
-            const auto& emitter = system->emitters[i]; Json block = Json::MakeObject(); block["name"] = system->definition->emitters[i].name;
+            const auto& emitter = system->emitters[i]; Json block = DescribeVfxEmitter(emitter, args["particles"].asBool()); block["name"] = system->definition->emitters[i].name;
             block["count"] = static_cast<uint64_t>(emitter.particles.size()); block["emitted"] = emitter.emitted;
             block["maxParticles"] = emitter.maxParticles; block["finished"] = ParticlesFinished(emitter);
             result["emitters"].push(block); count += emitter.particles.size();

@@ -23,7 +23,6 @@ struct ParticleEmitter;
 bool ParticleSettingsValid(const ParticleEmitter& emitter);
 
 // Emits up to the configured capacity immediately; returns accepted births.
-int BurstParticles(Scene& scene, EntityId id, int count);
 // True once a non-looping emitter has emitted everything it will and its particles are gone
 // (effect entities can be destroyed). Looping emitters never finish.
 bool ParticlesFinished(const ParticleEmitter& emitter);

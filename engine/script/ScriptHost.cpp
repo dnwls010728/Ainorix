@@ -727,34 +727,6 @@ int L_AnimationPlay(lua_State* L) {
     });
 }
 
-int L_ParticlesBurst(lua_State* L) {
-    return Guard(L, [&] {
-        EntityId id = CheckEntity(L, 1);
-        lua_Integer count = luaL_checkinteger(L, 2);
-        if (count < 0 || count > 10000) return luaL_error(L, "particle burst count must be 0..10000");
-        Json args = Json::MakeObject();
-        args["id"] = id;
-        args["count"] = static_cast<int>(count);
-        Json result = Host(L).GetEngine().Call("particles.burst", args);
-        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
-        lua_pushinteger(L, result["result"]["accepted"].asInt());
-        return 1;
-    });
-}
-
-// particles.state(id) -> {count, emitted, playing, loop, maxParticles, finished}
-int L_ParticlesState(lua_State* L) {
-    return Guard(L, [&] {
-        Json args = Json::MakeObject();
-        args["id"] = CheckEntity(L, 1);
-        Json result = Host(L).GetEngine().Call("particles.state", args);
-        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
-        PushJson(L, result["result"]);
-        return 1;
-    });
-}
-
-// VFX bindings share the command registry, including validation and runtime-only controls.
 int VfxLuaCall(lua_State* L, const char* operation) {
     return Guard(L, [&] {
         const std::string op = operation;
@@ -763,7 +735,7 @@ int VfxLuaCall(lua_State* L, const char* operation) {
             args = lua_istable(L, 2) ? ToJson(L, 2) : Json::MakeObject();
             args["path"] = luaL_checkstring(L, 1);
         } else {
-            if (op == "play" || op == "stop") args = lua_istable(L, 2) ? ToJson(L, 2) : Json::MakeObject();
+            if (op == "play" || op == "stop" || op == "clear" || op == "state") args = lua_istable(L, 2) ? ToJson(L, 2) : Json::MakeObject();
             args["id"] = CheckEntity(L, 1);
             if (op == "set_param") { args["name"] = luaL_checkstring(L, 2); args["value"] = ToJson(L, 3); }
             if (op == "burst" && !lua_isnoneornil(L, 2)) {
@@ -1223,7 +1195,6 @@ function Script:add(t, v) return scene.add(self.id, t, v) end
 function Script:has(t) return scene.has(self.id, t) end
 function Script:remove(t) return scene.remove(self.id, t) end
 function Script:play(clip, options) return animation.play(self.id, clip, options) end
-function Script:burst(count) return particles.burst(self.id, count) end
 function Script:destroy() return scene.destroy(self.id) end
 function Script:position() return scene.get(self.id, "Transform").position end
 function Script:setPosition(x, y, z) scene.set(self.id, "Transform", {position = {x = x, y = y, z = z}}) end
@@ -1673,8 +1644,6 @@ void ScriptHost::Open() {
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
-    const luaL_Reg particleFuncs[] = {{"burst", L_ParticlesBurst}, {"state", L_ParticlesState}, {nullptr, nullptr}};
-    SetFuncs(L, "particles", particleFuncs);
     const luaL_Reg vfxFuncs[] = {{"spawn", L_VfxSpawn}, {"play", L_VfxPlay}, {"stop", L_VfxStop},
         {"burst", L_VfxBurst}, {"clear", L_VfxClear}, {"set", L_VfxSet}, {"state", L_VfxState}, {nullptr, nullptr}};
     SetFuncs(L, "vfx", vfxFuncs);
@@ -2106,7 +2075,7 @@ std::vector<std::string> ScriptHost::PollHotReload(const std::string& changedPat
     reloading_ = true; reloadViolation_ = false; reloadBlocked_ = reloadProtected_;
     // Block engine functions even when a module captured an unguarded binding earlier.
     const int top = lua_gettop(L_);
-    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "particles", "vfx", "trail", "physics", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
+    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "vfx", "trail", "physics", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
         lua_getglobal(L_, global);
         if (lua_istable(L_, -1)) { lua_pushnil(L_); while (lua_next(L_, -2)) { if (lua_isfunction(L_, -1)) reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1); } }
         lua_pop(L_, 1);

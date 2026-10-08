@@ -100,6 +100,9 @@ PreparedPreset PreparePreset(const std::string& name) {
     if (!preset["bundled"].asBool()) {
         document["format"] = "oe.vfx"; document["version"] = 1; document["name"] = name;
         document["emitters"] = preset["emitters"]; document["trails"] = preset["trails"];
+        int capacity = 0;
+        for (const auto& block : preset["emitters"].items()) capacity += block["emitter"]["maxParticles"].asInt(256);
+        document["budget"]["maxParticles"] = capacity;
         return {ParseVfxAsset(document).json, {}};
     }
     document = preset["vfx"];

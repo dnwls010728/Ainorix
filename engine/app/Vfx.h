@@ -18,6 +18,10 @@ Json VfxPresetDocument(Engine& engine, const std::string& name);
 std::string VfxPresetAsset(Engine& engine, const std::string& name);
 // Applies one preset to an entity atomically; the calling command supplies scene undo.
 Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args);
+// Read-only counts/settings and optional birth/evaluated snapshots for one asset emitter.
+Json DescribeVfxEmitter(const ParticleEmitter& emitter, bool particles);
+// Validate asset emitter/trail values without creating scene components; id supplies optional anchor context.
+Json CheckVfxValues(Engine& engine, const ParticleEmitter* emitter, const Trail* trail, EntityId id = 0);
 // Checks a selected effect subtree without stepping or changing it.
 Json CheckVfx(Engine& engine, EntityId id);
 // Restarts the effect in an isolated scene and returns a contact sheet or numeric analysis.

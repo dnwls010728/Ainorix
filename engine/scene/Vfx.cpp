@@ -12,6 +12,15 @@
 #include "scene/Systems.h"
 
 namespace oe {
+const ComponentType& VfxEmitterType() {
+    static const ComponentType type = [] {
+        ComponentType result; result.makePool = [] { return std::make_unique<ComponentPool<ParticleEmitter>>(); }; result.name = "EmitterSettings"; result.doc = ParticleEmitter::kDoc;
+        FieldList fields; ParticleEmitter::Reflect(fields); result.fields = std::move(fields.fields);
+        return result;
+    }();
+    return type;
+}
+
 namespace {
 size_t Distance(const std::string& a, const std::string& b) {
     std::vector<size_t> row(b.size() + 1);
@@ -83,7 +92,7 @@ void ValidateFields(const ComponentType& type, void* value, const Json& values) 
         }
         if (!FieldFromJson(*field, value, v, &error)) throw ApiError("invalid_vfx", error, "Use the type/options in vfx.schema.");
     }
-    if (type.name == "ParticleEmitter") {
+    if (type.name == "EmitterSettings") {
         const auto& emitter = *static_cast<ParticleEmitter*>(value);
         if (emitter.shapeSize.x < 0 || emitter.shapeSize.y < 0 || emitter.shapeSize.z < 0)
             throw ApiError("invalid_range", "shapeSize must be nonnegative", "Use a radius or nonnegative half extents.");
@@ -96,12 +105,12 @@ void ValidateFields(const ComponentType& type, void* value, const Json& values) 
 }  // namespace
 
 void ValidateVfxSettings(const ComponentType& type, const void* current, const Json& values, const Json* expressionParams) {
-    if (type.name != "ParticleEmitter" && type.name != "Trail") return;
+    if (type.name != "EmitterSettings" && type.name != "Trail") return;
     auto pool = type.makePool();
     void* copy = pool->Add(1);
     std::string error;
     if (current) ApplyComponentJson(type, copy, ComponentToJson(type, current), &error);
-    if (type.name == "ParticleEmitter") {
+    if (type.name == "EmitterSettings") {
         auto& emitter=*static_cast<ParticleEmitter*>(copy);
         if (expressionParams) emitter.expressionParams=*expressionParams;
         else if (current) emitter.expressionParams=static_cast<const ParticleEmitter*>(current)->expressionParams;
@@ -174,7 +183,7 @@ Target FindTarget(const VfxAsset& asset, const std::string& to) {
     for (size_t i = 0; i < asset.emitters.size(); ++i) if (asset.emitters[i].name == name) { target.index = i; found = true; }
     for (size_t i = 0; i < asset.trails.size(); ++i) if (asset.trails[i].name == name) { target.trail = true; target.index = i; found = true; }
     if (!found) throw ApiError("invalid_vfx", "parameter target has no block '" + name + "'", "Use one of the named emitters/trails in this asset.");
-    const ComponentType& type = *TypeRegistry::Find(target.trail ? "Trail" : "ParticleEmitter");
+    const ComponentType& type = (target.trail ? *TypeRegistry::Find("Trail") : VfxEmitterType());
     target.field = type.FindField(field);
     if (!target.field) {
         Json bad = Json::MakeObject(); bad[field] = 0;
@@ -210,7 +219,7 @@ void ConfigureVfx(const VfxAsset& asset, const Json& overrides, std::vector<Part
                 if (!value.isNumber()) throw ApiError("invalid_vfx", "scale requires a numeric parameter", "Remove scale for color, string, vector or boolean targets.");
                 applied = value.asNumber() * mapping["scale"].asNumber();
             }
-            const ComponentType& type = *TypeRegistry::Find(target.trail ? "Trail" : "ParticleEmitter");
+            const ComponentType& type = (target.trail ? *TypeRegistry::Find("Trail") : VfxEmitterType());
             void* component = target.trail ? static_cast<void*>(&trails[target.index]) : static_cast<void*>(&emitters[target.index]);
             Json patch = Json::MakeObject(); patch[target.field->name] = applied;
             ValidateVfxSettings(type, component, patch);
@@ -256,7 +265,7 @@ VfxAsset ParseVfxAsset(const Json& json) {
             Keys(block, {"name", trail ? "trail" : "emitter", "transform", "matrix"}, location);
             const std::string name = block["name"].asString();
             if (!NameValid(name) || !names.insert(name).second) throw ApiError("invalid_vfx", location + ".name is invalid or repeated", "Use unique 1..64 character names containing letters, digits, '_' or '-'.");
-            const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");
+            const ComponentType& type = (trail ? *TypeRegistry::Find("Trail") : VfxEmitterType());
             const char* settings = trail ? "trail" : "emitter";
             const Json values = block.has(settings) ? block[settings] : Json::MakeObject();
             try { ValidateVfxSettings(type, nullptr, values, &expressionDefaults); }
@@ -345,7 +354,7 @@ bool RefreshVfx(VFXSystem& system, AssetManager& assets, std::string* error) {
     if (restart) { system.emitters = std::move(emitters); system.trails = std::move(trails); system.started = false; system.expressionTime=0; }
     else {
         std::string ignored;
-        const ComponentType& emitterType = *TypeRegistry::Find("ParticleEmitter"), &trailType = *TypeRegistry::Find("Trail");
+        const ComponentType& emitterType = VfxEmitterType(), &trailType = *TypeRegistry::Find("Trail");
         for (size_t i = 0; i < emitters.size(); ++i) {
             ApplyComponentJson(emitterType, &system.emitters[i], ComponentToJson(emitterType, &emitters[i]), &ignored);
             system.emitters[i].expressionParams=emitters[i].expressionParams;system.emitters[i].expressionInSystem=true;

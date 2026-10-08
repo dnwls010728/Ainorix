@@ -34,12 +34,40 @@ Platformer and crystal owners now disappear when their particles finish rather t
 All 303 Windows tests pass after migration, including Dungeon/Platformer, Wickbound, DongleZoo,
 VFXLab and OnlineRPG gameplay coverage. Pure content changes require packaging, not a player rebuild.
 
+## Unified core and authoring (6.3–6.5)
+
+Emitter regression fixtures now create real assets and VFXSystem owners through the public commands;
+EmitterSettings is test-only shorthand, never a scene component. VfxEmitterType independently reflects
+internal ParticleEmitter values for asset schemas, strict validation and Effects controls. Scene
+registration, standalone stepping/gather, particles.* commands, the Lua particles table and self:burst
+are removed. Stale scene entries retain the owner/other components and emit a VFXSystem migration hint.
+Trail remains registered. No inline VFX definitions or deleted samples were introduced.
+
+All 15 presets now place linked assets. Original presets use the sum of their emitter caps as their
+explicit system budget. Their merge mode writes a separate asset and preserves unspecified authored
+fields; parameterized assets refuse merge to avoid defaults silently overriding the preset patch.
+Installed assets survive scene undo. Use vfx.set for named-block edits of parameterized effects.
+
+vfx.state {particles:true} reports detailed snapshots inside named emitter blocks. vfx.clear leaves
+clocks/RNG unchanged when restart is omitted; supplied restart resets clocks/counters/RNG, rearming
+startup births only when true. Lua accepts matching option tables. vfx.from_entity packs linked assets
+and direct trails, renaming parameters, expression references and death links, retaining relative
+matrices and authored overrides as defaults. Checks validate emitter values without fake scene pools.
+
+API/particle/scripting/editor docs, the three READMEs and identical AGENTS.md/CLAUDE.md now describe the
+single asset authoring route. DESIGN invariant 1.8 permits explicitly approved pre-release consolidation
+with shipped migration and a removal hint. Korean D3D11 Effects screenshot inspected.
+
+Windows Release: 305 tests, zero failed checks. The two new retirement/packing tests cover stale-file
+hints, removed commands/Lua, parameter/expression/death remapping, relative matrices and runtime options.
+Final 2D `eeb1529ca41029c9` and 3D `4ea73d9e1b71d479` hashes are unchanged across repeated runs.
+
 ## Implementation status (work log)
 
 - [x] 6.1: run the old-path parity gate and capture final particle reference hashes/seed contract.
 - [x] 6.2: migrate shipped content, generators and gameplay effect scripts; compare preview/analyze.
-- [ ] 6.3: move fixtures and regression tests to assets; establish stable reference hashes.
-- [ ] 6.4: retire registration, scene stepping/gather and standalone commands/Lua; retain reflection.
+- [x] 6.3: move fixtures and regression tests to assets; establish stable reference hashes.
+- [x] 6.4: retire registration, scene stepping/gather and standalone commands/Lua; retain reflection.
 - [ ] 6.5: revise particle/API/editor/agent documentation and pre-release compatibility rule.
 - [ ] 6.6: full Windows/Node suites and Web/Android player rebuilds.
 - [ ] Android device, browser GPU and Linux/EGL execution.

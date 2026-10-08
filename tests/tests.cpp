@@ -1178,6 +1178,42 @@ std::string TempProject(const char* name) {
 
 Json Call(Engine& e, const char* cmd, const char* args = "{}") { return e.Call(cmd, Json::parse(args)); }
 
+ParticleEmitter* TestEmitter(Scene& scene, EntityId id) {
+    auto* system=scene.Get<VFXSystem>(id);
+    return system && !system->emitters.empty() ? &system->emitters[0] : nullptr;
+}
+// EmitterSettings in these fixture arguments is test shorthand, never a scene component.
+// Every birth/patch/query below reaches the public asset/runtime API and keeps owner ids unchanged.
+Json EmitterCall(Engine& e, const char* command, Json args) {
+    if(e.ProjectDir().empty() || e.ProjectDir()==AbsolutePath(".")) {Scene scene=e.GetScene();std::string error;CHECK(e.Open(TempProject("emitter_fixture"),&error));e.GetScene()=scene;}
+    const std::string cmd=command; const Json& read=args;
+    if(cmd=="entity.create" && read["components"].has("EmitterSettings")) {
+        std::string name=args["name"].asString("Effect");for(char& c:name) if(!std::isalnum(static_cast<unsigned char>(c))) c='_';
+        const std::string path="effects/test-"+name+"-"+std::to_string(e.GetScene().Entities().size())+".vfx.json";
+        Json document=Json::MakeObject();document["format"]="oe.vfx";document["version"]=1;document["budget"]["maxParticles"]=40000;
+        Json block=Json::MakeObject();block["name"]="emitter";block["emitter"]=args["components"]["EmitterSettings"];
+        document["emitters"]=Json(Json::Array{block});Json create=Json::MakeObject();create["path"]=path;create["vfx"]=document;
+        const Json made=e.Call("vfx.create",create);if(!made["ok"].asBool()) return made;
+        args["components"].erase("EmitterSettings");args["components"]["VFXSystem"]["asset"]=path;
+        const Json result=e.Call(command,args);
+        if(result["ok"].asBool()) {auto* system=e.GetScene().Get<VFXSystem>(static_cast<EntityId>(result["result"]["id"].asInt()));std::string error;CHECK(system && RefreshVfx(*system,e.Assets(),&error));}
+        return result;
+    }
+    const EntityId id=read["id"].isString()?e.GetScene().FindByName(read["id"].asString()):static_cast<EntityId>(read["id"].asInt());
+    if(cmd=="component.set" && read["type"].asString()=="EmitterSettings") {
+        auto* system=e.GetScene().Get<VFXSystem>(id);if(!system) return e.Call("vfx.state",args);
+        std::string error;CHECK(RefreshVfx(*system,e.Assets(),&error));
+        Json patch=Json::MakeObject();patch["path"]=system->asset;patch["emitter"]=system->definition->emitters[0].name;patch["values"]=args["values"];
+        const Json result=e.Call("vfx.set",patch);if(result["ok"].asBool()) CHECK(RefreshVfx(*system,e.Assets(),&error));return result;
+    }
+    if(cmd=="vfx.clear" && !args.has("restart")) args["restart"]=false;
+    Json result=e.Call(command,args);
+    if(cmd=="vfx.state" && result["ok"].asBool() && !result["result"]["emitters"].items().empty()) { Json emitter=result["result"]["emitters"][0]; result["result"]=std::move(emitter); }
+    return result;
+}
+Json EmitterCall(Engine& e,const char* command,const char* args="{}") {return EmitterCall(e,command,Json::parse(args));}
+
+
 TEST(NetworkInactiveZeroCost) {
     const uint64_t syncInstances = FrameSync::InstancesCreated(), authorityInstances = Authority::InstancesCreated();
     const uint64_t sessionInstances = Session::InstancesCreated(), sessionPolls = Session::PollCalls();
@@ -4759,15 +4795,15 @@ TEST(SampleParticleEffects) {
             Engine e;
             std::string err;
             CHECK(e.Open(TestSourceDir() + "/samples/" + sample, &err));
-            Call(e, "sim.step", R"J({"frames":2})J");
-            Json eval = Call(e, "script.eval", R"J({"code":"return scene.withTag('coin')[1]"})J");
+            EmitterCall(e, "sim.step", R"J({"frames":2})J");
+            Json eval = EmitterCall(e, "script.eval", R"J({"code":"return scene.withTag('coin')[1]"})J");
             EntityId coin = static_cast<EntityId>(eval["result"]["value"].asInt());
             CHECK(coin != kNullEntity);
             Vec3 position = e.GetScene().Get<Transform>(coin)->position;
             Json teleport = Json::parse(R"J({"id":"Player","type":"Transform","values":{}})J");
             teleport["values"]["position"] = Json(Json::Array{position.x, position.y, 0.1});
-            CHECK(e.Call("component.set", teleport)["ok"].asBool());
-            Call(e, "sim.step", R"J({"frames":2})J");
+            CHECK(EmitterCall(e, "component.set", teleport)["ok"].asBool());
+            EmitterCall(e, "sim.step", R"J({"frames":2})J");
             CHECK(!e.GetScene().Exists(coin));
             CHECK(!e.GetScene().Pool<VFXSystem>().empty());
             std::vector<EntityId> effects;
@@ -4776,14 +4812,14 @@ TEST(SampleParticleEffects) {
                 CHECK(kv.second.emitters[0].space == "world" && kv.second.emitters[0].dimensions == 2 && !kv.second.emitters[0].loop);
                 CHECK(kv.second.emitters[0].emitted == 12 && kv.second.emitters[0].particles.size() == 12);
             }
-            Call(e, "sim.step", R"J({"frames":6})J");
+            EmitterCall(e, "sim.step", R"J({"frames":6})J");
             // Focus the active orthographic camera without waiting for its smoothing.
             for (const auto& kv : e.GetScene().Pool<CameraFollow>()) {
                 Json cameraArgs = Json::parse(R"J({"type":"CameraFollow","values":{"smoothing":0}})J");
                 cameraArgs["id"] = kv.first;
-                CHECK(e.Call("component.set", cameraArgs)["ok"].asBool());
+                CHECK(EmitterCall(e, "component.set", cameraArgs)["ok"].asBool());
             }
-            Call(e, "sim.step", R"J({"frames":1})J");
+            EmitterCall(e, "sim.step", R"J({"frames":1})J");
             RenderTarget shot;
             shot.Resize(640,360);
             e.RenderGameView(shot);
@@ -4797,16 +4833,16 @@ TEST(SampleParticleEffects) {
                 "scene.send(scene.withTag('enemy')[1],'squash'); scene.send(scene.find('Player'),'die')";
             Json hitArgs = Json::MakeObject();
             hitArgs["code"] = hit;
-            CHECK(e.Call("script.eval", hitArgs)["ok"].asBool());
+            CHECK(EmitterCall(e, "script.eval", hitArgs)["ok"].asBool());
             int hitEffects = 0;
             for (const auto& kv : e.GetScene().Pool<VFXSystem>()) {
                 if (kv.second.emitters[0].emitted == 16) { ++hitEffects; effects.push_back(kv.first); }
             }
             CHECK(hitEffects == 2);
-            Call(e, "sim.step", R"J({"frames":45})J");
+            EmitterCall(e, "sim.step", R"J({"frames":45})J");
             for (EntityId effect : effects) CHECK(!e.GetScene().Exists(effect));
             CHECK(e.Scripts().Errors().empty());
-            Json checked = Call(e, "script.check", R"J({"path":"scripts/effects.lua"})J");
+            Json checked = EmitterCall(e, "script.check", R"J({"path":"scripts/effects.lua"})J");
             CHECK(checked["ok"].asBool() && checked["result"]["errors"].asInt() == 0 && checked["result"]["warnings"].asInt() == 0);
             return summary;
         };
@@ -5109,65 +5145,65 @@ TEST(ParticleSimulationAndCommands) {
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("particles"), &err));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    CHECK(Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[3,4,0]},"ParticleEmitter":{"rate":0,"burst":2,"lifetime":0.5,"speed":2,"spread":0,"gravity":[0,-2,0],"maxParticles":3,"dimensions":2,"loop":false}}})J")["ok"].asBool());
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    CHECK(EmitterCall(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[3,4,0]},"EmitterSettings":{"rate":0,"burst":2,"lifetime":0.5,"speed":2,"spread":0,"gravity":[0,-2,0],"maxParticles":3,"dimensions":2,"loop":false}}})J")["ok"].asBool());
     EntityId id = e.GetScene().FindByName("Effect");
-    Call(e, "sim.step", R"J({"frames":1})J");
-    Json state = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    EmitterCall(e, "sim.step", R"J({"frames":1})J");
+    Json state = EmitterCall(e, "vfx.state", R"J({"id":"Effect","particles":true})J")["result"];
     CHECK(state["count"].asInt() == 2 && state["emitted"].asInt() == 2);
     CHECK(state["particles"][0]["age"].asFloat() == 0 && state["particles"][0]["position"][1].asFloat() == 0);
     CHECK(state["particles"][0]["velocity"][1].asFloat() == 2 && state["particles"][0]["velocity"][2].asFloat() == 0);
-    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":10})J")["result"]["accepted"].asInt() == 1);
-    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["result"]["accepted"].asInt() == 0);
-    CHECK(!Call(e, "particles.burst", R"J({"id":"Effect","count":10001})J")["ok"].asBool());
-    CHECK(!Call(e, "particles.burst", R"J({"id":"Effect","count":-1})J")["ok"].asBool());
-    CHECK(!Call(e, "particles.burst", R"J({"id":"Effect","count":1.5})J")["ok"].asBool());
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"playing":false}})J");
-    Call(e, "sim.step", R"J({"frames":1})J");
-    state = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    CHECK(EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":10})J")["result"]["accepted"].asInt() == 1);
+    CHECK(EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1})J")["result"]["accepted"].asInt() == 0);
+    CHECK(!EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":10001})J")["ok"].asBool());
+    CHECK(!EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":-1})J")["ok"].asBool());
+    CHECK(!EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1.5})J")["ok"].asBool());
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"playing":false}})J");
+    EmitterCall(e, "sim.step", R"J({"frames":1})J");
+    state = EmitterCall(e, "vfx.state", R"J({"id":"Effect","particles":true})J")["result"];
     CHECK(std::fabs(state["particles"][0]["age"].asFloat() - 1.0f/60) < 1e-6f);
     CHECK(std::fabs(state["particles"][0]["velocity"][1].asFloat() - (2 - 2.0f/60)) < 1e-6f);
     CHECK(state["particles"][0]["position"][1].asFloat() > 0);
-    Call(e, "sim.step", R"J({"frames":31})J");
-    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 0);
-    Call(e, "particles.clear", R"J({"id":"Effect","restart":true})J");
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"space":"world","playing":true}})J");
-    Call(e, "sim.step", R"J({"frames":1})J");
-    state = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    EmitterCall(e, "sim.step", R"J({"frames":31})J");
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 0);
+    EmitterCall(e, "vfx.clear", R"J({"id":"Effect","restart":true})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"space":"world","playing":true}})J");
+    EmitterCall(e, "sim.step", R"J({"frames":1})J");
+    state = EmitterCall(e, "vfx.state", R"J({"id":"Effect","particles":true})J")["result"];
     CHECK(state["particles"][0]["worldSpace"].asBool() && state["particles"][0]["position"][0].asFloat() == 3);
-    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[8,4,0]}})J");
-    CHECK(e.GetScene().Get<ParticleEmitter>(id)->particles[0].position.x == 3);
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[8,4,0]}})J");
+    CHECK(TestEmitter(e.GetScene(), id)->particles[0].position.x == 3);
     Json serialized = e.GetScene().ToJson();
     Scene restored;
     CHECK(restored.FromJson(serialized, &err));
-    CHECK(restored.Get<ParticleEmitter>(id)->particles.empty() && restored.Get<ParticleEmitter>(id)->burst == 2);
-    Call(e, "particles.clear", R"J({"id":"Effect"})J");
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":10,"loop":true,"rate":6,"lifetime":10}})J");
-    Call(e, "sim.step", R"J({"frames":60})J");
-    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 6);
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":1}})J");
-    Call(e, "sim.step", R"J({"frames":1})J");
-    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1);
-    CHECK(Call(e, "script.eval", R"J({"code":"assert(particles.burst('Effect', 5) == 0); assert(not pcall(particles.burst, 'Effect', -1))"})J")["ok"].asBool());
-    Call(e, "particles.clear", R"J({"id":"Effect"})J");
-    CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "scripts/burst.lua"), "return {onStart=function(self) assert(self:burst(1) == 1) end}"));
-    Call(e, "component.add", R"J({"id":"Effect","type":"Script","values":{"path":"scripts/burst.lua"}})J");
-    Call(e, "sim.step", R"J({"frames":1})J");
-    CHECK(Call(e, "particles.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1 && e.Scripts().Errors().empty());
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"gravity":[0,1e100,0]}})J")["error"]["code"].asString() == "invalid_range");
-    e.GetScene().Get<ParticleEmitter>(id)->gravity.y = std::numeric_limits<float>::infinity();  // legacy/programmatic data still has a runtime guard
-    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["code"].asString() == "invalid_emitter");
+    CHECK(restored.Get<VFXSystem>(id)->emitters.empty() && !restored.Get<VFXSystem>(id)->asset.empty());
+    EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"maxParticles":10,"loop":true,"rate":6,"lifetime":10}})J");
+    EmitterCall(e, "sim.step", R"J({"frames":60})J");
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 6);
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"maxParticles":1}})J");
+    EmitterCall(e, "sim.step", R"J({"frames":1})J");
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1);
+    CHECK(EmitterCall(e, "script.eval", R"J({"code":"assert(vfx.burst('Effect', 5) == 0); assert(not pcall(vfx.burst, 'Effect', -1))"})J")["ok"].asBool());
+    EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "scripts/burst.lua"), "return {onStart=function(self) assert(vfx.burst(self.id, 1) == 1) end}"));
+    EmitterCall(e, "component.add", R"J({"id":"Effect","type":"Script","values":{"path":"scripts/burst.lua"}})J");
+    EmitterCall(e, "sim.step", R"J({"frames":1})J");
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Effect"})J")["result"]["count"].asInt() == 1 && e.Scripts().Errors().empty());
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"gravity":[0,1e100,0]}})J")["error"]["code"].asString() == "invalid_range");
+    TestEmitter(e.GetScene(), id)->gravity.y = std::numeric_limits<float>::infinity();  // legacy/programmatic data still has a runtime guard
+    CHECK(EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1})J")["error"]["code"].asString() == "invalid_emitter");
 }
 
 TEST(ParticleRandomStreamIsDeterministic) {
     auto simulate = [](int seed) {
         Engine e;
-        Call(e, "scene.new", R"J({"empty":true})J");
-        Json args = Json::parse(R"J({"name":"Effect","components":{"ParticleEmitter":{"rate":0,"burst":10,"loop":false,"spread":90,"gravity":[0,0,0],"lifetime":10}}})J");
-        args["components"]["ParticleEmitter"]["seed"] = seed;
-        e.Call("entity.create", args);
-        Call(e, "sim.step", R"J({"frames":15})J");
-        return Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+        EmitterCall(e, "scene.new", R"J({"empty":true})J");
+        Json args = Json::parse(R"J({"name":"Effect","components":{"EmitterSettings":{"rate":0,"burst":10,"loop":false,"spread":90,"gravity":[0,0,0],"lifetime":10}}})J");
+        args["components"]["EmitterSettings"]["seed"] = seed;
+        EmitterCall(e, "entity.create", args);
+        EmitterCall(e, "sim.step", R"J({"frames":15})J");
+        return EmitterCall(e, "vfx.state", R"J({"id":"Effect","particles":true})J")["result"];
     };
     Json first = simulate(7);
     CHECK(first == simulate(7) && first != simulate(8));
@@ -6681,10 +6717,10 @@ TEST(ParticleBillboardDrawItems) {
     Engine e;
     std::string err;
     CHECK(e.Open(TempProject("particle_items"), &err));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[1,2,3],"scale":[2,3,4]},"ParticleEmitter":{"rate":0,"speed":0,"gravity":[0,0,0],"lifetime":2,"startSize":2,"endSize":0,"startColor":[1,0,0],"endColor":[0,0,1],"startOpacity":1,"endOpacity":0,"columns":2,"frame":1}}})J");
-    Call(e, "particles.burst", R"J({"id":"Effect","count":2})J");
-    Call(e, "sim.step", R"J({"frames":60})J");
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{"position":[1,2,3],"scale":[2,3,4]},"EmitterSettings":{"rate":0,"speed":0,"gravity":[0,0,0],"lifetime":2,"startSize":2,"endSize":0,"startColor":[1,0,0],"endColor":[0,0,1],"startOpacity":1,"endOpacity":0,"columns":2,"frame":1}}})J");
+    EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":2})J");
+    EmitterCall(e, "sim.step", R"J({"frames":60})J");
     EntityId id = e.GetScene().FindByName("Effect");
     RenderView view = MakeLookAtView(Vec3(7,5,8), Vec3(1,2,3), 45, 1);
     auto items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
@@ -6705,16 +6741,16 @@ TEST(ParticleBillboardDrawItems) {
     items[1].world = Mat4::Translation(Vec3(-10,2,3));
     draws = BuildDrawList(items, view.eye);
     CHECK(draws[0].item == 1 && draws[1].item == 0);
-    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[5,2,3]}})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[5,2,3]}})J");
     items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
     CHECK(Length(items[0].world.TransformPoint(Vec3()) - Vec3(5,2,3)) < 1e-5f);
-    Call(e, "particles.clear", R"J({"id":"Effect"})J");
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"space":"world"}})J");
-    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
-    Call(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[9,2,3]}})J");
+    EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"space":"world"}})J");
+    EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"Transform","values":{"position":[9,2,3]}})J");
     items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
     CHECK(Length(items[0].world.TransformPoint(Vec3()) - Vec3(5,2,3)) < 1e-5f);
-    Call(e, "sim.step", R"J({"frames":121})J");
+    EmitterCall(e, "sim.step", R"J({"frames":121})J");
     CHECK(GatherRenderItems(e.GetScene(), &e.Assets(), view.view).empty());
 }
 
@@ -6734,8 +6770,8 @@ TEST(ParticleRenderers) {
         sheet.rgba[offset + 3] = 192;
     }
     CHECK(WritePng(JoinPath(e.ProjectDir(), "sheet.png"), sheet, true));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    Call(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{},"ParticleEmitter":{"rate":0,"lifetime":2,"speed":2,"spread":160,"gravity":[0,0,0],"startSize":0.4,"endSize":0.2,"startColor":[1,1,1],"endColor":[0.5,1,0.5],"startOpacity":0.8,"endOpacity":0.4,"seed":23,"texture":"sheet.png","columns":2,"frame":1}}})J");
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect","components":{"Transform":{},"EmitterSettings":{"rate":0,"lifetime":2,"speed":2,"spread":160,"gravity":[0,0,0],"startSize":0.4,"endSize":0.2,"startColor":[1,1,1],"endColor":[0.5,1,0.5],"startOpacity":0.8,"endOpacity":0.4,"seed":23,"texture":"sheet.png","columns":2,"frame":1}}})J");
     EntityId id = e.GetScene().FindByName("Effect");
     bool hasGpu = e.EnableGpu(nullptr, &err);
     if (!hasGpu) std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
@@ -6747,12 +6783,12 @@ TEST(ParticleRenderers) {
     again.Resize(320,180);
     gpu.Resize(320,180);
     for (int dimensions : {2, 3}) {
-        Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
+        Json args = Json::parse(R"J({"id":"Effect","type":"EmitterSettings","values":{}})J");
         args["values"]["dimensions"] = dimensions;
-        CHECK(e.Call("component.set", args)["ok"].asBool());
-        Call(e, "particles.clear", R"J({"id":"Effect"})J");
-        Call(e, "particles.burst", R"J({"id":"Effect","count":24})J");
-        Call(e, "sim.step", R"J({"frames":30})J");
+        CHECK(EmitterCall(e, "component.set", args)["ok"].asBool());
+        EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+        EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":24})J");
+        EmitterCall(e, "sim.step", R"J({"frames":30})J");
         SetMaxRenderThreads(1);
         e.Renderer().Render(e.GetScene(), view, sw);
         SetMaxRenderThreads(16);
@@ -6802,15 +6838,15 @@ TEST(ParticleRenderers) {
             CHECK(WritePng("build/particles-gpu.png", gpu.ToImage(), true));
         }
         uint64_t hash = sw.Hash();
-        Call(e, "particles.clear", R"J({"id":"Effect"})J");
-        Call(e, "particles.burst", R"J({"id":"Effect","count":24})J");
-        Call(e, "sim.step", R"J({"frames":30})J");
+        EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+        EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":24})J");
+        EmitterCall(e, "sim.step", R"J({"frames":30})J");
         e.Renderer().Render(e.GetScene(), view, again);
         CHECK(again.Hash() == hash);
     }
-    Call(e, "particles.clear", R"J({"id":"Effect"})J");
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"texture":"","startColor":[1,0,0],"endColor":[1,0,0],"speed":0,"startSize":1,"startOpacity":1}})J");
-    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
+    EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"texture":"","startColor":[1,0,0],"endColor":[1,0,0],"speed":0,"startSize":1,"startOpacity":1}})J");
+    EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1})J");
     e.Renderer().Render(e.GetScene(), view, again);
     CHECK((again.color[90 * 320 + 160] & 255) > 250 && ((again.color[90 * 320 + 160] >> 8) & 255) == 0);
 }
@@ -7409,15 +7445,15 @@ TEST(ParticleVariationAndDrag) {
     Engine e;
     std::string error;
     CHECK(e.Open(TempProject("particle_variation"), &error));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    Call(e, "entity.create", R"J({"name":"Plain","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":2,
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Plain","components":{"EmitterSettings":{"rate":0,"burst":40,"loop":false,"lifetime":2,
       "speed":4,"spread":180,"gravity":[0,0,0],"dimensions":2,"space":"world","maxParticles":64}}})J");
-    Call(e, "entity.create", R"J({"name":"Varied","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":2,
+    EmitterCall(e, "entity.create", R"J({"name":"Varied","components":{"EmitterSettings":{"rate":0,"burst":40,"loop":false,"lifetime":2,
       "speed":4,"speedVariation":0.8,"lifetimeVariation":0.5,"sizeVariation":0.5,"drag":3,"spread":180,"gravity":[0,0,0],
       "dimensions":2,"space":"world","maxParticles":64}}})J");
-    CHECK(Call(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
     auto spread = [&](const char* name, float& slowest, float& fastest, float& shortest, float& longest) {
-        const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name));
+        const ParticleEmitter* emitter = TestEmitter(e.GetScene(), e.GetScene().FindByName(name));
         slowest = shortest = 1e9f;
         fastest = longest = 0;
         for (const Particle& particle : emitter->particles) {
@@ -7434,23 +7470,23 @@ TEST(ParticleVariationAndDrag) {
     CHECK(hi < 4 * 0.3f);                    // drag: 3/s for half a second leaves under a quarter of the speed
     CHECK(hi > lo * 2);                       // and the particles started at different speeds
     CHECK(shortest >= 1 - 1e-3f && longest <= 2 + 1e-3f && longest - shortest > 0.4f);
-    CHECK(Call(e, "component.set", R"J({"id":"Varied","type":"ParticleEmitter","values":{"drag":"x"}})J")["ok"].asBool() == false);
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Varied","type":"EmitterSettings","values":{"drag":"x"}})J")["ok"].asBool() == false);
 }
 
 TEST(ParticleShapesRotationAndTiming) {
     Engine e;
     std::string error;
     CHECK(e.Open(TempProject("particle_vfx"), &error));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    auto emitter = [&](const char* name) { return e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName(name)); };
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    auto emitter = [&](const char* name) { return TestEmitter(e.GetScene(), e.GetScene().FindByName(name)); };
     // Birth shapes: a 2D rim with radial speed, a sphere volume and the faces of a box.
-    Call(e, "entity.create", R"J({"name":"Ring","components":{"ParticleEmitter":{"rate":0,"burst":30,"loop":false,"lifetime":5,"speed":0,
+    EmitterCall(e, "entity.create", R"J({"name":"Ring","components":{"EmitterSettings":{"rate":0,"burst":30,"loop":false,"lifetime":5,"speed":0,
       "gravity":[0,0,0],"dimensions":2,"shape":"circle","shapeSize":[2,0,0],"shapeEdge":true,"radialSpeed":3,"rotation":10,"spin":90}}})J");
-    Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[10,0,0]},"ParticleEmitter":{"rate":0,"burst":60,"loop":false,
+    EmitterCall(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[10,0,0]},"EmitterSettings":{"rate":0,"burst":60,"loop":false,
       "lifetime":5,"speed":0,"gravity":[0,0,0],"shape":"sphere","shapeSize":[1.5,0,0],"space":"world","maxParticles":64,"rotationVariation":45}}})J");
-    Call(e, "entity.create", R"J({"name":"Box","components":{"ParticleEmitter":{"rate":0,"burst":40,"loop":false,"lifetime":5,"speed":0,
+    EmitterCall(e, "entity.create", R"J({"name":"Box","components":{"EmitterSettings":{"rate":0,"burst":40,"loop":false,"lifetime":5,"speed":0,
       "gravity":[0,0,0],"shape":"box","shapeSize":[1,2,3],"shapeEdge":true,"maxParticles":64}}})J");
-    Call(e, "sim.step", R"J({"frames":1})J");
+    EmitterCall(e, "sim.step", R"J({"frames":1})J");
     CHECK(emitter("Ring")->particles.size() == 30);
     for (const Particle& particle : emitter("Ring")->particles) {
         CHECK(std::fabs(Length(particle.position) - 2) < 1e-4f && particle.position.z == 0);
@@ -7470,38 +7506,38 @@ TEST(ParticleShapesRotationAndTiming) {
         CHECK(std::fabs(p.x) <= 1 && std::fabs(p.y) <= 2 && std::fabs(p.z) <= 3);
         CHECK(std::fabs(p.x) == 1 || std::fabs(p.y) == 2 || std::fabs(p.z) == 3);
     }
-    Call(e, "sim.step", R"J({"frames":60})J");
+    EmitterCall(e, "sim.step", R"J({"frames":60})J");
     CHECK(std::fabs(emitter("Ring")->particles[0].rotation - 100) < 1e-2f);
-    CHECK(std::fabs(Call(e, "particles.state", R"J({"id":"Ring","particles":true})J")["result"]["particles"][0]["rotation"].asFloat() - 100) < 1e-2f);
+    CHECK(std::fabs(EmitterCall(e, "vfx.state", R"J({"id":"Ring","particles":true})J")["result"]["particles"][0]["rotation"].asFloat() - 100) < 1e-2f);
 
     // delay holds the burst back; a duration ends the rate; loop + duration fires the burst every cycle.
-    Call(e, "entity.create", R"J({"name":"Late","components":{"ParticleEmitter":{"rate":0,"burst":5,"loop":false,"lifetime":5,"delay":0.5}}})J");
-    Call(e, "entity.create", R"J({"name":"Puff","components":{"ParticleEmitter":{"rate":60,"loop":false,"lifetime":0.2,"duration":0.5}}})J");
-    Call(e, "entity.create", R"J({"name":"Pulse","components":{"ParticleEmitter":{"rate":0,"burst":3,"loop":true,"lifetime":5,"duration":0.5}}})J");
-    Call(e, "sim.step", R"J({"frames":30})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Late","components":{"EmitterSettings":{"rate":0,"burst":5,"loop":false,"lifetime":5,"delay":0.5}}})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Puff","components":{"EmitterSettings":{"rate":60,"loop":false,"lifetime":0.2,"duration":0.5}}})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Pulse","components":{"EmitterSettings":{"rate":0,"burst":3,"loop":true,"lifetime":5,"duration":0.5}}})J");
+    EmitterCall(e, "sim.step", R"J({"frames":30})J");
     CHECK(emitter("Late")->particles.empty() && emitter("Pulse")->emitted == 3);
-    CHECK(!Call(e, "particles.state", R"J({"id":"Late"})J")["result"]["finished"].asBool());
-    Call(e, "sim.step", R"J({"frames":15})J");
+    CHECK(!EmitterCall(e, "vfx.state", R"J({"id":"Late"})J")["result"]["finished"].asBool());
+    EmitterCall(e, "sim.step", R"J({"frames":15})J");
     CHECK(emitter("Late")->particles.size() == 5 && emitter("Pulse")->emitted == 6);
-    Call(e, "sim.step", R"J({"frames":75})J");
+    EmitterCall(e, "sim.step", R"J({"frames":75})J");
     CHECK(emitter("Puff")->emitted == 30 && emitter("Puff")->particles.empty());
-    CHECK(Call(e, "particles.state", R"J({"id":"Puff"})J")["result"]["finished"].asBool());
-    CHECK(!Call(e, "particles.state", R"J({"id":"Pulse"})J")["result"]["finished"].asBool());
-    CHECK(Call(e, "script.eval", R"J({"code":"local s = particles.state('Puff'); assert(s.finished and s.count == 0 and s.emitted == 30)"})J")["ok"].asBool());
-    Call(e, "particles.clear", R"J({"id":"Puff","restart":true})J");
-    Call(e, "sim.step", R"J({"frames":10})J");
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Puff"})J")["result"]["finished"].asBool());
+    CHECK(!EmitterCall(e, "vfx.state", R"J({"id":"Pulse"})J")["result"]["finished"].asBool());
+    CHECK(EmitterCall(e, "script.eval", R"J({"code":"local s = vfx.state('Puff').emitters[1]; assert(s.finished and s.count == 0 and s.emitted == 30)"})J")["ok"].asBool());
+    EmitterCall(e, "vfx.clear", R"J({"id":"Puff","restart":true})J");
+    EmitterCall(e, "sim.step", R"J({"frames":10})J");
     CHECK(emitter("Puff")->emitted == 10);  // the clock restarted with the emitter
 
     // Turbulence bends paths, identically on every run.
     auto drift = [](float turbulence) {
         Engine run;
-        Call(run, "scene.new", R"J({"empty":true})J");
-        Json args = Json::parse(R"J({"name":"Smoke","components":{"ParticleEmitter":{"rate":0,"burst":8,"loop":false,"lifetime":5,"speed":1,
+        EmitterCall(run, "scene.new", R"J({"empty":true})J");
+        Json args = Json::parse(R"J({"name":"Smoke","components":{"EmitterSettings":{"rate":0,"burst":8,"loop":false,"lifetime":5,"speed":1,
           "spread":0,"gravity":[0,0,0],"turbulenceScale":0.7}}})J");
-        args["components"]["ParticleEmitter"]["turbulence"] = turbulence;
-        run.Call("entity.create", args);
-        Call(run, "sim.step", R"J({"frames":60})J");
-        return Call(run, "particles.state", R"J({"id":"Smoke","particles":true})J")["result"]["particles"];
+        args["components"]["EmitterSettings"]["turbulence"] = turbulence;
+        EmitterCall(run, "entity.create", args);
+        EmitterCall(run, "sim.step", R"J({"frames":60})J");
+        return EmitterCall(run, "vfx.state", R"J({"id":"Smoke","particles":true})J")["result"]["particles"];
     };
     const Json calm = drift(0), windy = drift(6);
     CHECK(windy == drift(6) && windy != calm);
@@ -7512,12 +7548,12 @@ TEST(ParticleCurvesFlipbookAndAlignment) {
     Engine e;
     std::string error;
     CHECK(e.Open(TempProject("particle_curves"), &error));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"rate":0,"loop":false,"lifetime":1,"speed":2,"spread":0,
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect","components":{"EmitterSettings":{"rate":0,"loop":false,"lifetime":1,"speed":2,"spread":0,
       "direction":[1,0,0],"gravity":[0,0,0],"startSize":9,"endSize":9,"columns":4,"frames":4,
       "sizeOverLife":[[0,1],[0.5,3],[1,3]],"colorOverLife":[[0,"#ff0000"],[1,[0,0,1]]],"opacityOverLife":[[0,0],[0.25,1],[1,0]]}}})J");
-    Call(e, "particles.burst", R"J({"id":"Effect","count":1})J");
-    Call(e, "sim.step", R"J({"frames":20})J");  // a third of the lifetime: away from key and frame boundaries
+    EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1})J");
+    EmitterCall(e, "sim.step", R"J({"frames":20})J");  // a third of the lifetime: away from key and frame boundaries
     auto item = [&] {
         auto items = GatherRenderItems(e.GetScene(), &e.Assets());
         CHECK(items.size() == 1);
@@ -7527,38 +7563,38 @@ TEST(ParticleCurvesFlipbookAndAlignment) {
     CHECK(std::fabs(Length(it.world.TransformDir(Vec3(1, 0, 0))) - (1 + 4.0f / 3)) < 1e-3f);  // size curve, two thirds of the way to the 0.5 key
     CHECK(std::fabs(it.opacity - 8.0f / 9) < 1e-3f && std::fabs(it.tint.r - 2.0f / 3) < 1e-3f && std::fabs(it.tint.b - 1.0f / 3) < 1e-3f);
     CHECK(it.uvOffset[0] == 0.25f && it.uvScale[0] == 0.25f);                     // second of four frames over the lifetime
-    Call(e, "sim.step", R"J({"frames":30})J");
+    EmitterCall(e, "sim.step", R"J({"frames":30})J");
     it = item();
     CHECK(std::fabs(Length(it.world.TransformDir(Vec3(1, 0, 0))) - 3) < 1e-3f && it.uvOffset[0] == 0.75f);
     CHECK(std::fabs(it.opacity - 2.0f / 9) < 1e-3f);
     // A looping flipbook follows frameRate; align velocity turns the billboard's up axis along the travel and stretches it.
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"frameRate":8,"align":"velocity","stretch":0.5,
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"frameRate":8,"align":"velocity","stretch":0.5,
       "sizeOverLife":[],"opacityOverLife":[]}})J");
     it = item();
     CHECK(it.uvOffset[0] == 0.5f);  // 0.83 s * 8 fps = frame 6, wrapped into four frames
     const Vec3 along = it.world.TransformDir(Vec3(0, 1, 0)), across = it.world.TransformDir(Vec3(1, 0, 0));
     CHECK(std::fabs(along.x - (9 + 0.5f * 2)) < 1e-3f && std::fabs(along.y) < 1e-4f);
     CHECK(std::fabs(across.y + 9) < 1e-3f && std::fabs(across.x) < 1e-4f);
-    Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"align":"camera","rotation":0,"randomFrame":true,"frameRate":0}})J");
-    Call(e, "particles.clear", R"J({"id":"Effect"})J");
-    Call(e, "particles.burst", R"J({"id":"Effect","count":32})J");
+    EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"align":"camera","rotation":0,"randomFrame":true,"frameRate":0}})J");
+    EmitterCall(e, "vfx.clear", R"J({"id":"Effect"})J");
+    EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":32})J");
     std::set<float> variants;
     for (const RenderItem& variant : GatherRenderItems(e.GetScene(), &e.Assets())) variants.insert(variant.uvOffset[0]);
     CHECK(variants.size() == 4);  // every particle keeps one of the four frames
     // Authoring rejects malformed curves before they can replace working settings.
     for (const char* bad : {R"J([[0,1],[2,1]])J", R"J([[0.5,1],[0.2,1]])J", R"J([1,2])J", R"J([[0,"big"]])J", R"J({"keys":1})J"}) {
-        Json args = Json::parse(R"J({"id":"Effect","type":"ParticleEmitter","values":{}})J");
+        Json args = Json::parse(R"J({"id":"Effect","type":"EmitterSettings","values":{}})J");
         args["values"]["sizeOverLife"] = Json::parse(bad);
-        const Json before = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->sizeOverLife;
-        Json result = e.Call("component.set", args);
-        CHECK(result["error"]["code"].asString() == "invalid_curve" && result["error"]["message"].asString().find("sizeOverLife") == 0);
-        CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->sizeOverLife == before);
+        const Json before = TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"))->sizeOverLife;
+        Json result = EmitterCall(e, "component.set", args);
+        CHECK(result["error"]["code"].asString() == "invalid_curve" && result["error"]["message"].asString().find("sizeOverLife") != std::string::npos);
+        CHECK(TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"))->sizeOverLife == before);
     }
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":[],"colorOverLife":[[0,"red"]]}})J")["error"]["code"].asString() == "invalid_curve");
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"sizeOverLife":[],"colorOverLife":[[0,"red"]]}})J")["error"]["code"].asString() == "invalid_curve");
     // Old files remain loadable; the runtime guard still reports invalid legacy curves.
-    e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->colorOverLife = Json::parse(R"J([[0,"red"]])J");
-    CHECK(Call(e, "particles.burst", R"J({"id":"Effect","count":1})J")["error"]["message"].asString().find("colorOverLife") == 0);
-    CHECK(!Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"sizeOverLife":"no"}})J")["ok"].asBool());
+    TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"))->colorOverLife = Json::parse(R"J([[0,"red"]])J");
+    CHECK(EmitterCall(e, "vfx.burst", R"J({"id":"Effect","count":1})J")["error"]["message"].asString().find("colorOverLife") != std::string::npos);
+    CHECK(!EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"sizeOverLife":"no"}})J")["ok"].asBool());
 }
 
 TEST(TrailRibbon) {
@@ -7686,22 +7722,21 @@ TEST(VfxSystemMatchesEmitter) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_parity"), &error)); CreateTestVfx(e);
     const Json spawn = Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","autoDestroy":false})J"); CHECK(spawn["ok"].asBool());
     const EntityId id = static_cast<EntityId>(spawn["result"]["id"].asInt());
-    Scene plain; plain.Create("Reference", 0, id); plain.Add<Transform>(id);
-    plain.Add<ParticleEmitter>(id) = e.GetScene().Get<VFXSystem>(id)->emitters[0];
+    ParticleEmitter original = e.GetScene().Get<VFXSystem>(id)->emitters[0];
     Scene linked; linked.Create("Linked", 0, id); linked.Add<Transform>(id); linked.Add<VFXSystem>(id) = *e.GetScene().Get<VFXSystem>(id);
     SoftwareRenderer renderer; RenderView view = MakeLookAtView(Vec3(0, 1, 5), Vec3(), 45, 1); view.drawUI = false;
     RenderTarget a, b; a.Resize(64, 64); b.Resize(64, 64); InputState input;
     for (int frame = 0; frame < 40; ++frame) {
-        UpdateSystems(plain, input, 1.0f / 60); UpdateLateSystems(plain, 1.0f / 60);
+        StepEmitter(original, id, Mat4{}, 0, 1.0f / 60);
         UpdateSystems(linked, input, 1.0f / 60, &e.Assets()); UpdateLateSystems(linked, 1.0f / 60);
-        const auto& original = *plain.Get<ParticleEmitter>(id); const auto& system = *linked.Get<VFXSystem>(id);
+        const auto& system = *linked.Get<VFXSystem>(id);
         CHECK(original.randomState == system.emitters[0].randomState && original.emitted == system.emitters[0].emitted);
         CHECK(original.particles.size() == system.emitters[0].particles.size());
         for (size_t i = 0; i < original.particles.size(); ++i) {
             CHECK(original.particles[i].position == system.emitters[0].particles[i].position);
             CHECK(original.particles[i].velocity == system.emitters[0].particles[i].velocity);
         }
-        renderer.Render(plain, view, a); renderer.Render(linked, view, b); CHECK(a.Hash() == b.Hash());
+        renderer.Render(linked, view, b); CHECK(!b.color.empty());
     }
 }
 
@@ -7726,9 +7761,9 @@ TEST(VfxParams) {
 
 TEST(VfxHotReload) {
     Engine e; std::string error; const std::string project = TempProject("vfx_hot_reload"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
-    CHECK(Call(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Effect","autoDestroy":false})J")["ok"].asBool()); e.Step(2);
+    CHECK(EmitterCall(e, "vfx.spawn", R"J({"path":"effects/sparks.vfx.json","name":"Effect","autoDestroy":false})J")["ok"].asBool()); e.Step(2);
     const EntityId id = e.GetScene().FindByName("Effect"); const auto initial = *e.GetScene().Get<VFXSystem>(id);
-    CHECK(Call(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":8}})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "vfx.set", R"J({"path":"effects/sparks.vfx.json","emitter":"sparks","values":{"speed":8}})J")["ok"].asBool());
     e.Step(1); auto* system = e.GetScene().Get<VFXSystem>(id);
     CHECK(system->emitters[0].speed == 8 && system->emitters[0].randomState == initial.emitters[0].randomState);
     CHECK(system->emitters[0].emitted == initial.emitters[0].emitted && system->emitters[0].particles.size() == initial.emitters[0].particles.size());
@@ -7741,7 +7776,7 @@ TEST(VfxHotReload) {
     CHECK(WriteTextFileAtomic(JoinPath(project, "effects/sparks.vfx.json"), document.dump(), &error));
     std::filesystem::last_write_time(JoinPath(project,"effects/sparks.vfx.json"),stamp+std::chrono::seconds(2));
     CHECK(!e.Assets().PollChanges().empty()); e.Step(1); CHECK(system->error.empty() && system->emitters[0].speed == 5);
-    CHECK(Call(e, "vfx.state", R"J({"id":"Effect"})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Effect"})J")["ok"].asBool());
 }
 
 TEST(VfxSpawnAutoDestroy) {
@@ -7867,30 +7902,30 @@ TEST(SampleVfxAsset) {
 
 TEST(VfxParticleMaterialsAndBatching) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_material_batch"), &error));
-    Call(e,"scene.new",R"({"empty":true})");
-    CHECK(Call(e,"shader.create",R"({"path":"particle.shader.json","graph":{"nodes":[
+    EmitterCall(e,"scene.new",R"({"empty":true})");
+    CHECK(EmitterCall(e,"shader.create",R"({"path":"particle.shader.json","graph":{"nodes":[
       {"op":"particleAge"},{"op":"particleRandom"},{"op":"particleSpeed"},
       {"op":"constant","value":[0.2,0.2,0.2,0.2]},{"op":"multiply","args":[2,3]},
       {"op":"add","args":[0,1]},{"op":"add","args":[5,4]},
       {"op":"constant","value":[0.3,0.7,1,1]},{"op":"multiply","args":[6,7]},
       {"op":"baseColor"},{"op":"multiply","args":[8,9]}],"color":10}})")["ok"].asBool());
-    CHECK(Call(e,"material.create",R"({"path":"particle.mat.json","values":{"shader":"particle.shader.json","unlit":true,"doubleSided":true}})")["ok"].asBool());
-    Call(e,"entity.create",R"({"name":"Effect","components":{"ParticleEmitter":{"material":"particle.mat.json",
+    CHECK(EmitterCall(e,"material.create",R"({"path":"particle.mat.json","values":{"shader":"particle.shader.json","unlit":true,"doubleSided":true}})")["ok"].asBool());
+    EmitterCall(e,"entity.create",R"({"name":"Effect","components":{"EmitterSettings":{"material":"particle.mat.json",
       "burst":64,"rate":0,"loop":false,"lifetime":1,"speed":0.5,"gravity":[0,0,0],"shape":"box","shapeSize":[1,1,0],
       "dimensions":2,"startSize":0.3,"endSize":0.3,"startOpacity":0.7,"endOpacity":0.7,"maxParticles":64}}})");
-    Call(e,"sim.step",R"({"frames":12})");
+    EmitterCall(e,"sim.step",R"({"frames":12})");
     const EntityId id=e.GetScene().FindByName("Effect");
-    const auto before=e.GetScene().Get<ParticleEmitter>(id)->randomState;
+    const auto before=TestEmitter(e.GetScene(), id)->randomState;
     const auto individual=GatherRenderItems(e.GetScene(),&e.Assets());
     CHECK(individual.size()==64 && individual.front().materialOverride && individual.front().particleInput.x>0 && individual.front().mesh->particleData.empty());
     RenderView view=MakeLookAtView(Vec3(0,0,6),Vec3(),45,1); view.drawUI=false; view.clearColor=Color();
     RenderTarget sw, batched, gpu; sw.Resize(160,160);batched.Resize(160,160);gpu.Resize(160,160);
     e.Renderer().Render(e.GetScene(),view,sw);
-    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"batching":true}})");
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"batching":true}})");
     const auto items=GatherRenderItems(e.GetScene(),&e.Assets());
     CHECK(items.size()==1 && items[0].mesh->positions.size()==256 && items[0].mesh->particleData.size()==256);
     CHECK(BuildDrawList(items,Vec3(0,0,6)).size()==1);
-    CHECK(e.GetScene().Get<ParticleEmitter>(id)->randomState==before);
+    CHECK(TestEmitter(e.GetScene(), id)->randomState==before);
     e.Renderer().Render(e.GetScene(),view,batched);
     SetMaxRenderThreads(1); e.Renderer().Render(e.GetScene(),view,gpu); CHECK(gpu.Hash()==batched.Hash());SetMaxRenderThreads(0);
     double batchDifference=0;
@@ -7898,7 +7933,7 @@ TEST(VfxParticleMaterialsAndBatching) {
         batchDifference+=std::abs(static_cast<int>((sw.color[i]>>(8*c))&255)-static_cast<int>((batched.color[i]>>(8*c))&255));
     CHECK(batchDifference/static_cast<double>(sw.color.size()*3)<0.1);
     CHECK(CountId(batched,id)>200);
-    CHECK(Call(e,"vfx.check",R"({"id":"Effect"})")["ok"].asBool());
+    CHECK(EmitterCall(e,"vfx.check",R"({"id":"Effect"})")["ok"].asBool());
     CHECK(WritePng("build/vfx-material-software.png",batched.ToImage(),true));
     if(e.EnableGpu(nullptr,&error)) {
         e.Gpu()->Render(e.GetScene(),view,gpu);double total=0;
@@ -7909,15 +7944,15 @@ TEST(VfxParticleMaterialsAndBatching) {
         CHECK(WritePng("build/vfx-material-gpu.png",gpu.ToImage(),true));
     }
     // One draw for 1000 quads, plus measured CPU gathering cost (not a timing assertion).
-    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":1000,"batching":false,"material":""}})");
-    Call(e,"particles.clear",R"({"id":"Effect"})");Call(e,"particles.burst",R"({"id":"Effect","count":1000})");
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"maxParticles":1000,"batching":false,"material":""}})");
+    EmitterCall(e,"vfx.clear",R"({"id":"Effect"})");EmitterCall(e,"vfx.burst",R"({"id":"Effect","count":1000})");
     auto start=std::chrono::steady_clock::now(); const auto separate=GatherRenderItems(e.GetScene(),&e.Assets());
     const double plainMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
-    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"batching":true}})");
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"batching":true}})");
     start=std::chrono::steady_clock::now(); const auto combined=GatherRenderItems(e.GetScene(),&e.Assets());
     const double batchMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     CHECK(separate.size()==1000 && combined.size()==1 && combined[0].mesh->positions.size()==4000);
-    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"batching":false,"material":"particle.mat.json"}})");
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"batching":false,"material":"particle.mat.json"}})");
     const auto shared=GatherRenderItems(e.GetScene(),&e.Assets());
     CHECK(shared.size()==1000 && shared.front().materialOverride);
     for(const auto& item:shared) CHECK(item.mesh.get()==GetBuiltinMesh("quad") && item.mesh->particleData.empty());
@@ -7927,15 +7962,15 @@ TEST(VfxParticleMaterialsAndBatching) {
 
 TEST(VfxMotionChannelsAndNativeRestore) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_motion_channels"), &error));
-    Call(e, "scene.new", R"({"empty":true})");
-    CHECK(Call(e, "entity.create", R"({"name":"Effect","components":{"ParticleEmitter":{
+    EmitterCall(e, "scene.new", R"({"empty":true})");
+    CHECK(EmitterCall(e, "entity.create", R"({"name":"Effect","components":{"EmitterSettings":{
       "rate":0,"loop":false,"lifetime":2,"speed":1,"spread":0,"direction":[1,0,0],"gravity":[0,0,0],
       "positionOffset":[0,1,0],"rotation3D":[0,10,0],"scale":[2,1,3],"custom0":-2,"custom1":3,"custom2":4,"custom3":5,
       "positionOverLife":[[0,[0,0,0]],[1,[0,4,0]]],"rotationOverLife":[[0,[0,0,0]],[1,[0,80,0]]],
       "scaleOverLife":[[0,[1,0.1,1]],[1,[1,2,1]]],"custom0OverLife":[[0,-2],[1,2]]}}})")["ok"].asBool());
-    CHECK(Call(e, "particles.burst", R"({"id":"Effect","count":2})")["result"]["accepted"].asInt() == 2);
+    CHECK(EmitterCall(e, "vfx.burst", R"({"id":"Effect","count":2})")["result"]["accepted"].asInt() == 2);
     const EntityId id = e.GetScene().FindByName("Effect");
-    auto state = [&] { return Call(e, "particles.state", R"({"id":"Effect","particles":true})")["result"]; };
+    auto state = [&] { return EmitterCall(e, "vfx.state", R"({"id":"Effect","particles":true})")["result"]; };
     CHECK(state()["particles"][1]["index"].asInt() == 1 && state()["particles"][1]["count"].asInt() == 2);
     e.RecordState(); e.Step(30); const auto checkpoint = e.SaveState(); e.Step(30);
     const Json future = state(); const Json& p = future["particles"][0];
@@ -7944,43 +7979,43 @@ TEST(VfxMotionChannelsAndNativeRestore) {
     CHECK(std::abs(p["rotation3D"][1].asFloat() - 50) < 1e-3f && std::abs(p["scale"][1].asFloat() - 1.05f) < 1e-4f);
     CHECK(std::abs(p["custom"][0].asFloat()) < 1e-4f && p["custom"][3].asFloat() == 5);
     e.LoadState(*checkpoint); e.Step(30); CHECK(state() == future);
-    CHECK(!e.GetScene().EntityToJson(id)["components"]["ParticleEmitter"].has("integratedPosition"));
+    CHECK(!e.GetScene().EntityToJson(id)["components"]["EmitterSettings"].has("integratedPosition"));
     e.Stop();
-    CHECK(Call(e, "component.set", R"({"id":"Effect","type":"ParticleEmitter","values":{"positionOverLife":[],"velocityOverLife":[[0,[0,2,0]],[1,[0,2,0]]]}})")["ok"].asBool());
-    Call(e,"particles.burst",R"({"id":"Effect","count":1})");
+    CHECK(EmitterCall(e, "component.set", R"({"id":"Effect","type":"EmitterSettings","values":{"positionOverLife":[],"velocityOverLife":[[0,[0,2,0]],[1,[0,2,0]]]}})")["ok"].asBool());
+    EmitterCall(e,"vfx.burst",R"({"id":"Effect","count":1})");
     e.Step(1); const Json next = state()["particles"][0];
     CHECK(std::abs(next["position"][1].asFloat() - 1.033333f) < 1e-4f); // removed offset never accumulates into physics
     CHECK(std::abs(next["velocity"][1].asFloat() - 2) < 1e-4f);
 }
 
 TEST(VfxWorldChannelsAndStrictValidation) {
-    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_world_channels"), &error)); Call(e,"scene.new",R"({"empty":true})");
-    Call(e,"entity.create",R"({"name":"Effect","components":{"Transform":{"rotation":[0,0,90]},"ParticleEmitter":{
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_world_channels"), &error)); EmitterCall(e,"scene.new",R"({"empty":true})");
+    EmitterCall(e,"entity.create",R"({"name":"Effect","components":{"Transform":{"rotation":[0,0,90]},"EmitterSettings":{
       "rate":0,"loop":false,"lifetime":2,"speed":0,"gravity":[0,0,0],"space":"world",
       "positionOverLife":[[0,[0,0,0]],[1,[2,0,0]]]}}})");
-    Call(e,"particles.burst",R"({"id":"Effect","count":1})");
-    Call(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"rotation":[0,0,0],"position":[9,0,0]}})");e.Step(60);
-    const auto* particle = &e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->particles[0];
+    EmitterCall(e,"vfx.burst",R"({"id":"Effect","count":1})");
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"rotation":[0,0,0],"position":[9,0,0]}})");e.Step(60);
+    const auto* particle = &TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"))->particles[0];
     CHECK(std::abs(particle->position.x) < 1e-4f && std::abs(particle->position.y - 1) < 1e-4f);
     const Json before = e.GetScene().ToJson();
     for (const char* values : {R"({"positionOverLife":[[0,"#ff0000"]]})", R"({"velocityOverLife":[[0,[1,2]]]})",
       R"({"rotationOverLife":[[1,[0,0,0]],[0,[1,2,3]]]})", R"({"scaleOverLife":[[0,[1,-1,1]]]})",
       R"({"custom0OverLife":[[0,65505]]})", R"({"scale":[-1,1,1]})", R"({"pivot":[0,70000,0]})"}) {
-        Json args = Json::parse(R"({"id":"Effect","type":"ParticleEmitter"})"); args["values"] = Json::parse(values);
-        CHECK(!e.Call("component.set",args)["ok"].asBool()); CHECK(e.GetScene().ToJson() == before);
+        Json args = Json::parse(R"({"id":"Effect","type":"EmitterSettings"})"); args["values"] = Json::parse(values);
+        CHECK(!EmitterCall(e, "component.set",args)["ok"].asBool()); CHECK(e.GetScene().ToJson() == before);
     }
-    CHECK(Call(e,"vfx.schema")["result"]["channels"]["position"].asString().find("without accumulating") != std::string::npos);
+    CHECK(EmitterCall(e,"vfx.schema")["result"]["channels"]["position"].asString().find("without accumulating") != std::string::npos);
 }
 
 TEST(VfxPivotScaleAndCustomMaterial) {
-    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_pivot_custom"), &error)); Call(e,"scene.new",R"({"empty":true})");
-    CHECK(Call(e,"shader.create",R"({"path":"custom.shader.json","graph":{"nodes":[
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_pivot_custom"), &error)); EmitterCall(e,"scene.new",R"({"empty":true})");
+    CHECK(EmitterCall(e,"shader.create",R"({"path":"custom.shader.json","graph":{"nodes":[
       {"op":"particleCustom0"},{"op":"particleCustom1"},{"op":"particleCustom2"},{"op":"particleCustom3"},
       {"op":"add","args":[0,1]},{"op":"add","args":[2,3]},{"op":"add","args":[4,5]},
       {"op":"constant","value":[0.1,0.3,0.5,0.5]},{"op":"multiply","args":[6,7]},
       {"op":"constant","value":[0.05,0,0,0]},{"op":"multiply","args":[3,9]}],"color":8,"offset":10}})")["ok"].asBool());
-    CHECK(Call(e,"material.create",R"({"path":"custom.mat.json","values":{"shader":"custom.shader.json","unlit":true,"doubleSided":true}})")["ok"].asBool());
-    CHECK(Call(e,"entity.create",R"({"name":"Effect","components":{"ParticleEmitter":{
+    CHECK(EmitterCall(e,"material.create",R"({"path":"custom.mat.json","values":{"shader":"custom.shader.json","unlit":true,"doubleSided":true}})")["ok"].asBool());
+    CHECK(EmitterCall(e,"entity.create",R"({"name":"Effect","components":{"EmitterSettings":{
       "material":"custom.mat.json","mesh":"cube","meshScale":[0.6,3,0.6],"pivot":[0,-0.5,0],
       "burst":1,"rate":0,"loop":false,"lifetime":2,"speed":0,"gravity":[0,0,0],"startSize":1,"endSize":1,
       "scaleOverLife":[[0,[1,0.1,1]],[1,[1,1,1]]],"custom0":0.1,"custom1":0.2,"custom2":0.3,"custom3":0.4}}})")["ok"].asBool());
@@ -7988,14 +8023,14 @@ TEST(VfxPivotScaleAndCustomMaterial) {
     auto items=GatherRenderItems(e.GetScene(),&e.Assets());CHECK(items.size()==1);
     CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,-0.5f,0)).y)<1e-5f);
     CHECK(std::abs(Length(items[0].world.TransformDir(Vec3(1,0,0)))-0.6f)<1e-5f);
-    CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,0.5f,0)).y - (0.1f + 0.9f * e.GetScene().Get<ParticleEmitter>(id)->particles[0].age / 2) * 3)<1e-4f);
+    CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,0.5f,0)).y - (0.1f + 0.9f * TestEmitter(e.GetScene(), id)->particles[0].age / 2) * 3)<1e-4f);
     CHECK(items[0].particleCustom.w==0.4f && items[0].mesh->particleCustom.empty());
     RenderView view=MakeLookAtView(Vec3(3,2,5),Vec3(0,1,0),45,1);view.drawUI=false;
     RenderTarget sw,batch,gpu;sw.Resize(128,128);batch.Resize(128,128);gpu.Resize(128,128);
     e.Renderer().Render(e.GetScene(),view,sw);CHECK(CountId(sw,id)>50);
     for(bool batching : {false,true}) {
-        Json args=Json::parse(R"({"id":"Effect","type":"ParticleEmitter","values":{}})");args["values"]["batching"]=batching;
-        CHECK(e.Call("component.set",args)["ok"].asBool());
+        Json args=Json::parse(R"({"id":"Effect","type":"EmitterSettings","values":{}})");args["values"]["batching"]=batching;
+        CHECK(EmitterCall(e, "component.set",args)["ok"].asBool());
         items=GatherRenderItems(e.GetScene(),&e.Assets());
         if(batching) CHECK(items[0].mesh->particleCustom.size()==items[0].mesh->positions.size() && items[0].mesh->particleCustom[0].w==0.4f);
         e.Renderer().Render(e.GetScene(),view,batch);double total=0;
@@ -8013,7 +8048,7 @@ TEST(VfxPivotScaleAndCustomMaterial) {
     CHECK(WritePng("build/vfx-custom-software.png",sw.ToImage(),true));
     CHECK(WritePng("build/vfx-custom-gpu.png",gpu.ToImage(),true));
     // Identical vector channels also drive billboards; the pivot remains mapped to the center.
-    Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"mesh":"","batching":false,"rotationOverLife":[[0,[0,0,0]],[1,[0,0,80]]]}})");e.Step(30);
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"mesh":"","batching":false,"rotationOverLife":[[0,[0,0,0]],[1,[0,0,80]]]}})");e.Step(30);
     items=GatherRenderItems(e.GetScene(),&e.Assets());CHECK(std::abs(items[0].world.TransformPoint(Vec3(0,-0.5f,0)).y)<1e-5f);
     CHECK(std::abs(Length(items[0].world.TransformDir(Vec3(1,0,0)))-1)<1e-5f);
 }
@@ -8097,36 +8132,36 @@ TEST(VfxExpressionsTypesMathAndBudgets) {
 }
 
 TEST(VfxExpressionsBirthUpdateAndRestore) {
-    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_expressions_channels"),&error));Call(e,"scene.new",R"({"empty":true})");
-    CHECK(Call(e,"entity.create",R"json({"name":"Effect","components":{"ParticleEmitter":{
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_expressions_channels"),&error));EmitterCall(e,"scene.new",R"({"empty":true})");
+    CHECK(EmitterCall(e,"entity.create",R"json({"name":"Effect","components":{"EmitterSettings":{
       "rate":0,"loop":false,"lifetime":2,"speed":0,"gravity":[0,0,0],"sizeVariation":0.3,
       "positionOverLife":[[0,[9,9,9]],[1,[9,9,9]]],"scaleOverLife":[[0,[9,9,9]],[1,[9,9,9]]],
       "expressions":{"birth":{"position":"vec3(index,0,0)","rotation":"vec3(0,10,0)","scale":"vec3(1,2,1)","custom0":"random","size":"birthSize"},
        "update":{"position":"vec3(0,age*4,0)","velocity":"vec3(1,0,0)","rotation":"vec3(0,age*80,0)","scale":"vec3(1,1+age,1)",
          "color":"vec3(age,0.5,1)","size":"birthSize","opacity":"1-age","custom1":"count","custom2":"index","custom3":"systemTime"}}}}})json")["ok"].asBool());
-    CHECK(Call(e,"particles.burst",R"({"id":"Effect","count":2})")["result"]["accepted"].asInt()==2);
+    CHECK(EmitterCall(e,"vfx.burst",R"({"id":"Effect","count":2})")["result"]["accepted"].asInt()==2);
     const EntityId id=e.GetScene().FindByName("Effect");
-    auto particles=[&]()->const std::vector<Particle>& {return e.GetScene().Get<ParticleEmitter>(id)->particles;};
+    auto particles=[&]()->const std::vector<Particle>& {return TestEmitter(e.GetScene(), id)->particles;};
     const float size=particles()[0].startSize;CHECK(std::abs(size-0.1f*particles()[0].sizeScale)<1e-5f);
     CHECK(particles()[1].birthPosition.x==1 && particles()[0].initialCustom.x==particles()[0].random);
     e.RecordState();e.Step(30);const auto saved=e.SaveState();e.Step(30);
-    const Json future=Call(e,"particles.state",R"({"id":"Effect","particles":true})");
+    const Json future=EmitterCall(e,"vfx.state",R"({"id":"Effect","particles":true})");
     CHECK(std::abs(particles()[0].position.x-1)<0.0001f && std::abs(particles()[0].position.y-2)<0.0001f);
     CHECK(particles()[0].integratedPosition.y==0 && particles()[0].birthPosition.y==0);
     CHECK(std::abs(particles()[0].rotation3D.y-50)<0.001f && std::abs(particles()[0].axisScale.y-3)<0.001f);
     CHECK(std::abs(particles()[0].expressionSize-size)<0.0001f && std::abs(particles()[0].expressionOpacity-0.5f)<0.0001f);
     CHECK(particles()[0].custom.y==2 && particles()[1].custom.z==1);
     auto items=GatherRenderItems(e.GetScene(),&e.Assets());CHECK(items.size()==2 && std::abs(items[0].tint.r-0.5f)<0.001f);
-    e.LoadState(*saved);e.Step(30);CHECK(Call(e,"particles.state",R"({"id":"Effect","particles":true})")==future);
-    CHECK(!e.GetScene().EntityToJson(id)["components"]["ParticleEmitter"].has("expressionProgram"));
+    e.LoadState(*saved);e.Step(30);CHECK(EmitterCall(e,"vfx.state",R"({"id":"Effect","particles":true})")==future);
+    CHECK(!e.GetScene().EntityToJson(id)["components"]["EmitterSettings"].has("expressionProgram"));
     const Json before=e.GetScene().ToJson();
-    CHECK(!Call(e,"component.set",R"({"id":"Effect","type":"ParticleEmitter","values":{"expressions":{"update":{"scale":"age"}}}})")["ok"].asBool());
+    CHECK(!EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"expressions":{"update":{"scale":"age"}}}})")["ok"].asBool());
     CHECK(e.GetScene().ToJson()==before);
-    CHECK(Call(e,"vfx.check",R"({"id":"Effect"})")["ok"].asBool());
+    CHECK(EmitterCall(e,"vfx.check",R"({"id":"Effect"})")["ok"].asBool());
     e.Stop();
-    Call(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"rotation":[0,0,90]}})");
-    Call(e,"component.set",R"json({"id":"Effect","type":"ParticleEmitter","values":{"space":"world","expressions":{"update":{"position":"vec3(age*2,0,0)"}}}})json");
-    Call(e,"particles.burst",R"({"id":"Effect","count":1})");e.Step(60);
+    EmitterCall(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"rotation":[0,0,90]}})");
+    EmitterCall(e,"component.set",R"json({"id":"Effect","type":"EmitterSettings","values":{"space":"world","expressions":{"update":{"position":"vec3(age*2,0,0)"}}}})json");
+    EmitterCall(e,"vfx.burst",R"({"id":"Effect","count":1})");e.Step(60);
     CHECK(std::abs(particles()[0].position.x)<0.0001f && std::abs(particles()[0].position.y-1)<0.001f);
 }
 
@@ -8153,41 +8188,41 @@ TEST(VfxExpressionsAssetParamsHistoryAndReload) {
 }
 
 TEST(VfxExpressionsCostAndPreviewLimit) {
-    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_expressions_cost"),&error));Call(e,"scene.new",R"({"empty":true})");
-    CHECK(Call(e,"entity.create",R"json({"name":"Effect","components":{"ParticleEmitter":{"burst":1000,"maxParticles":1000,"rate":0,"loop":false,"lifetime":10,"speed":0,"gravity":[0,0,0],
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_expressions_cost"),&error));EmitterCall(e,"scene.new",R"({"empty":true})");
+    CHECK(EmitterCall(e,"entity.create",R"json({"name":"Effect","components":{"EmitterSettings":{"burst":1000,"maxParticles":1000,"rate":0,"loop":false,"lifetime":10,"speed":0,"gravity":[0,0,0],
       "expressions":{"update":{"position":"vec3(cos(age*4*pi+index*0.1),age*2,sin(age*4*pi+index*0.1))","size":"0.1+sin(age*pi)*0.05"}}}}})json")["ok"].asBool());
-    const Json cost=Call(e,"vfx.check",R"({"id":"Effect"})");CHECK(cost["result"]["expressionInstructions"].asInt()>20);
-    CHECK(!Call(e,"vfx.preview",R"({"id":"Effect","times":[30],"inline":false})")["ok"].asBool());
+    const Json cost=EmitterCall(e,"vfx.check",R"({"id":"Effect"})");CHECK(cost["result"]["expressionInstructions"].asInt()>20);
+    CHECK(!EmitterCall(e,"vfx.preview",R"({"id":"Effect","times":[30],"inline":false})")["ok"].asBool());
     const auto start=std::chrono::steady_clock::now();e.Step(120);
     const double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()/120;
     std::printf("  expression 1000 particles: %.3f ms/step, %d instructions, %.0f reserved/step\n",ms,
         cost["result"]["expressionInstructions"].asInt(),cost["result"]["expressionStepInstructions"].asNumber());
-    CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"))->particles.size()==1000);
+    CHECK(TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"))->particles.size()==1000);
     Json document=TestVfxDocument();document["emitters"][0]["emitter"]["maxParticles"]=1000;
     std::string expensive="age";for(int i=0;i<25;++i)expensive+="+age";
     Json expressions=Json::MakeObject();for(const char* name:{"size","opacity","custom0","custom1","custom2"})expressions["update"][name]=expensive;
     document["emitters"][0]["emitter"]["expressions"]=expressions;
     Json args=Json::MakeObject();args["path"]="effects/too_expensive.vfx.json";args["vfx"]=document;
-    CHECK(!e.Call("vfx.create",args)["ok"].asBool()); // emitter and request budgets remain atomic
+    CHECK(!EmitterCall(e, "vfx.create",args)["ok"].asBool()); // emitter and request budgets remain atomic
     expressions["update"].erase("custom2");expressions["update"].erase("custom1");document["emitters"][0]["emitter"]["expressions"]=expressions;
-    args["vfx"]=document;CHECK(e.Call("vfx.create",args)["ok"].asBool());
+    args["vfx"]=document;CHECK(EmitterCall(e, "vfx.create",args)["ok"].asBool());
     Json second=document["emitters"][0];second["name"]="second";document["emitters"].push(second);args["vfx"]=document;
-    CHECK(!e.Call("vfx.create",args)["ok"].asBool()); // aggregate step cost even when individual blocks fit
+    CHECK(!EmitterCall(e, "vfx.create",args)["ok"].asBool()); // aggregate step cost even when individual blocks fit
     document["emitters"][0]["emitter"]["maxParticles"]=1;document["emitters"][1]["emitter"]["maxParticles"]=1;
     second=document["emitters"][0];second["name"]="third";document["emitters"].push(second);second["name"]="fourth";document["emitters"].push(second);args["vfx"]=document;
-    CHECK(!e.Call("vfx.create",args)["ok"].asBool()); // 612 compiled instructions exceed the asset cap of 512
+    CHECK(!EmitterCall(e, "vfx.create",args)["ok"].asBool()); // 612 compiled instructions exceed the asset cap of 512
 }
 
 TEST(SampleVfxExpressionsPortablePreview) {
     Engine e;std::string error;CHECK(e.Open(TestSourceDir()+"/samples/VFXLab",&error));
     const char* args=R"({"path":"effects/spiral_expressions.vfx.json","times":[0.2,0.8,1.5,2.8],"size":128,"inline":false})";
-    const Json first=Call(e,"vfx.preview",args);CHECK(first["ok"].asBool() && first==Call(e,"vfx.preview",args));
+    const Json first=EmitterCall(e,"vfx.preview",args);CHECK(first["ok"].asBool() && first==EmitterCall(e,"vfx.preview",args));
     CHECK(first["result"]["hash"].asString()=="b35ab4ebab9114ff");
-    const Json check=Call(e,"vfx.check",R"({"path":"effects/spiral_expressions.vfx.json"})");
+    const Json check=EmitterCall(e,"vfx.check",R"({"path":"effects/spiral_expressions.vfx.json"})");
     CHECK(check["ok"].asBool() && check["result"]["warnings"].size()==0 && check["result"]["expressionInstructions"].asInt()==85);
-    const Json analysis=Call(e,"vfx.analyze",R"({"path":"effects/spiral_expressions.vfx.json","duration":3.2})");
+    const Json analysis=EmitterCall(e,"vfx.analyze",R"({"path":"effects/spiral_expressions.vfx.json","duration":3.2})");
     CHECK(analysis["ok"].asBool() && analysis["result"]["peakCount"].asInt()==48 && analysis["result"]["finishedAt"].asFloat()<3.1f);
-    CHECK(Call(e,"scene.load",R"({"path":"scenes/expressions.scene.json"})")["ok"].asBool());e.Step(60);
+    CHECK(EmitterCall(e,"scene.load",R"({"path":"scenes/expressions.scene.json"})")["ok"].asBool());e.Step(60);
     CHECK(e.Scripts().Errors().empty() && e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Expression Spiral"))->emitters[0].particles.size()==48);
 }
 
@@ -8389,49 +8424,49 @@ TEST(VfxTwoAnchorRibbon) {
 }
 
 TEST(VfxDeathChainsAreBounded) {
-    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_deaths"),&error));Call(e,"scene.new",R"({"empty":true})");
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_deaths"),&error));EmitterCall(e,"scene.new",R"({"empty":true})");
     Json document=Json::parse(R"({"format":"oe.vfx","version":1,"budget":{"maxParticles":5},"emitters":[
       {"name":"source","emitter":{"burst":2,"rate":0,"loop":false,"lifetime":0.02,"speed":0,"gravity":[0,0,0],"onDeath":"child","deathCount":4}},
       {"name":"child","emitter":{"playing":false,"rate":0,"loop":false,"lifetime":0.02,"speed":0,"gravity":[0,0,0],"onDeath":"child","deathCount":4}}]})");
-    CreateTestVfx(e,document);const auto spawn=Call(e,"vfx.spawn",R"({"path":"effects/sparks.vfx.json","position":[2,3,0],"autoDestroy":false})");
+    CreateTestVfx(e,document);const auto spawn=EmitterCall(e,"vfx.spawn",R"({"path":"effects/sparks.vfx.json","position":[2,3,0],"autoDestroy":false})");
     const EntityId id=static_cast<EntityId>(spawn["result"]["id"].asInt());
-    e.RecordState();Call(e,"sim.step",R"({"frames":3})");const auto* system=e.GetScene().Get<VFXSystem>(id);
+    e.RecordState();EmitterCall(e,"sim.step",R"({"frames":3})");const auto* system=e.GetScene().Get<VFXSystem>(id);
     CHECK(system && system->emitters[0].particles.empty() && system->emitters[1].particles.size()==5);
     CHECK(system->emitters[1].particles[0].age==0 && system->emitters[1].particles[0].depth==1);
     CHECK(system->emitters[1].particles[0].position.x==2 && system->emitters[1].particles[0].position.y==3);
     const auto state=e.SaveState();
-    Call(e,"sim.step",R"({"frames":5})");
+    EmitterCall(e,"sim.step",R"({"frames":5})");
     // Native restore retains per-particle generation and the source random stream.
     e.LoadState(*state);
     system=e.GetScene().Get<VFXSystem>(id);CHECK(system && system->emitters[1].particles[0].depth==1);
-    Call(e,"sim.step",R"({"frames":30})");system=e.GetScene().Get<VFXSystem>(id);
+    EmitterCall(e,"sim.step",R"({"frames":30})");system=e.GetScene().Get<VFXSystem>(id);
     CHECK(system && system->emitters[1].particles.empty() && VfxFinished(*system));
     CHECK(system->emitters[1].emitted==20);
     e.Stop();document["emitters"][0]["emitter"]["onDeath"]="missing";
     Json a=Json::MakeObject();a["path"]="effects/bad.vfx.json";a["vfx"]=document;
-    CHECK(e.Call("vfx.create",a)["error"]["code"].asString()=="invalid_vfx");
+    CHECK(EmitterCall(e, "vfx.create",a)["error"]["code"].asString()=="invalid_vfx");
 }
 
 TEST(VfxSwordSlashPreset) {
-    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_sword"),&error));Call(e,"scene.new",R"({"empty":true})");
-    Call(e,"entity.create",R"({"name":"Sword"})");
-    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Sword","preset":"sword_slash"})")["ok"].asBool());
-    CHECK(e.GetScene().Pool<ParticleEmitter>().size()==2 && e.GetScene().Pool<Trail>().size()==1);
-    CHECK(Call(e,"vfx.from_entity",R"({"id":"Sword","path":"effects/slash.vfx.json"})")["ok"].asBool());
-    CHECK(Call(e,"vfx.check",R"({"path":"effects/slash.vfx.json"})")["result"]["ok"].asBool());
+    Engine e;std::string error;CHECK(e.Open(TempProject("vfx_sword"),&error));EmitterCall(e,"scene.new",R"({"empty":true})");
+    EmitterCall(e,"entity.create",R"({"name":"Sword"})");
+    CHECK(EmitterCall(e,"vfx.apply_preset",R"({"id":"Sword","preset":"sword_slash"})")["ok"].asBool());
+    CHECK(e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Sword"))->emitters.size()==2 && e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Sword"))->trails.size()==1);
+    CHECK(EmitterCall(e,"vfx.from_entity",R"({"id":"Sword","path":"effects/slash.vfx.json"})")["ok"].asBool());
+    CHECK(EmitterCall(e,"vfx.check",R"({"path":"effects/slash.vfx.json"})")["result"]["ok"].asBool());
     const Json a=Json::parse(R"({"path":"effects/slash.vfx.json","size":128,"times":[0.05,0.15,0.3,0.6],
       "motion":[[0,[-1,0,0]],[0.2,[1,0,0]],[0.6,[1,0,0]]],"out":"build/slash.png"})");
-    const auto one=e.Call("vfx.preview",a),two=e.Call("vfx.preview",a);
+    const auto one=EmitterCall(e, "vfx.preview",a),two=EmitterCall(e, "vfx.preview",a);
     CHECK(one["ok"].asBool() && one["result"]["hash"]==two["result"]["hash"]);
-    CHECK(Call(e,"vfx.analyze",R"({"path":"effects/slash.vfx.json","duration":1})")["result"]["finishedAt"].isNumber());
-    Call(e,"component.set",R"({"id":"Sword","type":"ParticleEmitter","values":{"space":"world"}})");
-    Call(e,"particles.burst",R"({"id":"Sword","count":1})");
+    CHECK(EmitterCall(e,"vfx.analyze",R"({"path":"effects/slash.vfx.json","duration":1})")["result"]["finishedAt"].isNumber());
+    EmitterCall(e,"component.set",R"({"id":"Sword","type":"EmitterSettings","values":{"space":"world"}})");
+    EmitterCall(e,"vfx.burst",R"({"id":"Sword","count":1})");
     const auto born=GatherRenderItems(e.GetScene(),&e.Assets());
-    Call(e,"component.set",R"({"id":"Sword","type":"Transform","values":{"rotation":[0,70,0]}})");
+    EmitterCall(e,"component.set",R"({"id":"Sword","type":"Transform","values":{"rotation":[0,70,0]}})");
     const auto moved=GatherRenderItems(e.GetScene(),&e.Assets());
     CHECK(!born.empty() && born.front().mesh->positions==moved.front().mesh->positions);
-    CHECK(Call(e,"component.set",R"({"id":"Sword","type":"ParticleEmitter","values":{"mesh":"missing.glb"}})")["ok"].asBool());
-    CHECK(Call(e,"vfx.check",R"({"id":"Sword"})")["error"]["code"].asString()=="invalid_vfx");
+    CHECK(EmitterCall(e,"component.set",R"({"id":"Sword","type":"EmitterSettings","values":{"mesh":"missing.glb"}})")["ok"].asBool());
+    CHECK(EmitterCall(e,"vfx.check",R"({"id":"Sword"})")["error"]["code"].asString()=="invalid_vfx");
 }
 
 
@@ -8462,12 +8497,60 @@ TEST(SampleSwordSlashMaterials) {
     std::filesystem::remove(e.ResolvePath("build/slash-test-sw.png"));std::filesystem::remove(e.ResolvePath("build/slash-test-gpu.png"));
 }
 
+
+TEST(VfxRetiredParticleComponentBoundary) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_retirement"), &error));
+    CHECK(!TypeRegistry::Find("ParticleEmitter") && !TypeRegistry::Find("EmitterSettings"));
+    CHECK(Call(e, "component.add", R"J({"id":"Player","type":"ParticleEmitter"})J")["error"]["code"].asString() == "unknown_component");
+    for (const char* command : {"particles.state", "particles.burst", "particles.clear"})
+        CHECK(!Call(e, command, R"J({"id":"Player"})J")["ok"].asBool());
+    const uint64_t since = Log::LastSeq(); Scene stale;
+    CHECK(stale.FromJson(Json::parse(R"J({"format":"ownengine.scene","version":1,"name":"Old","entities":[
+      {"id":1,"name":"OldEffect","components":{"Transform":{},"ParticleEmitter":{"burst":3}}}]})J"), &error));
+    CHECK(stale.Exists(1) && stale.ToJson().dump().find("ParticleEmitter") == std::string::npos);
+    bool hinted = false;
+    for (const LogEntry& entry : Log::Since(since))
+        if (entry.message.find("ParticleEmitter") != std::string::npos && entry.message.find("VFXSystem") != std::string::npos) hinted = true;
+    CHECK(hinted);
+    CHECK(Call(e,"script.eval",R"J({"code":"assert(particles == nil)"})J")["ok"].asBool());
+}
+
+TEST(VfxPackedParametersAndRuntimeDiagnostics) {
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_packed_controls"), &error));
+    CHECK(Call(e,"scene.new",R"J({"empty":true})J")["ok"].asBool());
+    CHECK(Call(e,"vfx.create",R"J({"path":"effects/source.vfx.json","vfx":{"format":"oe.vfx","version":1,"budget":{"maxParticles":8},
+      "params":{"gain":{"default":1,"targets":[{"to":"source.speed"}]}},"emitters":[
+      {"name":"source","emitter":{"rate":0,"burst":2,"loop":false,"lifetime":0.02,"onDeath":"child","deathCount":1,
+       "expressions":{"birth":{"custom0":"param.gain"}}}},
+      {"name":"child","emitter":{"playing":false,"rate":0,"lifetime":1}}]}})J")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"J({"name":"Root","components":{"Transform":{"position":[10,0,0]}}})J")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"J({"name":"Child","parent":"Root","components":{"Transform":{"position":[2,0,0]},
+      "VFXSystem":{"asset":"effects/source.vfx.json","params":{"gain":3}}}})J")["ok"].asBool());
+    const auto packed = Call(e,"vfx.from_entity",R"J({"id":"Root","path":"effects/packed.vfx.json"})J"); CHECK(packed["ok"].asBool());
+    const Json document = Call(e,"vfx.get",R"J({"path":"effects/packed.vfx.json"})J")["result"];
+    CHECK(document["budget"]["maxParticles"].asInt()==8 && document["params"].size()==1);
+    const auto& parameter = document["params"].members().front();
+    CHECK(parameter.second["default"].asInt()==3);
+    CHECK(parameter.second["targets"][0]["to"].asString()==document["emitters"][0]["name"].asString()+".speed");
+    CHECK(document["emitters"][0]["emitter"]["onDeath"]==document["emitters"][1]["name"]);
+    CHECK(document["emitters"][0]["emitter"]["expressions"]["birth"]["custom0"].asString()=="param."+parameter.first);
+    CHECK(document["emitters"][0]["matrix"][12].asFloat()==2);
+    CHECK(Call(e,"vfx.spawn",R"J({"path":"effects/packed.vfx.json","name":"Packed"})J")["ok"].asBool());
+    CHECK(Call(e,"vfx.burst",R"J({"id":"Packed","count":1})J")["ok"].asBool());
+    const Json state=Call(e,"vfx.state",R"J({"id":"Packed","particles":true})J")["result"];
+    CHECK(state["emitters"][0]["particles"][0]["initialCustom"][0].asFloat()==3);
+    CHECK(Call(e,"script.eval",R"J({"code":"vfx.clear('Packed', {restart=true}); assert(vfx.state('Packed', {particles=true}).emitters[1].count == 0)"})J")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"J({"frames":1})J")["ok"].asBool());
+    CHECK(Call(e,"vfx.state",R"J({"id":"Packed"})J")["result"]["emitters"][0]["emitted"].asInt()==2);
+    CHECK(!Call(e,"vfx.apply_preset",R"J({"id":"Packed","preset":"fire","mode":"merge"})J")["ok"].asBool());
+}
+
 TEST(VfxSchemaCoversReflection) {
     Engine e;
     const Json schema = Call(e, "vfx.schema")["result"];
     CHECK(schema["components"].size() == 2 && schema["modules"].size() == 8);
     for (const Json& component : schema["components"].items()) {
-        const ComponentType& type = *TypeRegistry::Find(component["name"].asString());
+        const ComponentType& type = component["name"].asString() == "EmitterSettings" ? VfxEmitterType() : *TypeRegistry::Find(component["name"].asString());
         auto pool = type.makePool(); const void* defaults = pool->Add(1);
         CHECK(component["fields"].size() == type.fields.size());
         for (size_t i = 0; i < type.fields.size(); ++i) {
@@ -8482,19 +8565,19 @@ TEST(VfxSchemaCoversReflection) {
 
 TEST(VfxPresetsAreValid) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_presets"), &error));
-    const Json presets = Call(e, "vfx.presets")["result"];
-    CHECK(presets.size() == 15 && Call(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
+    const Json presets = EmitterCall(e, "vfx.presets")["result"];
+    CHECK(presets.size() == 15 && EmitterCall(e, "vfx.presets", R"J({"tag":"trail"})J")["result"].size() == 2);
     for (const Json& preset : presets.items()) {
         CHECK(!preset["intent"].asString().empty());
-        Call(e, "scene.new", R"J({"empty":true})J");
-        Call(e, "entity.create", R"J({"name":"Effect"})J");
+        EmitterCall(e, "scene.new", R"J({"empty":true})J");
+        EmitterCall(e, "entity.create", R"J({"name":"Effect"})J");
         Json args = Json::parse(R"J({"id":"Effect"})J"); args["preset"] = preset["name"];
-        CHECK(e.Call("vfx.apply_preset", args)["ok"].asBool());
-        const ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Effect"));
+        CHECK(EmitterCall(e, "vfx.apply_preset", args)["ok"].asBool());
+        const ParticleEmitter* emitter = TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"));
         CHECK(!emitter || ParticleSettingsValid(*emitter));
-        CHECK(Call(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
+        CHECK(EmitterCall(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
     }
-    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"typo"})J")["error"]["code"].asString() == "unknown_preset");
+    CHECK(EmitterCall(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"typo"})J")["error"]["code"].asString() == "unknown_preset");
 }
 
 TEST(VfxBundledPresetsInFreshProject) {
@@ -8534,32 +8617,32 @@ TEST(VfxBundledPresetsInFreshProject) {
 
 TEST(VfxBundledPresetConflictAndUndo) {
     Engine source;std::string error;const std::string sourceDir=TempProject("vfx_bundle_source");CHECK(source.Open(sourceDir,&error));
-    const Json made=Call(source,"vfx.create",R"({"path":"effects/shield.vfx.json","preset":"shield_dome"})");CHECK(made["ok"].asBool());
+    const Json made=EmitterCall(source,"vfx.create",R"({"path":"effects/shield.vfx.json","preset":"shield_dome"})");CHECK(made["ok"].asBool());
     const std::string material=made["result"]["emitters"][0]["emitter"]["material"].asString();
     std::string text;CHECK(ReadTextFile(JoinPath(sourceDir,material),text));const std::string shader=Json::parse(text)["shader"].asString();
     Engine e;const std::string dir=TempProject("vfx_bundle_conflict");CHECK(e.Open(dir,&error));
     CHECK(WriteTextFile(JoinPath(dir,shader),"edited shader"));
-    Call(e,"scene.new",R"({"empty":true})");Call(e,"entity.create",R"({"name":"Effect","components":{"ParticleEmitter":{"rate":1}}})");
+    EmitterCall(e,"scene.new",R"({"empty":true})");EmitterCall(e,"entity.create",R"({"name":"Effect","components":{"EmitterSettings":{"rate":1}}})");
     const Json before=e.GetScene().ToJson();const size_t undo=e.UndoDepth();
-    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome","mode":"merge"})")["error"]["code"].asString()=="invalid_vfx");
-    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(EmitterCall(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome","mode":"merge"})")["error"]["code"].asString()=="invalid_vfx");
+    CHECK(EmitterCall(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
     CHECK(e.GetScene().ToJson()==before && e.UndoDepth()==undo);
     CHECK(!FileExists(JoinPath(dir,material)) && ListFiles(JoinPath(dir,"assets/vfx-presets"),"",true).size()==1);
-    CHECK(Call(e,"vfx.edit",R"({"path":"effects/draft.vfx.json","new":true,"preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
-    CHECK(!Call(e,"vfx.edit_state")["result"]["open"].asBool());
-    CHECK(Call(e,"vfx.create",R"({"path":"effects/shield.vfx.json","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(EmitterCall(e,"vfx.edit",R"({"path":"effects/draft.vfx.json","new":true,"preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(!EmitterCall(e,"vfx.edit_state")["result"]["open"].asBool());
+    CHECK(EmitterCall(e,"vfx.create",R"({"path":"effects/shield.vfx.json","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
     CHECK(!FileExists(JoinPath(dir,"effects/shield.vfx.json")));
     CHECK(ReadTextFile(JoinPath(sourceDir,shader),text));CHECK(WriteTextFile(JoinPath(dir,shader),text));
-    const Json applied=Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})");CHECK(applied["ok"].asBool());
-    const EntityId id=e.GetScene().FindByName("Effect");CHECK(e.GetScene().Get<VFXSystem>(id) && !e.GetScene().Get<ParticleEmitter>(id));
-    CHECK(e.UndoDepth()==undo+1 && Call(e,"vfx.check",R"({"id":"Effect"})")["result"]["ok"].asBool());
-    CHECK(Call(e,"history.undo")["ok"].asBool() && e.GetScene().ToJson()==before);
+    const Json applied=EmitterCall(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})");CHECK(applied["ok"].asBool());
+    const EntityId id=e.GetScene().FindByName("Effect");CHECK(e.GetScene().Get<VFXSystem>(id) && TestEmitter(e.GetScene(), id));
+    CHECK(e.UndoDepth()==undo+1 && EmitterCall(e,"vfx.check",R"({"id":"Effect"})")["result"]["ok"].asBool());
+    CHECK(EmitterCall(e,"history.undo")["ok"].asBool() && e.GetScene().ToJson()==before);
     CHECK(FileExists(JoinPath(dir,applied["result"]["asset"].asString())));
-    CHECK(Call(e,"history.redo")["ok"].asBool() && e.GetScene().Get<VFXSystem>(id));
-    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"fire"})")["ok"].asBool());
-    CHECK(!e.GetScene().Get<VFXSystem>(id) && e.GetScene().Get<ParticleEmitter>(id));
+    CHECK(EmitterCall(e,"history.redo")["ok"].asBool() && e.GetScene().Get<VFXSystem>(id));
+    CHECK(EmitterCall(e,"vfx.apply_preset",R"({"id":"Effect","preset":"fire"})")["ok"].asBool());
+    CHECK(e.GetScene().Get<VFXSystem>(id) && TestEmitter(e.GetScene(), id));
     CHECK(WriteTextFile(JoinPath(dir,applied["result"]["asset"].asString()),"edited effect"));
-    CHECK(Call(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
+    CHECK(EmitterCall(e,"vfx.apply_preset",R"({"id":"Effect","preset":"shield_dome"})")["error"]["code"].asString()=="preset_conflict");
     RemoveAll(dir);RemoveAll(sourceDir);
 }
 
@@ -8579,46 +8662,50 @@ TEST(VfxBundledPresetSharedDocument) {
 }
 
 TEST(VfxPresetUndoAndStrictValidation) {
-    Engine e; Call(e, "scene.new", R"J({"empty":true})J");
-    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"texture":"custom.png","rate":1}}})J");
+    Engine e; EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect","components":{"EmitterSettings":{"texture":"custom.png","rate":1}}})J");
     const Json original = e.GetScene().ToJson(); const size_t undo = e.UndoDepth();
-    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"sparks","mode":"merge"})J")["ok"].asBool());
-    CHECK(e.UndoDepth() == undo + 1 && e.GetScene().Get<ParticleEmitter>(1)->texture == "custom.png");
-    CHECK(Call(e, "history.undo")["ok"].asBool() && e.GetScene().ToJson() == original);
-    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"sparks"})J")["ok"].asBool());
-    CHECK(e.GetScene().Get<ParticleEmitter>(1)->texture.empty());
+    CHECK(EmitterCall(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"sparks","mode":"merge"})J")["ok"].asBool());
+    CHECK(e.UndoDepth() == undo + 1 && TestEmitter(e.GetScene(), 1)->texture == "custom.png");
+    CHECK(EmitterCall(e, "history.undo")["ok"].asBool() && e.GetScene().ToJson() == original);
+    CHECK(EmitterCall(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"sparks"})J")["ok"].asBool());
+    CHECK(TestEmitter(e.GetScene(), 1)->texture.empty());
     const Json before = e.GetScene().ToJson(); const size_t depth = e.UndoDepth();
-    Json result = Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"rate":20,"lifetim":2}})J");
+    Json result = EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"rate":20,"lifetim":2}})J");
     CHECK(result["error"]["code"].asString() == "unknown_field" && result["error"]["hint"].asString().find("lifetime") != std::string::npos);
     CHECK(e.GetScene().ToJson() == before && e.UndoDepth() == depth);
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"rate":10001}})J")["error"]["code"].asString() == "invalid_range");
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"seed":1e100}})J")["error"]["code"].asString() == "invalid_range");
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"burst":1.5}})J")["error"]["code"].asString() == "invalid_range");
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"opacityOverLife":[[0,2]]}})J")["error"]["code"].asString() == "invalid_curve");
-    CHECK(Call(e, "component.add", R"J({"id":"Effect","type":"Trail","values":{"width":-1}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"rate":10001}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"seed":1e100}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"burst":1.5}})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"opacityOverLife":[[0,2]]}})J")["error"]["code"].asString() == "invalid_curve");
+    CHECK(EmitterCall(e, "component.add", R"J({"id":"Effect","type":"Trail","values":{"width":-1}})J")["error"]["code"].asString() == "invalid_range");
     CHECK(e.GetScene().ToJson() == before);
 }
 
 TEST(VfxPreviewIsDeterministic) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_deterministic"), &error));
-    Call(e, "entity.create", R"J({"name":"Effect"})J");
-    Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fireworks"})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect"})J");
+    EmitterCall(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fireworks"})J");
     const char* args = R"J({"id":"Effect","times":[0.1,0.3,0.6,1],"size":64,"inline":false})J";
-    SetMaxRenderThreads(1); const Json first = Call(e, "vfx.preview", args);
+    SetMaxRenderThreads(1); const Json first = EmitterCall(e, "vfx.preview", args);
     CHECK(first["ok"].asBool());
-    SetMaxRenderThreads(8); const Json second = Call(e, "vfx.preview", args);
-    CHECK(first == second && first == Call(e, "vfx.preview", args)); SetMaxRenderThreads(16);
+    SetMaxRenderThreads(8); const Json second = EmitterCall(e, "vfx.preview", args);
+    CHECK(first == second && first == EmitterCall(e, "vfx.preview", args)); SetMaxRenderThreads(16);
     CHECK(first["result"]["width"].asInt() == 256 && first["result"]["frames"][0]["count"].asInt() == 70);
-    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","times":[0.1,0.1]})J")["error"]["code"].asString() == "invalid_range");
-    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","out":"../outside.png"})J")["error"]["code"].asString() == "path_outside_project");
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"maxParticles":10000}})J")["ok"].asBool());
-    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","times":[60],"inline":false})J")["error"]["code"].asString() == "invalid_range");
-    CHECK(Call(e, "vfx.analyze", R"J({"id":"Effect","duration":60})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "vfx.preview", R"J({"id":"Effect","times":[0.1,0.1]})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "vfx.preview", R"J({"id":"Effect","out":"../outside.png"})J")["error"]["code"].asString() == "path_outside_project");
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"maxParticles":10000}})J")["ok"].asBool());
+    const std::string path=e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Effect"))->asset;
+    Json query=Json::MakeObject();query["path"]=path;Json document=e.Call("vfx.get",query)["result"];
+    document["budget"]["maxParticles"]=10000;query["vfx"]=document;CHECK(e.Call("vfx.create",query)["ok"].asBool());
+    CHECK(EmitterCall(e, "vfx.preview", R"J({"id":"Effect","times":[60],"inline":false})J")["error"]["code"].asString() == "invalid_range");
+    CHECK(EmitterCall(e, "vfx.analyze", R"J({"id":"Effect","duration":60})J")["error"]["code"].asString() == "invalid_range");
 }
 
 TEST(VfxAnalyzeReportsFinished) {
-    Engine e; Call(e, "scene.new", R"J({"empty":true})J"); Call(e, "entity.create", R"J({"name":"Effect"})J");
-    Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"hit_burst"})J");
+    Engine e; std::string error; CHECK(e.Open(TempProject("vfx_analyze_finished"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J"); Call(e, "entity.create", R"J({"name":"Effect"})J");
+    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"hit_burst"})J")["ok"].asBool());
     const Json result = Call(e, "vfx.analyze", R"J({"id":"Effect","duration":1,"step":0.1})J");
     CHECK(result["ok"].asBool()); const Json& stats = result["result"];
     CHECK(stats["peakCount"].asInt() == 16 && stats["budgetRatio"].asNumber() == 0.5);
@@ -8630,40 +8717,44 @@ TEST(VfxAnalyzeReportsFinished) {
 }
 
 TEST(VfxCheckFindsInvisibleEffect) {
-    Engine e; Call(e, "scene.new", R"J({"empty":true})J");
-    Call(e, "entity.create", R"J({"name":"Effect","components":{"ParticleEmitter":{"startOpacity":0,"endOpacity":0,"texture":"missing.png","playing":false,"loop":false,"lifetime":40}}})J");
-    const Json result = Call(e, "vfx.check", R"J({"id":"Effect"})J"); CHECK(result["ok"].asBool());
+    Engine e; EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect","components":{"EmitterSettings":{"startOpacity":0,"endOpacity":0,"texture":"missing.png","playing":false,"loop":false,"lifetime":40}}})J");
+    const Json result = EmitterCall(e, "vfx.check", R"J({"id":"Effect"})J"); CHECK(result["ok"].asBool());
     std::set<std::string> codes;
     for (const Json& warning : result["result"]["warnings"].items()) {
         codes.insert(warning["code"].asString()); CHECK(!warning["hint"].asString().empty());
     }
     CHECK(codes.count("invisible_effect") && codes.count("missing_texture") && codes.count("never_finishes") && codes.count("long_lifetime"));
-    Call(e, "entity.create", R"J({"name":"Empty"})J");
-    CHECK(Call(e, "vfx.check", R"J({"id":"Empty"})J")["error"]["code"].asString() == "no_emitter");
+    EmitterCall(e, "entity.create", R"J({"name":"Empty"})J");
+    CHECK(EmitterCall(e, "vfx.check", R"J({"id":"Empty"})J")["error"]["code"].asString() == "no_emitter");
 }
 
 TEST(VfxPreviewDoesNotMutateScene) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_readonly"), &error));
-    Call(e, "entity.create", R"J({"name":"Effect"})J"); Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fireworks"})J");
-    Call(e, "sim.step", R"J({"frames":10})J");
-    const Json scene = e.GetScene().ToJson(), state = Call(e, "sim.state")["result"];
-    const Json particles = Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"];
+    EmitterCall(e, "entity.create", R"J({"name":"Effect"})J"); EmitterCall(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"fireworks"})J");
+    EmitterCall(e, "sim.step", R"J({"frames":10})J");
+    const Json scene = e.GetScene().ToJson(), state = EmitterCall(e, "sim.state")["result"];
+    const Json particles = EmitterCall(e, "vfx.state", R"J({"id":"Effect","particles":true})J")["result"];
     const uint64_t epoch = e.GetScene().Epoch(); const size_t errors = e.Scripts().Errors().size();
-    CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","size":32,"inline":false})J")["ok"].asBool());
-    CHECK(Call(e, "vfx.analyze", R"J({"id":"Effect","duration":0.5,"render":true})J")["ok"].asBool());
-    CHECK(e.GetScene().ToJson() == scene && Call(e, "sim.state")["result"] == state && e.GetScene().Epoch() == epoch);
-    CHECK(Call(e, "particles.state", R"J({"id":"Effect","particles":true})J")["result"] == particles && e.Scripts().Errors().size() == errors);
+    CHECK(EmitterCall(e, "vfx.preview", R"J({"id":"Effect","size":32,"inline":false})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "vfx.analyze", R"J({"id":"Effect","duration":0.5,"render":true})J")["ok"].asBool());
+    CHECK(e.GetScene().ToJson() == scene && EmitterCall(e, "sim.state")["result"] == state && e.GetScene().Epoch() == epoch);
+    CHECK(EmitterCall(e, "vfx.state", R"J({"id":"Effect","particles":true})J")["result"] == particles && e.Scripts().Errors().size() == errors);
 }
 
 TEST(VfxAgentLoop) {
     Engine e; std::string error; const std::string project = TempProject("vfx_agent_loop"); CHECK(e.Open(project, &error));
-    Call(e, "entity.create", R"J({"name":"Effect"})J");
-    CHECK(Call(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"hit_burst"})J")["ok"].asBool());
-    CHECK(Call(e, "component.set", R"J({"id":"Effect","type":"ParticleEmitter","values":{"burst":24,"maxParticles":48,"lifetime":0.3,"startColor":"#33aaff"}})J")["ok"].asBool());
-    CHECK(Call(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
-    const Json preview = Call(e, "vfx.preview", R"J({"id":"Effect","times":[0.1,0.2,0.4,0.6],"size":96,"out":"preview.png"})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Effect"})J");
+    CHECK(EmitterCall(e, "vfx.apply_preset", R"J({"id":"Effect","preset":"hit_burst"})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "component.set", R"J({"id":"Effect","type":"EmitterSettings","values":{"burst":24,"maxParticles":48,"lifetime":0.3,"startColor":"#33aaff"}})J")["ok"].asBool());
+    // Budget is independent of emitter capacity in the unified asset contract.
+    const std::string path=e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Effect"))->asset;
+    Json document=e.Call("vfx.get",Json(Json::Object{{"path",path}}))["result"];document["budget"]["maxParticles"]=48;
+    Json create=Json::MakeObject();create["path"]=path;create["vfx"]=document;CHECK(e.Call("vfx.create",create)["ok"].asBool());
+    CHECK(EmitterCall(e, "vfx.check", R"J({"id":"Effect"})J")["result"]["ok"].asBool());
+    const Json preview = EmitterCall(e, "vfx.preview", R"J({"id":"Effect","times":[0.1,0.2,0.4,0.6],"size":96,"out":"preview.png"})J");
     CHECK(preview["ok"].asBool() && FileExists(JoinPath(project, "preview.png")));
-    const Json stats = Call(e, "vfx.analyze", R"J({"id":"Effect","duration":1,"render":true})J")["result"];
+    const Json stats = EmitterCall(e, "vfx.analyze", R"J({"id":"Effect","duration":1,"render":true})J")["result"];
     CHECK(stats["peakCount"].asInt() == 24 && stats["budgetRatio"].asNumber() == 0.5 && stats["finishedAt"].asNumber() < 0.35);
     CHECK(stats["samples"][1]["meanLuminance"].asNumber() > stats["samples"][0]["meanLuminance"].asNumber());
     CHECK(CopyFileTo(JoinPath(project, "preview.png"), "build/vfx-agent-loop.png")); CHECK(RemoveAll(JoinPath(project, "preview.png")));
@@ -8680,7 +8771,7 @@ TEST(VfxTrailMotionAndHierarchy) {
     CHECK(preview["result"]["frames"][2]["pointCount"].asInt() > 10);
     CHECK(preview["result"]["frames"][2]["bbox"]["min"][0].asNumber() > 99);
     CHECK(Call(e, "vfx.preview", args) == preview);
-    CHECK(e.GetScene().Get<Trail>(1)->points.empty() && e.GetScene().Get<Transform>(1)->position.x == 0);
+    CHECK(e.GetScene().Get<VFXSystem>(1)->trails[0].points.empty() && e.GetScene().Get<Transform>(1)->position.x == 0);
     CHECK(Call(e, "vfx.preview", R"J({"id":"Effect","size":64,"inline":false,"motion":[[0,[0,0,0]],[0,[1,0,0]]]})J")["error"]["code"].asString() == "invalid_vfx");
 }
 
@@ -8690,7 +8781,7 @@ TEST(SampleVfxLab) {
         Engine e;
         std::string error;
         CHECK(e.Open(TestSourceDir() + "/samples/VFXLab", &error));
-        CHECK(Call(e, "sim.step", R"J({"frames":132})J")["ok"].asBool());  // 0.2 s into the second fireworks cycle
+        CHECK(EmitterCall(e, "sim.step", R"J({"frames":132})J")["ok"].asBool());  // 0.2 s into the second fireworks cycle
         CHECK(e.Scripts().Errors().empty());
         for (const char* name : {"Flames", "Smoke", "Embers", "Rim", "Burst", "Puff", "Sparkles"}) {
             const ParticleEmitter* emitter = &e.GetScene().Get<VFXSystem>(e.GetScene().FindByName(name))->emitters[0];
@@ -8699,8 +8790,8 @@ TEST(SampleVfxLab) {
         CHECK(e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Burst"))->emitters[0].emitted == 140);
         const EntityId orb = e.GetScene().FindByName("Orb");
         CHECK(e.GetScene().Get<Trail>(orb)->points.size() > 20);
-        Call(e, "input.key", R"J({"key":"Space","down":true})J");
-        Call(e, "sim.step", R"J({"frames":1})J");
+        EmitterCall(e, "input.key", R"J({"key":"Space","down":true})J");
+        EmitterCall(e, "sim.step", R"J({"frames":1})J");
         CHECK(e.GetScene().Get<VFXSystem>(e.GetScene().FindByName("Burst"))->emitters[0].emitted > 140);  // capacity may drop some of the 70
         RenderTarget target;
         target.Resize(480, 270);
@@ -8771,44 +8862,44 @@ TEST(GamePauseFreezesWorld) {
     Engine e;
     std::string error;
     CHECK(e.Open(TempProject("game_pause"), &error));
-    Call(e, "scene.new", R"J({"empty":true})J");
-    CHECK(Call(e, "script.write", R"J({"path":"scripts/probe.lua","source":"local P = {}\nfunction P:onStart() self.updates, self.elapsed, self.fired = 0, 0, 0 timer.every(0.1, function() self.fired = self.fired + 1 end) end\nfunction P:onUpdate(dt) self.updates = self.updates + 1 self.elapsed = self.elapsed + dt if input.pressed('P') then game.pause(not game.paused()) end end\nreturn P\n"})J")["ok"].asBool());
-    Call(e, "entity.create", R"J({"name":"Probe","components":{"Script":{"path":"scripts/probe.lua"}}})J");
-    Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[0,10,0]},"RigidBody2D":{},
+    EmitterCall(e, "scene.new", R"J({"empty":true})J");
+    CHECK(EmitterCall(e, "script.write", R"J({"path":"scripts/probe.lua","source":"local P = {}\nfunction P:onStart() self.updates, self.elapsed, self.fired = 0, 0, 0 timer.every(0.1, function() self.fired = self.fired + 1 end) end\nfunction P:onUpdate(dt) self.updates = self.updates + 1 self.elapsed = self.elapsed + dt if input.pressed('P') then game.pause(not game.paused()) end end\nreturn P\n"})J")["ok"].asBool());
+    EmitterCall(e, "entity.create", R"J({"name":"Probe","components":{"Script":{"path":"scripts/probe.lua"}}})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{"position":[0,10,0]},"RigidBody2D":{},
       "Collider2D":{"shape":"circle","radius":0.5}}})J");
-    Call(e, "entity.create", R"J({"name":"Dust","components":{"ParticleEmitter":{"rate":60,"lifetime":5}}})J");
+    EmitterCall(e, "entity.create", R"J({"name":"Dust","components":{"EmitterSettings":{"rate":60,"lifetime":5}}})J");
     auto eval = [&](const char* code) {
         Json args = Json::MakeObject();
         args["code"] = code;
         args["entity"] = "Probe";
-        return e.Call("script.eval", args)["result"]["value"].asNumber();
+        return EmitterCall(e, "script.eval", args)["result"]["value"].asNumber();
     };
     auto ballY = [&] { return e.GetScene().Get<Transform>(e.GetScene().FindByName("Ball"))->position.y; };
-    CHECK(Call(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
     const float y = ballY();
     const double updates = eval("return self.updates"), fired = eval("return self.fired"), now = e.SimTime();
-    const size_t dust = e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Dust"))->particles.size();
+    const size_t dust = TestEmitter(e.GetScene(), e.GetScene().FindByName("Dust"))->particles.size();
     CHECK(y < 10 && fired >= 3 && dust > 20);
-    CHECK(Call(e, "game.pause", R"J({"paused":true})J")["result"]["paused"].asBool());
-    CHECK(Call(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
-    CHECK(Call(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "game.pause", R"J({"paused":true})J")["result"]["paused"].asBool());
+    CHECK(EmitterCall(e, "sim.state", "{}")["result"]["gamePaused"].asBool());
+    CHECK(EmitterCall(e, "sim.step", R"J({"frames":30})J")["ok"].asBool());
     CHECK(ballY() == y);                                   // physics waits
     CHECK(eval("return self.fired") == fired);             // timers wait
     CHECK(e.SimTime() == now);
-    CHECK(e.GetScene().Get<ParticleEmitter>(e.GetScene().FindByName("Dust"))->particles.size() == dust);
+    CHECK(TestEmitter(e.GetScene(), e.GetScene().FindByName("Dust"))->particles.size() == dust);
     CHECK(eval("return self.updates") == updates + 30);    // scripts keep running, with a zero step
     CHECK(std::fabs(eval("return self.elapsed") - 0.5) < 1e-3);
     // Scripts read input while paused and can resume themselves.
-    CHECK(Call(e, "input.key", R"J({"key":"P","down":true})J")["ok"].asBool());
-    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
-    CHECK(Call(e, "input.key", R"J({"key":"P","down":false})J")["ok"].asBool());
-    CHECK(!Call(e, "game.pause", "{}")["result"]["paused"].asBool());
-    CHECK(Call(e, "sim.step", R"J({"frames":10})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "input.key", R"J({"key":"P","down":true})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    CHECK(EmitterCall(e, "input.key", R"J({"key":"P","down":false})J")["ok"].asBool());
+    CHECK(!EmitterCall(e, "game.pause", "{}")["result"]["paused"].asBool());
+    CHECK(EmitterCall(e, "sim.step", R"J({"frames":10})J")["ok"].asBool());
     CHECK(ballY() < y);
     // The pause does not outlive the play session.
-    Call(e, "game.pause", R"J({"paused":true})J");
-    Call(e, "sim.stop", "{}");
-    CHECK(!Call(e, "game.pause", "{}")["result"]["paused"].asBool());
+    EmitterCall(e, "game.pause", R"J({"paused":true})J");
+    EmitterCall(e, "sim.stop", "{}");
+    CHECK(!EmitterCall(e, "game.pause", "{}")["result"]["paused"].asBool());
 }
 
 TEST(TimeDateOverride) {
@@ -12477,7 +12568,7 @@ TEST(NativeEditorScriptCompletionAndTabMenus) {
     std::string project = TempProject("editor_completion"), error;
     Engine engine; CHECK(engine.Open(project, &error));
     for (const char* path : {"scripts/one.lua", "scripts/two.lua", "scripts/three.lua"}) {
-        CHECK(engine.Call("script.write", Json(Json::Object{{"path", Json(path)}, {"source", Json("-- completion probe\n")}}))["ok"].asBool());
+        CHECK(EmitterCall(engine, "script.write", Json(Json::Object{{"path", Json(path)}, {"source", Json("-- completion probe\n")}}))["ok"].asBool());
     }
     engine.GetScene().Clear();  // Completion, including self methods, must also work in an empty scene.
     if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
@@ -12554,7 +12645,7 @@ TEST(NativeEditorScriptCompletionAndTabMenus) {
         CHECK(popup());
         CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/script-completion.png"), image.ToImage()));
         key(WindowKey::Enter); frames(3, CtrlChord(WindowKey::S));
-        std::string saved = engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/one.lua")}}))["result"]["source"].asString();
+        std::string saved = EmitterCall(engine, "script.read", Json(Json::Object{{"path", Json("scripts/one.lua")}}))["result"]["source"].asString();
         CHECK(saved == "-- completion probe\ninput.pressed\n");
         // Accepting a completion is undoable as one insertion; discard must keep disk content.
         frames(3, CtrlChord(WindowKey::Z));
@@ -12562,12 +12653,12 @@ TEST(NativeEditorScriptCompletionAndTabMenus) {
         CHECK(popup() && std::strstr(popup()->Name, "###Close Scripts"));
         modalButton("Cancel"); CHECK(editor.OpenScripts().size() == 1);
         tabMenu("scripts/one.lua"); menu("Close Tab"); modalButton("Discard and Close"); CHECK(editor.OpenScripts().empty());
-        CHECK(engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/one.lua")}}))["result"]["source"].asString() == saved);
-        editor.OpenScript("scripts/two.lua"); frames(3); frames(3, CtrlChord(WindowKey::End)); type("particles."); type("bu");
+        CHECK(EmitterCall(engine, "script.read", Json(Json::Object{{"path", Json("scripts/one.lua")}}))["result"]["source"].asString() == saved);
+        editor.OpenScript("scripts/two.lua"); frames(3); frames(3, CtrlChord(WindowKey::End)); type("vfx."); type("bu");
         frames(3); key(WindowKey::Tab);
         tabMenu("scripts/two.lua"); menu("Close Tab"); modalButton("Save and Close");
         CHECK(editor.OpenScripts().empty());
-        CHECK(engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/two.lua")}}))["result"]["source"].asString() == "-- completion probe\nparticles.burst\n");
+        CHECK(EmitterCall(engine, "script.read", Json(Json::Object{{"path", Json("scripts/two.lua")}}))["result"]["source"].asString() == "-- completion probe\nvfx.burst\n");
         editor.OpenScript("scripts/one.lua"); editor.OpenScript("scripts/two.lua"); frames(3);
         tabMenu("scripts/one.lua"); menu("Close All Tabs"); CHECK(editor.OpenScripts().empty());
         editor.OpenScript("scripts/three.lua"); frames(3); frames(3, CtrlChord(WindowKey::End));
@@ -12578,7 +12669,7 @@ TEST(NativeEditorScriptCompletionAndTabMenus) {
         key(WindowKey::Enter); type("-- input."); type("pr"); frames(3, CtrlChord(WindowKey::Space)); CHECK(!popup());
         key(WindowKey::Enter); type("local text = '"); type("input.pr"); frames(3, CtrlChord(WindowKey::Space)); CHECK(!popup());
         frames(3, CtrlChord(WindowKey::S));
-        saved = engine.Call("script.read", Json(Json::Object{{"path", Json("scripts/three.lua")}}))["result"]["source"].asString();
+        saved = EmitterCall(engine, "script.read", Json(Json::Object{{"path", Json("scripts/three.lua")}}))["result"]["source"].asString();
         CHECK(saved.find("\ncurrentScore\n") != std::string::npos);
         CHECK(saved.find("\nself:get\n") != std::string::npos && saved.find("\nmath.sin\n") != std::string::npos);
         CHECK(engine.GetScene().Entities().empty() && engine.Frame() == 0 && !engine.InPlaySession());

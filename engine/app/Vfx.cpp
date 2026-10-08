@@ -11,6 +11,7 @@
 #include "app/Engine.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
+#include "core/Image.h"
 #include "scene/Components.h"
 #include "scene/Systems.h"
 #include "scene/Vfx.h"
@@ -45,8 +46,8 @@ Json VfxSchema() {
     Json out = Json::MakeObject();
     out["modules"] = Json(Json::Array{"Emission", "Shape", "Motion", "Appearance", "Curves", "Timing", "Render", "Expressions"});
     out["components"] = Json::MakeArray();
-    for (const char* name : {"ParticleEmitter", "Trail"}) {
-        const ComponentType& type = *TypeRegistry::Find(name);
+    for (const char* name : {"EmitterSettings", "Trail"}) {
+        const ComponentType& type = std::string(name) == "EmitterSettings" ? VfxEmitterType() : *TypeRegistry::Find(name);
         auto pool = type.makePool(); const void* defaults = pool->Add(1);
         Json component = Json::MakeObject(); component["name"] = name; component["fields"] = Json::MakeArray();
         for (const FieldInfo& field : type.fields) {
@@ -125,75 +126,56 @@ Json ApplyVfxPreset(Engine& engine, EntityId id, const Json& args) {
     const std::string mode = args["mode"].asString("replace");
     if (mode != "replace" && mode != "merge") throw ApiError("invalid_vfx", "mode must be replace or merge", "replace resets the affected component; merge keeps unspecified settings.");
     Scene& scene = engine.GetScene();
-    if (chosen["bundled"].asBool()) {
-        if (mode != "replace") throw ApiError("invalid_vfx", "bundled presets require mode:replace", "Create a preset asset with vfx.create, then patch its named blocks with vfx.set.");
-        const std::string path = VfxPresetAsset(engine, chosen["name"].asString());
-        Json values = Json::MakeObject(); values["asset"] = path;
-        ValidateVfxSystem(engine, nullptr, values);
-        for (const char* type : {"ParticleEmitter", "Trail", "VFXSystem"}) scene.RemoveComponent(id, *TypeRegistry::Find(type));
-        scene.Add<VFXSystem>(id).asset = path;
-        if (!scene.Get<Transform>(id)) scene.Add<Transform>(id);
-        Json out = Json::MakeObject(); out["id"] = id; out["preset"] = chosen["name"]; out["mode"] = mode; out["asset"] = path;
-        out["appliedFields"] = Json(Json::Array{"VFXSystem.asset"}); return out;
-    }
-    Json fields = Json::MakeArray();
-    // Validate every block before touching the live entity.
-    for (const char* blocks : {"emitters", "trails"}) for (const Json& block : chosen[blocks].items()) {
-        const bool trail = std::string(blocks) == "trails";
-        const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");
-        ValidateVfxSettings(type, mode == "merge" ? scene.GetComponent(id, type) : nullptr, block[trail ? "trail" : "emitter"]);
-    }
-    int emitterIndex = 0, trailIndex = 0;
-    if (mode == "replace") scene.RemoveComponent(id, *TypeRegistry::Find("VFXSystem"));
-    for (const char* blocks : {"emitters", "trails"}) for (const Json& block : chosen[blocks].items()) {
-        const bool trail = std::string(blocks) == "trails";
-        const ComponentType& type = *TypeRegistry::Find(trail ? "Trail" : "ParticleEmitter");
-        const int index = trail ? trailIndex++ : emitterIndex++;
-        EntityId target = id;
-        if (index > 0) {
-            const std::string name = scene.Record(id)->name + "_" + block["name"].asString();
-            target = kNullEntity;
-            for (EntityId child : scene.Children(id)) if (scene.Record(child)->name == name) target = child;
-            if (!target) target = scene.Create(name, id);
-            if (!scene.Get<Transform>(target)) scene.Add<Transform>(target);
+    if (chosen["bundled"].asBool() && mode != "replace")
+        throw ApiError("invalid_vfx", "bundled presets require mode:replace", "Create a preset asset with vfx.create, then patch its named blocks with vfx.set.");
+    std::string path;
+    if (mode == "merge" && scene.Get<VFXSystem>(id)) {
+        const auto* system = scene.Get<VFXSystem>(id);
+        Json document = engine.ReadProjectJson(system->asset);
+        if (document["params"].size() || system->params.size())
+            throw ApiError("invalid_vfx", "preset merge requires an unparameterized asset", "Patch named blocks with vfx.set, or use replace to attach the preset.");
+        for (const char* key : {"emitters", "trails"}) {
+            if (!document.has(key)) document[key] = Json::MakeArray();
+            for (size_t i = 0; i < chosen[key].size(); ++i) {
+                if (i >= document[key].size()) { document[key].push(chosen[key][i]); continue; }
+                const char* settings = std::string(key) == "emitters" ? "emitter" : "trail";
+                for (const auto& field : chosen[key][i][settings].members()) document[key][i][settings][field.first] = field.second;
+            }
         }
-        if (mode == "replace") scene.RemoveComponent(target, type);
-        void* component = scene.AddComponent(target, type);
-        const Json& values = block[trail ? "trail" : "emitter"];
-        std::string error;
-        if (!ApplyComponentJson(type, component, values, &error)) throw ApiError("invalid_vfx", error);
-        for (const FieldInfo& field : type.fields) if (mode == "replace" || values.has(field.name)) fields.push(type.name + "." + field.name);
-    }
+        document = ParseVfxAsset(document).json;
+        const std::string text = document.dump(2) + "\n";
+        const uint64_t hash = Fnv1a64(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+        path = "effects/presets/" + chosen["name"].asString() + "-" + std::to_string(hash) + ".vfx.json";
+        const std::string full = engine.ResolvePath(path);
+        if (FileExists(full)) {
+            std::string previous;
+            if (!ReadTextFile(full, previous) || previous != text) throw ApiError("preset_conflict", "merged preset destination was edited: " + path);
+        } else SaveVfxDocument(engine, path, document);
+    } else path = VfxPresetAsset(engine, chosen["name"].asString());
+    Json values = Json::MakeObject(); values["asset"] = path;
+    ValidateVfxSystem(engine, nullptr, values);
+    scene.RemoveComponent(id, *TypeRegistry::Find("Trail"));
+    scene.RemoveComponent(id, *TypeRegistry::Find("VFXSystem"));
+    auto& system = scene.Add<VFXSystem>(id); system.asset = path;
+    std::string error;
+    if (!RefreshVfx(system, engine.Assets(), &error)) throw ApiError("invalid_vfx", error);
     if (!scene.Get<Transform>(id)) scene.Add<Transform>(id);
-    Json out = Json::MakeObject(); out["id"] = id; out["preset"] = chosen["name"]; out["mode"] = mode; out["appliedFields"] = fields;
-    return out;
+    Json out = Json::MakeObject(); out["id"] = id; out["preset"] = chosen["name"]; out["mode"] = mode; out["asset"] = path;
+    out["appliedFields"] = Json(Json::Array{"VFXSystem.asset"}); return out;
 }
 
-Json CheckVfx(Engine& engine, EntityId root) {
+Json CheckVfxValues(Engine& engine, const ParticleEmitter* emitter, const Trail* trail, EntityId id) {
     Json out = Json::MakeObject(); out["ok"] = true; out["warnings"] = Json::MakeArray();
-    int instructions=0;uint64_t work=0;
-    bool found = false;
-    auto warn = [&](EntityId id, const char* code, const char* message, const char* hint) {
+    int instructions = 0; uint64_t work = 0; bool found = false;
+    auto warn = [&](EntityId owner, const char* code, const char* message, const char* hint) {
         Json warning = Json::MakeObject(); warning["code"] = code; warning["message"] = message; warning["hint"] = hint;
-        warning["emitter"] = engine.GetScene().Record(id)->name; warning["id"] = id; out["warnings"].push(warning);
+        warning["emitter"] = owner && engine.GetScene().Record(owner) ? engine.GetScene().Record(owner)->name : "emitter";
+        if (owner) warning["id"] = owner;
+        out["warnings"].push(warning);
     };
-    for (EntityId id : EffectIds(engine.GetScene(), root)) {
-        if (const VFXSystem* system = engine.GetScene().Get<VFXSystem>(id)) {
-            found = true;
-            ValidateVfxSystem(engine, system, Json::MakeObject());
-            Json checked = CheckVfxAsset(engine, system->asset, EffectiveVfxParams(*system));
-            instructions+=checked["expressionInstructions"].asInt();work+=static_cast<uint64_t>(checked["expressionStepInstructions"].asNumber());
-            for (const Json& warning : checked["warnings"].items()) { Json item = warning; item["id"] = id; out["warnings"].push(item); }
-            uint64_t live = 0;
-            for (const auto& block : system->emitters) live += block.particles.size();
-            if (live > static_cast<uint64_t>(checked["budget"].asInt()))
-                warn(id, "above_budget", "Live particles exceed the system budget.", "Step once to enforce the new cap, or call vfx.clear.");
-        }
-        const ParticleEmitter* emitter = engine.GetScene().Get<ParticleEmitter>(id);
-        const Trail* trail = engine.GetScene().Get<Trail>(id);
-        for (const char* name : {"ParticleEmitter", "Trail"}) {
-            const ComponentType& type = *TypeRegistry::Find(name);
-            const void* value = engine.GetScene().GetComponent(id, type);
+        for (const char* name : {"EmitterSettings", "Trail"}) {
+            const ComponentType& type = std::string(name) == "EmitterSettings" ? VfxEmitterType() : *TypeRegistry::Find(name);
+            const void* value = std::string(name) == "EmitterSettings" ? static_cast<const void*>(emitter) : static_cast<const void*>(trail);
             if (!value) continue;
             found = true; ValidateVfxSettings(type, value, ComponentToJson(type, value));
             const std::string texture = name == std::string("Trail") ? trail->texture : emitter->texture;
@@ -204,7 +186,7 @@ Json CheckVfx(Engine& engine, EntityId root) {
                 if (!engine.Assets().GetMaterial(material, &error))
                     throw ApiError("invalid_vfx", "Invalid effect material: " + error, "Create or repair the .mat.json and its shader graph.");
             }
-            if (emitter && name == std::string("ParticleEmitter") && !emitter->mesh.empty()) {
+            if (emitter && name == std::string("EmitterSettings") && !emitter->mesh.empty()) {
                 if (!GetBuiltinMesh(emitter->mesh)) engine.ResolvePath(emitter->mesh);
                 const auto mesh = engine.Assets().GetMesh(emitter->mesh);
                 if (!mesh || !mesh->joints.empty() || mesh->positions.size() > 65536 || mesh->indices.size() > 196608 ||
@@ -249,8 +231,37 @@ Json CheckVfx(Engine& engine, EntityId root) {
                 warn(id, "above_budget", "Trail points exceed the configured cap.", "Step once or call trail.clear.");
             warn(id, "trail_requires_motion", "A stationary trail produces no ribbon.", "Move the owner in gameplay; supply motion keys for isolated preview/analyze.");
         }
+    (void)found;
+    out["expressionInstructions"] = instructions; out["expressionStepInstructions"] = static_cast<double>(work);
+    return out;
+}
+
+Json CheckVfx(Engine& engine, EntityId root) {
+    Json out = Json::MakeObject(); out["ok"] = true; out["warnings"] = Json::MakeArray();
+    int instructions=0;uint64_t work=0;
+    bool found = false;
+    auto warn = [&](EntityId id, const char* code, const char* message, const char* hint) {
+        Json warning = Json::MakeObject(); warning["code"] = code; warning["message"] = message; warning["hint"] = hint;
+        warning["emitter"] = engine.GetScene().Record(id)->name; warning["id"] = id; out["warnings"].push(warning);
+    };
+    for (EntityId id : EffectIds(engine.GetScene(), root)) {
+        if (const VFXSystem* system = engine.GetScene().Get<VFXSystem>(id)) {
+            found = true;
+            ValidateVfxSystem(engine, system, Json::MakeObject());
+            Json checked = CheckVfxAsset(engine, system->asset, EffectiveVfxParams(*system));
+            instructions+=checked["expressionInstructions"].asInt();work+=static_cast<uint64_t>(checked["expressionStepInstructions"].asNumber());
+            for (const Json& warning : checked["warnings"].items()) { Json item = warning; item["id"] = id; out["warnings"].push(item); }
+            uint64_t live = 0;
+            for (const auto& block : system->emitters) live += block.particles.size();
+            if (live > static_cast<uint64_t>(checked["budget"].asInt()))
+                warn(id, "above_budget", "Live particles exceed the system budget.", "Step once to enforce the new cap, or call vfx.clear.");
+        }
+        if (const Trail* trail = engine.GetScene().Get<Trail>(id)) {
+            found = true; const Json checked = CheckVfxValues(engine, nullptr, trail, id);
+            for (const auto& warning : checked["warnings"].items()) out["warnings"].push(warning);
+        }
     }
-    if (!found) throw ApiError("no_emitter", "entity subtree has no ParticleEmitter or Trail", "Apply a preset or add ParticleEmitter/Trail first.");
+    if (!found) throw ApiError("no_emitter", "entity subtree has no VFXSystem or Trail", "Apply a preset or add a linked VFXSystem/Trail first.");
     out["expressionInstructions"]=instructions;out["expressionStepInstructions"]=static_cast<double>(work);
     return out;
 }

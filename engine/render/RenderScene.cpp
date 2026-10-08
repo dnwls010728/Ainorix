@@ -561,7 +561,6 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             items[first].mesh=mesh; items.resize(first+1);
         }
     };
-    for (const auto& kv : scene.Pool<ParticleEmitter>()) gatherEmitter(kv.first, kv.second, scene.WorldMatrix(kv.first));
     for (const auto& kv : scene.Pool<VFXSystem>()) if (kv.second.definition)
         for (size_t i = 0; i < kv.second.emitters.size(); ++i)
             gatherEmitter(kv.first, kv.second.emitters[i], scene.WorldMatrix(kv.first) * kv.second.definition->emitters[i].local);

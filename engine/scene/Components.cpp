@@ -6,7 +6,6 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Transform>();
     TypeRegistry::Register<MeshRenderer>();
     TypeRegistry::Register<Animator>();
-    TypeRegistry::Register<ParticleEmitter>();
     TypeRegistry::Register<Camera>();
     TypeRegistry::Register<PostProcess>();
     TypeRegistry::Register<Light2D>();

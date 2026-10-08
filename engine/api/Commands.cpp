@@ -348,7 +348,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
             .Opt("values", "object", "Partial block field patch.").Opt("params", "object", "Replace parameter definitions.")
             .Opt("merge", "string", "Coalesce a drag in the open document history; ignored for direct file edits.");
         if (op == "diff") params.Opt("against", "string", "Reference .vfx.json; omitted compares named blocks with component defaults.");
-        if (op == "from_entity") params.ReqWith("id", EntityRefSchema("Root of a ParticleEmitter/Trail subtree to pack."));
+        if (op == "from_entity") params.ReqWith("id", EntityRefSchema("Root of a VFXSystem/Trail subtree to pack."));
         Register(r, ("vfx." + op).c_str(), "Read or atomically author a reusable VFX asset; file edits do not enter scene undo.", params, false,
                  [op](Engine& e, const Json& a) { return VfxAssetCall(e, op, a); });
     }
@@ -365,6 +365,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         if (op == "stop") params.Opt("kill", "boolean", "Clear particles and trails immediately (default false: drain).");
         if (op == "burst") params.Opt("emitter", "string", "One named emitter; omitted targets all in asset order.")
             .Opt("count", "integer", "Births per selected emitter, 0..10000; omitted uses each configured burst.");
+        if (op == "clear") params.Opt("restart", "boolean", "If supplied, reset clocks/RNG/counters; true also re-arms automatic births. Omitted only clears live particles/trails.");
+        if (op == "state") params.Opt("particles", "boolean", "Include captured/evaluated particle snapshots per emitter.");
         if (op == "set_param") params.Req("name", "string", "Parameter name.").ReqWith("value", Json::MakeObject());
         Register(r, ("vfx." + op).c_str(), "Control or inspect linked VFX runtime; controls do not create scene undo entries.", params, false,
                  [op](Engine& e, const Json& a) { return VfxRuntimeCall(e, op, RequireEntity(e, a), a); });
@@ -386,7 +388,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine&, const Json&) { return VfxSchema(); });
     Register(r, "vfx.presets", "List portable effect presets with intent sentences and tags.", Params().Opt("tag", "string", "Filter by an exact tag."), false,
              [](Engine&, const Json& a) { return VfxPresets(a["tag"].asString()); });
-    Register(r, "vfx.apply_preset", "Apply a preset in one scene undo step; bundled presets install files and attach a VFXSystem.",
+    Register(r, "vfx.apply_preset", "Apply a preset asset and attach a VFXSystem in one scene undo step; installed files survive undo.",
              Params().ReqWith("id", EntityRefSchema("Target entity id or name.")).Req("preset", "string", "Name from vfx.presets.")
                  .Opt("mode", "string", "replace resets the affected component (default); merge preserves unspecified settings; bundled presets require replace."), true,
              [](Engine& e, const Json& a) { return ApplyVfxPreset(e, RequireEntity(e, a), a); });
@@ -553,87 +555,6 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  next.playing = true;
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
-             });
-    auto requireEmitter = [](Engine& e, const Json& args) -> ParticleEmitter& {
-        EntityId id = RequireEntity(e, args);
-        ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(id);
-        if (!emitter) throw ApiError("missing_component", "entity has no ParticleEmitter", "Add ParticleEmitter with component.add first.");
-        return *emitter;
-    };
-    Register(r, "particles.state", "Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include evaluated channels, captured birth inputs, index/count, stable random and worldSpace."),
-             false, [requireEmitter](Engine& e, const Json& a) {
-                 const ParticleEmitter& emitter = requireEmitter(e, a);
-                 Json out = Json::MakeObject();
-                 out["count"] = static_cast<uint64_t>(emitter.particles.size());
-                 out["emitted"] = emitter.emitted;
-                 out["playing"] = emitter.playing;
-                 out["loop"] = emitter.loop;
-                 out["maxParticles"] = emitter.maxParticles;
-                 out["finished"] = ParticlesFinished(emitter);
-                 if (a["particles"].asBool()) {
-                     out["particles"] = Json::MakeArray();
-                     for (const Particle& particle : emitter.particles) {
-                         Json p = Json::MakeObject();
-                         p["age"] = particle.age;
-                         p["lifetime"] = particle.lifetime;
-                         p["position"] = Json(Json::Array{particle.position.x, particle.position.y, particle.position.z});
-                         p["velocity"] = Json(Json::Array{particle.velocity.x, particle.velocity.y, particle.velocity.z});
-                         p["rotation"] = particle.rotation;
-                         auto vector = [](Vec3 v) { return Json(Json::Array{v.x, v.y, v.z}); };
-                         p["birthPosition"] = vector(particle.birthPosition);
-                         p["initialVelocity"] = vector(particle.initialVelocity);
-                         p["initialRotation"] = vector(particle.initialRotation);
-                         p["initialScale"] = vector(particle.initialScale);
-                         p["integratedPosition"] = vector(particle.integratedPosition);
-                         p["rotation3D"] = vector(particle.rotation3D);
-                         p["scale"] = vector(particle.axisScale);
-                         p["custom"] = Json(Json::Array{particle.custom.x, particle.custom.y, particle.custom.z, particle.custom.w});
-                         p["initialCustom"] = Json(Json::Array{particle.initialCustom.x, particle.initialCustom.y, particle.initialCustom.z, particle.initialCustom.w});
-                         p["index"] = particle.index; p["count"] = particle.birthCount;
-                         p["random"] = particle.random;
-                         p["worldSpace"] = particle.worldSpace;
-                         out["particles"].push(p);
-                     }
-                 }
-                 return out;
-             });
-    Register(r, "particles.burst", "Emit particles immediately, including on paused emitters. Excess births are dropped at capacity; runtime only.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Req("count", "integer", "Number to emit, 0..10000."),
-             false, [requireEmitter](Engine& e, const Json& a) {
-                 const ParticleEmitter& emitter = requireEmitter(e, a);
-                 if (!ParticleSettingsValid(emitter))
-                     {
-                     std::string detail;
-                     ParticleCurve curve;
-                     const char* hint = "Correct direction/gravity/colors and numeric fields with component.set.";
-                     if (!ParseParticleCurve(emitter.sizeOverLife, false, curve, &detail)) detail = "sizeOverLife: " + detail;
-                     else if (!ParseParticleCurve(emitter.colorOverLife, true, curve, &detail)) detail = "colorOverLife: " + detail;
-                     else if (!ParseParticleCurve(emitter.opacityOverLife, false, curve, &detail)) detail = "opacityOverLife: " + detail;
-                     if (!detail.empty()) hint = "Curves are [[t, value], ...] with t ascending in 0..1, e.g. [[0,0],[0.2,1],[1,0]]; fix it with component.set.";
-                     throw ApiError("invalid_emitter", detail.empty() ? "particle settings must be finite" : detail, hint);
-                 }
-                 double requested = a["count"].asNumber();
-                 if (requested < 0 || requested > 10000) throw ApiError("invalid_argument", "count must be 0..10000", "Use a bounded burst; maxParticles also limits accepted births.");
-                 int count = static_cast<int>(requested);
-                 Json out = Json::MakeObject();
-                 out["accepted"] = BurstParticles(e.GetScene(), RequireEntity(e, a), count);
-                 return out;
-             });
-    Register(r, "particles.clear", "Clear live particles and reset the random stream/counters. Optionally re-arm the initial burst; runtime only.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("restart", "boolean", "Re-arm initial burst for next playing step (default false)."),
-             false, [requireEmitter](Engine& e, const Json& a) {
-                 ParticleEmitter& emitter = requireEmitter(e, a);
-                 emitter.particles.clear();
-                 emitter.randomState = 0;
-                 emitter.carry = 0;
-                 emitter.emitted = 0;
-                 emitter.elapsed = 0;
-                 emitter.cycle = 0;
-                 emitter.initialBurstEmitted = !a["restart"].asBool(false);
-                 Json out = Json::MakeObject();
-                 out["count"] = 0;
-                 return out;
              });
     auto requireTrail = [](Engine& e, const Json& args) -> Trail& {
         EntityId id = RequireEntity(e, args);
