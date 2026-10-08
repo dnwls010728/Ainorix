@@ -59,6 +59,10 @@ constexpr const char* kIconChevronRight          = "\xee\x81\xb3";  // chevron-r
 constexpr const char* kIconPackage               = "\xee\x84\xad";  // package U+E12D
 constexpr const char* kIconPalette               = "\xee\x87\x9d";  // palette U+E1DD
 constexpr const char* kIconFileJson              = "\xee\x8d\xaf";  // file-json U+E36F
+constexpr const char* kIconFilm                  = "\xee\x83\x94";  // film U+E0D4
+constexpr const char* kIconAperture              = "\xee\x81\x84";  // aperture U+E044
+constexpr const char* kIconSquareDashed          = "\xee\x87\x8b";  // square-dashed U+E1CB
+constexpr const char* kIconMove3d                = "\xee\x8b\xa5";  // move-3d U+E2E5
 
 // A window or popup title with an icon in front: WithIcon(kIconFolder, TrId("Assets")). The `###` id
 // part of TrId stays the same, so docked layouts and settings keep working.

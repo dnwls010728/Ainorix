@@ -1282,14 +1282,14 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
         const float w = ImGui::CalcTextSize(save.c_str()).x + ImGui::GetStyle().FramePadding.x * 2 + gap;
         ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, ImGui::GetWindowWidth() - w));
         ImGui::BeginDisabled(session);
-        const bool pending = Dirty() && !session;
-        if (pending) {
+        const bool unsaved = Dirty() && !session;
+        if (unsaved) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.58f, 1.0f, 0.85f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.42f, 0.64f, 1.0f, 0.95f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.32f, 0.52f, 0.92f, 1.0f));
         }
         if (ImGui::Button(save.c_str())) Save();
-        if (pending) ImGui::PopStyleColor(3);
+        if (unsaved) ImGui::PopStyleColor(3);
         HelpTooltip(Tr("Save (Ctrl+S)"));
         ImGui::EndDisabled();
         ImGui::EndMenuBar();

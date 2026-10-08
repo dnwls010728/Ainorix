@@ -53,6 +53,68 @@ EntityIcon EntityKindIcon(const EntityRow& r) {
     return {kIconCircleDashed, ImVec4(0.50f, 0.52f, 0.56f, 1)};
 }
 
+// The icon on a component's Inspector header, in the same colors as the Hierarchy's entity icons.
+EntityIcon ComponentIcon(const std::string& type) {
+    const ImVec4 neutral(0.70f, 0.74f, 0.80f, 1), light(1.0f, 0.80f, 0.42f, 1), ui(1.0f, 0.66f, 0.42f, 1), physics(0.58f, 0.86f, 0.58f, 1);
+    if (type == "Transform") return {kIconMove3d, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (type == "Camera" || type == "CameraFollow") return {kIconVideo, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (type == "PostProcess") return {kIconAperture, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (type == "DirectionalLight") return {kIconSun, light};
+    if (type == "PointLight" || type == "Light2D" || type == "Darkness2D") return {kIconLightbulb, light};
+    if (type == "MeshRenderer") return {kIconBox, neutral};
+    if (type == "Sprite") return {kIconImage, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "SpriteAnimation" || type == "Animator") return {kIconFilm, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "Script") return {kIconBraces, ImVec4(0.92f, 0.84f, 0.50f, 1)};
+    if (type == "Collider" || type == "Collider2D") return {kIconSquareDashed, physics};
+    if (type == "RigidBody" || type == "RigidBody2D") return {kIconAtom, physics};
+    if (type == "CharacterBody" || type == "CharacterBody2D") return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
+    if (type == "Tilemap") return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};
+    if (type == "VFXSystem" || type == "Trail") return {kIconSparkles, ImVec4(1.0f, 0.70f, 0.42f, 1)};
+    if (type == "AudioSource") return {kIconVolume2, ImVec4(0.60f, 0.84f, 1.0f, 1)};
+    if (type == "UIText") return {kIconType, ui};
+    if (type.compare(0, 2, "UI") == 0) return {kIconLayoutTemplate, ui};
+    if (type == "NetSync" || type == "NetPlayer") return {kIconNetwork, neutral};
+    if (type == "Tag") return {kIconLayers, neutral};
+    return {kIconPackage, neutral};
+}
+
+// A component section header in the Inspector: chevron, colored icon and name on a soft bar. Clicking
+// it folds the section; the state is remembered per header id and starts open. The header stays the
+// last item, so a tooltip or context menu can follow.
+bool SectionHeader(const char* name, const EntityIcon& icon) {
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    const ImGuiID openId = ImGui::GetID("##open");
+    bool open = storage->GetBool(openId, true);
+    const float h = ImGui::GetFrameHeight() + 2.0f, font = ImGui::GetFontSize();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::SetNextItemAllowOverlap();
+    if (ImGui::InvisibleButton("##header", ImVec2(w, h))) storage->SetBool(openId, open = !open);
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p, ImVec2(p.x + w, p.y + h), IM_COL32(255, 255, 255, hovered ? 20 : 11), ImGui::GetStyle().FrameRounding);
+    float x = p.x + ImGui::GetStyle().FramePadding.x * 0.6f;
+    const float y = p.y + (h - font) * 0.5f;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), open ? kIconChevronDown : kIconChevronRight);
+    x += font + 2.0f;
+    draw->AddText(ImVec2(x, y), ImGui::ColorConvertFloat4ToU32(icon.color), icon.glyph);
+    x += font + 6.0f;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_Text), name);
+    return open;
+}
+
+// A borderless square icon button (a section's remove button): dim until hovered.
+bool GhostIconButton(const char* id, const char* icon, float side, ImU32 hoverColor) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(side, side));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (hovered) draw->AddRectFilled(p, ImVec2(p.x + side, p.y + side), IM_COL32(255, 255, 255, 18), ImGui::GetStyle().FrameRounding);
+    const ImVec2 size = ImGui::CalcTextSize(icon);
+    draw->AddText(ImVec2(p.x + (side - size.x) * 0.5f, p.y + (side - size.y) * 0.5f), hovered ? hoverColor : ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+    return pressed;
+}
+
 const char* KindLabel(const std::string& kind) {
     if (kind == "scene") return Tr("Scenes");
     if (kind == "prefab") return Tr("Prefabs");
@@ -396,7 +458,10 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
     ImGui::PushTextWrapPos(0.0f);
+    // Labels sit a step below the values so the eye lands on the numbers.
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.67f, 0.70f, 1.0f));
     ImGui::TextUnformatted(Humanize(field).c_str());
+    ImGui::PopStyleColor();
     ImGui::PopTextWrapPos();
     HelpTooltip(schema["description"].asString(""));
     ImGui::TableSetColumnIndex(1);
@@ -431,12 +496,12 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         const bool stacked = available < ImGui::GetFontSize() * 9.5f;
         // Plain values with a thin axis-colored mark at the left edge of each field.
         const ImU32 axisColors[] = {IM_COL32(240, 104, 104, 255), IM_COL32(120, 210, 130, 255), IM_COL32(100, 156, 255, 255)};
-        const char* formats[] = {"%.3g", "%.3g", "%.3g"};
+        const char* format = field == "rotation" ? "%.3g\xc2\xb0" : "%.3g";  // rotations read in degrees
         for (int axis = 0; axis < 3; ++axis) {
             if (axis > 0 && !stacked) ImGui::SameLine(0, gap);
             ImGui::PushID(axis);
             ImGui::SetNextItemWidth(stacked ? available : (available - gap * 2) / 3);
-            const bool edited = ImGui::DragFloat(label.c_str(), &f[axis], speed, 0, 0, formats[axis]);
+            const bool edited = ImGui::DragFloat(label.c_str(), &f[axis], speed, 0, 0, format);
             {
                 const ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
                 const float inset = ImGui::GetStyle().FrameRounding * 0.5f;
@@ -585,15 +650,24 @@ void NativeEditor::Impl::InspectorPanel() {
     }
     if (selection.size() > 1) ImGui::TextDisabled(Tr("%d entities selected - showing the first"), static_cast<int>(selection.size()));
 
-    // Name + id
+    // Entity icon, name and id.
     std::string name;
-    ImGui::SetNextItemWidth(-ImGui::CalcTextSize("#00000").x - ImGui::GetStyle().ItemSpacing.x);
+    if (const EntityRow* row = Row(id)) {
+        const EntityIcon icon = EntityKindIcon(*row);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(icon.color, "%s", icon.glyph);
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+    }
+    const std::string idText = Format("#%u", id);
+    ImGui::SetNextItemWidth(-ImGui::CalcTextSize(idText.c_str()).x - ImGui::GetStyle().ItemSpacing.x);
     if (CommitText("##name", selected["name"].asString(""), name) && !name.empty()) {
         Call("entity.rename", ObjectOf({{"id", Json(id)}, {"name", Json(name)}}));
         Refresh(true);
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("#%u", id);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", idText.c_str());
+    ImGui::Dummy(ImVec2(0, 2));
 
     const Json& comps = selected["components"];
     std::string removeType;
@@ -602,14 +676,10 @@ void NativeEditor::Impl::InspectorPanel() {
         ImGui::PushID(type.c_str());
         auto typeIt = typeByName.find(type);
         const Json* typeInfo = typeIt == typeByName.end() ? nullptr : typeIt->second;
-        float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+        const float headerHeight = ImGui::GetFrameHeight() + 2.0f;
         // Section bars are neutral: the accent color is kept for what is selected.
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(1.0f, 1.0f, 1.0f, 0.045f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.07f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(1.0f, 1.0f, 1.0f, 0.09f));
-        bool open = ImGui::CollapsingHeader(type.c_str(), ImGuiTreeNodeFlags_AllowOverlap);
-        ImGui::PopStyleColor(3);
+        const bool open = SectionHeader(type.c_str(), ComponentIcon(type));
         if (typeInfo) HelpTooltip((*typeInfo)["doc"].asString(""));
         if (ImGui::BeginPopupContextItem("##compctx")) {
             if (ImGui::MenuItem(Tr("Remove Component"))) removeType = type;
@@ -621,25 +691,31 @@ void NativeEditor::Impl::InspectorPanel() {
             ImGui::EndPopup();
         }
         // Remove button on the header's right edge.
-        ImGui::SameLine(headerRight - ImGui::GetFrameHeight());
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        if (ImGui::SmallButton("x")) removeType = type;
-        ImGui::PopStyleColor();
+        ImGui::SameLine(headerRight - headerHeight - 1.0f);
+        if (GhostIconButton("##remove", kIconX, headerHeight, IM_COL32(236, 110, 100, 255))) removeType = type;
         HelpTooltip(Format(Tr("Remove %s"), type.c_str()));
         if (open && typeInfo) {
-            if (type == "Script") {
-                std::string path = kv.second["path"].asString("");
-                if (!path.empty() && ImGui::Button(Tr("Edit Script"))) OpenScript(path);
+            // Shortcuts into the component's own editor.
+            const char* editIcon = nullptr;
+            const char* editLabel = nullptr;
+            std::string editPath;
+            if (type == "Script") editIcon = kIconFileCode, editLabel = "Edit Script", editPath = kv.second["path"].asString("");
+            if (type == "VFXSystem") editIcon = kIconSparkles, editLabel = "Edit Effect", editPath = kv.second["asset"].asString("");
+            if (type == "MeshRenderer") editIcon = kIconPalette, editLabel = "Edit Material", editPath = kv.second["material"].asString("");
+            if (editLabel && !editPath.empty()) {
+                ImGui::Dummy(ImVec2(0, 1));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
+                if (ImGui::Button(WithIcon(editIcon, Tr(editLabel)).c_str(), ImVec2(-FLT_MIN, 0))) {
+                    if (type == "Script") OpenScript(editPath);
+                    else if (type == "VFXSystem") OpenEffect(editPath);
+                    else OpenShader(editPath);
+                }
+                ImGui::PopStyleColor();
             }
-            if (type == "VFXSystem") {
-                const std::string path = kv.second["asset"].asString();
-                if (!path.empty() && ImGui::Button(Tr("Edit Effect"))) OpenEffect(path);
-            }
-            if (type == "MeshRenderer") {
-                std::string path = kv.second["material"].asString("");
-                if (!path.empty() && ImGui::Button(Tr("Edit Material"))) OpenShader(path);
-            }
-            if (ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 3.0f));
+            const bool table = ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX);
+            ImGui::PopStyleVar();
+            if (table) {
                 ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.34f);
                 ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.66f);
                 for (const auto& f : (*typeInfo)["schema"]["properties"].members()) {
@@ -653,6 +729,7 @@ void NativeEditor::Impl::InspectorPanel() {
         } else if (open) {
             ImGui::TextDisabled("%s", Tr("Unknown component type"));
         }
+        ImGui::Dummy(ImVec2(0, open ? 4.0f : 1.0f));
         ImGui::PopID();
     }
     if (!removeType.empty()) {
@@ -660,9 +737,12 @@ void NativeEditor::Impl::InspectorPanel() {
         Refresh(true);
     }
     ImGui::Spacing();
-    float w = ImGui::GetFontSize() * 12;
-    ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetContentRegionAvail().x - w) * 0.5f));
-    if (ImGui::Button(Tr("Add Component"), ImVec2(w, 0))) ImGui::OpenPopup("##addcomp");
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.58f, 1.0f, 0.16f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.36f, 0.58f, 1.0f, 0.28f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.36f, 0.58f, 1.0f, 0.38f));
+    const bool add = ImGui::Button(WithIcon(kIconPlus, Tr("Add Component")).c_str(), ImVec2(-FLT_MIN, ImGui::GetFrameHeight() + 4.0f));
+    ImGui::PopStyleColor(3);
+    if (add) ImGui::OpenPopup("##addcomp");
     AddComponentPopup(id);
     ImGui::End();
 }
@@ -971,7 +1051,7 @@ void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(Tr("Params"));
+    ImGui::TextColored(ImVec4(0.66f, 0.67f, 0.70f, 1.0f), "%s", Tr("Params"));
     HelpTooltip(Tr("Values the script reads as self.params.<name>. Rows come from the script; dimmed values are the script's defaults."));
     ImGui::TableSetColumnIndex(1);
     if (ImGui::SmallButton(raw ? Tr("Fields") : "JSON")) {
@@ -1083,9 +1163,9 @@ void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
         ImGui::TableSetColumnIndex(0);
         ImGui::AlignTextToFramePadding();
         ImGui::Indent(ImGui::GetStyle().IndentSpacing * 0.6f);
-        if (!row.info) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.3f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Text, row.info ? ImVec4(0.66f, 0.67f, 0.70f, 1) : ImVec4(0.95f, 0.72f, 0.3f, 1));
         ImGui::TextUnformatted(Humanize(name).c_str());
-        if (!row.info) ImGui::PopStyleColor();
+        ImGui::PopStyleColor();
         ImGui::Unindent(ImGui::GetStyle().IndentSpacing * 0.6f);
         {
             std::string tip = name;
