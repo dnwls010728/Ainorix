@@ -286,6 +286,7 @@ struct Loader {
         const cgltf_accessor* pos = nullptr;
         const cgltf_accessor* nor = nullptr;
         const cgltf_accessor* uv = nullptr;
+        const cgltf_accessor* color = nullptr;
         const cgltf_accessor* joints = nullptr;
         const cgltf_accessor* weights = nullptr;
         for (cgltf_size i = 0; i < prim.attributes_count; ++i) {
@@ -293,6 +294,7 @@ struct Loader {
             if (a.type == cgltf_attribute_type_position) pos = a.data;
             else if (a.type == cgltf_attribute_type_normal) nor = a.data;
             else if (a.type == cgltf_attribute_type_texcoord && a.index == 0) uv = a.data;
+            else if (a.type == cgltf_attribute_type_color && a.index == 0) color = a.data;
             else if (a.type == cgltf_attribute_type_joints && a.index == 0) joints = a.data;
             else if (a.type == cgltf_attribute_type_weights && a.index == 0) weights = a.data;
             else if (a.type == cgltf_attribute_type_joints || a.type == cgltf_attribute_type_weights)
@@ -330,6 +332,8 @@ struct Loader {
             }
         }
         uint32_t base = static_cast<uint32_t>(mesh.positions.size());
+        // COLOR_0 (RGB or RGBA) multiplies the material color; primitives without it are white.
+        if (color && mesh.colors.size() < base) mesh.colors.resize(base, Vec4(1, 1, 1, 1));
         Mat4 normalMatrix = world.Inverse().Transposed();
         for (cgltf_size i = 0; i < pos->count; ++i) {
             float p[3] = {0, 0, 0}, n[3] = {0, 1, 0}, t[2] = {0, 0};
@@ -340,6 +344,13 @@ struct Loader {
             mesh.normals.push_back(Normalize(normalMatrix.TransformDir(Vec3(n[0], n[1], n[2]))));
             mesh.uvs.push_back(t[0]);
             mesh.uvs.push_back(t[1]);
+            if (color) {
+                float c[4] = {1, 1, 1, 1};
+                cgltf_accessor_read_float(color, i, c, color->type == cgltf_type_vec3 ? 3 : 4);
+                mesh.colors.push_back(Vec4(c[0], c[1], c[2], c[3]));
+            } else if (!mesh.colors.empty()) {
+                mesh.colors.push_back(Vec4(1, 1, 1, 1));
+            }
             SkinVertex influence;
             if (node->skin) {
                 cgltf_uint indices[4]{};

@@ -168,6 +168,28 @@ Disabling FXAA avoids its intermediate allocation/pass and preserves previous
 frame hashes. Depth and entity IDs are never filtered. Sampling across small
 features may soften them; pixel-art cameras should leave it disabled.
 
+## Fog, color grading and ACES
+
+Distance fog and color grading live on the same `PostProcess` component; all neutral defaults leave
+existing frames unchanged (the effects are skipped, not computed with neutral values).
+
+- `fog` (0..1, 0 = off), `fogColor`, `fogStart`, `fogEnd`: each lit or unlit surface is mixed toward
+  `fogColor` by `fog * clamp((distance - fogStart) / (fogEnd - fogStart), 0, 1)`, where distance is
+  measured from the camera position to the surface point. It is applied per surface after lighting and
+  emission (`FogAmount` in `PostProcess.h`, `mesh_fs` in `Shaders.glsl`), so blended surfaces fog
+  correctly behind each other; additive surfaces (glows, `blend: add`) fade toward black instead of
+  adding fog color. The background clear color is not fogged; set it to `fogColor` for a horizon that
+  melts into the fog. A material can opt out with `"fog": false` (sky domes, mountain backdrops).
+- `saturation` (0 = grey, 1 = unchanged), `contrast` (around mid grey 0.5) and split toning
+  `shadowTint` / `highlightTint` (multipliers blended by luminance with a smoothstep up to 0.9) run
+  after tone mapping and before the vignette, on display color (`Grade` in `PostProcess.h`,
+  `composite_fs`).
+- `toneMapping: "aces"` is the Narkowicz fit of the ACES filmic curve
+  (`x(2.51x + 0.03) / (x(2.43x + 0.59) + 0.14)`) after `exposure`; it needs the HDR target like Reinhard.
+
+Verified by FogGradingHemisphereAndSpriteEmission (software checks per pixel, D3D11 mean difference
+0.58 against the software renderer). `games/RPG` drives all of them per time of day from Lua.
+
 ## Showcase presets
 
 Run `oe run samples/Showcase`, or package it with `oe package samples/Showcase

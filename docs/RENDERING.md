@@ -66,7 +66,7 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 
 Models and textures are cached and **hot-reloaded** when their files change (checked twice a second while playing and before every `sim.step`).
 
-Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
+Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. `COLOR_0` vertex colors (RGB or RGBA) multiply the material color in both renderers and reach shader graphs through `baseColor`. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
 
 ## MeshRenderer
 
@@ -176,8 +176,10 @@ glTF models load their full materials: base color factor including alpha, base c
 - `PointLight`: color, intensity, `range` (quadratic falloff to zero at the range).
 - Lighting is per pixel with a physically based model (glTF metallic-roughness): GGX normal distribution, Smith-Schlick geometry, Schlick Fresnel; F0 is 0.04 for dielectrics and the base color for metals, and the diffuse part is `baseColor * (1 - metallic)`. Both renderers use the same math (`Lighting::Shade` in `SoftwareRenderer.cpp`, `mesh_fs` in `Shaders.glsl`).
 - Light colors include the factor pi and lighting happens on non-linear (display) colors, clamped, with no tone mapping or HDR yet, so a white diffuse surface lit head-on still shows exactly the light color.
+- Hemisphere ambient: with `DirectionalLight.hemisphere` the ambient light is `groundAmbient` for faces pointing down, `ambient` for faces pointing up, blended by `normal.y * 0.5 + 0.5` (outdoor scenes: blue sky above, warm bounce below). Off by default (one flat ambient color).
 - Ambient = `DirectionalLight.ambient` * (diffuse + environment reflection). There is no skybox or environment map yet: reflections are approximated by a hemisphere that is brighter above (sky) than below (ground). Very smooth metals therefore reflect only this approximation and the highlights of the lights. Ambient occlusion textures darken this ambient term only.
-- Emissive is added after lighting (also for unlit materials).
+- Emissive is added after lighting (also for unlit materials). `Sprite.emission` (lit sprites) turns the sprite's own image into emission at that fraction, so billboards seen against the light at night do not go black.
+- Distance fog (`PostProcess.fog`) is applied per surface after emission; materials with `"fog": false` skip it. See [POSTPROCESS.md](POSTPROCESS.md#fog-color-grading-and-aces).
 
 ## Cameras
 
@@ -195,7 +197,8 @@ Exposure and optional Reinhard tone mapping preserve HDR lighting/emissive value
 before conversion to display color in both renderers. Neutral settings retain
 the original frame hashes. Optional bloom extracts and blurs HDR highlights before
 tone mapping in both renderers. Optional depth of field (`dofRadius`, `dofFocus`,
-`dofRange`, `dofFalloff`) blurs surfaces by their view depth before bloom. FXAA and custom shader materials remain later P6 milestones;
+`dofRange`, `dofFalloff`) blurs surfaces by their view depth before bloom. Distance fog, ACES tone mapping and color grading
+(saturation, contrast, shadow/highlight tints) are further optional fields. FXAA and custom shader materials remain later P6 milestones;
 see [POSTPROCESS.md](POSTPROCESS.md) for controls and verification.
 
 ## Debug drawing

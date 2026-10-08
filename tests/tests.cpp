@@ -9725,6 +9725,139 @@ TEST(GpuRendererMatchesSoftware) {
     CHECK(!Call(e, "render.screenshot", R"J({"renderer": "vulkan", "inline": false})J")["ok"].asBool());
 }
 
+// PostProcess fog / color grading / ACES, DirectionalLight hemisphere ambient, Sprite.emission and the
+// material fog opt-out, in both renderers; glTF COLOR_0 vertex colors load into the mesh.
+TEST(FogGradingHemisphereAndSpriteEmission) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("fog_grading"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,3,9],"rotation":[-15,0,0]},"Camera":{"clearColor":[0,0,0]},"PostProcess":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-50,30,0]},"DirectionalLight":{"ambient":[0.3,0.3,0.3]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[30,1,40]},"MeshRenderer":{"mesh":"plane","color":[0.4,0.7,0.3]}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{"position":[-1.5,1,0]},"MeshRenderer":{"mesh":"cube","color":[0.9,0.3,0.2]}}})J");
+    CHECK(Call(e, "material.create", R"J({"path":"materials/nofog.mat.json","values":{"baseColor":[0.2,0.4,0.9],"fog":false}})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Clear","components":{"Transform":{"position":[1.5,1,-2]},"MeshRenderer":{"mesh":"cube","material":"materials/nofog.mat.json"}}})J");
+    const int w = 128, h = 72;
+    auto render = [&](RenderTarget& t) {
+        RenderView view;
+        MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+        t.Resize(w, h);
+        e.Renderer().Render(e.GetScene(), view, t);
+        return view;
+    };
+    auto set = [&](const char* id, const char* type, const char* values) {
+        const std::string args = std::string(R"J({"id":")J") + id + R"J(","type":")J" + type + R"J(","values":)J" + values + "}";
+        CHECK(Call(e, "component.set", args.c_str())["ok"].asBool());
+    };
+    auto px = [&](const RenderTarget& t, int x, int y) { return t.color[static_cast<size_t>(y) * w + static_cast<size_t>(x)]; };
+    RenderTarget base, fog, again;
+    render(base);
+    // Neutral new fields keep the frame: fog 0 and grading at its defaults.
+    set("Camera", "PostProcess", R"J({"fogColor":[1,0,1],"fogStart":0,"fogEnd":1,"saturation":1,"contrast":1})J");
+    render(again);
+    CHECK(again.Hash() == base.Hash());
+    // Full fog from 1 m: every fogged surface turns magenta, the fog:false cube and the background do not.
+    set("Camera", "PostProcess", R"J({"fog":1})J");
+    render(fog);
+    const EntityId clear = e.GetScene().FindByName("Clear"), box = e.GetScene().FindByName("Box");
+    int magenta = 0, clearMagenta = 0, clearPixels = 0;
+    for (size_t i = 0; i < fog.color.size(); ++i) {
+        const uint32_t c = fog.color[i];
+        const bool isMagenta = (c & 255) == 255 && ((c >> 8) & 255) == 0 && ((c >> 16) & 255) == 255;
+        if (fog.ids[i] == clear) {
+            ++clearPixels;
+            clearMagenta += isMagenta;
+            CHECK(c == base.color[i]);
+        } else if (fog.ids[i] != kNullEntity) {
+            magenta += isMagenta;
+        } else {
+            CHECK(c == base.color[i]);
+        }
+    }
+    CHECK(clearPixels > 20 && clearMagenta == 0 && magenta > 1000);
+    // Partial fog grows with distance: the near ground bottom row is less fogged than far ground.
+    set("Camera", "PostProcess", R"J({"fog":0.8,"fogStart":5,"fogEnd":40})J");
+    render(fog);
+    auto green = [](uint32_t c) { return static_cast<int>((c >> 8) & 255); };
+    CHECK(green(px(fog, 64, 70)) > green(px(fog, 64, 40)));
+    set("Camera", "PostProcess", R"J({"fog":0})J");
+    // Saturation 0: grey everywhere; ACES differs from no tone mapping.
+    set("Camera", "PostProcess", R"J({"saturation":0})J");
+    render(again);
+    int coloured = 0;
+    for (uint32_t c : again.color) {
+        const int r = c & 255, g = (c >> 8) & 255, b = (c >> 16) & 255;
+        coloured += std::abs(r - g) > 1 || std::abs(g - b) > 1;
+    }
+    CHECK(coloured == 0);
+    set("Camera", "PostProcess", R"J({"saturation":1.2,"contrast":1.1,"shadowTint":[0.9,0.95,1.1],"highlightTint":[1.1,1,0.85]})J");
+    render(again);
+    CHECK(again.Hash() != base.Hash());
+    RenderTarget aces;
+    set("Camera", "PostProcess", R"J({"saturation":1,"contrast":1,"shadowTint":[1,1,1],"highlightTint":[1,1,1],"toneMapping":"aces"})J");
+    render(aces);
+    CHECK(aces.Hash() != base.Hash());
+    set("Camera", "PostProcess", R"J({"toneMapping":"none"})J");
+    render(again);
+    CHECK(again.Hash() == base.Hash());
+    // Hemisphere ambient: the box's downward-facing parts are not visible, but its sides (normal.y = 0) get the
+    // average of sky and ground, so a black ground ambient darkens them.
+    set("Sun", "DirectionalLight", R"J({"hemisphere":true,"groundAmbient":[0,0,0]})J");
+    render(again);
+    int boxDarker = 0, boxPixels = 0;
+    for (size_t i = 0; i < again.color.size(); ++i) {
+        if (again.ids[i] != box) continue;
+        ++boxPixels;
+        boxDarker += (again.color[i] & 255) < (base.color[i] & 255);
+    }
+    CHECK(boxPixels > 20 && boxDarker > boxPixels / 2);
+    set("Sun", "DirectionalLight", R"J({"hemisphere":false})J");
+    // Sprite.emission: a lit sprite with no light at all is black; emission brings back its own colour.
+    Call(e, "entity.create", R"J({"name":"Board","components":{"Transform":{"position":[0,1.5,3]},"Sprite":{"width":1,"height":1,"lit":true,"color":[1,0.5,0.25]}}})J");
+    set("Sun", "DirectionalLight", R"J({"intensity":0,"ambient":[0,0,0]})J");
+    RenderTarget dark, glow;
+    render(dark);
+    set("Board", "Sprite", R"J({"emission":1})J");
+    render(glow);
+    const EntityId board = e.GetScene().FindByName("Board");
+    int boardPixels = 0;
+    for (size_t i = 0; i < glow.color.size(); ++i) {
+        if (glow.ids[i] != board) continue;
+        ++boardPixels;
+        CHECK((dark.color[i] & 0xFFFFFF) == 0);
+        CHECK((glow.color[i] & 255) >= 250 && ((glow.color[i] >> 8) & 255) >= 124 && ((glow.color[i] >> 8) & 255) <= 131);
+    }
+    CHECK(boardPixels > 50);
+    set("Sun", "DirectionalLight", R"J({"intensity":1,"ambient":[0.3,0.3,0.3],"hemisphere":true,"groundAmbient":[0.1,0.05,0]})J");
+    set("Camera", "PostProcess", R"J({"fog":0.7,"fogStart":4,"fogEnd":30,"fogColor":[0.8,0.85,0.9],"saturation":1.15,"contrast":1.05,"shadowTint":[0.9,0.95,1.1],"highlightTint":[1.08,1,0.9]})J");
+    RenderTarget sw;
+    const RenderView view = render(sw);
+    if (e.EnableGpu(nullptr, &err)) {
+        RenderTarget gpu;
+        gpu.Resize(w, h);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double error = 0;
+        for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+            error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+        const double mean = error / static_cast<double>(sw.color.size() * 3);
+        std::printf("  fog/grading/hemisphere/emission software/GPU mean difference %.4f\n", mean);
+        CHECK(mean < 2.5);
+    } else std::printf("  SKIP GPU comparison (%s)\n", err.c_str());
+    // COLOR_0 vertex colors (the RPG terrain carries per-tile tints).
+    CHECK(CopyFileTo(TestSourceDir() + "/games/RPG/assets/models/terrain.glb", JoinPath(e.ProjectDir(), "assets/models/terrain.glb")));
+    const auto terrain = e.Assets().GetMesh("assets/models/terrain.glb", &err);
+    if (terrain) {
+        CHECK(terrain->colors.size() == terrain->positions.size());
+        bool tinted = false;
+        for (const Vec4& c : terrain->colors) tinted = tinted || c.x != 1 || c.z != 1;
+        CHECK(tinted);
+    } else {
+        std::printf("  terrain.glb: %s\n", err.c_str());
+        CHECK(false);
+    }
+}
+
 TEST(AnimatedSkinRenderers) {
     Engine e;
     std::string err;
@@ -14499,6 +14632,76 @@ TEST(DongleZooModuleSnapshotsAndCatalog) {
     CHECK(Call(live, "script.eval", R"({"entity":"App","code":"return self.score == 17 and self.ownerContext == self.services"})")["result"]["value"].asBool());
     CHECK(Call(live, "script.errors")["result"].size() == 0);
     CHECK(Call(e, "script.errors")["result"].size() == 0);
+}
+
+TEST(RPGVillageGame) {
+    // The HD-2D village in games/RPG: scripts check clean, the opening shot hands control over, the hero
+    // walks over the terrain grid (not into houses or water), Q turns the camera and time of day drives
+    // the sun, lamps and clock.
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/games/RPG";
+    CHECK(e.Open(project, &error));
+    for (const std::string& file : GameFiles(project)) {
+        if (file.size() < 4 || file.substr(file.size() - 4) != ".lua") continue;
+        Json args = Json::MakeObject();
+        args["path"] = file;
+        Json result = e.Call("script.check", args)["result"];
+        CHECK(result["errors"].asInt() == 0 && result["warnings"].asInt() == 0);
+    }
+    auto step = [&](int frames) {
+        Json args = Json::MakeObject();
+        args["frames"] = frames;
+        CHECK(e.Call("sim.step", args)["ok"].asBool());
+    };
+    auto eval = [&](const std::string& code) {
+        Json args = Json::MakeObject();
+        args["code"] = code;
+        args["entity"] = "Game";
+        return e.Call("script.eval", args)["result"]["value"];
+    };
+    auto key = [&](const char* name, bool down) {
+        Json args = Json::MakeObject();
+        args["key"] = name;
+        args["down"] = down;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
+    };
+    const EntityId hero = e.GetScene().FindByName("Hero");
+    const Vec3 start = e.GetScene().Get<Transform>(hero)->position;
+    key("W", true);
+    step(60);  // the opening shot keeps the hero still
+    CHECK(Length(e.GetScene().Get<Transform>(hero)->position - start) < 1e-4f);
+    CHECK(eval("return game.get('locked')").asBool());
+    step(240);
+    CHECK(!eval("return game.get('locked')").asBool());
+    step(60);
+    const Vec3 walked = e.GetScene().Get<Transform>(hero)->position;
+    CHECK(walked.z < start.z - 1.0f);  // forward = away from the camera (-z at yaw 0)
+    CHECK(e.GetScene().Get<Sprite>(hero)->frame / 4 == 2);  // back view row
+    step(600);  // straight north ends at the house across the plaza or a terrace step, never inside it
+    key("W", false);
+    const Vec3 stopped = e.GetScene().Get<Transform>(hero)->position;
+    CHECK(eval(std::string("return require('scripts.lib.terrain').height(") + std::to_string(static_cast<int>(std::floor(stopped.x + 0.5f))) +
+               "," + std::to_string(static_cast<int>(std::floor(stopped.z + 0.5f))) + ")").asNumber() >= 0);
+    key("Q", true);
+    step(1);
+    key("Q", false);
+    step(60);
+    CHECK(std::fabs(eval("return game.get('camYaw')").asNumber() - kPi / 4) < 0.02);
+    // Billboards turn with the camera.
+    CHECK(std::fabs(e.GetScene().Get<Transform>(e.GetScene().FindByName("Lamp1"))->rotation.y - 45.0f) < 1.5f);
+    // Night: lamps on, windows glowing, fireflies; the clock says so.
+    eval("self.tod = 0.85");
+    step(60);
+    const PointLight* lamp = e.GetScene().Get<PointLight>(e.GetScene().FindByName("Light"));
+    CHECK(lamp && lamp->intensity > 1.5f);
+    const MeshRenderer* windows = e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Windows"));
+    CHECK(windows && windows->shaderUniforms["glow"].asNumber() > 1.5);
+    CHECK(e.GetScene().Get<UIText>(e.GetScene().FindByName("Clock"))->text.find("밤") == 0);
+    eval("self.tod = 0.25");
+    step(60);
+    CHECK(e.GetScene().Get<PointLight>(e.GetScene().FindByName("Light"))->intensity < 0.1f);
+    CHECK(Call(e, "script.errors", "{}")["result"].size() == 0);
 }
 
 TEST(DongleZooGame) {

@@ -27,6 +27,11 @@ constexpr int kMaxDirLights = 4;
 constexpr int kMaxPointLights = 16;
 const Color kOutlineColor(1.0f, 0.62f, 0.1f);
 
+// composite_fs tone_mapping.y: 0 none, 1 Reinhard, 2 ACES.
+float ToneMappingMode(const PostProcess& post) {
+    return post.toneMapping == "aces" ? 2.0f : post.toneMapping == "reinhard" ? 1.0f : 0.0f;
+}
+
 struct MeshVertex {
     float pos[3];
     float nrm[3];
@@ -1021,6 +1026,10 @@ struct GpuRenderer::Impl {
             Put(lu.counts, static_cast<float>(dirs), static_cast<float>(points), shadows ? 1.0f : 0.0f, lights.shadowStrength);
             Put(lu.shadow_params, fit.texelWorld, 1.0f / static_cast<float>(settings.shadowMapSize), 0.002f, 0);
             Put(lu.eye, view.eye.x, view.eye.y, view.eye.z, 1);
+            const PostProcess fog = NormalizePostProcess(view.postProcess);
+            Put(lu.ambient_ground, lights.groundAmbient.r, lights.groundAmbient.g, lights.groundAmbient.b, lights.hemisphere ? 1.0f : 0.0f);
+            Put(lu.fog_color, fog.fogColor.r, fog.fogColor.g, fog.fogColor.b, fog.fog);
+            Put(lu.fog_range, fog.fogStart, fog.fogEnd, 0, 0);
             for (int i = 0; i < dirs; ++i) {
                 const RenderDirLight& l = lights.dirs[static_cast<size_t>(i)];
                 Put(lu.dir_dir[i], l.dir.x, l.dir.y, l.dir.z, 0);
@@ -1070,7 +1079,8 @@ struct GpuRenderer::Impl {
                 Put(mu.pbr, m.metallic, m.roughness, m.normalScale, m.occlusionStrength);
                 Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
-                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, 0, 0);
+                const float fogMode = !m.fog ? 0.0f : (dc.blend && m.additive ? 2.0f : 1.0f);
+                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, fogMode, 0);
                 PutGraph(mu, m, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
@@ -1287,8 +1297,11 @@ struct GpuRenderer::Impl {
             oe_composite_params_t cu{};
             Put(cu.target, static_cast<float>(t.width), static_cast<float>(t.height), 0, 0);
             Put(cu.bloom_strength, post.bloom, 0, 0, 0);
-            Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
+            Put(cu.tone_mapping, post.exposure, ToneMappingMode(post), 0, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            Put(cu.grade_shadow, post.shadowTint.r, post.shadowTint.g, post.shadowTint.b, UsesGrading(post) ? 1.0f : 0.0f);
+            Put(cu.grade_high, post.highlightTint.r, post.highlightTint.g, post.highlightTint.b, 0);
+            Put(cu.grade_params, post.saturation, post.contrast, 0, 0);
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
             sg_bindings b{};
             b.views[VIEW_oe_scene_tex] = sceneSource;
@@ -1315,8 +1328,11 @@ struct GpuRenderer::Impl {
             Put(cu.target, static_cast<float>(outW), static_cast<float>(outH), 0, 0);
             Put(cu.outline_color, kOutlineColor.r, kOutlineColor.g, kOutlineColor.b, outline ? 1.0f : 0.0f);
             Put(cu.bloom_strength, post.bloom, 0, 0, 0);
-            Put(cu.tone_mapping, post.exposure, post.toneMapping == "reinhard" ? 1.0f : 0.0f, 0, 0);
+            Put(cu.tone_mapping, post.exposure, ToneMappingMode(post), 0, 0);
             Put(cu.vignette, post.vignette, post.vignetteRadius, post.vignetteSoftness, 0);
+            Put(cu.grade_shadow, post.shadowTint.r, post.shadowTint.g, post.shadowTint.b, UsesGrading(post) ? 1.0f : 0.0f);
+            Put(cu.grade_high, post.highlightTint.r, post.highlightTint.g, post.highlightTint.b, 0);
+            Put(cu.grade_params, post.saturation, post.contrast, 0, 0);
             Put(cu.post_stage, t.fxaa ? 1.0f : 0.0f, t.fxaa ? 1.0f : 0.0f,
                 1.0f / static_cast<float>(t.width), 1.0f / static_cast<float>(t.height));
             sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));

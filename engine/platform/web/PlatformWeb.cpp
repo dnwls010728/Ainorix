@@ -161,6 +161,8 @@ std::string KeyName(const EmscriptenKeyboardEvent* e) {
     if (code == "Delete") return "Delete";
     if (code == "Home") return "Home";
     if (code == "End") return "End";
+    if (code == "BracketLeft") return "LeftBracket";
+    if (code == "BracketRight") return "RightBracket";
     return std::string();
 }
 

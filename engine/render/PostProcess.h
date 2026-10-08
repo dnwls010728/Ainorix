@@ -11,7 +11,7 @@ constexpr int kMaxDofRadius = 16;
 // Render callers may construct settings directly, bypassing reflection's range clamping.
 inline PostProcess NormalizePostProcess(PostProcess settings) {
     settings.exposure = std::isfinite(settings.exposure) ? Clamp(settings.exposure, 0, 32) : 1;
-    if (settings.toneMapping != "reinhard") settings.toneMapping = "none";
+    if (settings.toneMapping != "reinhard" && settings.toneMapping != "aces") settings.toneMapping = "none";
     settings.bloom = std::isfinite(settings.bloom) ? Clamp(settings.bloom, 0, 4) : 0;
     settings.bloomThreshold = std::isfinite(settings.bloomThreshold) ? Clamp(settings.bloomThreshold, 0, 32) : 1;
     settings.bloomRadius = std::clamp(settings.bloomRadius, 1, 32);
@@ -22,6 +22,11 @@ inline PostProcess NormalizePostProcess(PostProcess settings) {
     settings.dofFocus = std::isfinite(settings.dofFocus) ? Clamp(settings.dofFocus, 0, 100000) : 10;
     settings.dofRange = std::isfinite(settings.dofRange) ? Clamp(settings.dofRange, 0, 100000) : 2;
     settings.dofFalloff = std::isfinite(settings.dofFalloff) ? Clamp(settings.dofFalloff, 0.01f, 100000) : 8;
+    settings.fog = std::isfinite(settings.fog) ? Clamp(settings.fog, 0, 1) : 0;
+    settings.fogStart = std::isfinite(settings.fogStart) ? Clamp(settings.fogStart, 0, 100000) : 20;
+    settings.fogEnd = std::isfinite(settings.fogEnd) ? Clamp(settings.fogEnd, settings.fogStart + 0.01f, 100000.01f) : settings.fogStart + 60;
+    settings.saturation = std::isfinite(settings.saturation) ? Clamp(settings.saturation, 0, 4) : 1;
+    settings.contrast = std::isfinite(settings.contrast) ? Clamp(settings.contrast, 0, 4) : 1;
     return settings;
 }
 
@@ -45,8 +50,36 @@ inline Color ToneMap(Color c, const PostProcess& settings) {
     c = ClampHdr(c) * settings.exposure;
     if (settings.toneMapping == "reinhard") {
         c = Color(c.r / (1 + c.r), c.g / (1 + c.g), c.b / (1 + c.b));
+    } else if (settings.toneMapping == "aces") {
+        auto aces = [](float x) { return x * (2.51f * x + 0.03f) / (x * (2.43f * x + 0.59f) + 0.14f); };
+        c = Color(aces(c.r), aces(c.g), aces(c.b));
     }
     return Color(Clamp(c.r, 0, 1), Clamp(c.g, 0, 1), Clamp(c.b, 0, 1));
+}
+
+// Color grading runs only when one of its settings differs from neutral, so default frames are unchanged.
+inline bool UsesGrading(const PostProcess& s) {
+    const Color& a = s.shadowTint;
+    const Color& b = s.highlightTint;
+    return s.saturation != 1 || s.contrast != 1 || a.r != 1 || a.g != 1 || a.b != 1 || b.r != 1 || b.g != 1 || b.b != 1;
+}
+
+// Must match Grade in composite_fs: split toning by luminance, saturation, contrast around 0.5, on display color.
+inline Color Grade(Color c, const PostProcess& s) {
+    auto luma = [](const Color& x) { return x.r * 0.2126f + x.g * 0.7152f + x.b * 0.0722f; };
+    float t = Clamp(luma(c) / 0.9f, 0, 1);
+    t = t * t * (3 - 2 * t);
+    c = c * (s.shadowTint * (1 - t) + s.highlightTint * t);
+    const float l = luma(c);
+    c = Color(l + (c.r - l) * s.saturation, l + (c.g - l) * s.saturation, l + (c.b - l) * s.saturation);
+    c = Color((c.r - 0.5f) * s.contrast + 0.5f, (c.g - 0.5f) * s.contrast + 0.5f, (c.b - 0.5f) * s.contrast + 0.5f);
+    return Color(Clamp(c.r, 0, 1), Clamp(c.g, 0, 1), Clamp(c.b, 0, 1));
+}
+
+// Fraction of fogColor at `distance` meters from the eye (0 when fog is off). Must match mesh_fs.
+inline float FogAmount(const PostProcess& s, float distance) {
+    if (s.fog <= 0) return 0;
+    return s.fog * Clamp((distance - s.fogStart) / (s.fogEnd - s.fogStart), 0, 1);
 }
 
 // Must match composite_fs: normalized pixel-center UV, cubic smoothstep, no aspect correction.

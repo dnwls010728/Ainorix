@@ -31,6 +31,7 @@ const FieldDoc kFields[] = {
     {"doubleSided", "Draw back faces too (leaves, cloth, glass panes)"},
     {"unlit", "Ignore lights: color = base (+ emissive)"},
     {"pixelArt", "Nearest-neighbour texture sampling"},
+    {"fog", "Affected by the camera's PostProcess fog (default true; false for sky domes and backdrops)"},
     {"tiling", "UV repeat [x,y]"},
     {"offset", "UV offset [x,y]"},
     {"shader", "Project-relative *.shader.json surface graph (empty disables it)"},
@@ -129,6 +130,7 @@ bool MaterialFromJson(const Json& json, const TextureLoader& loadTexture, Materi
         else if (k == "doubleSided") ok = boolean(m.doubleSided);
         else if (k == "unlit") ok = boolean(m.unlit);
         else if (k == "pixelArt") ok = boolean(m.pixelArt);
+        else if (k == "fog") ok = boolean(m.fog);
         else if (k == "tiling") ok = pair(m.tiling);
         else if (k == "offset") ok = pair(m.offset);
         else if (k == "shader") {
@@ -180,6 +182,7 @@ Json DefaultMaterialJson() {
     j["doubleSided"] = d.doubleSided;
     j["unlit"] = d.unlit;
     j["pixelArt"] = d.pixelArt;
+    j["fog"] = d.fog;
     j["tiling"] = Json(Json::Array{1, 1});
     j["offset"] = Json(Json::Array{0, 0});
     j["shader"] = "";

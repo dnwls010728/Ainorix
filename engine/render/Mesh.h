@@ -46,6 +46,7 @@ struct Material {
     bool additive = false;     // Blend only: add color * alpha to the target (glows) instead of mixing
     bool unlit = false;
     bool pixelArt = false;     // nearest-neighbour sampling
+    bool fog = true;           // PostProcess fog applies (false: sky domes, backdrops)
     float tiling[2] = {1, 1};  // uv = uv * tiling + offset
     float offset[2] = {0, 0};
     std::string shaderPath;                                  // project-relative surface graph asset

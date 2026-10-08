@@ -86,7 +86,7 @@ end
 | `scene.children(id)` / `scene.child(id, name)` | Direct children in id order / the child with that name or `nil` (parts of a prefab: body sprite, light, sensors) |
 | `scene.all(type?)` | Array of entity ids (optionally only those with a component) |
 | `scene.withTag(tag)` | Array of entity ids whose `Tag` contains `tag` |
-| `input.down(key)` / `input.pressed(key)` | Key held / pressed this frame (`"W"`, `"Space"`, `"Left"`, …) |
+| `input.down(key)` / `input.pressed(key)` | Key held / pressed this frame: letters `"A"`..`"Z"`, digits `"0"`..`"9"`, `"Space"`, `"Left"`/`"Right"`/`"Up"`/`"Down"`, `"Shift"`, `"Control"`, `"Escape"`, `"Enter"`, `"Tab"`, `"Backspace"`, `"Delete"`, `"Home"`, `"End"`, `"LeftBracket"`, `"RightBracket"`, gamepad buttons (`"GamepadA"`, …) |
 | `input.axis(name)` | Gamepad stick LeftX/LeftY/RightX/RightY (-1..1; +Y up) or LT/RT (0..1), with a 0.15 scalar dead zone rescaled to full range. Buttons use `input.down/pressed("GamepadA")` etc.; see [INPUT.md](INPUT.md) |
 | `time.dt()`, `time.frame()`, `time.now()` | Step length (0 while the game is paused), frame number, simulated seconds (they wait during a pause) |
 | `time.date()` | Calendar date `"YYYY-MM-DD"` in local time, for features outside the simulation (daily rewards). Tools pin it with `time.date {set}` |

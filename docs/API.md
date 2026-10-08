@@ -1668,7 +1668,7 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | field | type | default | description |
 |---|---|---|---|
 | `exposure` | float | `1` | Scene brightness multiplier before tone mapping. 1 preserves brightness. |
-| `toneMapping` | string | `"none"` | none (disabled) or reinhard (compress HDR channels as c / (1 + c)). |
+| `toneMapping` | string | `"none"` | none (disabled), reinhard (compress HDR channels as c / (1 + c)) or aces (filmic curve, Narkowicz fit of ACES). |
 | `bloom` | float | `0` | Blurred highlight strength before exposure/tone mapping. 0 disables bloom. |
 | `bloomThreshold` | float | `1` | Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue. |
 | `bloomRadius` | int | `8` | Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional. |
@@ -1680,6 +1680,14 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | `dofFocus` | float | `10` | Depth of field: distance in front of the camera, in meters, that is sharp. |
 | `dofRange` | float | `2` | Depth of field: depth on either side of dofFocus that stays fully sharp. |
 | `dofFalloff` | float | `8` | Depth of field: depth beyond dofRange over which the blur grows to dofRadius (minimum 0.01). |
+| `fog` | float | `0` | Distance fog: amount of fogColor mixed into surfaces at fogEnd and beyond (0 disables). It grows linearly from fogStart; additive surfaces fade out instead. Materials with fog: false (sky domes) are not fogged. |
+| `fogColor` | color | `[0.75,0.819999993,0.899999976]` | Fog color (usually the sky's horizon color). |
+| `fogStart` | float | `20` | Fog: distance from the camera in meters where fog begins. |
+| `fogEnd` | float | `80` | Fog: distance where the fog reaches its full amount (at least fogStart + 0.01). |
+| `saturation` | float | `1` | Color grading after tone mapping: 0 = grey, 1 = unchanged, above 1 = more vivid. |
+| `contrast` | float | `1` | Color grading: contrast around mid grey 0.5; 1 = unchanged. |
+| `shadowTint` | color | `[1,1,1]` | Color grading: multiplier for dark tones (split toning, e.g. cool shadows). White = unchanged. |
+| `highlightTint` | color | `[1,1,1]` | Color grading: multiplier for bright tones (e.g. warm highlights). White = unchanged. |
 
 ### Light2D
 
@@ -1712,7 +1720,9 @@ Sun-like light. Direction comes from the entity's rotation (local -Z).
 |---|---|---|---|
 | `color` | color | `[1,0.970000029,0.899999976]` | Light color. |
 | `intensity` | float | `1` | Brightness multiplier. |
-| `ambient` | color | `[0.180000007,0.200000003,0.25]` | Ambient light added to every surface. |
+| `ambient` | color | `[0.180000007,0.200000003,0.25]` | Ambient light added to every surface (with hemisphere: the light from the sky above). |
+| `hemisphere` | bool | `false` | Hemisphere ambient: surfaces facing up get `ambient`, surfaces facing down get groundAmbient, blended by the normal. |
+| `groundAmbient` | color | `[0.100000001,0.0900000036,0.0799999982]` | Hemisphere ambient: light bounced from the ground, seen by downward faces. |
 | `shadows` | bool | `true` | Cast shadows (first directional light only). |
 | `shadowStrength` | float | `0.75` | 0 = no darkening, 1 = black shadows. |
 
@@ -2203,6 +2213,7 @@ Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at t
 | `alphaCutoff` | float | `0.5` | Pixels with alpha below this are not drawn. 0 = soft edges: the image's alpha is blended (smoke, glows, UI-like art). |
 | `opacity` | float | `1` | Below 1 the sprite is drawn see-through (alpha blended). |
 | `lit` | bool | `false` | Apply scene lighting (default: full brightness, like classic 2D). |
+| `emission` | float | `0` | Lit sprites: this fraction of the image's own colour is added whatever the lighting, so sprites seen against the light (night, backlit) stay readable. 0 = none. |
 | `blend` | string | `"alpha"` | alpha = normal; add = the image brightens what is behind it (glows, fire, light beams) and is always blended. |
 | `layer` | int | `0` | 2D sorting layer: sprites of a higher layer are drawn in front of lower ones at the same depth, whatever their position on screen (background 0, characters 1, effects 2, ...). |
 | `order` | int | `0` | Sorting inside the layer: higher is drawn in front. |

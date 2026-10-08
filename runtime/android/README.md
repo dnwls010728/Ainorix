@@ -342,3 +342,17 @@ Node/Wasm 249 tests pass. Android devices, browser GPU and Linux/EGL execution r
 | runtime/android/x86_64/liboe_player.so | 8,133,800 | 7e14a75723bd879d5bc42bf4119d45970f5edb465e8bee45d7d6bd441a873374 |
 
 Commands.cpp SHA256: `524d9d4927ff3f93bc59578fc897c4d747f0791d5e90402b904d1f928361a00f`.
+
+## Fog, grading and RPG rebuild (2026-10-08)
+
+Players gain per-surface distance fog (`PostProcess.fog*`, material `fog: false`), ACES tone mapping,
+colour grading (`saturation`, `contrast`, `shadowTint`, `highlightTint`), hemisphere ambient
+(`DirectionalLight.hemisphere/groundAmbient`), `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket` /
+`RightBracket` key names, used by games/RPG (docs/RPG.md). Built from branch claude/rpg-village on main 7cc9d8b
+with Android NDK r28c, Release, parallelism 2. Windows 307 tests pass. Android devices, browser GPU and
+Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,695,680 | e0db04b312aede70294cc2e09399f68585d4589e89f3155dc3227f0f5eec7018 |
+| runtime/android/x86_64/liboe_player.so | 8,149,576 | a766ab4c0ba6d11ccc2865011be1dba5b15d0d2e45cf55283e44d56466c9959b |
