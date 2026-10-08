@@ -44,6 +44,8 @@
 #include "platform/TouchInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
+#include "render/GraphSource.h"
+#include "render/shaders/Shaders.glsl.h"
 #include "render/RenderScene.h"
 #include "render/ShaderGraph.h"
 #include "render/UI.h"
@@ -6856,9 +6858,50 @@ TEST(ShaderMaterialVaryingAlphaAndOcclusion) {
     }
 }
 
+TEST(GraphSourcePatchesEveryBackend) {
+    // Every operation, a uniform and both outputs: the generated code replaces the interpreter in the
+    // mesh and surface programs of every backend sokol-shdc generated (compiled on the GPU elsewhere).
+    ShaderGraph graph;
+    std::string err;
+    CHECK(CompileShaderGraph(Json::parse(R"J({"uniforms":{"wind":[1,0,0.5,0]},"nodes":[
+        {"op":"constant","value":[0.1,-2,3e-5,1]},{"op":"uniform","name":"wind"},{"op":"uv"},{"op":"position"},{"op":"normal"},
+        {"op":"time"},{"op":"baseColor"},{"op":"particleAge"},{"op":"particleRandom"},{"op":"particleSpeed"},
+        {"op":"particleCustom0"},{"op":"particleCustom1"},{"op":"particleCustom2"},{"op":"particleCustom3"},
+        {"op":"add","args":[0,1]},{"op":"subtract","args":[14,2]},{"op":"multiply","args":[15,3]},{"op":"divide","args":[16,4]},
+        {"op":"min","args":[17,5]},{"op":"max","args":[18,6]},{"op":"sin","args":[19]},{"op":"cos","args":[20]},
+        {"op":"floor","args":[21]},{"op":"fract","args":[22]},{"op":"abs","args":[23]},{"op":"clamp","args":[24,7,8]},
+        {"op":"mix","args":[25,9,10]},{"op":"step","args":[26,11]},{"op":"dot","args":[27,12]},{"op":"normalize","args":[28]},
+        {"op":"swizzle","args":[29],"value":[3,1,2,0]},{"op":"add","args":[30,13]},{"op":"texture","args":[31]}],
+        "color":32,"emissive":31,"normal":29,"offset":31})J"), graph, &err));
+    for (GraphDialect dialect : {GraphDialect::Glsl, GraphDialect::Hlsl}) {
+        const std::string surface = GraphSurfaceBody(graph, dialect), vertex = GraphVertexBody(graph, dialect);
+        CHECK(surface.find("GraphTexture(oeg31.xy)") != std::string::npos && vertex.find("GraphTexture") == std::string::npos);
+        CHECK(vertex.find("return oeg31.xyz;") != std::string::npos && surface.find("emission = oeg31.rgb;") != std::string::npos);
+        CHECK(surface.find(dialect == GraphDialect::Hlsl ? "frac(" : "fract(") != std::string::npos);
+    }
+    for (sg_backend backend : {SG_BACKEND_D3D11, SG_BACKEND_GLES3, SG_BACKEND_GLCORE}) {
+        const GraphDialect dialect = backend == SG_BACKEND_D3D11 ? GraphDialect::Hlsl : GraphDialect::Glsl;
+        for (const sg_shader_desc* desc : {oe_mesh_shader_desc(backend), oe_surface_aux_shader_desc(backend)}) {
+            CHECK(desc && desc->vertex_func.source && desc->fragment_func.source);
+            if (!desc || !desc->vertex_func.source || !desc->fragment_func.source) continue;
+            std::string vs = desc->vertex_func.source, fs = desc->fragment_func.source;
+            const size_t before = fs.size();
+            CHECK(ReplaceFunctionBody(vs, "VertexOffset", GraphVertexBody(graph, dialect)));
+            CHECK(ReplaceFunctionBody(fs, "SurfaceGraph", GraphSurfaceBody(graph, dialect)));
+            // The interpreter loop is gone from the patched function; its callers are untouched.
+            const size_t body = fs.find("oeg0");
+            CHECK(body != std::string::npos && fs.size() != before);
+            CHECK(fs.find("SurfaceGraph(param", body) != std::string::npos);
+        }
+    }
+    std::string missing = "void main() {}";
+    CHECK(!ReplaceFunctionBody(missing, "SurfaceGraph", "return;"));
+}
+
 TEST(ShaderMaterialInstructionFamilies) {
     Engine e;
     std::string error;
+    const uint64_t logStart = Log::LastSeq();
     CHECK(e.Open(TempProject("shader_instruction_families"), &error));
     Call(e, "scene.new", R"J({"empty":true})J");
     Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
@@ -6976,6 +7019,8 @@ TEST(ShaderMaterialInstructionFamilies) {
     CHECK((blended & 0xFFFFFF) == 0x0F1C55);  // graph replaces zero input opacity; blend happens in HDR
     CHECK(cpu.ids[36*128+64] == kNullEntity);  // alpha below 0.5 does not take picking ownership
     std::printf("  graph instruction/input/HDR worst software/GPU mean difference %.4f\n",worstMean);
+    // Each graph above ran as its own compiled GPU program, not through the interpreter fallback.
+    for (const LogEntry& entry : Log::Since(logStart)) CHECK(entry.message.find("did not compile") == std::string::npos);
 }
 
 TEST(ShaderMaterialRendering) {

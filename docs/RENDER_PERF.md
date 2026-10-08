@@ -70,5 +70,11 @@ and screenshots, and the web/Android runtimes are rebuilt when the step is done.
       map is already fine, and a closer fit (40) made the shadow pass ~1 ms slower
       because cut-out sprites cover more shadow texels, each running the graph
       interpreter (step 6). Verified by ShadowDistanceFitsTheView.
-- [ ] 6. Shader graphs compiled to HLSL / GLSL ES at load time (one program per
-      graph), the interpreter kept as fallback when compilation fails.
+- [x] 6. Shader graphs compiled into their own programs (`GraphSource.cpp`,
+      `GraphPipeline` in GpuRenderer.cpp): the generated HLSL / GLSL ES mesh and
+      surface shaders get the graph as straight-line code in place of the
+      interpreter loops; the interpreter stays as the fallback when a program does
+      not compile. RPG **~13.5 → ~5.4 ms**, same frame (max channel difference 1).
+      GraphSourcePatchesEveryBackend checks the generated code for D3D11, GLES3 and
+      GLCORE sources; ShaderMaterialInstructionFamilies runs every operation through
+      compiled programs on D3D11.

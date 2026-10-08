@@ -238,6 +238,18 @@ values. Node outputs saturate to -65504..65504; NaN becomes zero. Division by
 zero returns zero for that channel. This gives the GPU a finite bounded program
 and keeps the CPU reference independent of platform compiler behavior.
 
+The GPU renderer compiles each graph into its own program the first time a
+material uses it (`engine/render/GraphSource.cpp`): it takes the mesh and surface
+shaders sokol-shdc generated from `Shaders.glsl` (HLSL for D3D11, GLSL ES 3.00 for
+WebGL2/GLES3) and replaces the bodies of `SurfaceGraph` and `VertexOffset` with the
+graph as straight-line code, one variable per node, with the same saturation and
+division rules. Lighting code therefore stays in one place. The generated code
+reads its inputs only through the `Graph*`/`VGraph*` helper functions in
+`Shaders.glsl`; keep those names when editing it. A graph whose program does not
+compile logs a warning and is interpreted by the general shader instead (the
+loops in `SurfaceGraph`/`VertexOffset`), which gives the same picture more slowly.
+The first frame that uses a graph pays its shader compile.
+
 Two more optional outputs sit next to `color` and `emissive`:
 
 - `"offset": <node index>` displaces vertices. The node's xyz is added to each

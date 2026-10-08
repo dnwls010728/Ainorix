@@ -9,6 +9,7 @@
 
 #include "core/Log.h"
 #include "render/GpuDevice.h"
+#include "render/GraphSource.h"
 #include "render/RenderScene.h"
 #include "render/PostProcess.h"
 #include "render/UI.h"
@@ -538,6 +539,23 @@ struct GpuRenderer::Impl {
     Targets offscreen, window;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
 
+    // Shader graphs compiled into their own mesh/surface programs (GraphSource.h); pipelines are made
+    // on first use from the descriptions of the standard ones. A graph whose program fails to compile
+    // keeps the interpreter (the standard pipelines).
+    struct GraphProgram {
+        std::weak_ptr<const ShaderGraph> owner;
+        sg_shader mesh{}, aux{};
+        bool failed = false;
+        std::unordered_map<uint32_t, sg_pipeline> pipelines;  // standard pipeline id -> this graph's
+        void Destroy() {
+            for (auto& kv : pipelines) sg_destroy_pipeline(kv.second);
+            if (mesh.id) sg_destroy_shader(mesh);
+            if (aux.id) sg_destroy_shader(aux);
+        }
+    };
+    std::unordered_map<const ShaderGraph*, GraphProgram> graphPrograms;
+    std::unordered_map<uint32_t, sg_pipeline_desc> graphPipelineDescs;  // standard mesh/surface pipelines by id
+
     std::unordered_map<const Mesh*, GpuMesh> meshes;
     std::unordered_map<const Mesh*, GpuMesh> flatMeshes;
     std::unordered_map<const Texture*, GpuTexture> textures;
@@ -625,12 +643,12 @@ struct GpuRenderer::Impl {
                 d.sample_count = msaa;
                 viewDepthTarget(d, mrt, blend == 0);
                 d.label = blend ? "oe-mesh-blend" : "oe-mesh";
-                meshPips[mrt][blend][twoSided] = sg_make_pipeline(&d);
+                meshPips[mrt][blend][twoSided] = GraphCapablePipeline(d);
                 if (hdrSupported) {
                     d.colors[0].pixel_format = kHdrFormat;
                     d.sample_count = hdrSamples;
                     d.label = blend ? "oe-hdr-mesh-blend" : "oe-hdr-mesh";
-                    hdrMeshPips[mrt][blend][twoSided] = sg_make_pipeline(&d);
+                    hdrMeshPips[mrt][blend][twoSided] = GraphCapablePipeline(d);
                 }
             }
         }
@@ -698,12 +716,12 @@ struct GpuRenderer::Impl {
             d.colors[0].pixel_format = SG_PIXELFORMAT_NONE;
             d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_FRONT;
             d.label = "oe-surface-shadow";
-            surfaceShadow[twoSided] = sg_make_pipeline(&d);
+            surfaceShadow[twoSided] = GraphCapablePipeline(d);
             if (dofSupported) {
                 d.colors[0].pixel_format = kDofDepthFormat;
                 d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
                 d.label = "oe-surface-depth";
-                surfaceDepthPip[twoSided] = sg_make_pipeline(&d);
+                surfaceDepthPip[twoSided] = GraphCapablePipeline(d);
             }
             d.colors[0].pixel_format = kColorFormat;
             d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
@@ -711,7 +729,7 @@ struct GpuRenderer::Impl {
                 d.depth.write_enabled = stage == 0;
                 d.colors[0].write_mask = stage == 0 ? SG_COLORMASK_NONE : SG_COLORMASK_RGBA;
                 d.label = "oe-surface-mask";
-                surfaceMask[stage][twoSided] = sg_make_pipeline(&d);
+                surfaceMask[stage][twoSided] = GraphCapablePipeline(d);
             }
         }
         if (dofSupported) {
@@ -839,7 +857,63 @@ struct GpuRenderer::Impl {
         shadowTex = TextureView(shadowMap);
     }
 
+    // A standard pipeline that graph materials get their own copy of (GraphPipeline).
+    sg_pipeline GraphCapablePipeline(const sg_pipeline_desc& d) {
+        sg_pipeline pipeline = sg_make_pipeline(&d);
+        graphPipelineDescs[pipeline.id] = d;
+        return pipeline;
+    }
+
+    // `standard` with the material's compiled graph program, or `standard` itself (no graph, failed).
+    sg_pipeline GraphPipeline(sg_pipeline standard, const Material& material) {
+        if (!material.shader) return standard;
+        GraphProgram& program = ProgramFor(material.shader);
+        if (program.failed) return standard;
+        auto found = program.pipelines.find(standard.id);
+        if (found != program.pipelines.end()) return found->second;
+        sg_pipeline_desc d = graphPipelineDescs.at(standard.id);
+        d.shader = d.shader.id == meshShd.id ? program.mesh : program.aux;
+        d.label = "oe-graph";
+        return program.pipelines[standard.id] = sg_make_pipeline(&d);
+    }
+
+    GraphProgram& ProgramFor(const std::shared_ptr<const ShaderGraph>& graph) {
+        auto found = graphPrograms.find(graph.get());
+        if (found != graphPrograms.end() && !found->second.owner.expired()) return found->second;
+        if (found != graphPrograms.end()) {
+            found->second.Destroy();
+            graphPrograms.erase(found);
+        }
+        GraphProgram& program = graphPrograms[graph.get()];
+        program.owner = graph;
+        const sg_backend backend = sg_query_backend();
+        program.mesh = CompileGraph(*oe_mesh_shader_desc(backend), *graph);
+        program.aux = program.mesh.id ? CompileGraph(*oe_surface_aux_shader_desc(backend), *graph) : sg_shader{};
+        program.failed = !program.mesh.id || !program.aux.id;
+        if (program.failed) OE_LOG_WARN("gpu", "a shader graph did not compile for the GPU; it is interpreted instead");
+        return program;
+    }
+
+    // The generated program `standard` with the graph in place of the interpreter loops.
+    static sg_shader CompileGraph(sg_shader_desc desc, const ShaderGraph& graph) {
+        const GraphDialect dialect = sg_query_backend() == SG_BACKEND_D3D11 ? GraphDialect::Hlsl : GraphDialect::Glsl;
+        if (!desc.vertex_func.source || !desc.fragment_func.source) return sg_shader{};  // bytecode: nothing to patch
+        std::string vertex = desc.vertex_func.source, fragment = desc.fragment_func.source;
+        if (!ReplaceFunctionBody(vertex, "VertexOffset", GraphVertexBody(graph, dialect)) ||
+            !ReplaceFunctionBody(fragment, "SurfaceGraph", GraphSurfaceBody(graph, dialect)))
+            return sg_shader{};
+        desc.vertex_func.source = vertex.c_str();
+        desc.fragment_func.source = fragment.c_str();
+        desc.label = "oe-graph";
+        sg_shader shader = sg_make_shader(&desc);
+        if (sg_query_shader_state(shader) == SG_RESOURCESTATE_VALID) return shader;
+        sg_destroy_shader(shader);
+        return sg_shader{};
+    }
+
     void Shutdown() {
+        for (auto& kv : graphPrograms) kv.second.Destroy();
+        graphPrograms.clear();
         for (auto& kv : meshes) kv.second.Destroy();
         for (auto& kv : flatMeshes) kv.second.Destroy();
         for (auto& kv : textures) kv.second.Destroy();
@@ -890,6 +964,14 @@ struct GpuRenderer::Impl {
         sweep(flatMeshes);
         sweep(textures);
         sweep(uiTextures);
+        for (auto it = graphPrograms.begin(); it != graphPrograms.end();) {
+            if (it->second.owner.expired()) {
+                it->second.Destroy();
+                it = graphPrograms.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     // UI images and font atlas pages: one level, updated when the texels change.
@@ -1180,7 +1262,7 @@ struct GpuRenderer::Impl {
                 const RenderItem& it = *itp;
                 const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                 if (cutout || Displaced(dc.material)) {
-                    Use(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
+                    Use(GraphPipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0], dc.material));
                     ApplySurface(dc, it, mesh, fit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
                     Draw(mesh);
                     current = -1;
@@ -1305,7 +1387,7 @@ struct GpuRenderer::Impl {
                 const Material& m = dc.material;
                 const int blendMode = dc.blend ? (m.additive ? 2 : 1) : 0;
                 const int mrt = t.dofMrt ? 1 : 0;
-                sg_pipeline pip = t.hdr ? hdrMeshPips[mrt][blendMode][m.doubleSided ? 1 : 0] : meshPips[mrt][blendMode][m.doubleSided ? 1 : 0];
+                sg_pipeline pip = GraphPipeline(t.hdr ? hdrMeshPips[mrt][blendMode][m.doubleSided ? 1 : 0] : meshPips[mrt][blendMode][m.doubleSided ? 1 : 0], m);
                 if (pip.id != current.id) {
                     Use(pip);
                     sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
@@ -1391,7 +1473,7 @@ struct GpuRenderer::Impl {
                     const int twoSided = dc.material.doubleSided ? 1 : 0;
                     const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                     if (cutout || Displaced(dc.material)) {
-                        Use(surfaceDepthPip[twoSided]);
+                        Use(GraphPipeline(surfaceDepthPip[twoSided], dc.material));
                         ApplySurface(dc, it, Binding(*gpuMeshes[dc.item], sub), viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
                     } else {
                         Use(sceneDepthPip[twoSided]);
@@ -1464,7 +1546,7 @@ struct GpuRenderer::Impl {
                         if (surfaceAlpha) {
                             for (const DrawCall& draw : draws) {
                                 if (draw.item != i) continue;
-                                Use(surfaceMask[stage][draw.material.doubleSided ? 1 : 0]);
+                                Use(GraphPipeline(surfaceMask[stage][draw.material.doubleSided ? 1 : 0], draw.material));
                                 const float cutoff = draw.material.alphaMode == AlphaMode::Mask ? draw.material.alphaCutoff :
                                                      (draw.blend ? 0.5f : 0.0f);
                                 ApplySurface(draw, items[i], Binding(*gpuMeshes[i], items[i].mesh->submeshes[draw.submesh]), viewProj, view.shaderTime, cutoff);
@@ -1636,8 +1718,8 @@ GpuRenderer::GpuRenderer(GpuDevice& device, AssetManager* assets, const Settings
     desc.image_pool_size = 1024;
     desc.view_pool_size = 2048;
     desc.sampler_pool_size = 64;
-    desc.shader_pool_size = 64;
-    desc.pipeline_pool_size = 256;
+    desc.shader_pool_size = 256;
+    desc.pipeline_pool_size = 1024;
     desc.uniform_buffer_size = 8 * 1024 * 1024;
     sg_setup(&desc);
     Settings s = settings;
