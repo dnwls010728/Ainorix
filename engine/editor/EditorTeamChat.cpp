@@ -2,6 +2,7 @@
 // of every running turn with its Stop button, and the input: files dropped on the panel are
 // attached, `@` completes an agent and `#` a project file, each with a preview. Reads
 // team.messages / team.state and writes through team.send / team.cancel only.
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -214,7 +215,7 @@ void NativeEditor::Impl::TeamChatPanel() {
         requestTeamChatFocus = false;
     }
     // The tab counts what arrived while it was hidden.
-    const std::string title = chatUnread > 0 ? Format("%s (%d)###Team Chat", Tr("Team Chat"), chatUnread) : TrId("Team Chat");
+    const std::string title = WithIcon(kIconMessagesSquare, chatUnread > 0 ? Format("%s (%d)###Team Chat", Tr("Team Chat"), chatUnread) : TrId("Team Chat"));
     chatVisible = ImGui::Begin(title.c_str(), &showTeamChat);
     if (!chatVisible) {
         ImGui::End();

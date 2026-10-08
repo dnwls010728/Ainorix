@@ -1,3 +1,4 @@
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include <algorithm>
 #include <cmath>
@@ -383,7 +384,7 @@ void NativeEditor::Impl::ShadersPanel() {
     shaderEditorFocused = false;
     if (focusShaders) { ImGui::SetNextWindowFocus(); focusShaders = false; }
     // Keep unsaved documents visible; switching documents has an explicit save/discard prompt.
-    if (!ImGui::Begin(TrId("Shader Graph").c_str(), &showShaders)) { ImGui::End(); return; }
+    if (!ImGui::Begin(WithIcon(kIconWorkflow, TrId("Shader Graph")).c_str(), &showShaders)) { ImGui::End(); return; }
     shaderEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     if (ImGui::Button(Tr("New Shader"))) OpenShader("");
     if (shaderDocument.isNull()) {

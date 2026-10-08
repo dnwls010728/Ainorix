@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 #include "ImGuizmo.h"
@@ -375,7 +376,7 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
 void NativeEditor::Impl::ScenePanel() {
     if (focusSceneTab > 0 && --focusSceneTab == 0) ImGui::SetNextWindowFocus();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    bool open = ImGui::Begin(TrId("Scene").c_str(), &showScene, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    bool open = ImGui::Begin(WithIcon(kIconBox, TrId("Scene")).c_str(), &showScene, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     sceneFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     sceneHovered = false;
@@ -695,7 +696,7 @@ void NativeEditor::Impl::GamePanel() {
         gameFocused = engine.InPlaySession();
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    bool open = ImGui::Begin(TrId("Game").c_str(), &showGame, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    bool open = ImGui::Begin(WithIcon(kIconGamepad2, TrId("Game")).c_str(), &showGame, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     gameHovered = false;
     ImVec2 avail = ImGui::GetContentRegionAvail();

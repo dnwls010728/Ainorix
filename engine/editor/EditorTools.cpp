@@ -1,4 +1,5 @@
 // Command-backed clipboard, source-prefab workflow, history and asset previews.
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -102,7 +103,7 @@ void NativeEditor::Impl::HistoryPanel() {
         ImGui::SetNextWindowFocus();
         requestHistoryFocus = false;
     }
-    if (!ImGui::Begin(TrId("History").c_str(), &showHistory)) { ImGui::End(); return; }
+    if (!ImGui::Begin(WithIcon(kIconHistory, TrId("History")).c_str(), &showHistory)) { ImGui::End(); return; }
     const Json response = Call("history.list", Json(), true);
     const Json& history = response["result"];
     const int cursor = history["cursor"].asInt();

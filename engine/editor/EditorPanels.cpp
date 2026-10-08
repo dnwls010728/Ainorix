@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 #include "render/GpuRenderer.h"
@@ -29,25 +30,27 @@ bool ContainsNoCase(const std::string& text, const std::string& needle) {
 
 std::string FileName(const std::string& path) { return path.substr(path.find_last_of('/') + 1); }
 
-// A short colored tag that tells entities apart at a glance.
-void EntityKindTag(const EntityRow& r) {
-    const char* tag = "";
-    ImVec4 col(0.55f, 0.58f, 0.63f, 1);
-    if (r.Has("Camera")) tag = "CAM", col = ImVec4(0.55f, 0.75f, 1.0f, 1);
-    else if (r.Has("DirectionalLight") || r.Has("PointLight")) tag = "LIT", col = ImVec4(1.0f, 0.82f, 0.4f, 1);
-    else if (r.Has("CharacterBody")) tag = "CHR", col = ImVec4(0.5f, 0.9f, 0.85f, 1);
-    else if (r.Has("RigidBody")) tag = "PHY", col = ImVec4(0.55f, 0.9f, 0.55f, 1);
-    else if (r.Has("Tilemap")) tag = "MAP", col = ImVec4(0.8f, 0.65f, 1.0f, 1);
-    else if (r.Has("Sprite")) tag = "SPR", col = ImVec4(0.95f, 0.6f, 0.8f, 1);
-    else if (r.Has("MeshRenderer")) tag = "MSH", col = ImVec4(0.7f, 0.74f, 0.8f, 1);
-    else if (r.Has("UIText") || r.Has("UIPanel") || r.Has("UIButton") || r.Has("UIImage") || r.Has("UISlider") || r.Has("UIInput") || r.Has("UIDropdown") ||
-             r.Has("UIJoystick")) tag = "UI", col = ImVec4(1.0f, 0.62f, 0.35f, 1);
-    else if (r.Has("AudioSource")) tag = "SND", col = ImVec4(0.6f, 0.85f, 1.0f, 1);
-    if (!*tag) return;
-    ImGui::SameLine(0, 4);
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.88f);
-    ImGui::TextColored(col, "%s", tag);
-    ImGui::PopFont();
+// An icon (and its color) that tells entities apart at a glance.
+struct EntityIcon {
+    const char* glyph;
+    ImVec4 color;
+};
+EntityIcon EntityKindIcon(const EntityRow& r) {
+    if (r.Has("Camera")) return {kIconVideo, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (r.Has("DirectionalLight")) return {kIconSun, ImVec4(1.0f, 0.80f, 0.42f, 1)};
+    if (r.Has("PointLight")) return {kIconLightbulb, ImVec4(1.0f, 0.80f, 0.42f, 1)};
+    if (r.Has("CharacterBody") || r.Has("CharacterBody2D")) return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
+    if (r.Has("RigidBody") || r.Has("RigidBody2D")) return {kIconAtom, ImVec4(0.58f, 0.86f, 0.58f, 1)};
+    if (r.Has("Tilemap")) return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};
+    if (r.Has("VFXSystem") || r.Has("Trail")) return {kIconSparkles, ImVec4(1.0f, 0.70f, 0.42f, 1)};
+    if (r.Has("Sprite")) return {kIconImage, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (r.Has("MeshRenderer")) return {kIconBox, ImVec4(0.70f, 0.74f, 0.80f, 1)};
+    if (r.Has("UIText")) return {kIconType, ImVec4(1.0f, 0.66f, 0.42f, 1)};
+    if (r.Has("UIPanel") || r.Has("UIButton") || r.Has("UIImage") || r.Has("UISlider") || r.Has("UIInput") || r.Has("UIDropdown") ||
+        r.Has("UIJoystick")) return {kIconLayoutTemplate, ImVec4(1.0f, 0.66f, 0.42f, 1)};
+    if (r.Has("AudioSource")) return {kIconVolume2, ImVec4(0.60f, 0.84f, 1.0f, 1)};
+    if (r.Has("Script")) return {kIconBraces, ImVec4(0.92f, 0.84f, 0.50f, 1)};
+    return {kIconCircleDashed, ImVec4(0.50f, 0.52f, 0.56f, 1)};
 }
 
 const char* KindLabel(const std::string& kind) {
@@ -186,7 +189,10 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
             renaming = kNullEntity;
         }
     } else {
-        open = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "%s", row.name.c_str());
+        const EntityIcon icon = EntityKindIcon(row);
+        ImGui::PushStyleColor(ImGuiCol_Text, icon.color);
+        open = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "%s", icon.glyph);
+        ImGui::PopStyleColor();
         if (scrollToRow == row.id) {
             ImGui::SetScrollHereY(0.4f);
             scrollToRow = kNullEntity;
@@ -233,7 +239,8 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
             EntityContextMenu(&row);
             ImGui::EndPopup();
         }
-        EntityKindTag(row);
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextUnformatted(row.name.c_str());
         // Eye: shows / hides what the entity draws (its UI element, sprite, mesh or tilemap).
         {
             bool shown = true;
@@ -252,9 +259,9 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
                 // A long name or its tag must not show through the eye: the icon sits on the row's own color.
                 draw->AddRectFilled(ImVec2(p.x - 4.0f, p.y), ImVec2(p.x + side, p.y + side),
                                     ImGui::GetColorU32(IsSelected(row.id) ? ImGuiCol_Header : ImGuiCol_WindowBg));
-                draw->AddEllipse(c, ImVec2(side * 0.3f, side * 0.18f), col, 0.0f, 0, 1.4f);
-                if (shown) draw->AddCircleFilled(c, side * 0.09f, col);
-                else draw->AddLine(ImVec2(c.x - side * 0.28f, c.y + side * 0.24f), ImVec2(c.x + side * 0.28f, c.y - side * 0.24f), col, 1.4f);
+                const char* glyph = shown ? kIconEye : kIconEyeOff;
+                const ImVec2 glyphSize = ImGui::CalcTextSize(glyph);
+                draw->AddText(ImVec2(c.x - glyphSize.x * 0.5f, c.y - glyphSize.y * 0.5f), col, glyph);
                 HelpTooltip(Tr(shown ? "Visible - click to hide" : "Hidden - click to show"));
             }
         }
@@ -286,11 +293,11 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
 }
 
 void NativeEditor::Impl::HierarchyPanel() {
-    if (!ImGui::Begin(TrId("Hierarchy").c_str(), &showHierarchy)) {
+    if (!ImGui::Begin(WithIcon(kIconListTree, TrId("Hierarchy")).c_str(), &showHierarchy)) {
         ImGui::End();
         return;
     }
-    if (ImGui::Button("+")) ImGui::OpenPopup("##create");
+    if (ImGui::Button(kIconPlus)) ImGui::OpenPopup("##create");
     HelpTooltip(Tr("Create an entity"));
     if (ImGui::BeginPopup("##create")) {
         CreateMenuItems();
@@ -298,7 +305,7 @@ void NativeEditor::Impl::HierarchyPanel() {
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##filter", Tr("Search"), &hierarchyFilter);
+    ImGui::InputTextWithHint("##filter", WithIcon(kIconSearch, Tr("Search")).c_str(), &hierarchyFilter);
 
     std::map<EntityId, std::vector<EntityId>> children;
     for (const EntityRow& r : rows) children[rowIndex.count(r.parent) ? r.parent : kNullEntity].push_back(r.id);
@@ -563,7 +570,7 @@ void NativeEditor::Impl::AddComponentPopup(EntityId id) {
 }
 
 void NativeEditor::Impl::InspectorPanel() {
-    if (!ImGui::Begin(TrId("Inspector").c_str(), &showInspector)) {
+    if (!ImGui::Begin(WithIcon(kIconSlidersHorizontal, TrId("Inspector")).c_str(), &showInspector)) {
         ImGui::End();
         return;
     }
@@ -663,7 +670,7 @@ void NativeEditor::Impl::InspectorPanel() {
 // ----- Assets --------------------------------------------------------------------
 
 void NativeEditor::Impl::AssetsPanel() {
-    if (!ImGui::Begin(TrId("Assets").c_str(), &showAssets)) {
+    if (!ImGui::Begin(WithIcon(kIconFolder, TrId("Assets")).c_str(), &showAssets)) {
         ImGui::End();
         return;
     }
@@ -680,7 +687,7 @@ void NativeEditor::Impl::AssetsPanel() {
     const float font = ImGui::GetFontSize();
     // Keep the toolbar usable when the panel is docked into a narrow column.
     ImGui::SetNextItemWidth(std::max(font * 4, ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x));
-    ImGui::InputTextWithHint("##filter", Tr("Search assets by name or path"), &assetFilter);
+    ImGui::InputTextWithHint("##filter", WithIcon(kIconSearch, Tr("Search assets by name or path")).c_str(), &assetFilter);
     ImGui::SameLine();
     if (ImGui::Button("?")) ImGui::OpenPopup("##assethelp");
     if (ImGui::BeginPopup("##assethelp")) {
@@ -797,9 +804,13 @@ void NativeEditor::Impl::AssetsPanel() {
                     const ImVec2 start(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f);
                     draw->AddImage(ViewTexture(engine.Gpu()->ImageView(image)), start, start + size);
                 } else {
-                    const char* symbol = kind == "script" ? "</>" : kind == "audio" ? "SND" : kind == "font" ? "Aa" : "FILE";
-                    const ImVec2 size = ImGui::CalcTextSize(symbol);
-                    draw->AddText(ImVec2(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f),
+                    const char* symbol = kind == "script" ? kIconFileCode : kind == "audio" ? kIconMusic : kind == "font" ? kIconType :
+                                         kind == "vfx" ? kIconSparkles : kind == "shader" ? kIconWorkflow : kind == "material" ? kIconPalette :
+                                         kind == "prefab" ? kIconPackage : kind == "scene" ? kIconFileJson : kind == "model" ? kIconBox :
+                                         kind == "texture" ? kIconImage : kIconFile;
+                    const float iconSize = std::min(side * 0.5f, ImGui::GetFontSize() * 2.0f);
+                    const ImVec2 size = ImGui::GetFont()->CalcTextSizeA(iconSize, FLT_MAX, 0.0f, symbol);
+                    draw->AddText(ImGui::GetFont(), iconSize, ImVec2(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f),
                                   ImGui::GetColorU32(KindColor(kind)), symbol);
                 }
                 const float textX = useGrid ? pos.x + padding : preview.x + side + padding;
@@ -846,7 +857,7 @@ void NativeEditor::Impl::AssetsPanel() {
 // ----- Console -------------------------------------------------------------------
 
 void NativeEditor::Impl::ConsolePanel() {
-    if (!ImGui::Begin(TrId("Console").c_str(), &showConsole)) {
+    if (!ImGui::Begin(WithIcon(kIconTerminal, TrId("Console")).c_str(), &showConsole)) {
         ImGui::End();
         return;
     }

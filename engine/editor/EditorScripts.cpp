@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -252,7 +253,7 @@ void NativeEditor::Impl::UpdateScriptMarkers(ScriptTab& tab) {
 void NativeEditor::Impl::ScriptsPanel() {
     scriptEditorFocused = false;
     if (focusScript >= 0) ImGui::SetNextWindowFocus();  // bring the tab to front; Begin() skips hidden tabs
-    if (!ImGui::Begin(TrId("Scripts").c_str(), &showScripts)) {
+    if (!ImGui::Begin(WithIcon(kIconFileCode, TrId("Scripts")).c_str(), &showScripts)) {
         ImGui::End();
         return;
     }

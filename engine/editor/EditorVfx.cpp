@@ -1,3 +1,4 @@
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 
 #include <algorithm>
@@ -530,7 +531,7 @@ void NativeEditor::Impl::EffectsPanel() {
     if (effectsPresets.isNull()) effectsPresets = Call("vfx.presets", Json())["result"];
     if (focusEffects) { ImGui::SetNextWindowFocus(); focusEffects = false; }
     bool open = true;
-    const bool visible = ImGui::Begin(TrId("Effects").c_str(), &open);
+    const bool visible = ImGui::Begin(WithIcon(kIconSparkles, TrId("Effects")).c_str(), &open);
     if (!open) {
         if (effectsState["dirty"].asBool()) { effectsPendingClose = true; effectsPrompt = true; }
         else { Call("vfx.close", Json(), true); showEffects = false; }

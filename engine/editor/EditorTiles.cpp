@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -159,7 +160,7 @@ void NativeEditor::Impl::TileSceneInput(ImDrawList* dl, bool clickedLeft, bool c
 }
 
 void NativeEditor::Impl::TilesPanel() {
-    if (!ImGui::Begin(TrId("Tiles").c_str(), &showTiles)) {
+    if (!ImGui::Begin(WithIcon(kIconGrid3x3, TrId("Tiles")).c_str(), &showTiles)) {
         ImGui::End();
         return;
     }

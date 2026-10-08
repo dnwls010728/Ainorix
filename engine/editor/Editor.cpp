@@ -1,6 +1,7 @@
 // Native editor core: lifecycle, window input -> Dear ImGui, command helpers,
 // menus, toolbar, status bar, dock layout, prompts and the main loop.
 // Panels live in EditorPanels.cpp, the Scene/Game views in EditorViewports.cpp.
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -28,6 +29,8 @@ namespace oe {
 
 extern const unsigned char kDefaultFontData[];
 extern const size_t kDefaultFontSize;
+extern const unsigned char kIconFontData[];
+extern const size_t kIconFontSize;
 
 namespace {
 
@@ -260,7 +263,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     }
 }
 
-// Toolbar icons drawn as shapes, so they do not depend on font glyphs.
+// Toolbar buttons with a Lucide icon (EditorIcons.h); the active tool shows its icon in the accent color.
 enum class Icon { Play, Pause, Stop, Step, Select, Move, Rotate, Scale };
 
 bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, bool enabled = true) {
@@ -274,46 +277,21 @@ bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, boo
     if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tooltip);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
-    if (active) {
-        const ImU32 accent = ImGui::GetColorU32(ImGuiCol_CheckMark);
-        ImGui::GetWindowDrawList()->AddRect(mn, mx, accent, ImGui::GetStyle().FrameRounding, 2.0f);
-    }
-    ImVec2 c((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
-    float r = h * 0.26f;
+    const char* glyph = kIconPlay;
     ImU32 col = ImGui::GetColorU32(enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
     switch (icon) {
-        case Icon::Play: dl->AddTriangleFilled(ImVec2(c.x - r * 0.8f, c.y - r), ImVec2(c.x - r * 0.8f, c.y + r), ImVec2(c.x + r, c.y), IM_COL32(90, 200, 120, 255)); break;
-        case Icon::Pause:
-            dl->AddRectFilled(ImVec2(c.x - r * 0.8f, c.y - r), ImVec2(c.x - r * 0.25f, c.y + r), col);
-            dl->AddRectFilled(ImVec2(c.x + r * 0.25f, c.y - r), ImVec2(c.x + r * 0.8f, c.y + r), col);
-            break;
-        case Icon::Stop: dl->AddRectFilled(ImVec2(c.x - r * 0.85f, c.y - r * 0.85f), ImVec2(c.x + r * 0.85f, c.y + r * 0.85f), IM_COL32(230, 90, 80, 255)); break;
-        case Icon::Step:
-            dl->AddTriangleFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x - r, c.y + r), ImVec2(c.x + r * 0.5f, c.y), col);
-            dl->AddRectFilled(ImVec2(c.x + r * 0.55f, c.y - r), ImVec2(c.x + r, c.y + r), col);
-            break;
-        case Icon::Select:
-            dl->AddTriangleFilled(ImVec2(c.x - r * 0.7f, c.y - r), ImVec2(c.x - r * 0.7f, c.y + r * 0.7f), ImVec2(c.x + r * 0.7f, c.y + r * 0.2f), col);
-            break;
-        case Icon::Move:
-            dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), col, 1.6f);
-            dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), col, 1.6f);
-            dl->AddTriangleFilled(ImVec2(c.x + r * 1.2f, c.y), ImVec2(c.x + r * 0.7f, c.y - r * 0.35f), ImVec2(c.x + r * 0.7f, c.y + r * 0.35f), col);
-            dl->AddTriangleFilled(ImVec2(c.x - r * 1.2f, c.y), ImVec2(c.x - r * 0.7f, c.y + r * 0.35f), ImVec2(c.x - r * 0.7f, c.y - r * 0.35f), col);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y - r * 1.2f), ImVec2(c.x + r * 0.35f, c.y - r * 0.7f), ImVec2(c.x - r * 0.35f, c.y - r * 0.7f), col);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y + r * 1.2f), ImVec2(c.x - r * 0.35f, c.y + r * 0.7f), ImVec2(c.x + r * 0.35f, c.y + r * 0.7f), col);
-            break;
-        case Icon::Rotate:
-            dl->PathArcTo(c, r, 0.4f, 5.6f, 20);
-            dl->PathStroke(col, 1.8f);
-            dl->AddTriangleFilled(ImVec2(c.x + r * 1.35f, c.y - r * 0.05f), ImVec2(c.x + r * 0.55f, c.y - r * 0.05f), ImVec2(c.x + r * 0.95f, c.y + r * 0.55f), col);
-            break;
-        case Icon::Scale:
-            dl->AddRect(ImVec2(c.x - r, c.y - r * 0.2f), ImVec2(c.x + r * 0.2f, c.y + r), col, 0.0f, 1.6f);
-            dl->AddLine(ImVec2(c.x - r * 0.1f, c.y + r * 0.1f), ImVec2(c.x + r, c.y - r), col, 1.6f);
-            dl->AddTriangleFilled(ImVec2(c.x + r * 1.1f, c.y - r * 1.1f), ImVec2(c.x + r * 0.4f, c.y - r), ImVec2(c.x + r, c.y - r * 0.4f), col);
-            break;
+        case Icon::Play: glyph = kIconPlay; if (enabled) col = IM_COL32(96, 208, 128, 255); break;
+        case Icon::Pause: glyph = kIconPause; break;
+        case Icon::Stop: glyph = kIconSquare; if (enabled) col = IM_COL32(236, 96, 86, 255); break;
+        case Icon::Step: glyph = kIconStepForward; break;
+        case Icon::Select: glyph = kIconMousePointer2; break;
+        case Icon::Move: glyph = kIconMove; break;
+        case Icon::Rotate: glyph = kIconRotate3d; break;
+        case Icon::Scale: glyph = kIconScale3d; break;
     }
+    if (active && icon != Icon::Stop) col = ImGui::GetColorU32(ImGuiCol_CheckMark);
+    const ImVec2 glyphSize = ImGui::CalcTextSize(glyph);
+    dl->AddText(ImVec2((mn.x + mx.x - glyphSize.x) * 0.5f, (mn.y + mx.y - glyphSize.y) * 0.5f), col, glyph);
     return pressed;
 }
 
@@ -1504,6 +1482,17 @@ bool NativeEditor::Init(std::string* error) {
     cfg.FontDataOwnedByAtlas = false;
     std::snprintf(cfg.Name, sizeof(cfg.Name), "Roboto");
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kDefaultFontData), static_cast<int>(kDefaultFontSize), kBaseFontSize, &cfg);
+    {
+        // Line icons (EditorIcons.h) in the private-use range, lowered a little onto the text line.
+        static const ImWchar kIconRange[] = {static_cast<ImWchar>(kIconFirst), static_cast<ImWchar>(kIconLast), 0};
+        ImFontConfig icons;
+        icons.MergeMode = true;
+        icons.FontDataOwnedByAtlas = false;
+        icons.GlyphRanges = kIconRange;
+        icons.GlyphMinAdvanceX = kBaseFontSize;
+        icons.GlyphOffset = ImVec2(0.0f, kBaseFontSize * 0.12f);
+        io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kIconFontData), static_cast<int>(kIconFontSize), kBaseFontSize, &icons);
+    }
     std::vector<const char*> korean = {"C:/Windows/Fonts/malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc",
                                        "/System/Library/Fonts/Supplemental/AppleGothic.ttf", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                                        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"};
