@@ -78,3 +78,9 @@ and screenshots, and the web/Android runtimes are rebuilt when the step is done.
       GraphSourcePatchesEveryBackend checks the generated code for D3D11, GLES3 and
       GLCORE sources; ShaderMaterialInstructionFamilies runs every operation through
       compiled programs on D3D11.
+
+Runtimes rebuilt after step 6 (runtime/web, runtime/android). `games/RPG` runs in
+headless Edge (WebGL2 on SwiftShader) with compiled graphs and the MRT depth target
+and no shader warnings. Still unverified: GLES3 on an Android device (no device
+or emulator here: install the APK from `oe package games/RPG --android` and look
+for `did not compile` in logcat), Linux EGL, and frame rates on mobile GPUs.
