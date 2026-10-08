@@ -5,8 +5,10 @@
 
 ## Current build
 
-Built on 2026-10-08 with Emscripten 6.0.10, Release, `BINARYEN_CORES=1`, parallelism 2, from branch
-`claude/rpg-village` (after main `7cc9d8b`). It contains every engine feature up to then: scripting and official
+Built on 2026-10-09 with Emscripten 6.0.10, Release, `BINARYEN_CORES=1`, parallelism 2, from branch
+`claude/shadow-offset-bounds` (after main `25f5bb2`). It contains every engine feature up to then, including the
+GPU performance work of docs/RENDER_PERF.md (shadow fit without the CPU vertex stage, depth of field from the scene
+pass's second target, frustum culling, dynamic batching, `shadowDistance`, shader graphs compiled to GLSL ES): scripting and official
 Lua modules, physics (Jolt, Box2D), UI widgets, saves, animation, gamepads and multi-touch, host bridge,
 networking (WebSocket client, protocol v4), asset-based VFX with expressions, surface shader graphs (vertex offset,
 normal, `Sprite.material`), post effects (tone mapping incl. ACES, bloom, DOF, FXAA, fog, colour grading),
@@ -14,11 +16,13 @@ hemisphere ambient, `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket`/`Rig
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
-| oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
-| oe_player.wasm | 4,952,310 | 1d43af71f0b825e5ebaab64792640e54f25144f392863c102d946b33ec19e496 |
+| oe_player.js | 127,442 | fcc216268e801696ee0a442da28d9b705feb12a0256ad6ae0d653740dc918469 |
+| oe_player.wasm | 5,007,917 | dc1109d991c61c167d7e89d7fa1cac69abaf753888015063728885ed304a4681 |
 
-Windows Release: all engine tests pass. Not verified in a browser for this build: GPU execution of the newer
-shaders (DOF, graph vertex stage, fog, grading), typing into `UIInput`, real ads, sound output and phone touch.
+Windows Release: all engine tests pass. `games/RPG` packaged with it runs in headless Edge (WebGL2 on SwiftShader):
+compiled shader graphs (swaying trees, terrain, water, sky), the depth-of-field MRT target and fog render with no
+shader compile warnings. Not verified in a browser for this build: frame rate on real GPUs, typing into `UIInput`,
+real ads, sound output and phone touch.
 A browser can join binary WebSocket sessions but cannot host or use raw UDP/TCP (`link.open` returns `nil`).
 Earlier per-build notes are in the git history of this file.
 

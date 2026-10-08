@@ -172,7 +172,7 @@ glTF models load their full materials: base color factor including alpha, base c
 
 ## Lights and shadows
 
-- `DirectionalLight`: color, intensity, ambient, `shadows`, `shadowStrength`. The first directional light casts shadows: an orthographic shadow map fitted to the scene (software 1024², GPU 2048² with hardware comparison filtering), 3×3 PCF, back faces rendered to avoid acne.
+- `DirectionalLight`: color, intensity, ambient, `shadows`, `shadowStrength`, `shadowDistance`. The first directional light casts shadows: an orthographic shadow map fitted to the scene (software 1024², GPU 2048² with hardware comparison filtering), 3×3 PCF, back faces rendered to avoid acne. `shadowDistance` > 0 fits the map to what the camera sees up to that distance instead (a sphere around that part of the view frustum, moved in whole texels so shadows do not shimmer; its depth range reaches back over the scene so casters between the sun and the view still cast; the GPU shadow pass skips casters outside it). Large scenes get sharper shadows; a scene smaller than that part keeps the whole-scene fit. Surfaces beyond the distance are unshadowed.
 - `PointLight`: color, intensity, `range` (quadratic falloff to zero at the range).
 - Lighting is per pixel with a physically based model (glTF metallic-roughness): GGX normal distribution, Smith-Schlick geometry, Schlick Fresnel; F0 is 0.04 for dielectrics and the base color for metals, and the diffuse part is `baseColor * (1 - metallic)`. Both renderers use the same math (`Lighting::Shade` in `SoftwareRenderer.cpp`, `mesh_fs` in `Shaders.glsl`).
 - Light colors include the factor pi and lighting happens on non-linear (display) colors, clamped, with no tone mapping or HDR yet, so a white diffuse surface lit head-on still shows exactly the light color.
@@ -212,7 +212,7 @@ Collider wireframes are separate: `render.screenshot {colliders:true}` (see PHYS
 
 ## Performance
 
-GPU: the game window renders at the window's resolution (`project.json` `window.renderScale` 0.25–1 renders the 3D image smaller and upscales it, UI stays sharp) and presents with vsync.
+GPU: the game window renders at the window's resolution (`project.json` `window.renderScale` 0.25–1 renders the 3D image smaller and upscales it, UI stays sharp) and presents with vsync. Frame-time measurement and the optimization work log: [RENDER_PERF.md](RENDER_PERF.md).
 
 Software: the main pass and the shadow pass are split into horizontal bands rendered on worker threads (one band per core, up to 16). Triangles use a consistent fill rule (a pixel on a shared edge belongs to exactly one of the two triangles, so there are no gaps or double-drawn pixels). Each pixel belongs to exactly one band and sees triangles in the same order, so the result does not depend on the number of threads (`SetMaxRenderThreads(1)` is used in tests to prove it). A small lit scene with a skinned model renders at 1280×720 in roughly 14 ms on an 8-core desktop.
 

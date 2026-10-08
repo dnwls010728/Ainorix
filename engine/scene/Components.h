@@ -597,6 +597,7 @@ struct DirectionalLight {
     Color groundAmbient{0.1f, 0.09f, 0.08f};
     bool shadows = true;
     float shadowStrength = 0.75f;
+    float shadowDistance = 0.0f;
     static void Reflect(FieldList& f) {
         f.Add("color", &DirectionalLight::color, "Light color.");
         f.Add("intensity", &DirectionalLight::intensity, "Brightness multiplier.");
@@ -607,6 +608,10 @@ struct DirectionalLight {
         f.Add("shadows", &DirectionalLight::shadows, "Cast shadows (first directional light only).");
         FieldInfo& s = f.Add("shadowStrength", &DirectionalLight::shadowStrength, "0 = no darkening, 1 = black shadows.");
         s.hasRange = true; s.min = 0.0f; s.max = 1.0f;
+        FieldInfo& d = f.Add("shadowDistance", &DirectionalLight::shadowDistance,
+                             "0 = the shadow map covers the whole scene. > 0: only what the camera sees up to this distance "
+                             "(world units), so large scenes get sharper shadows and the shadow pass skips far casters.");
+        d.hasRange = true; d.min = 0.0f; d.max = 100000.0f;
     }
 };
 

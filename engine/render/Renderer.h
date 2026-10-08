@@ -50,6 +50,7 @@ struct RenderStats {
     int drawnEntities = 0;
     int triangles = 0;
     double milliseconds = 0.0;
+    int drawCalls = 0;  // GPU renderer: mesh draws of the scene pass after culling (0 for the software renderer)
 };
 
 // Rendering backend interface. The software rasterizer is the reference

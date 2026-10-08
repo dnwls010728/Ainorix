@@ -702,15 +702,47 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
     }
 }
 
-void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, float time, Vec3& lo, Vec3& hi) {
+float OffsetMargin(const Material& material) {
+    if (!material.shader || material.shader->offset < 0) return 0;
+    return material.shader->maxOffset >= 0 ? material.shader->maxOffset : kDefaultOffsetMargin;
+}
+
+void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi) {
     for (const DrawCall& draw : draws) {
-        if (items[draw.item].unlit) continue;
-        ForEachVertexOffset(items[draw.item], draw, time, [&](uint32_t, const Vec3& wpos, const Vec3& offset) {
-            const Vec3 p = wpos + offset;
-            lo = Vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
-            hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
-        });
+        const RenderItem& it = items[draw.item];
+        if (it.unlit || !draw.material.shader || draw.material.shader->offset < 0) continue;
+        Vec3 a, b;
+        ItemWorldBounds(it, OffsetMargin(draw.material), a, b);
+        lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+        hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
     }
+}
+
+void ItemWorldBounds(const RenderItem& item, float margin, Vec3& lo, Vec3& hi) {
+    lo = Vec3(1e30f, 1e30f, 1e30f);
+    hi = Vec3(-1e30f, -1e30f, -1e30f);
+    const Vec3 &a = item.boundsMin, &b = item.boundsMax;
+    for (int c = 0; c < 8; ++c) {
+        const Vec3 p = item.world.TransformPoint(Vec3(c & 1 ? b.x : a.x, c & 2 ? b.y : a.y, c & 4 ? b.z : a.z));
+        lo = Vec3(std::min(lo.x, p.x - margin), std::min(lo.y, p.y - margin), std::min(lo.z, p.z - margin));
+        hi = Vec3(std::max(hi.x, p.x + margin), std::max(hi.y, p.y + margin), std::max(hi.z, p.z + margin));
+    }
+}
+
+bool BoxInFrustum(const Mat4& viewProj, const Vec3& lo, const Vec3& hi, bool depth) {
+    int outside[6] = {0, 0, 0, 0, 0, 0};
+    for (int c = 0; c < 8; ++c) {
+        const Vec4 p = viewProj * Vec4(c & 1 ? hi.x : lo.x, c & 2 ? hi.y : lo.y, c & 4 ? hi.z : lo.z, 1.0f);
+        outside[0] += p.x < -p.w;
+        outside[1] += p.x > p.w;
+        outside[2] += p.y < -p.w;
+        outside[3] += p.y > p.w;
+        outside[4] += p.z < -p.w;
+        outside[5] += p.z > p.w;
+    }
+    for (int plane = 0; plane < (depth ? 6 : 4); ++plane)
+        if (outside[plane] == 8) return false;
+    return true;
 }
 
 RenderLights GatherRenderLights(const Scene& scene) {
@@ -725,6 +757,7 @@ RenderLights GatherRenderLights(const Scene& scene) {
         if (lights.dirs.empty()) {
             lights.shadows = kv.second.shadows;
             lights.shadowStrength = kv.second.shadowStrength;
+            lights.shadowDistance = std::isfinite(kv.second.shadowDistance) ? std::max(0.0f, kv.second.shadowDistance) : 0.0f;
         }
         lights.dirs.push_back(l);
     }
@@ -746,6 +779,45 @@ ShadowFit FitShadow(const Vec3& lo, const Vec3& hi, const Vec3& dir, int mapSize
     Mat4 lproj = Mat4::Orthographic(radius, 1.0f, 0.01f, radius * 4.0f);
     ShadowFit fit;
     fit.viewProj = lproj * lview;
+    fit.texelWorld = 2.0f * radius / static_cast<float>(mapSize);
+    return fit;
+}
+
+ShadowFit FitShadowToView(const Mat4& view, const Mat4& proj, float distance, const Vec3& lo, const Vec3& hi,
+                          const Vec3& dir, int mapSize) {
+    // Corners of the view frustum from the near plane to `distance` (NDC z of that view depth).
+    const bool ortho = proj.at(3, 3) == 1.0f;
+    const float p22 = proj.at(2, 2), p23 = proj.at(2, 3);
+    const float farZ = std::min(1.0f, ortho ? -p22 * distance + p23 : (-p22 * distance + p23) / distance);
+    const Mat4 toWorld = (proj * view).Inverse();
+    Vec3 corners[8];
+    Vec3 center;
+    for (int c = 0; c < 8; ++c) {
+        const Vec4 p = toWorld * Vec4(c & 1 ? 1.0f : -1.0f, c & 2 ? 1.0f : -1.0f, c & 4 ? farZ : -1.0f, 1.0f);
+        corners[c] = p.xyz() * (1.0f / p.w);
+        center = center + corners[c] * 0.125f;
+    }
+    // A sphere around the slice keeps the map's size fixed while the camera turns.
+    float radius = 0.5f;
+    for (const Vec3& p : corners) radius = std::max(radius, Length(p - center));
+    radius = std::ceil(radius);
+    if (!std::isfinite(radius) || Length(hi - lo) * 0.5f <= radius) return FitShadow(lo, hi, dir, mapSize);
+    // Toward the light: far enough back that every caster of the scene box is in front of the near plane.
+    float back = radius * 2.0f;
+    for (int c = 0; c < 8; ++c) {
+        const Vec3 p(c & 1 ? hi.x : lo.x, c & 2 ? hi.y : lo.y, c & 4 ? hi.z : lo.z);
+        back = std::max(back, Dot(p - center, dir * -1.0f) + 1.0f);
+    }
+    const Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+    const Mat4 lview = Mat4::LookAt(center - dir * back, center, up);
+    const Mat4 lproj = Mat4::Orthographic(radius, 1.0f, 0.01f, back + radius * 2.0f);
+    ShadowFit fit;
+    fit.viewProj = lproj * lview;
+    // Snap to whole texels: the world origin lands on a texel corner of the map.
+    const Vec4 origin = fit.viewProj * Vec4(0, 0, 0, 1);
+    const float texels = static_cast<float>(mapSize) * 0.5f;
+    const float dx = std::round(origin.x * texels) / texels - origin.x, dy = std::round(origin.y * texels) / texels - origin.y;
+    fit.viewProj = Mat4::Translation(Vec3(dx, dy, 0)) * fit.viewProj;
     fit.texelWorld = 2.0f * radius / static_cast<float>(mapSize);
     return fit;
 }

@@ -65,9 +65,13 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 view_proj;
     mat4 model;
     mat4 normal_mat;
-    mat4 joint_palette[64];
     vec4 item_custom; // custom attributes on shared meshes
     vec4 item_particle; // shared-mesh particle inputs; batched inputs are in particle0
+};
+
+// Skin joints (4 KB): uploaded for skinned meshes only, left over (unused) for the others.
+layout(binding=4) uniform mesh_vs_skin {
+    mat4 joint_palette[64];
 };
 
 // Vertex stage of a shader graph with an `offset` output (ShaderVertexOffset in ShaderGraph.cpp).
@@ -101,6 +105,14 @@ centroid out vec2 v_uv;
 
 @include_block graph_ops
 
+// Inputs of the vertex stage of a graph. Compiled graphs (GraphSource.cpp) replace the body of
+// VertexOffset with straight-line code that reads its inputs through these functions only.
+vec4 VGraphUniform(int slot) { return vgraph_uniform[slot]; }
+float VGraphTime() { return vgraph_control.w; }
+vec4 VGraphBaseColor() { return vgraph_base_color * color0; }
+vec4 VGraphParticle() { return particle0 + item_particle; }
+vec4 VGraphCustom() { return custom0 + item_custom; }
+
 vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
     if (vgraph_control.x < 0.5) return vec3(0.0);
     vec4 registers[48];
@@ -111,19 +123,19 @@ vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
         vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
         vec4 value = vec4(0.0);
         if (code.x == 0) value = vgraph_value[i];
-        else if (code.x == 1) value = vgraph_uniform[int(vgraph_value[i].x)];
+        else if (code.x == 1) value = VGraphUniform(int(vgraph_value[i].x));
         else if (code.x == 2) value = vec4(uv,0.0,0.0);
         else if (code.x == 3) value = vec4(wpos,1.0);
         else if (code.x == 4) value = vec4(nrm,0.0);
-        else if (code.x == 5) value = vec4(vgraph_control.w);
-        else if (code.x == 6) value = vgraph_base_color * color0;
-        else if (code.x == 25) value = vec4(particle0.x + item_particle.x);
-        else if (code.x == 26) value = vec4(particle0.y + item_particle.y);
-        else if (code.x == 27) value = vec4(particle0.z + item_particle.z);
-        else if (code.x == 28) value = vec4(custom0.x + item_custom.x);
-        else if (code.x == 29) value = vec4(custom0.y + item_custom.y);
-        else if (code.x == 30) value = vec4(custom0.z + item_custom.z);
-        else if (code.x == 31) value = vec4(custom0.w + item_custom.w);
+        else if (code.x == 5) value = vec4(VGraphTime());
+        else if (code.x == 6) value = VGraphBaseColor();
+        else if (code.x == 25) value = vec4(VGraphParticle().x);
+        else if (code.x == 26) value = vec4(VGraphParticle().y);
+        else if (code.x == 27) value = vec4(VGraphParticle().z);
+        else if (code.x == 28) value = vec4(VGraphCustom().x);
+        else if (code.x == 29) value = vec4(VGraphCustom().y);
+        else if (code.x == 30) value = vec4(VGraphCustom().z);
+        else if (code.x == 31) value = vec4(VGraphCustom().w);
         else if (code.x == 7) value = vec4(1.0);  // no texture in the vertex stage
         else value = GraphOp(code.x, a, b, c, vgraph_value[i]);
         registers[i] = GraphFinite(value);
@@ -176,6 +188,16 @@ layout(binding=1) uniform mesh_material {
 @end
 
 @block surface_graph
+// Inputs of the fragment stage of a graph, read by compiled graphs (GraphSource.cpp) the same way.
+vec4 GraphUniform(int slot) { return graph_uniform[slot]; }
+float GraphTime() { return graph_control.w; }
+vec4 GraphPosition() { return vec4(v_wpos, 1.0); }
+vec4 GraphParticle() { return v_particle; }
+vec4 GraphCustom() { return v_custom; }
+// Explicit level zero matches the software texture sampler and avoids
+// undefined implicit derivatives in data-dependent instruction flow.
+vec4 GraphTexture(vec2 uv) { return textureLod(sampler2D(base_tex,base_smp),uv,0.0); }
+
 // `normal_out` is the graph's lighting normal, zero when it has none.
 void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out vec3 emission, out vec3 normal_out) {
     emission = vec3(0.0);
@@ -189,22 +211,20 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
         vec4 a = registers[code.y], b = registers[code.z], c = registers[code.w];
         vec4 value = vec4(0.0);
         if (code.x == 0) value = graph_value[i];
-        else if (code.x == 1) value = graph_uniform[int(graph_value[i].x)];
+        else if (code.x == 1) value = GraphUniform(int(graph_value[i].x));
         else if (code.x == 2) value = vec4(uv,0.0,0.0);
-        else if (code.x == 3) value = vec4(v_wpos,1.0);
+        else if (code.x == 3) value = GraphPosition();
         else if (code.x == 4) value = vec4(normal,0.0);
-        else if (code.x == 5) value = vec4(graph_control.w);
+        else if (code.x == 5) value = vec4(GraphTime());
         else if (code.x == 6) value = vec4(base,alpha);
-        else if (code.x == 25) value = vec4(v_particle.x);
-        else if (code.x == 26) value = vec4(v_particle.y);
-        else if (code.x == 27) value = vec4(v_particle.z);
-        else if (code.x == 31) value = vec4(v_custom.w);
-        else if (code.x == 30) value = vec4(v_custom.z);
-        else if (code.x == 29) value = vec4(v_custom.y);
-        else if (code.x == 28) value = vec4(v_custom.x);
-        // Explicit level zero matches the software texture sampler and avoids
-        // undefined implicit derivatives in data-dependent instruction flow.
-        else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
+        else if (code.x == 25) value = vec4(GraphParticle().x);
+        else if (code.x == 26) value = vec4(GraphParticle().y);
+        else if (code.x == 27) value = vec4(GraphParticle().z);
+        else if (code.x == 31) value = vec4(GraphCustom().w);
+        else if (code.x == 30) value = vec4(GraphCustom().z);
+        else if (code.x == 29) value = vec4(GraphCustom().y);
+        else if (code.x == 28) value = vec4(GraphCustom().x);
+        else if (code.x == 7) value = GraphTexture(a.xy);
         else value = GraphOp(code.x, a, b, c, graph_value[i]);
         registers[i] = GraphFinite(value);
     }
@@ -229,6 +249,7 @@ layout(binding=2) uniform mesh_lights {
     vec4 ambient_ground; // rgb: hemisphere ambient of downward faces, w: 1 = hemisphere ambient on
     vec4 fog_color;      // rgb: fog color, w: largest fog amount (0 = off)
     vec4 fog_range;      // x: start distance, y: end distance
+    vec4 view_axis;      // xyz: camera forward; frag_depth = view depth along it (depth of field)
     vec4 dir_dir[4];     // direction the light travels
     vec4 dir_color[4];
     vec4 point_pos[16];  // xyz: position, w: range
@@ -252,7 +273,9 @@ in vec3 v_nrm;
 in vec4 v_tan;
 centroid in vec2 v_uv;
 
-out vec4 frag_color;
+layout(location=0) out vec4 frag_color;
+// View depth for depth of field when the pass has a second target (blended pipelines mask it off).
+layout(location=1) out vec4 frag_depth;
 
 const float PI = 3.14159265;
 
@@ -411,6 +434,7 @@ void main() {
         outc = color_range.z > 1.5 ? outc * (1.0 - f) : outc * (1.0 - f) + fog_color.rgb * f;
     }
     frag_color = vec4(clamp(outc, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
+    frag_depth = vec4(dot(v_wpos - eye.xyz, view_axis.xyz), 0.0, 0.0, 1.0);
 }
 @end
 
@@ -422,6 +446,9 @@ void main() {
 @hlsl_options fixup_clipspace
 layout(binding=0) uniform pos_vs_params {
     mat4 mvp;
+};
+
+layout(binding=2) uniform pos_vs_skin {
     mat4 joint_palette[64];
 };
 
@@ -758,6 +785,7 @@ void main() {
 layout(binding=0) uniform dof_params {
     vec4 dof_lens; // x: largest radius in pixels (1..16), y: focus depth, z: sharp range, w: falloff
     vec4 dof_proj; // x: projection (2,2), y: projection (2,3), z: 1 = orthographic, w: 0 horizontal, 1 vertical
+    vec4 dof_mode; // x: 1 = the depth texture holds view depth (scene pass MRT), 0 = depth buffer values
 };
 layout(binding=0) uniform texture2D dof_source_tex;
 layout(binding=0) uniform sampler dof_source_smp;
@@ -766,7 +794,9 @@ layout(binding=1) uniform sampler dof_depth_smp;
 out vec4 frag_color;
 
 float DofDepth(ivec2 q) {
-    float ndc = texelFetch(sampler2D(dof_depth_tex, dof_depth_smp), q, 0).r * 2.0 - 1.0;
+    float stored = texelFetch(sampler2D(dof_depth_tex, dof_depth_smp), q, 0).r;
+    if (dof_mode.x > 0.5) return stored;
+    float ndc = stored * 2.0 - 1.0;
     return dof_proj.z > 0.5 ? (dof_proj.y - ndc) / dof_proj.x : dof_proj.y / (ndc + dof_proj.x);
 }
 

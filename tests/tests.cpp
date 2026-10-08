@@ -44,6 +44,8 @@
 #include "platform/TouchInput.h"
 #include "render/Font.h"
 #include "render/GpuRenderer.h"
+#include "render/GraphSource.h"
+#include "render/shaders/Shaders.glsl.h"
 #include "render/RenderScene.h"
 #include "render/ShaderGraph.h"
 #include "render/UI.h"
@@ -6076,6 +6078,160 @@ TEST(GltfMaterialsAreLoaded) {
     CHECK(mesh.tangents.size() == mesh.positions.size());
 }
 
+TEST(GpuFrustumCulling) {
+    // Boxes outside the camera (and displaced surfaces only inside it through their offset margin).
+    Vec3 lo, hi;
+    RenderItem item;
+    item.boundsMin = Vec3(-1, -1, -1);
+    item.boundsMax = Vec3(1, 1, 1);
+    item.world = Mat4::Translation(Vec3(0, 0, -10));
+    ItemWorldBounds(item, 0.5f, lo, hi);
+    CHECK(lo.x == -1.5f && hi.z == -8.5f);
+    const Mat4 viewProj = Mat4::Perspective(60.0f * 3.14159265f / 180.0f, 1.0f, 0.1f, 100.0f);
+    CHECK(BoxInFrustum(viewProj, lo, hi));
+    CHECK(!BoxInFrustum(viewProj, Vec3(-1, -1, 9), Vec3(1, 1, 11)));        // behind the camera
+    CHECK(!BoxInFrustum(viewProj, Vec3(50, -1, -11), Vec3(52, 1, -9)));     // far to the right
+    CHECK(!BoxInFrustum(viewProj, Vec3(-1, -1, -300), Vec3(1, 1, -200)));   // beyond the far plane
+    CHECK(BoxInFrustum(viewProj, Vec3(-1, -1, -300), Vec3(1, 1, -200), false));
+    CHECK(BoxInFrustum(viewProj, Vec3(-200, -1, -11), Vec3(200, 1, -9)));   // spans the view
+
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gpu_culling"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,5]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-60,20,0]},"DirectionalLight":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Seen","components":{"Transform":{},"MeshRenderer":{"mesh":"cube"}}})J");
+    Call(e, "entity.create", R"J({"name":"Behind","components":{"Transform":{"position":[0,0,20]},"MeshRenderer":{"mesh":"cube"}}})J");
+    Call(e, "entity.create", R"J({"name":"Aside","components":{"Transform":{"position":[60,0,0]},"MeshRenderer":{"mesh":"cube"}}})J");
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    const int w = 160, h = 120;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget sw, gpu;
+    sw.Resize(w, h);
+    gpu.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    const RenderStats stats = e.Gpu()->Render(e.GetScene(), view, gpu);
+    CHECK(stats.drawnEntities == 3 && stats.drawCalls == 1);
+    // A culled box changes nothing in the picture.
+    double error = 0;
+    for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+        error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+    std::printf("  culled frame software/GPU mean difference %.4f\n", error / static_cast<double>(sw.color.size() * 3));
+    CHECK(error / static_cast<double>(sw.color.size() * 3) < 2.0);
+}
+
+TEST(ShadowDistanceFitsTheView) {
+    const Vec3 dir = Normalize(Vec3(-0.4f, -1.0f, -0.3f));
+    const Mat4 view = Mat4::LookAt(Vec3(0, 5, 10), Vec3(0, 0, 0), Vec3(0, 1, 0));
+    const Mat4 proj = Mat4::Perspective(60.0f * 3.14159265f / 180.0f, 1.5f, 0.1f, 500.0f);
+    const Vec3 lo(-200, -1, -200), hi(200, 10, 200);
+    const ShadowFit scene = FitShadow(lo, hi, dir, 2048);
+    const ShadowFit near = FitShadowToView(view, proj, 20.0f, lo, hi, dir, 2048);
+    CHECK(near.texelWorld < scene.texelWorld / 5);
+    // Whole texels: the world origin lands on a texel corner (no shimmer while the camera moves).
+    const Vec4 origin = near.viewProj * Vec4(0, 0, 0, 1);
+    CHECK(std::fabs(origin.x * 1024.0f - std::round(origin.x * 1024.0f)) < 1e-2f);
+    // A caster of the scene box far toward the light is still inside the light's depth range.
+    const Vec4 caster = near.viewProj * Vec4(Vec3(150, 9, 110), 1);
+    CHECK(caster.z > -1.0f && caster.z < 1.0f);
+    // A scene smaller than the view slice keeps the whole-scene fit.
+    const ShadowFit small = FitShadowToView(view, proj, 200.0f, Vec3(-1, 0, -1), Vec3(1, 1, 1), dir, 2048);
+    CHECK(small.texelWorld == FitShadow(Vec3(-1, 0, -1), Vec3(1, 1, 1), dir, 2048).texelWorld);
+
+    // Both renderers: the cube's shadow on a large ground with and without shadowDistance.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("shadow_distance"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,4,8],"rotation":[-26,0,0]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-60,30,0]},"DirectionalLight":{"ambient":[0.1,0.1,0.1],"shadowStrength":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[400,1,400]},"MeshRenderer":{"mesh":"plane","color":[1,1,1]}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{"position":[0,0.5,0]},"MeshRenderer":{"mesh":"cube","color":[1,0.2,0.2]}}})J");
+    Call(e, "entity.create", R"J({"name":"Far","components":{"Transform":{"position":[150,0.5,-150]},"MeshRenderer":{"mesh":"cube"}}})J");
+    const int w = 200, h = 150;
+    RenderView rv;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, rv);
+    // Ground just behind the box (away from the sun) is in its shadow.
+    const Vec3 dirLight = Normalize(e.GetScene().WorldMatrix(e.GetScene().FindByName("Sun")).TransformDir(Vec3(0, 0, -1)));
+    const Vec3 shaded = Vec3(0, 0, 0) + Vec3(dirLight.x, 0, dirLight.z) * (1.2f / std::max(0.2f, std::sqrt(dirLight.x * dirLight.x + dirLight.z * dirLight.z)));
+    auto green = [&](const RenderTarget& t, Vec3 world) {
+        const Vec4 clip = rv.proj * rv.view * Vec4(world, 1);
+        const int x = static_cast<int>((clip.x / clip.w * 0.5f + 0.5f) * w), y = static_cast<int>((0.5f - clip.y / clip.w * 0.5f) * h);
+        return static_cast<int>((t.color[static_cast<size_t>(y) * w + static_cast<size_t>(x)] >> 8) & 255);
+    };
+    auto shadowContrast = [&](IRenderer& r) {
+        RenderTarget t;
+        t.Resize(w, h);
+        r.Render(e.GetScene(), rv, t);
+        return std::make_pair(green(t, shaded), green(t, Vec3(-2.5f, 0, 1.5f)));
+    };
+    const auto wholeScene = shadowContrast(e.Renderer());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"DirectionalLight","values":{"shadowDistance":25}})J")["ok"].asBool());
+    const auto viewFit = shadowContrast(e.Renderer());
+    std::printf("  box shadow (software): whole scene %d/%d, shadowDistance %d/%d (shaded/lit)\n",
+                wholeScene.first, wholeScene.second, viewFit.first, viewFit.second);
+    CHECK(viewFit.first < viewFit.second / 2);
+    if (e.EnableGpu(nullptr, &err)) {
+        const auto gpu = shadowContrast(*e.Gpu());
+        std::printf("  box shadow (gpu): shadowDistance %d/%d\n", gpu.first, gpu.second);
+        CHECK(gpu.first < gpu.second / 2);
+    }
+}
+
+TEST(GpuSpriteBatching) {
+    // Runs of sprites sharing a material are drawn as one batch; each keeps its own tint, opacity,
+    // frame, flip and transform, so the picture matches the software renderer's per-sprite draws.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gpu_batching"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(Call(e, "asset.generate_texture", R"J({"path":"assets/textures/c.png","pattern":"checker","size":64})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,3,9],"rotation":[-18,0,0]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-55,30,0]},"DirectionalLight":{"ambient":[0.3,0.3,0.3]}}})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"scale":[20,1,20]},"MeshRenderer":{"mesh":"plane","color":[0.8,0.8,0.8]}}})J");
+    const int count = 24;
+    for (int i = 0; i < count; ++i) {
+        const float x = static_cast<float>(i % 6) * 1.6f - 4.0f, z = -static_cast<float>(i / 6) * 1.5f;
+        // Cut-out, lit, shadow-casting sprites (opaque list: batched in id order) with varying values.
+        const std::string args = Format(R"J({"name":"S%d","components":{"Transform":{"position":[%g,0,%g],"rotation":[0,%d,0]},
+            "Sprite":{"texture":"assets/textures/c.png","columns":2,"rows":2,"frame":%d,"flipX":%s,"width":1.2,"height":1.4,"pivotY":0,
+            "lit":true,"castShadows":true,"alphaCutoff":0.5,"color":[%g,%g,%g]}}})J", i, x, z, (i * 17) % 60 - 30, i % 4,
+            i % 3 == 0 ? "true" : "false", 0.4 + 0.025 * i, 1.0 - 0.03 * i, 0.5 + 0.02 * (i % 5));
+        CHECK(Call(e, "entity.create", args.c_str())["ok"].asBool());
+    }
+    for (int i = 0; i < 6; ++i) {  // soft-edged sprites with different opacity (blended, back to front)
+        const std::string args = Format(R"J({"name":"G%d","components":{"Transform":{"position":[%g,1.8,%g]},
+            "Sprite":{"texture":"assets/textures/c.png","width":0.8,"height":0.8,"opacity":%g,"color":[1,0.6,0.3]}}})J",
+            i, static_cast<float>(i) * 1.1f - 3.0f, 1.0f - static_cast<float>(i) * 0.4f, 0.3 + 0.1 * i);
+        CHECK(Call(e, "entity.create", args.c_str())["ok"].asBool());
+    }
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    const int w = 320, h = 200;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget sw, gpu;
+    sw.Resize(w, h);
+    gpu.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    const RenderStats stats = e.Gpu()->Render(e.GetScene(), view, gpu);
+    std::printf("  %d sprites + ground in %d draw calls\n", count + 6, stats.drawCalls);
+    CHECK(stats.drawCalls <= 4);
+    double error = 0;
+    for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+        error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+    error /= static_cast<double>(sw.color.size() * 3);
+    std::printf("  batched sprites software/GPU mean difference %.4f\n", error);
+    CHECK(error < 3.0);
+}
+
 TEST(UIGpuMatchesSoftware) {
     Engine e;
     std::string err;
@@ -6702,9 +6858,50 @@ TEST(ShaderMaterialVaryingAlphaAndOcclusion) {
     }
 }
 
+TEST(GraphSourcePatchesEveryBackend) {
+    // Every operation, a uniform and both outputs: the generated code replaces the interpreter in the
+    // mesh and surface programs of every backend sokol-shdc generated (compiled on the GPU elsewhere).
+    ShaderGraph graph;
+    std::string err;
+    CHECK(CompileShaderGraph(Json::parse(R"J({"uniforms":{"wind":[1,0,0.5,0]},"nodes":[
+        {"op":"constant","value":[0.1,-2,3e-5,1]},{"op":"uniform","name":"wind"},{"op":"uv"},{"op":"position"},{"op":"normal"},
+        {"op":"time"},{"op":"baseColor"},{"op":"particleAge"},{"op":"particleRandom"},{"op":"particleSpeed"},
+        {"op":"particleCustom0"},{"op":"particleCustom1"},{"op":"particleCustom2"},{"op":"particleCustom3"},
+        {"op":"add","args":[0,1]},{"op":"subtract","args":[14,2]},{"op":"multiply","args":[15,3]},{"op":"divide","args":[16,4]},
+        {"op":"min","args":[17,5]},{"op":"max","args":[18,6]},{"op":"sin","args":[19]},{"op":"cos","args":[20]},
+        {"op":"floor","args":[21]},{"op":"fract","args":[22]},{"op":"abs","args":[23]},{"op":"clamp","args":[24,7,8]},
+        {"op":"mix","args":[25,9,10]},{"op":"step","args":[26,11]},{"op":"dot","args":[27,12]},{"op":"normalize","args":[28]},
+        {"op":"swizzle","args":[29],"value":[3,1,2,0]},{"op":"add","args":[30,13]},{"op":"texture","args":[31]}],
+        "color":32,"emissive":31,"normal":29,"offset":31})J"), graph, &err));
+    for (GraphDialect dialect : {GraphDialect::Glsl, GraphDialect::Hlsl}) {
+        const std::string surface = GraphSurfaceBody(graph, dialect), vertex = GraphVertexBody(graph, dialect);
+        CHECK(surface.find("GraphTexture(oeg31.xy)") != std::string::npos && vertex.find("GraphTexture") == std::string::npos);
+        CHECK(vertex.find("return oeg31.xyz;") != std::string::npos && surface.find("emission = oeg31.rgb;") != std::string::npos);
+        CHECK(surface.find(dialect == GraphDialect::Hlsl ? "frac(" : "fract(") != std::string::npos);
+    }
+    for (sg_backend backend : {SG_BACKEND_D3D11, SG_BACKEND_GLES3, SG_BACKEND_GLCORE}) {
+        const GraphDialect dialect = backend == SG_BACKEND_D3D11 ? GraphDialect::Hlsl : GraphDialect::Glsl;
+        for (const sg_shader_desc* desc : {oe_mesh_shader_desc(backend), oe_surface_aux_shader_desc(backend)}) {
+            CHECK(desc && desc->vertex_func.source && desc->fragment_func.source);
+            if (!desc || !desc->vertex_func.source || !desc->fragment_func.source) continue;
+            std::string vs = desc->vertex_func.source, fs = desc->fragment_func.source;
+            const size_t before = fs.size();
+            CHECK(ReplaceFunctionBody(vs, "VertexOffset", GraphVertexBody(graph, dialect)));
+            CHECK(ReplaceFunctionBody(fs, "SurfaceGraph", GraphSurfaceBody(graph, dialect)));
+            // The interpreter loop is gone from the patched function; its callers are untouched.
+            const size_t body = fs.find("oeg0");
+            CHECK(body != std::string::npos && fs.size() != before);
+            CHECK(fs.find("SurfaceGraph(param", body) != std::string::npos);
+        }
+    }
+    std::string missing = "void main() {}";
+    CHECK(!ReplaceFunctionBody(missing, "SurfaceGraph", "return;"));
+}
+
 TEST(ShaderMaterialInstructionFamilies) {
     Engine e;
     std::string error;
+    const uint64_t logStart = Log::LastSeq();
     CHECK(e.Open(TempProject("shader_instruction_families"), &error));
     Call(e, "scene.new", R"J({"empty":true})J");
     Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
@@ -6822,6 +7019,8 @@ TEST(ShaderMaterialInstructionFamilies) {
     CHECK((blended & 0xFFFFFF) == 0x0F1C55);  // graph replaces zero input opacity; blend happens in HDR
     CHECK(cpu.ids[36*128+64] == kNullEntity);  // alpha below 0.5 does not take picking ownership
     std::printf("  graph instruction/input/HDR worst software/GPU mean difference %.4f\n",worstMean);
+    // Each graph above ran as its own compiled GPU program, not through the interpreter fallback.
+    for (const LogEntry& entry : Log::Since(logStart)) CHECK(entry.message.find("did not compile") == std::string::npos);
 }
 
 TEST(ShaderMaterialRendering) {
@@ -8726,6 +8925,10 @@ TEST(ShaderGraphVertexOffset) {
     CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"},{"op":"texture","args":[0]}],"color":1,"offset":1})J"), graph, &err));
     CHECK(err.find("texture") != std::string::npos);
     CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":3})J"), graph, &err));
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"maxOffset":0.5})J"), graph, &err) && graph.maxOffset == 0.5f);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0})J"), graph, &err) && graph.maxOffset == -1);
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"maxOffset":-1})J"), graph, &err));
+    CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"maxOffset":1})J"), graph, &err) && err.find("requires") != std::string::npos);
     CHECK(GetBuiltinMesh("plane64")->positions.size() == 65 * 65 && GetBuiltinMesh("plane64")->TriangleCount() == 64 * 64 * 2);
 
     Engine e;
@@ -8788,6 +8991,24 @@ TEST(ShaderGraphVertexOffset) {
         CHECK(red(pixel(sideways, Vec3(3, 1, 0))) < red(pixel(plain, Vec3(3, 1, 0))) / 2);
         return plain;
     };
+    // Shadow bounds grow by the declared maxOffset (else the default margin) without running the
+    // vertex stage on the CPU; items without an offset graph add nothing.
+    CHECK(Call(e, "shader.create", R"J({"path":"bounded.shader.json","graph":{"uniforms":{"shift":[3,1,0,0]},
+        "nodes":[{"op":"constant","value":[1,0,0,1]},{"op":"uniform","name":"shift"}],"color":0,"offset":1,"maxOffset":4}})J")["result"]["maxOffset"].asNumber() == 4);
+    CHECK(Call(e, "material.create", R"J({"path":"bounded.mat.json","values":{"shader":"bounded.shader.json","doubleSided":true}})J")["ok"].asBool());
+    auto offsetBounds = [&](const char* material) {
+        const std::string args = std::string(R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":")J") + material + "\"}}";
+        Call(e, "component.set", args.c_str());
+        const std::vector<RenderItem> items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+        Vec3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
+        ExtendOffsetBounds(items, BuildDrawList(items, view.eye), lo, hi);
+        return std::make_pair(lo, hi);
+    };
+    const auto byDefault = offsetBounds("moved.mat.json"), declared = offsetBounds("bounded.mat.json");
+    CHECK(std::fabs((byDefault.second.x - byDefault.first.x) - (4 + 2 * kDefaultOffsetMargin)) < 1e-4f);
+    CHECK(std::fabs((declared.first.y + 4) - (byDefault.first.y + kDefaultOffsetMargin)) < 1e-4f);
+    CHECK(std::fabs(declared.second.x - declared.first.x - 12) < 1e-4f);
+    CHECK(offsetBounds("").first.x > 1e29f);
     const RenderTarget software = check(e.Renderer(), "software");
     // Depth of field reads the moved surface's depth (GPU: its own depth pass).
     CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"moved.mat.json"}})J")["ok"].asBool());

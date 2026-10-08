@@ -110,6 +110,10 @@ public:
         swapchain_->Present(1, 0);
     }
 
+    void Flush() override {
+        if (context_) context_->Flush();
+    }
+
     bool ReadPixels(sg_image image, int width, int height, uint32_t* out) override {
         sg_d3d11_image_info info = sg_d3d11_query_image_info(image);
         auto* tex = static_cast<ID3D11Texture2D*>(const_cast<void*>(info.tex2d));

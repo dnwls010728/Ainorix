@@ -1217,6 +1217,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      out["stats"]["entities"] = stats.drawnEntities;
                      out["stats"]["triangles"] = stats.triangles;
                      out["stats"]["ms"] = stats.milliseconds;
+                     out["stats"]["drawCalls"] = stats.drawCalls;
                      std::vector<uint8_t> png = EncodePng(img);
                      if (a.has("path")) {
                          std::string path = e.ResolvePath(a["path"].asString());
@@ -1993,6 +1994,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         result["emissive"] = graph.emissive;
         result["normal"] = graph.normal;
         result["offset"] = graph.offset;
+        if (graph.maxOffset >= 0) result["maxOffset"] = graph.maxOffset;
         result["uniforms"] = Json::MakeArray();
         for (const std::string& name : graph.uniformNames) result["uniforms"].push(name);
         return result;

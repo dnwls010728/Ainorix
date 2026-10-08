@@ -1725,6 +1725,7 @@ Sun-like light. Direction comes from the entity's rotation (local -Z).
 | `groundAmbient` | color | `[0.100000001,0.0900000036,0.0799999982]` | Hemisphere ambient: light bounced from the ground, seen by downward faces. |
 | `shadows` | bool | `true` | Cast shadows (first directional light only). |
 | `shadowStrength` | float | `0.75` | 0 = no darkening, 1 = black shadows. |
+| `shadowDistance` | float | `0` | 0 = the shadow map covers the whole scene. > 0: only what the camera sees up to this distance (world units), so large scenes get sharper shadows and the shadow pass skips far casters. |
 
 ### Tag
 

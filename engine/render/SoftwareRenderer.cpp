@@ -539,12 +539,14 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
             lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
             hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
         }
-        ExtendOffsetBounds(items, draws, view.shaderTime, lo, hi);
+        ExtendOffsetBounds(items, draws, lo, hi);
         if (anyCaster && lo.x <= hi.x) {
             ShadowMap& sm = lighting.shadow;
             sm.enabled = true;
             sm.strength = shadowStrength;
-            ShadowFit fit = FitShadow(lo, hi, lighting.dirs[0].dir, sm.size);
+            ShadowFit fit = gathered.shadowDistance > 0.0f
+                ? FitShadowToView(view.view, view.proj, gathered.shadowDistance, lo, hi, lighting.dirs[0].dir, sm.size)
+                : FitShadow(lo, hi, lighting.dirs[0].dir, sm.size);
             sm.viewProj = fit.viewProj;
             sm.texelWorld = fit.texelWorld;
             sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);

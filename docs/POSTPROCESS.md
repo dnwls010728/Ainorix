@@ -138,14 +138,18 @@ Depth comes from opaque and cut-out surfaces. Blended surfaces (soft-edged
 sprites, particles, anything with opacity below 1) write no depth and are blurred
 like whatever is behind them; pixels with nothing drawn count as the far plane.
 
-The software renderer uses its depth buffer directly. The GPU renderer adds one
-single-sample geometry pass that writes the depth buffer value into an R32F
-target, then runs the two blur passes in the scene format (shaders `scene_depth`
-and `dof` in `engine/render/shaders/Shaders.glsl`; helpers `DofViewDepth`,
-`DofCoc` and `DofWeight` in `engine/render/PostProcess.h`). It needs renderable
-R32F targets; without them an error tells the caller to use the software
-renderer. Because the depth pass is not multisampled, MSAA edge pixels of a
-focused object can carry the background's depth and smear slightly.
+The software renderer uses its depth buffer directly. The GPU renderer's scene
+pass writes each opaque or cut-out pixel's view depth into a second RGBA16F color
+target (multisampled like the scene and resolved; blended pipelines mask it off),
+then runs the two blur passes in the scene format (`mesh_fs` output `frag_depth`
+and shader `dof` in `engine/render/shaders/Shaders.glsl`; helpers `DofViewDepth`,
+`DofCoc` and `DofWeight` in `engine/render/PostProcess.h`). Resolved MSAA edge
+pixels average the depths of both sides. Where multisampled RGBA16F targets are
+not renderable it falls back to one extra single-sample geometry pass that writes
+the depth buffer value into an R32F target (shader `scene_depth`); MSAA edge
+pixels of a focused object can then carry the background's depth and smear
+slightly. Without renderable R32F targets either, an error tells the caller to
+use the software renderer.
 
 Verified by CameraDepthOfField. The prebuilt web and Android players include it;
 WebGL2/GLES3/EGL execution of the new shaders is unverified. `games/RPG` uses it with a long lens.
@@ -234,6 +238,18 @@ values. Node outputs saturate to -65504..65504; NaN becomes zero. Division by
 zero returns zero for that channel. This gives the GPU a finite bounded program
 and keeps the CPU reference independent of platform compiler behavior.
 
+The GPU renderer compiles each graph into its own program the first time a
+material uses it (`engine/render/GraphSource.cpp`): it takes the mesh and surface
+shaders sokol-shdc generated from `Shaders.glsl` (HLSL for D3D11, GLSL ES 3.00 for
+WebGL2/GLES3) and replaces the bodies of `SurfaceGraph` and `VertexOffset` with the
+graph as straight-line code, one variable per node, with the same saturation and
+division rules. Lighting code therefore stays in one place. The generated code
+reads its inputs only through the `Graph*`/`VGraph*` helper functions in
+`Shaders.glsl`; keep those names when editing it. A graph whose program does not
+compile logs a warning and is interpreted by the general shader instead (the
+loops in `SurfaceGraph`/`VertexOffset`), which gives the same picture more slowly.
+The first frame that uses a graph pays its shader compile.
+
 Two more optional outputs sit next to `color` and `emissive`:
 
 - `"offset": <node index>` displaces vertices. The node's xyz is added to each
@@ -251,10 +267,20 @@ Two more optional outputs sit next to `color` and `emissive`:
   top of it. The `normal` input node still gives the geometric normal.
 
 Displaced surfaces are displaced consistently in the shadow map, the
-depth-of-field depth pass and the editor selection outline. The displacement is
+depth of field and the editor selection outline. The displacement is
 render-only: physics, `physics.raycast` picking and `boundsMin`/`boundsMax` do not
 know about it. Shared vertices need a mesh with enough vertices, so use `plane64`
 (see [RENDERING.md](RENDERING.md)) rather than the 4-vertex `plane`.
+
+The shadow map is fitted to the scene bounds without running the vertex stage on
+the CPU (as Unreal's `Max World Position Offset Displacement` or Godot's
+`extra_cull_margin`): each displaced item's bounds are widened by a margin. The
+optional `"maxOffset": <number>` (world units, 0..65504, only with `offset`)
+declares the largest distance the graph moves a vertex; without it the margin is
+1 world unit. A graph that moves vertices further than its margin can have its
+shadow cut where it reaches past every other object of the scene, so declare
+`maxOffset` for large displacements. `shader.create`, `shader.check` and
+`asset.info` report a declared `maxOffset`.
 `shader.create`, `shader.check` and `asset.info` report `normal` and `offset`
 (-1 = absent). Prebuilt web and Android players older than this change ignore both
 outputs and reject graphs with more than 32 nodes until they are rebuilt.

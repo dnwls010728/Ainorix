@@ -37,7 +37,8 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
     if (!json.isObject()) return fail("shader must be an object");
     for (const auto& field : json.members())
         if (field.first != "format" && field.first != "nodes" && field.first != "uniforms" &&
-            field.first != "color" && field.first != "emissive" && field.first != "normal" && field.first != "offset") return fail("unknown shader field '" + field.first + "'");
+            field.first != "color" && field.first != "emissive" && field.first != "normal" && field.first != "offset" &&
+            field.first != "maxOffset") return fail("unknown shader field '" + field.first + "'");
     if (json.has("format") && json["format"].asString() != "ownengine.shader") return fail("format must be ownengine.shader");
     const Json& nodes = json["nodes"];
     if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > ShaderGraph::kMaxNodes) return fail("nodes must contain 1.." + std::to_string(ShaderGraph::kMaxNodes) + " instructions");
@@ -113,6 +114,12 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
             for (const OpInfo& op : kOps) if (op.op == instruction.op) count = op.args;
             for (int a = 0; a < count; ++a) needed[static_cast<size_t>(instruction.args[static_cast<size_t>(a)])] = true;
         }
+    }
+    if (json.has("maxOffset")) {
+        const Json& limit = json["maxOffset"];
+        if (result.offset < 0) return fail("maxOffset requires an offset output");
+        if (!limit.isNumber() || !(limit.asNumber() >= 0 && limit.asNumber() <= 65504)) return fail("maxOffset must be a number in 0..65504");
+        result.maxOffset = limit.asFloat();
     }
     out = std::move(result);
     if (error) error->clear();
