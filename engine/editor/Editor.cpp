@@ -295,6 +295,56 @@ bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, boo
     return pressed;
 }
 
+// A run of toolbar buttons on one rounded, slightly lifted background (drawn behind them once the
+// run's size is known).
+struct ToolbarGroup {
+    ImDrawList* draw;
+    ImVec2 start;
+    ToolbarGroup() : draw(ImGui::GetWindowDrawList()), start(ImGui::GetCursorScreenPos()) {
+        draw->ChannelsSplit(2);
+        draw->ChannelsSetCurrent(1);
+    }
+    ~ToolbarGroup() {
+        const ImVec2 end = ImGui::GetItemRectMax();
+        draw->ChannelsSetCurrent(0);
+        draw->AddRectFilled(ImVec2(start.x - 2, start.y - 1), ImVec2(end.x + 2, end.y + 1), IM_COL32(255, 255, 255, 16), 7.0f);
+        draw->ChannelsMerge();
+    }
+};
+
+// A thin vertical line between toolbar sections.
+void ToolbarDivider(float gap) {
+    ImGui::SameLine(0, gap);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetFrameHeight();
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y + h * 0.2f), ImVec2(p.x, p.y + h * 0.8f), ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+    ImGui::Dummy(ImVec2(1, h));
+    ImGui::SameLine(0, gap);
+}
+
+// A small toggle with an icon and a label (Local/World, Snap): lifted and bright when on.
+bool ToolbarToggle(const char* icon, const char* label, bool on, const char* tooltip) {
+    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(1, 1, 1, 0.10f) : ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Text, on ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    const bool pressed = ImGui::Button(Format("%s %s", icon, label).c_str());
+    ImGui::PopStyleColor(2);
+    HelpTooltip(tooltip);
+    return pressed;
+}
+
+// A rounded label with a colored dot: the editor's mode (Editing / Playing / Paused).
+void ModePill(const char* text, ImU32 dot) {
+    const ImVec2 textSize = ImGui::CalcTextSize(text);
+    const float h = ImGui::GetFrameHeight(), pad = ImGui::GetStyle().FramePadding.x, dotR = h * 0.13f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 size(pad * 2 + dotR * 2 + 6 + textSize.x, h);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p, p + size, IM_COL32(255, 255, 255, 12), h * 0.5f);
+    draw->AddCircleFilled(ImVec2(p.x + pad + dotR, p.y + h * 0.5f), dotR, dot);
+    draw->AddText(ImVec2(p.x + pad + dotR * 2 + 6, p.y + (h - textSize.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), text);
+    ImGui::Dummy(size);
+}
+
 }  // namespace
 
 std::vector<std::pair<std::string, std::string>> EditorAddPresets() {
@@ -1145,19 +1195,42 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
     ImGui::PopStyleVar();
     if (open && ImGui::BeginMenuBar()) {
         bool session = InPlaySession();
-        if (IconButton("##select", Icon::Select, gizmoOp == GizmoOp::None, Tr("Select (Q)"))) gizmoOp = GizmoOp::None;
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
+
+        // Left: project / scene, with a dot while the scene has unsaved changes.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(engine.ProjectName().c_str());
+        ImGui::SameLine(0, gap * 0.5f);
+        ImGui::TextDisabled("/");
+        ImGui::SameLine(0, gap * 0.5f);
+        const std::string scene = sceneName.empty() ? std::string(Tr("(unsaved scene)")) : sceneName;
+        ImGui::TextDisabled("%s", scene.c_str());
+        HelpTooltip(scenePath);
+        if (Dirty() && !session) {
+            ImGui::SameLine(0, gap * 0.6f);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetFrameHeight();
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 3, p.y + h * 0.5f), 3.0f, IM_COL32(240, 176, 72, 255));
+            ImGui::Dummy(ImVec2(6, h));
+            HelpTooltip(Tr("Unsaved changes"));
+        }
+
+        // Transform tools, gizmo space and snapping.
+        ToolbarDivider(gap * 1.5f);
+        {
+            ToolbarGroup group;
+            if (IconButton("##select", Icon::Select, gizmoOp == GizmoOp::None, Tr("Select (Q)"))) gizmoOp = GizmoOp::None;
+            ImGui::SameLine(0, 2);
+            if (IconButton("##move", Icon::Move, gizmoOp == GizmoOp::Translate, Tr("Move (W)"))) gizmoOp = GizmoOp::Translate;
+            ImGui::SameLine(0, 2);
+            if (IconButton("##rotate", Icon::Rotate, gizmoOp == GizmoOp::Rotate, Tr("Rotate (E)"))) gizmoOp = GizmoOp::Rotate;
+            ImGui::SameLine(0, 2);
+            if (IconButton("##scale", Icon::Scale, gizmoOp == GizmoOp::Scale, Tr("Scale (R)"))) gizmoOp = GizmoOp::Scale;
+        }
+        ImGui::SameLine(0, gap);
+        if (ToolbarToggle(gizmoLocal ? kIconBox : kIconGlobe, Tr(gizmoLocal ? "Local" : "World"), true, Tr("Gizmo orientation (X)"))) gizmoLocal = !gizmoLocal;
         ImGui::SameLine(0, 2);
-        if (IconButton("##move", Icon::Move, gizmoOp == GizmoOp::Translate, Tr("Move (W)"))) gizmoOp = GizmoOp::Translate;
-        ImGui::SameLine(0, 2);
-        if (IconButton("##rotate", Icon::Rotate, gizmoOp == GizmoOp::Rotate, Tr("Rotate (E)"))) gizmoOp = GizmoOp::Rotate;
-        ImGui::SameLine(0, 2);
-        if (IconButton("##scale", Icon::Scale, gizmoOp == GizmoOp::Scale, Tr("Scale (R)"))) gizmoOp = GizmoOp::Scale;
-        ImGui::SameLine();
-        if (ImGui::Button(Tr(gizmoLocal ? "Local" : "World"))) gizmoLocal = !gizmoLocal;
-        HelpTooltip(Tr("Gizmo orientation (X)"));
-        ImGui::SameLine();
-        ImGui::Checkbox(Tr("Snap"), &snap);
-        HelpTooltip(Tr("Snap gizmo moves (hold Ctrl to toggle while dragging)"));
+        if (ToolbarToggle(kIconMagnet, Tr("Snap"), snap, Tr("Snap gizmo moves (hold Ctrl to toggle while dragging)"))) snap = !snap;
         if (snap) {
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 3.5f);
@@ -1169,18 +1242,25 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
             HelpTooltip(Tr("Rotate snap"));
         }
 
-        // Play controls in the middle.
-        float group = ImGui::GetFrameHeight() * 1.25f * 3 + 4;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, (ImGui::GetWindowWidth() - group) * 0.5f));
-        if (session) {
-            if (IconButton("##stop", Icon::Stop, true, Tr("Stop (Ctrl+P) - restores the scene"))) TogglePlay();
-        } else if (IconButton("##play", Icon::Play, false, Tr("Play (Ctrl+P)"), engine.EditingPrefab().empty())) {
-            TogglePlay();
+        // Middle: play controls and the mode they leave the editor in.
+        const char* mode = Tr(!session ? "Editing" : Playing() ? "Playing" : "Paused");
+        const ImU32 modeDot = !session ? IM_COL32(150, 156, 168, 255) : Playing() ? IM_COL32(96, 208, 128, 255) : IM_COL32(240, 176, 72, 255);
+        const float buttons = ImGui::GetFrameHeight() * 1.25f * 3 + 4;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, (ImGui::GetWindowWidth() - buttons) * 0.5f));
+        {
+            ToolbarGroup group;
+            if (session) {
+                if (IconButton("##stop", Icon::Stop, true, Tr("Stop (Ctrl+P) - restores the scene"))) TogglePlay();
+            } else if (IconButton("##play", Icon::Play, false, Tr("Play (Ctrl+P)"), engine.EditingPrefab().empty())) {
+                TogglePlay();
+            }
+            ImGui::SameLine(0, 2);
+            if (IconButton("##pause", Icon::Pause, session && !Playing(), Tr(Playing() ? "Pause" : "Resume"), session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
+            ImGui::SameLine(0, 2);
+            if (IconButton("##step", Icon::Step, false, Tr("Step one frame (1/60 s)"), session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
         }
-        ImGui::SameLine(0, 2);
-        if (IconButton("##pause", Icon::Pause, session && !Playing(), Tr(Playing() ? "Pause" : "Resume"), session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
-        ImGui::SameLine(0, 2);
-        if (IconButton("##step", Icon::Step, false, Tr("Step one frame (1/60 s)"), session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
+        ImGui::SameLine(0, gap);
+        ModePill(mode, modeDot);
 
         if (engine.NetworkEnabled()) {
             Json network = engine.NetworkCall("state", Json::MakeObject());
@@ -1197,16 +1277,20 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
             ImGui::EndDisabled();
         }
 
-        // Scene name + save on the right.
-        std::string title = (sceneName.empty() ? std::string(Tr("(unsaved scene)")) : sceneName) + (Dirty() && !session ? " *" : "");
-        float w = ImGui::CalcTextSize(title.c_str()).x + ImGui::CalcTextSize(Tr("Save")).x + ImGui::GetStyle().FramePadding.x * 2 + 24;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetWindowWidth() - w));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(title.c_str());
-        HelpTooltip(scenePath);
-        ImGui::SameLine();
+        // Right: save, highlighted while there is something to save.
+        const std::string save = Format("%s  %s", kIconSave, Tr("Save"));
+        const float w = ImGui::CalcTextSize(save.c_str()).x + ImGui::GetStyle().FramePadding.x * 2 + gap;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, ImGui::GetWindowWidth() - w));
         ImGui::BeginDisabled(session);
-        if (ImGui::Button(Tr("Save"))) Save();
+        const bool pending = Dirty() && !session;
+        if (pending) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.58f, 1.0f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.42f, 0.64f, 1.0f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.32f, 0.52f, 0.92f, 1.0f));
+        }
+        if (ImGui::Button(save.c_str())) Save();
+        if (pending) ImGui::PopStyleColor(3);
+        HelpTooltip(Tr("Save (Ctrl+S)"));
         ImGui::EndDisabled();
         ImGui::EndMenuBar();
     }
