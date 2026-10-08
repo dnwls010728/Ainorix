@@ -12,7 +12,8 @@ without editor start-up. It includes the simulation and the editor UI; an empty
 project measures about 0.1 ms. Run it twice: results vary by about 0.3 ms.
 
 `render.screenshot {renderer:"gpu"}` reports `stats.ms`, the CPU time the renderer
-spent recording the frame (not the GPU time).
+spent recording the frame (not the GPU time), and `stats.drawCalls`, the mesh draws
+of the scene pass after culling (0 for the software renderer).
 
 Reference machine for the numbers below: Intel i7-13700K, NVIDIA RTX 4070 Ti,
 Windows 11, D3D11, 1600×900 editor window.
@@ -41,8 +42,14 @@ and screenshots, and the web/Android runtimes are rebuilt when the step is done.
       upload is a `glUniform4fv` call (unmeasured there). The palette is still
       declared, so the vertex stage still declares ~380 uniform vectors (WebGL2
       guarantees 256): a skinned/static shader split would be needed to lower that.
-- [ ] 3. Frustum culling of the scene pass (camera) and the shadow pass (light),
-      with displaced surfaces widened by their `maxOffset` margin.
+- [x] 3. Frustum culling of the scene pass and the depth-of-field fallback pass
+      (camera) and the shadow pass (light, sides only: casters in front of the
+      light's near plane still cast), with displaced surfaces widened by their
+      offset margin (`ItemWorldBounds`, `BoxInFrustum` in RenderScene.h).
+      `render.screenshot` reports `stats.drawCalls`. RPG: 794 items, 171 scene draws,
+      ~12.95 ms (its cost is pixel shading, see step 6); same frame bit for bit.
+      The shadow pass culls nothing yet because the shadow map still covers the
+      whole scene (step 5).
 - [ ] 4. Instanced sprites: consecutive draws of the same quad and material are
       drawn with one instanced call.
 - [ ] 5. Shadow map fitted to the camera view (shadow distance) instead of the

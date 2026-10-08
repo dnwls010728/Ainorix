@@ -948,6 +948,15 @@ struct GpuRenderer::Impl {
             stats.triangles += static_cast<int>(it.mesh->TriangleCount());
         }
         stats.drawnEntities = static_cast<int>(items.size());
+        // Frustum culling: each draw's world box (displaced surfaces widened by their offset margin)
+        // against the camera here and against the light in the shadow pass.
+        std::vector<Vec3> drawLo(draws.size()), drawHi(draws.size());
+        std::vector<char> inView(draws.size());
+        const Mat4 cameraViewProj = view.proj * view.view;
+        for (size_t k = 0; k < draws.size(); ++k) {
+            ItemWorldBounds(items[draws[k].item], OffsetMargin(draws[k].material), drawLo[k], drawHi[k]);
+            inView[k] = BoxInFrustum(cameraViewProj, drawLo[k], drawHi[k]);
+        }
 
         // ----- Shadow map: first directional light, fitted to casters + receivers
         bool shadows = false;
@@ -984,6 +993,8 @@ struct GpuRenderer::Impl {
             for (const DrawCall& dc : draws) {
                 const RenderItem& it = items[dc.item];
                 if (!it.castShadows || it.unlit || dc.blend) continue;  // transparent surfaces cast no shadow
+                const size_t k = static_cast<size_t>(&dc - draws.data());
+                if (!BoxInFrustum(fit.viewProj, drawLo[k], drawHi[k], false)) continue;
                 const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
                 if (cutout || Displaced(dc.material)) {
                     Use(surfaceShadow[dc.material.doubleSided ? 1 : 0]);
@@ -1105,6 +1116,7 @@ struct GpuRenderer::Impl {
             // pipelines drops uniforms, so the lights are re-applied each time.
             sg_pipeline current{};
             for (const DrawCall& dc : draws) {
+                if (!inView[static_cast<size_t>(&dc - draws.data())]) continue;
                 const RenderItem& it = items[dc.item];
                 const Material& m = dc.material;
                 const int blendMode = dc.blend ? (m.additive ? 2 : 1) : 0;
@@ -1159,6 +1171,7 @@ struct GpuRenderer::Impl {
                 sg_apply_bindings(&b);
                 const Submesh& sub = it.mesh->submeshes[dc.submesh];
                 sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+                ++stats.drawCalls;
             }
 
             if (haveLines) {
@@ -1190,7 +1203,7 @@ struct GpuRenderer::Impl {
                 pass.label = "oe-dof-depth";
                 sg_begin_pass(&pass);
                 for (const DrawCall& dc : draws) {
-                    if (dc.blend) continue;
+                    if (dc.blend || !inView[static_cast<size_t>(&dc - draws.data())]) continue;
                     const RenderItem& it = items[dc.item];
                     const Submesh& sub = it.mesh->submeshes[dc.submesh];
                     const int twoSided = dc.material.doubleSided ? 1 : 0;

@@ -300,6 +300,7 @@ int CmdRender(const Args& a) {
     res["result"]["stats"]["entities"] = stats.drawnEntities;
     res["result"]["stats"]["triangles"] = stats.triangles;
     res["result"]["stats"]["ms"] = stats.milliseconds;
+    res["result"]["stats"]["drawCalls"] = stats.drawCalls;
     PrintJson(res);
     return 0;
 }

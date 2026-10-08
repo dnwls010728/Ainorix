@@ -6076,6 +6076,53 @@ TEST(GltfMaterialsAreLoaded) {
     CHECK(mesh.tangents.size() == mesh.positions.size());
 }
 
+TEST(GpuFrustumCulling) {
+    // Boxes outside the camera (and displaced surfaces only inside it through their offset margin).
+    Vec3 lo, hi;
+    RenderItem item;
+    item.boundsMin = Vec3(-1, -1, -1);
+    item.boundsMax = Vec3(1, 1, 1);
+    item.world = Mat4::Translation(Vec3(0, 0, -10));
+    ItemWorldBounds(item, 0.5f, lo, hi);
+    CHECK(lo.x == -1.5f && hi.z == -8.5f);
+    const Mat4 viewProj = Mat4::Perspective(60.0f * 3.14159265f / 180.0f, 1.0f, 0.1f, 100.0f);
+    CHECK(BoxInFrustum(viewProj, lo, hi));
+    CHECK(!BoxInFrustum(viewProj, Vec3(-1, -1, 9), Vec3(1, 1, 11)));        // behind the camera
+    CHECK(!BoxInFrustum(viewProj, Vec3(50, -1, -11), Vec3(52, 1, -9)));     // far to the right
+    CHECK(!BoxInFrustum(viewProj, Vec3(-1, -1, -300), Vec3(1, 1, -200)));   // beyond the far plane
+    CHECK(BoxInFrustum(viewProj, Vec3(-1, -1, -300), Vec3(1, 1, -200), false));
+    CHECK(BoxInFrustum(viewProj, Vec3(-200, -1, -11), Vec3(200, 1, -9)));   // spans the view
+
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("gpu_culling"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,5]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{"rotation":[-60,20,0]},"DirectionalLight":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Seen","components":{"Transform":{},"MeshRenderer":{"mesh":"cube"}}})J");
+    Call(e, "entity.create", R"J({"name":"Behind","components":{"Transform":{"position":[0,0,20]},"MeshRenderer":{"mesh":"cube"}}})J");
+    Call(e, "entity.create", R"J({"name":"Aside","components":{"Transform":{"position":[60,0,0]},"MeshRenderer":{"mesh":"cube"}}})J");
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    const int w = 160, h = 120;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget sw, gpu;
+    sw.Resize(w, h);
+    gpu.Resize(w, h);
+    e.Renderer().Render(e.GetScene(), view, sw);
+    const RenderStats stats = e.Gpu()->Render(e.GetScene(), view, gpu);
+    CHECK(stats.drawnEntities == 3 && stats.drawCalls == 1);
+    // A culled box changes nothing in the picture.
+    double error = 0;
+    for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+        error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+    std::printf("  culled frame software/GPU mean difference %.4f\n", error / static_cast<double>(sw.color.size() * 3));
+    CHECK(error / static_cast<double>(sw.color.size() * 3) < 2.0);
+}
+
 TEST(UIGpuMatchesSoftware) {
     Engine e;
     std::string err;

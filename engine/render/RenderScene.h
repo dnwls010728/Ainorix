@@ -85,6 +85,12 @@ float OffsetMargin(const Material& material);
 // with the vertex count every frame); a graph moving vertices further than it declares can
 // leave its shadow cut at the edge of the map.
 void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi);
+// World-space box around an item's bounds, widened by `margin` on every side.
+void ItemWorldBounds(const RenderItem& item, float margin, Vec3& lo, Vec3& hi);
+// False when the world box lies entirely outside one plane of viewProj's clip volume (OpenGL clip
+// space). `depth` false ignores the near and far planes (shadow casters in front of the light's
+// near plane still cast).
+bool BoxInFrustum(const Mat4& viewProj, const Vec3& lo, const Vec3& hi, bool depth = true);
 
 struct RenderDirLight {
     Vec3 dir;  // direction the light travels

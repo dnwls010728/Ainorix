@@ -711,14 +711,38 @@ void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<
     for (const DrawCall& draw : draws) {
         const RenderItem& it = items[draw.item];
         if (it.unlit || !draw.material.shader || draw.material.shader->offset < 0) continue;
-        const float margin = OffsetMargin(draw.material);
-        const Vec3 &a = it.boundsMin, &b = it.boundsMax;
-        for (int c = 0; c < 8; ++c) {
-            const Vec3 p = it.world.TransformPoint(Vec3(c & 1 ? b.x : a.x, c & 2 ? b.y : a.y, c & 4 ? b.z : a.z));
-            lo = Vec3(std::min(lo.x, p.x - margin), std::min(lo.y, p.y - margin), std::min(lo.z, p.z - margin));
-            hi = Vec3(std::max(hi.x, p.x + margin), std::max(hi.y, p.y + margin), std::max(hi.z, p.z + margin));
-        }
+        Vec3 a, b;
+        ItemWorldBounds(it, OffsetMargin(draw.material), a, b);
+        lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+        hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
     }
+}
+
+void ItemWorldBounds(const RenderItem& item, float margin, Vec3& lo, Vec3& hi) {
+    lo = Vec3(1e30f, 1e30f, 1e30f);
+    hi = Vec3(-1e30f, -1e30f, -1e30f);
+    const Vec3 &a = item.boundsMin, &b = item.boundsMax;
+    for (int c = 0; c < 8; ++c) {
+        const Vec3 p = item.world.TransformPoint(Vec3(c & 1 ? b.x : a.x, c & 2 ? b.y : a.y, c & 4 ? b.z : a.z));
+        lo = Vec3(std::min(lo.x, p.x - margin), std::min(lo.y, p.y - margin), std::min(lo.z, p.z - margin));
+        hi = Vec3(std::max(hi.x, p.x + margin), std::max(hi.y, p.y + margin), std::max(hi.z, p.z + margin));
+    }
+}
+
+bool BoxInFrustum(const Mat4& viewProj, const Vec3& lo, const Vec3& hi, bool depth) {
+    int outside[6] = {0, 0, 0, 0, 0, 0};
+    for (int c = 0; c < 8; ++c) {
+        const Vec4 p = viewProj * Vec4(c & 1 ? hi.x : lo.x, c & 2 ? hi.y : lo.y, c & 4 ? hi.z : lo.z, 1.0f);
+        outside[0] += p.x < -p.w;
+        outside[1] += p.x > p.w;
+        outside[2] += p.y < -p.w;
+        outside[3] += p.y > p.w;
+        outside[4] += p.z < -p.w;
+        outside[5] += p.z > p.w;
+    }
+    for (int plane = 0; plane < (depth ? 6 : 4); ++plane)
+        if (outside[plane] == 8) return false;
+    return true;
 }
 
 RenderLights GatherRenderLights(const Scene& scene) {

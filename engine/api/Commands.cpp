@@ -1217,6 +1217,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      out["stats"]["entities"] = stats.drawnEntities;
                      out["stats"]["triangles"] = stats.triangles;
                      out["stats"]["ms"] = stats.milliseconds;
+                     out["stats"]["drawCalls"] = stats.drawCalls;
                      std::vector<uint8_t> png = EncodePng(img);
                      if (a.has("path")) {
                          std::string path = e.ResolvePath(a["path"].asString());
