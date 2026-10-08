@@ -206,6 +206,58 @@ struct NativeEditor::Impl {
     void ShaderArrange();
     bool SaveShader();
     bool SaveShaderMaterial();
+    // Effects document is owned by Engine commands, so remote agents share its history.
+    bool effectsGraph = false, effectsGraphFit = false, effectsLayoutDirty = false;
+    std::string effectsLayoutPath, effectsGraphSelected, effectsGraphLink, effectsGraphHint, effectsGraphErrorNode;
+    std::string effectsGraphField = "rate";
+    std::map<std::string, ImVec2> effectsGraphPositions;
+    std::map<std::string, int> effectsGraphModules;
+    std::vector<std::string> effectsGraphMaterials, effectsGraphAnchors;
+    ImVec2 effectsGraphPan{24, 24};
+    float effectsGraphZoom = 0.8f;
+    void EffectsGraph();
+    bool effectsValues = false, effectsValueFit = false;
+    Json effectsValueGraph;
+    Json effectsValueParamTypes;
+    std::string effectsValueKey, effectsValueSource, effectsValueError;
+    int effectsValueSelected = -1, effectsValueLink = -1;
+    ImVec2 effectsValuePan{24,24};
+    float effectsValueZoom = 0.8f;
+    void EffectsValues();
+    bool EffectsValueApply(const Json& candidate, const std::string& merge = {});
+    void EffectsBlockFields();
+    void EffectsParameterValue(const std::string& name, float fieldWidth = 0);
+    void EffectsGraphLayout(bool save);
+    bool showEffects = false, focusEffects = false, effectsEditorFocused = false;
+    Json effectsState, effectsDocument, effectsSchema, effectsPresets;
+    std::string effectsPath, effectsNewPath = "effects/new.vfx.json", effectsPreset = "fire", effectsError;
+    int effectsBlock = 0, effectsDragSerial = 0;
+    int effectsModule = 0;
+    std::map<std::string, int> effectsCurveKeys;
+    std::map<std::string,std::pair<std::string,std::string>> effectsExpressionText; // canonical/pending source per channel
+    float effectsCurveRange = 1;
+    bool effectsPrompt = false, effectsPendingNew = false, effectsPendingClose = false;
+    std::string effectsPendingPath;
+    PendingAction effectsPendingAction;
+    std::unique_ptr<Scene> effectsScene;
+    std::shared_ptr<const Texture> effectsImage;
+    EntityId effectsRoot = 0;
+    int effectsFrame = 0, effectsCycleFrames = 180;
+    bool effectsPlaying = true, effectsLoop = true, effectsMotion = false;
+    double effectsAccumulator = 0, effectsLastTime = 0;
+    float effectsZoom = 6;
+    Vec3 effectsTarget{0, 1, 0};
+    std::map<std::string, std::array<float, 4>> effectsRects;  // automation: actual interactive widget bounds
+    void OpenEffect(const std::string& path, bool create = false);
+    void EffectsPanel();
+    void EffectsModals();
+    void EffectsInspector();
+    void EffectsPreview(bool compact = false);
+    void ResetEffectsPreview();
+    bool EffectsSave();
+    void EffectsReplace(const Json& document, const std::string& merge = {});
+    std::string EffectsMerge(const std::string& control);
+    void EffectsRect(const std::string& name);
     std::string addComponentFilter;
     std::map<std::string, int> dragSerial;  // inspector drag -> undo merge group
     int gizmoSerial = 0;

@@ -15,7 +15,8 @@ const OpInfo kOps[] = {
     {"sin",ShaderOp::Sin,1}, {"cos",ShaderOp::Cos,1}, {"floor",ShaderOp::Floor,1},
     {"fract",ShaderOp::Fract,1}, {"abs",ShaderOp::Abs,1}, {"clamp",ShaderOp::Clamp,3},
     {"mix",ShaderOp::Mix,3}, {"step",ShaderOp::Step,2}, {"dot",ShaderOp::Dot,2},
-    {"normalize",ShaderOp::Normalize,1}, {"swizzle",ShaderOp::Swizzle,1}
+    {"normalize",ShaderOp::Normalize,1}, {"swizzle",ShaderOp::Swizzle,1},
+    {"particleAge",ShaderOp::ParticleAge,0}, {"particleRandom",ShaderOp::ParticleRandom,0}, {"particleSpeed",ShaderOp::ParticleSpeed,0}, {"particleCustom0",ShaderOp::ParticleCustom0,0}, {"particleCustom1",ShaderOp::ParticleCustom1,0}, {"particleCustom2",ShaderOp::ParticleCustom2,0}, {"particleCustom3",ShaderOp::ParticleCustom3,0}
 };
 bool Vector(const Json& j, Vec4& out) {
     auto finite = [](const Json& v) { return v.isNumber() && std::isfinite(v.asNumber()) && std::fabs(v.asNumber()) <= 65504; };
@@ -157,6 +158,13 @@ std::array<Vec4, ShaderGraph::kMaxNodes> RunGraph(const ShaderGraph& graph, cons
             case ShaderOp::UV: result = inputs.uv; break;
             case ShaderOp::Position: result = inputs.position; break;
             case ShaderOp::Normal: result = inputs.normal; break;
+            case ShaderOp::ParticleAge: result = Vec4(inputs.particle.x,inputs.particle.x,inputs.particle.x,inputs.particle.x); break;
+            case ShaderOp::ParticleRandom: result = Vec4(inputs.particle.y,inputs.particle.y,inputs.particle.y,inputs.particle.y); break;
+            case ShaderOp::ParticleSpeed: result = Vec4(inputs.particle.z,inputs.particle.z,inputs.particle.z,inputs.particle.z); break;
+            case ShaderOp::ParticleCustom0: result = Vec4(inputs.custom.x,inputs.custom.x,inputs.custom.x,inputs.custom.x); break;
+            case ShaderOp::ParticleCustom1: result = Vec4(inputs.custom.y,inputs.custom.y,inputs.custom.y,inputs.custom.y); break;
+            case ShaderOp::ParticleCustom2: result = Vec4(inputs.custom.z,inputs.custom.z,inputs.custom.z,inputs.custom.z); break;
+            case ShaderOp::ParticleCustom3: result = Vec4(inputs.custom.w,inputs.custom.w,inputs.custom.w,inputs.custom.w); break;
             case ShaderOp::Time: result = Vec4(inputs.time,inputs.time,inputs.time,inputs.time); break;
             case ShaderOp::BaseColor: result = inputs.baseColor; break;
             case ShaderOp::Texture: result = inputs.texture ? inputs.texture(a.x,a.y) : Vec4(1,1,1,1); break;

@@ -1,0 +1,95 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Generated effect",
+  "budget": {
+    "maxParticles": 48
+  },
+  "emitters": [
+    {
+      "name": "emitter",
+      "emitter": {
+        "texture": "assets/textures/glow.png",
+        "pixelArt": false,
+        "space": "world",
+        "rate": 30,
+        "lifetime": 0.8,
+        "lifetimeVariation": 0.4,
+        "speed": 0.5,
+        "speedVariation": 0.6,
+        "spread": 180,
+        "gravity": [
+          0,
+          -0.8,
+          0
+        ],
+        "blend": "add",
+        "maxParticles": 48,
+        "startSize": 0.1,
+        "endSize": 0,
+        "startColor": [
+          0.8,
+          1.0,
+          0.9
+        ],
+        "endColor": [
+          0.2,
+          0.6,
+          1.0
+        ],
+        "startOpacity": 1,
+        "endOpacity": 0
+      }
+    }
+  ],
+  "params": {
+    "startColor": {
+      "default": [
+        0.8,
+        1.0,
+        0.9
+      ],
+      "targets": [
+        {
+          "to": "emitter.startColor"
+        }
+      ]
+    },
+    "endColor": {
+      "default": [
+        0.2,
+        0.6,
+        1.0
+      ],
+      "targets": [
+        {
+          "to": "emitter.endColor"
+        }
+      ]
+    },
+    "speed": {
+      "default": 0.5,
+      "targets": [
+        {
+          "to": "emitter.speed"
+        }
+      ]
+    },
+    "startSize": {
+      "default": 0.1,
+      "targets": [
+        {
+          "to": "emitter.startSize"
+        }
+      ]
+    },
+    "playing": {
+      "default": true,
+      "targets": [
+        {
+          "to": "emitter.playing"
+        }
+      ]
+    }
+  }
+}

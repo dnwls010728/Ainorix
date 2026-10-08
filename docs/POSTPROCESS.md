@@ -301,7 +301,9 @@ Operations and argument counts:
 | Operation | Args | Behavior |
 |---|---:|---|
 | constant / uniform | 0 | value scalar/vector, or name declared uniform |
-| uv / position / normal / time / baseColor | 0 | Fragment input |
+| uv / position / normal / time / baseColor | 0 | Surface input |
+| particleAge / particleRandom / particleSpeed | 0 | Normalized age, stable birth random and world speed; zero outside effects |
+| particleCustom0 / particleCustom1 / particleCustom2 / particleCustom3 | 0 | Four per-particle signed custom channels; scalar replicated to RGBA, no graph uniform slots. Available in color/emissive/normal and vertex offset; defaults zero outside VFX. |
 | texture | 1 | Sample base texture using input vector xy |
 | add / subtract / multiply / divide | 2 | Component-wise arithmetic |
 | min / max | 2 | Component-wise minimum/maximum |

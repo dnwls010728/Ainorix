@@ -155,6 +155,7 @@ struct Vtx {
     Vec3 wpos;
     Vec3 nrm;
     Vec4 tan;
+    Vec4 color{1, 1, 1, 1}, particle{}, custom{};
     float u = 0, v = 0;
 };
 
@@ -164,6 +165,9 @@ Vtx LerpVtx(const Vtx& a, const Vtx& b, float t) {
     r.wpos = a.wpos + (b.wpos - a.wpos) * t;
     r.nrm = a.nrm + (b.nrm - a.nrm) * t;
     r.tan = a.tan + (b.tan - a.tan) * t;
+    r.color = a.color + (b.color - a.color) * t;
+    r.particle = a.particle + (b.particle - a.particle) * t;
+    r.custom = a.custom + (b.custom - a.custom) * t;
     r.u = a.u + (b.u - a.u) * t;
     r.v = a.v + (b.v - a.v) * t;
     return r;
@@ -178,6 +182,7 @@ struct RasterMaterial {
     EntityId id = kNullEntity;
     float uvOffset[2] = {0, 0};  // item uv rect (sprite frames) applied before the material tiling
     float uvScale[2] = {1, 1};
+    Vec4 particleInput{}, particleCustom{};
     float shaderTime = 0;
 };
 
@@ -303,8 +308,9 @@ private:
                 const Material& m = *mat.m;
                 float u = ((a.u * p0 + b.u * p1 + c.u * p2) * mat.uvScale[0] + mat.uvOffset[0]) * m.tiling[0] + m.offset[0];
                 float v = ((a.v * p0 + b.v * p1 + c.v * p2) * mat.uvScale[1] + mat.uvOffset[1]) * m.tiling[1] + m.offset[1];
-                Color base = m.baseColor;
-                float alpha = m.opacity;
+                const Vec4 color = a.color * p0 + b.color * p1 + c.color * p2;
+                Color base = m.baseColor * Color(color.x, color.y, color.z);
+                float alpha = m.opacity * color.w;
                 if (m.baseTexture) {
                     float ta = 1.0f;
                     base = base * m.baseTexture->Sample(u, v, m.pixelArt, &ta);
@@ -321,6 +327,8 @@ private:
                     input.normal = Vec4(normal, 0);
                     input.baseColor = Vec4(base.r, base.g, base.b, alpha);
                     input.time = mat.shaderTime;
+                    input.particle = mat.particleInput + a.particle * p0 + b.particle * p1 + c.particle * p2;
+                    input.custom = mat.particleCustom + a.custom * p0 + b.custom * p1 + c.custom * p2;
                     input.texture = [&m](float x, float y) {
                         float ta = 1;
                         const Color color = m.baseTexture ? m.baseTexture->Sample(x, y, m.pixelArt, &ta) : Color(1, 1, 1);
@@ -596,6 +604,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         RasterMaterial mat;
         mat.m = &dc.material;
         mat.shaderTime = view.shaderTime;
+        mat.particleInput = it.particleInput;
+        mat.particleCustom = it.particleCustom;
         mat.flat = it.flat;
         mat.blend = dc.blend;
         mat.pick = it.pickable;
@@ -612,6 +622,9 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                 v[j].wpos = tr.wpos[idx];
                 v[j].nrm = tr.nrm[idx];
                 v[j].tan = tr.tan[idx];
+                if (idx < m.colors.size()) v[j].color = m.colors[idx];
+                if (idx < m.particleData.size()) v[j].particle = m.particleData[idx];
+                if (idx < m.particleCustom.size()) v[j].custom = m.particleCustom[idx];
                 v[j].clip = clip[i][idx];
                 if (idx * 2 + 1 < m.uvs.size()) {
                     v[j].u = m.uvs[idx * 2];

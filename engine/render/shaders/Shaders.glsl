@@ -66,6 +66,8 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 model;
     mat4 normal_mat;
     mat4 joint_palette[64];
+    vec4 item_custom; // custom attributes on shared meshes
+    vec4 item_particle; // shared-mesh particle inputs; batched inputs are in particle0
 };
 
 // Vertex stage of a shader graph with an `offset` output (ShaderVertexOffset in ShaderGraph.cpp).
@@ -85,7 +87,13 @@ in vec2 texcoord;
 in vec4 tangent;
 in vec4 joint_indices;
 in vec4 joint_weights;
+in vec4 color0;
+in vec4 particle0;
+in vec4 custom0;
 
+out vec4 v_color;
+out vec4 v_particle;
+out vec4 v_custom;
 out vec3 v_wpos;
 out vec3 v_nrm;
 out vec4 v_tan;
@@ -108,7 +116,14 @@ vec3 VertexOffset(vec3 wpos, vec3 nrm, vec2 uv) {
         else if (code.x == 3) value = vec4(wpos,1.0);
         else if (code.x == 4) value = vec4(nrm,0.0);
         else if (code.x == 5) value = vec4(vgraph_control.w);
-        else if (code.x == 6) value = vgraph_base_color;
+        else if (code.x == 6) value = vgraph_base_color * color0;
+        else if (code.x == 25) value = vec4(particle0.x + item_particle.x);
+        else if (code.x == 26) value = vec4(particle0.y + item_particle.y);
+        else if (code.x == 27) value = vec4(particle0.z + item_particle.z);
+        else if (code.x == 28) value = vec4(custom0.x + item_custom.x);
+        else if (code.x == 29) value = vec4(custom0.y + item_custom.y);
+        else if (code.x == 30) value = vec4(custom0.z + item_custom.z);
+        else if (code.x == 31) value = vec4(custom0.w + item_custom.w);
         else if (code.x == 7) value = vec4(1.0);  // no texture in the vertex stage
         else value = GraphOp(code.x, a, b, c, vgraph_value[i]);
         registers[i] = GraphFinite(value);
@@ -132,6 +147,9 @@ void main() {
     v_wpos = wp.xyz;
     v_tan = vec4(normalize((model * skin * vec4(tangent.xyz, 0.0)).xyz), tangent.w);
     v_uv = texcoord;
+    v_color = color0;
+    v_particle = particle0 + item_particle;
+    v_custom = custom0 + item_custom;
     gl_Position = view_proj * wp;
 }
 @end
@@ -176,6 +194,13 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
         else if (code.x == 4) value = vec4(normal,0.0);
         else if (code.x == 5) value = vec4(graph_control.w);
         else if (code.x == 6) value = vec4(base,alpha);
+        else if (code.x == 25) value = vec4(v_particle.x);
+        else if (code.x == 26) value = vec4(v_particle.y);
+        else if (code.x == 27) value = vec4(v_particle.z);
+        else if (code.x == 31) value = vec4(v_custom.w);
+        else if (code.x == 30) value = vec4(v_custom.z);
+        else if (code.x == 29) value = vec4(v_custom.y);
+        else if (code.x == 28) value = vec4(v_custom.x);
         // Explicit level zero matches the software texture sampler and avoids
         // undefined implicit derivatives in data-dependent instruction flow.
         else if (code.x == 7) value = textureLod(sampler2D(base_tex,base_smp),a.xy,0.0);
@@ -215,6 +240,9 @@ layout(binding=3) uniform texture2D mr_tex;
 layout(binding=4) uniform texture2D emissive_tex;
 layout(binding=5) uniform texture2D occlusion_tex;
 
+in vec4 v_color;
+in vec4 v_particle;
+in vec4 v_custom;
 in vec3 v_wpos;
 in vec3 v_nrm;
 in vec4 v_tan;
@@ -271,8 +299,8 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
 
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
-    vec3 base = base_color.rgb;
-    float alpha = base_color.a;
+    vec3 base = base_color.rgb * v_color.rgb;
+    float alpha = base_color.a * v_color.a;
     if (flags.y > 0.5) {
         vec4 texel = texture(sampler2D(base_tex, base_smp), uv);
         base *= texel.rgb;
@@ -433,6 +461,9 @@ void main() {
 @include_block surface_material
 layout(binding=0) uniform texture2D base_tex;
 layout(binding=0) uniform sampler base_smp;
+in vec4 v_color;
+in vec4 v_particle;
+in vec4 v_custom;
 in vec3 v_wpos;
 in vec3 v_nrm;
 in vec4 v_tan;
@@ -442,8 +473,8 @@ out vec4 frag_color;
 @include_block surface_graph
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
-    vec3 base = base_color.rgb;
-    float alpha = base_color.a;
+    vec3 base = base_color.rgb * v_color.rgb;
+    float alpha = base_color.a * v_color.a;
     if (flags.y > 0.5) {
         vec4 texel = textureLod(sampler2D(base_tex,base_smp),uv,0.0);
         base *= texel.rgb;

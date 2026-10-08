@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include "editor/EditorShaderGraph.h"
+#include "editor/EditorNodeCanvas.h"
 #include "editor/EditorText.h"
 #include "app/Engine.h"
 #include "assets/Assets.h"
@@ -187,41 +188,25 @@ bool NativeEditor::Impl::SaveShaderMaterial() {
 }
 
 void NativeEditor::Impl::ShaderCanvas() {
-    ImVec2 size = ImGui::GetContentRegionAvail();
-    ImGui::BeginChild("##shadercanvas", ImVec2(std::max(160.0f, size.x), std::max(140.0f, size.y)), ImGuiChildFlags_Borders,
-                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImVec2 origin = ImGui::GetCursorScreenPos(); size = ImGui::GetContentRegionAvail();
+    EditorNodeCanvas canvas("##shadercanvas", shaderPan, shaderZoom);
     if (shaderFit) {
         ImVec2 low = shaderOutputPos, high = shaderOutputPos + ImVec2(190, 160);
         for (ImVec2 p : shaderPositions) {
             low.x = std::min(low.x, p.x); low.y = std::min(low.y, p.y);
             high.x = std::max(high.x, p.x + 190); high.y = std::max(high.y, p.y + 140);
         }
-        shaderZoom = Clamp(std::min((size.x - 40) / std::max(1.0f, high.x - low.x),
-                                    (size.y - 40) / std::max(1.0f, high.y - low.y)), 0.08f, 1.0f);
-        shaderPan = ImVec2(20, 20) - low * shaderZoom; shaderFit = false;
+        canvas.Fit(low, high); shaderFit = false;
     }
-    ImDrawList* draw = ImGui::GetWindowDrawList(); ImGuiIO& io = ImGui::GetIO();
-    bool hovered = ImGui::IsWindowHovered();
-    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) shaderPan += io.MouseDelta;
-    if (hovered && io.MouseWheel != 0) {
-        float before = shaderZoom; shaderZoom = Clamp(shaderZoom * std::pow(1.15f, io.MouseWheel), 0.08f, 1.5f);
-        shaderPan = io.MousePos - origin - (io.MousePos - origin - shaderPan) * (shaderZoom / before);
-    }
-    float grid = 32 * shaderZoom;
-    for (float x = std::fmod(shaderPan.x, grid); x < size.x; x += grid)
-        draw->AddLine(origin + ImVec2(x, 0), origin + ImVec2(x, size.y), IM_COL32(48, 53, 63, 255));
-    for (float y = std::fmod(shaderPan.y, grid); y < size.y; y += grid)
-        draw->AddLine(origin + ImVec2(0, y), origin + ImVec2(size.x, y), IM_COL32(48, 53, 63, 255));
-    auto point = [&](ImVec2 p) { return origin + shaderPan + p * shaderZoom; };
+    canvas.Navigate();
+    ImDrawList* draw = canvas.draw; ImGuiIO& io = ImGui::GetIO();
+    auto point = [&](ImVec2 p) { return canvas.Point(p); };
     auto output = [&](int node) { return point(shaderPositions[static_cast<size_t>(node)] + ImVec2(190, 24)); };
     auto input = [&](int node, int pin) {
         ImVec2 pos = node < 0 ? shaderOutputPos : shaderPositions[static_cast<size_t>(node)];
         return point(pos + ImVec2(0, 54 + static_cast<float>(pin) * 23));
     };
     auto wire = [&](ImVec2 from, ImVec2 to) {
-        float bend = std::max(45.0f, std::fabs(to.x - from.x) * 0.5f);
-        draw->AddBezierCubic(from, from + ImVec2(bend, 0), to - ImVec2(bend, 0), to, kWire, 2);
+        canvas.Wire(from, to, kWire);
     };
     const int count = static_cast<int>(shaderDocument["nodes"].size());
     const Json& document = shaderDocument;
@@ -241,25 +226,18 @@ void NativeEditor::Impl::ShaderCanvas() {
         bool surface = n == count;
         ImVec2& position = surface ? shaderOutputPos : shaderPositions[static_cast<size_t>(n)];
         int pins = surface ? 4 : static_cast<int>(document["nodes"][n]["args"].size());
-        ImVec2 p = point(position), end = p + ImVec2(190, std::max(94.0f, 68 + static_cast<float>(pins) * 23)) * shaderZoom;
-        draw->AddRectFilled(p, end, IM_COL32(30, 34, 42, 255), 5);
-        draw->AddRectFilled(p, p + ImVec2(190, 36) * shaderZoom, surface ? IM_COL32(48, 91, 84, 255) : IM_COL32(52, 69, 93, 255), 5);
-        draw->AddRect(p, end, !surface && shaderSelected == n ? kWire : IM_COL32(98, 109, 127, 255), 5, 1.5f);
+        ImVec2 p = point(position);
         std::string title = surface ? Tr("Surface Output") : std::to_string(n) + "  " + shaderDocument["nodes"][n]["op"].asString();
-        draw->AddText(p + ImVec2(10, 9) * shaderZoom, IM_COL32(240, 243, 248, 255), title.c_str());
-        ImGui::PushID(n); ImGui::SetCursorScreenPos(p + ImVec2(8, 2) * shaderZoom);
-        // The whole card is draggable; leave the pin hit areas outside its bounds.
-        ImGui::InvisibleButton("##node", ImVec2(174 * shaderZoom, end.y - p.y - 4 * shaderZoom));
+        ImGui::PushID(n);
+        canvas.Card(position, ImVec2(190, std::max(94.0f, 68 + static_cast<float>(pins) * 23)), title.c_str(),
+            surface ? IM_COL32(48, 91, 84, 255) : IM_COL32(52, 69, 93, 255), !surface && shaderSelected == n);
         if (ImGui::IsItemClicked() && !surface) shaderSelected = n;
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) position += io.MouseDelta / shaderZoom;
         for (int pin = 0; pin < pins; ++pin) {
             ImVec2 pinPos = input(surface ? -1 : n, pin);
             const char* label = surface ? kOutputs[pin] : pin == 0 ? "A" : pin == 1 ? "B" : "C";
             draw->AddText(pinPos + ImVec2(12, -7) * shaderZoom, IM_COL32(205, 213, 224, 255), label);
             int source = surface ? document[kOutputs[pin]].asInt(-1) : document["nodes"][n]["args"][pin].asInt(-1);
-            draw->AddCircleFilled(pinPos, 5 * shaderZoom, source >= 0 ? kWire : IM_COL32(110, 120, 139, 255));
-            ImGui::SetCursorScreenPos(pinPos - ImVec2(8, 8) * shaderZoom); ImGui::PushID(pin);
-            ImGui::InvisibleButton("##input", ImVec2(16, 16) * shaderZoom);
+            ImGui::PushID(pin); canvas.Pin("##input", pinPos, source >= 0);
             // The source pin still owns the active ID if it is submitted after this target.
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && shaderLink >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 if (surface) { shaderDocument[kOutputs[pin]] = shaderLink; ShaderRecord(); }
@@ -275,9 +253,7 @@ void NativeEditor::Impl::ShaderCanvas() {
             ImGui::PopID();
         }
         if (!surface) {
-            ImVec2 pinPos = output(n); draw->AddCircleFilled(pinPos, 5 * shaderZoom, kWire);
-            ImGui::SetCursorScreenPos(pinPos - ImVec2(8, 8) * shaderZoom);
-            ImGui::InvisibleButton("##output", ImVec2(16, 16) * shaderZoom);
+            ImVec2 pinPos = output(n); canvas.Pin("##output", pinPos, true);
             if (ImGui::IsItemActivated()) shaderLink = n;
             const Json& node = document["nodes"][n];
             if (node.has("value") || node.has("name")) {
@@ -290,7 +266,6 @@ void NativeEditor::Impl::ShaderCanvas() {
     }
     ImGui::PopFont();
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Escape)) shaderLink = -1;
-    ImGui::EndChild();
 }
 
 void NativeEditor::Impl::ShaderProperties() {

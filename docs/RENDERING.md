@@ -9,6 +9,29 @@ Two renderers draw the same scene description (`engine/render/RenderScene.h`: me
 
 GPU backends: **Direct3D 11** on Windows (hardware, falling back to WARP — the software D3D device built into Windows), **WebGL2** in the browser, **OpenGL ES 3 over EGL** on Linux (headless; Mesa's llvmpipe works without a GPU). Front-ends take `--renderer auto|gpu|software` (`auto` = GPU when available, otherwise software); `engine.info` reports both `renderer` (software) and `displayRenderer`. The test `GpuRendererMatchesSoftware` compares the two (mean channel difference below 1/255 on the Showcase).
 
+GPU texture/mesh caches follow their CPU owners. Scene rendering evicts expired owners, and the native
+editor also calls `GpuRenderer::CollectGarbage` between frames so an Effects/Shader workspace continues
+releasing old preview images while Scene/Game are hidden. Resource-pool failures include their names
+in Release logs: `sg item 159` is `VIEW_POOL_EXHAUSTED`, the sokol view pool limit, not a particle-field
+validation error. Pool sizes are fixed; preview lifetimes must stay bounded rather than increasing them.
+
+D3D11 shader compiler diagnostics are logged with their actual text, including in Release builds.
+Sokol emits `D3D11_SHADER_COMPILATION_OUTPUT` (item 40) first as a marker and then sends the diagnostic
+at info level; the engine preserves the text as a warning instead of dropping it. The current HLSL
+compiler reports X3570 for the shadow comparison sampling inside the directional-light loop with a
+runtime exit: it attempts to unroll the loop to accommodate implicit gradients. Compilation and the
+VFXLab editor screenshot succeed on the tested D3D11 device. This change exposes diagnostics only;
+shader source and generated programs are unchanged.
+
+### Effect vertex streams
+
+Effect meshes can carry optional RGBA vertex colors and normalized particle age/random/world speed.
+Both renderers interpolate them with perspective-correct weights; absent colors are white and absent
+particle inputs are zero. Unbatched effects supply the same inputs through a dedicated per-draw value
+and keep shared GPU meshes rather than creating a GPU buffer per particle. `RenderItem.materialOverride` binds emitter/trail materials like mesh
+materials. Legacy billboards keep the shared-quad path; batching is opt-in because transparent emitter
+groups cannot interleave their particles with other draws. See [VFX.md](VFX.md) for limits and shader inputs.
+
 ## GPU pipeline and shaders
 
 ParticleEmitter uses shared camera-facing quads in both renderers, with lifetime

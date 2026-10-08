@@ -54,33 +54,8 @@
       "name": "Trail",
       "parent": 1,
       "components": {
-        "ParticleEmitter": {
-          "rate": 24,
-          "lifetime": 0.3,
-          "speed": 0,
-          "gravity": [
-            0,
-            0,
-            0
-          ],
-          "startSize": 0.15000000000000002,
-          "endSize": 0.05,
-          "startColor": [
-            1.0,
-            0.6039,
-            0.2353
-          ],
-          "endColor": [
-            1.0,
-            0.6039,
-            0.2353
-          ],
-          "space": "world",
-          "dimensions": 2,
-          "texture": "assets/fx/disc.png",
-          "blend": "add",
-          "layer": 12,
-          "maxParticles": 12
+        "VFXSystem": {
+          "asset": "effects/generated-b6b9b3ab9c5b.vfx.json"
         },
         "Transform": {}
       }

@@ -58,6 +58,7 @@ const char* KindLabel(const std::string& kind) {
     if (kind == "texture") return Tr("Textures");
     if (kind == "material") return Tr("Materials");
     if (kind == "shader") return Tr("Shaders");
+    if (kind == "vfx") return Tr("Effects");
     if (kind == "audio") return Tr("Sounds");
     if (kind == "font") return Tr("Fonts");
     return Tr("Other");
@@ -65,6 +66,7 @@ const char* KindLabel(const std::string& kind) {
 
 ImVec4 KindColor(const std::string& kind) {
     if (kind == "scene") return ImVec4(0.55f, 0.75f, 1.0f, 1);
+    if (kind == "vfx") return ImVec4(1.0f, 0.65f, 0.35f, 1);
     if (kind == "prefab") return ImVec4(0.5f, 0.9f, 0.85f, 1);
     if (kind == "script") return ImVec4(0.95f, 0.85f, 0.45f, 1);
     if (kind == "model") return ImVec4(0.8f, 0.65f, 1.0f, 1);
@@ -618,6 +620,10 @@ void NativeEditor::Impl::InspectorPanel() {
                 std::string path = kv.second["path"].asString("");
                 if (!path.empty() && ImGui::Button(Tr("Edit Script"))) OpenScript(path);
             }
+            if (type == "VFXSystem") {
+                const std::string path = kv.second["asset"].asString();
+                if (!path.empty() && ImGui::Button(Tr("Edit Effect"))) OpenEffect(path);
+            }
             if (type == "MeshRenderer") {
                 std::string path = kv.second["material"].asString("");
                 if (!path.empty() && ImGui::Button(Tr("Edit Material"))) OpenShader(path);
@@ -742,10 +748,11 @@ void NativeEditor::Impl::AssetsPanel() {
                     if (kind == "scene") RequestAction({PendingAction::Kind::LoadScene, path});
                     else if (kind == "script") OpenScript(path);
                     else if (kind == "shader" || kind == "material") OpenShader(path);
+                    else if (kind == "vfx") OpenEffect(path);
                     else if (kind == "prefab") Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 }
             }
-            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material") ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
+            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material" || kind == "vfx") ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
             HelpTooltip(hint ? path + "\n" + hint : path);
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload(kAssetPayload, path.data(), path.size());
@@ -756,6 +763,7 @@ void NativeEditor::Impl::AssetsPanel() {
                 selectedAsset = path;
                 if (kind == "scene" && ImGui::MenuItem(Tr("Open"))) RequestAction({PendingAction::Kind::LoadScene, path});
                 if (kind == "script" && ImGui::MenuItem(Tr("Edit"))) OpenScript(path);
+                if (kind == "vfx" && ImGui::MenuItem(Tr("Edit Effect"))) OpenEffect(path);
                 if ((kind == "shader" || kind == "material") && ImGui::MenuItem(Tr("Edit Graph"))) OpenShader(path);
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Instantiate"))) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Edit Prefab"), nullptr, false, !InPlaySession()))

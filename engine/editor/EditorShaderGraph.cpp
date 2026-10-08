@@ -37,12 +37,12 @@ bool Dependencies(const Json& document, bool disconnected, std::vector<int>& ord
 const std::vector<std::string>& EditorShaderOperations() {
     static const std::vector<std::string> operations = {"constant", "uniform", "uv", "position", "normal", "time", "baseColor",
         "texture", "add", "subtract", "multiply", "divide", "min", "max", "sin", "cos", "floor", "fract", "abs",
-        "clamp", "mix", "step", "dot", "normalize", "swizzle"};
+        "clamp", "mix", "step", "dot", "normalize", "swizzle", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1", "particleCustom2", "particleCustom3"};
     return operations;
 }
 
 int EditorShaderArity(const std::string& op) {
-    for (const char* name : {"constant", "uniform", "uv", "position", "normal", "time", "baseColor"}) if (op == name) return 0;
+    for (const char* name : {"constant", "uniform", "uv", "position", "normal", "time", "baseColor", "particleAge", "particleRandom", "particleSpeed", "particleCustom0", "particleCustom1", "particleCustom2", "particleCustom3"}) if (op == name) return 0;
     for (const char* name : {"texture", "sin", "cos", "floor", "fract", "abs", "normalize", "swizzle"}) if (op == name) return 1;
     for (const char* name : {"add", "subtract", "multiply", "divide", "min", "max", "step", "dot"}) if (op == name) return 2;
     if (op == "clamp" || op == "mix") return 3;

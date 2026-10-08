@@ -1165,7 +1165,10 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
             journal_->commands[frame_].emplace_back(name, args);
         }
         if ((journal_ || (sync_ && sync_->Active()) || (authority_ && authority_->Active())) && !inWorld_ && !replaying_ &&
-            (name == "audio.play" || name == "audio.stop" || name == "game.load_scene" || name == "save.set" || name == "save.clear" || name == "save.flush" || name == "script.write" || name == "script.reload"))
+            (name == "audio.play" || name == "audio.stop" || name == "game.load_scene" || name == "save.set" || name == "save.clear" || name == "save.flush" || name == "script.write" || name == "script.reload" ||
+             name == "vfx.create" || name == "vfx.set" || name == "vfx.from_entity" || name == "vfx.play" || name == "vfx.stop" ||
+             name == "vfx.burst" || name == "vfx.clear" || name == "vfx.set_param" || name == "vfx.edit" || name == "vfx.undo" ||
+             name == "vfx.redo" || name == "vfx.save" || name == "vfx.close" || name == "vfx.edit_replace"))
             throw ApiError("state_recording", "external side effects are disabled while recording", "Use deterministic Lua gameplay or stop recording before edits.");
         const bool record = cmd->mutates && !playSnapshot_;
         Json before = record ? scene_.ToJson() : Json();

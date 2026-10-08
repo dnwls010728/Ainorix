@@ -1,6 +1,6 @@
 """Writes the VFXLab scene (python tools/make_scene.py, from the sample folder).
 
-Four effects built only from ParticleEmitter and Trail settings, left to right:
+Four effects built from VFXSystem assets and Trail settings, left to right:
   Campfire   flames (color/size curves, turbulence), smoke (random sheet frame, spin, opacity curve),
              embers (velocity-aligned streaks)
   Portal     a ring of motes born on a circle's rim, pulled inward as they rise
@@ -11,6 +11,30 @@ import json
 import os
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+import hashlib
+
+
+def vfx(settings):
+    """Write one reusable emitter asset; preserve the owner id and index-zero RNG seed."""
+    path = "effects/generated-" + hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:12] + ".vfx.json"
+    defaults = {'startColor': [1, 1, 1], 'endColor': [1, 1, 1], 'speed': 1, 'startSize': 0.100000001, 'playing': True}
+    params = {}
+    for field, default in defaults.items():
+        value = settings.get(field, default)
+        if field in ("startColor", "endColor") and isinstance(value, str):
+            value = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        params[field] = {"default": value, "targets": [{"to": "emitter." + field}]}
+    asset = {"format": "oe.vfx", "version": 1, "name": "Generated effect",
+             "budget": {"maxParticles": settings.get("maxParticles", 256)},
+             "emitters": [{"name": "emitter", "emitter": settings}], "params": params}
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(asset, file, indent=2)
+        file.write("\n")
+    return {"asset": path}
+
 GLOW = "assets/textures/glow.png"
 SMOKE = "assets/textures/smoke.png"
 
@@ -28,7 +52,7 @@ def add(name, components, parent=None):
 def emitter(name, position, parent=None, **settings):
     values = {"texture": GLOW, "pixelArt": False, "space": "world"}
     values.update(settings)
-    return add(name, {"Transform": {"position": position}, "ParticleEmitter": values}, parent)
+    return add(name, {"Transform": {"position": position}, "VFXSystem": vfx(values)}, parent)
 
 
 # ----- Stage ----------------------------------------------------------------------------------
@@ -107,3 +131,30 @@ with open(full, "w", encoding="utf-8", newline="\n") as f:
     json.dump({"format": "ownengine.scene", "version": 1, "name": "VFXLab", "entities": entities}, f, indent=2)
     f.write("\n")
 print("wrote %d entities" % len(entities))
+
+# Offer a grouped campfire asset alongside the individual emitter assets.
+import copy
+asset_entities = copy.deepcopy(entities)
+fire_entity = next(entity for entity in asset_entities if entity["name"] == "Campfire")
+blocks = []
+for entity in asset_entities:
+    if entity.get("parent") == fire_entity["id"] and "VFXSystem" in entity["components"]:
+        blocks.append({"name": entity["name"].lower(), "transform": entity["components"]["Transform"],
+                       "emitter": json.load(open(os.path.join(ROOT, entity["components"]["VFXSystem"]["asset"]), encoding="utf-8"))["emitters"][0]["emitter"]})
+removed = {entity["id"] for entity in asset_entities
+           if entity.get("parent") == fire_entity["id"] and "VFXSystem" in entity["components"]}
+asset_entities = [entity for entity in asset_entities if entity["id"] not in removed]
+fire_entity["components"]["VFXSystem"] = {"asset": "effects/campfire.vfx.json", "params": {"intensity": 1}}
+asset = {"format": "oe.vfx", "version": 1, "name": "Campfire", "description": "Warm flames, rising smoke and velocity-aligned embers.",
+         "emitters": blocks, "params": {
+             "intensity": {"default": 1, "min": 0, "max": 3, "doc": "Scale all campfire emission rates.",
+                           "targets": [{"to": block["name"] + ".rate", "scale": block["emitter"]["rate"]} for block in blocks]}},
+         "budget": {"maxParticles": 208}}
+for path, document in [("effects/campfire.vfx.json", asset),
+                       ("scenes/assets.scene.json", {"format": "ownengine.scene", "version": 1, "name": "VFXLab Assets", "entities": asset_entities})]:
+    full = os.path.join(ROOT, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="\n") as file:
+        json.dump(document, file, indent=2)
+        file.write("\n")
+print("wrote campfire asset and alternate asset scene")

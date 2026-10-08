@@ -1,0 +1,105 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Sword Slash",
+  "description": "Two-anchor blade ribbon, dissolving mesh crescent and sparks.",
+  "emitters": [
+    {
+      "name": "crescent",
+      "emitter": {
+        "mesh": "crescent",
+        "batching": true,
+        "burst": 1,
+        "rate": 0,
+        "loop": false,
+        "lifetime": 0.35,
+        "speed": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 3,
+        "endSize": 4,
+        "startColor": [
+          0.3,
+          0.8,
+          1
+        ],
+        "endColor": [
+          0.05,
+          0.2,
+          1
+        ],
+        "blend": "add",
+        "maxParticles": 4,
+        "material": "materials/slash.mat.json"
+      }
+    },
+    {
+      "name": "sparks",
+      "emitter": {
+        "burst": 18,
+        "rate": 0,
+        "loop": false,
+        "lifetime": 0.45,
+        "speed": 2,
+        "speedVariation": 0.5,
+        "spread": 180,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "align": "velocity",
+        "stretch": 0.08,
+        "blend": "add",
+        "batching": true,
+        "startSize": 0.08,
+        "endSize": 0.01,
+        "startColor": [
+          0.4,
+          0.9,
+          1
+        ],
+        "maxParticles": 32
+      }
+    }
+  ],
+  "trails": [
+    {
+      "name": "blade",
+      "trail": {
+        "mode": "ribbon",
+        "baseOffset": [
+          0,
+          0,
+          0
+        ],
+        "tipOffset": [
+          0,
+          1.5,
+          0
+        ],
+        "duration": 0.2,
+        "lifetime": 0.25,
+        "blend": "add",
+        "color": [
+          0.4,
+          0.9,
+          1
+        ],
+        "endColor": [
+          0.05,
+          0.2,
+          1
+        ],
+        "minDistance": 0.01,
+        "material": "materials/slash.mat.json"
+      }
+    }
+  ],
+  "budget": {
+    "maxParticles": 64
+  }
+}

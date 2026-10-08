@@ -252,3 +252,78 @@ build_web.bat, EMSDK=E:/emsdk, Release. Two initial link attempts failed in
 wasm-metadce (exit 3221225477); retry with BINARYEN_CORES=1 and build parallelism
 2 succeeded. Wasm grew by 1,457 bytes; JS is byte-identical. Evidence:
 ignored build/orthographic-web-build.log.
+
+## VFX phase 4 rebuild (2026-10-08)
+
+The player includes VFXSystem assets, materials, normalized age/random/speed graph inputs, optional
+emitter batching, bounded death chains, two-anchor ribbons and static mesh particles. Unbatched
+particles keep shared GPU meshes and use a dedicated draw input; batching uses vertex RGBA/data.
+Legacy particle hashes remain unchanged. See docs/VFX_PHASE4.md for validation and known limits.
+
+Built with Emscripten 6.0.10, Release, BINARYEN_CORES=1 and parallelism 2. Node/WASM portable
+core: 230 tests, zero failures. Actual browser WebGL2 execution of these effects remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,677,178 | ebac03f51f5d5b6a3f7af13a1ac2e38b42c049c1b728c8ab640f6846659b67d8 |
+
+Commands.cpp SHA256: `9e32bd478583e35831c86902197af9d2458133654dae8ba999c392db624fed74`.
+
+## VFX motion channels rebuild (phase 5a, 2026-10-08)
+
+Players include captured birth state, motion/XYZ scale curves, pivots and four custom material
+attributes in both rendering paths and batching. See docs/VFX_PHASE5A.md for the contract and validation.
+Built with Emscripten 6.0.10, Release, parallelism 2 and BINARYEN_CORES=1.
+All 234 Node/WASM tests pass, including the same curve-proof hash as Windows. The existing
+unused ProcessFixtureDir warning remains. Device/browser GPU execution remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,734,722 | e94db0c29e7239a1c40ed7c1516efd3cbd6a4f56328afc97cc3b082db220ba0f |
+
+## VFX expressions rebuild (phase 5b, 2026-10-08)
+
+Players include typed Birth/Update expressions, own bounded math, cached programs, parameter inputs
+and conservative instruction budgets. Contract: docs/VFX_PHASE5B.md. Windows/Node assert the same
+math and software-preview hashes; all 239 Node tests pass. Device/browser GPU execution remains
+unverified. Toolchains: Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,803,292 | d2a340496cae0d3cfc6304a74f59f5919e36e50dace0b082f6e897988fbb0a82 |
+
+Commands.cpp SHA256: `e9777ebc426db0bf619d384f6c28522ba625809c22eab950e52bc9aa6e62fa29`.
+
+## VFX value-node authoring rebuild (phase 5c, 2026-10-08)
+
+The compiler retains exact decimal literal spelling for transient graph conversion. Common commands
+now expose graph/source conversion with the existing runtime evaluator. Simulation and legacy hashes
+remain unchanged. All 244 Node/WASM tests pass. Desktop value-node editing is not part of the player.
+Built with Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2 and BINARYEN_CORES=1 for Web.
+Android devices, browser GPU and Linux/EGL execution remain unverified. See docs/VFX_PHASE5C.md.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,830,223 | bdbcf6a5e5ecff4a81b237fa1f5c05cb2e0d24316f5d55782901cfd1e67be133 |
+
+Commands.cpp SHA256: `bc3347cc460c58d067ce65920814b7f6984926421bae3169fc73ff740cd8f90d`.
+
+## VFX acceptance preset release (phase 5d, 2026-10-08)
+
+The six expression acceptance effects and their meshes/textures/materials now ship in the shared
+engine. `vfx.create {path,preset}`, shared Effects drafts and linked preset placement preserve
+parameters and budgets; dependency conflicts refuse overwrites. Fresh-project previews retain all six
+software reference hashes. All 247 Node/WASM tests pass. Windows/editor evidence is recorded in
+[the release report](../../docs/VFX_PHASE5D.md). Rebuilt with Emscripten 6.0.10 / NDK r28c, Release.
+Android devices, browser GPU and Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/web/oe_player.js | 127,442 | 1e9089cf64fde3dcbfdd5de9afb8b8e9496151abf2eb13ad7e491636f12669cc |
+| runtime/web/oe_player.wasm | 4,921,115 | eee728a55e564efb4083986dfb1dd1d7f758a3cddfbb8908e341e1186c0081ba |
+
+Commands.cpp SHA256: `c93cd01e47925ba2f8ea60087c51c98a37ea137ec3fc61e966235192e3222d07`.

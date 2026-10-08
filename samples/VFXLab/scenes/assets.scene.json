@@ -1,0 +1,465 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "VFXLab Assets",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Moon",
+      "components": {
+        "Transform": {
+          "rotation": [
+            -50,
+            30,
+            0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            0.55,
+            0.65,
+            0.9
+          ],
+          "intensity": 0.5,
+          "ambient": [
+            0.08,
+            0.09,
+            0.14
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            3.2,
+            10.5
+          ],
+          "rotation": [
+            -11,
+            0,
+            0
+          ]
+        },
+        "Camera": {
+          "fov": 45,
+          "clearColor": [
+            0.02,
+            0.025,
+            0.05
+          ]
+        },
+        "PostProcess": {
+          "toneMapping": "reinhard",
+          "exposure": 1.3,
+          "bloom": 0.9,
+          "bloomThreshold": 0.7,
+          "bloomRadius": 10
+        },
+        "Script": {
+          "path": "scripts/lab.lua"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "scale": [
+            30,
+            1,
+            30
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "plane",
+          "color": [
+            0.1,
+            0.11,
+            0.14
+          ]
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Campfire",
+      "components": {
+        "Transform": {
+          "position": [
+            -4.5,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/campfire.vfx.json",
+          "params": {
+            "intensity": 1
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Log1",
+      "components": {
+        "Transform": {
+          "position": [
+            0.175,
+            0.1,
+            0.0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1.0,
+            0.18,
+            0.18
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.12,
+            0.07
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 6,
+      "name": "Log2",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.1,
+            0.1,
+            0.15
+          ],
+          "rotation": [
+            0,
+            60,
+            0
+          ],
+          "scale": [
+            1.0,
+            0.18,
+            0.18
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.12,
+            0.07
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 7,
+      "name": "Log3",
+      "components": {
+        "Transform": {
+          "position": [
+            -0.1,
+            0.1,
+            -0.15
+          ],
+          "rotation": [
+            0,
+            120,
+            0
+          ],
+          "scale": [
+            1.0,
+            0.18,
+            0.18
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.2,
+            0.12,
+            0.07
+          ]
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 8,
+      "name": "FireLight",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.8,
+            0
+          ]
+        },
+        "PointLight": {
+          "color": [
+            1.0,
+            0.55,
+            0.2
+          ],
+          "intensity": 3,
+          "range": 6
+        }
+      },
+      "parent": 4
+    },
+    {
+      "id": 12,
+      "name": "Portal",
+      "components": {
+        "Transform": {
+          "position": [
+            -1.3,
+            0.05,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "PortalLight",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.6,
+            0
+          ]
+        },
+        "PointLight": {
+          "color": [
+            0.3,
+            0.7,
+            1.0
+          ],
+          "intensity": 2,
+          "range": 4
+        }
+      },
+      "parent": 12
+    },
+    {
+      "id": 14,
+      "name": "Rim",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-5f50ea4bde94.vfx.json"
+        }
+      },
+      "parent": 12
+    },
+    {
+      "id": 15,
+      "name": "Core",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0.15,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-7c2964168d16.vfx.json"
+        }
+      },
+      "parent": 12
+    },
+    {
+      "id": 16,
+      "name": "Fireworks",
+      "components": {
+        "Transform": {
+          "position": [
+            1.7,
+            2.6,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Burst",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-da18ce2c457f.vfx.json"
+        }
+      },
+      "parent": 16
+    },
+    {
+      "id": 18,
+      "name": "Flash",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-6552349adb26.vfx.json"
+        }
+      },
+      "parent": 16
+    },
+    {
+      "id": 19,
+      "name": "Puff",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-c98debb509bf.vfx.json"
+        }
+      },
+      "parent": 16
+    },
+    {
+      "id": 20,
+      "name": "Orb",
+      "components": {
+        "Transform": {
+          "position": [
+            4.6,
+            1.4,
+            0
+          ]
+        },
+        "Script": {
+          "path": "scripts/orbit.lua",
+          "params": {
+            "width": 1.5,
+            "height": 0.9,
+            "speed": 2.4
+          }
+        },
+        "Trail": {
+          "lifetime": 0.7,
+          "minDistance": 0.04,
+          "width": 0.34,
+          "endWidth": 0.02,
+          "color": [
+            0.6,
+            1.0,
+            0.75
+          ],
+          "endColor": [
+            0.1,
+            0.5,
+            1.0
+          ],
+          "opacity": 0.95,
+          "endOpacity": 0,
+          "texture": "assets/textures/streak.png",
+          "blend": "add",
+          "maxPoints": 96
+        },
+        "PointLight": {
+          "color": [
+            0.4,
+            1.0,
+            0.7
+          ],
+          "intensity": 1.5,
+          "range": 3
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "OrbGlow",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-192c3f300358.vfx.json"
+        }
+      },
+      "parent": 20
+    },
+    {
+      "id": 22,
+      "name": "Sparkles",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "VFXSystem": {
+          "asset": "effects/generated-7a53b2e594ea.vfx.json"
+        }
+      },
+      "parent": 20
+    },
+    {
+      "id": 23,
+      "name": "Help",
+      "components": {
+        "UIText": {
+          "text": "VFXLab   campfire / portal / fireworks / orb trail      Space: fire a burst",
+          "anchor": "bottom-left",
+          "x": 16,
+          "y": -16,
+          "size": 18,
+          "color": [
+            0.8,
+            0.85,
+            0.95
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Rain Snow",
+  "description": "Phase 5b+ text-only acceptance proof; no gameplay transform script.",
+  "budget": {
+    "maxParticles": 88
+  },
+  "emitters": [
+    {
+      "name": "rain",
+      "emitter": {
+        "burst": 12,
+        "rate": 32,
+        "maxParticles": 40,
+        "loop": false,
+        "lifetime": 0.6,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 0.055,
+        "endSize": 0.055,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "duration": 1.8,
+        "texture": "assets/textures/glow.png",
+        "space": "world",
+        "shape": "box",
+        "shapeSize": [
+          1.5,
+          0,
+          1.8
+        ],
+        "positionOffset": [
+          -1.8,
+          3,
+          0
+        ],
+        "startColor": [
+          0.35,
+          0.6,
+          0.9
+        ],
+        "align": "velocity",
+        "stretch": 0.055,
+        "expressions": {
+          "update": {
+            "velocity": "vec3(0,-birthPosition.y/lifetime,0)",
+            "opacity": "curve(age,0,0,0.1,0.9,0.9,0.9,1,0)"
+          }
+        }
+      }
+    },
+    {
+      "name": "snow",
+      "emitter": {
+        "burst": 16,
+        "rate": 14,
+        "maxParticles": 48,
+        "loop": false,
+        "lifetime": 2.5,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 0.14,
+        "endSize": 0.14,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "duration": 1.8,
+        "texture": "assets/textures/glow.png",
+        "space": "world",
+        "shape": "box",
+        "shapeSize": [
+          1.5,
+          0,
+          1.8
+        ],
+        "positionOffset": [
+          1.8,
+          3,
+          0
+        ],
+        "startColor": [
+          0.8,
+          0.9,
+          1
+        ],
+        "expressions": {
+          "update": {
+            "velocity": "vec3(0,-birthPosition.y/lifetime,0)",
+            "position": "vec3(sin(age*2*pi+random*2*pi)*0.16,0,cos(age*2*pi+random*2*pi)*0.12)",
+            "opacity": "curve(age,0,0,0.1,0.9,0.9,0.9,1,0)"
+          }
+        }
+      }
+    }
+  ]
+}

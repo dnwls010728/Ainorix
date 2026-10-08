@@ -254,3 +254,77 @@ build_android.bat with ANDROID_HOME=build/android-sdk succeeded for both support
 ABIs. arm64 grew by 1,856 bytes and x86_64 by 1,968 bytes for the shared command
 parser and rebuilt platform interface. Device/emulator execution remains unverified.
 Evidence: ignored build/orthographic-android-build.log.
+
+## VFX phase 4 rebuild (2026-10-08)
+
+The player includes VFXSystem assets, materials, normalized age/random/speed graph inputs, optional
+emitter batching, bounded death chains, two-anchor ribbons and static mesh particles. Unbatched
+particles keep shared GPU meshes and use a dedicated draw input; batching uses vertex RGBA/data.
+Legacy particle hashes remain unchanged. See docs/VFX_PHASE4.md for validation and known limits.
+
+Built with Android NDK r28c, Release, for arm64-v8a and x86_64. Native Windows/D3D11 tests
+pass; Android device/emulator execution of these effects remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,409,776 | a0bf24b6ac836be34c91bc7bfeaa2f75b6daae8fe6b73ed557652fcf7faae66d |
+| runtime/android/x86_64/liboe_player.so | 7,828,920 | 56d02ef6d45bfffa2d7dc80bf3d66be28a72709271021aaa491b6db54ffa7d83 |
+
+Commands.cpp SHA256: `9e32bd478583e35831c86902197af9d2458133654dae8ba999c392db624fed74`.
+
+## VFX motion channels rebuild (phase 5a, 2026-10-08)
+
+Players include captured birth state, motion/XYZ scale curves, pivots and four custom material
+attributes in both rendering paths and batching. See docs/VFX_PHASE5A.md for the contract and validation.
+Built with Android NDK r28c, Release, parallelism 2, for arm64-v8a and x86_64.
+Device/browser GPU execution remains unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,458,096 | 338dfb0b4ea84f5ca6aaeea12e8fd238496541b2c19c317ef3e6cf8a759803d2 |
+| runtime/android/x86_64/liboe_player.so | 7,885,816 | 522953612cb25ce4d3d188a3edbdb4b8daca34809fa04572ae1b32a558154de1 |
+
+## VFX expressions rebuild (phase 5b, 2026-10-08)
+
+Players include typed Birth/Update expressions, own bounded math, cached programs, parameter inputs
+and conservative instruction budgets. Contract: docs/VFX_PHASE5B.md. Windows/Node assert the same
+math and software-preview hashes; all 239 Node tests pass. Device/browser GPU execution remains
+unverified. Toolchains: Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,539,280 | eec339f5c070589867b768faf2acbb90eabbbfba6f2cee070256686141934d58 |
+| runtime/android/x86_64/liboe_player.so | 7,976,856 | 46f6d3fbf9f26fce2f41c6cadd2b60e076076756845f829c1f452cf352873528 |
+
+Commands.cpp SHA256: `e9777ebc426db0bf619d384f6c28522ba625809c22eab950e52bc9aa6e62fa29`.
+
+## VFX value-node authoring rebuild (phase 5c, 2026-10-08)
+
+The compiler retains exact decimal literal spelling for transient graph conversion. Common commands
+now expose graph/source conversion with the existing runtime evaluator. Simulation and legacy hashes
+remain unchanged. All 244 Node/WASM tests pass. Desktop value-node editing is not part of the player.
+Built with Emscripten 6.0.10 / Android NDK r28c, Release, parallelism 2 and BINARYEN_CORES=1 for Web.
+Android devices, browser GPU and Linux/EGL execution remain unverified. See docs/VFX_PHASE5C.md.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,573,120 | 52a35b25bbbabb9c9085b9908dbd10649450196ca96aa5342ee1c2021e6c26b2 |
+| runtime/android/x86_64/liboe_player.so | 8,015,256 | d68bc07328da449750b0b5b0f82b10f8e7aa196e07e0db7cb863380f495db9b7 |
+
+Commands.cpp SHA256: `bc3347cc460c58d067ce65920814b7f6984926421bae3169fc73ff740cd8f90d`.
+
+## VFX acceptance preset release (phase 5d, 2026-10-08)
+
+The six expression acceptance effects and their meshes/textures/materials now ship in the shared
+engine. `vfx.create {path,preset}`, shared Effects drafts and linked preset placement preserve
+parameters and budgets; dependency conflicts refuse overwrites. Fresh-project previews retain all six
+software reference hashes. All 247 Node/WASM tests pass. Windows/editor evidence is recorded in
+[the release report](../../docs/VFX_PHASE5D.md). Rebuilt with Emscripten 6.0.10 / NDK r28c, Release.
+Android devices, browser GPU and Linux/EGL execution remain unverified.
+
+| Artifact | Bytes | SHA256 |
+|---|---:|---|
+| runtime/android/arm64-v8a/liboe_player.so | 7,669,696 | 6f0071dcb4e335281727bfe2dd0699821fdec0603bc2aea268ae9bf9836195a9 |
+| runtime/android/x86_64/liboe_player.so | 8,114,328 | 3ece61a7e6d6b70e243cde24e9c3735e6981bed8bd48ce83bd5c1ec9d561014d |
+
+Commands.cpp SHA256: `c93cd01e47925ba2f8ea60087c51c98a37ea137ec3fc61e966235192e3222d07`.

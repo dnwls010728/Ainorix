@@ -1,0 +1,189 @@
+{
+  "format": "ownengine.shader",
+  "nodes": [
+    {
+      "op": "uniform",
+      "name": "cameraPosition"
+    },
+    {
+      "op": "position"
+    },
+    {
+      "op": "subtract",
+      "args": [
+        0,
+        1
+      ]
+    },
+    {
+      "op": "normalize",
+      "args": [
+        2
+      ]
+    },
+    {
+      "op": "normal"
+    },
+    {
+      "op": "normalize",
+      "args": [
+        4
+      ]
+    },
+    {
+      "op": "dot",
+      "args": [
+        3,
+        5
+      ]
+    },
+    {
+      "op": "abs",
+      "args": [
+        6
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 1
+    },
+    {
+      "op": "constant",
+      "value": 0
+    },
+    {
+      "op": "clamp",
+      "args": [
+        7,
+        9,
+        8
+      ]
+    },
+    {
+      "op": "subtract",
+      "args": [
+        8,
+        10
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        11,
+        11
+      ]
+    },
+    {
+      "op": "particleCustom0"
+    },
+    {
+      "op": "constant",
+      "value": 0.2
+    },
+    {
+      "op": "multiply",
+      "args": [
+        12,
+        13
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        14,
+        15
+      ]
+    },
+    {
+      "op": "baseColor"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        17,
+        16
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        18,
+        19
+      ]
+    },
+    {
+      "op": "constant",
+      "value": 0.06
+    },
+    {
+      "op": "constant",
+      "value": 0.7
+    },
+    {
+      "op": "multiply",
+      "args": [
+        12,
+        22
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        21,
+        23
+      ]
+    },
+    {
+      "op": "particleCustom3"
+    },
+    {
+      "op": "multiply",
+      "args": [
+        24,
+        25
+      ]
+    },
+    {
+      "op": "constant",
+      "value": [
+        0,
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "op": "multiply",
+      "args": [
+        26,
+        27
+      ]
+    },
+    {
+      "op": "add",
+      "args": [
+        20,
+        28
+      ]
+    }
+  ],
+  "color": 29,
+  "emissive": 20,
+  "uniforms": {
+    "cameraPosition": [
+      0,
+      0,
+      0,
+      1
+    ]
+  }
+}

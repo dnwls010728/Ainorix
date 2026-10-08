@@ -1,8 +1,37 @@
 # Particle effects and trails (VFX)
 
-`ParticleEmitter` and `Trail` are simulated at the fixed step, deterministic, and drawn the same by both renderers.
+`VFXSystem` asset emitters and `Trail` are simulated at the fixed step, deterministic, and drawn the same by both renderers.
+ParticleEmitter remains an internal settings/runtime value. Its scene component and `particles.*` APIs
+were retired in [phase 6](VFX_PHASE6.md); author `.vfx.json` blocks through Effects or `vfx.create/set`.
 This document is the contract and the reference for their fields; status and verification are in the work log at
 the end.
+
+For presets, strict authoring validation, isolated contact sheets and numeric analysis through `vfx.*`,
+see [VFX.md](VFX.md). `vfx.create/set` and Trail `component.add/set` reject bad ranges and curves before editing.
+Old ParticleEmitter scene entries are skipped with a replacement hint; runtime guards still reject invalid values.
+
+## VFX expressions
+
+`expressions` stores typed Birth/Update source text; present channels replace curves, while Update
+position remains a non-accumulating offset and Update velocity precedes forces. See
+[VFX_PHASE5B.md](VFX_PHASE5B.md) for inputs, clocks, size variation, numeric/cost bounds and tests.
+
+## VFX motion channels
+
+ParticleEmitter now captures `positionOffset` (emitter-space meters), `rotation3D` (XYZ degrees),
+`scale` (nonnegative XYZ multipliers) and `custom0..3` at birth. Normalized-age vector curves
+`positionOverLife`, `velocityOverLife`, `rotationOverLife` and `scaleOverLife` share these channels
+between quads and meshes. The position curve offsets separately integrated motion; velocity replaces
+velocity before forces each step; rotation adds to birth XYZ rotation inside legacy Z spin; scale
+multiplies birth scale, legacy scalar size and meshScale once. `pivot` fixes an unscaled geometry point
+at the center before rotation/scaling. Four signed scalar custom curves replace their birth values;
+materials use zero-argument `particleCustom0..3` ops through a dedicated attribute stream.
+
+World-space position/velocity curves use the emitter matrix captured at birth; local particles keep
+following the owner. Full semantics, examples, limits and hot reload behavior are in
+[VFX.md](VFX.md#motion-channels-and-pivot). Native saves/rollback copy the captured and evaluated
+state, accepted birth `index`, immutable accepted batch `count` and stable random; JSON only saves
+settings. Empty curves and default birth values preserve legacy emission RNG and frame hashes.
 
 ## Simulation contract
 
@@ -19,7 +48,7 @@ lost per second. They draw from the emitter's random stream only when non-zero, 
 `Sprite.layer`. The world stands still while the game is paused (`game.pause`): particles neither age nor move.
 
 An emitter starts its configured burst once on its first playing simulation
-step. loop:false disables continuous rate emission; explicit particles.burst
+step. loop:false disables continuous rate emission; explicit vfx.burst
 still works. playing:false pauses automatic emission; existing particles keep
 aging and moving. Newly emitted particles start at age zero; integration of
 existing particles happens before emission each fixed step. world-space
@@ -55,13 +84,13 @@ the older draws, so turning one on does not reshuffle the rest.
   keys. A non-empty curve replaces the start/end pair (sizeVariation still scales
   sizes). Colors are `[r, g, b]` or `"#rrggbb"`. Curves are live settings: editing one
   changes particles already alive. A malformed curve stops emission
-  (`particles.burst` answers `invalid_emitter` naming the curve).
+  (`vfx.burst` answers `invalid_emitter` naming the curve).
 - **Turbulence**: `turbulence` (m/s^2) pushes particles with a fixed value-noise field
   sampled at their position; `turbulenceScale` is cells per meter. The field uses
   integer hashes and float lerps only (no libm). It is a live setting.
 - **Timing**: `delay` holds back the initial burst and the rate. `duration` (0 = none)
   ends the rate after that many seconds; with `loop` the cycle repeats and fires the
-  burst again every `duration` seconds. `particles.state` reports `finished` once a
+  burst again every `duration` seconds. `vfx.state` emitter blocks report `finished` once a
   non-looping emitter has nothing left to emit and no live particles.
 - **Sampling**: `pixelArt: false` filters the texture smoothly (soft glows, smoke).
 
@@ -92,22 +121,20 @@ blend `alpha` or `add`, and sort like sprites (`layer`, then distance).
 
 ## API and scripting
 
-- particles.state {id, particles?}: count, emitted, playing, loop, maxParticles and
-  finished. particles:true includes age/lifetime, position/velocity, rotation and
-  worldSpace snapshots. Lua `particles.state(id)` returns the same table.
-- particles.burst {id, count}: immediate emission (0..10000), returning accepted.
-  Explicit bursts work while playing:false and do not re-arm the startup burst.
-- particles.clear {id, restart?}: clear particles, counters, fractional births, the
-  delay/duration clock and PRNG state. restart:true re-arms the startup burst for the next playing step;
-  otherwise it stays disarmed. Configured emitter settings are preserved.
-- Lua particles.burst(id, count), or self:burst(count) on an attached script,
-  returns accepted births and raises an error for missing emitters/bad counts.
+- `vfx.state {id,particles?}` returns system playback/params/count/budget and named emitter blocks.
+  Each block reports count, emitted, playing, loop, maxParticles and finished. With particles:true,
+  blocks include age/lifetime, position/velocity, birth inputs, evaluated motion/custom and worldSpace.
+  Lua: `vfx.state(id, {particles=true})`.
+- `vfx.burst {id,count?,emitter?}` emits 0..10000 births, capped by each emitter and the system budget.
+  Explicit bursts work while paused and do not rearm startup births. Lua: `vfx.burst(id,countOrOptions)`.
+- `vfx.clear {id,restart?}` empties particles and trails. Omitted restart retains clocks/RNG.
+  Supplied restart resets counters, fractional births, delay/duration clocks and RNG; true rearms
+  startup births, false consumes them. Settings/playback remain intact. Lua: `vfx.clear(id,{restart=true})`.
 
-Burst/clear change transient simulation state, like audio playback, and do not
-participate in scene undo. Reflected emitter settings serialize normally and
-component edits participate in undo. Particle coordinate snapshots, colors,
-sizes, opacity and gravity are captured at birth; world-space velocities include
-the spawn transform's scale/rotation.
+Runtime controls do not participate in scene undo. Asset settings serialize in `.vfx.json`; author
+with `vfx.set` or the Effects document history. VFXSystem component edits participate in scene undo.
+Particle coordinate snapshots, colors, sizes, opacity and gravity are captured at birth;
+world-space velocities include the spawn transform's scale/rotation.
 
 ## Sample gameplay effects
 
@@ -125,7 +152,7 @@ Both renderers consume the same camera-facing unit quads from GatherRenderItems
 and the same transparent BuildDrawList. Each live particle uses a shared static
 quad, so the GPU mesh cache does not grow with births. Dimensions selects planar
 or cone emission; both modes face the current camera, including orthographic
-and editor views. Particle quads are unlit and do not cast shadows.
+and editor views. Particle quads are unlit by default; material overrides can enable lighting. They do not cast shadows.
 
 Size, RGB tint and opacity interpolate linearly between their birth snapshots
 over age/lifetime. Size is the square billboard width/height in world meters;
@@ -138,6 +165,13 @@ inset to avoid neighbouring-frame bleed. Empty texture gives a solid quad;
 missing textures give magenta quads. Texture alpha multiplies particle opacity.
 Opaque geometry precedes particles; blended draws sort back to front by bounds
 center distance. Entity id breaks ties, then stable birth order within an emitter.
+
+## Extended effect rendering
+
+Phase 4 adds emitter/trail materials, static mesh particles, optional emitter batching, normalized age/
+random/speed graph inputs, two-anchor blade ribbons and bounded asset death chains. See the complete
+field, ordering and budget contract in [VFX.md](VFX.md#materials-mesh-particles-ribbons-and-death-chains-phase-4).
+Legacy defaults retain the original particle hashes and draw ordering.
 
 ## Implementation status (work log)
 
@@ -182,7 +216,7 @@ P3.2 and P3.3 continue from that combined main.
       shapeEdge, radialSpeed), rotation and spin, align velocity + stretch, flipbooks
       (frames, frameRate, randomFrame), sizeOverLife/colorOverLife/opacityOverLife
       curves, turbulence, delay/duration cycles, pixelArt switch, `finished` in
-      particles.state and Lua particles.state. Emitters that do not use a new field
+      emitter state diagnostics (now vfx.state and Lua vfx.state). Emitters that do not use a new field
       keep their random sequence and frame hashes (ParticleRenderers hashes unchanged).
       Tests: ParticleShapesRotationAndTiming, ParticleCurvesFlipbookAndAlignment.
 - [x] V2: Trail component (camera-facing ribbon, width/color/opacity fade, optional
@@ -192,10 +226,11 @@ P3.2 and P3.3 continue from that combined main.
 - [x] V3: samples/VFXLab (campfire, portal, fireworks, orb trail) with generated
       textures; SampleVfxLab runs it twice and compares frame hashes. Software and
       D3D11 PNGs at frames 132 and 200 were inspected. Windows passes 187 tests.
-- [ ] Rebuild runtime/web and runtime/android: engine C++ used by the player changed
-      and this host has no Emscripten SDK or Android NDK. Until then packaged web and
-      Android games ignore the V1/V2 fields and Trail. Also run the suite under
-      Node/WASM to confirm the new tests and the turbulence field match Windows.
-- [ ] Not done, candidates for later: sub-emitters (spawn on particle death), mesh
-      particles, lit or soft (depth-faded) particles, particle collision, an editor
-      preview that simulates the selected emitter while the game is stopped.
+- [x] Runtime rebuild (phase 4, 2026-10-08): web and both Android players now include the VFX toolkit
+      and assets. Portable core tests run under Node/WASM; see VFX_PHASE4.md for current evidence.
+- [x] Phase 4: materials (including lit graphs), static mesh particles, two-anchor ribbons, optional
+      batching and bounded asset death chains; Effects isolated preview shipped in phase 3. See VFX.md.
+- [x] Phase 5a motion channels, pivot and custom attributes; see [VFX_PHASE5A.md](VFX_PHASE5A.md).
+- [ ] Candidates for later: soft/depth-faded particles and particle collision.
+
+- [x] Phase 5b expressions, cached programs and fixed-step evaluation; see [VFX_PHASE5B.md](VFX_PHASE5B.md).

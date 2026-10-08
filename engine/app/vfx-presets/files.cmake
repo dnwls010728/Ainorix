@@ -1,0 +1,21 @@
+# The release uses the same assets as the script-free acceptance tests.
+set(OE_VFX_PRESET_FILES
+  effects/ice_pillar.vfx.json
+  effects/tornado.vfx.json
+  effects/shield_dome.vfx.json
+  effects/shockwave.vfx.json
+  effects/rain_snow.vfx.json
+  effects/healing_aura.vfx.json
+  assets/models/vfx_crystal.glb
+  assets/models/vfx_dome.glb
+  assets/models/vfx_ring.glb
+  assets/textures/glow.png
+  assets/textures/smoke.png
+  materials/ice_channels.mat.json
+  materials/ice_channels.shader.json
+  materials/vfx_healing.mat.json
+  materials/vfx_healing.shader.json
+  materials/vfx_shield.mat.json
+  materials/vfx_shield.shader.json
+  materials/vfx_shockwave.mat.json
+  materials/vfx_shockwave.shader.json)

@@ -34,6 +34,9 @@ struct MeshVertex {
     float tan[4];
     float joints[4];
     float weights[4];
+    float color[4];
+    float particle[4];
+    float custom[4];
 };
 
 struct ColorVertex {
@@ -321,7 +324,24 @@ struct Targets {
 };
 
 void SgLog(const char* tag, uint32_t level, uint32_t item, const char* message, uint32_t line, const char*, void*) {
-    const char* msg = message ? message : "(no message in release builds)";
+    // sokol emits a marker at warning level, then the actual compiler text at info level.
+    // Preserve that diagnostic instead of dropping its text in Release logs.
+    if (item == SG_LOGITEM_D3D11_SHADER_COMPILATION_OUTPUT) {
+        if (message) OE_LOG_WARN("gpu", "D3D11 shader compiler: %s", message);
+        return;
+    }
+    const char* msg = message;
+    if (!msg) {
+        switch (item) {
+            case SG_LOGITEM_BUFFER_POOL_EXHAUSTED: msg = "BUFFER_POOL_EXHAUSTED: buffer pool exhausted"; break;
+            case SG_LOGITEM_IMAGE_POOL_EXHAUSTED: msg = "IMAGE_POOL_EXHAUSTED: image pool exhausted"; break;
+            case SG_LOGITEM_VIEW_POOL_EXHAUSTED: msg = "VIEW_POOL_EXHAUSTED: view pool exhausted"; break;
+            case SG_LOGITEM_SAMPLER_POOL_EXHAUSTED: msg = "SAMPLER_POOL_EXHAUSTED: sampler pool exhausted"; break;
+            case SG_LOGITEM_SHADER_POOL_EXHAUSTED: msg = "SHADER_POOL_EXHAUSTED: shader pool exhausted"; break;
+            case SG_LOGITEM_PIPELINE_POOL_EXHAUSTED: msg = "PIPELINE_POOL_EXHAUSTED: pipeline pool exhausted"; break;
+            default: msg = "(no message in release builds)"; break;
+        }
+    }
     if (level <= 1) OE_LOG_ERROR("gpu", "%s item %u line %u: %s", tag, item, line, msg);
     else if (level == 2) OE_LOG_WARN("gpu", "%s item %u line %u: %s", tag, item, line, msg);
 }
@@ -412,6 +432,9 @@ struct GpuRenderer::Impl {
                 d.layout.attrs[ATTR_oe_mesh_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
                 d.layout.attrs[ATTR_oe_mesh_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
                 d.layout.attrs[ATTR_oe_mesh_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_mesh_color0] = {0, offsetof(MeshVertex, color), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_mesh_particle0] = {0, offsetof(MeshVertex, particle), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_mesh_custom0] = {0, offsetof(MeshVertex, custom), SG_VERTEXFORMAT_FLOAT4};
                 d.index_type = SG_INDEXTYPE_UINT32;
                 d.depth.pixel_format = kDepthFormat;
                 d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
@@ -488,6 +511,9 @@ struct GpuRenderer::Impl {
             d.layout.attrs[ATTR_oe_surface_aux_tangent] = {0, offsetof(MeshVertex, tan), SG_VERTEXFORMAT_FLOAT4};
             d.layout.attrs[ATTR_oe_surface_aux_joint_indices] = {0, offsetof(MeshVertex, joints), SG_VERTEXFORMAT_FLOAT4};
             d.layout.attrs[ATTR_oe_surface_aux_joint_weights] = {0, offsetof(MeshVertex, weights), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_color0] = {0, offsetof(MeshVertex, color), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_particle0] = {0, offsetof(MeshVertex, particle), SG_VERTEXFORMAT_FLOAT4};
+            d.layout.attrs[ATTR_oe_surface_aux_custom0] = {0, offsetof(MeshVertex, custom), SG_VERTEXFORMAT_FLOAT4};
             d.index_type = SG_INDEXTYPE_UINT32;
             d.face_winding = SG_FACEWINDING_CCW;
             d.depth.pixel_format = kDepthFormat;
@@ -725,6 +751,12 @@ struct GpuRenderer::Impl {
         std::vector<uint32_t> indices;
         auto vertex = [&](uint32_t i, const Vec3& n) {
             MeshVertex v{};
+            const Vec4 color = i < m.colors.size() ? m.colors[i] : Vec4(1, 1, 1, 1);
+            const Vec4 data = i < m.particleData.size() ? m.particleData[i] : Vec4();
+            Put(v.color, color.x, color.y, color.z, color.w);
+            Put(v.particle, data.x, data.y, data.z, data.w);
+            const Vec4 custom = i < m.particleCustom.size() ? m.particleCustom[i] : Vec4();
+            Put(v.custom, custom.x, custom.y, custom.z, custom.w);
             const Vec4 t = static_cast<size_t>(i) < m.tangents.size() ? m.tangents[i] : Vec4(1, 0, 0, 1);
             v.tan[0] = t.x;
             v.tan[1] = t.y;
@@ -823,6 +855,8 @@ struct GpuRenderer::Impl {
         Put(vertex.view_proj, viewProj);
         Put(vertex.model, item.world);
         Put(vertex.normal_mat, item.normalMatrix);
+        Put(vertex.item_custom, item.particleCustom.x, item.particleCustom.y, item.particleCustom.z, item.particleCustom.w);
+        Put(vertex.item_particle, item.particleInput.x, item.particleInput.y, item.particleInput.z, item.particleInput.w);
         for (size_t j = 0; j < item.joints.size(); ++j) Put(vertex.joint_palette[j], item.joints[j]);
         sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
         oe_mesh_vs_graph_t vertexGraph{};
@@ -1014,6 +1048,8 @@ struct GpuRenderer::Impl {
                 Put(vu.view_proj, viewProj);
                 Put(vu.model, it.world);
                 Put(vu.normal_mat, it.normalMatrix);
+                Put(vu.item_custom, it.particleCustom.x, it.particleCustom.y, it.particleCustom.z, it.particleCustom.w);
+                Put(vu.item_particle, it.particleInput.x, it.particleInput.y, it.particleInput.z, it.particleInput.w);
                 for (size_t j = 0; j < it.joints.size(); ++j) Put(vu.joint_palette[j], it.joints[j]);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
                 oe_mesh_vs_graph_t vg{};
@@ -1354,6 +1390,7 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
 }
 
 sg_view GpuRenderer::ImageView(const std::shared_ptr<const Texture>& texture) { return impl_->UITextureFor(texture); }
+void GpuRenderer::CollectGarbage() { impl_->Evict(); }
 
 sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats) {
     int w = std::max(1, width), h = std::max(1, height);

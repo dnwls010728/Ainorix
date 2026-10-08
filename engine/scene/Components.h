@@ -1,10 +1,13 @@
 #pragma once
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "scene/Reflect.h"
 
 namespace oe {
+struct VfxAsset;
+struct VfxExpressionSet;
 
 // Built-in components. To add one: declare a struct with kTypeName, kDoc and
 // Reflect(), then register it in RegisterBuiltinComponents(). Serialization,
@@ -85,6 +88,19 @@ struct Particle {
     float rotation = 0, spin = 0;  // degrees around the view axis, degrees per second
     float sizeScale = 1;           // sizeVariation factor, applied to sizeOverLife keys
     int frameOffset = 0;           // randomFrame: first flipbook frame of this particle
+    Vec3 birthPosition, initialVelocity, initialRotation, initialScale{1, 1, 1}; // captured birth inputs
+    Vec3 integratedPosition; // physics position without the non-accumulating lifetime offset
+    Vec3 rotation3D, axisScale{1, 1, 1}; // evaluated extra Euler rotation and scale multiplier
+    Vec4 initialCustom{}, custom{}; // captured and evaluated material attributes
+    Vec3 expressionBirthPosition, expressionBirthVelocity; // captured emitter coordinates for expressions
+    Vec3 expressionColor; float expressionSize = 0, expressionOpacity = 0; // evaluated appearance overrides
+    bool hasExpressionColor = false, hasExpressionSize = false, hasExpressionOpacity = false;
+    Mat4 birthBasis; // emitter frame captured for world-space motion curves
+    uint64_t index = 0; // accepted birth order, independent of channel evaluation
+    int birthCount = 0; // accepted particles in this birth batch, immutable
+    Mat4 meshBasis;    // world-space mesh orientation captured at birth
+    float random = 0;  // stable birth hash, no extra random draws
+    int depth = 0;     // bounded death-chain generation
     bool worldSpace = false;
 };
 
@@ -104,6 +120,23 @@ struct ParticleEmitter {
     Color startColor{1, 1, 1}, endColor{1, 1, 1};
     float startOpacity = 1, endOpacity = 0;
     std::string texture;
+    std::string material;  // optional .mat.json surface graph
+    std::string mesh;      // empty = billboard; otherwise static project/built-in mesh
+    Vec3 meshScale{1, 1, 1};
+    Vec3 positionOffset{}, rotation3D{}, scale{1, 1, 1}, pivot{}; // birth offset/rotation/scale; unscaled geometry pivot
+    float custom0 = 0, custom1 = 0, custom2 = 0, custom3 = 0; // birth material data
+    Json positionOverLife = Json::MakeArray(), velocityOverLife = Json::MakeArray(); // vector keys, emitter coordinates
+    Json rotationOverLife = Json::MakeArray(), scaleOverLife = Json::MakeArray(); // additive degrees / scale multipliers
+    Json custom0OverLife = Json::MakeArray(), custom1OverLife = Json::MakeArray(); // scalar material data keys
+    Json custom2OverLife = Json::MakeArray(), custom3OverLife = Json::MakeArray();
+    Json expressions = Json::MakeObject(); // canonical birth/update expression source text
+    Json expressionParams = Json::MakeObject(); // runtime parameter values, not serialized
+    mutable std::shared_ptr<const VfxExpressionSet> expressionProgram; // immutable compiled cache, shared by snapshots
+    bool expressionInSystem = false; // distinguishes zero-parameter linked effects from standalone emitters
+    double expressionSystemTime = 0; // fixed-step parent system clock (standalone uses emitter elapsed)
+    bool batching = false;  // opt-in atomic emitter draw; legacy per-particle sorting otherwise
+    std::string onDeath;   // named target emitter in the same VFX asset
+    int deathCount = 1;
     int frame = 0, columns = 1, rows = 1;
     std::string space = "local";
     int dimensions = 3;
@@ -157,6 +190,21 @@ struct ParticleEmitter {
         f.Add("endColor", &ParticleEmitter::endColor, "RGB tint at expiry.");
         range(f.Add("startOpacity", &ParticleEmitter::startOpacity, "Opacity at birth."), 0, 1);
         range(f.Add("endOpacity", &ParticleEmitter::endOpacity, "Opacity at expiry."), 0, 1);
+        f.Add("material", &ParticleEmitter::material, "Optional project-relative .mat.json, including surface graphs.");
+        f.Add("mesh", &ParticleEmitter::mesh, "Static project mesh or built-in name; empty uses camera-facing quads.");
+        f.Add("meshScale", &ParticleEmitter::meshScale, "Mesh XYZ scale multiplied by lifetime size; orientation follows emitter and rotation.");
+        f.Add("expressions", &ParticleEmitter::expressions, "Typed source text {birth:{channel:text},update:{channel:text}}; vfx.schema.expressions defines inputs, operations and budgets.");
+        f.Add("positionOffset", &ParticleEmitter::positionOffset, "Birth offset in emitter coordinates; captured before local/world conversion.");
+        f.Add("rotation3D", &ParticleEmitter::rotation3D, "Birth XYZ Euler rotation in degrees, added to lifetime rotation and legacy Z spin.");
+        f.Add("scale", &ParticleEmitter::scale, "Nonnegative birth XYZ multiplier; multiplied once by scaleOverLife, scalar size and meshScale (meshes only).");
+        f.Add("pivot", &ParticleEmitter::pivot, "Unscaled mesh/billboard geometry point fixed at the particle center under scale and rotation.");
+        range(f.Add("custom0", &ParticleEmitter::custom0, "Birth material custom0; captured per particle, not a shader uniform."), -65504, 65504);
+        range(f.Add("custom1", &ParticleEmitter::custom1, "Birth material custom1; captured per particle, not a shader uniform."), -65504, 65504);
+        range(f.Add("custom2", &ParticleEmitter::custom2, "Birth material custom2; captured per particle, not a shader uniform."), -65504, 65504);
+        range(f.Add("custom3", &ParticleEmitter::custom3, "Birth material custom3; captured per particle, not a shader uniform."), -65504, 65504);
+        f.Add("batching", &ParticleEmitter::batching, "Combine particles into one emitter draw, sorted internally; transparent emitters sort as whole groups.");
+        f.Add("onDeath", &ParticleEmitter::onDeath, "VFX asset only: named emitter receiving a burst at each expired particle position; maximum depth 4.");
+        range(f.Add("deathCount", &ParticleEmitter::deathCount, "Particles per death event, subject to target and system budgets."), 0, 256);
         f.Add("texture", &ParticleEmitter::texture, "Optional texture/sprite sheet; empty uses solid quads.");
         range(f.Add("frame", &ParticleEmitter::frame, "Sprite sheet frame, row-major."), 0, 1000000);
         range(f.Add("columns", &ParticleEmitter::columns, "Sprite sheet columns."), 1, 4096);
@@ -195,6 +243,14 @@ struct ParticleEmitter {
               "Color keys [[t, [r, g, b]] or [t, \"#rrggbb\"], ...]; replaces startColor/endColor when not empty. At most 16 keys.");
         f.Add("opacityOverLife", &ParticleEmitter::opacityOverLife,
               "Opacity keys [[t, 0..1], ...]; replaces startOpacity/endOpacity when not empty (fade in, hold, fade out). At most 16 keys.");
+        f.Add("positionOverLife", &ParticleEmitter::positionOverLife, "Vector keys [[age,[x,y,z]],...], meters in emitter coordinates; additive offset on integrated motion, never accumulated.");
+        f.Add("velocityOverLife", &ParticleEmitter::velocityOverLife, "Vector keys in emitter meters/second; replaces velocity each step before gravity/drag. Empty retains integrated velocity.");
+        f.Add("rotationOverLife", &ParticleEmitter::rotationOverLife, "Vector keys in degrees; added to captured rotation3D and legacy Z rotation/spin.");
+        f.Add("scaleOverLife", &ParticleEmitter::scaleOverLife, "Nonnegative XYZ multiplier keys; normalized age 0..1, up to 16 keys. Empty means [1,1,1].");
+        f.Add("custom0OverLife", &ParticleEmitter::custom0OverLife, "Scalar keys for particleCustom0; replaces the birth value over normalized age, at most 16 keys.");
+        f.Add("custom1OverLife", &ParticleEmitter::custom1OverLife, "Scalar keys for particleCustom1; replaces the birth value over normalized age, at most 16 keys.");
+        f.Add("custom2OverLife", &ParticleEmitter::custom2OverLife, "Scalar keys for particleCustom2; replaces the birth value over normalized age, at most 16 keys.");
+        f.Add("custom3OverLife", &ParticleEmitter::custom3OverLife, "Scalar keys for particleCustom3; replaces the birth value over normalized age, at most 16 keys.");
         range(f.Add("turbulence", &ParticleEmitter::turbulence, "Strength in m/s^2 of a fixed noise field that pushes particles around (smoke, embers)."), 0, 10000);
         range(f.Add("turbulenceScale", &ParticleEmitter::turbulenceScale, "Noise cells per meter: small = wide swirls, large = jitter."), 0.001f, 1000);
         f.Add("pixelArt", &ParticleEmitter::pixelArt, "Sharp nearest-neighbour texels; false filters the texture smoothly (soft glows, smoke).");
@@ -205,6 +261,7 @@ struct ParticleEmitter {
 struct TrailPoint {
     Vec3 position;
     float age = 0;
+    Vec3 tip;  // second world-space anchor in ribbon mode
 };
 
 struct Trail {
@@ -216,6 +273,12 @@ struct Trail {
     Color color{1, 1, 1}, endColor{1, 1, 1};
     float opacity = 1, endOpacity = 0;
     std::string texture;
+    std::string material;
+    std::string mode = "camera";  // ribbon sweeps base to tip, independent of camera
+    std::string baseAnchor, tipAnchor;  // optional unique entity names; empty uses owner
+    Vec3 baseOffset, tipOffset{0, 1, 0};
+    float duration = 0;  // finite emission window; zero keeps emitting
+    double elapsed = 0;  // runtime emission clock
     std::string blend = "alpha";
     int layer = 0;
     int maxPoints = 64;
@@ -231,11 +294,44 @@ struct Trail {
         f.Add("endColor", &Trail::endColor, "RGB tint at the oldest point.");
         range(f.Add("opacity", &Trail::opacity, "Opacity at the entity."), 0, 1);
         range(f.Add("endOpacity", &Trail::endOpacity, "Opacity at the oldest point."), 0, 1);
+        f.Add("material", &Trail::material, "Optional .mat.json surface material/graph.");
+        f.Add("mode", &Trail::mode, "camera faces the view; ribbon sweeps between two world-space anchors.").options = {"camera", "ribbon"};
+        f.Add("baseAnchor", &Trail::baseAnchor, "Unique scene entity name for blade base; empty uses owner/local block transform.");
+        f.Add("tipAnchor", &Trail::tipAnchor, "Unique scene entity name for blade tip; empty uses owner/local block transform.");
+        f.Add("baseOffset", &Trail::baseOffset, "Base offset in anchor coordinates.");
+        f.Add("tipOffset", &Trail::tipOffset, "Tip offset in anchor coordinates.");
+        range(f.Add("duration", &Trail::duration, "Seconds of emission, followed by drain; zero emits indefinitely."), 0, 600);
         f.Add("texture", &Trail::texture, "Optional image stretched over the ribbon: left edge at the entity, right edge at the oldest point. Empty = solid.");
         f.Add("blend", &Trail::blend, "alpha = normal; add = the ribbon brightens what is behind it (energy, fire).").options = {"alpha", "add"};
         f.Add("layer", &Trail::layer, "2D sorting layer, like Sprite.layer.");
         range(f.Add("maxPoints", &Trail::maxPoints, "Most path points kept; the oldest are dropped first."), 2, 1024);
         f.Add("emitting", &Trail::emitting, "Add new points while true; false lets the existing ribbon fade out.");
+    }
+};
+
+// A linked effect's authored fields; all instance arrays/counters are transient and copied by snapshots.
+struct VFXSystem {
+    static constexpr const char* kTypeName = "VFXSystem";
+    static constexpr const char* kDoc = "Live-linked .vfx.json effect with named parameters, independent emitters and a shared particle budget.";
+    std::string asset;  // project-relative .vfx.json
+    Json params = Json::MakeObject();  // named instance overrides
+    bool playing = true;  // enable automatic emission; existing particles/points still age
+    bool autoDestroy = false;  // destroy the owner once finished
+    std::shared_ptr<const VfxAsset> definition;  // immutable cached definition retained in native snapshots
+    std::string loadedPath, error;  // last successful source and current reload diagnostic
+    Json appliedParams;  // last validated overrides; avoids per-frame configuration work
+    Json runtimeParams = Json::MakeObject();  // Lua/command overrides excluded from authored scene JSON
+    bool playbackOverride = false, runtimePlaying = true;  // runtime controls leave authored playing unchanged
+    std::vector<ParticleEmitter> emitters;
+    std::vector<Trail> trails;
+    double expressionTime = 0; // fixed-step parent clock, retained by native snapshots
+    bool started = false;
+    bool suppressDestroy = false;  // a clear operation can leave an empty reusable instance
+    static void Reflect(FieldList& f) {
+        f.Add("asset", &VFXSystem::asset, "Project-relative effect asset (*.vfx.json).");
+        f.Add("params", &VFXSystem::params, "Named parameter overrides defined by the effect asset; unknown names/ranges are errors.");
+        f.Add("playing", &VFXSystem::playing, "Automatic emission switch; existing particles and trail points keep aging while false.");
+        f.Add("autoDestroy", &VFXSystem::autoDestroy, "Destroy the owner and its children after the effect finishes (vfx.spawn defaults to true).");
     }
 };
 

@@ -9,6 +9,8 @@
 #include "app/CoordinateQueries.h"
 #include "app/Project.h"
 #include "app/AssetPreview.h"
+#include "app/Vfx.h"
+#include "app/VfxExpressionGraph.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
 #include "core/FileSystem.h"
@@ -323,6 +325,94 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    Register(r, "vfx.edit", "Open an isolated Effects document shared by editor and attached agents; scene history is unchanged.",
+             Params().Req("path", "string", "Project .vfx.json path.").Opt("new", "boolean", "Start an unsaved asset; path must not exist.")
+                 .Opt("preset", "string", "Preset for a new document (default fire).").Opt("discard", "boolean", "Explicitly discard previous unsaved document."), false,
+             [](Engine& e, const Json& a) { return e.VfxDocumentCall("edit", a); });
+    Register(r, "vfx.edit_replace", "Validate and replace the complete isolated document in one document history step.",
+             Params().Req("vfx", "object", "Complete oe.vfx document.").Opt("merge", "string", "Repeated edits with the same nonempty key coalesce."), false,
+             [](Engine& e, const Json& a) { return e.VfxDocumentCall("edit_replace", a); });
+    for (const char* operation : {"edit_state", "undo", "redo", "save", "close"}) {
+        const std::string op = operation; Params params;
+        if (op == "close") params.Opt("discard", "boolean", "Explicitly discard unsaved document changes.");
+        Register(r, ("vfx." + op).c_str(), "Inspect, undo/redo, atomically save or close the isolated Effects document.", params, false,
+                 [op](Engine& e, const Json& a) { return e.VfxDocumentCall(op == "edit_state" ? "state" : op, a); });
+    }
+    for (const char* operation : {"create", "get", "list", "set", "diff", "from_entity"}) {
+        Params params;
+        const std::string op = operation;
+        if (op != "list") params.Req("path", "string", "Project-relative .vfx.json asset path.");
+        if (op == "create") params.Opt("vfx", "object", "Version 1 oe.vfx document; provide exactly one of vfx or preset.")
+            .Opt("preset", "string", "Name from vfx.presets; installs bundled dependencies and refuses existing asset paths.");
+        if (op == "set") params.Opt("emitter", "string", "Emitter block name.").Opt("trail", "string", "Trail block name.")
+            .Opt("values", "object", "Partial block field patch.").Opt("params", "object", "Replace parameter definitions.")
+            .Opt("merge", "string", "Coalesce a drag in the open document history; ignored for direct file edits.");
+        if (op == "diff") params.Opt("against", "string", "Reference .vfx.json; omitted compares named blocks with component defaults.");
+        if (op == "from_entity") params.ReqWith("id", EntityRefSchema("Root of a VFXSystem/Trail subtree to pack."));
+        Register(r, ("vfx." + op).c_str(), "Read or atomically author a reusable VFX asset; file edits do not enter scene undo.", params, false,
+                 [op](Engine& e, const Json& a) { return VfxAssetCall(e, op, a); });
+    }
+    Register(r, "vfx.spawn", "Create a linked VFXSystem with validated parameters in one scene undo step.",
+             Params().Req("path", "string", "Project .vfx.json asset.").Opt("name", "string", "Owner entity name.")
+                 .OptWith("parent", EntityRefSchema("Optional parent; position is local to parent."))
+                 .Opt("position", "array", "Local [x,y,z].").Opt("params", "object", "Named parameter overrides.")
+                 .Opt("autoDestroy", "boolean", "Destroy owner after all emission and particles/trails finish (default true)."), true,
+             [](Engine& e, const Json& a) { return VfxRuntimeCall(e, "spawn", 0, a); });
+    for (const char* operation : {"play", "stop", "burst", "clear", "set_param", "state"}) {
+        const std::string op = operation; Params params;
+        params.ReqWith("id", EntityRefSchema("VFXSystem owner id or name."));
+        if (op == "play") params.Opt("restart", "boolean", "Restart all blocks (default true); false resumes their clocks.");
+        if (op == "stop") params.Opt("kill", "boolean", "Clear particles and trails immediately (default false: drain).");
+        if (op == "burst") params.Opt("emitter", "string", "One named emitter; omitted targets all in asset order.")
+            .Opt("count", "integer", "Births per selected emitter, 0..10000; omitted uses each configured burst.");
+        if (op == "clear") params.Opt("restart", "boolean", "If supplied, reset clocks/RNG/counters; true also re-arms automatic births. Omitted only clears live particles/trails.");
+        if (op == "state") params.Opt("particles", "boolean", "Include captured/evaluated particle snapshots per emitter.");
+        if (op == "set_param") params.Req("name", "string", "Parameter name.").ReqWith("value", Json::MakeObject());
+        Register(r, ("vfx." + op).c_str(), "Control or inspect linked VFX runtime; controls do not create scene undo entries.", params, false,
+                 [op](Engine& e, const Json& a) { return VfxRuntimeCall(e, op, RequireEntity(e, a), a); });
+    }
+    Register(r,"vfx.expression_eval","Compile and evaluate a bounded VFX expression without changing the scene; returns its type, value and instruction cost.",
+        Params().Req("source","string","Expression source, 1..1024 bytes.").Opt("type","string","scalar (default) or vector.")
+            .Opt("inputs","object","Finite scalar/vector inputs from vfx.schema.expressions; omitted values use deterministic defaults.")
+            .Opt("params","object","Numeric scalar/three-vector parameter values, up to 32 entries."),false,
+        [](Engine&,const Json& a){return EvaluateVfxExpressionCall(a);});
+    Register(r,"vfx.expression_graph","Convert expression text to transient typed value nodes; unsupported conversion preserves source documents.",
+        Params().Req("source","string","Expression text, 1..1024 bytes.").Opt("type","string","scalar (default) or vector.")
+            .Opt("params","object","Numeric parameter defaults, up to 32 entries."),false,
+        [](Engine&,const Json& a){return VfxExpressionGraphCall(a,false);});
+    Register(r,"vfx.expression_source","Compile a transient value graph back to expression text; rejects cycles, invalid types and exceeded budgets.",
+        Params().Req("graph","object","oe.vfx.expression_graph version 1; nodes with op, args, literal/name/axis and integer output.")
+            .Opt("type","string","scalar (default) or vector.").Opt("params","object","Numeric parameter defaults, up to 32 entries."),false,
+        [](Engine&,const Json& a){return VfxExpressionGraphCall(a,true);});
+    Register(r, "vfx.schema", "Discover particle/trail fields, fixed-order modules, defaults, ranges and authoring limits.", Params(), false,
+             [](Engine&, const Json&) { return VfxSchema(); });
+    Register(r, "vfx.presets", "List portable effect presets with intent sentences and tags.", Params().Opt("tag", "string", "Filter by an exact tag."), false,
+             [](Engine&, const Json& a) { return VfxPresets(a["tag"].asString()); });
+    Register(r, "vfx.apply_preset", "Apply a preset asset and attach a VFXSystem in one scene undo step; installed files survive undo.",
+             Params().ReqWith("id", EntityRefSchema("Target entity id or name.")).Req("preset", "string", "Name from vfx.presets.")
+                 .Opt("mode", "string", "replace resets the affected component (default); merge preserves unspecified settings; bundled presets require replace."), true,
+             [](Engine& e, const Json& a) { return ApplyVfxPreset(e, RequireEntity(e, a), a); });
+    Register(r, "vfx.check", "Validate settings in an effect subtree and report actionable warnings without stepping it.",
+             Params().OptWith("id", EntityRefSchema("Effect root id or name; includes descendants.")).Opt("path", "string", "Alternative .vfx.json asset source."), false,
+             [](Engine& e, const Json& a) { if (a.has("id") == a.has("path")) throw ApiError("invalid_vfx", "provide exactly one id or path"); return a.has("path") ? CheckVfxAsset(e, a["path"].asString()) : CheckVfx(e, RequireEntity(e, a)); });
+    Register(r, "vfx.preview", "Restart an isolated effect and render a contact sheet with one shared camera; does not run gameplay scripts.",
+             Params().OptWith("id", EntityRefSchema("Effect root id or name.")).Opt("path", "string", "Alternative .vfx.json asset source.")
+                 .Opt("times", "array", "1..16 increasing seconds within 0..60; rounded to 60 Hz. Default [0.1,0.3,0.6,1].")
+                 .Opt("size", "integer", "Square tile size 32..512 (default 256); up to four columns.")
+                 .Opt("renderer", "string", "software (default, deterministic) or gpu (hardware dependent).")
+                 .Opt("camera", "object", "Optional eye/target vec3, fov, projection and orthoSize; otherwise fit the sampled effect.")
+                 .Opt("motion", "array", "2..32 keys [[seconds,[x,y,z]],...] of root offsets in parent coordinates; no gameplay scripts.")
+                 .Opt("out", "string", "Write contact-sheet PNG inside the project.")
+                 .Opt("inline", "boolean", "Return png_base64 (default true when out is absent)."), false,
+             [](Engine& e, const Json& a) { if (a.has("id") == a.has("path")) throw ApiError("invalid_vfx", "provide exactly one id or path"); return PreviewVfx(e, a.has("id") ? RequireEntity(e, a) : 0, a); });
+    Register(r, "vfx.analyze", "Measure a restarted isolated effect at fixed steps; peaks and completion examine every frame.",
+             Params().OptWith("id", EntityRefSchema("Effect root id or name.")).Opt("path", "string", "Alternative .vfx.json asset source.")
+                 .Opt("duration", "number", "1/60..60 seconds (default 5), rounded to 60 Hz.")
+                 .Opt("step", "number", "Sample interval >=1/60 second (default 0.25); at most 241 samples.")
+                 .Opt("render", "boolean", "Include mean luminance of 128x128 software frames (default false).")
+                 .Opt("camera", "object", "Optional eye/target vec3, fov, projection and orthoSize for luminance frames.")
+                 .Opt("motion", "array", "Root offsets [[seconds,[x,y,z]],...] for trail/moving-owner analysis."), false,
+             [](Engine& e, const Json& a) { if (a.has("id") == a.has("path")) throw ApiError("invalid_vfx", "provide exactly one id or path"); return AnalyzeVfx(e, a.has("id") ? RequireEntity(e, a) : 0, a); });
     const struct { const char* name; const char* summary; } netQueries[] = {
         {"state", "Read network configuration, role, lobby state and connection error; none mode starts no networking."},
         {"players", "List lobby players in id order, or the local player in none mode."},
@@ -466,75 +556,6 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
              });
-    auto requireEmitter = [](Engine& e, const Json& args) -> ParticleEmitter& {
-        EntityId id = RequireEntity(e, args);
-        ParticleEmitter* emitter = e.GetScene().Get<ParticleEmitter>(id);
-        if (!emitter) throw ApiError("missing_component", "entity has no ParticleEmitter", "Add ParticleEmitter with component.add first.");
-        return *emitter;
-    };
-    Register(r, "particles.state", "Live particle count, accepted births, finished (a non-looping emitter is done and empty) and optional particle snapshots in their local/world coordinates.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("particles", "boolean", "Include age, lifetime, position, velocity, rotation and worldSpace."),
-             false, [requireEmitter](Engine& e, const Json& a) {
-                 const ParticleEmitter& emitter = requireEmitter(e, a);
-                 Json out = Json::MakeObject();
-                 out["count"] = static_cast<uint64_t>(emitter.particles.size());
-                 out["emitted"] = emitter.emitted;
-                 out["playing"] = emitter.playing;
-                 out["loop"] = emitter.loop;
-                 out["maxParticles"] = emitter.maxParticles;
-                 out["finished"] = ParticlesFinished(emitter);
-                 if (a["particles"].asBool()) {
-                     out["particles"] = Json::MakeArray();
-                     for (const Particle& particle : emitter.particles) {
-                         Json p = Json::MakeObject();
-                         p["age"] = particle.age;
-                         p["lifetime"] = particle.lifetime;
-                         p["position"] = Json(Json::Array{particle.position.x, particle.position.y, particle.position.z});
-                         p["velocity"] = Json(Json::Array{particle.velocity.x, particle.velocity.y, particle.velocity.z});
-                         p["rotation"] = particle.rotation;
-                         p["worldSpace"] = particle.worldSpace;
-                         out["particles"].push(p);
-                     }
-                 }
-                 return out;
-             });
-    Register(r, "particles.burst", "Emit particles immediately, including on paused emitters. Excess births are dropped at capacity; runtime only.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Req("count", "integer", "Number to emit, 0..10000."),
-             false, [requireEmitter](Engine& e, const Json& a) {
-                 const ParticleEmitter& emitter = requireEmitter(e, a);
-                 if (!ParticleSettingsValid(emitter))
-                     {
-                     std::string detail;
-                     ParticleCurve curve;
-                     const char* hint = "Correct direction/gravity/colors and numeric fields with component.set.";
-                     if (!ParseParticleCurve(emitter.sizeOverLife, false, curve, &detail)) detail = "sizeOverLife: " + detail;
-                     else if (!ParseParticleCurve(emitter.colorOverLife, true, curve, &detail)) detail = "colorOverLife: " + detail;
-                     else if (!ParseParticleCurve(emitter.opacityOverLife, false, curve, &detail)) detail = "opacityOverLife: " + detail;
-                     if (!detail.empty()) hint = "Curves are [[t, value], ...] with t ascending in 0..1, e.g. [[0,0],[0.2,1],[1,0]]; fix it with component.set.";
-                     throw ApiError("invalid_emitter", detail.empty() ? "particle settings must be finite" : detail, hint);
-                 }
-                 double requested = a["count"].asNumber();
-                 if (requested < 0 || requested > 10000) throw ApiError("invalid_argument", "count must be 0..10000", "Use a bounded burst; maxParticles also limits accepted births.");
-                 int count = static_cast<int>(requested);
-                 Json out = Json::MakeObject();
-                 out["accepted"] = BurstParticles(e.GetScene(), RequireEntity(e, a), count);
-                 return out;
-             });
-    Register(r, "particles.clear", "Clear live particles and reset the random stream/counters. Optionally re-arm the initial burst; runtime only.",
-             Params().ReqWith("id", EntityRefSchema("ParticleEmitter entity.")).Opt("restart", "boolean", "Re-arm initial burst for next playing step (default false)."),
-             false, [requireEmitter](Engine& e, const Json& a) {
-                 ParticleEmitter& emitter = requireEmitter(e, a);
-                 emitter.particles.clear();
-                 emitter.randomState = 0;
-                 emitter.carry = 0;
-                 emitter.emitted = 0;
-                 emitter.elapsed = 0;
-                 emitter.cycle = 0;
-                 emitter.initialBurstEmitted = !a["restart"].asBool(false);
-                 Json out = Json::MakeObject();
-                 out["count"] = 0;
-                 return out;
-             });
     auto requireTrail = [](Engine& e, const Json& args) -> Trail& {
         EntityId id = RequireEntity(e, args);
         Trail* trail = e.GetScene().Get<Trail>(id);
@@ -547,7 +568,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  const Trail& trail = requireTrail(e, a);
                  Json out = Json::MakeObject();
                  out["count"] = static_cast<uint64_t>(trail.points.size());
-                 out["emitting"] = trail.emitting;
+                 out["emitting"] = TrailEmitting(trail);
                  out["maxPoints"] = trail.maxPoints;
                  if (a["points"].asBool()) {
                      out["points"] = Json::MakeArray();
@@ -555,6 +576,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          Json p = Json::MakeObject();
                          p["position"] = Json(Json::Array{point.position.x, point.position.y, point.position.z});
                          p["age"] = point.age;
+                         if (trail.mode == "ribbon") p["tip"] = Json(Json::Array{point.tip.x, point.tip.y, point.tip.z});
                          out["points"].push(p);
                      }
                  }
@@ -854,6 +876,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  const ComponentType& t = RequireType(a["type"]);
                  Scene& s = e.GetScene();
                  bool existed = s.GetComponent(id, t) != nullptr;
+                 if (t.name == "VFXSystem") ValidateVfxSystem(e, s.GetComponent(id, t), a.has("values") ? a["values"] : Json::MakeObject());
+                 ValidateVfxSettings(t, s.GetComponent(id, t), a.has("values") ? a["values"] : Json::MakeObject());
                  void* c = s.AddComponent(id, t);
                  std::string err;
                  if (!ApplyComponentJson(t, c, a["values"], &err)) {
@@ -872,6 +896,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  Scene& s = e.GetScene();
                  void* c = s.GetComponent(id, t);
                  if (!c) throw ApiError("component_missing", "entity " + std::to_string(id) + " has no " + t.name + " component", "Use component.add to add it first.");
+                 if (t.name == "VFXSystem") ValidateVfxSystem(e, c, a["values"]);
+                 ValidateVfxSettings(t, c, a["values"]);
                  // Validate on a copy first so a bad field does not leave a half-applied edit.
                  Json backup = ComponentToJson(t, c);
                  std::string err;

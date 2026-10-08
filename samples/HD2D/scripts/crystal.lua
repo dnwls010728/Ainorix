@@ -17,14 +17,9 @@ function Crystal:onUpdate(dt)
 
   audio.play("sounds/crystal.wav", { volume = 0.7 })
   -- Sparks that outlive the shard.
-  local sparks = scene.create("Crystal Sparks", {
-    Transform = { position = { self.base.x, y, self.base.z } },
-    ParticleEmitter = { rate = 0, burst = 18, loop = false, lifetime = 0.7, lifetimeVariation = 0.4, speed = 2.4,
-                        speedVariation = 0.5, spread = 180, drag = 3, gravity = { 0, -1.5, 0 }, startSize = 0.16,
-                        endSize = 0.02, startColor = { 0.6, 1.6, 1.8 }, endColor = { 0.3, 0.6, 1.4 },
-                        space = "world", blend = "add", maxParticles = 18 }
+  vfx.spawn("effects/crystal_sparks.vfx.json", {
+    name = "Crystal Sparks", position = { self.base.x, y, self.base.z }, autoDestroy = true,
   })
-  timer.after(1.2, function() scene.destroy(sparks) end)
   scene.send(scene.find("Game"), "onCrystal")
   self:destroy()
 end

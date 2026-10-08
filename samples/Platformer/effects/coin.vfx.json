@@ -1,0 +1,42 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Coin Sparkles",
+  "budget": {
+    "maxParticles": 16
+  },
+  "emitters": [
+    {
+      "name": "emitter",
+      "emitter": {
+        "rate": 0,
+        "loop": false,
+        "lifetime": 0.5,
+        "dimensions": 2,
+        "space": "world",
+        "speed": 1.8,
+        "spread": 180,
+        "gravity": [
+          0,
+          -5,
+          0
+        ],
+        "startSize": 0.12,
+        "endSize": 0.02,
+        "startColor": [
+          1,
+          0.8,
+          0.1
+        ],
+        "endColor": [
+          1,
+          0.4,
+          0.05
+        ],
+        "startOpacity": 1,
+        "endOpacity": 0,
+        "maxParticles": 16
+      }
+    }
+  ]
+}

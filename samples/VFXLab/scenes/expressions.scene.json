@@ -1,0 +1,73 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "VFX Expressions",
+  "entities": [
+    {
+      "id": 1,
+      "name": "Camera",
+      "components": {
+        "Transform": {
+          "position": [
+            5,
+            3.5,
+            7
+          ],
+          "rotation": [
+            -12,
+            35,
+            0
+          ]
+        },
+        "Camera": {
+          "clearColor": [
+            0.025,
+            0.04,
+            0.065
+          ]
+        },
+        "PostProcess": {
+          "bloom": 0.4,
+          "bloomThreshold": 0.8
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Expression Spiral",
+      "components": {
+        "Transform": {},
+        "VFXSystem": {
+          "asset": "effects/spiral_expressions.vfx.json"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Ground",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -0.05,
+            0
+          ],
+          "scale": [
+            8,
+            0.1,
+            8
+          ]
+        },
+        "MeshRenderer": {
+          "mesh": "cube",
+          "color": [
+            0.08,
+            0.13,
+            0.2
+          ],
+          "unlit": true
+        }
+      }
+    }
+  ]
+}

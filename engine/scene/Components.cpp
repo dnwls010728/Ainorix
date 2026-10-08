@@ -6,7 +6,6 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Transform>();
     TypeRegistry::Register<MeshRenderer>();
     TypeRegistry::Register<Animator>();
-    TypeRegistry::Register<ParticleEmitter>();
     TypeRegistry::Register<Camera>();
     TypeRegistry::Register<PostProcess>();
     TypeRegistry::Register<Light2D>();
@@ -42,6 +41,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<NetSync>();
     TypeRegistry::Register<NetPlayer>();
     TypeRegistry::Register<Trail>();
+    TypeRegistry::Register<VFXSystem>();
 }
 
 }  // namespace oe

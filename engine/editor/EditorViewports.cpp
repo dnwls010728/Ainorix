@@ -307,6 +307,8 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
                                                                      {"MeshRenderer", ObjectOf({{"mesh", Json(path)}})}})}}));
     } else if (EndsWith(path, ".prefab.json")) {
         r = Call("prefab.instantiate", ObjectOf({{"path", Json(path)}, {"position", Vec3Json(hit)}}));
+    } else if (EndsWith(path, ".vfx.json")) {
+        r = Call("vfx.spawn", ObjectOf({{"path", path}, {"position", Vec3Json(hit)}, {"autoDestroy", false}}));
     } else if (EndsWith(path, ".scene.json")) {
         RequestAction({PendingAction::Kind::LoadScene, path});
         return;

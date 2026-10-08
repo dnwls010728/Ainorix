@@ -24,8 +24,11 @@ function Effects:burst(x, y, tier, big)
   local r = D.TIERS[tier].r
   local id = scene.instantiate("prefabs/fx_burst.prefab.json", { position = { x = x, y = y, z = 0 } })
   local c = UI.rgb(D.TIERS[tier].color)
-  scene.set(id, "ParticleEmitter", { startColor = c, endColor = c, speed = 2.5 + r * 3, startSize = 0.12 + r * 0.22 })
-  particles.burst(id, big and 22 or 12)
+  vfx.set(id, "startColor", c)
+  vfx.set(id, "endColor", c)
+  vfx.set(id, "speed", 2.5 + r * 3)
+  vfx.set(id, "startSize", 0.12 + r * 0.22)
+  vfx.burst(id, big and 22 or 12)
   self.fx[#self.fx + 1] = { id = id, left = 80 }
   local ring = scene.instantiate("prefabs/fx_ring.prefab.json", { position = { x = x, y = y, z = 0 } })
   scene.set(ring, "Sprite", { width = r * 2, height = r * 2, color = c })

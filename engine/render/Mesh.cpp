@@ -235,9 +235,27 @@ Mesh MakeSphere(int rings, int segments) {
     return m;
 }
 
+Mesh MakeCrescent() {
+    Mesh m;
+    constexpr int segments = 48;
+    for (int i=0; i<=segments; ++i) {
+        const float t = static_cast<float>(i)/static_cast<float>(segments);
+        const float angle = (t-0.5f)*kPi*1.5f;
+        const float inner = 0.5f - 0.14f*std::sin(t*kPi);
+        const Vec3 direction(std::cos(angle),std::sin(angle),0);
+        m.positions.push_back(direction*inner); m.positions.push_back(direction*0.5f);
+        m.normals.insert(m.normals.end(),2,Vec3(0,0,1));
+        m.uvs.insert(m.uvs.end(),{t,1,t,0});
+        if (i>0) { const uint32_t b=static_cast<uint32_t>(i-1)*2;
+            m.indices.insert(m.indices.end(),{b,b+1,b+3,b,b+3,b+2}); }
+    }
+    Finish(m); return m;
+}
+
 const std::map<std::string, Mesh>& Meshes() {
     static const std::map<std::string, Mesh> meshes = {
         {"cube", MakeCube()},
+        {"crescent", MakeCrescent()},
         {"plane", MakePlane()},
         {"plane64", MakePlaneGrid(64)},
         {"pyramid", MakePyramid()},

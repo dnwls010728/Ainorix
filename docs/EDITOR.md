@@ -1,5 +1,7 @@
 # Editor
 
+Effects > New Effect now lists 15 presets, including six complete expression effects. Dependencies install into the project on creation; save the draft, then Place in Scene. See [VFX phase 5d](VFX_PHASE5D.md).
+
 `oe editor <project>` opens the native editor: a Dear ImGui docking application drawn on the GPU in the engine
 process. It changes the scene only through commands, so an agent attached with `oe mcp --connect 7777` works in
 the same session as the person. What was built when, and what is unverified, is in the work log at the end.
@@ -18,7 +20,32 @@ the same session as the person. What was built when, and what is unverified, is 
 - **Tiles** - palette of the selected Tilemap's tile characters, drawn from its tileset (autotiles show their fully connected frame; tooltips list collision, autotile mode and variants). Picking one turns on **Paint Tiles**: in the Scene view left drag paints, right drag erases, Shift+drag fills a rectangle, Ctrl+click picks the tile under the cursor, middle drag pans; the cell under the cursor is outlined with its column, row. Autotiles connect as you paint and each stroke is one undo step (`tilemap.paint {merge}`). See [2D.md](2D.md#tilemap).
 - **Shader Graph** - node workspace for portable surface graphs: connections, constants/uniforms, color/emissive/normal/offset outputs, local undo, validation and a live surface swatch. Create/edit shader-linked materials and apply them to selected meshes. Open shader/material assets from Assets, or use View > Shader Graph. See [SHADER_EDITOR.md](SHADER_EDITOR.md) for authoring, previews and limits.
 - **Scripts** - Lua code editor tabs ([ImGuiColorTextEdit](https://github.com/goossens/ImGuiColorTextEdit)): syntax highlighting (engine API names such as `scene`, `input`, `self` in their own color), line numbers, bracket matching, auto indent, multiple cursors, undo/redo, **find / replace / replace all** (Ctrl+F; Aa = match case, [] = whole word, Ctrl+G next). While you type, the script is checked with `script.check` (0.35 s after the last key): syntax errors and warnings (a global assigned without `local`, an unknown global) are marked on the line number and underlined, with the message as a tooltip, and listed under the code - click one to jump there. Runtime errors of the running game (`script.errors`) are marked the same way. Ctrl+S (or Save) writes through `script.write`, which hot-reloads the script, also while the game runs.
-Right-click any script tab for **Close Tab**, **Close Other Tabs**, or **Close All Tabs**. Closing modified buffers asks to save, discard, or cancel; cancelling a bulk close keeps every requested tab, and a failed save keeps the buffers open. Completion appears while typing and can also be requested with Ctrl+Space: Lua keywords, sandbox globals, current-file identifiers, and members of known API tables (`input.pr`, `particles.bu`, `math.si`, `self:ge`, etc.). Up/Down chooses a candidate, Tab/Enter inserts it, and Esc dismisses it. Comments and strings do not trigger completion. This is name completion, without type inference for project-defined objects or required modules. Diagnostic lines come directly from Lua: a valid bare `return` followed by another statement reports the later statement, where the parser detects the violation, rather than moving the error back to the first return.
+Right-click any script tab for **Close Tab**, **Close Other Tabs**, or **Close All Tabs**. Closing modified buffers asks to save, discard, or cancel; cancelling a bulk close keeps every requested tab, and a failed save keeps the buffers open. Completion appears while typing and can also be requested with Ctrl+Space: Lua keywords, sandbox globals, current-file identifiers, and members of known API tables (`input.pr`, `vfx.bu`, `math.si`, `self:ge`, etc.). Up/Down chooses a candidate, Tab/Enter inserts it, and Esc dismisses it. Comments and strings do not trigger completion. This is name completion, without type inference for project-defined objects or required modules. Diagnostic lines come directly from Lua: a valid bare `return` followed by another statement reports the later statement, where the parser detects the violation, rather than moving the error back to the first return.
+
+**Effects** opens from View > Effects, a `.vfx.json` asset double-click, or **Edit Effect** on a
+VFXSystem. New Effect starts an unsaved preset; Open Effect chooses a project asset. Parameters
+have typed default controls and optional JSON definitions. Emission, Shape, Motion, Appearance,
+Curves, Timing and Render group the reflected emitter/trail settings. Parameter-controlled fields
+are disabled: edit the parameter instead. Add Emitter/Add Trail append blocks to the document.
+
+Scalar lifetime curves show draggable keys; color lifetime curves show a gradient and color picker.
+Create Curve converts start/end values to two keys. Add Key samples the largest interval, Remove Key
+removes the selected key, and Use Start/End restores the component's start/end interpolation. Dragging
+a graph key changes its normalized time and scalar value; color keys change time on the gradient.
+
+The isolated preview runs at 60 Hz, with Play/Pause, Restart, a three-second Loop Preview, timeline
+scrubbing, optional root motion for trails, Fit Preview and distance. Particle count, total budget and
+trail points are visible. Backward scrubbing restarts and deterministically resimulates; expensive
+scrubs are capped at the headless preview work budget. Document edits restart the preview. It uses the
+software reference renderer in a GPU editor image, and runs no gameplay scripts or live-scene simulation.
+
+Save Effect/Ctrl+S atomically writes the document. Ctrl+Z/Ctrl+Y and the panel's Undo/Redo use their own
+64-step history, separate from scene undo. Switching assets, closing the panel or quitting asks to
+save/discard/cancel when dirty. Changes made on disk after opening block saving rather than overwrite
+another writer. Reload through `vfx.edit {path,discard:true}` after resolving the conflict. Attached agents
+share this draft through `vfx.edit_state`, `vfx.set` and `vfx.edit_replace`; see [VFX.md](VFX.md).
+Place in Scene requires a saved document and creates one undoable VFXSystem. Dragging a VFX asset from
+Assets into Scene also places an instance at the drop point.
 
 The theme is tuned for reading (`ApplyStyle` in `Editor.cpp`): 17 px text (Korean/Japanese glyphs merged 6 % larger to match Roboto), bright secondary text, outlined fields, stronger selected tabs and keyboard focus, and larger scrollbars and slider handles. Active toolbar tools have an outline as well as a colored fill. Hierarchy type tags are large enough to read beside entity names. View > Interface size scales all of it.
 
@@ -131,6 +158,7 @@ oe editor samples/Platformer --screenshot build/editor.png --2d --select Player 
 oe editor samples/Hello --screenshot build/editor.png --play --frames 60  # Game view after 1 s of play
 oe editor samples/Wickbound --screenshot build/editor.png --game --select Start  # stopped Game view: UI editing with a selection
 oe editor samples/Hello --screenshot build/editor.png --lang ja       # Japanese interface (default for screenshots: en)
+oe editor samples/VFXLab --screenshot build/effects.png --effects effects/campfire.vfx.json # Effects workspace
 oe editor samples/FPS --screenshot build/editor.png --script scripts/target.lua  # code editor with the script's problems
 oe editor samples/Hello --screenshot build/editor.png --team --agent new  # Team panel and the agent profile dialog (--agent <id> edits one)
 oe editor samples/Hello --screenshot build/editor.png --chat             # Team Chat panel
@@ -158,6 +186,13 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 Platform requirements (`engine/platform/Platform.h`): `Window::SetEventMode` / `TakeEvents` (full keyboard, text, all mouse buttons, wheel, focus, close, dropped files), `SetCursor`, `DpiScale`, `Maximize`, and `PlatformEnableHighDpi`. Win32 implements them; a macOS port needs them in its AppKit window plus a Metal `GpuDevice` (see [PLATFORMS.md](PLATFORMS.md)).
 
 Adding a panel: a method on `NativeEditor::Impl` (declared in `EditorInternal.h`), called from `NativeEditor::Update`, docked in `DockLayout`, with a toggle in the View menu. Read data with `Call("...")` when the revision changes (`Refresh`), write with commands so undo and agents using the API stay in sync.
+
+## Effects value nodes
+
+Enable Value Nodes in Effects to edit Birth/Update channel expressions. Nodes compile into the same
+source used by the command-backed document; there is no editor evaluator. Complete edits share undo,
+while incomplete topology stays pending. Positions and framing live in `.oe/vfx-layout/` sidecars.
+Material graphs remain in Shaders. Usage and verification: [VFX_PHASE5C.md](VFX_PHASE5C.md).
 
 ## Implementation status (work log): P7
 
@@ -195,3 +230,87 @@ It starts from updated main; P6 verification/sample changes have a separate bran
 The editor only uses public commands (`Engine::Call`), so an agent attached with `oe mcp --connect 7777` sees and can do exactly what the person in the editor does. The editor keeps the HTTP API running (`--port`, default 7777): `oe mcp --connect` and `POST /api/call` work while it is open, and every edit that arrives through the API shows up as a notice (`API: component.set Player MeshRenderer`) plus a fading dot on the entity in the Hierarchy.
 
 Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
+
+### Effects expression source (phase 5b)
+
+Select Expressions in an effect block (Fields or expanded Structure Graph module). Choose Birth/Update,
+a channel and type source. Apply Expression validates the whole draft; Clear Expression restores the
+channel's field/curve behavior. Each application is one undo step. Invalid text stays editable and
+shows block/channel/line/column errors without changing the draft. Remote patches and undo refresh
+the displayed source. Expression-only parameters accept empty targets and vec3 controls. Disconnecting
+a field retains parameters used by expressions. Open `effects/spiral_expressions.vfx.json` in VFXLab for a script-free proof.
+Language and limits: [VFX_PHASE5B.md](VFX_PHASE5B.md).
+
+### Effects motion curves (phase 5a)
+
+Motion exposes Birth Offset; Appearance exposes Birth Rotation, Birth Scale, Particle Pivot and
+`custom0..3`. Curves includes Position, Velocity, Rotation and Axis Scale curves, with X/Y/Z radio
+controls sharing one set of age keys. Adding/moving a key samples the other axes at its new age;
+removing a key removes it for all three axes. Signed position/velocity/rotation/custom plots accept
+negative values; scale stays nonnegative. Use Birth Values clears a channel curve. Edits, undo,
+redo, saving and attached-agent patches use the same draft commands in either Fields or Structure Graph.
+Shaders lists `particleCustom0..3` alongside age/random/speed inputs. Open
+`effects/ice_pillar_curves.vfx.json` in VFXLab to inspect growth, hold and material dissolve.
+
+### Effects rendering fields (VFX phase 4)
+
+Effects exposes `material`, `mesh`, `batching`, death emitter/count, ribbon mode and two anchors through
+the existing grouped command-backed inspector. Material graphs remain authored in Shaders; their node
+menu includes `particleAge`, `particleRandom` and `particleSpeed`. The preview uses real material/mesh
+assets for rendering and Fit Preview. Local ribbon offsets work in isolation; external named anchors
+are resolved by the scene instance. Structure Graph adds reference nodes and wires backed by the same document; see [VFX.md](VFX.md#effects-structure-graph).
+
+
+### Effects authoring (VFX phase 3, 2026-10-08)
+
+- [x] Effects panel, module fields, typed parameters and curve/gradient controls; isolated playback,
+      scrub, loop, trail motion and budget counts. Shared command document owns separate undo/redo,
+      validated saves and disk conflict protection. Dirty close/switch/quit uses save/discard/cancel.
+- [x] VFX asset open/context actions, VFXSystem inspector link and undoable Scene placement/drop.
+      Attached agents edit the same draft and produce notices. English/Korean/Japanese UI and
+      `--effects` screenshot selection added. Old layouts insert the new tab without resetting others.
+- [x] Windows Release build, all 274 tests; native event-driven fields, curves/gradients, history,
+      saving, remote notice, dirty switch prompt, Place in Scene and real asset-card drag checked.
+      English workflow and Korean/Japanese D3D11 screenshots inspected. CLI authoring/preview tested.
+- [ ] Linux/EGL and other editor platforms unverified. Web/Android player binaries need the existing
+      Emscripten/NDK rebuild follow-up; editor itself is not linked into players.
+
+### Preview GPU resource lifetime fix (2026-10-08)
+
+- [x] Release old preview GPU copies every editor frame, including when Effects/Shader hides both
+      Scene and Game. Previously eviction ran only on scene rendering: each new preview accumulated
+      an image/view until sokol reported IMAGE_POOL_EXHAUSTED and VIEW_POOL_EXHAUSTED (`sg item 159`).
+      Release pool errors now name the failing pool instead of only reporting a numeric item.
+- [x] VFXLab CLI editor screenshot at 800x600 over 2200 frames reproduced 1403 GPU errors before the
+      fix, including 194 view-pool failures; the same run after the fix has zero GPU errors.
+      NativeEditorEffectsResourceLifetime tracks live images/views over 2200 frames with Scene hidden;
+      Windows Release build and the complete 275-test suite pass. Before/after screenshots inspected.
+- [ ] Other GPU backends unverified here. Prebuilt Web/Android players retain the previously recorded
+      SDK rebuild follow-up; the editor fix itself is desktop-only.
+
+### Effects structure graph (phase 4b, 2026-10-08)
+
+- [x] Structure Graph toggle; emitter/trail modules expand with the existing fields and curve widgets.
+      Material, parameter, death-trigger and scene-anchor wires use shared document commands. Output
+      edits the total budget. Invalid wires preserve the draft and show the command hint.
+- [x] Material double-click opens Shaders; unused material/anchor references are palette entries.
+      Header drag, middle-mouse pan, wheel zoom, arrangement and fit use EditorNodeCanvas, also used
+      by Shaders. Asset layout lives only in `.oe/vfx-layout/`; `--effects-graph` selects this view in
+      screenshot mode. Field view remains available. See [VFX.md](VFX.md#effects-structure-graph).
+- [x] Warning-free Windows build, all 282 tests and D3D11 screenshots; details in [VFX_PHASE4B.md](VFX_PHASE4B.md).
+- [ ] Other desktop GPU backends unverified.
+
+### Effects motion channels (2026-10-08)
+
+- [x] Vector axis controls, signed curves, translated birth/pivot labels and material custom ops.
+- [x] Native event coverage for vector-axis drag and document undo/redo. See [VFX_PHASE5A.md](VFX_PHASE5A.md).
+
+### Effects expressions (2026-10-08)
+
+- [x] Translated Birth/Update channel source widget, explicit Apply/Clear, individual document history
+      and native event verification. See [VFX_PHASE5B.md](VFX_PHASE5B.md).
+
+### Effects value nodes (2026-10-08)
+
+- [x] Typed channel canvas, source/graph commands, shared history and independent layout.
+- [x] Native event tests and Korean/English D3D11 screenshots. See [VFX_PHASE5C.md](VFX_PHASE5C.md).

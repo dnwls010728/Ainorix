@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "scene/Components.h"
 #include "scene/Systems.h"
+#include "scene/Vfx.h"
 #include "scene/TileGrid.h"
 
 namespace oe {
@@ -383,10 +384,8 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
     }
     // Each particle shares the static quad. Stable birth order also resolves equal-distance blends.
     const float axes[3][3] = {{right.x, right.y, right.z}, {up.x, up.y, up.z}, {normal.x, normal.y, normal.z}};
-    for (const auto& kv : scene.Pool<ParticleEmitter>()) {
-        const ParticleEmitter& emitter = kv.second;
-        if (emitter.particles.empty()) continue;
-        const Mat4 emitterWorld = scene.WorldMatrix(kv.first);
+    auto gatherEmitter = [&](EntityId owner, const ParticleEmitter& emitter, const Mat4& emitterWorld) {
+        if (emitter.particles.empty()) return;
         std::shared_ptr<const Texture> texture;
         if (!emitter.texture.empty() && assets) texture = assets->GetTexture(emitter.texture);
         const int columns = std::max(1, std::min(4096, emitter.columns)), rows = std::max(1, std::min(4096, emitter.rows));
@@ -399,30 +398,41 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         ParseParticleCurve(emitter.opacityOverLife, false, opacityCurve, nullptr);
         const int flipbook = std::max(1, std::min(1000000, emitter.frames));
         const bool alignVelocity = emitter.align == "velocity";
+        const size_t first = items.size();
+        const auto material = !emitter.material.empty() && assets ? assets->GetMaterial(emitter.material) : nullptr;
+        auto sourceMesh = emitter.mesh.empty() ? std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad) :
+            (assets ? assets->GetMesh(emitter.mesh) : std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), GetBuiltinMesh(emitter.mesh)));
+        if (sourceMesh && !emitter.mesh.empty() && (!sourceMesh->joints.empty() || sourceMesh->positions.size() > 65536 ||
+            sourceMesh->indices.size() > 196608 || sourceMesh->positions.size()*emitter.particles.size() > 1000000)) sourceMesh.reset();
         for (const Particle& particle : emitter.particles) {
             if (!std::isfinite(particle.age) || !std::isfinite(particle.lifetime) || particle.lifetime <= 0) continue;
             float t = Clamp(particle.age / particle.lifetime, 0, 1);
             float size = sizeCurve.Empty() ? particle.startSize * (1 - t) + particle.endSize * t : sizeCurve.Sample(t).x * particle.sizeScale;
             float opacity = opacityCurve.Empty() ? particle.startOpacity * (1 - t) + particle.endOpacity * t : opacityCurve.Sample(t).x;
+            if (particle.hasExpressionSize) size=particle.expressionSize;
+            if (particle.hasExpressionOpacity) opacity=particle.expressionOpacity;
             if (!std::isfinite(size) || size <= 0 || !std::isfinite(opacity) || opacity <= 0) continue;
             Vec3 center = particle.worldSpace ? particle.position : emitterWorld.TransformPoint(particle.position);
             if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)) continue;
             RenderItem it;
-            it.id = kv.first;
+            it.id = owner;
             it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
             it.textureOverride = texture;
+            it.materialOverride = material;
             if (colorCurve.Empty()) {
                 it.tint = particle.startColor * (1 - t) + particle.endColor * t;
             } else {
                 const Vec3 c = colorCurve.Sample(t);
                 it.tint = Color(c.x, c.y, c.z);
             }
+            if (particle.hasExpressionColor) it.tint=Color(particle.expressionColor.x,particle.expressionColor.y,particle.expressionColor.z);
             it.opacity = Clamp(opacity, 0, 1);
             it.sortLayer = emitter.layer;
             it.additive = emitter.blend == "add";
             it.blend = true;
-            it.unlit = true;
+            it.unlit = !material || material->unlit;
             it.castShadows = false;
+            it.doubleSided = !emitter.mesh.empty();
             it.pointSample = emitter.pixelArt;
             if (!emitter.texture.empty() && !texture) {
                 it.tint = Color(1, 0, 1);
@@ -468,24 +478,107 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.world.at(0, 3) = center.x;
             it.world.at(1, 3) = center.y;
             it.world.at(2, 3) = center.z;
+            if (!(particle.rotation3D == Vec3()) || !(particle.axisScale == Vec3(1, 1, 1)) || !(emitter.pivot == Vec3())) {
+                // Rotate in unscaled billboard axes, then apply size/stretch once on the geometry.
+                for (int axis = 0; axis < 3; ++axis) {
+                    it.world.at(axis, 0) = turned[0][axis];
+                    it.world.at(axis, 1) = turned[1][axis];
+                }
+                it.world = it.world * Mat4::RotationEuler(particle.rotation3D) *
+                    Mat4::Scale(Vec3(size * particle.axisScale.x, length * particle.axisScale.y, size * particle.axisScale.z)) * Mat4::Translation(emitter.pivot * -1);
+            }
+            if (!emitter.mesh.empty() && sourceMesh) {
+                // Static mesh particles retain emitter orientation; lifetime size scales all axes.
+                Mat4 basis = particle.worldSpace ? particle.meshBasis : emitterWorld;
+                for (int axis = 0; axis < 3; ++axis) {
+                    Vec3 column(basis.at(0,axis), basis.at(1,axis), basis.at(2,axis));
+                    column = Normalize(column);
+                    basis.at(0,axis)=column.x; basis.at(1,axis)=column.y; basis.at(2,axis)=column.z;
+                }
+                basis.at(0,3)=center.x; basis.at(1,3)=center.y; basis.at(2,3)=center.z;
+                it.world = basis * Mat4::RotationEuler(Vec3(0,0,particle.rotation)) * Mat4::Scale(emitter.meshScale * size);
+                if (!(particle.rotation3D == Vec3()) || !(particle.axisScale == Vec3(1, 1, 1)) || !(emitter.pivot == Vec3()))
+                    it.world = basis * Mat4::RotationEuler(Vec3(0,0,particle.rotation)) * Mat4::RotationEuler(particle.rotation3D) *
+                        Mat4::Scale(Vec3(emitter.meshScale.x * size * particle.axisScale.x, emitter.meshScale.y * size * particle.axisScale.y,
+                            emitter.meshScale.z * size * particle.axisScale.z)) * Mat4::Translation(emitter.pivot * -1);
+                it.mesh = sourceMesh;
+            }
+            if ((!emitter.material.empty() && !material) || (!emitter.mesh.empty() && !sourceMesh)) {
+                it.tint = Color(1,0,1); it.error = true; it.unlit = true;
+            }
             it.normalMatrix = it.world.Inverse().Transposed();
+            const Vec3 velocity = particle.worldSpace ? particle.velocity : emitterWorld.TransformDir(particle.velocity);
+            it.particleInput = Vec4(t, particle.random, Length(velocity), 0);
+            it.particleCustom = particle.custom;
+            if (emitter.batching) {
+                auto mesh = std::make_shared<Mesh>(*it.mesh);
+                const Vec4 data = it.particleInput;
+                it.particleInput = Vec4();
+                it.particleCustom = Vec4();
+                mesh->colors.assign(mesh->positions.size(), Vec4(it.tint.r,it.tint.g,it.tint.b,it.opacity));
+                mesh->particleData.assign(mesh->positions.size(), data);
+                mesh->particleCustom.assign(mesh->positions.size(), particle.custom);
+                for (size_t vertex=0; vertex<mesh->positions.size(); ++vertex) {
+                    mesh->positions[vertex] = it.world.TransformPoint(mesh->positions[vertex]);
+                    if (vertex < mesh->normals.size()) mesh->normals[vertex] = Normalize(it.normalMatrix.TransformDir(mesh->normals[vertex]));
+                    if (vertex*2+1 < mesh->uvs.size()) {
+                        mesh->uvs[vertex*2] = mesh->uvs[vertex*2]*du + u0;
+                        mesh->uvs[vertex*2+1] = mesh->uvs[vertex*2+1]*dv + v0;
+                    }
+                }
+                mesh->skin.clear(); mesh->joints.clear(); mesh->clips.clear();
+                mesh->ComputeBounds(); mesh->ComputeTangents();
+                it.mesh = mesh; it.world = Mat4{}; it.normalMatrix = Mat4{};
+                it.tint = Color(1,1,1); it.opacity = 1;
+                it.uvOffset[0]=it.uvOffset[1]=0; it.uvScale[0]=it.uvScale[1]=1;
+            }
             items.push_back(std::move(it));
         }
-    }
+        if (emitter.batching && items.size() > first + 1 && (material || emitter.mesh.empty() ||
+            (sourceMesh && sourceMesh->submeshes.size() == 1))) {
+            // Opt-in group sorting: retain back-to-front order inside the emitter.
+            std::stable_sort(items.begin()+static_cast<std::ptrdiff_t>(first), items.end(), [&](const RenderItem& a, const RenderItem& b) {
+                const Vec3 eye = cameraWorld.TransformPoint(Vec3());
+                return Length((a.mesh->boundsMin+a.mesh->boundsMax)*0.5f-eye) >
+                       Length((b.mesh->boundsMin+b.mesh->boundsMax)*0.5f-eye);
+            });
+            auto mesh = std::make_shared<Mesh>();
+            for (size_t index=first; index<items.size(); ++index) {
+                const Mesh& part = *items[index].mesh;
+                const uint32_t offset = static_cast<uint32_t>(mesh->positions.size());
+                mesh->positions.insert(mesh->positions.end(),part.positions.begin(),part.positions.end());
+                mesh->normals.insert(mesh->normals.end(),part.normals.begin(),part.normals.end());
+                mesh->uvs.insert(mesh->uvs.end(),part.uvs.begin(),part.uvs.end());
+                mesh->colors.insert(mesh->colors.end(),part.colors.begin(),part.colors.end());
+                mesh->particleData.insert(mesh->particleData.end(),part.particleData.begin(),part.particleData.end());
+                mesh->particleCustom.insert(mesh->particleCustom.end(),part.particleCustom.begin(),part.particleCustom.end());
+                for (uint32_t vertex : part.indices) mesh->indices.push_back(vertex+offset);
+            }
+            mesh->materials = items[first].mesh->materials;
+            Submesh sub; sub.indexCount=static_cast<uint32_t>(mesh->indices.size());
+            sub.material=items[first].mesh->submeshes.front().material;
+            mesh->submeshes={sub}; mesh->ComputeBounds(); mesh->ComputeTangents();
+            items[first].mesh=mesh; items.resize(first+1);
+        }
+    };
+    for (const auto& kv : scene.Pool<VFXSystem>()) if (kv.second.definition)
+        for (size_t i = 0; i < kv.second.emitters.size(); ++i)
+            gatherEmitter(kv.first, kv.second.emitters[i], scene.WorldMatrix(kv.first) * kv.second.definition->emitters[i].local);
     // Trails: one ribbon mesh per entity in world coordinates, rebuilt every frame from its path and
     // turned toward the camera. The fade along its length comes from the texture (TrailTexture).
-    for (const auto& kv : scene.Pool<Trail>()) {
-        const Trail& trail = kv.second;
+    auto gatherTrail = [&](EntityId owner, const Trail& trail, const Vec3& head, const Vec3& tip, bool emitting) {
         std::vector<TrailPoint> path = trail.points;
-        if (trail.emitting) {  // the ribbon always reaches the entity, also between path points
-            const Vec3 head = scene.WorldMatrix(kv.first).TransformPoint(Vec3());
+        if (emitting) {  // the ribbon always reaches the entity, also between path points
             if (std::isfinite(head.x) && std::isfinite(head.y) && std::isfinite(head.z) &&
-                (path.empty() || Length(head - path.back().position) > 1e-5f)) path.push_back({head, 0.0f});
+                (path.empty() || Length(head - path.back().position) > 1e-5f ||
+                 (trail.mode == "ribbon" && Length(tip-path.back().tip) > 1e-5f))) path.push_back({head, 0.0f, tip});
         }
-        if (path.size() < 2 || !std::isfinite(trail.width) || !std::isfinite(trail.endWidth)) continue;
+        if (path.size() < 2 || !std::isfinite(trail.width) || !std::isfinite(trail.endWidth)) return;
         std::shared_ptr<const Texture> image;
         if (!trail.texture.empty() && assets) image = assets->GetTexture(trail.texture);
-        const bool missing = !trail.texture.empty() && !image;
+        const auto material = !trail.material.empty() && assets ? assets->GetMaterial(trail.material) : nullptr;
+        if (trail.texture.empty() && material) image = material->baseTexture;
+        const bool missing = (!trail.texture.empty() && !image) || (!trail.material.empty() && !material);
         std::shared_ptr<const Texture> fade = TrailTexture(trail, missing ? nullptr : image);
         const float lifetime = std::isfinite(trail.lifetime) ? Clamp(trail.lifetime, 0.01f, 60) : 0.01f;
         const float texelU = 1.0f / static_cast<float>(fade->width), texelV = 1.0f / static_cast<float>(fade->height);
@@ -500,8 +593,9 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             const float half = std::max(0.0f, trail.width * (1 - u) + trail.endWidth * u) * 0.5f;
             // Texel centers of the first/last column and row: bilinear sampling never wraps head into tail.
             const float tu = texelU * 0.5f + u * (1.0f - texelU);
-            mesh->positions.push_back(path[i].position - side * half);
-            mesh->positions.push_back(path[i].position + side * half);
+            mesh->positions.push_back(trail.mode == "ribbon" ? path[i].position : path[i].position - side * half);
+            mesh->positions.push_back(trail.mode == "ribbon" ? path[i].tip : path[i].position + side * half);
+            if (material) mesh->particleData.insert(mesh->particleData.end(), 2, Vec4(u,0,0,0));
             mesh->normals.insert(mesh->normals.end(), 2, normal);
             mesh->uvs.insert(mesh->uvs.end(), {tu, 1.0f - texelV * 0.5f, tu, texelV * 0.5f});
             if (i == 0) continue;
@@ -514,9 +608,10 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         mesh->ComputeBounds();
         mesh->ComputeTangents();
         RenderItem it;
-        it.id = kv.first;
+        it.id = owner;
         it.mesh = mesh;
         it.textureOverride = fade;
+        it.materialOverride = material;
         it.tint = missing ? Color(1, 0, 1) : Color(1, 1, 1);
         it.error = missing;
         it.blend = true;
@@ -524,9 +619,19 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.unlit = true;
         it.castShadows = false;
         it.doubleSided = true;
+        it.unlit = !material || material->unlit;
         it.sortLayer = trail.layer;
         items.push_back(std::move(it));
-    }
+    };
+    auto trailItem = [&](EntityId id, const Trail& trail, const Mat4& world, bool playing) {
+        Vec3 base, tip;
+        const bool valid = TrailAnchors(scene, trail, world, base, tip);
+        gatherTrail(id, trail, base, tip, valid && playing && TrailEmitting(trail));
+    };
+    for (const auto& kv : scene.Pool<Trail>()) trailItem(kv.first, kv.second, scene.WorldMatrix(kv.first), true);
+    for (const auto& kv : scene.Pool<VFXSystem>()) if (kv.second.definition)
+        for (size_t i = 0; i < kv.second.trails.size(); ++i)
+            trailItem(kv.first, kv.second.trails[i], scene.WorldMatrix(kv.first) * kv.second.definition->trails[i].local, VfxPlaying(kv.second));
     std::stable_sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) { return a.id < b.id; });
     for (RenderItem& item : items) {
         item.boundsMin = item.mesh->boundsMin;
@@ -570,6 +675,13 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
         }
         input.uv = Vec4((u * item.uvScale[0] + item.uvOffset[0]) * material.tiling[0] + material.offset[0],
                         (v * item.uvScale[1] + item.uvOffset[1]) * material.tiling[1] + material.offset[1], 0, 0);
+        input.particle = item.particleInput + (vertex < m.particleData.size() ? m.particleData[vertex] : Vec4());
+        input.custom = item.particleCustom + (vertex < m.particleCustom.size() ? m.particleCustom[vertex] : Vec4());
+        input.baseColor = Vec4(material.baseColor.r, material.baseColor.g, material.baseColor.b, material.opacity);
+        if (vertex < m.colors.size()) {
+            const Vec4 c = m.colors[vertex];
+            input.baseColor = Vec4(input.baseColor.x*c.x, input.baseColor.y*c.y, input.baseColor.z*c.z, input.baseColor.w*c.w);
+        }
         input.position = Vec4(wpos, 1);
         input.normal = Vec4(normal, 0);
         fn(vertex, wpos, ShaderVertexOffset(*material.shader, input, material.shaderUniforms));

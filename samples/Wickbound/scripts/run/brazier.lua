@@ -57,7 +57,7 @@ function Brazier:ignite()
   self.fire = scene.child(self.id, "Fire")
   scene.set(self.fire, "Sprite", { visible = true })
   scene.set(scene.child(self.id, "FireCore"), "Sprite", { visible = true })
-  scene.set(scene.child(self.id, "Sparks"), "ParticleEmitter", { playing = true })
+  vfx.set(scene.child(self.id, "Sparks"), "playing", true)
   for _, name in ipairs({ "Ring", "Progress", "Ember", "Beacon" }) do
     scene.set(scene.child(self.id, name), "Sprite", { visible = false })
   end

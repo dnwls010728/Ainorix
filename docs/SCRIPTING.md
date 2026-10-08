@@ -71,8 +71,10 @@ end
 |---|---|
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
 | `animation.play(id, clip, options?)` | Play a glTF clip on MeshRenderer; add Animator if needed. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
-| `particles.burst(id, count)` | Emit up to 0..10000 particles immediately on ParticleEmitter; returns accepted births, respecting capacity even while paused. Attached scripts can use `self:burst(count)`. See [PARTICLES.md](PARTICLES.md) |
-| `particles.state(id)` | `{count, emitted, playing, loop, maxParticles, finished}`; `finished` is true once a non-looping emitter has emitted everything and its particles are gone (destroy one-shot effects then). |
+| `vfx.spawn(path, options?)` | Create a linked .vfx.json effect; returns owner id. Options: name, parent, position, params, autoDestroy (default true). See [VFX.md](VFX.md). |
+| `vfx.play(id, {restart=true}?)`, `vfx.stop(id, {kill=false}?)` | Restart/resume emission or stop and drain; kill empties particles/trails. |
+| `vfx.burst(id, countOrOptions?)`, `vfx.clear(id, options?)` | Accepted manual births, capped per emitter/system; options may include emitter and count. Clear keeps clocks/RNG when restart is omitted; restart=true/false resets clocks/counters/RNG and rearms/consumes startup births. Playback is retained. |
+| `vfx.set(id, name, value)`, `vfx.state(id, options?)` | Validated transient parameter override; effective params, playback/completion/error, counts, budget and named block statistics; {particles=true} adds detailed per-emitter snapshots. Controls preserve authored scene JSON and native snapshot state. |
 | `trail.clear(id)` | Forget a Trail's path, e.g. after teleporting the entity, so no ribbon joins the old and new place. |
 | `scene.set(id, type, values)` | Partial update: `scene.set(id, "Transform", {position = {y = 2}})` keeps x and z |
 | `scene.add(id, type, values?)` / `scene.remove(id, type)` / `scene.has(id, type)` | Component management |

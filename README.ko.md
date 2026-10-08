@@ -14,6 +14,14 @@ AI 에이전트가 사람만큼 쉽게 조작하고 검증할 수 있도록 만�
 |---|---|
 | ![Showcase 렌더](docs/images/showcase.png) | glTF 여우(플레이어 조작, 추적 카메라), 절차적 텍스처, 그림자, 점광원. 결정적인 소프트웨어 렌더러의 출력입니다. 게임 창, 웹 빌드, 에디터 뷰는 같은 장면을 GPU 렌더러로 그립니다. |
 
+VFX 생성·갱신 채널을 수식으로 제어할 수 있습니다. 이펙트 > 수식에서 입력·검증·되돌리기를 지원하며, `vfx.expression_eval`로 결과와 계산 비용을 확인합니다. VFXLab의 `effects/spiral_expressions.vfx.json` 또는 `scenes/expressions.scene.json`에서 확인하세요. [명세와 검증](docs/VFX_PHASE5B.md).
+
+VFXLab에 스크립트 없이 동작하는 얼음 기둥·회오리·보호막·충격파·비/눈·힐링 효과 6종이 추가됐습니다. 같은 이름의 이펙트 에셋 또는 씬을 열어 확인하세요. [예제와 검증 기록](docs/VFX_PHASE5B_PLUS.md).
+
+이펙트의 **값 노드**에서 생성·갱신 수식을 편집할 수 있습니다. 컴파일러 검증·되돌리기·수식 편집을 공유하며, 에이전트는 `vfx.expression_graph` / `vfx.expression_source`를 사용합니다. [사용법과 제한](docs/VFX_PHASE5C.md).
+
+6종 표현식 이펙트를 기본 프리셋으로 제공합니다. 이펙트 > 새 이펙트 또는 `vfx.create {path,preset}`으로 생성하면 메시·텍스처·머티리얼이 프로젝트에 함께 설치됩니다. [사용법과 제한](docs/VFX_PHASE5D.md).
+
 ## 무엇이 다른가
 
 - **모든 것이 하나의 API.** 씬 편집, 시뮬레이션, 입력, 스크린샷, 에셋 등 모든 기능이 JSON 스키마를 가진 명령이며
@@ -95,7 +103,8 @@ oe render MyGame --frames 120 --out shot.png
 
 Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 종류 필터를 지원합니다. 낮은 패널은 이름이 보이도록 간결한 목록으로 표시됩니다.
 인터페이스는 17px 글자, 선명한 선택·포커스 표시, 패널 너비에 맞춰 배치되는 X/Y/Z 필드, 심각도 이름과 줄바꿈 필터가 있는 Console을 제공합니다. 보기 > 인터페이스 크기에서 배율을 조절합니다.
-스크립트 탭 우클릭으로 닫기·다른 탭 닫기·전체 닫기를 선택하며, 미저장 변경은 확인 후 처리합니다. 입력 중 Lua API와 파일 내 이름을 자동완성으로 제안합니다(Ctrl+Space: 목록, Tab/Enter: 삽입).
+
+스크립트 탭 우클릭으로 닫기·다른 탭 닫기·전체 닫기를 선택하며, 미저장 변경은 확인 후 처리합니다. 입력 중 Lua API와 파일 내 이름을 자동완성으로 제안합니다(Ctrl+Space: 목록, Tab/Enter: 삽입).
 셰이더 그래프에서 노드 연결·유니폼 편집·표면 미리보기를 제공하며, 셰이더에 연결된 머티리얼을 생성해 선택한 메시에 적용합니다. 에셋의 셰이더·머티리얼을 열거나 보기 > 셰이더 그래프를 선택하세요([안내](docs/SHADER_EDITOR.md)).
 
 
@@ -107,6 +116,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 포스트 프로세싱과 셰이더 | 노출과 톤 매핑, 블룸, 비네트, FXAA, 피사계 심도. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`) | [POSTPROCESS](docs/POSTPROCESS.md), [TOON](docs/TOON.md) |
 | 애니메이션 | 두 렌더러에서 동작하는 glTF 스켈레탈 애니메이션(관절 64개까지), `Animator`, Lua 재생 | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
+| VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |
 | 물리 | Jolt 3D와 Box2D 2D: 강체, 트리거, 캐릭터 컨트롤러, 일방통행 플랫폼, 충돌 레이어, 레이캐스트. 결정적 | [PHYSICS](docs/PHYSICS.md) |
 | 2D | 스프라이트와 시트 애니메이션, 타일셋 파일을 쓰는 텍스트 타일맵, 오토타일과 타일별 충돌, 2D 조명, 3D 세계 속 HD-2D 스프라이트 | [2D](docs/2D.md) |
 | UI | 텍스트(TrueType, 리치 텍스트, 자동 축소), 패널, 버튼(토글, 라디오 그룹, 아이콘), 이미지, 슬라이더, 텍스트 입력, 드롭다운, 화면 조이스틱, 레이아웃, 스크롤 뷰, 등장 모션, 키보드/게임패드 포커스. 모든 요소에 색 대신 9-slice 이미지 사용 가능 | [UI](docs/UI.md) |
@@ -197,3 +207,6 @@ third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear Im
 
 MIT — [LICENSE](LICENSE). `third_party/`의 코드는 각자의 라이선스를 따릅니다(MIT, zlib, 퍼블릭 도메인, Roboto 폰트는
 Apache 2.0).
+
+VFX 6단계: 씬 파티클은 `.vfx.json` + `VFXSystem`으로 통합했습니다. `ParticleEmitter`는 내부 설정·실행 상태만 담당합니다.
+독립 `particles.*`와 `self:burst`는 제거했습니다. 직접 사용하는 `Trail`은 유지합니다. [통합·이관 안내](docs/VFX_PHASE6.md).

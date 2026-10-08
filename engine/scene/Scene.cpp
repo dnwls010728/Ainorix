@@ -17,6 +17,7 @@ uint64_t NextEpoch(uint64_t current) {
 // Behaviour components that moved out of the engine into project scripts. Files that still name
 // them keep loading: the component is skipped with a warning that says what replaces it.
 const char* RemovedComponentHint(const std::string& type) {
+    if (type == "ParticleEmitter") return "use a VFXSystem asset; author it with vfx.create/Effects, or export from a pre-removal build with vfx.from_entity";
     if (type == "Rotator") return "scripts/rotator.lua from the project template: self:rotate(x * dt, y * dt, z * dt)";
     if (type == "Velocity") return "a script that calls self:translate(x * dt, y * dt, z * dt)";
     if (type == "PlayerController") return "scripts/player_controller.lua from the project template";
