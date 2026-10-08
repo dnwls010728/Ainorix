@@ -1,0 +1,61 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Shockwave",
+  "description": "Phase 5b+ text-only acceptance proof; no gameplay transform script.",
+  "budget": {
+    "maxParticles": 1
+  },
+  "emitters": [
+    {
+      "name": "ring",
+      "emitter": {
+        "burst": 1,
+        "rate": 0,
+        "maxParticles": 1,
+        "loop": false,
+        "lifetime": 1.4,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 1,
+        "endSize": 1,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "mesh": "assets/models/vfx_ring.glb",
+        "material": "materials/vfx_shockwave.mat.json",
+        "positionOffset": [
+          0,
+          0.05,
+          0
+        ],
+        "startColor": [
+          1,
+          0.45,
+          0.08
+        ],
+        "expressions": {
+          "update": {
+            "scale": "vec3(1,1,1)*(0.3+age*lifetime*param.speed)",
+            "custom0": "curve(age,0,1,0.3,2,1,0)",
+            "custom3": "curve(age,0,1,0.5,1,1,0)",
+            "opacity": "1-age"
+          }
+        }
+      }
+    }
+  ],
+  "params": {
+    "speed": {
+      "default": 2,
+      "targets": [],
+      "min": 0.1,
+      "max": 4
+    }
+  }
+}

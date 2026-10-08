@@ -182,14 +182,14 @@ if(NOT OE_LUA_OLD STREQUAL OE_LUA_GENERATED)
 endif()
 list(APPEND OE_CORE_SOURCES ${OE_LUA_CPP})
 
-# Portable acceptance presets ship in the executable, without requiring a sample checkout.
+# Portable acceptance presets ship in the executable; their source files live in engine/app/vfx-presets/.
 include(engine/app/vfx-presets/files.cmake)
 set(OE_VFX_CPP ${CMAKE_BINARY_DIR}/generated/EmbeddedVfxPresets.cpp)
 set(OE_VFX_GENERATED "// Generated from the VFX preset manifest; do not edit.\n#include \"app/VfxPresetBundle.h\"\nnamespace oe {\n")
 set(OE_VFX_ENTRIES "")
 set(OE_VFX_INDEX 0)
 foreach(OE_VFX_REL IN LISTS OE_VFX_PRESET_FILES)
-  set(OE_VFX_FILE "${CMAKE_SOURCE_DIR}/samples/VFXLab/${OE_VFX_REL}")
+  set(OE_VFX_FILE "${CMAKE_SOURCE_DIR}/engine/app/vfx-presets/${OE_VFX_REL}")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${OE_VFX_FILE}")
   if(OE_VFX_REL MATCHES "\\.json$")
     file(READ "${OE_VFX_FILE}" OE_VFX_DATA)

@@ -1,0 +1,70 @@
+{
+  "format": "oe.vfx",
+  "version": 1,
+  "name": "Healing Aura",
+  "description": "Phase 5b+ text-only acceptance proof; no gameplay transform script.",
+  "budget": {
+    "maxParticles": 48
+  },
+  "emitters": [
+    {
+      "name": "spiral",
+      "emitter": {
+        "burst": 48,
+        "rate": 0,
+        "maxParticles": 48,
+        "loop": false,
+        "lifetime": 3,
+        "speed": 0,
+        "spread": 0,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "startSize": 0.18,
+        "endSize": 0.18,
+        "startOpacity": 1,
+        "endOpacity": 1,
+        "pixelArt": false,
+        "lifetimeVariation": 0.3,
+        "texture": "assets/textures/glow.png",
+        "material": "materials/vfx_healing.mat.json",
+        "startColor": [
+          0.1,
+          1,
+          0.4
+        ],
+        "blend": "add",
+        "batching": true,
+        "expressions": {
+          "birth": {
+            "position": "vec3(0,0,0)",
+            "custom2": "random"
+          },
+          "update": {
+            "position": "vec3(cos(age*6*pi+index*2*pi/max(count,1))*param.radius*(1-age*0.5),age*param.height,sin(age*6*pi+index*2*pi/max(count,1))*param.radius*(1-age*0.5))",
+            "custom0": "0.3+sin(age*pi)*1.2+random*0.2",
+            "custom1": "age",
+            "size": "birthSize*(0.6+sin(age*pi)*0.7)",
+            "opacity": "curve(age,0,0,0.1,1,0.8,1,1,0)"
+          }
+        }
+      }
+    }
+  ],
+  "params": {
+    "radius": {
+      "default": 1.2,
+      "targets": [],
+      "min": 0.2,
+      "max": 3
+    },
+    "height": {
+      "default": 3,
+      "targets": [],
+      "min": 0.5,
+      "max": 5
+    }
+  }
+}

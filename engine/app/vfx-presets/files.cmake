@@ -1,4 +1,4 @@
-# The release uses the same assets as the script-free acceptance tests.
+# Preset source files (paths relative to this folder), embedded into the engine by CMakeLists.txt.
 set(OE_VFX_PRESET_FILES
   effects/ice_pillar.vfx.json
   effects/tornado.vfx.json

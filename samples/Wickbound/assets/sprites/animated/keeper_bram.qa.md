@@ -1,1 +1,0 @@
-Continuous shuffling steps preserve the broad body and lantern. Sprite-gen reports 1.17% head displacement at one step; this is recorded as residual motion, not silently treated as perfect registration.

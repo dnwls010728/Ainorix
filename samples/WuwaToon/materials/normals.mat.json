@@ -1,5 +1,0 @@
-{
-  "format": "ownengine.material",
-  "unlit": true,
-  "shader": "materials/normals.shader.json"
-}

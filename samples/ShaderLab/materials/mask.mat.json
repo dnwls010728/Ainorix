@@ -1,6 +1,0 @@
-{
-  "shader": "materials/mask.shader.json",
-  "alphaMode": "mask",
-  "alphaCutoff": 0.5,
-  "doubleSided": true
-}

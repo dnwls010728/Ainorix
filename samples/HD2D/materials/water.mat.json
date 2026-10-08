@@ -1,6 +1,0 @@
-{
-  "shader": "materials/water.shader.json",
-  "baseTexture": "assets/textures/water.png",
-  "pixelArt": true,
-  "roughness": 0.25
-}
