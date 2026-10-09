@@ -271,11 +271,14 @@ TeamSession::TeamSession(TeamStore& store, const std::vector<Backend>& backends,
 
 TeamSession::~TeamSession() {
     for (auto& entry : agents_) StopTurn(entry.second);
+    for (auto& entry : directs_) StopDirectTurn(entry.second);
 }
 
 void TeamSession::Open() {
     for (auto& entry : agents_) StopTurn(entry.second);
     agents_.clear();
+    for (auto& entry : directs_) StopDirectTurn(entry.second);
+    directs_.clear();
     messages_.clear();
     lastMessageId_ = 0;
     projectDir_ = store_.ProjectDir();
@@ -804,35 +807,40 @@ void TeamSession::Update() {
     }
     const double now = PlatformTimeSeconds();
     for (auto& entry : agents_) {
-        Runtime& runtime = entry.second;
-        if (!runtime.turn) continue;
-        Turn& turn = *runtime.turn;
-        std::vector<std::pair<std::string, bool>> lines;
-        bool eof = false;
-        double lastOutputAt = turn.startedAt;
-        {
-            std::lock_guard<std::mutex> lock(turn.mutex);
-            lines.swap(turn.lines);
-            eof = turn.eof;
-            lastOutputAt = turn.lastOutputAt;
-        }
-        for (const auto& line : lines) HandleLine(turn, line.first, line.second);
-        if (eof) {
-            // A CLI may close its output a moment before it exits: its exit code is read once
-            // it has exited (or was killed after a short wait), not at the end of the stream.
-            if (turn.eofAt < 0.0) turn.eofAt = now;
-            if (!turn.process->Running(nullptr)) FinishTurn(entry.first, runtime);
-            else if (now - turn.eofAt > kExitGraceSeconds) turn.process->Kill();
-        } else if (turn.done && now - turn.doneAt > kExitGraceSeconds) {
-            turn.process->Kill();  // the CLI is done but something it started keeps the pipes open
-        } else if (!turn.timedOut && !turn.done &&
-                   (now >= turn.deadlineAt || now - lastOutputAt > host_.idleTimeoutSeconds)) {
-            turn.timedOut = true;
-            turn.idleTimedOut = now < turn.deadlineAt;
-            turn.process->Kill();
-        }
+        if (entry.second.turn && PumpTurn(*entry.second.turn, now)) FinishTurn(entry.first, entry.second);
+    }
+    for (auto& entry : directs_) {
+        if (entry.second.turn && PumpTurn(*entry.second.turn, now)) FinishDirectTurn(entry.first, entry.second);
     }
     Schedule();
+}
+
+bool TeamSession::PumpTurn(Turn& turn, double now) {
+    std::vector<std::pair<std::string, bool>> lines;
+    bool eof = false;
+    double lastOutputAt = turn.startedAt;
+    {
+        std::lock_guard<std::mutex> lock(turn.mutex);
+        lines.swap(turn.lines);
+        eof = turn.eof;
+        lastOutputAt = turn.lastOutputAt;
+    }
+    for (const auto& line : lines) HandleLine(turn, line.first, line.second);
+    if (eof) {
+        // A CLI may close its output a moment before it exits: its exit code is read once
+        // it has exited (or was killed after a short wait), not at the end of the stream.
+        if (turn.eofAt < 0.0) turn.eofAt = now;
+        if (!turn.process->Running(nullptr)) return true;
+        if (now - turn.eofAt > kExitGraceSeconds) turn.process->Kill();
+    } else if (turn.done && now - turn.doneAt > kExitGraceSeconds) {
+        turn.process->Kill();  // the CLI is done but something it started keeps the pipes open
+    } else if (!turn.timedOut && !turn.done &&
+               (now >= turn.deadlineAt || now - lastOutputAt > host_.idleTimeoutSeconds)) {
+        turn.timedOut = true;
+        turn.idleTimedOut = now < turn.deadlineAt;
+        turn.process->Kill();
+    }
+    return false;
 }
 
 void TeamSession::Schedule() {
@@ -1020,6 +1028,9 @@ void TeamSession::Clear() {
     agents_.clear();
     tasks_.Clear();
     messages_.clear();
+    for (auto& entry : directs_) StopDirectTurn(entry.second);
+    directs_.clear();
+    RemoveAll(JoinPath(Directory(), "threads"));
     RemoveAll(JoinPath(Directory(), "chat.jsonl"));
     RemoveAll(JoinPath(Directory(), "sessions.json"));
     ++revision_;  // message ids keep counting, so a client polling `after` never sees an old id again
@@ -1151,6 +1162,325 @@ Json TeamSession::Messages(uint64_t after, bool hasAfter, int limit) {
     result["first"] = messages_.empty() ? uint64_t(0) : messages_.front().id;  // 0: the log is empty (a viewer drops what it kept)
     result["last"] = lastMessageId_;
     return result;
+}
+
+
+// ----- Direct conversations --------------------------------------------------------
+
+namespace {
+
+constexpr size_t kMaxDirectMessages = 200;  // kept per thread (file and memory)
+
+bool ValidThreadKey(const std::string& key) {
+    if (key.empty() || key.size() > 64) return false;
+    for (char c : key) {
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_')) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+TeamSession::Direct& TeamSession::LoadDirect(const std::string& thread) {
+    if (store_.ProjectDir() != projectDir_) Open();
+    auto found = directs_.find(thread);
+    if (found != directs_.end()) return found->second;
+    Direct& direct = directs_[thread];
+    std::string text, error;
+    if (ReadTextFile(JoinPath(JoinPath(Directory(), "threads"), thread + ".json"), text)) {
+        const Json root = Json::parse(text, &error);
+        if (error.empty() && root.isObject()) {
+            direct.backend = root["backend"].asString("");
+            direct.model = root["model"].asString("");
+            const std::string session = root["session"].asString("");
+            if (ValidSessionId(session)) direct.session = session;
+            direct.sessionBackend = root["sessionBackend"].asString("");
+            for (const Json& item : root["messages"].items()) {
+                ChatMessage message;
+                if (!MessageFromJson(item, message)) continue;
+                direct.lastId = std::max(direct.lastId, message.id);
+                direct.messages.push_back(std::move(message));
+            }
+        } else {
+            OE_LOG_WARN("team", "ignoring unreadable conversation .oe/team/threads/%s.json", thread.c_str());
+        }
+    }
+    return direct;
+}
+
+void TeamSession::SaveDirect(const std::string& thread, const Direct& direct) {
+    Json root = Json::MakeObject();
+    root["version"] = 1;
+    root["backend"] = direct.backend;
+    root["model"] = direct.model;
+    if (!direct.session.empty()) {
+        root["session"] = direct.session;
+        root["sessionBackend"] = direct.sessionBackend;
+    }
+    Json list = Json::MakeArray();
+    for (const ChatMessage& message : direct.messages) list.push(ChatMessageToJson(message));
+    root["messages"] = std::move(list);
+    std::string error;
+    const std::string file = JoinPath(JoinPath(Directory(), "threads"), thread + ".json");
+    if (!WriteTextFileAtomic(file, root.dump(2) + "\n", &error)) OE_LOG_WARN("team", "cannot write %s: %s", file.c_str(), error.c_str());
+}
+
+ChatMessage& TeamSession::AppendDirect(Direct& direct, ChatMessage message) {
+    message.id = ++direct.lastId;
+    message.time = NowUtc();
+    message.text = Shorten(message.text, kMaxReplyBytes);
+    direct.messages.push_back(std::move(message));
+    if (direct.messages.size() > kMaxDirectMessages) direct.messages.erase(direct.messages.begin());
+    ++revision_;
+    return direct.messages.back();
+}
+
+Json TeamSession::Ask(const std::string& thread, const std::string& backendId, const std::string& model, const std::string& text,
+                      const std::string& context) {
+    if (!ValidThreadKey(thread)) throw ApiError("invalid_argument", "thread must be 1..64 characters of a-z, 0-9, '-' and '_'");
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos) throw ApiError("invalid_argument", "the message is empty");
+    if (!ValidTeamText(text, kMaxSendBytes) || !ValidTeamText(context, kMaxSendBytes)) {
+        throw ApiError("invalid_argument", "text and context must be UTF-8 text of at most 32768 bytes each");
+    }
+    // The CLI and model are what the person chose: OfflineReason checks a profile of them.
+    AgentProfile agent;
+    agent.id = "ask-" + backendId;
+    agent.backend = backendId;
+    agent.model = model;
+    const Backend* backend = FindBackend(backendId);
+    std::string hint;
+    const std::string offline = OfflineReason(agent, &hint);
+    if (!backend || !offline.empty()) throw ApiError("agent_offline", "cannot ask '" + backendId + "': " + offline, hint);
+    agent.name = backend->displayName;
+    Direct& direct = LoadDirect(thread);
+    if (direct.turn) throw ApiError("agent_busy", "this conversation has a turn running", "Wait for the reply, or stop it with team.thread_cancel.");
+
+    ChatMessage question;
+    question.from = "user";
+    question.to = {backend->id};
+    question.text = text;
+    AppendDirect(direct, std::move(question));
+    direct.backend = backend->id;
+    direct.model = model;
+    if (direct.sessionBackend != backend->id) direct.session.clear();  // a conversation belongs to the CLI that made it
+
+    std::string prompt;
+    if (!context.empty()) prompt += context + "\n\n";
+    prompt += text + "\n";
+    prompt += host_.apiPort > 0 ? "\nConnection: the ownengine MCP server controls this project in the open editor. Use its tools; "
+                                  "editor_state shows what the person sees and has selected.\n"
+                                : "\nConnection: no editor API is attached; edit files or use oe exec.\n";
+    const std::string standing =
+        "You are " + backend->displayName + ", asked directly by the person working in the OwnEngine editor (not through the agent team). "
+        "They write from a bubble attached to an object in the Scene view; the prompt starts with that object.\n"
+        "Keep replies short: say what you changed and what you verified.\n"
+        "Project directory: " + projectDir_ + " (working directory). Read AGENTS.md if present. Save generated images in .oe/team/images/.\n";
+
+    const std::string tmp = JoinPath(Directory(), "tmp"), relativeTmp = ".oe/team/tmp/", name = "ask-" + thread;
+    CreateDirectories(tmp);
+    TurnRequest request;
+    request.executable = Executable(*backend);
+    request.model = model;
+    request.access = "edit";
+    request.inheritUserTools = store_.Settings().inheritUserTools;
+    request.sessionId = direct.session;
+    auto fail = [&](const std::string& message, const std::string& failHint) {
+        ChatMessage error;
+        error.from = backend->id;
+        error.to = {"user"};
+        error.kind = "error";
+        error.text = message;
+        error.hint = failHint;
+        AppendDirect(direct, std::move(error));
+        SaveDirect(thread, direct);
+        return DirectState(thread);
+    };
+    if (backend->systemPromptFlag) {
+        if (!WriteTextFileAtomic(JoinPath(tmp, name + ".system.md"), standing, nullptr)) return fail("Cannot write the prompt file in .oe/team/tmp/.", "Check that the project folder is writable.");
+        request.systemPromptFile = relativeTmp + name + ".system.md";
+    } else if (direct.session.empty()) {
+        prompt = standing + "\n---\n\n" + prompt;
+    }
+    std::string oe = host_.oeExecutable;
+    if (oe.empty()) {
+        oe = JoinPath(ExecutableDirectory(), "oe.exe");
+        if (!FileExists(oe)) oe = JoinPath(ExecutableDirectory(), "oe");
+    }
+    Json config = Json::MakeObject();
+    config["mcpServers"] = Json::MakeObject();
+    if (host_.apiPort > 0 && FileExists(oe)) {
+        Json server = Json::MakeObject();
+        server["command"] = oe;
+        Json arguments = Json::MakeArray();
+        for (const std::string& argument : {std::string("mcp"), std::string("--connect"), std::to_string(host_.apiPort), std::string("--agent"), agent.id}) arguments.push(argument);
+        server["args"] = std::move(arguments);
+        config["mcpServers"]["ownengine"] = std::move(server);
+        request.oeExecutable = oe;
+        request.apiPort = host_.apiPort;
+        request.agentId = agent.id;
+    }
+    if (!WriteTextFileAtomic(JoinPath(tmp, name + ".mcp.json"), config.dump(2) + "\n", nullptr)) return fail("Cannot write the MCP config in .oe/team/tmp/.", "Check that the project folder is writable.");
+    request.mcpConfigFile = relativeTmp + name + ".mcp.json";
+    ProcessOptions options = backend->buildTurn(request);
+    options.workingDirectory = projectDir_;
+    options.environment.emplace_back("OE_TEAM_AGENT", agent.id);
+    options.pipeStdin = true;
+
+    auto turn = std::make_unique<Turn>();
+    std::string error;
+    turn->process = PlatformStartProcess(options, &error);
+    if (!turn->process) return fail("Cannot start " + backend->displayName + ": " + error, "Call team.backends {refresh:true} to check the installation.");
+    turn->backend = backend;
+    turn->agentId = agent.id;
+    turn->model = model;
+    turn->resumed = !request.sessionId.empty();
+    turn->startedAt = PlatformTimeSeconds();
+    turn->lastOutputAt = turn->startedAt;
+    turn->task = Shorten(FirstLine(text), 120);
+    turn->replyTo = "user";
+    turn->maxDurationSeconds = host_.turnTimeoutSeconds;
+    turn->deadlineAt = turn->startedAt + turn->maxDurationSeconds;
+    CreateDirectories(JoinPath(Directory(), "images"));
+    turn->imagesBefore = ScanImages();
+    Turn* raw = turn.get();
+    turn->thread = std::thread([raw, prompt] {
+        std::string writeError;
+        raw->process->Write(prompt, &writeError);
+        raw->process->CloseInput();
+        std::string line;
+        bool isStderr = false;
+        while (raw->process->ReadLine(line, isStderr)) {
+            std::lock_guard<std::mutex> lock(raw->mutex);
+            raw->lines.emplace_back(line, isStderr);
+            raw->lastOutputAt = PlatformTimeSeconds();
+        }
+        std::lock_guard<std::mutex> lock(raw->mutex);
+        raw->eof = true;
+    });
+    direct.turn = std::move(turn);
+    SaveDirect(thread, direct);
+    ++revision_;
+    return DirectState(thread);
+}
+
+void TeamSession::FinishDirectTurn(const std::string& thread, Direct& direct) {
+    std::unique_ptr<Turn> turn = std::move(direct.turn);
+    turn->thread.join();
+    int exitCode = 0;
+    turn->process->Running(&exitCode);
+    const double seconds = PlatformTimeSeconds() - turn->startedAt;
+    const bool ok = turn->done && exitCode == 0 && !turn->timedOut;
+    const Json accounting = RecordTurn(*turn, turn->timedOut && !turn->idleTimedOut ? "timed_out" : ok ? "done" : "failed");
+    if (turn->done && !turn->timedOut) {
+        ChatMessage reply;
+        reply.from = turn->backend->id;
+        reply.to = {"user"};
+        reply.text = !turn->finalText.empty() ? turn->finalText : !turn->lastText.empty() ? turn->lastText : "(no reply)";
+        reply.hasTurn = true;
+        reply.seconds = seconds;
+        reply.tools = turn->tools;
+        reply.costUsd = accounting["costUsd"].asNumber();
+        reply.costKnown = accounting["costKnown"].asBool();
+        reply.usage = turn->usage;
+        reply.steps = turn->steps;
+        for (const auto& image : ScanImages()) {
+            const auto before = turn->imagesBefore.find(image.first);
+            if (before != turn->imagesBefore.end() && before->second == image.second) continue;
+            if (reply.attachments.size() >= kMaxTurnImages) break;
+            reply.attachments.push_back(Describe(image.first));
+        }
+        AppendDirect(direct, std::move(reply));
+        direct.session = turn->sessionId;
+        direct.sessionBackend = turn->backend->id;
+    } else {
+        std::string message = turn->idleTimedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(host_.idleTimeoutSeconds)) + " s without output (idle timeout)." :
+                              turn->timedOut ? "The turn was stopped after " + std::to_string(static_cast<int>(seconds)) + " s without finishing." :
+                              !turn->failure.empty() ? turn->failure : turn->backend->displayName + " exited with code " + std::to_string(exitCode) + " before finishing the turn.";
+        if (turn->failure.empty()) {
+            for (const std::string& line : turn->stderrTail) message += "\n" + line;
+        }
+        direct.session.clear();  // a broken or expired conversation must not fail every later turn
+        ChatMessage error;
+        error.from = turn->backend->id;
+        error.to = {"user"};
+        error.kind = "error";
+        error.text = message;
+        error.hint = "Run `" + turn->backend->executable + "` once in a terminal to check that it works and that you are logged in.";
+        AppendDirect(direct, std::move(error));
+    }
+    SaveDirect(thread, direct);
+    ++revision_;
+}
+
+void TeamSession::StopDirectTurn(Direct& direct) {
+    if (!direct.turn) return;
+    direct.turn->process->Kill();
+    direct.turn->thread.join();
+    for (const auto& line : direct.turn->lines) HandleLine(*direct.turn, line.first, line.second);
+    RecordTurn(*direct.turn, "cancelled");
+    direct.turn.reset();
+    ++revision_;
+}
+
+bool TeamSession::CancelDirect(const std::string& thread) {
+    if (!ValidThreadKey(thread)) throw ApiError("invalid_argument", "thread must be 1..64 characters of a-z, 0-9, '-' and '_'");
+    Direct& direct = LoadDirect(thread);
+    if (!direct.turn) return false;
+    const std::string backend = direct.turn->backend->id;
+    StopDirectTurn(direct);
+    ChatMessage notice;
+    notice.from = backend;
+    notice.to = {"user"};
+    notice.kind = "notice";
+    notice.text = "Stopped.";
+    AppendDirect(direct, std::move(notice));
+    SaveDirect(thread, direct);
+    return true;
+}
+
+Json TeamSession::DirectState(const std::string& thread) {
+    if (!ValidThreadKey(thread)) throw ApiError("invalid_argument", "thread must be 1..64 characters of a-z, 0-9, '-' and '_'");
+    Direct& direct = LoadDirect(thread);
+    Json out = Json::MakeObject();
+    out["thread"] = thread;
+    out["backend"] = direct.backend;
+    out["model"] = direct.model;
+    out["running"] = direct.turn != nullptr;
+    out["revision"] = revision_;
+    if (direct.turn) {
+        out["activity"] = direct.turn->activity;
+        out["elapsed"] = std::round((PlatformTimeSeconds() - direct.turn->startedAt) * 10.0) / 10.0;
+        out["tools"] = direct.turn->tools;
+    }
+    Json list = Json::MakeArray();
+    for (const ChatMessage& message : direct.messages) list.push(ChatMessageToJson(message));
+    out["messages"] = std::move(list);
+    return out;
+}
+
+Json TeamSession::DirectThreads() {
+    if (store_.ProjectDir() != projectDir_) Open();
+    std::set<std::string> keys;
+    for (const std::string& file : ListFiles(JoinPath(Directory(), "threads"), ".json", false)) {
+        std::string key = file.substr(file.find_last_of("/\\") + 1);
+        key = key.substr(0, key.size() - 5);
+        if (ValidThreadKey(key)) keys.insert(key);
+    }
+    for (const auto& entry : directs_) {
+        if (!entry.second.messages.empty() || entry.second.turn) keys.insert(entry.first);  // not one only looked at
+    }
+    Json list = Json::MakeArray();
+    for (const std::string& key : keys) {
+        Direct& direct = LoadDirect(key);
+        Json item = Json::MakeObject();
+        item["thread"] = key;
+        item["backend"] = direct.backend;
+        item["model"] = direct.model;
+        item["messages"] = static_cast<uint64_t>(direct.messages.size());
+        item["running"] = direct.turn != nullptr;
+        list.push(std::move(item));
+    }
+    return list;
 }
 
 }  // namespace oe

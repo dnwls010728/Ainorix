@@ -267,7 +267,33 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  return result;
              });
 
-    Register(registry, "team.delegate", "Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.",
+    Register(registry, "team.ask",
+             "Ask one agent CLI directly, outside the team roster and chat: a direct conversation (`thread`) with the CLI and model "
+             "chosen per message (the editor's \"Ask an agent\" bubble on a Scene object). The turn runs like a team turn, attached "
+             "to the editor; follow it with team.thread. Returns the thread state at once.",
+             Params()
+                 .Req("thread", "string", "Conversation key, 1..64 characters of a-z, 0-9, '-' and '_' (the editor uses e<entity>-<backend>).")
+                 .Req("backend", "string", "Agent CLI id from team.backends (claude, codex, ...).")
+                 .Opt("model", "string", "Model id of that CLI (team.backends lists them); empty = the CLI's default.")
+                 .Req("text", "string", "The message, at most 32 KiB.")
+                 .Opt("context", "string", "What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB."),
+             [state](Engine& e, const Json& a) {
+                 return state->Session(e).Ask(a["thread"].asString(), a["backend"].asString(), a["model"].asString(""),
+                                              a["text"].asString(), a["context"].asString(""));
+             });
+    Register(registry, "team.thread", "One direct conversation (team.ask): backend, model, running, activity and its messages, oldest first.",
+             Params().Req("thread", "string", "Conversation key."),
+             [state](Engine& e, const Json& a) { return state->Session(e).DirectState(a["thread"].asString()); });
+    Register(registry, "team.thread_cancel", "Stop the running turn of a direct conversation; {cancelled: false} when none ran.",
+             Params().Req("thread", "string", "Conversation key."), [state](Engine& e, const Json& a) {
+                 Json out = Json::MakeObject();
+                 out["cancelled"] = state->Session(e).CancelDirect(a["thread"].asString());
+                 return out;
+             });
+    Register(registry, "team.threads", "Stored direct conversations: [{thread, backend, model, messages, running}].", Params(),
+             [state](Engine& e, const Json&) { return state->Session(e).DirectThreads(); });
+
+    Register(registry, "team.delegate","Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.",
              Params().Req("to", "string", "Worker id or name; an optional @ prefix is accepted.").Req("goal", "string", "Exact task goal, at most 16 KiB.")
                  .Opt("acceptance", "string", "Success check, at most 8 KiB.")
                  .OptWith("files", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":32,"description":"Project-relative files to consult or change."})J"))
