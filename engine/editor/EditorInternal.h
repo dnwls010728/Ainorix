@@ -327,7 +327,9 @@ struct NativeEditor::Impl {
     // or one installed agent CLI directly, from a bubble that stays next to the object.
     struct AskBubble {
         int serial = 0;              // ImGui id
-        EntityId entity = kNullEntity;
+        EntityId entity = kNullEntity;  // the object asked about; for a spot, the surface it is on (or none)
+        bool spot = false;           // about a place in the scene (point) rather than the object
+        Vec3 point, normal;          // the spot: world position and surface normal
         std::string backend;         // agent CLI id; empty = the team
         std::string model;           // that CLI's model; empty = its default
         std::string thread;          // team.ask conversation (agent bubbles)
@@ -341,15 +343,18 @@ struct NativeEditor::Impl {
     };
     std::vector<AskBubble> askBubbles;
     int askSerial = 0;
-    EntityId askMenuEntity = kNullEntity;  // the object the Scene context menu is for
+    EntityId askMenuEntity = kNullEntity;  // the object the Scene context menu is for (none: empty space)
+    Vec3 askMenuPoint, askMenuNormal{0, 1, 0};  // the spot it was opened on (surface, or the ground plane)
     bool sceneRightPressed = false;        // right button went down on the view (a click opens the menu)
     std::map<std::string, std::array<float, 4>> askRects;  // automation: "<serial>:input", "<serial>:send"
     void OpenAskBubble(EntityId entity, const std::string& backend);
+    void OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend);
+    std::string SpotLabel(const AskBubble& bubble) const;  // "(3.2, 0, -1.5) on Ground"
     void SceneAskMenu();
     void AskBubbles(ImVec2 viewPos, ImVec2 viewSize);
     bool AskBubbleBody(AskBubble& bubble);  // true: closed
     void AskSend(AskBubble& bubble);
-    std::string AskContext(EntityId entity) const;
+    std::string AskContext(const AskBubble& bubble) const;
 
     struct ChatEntry {
         Json message;                    // one team.messages entry
@@ -527,7 +532,7 @@ struct NativeEditor::Impl {
     void SceneOverlays(ImDrawList* dl);
     void SceneGizmo();
     void ScenePick(float x, float y, bool additive);
-    EntityId ScenePickId(float x, float y);  // the entity drawn at a Scene view pixel (render.pick)
+    EntityId ScenePickId(float x, float y, Vec3* point = nullptr, Vec3* normal = nullptr);  // render.pick at a Scene view pixel
     void SceneDrop(const std::string& path, float x, float y);
     void GameInput();
     void ReleaseGameInput();

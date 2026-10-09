@@ -181,7 +181,7 @@ glTF models load their full materials: base color factor including alpha, base c
 - **Order**: opaque and `mask` surfaces are drawn first; blended surfaces follow, sorted back to front by the distance from the camera to each object's bounds center (ties by entity id).
 - **Depth**: blended surfaces test against depth but do not write it. `mask` surfaces write depth (pixels below `alphaCutoff` are discarded).
 - **Shadows**: blended surfaces cast no shadows. `mask` surfaces that have a base texture or a shader graph are alpha-tested in the shadow pass of both renderers, so cut-out materials (glTF `alphaMode: mask` leaves, fences) shadow only where they are drawn. Double-sided materials put both sides into the shadow map and draw back faces with flipped normals.
-- **Picking**: blended surfaces are pickable (`render.pick`, editor click) where they are at least 50% opaque.
+- **Picking**: blended surfaces are pickable (`render.pick`, editor click) where they are at least 50% opaque. `render.pick` also unprojects the depth buffer: `point` (world position of the surface at the pixel), `normal` (from the neighbouring pixels of the same entity, facing the camera) and `distance`; no `point` where nothing is drawn. The editor's Scene right-click uses it for "this spot".
 - **Limitations**: sorting is per object, so intersecting transparent objects, or one large transparent object around others, can sort wrongly. Split the mesh or use `mask` where that matters.
 
 ## Sprites and tilemaps (2D)

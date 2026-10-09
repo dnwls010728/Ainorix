@@ -675,22 +675,30 @@ check, `--chat` the Team Chat (`--agent new` or `--agent <id>` also opens the pr
 
 ### 7.4 Asking about an object (Scene bubbles)
 
-Right-click an object in the Scene view (a click, not a fly/pan drag; also on the gizmo, which
-only takes the left button): it is selected and a menu offers **Ask the Team** and **Ask an
-Agent ▸** with the installed agent CLIs (`team.backends`). Either opens a bubble that stays next
-to the object while the camera moves (several may be open; bubbles of one object stand side by
-side; deleting the object closes them). Enter sends, Ctrl+Enter adds a line.
+Right-click in the Scene view (a click, not a fly/pan drag; also on the gizmo, which only takes
+the left button). The menu has two groups, each with **Ask the Team** and **Ask an Agent ▸** (the
+installed agent CLIs, `team.backends`):
 
-- **Team**: the text goes to the team chat as `[Name #id] text` (`team.send`), so the lead
+- the **object** under the pointer (choosing selects it; the right click alone does not), and
+- **this spot**: the point on the surface under the pointer (`render.pick` returns it with the
+  surface normal) or, over empty space, where the pointer's ray meets the ground plane (y = 0;
+  z = 0 in 2D). For "put a tree here".
+
+Either opens a bubble that stays next to its object or spot while the camera moves (a pin marks
+the spot; several bubbles may be open, those of one object side by side; deleting the object
+closes its bubbles, a spot's stays). Enter sends, Ctrl+Enter adds a line.
+
+- **Team**: the text goes to the team chat as `[Name #id] text` or `[This spot (x, y, z) on Name] text` (`team.send`), so the lead
   answers unless someone is @mentioned. The bubble shows what it sent and the replies addressed
   to the person since then, plus the activity of working agents; the Team Chat has all of it.
 - **One agent**: a direct conversation outside the roster and the chat (`team.ask`, thread
-  `e<entity>-<cli>`). The bubble picks the model per message (the CLI's catalog or its
+  `e<entity>-<cli>`, or `p<hash of the spot to 0.1 m>-<cli>`). The bubble picks the model per message (the CLI's catalog or its
   default) and shows the conversation, the running activity and a Stop button
   (`team.thread_cancel`). The turn runs like a team turn: in the project directory, with
   `edit` access, the editor's MCP server (`--agent ask-<cli>`, so edits show as notices with the
   CLI's name), usage recorded under `ask-<cli>`. The prompt starts with the object (`entity #id
-  "Name" (components) in scene ...`, read with `entity.get`) and the CLI's own conversation is
+  "Name" (components) in scene ...`, read with `entity.get`) or the spot (world position, the
+  entity and normal of the surface, and that "here" means that position) and the CLI's own conversation is
   resumed by the next message. Conversations are kept in `.oe/team/threads/<thread>.json` (the
   last 200 messages); `team.clear` removes them, `team.threads` lists them.
 

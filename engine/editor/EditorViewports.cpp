@@ -284,7 +284,7 @@ void NativeEditor::Impl::SceneGizmo() {
     Refresh(true);
 }
 
-EntityId NativeEditor::Impl::ScenePickId(float x, float y) {
+EntityId NativeEditor::Impl::ScenePickId(float x, float y, Vec3* point, Vec3* normal) {
     Json camera = SceneCameraRequest(cam);
     Json r = Call("render.pick", ObjectOf({{"x", Json(static_cast<int>(x))},
                                            {"y", Json(static_cast<int>(y))},
@@ -292,7 +292,10 @@ EntityId NativeEditor::Impl::ScenePickId(float x, float y) {
                                            {"height", Json(static_cast<int>(sceneImageSize.y))},
                                            {"camera", camera}}),
                   true);
-    return static_cast<EntityId>(r["result"]["id"].asNumber(0));
+    const Json& hit = r["result"];
+    if (point && hit["point"].isArray()) *point = JsonVec3(hit["point"]);
+    if (normal && hit["normal"].isArray()) *normal = JsonVec3(hit["normal"]);
+    return hit["point"].isArray() || !point ? static_cast<EntityId>(hit["id"].asNumber(0)) : kNullEntity;
 }
 
 void NativeEditor::Impl::ScenePick(float x, float y, bool additive) {
@@ -593,14 +596,23 @@ void NativeEditor::Impl::ScenePanel() {
     if (sceneRightPressed && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
         sceneRightPressed = false;
         if (io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] < 16.0f) {
-            const EntityId id = markerHover != kNullEntity ? markerHover : ScenePickId(io.MousePos.x - pos.x, io.MousePos.y - pos.y);
-            if (id != kNullEntity) {
-                SelectOnly(id);
-                scrollToRow = id;
-                Refresh(true);
-                askMenuEntity = id;
-                ImGui::OpenPopup("##sceneAsk");
+            // The object under the pointer and the spot on its surface; over empty space the spot
+            // is where the pointer's ray meets the ground plane (y = 0; z = 0 in 2D).
+            const float x = io.MousePos.x - pos.x, y = io.MousePos.y - pos.y;
+            Vec3 point, normal(0, 1, 0);
+            EntityId id = ScenePickId(x, y, &point, &normal);
+            if (id == kNullEntity) {
+                Vec3 origin, dir;
+                ScreenRay(sceneViewMat, sceneProjMat, x, y, sceneImageSize.x, sceneImageSize.y, origin, dir);
+                normal = cam.mode2D ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+                point = cam.target;
+                RayPlane(origin, dir, Vec3(0, 0, 0), normal, point);
             }
+            if (markerHover != kNullEntity) id = markerHover;
+            askMenuEntity = id;
+            askMenuPoint = point;
+            askMenuNormal = normal;
+            ImGui::OpenPopup("##sceneAsk");
         }
     }
     SceneAskMenu();

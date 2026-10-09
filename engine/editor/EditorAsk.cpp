@@ -56,23 +56,44 @@ bool IconButton(const char* id, const char* icon, float side, bool enabled = tru
 
 }  // namespace
 
-std::string NativeEditor::Impl::AskContext(EntityId entity) const {
-    const EntityRow* row = Row(entity);
+std::string NativeEditor::Impl::SpotLabel(const AskBubble& bubble) const {
+    const EntityRow* surface = Row(bubble.entity);
+    std::string label = Format("(%.2f, %.2f, %.2f)", bubble.point.x, bubble.point.y, bubble.point.z);
+    if (surface) label += " " + Format(Tr("on %s"), surface->name.c_str());
+    return label;
+}
+
+std::string NativeEditor::Impl::AskContext(const AskBubble& bubble) const {
+    const EntityRow* row = Row(bubble.entity);
     std::string components;
     if (row) {
         for (const std::string& c : row->components) components += (components.empty() ? "" : ", ") + c;
     }
-    const std::string id = std::to_string(entity);
+    const std::string id = std::to_string(bubble.entity);
     std::string scene = scenePath;
     if (!scene.empty() && !engine.ProjectDir().empty()) scene = RelativePath(scenePath, engine.ProjectDir());
-    return "The person is pointing at this object in the editor's Scene view: entity #" + id + " \"" + (row ? row->name : "") +
-           "\" (components: " + components + ") in scene \"" + sceneName + "\"" + (scene.empty() ? "" : " (" + scene + ")") +
-           ". Read it with entity.get {id: " + id + "}; editor.state shows what else they see.";
+    const std::string where = " in scene \"" + sceneName + "\"" + (scene.empty() ? "" : " (" + scene + ")");
+    if (!bubble.spot) {
+        return "The person is pointing at this object in the editor's Scene view: entity #" + id + " \"" + (row ? row->name : "") +
+               "\" (components: " + components + ")" + where + ". Read it with entity.get {id: " + id + "}; editor.state shows what else they see.";
+    }
+    const Vec3& p = bubble.point;
+    const Vec3& n = bubble.normal;
+    std::string text = Format("The person is pointing at a spot in the editor's Scene view: world position (%.3f, %.3f, %.3f)", p.x, p.y, p.z);
+    if (row) {
+        text += Format(", on the surface of entity #%s \"%s\" (components: %s; surface normal (%.2f, %.2f, %.2f))", id.c_str(), row->name.c_str(),
+                       components.c_str(), n.x, n.y, n.z);
+    } else {
+        text += Format(", where the pointer's ray meets the ground plane (normal (%.0f, %.0f, %.0f)); nothing is drawn there", n.x, n.y, n.z);
+    }
+    return text + where + ". When they ask to put, build or move something \"here\", use that position (resting on that surface). "
+                          "editor.state shows what else they see.";
 }
 
+// One conversation per object (or spot) and CLI: opening the bubble again shows it, with its model.
 void NativeEditor::Impl::OpenAskBubble(EntityId entity, const std::string& backend) {
     for (AskBubble& bubble : askBubbles) {
-        if (bubble.entity == entity && bubble.backend == backend) {
+        if (!bubble.spot && bubble.entity == entity && bubble.backend == backend) {
             bubble.focusInput = true;
             return;
         }
@@ -81,35 +102,40 @@ void NativeEditor::Impl::OpenAskBubble(EntityId entity, const std::string& backe
     bubble.serial = ++askSerial;
     bubble.entity = entity;
     bubble.backend = backend;
-    if (!backend.empty()) {
-        // One conversation per object and CLI: opening the bubble again shows it, with its model.
-        bubble.thread = "e" + std::to_string(entity) + "-" + backend;
-        const Json state = Call("team.thread", ObjectOf({{"thread", Json(bubble.thread)}}), true);
-        if (Ok(state)) {
-            bubble.state = state["result"];
-            if (bubble.state["backend"].asString("") == backend) bubble.model = bubble.state["model"].asString("");
+    if (!backend.empty()) bubble.thread = "e" + std::to_string(entity) + "-" + backend;
+    askBubbles.push_back(std::move(bubble));
+}
+
+void NativeEditor::Impl::OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend) {
+    // Spots a few centimetres apart are the same place (and the same conversation).
+    const Vec3 rounded(std::round(point.x * 10.0f) / 10.0f, std::round(point.y * 10.0f) / 10.0f, std::round(point.z * 10.0f) / 10.0f);
+    for (AskBubble& bubble : askBubbles) {
+        if (bubble.spot && bubble.backend == backend && Length(bubble.point - point) < 0.05f) {
+            bubble.focusInput = true;
+            return;
         }
-        bubble.polled = time;
+    }
+    AskBubble bubble;
+    bubble.serial = ++askSerial;
+    bubble.entity = surface;
+    bubble.spot = true;
+    bubble.point = point;
+    bubble.normal = normal;
+    bubble.backend = backend;
+    if (!backend.empty()) {
+        uint32_t hash = 2166136261u;
+        for (char c : Format("%.1f,%.1f,%.1f", rounded.x, rounded.y, rounded.z)) hash = (hash ^ static_cast<unsigned char>(c)) * 16777619u;
+        bubble.thread = Format("p%08x-", hash) + backend;
     }
     askBubbles.push_back(std::move(bubble));
 }
 
 void NativeEditor::Impl::SceneAskMenu() {
     if (!ImGui::BeginPopup("##sceneAsk")) return;
-    const EntityRow* row = Row(askMenuEntity);
-    if (!row) {
-        ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-        return;
-    }
-    ImGui::TextDisabled("%s", row->name.c_str());
-    ImGui::Separator();
-    const bool teamReady = teamAvailable && team["agents"].size() > 0;
-    if (ImGui::MenuItem(WithIcon(kIconUsers, Tr("Ask the Team")).c_str(), nullptr, false, teamReady)) OpenAskBubble(askMenuEntity, "");
-    if (!teamReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-        ImGui::SetTooltip("%s", Tr(teamAvailable ? "The team has no agents yet (Team panel)." : "Agent teams need `oe editor`."));
-    }
-    if (ImGui::BeginMenu(WithIcon(kIconBot, Tr("Ask an Agent")).c_str(), teamAvailable)) {
+    // The installed CLIs, for "Ask an Agent"; the chosen one's id.
+    auto agentMenu = [&](const char* id) {
+        std::string chosen;
+        if (!ImGui::BeginMenu((WithIcon(kIconBot, Tr("Ask an Agent")) + id).c_str(), teamAvailable)) return chosen;
         int installed = 0;
         bool detecting = teamBackends.size() == 0;
         for (const Json& backend : teamBackends.items()) {
@@ -118,11 +144,54 @@ void NativeEditor::Impl::SceneAskMenu() {
             if (status != "installed") continue;
             ++installed;
             const std::string label = backend["name"].asString("") + "##" + backend["id"].asString("");
-            if (ImGui::MenuItem(label.c_str())) OpenAskBubble(askMenuEntity, backend["id"].asString(""));
+            if (ImGui::MenuItem(label.c_str())) chosen = backend["id"].asString("");
         }
-        if (installed == 0) ImGui::TextDisabled("%s", Tr(detecting ? "Looking for agent CLIs..." : "No agent CLI is installed."));
+        if (installed == 0) {
+            if (detecting) ImGui::TextDisabled("%s", Tr("Looking for agent CLIs..."));
+            else ImGui::TextDisabled("%s", Tr("No agent CLI is installed."));
+        }
         ImGui::EndMenu();
+        return chosen;
+    };
+    const bool teamReady = teamAvailable && team["agents"].size() > 0;
+    auto teamItem = [&](const char* id) {
+        const bool chosen = ImGui::MenuItem((WithIcon(kIconUsers, Tr("Ask the Team")) + id).c_str(), nullptr, false, teamReady);
+        if (!teamReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (teamAvailable) ImGui::SetTooltip("%s", Tr("The team has no agents yet (Team panel)."));
+            else ImGui::SetTooltip("%s", Tr("Agent teams need `oe editor`."));
+        }
+        return chosen;
+    };
+
+    // About the object under the pointer (choosing selects it) ...
+    const EntityRow* row = Row(askMenuEntity);
+    if (row) {
+        ImGui::TextColored(kAccent, "%s", kIconBox);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", row->name.c_str());
+        std::string backend;
+        const bool toTeam = teamItem("##object");
+        if (!toTeam) backend = agentMenu("##object");
+        if (toTeam || !backend.empty()) {
+            SelectOnly(askMenuEntity);
+            scrollToRow = askMenuEntity;
+            Refresh(true);
+            OpenAskBubble(askMenuEntity, backend);
+        }
+        ImGui::Separator();
     }
+    // ... and about the spot itself: "put something here".
+    AskBubble probe;
+    probe.spot = true;
+    probe.point = askMenuPoint;
+    probe.entity = askMenuEntity;
+    ImGui::TextColored(kAccent, "%s", kIconMapPin);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", (std::string(Tr("This spot")) + " " + SpotLabel(probe)).c_str());
+    std::string backend;
+    const bool toTeam = teamItem("##spot");
+    if (!toTeam) backend = agentMenu("##spot");
+    if (toTeam || !backend.empty()) OpenAskSpot(askMenuPoint, askMenuNormal, askMenuEntity, backend);
     ImGui::EndPopup();
 }
 
@@ -131,7 +200,8 @@ void NativeEditor::Impl::AskSend(AskBubble& bubble) {
     if (text.empty()) return;
     if (bubble.backend.empty()) {
         const EntityRow* row = Row(bubble.entity);
-        const std::string prefix = "[" + (row ? row->name : std::string()) + " #" + std::to_string(bubble.entity) + "] ";
+        const std::string prefix = bubble.spot ? "[" + std::string(Tr("This spot")) + " " + SpotLabel(bubble) + "] "
+                                               : "[" + (row ? row->name : std::string()) + " #" + std::to_string(bubble.entity) + "] ";
         const Json result = Call("team.send", ObjectOf({{"text", Json(prefix + text)}}), true);
         if (!Ok(result)) {
             Notify(result["error"]["message"].asString(""), true);
@@ -141,7 +211,7 @@ void NativeEditor::Impl::AskSend(AskBubble& bubble) {
     } else {
         const Json result = Call("team.ask", ObjectOf({{"thread", Json(bubble.thread)}, {"backend", Json(bubble.backend)},
                                                        {"model", Json(bubble.model)}, {"text", Json(text)},
-                                                       {"context", Json(AskContext(bubble.entity))}}), true);
+                                                       {"context", Json(AskContext(bubble))}}), true);
         if (!Ok(result)) {
             const std::string hint = result["error"]["hint"].asString("");
             Notify(result["error"]["message"].asString("") + (hint.empty() ? "" : " " + hint), true);
@@ -168,7 +238,8 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
     ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::TextUnformatted(target.c_str());
     ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
-    ImGui::TextDisabled("\xc2\xb7 %s", row ? row->name.c_str() : "");
+    const std::string about = bubble.spot ? std::string(kIconMapPin) + " " + SpotLabel(bubble) : row ? row->name : std::string();
+    ImGui::TextDisabled("\xc2\xb7 %s", about.c_str());
     ImGui::SameLine(right - side);
     if (IconButton("##close", kIconX, side)) return true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Close (the conversation is kept)"));
@@ -293,7 +364,7 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
         askRects[std::to_string(bubble.serial) + ":input"] = {a.x, a.y, b.x - a.x, b.y - a.y};
     }
     if (bubble.input.empty() && !ImGui::IsItemActive()) {
-        const std::string hint = Format(Tr("Ask %s about %s"), target.c_str(), row ? row->name.c_str() : "");
+        const std::string hint = Format(Tr("Ask %s about %s"), target.c_str(), bubble.spot ? Tr("this spot") : row ? row->name.c_str() : "");
         ImGui::GetWindowDrawList()->AddText(ImVec2(inputPos.x + ImGui::GetStyle().FramePadding.x, inputPos.y + ImGui::GetStyle().FramePadding.y),
                                             ImGui::GetColorU32(ImGuiCol_TextDisabled), hint.c_str());
     }
@@ -313,7 +384,7 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
 void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
     askRects.clear();
     Scene& scene = engine.GetScene();
-    askBubbles.erase(std::remove_if(askBubbles.begin(), askBubbles.end(), [&](const AskBubble& b) { return !scene.Exists(b.entity); }),
+    askBubbles.erase(std::remove_if(askBubbles.begin(), askBubbles.end(), [&](const AskBubble& b) { return !b.spot && !scene.Exists(b.entity); }),
                      askBubbles.end());
     if (askBubbles.empty() || viewSize.x < 64 || viewSize.y < 64) return;
     const Mat4 viewProj = sceneProjMat * sceneViewMat;
@@ -327,11 +398,14 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
         // Agent conversations refresh often while a turn runs.
         if (!bubble.backend.empty() && time - bubble.polled > (bubble.state["running"].asBool() ? 0.25 : 2.0)) {
             bubble.polled = time;
+            const bool first = bubble.state.isNull();
             const Json state = Call("team.thread", ObjectOf({{"thread", Json(bubble.thread)}}), true);
             if (Ok(state)) bubble.state = state["result"];
+            // Reopened: the conversation continues with the model it last used.
+            if (first && bubble.state["backend"].asString("") == bubble.backend) bubble.model = bubble.state["model"].asString("");
         }
         // Next to the object's origin; bubbles of the same object stand side by side.
-        const Vec3 world = scene.WorldMatrix(bubble.entity).TransformPoint(Vec3(0, 0, 0));
+        const Vec3 world = bubble.spot ? bubble.point : scene.WorldMatrix(bubble.entity).TransformPoint(Vec3(0, 0, 0));
         const Vec4 clip = viewProj * Vec4(world, 1.0f);
         ImVec2 anchor(viewPos.x + viewSize.x * 0.5f, viewPos.y + viewSize.y * 0.5f);
         bool visible = clip.w > 1e-4f;

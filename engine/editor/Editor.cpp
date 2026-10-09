@@ -1951,6 +1951,10 @@ void NativeEditor::OpenAskBubble(EntityId entity, const std::string& backend) { 
 EntityId NativeEditor::AskMenuEntity() const {
     return ImGui::IsPopupOpen("##sceneAsk", ImGuiPopupFlags_AnyPopupId) ? impl_->askMenuEntity : kNullEntity;
 }
+void NativeEditor::OpenAskSpot(const Vec3& point, EntityId surface, const std::string& backend) {
+    impl_->OpenAskSpot(point, Vec3(0, 1, 0), surface, backend);
+}
+Vec3 NativeEditor::AskMenuPoint() const { return impl_->askMenuPoint; }
 int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }
 std::array<float, 4> NativeEditor::AskControlRect(int index, const std::string& name) const {
     if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {0, 0, 0, 0};

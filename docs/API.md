@@ -885,7 +885,7 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 
 ### `render.pick`
 
-Return the entity visible at a pixel of a rendered view.
+Return the entity visible at a pixel of a rendered view, and where its surface is: point (world position), normal (facing the camera) and distance from the camera. point is absent where nothing is drawn.
 
 | arg | type | required | description |
 |---|---|---|---|

@@ -14931,6 +14931,19 @@ TEST(NativeEditorInspectorKeepsScroll) {
 }
 
 // editor.state / editor.select: agents see what the human sees in the open editor and can point at entities.
+// render.pick reports where the surface under a pixel is, not only which entity.
+TEST(RenderPickSurfacePoint) {
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TempProject("pick_point"), &error));
+    const Json hit = Call(e, "render.pick", R"J({"x":160,"y":90,"width":320,"height":180,"camera":{"eye":[1,10,2.01],"target":[1,0,2]}})J")["result"];
+    CHECK(hit["name"].asString() == "Ground");
+    CHECK(std::fabs(hit["point"][0].asFloat() - 1) < 0.05f && std::fabs(hit["point"][1].asFloat()) < 0.01f && std::fabs(hit["point"][2].asFloat() - 2) < 0.05f);
+    CHECK(hit["normal"][1].asFloat() > 0.99f && std::fabs(hit["distance"].asFloat() - 10) < 0.05f);
+    const Json sky = Call(e, "render.pick", R"J({"x":160,"y":10,"width":320,"height":180,"camera":{"eye":[0,1,0],"target":[0,2,-10]}})J")["result"];
+    CHECK(sky["id"].asInt() == 0 && !sky.has("point"));
+}
+
 TEST(EditorStateForAgents) {
     const std::string project = TempProject("editor_state");
     Engine engine;
@@ -15011,7 +15024,7 @@ TEST(NativeEditorAskBubbles) {
     std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), {echo});
     CHECK(Call(e, "team.add", R"J({"name":"Mina","backend":"echo"})J")["ok"].asBool());
     CHECK(Call(e, "team.settings", R"J({"lead":"mina"})J")["ok"].asBool());
-    CHECK(Call(e, "entity.create", R"J({"name":"Target","components":{"Transform":{"position":[30,1,30],"scale":[3,3,3]},"MeshRenderer":{"mesh":"cube"}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Target","components":{"Transform":{"position":[3,1,-3],"scale":[1.5,1.5,1.5]},"MeshRenderer":{"mesh":"cube"}}})J")["ok"].asBool());
     const EntityId target = e.GetScene().FindByName("Target");
     if (!e.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
     NativeEditor::Options options;
@@ -15073,17 +15086,48 @@ TEST(NativeEditorAskBubbles) {
         CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("\"Target\"") != std::string::npos && prompt.find("make it blue") != std::string::npos);
         CHECK(Call(e, "team.messages")["result"]["messages"].size() == 0);
 
+        // A spot on the ground: the menu knows the point on its surface, and an agent is told where it is.
+        const ImVec2 ground(scene->InnerRect.Min.x + 60, scene->InnerRect.Max.y - 40);
+        move.x = ground.x; move.y = ground.y;
+        frames(2, {move});
+        mouse(ground.x, ground.y, 1, true);
+        mouse(ground.x, ground.y, 1, false);
+        const EntityId groundId = e.GetScene().FindByName("Ground");
+        CHECK(editor.AskMenuEntity() == groundId && std::fabs(editor.AskMenuPoint().y) < 0.01f);
+        CHECK(editor.Selected() == target);  // a right click alone does not change the selection
+        const Vec3 spot = editor.AskMenuPoint();
+        frames(2, {KeyEvent(WindowKey::Escape, true)});
+        frames(2, {KeyEvent(WindowKey::Escape, false)});
+        editor.OpenAskSpot(spot, groundId, "echo");
+        frames(3);
+        CHECK(editor.AskBubbleCount() == 2);
+        type("put a tree here");
+        for (int i = 0; i < 300; ++i) {
+            frames(1);
+            const Json threads = Call(e, "team.threads")["result"];
+            bool done = threads.size() == 2;
+            for (const Json& t : threads.items()) done = done && !t["running"].asBool() && t["messages"].asInt() == 2;
+            if (done) break;
+            PlatformSleep(0.02);
+        }
+        CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("world position") != std::string::npos &&
+              prompt.find("\"Ground\"") != std::string::npos && prompt.find("put a tree here") != std::string::npos);
+        bool spotThread = false;
+        const Json threads = Call(e, "team.threads")["result"];
+        for (const Json& t : threads.items()) spotThread = spotThread || t["thread"].asString().rfind("p", 0) == 0;
+        CHECK(spotThread);
+
         // Ask the team: the message goes to the team chat, naming the object.
         editor.OpenAskBubble(target, "");
         frames(3);
-        CHECK(editor.AskBubbleCount() == 2);
+        CHECK(editor.AskBubbleCount() == 3);
         type("what is this?");
         const Json messages = Call(e, "team.messages")["result"]["messages"];
         CHECK(messages.size() >= 1 && messages[0]["text"].asString() == "[Target #" + std::to_string(target) + "] what is this?");
-        // Deleting the object closes its bubbles.
+        // Deleting the object closes its bubbles; the spot's stays.
         CHECK(Call(e, "entity.delete", R"J({"id":"Target"})J")["ok"].asBool());
         frames(2);
-        CHECK(editor.AskBubbleCount() == 0);
+        CHECK(editor.AskBubbleCount() == 1);
     }
     team.reset();
     RemoveAll(project);

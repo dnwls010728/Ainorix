@@ -43,6 +43,7 @@ constexpr const char* kIconFileCode              = "\xee\x83\x87";  // file-code
 constexpr const char* kIconUsers                 = "\xee\x86\xa4";  // users U+E1A4
 constexpr const char* kIconBot                   = "\xee\x86\xbb";  // bot U+E1BB
 constexpr const char* kIconSend                  = "\xee\x85\x96";  // send U+E156
+constexpr const char* kIconMapPin                = "\xee\x84\x95";  // map-pin U+E115
 constexpr const char* kIconMessagesSquare        = "\xee\x90\x92";  // messages-square U+E412
 constexpr const char* kIconHistory               = "\xee\x87\xb5";  // history U+E1F5
 constexpr const char* kIconNetwork               = "\xee\x84\xa9";  // network U+E129

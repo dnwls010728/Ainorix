@@ -1233,15 +1233,59 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     {
         Params p = ViewParams();
         p.Req("x", "integer", "Pixel x (0 = left).").Req("y", "integer", "Pixel y (0 = top).");
-        Register(r, "render.pick", "Return the entity visible at a pixel of a rendered view.", p, false, [](Engine& e, const Json& a) {
+        Register(r, "render.pick",
+                 "Return the entity visible at a pixel of a rendered view, and where its surface is: point (world position), "
+                 "normal (facing the camera) and distance from the camera. point is absent where nothing is drawn.",
+                 p, false, [](Engine& e, const Json& a) {
             ViewRequest vr = ParseView(e, a);
             RenderTarget target;
             target.Resize(vr.width, vr.height);
             e.Renderer().Render(e.GetScene(), vr.view, target);
-            EntityId id = target.IdAt(a["x"].asInt(), a["y"].asInt());
+            const int x = a["x"].asInt(), y = a["y"].asInt();
+            EntityId id = target.IdAt(x, y);
             Json out = Json::MakeObject();
             out["id"] = id;
             if (id != kNullEntity) out["name"] = e.GetScene().Record(id)->name;
+            // The depth buffer holds NDC z mapped to 0..1 (1 = cleared): unproject the pixel center.
+            const Mat4 inverse = (vr.view.proj * vr.view.view).Inverse();
+            auto surface = [&](int px, int py, Vec3& world) {
+                if (px < 0 || py < 0 || px >= target.width || py >= target.height) return false;
+                const float depth = target.depth[static_cast<size_t>(py) * static_cast<size_t>(target.width) + static_cast<size_t>(px)];
+                if (depth >= 1.0f) return false;
+                const Vec4 ndc((static_cast<float>(px) + 0.5f) / static_cast<float>(target.width) * 2.0f - 1.0f,
+                               1.0f - (static_cast<float>(py) + 0.5f) / static_cast<float>(target.height) * 2.0f, depth * 2.0f - 1.0f, 1.0f);
+                const Vec4 h = inverse * ndc;
+                if (std::fabs(h.w) < 1e-12f) return false;
+                world = Vec3(h.x / h.w, h.y / h.w, h.z / h.w);
+                return true;
+            };
+            Vec3 point;
+            if (surface(x, y, point)) {
+                auto round = [](const Vec3& v) {  // millimetres, as doubles so the JSON reads 0.009, not 0.00900000054
+                    Json json = Json::MakeArray();
+                    for (float c : {v.x, v.y, v.z}) json.push(Json(std::round(static_cast<double>(c) * 1000.0) / 1000.0 + 0.0));
+                    return json;
+                };
+                out["point"] = round(point);
+                out["distance"] = std::round(static_cast<double>(Length(point - vr.view.eye)) * 1000.0) / 1000.0;
+                // Normal from the neighbouring pixels of the same surface, turned toward the camera.
+                Vec3 right, down;
+                const bool hasRight = surface(x + 1, y, right) && target.IdAt(x + 1, y) == id;
+                const bool hasDown = surface(x, y + 1, down) && target.IdAt(x, y + 1) == id;
+                Vec3 left, up;
+                const bool hasLeft = !hasRight && surface(x - 1, y, left) && target.IdAt(x - 1, y) == id;
+                const bool hasUp = !hasDown && surface(x, y - 1, up) && target.IdAt(x, y - 1) == id;
+                if ((hasRight || hasLeft) && (hasDown || hasUp)) {
+                    const Vec3 du = hasRight ? right - point : point - left;
+                    const Vec3 dv = hasDown ? down - point : point - up;
+                    Vec3 normal = Cross(du, dv);
+                    if (Length(normal) > 1e-9f) {
+                        normal = Normalize(normal);
+                        if (Dot(normal, vr.view.eye - point) < 0) normal = normal * -1.0f;
+                        out["normal"] = round(normal);
+                    }
+                }
+            }
             return out;
         });
     }

@@ -89,7 +89,10 @@ public:
     // the entity the right-click menu is open for (none: 0), the open bubbles and a control's
     // screen bounds ("input", "send" of the bubble at `index`).
     void OpenAskBubble(EntityId entity, const std::string& backend);
+    // ... or for a spot in the scene (point on the surface of `surface`, kNullEntity = none).
+    void OpenAskSpot(const Vec3& point, EntityId surface, const std::string& backend);
     EntityId AskMenuEntity() const;
+    Vec3 AskMenuPoint() const;  // where the open menu was opened, in world space
     int AskBubbleCount() const;
     std::array<float, 4> AskControlRect(int index, const std::string& name) const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
