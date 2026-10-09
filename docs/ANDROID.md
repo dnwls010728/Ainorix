@@ -151,6 +151,13 @@ its README). `oe package --android` APKs and App Bundles pass `apksigner verify`
       (Korean/Japanese IMEs, swipe typing) needs a Java view with an `InputConnection` (a dex in the APK).
 - [ ] Emulator SwiftShader modes capture black screenshots; use `-gpu host`.
 
+Emulator: `tools\android_emulator.bat` starts an AVD named `oe_api35` with `-gpu host` (SDK from `ANDROID_HOME`,
+else `build\android-sdk`; create the AVD once with `avdmanager create avd -n oe_api35 -k
+"system-images;android-35;google_apis;x86_64" -d pixel_7`). Then `oe package <project> --android --install` and
+`adb exec-out screencap -p > shot.png`. Last run 2026-10-10 (API 35, x86_64, WHPX): the default template and
+`games/RPG` render (shader graphs, shadows, DOF, fog, Korean UI text) with no `gpu` warnings, and keyboard input
+moves the RPG hero. `games/RPG` has no touch controls yet.
+
 To repeat the test suite on Android, configure an NDK build with `-DOE_BUILD_TESTS=ON`, build `oe_tests`,
 then stage it with its fixtures:
 

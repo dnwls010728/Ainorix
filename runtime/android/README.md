@@ -7,15 +7,15 @@ signing needs Java.
 ## Current build
 
 - ABIs: `arm64-v8a` (phones/tablets), `x86_64` (emulators).
-- Built on 2026-10-09 with Android NDK r28c (28.2.13676358), Release, API 26, static libc++, GLES3 and AAudio,
-  from branch `claude/axis-locks`, with the same engine features as the web runtime (see
+- Built on 2026-10-10 with Android NDK r28c (28.2.13676358), Release, API 26, static libc++, GLES3 and AAudio,
+  from `main` (2f84c32 + quiet GL unused-input logs), with the same engine features as the web runtime (see
   [../web/README.md](../web/README.md)).
 - ELF load segments are aligned to 16 KB; `oe_ANativeActivity_onCreate` is exported.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
-| arm64-v8a/liboe_player.so | 7,792,928 | 77f8d1a63bcc253e74ea5758822b61cc2942889dee6b693be74dc8647bcfe909 |
-| x86_64/liboe_player.so | 8,265,496 | ca9670f414df9518a925210b2c47b518f88db202b524f6372ea641c0f4e346c6 |
+| arm64-v8a/liboe_player.so | 7,805,760 | c038ecf13f5e4ee92013095d36584c236789e05e612bb284a50ede24f0fcac25 |
+| x86_64/liboe_player.so | 8,280,712 | 3341144ad666003cc4df7166e3c16ec82129381dd45f71f7231904aedd315cec |
 
 Packaging checks (`apksigner verify`, `aapt2 dump badging`, `zipalign -c -P 16 4`) pass. **Not run on a device**:
 everything newer than the last emulator run recorded in [docs/ANDROID.md](../../docs/ANDROID.md) is unverified on

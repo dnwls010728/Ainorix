@@ -5,9 +5,10 @@
 
 ## Current build
 
-Built on 2026-10-09 with Emscripten 6.0.10, Release, from branch `claude/axis-locks` (per-axis physics locks; shaders without the
+Built on 2026-10-10 with Emscripten 6.0.10, Release, from `main` (GL drivers' unused vertex inputs and uniforms now log at debug level instead of
+nameless `sg item` warnings). The previous build, from branch `claude/axis-locks`, added per-axis physics locks and shaders without the
 loops the D3D compiler had to unroll: the shadow lookup moved out of the directional-light loop, `GraphFinite`
-without a loop). It contains every engine feature up to then, including the
+without a loop. This build contains every engine feature up to then, including the
 GPU performance work of docs/RENDER_PERF.md (shadow fit without the CPU vertex stage, depth of field from the scene
 pass's second target, frustum culling, dynamic batching, `shadowDistance`, shader graphs compiled to GLSL ES): scripting and official
 Lua modules, physics (Jolt, Box2D), UI widgets, saves, animation, gamepads and multi-touch, host bridge,
@@ -18,7 +19,7 @@ hemisphere ambient, `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket`/`Rig
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | cc2d3d2aed2277b9e88da446b7678132920ca424209736304046658d338e27ba |
-| oe_player.wasm | 5,048,835 | e223b87ef4abe4467032f158fa5af0c0011ef8a8ad9fd7620fa7812edb6d368f |
+| oe_player.wasm | 5,061,230 | 55c4e81a8701fe0876e1d87c39423a8a1f6c4db6653fe5e4d636fe40519c2f65 |
 
 Windows Release: all engine tests pass. `games/RPG` packaged with it runs in headless Edge (WebGL2 on SwiftShader):
 compiled shader graphs (swaying trees, terrain, water, sky), shadows, the depth-of-field MRT target and fog render

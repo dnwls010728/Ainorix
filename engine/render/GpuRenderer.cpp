@@ -575,6 +575,16 @@ void SgLog(const char* tag, uint32_t level, uint32_t item, const char* message, 
         if (message) OE_LOG_WARN("gpu", "D3D11 shader compiler: %s", message);
         return;
     }
+    // GL drivers strip inputs a program never reads (vertex colour in a shader graph that ignores it, uniforms of
+    // features a variant does not use); sokol then skips them. Expected, so only the name (sent at info level) is
+    // kept, as debug.
+    const char* unused = item == SG_LOGITEM_GL_VERTEX_ATTRIBUTE_NOT_FOUND_IN_SHADER ? "vertex attribute"
+                       : item == SG_LOGITEM_GL_UNIFORMBLOCK_NAME_NOT_FOUND_IN_SHADER ? "uniform"
+                       : item == SG_LOGITEM_GL_IMAGE_SAMPLER_NAME_NOT_FOUND_IN_SHADER ? "texture" : nullptr;
+    if (unused) {
+        if (message) OE_LOG_DEBUG("gpu", "GL program does not use %s '%s'", unused, message);
+        return;
+    }
     const char* msg = message;
     if (!msg) {
         switch (item) {
