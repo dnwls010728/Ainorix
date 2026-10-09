@@ -249,6 +249,7 @@ struct NativeEditor::Impl {
     float effectsZoom = 6;
     Vec3 effectsTarget{0, 1, 0};
     std::map<std::string, std::array<float, 4>> effectsRects;  // automation: actual interactive widget bounds
+    std::map<std::string, std::array<float, 4>> inspectorRects;  // automation: "Type.field" value widget bounds
     void OpenEffect(const std::string& path, bool create = false);
     void EffectsPanel();
     void EffectsModals();
@@ -472,6 +473,7 @@ struct NativeEditor::Impl {
     void EntityContextMenu(const EntityRow* row);
     void InspectorPanel();
     bool FieldEditor(EntityId id, const std::string& type, const std::string& field, const Json& schema, const Json& value);
+    void AxisLockRow(EntityId id, const std::string& type, const std::string& group, const Json& properties, const Json& values);
     void AddComponentPopup(EntityId id);
     // Script component params as typed rows (from script.params), inside the inspector table.
     void ScriptParamsRows(EntityId id, const Json& script);

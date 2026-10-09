@@ -5,7 +5,7 @@
 
 ## Current build
 
-Built on 2026-10-09 with Emscripten 6.0.10, Release, from branch `claude/editor-startup` (shaders without the
+Built on 2026-10-09 with Emscripten 6.0.10, Release, from branch `claude/axis-locks` (per-axis physics locks; shaders without the
 loops the D3D compiler had to unroll: the shadow lookup moved out of the directional-light loop, `GraphFinite`
 without a loop). It contains every engine feature up to then, including the
 GPU performance work of docs/RENDER_PERF.md (shadow fit without the CPU vertex stage, depth of field from the scene
@@ -18,7 +18,7 @@ hemisphere ambient, `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket`/`Rig
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | cc2d3d2aed2277b9e88da446b7678132920ca424209736304046658d338e27ba |
-| oe_player.wasm | 5,038,696 | db3aa262b713d7978bae0cad790f07fb9beb6b1b595b07fe466d507f63a9d0e6 |
+| oe_player.wasm | 5,048,835 | e223b87ef4abe4467032f158fa5af0c0011ef8a8ad9fd7620fa7812edb6d368f |
 
 Windows Release: all engine tests pass. `games/RPG` packaged with it runs in headless Edge (WebGL2 on SwiftShader):
 compiled shader graphs (swaying trees, terrain, water, sky), shadows, the depth-of-field MRT target and fog render

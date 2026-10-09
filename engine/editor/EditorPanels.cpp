@@ -627,6 +627,8 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         }
     }
 
+    const ImVec2 itemMin = ImGui::GetItemRectMin(), itemMax = ImGui::GetItemRectMax();
+    inspectorRects[type + "." + field] = {itemMin.x, itemMin.y, itemMax.x - itemMin.x, itemMax.y - itemMin.y};
     if (changed) {
         Json args = ObjectOf({{"id", Json(id)}, {"type", Json(type)}, {"values", ObjectOf({{field.c_str(), newValue}})}});
         if (!merge.empty()) args["merge"] = Json(merge);
@@ -634,6 +636,55 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         Refresh(true);
     }
     return changed;
+}
+
+// `group`X/Y/Z bools (RigidBody.lockPositionX..) as one row of axis toggles, like Unity's constraints.
+void NativeEditor::Impl::AxisLockRow(EntityId id, const std::string& type, const std::string& group, const Json& properties, const Json& values) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.67f, 0.70f, 1.0f));
+    ImGui::TextUnformatted(Humanize(group).c_str());
+    ImGui::PopStyleColor();
+    HelpTooltip(Tr("Locked axes (world space): the body never moves along / rotates around them."));
+    ImGui::TableSetColumnIndex(1);
+
+    const ImU32 axisColors[] = {IM_COL32(240, 104, 104, 255), IM_COL32(120, 210, 130, 255), IM_COL32(100, 156, 255, 255)};
+    const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+    const float chipWidth = (ImGui::GetContentRegionAvail().x - gap * 2) / 3;
+    const float chipHeight = ImGui::GetFrameHeight();
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    for (int axis = 0; axis < 3; ++axis) {
+        const std::string field = group + "XYZ"[axis];
+        if (!properties.has(field)) continue;  // its slot stays empty: X, Y and Z line up across components
+        ImGui::SetCursorScreenPos(ImVec2(rowStart.x + axis * (chipWidth + gap), rowStart.y));
+        const bool on = values[field].asBool(false);
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::PushID(axis);
+        const bool clicked = ImGui::InvisibleButton("##axis", ImVec2(chipWidth, chipHeight));
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        inspectorRects[type + "." + field] = {p.x, p.y, chipWidth, chipHeight};
+        HelpTooltip(properties[field]["description"].asString(""));
+        const ImVec2 q(p.x + chipWidth, p.y + chipHeight);
+        if (on) {
+            const ImU32 c = axisColors[axis];
+            draw->AddRectFilled(p, q, (c & 0x00FFFFFF) | (hovered ? 0x70000000 : 0x55000000), rounding);
+            draw->AddRect(p, q, c, rounding, 1.0f);
+        } else {
+            draw->AddRectFilled(p, q, IM_COL32(255, 255, 255, hovered ? 20 : 8), rounding);
+        }
+        const char label[2] = {"XYZ"[axis], 0};
+        const ImVec2 size = ImGui::CalcTextSize(label);
+        draw->AddText(ImVec2(p.x + (chipWidth - size.x) * 0.5f, p.y + (chipHeight - size.y) * 0.5f),
+                      on ? IM_COL32(255, 255, 255, 255) : ImGui::GetColorU32(ImGuiCol_TextDisabled), label);
+        if (clicked) {
+            Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json(type)}, {"values", ObjectOf({{field.c_str(), Json(!on)}})}}));
+            Refresh(true);
+        }
+    }
 }
 
 void NativeEditor::Impl::AddComponentPopup(EntityId id) {
@@ -646,7 +697,7 @@ void NativeEditor::Impl::AddComponentPopup(EntityId id) {
     ImGui::InputTextWithHint("##find", Tr("Search components"), &addComponentFilter);
     ImGui::Separator();
     ImGui::BeginChild("##list", ImVec2(ImGui::GetFontSize() * 16, ImGui::GetFontSize() * 18));
-    const Json& comps = selected["components"];
+    const Json comps = selected["components"];  // a copy: Refresh below replaces `selected`
     for (const Json& t : componentTypes.items()) {
         std::string name = t["name"].asString("");
         if (comps.has(name) || !ContainsNoCase(name, addComponentFilter)) continue;
@@ -667,6 +718,7 @@ void NativeEditor::Impl::InspectorPanel() {
         return;
     }
     EntityId id = Primary();
+    inspectorRects.clear();
     if (id != kNullEntity && selectedId != id) Refresh(true);
     if (id == kNullEntity || !selected.isObject()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -676,6 +728,10 @@ void NativeEditor::Impl::InspectorPanel() {
         return;
     }
     if (selection.size() > 1) ImGui::TextDisabled(Tr("%d entities selected - showing the first"), static_cast<int>(selection.size()));
+    // The frame draws from a copy: an edit below calls Refresh(true), which replaces `selected`
+    // while its components are still being drawn (the rest of the panel then went missing for a
+    // frame, so it flickered and lost its scroll position). The next frame shows the new values.
+    const Json entity = selected;
 
     // Entity icon, name and id.
     std::string name;
@@ -687,7 +743,7 @@ void NativeEditor::Impl::InspectorPanel() {
     }
     const std::string idText = Format("#%u", id);
     ImGui::SetNextItemWidth(-ImGui::CalcTextSize(idText.c_str()).x - ImGui::GetStyle().ItemSpacing.x);
-    if (CommitText("##name", selected["name"].asString(""), name) && !name.empty()) {
+    if (CommitText("##name", entity["name"].asString(""), name) && !name.empty()) {
         Call("entity.rename", ObjectOf({{"id", Json(id)}, {"name", Json(name)}}));
         Refresh(true);
     }
@@ -696,7 +752,7 @@ void NativeEditor::Impl::InspectorPanel() {
     ImGui::TextDisabled("%s", idText.c_str());
     ImGui::Dummy(ImVec2(0, 2));
 
-    const Json& comps = selected["components"];
+    const Json& comps = entity["components"];
     std::string removeType;
     for (const auto& kv : comps.members()) {
         const std::string& type = kv.first;
@@ -745,10 +801,23 @@ void NativeEditor::Impl::InspectorPanel() {
             if (table) {
                 ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.34f);
                 ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.66f);
-                for (const auto& f : (*typeInfo)["schema"]["properties"].members()) {
-                    ImGui::PushID(f.first.c_str());
-                    if (type == "Script" && f.first == "params") ScriptParamsRows(id, kv.second);
-                    else FieldEditor(id, type, f.first, f.second, kv.second[f.first]);
+                const Json& properties = (*typeInfo)["schema"]["properties"];
+                for (const auto& f : properties.members()) {
+                    // lockPositionX/Y/Z, lockRotationX/Y/Z: one row of axis toggles, drawn at the group's first field.
+                    const std::string& field = f.first;
+                    const bool axisLock = field.size() > 5 && field.compare(0, 4, "lock") == 0 &&
+                                          std::strchr("XYZ", field.back()) && f.second["x-oe-type"].asString("") == "bool";
+                    const std::string group = axisLock ? field.substr(0, field.size() - 1) : std::string();
+                    if (axisLock) {
+                        std::string first;
+                        for (const char* axis : {"X", "Y", "Z"})
+                            if (first.empty() && properties.has(group + axis)) first = group + axis;
+                        if (field != first) continue;
+                    }
+                    ImGui::PushID(field.c_str());
+                    if (type == "Script" && field == "params") ScriptParamsRows(id, kv.second);
+                    else if (axisLock) AxisLockRow(id, type, group, properties, kv.second);
+                    else FieldEditor(id, type, field, f.second, kv.second[field]);
                     ImGui::PopID();
                 }
                 ImGui::EndTable();

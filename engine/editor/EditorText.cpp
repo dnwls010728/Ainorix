@@ -474,6 +474,7 @@ const Entry kCatalog[] = {
     {"Errors", "오류", "エラー"},
     {"Filter", "필터", "フィルター"},
     {"Clear", "지우기", "クリア"},
+    {"Locked axes (world space): the body never moves along / rotates around them.", "잠근 축(월드 기준): 바디가 이 축을 따라 움직이거나 이 축을 중심으로 회전하지 않습니다.", "ロックした軸（ワールド座標）: ボディはこの軸に沿って移動せず、この軸まわりに回転しません。"},
     {"Auto-scroll", "자동 스크롤", "自動スクロール"},
     {"Copy", "복사", "コピー"},
     {"command.name {\"json\": \"args\"}   (Tab completes, Up/Down history)", "command.name {\"json\": \"args\"}   (Tab 자동완성, 위/아래 이전 명령)",

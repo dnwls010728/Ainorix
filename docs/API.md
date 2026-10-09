@@ -1772,9 +1772,13 @@ Makes a Collider move. dynamic = driven by gravity and collisions; kinematic = f
 | `angularVelocity` | vec3 | `[0,0,0]` | Angular velocity in degrees/s (world axes). Written by the simulation. |
 | `gravityScale` | float | `1` | Multiplier for gravity (0 = floats). |
 | `linearDamping` | float | `0.0500000007` | Air resistance. |
-| `lockRotation` | bool | `false` | Prevent the body from rotating (keeps it upright). |
 | `continuous` | bool | `false` | Continuous collision detection for fast objects (prevents tunneling through thin walls). |
-| `plane2D` | bool | `false` | 2D physics: move only in the XY plane and rotate only around Z. |
+| `lockPositionX` | bool | `false` | Never move along the world X axis (dynamic bodies). |
+| `lockPositionY` | bool | `false` | Never move along the world Y axis (dynamic bodies). |
+| `lockPositionZ` | bool | `false` | Never move along the world Z axis (dynamic bodies); with lockRotationX/Y it keeps a 2.5D body in its XY plane. |
+| `lockRotationX` | bool | `false` | Never rotate around the world X axis (dynamic bodies). |
+| `lockRotationY` | bool | `false` | Never rotate around the world Y axis (dynamic bodies). |
+| `lockRotationZ` | bool | `false` | Never rotate around the world Z axis (dynamic bodies). All three keep the body upright. |
 
 ### CharacterBody
 
@@ -1790,7 +1794,9 @@ Physics character for players/NPCs: set velocity (x/z to walk, y to jump) and th
 | `gravityScale` | float | `1` | Multiplier for gravity. |
 | `velocity` | vec3 | `[0,0,0]` | Desired velocity in m/s; after each step it holds the actual velocity. |
 | `grounded` | bool | `false` | Runtime state: true while standing on walkable ground. |
-| `plane2D` | bool | `false` | 2D games: keep the character on its starting Z (velocity.z is ignored). |
+| `lockPositionX` | bool | `false` | Keep the character on its X (velocity.x is ignored). |
+| `lockPositionY` | bool | `false` | Keep the character at its height: no gravity or jumps (velocity.y is ignored). |
+| `lockPositionZ` | bool | `false` | Keep the character on its Z (velocity.z is ignored); 2.5D side-scrollers. |
 
 ### Collider2D
 
@@ -1828,8 +1834,10 @@ Makes a Collider2D move in the XY plane (Box2D). dynamic = gravity and collision
 | `gravityScale` | float | `1` | Multiplier for gravity (0 = floats; top-down games). |
 | `linearDamping` | float | `0` | Slows the body down over time (top-down friction). |
 | `angularDamping` | float | `0.0500000007` | Slows spinning down over time. |
-| `fixedRotation` | bool | `false` | Never rotate (keeps it upright). |
 | `bullet` | bool | `false` | Continuous collision against other moving bodies too (fast projectiles). Static geometry is always continuous. |
+| `lockPositionX` | bool | `false` | Never move along X (dynamic bodies): it only slides up and down. |
+| `lockPositionY` | bool | `false` | Never move along Y (dynamic bodies): it only slides sideways. |
+| `lockRotationZ` | bool | `false` | Never rotate around Z, the only 2D rotation (keeps it upright). |
 
 ### CharacterBody2D
 

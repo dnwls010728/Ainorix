@@ -705,9 +705,10 @@ struct RigidBody {
     Vec3 angularVelocity{0, 0, 0};
     float gravityScale = 1.0f;
     float linearDamping = 0.05f;
-    bool lockRotation = false;
     bool continuous = false;
-    bool plane2D = false;
+    // Axis locks (Unity's constraints, Godot's axis_lock_*): no movement along / rotation around a world axis.
+    bool lockPositionX = false, lockPositionY = false, lockPositionZ = false;
+    bool lockRotationX = false, lockRotationY = false, lockRotationZ = false;
     static void Reflect(FieldList& f) {
         f.Add("type", &RigidBody::type, "Body type.").options = {"dynamic", "kinematic"};
         FieldInfo& m = f.Add("mass", &RigidBody::mass, "Mass in kg (dynamic bodies).");
@@ -716,9 +717,31 @@ struct RigidBody {
         f.Add("angularVelocity", &RigidBody::angularVelocity, "Angular velocity in degrees/s (world axes). Written by the simulation.");
         f.Add("gravityScale", &RigidBody::gravityScale, "Multiplier for gravity (0 = floats).");
         f.Add("linearDamping", &RigidBody::linearDamping, "Air resistance.");
-        f.Add("lockRotation", &RigidBody::lockRotation, "Prevent the body from rotating (keeps it upright).");
         f.Add("continuous", &RigidBody::continuous, "Continuous collision detection for fast objects (prevents tunneling through thin walls).");
-        f.Add("plane2D", &RigidBody::plane2D, "2D physics: move only in the XY plane and rotate only around Z.");
+        f.Add("lockPositionX", &RigidBody::lockPositionX, "Never move along the world X axis (dynamic bodies).");
+        f.Add("lockPositionY", &RigidBody::lockPositionY, "Never move along the world Y axis (dynamic bodies).");
+        f.Add("lockPositionZ", &RigidBody::lockPositionZ, "Never move along the world Z axis (dynamic bodies); with lockRotationX/Y it keeps a 2.5D body in its XY plane.");
+        f.Add("lockRotationX", &RigidBody::lockRotationX, "Never rotate around the world X axis (dynamic bodies).");
+        f.Add("lockRotationY", &RigidBody::lockRotationY, "Never rotate around the world Y axis (dynamic bodies).");
+        f.Add("lockRotationZ", &RigidBody::lockRotationZ, "Never rotate around the world Z axis (dynamic bodies). All three keep the body upright.");
+    }
+    // Fields of older files and calls: lockRotation (all three rotation locks), plane2D (Z position plus X/Y rotation).
+    static bool Upgrade(Json& values) {
+        bool changed = false;
+        if (values.has("lockRotation")) {
+            const bool on = values["lockRotation"].asBool(false);
+            for (const char* k : {"lockRotationX", "lockRotationY", "lockRotationZ"}) values[k] = Json(on);
+            values.erase("lockRotation");
+            changed = true;
+        }
+        if (values.has("plane2D")) {
+            const bool on = values["plane2D"].asBool(false);
+            values["lockPositionZ"] = Json(on);
+            if (on) values["lockRotationX"] = values["lockRotationY"] = Json(true);
+            values.erase("plane2D");
+            changed = true;
+        }
+        return changed;
     }
 };
 
@@ -733,7 +756,7 @@ struct CharacterBody {
     float gravityScale = 1.0f;
     Vec3 velocity{0, 0, 0};
     bool grounded = false;
-    bool plane2D = false;
+    bool lockPositionX = false, lockPositionY = false, lockPositionZ = false;
     static void Reflect(FieldList& f) {
         f.Add("shape", &CharacterBody::shape, "Shape centered on the entity origin.").options = {"capsule", "sphere"};
         f.Add("radius", &CharacterBody::radius, "Radius in meters.");
@@ -743,7 +766,15 @@ struct CharacterBody {
         f.Add("gravityScale", &CharacterBody::gravityScale, "Multiplier for gravity.");
         f.Add("velocity", &CharacterBody::velocity, "Desired velocity in m/s; after each step it holds the actual velocity.");
         f.Add("grounded", &CharacterBody::grounded, "Runtime state: true while standing on walkable ground.");
-        f.Add("plane2D", &CharacterBody::plane2D, "2D games: keep the character on its starting Z (velocity.z is ignored).");
+        f.Add("lockPositionX", &CharacterBody::lockPositionX, "Keep the character on its X (velocity.x is ignored).");
+        f.Add("lockPositionY", &CharacterBody::lockPositionY, "Keep the character at its height: no gravity or jumps (velocity.y is ignored).");
+        f.Add("lockPositionZ", &CharacterBody::lockPositionZ, "Keep the character on its Z (velocity.z is ignored); 2.5D side-scrollers.");
+    }
+    static bool Upgrade(Json& values) {  // plane2D of older files and calls
+        if (!values.has("plane2D")) return false;
+        values["lockPositionZ"] = Json(values["plane2D"].asBool(false));
+        values.erase("plane2D");
+        return true;
     }
 };
 
@@ -805,8 +836,9 @@ struct RigidBody2D {
     float gravityScale = 1.0f;
     float linearDamping = 0.0f;
     float angularDamping = 0.05f;
-    bool fixedRotation = false;
     bool bullet = false;
+    bool lockPositionX = false, lockPositionY = false;
+    bool lockRotationZ = false;
     static void Reflect(FieldList& f) {
         f.Add("type", &RigidBody2D::type, "Body type.").options = {"dynamic", "kinematic"};
         FieldInfo& m = f.Add("mass", &RigidBody2D::mass, "Mass in kg (dynamic bodies).");
@@ -816,8 +848,16 @@ struct RigidBody2D {
         f.Add("gravityScale", &RigidBody2D::gravityScale, "Multiplier for gravity (0 = floats; top-down games).");
         f.Add("linearDamping", &RigidBody2D::linearDamping, "Slows the body down over time (top-down friction).");
         f.Add("angularDamping", &RigidBody2D::angularDamping, "Slows spinning down over time.");
-        f.Add("fixedRotation", &RigidBody2D::fixedRotation, "Never rotate (keeps it upright).");
         f.Add("bullet", &RigidBody2D::bullet, "Continuous collision against other moving bodies too (fast projectiles). Static geometry is always continuous.");
+        f.Add("lockPositionX", &RigidBody2D::lockPositionX, "Never move along X (dynamic bodies): it only slides up and down.");
+        f.Add("lockPositionY", &RigidBody2D::lockPositionY, "Never move along Y (dynamic bodies): it only slides sideways.");
+        f.Add("lockRotationZ", &RigidBody2D::lockRotationZ, "Never rotate around Z, the only 2D rotation (keeps it upright).");
+    }
+    static bool Upgrade(Json& values) {  // fixedRotation of older files and calls
+        if (!values.has("fixedRotation")) return false;
+        values["lockRotationZ"] = Json(values["fixedRotation"].asBool(false));
+        values.erase("fixedRotation");
+        return true;
     }
 };
 

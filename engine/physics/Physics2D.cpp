@@ -295,6 +295,9 @@ struct Physics2D::Impl {
         std::vector<b2ShapeId> triggers;
         bool tilemap = false;
         Seen seen;
+        // RigidBody2D.lockPositionX/Y: a shapeless static body at the locked position, jointed to
+        // this one (Box2D 3.1 has no axis locks). Destroying it removes the joint.
+        b2BodyId anchor = b2_nullBodyId;
     };
     struct CharacterRec {
         b2BodyId body = b2_nullBodyId;
@@ -327,9 +330,33 @@ struct Physics2D::Impl {
     }
 
     void DestroyBody(BodyRec& rec) {
+        if (b2Body_IsValid(rec.anchor)) b2DestroyBody(rec.anchor);
+        rec.anchor = b2_nullBodyId;
         if (b2Body_IsValid(rec.id)) b2DestroyBody(rec.id);
         rec.id = b2_nullBodyId;
         rec.triggers.clear();
+    }
+
+    // Holds the body origin on its current x (lockPositionX), y (lockPositionY) or both, while it
+    // still rotates freely: a wheel joint (point on a line) for one axis, a revolute joint for both.
+    void LockAxes(BodyRec& rec, const RigidBody2D& rb) {
+        if (!rb.lockPositionX && !rb.lockPositionY) return;
+        b2BodyDef bd = b2DefaultBodyDef();
+        bd.position = b2Body_GetPosition(rec.id);
+        rec.anchor = b2CreateBody(world, &bd);
+        if (rb.lockPositionX && rb.lockPositionY) {
+            b2RevoluteJointDef jd = b2DefaultRevoluteJointDef();
+            jd.bodyIdA = rec.anchor;
+            jd.bodyIdB = rec.id;
+            b2CreateRevoluteJoint(world, &jd);
+        } else {
+            b2WheelJointDef jd = b2DefaultWheelJointDef();
+            jd.bodyIdA = rec.anchor;
+            jd.bodyIdB = rec.id;
+            jd.localAxisA = rb.lockPositionX ? b2Vec2{0.0f, 1.0f} : b2Vec2{1.0f, 0.0f};  // the axis it may still move along
+            jd.enableSpring = false;
+            b2CreateWheelJoint(world, &jd);
+        }
     }
 
     // ----- Shapes -----
@@ -596,7 +623,7 @@ struct Physics2D::Impl {
                     bd.gravityScale = rb->gravityScale;
                     bd.linearDamping = std::max(0.0f, rb->linearDamping);
                     bd.angularDamping = std::max(0.0f, rb->angularDamping);
-                    bd.fixedRotation = rb->fixedRotation;
+                    bd.fixedRotation = rb->lockRotationZ;
                     bd.isBullet = rb->bullet;
                 }
                 rec.id = b2CreateBody(world, &bd);
@@ -619,6 +646,7 @@ struct Physics2D::Impl {
                         md.rotationalInertia = 0.1f * mass;
                     }
                     b2Body_SetMassData(rec.id, md);
+                    LockAxes(rec, *rb);
                 }
                 rec.key = key;
                 rec.lastPos = pose.p;
@@ -644,6 +672,7 @@ struct Physics2D::Impl {
                 b2Body_SetAngularVelocity(rec.id, b2RelativeAngle(pose.q, cur.q) / dt);
             } else if (moved) {
                 b2Body_SetTransform(rec.id, pose.p, pose.q);
+                if (b2Body_IsValid(rec.anchor)) b2Body_SetTransform(rec.anchor, pose.p, b2Rot_identity);  // locks hold the new place
                 if (rec.kind != Kind::Static) b2Body_SetAwake(rec.id, true);
             }
             rec.lastPos = pose.p;
