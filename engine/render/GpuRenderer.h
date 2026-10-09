@@ -25,6 +25,12 @@ public:
     struct Settings {
         int msaa = 4;               // scene pass sample count (1 = off)
         int shadowMapSize = 2048;
+        // Where devices that compile shader source themselves (D3D11) keep compiled programs,
+        // keyed by a hash of the source; empty = no disk cache. The editor uses <project>/.oe/shader-cache.
+        std::string shaderCacheDir;
+        // Shader graph programs compile on worker threads; until one is ready its materials draw
+        // with the interpreter (same image, slower shader). Off: compiled on first use (tests, screenshots).
+        bool asyncShaders = false;
     };
 
     // Calls sg_setup() with the device's environment; the device must outlive the renderer.

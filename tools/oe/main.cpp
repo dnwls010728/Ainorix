@@ -429,10 +429,16 @@ std::string EditorLayoutFile(const Engine& engine) {
     return JoinPath(JoinPath(engine.ProjectDir().empty() ? std::string(".") : engine.ProjectDir(), ".oe"), "editor.ini");
 }
 
+// Compiled shader programs of the editor (GpuRenderer::Settings::shaderCacheDir), next to its layout.
+std::string EditorShaderCache(const Engine& engine) {
+    return JoinPath(ParentPath(EditorLayoutFile(engine)), "shader-cache");
+}
+
 // `oe editor --screenshot`: the native editor drawn offscreen (GPU required),
 // so agents and tests can look at the editor itself.
 int CmdEditorScreenshot(Engine& engine, const Args& a) {
     int code = 0;
+    engine.SetGpuShaderOptions(EditorShaderCache(engine), false);  // graphs compiled before the shot
     if (!SetupRenderer(engine, a, nullptr, code)) return code;
     if (!engine.Gpu()) return Fail("gpu_unavailable", "the native editor needs the GPU renderer", "Install a GPU backend (Linux: libegl-dev libgles-dev) or use `oe render`.");
     NativeEditor::Options options;  // no layout file: the default layout, reproducible
@@ -505,6 +511,7 @@ int CmdEditor(const Args& a) {
                     "Agents: `oe mcp <project>` or `oe exec`; to look at the editor headless: `oe editor <project> --screenshot shot.png`.");
     }
     std::string gpuError;
+    engine.SetGpuShaderOptions(EditorShaderCache(engine), true);  // graphs draw interpreted until compiled
     if (!engine.EnableGpu(window.get(), &gpuError)) {
         return Fail("gpu_unavailable", "the editor needs the GPU renderer: " + gpuError, "Update the graphics driver; `oe run --renderer software` still plays the game.");
     }

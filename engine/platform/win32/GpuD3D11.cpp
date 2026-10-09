@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <vector>
 
 #include "platform/Platform.h"
 #include "render/GpuDevice.h"
@@ -58,6 +60,17 @@ public:
         if (context_) context_->ClearState();
         Release(context_);
         Release(device_);
+    }
+
+    // D3DCompile from the same DLL sokol_gfx loads; loaded once, callable from any thread.
+    static pD3DCompile Compiler() {
+        static std::once_flag once;
+        static pD3DCompile compile = nullptr;
+        std::call_once(once, [] {
+            if (HMODULE dll = LoadLibraryA("d3dcompiler_47.dll"))
+                compile = reinterpret_cast<pD3DCompile>(reinterpret_cast<void*>(GetProcAddress(dll, "D3DCompile")));
+        });
+        return compile;
     }
 
     const char* Name() const override { return warp_ ? "d3d11-warp" : "d3d11"; }
@@ -113,6 +126,34 @@ public:
     void Flush() override {
         if (context_) context_->Flush();
     }
+
+    bool CompileShader(const std::string& source, const char* target, const char* entry,
+                       std::vector<uint8_t>* bytecode, std::string* error) const override {
+        pD3DCompile compile = Compiler();
+        if (!compile) {
+            if (error) *error = "d3dcompiler_47.dll is not available";
+            return false;
+        }
+        // The flags sokol_gfx uses for source it compiles itself (_sg_d3d11_compile_shader).
+        const UINT flags = D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+        ID3DBlob* code = nullptr;
+        ID3DBlob* messages = nullptr;
+        HRESULT hr = compile(source.data(), source.size(), nullptr, nullptr, nullptr, entry ? entry : "main",
+                             target, flags, 0, &code, &messages);
+        if (FAILED(hr) || !code) {
+            if (error) *error = messages ? static_cast<const char*>(messages->GetBufferPointer()) : "D3DCompile failed";
+            Release(messages);
+            Release(code);
+            return false;
+        }
+        const auto* bytes = static_cast<const uint8_t*>(code->GetBufferPointer());
+        bytecode->assign(bytes, bytes + code->GetBufferSize());
+        Release(messages);
+        Release(code);
+        return true;
+    }
+
+    std::string ShaderCompilerId() const override { return Compiler() ? "d3dcompiler_47 column-major O3" : ""; }
 
     bool ReadPixels(sg_image image, int width, int height, uint32_t* out) override {
         sg_d3d11_image_info info = sg_d3d11_query_image_info(image);
