@@ -7211,7 +7211,9 @@ TEST(GpuShaderCacheAndBackgroundGraphs) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     CHECK(async.color == sync.color);
-    CHECK(ListFiles(cache, ".bin", false).size() == stored);  // everything came from the cache
+    const std::vector<std::string> after = ListFiles(cache, ".bin", false);
+    if (after.size() != stored) std::printf("  shader cache had %zu files, now %zu\n", stored, after.size());
+    CHECK(after.size() == stored);  // everything came from the cache
 }
 
 TEST(MeshRendererShaderUniforms) {
@@ -14835,14 +14837,73 @@ TEST(NativeEditorInspectorKeepsScroll) {
     RemoveAll(project);
 }
 
+// editor.state / editor.select: agents see what the human sees in the open editor and can point at entities.
+TEST(EditorStateForAgents) {
+    const std::string project = TempProject("editor_state");
+    Engine engine;
+    std::string error;
+    CHECK(engine.Open(project, &error));
+    CHECK(!Call(engine, "editor.state")["result"]["open"].asBool());
+    CHECK(Call(engine, "editor.select", R"J({"ids":["Player"]})J")["error"]["code"].asString() == "no_editor");
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    CHECK(Call(engine, "entity.create", R"J({"name":"Far","components":{"Transform":{"position":[40,2,-30]},"MeshRenderer":{"mesh":"cube"}}})J")["ok"].asBool());
+    NativeEditor::Options options;
+    options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options);
+        CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update({}, 1440, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        frames(3);
+        Json state = Call(engine, "editor.state")["result"];
+        CHECK(state["open"].asBool() && state["play"].asString() == "editing" && state["selection"].size() == 0);
+        CHECK(state["sceneView"]["mode"].asString() == "3D");
+        bool sceneVisible = false;
+        for (const Json& panel : state["visiblePanels"].items()) sceneVisible = sceneVisible || panel.asString() == "Scene";
+        CHECK(sceneVisible);
+
+        // The agent points at an entity: the editor selects it and moves the Scene view there.
+        Json selected = Call(engine, "editor.select", R"J({"ids":["Far"],"frame":true})J");
+        CHECK(selected["ok"].asBool());
+        state = selected["result"];
+        CHECK(state["selection"].size() == 1 && state["selection"][0]["name"].asString() == "Far");
+        CHECK(editor.Selected() == engine.GetScene().FindByName("Far"));
+        const Json& t = state["sceneView"]["target"];
+        const Vec3 target(t[0].asFloat(0), t[1].asFloat(0), t[2].asFloat(0));
+        CHECK(Length(target - Vec3(40, 2, -30)) < 0.01f);
+        CHECK(Call(engine, "editor.select", R"J({"ids":["Nobody"]})J")["error"]["code"].asString() == "entity_not_found");
+
+        // The human's script tab and cursor.
+        editor.OpenScript("scripts/player_controller.lua");
+        frames(4);
+        state = Call(engine, "editor.state")["result"];
+        CHECK(state["script"]["path"].asString() == "scripts/player_controller.lua" && state["script"]["line"].asInt() == 1);
+        CHECK(state["openScripts"].size() == 1);
+
+        CHECK(Call(engine, "editor.select", R"J({"ids":[]})J")["result"]["selection"].size() == 0);
+    }
+    CHECK(!Call(engine, "editor.state")["result"]["open"].asBool());  // closed again
+    RemoveAll(project);
+}
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    // OE_TEST_FILTER=Name runs only the tests whose names contain it (repeat a flaky one, iterate on one).
+    const char* filter = std::getenv("OE_TEST_FILTER");
+    size_t ran = 0;
     for (const TestCase& t : Tests()) {
+        if (filter && *filter && !std::strstr(t.name, filter)) continue;
         int before = g_failures;
         t.fn();
+        ++ran;
         std::printf("%s %s\n", g_failures == before ? "PASS" : "FAIL", t.name);
     }
-    std::printf("\n%zu tests, %d failed checks\n", Tests().size(), g_failures);
+    std::printf("\n%zu tests, %d failed checks\n", ran, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

@@ -12,6 +12,8 @@ the same session as the person. Open items are listed under [Status](#status) at
 
 The editor only uses public commands (`Engine::Call`), so an agent attached with `oe mcp --connect 7777` sees and can do exactly what the person in the editor does. The editor keeps the HTTP API running (`--port`, default 7777): `oe mcp --connect` and `POST /api/call` work while it is open, and every edit that arrives through the API shows up as a notice (`API: component.set Player MeshRenderer`) plus a fading dot on the entity in the Hierarchy.
 
+**What the human is looking at.** `editor.state` answers for the open editor (`{open:false}` without one): the selection (ids, names, components), `play` (editing/playing/paused), the scene name/path and `unsaved`, `focusedPanel` and `visiblePanels` (English panel names), `sceneView` (2D/3D, eye, target, forward, distance, gizmo tool and space, whether the mouse is over it), `openScripts` and `script` (the visible tab with its 1-based cursor `line`/`column` and the selected text), `selectedAsset`, and the open `shader` / `effect`. So an agent can resolve "make this red", "what's wrong on line 12" or "use the texture I picked". `editor.select {ids:[..], frame:true}` selects entities (ids or names; `[]` clears) and optionally moves the Scene view to the first, to point the human at something; selection is not an edit and makes no undo entry.
+
 Without a window (Linux `null` platform, CI) the editor can still be rendered to an image for agents and tests: see [For agents](#for-agents-looking-at-the-editor).
 
 ## Panels

@@ -683,6 +683,111 @@ void NativeEditor::Impl::FrameSelection() {
     cam.Frame(p, radius);
 }
 
+// editor.state: what the human sees, for agents attached to this editor. Panels go by their
+// English names; script lines and columns count from 1.
+Json NativeEditor::Impl::EditorState() {
+    Json out = Json::MakeObject();
+    out["open"] = true;
+    out["language"] = EditorLanguageCode(GetEditorLanguage());
+    Json scene = Json::MakeObject();
+    scene["name"] = sceneName;
+    scene["path"] = scenePath;
+    scene["unsaved"] = Dirty() && !InPlaySession();
+    out["scene"] = scene;
+    out["play"] = !InPlaySession() ? "editing" : Playing() ? "playing" : "paused";
+
+    Json selectionJson = Json::MakeArray();
+    for (EntityId id : selection) {
+        const EntityRow* row = Row(id);
+        if (!row) continue;
+        Json item = Json::MakeObject();
+        item["id"] = static_cast<uint64_t>(id);
+        item["name"] = row->name;
+        Json components = Json::MakeArray();
+        for (const std::string& c : row->components) components.push(Json(c));
+        item["components"] = components;
+        selectionJson.push(item);
+    }
+    out["selection"] = selectionJson;
+
+    // Panels: the one with keyboard focus and those on screen (docked tabs in front, not collapsed).
+    static const char* const kPanels[] = {"Hierarchy", "Team", "Tiles", "Inspector", "Network", "Scene", "Game", "Scripts",
+                                          "Shader Graph", "Effects", "Assets", "Console", "History", "Team Chat"};
+    Json visible = Json::MakeArray();
+    std::string focused;
+    const ImGuiWindow* nav = ImGui::GetCurrentContext() ? ImGui::GetCurrentContext()->NavWindow : nullptr;
+    for (const char* panel : kPanels) {
+        const ImGuiWindow* w = ImGui::FindWindowByName((std::string("###") + panel).c_str());
+        if (!w) continue;
+        if (w->WasActive && !w->Collapsed && (!w->DockIsActive || w->DockTabIsVisible)) visible.push(Json(panel));
+        if (nav && nav->RootWindowDockTree == w->RootWindowDockTree && nav->RootWindow == w->RootWindow) focused = panel;
+    }
+    out["visiblePanels"] = visible;
+    out["focusedPanel"] = focused.empty() ? Json() : Json(focused);
+
+    Json view = Json::MakeObject();
+    view["mode"] = cam.mode2D ? "2D" : "3D";
+    view["eye"] = Vec3Json(cam.Eye());
+    view["target"] = Vec3Json(cam.target);
+    view["forward"] = Vec3Json(cam.Forward());
+    view["distance"] = cam.distance;
+    view["hovered"] = sceneHovered;
+    view["gizmo"] = gizmoOp == GizmoOp::Rotate ? "rotate" : gizmoOp == GizmoOp::Scale ? "scale" : gizmoOp == GizmoOp::Translate ? "translate" : "none";
+    view["gizmoSpace"] = gizmoLocal ? "local" : "world";
+    out["sceneView"] = view;
+
+    Json openScripts = Json::MakeArray();
+    for (const ScriptTab& tab : scripts) {
+        if (!tab.open) continue;
+        Json item = Json::MakeObject();
+        item["path"] = tab.path;
+        item["modified"] = tab.modified;
+        openScripts.push(item);
+    }
+    out["openScripts"] = openScripts;
+    out["script"] = Json();
+    for (const ScriptTab& tab : scripts) {
+        if (!tab.open || tab.path != activeScriptPath) continue;
+        const TextEditor& ed = *tab.editor;
+        Json script = Json::MakeObject();
+        script["path"] = tab.path;
+        const TextEditor::DocPos cursor = ed.GetMainCursorPosition();
+        script["line"] = static_cast<uint64_t>(cursor.line + 1);
+        script["column"] = static_cast<uint64_t>(cursor.index + 1);
+        if (ed.MainCursorHasSelection()) {
+            const TextEditor::DocSelection range = ed.GetMainCursorSelection();
+            Json sel = Json::MakeObject();
+            sel["startLine"] = static_cast<uint64_t>(range.start.line + 1);
+            sel["startColumn"] = static_cast<uint64_t>(range.start.index + 1);
+            sel["endLine"] = static_cast<uint64_t>(range.end.line + 1);
+            sel["endColumn"] = static_cast<uint64_t>(range.end.index + 1);
+            std::string text = ed.GetSectionText(range);
+            if (text.size() > 4000) text = text.substr(0, 4000) + "...";
+            sel["text"] = text;
+            script["selection"] = sel;
+        }
+        out["script"] = script;
+    }
+    out["selectedAsset"] = selectedAsset.empty() ? Json() : Json(selectedAsset);
+    out["shader"] = showShaders && !shaderPath.empty() ? Json(shaderPath) : Json();
+    out["effect"] = showEffects && !effectsPath.empty() ? Json(effectsPath) : Json();
+    return out;
+}
+
+// editor.select: ids are resolved by the command; an empty list clears the selection.
+Json NativeEditor::Impl::EditorSelect(const Json& args) {
+    selection.clear();
+    for (const Json& id : args["ids"].items()) {
+        const EntityId entity = static_cast<EntityId>(id.asNumber(0));
+        if (std::find(selection.begin(), selection.end(), entity) == selection.end()) selection.push_back(entity);
+    }
+    anchorRow = Primary();
+    selectedId = kNullEntity;
+    Refresh(true);
+    if (args["frame"].asBool(false)) FrameSelection();
+    return EditorState();
+}
+
 void NativeEditor::Impl::CreatePreset(const char* key) {
     const Preset* p = nullptr;
     for (const Preset& x : kPresets) {
@@ -1534,6 +1639,7 @@ NativeEditor::NativeEditor(Engine& engine, Window* window, Options options) : im
 NativeEditor::~NativeEditor() {
     if (!impl_->ready) return;
     impl_->engine.SetRemoteCallObserver(nullptr);
+    impl_->engine.SetEditorHandler(nullptr);
     if (!impl_->options.layoutFile.empty()) ImGui::SaveIniSettingsToDisk(impl_->options.layoutFile.c_str());
     impl_->ReleaseGameInput();
     if (impl_->offAtt.id) sg_destroy_view(impl_->offAtt);
@@ -1626,6 +1732,7 @@ bool NativeEditor::Init(std::string* error) {
     mergeCjk();  // Korean/Japanese in scripts and the code editor
 
     m.engine.SetRemoteCallObserver([&m](const std::string& name, const Json& args, const Json& result) { m.OnRemoteCall(name, args, result); });
+    m.engine.SetEditorHandler([&m](const std::string& op, const Json& args) { return op == "select" ? m.EditorSelect(args) : m.EditorState(); });
     m.componentTypes = m.Call("component.types", Json(), true)["result"];
     for (const Json& t : m.componentTypes.items()) m.typeByName[t["name"].asString("")] = &t;
     for (const Json& c : m.Call("api.list", Json(), true)["result"].items()) m.commandNames.push_back(c["name"].asString(""));

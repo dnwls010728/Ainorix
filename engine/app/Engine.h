@@ -257,6 +257,11 @@ public:
     // native editor uses it to show what an agent changed. Empty = none.
     using CallObserver = std::function<void(const std::string& name, const Json& args, const Json& result)>;
     void SetRemoteCallObserver(CallObserver observer) { remoteObserver_ = std::move(observer); }
+    // The native editor showing this engine (oe editor) answers editor.state and editor.select
+    // through this (op "state" / "select"); empty when no editor is open.
+    using EditorHandler = std::function<Json(const std::string& op, const Json& args)>;
+    void SetEditorHandler(EditorHandler handler) { editorHandler_ = std::move(handler); }
+    const EditorHandler& GetEditorHandler() const { return editorHandler_; }
     std::future<std::vector<uint8_t>> PostJob(std::function<std::vector<uint8_t>()> job);
     void RunPostedJobs();
 
@@ -463,6 +468,7 @@ private:
     std::string prefabPath_;
 
     CallObserver remoteObserver_;
+    EditorHandler editorHandler_;
     std::string remoteAgent_;
     std::mutex jobsMutex_;
     std::deque<std::function<void()>> jobs_;

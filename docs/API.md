@@ -1403,6 +1403,21 @@ Draw lines/boxes/spheres in every view (visible in screenshots) to mark points, 
 
 Remove all debug lines.
 
+## editor
+
+### `editor.state`
+
+What the human sees in the open editor: selected entities, focused and visible panels, Scene view camera, the script tab and cursor/selection, the selected asset, open shader/effect, play state. {open:false} without an editor.
+
+### `editor.select`
+
+Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `ids` | array | yes | Entity ids or unique names; [] clears the selection. |
+| `frame` | boolean |  | Move the Scene view camera to the first entity (default false). |
+
 ## history
 
 ### `history.list`

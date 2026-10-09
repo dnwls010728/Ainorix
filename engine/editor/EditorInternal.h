@@ -177,6 +177,7 @@ struct NativeEditor::Impl {
     bool assetGrid = true;
     std::string selectedAsset;
     std::vector<ScriptTab> scripts;
+    std::string activeScriptPath;  // the tab the Scripts panel showed last frame (editor.state)
     std::vector<std::string> closingScripts;  // Paths survive tab moves while the unsaved-changes prompt is open.
     int focusScript = -1;
     bool scriptEditorFocused = false;  // keys belong to the code editor (no scene shortcuts)
@@ -448,6 +449,8 @@ struct NativeEditor::Impl {
     void PasteSelection();
     void BrowseFile(NativeEditor::FilePurpose purpose);
     void FrameSelection();
+    Json EditorState();                     // editor.state
+    Json EditorSelect(const Json& args);    // editor.select {ids, frame}
     void CreatePreset(const char* key);
     void RequestAction(PendingAction action);  // asks to save first when dirty
     void RunAction(const PendingAction& action);

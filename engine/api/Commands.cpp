@@ -304,6 +304,7 @@ std::string Guide() {
         "6. sim.step {frames:60} simulates one second deterministically; input.key {key:\"W\", down:true} injects input.\n"
         "   sim.stop restores the scene from before simulation started.\n"
         "7. scene.save persists to disk (JSON, diff friendly). history.undo reverts the last edit.\n"
+        "8. Attached to a human's editor: editor.state says what they selected and have open; editor.select points at entities.\n"
         "Use api.batch to send many commands in one round trip.";
 }
 
@@ -2237,6 +2238,36 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     });
 
     // ----- history -----------------------------------------------------------------
+    // What the person in the editor is looking at, so "this", "the selected one" or "line 12" can be resolved.
+    Register(r, "editor.state",
+             "What the human sees in the open editor: selected entities, focused and visible panels, Scene view camera, "
+             "the script tab and cursor/selection, the selected asset, open shader/effect, play state. {open:false} without an editor.",
+             Params(), false, [](Engine& e, const Json& a) {
+                 if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("state", a);
+                 Json out = Json::MakeObject();
+                 out["open"] = false;
+                 out["hint"] = "No editor shows this engine. The human runs `oe editor <project>`; agents attach with `oe mcp --connect 7777`.";
+                 return out;
+             });
+    Register(r, "editor.select",
+             "Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).",
+             Params().Req("ids", "array", "Entity ids or unique names; [] clears the selection.")
+                 .Opt("frame", "boolean", "Move the Scene view camera to the first entity (default false)."),
+             false, [](Engine& e, const Json& a) {
+                 const Engine::EditorHandler& editor = e.GetEditorHandler();
+                 if (!editor) throw ApiError("no_editor", "no editor shows this engine",
+                                             "The human runs `oe editor <project>`; attach to it with `oe mcp --connect 7777`.");
+                 Json ids = Json::MakeArray();
+                 for (const Json& ref : a["ids"].items()) {
+                     Json one = Json::MakeObject();
+                     one["id"] = ref;
+                     ids.push(Json(static_cast<uint64_t>(RequireEntity(e, one))));
+                 }
+                 Json args = Json::MakeObject();
+                 args["ids"] = ids;
+                 args["frame"] = a["frame"].asBool(false);
+                 return editor("select", args);
+             });
     Register(r, "history.list", "Scene edit commands and arguments in chronological order, with applied cursor. Consecutive merge groups share one entry.",
              Params(), false, [](Engine& e, const Json&) { return e.HistoryState(); });
     Register(r, "history.go", "Move to an applied history cursor by undoing/redoing edits. Retains the redo branch until a new edit.",
