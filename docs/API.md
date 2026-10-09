@@ -761,7 +761,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `camera` | integer \| string | yes | Explicit Camera entity id or unique name. |
 | `position` | object | yes | Finite world point {x,y,z}. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
 
@@ -771,7 +771,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `camera` | integer \| string | yes | Explicit Camera entity id or unique name. |
 | `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
 
@@ -781,7 +781,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `camera` | integer \| string | yes | Explicit Camera entity id or unique name. |
 | `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
 | `plane` | object | yes | World plane {point:{x,y,z},normal:{x,y,z}}; nonzero normal. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
@@ -794,7 +794,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `canvas` | entity |  | Single effective UICanvas id/name; omitted uses first canvas or fallback. |
+| `canvas` | integer \| string |  | Single effective UICanvas id/name; omitted uses first canvas or fallback. |
 | `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
 
@@ -808,7 +808,7 @@ Read-only text layout in reference pixels at effective view scale; actual render
 | `style` | object |  | font, size, letterSpacing, lineSpacing, bold, rich; defaults match UIText. |
 | `wrapWidth` | number |  | Reference pixels; omitted/zero = no wrap; maximum 65536. |
 | `view` | object |  | Logical {width,height}; omitted uses local input.viewSize(). |
-| `canvas` | entity |  | Single effective UICanvas; omitted uses first canvas/fallback. |
+| `canvas` | integer \| string |  | Single effective UICanvas; omitted uses first canvas/fallback. |
 
 ### `ui.layout`
 
@@ -885,7 +885,7 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 
 ### `render.pick`
 
-Return the entity visible at a pixel of a rendered view.
+Return the entity visible at a pixel of a rendered view, and where its surface is: point (world position), normal (facing the camera) and distance from the camera. point is absent where nothing is drawn.
 
 | arg | type | required | description |
 |---|---|---|---|
@@ -1105,7 +1105,7 @@ Gameplay pause of the play session (like game.pause in Lua): scripts and UI keep
 
 | arg | type | required | description |
 |---|---|---|---|
-| `paused` | bool |  | true pauses, false resumes. |
+| `paused` | boolean |  | true pauses, false resumes. |
 
 ### `game.load_scene`
 
@@ -1403,6 +1403,21 @@ Draw lines/boxes/spheres in every view (visible in screenshots) to mark points, 
 
 Remove all debug lines.
 
+## editor
+
+### `editor.state`
+
+What the human sees in the open editor: selected entities, focused and visible panels, Scene view camera, the script tab and cursor/selection, the selected asset, open shader/effect, play state. {open:false} without an editor.
+
+### `editor.select`
+
+Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `ids` | array | yes | Entity ids or unique names; [] clears the selection. |
+| `frame` | boolean |  | Move the Scene view camera to the first entity (default false). |
+
 ## history
 
 ### `history.list`
@@ -1429,12 +1444,16 @@ Redo the last undone edit.
 
 ### `team.backends`
 
-Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, its version, path, models and install hint. Detection runs once per session (it starts `<cli> --version`, a few seconds in total).
+Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, its version, path, models and install hint. Detection runs once per session (it starts `<cli> --version` and the CLI's login check, a few seconds in total): `login` is loggedIn | loggedOut | unknown with `loginDetail` and the `loginHint` command that signs in. `engine` is how the ownengine MCP server came up in the CLI's latest turn this session ({status: connected | failed | ..., time, agent}).
 
 | arg | type | required | description |
 |---|---|---|---|
 | `refresh` | boolean |  | Detect again, e.g. after installing a CLI (default false). |
 | `async` | boolean |  | Do not wait: detection runs in the background and entries report status "detecting" until a later call finds it done (what the editor does, so its window never freezes; default false). |
+
+### `team.connection`
+
+How agent turns reach this editor: {apiPort (0 = no editor API), oe (the program), mcp (the MCP server command line each turn gets), shell (the same commands from a shell, allowed without asking in edit access), askAccess}.
 
 ### `team.presets`
 
@@ -1443,6 +1462,10 @@ Names of the built-in profile pictures (use as avatar "preset:<name>").
 ### `team.list`
 
 The project's agent team: settings (lead, maxConcurrent, maxHops, inheritUserTools), a revision that changes with every edit, and all agent profiles.
+
+### `team.add_defaults`
+
+Give a project without agents the default team that `oe new` creates (docs/TEAM.md §3.3): Lead (Sonnet), Core (Opus), Content (Sonnet), Art (Codex) and QA (Sonnet). For projects made before teams or with --no-team. Returns team.list.
 
 ### `team.get`
 
@@ -1515,6 +1538,7 @@ Read or change the team settings; without arguments it only reads them.
 | `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off). |
 | `inheritUserTools` | boolean |  | Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain. |
 | `rotateAboveInputTokens` | integer |  | Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000. |
+| `askAccess` | string |  | read | edit (default) | full: what an agent CLI asked directly (team.ask, the editor's Ask bubbles and Agent Chat) may do without asking. |
 
 ### `team.send`
 
@@ -1526,6 +1550,39 @@ Post a message to the team chat and give a turn to every agent it addresses: @id
 | `attachments` | array |  | Files the agents should look at: paths on this PC or relative to the project, at most 8, 32 MiB each. A file outside the project is copied into .oe/team/attachments/. |
 | `from` | string |  | Sender: "user" (default) or an agent id. |
 | `wait` | number |  | Block up to this many seconds until the addressed agents have finished, then also return the new messages and the state (for one-shot `oe exec`; default 0 = return at once). |
+
+### `team.ask`
+
+Ask one agent CLI directly, outside the team roster and chat: a direct conversation (`thread`) with the CLI and model chosen per message (the editor's "Ask an agent" bubble on a Scene object). The turn runs like a team turn, attached to the editor; follow it with team.thread. Returns the thread state at once.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `thread` | string | yes | Conversation key, 1..64 characters of a-z, 0-9, '-' and '_' (the editor uses e<entity>-<backend>). |
+| `backend` | string | yes | Agent CLI id from team.backends (claude, codex, ...). |
+| `model` | string |  | Model id of that CLI (team.backends lists them); empty = the CLI's default. |
+| `text` | string | yes | The message, at most 32 KiB (may be empty when files are attached). |
+| `context` | string |  | What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB. |
+| `attachments` | array |  | Files the agent should look at, as in team.send: paths on this PC or relative to the project, at most 8, 32 MiB each. |
+
+### `team.thread`
+
+One direct conversation (team.ask): backend, model, running, activity and its messages, oldest first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `thread` | string | yes | Conversation key. |
+
+### `team.thread_cancel`
+
+Stop the running turn of a direct conversation; {cancelled: false} when none ran.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `thread` | string | yes | Conversation key. |
+
+### `team.threads`
+
+Stored direct conversations: [{thread, backend, model, messages, running, title (the first message), updated (UTC)}].
 
 ### `team.delegate`
 

@@ -87,6 +87,71 @@ std::vector<ModelInfo> CodexModels() {
     return ParseCodexModelCache(text);
 }
 
+std::string UserHome() {
+    std::string home = EnvironmentValue("USERPROFILE");
+    return home.empty() ? EnvironmentValue("HOME") : home;
+}
+
+bool RunCheck(const std::string& executable, std::vector<std::string> arguments, double timeoutSeconds, Captured& captured, BackendState& state) {
+    ProcessOptions options;
+    options.executable = executable;
+    options.arguments = std::move(arguments);
+    options.pipeStdin = false;
+    std::string error;
+    if (!Capture(options, timeoutSeconds, captured, &error) || captured.timedOut) {
+        state.loginDetail = error.empty() ? "the login check did not finish in time" : error;
+        return false;
+    }
+    return true;
+}
+
+// `claude auth status` prints {"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "pro", ...}.
+void ClaudeLogin(const std::string& executable, double timeoutSeconds, BackendState& state) {
+    Captured captured;
+    if (!RunCheck(executable, {"auth", "status"}, timeoutSeconds, captured, state)) return;
+    std::string error;
+    const Json status = Json::parse(captured.out, &error);
+    if (!error.empty() || !status["loggedIn"].isBool()) {
+        state.loginDetail = "`claude auth status` printed no login state";
+        return;
+    }
+    state.login = status["loggedIn"].asBool() ? "loggedIn" : "loggedOut";
+    if (status["loggedIn"].asBool()) {
+        state.loginDetail = status["authMethod"].asString("");
+        const std::string plan = status["subscriptionType"].asString("");
+        if (!plan.empty()) state.loginDetail += (state.loginDetail.empty() ? "" : " ") + std::string("(") + plan + ")";
+    }
+}
+
+// `codex login status`: exit 0 and "Logged in using ChatGPT" (on stderr), otherwise "Not logged in".
+void CodexLogin(const std::string& executable, double timeoutSeconds, BackendState& state) {
+    Captured captured;
+    if (!RunCheck(executable, {"login", "status"}, timeoutSeconds, captured, state)) return;
+    const std::string line = FirstLine(captured.out.empty() ? captured.err : captured.out);
+    if (captured.exitCode == 0 && line.find("Logged in") != std::string::npos) {
+        state.login = "loggedIn";
+        const size_t using_ = line.find("using ");
+        state.loginDetail = using_ == std::string::npos ? line : line.substr(using_ + 6);
+    } else {
+        state.login = "loggedOut";
+        state.loginDetail = line;
+    }
+}
+
+// Gemini CLI has no status command: a Google sign-in leaves ~/.gemini/oauth_creds.json, an API
+// key comes from the environment.
+void GeminiLogin(const std::string&, double, BackendState& state) {
+    if (!EnvironmentValue("GEMINI_API_KEY").empty() || !EnvironmentValue("GOOGLE_API_KEY").empty()) {
+        state.login = "loggedIn";
+        state.loginDetail = "API key";
+    } else if (!UserHome().empty() && FileExists(JoinPath(UserHome(), ".gemini/oauth_creds.json"))) {
+        state.login = "loggedIn";
+        state.loginDetail = "Google account";
+    } else {
+        state.login = "loggedOut";
+    }
+}
+
 Json ModelsToJson(const std::vector<ModelInfo>& models) {
     Json list = Json::MakeArray();
     for (const ModelInfo& model : models) {
@@ -120,6 +185,8 @@ std::vector<Backend> BuiltinBackends() {
     claude.displayName = "Claude Code";
     claude.executable = "claude";
     claude.installHint = "npm install -g @anthropic-ai/claude-code";
+    claude.loginHint = "claude auth login";
+    claude.checkLogin = &ClaudeLogin;
     // The CLI's own aliases: they follow new model releases without an engine update. The
     // labels carry no version: Claude Code offers no list to read one from, and a version is
     // shown only where it was detected on this PC, never guessed.
@@ -133,6 +200,8 @@ std::vector<Backend> BuiltinBackends() {
     codex.displayName = "Codex";
     codex.executable = "codex";
     codex.installHint = "npm install -g @openai/codex";
+    codex.loginHint = "codex login";
+    codex.checkLogin = &CodexLogin;
     // No built-in catalog: the models are the ones the installed Codex reports (its model cache).
     // When that cannot be read, only the CLI's default is offered, never a guessed list.
     codex.supportsImages = true;
@@ -145,6 +214,8 @@ std::vector<Backend> BuiltinBackends() {
     gemini.displayName = "Gemini CLI";
     gemini.executable = "gemini";
     gemini.installHint = "npm install -g @google/gemini-cli";
+    gemini.loginHint = "gemini";
+    gemini.checkLogin = &GeminiLogin;
     // No catalog yet: the CLI's default model, or a custom id (the turn adapter is listed under Later).
     return backends;
 }
@@ -244,6 +315,7 @@ BackendState DetectBackend(const Backend& backend, double timeoutSeconds) {
     }
     state.status = BackendStatus::Installed;
     if (state.version.empty()) state.version = ParseCliVersion(captured.err);
+    if (backend.checkLogin) backend.checkLogin(state.path, timeoutSeconds, state);
     if (backend.discoverModels) {
         std::vector<ModelInfo> discovered = backend.discoverModels();
         if (!discovered.empty()) {
@@ -276,6 +348,12 @@ Json BackendToJson(const Backend& backend, const BackendState& state) {
     j["modelSource"] = state.modelsDiscovered ? "discovered" : "catalog";
     j["supportsImages"] = backend.supportsImages;
     j["installHint"] = backend.installHint;
+    j["runsTurns"] = static_cast<bool>(backend.buildTurn);  // false: detected only (no turn adapter yet)
+    if (state.status == BackendStatus::Installed) {
+        j["login"] = state.login;
+        if (!state.loginDetail.empty()) j["loginDetail"] = state.loginDetail;
+        if (!backend.loginHint.empty()) j["loginHint"] = backend.loginHint;
+    }
     return j;
 }
 

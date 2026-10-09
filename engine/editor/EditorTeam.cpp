@@ -276,6 +276,13 @@ void NativeEditor::Impl::TeamPanel() {
         ImGui::Spacing();
         ImGui::TextWrapped("%s", Tr("Agents work through the coding-agent CLIs installed on this PC (Claude Code, Codex)."));
         ImGui::Spacing();
+        if (ImGui::Button(Tr("Add the default team"))) {  // what `oe new` gives a project: Lead, Core, Content, Art, QA
+            const Json added = Call("team.add_defaults", Json(), true);
+            if (!Ok(added)) Notify(added["error"]["message"].asString(""), true);
+            teamListRevision = -1;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Lead, Core, Content, Art and QA, as a new project gets them."));
+        ImGui::SameLine();
         if (ImGui::Button(Tr("Add your first agent"))) EditAgent("");
     }
     ImGui::TextDisabled("%s", Tr("Usage today (UTC)"));

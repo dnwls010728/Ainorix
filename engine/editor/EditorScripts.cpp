@@ -252,6 +252,7 @@ void NativeEditor::Impl::UpdateScriptMarkers(ScriptTab& tab) {
 
 void NativeEditor::Impl::ScriptsPanel() {
     scriptEditorFocused = false;
+    activeScriptPath.clear();
     if (focusScript >= 0) ImGui::SetNextWindowFocus();  // bring the tab to front; Begin() skips hidden tabs
     if (!ImGui::Begin(WithIcon(kIconFileCode, TrId("Scripts")).c_str(), &showScripts)) {
         ImGui::End();
@@ -294,6 +295,7 @@ void NativeEditor::Impl::ScriptsPanel() {
                 ImGui::EndPopup();
             }
             if (!active) continue;
+            activeScriptPath = t.path;
 
             // Runtime errors for this file (changes rebuild the markers).
             std::vector<ScriptDiagnostic> runtime;

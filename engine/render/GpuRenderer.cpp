@@ -7,6 +7,7 @@
 #include <cstring>
 #include <future>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -79,7 +80,13 @@ bool CompileStage(const GpuDevice& device, const std::string& compiler, const st
         OE_LOG_WARN("gpu", "shader compile failed: %s", error.c_str());
         return false;
     }
-    if (!path.empty()) WriteTextFileAtomic(path, std::string(stage.bytecode.begin(), stage.bytecode.end()), nullptr);
+    if (!path.empty()) {
+        // Programs that share a stage compile it on several threads at once; WriteTextFileAtomic
+        // writes through one fixed temporary name, so concurrent writers of a key could lose the file.
+        static std::mutex writing;
+        std::lock_guard<std::mutex> lock(writing);
+        WriteTextFileAtomic(path, std::string(stage.bytecode.begin(), stage.bytecode.end()), nullptr);
+    }
     return true;
 }
 

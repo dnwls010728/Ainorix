@@ -85,6 +85,25 @@ public:
     std::array<float, 4> EffectsControlRect(const std::string& name) const;
     // Screen bounds of an Inspector value widget, "RigidBody.mass" (axis toggles: "RigidBody.lockPositionX"); zero when not drawn.
     std::array<float, 4> InspectorControlRect(const std::string& name) const;
+    // Ask bubbles (Scene view): open one for an entity (backend: agent CLI id, empty = the team),
+    // the entity the right-click menu is open for (none: 0), the open bubbles and a control's
+    // screen bounds ("input", "send" of the bubble at `index`).
+    void OpenAskBubble(EntityId entity, const std::string& backend);
+    // ... or for a spot in the scene (point on the surface of `surface`, kNullEntity = none).
+    void OpenAskSpot(const Vec3& point, EntityId surface, const std::string& backend);
+    EntityId AskMenuEntity() const;
+    Vec3 AskMenuPoint() const;  // where the open menu was opened, in world space
+    int AskBubbleCount() const;
+    // The Agent Chat panel in front, talking to `backend` (empty: as it was), and its input's bounds.
+    void FocusAgentChat(const std::string& backend = {});
+    std::array<float, 4> AgentChatInputRect() const;
+    std::array<float, 4> AskControlRect(int index, const std::string& name) const;
+    // Files waiting to go with the next message of the Agent Chat panel / of the bubble at `index`.
+    std::vector<std::string> AgentChatAttachments() const;
+    std::vector<std::string> AskAttachments(int index) const;
+    // The Settings window, on a tab ("agents"; empty = as it was).
+    void OpenSettings(const std::string& tab = {});
+    bool SettingsOpen() const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).

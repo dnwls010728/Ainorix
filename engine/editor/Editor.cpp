@@ -194,6 +194,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "HistoryPanel=%d", &i) == 1) m->showHistory = i != 0;
     else if (std::sscanf(line, "TeamPanel=%d", &i) == 1) m->showTeam = i != 0;
     else if (std::sscanf(line, "TeamChatPanel=%d", &i) == 1) m->showTeamChat = i != 0;
+    else if (std::sscanf(line, "AgentChatPanel=%d", &i) == 1) m->showAgentChat = i != 0;
     else if (std::sscanf(line, "Thumbnails=%d", &i) == 1) m->showThumbnails = i != 0;
     else if (std::sscanf(line, "AssetGrid=%d", &i) == 1) m->assetGrid = i != 0;
     else if (std::sscanf(line, "ShaderPanel=%d", &i) == 1) m->showShaders = i != 0;
@@ -242,7 +243,8 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
-    buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam, m->showTeamChat);
+    buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\nAgentChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam,
+                 m->showTeamChat, m->showAgentChat);
     buf->appendf("AssetGrid=%d\n", m->assetGrid);
     buf->appendf("ShaderPanel=%d\n", m->showShaders);
     buf->appendf("EffectsPanel=%d\n", m->showEffects);
@@ -572,6 +574,9 @@ void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args,
     for (const Json& member : team["agents"].items()) {
         if (!agent.empty() && member["id"].asString("") == agent) who = member["name"].asString(agent);
     }
+    if (agent.rfind("ask-", 0) == 0) {  // asked directly from a Scene bubble (team.ask): the CLI's name
+        if (const Json* backend = TeamBackend(agent.substr(4))) who = (*backend)["name"].asString(agent);
+    }
     if (id != kNullEntity) {
         if (agent.empty()) remoteEditColors.erase(id);
         else remoteEditColors[id] = AgentColor(agent);
@@ -681,6 +686,111 @@ void NativeEditor::Impl::FrameSelection() {
         radius = std::max(radius, 0.5f * static_cast<float>(std::max(w, h)) * ts * std::max(std::fabs(s.x), std::fabs(s.y)));
     }
     cam.Frame(p, radius);
+}
+
+// editor.state: what the human sees, for agents attached to this editor. Panels go by their
+// English names; script lines and columns count from 1.
+Json NativeEditor::Impl::EditorState() {
+    Json out = Json::MakeObject();
+    out["open"] = true;
+    out["language"] = EditorLanguageCode(GetEditorLanguage());
+    Json scene = Json::MakeObject();
+    scene["name"] = sceneName;
+    scene["path"] = scenePath;
+    scene["unsaved"] = Dirty() && !InPlaySession();
+    out["scene"] = scene;
+    out["play"] = !InPlaySession() ? "editing" : Playing() ? "playing" : "paused";
+
+    Json selectionJson = Json::MakeArray();
+    for (EntityId id : selection) {
+        const EntityRow* row = Row(id);
+        if (!row) continue;
+        Json item = Json::MakeObject();
+        item["id"] = static_cast<uint64_t>(id);
+        item["name"] = row->name;
+        Json components = Json::MakeArray();
+        for (const std::string& c : row->components) components.push(Json(c));
+        item["components"] = components;
+        selectionJson.push(item);
+    }
+    out["selection"] = selectionJson;
+
+    // Panels: the one with keyboard focus and those on screen (docked tabs in front, not collapsed).
+    static const char* const kPanels[] = {"Hierarchy", "Team", "Tiles", "Inspector", "Network", "Scene", "Game", "Scripts",
+                                          "Shader Graph", "Effects", "Assets", "Console", "History", "Team Chat", "Agent Chat"};
+    Json visible = Json::MakeArray();
+    std::string focused;
+    const ImGuiWindow* nav = ImGui::GetCurrentContext() ? ImGui::GetCurrentContext()->NavWindow : nullptr;
+    for (const char* panel : kPanels) {
+        const ImGuiWindow* w = ImGui::FindWindowByName((std::string("###") + panel).c_str());
+        if (!w) continue;
+        if (w->WasActive && !w->Collapsed && (!w->DockIsActive || w->DockTabIsVisible)) visible.push(Json(panel));
+        if (nav && nav->RootWindowDockTree == w->RootWindowDockTree && nav->RootWindow == w->RootWindow) focused = panel;
+    }
+    out["visiblePanels"] = visible;
+    out["focusedPanel"] = focused.empty() ? Json() : Json(focused);
+
+    Json view = Json::MakeObject();
+    view["mode"] = cam.mode2D ? "2D" : "3D";
+    view["eye"] = Vec3Json(cam.Eye());
+    view["target"] = Vec3Json(cam.target);
+    view["forward"] = Vec3Json(cam.Forward());
+    view["distance"] = cam.distance;
+    view["hovered"] = sceneHovered;
+    view["gizmo"] = gizmoOp == GizmoOp::Rotate ? "rotate" : gizmoOp == GizmoOp::Scale ? "scale" : gizmoOp == GizmoOp::Translate ? "translate" : "none";
+    view["gizmoSpace"] = gizmoLocal ? "local" : "world";
+    out["sceneView"] = view;
+
+    Json openScripts = Json::MakeArray();
+    for (const ScriptTab& tab : scripts) {
+        if (!tab.open) continue;
+        Json item = Json::MakeObject();
+        item["path"] = tab.path;
+        item["modified"] = tab.modified;
+        openScripts.push(item);
+    }
+    out["openScripts"] = openScripts;
+    out["script"] = Json();
+    for (const ScriptTab& tab : scripts) {
+        if (!tab.open || tab.path != activeScriptPath) continue;
+        const TextEditor& ed = *tab.editor;
+        Json script = Json::MakeObject();
+        script["path"] = tab.path;
+        const TextEditor::DocPos cursor = ed.GetMainCursorPosition();
+        script["line"] = static_cast<uint64_t>(cursor.line + 1);
+        script["column"] = static_cast<uint64_t>(cursor.index + 1);
+        if (ed.MainCursorHasSelection()) {
+            const TextEditor::DocSelection range = ed.GetMainCursorSelection();
+            Json sel = Json::MakeObject();
+            sel["startLine"] = static_cast<uint64_t>(range.start.line + 1);
+            sel["startColumn"] = static_cast<uint64_t>(range.start.index + 1);
+            sel["endLine"] = static_cast<uint64_t>(range.end.line + 1);
+            sel["endColumn"] = static_cast<uint64_t>(range.end.index + 1);
+            std::string text = ed.GetSectionText(range);
+            if (text.size() > 4000) text = text.substr(0, 4000) + "...";
+            sel["text"] = text;
+            script["selection"] = sel;
+        }
+        out["script"] = script;
+    }
+    out["selectedAsset"] = selectedAsset.empty() ? Json() : Json(selectedAsset);
+    out["shader"] = showShaders && !shaderPath.empty() ? Json(shaderPath) : Json();
+    out["effect"] = showEffects && !effectsPath.empty() ? Json(effectsPath) : Json();
+    return out;
+}
+
+// editor.select: ids are resolved by the command; an empty list clears the selection.
+Json NativeEditor::Impl::EditorSelect(const Json& args) {
+    selection.clear();
+    for (const Json& id : args["ids"].items()) {
+        const EntityId entity = static_cast<EntityId>(id.asNumber(0));
+        if (std::find(selection.begin(), selection.end(), entity) == selection.end()) selection.push_back(entity);
+    }
+    anchorRow = Primary();
+    selectedId = kNullEntity;
+    Refresh(true);
+    if (args["frame"].asBool(false)) FrameSelection();
+    return EditorState();
 }
 
 void NativeEditor::Impl::CreatePreset(const char* key) {
@@ -1117,6 +1227,11 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::Separator();
         if (ImGui::MenuItem(Tr("Frame Selected"), "F", false, any)) FrameSelection();
         if (ImGui::MenuItem(Tr("Select None"), "Esc", false, any)) selection.clear();
+        ImGui::Separator();
+        if (ImGui::MenuItem(WithIcon(kIconSettings, Tr("Settings...")).c_str())) {
+            showSettings = true;
+            ImGui::SetWindowFocus(WithIcon(kIconSettings, TrId("Settings")).c_str());
+        }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(Tr("Create"))) {
@@ -1161,6 +1276,7 @@ void NativeEditor::Impl::MainMenu() {
         if (ImGui::MenuItem(Tr("Network"), nullptr, &showNetwork) && showNetwork) requestNetworkFocus = true;
         if (teamAvailable && ImGui::MenuItem(Tr("Team"), nullptr, &showTeam) && showTeam) requestTeamFocus = true;
         if (teamAvailable && ImGui::MenuItem(Tr("Team Chat"), nullptr, &showTeamChat) && showTeamChat) requestTeamChatFocus = true;
+        if (teamAvailable && ImGui::MenuItem(Tr("Agent Chat"), nullptr, &showAgentChat) && showAgentChat) requestAgentChatFocus = true;
         ImGui::MenuItem(Tr("ImGui Metrics"), nullptr, &showMetrics);
         ImGui::EndMenu();
     }
@@ -1384,10 +1500,14 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
             ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("###Console"));
             if (console && console->DockId) ImGui::DockBuilderDockWindow("###Team Chat", console->DockId);
         }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Agent Chat"))) {
+            ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("###Console"));
+            if (console && console->DockId) ImGui::DockBuilderDockWindow("###Agent Chat", console->DockId);
+        }
         return;
     }
     resetLayout = false;
-    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = showTeam = showTeamChat = true;
+    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = showTeam = showTeamChat = showAgentChat = true;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockspace);
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -1410,6 +1530,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderDockWindow("###History", bottom);
     ImGui::DockBuilderDockWindow("###Team Chat", bottom);
+    ImGui::DockBuilderDockWindow("###Agent Chat", bottom);
     ImGui::DockBuilderFinish(dockspace);
     if (ImGuiDockNode* b = ImGui::DockBuilderGetNode(bottom)) b->SelectedTabId = ImHashStr("###Assets");  // as before the chat tab existed
     if (ImGuiDockNode* r = ImGui::DockBuilderGetNode(right)) r->SelectedTabId = ImHashStr("###Inspector");  // Tiles waits behind it
@@ -1534,6 +1655,7 @@ NativeEditor::NativeEditor(Engine& engine, Window* window, Options options) : im
 NativeEditor::~NativeEditor() {
     if (!impl_->ready) return;
     impl_->engine.SetRemoteCallObserver(nullptr);
+    impl_->engine.SetEditorHandler(nullptr);
     if (!impl_->options.layoutFile.empty()) ImGui::SaveIniSettingsToDisk(impl_->options.layoutFile.c_str());
     impl_->ReleaseGameInput();
     if (impl_->offAtt.id) sg_destroy_view(impl_->offAtt);
@@ -1626,6 +1748,7 @@ bool NativeEditor::Init(std::string* error) {
     mergeCjk();  // Korean/Japanese in scripts and the code editor
 
     m.engine.SetRemoteCallObserver([&m](const std::string& name, const Json& args, const Json& result) { m.OnRemoteCall(name, args, result); });
+    m.engine.SetEditorHandler([&m](const std::string& op, const Json& args) { return op == "select" ? m.EditorSelect(args) : m.EditorState(); });
     m.componentTypes = m.Call("component.types", Json(), true)["result"];
     for (const Json& t : m.componentTypes.items()) m.typeByName[t["name"].asString("")] = &t;
     for (const Json& c : m.Call("api.list", Json(), true)["result"].items()) m.commandNames.push_back(c["name"].asString(""));
@@ -1694,11 +1817,13 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showHistory) m.HistoryPanel();
     if (m.teamAvailable && m.showTeam) m.TeamPanel();
     if (m.teamAvailable && m.showTeamChat) m.TeamChatPanel();
+    if (m.teamAvailable && m.showAgentChat) m.AgentChatPanel();
     if (m.showMetrics) ImGui::ShowMetricsWindow(&m.showMetrics);
     m.EffectsModals();
     m.Modals();
     if (m.teamAvailable) m.TeamModals();
     if (m.teamAvailable) m.ImageViewer();
+    m.SettingsWindow();
     if (m.teamAvailable && !m.droppedFiles.empty()) m.RouteDroppedFiles();  // onto the chat: attached, not imported
     m.Toasts();
     if (!m.droppedFiles.empty()) m.ImportDroppedFiles();
@@ -1835,6 +1960,36 @@ Json NativeEditor::EffectsDocument() const { return impl_->engine.VfxDocumentCal
 std::array<float, 4> NativeEditor::EffectsControlRect(const std::string& name) const {
     const auto found = impl_->effectsRects.find(name);
     return found == impl_->effectsRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
+
+void NativeEditor::OpenAskBubble(EntityId entity, const std::string& backend) { impl_->OpenAskBubble(entity, backend); }
+EntityId NativeEditor::AskMenuEntity() const {
+    return ImGui::IsPopupOpen("##sceneAsk", ImGuiPopupFlags_AnyPopupId) ? impl_->askMenuEntity : kNullEntity;
+}
+void NativeEditor::OpenAskSpot(const Vec3& point, EntityId surface, const std::string& backend) {
+    impl_->OpenAskSpot(point, Vec3(0, 1, 0), surface, backend);
+}
+Vec3 NativeEditor::AskMenuPoint() const { return impl_->askMenuPoint; }
+void NativeEditor::FocusAgentChat(const std::string& backend) {
+    impl_->showAgentChat = impl_->requestAgentChatFocus = impl_->agentChatFocusInput = true;
+    if (!backend.empty() && backend != impl_->agentChatBackend) impl_->AgentChatSelect(backend, "");
+}
+std::array<float, 4> NativeEditor::AgentChatInputRect() const { return impl_->agentChatInputRect; }
+int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }
+std::vector<std::string> NativeEditor::AgentChatAttachments() const { return impl_->agentChatAttachments; }
+std::vector<std::string> NativeEditor::AskAttachments(int index) const {
+    if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {};
+    return impl_->askBubbles[index].attachments;
+}
+void NativeEditor::OpenSettings(const std::string& tab) {
+    impl_->showSettings = true;
+    impl_->settingsTab = tab;
+}
+bool NativeEditor::SettingsOpen() const { return impl_->showSettings; }
+std::array<float, 4> NativeEditor::AskControlRect(int index, const std::string& name) const {
+    if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {0, 0, 0, 0};
+    const auto found = impl_->askRects.find(std::to_string(impl_->askBubbles[index].serial) + ":" + name);
+    return found == impl_->askRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
 }
 
 std::array<float, 4> NativeEditor::InspectorControlRect(const std::string& name) const {

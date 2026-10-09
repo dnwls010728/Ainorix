@@ -76,7 +76,22 @@ struct ChatCompletion {
     std::string label, detail;             // shown in the list
     std::string avatar, id;                // agents: picture key and id
     std::string file;                      // files: project-relative path
+    EntityId entity = kNullEntity;         // scene objects (ChatMentions::Entities)
     bool enabled = true;                   // an offline agent is listed but cannot be chosen
+};
+
+// What `@` completes to in a chat input: team agents (team chat, team bubbles) or the scene's
+// objects (direct conversations with one CLI, which has no teammates to mention).
+enum class ChatMentions { Agents, Entities };
+
+// The completion list of one chat input: the word it was built for, the chosen row and whether
+// to scroll it into view.
+struct ChatCompleteState {
+    std::string key;
+    int index = 0;
+    bool scroll = false;
+    bool listHovered = false;  // the pointer is on the list: it stays while the input loses focus to a click
+    bool caretToEnd = false;   // after a completion: caret to the end, nothing selected
 };
 
 enum class GizmoOp { None, Translate, Rotate, Scale };
@@ -177,6 +192,7 @@ struct NativeEditor::Impl {
     bool assetGrid = true;
     std::string selectedAsset;
     std::vector<ScriptTab> scripts;
+    std::string activeScriptPath;  // the tab the Scripts panel showed last frame (editor.state)
     std::vector<std::string> closingScripts;  // Paths survive tab moves while the unsaved-changes prompt is open.
     int focusScript = -1;
     bool scriptEditorFocused = false;  // keys belong to the code editor (no scene shortcuts)
@@ -322,6 +338,67 @@ struct NativeEditor::Impl {
     void TeamModals();
     // Team Chat (EditorTeamChat.cpp)
     bool showTeamChat = true, requestTeamChatFocus = false;
+    // ----- Ask bubbles (EditorAsk.cpp): right-click an object in the Scene view and ask the team,
+    // or one installed agent CLI directly, from a bubble that stays next to the object.
+    struct AskBubble {
+        int serial = 0;              // ImGui id
+        EntityId entity = kNullEntity;  // the object asked about; for a spot, the surface it is on (or none)
+        bool spot = false;           // about a place in the scene (point) rather than the object
+        Vec3 point, normal;          // the spot: world position and surface normal
+        std::string backend;         // agent CLI id; empty = the team
+        std::string model;           // that CLI's model; empty = its default
+        std::string thread;          // team.ask conversation (agent bubbles)
+        std::string input;
+        Json state;                  // team.thread (agent bubbles)
+        std::vector<uint64_t> sent;  // team chat messages this bubble sent (team bubbles)
+        double polled = -100;
+        ChatCompleteState complete;  // @ / # completion of its input
+        bool focusInput = true;
+        size_t shown = 0;            // messages drawn last frame: more scrolls to the newest
+        ImVec2 size{0, 0};           // last frame's size, to keep it inside the view
+        ImVec2 pos{0, 0};            // last frame's top-left corner (files dropped on it are attached)
+        std::vector<std::string> attachments;  // files that go with the next message
+    };
+    std::vector<AskBubble> askBubbles;
+    int askSerial = 0;
+    EntityId askMenuEntity = kNullEntity;  // the object the Scene context menu is for (none: empty space)
+    Vec3 askMenuPoint, askMenuNormal{0, 1, 0};  // the spot it was opened on (surface, or the ground plane)
+    bool sceneRightPressed = false;        // right button went down on the view (a click opens the menu)
+    std::map<std::string, std::array<float, 4>> askRects;  // automation: "<serial>:input", "<serial>:send"
+    void OpenAskBubble(EntityId entity, const std::string& backend);
+    void OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend);
+    std::string SpotLabel(const AskBubble& bubble) const;  // "(3.2, 0, -1.5) on Ground"
+    void SceneAskMenu();
+    void AskBubbles(ImVec2 viewPos, ImVec2 viewSize);
+    bool AskBubbleBody(AskBubble& bubble);  // true: closed
+    void AskSend(AskBubble& bubble);
+    std::string AskContext(const AskBubble& bubble) const;
+    // A direct conversation's messages and running line (bubbles and the Agent Chat panel); a
+    // change in what is drawn scrolls to the newest. `details`: turn tools/time/cost under replies.
+    void DrawDirectConversation(const Json& state, const std::string& target, size_t& shown, bool details);
+    // A message's attachments: pictures as thumbnails (click: the viewer), other files as buttons.
+    void DrawAttachments(const Json& attachments, float thumbnailEm);
+    // Files waiting to go with the next message, as chips (click removes one).
+    void AttachmentChips(std::vector<std::string>& files);
+    // The native file chooser; the chosen file is added to `files` (at most 8).
+    void ChooseAttachment(std::vector<std::string>& files);
+
+    // ----- Agent Chat panel (EditorAsk.cpp): talk to one installed agent CLI, model chosen here,
+    // outside the team (team.ask conversations "chat-<cli>[-n]"; object bubbles' ones are listed too).
+    bool showAgentChat = true, requestAgentChatFocus = false, agentChatFocusInput = false;
+    std::string agentChatBackend, agentChatModel, agentChatThread, agentChatInput;
+    Json agentChatState;                          // team.thread of agentChatThread
+    Json agentChatThreads = Json::MakeArray();    // team.threads
+    double agentChatPolled = -100, agentChatThreadsPolled = -100;
+    size_t agentChatShown = 0;
+    std::array<float, 4> agentChatInputRect{0, 0, 0, 0};
+    ChatCompleteState agentChatComplete;
+    std::vector<std::string> agentChatAttachments;  // files that go with the next message
+    std::array<float, 4> agentChatRect{0, 0, 0, 0};  // the panel's window: a file dropped inside it is attached
+    void AgentChatPanel();
+    void AgentChatSelect(const std::string& backend, const std::string& thread);
+    void AgentChatSend();
+
     struct ChatEntry {
         Json message;                    // one team.messages entry
         std::vector<std::string> links;  // project files named in the text (open on click)
@@ -342,11 +419,17 @@ struct NativeEditor::Impl {
     bool chatViewerActual = false;                  // 100 % instead of fit
     std::vector<std::pair<std::string, bool>> MentionCandidates(const std::string& prefix) const;
     std::vector<std::string> FileCandidates(const std::string& prefix) const;
-    int chatCompleteIndex = 0;            // chosen row of the completion list (Up / Down, the pointer)
-    std::string chatCompleteKey;          // the word the list was built for; another word starts at the top
-    bool chatCompleteScroll = false;      // bring the chosen row into view
-    std::vector<ChatCompletion> Completions(char marker, const std::string& prefix) const;
-    ImU32 ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length) const;
+    ChatCompleteState chatComplete;
+    std::vector<ChatCompletion> Completions(char marker, const std::string& prefix, ChatMentions mentions) const;
+    ImU32 ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length,
+                         ChatMentions mentions = ChatMentions::Agents) const;
+    // A chat input (Team Chat, Agent Chat, Scene bubbles): multi-line, Enter sends (returns true),
+    // Shift+Enter or Ctrl+Enter adds a line; a typed @word or #word completes from a list floating
+    // above it (Up / Down choose, Tab or a click takes, files are previewed beside it) and the
+    // references in the text are tinted.
+    // `bounds` / `active`: the field's screen rectangle and whether it is being typed in.
+    bool ChatInput(const char* id, std::string& text, ImVec2 size, ChatCompleteState& complete, ChatMentions mentions, bool& focus,
+                   std::array<float, 4>* bounds = nullptr, bool* active = nullptr);
     // A message's text as Markdown (headings, lists, quotes, tables, rules, fenced code; inline bold,
     // italic, code, strike and links), wrapped to the panel; `tint` colors @mentions and `files`.
     void DrawChatMarkdown(const std::string& text, const std::vector<std::string>& files, bool tint, ImU32 color);
@@ -361,6 +444,15 @@ struct NativeEditor::Impl {
     void ImportChatImage(const std::string& path);
     void ImageViewer();
     void TeamChatPanel();
+
+    // ----- Settings window (EditorSettings.cpp): Agents tab (CLIs installed, login, how they
+    // reach the editor, permissions of direct conversations).
+    bool showSettings = false;
+    std::string settingsTab;  // tab to select on the next frame ("agents"); empty = keep
+    void SettingsWindow();
+    void SettingsAgentsTab();
+    double settingsPolled = -100;
+    Json settingsConnection;  // team.connection
 
     // ----- Tile painting (EditorTiles.cpp): Tiles panel + brush in the Scene view
     bool showTiles = true;
@@ -448,6 +540,8 @@ struct NativeEditor::Impl {
     void PasteSelection();
     void BrowseFile(NativeEditor::FilePurpose purpose);
     void FrameSelection();
+    Json EditorState();                     // editor.state
+    Json EditorSelect(const Json& args);    // editor.select {ids, frame}
     void CreatePreset(const char* key);
     void RequestAction(PendingAction action);  // asks to save first when dirty
     void RunAction(const PendingAction& action);
@@ -496,6 +590,7 @@ struct NativeEditor::Impl {
     void SceneOverlays(ImDrawList* dl);
     void SceneGizmo();
     void ScenePick(float x, float y, bool additive);
+    EntityId ScenePickId(float x, float y, Vec3* point = nullptr, Vec3* normal = nullptr);  // render.pick at a Scene view pixel
     void SceneDrop(const std::string& path, float x, float y);
     void GameInput();
     void ReleaseGameInput();

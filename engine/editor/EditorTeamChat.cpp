@@ -184,18 +184,36 @@ void NativeEditor::Impl::SendChat() {
     }
 }
 
-// Files dropped on the Team Chat panel are attached to the next message; the others are left
-// for the import (ImportDroppedFiles), as before.
+// Files dropped on the Team Chat or Agent Chat panel or on a Scene bubble are attached to its
+// next message; the others are left for the import (ImportDroppedFiles), as before.
 void NativeEditor::Impl::RouteDroppedFiles() {
     std::vector<std::string> other;
+    auto inside = [](ImVec2 at, const std::array<float, 4>& rect) {
+        return rect[2] > 0 && at.x >= rect[0] && at.y >= rect[1] && at.x < rect[0] + rect[2] && at.y < rect[1] + rect[3];
+    };
     for (size_t i = 0; i < droppedFiles.size(); ++i) {
         const ImVec2 at = i < droppedAt.size() ? droppedAt[i] : ImVec2(-1, -1);
-        const bool onChat = chatVisible && at.x >= chatRect[0] && at.y >= chatRect[1] && at.x < chatRect[0] + chatRect[2] && at.y < chatRect[1] + chatRect[3];
-        if (!onChat) {
+        std::vector<std::string>* target = nullptr;
+        bool* focus = nullptr;
+        for (AskBubble& bubble : askBubbles) {  // drawn on top of the Scene view
+            if (inside(at, {bubble.pos.x, bubble.pos.y, bubble.size.x, bubble.size.y})) {
+                target = &bubble.attachments;
+                focus = &bubble.focusInput;
+            }
+        }
+        if (!target && showAgentChat && inside(at, agentChatRect)) {
+            target = &agentChatAttachments;
+            focus = &agentChatFocusInput;
+        }
+        if (!target && chatVisible && inside(at, chatRect)) {
+            target = &chatAttachments;
+            focus = &chatFocusInput;
+        }
+        if (!target) {
             other.push_back(droppedFiles[i]);
-        } else if (chatAttachments.size() < kMaxPendingAttachments) {
-            if (std::find(chatAttachments.begin(), chatAttachments.end(), droppedFiles[i]) == chatAttachments.end()) chatAttachments.push_back(droppedFiles[i]);
-            chatFocusInput = true;
+        } else if (target->size() < kMaxPendingAttachments) {
+            if (std::find(target->begin(), target->end(), droppedFiles[i]) == target->end()) target->push_back(droppedFiles[i]);
+            *focus = true;
         } else {
             Notify(Tr("A message carries at most 8 attachments."), true);
         }
@@ -368,26 +386,41 @@ void NativeEditor::Impl::TeamChatPanel() {
     }
 
     // ----- Files waiting to go with the next message
-    for (size_t i = 0; i < chatAttachments.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        if (i > 0) ImGui::SameLine();
-        const std::string file = chatAttachments[i];
-        const bool remove = ImGui::Button((BaseName(file) + "  " + kIconX).c_str());
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            DrawImageFile(file, ImVec2(font * 14.0f, font * 14.0f), 1.0f);
-            ImGui::TextDisabled("%s", file.c_str());
-            ImGui::EndTooltip();
-        }
-        if (remove) chatAttachments.erase(chatAttachments.begin() + static_cast<std::ptrdiff_t>(i));
-        ImGui::PopID();
-    }
+    AttachmentChips(chatAttachments);
 
     // ----- Input: Enter sends, Shift+Enter is a new line; @agent and #file complete from a list
-    ImGuiIO& io = ImGui::GetIO();
     const float sendWidth = ImGui::CalcTextSize(Tr("Send")).x + style.FramePadding.x * 2.0f;
-    const float hintTop = ImGui::GetCursorScreenPos().y;
+    const float attachWidth = ImGui::CalcTextSize(kIconPaperclip).x + style.FramePadding.x * 2.0f;
     ImGui::TextDisabled("%s", Tr("Enter sends, Shift+Enter starts a new line, @ mentions an agent, # refers to a project file."));
+    const bool enter = ChatInput("##chatInput", chatInput, ImVec2(-(sendWidth + attachWidth + style.ItemSpacing.x * 2.0f), inputHeight), chatComplete,
+                                 ChatMentions::Agents, chatFocusInput);
+    ImGui::SameLine();
+    if (ImGui::Button(kIconPaperclip, ImVec2(attachWidth, inputHeight))) ChooseAttachment(chatAttachments);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Attach a file (or drop files on this panel)"));
+    ImGui::SameLine();
+    if (ImGui::Button(Tr("Send"), ImVec2(sendWidth, inputHeight)) || enter) {
+        chatJustSent = true;
+        SendChat();
+    }
+    ImGui::End();
+}
+
+namespace {
+// What the Tab callback of a chat input needs.
+struct ChatInputContext {
+    const NativeEditor::Impl* editor;
+    ChatCompleteState* complete;
+    ChatMentions mentions;
+    bool completed = false;  // Tab replaced the word
+};
+}  // namespace
+
+bool NativeEditor::Impl::ChatInput(const char* id, std::string& text, ImVec2 size, ChatCompleteState& complete, ChatMentions mentions, bool& focus,
+                                   std::array<float, 4>* bounds, bool* active) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGuiIO& io = ImGui::GetIO();
+    const float font = ImGui::GetFontSize(), line = ImGui::GetTextLineHeight(), avatarSize = line * 1.6f;
+    const std::string project = engine.ProjectDir();
 
     // What the word being typed could become. Decided before the input runs, so that Up / Down
     // choose in the list instead of moving the caret.
@@ -395,44 +428,56 @@ void NativeEditor::Impl::TeamChatPanel() {
     int at = 0;
     std::string prefix;
     std::vector<ChatCompletion> items;
-    if (TokenAt(chatInput.c_str(), static_cast<int>(chatInput.size()), marker, at, prefix)) items = Completions(marker, prefix);
+    if (TokenAt(text.c_str(), static_cast<int>(text.size()), marker, at, prefix)) items = Completions(marker, prefix, mentions);
     const std::string completeKey = items.empty() ? std::string() : std::string(1, marker) + prefix;
-    if (completeKey != chatCompleteKey) {  // another word: start at the top again
-        chatCompleteKey = completeKey;
-        chatCompleteIndex = 0;
-        chatCompleteScroll = true;
+    if (completeKey != complete.key) {  // another word: start at the top again
+        complete.key = completeKey;
+        complete.index = 0;
+        complete.scroll = true;
     }
     const int count = static_cast<int>(items.size());
-    chatCompleteIndex = count > 0 ? std::min(chatCompleteIndex, count - 1) : 0;
-    const ImGuiID inputId = ImGui::GetID("##chatInput");
+    complete.index = count > 0 ? std::min(complete.index, count - 1) : 0;
+    const ImGuiID inputId = ImGui::GetID(id);
     ImGuiKeyData* upKey = ImGui::GetKeyData(ImGuiKey_UpArrow);
     ImGuiKeyData* downKey = ImGui::GetKeyData(ImGuiKey_DownArrow);
     const bool upHeld = upKey->Down, downHeld = downKey->Down;
     const bool choosing = count > 0 && ImGui::GetActiveID() == inputId;
     if (choosing) {
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) chatCompleteIndex = (chatCompleteIndex + 1) % count, chatCompleteScroll = true;
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) chatCompleteIndex = (chatCompleteIndex + count - 1) % count, chatCompleteScroll = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) complete.index = (complete.index + 1) % count, complete.scroll = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) complete.index = (complete.index + count - 1) % count, complete.scroll = true;
         upKey->Down = downKey->Down = false;  // hidden from the text field for this call only
     }
-    if (chatFocusInput) {
+    if (focus) {
         ImGui::SetKeyboardFocusHere();
-        chatFocusInput = false;
+        focus = false;
     }
     // ImGui submits on Enter when Ctrl is not needed for a line break; with Shift held the
-    // flag is left out, so Enter inserts the line break instead.
-    const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackCompletion | (io.KeyShift ? 0 : ImGuiInputTextFlags_CtrlEnterForNewLine);
+    // flag is left out, so Enter inserts the line break instead (Ctrl+Enter does too).
+    const ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackCompletion | ImGuiInputTextFlags_CallbackAlways |
+                                      (io.KeyShift ? 0 : ImGuiInputTextFlags_CtrlEnterForNewLine);
+    ChatInputContext context{this, &complete, mentions};
     const bool enter = ImGui::InputTextMultiline(
-        "##chatInput", &chatInput, ImVec2(-(sendWidth + style.ItemSpacing.x), inputHeight), flags,
-        [](ImGuiInputTextCallbackData* data) {  // Tab: the chosen entry replaces the word
-            const auto* self = static_cast<const NativeEditor::Impl*>(data->UserData);
+        id, &text, size, flags,
+        [](ImGuiInputTextCallbackData* data) {
+            auto* self = static_cast<ChatInputContext*>(data->UserData);
+            if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways) {
+                // Focused again after a completion: the caret goes after the inserted word
+                // instead of the whole text being selected (typing would replace it).
+                if (self->complete->caretToEnd) {
+                    data->CursorPos = data->SelectionStart = data->SelectionEnd = data->BufTextLen;
+                    self->complete->caretToEnd = false;
+                }
+                return 0;
+            }
+            // Tab: the chosen entry replaces the word.
             char typedMarker = 0;
             int wordAt = 0;
             std::string typed;
             if (!TokenAt(data->Buf, data->CursorPos, typedMarker, wordAt, typed)) return 0;
-            const std::vector<ChatCompletion> options = self->Completions(typedMarker, typed);
+            const std::vector<ChatCompletion> options = self->editor->Completions(typedMarker, typed, self->mentions);
             const ChatCompletion* chosen = nullptr;
-            if (self->chatCompleteIndex < static_cast<int>(options.size()) && options[static_cast<size_t>(self->chatCompleteIndex)].enabled) {
-                chosen = &options[static_cast<size_t>(self->chatCompleteIndex)];
+            if (self->complete->index < static_cast<int>(options.size()) && options[static_cast<size_t>(self->complete->index)].enabled) {
+                chosen = &options[static_cast<size_t>(self->complete->index)];
             }
             for (const ChatCompletion& option : options) {
                 if (!chosen && option.enabled) chosen = &option;  // the chosen one cannot be called: the first that can
@@ -440,33 +485,37 @@ void NativeEditor::Impl::TeamChatPanel() {
             if (!chosen) return 0;
             data->DeleteChars(wordAt, data->CursorPos - wordAt);
             data->InsertChars(wordAt, chosen->insert.c_str());
+            self->completed = true;
             return 0;
         },
-        this);
+        &context);
+    if (context.completed) focus = complete.caretToEnd = true;  // Tab may also move keyboard focus on: keep typing here
     upKey->Down = upHeld;
     downKey->Down = downHeld;
-    const ImVec2 inputMin = ImGui::GetItemRectMin();
+    const ImVec2 inputMin = ImGui::GetItemRectMin(), inputMax = ImGui::GetItemRectMax();
+    if (bounds) *bounds = {inputMin.x, inputMin.y, inputMax.x - inputMin.x, inputMax.y - inputMin.y};
+    if (active) *active = ImGui::IsItemActive();
 
-    // Mentions and project files already in the text are tinted, so it shows what will be
-    // understood as a reference. Drawn into the field's own window, over its text.
+    // References already in the text are tinted, so it shows what will be understood as one.
+    // Drawn into the field's own window, over its text.
     for (ImGuiWindow* child : ImGui::GetCurrentWindow()->DC.ChildWindows) {
-        if (!std::strstr(child->Name, "##chatInput")) continue;
+        if (!std::strstr(child->Name, id)) continue;
         const ImVec2 origin(inputMin.x + style.FramePadding.x - child->Scroll.x, inputMin.y + style.FramePadding.y - child->Scroll.y);  // where the field draws its text
         const float rowHeight = ImGui::GetFontSize();
         child->DrawList->PushClipRect(child->InnerClipRect.Min, child->InnerClipRect.Max, true);
         int row = 0;
-        for (size_t lineStart = 0; lineStart <= chatInput.size(); ++row) {
-            const size_t lineEnd = std::min(chatInput.find('\n', lineStart), chatInput.size());
+        for (size_t lineStart = 0; lineStart <= text.size(); ++row) {
+            const size_t lineEnd = std::min(text.find('\n', lineStart), text.size());
             for (size_t wordStart = lineStart; wordStart < lineEnd;) {
-                const size_t wordEnd = std::min(chatInput.find_first_of(" \t", wordStart), lineEnd);
+                const size_t wordEnd = std::min(text.find_first_of(" \t", wordStart), lineEnd);
                 size_t length = 0;
-                const ImU32 color = wordEnd > wordStart ? ChatTokenColor(chatInput.substr(wordStart, wordEnd - wordStart), nullptr, length) : 0;
+                const ImU32 color = wordEnd > wordStart ? ChatTokenColor(text.substr(wordStart, wordEnd - wordStart), nullptr, length, mentions) : 0;
                 if (color) {
-                    const char* text = chatInput.c_str();
-                    const float x = ImGui::CalcTextSize(text + lineStart, text + wordStart).x, tokenWidth = ImGui::CalcTextSize(text + wordStart, text + wordStart + length).x;
+                    const char* chars = text.c_str();
+                    const float x = ImGui::CalcTextSize(chars + lineStart, chars + wordStart).x, tokenWidth = ImGui::CalcTextSize(chars + wordStart, chars + wordStart + length).x;
                     const ImVec2 min(origin.x + x, origin.y + static_cast<float>(row) * rowHeight);
                     child->DrawList->AddRectFilled(ImVec2(min.x - 2.0f, min.y), ImVec2(min.x + tokenWidth + 2.0f, min.y + rowHeight), (color & 0x00FFFFFFu) | 0x38000000u, 3.0f);
-                    child->DrawList->AddText(min, color, text + wordStart, text + wordStart + length);
+                    child->DrawList->AddText(min, color, chars + wordStart, chars + wordStart + length);
                 }
                 wordStart = wordEnd + 1;
             }
@@ -475,30 +524,25 @@ void NativeEditor::Impl::TeamChatPanel() {
         child->DrawList->PopClipRect();
     }
 
-    ImGui::SameLine();
-    if (ImGui::Button(Tr("Send"), ImVec2(sendWidth, inputHeight)) || enter) {
-        chatJustSent = true;
-        SendChat();
-    }
-
-    // ----- Completion list, floating above the input: agents with picture, role and state; files
-    // with a thumbnail. At most eight rows show, the rest scroll. Up / Down move the choice, Tab
-    // (or a click) takes it, and the chosen file is previewed beside the list.
-    if (count > 0) {
+    // ----- Completion list, floating above the input: agents with picture, role and state, scene
+    // objects with their components, files with a thumbnail. At most eight rows show, the rest
+    // scroll. Up / Down move the choice, Tab (or a click) takes it, a chosen file is previewed.
+    // Only for the input being typed in (or while the pointer is on its list, to click a row).
+    if (count > 0 && (ImGui::GetActiveID() == inputId || complete.listHovered)) {
         const float rowHeight = avatarSize + style.ItemSpacing.y;
         const float listHeight = static_cast<float>(std::min(count, 8)) * rowHeight + style.WindowPadding.y * 2.0f - style.ItemSpacing.y;
         // Its own window in the always-on-top layer, so it may reach above a short panel.
-        ImGui::SetNextWindowPos(ImVec2(inputMin.x, hintTop - 2.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-        ImGui::SetNextWindowSize(ImVec2(std::min(chatRect[2] - style.WindowPadding.x * 2.0f, font * 34.0f), listHeight));
-        ImGui::Begin("##chatComplete", nullptr,
+        ImGui::SetNextWindowPos(ImVec2(inputMin.x, inputMin.y - 2.0f), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+        ImGui::SetNextWindowSize(ImVec2(std::clamp(inputMax.x - inputMin.x, font * 22.0f, font * 34.0f), listHeight));
+        ImGui::Begin(Format("##complete%08x", inputId).c_str(), nullptr,
                      ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking);
         const ImVec2 listPos = ImGui::GetWindowPos(), listSize = ImGui::GetWindowSize();
-        if (chatCompleteScroll) {  // keep the choice in view
-            const float top = static_cast<float>(chatCompleteIndex) * rowHeight, bottom = top + rowHeight;
+        if (complete.scroll) {  // keep the choice in view
+            const float top = static_cast<float>(complete.index) * rowHeight, bottom = top + rowHeight;
             if (top < ImGui::GetScrollY()) ImGui::SetScrollY(top);
             else if (bottom > ImGui::GetScrollY() + listHeight - style.WindowPadding.y * 2.0f) ImGui::SetScrollY(bottom - (listHeight - style.WindowPadding.y * 2.0f));
-            chatCompleteScroll = false;
+            complete.scroll = false;
         }
         ImGuiListClipper clipper;  // only the rows in view cost anything (thumbnails are made on demand)
         clipper.Begin(count, rowHeight);
@@ -508,13 +552,17 @@ void NativeEditor::Impl::TeamChatPanel() {
                 ImGui::PushID(i);
                 ImGui::BeginDisabled(!row.enabled);  // offline agents are listed, but cannot be called
                 const ImVec2 pos = ImGui::GetCursorScreenPos();
-                if (ImGui::Selectable("##row", i == chatCompleteIndex, 0, ImVec2(0, avatarSize))) {
-                    chatInput = chatInput.substr(0, static_cast<size_t>(at)) + row.insert;
-                    chatFocusInput = true;
+                if (ImGui::Selectable("##row", i == complete.index, 0, ImVec2(0, avatarSize))) {
+                    text = text.substr(0, static_cast<size_t>(at)) + row.insert;
+                    focus = complete.caretToEnd = true;
                 }
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) chatCompleteIndex = i;  // the pointer chooses too
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) complete.index = i;  // the pointer chooses too
                 ImDrawList* dl = ImGui::GetWindowDrawList();
-                if (row.file.empty()) {
+                if (row.entity != kNullEntity) {
+                    const ImVec2 iconSize = ImGui::CalcTextSize(kIconBox);
+                    dl->AddRectFilled(pos, ImVec2(pos.x + avatarSize, pos.y + avatarSize), IM_COL32(255, 255, 255, 14), 4.0f);
+                    dl->AddText(ImVec2(pos.x + (avatarSize - iconSize.x) * 0.5f, pos.y + (avatarSize - iconSize.y) * 0.5f), IM_COL32(110, 170, 255, 255), kIconBox);
+                } else if (row.file.empty()) {
                     DrawAvatar(dl, pos, avatarSize, row.avatar, row.id, row.label);
                 } else if (const std::shared_ptr<const Texture> thumbnail = AssetThumbnail(row.file)) {
                     if (engine.Gpu()) dl->AddImage(ViewTexture(engine.Gpu()->ImageView(thumbnail)), pos, ImVec2(pos.x + avatarSize, pos.y + avatarSize));
@@ -526,38 +574,60 @@ void NativeEditor::Impl::TeamChatPanel() {
                 ImGui::PopID();
             }
         }
+        complete.listHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
         ImGui::End();
 
         // Quick look at the chosen file, beside the list: the picture, the thumbnail of a model,
         // material or prefab, or the first lines of a script or text file.
-        const ChatCompletion& chosen = items[static_cast<size_t>(chatCompleteIndex)];
+        const ChatCompletion& chosen = items[static_cast<size_t>(complete.index)];
         if (!chosen.file.empty()) {
             ImGui::SetNextWindowPos(ImVec2(listPos.x + listSize.x + 6.0f, listPos.y + listSize.y), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
             ImGui::BeginTooltip();
             const std::string full = JoinPath(project, chosen.file);
             if (!DrawImageFile(full, ImVec2(font * 16.0f, font * 16.0f), 1.0f)) {
                 const std::shared_ptr<const Texture> thumbnail = AssetThumbnail(chosen.file);
-                std::string text;
+                std::string fileText;
                 if (thumbnail && engine.Gpu()) {
                     ImGui::Image(ViewTexture(engine.Gpu()->ImageView(thumbnail)), ImVec2(font * 10.0f, font * 10.0f));
-                } else if ((EndsWith(chosen.file, ".lua") || EndsWith(chosen.file, ".json") || EndsWith(chosen.file, ".md") || EndsWith(chosen.file, ".txt")) && ReadTextFile(full, text)) {
+                } else if ((EndsWith(chosen.file, ".lua") || EndsWith(chosen.file, ".json") || EndsWith(chosen.file, ".md") || EndsWith(chosen.file, ".txt")) && ReadTextFile(full, fileText)) {
                     size_t cut = 0;
-                    for (int lines = 0; lines < 14 && cut < text.size() && cut < 1500; ++lines) cut = std::min(text.find('\n', cut), text.size() - 1) + 1;
+                    for (int lines = 0; lines < 14 && cut < fileText.size() && cut < 1500; ++lines) cut = std::min(fileText.find('\n', cut), fileText.size() - 1) + 1;
                     ImGui::PushFont(monoFont, 0.0f);
-                    ImGui::TextUnformatted(text.substr(0, cut).c_str());
+                    ImGui::TextUnformatted(fileText.substr(0, cut).c_str());
                     ImGui::PopFont();
                 }
             }
             ImGui::TextDisabled("%s", chosen.file.c_str());
             ImGui::EndTooltip();
         }
+    } else {
+        complete.listHovered = false;
     }
-    ImGui::End();
+    return enter;
 }
 
 // The entries a typed `@` or `#` word could complete to, in the order the list shows them.
-std::vector<ChatCompletion> NativeEditor::Impl::Completions(char marker, const std::string& prefix) const {
+std::vector<ChatCompletion> NativeEditor::Impl::Completions(char marker, const std::string& prefix, ChatMentions mentions) const {
     std::vector<ChatCompletion> out;
+    if (marker == '@' && mentions == ChatMentions::Entities) {
+        // Scene objects whose name starts with (first) or contains the typed text.
+        const std::string typed = Lower(prefix);
+        for (int pass = 0; pass < 2 && out.size() < 300; ++pass) {
+            for (const EntityRow& entity : rows) {
+                const std::string name = Lower(entity.name);
+                const size_t found = name.find(typed);
+                if (found == std::string::npos || (pass == 0) != (found == 0)) continue;
+                ChatCompletion row;
+                row.entity = entity.id;
+                row.insert = (entity.name.find(' ') == std::string::npos ? "@" + entity.name : "@\"" + entity.name + "\"") + " ";
+                row.label = entity.name;
+                for (const std::string& c : entity.components) row.detail += (row.detail.empty() ? "" : ", ") + c;
+                out.push_back(std::move(row));
+                if (out.size() >= 300) break;
+            }
+        }
+        return out;
+    }
     if (marker == '#') {
         for (const std::string& file : FileCandidates(prefix)) {
             ChatCompletion row;
@@ -599,11 +669,19 @@ std::vector<ChatCompletion> NativeEditor::Impl::Completions(char marker, const s
 // color) or a project file (`files`: the ones a message names; null = look the word up in the
 // asset list). `length` is how much of the word the reference covers (trailing punctuation is
 // left plain). 0 = an ordinary word.
-ImU32 NativeEditor::Impl::ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length) const {
+ImU32 NativeEditor::Impl::ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length, ChatMentions mentions) const {
     length = word.size();
     while (length > 0 && std::strchr(".,:;!?)", word[length - 1])) --length;
     if (length < 2) return 0;
     const std::string core = word.substr(0, length);
+    if (core[0] == '@' && mentions == ChatMentions::Entities) {  // a scene object (a quoted name is one word only up to its space)
+        std::string name = core.substr(1);
+        if (!name.empty() && name[0] == '"') name = name.substr(1, name.find('"', 1) == std::string::npos ? std::string::npos : name.find('"', 1) - 1);
+        for (const EntityRow& entity : rows) {
+            if (Lower(entity.name) == Lower(name) || (core[1] == '"' && Lower(entity.name).rfind(Lower(name), 0) == 0)) return IM_COL32(110, 170, 255, 255);
+        }
+        return 0;
+    }
     if (core[0] == '@') {
         const std::string name = Lower(core.substr(1));
         if (name == "all") return IM_COL32(110, 170, 255, 255);

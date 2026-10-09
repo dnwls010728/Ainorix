@@ -32,6 +32,7 @@ struct TeamSettings {
     int rotateAboveInputTokens = 0; // 0 = disabled; fresh conversation before next turn at/above this estimate
     int maxHops = 0;        // chained agent-to-agent turns per user message, 0..16; off by default
     bool inheritUserTools = false; // opt in to the CLI's user MCP servers and skills
+    std::string askAccess = "edit"; // read | edit | full for direct conversations (team.ask), like an agent's access
 };
 
 constexpr size_t kMaxTeamAgents = 16;

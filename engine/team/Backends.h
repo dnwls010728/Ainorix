@@ -53,7 +53,8 @@ struct TurnEvent {
         Tool,      // a tool call started: text = verb ("Reading"), detail = what, itemId = the call
         Text,      // text = assistant text (the last one is the reply when Done carries none)
         Done,      // the turn ended well: text = final reply (may be empty), costUsd when known
-        Failed     // the turn ended badly: text = the CLI's message
+        Failed,    // the turn ended badly: text = the CLI's message
+        Mcp        // an MCP server's state at startup: text = server name, detail = connected | failed | pending | ...
     };
     Kind kind = Kind::Thinking;
     std::string text, detail, itemId;
@@ -64,12 +65,15 @@ struct TurnEvent {
 };
 using TurnEvents = std::vector<TurnEvent>;
 
+struct BackendState;
+
 // One agent CLI: how to find it, what it offers, and (when it can run turns) its adapter.
 struct Backend {
     std::string id;           // "claude"; stored in team.json
     std::string displayName;  // "Claude Code"
     std::string executable;   // program name searched in PATH, or a path
     std::string installHint;  // how to install the CLI, shown for a disabled entry
+    std::string loginHint;    // the command that signs in, shown when not logged in
     std::vector<ModelInfo> models;  // built-in catalog, used when nothing better is known
     bool supportsImages = false;    // can produce image files
     // Optional: the models the installed CLI knows on this PC (its own cache or config).
@@ -81,6 +85,9 @@ struct Backend {
     // One line of the CLI's stdout -> events. Lines it does not understand (other event types,
     // cut or broken JSON) give nothing: a stream never fails a turn by its shape.
     std::function<void(const std::string& line, TurnEvents& out)> parseLine;
+    // Optional: whether the user is signed in (`claude auth status`, `codex login status`, a
+    // credentials file). Runs during detection; null = unknown.
+    void (*checkLogin)(const std::string& executable, double timeoutSeconds, BackendState& state) = nullptr;
 };
 
 // Detecting: `team.backends {async:true}` has not finished looking yet.
@@ -95,6 +102,8 @@ struct BackendState {
     std::string message;  // why it is not Installed
     std::vector<ModelInfo> models;  // discovered, else the catalog
     bool modelsDiscovered = false;
+    std::string login = "unknown";  // loggedIn | loggedOut | unknown
+    std::string loginDetail;        // "claude.ai (pro)", "ChatGPT", or why it is unknown
 };
 
 // Claude Code, Codex and Gemini CLI, in the order the editor lists them.
@@ -108,8 +117,8 @@ bool ApplyBackendOverrides(const std::string& path, std::vector<Backend>& backen
 // <user config>/OwnEngine/backends.json (%APPDATA% on Windows); empty where there is no such folder.
 std::string BackendOverridesPath();
 
-// Finds the executable and runs `<executable> --version` (killed after timeoutSeconds). Being
-// installed does not prove the user is logged in; that shows on the first turn.
+// Finds the executable and runs `<executable> --version` (killed after timeoutSeconds), then the
+// backend's login check when it has one.
 BackendState DetectBackend(const Backend& backend, double timeoutSeconds = 10.0);
 // All backends at once, one thread each; the result is in the order of `backends`.
 std::vector<BackendState> DetectBackends(const std::vector<Backend>& backends, double timeoutSeconds = 10.0);

@@ -54,7 +54,7 @@ struct Args {
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
 const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script", "--shader", "--effects",
-                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--seed", "--api-port", "--players", "--agent"};
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--seed", "--api-port", "--players", "--agent", "--ask", "--agent-chat", "--settings"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -200,7 +200,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --console --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat [cli] --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -464,7 +464,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
@@ -476,6 +476,15 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         if (i == 4 && a.Has("--agent")) editor.EditAgent(a.Get("--agent") == "new" ? "" : a.Get("--agent"));  // the profile dialog
         if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (i == 2 && a.Has("--shader")) editor.OpenShader(a.Get("--shader"));
+        if (i == 0 && (a.Has("--agent-chat") || a.Has("--settings"))) engine.Call("team.backends", Json());  // detect the CLIs first (the editor polls in the background)
+        if (i == 3 && a.Has("--agent-chat")) editor.FocusAgentChat(a.Get("--agent-chat"));
+        if (i == 3 && a.Has("--settings")) editor.OpenSettings(a.Get("--settings"));
+        if (i == 2 && a.Has("--ask")) {  // an Ask bubble on an entity: Name (the team) or Name:cli (claude, codex, ...)
+            const std::string spec = a.Get("--ask");
+            const size_t colon = spec.rfind(':');
+            const EntityId target = engine.GetScene().FindByName(colon == std::string::npos ? spec : spec.substr(0, colon));
+            if (target != kNullEntity) editor.OpenAskBubble(target, colon == std::string::npos ? std::string() : spec.substr(colon + 1));
+        }
         if (i == 2 && a.Has("--effects")) {
             editor.OpenEffect(a.Get("--effects")); editor.SetEffectsGraph(a.Has("--effects-graph"));
             if(a.Has("--effects-values")) editor.SetEffectsValues(true,true,10);

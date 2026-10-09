@@ -41,6 +41,9 @@ constexpr const char* kIconTerminal              = "\xee\x86\x85";  // terminal 
 constexpr const char* kIconGamepad2              = "\xee\x83\xa2";  // gamepad-2 U+E0E2
 constexpr const char* kIconFileCode              = "\xee\x83\x87";  // file-code U+E0C7
 constexpr const char* kIconUsers                 = "\xee\x86\xa4";  // users U+E1A4
+constexpr const char* kIconBot                   = "\xee\x86\xbb";  // bot U+E1BB
+constexpr const char* kIconSend                  = "\xee\x85\x96";  // send U+E156
+constexpr const char* kIconMapPin                = "\xee\x84\x95";  // map-pin U+E115
 constexpr const char* kIconMessagesSquare        = "\xee\x90\x92";  // messages-square U+E412
 constexpr const char* kIconHistory               = "\xee\x87\xb5";  // history U+E1F5
 constexpr const char* kIconNetwork               = "\xee\x84\xa9";  // network U+E129
@@ -75,6 +78,11 @@ constexpr const char* kIconRefreshCw             = "\xee\x85\x89";  // refresh-c
 constexpr const char* kIconCircleHelp            = "\xee\x82\x82";  // circle-help U+E082
 constexpr const char* kIconCpu                   = "\xee\x82\xad";  // cpu U+E0AD
 constexpr const char* kIconGauge                 = "\xee\x86\xbf";  // gauge U+E1BF
+constexpr const char* kIconPaperclip             = "\xee\x84\xb1";  // paperclip U+E131
+constexpr const char* kIconSettings              = "\xee\x85\x98";  // settings U+E158
+constexpr const char* kIconCircleCheck           = "\xee\x88\xa6";  // circle-check U+E226
+constexpr const char* kIconLogIn                 = "\xee\x84\x91";  // log-in U+E111
+constexpr const char* kIconPlug                  = "\xee\x8e\x83";  // plug U+E383
 
 // A window or popup title with an icon in front: WithIcon(kIconFolder, TrId("Assets")). The `###` id
 // part of TrId stays the same, so docked layouts and settings keep working.

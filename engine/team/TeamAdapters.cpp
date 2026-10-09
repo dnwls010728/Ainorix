@@ -129,7 +129,12 @@ ProcessOptions ClaudeBuildTurn(const TurnRequest& request) {
     if (!request.inheritUserTools) add({"--strict-mcp-config", "--disable-slash-commands"});
     if (!request.mcpConfigFile.empty()) {
         add({"--mcp-config", request.mcpConfigFile});
-        if (request.access == "edit" && request.apiPort > 0) add({"--allowedTools", "mcp__ownengine"});
+        // Edit mode allows the engine tools, and the same commands through the `oe` CLI (put on
+        // the turn's PATH by TeamSession) for when the MCP tools are not there.
+        if (request.access == "edit" && request.apiPort > 0) {
+            add({"--allowedTools", "mcp__ownengine", "Bash(oe exec:*)", "Bash(oe script:*)", "Bash(oe render:*)", "PowerShell(oe exec:*)",
+                 "PowerShell(oe script:*)", "PowerShell(oe render:*)"});
+        }
     }
     if (request.maxBudgetUsd > 0) {
         std::ostringstream number; number.imbue(std::locale::classic()); number << std::fixed << std::setprecision(6) << request.maxBudgetUsd;
@@ -145,7 +150,13 @@ void ParseClaudeLine(const std::string& line, TurnEvents& out) {
     if (!error.empty() || !j.isObject()) return;
     const std::string type = j["type"].asString("");
     if (type == "system") {
-        if (j["subtype"].asString("") == "init" && j["session_id"].isString()) out.push_back(Event(TurnEvent::Kind::Session, j["session_id"].asString()));
+        if (j["subtype"].asString("") != "init") return;
+        if (j["session_id"].isString()) out.push_back(Event(TurnEvent::Kind::Session, j["session_id"].asString()));
+        for (const Json& server : j["mcp_servers"].items()) {
+            TurnEvent mcp = Event(TurnEvent::Kind::Mcp, server["name"].asString(""));
+            mcp.detail = server["status"].asString("unknown");
+            if (!mcp.text.empty()) out.push_back(std::move(mcp));
+        }
     } else if (type == "assistant") {
         const bool subagent = j["parent_tool_use_id"].isString();  // a delegated agent's words are not the reply
         for (const Json& item : j["message"]["content"].items()) {
@@ -187,6 +198,8 @@ ProcessOptions CodexBuildTurn(const TurnRequest& request) {
     // strings use TOML's single-quoted form. `exec resume` has no -s flag: the config key works for both.
     add({"-c", std::string("sandbox_mode='") + (request.access == "read" ? "read-only" : request.access == "full" ? "danger-full-access" : "workspace-write") + "'"});
     if (request.apiPort > 0 && !request.oeExecutable.empty()) {
+        // `oe exec --connect` reaches the editor on localhost, which the workspace sandbox blocks.
+        if (request.access == "edit") add({"-c", "sandbox_workspace_write.network_access=true"});
         add({"-c", "mcp_servers.ownengine.command='" + request.oeExecutable + "'"});
         add({"-c", "mcp_servers.ownengine.args=['mcp','--connect','" + std::to_string(request.apiPort) + "'" +
                        (request.agentId.empty() ? "" : ",'--agent','" + request.agentId + "'") + "]"});

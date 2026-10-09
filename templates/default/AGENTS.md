@@ -15,7 +15,7 @@ A two-level coin collecting game: walk into the coins (W/A/S/D, Space jumps), cl
 - Saves: `save.state` shows the high score. Lua `save.get/set/flush` keeps the best total across Play Again; tools use memory unless `--save-dir <dir>` is supplied, packaged players use platform storage.
 - Sounds:  `oe exec . audio.generate '{"path":"sounds/jump.wav","preset":"jump"}'` synthesizes effects.
 - Live:    `oe mcp .` exposes every command as an MCP tool (screenshots come back as images).
-- Human:   `oe editor .` opens the editor (it serves the same API on http://127.0.0.1:7777; attach with `oe mcp --connect 7777`); `oe run .` plays in a window.
+- Human:   `oe editor .` opens the editor (it serves the same API on http://127.0.0.1:7777; attach with `oe mcp --connect 7777`; `editor.state` says what the human has selected and open, `editor.select` points at entities); `oe run .` plays in a window.
 
 - Common edits: see `EDITING.md`. Player `Script.params` speed/jumpSpeed/gravity keep
   literal defaults for inspector and script.params inference; stages/UI remain scene data.

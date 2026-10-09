@@ -101,6 +101,28 @@ public:
     Json Task(const std::string& id) const { return tasks_.Get(id); }
     Json Tasks() const { return tasks_.List(); }
 
+    // Direct conversations (docs/TEAM.md §7.4): one agent CLI and model chosen per conversation,
+    // outside the roster and the team chat; the editor's "Ask an agent" bubbles keep one per
+    // entity and CLI. `thread` is [a-z0-9_-]{1,64}; it resumes the CLI's own conversation.
+    // `context` goes before the text in the prompt only (what the person points at). Throws
+    // ApiError for an unknown or missing CLI, a busy thread or invalid text. Result: DirectState.
+    // `attachments` work as in Send (files the CLI is pointed to; the text may then be empty).
+    Json Ask(const std::string& thread, const std::string& backend, const std::string& model, const std::string& text,
+             const std::string& context, const std::vector<std::string>& attachments = {});
+    // {thread, backend, model, running, activity, elapsed, tools, revision, messages (oldest first)};
+    // an unknown thread has no messages.
+    Json DirectState(const std::string& thread);
+    // Stops the thread's running turn; false when none was running.
+    bool CancelDirect(const std::string& thread);
+    // Stored threads: [{thread, backend, model, messages, running, title (first message), updated}].
+    Json DirectThreads();
+    // How the ownengine MCP server came up in each CLI's latest turn this session:
+    // {backend: {status: connected | failed | pending | ..., time, agent}}; a CLI that has not
+    // run a turn with the editor attached is absent.
+    Json EngineConnections() const { return engineConnections_; }
+    // The `oe` program agents use for the MCP server and as a shell fallback.
+    std::string OeExecutable() const;
+
 private:
     struct Turn;
     struct Runtime {
@@ -113,6 +135,21 @@ private:
         std::string lastError, lastHint;
     };
 
+    struct Direct {
+        std::string backend, model;             // the CLI and model of the next turn
+        std::string session, sessionBackend;    // that CLI's conversation, resumed by the next turn
+        std::vector<ChatMessage> messages;      // the conversation as shown, bounded
+        uint64_t lastId = 0;
+        std::unique_ptr<Turn> turn;
+    };
+
+    // Reads output a turn queued and stops one past its time; true when it is ready to finish.
+    bool PumpTurn(Turn& turn, double now);
+    Direct& LoadDirect(const std::string& thread);
+    void SaveDirect(const std::string& thread, const Direct& direct);
+    ChatMessage& AppendDirect(Direct& direct, ChatMessage message);
+    void FinishDirectTurn(const std::string& thread, Direct& direct);
+    void StopDirectTurn(Direct& direct);
     const Backend* FindBackend(const std::string& id) const;
     const std::string& Executable(const Backend& backend);
     // Why the agent cannot take a turn now; empty when it can.
@@ -133,6 +170,11 @@ private:
     // before and after a turn to find the images it produced.
     std::map<std::string, int64_t> ScanImages() const;
     ChatAttachment Describe(const std::string& relativePath) const;
+    // Files a message points to: a project file in place, another one copied into
+    // .oe/team/attachments/<prefix>-<n>-<name>. Throws ApiError for a missing or too large file.
+    std::vector<ChatAttachment> ResolveAttachments(const std::vector<std::string>& attachments, const std::string& prefix) const;
+    // Starts a turn's CLI: the project directory, `oe` first on PATH, OE_TEAM_AGENT.
+    void PrepareProcess(ProcessOptions& options, const std::string& agentId) const;
     std::string Directory() const { return store_.Directory(); }
 
     TeamUsage usage_;
@@ -144,8 +186,10 @@ private:
     std::deque<ChatMessage> messages_;
     uint64_t lastMessageId_ = 0;
     std::map<std::string, Runtime> agents_;        // by agent id
+    std::map<std::string, Direct> directs_;        // direct conversations by thread, loaded when used
     std::map<std::string, std::string> executables_;  // backend id -> resolved path ("" = not found)
     std::map<std::string, int64_t> claimedImages_;    // images already attached to a reply (parallel turns see the same folders)
+    Json engineConnections_ = Json::MakeObject();
     uint64_t revision_ = 1;
 };
 
