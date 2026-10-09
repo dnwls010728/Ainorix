@@ -1,6 +1,7 @@
 // Agent team (docs/TEAM.md §7): the Team panel (roster with live state) and the agent profile
 // dialog. Everything goes through the team.* commands, so an agent attached over MCP manages the
 // team exactly as the person here does; the panel is hidden in tools that do not register them.
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -260,7 +261,7 @@ void NativeEditor::Impl::TeamPanel() {
         ImGui::SetNextWindowFocus();
         requestTeamFocus = false;
     }
-    if (!ImGui::Begin(TrId("Team").c_str(), &showTeam)) {
+    if (!ImGui::Begin(WithIcon(kIconUsers, TrId("Team")).c_str(), &showTeam)) {
         ImGui::End();
         return;
     }

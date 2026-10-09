@@ -1,3 +1,4 @@
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "app/Engine.h"
 #include "editor/EditorText.h"
@@ -9,7 +10,7 @@ Engine& NativeEditor::Impl::GameEngine() {
 }
 void NativeEditor::Impl::NetworkPanel() {
     if (requestNetworkFocus) { ImGui::SetNextWindowFocus(); requestNetworkFocus = false; }
-    if (!ImGui::Begin(TrId("Network").c_str(), &showNetwork)) { ImGui::End(); return; }
+    if (!ImGui::Begin(WithIcon(kIconNetwork, TrId("Network")).c_str(), &showNetwork)) { ImGui::End(); return; }
     if (!engine.NetworkEnabled()) {
         ImGui::TextWrapped("%s", Tr("Networking is disabled for this project."));
         ImGui::Spacing();

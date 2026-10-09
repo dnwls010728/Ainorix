@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 #include "render/GpuRenderer.h"
@@ -29,25 +30,116 @@ bool ContainsNoCase(const std::string& text, const std::string& needle) {
 
 std::string FileName(const std::string& path) { return path.substr(path.find_last_of('/') + 1); }
 
-// A short colored tag that tells entities apart at a glance.
-void EntityKindTag(const EntityRow& r) {
-    const char* tag = "";
-    ImVec4 col(0.55f, 0.58f, 0.63f, 1);
-    if (r.Has("Camera")) tag = "CAM", col = ImVec4(0.55f, 0.75f, 1.0f, 1);
-    else if (r.Has("DirectionalLight") || r.Has("PointLight")) tag = "LIT", col = ImVec4(1.0f, 0.82f, 0.4f, 1);
-    else if (r.Has("CharacterBody")) tag = "CHR", col = ImVec4(0.5f, 0.9f, 0.85f, 1);
-    else if (r.Has("RigidBody")) tag = "PHY", col = ImVec4(0.55f, 0.9f, 0.55f, 1);
-    else if (r.Has("Tilemap")) tag = "MAP", col = ImVec4(0.8f, 0.65f, 1.0f, 1);
-    else if (r.Has("Sprite")) tag = "SPR", col = ImVec4(0.95f, 0.6f, 0.8f, 1);
-    else if (r.Has("MeshRenderer")) tag = "MSH", col = ImVec4(0.7f, 0.74f, 0.8f, 1);
-    else if (r.Has("UIText") || r.Has("UIPanel") || r.Has("UIButton") || r.Has("UIImage") || r.Has("UISlider") || r.Has("UIInput") || r.Has("UIDropdown") ||
-             r.Has("UIJoystick")) tag = "UI", col = ImVec4(1.0f, 0.62f, 0.35f, 1);
-    else if (r.Has("AudioSource")) tag = "SND", col = ImVec4(0.6f, 0.85f, 1.0f, 1);
-    if (!*tag) return;
-    ImGui::SameLine(0, 4);
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.88f);
-    ImGui::TextColored(col, "%s", tag);
-    ImGui::PopFont();
+// An icon (and its color) that tells entities apart at a glance.
+struct EntityIcon {
+    const char* glyph;
+    ImVec4 color;
+};
+EntityIcon EntityKindIcon(const EntityRow& r) {
+    if (r.Has("Camera")) return {kIconVideo, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (r.Has("DirectionalLight")) return {kIconSun, ImVec4(1.0f, 0.80f, 0.42f, 1)};
+    if (r.Has("PointLight")) return {kIconLightbulb, ImVec4(1.0f, 0.80f, 0.42f, 1)};
+    if (r.Has("CharacterBody") || r.Has("CharacterBody2D")) return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
+    if (r.Has("RigidBody") || r.Has("RigidBody2D")) return {kIconAtom, ImVec4(0.58f, 0.86f, 0.58f, 1)};
+    if (r.Has("Tilemap")) return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};
+    if (r.Has("VFXSystem") || r.Has("Trail")) return {kIconSparkles, ImVec4(1.0f, 0.70f, 0.42f, 1)};
+    if (r.Has("Sprite")) return {kIconImage, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (r.Has("MeshRenderer")) return {kIconBox, ImVec4(0.70f, 0.74f, 0.80f, 1)};
+    if (r.Has("UIText")) return {kIconType, ImVec4(1.0f, 0.66f, 0.42f, 1)};
+    if (r.Has("UIPanel") || r.Has("UIButton") || r.Has("UIImage") || r.Has("UISlider") || r.Has("UIInput") || r.Has("UIDropdown") ||
+        r.Has("UIJoystick")) return {kIconLayoutTemplate, ImVec4(1.0f, 0.66f, 0.42f, 1)};
+    if (r.Has("AudioSource")) return {kIconVolume2, ImVec4(0.60f, 0.84f, 1.0f, 1)};
+    if (r.Has("Script")) return {kIconBraces, ImVec4(0.92f, 0.84f, 0.50f, 1)};
+    return {kIconCircleDashed, ImVec4(0.50f, 0.52f, 0.56f, 1)};
+}
+
+// The icon on a component's Inspector header, in the same colors as the Hierarchy's entity icons.
+EntityIcon ComponentIcon(const std::string& type) {
+    const ImVec4 neutral(0.70f, 0.74f, 0.80f, 1), light(1.0f, 0.80f, 0.42f, 1), ui(1.0f, 0.66f, 0.42f, 1), physics(0.58f, 0.86f, 0.58f, 1);
+    if (type == "Transform") return {kIconMove3d, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (type == "Camera" || type == "CameraFollow") return {kIconVideo, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (type == "PostProcess") return {kIconAperture, ImVec4(0.58f, 0.74f, 1.0f, 1)};
+    if (type == "DirectionalLight") return {kIconSun, light};
+    if (type == "PointLight" || type == "Light2D" || type == "Darkness2D") return {kIconLightbulb, light};
+    if (type == "MeshRenderer") return {kIconBox, neutral};
+    if (type == "Sprite") return {kIconImage, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "SpriteAnimation" || type == "Animator") return {kIconFilm, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "Script") return {kIconBraces, ImVec4(0.92f, 0.84f, 0.50f, 1)};
+    if (type == "Collider" || type == "Collider2D") return {kIconSquareDashed, physics};
+    if (type == "RigidBody" || type == "RigidBody2D") return {kIconAtom, physics};
+    if (type == "CharacterBody" || type == "CharacterBody2D") return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
+    if (type == "Tilemap") return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};
+    if (type == "VFXSystem" || type == "Trail") return {kIconSparkles, ImVec4(1.0f, 0.70f, 0.42f, 1)};
+    if (type == "AudioSource") return {kIconVolume2, ImVec4(0.60f, 0.84f, 1.0f, 1)};
+    if (type == "UIText") return {kIconType, ui};
+    if (type.compare(0, 2, "UI") == 0) return {kIconLayoutTemplate, ui};
+    if (type == "NetSync" || type == "NetPlayer") return {kIconNetwork, neutral};
+    if (type == "Tag") return {kIconLayers, neutral};
+    return {kIconPackage, neutral};
+}
+
+// A component section header in the Inspector: chevron, colored icon and name on a soft bar. Clicking
+// it folds the section; the state is remembered per header id and starts open. The header stays the
+// last item, so a tooltip or context menu can follow.
+bool SectionHeader(const char* name, const EntityIcon& icon) {
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    const ImGuiID openId = ImGui::GetID("##open");
+    bool open = storage->GetBool(openId, true);
+    const float h = ImGui::GetFrameHeight() + 2.0f, font = ImGui::GetFontSize();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::SetNextItemAllowOverlap();
+    if (ImGui::InvisibleButton("##header", ImVec2(w, h))) storage->SetBool(openId, open = !open);
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p, ImVec2(p.x + w, p.y + h), IM_COL32(255, 255, 255, hovered ? 20 : 11), ImGui::GetStyle().FrameRounding);
+    float x = p.x + ImGui::GetStyle().FramePadding.x * 0.6f;
+    const float y = p.y + (h - font) * 0.5f;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), open ? kIconChevronDown : kIconChevronRight);
+    x += font + 2.0f;
+    draw->AddText(ImVec2(x, y), ImGui::ColorConvertFloat4ToU32(icon.color), icon.glyph);
+    x += font + 6.0f;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(ImGuiCol_Text), name);
+    return open;
+}
+
+// A borderless square icon button (a section's remove button): dim until hovered.
+bool GhostIconButton(const char* id, const char* icon, float side, ImU32 hoverColor) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(side, side));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (hovered) draw->AddRectFilled(p, ImVec2(p.x + side, p.y + side), IM_COL32(255, 255, 255, 18), ImGui::GetStyle().FrameRounding);
+    const ImVec2 size = ImGui::CalcTextSize(icon);
+    draw->AddText(ImVec2(p.x + (side - size.x) * 0.5f, p.y + (side - size.y) * 0.5f), hovered ? hoverColor : ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+    return pressed;
+}
+
+// A rounded filter chip: colored icon, label and an optional count (-1 = none). Lifted when on, outlined
+// and dimmed when off.
+std::string ChipText(const char* label, int count) { return count >= 0 ? Format("%s  %d", label, count) : std::string(label); }
+float ChipWidth(const char* label, int count) {
+    return ImGui::GetFontSize() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(ChipText(label, count).c_str()).x +
+           ImGui::GetStyle().FramePadding.x * 2.0f;
+}
+bool FilterChip(const char* id, const char* icon, ImU32 color, const char* label, int count, bool on) {
+    const float h = ImGui::GetFrameHeight(), w = ChipWidth(label, count), pad = ImGui::GetStyle().FramePadding.x;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 end(p.x + w, p.y + h);
+    if (on) draw->AddRectFilled(p, end, IM_COL32(255, 255, 255, hovered ? 34 : 22), h * 0.5f);
+    else draw->AddRect(p, end, IM_COL32(255, 255, 255, hovered ? 40 : 22), h * 0.5f);
+    const float y = p.y + (h - ImGui::GetFontSize()) * 0.5f;
+    draw->AddText(ImVec2(p.x + pad, y), on ? color : ImGui::GetColorU32(ImGuiCol_TextDisabled), icon);
+    const float x = p.x + pad + ImGui::GetFontSize() + ImGui::GetStyle().ItemInnerSpacing.x;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(on ? ImGuiCol_Text : ImGuiCol_TextDisabled), label);
+    if (count >= 0) {
+        const float lx = x + ImGui::CalcTextSize(label).x + ImGui::CalcTextSize("  ").x;
+        draw->AddText(ImVec2(lx, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), std::to_string(count).c_str());
+    }
+    return pressed;
 }
 
 const char* KindLabel(const std::string& kind) {
@@ -186,7 +278,10 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
             renaming = kNullEntity;
         }
     } else {
-        open = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "%s", row.name.c_str());
+        const EntityIcon icon = EntityKindIcon(row);
+        ImGui::PushStyleColor(ImGuiCol_Text, icon.color);
+        open = ImGui::TreeNodeEx("##node", flags | ImGuiTreeNodeFlags_AllowOverlap, "%s", icon.glyph);
+        ImGui::PopStyleColor();
         if (scrollToRow == row.id) {
             ImGui::SetScrollHereY(0.4f);
             scrollToRow = kNullEntity;
@@ -233,7 +328,8 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
             EntityContextMenu(&row);
             ImGui::EndPopup();
         }
-        EntityKindTag(row);
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::TextUnformatted(row.name.c_str());
         // Eye: shows / hides what the entity draws (its UI element, sprite, mesh or tilemap).
         {
             bool shown = true;
@@ -252,9 +348,9 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
                 // A long name or its tag must not show through the eye: the icon sits on the row's own color.
                 draw->AddRectFilled(ImVec2(p.x - 4.0f, p.y), ImVec2(p.x + side, p.y + side),
                                     ImGui::GetColorU32(IsSelected(row.id) ? ImGuiCol_Header : ImGuiCol_WindowBg));
-                draw->AddEllipse(c, ImVec2(side * 0.3f, side * 0.18f), col, 0.0f, 0, 1.4f);
-                if (shown) draw->AddCircleFilled(c, side * 0.09f, col);
-                else draw->AddLine(ImVec2(c.x - side * 0.28f, c.y + side * 0.24f), ImVec2(c.x + side * 0.28f, c.y - side * 0.24f), col, 1.4f);
+                const char* glyph = shown ? kIconEye : kIconEyeOff;
+                const ImVec2 glyphSize = ImGui::CalcTextSize(glyph);
+                draw->AddText(ImVec2(c.x - glyphSize.x * 0.5f, c.y - glyphSize.y * 0.5f), col, glyph);
                 HelpTooltip(Tr(shown ? "Visible - click to hide" : "Hidden - click to show"));
             }
         }
@@ -286,11 +382,11 @@ void NativeEditor::Impl::HierarchyNode(const EntityRow& row, const std::map<Enti
 }
 
 void NativeEditor::Impl::HierarchyPanel() {
-    if (!ImGui::Begin(TrId("Hierarchy").c_str(), &showHierarchy)) {
+    if (!ImGui::Begin(WithIcon(kIconListTree, TrId("Hierarchy")).c_str(), &showHierarchy)) {
         ImGui::End();
         return;
     }
-    if (ImGui::Button("+")) ImGui::OpenPopup("##create");
+    if (ImGui::Button(kIconPlus)) ImGui::OpenPopup("##create");
     HelpTooltip(Tr("Create an entity"));
     if (ImGui::BeginPopup("##create")) {
         CreateMenuItems();
@@ -298,7 +394,7 @@ void NativeEditor::Impl::HierarchyPanel() {
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputTextWithHint("##filter", Tr("Search"), &hierarchyFilter);
+    ImGui::InputTextWithHint("##filter", WithIcon(kIconSearch, Tr("Search")).c_str(), &hierarchyFilter);
 
     std::map<EntityId, std::vector<EntityId>> children;
     for (const EntityRow& r : rows) children[rowIndex.count(r.parent) ? r.parent : kNullEntity].push_back(r.id);
@@ -389,7 +485,10 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
     ImGui::PushTextWrapPos(0.0f);
+    // Labels sit a step below the values so the eye lands on the numbers.
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.66f, 0.67f, 0.70f, 1.0f));
     ImGui::TextUnformatted(Humanize(field).c_str());
+    ImGui::PopStyleColor();
     ImGui::PopTextWrapPos();
     HelpTooltip(schema["description"].asString(""));
     ImGui::TableSetColumnIndex(1);
@@ -422,15 +521,19 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         const float available = ImGui::GetContentRegionAvail().x;
         const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
         const bool stacked = available < ImGui::GetFontSize() * 9.5f;
-        const ImVec4 axisColors[] = {{1.0f, 0.64f, 0.64f, 1}, {0.65f, 0.92f, 0.68f, 1}, {0.65f, 0.80f, 1.0f, 1}};
-        const char* formats[] = {"X %.3g", "Y %.3g", "Z %.3g"};
+        // Plain values with a thin axis-colored mark at the left edge of each field.
+        const ImU32 axisColors[] = {IM_COL32(240, 104, 104, 255), IM_COL32(120, 210, 130, 255), IM_COL32(100, 156, 255, 255)};
+        const char* format = field == "rotation" ? "%.3g\xc2\xb0" : "%.3g";  // rotations read in degrees
         for (int axis = 0; axis < 3; ++axis) {
             if (axis > 0 && !stacked) ImGui::SameLine(0, gap);
             ImGui::PushID(axis);
             ImGui::SetNextItemWidth(stacked ? available : (available - gap * 2) / 3);
-            ImGui::PushStyleColor(ImGuiCol_Text, axisColors[axis]);
-            const bool edited = ImGui::DragFloat(label.c_str(), &f[axis], speed, 0, 0, formats[axis]);
-            ImGui::PopStyleColor();
+            const bool edited = ImGui::DragFloat(label.c_str(), &f[axis], speed, 0, 0, format);
+            {
+                const ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
+                const float inset = ImGui::GetStyle().FrameRounding * 0.5f;
+                ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(mn.x + 1.0f, mn.y + inset), ImVec2(mn.x + 3.0f, mx.y - inset), axisColors[axis], 1.0f);
+            }
             HelpTooltip(Format("%s: %.7g", axis == 0 ? "X" : axis == 1 ? "Y" : "Z", static_cast<double>(f[axis])));
             if (edited || ImGui::IsItemActivated()) dragMerge();
             changed |= edited;
@@ -559,7 +662,7 @@ void NativeEditor::Impl::AddComponentPopup(EntityId id) {
 }
 
 void NativeEditor::Impl::InspectorPanel() {
-    if (!ImGui::Begin(TrId("Inspector").c_str(), &showInspector)) {
+    if (!ImGui::Begin(WithIcon(kIconSlidersHorizontal, TrId("Inspector")).c_str(), &showInspector)) {
         ImGui::End();
         return;
     }
@@ -574,15 +677,24 @@ void NativeEditor::Impl::InspectorPanel() {
     }
     if (selection.size() > 1) ImGui::TextDisabled(Tr("%d entities selected - showing the first"), static_cast<int>(selection.size()));
 
-    // Name + id
+    // Entity icon, name and id.
     std::string name;
-    ImGui::SetNextItemWidth(-ImGui::CalcTextSize("#00000").x - ImGui::GetStyle().ItemSpacing.x);
+    if (const EntityRow* row = Row(id)) {
+        const EntityIcon icon = EntityKindIcon(*row);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(icon.color, "%s", icon.glyph);
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+    }
+    const std::string idText = Format("#%u", id);
+    ImGui::SetNextItemWidth(-ImGui::CalcTextSize(idText.c_str()).x - ImGui::GetStyle().ItemSpacing.x);
     if (CommitText("##name", selected["name"].asString(""), name) && !name.empty()) {
         Call("entity.rename", ObjectOf({{"id", Json(id)}, {"name", Json(name)}}));
         Refresh(true);
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("#%u", id);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", idText.c_str());
+    ImGui::Dummy(ImVec2(0, 2));
 
     const Json& comps = selected["components"];
     std::string removeType;
@@ -591,14 +703,10 @@ void NativeEditor::Impl::InspectorPanel() {
         ImGui::PushID(type.c_str());
         auto typeIt = typeByName.find(type);
         const Json* typeInfo = typeIt == typeByName.end() ? nullptr : typeIt->second;
-        float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-        ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+        const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+        const float headerHeight = ImGui::GetFrameHeight() + 2.0f;
         // Section bars are neutral: the accent color is kept for what is selected.
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.215f, 0.235f, 0.28f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.26f, 0.285f, 0.34f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.29f, 0.32f, 0.38f, 1.0f));
-        bool open = ImGui::CollapsingHeader(type.c_str(), ImGuiTreeNodeFlags_AllowOverlap);
-        ImGui::PopStyleColor(3);
+        const bool open = SectionHeader(type.c_str(), ComponentIcon(type));
         if (typeInfo) HelpTooltip((*typeInfo)["doc"].asString(""));
         if (ImGui::BeginPopupContextItem("##compctx")) {
             if (ImGui::MenuItem(Tr("Remove Component"))) removeType = type;
@@ -610,25 +718,31 @@ void NativeEditor::Impl::InspectorPanel() {
             ImGui::EndPopup();
         }
         // Remove button on the header's right edge.
-        ImGui::SameLine(headerRight - ImGui::GetFrameHeight());
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        if (ImGui::SmallButton("x")) removeType = type;
-        ImGui::PopStyleColor();
+        ImGui::SameLine(headerRight - headerHeight - 1.0f);
+        if (GhostIconButton("##remove", kIconX, headerHeight, IM_COL32(236, 110, 100, 255))) removeType = type;
         HelpTooltip(Format(Tr("Remove %s"), type.c_str()));
         if (open && typeInfo) {
-            if (type == "Script") {
-                std::string path = kv.second["path"].asString("");
-                if (!path.empty() && ImGui::Button(Tr("Edit Script"))) OpenScript(path);
+            // Shortcuts into the component's own editor.
+            const char* editIcon = nullptr;
+            const char* editLabel = nullptr;
+            std::string editPath;
+            if (type == "Script") editIcon = kIconFileCode, editLabel = "Edit Script", editPath = kv.second["path"].asString("");
+            if (type == "VFXSystem") editIcon = kIconSparkles, editLabel = "Edit Effect", editPath = kv.second["asset"].asString("");
+            if (type == "MeshRenderer") editIcon = kIconPalette, editLabel = "Edit Material", editPath = kv.second["material"].asString("");
+            if (editLabel && !editPath.empty()) {
+                ImGui::Dummy(ImVec2(0, 1));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
+                if (ImGui::Button(WithIcon(editIcon, Tr(editLabel)).c_str(), ImVec2(-FLT_MIN, 0))) {
+                    if (type == "Script") OpenScript(editPath);
+                    else if (type == "VFXSystem") OpenEffect(editPath);
+                    else OpenShader(editPath);
+                }
+                ImGui::PopStyleColor();
             }
-            if (type == "VFXSystem") {
-                const std::string path = kv.second["asset"].asString();
-                if (!path.empty() && ImGui::Button(Tr("Edit Effect"))) OpenEffect(path);
-            }
-            if (type == "MeshRenderer") {
-                std::string path = kv.second["material"].asString("");
-                if (!path.empty() && ImGui::Button(Tr("Edit Material"))) OpenShader(path);
-            }
-            if (ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_RowBg)) {
+            ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 3.0f));
+            const bool table = ImGui::BeginTable("##fields", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX);
+            ImGui::PopStyleVar();
+            if (table) {
                 ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.34f);
                 ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.66f);
                 for (const auto& f : (*typeInfo)["schema"]["properties"].members()) {
@@ -642,6 +756,7 @@ void NativeEditor::Impl::InspectorPanel() {
         } else if (open) {
             ImGui::TextDisabled("%s", Tr("Unknown component type"));
         }
+        ImGui::Dummy(ImVec2(0, open ? 4.0f : 1.0f));
         ImGui::PopID();
     }
     if (!removeType.empty()) {
@@ -649,9 +764,12 @@ void NativeEditor::Impl::InspectorPanel() {
         Refresh(true);
     }
     ImGui::Spacing();
-    float w = ImGui::GetFontSize() * 12;
-    ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetContentRegionAvail().x - w) * 0.5f));
-    if (ImGui::Button(Tr("Add Component"), ImVec2(w, 0))) ImGui::OpenPopup("##addcomp");
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.58f, 1.0f, 0.16f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.36f, 0.58f, 1.0f, 0.28f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.36f, 0.58f, 1.0f, 0.38f));
+    const bool add = ImGui::Button(WithIcon(kIconPlus, Tr("Add Component")).c_str(), ImVec2(-FLT_MIN, ImGui::GetFrameHeight() + 4.0f));
+    ImGui::PopStyleColor(3);
+    if (add) ImGui::OpenPopup("##addcomp");
     AddComponentPopup(id);
     ImGui::End();
 }
@@ -659,7 +777,7 @@ void NativeEditor::Impl::InspectorPanel() {
 // ----- Assets --------------------------------------------------------------------
 
 void NativeEditor::Impl::AssetsPanel() {
-    if (!ImGui::Begin(TrId("Assets").c_str(), &showAssets)) {
+    if (!ImGui::Begin(WithIcon(kIconFolder, TrId("Assets")).c_str(), &showAssets)) {
         ImGui::End();
         return;
     }
@@ -676,9 +794,9 @@ void NativeEditor::Impl::AssetsPanel() {
     const float font = ImGui::GetFontSize();
     // Keep the toolbar usable when the panel is docked into a narrow column.
     ImGui::SetNextItemWidth(std::max(font * 4, ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x));
-    ImGui::InputTextWithHint("##filter", Tr("Search assets by name or path"), &assetFilter);
+    ImGui::InputTextWithHint("##filter", WithIcon(kIconSearch, Tr("Search assets by name or path")).c_str(), &assetFilter);
     ImGui::SameLine();
-    if (ImGui::Button("?")) ImGui::OpenPopup("##assethelp");
+    if (GhostIconButton("##help", kIconCircleHelp, ImGui::GetFrameHeight(), ImGui::GetColorU32(ImGuiCol_Text))) ImGui::OpenPopup("##assethelp");
     if (ImGui::BeginPopup("##assethelp")) {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + font * 22);
         ImGui::TextUnformatted(Tr("Drop files on the window to import. Drag assets into the Scene, Hierarchy or Inspector."));
@@ -696,21 +814,30 @@ void NativeEditor::Impl::AssetsPanel() {
         }
         ImGui::EndCombo();
     }
-    const float actionsWidth = ImGui::CalcTextSize(Tr("Grid")).x + ImGui::CalcTextSize(Tr("List")).x +
-        ImGui::CalcTextSize(Tr("Refresh")).x + ImGui::GetStyle().FramePadding.x * 6 + ImGui::GetStyle().ItemSpacing.x * 3;
+    // Grid/List as a two-icon segmented control, then Refresh; all square, frame-high buttons.
+    const float square = ImGui::GetFrameHeight();
+    const float actionsWidth = square * 3 + 2 + ImGui::GetStyle().ItemSpacing.x * 2;
     if (ImGui::GetContentRegionAvail().x > font * 9 + actionsWidth) ImGui::SameLine();
-    // Buttons use frame padding and a centered baseline, matching the adjacent combo and Refresh button.
-    auto viewButton = [&](const char* label, bool grid) {
-        if (assetGrid == grid) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        const bool clicked = ImGui::Button(label);
-        if (assetGrid == grid) ImGui::PopStyleColor();
+    auto viewButton = [&](const char* id, const char* icon, const char* tip, bool grid) {
+        // Drawn by hand: a Button would place the glyph after its frame padding, off center in a square.
+        const bool on = assetGrid == grid;
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(square, square));
+        const int alpha = on ? 36 : ImGui::IsItemHovered() ? 20 : 8;
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(p, ImVec2(p.x + square, p.y + square), IM_COL32(255, 255, 255, alpha), ImGui::GetStyle().FrameRounding);
+        const ImVec2 size = ImGui::CalcTextSize(icon);
+        draw->AddText(ImVec2(p.x + (square - size.x) * 0.5f, p.y + (square - size.y) * 0.5f),
+                      ImGui::GetColorU32(on ? ImGuiCol_Text : ImGuiCol_TextDisabled), icon);
+        HelpTooltip(tip);
         if (clicked) assetGrid = grid;
     };
-    viewButton(Tr("Grid"), true);
+    viewButton("##grid", kIconLayoutGrid, Tr("Grid"), true);
+    ImGui::SameLine(0, 2);
+    viewButton("##list", kIconList, Tr("List"), false);
     ImGui::SameLine();
-    viewButton(Tr("List"), false);
-    ImGui::SameLine();
-    if (ImGui::Button(Tr("Refresh"))) RefreshAssets(true);
+    if (GhostIconButton("##refresh", kIconRefreshCw, square, ImGui::GetColorU32(ImGuiCol_Text))) RefreshAssets(true);
+    HelpTooltip(Tr("Refresh"));
 
     size_t matched = 0;
     for (const auto& kv : byKind) {
@@ -781,10 +908,12 @@ void NativeEditor::Impl::AssetsPanel() {
                 const bool isSelected = selectedAsset == path;
                 const float padding = font * 0.5f;
                 const ImVec2 end(pos.x + itemWidth, pos.y + itemHeight);
-                draw->AddRect(pos, end, ImGui::GetColorU32(isSelected ? ImGuiCol_ButtonActive : ImGuiCol_Border), 4);
+                // Soft cards; the selected one gets an accent wash and outline.
+                draw->AddRectFilled(pos, end, isSelected ? IM_COL32(92, 148, 255, 40) : IM_COL32(255, 255, 255, 8), 6);
+                if (isSelected) draw->AddRect(pos, end, IM_COL32(92, 148, 255, 160), 6);
                 const float side = useGrid ? font * 3.5f : itemHeight - padding * 2;
                 const ImVec2 preview(useGrid ? pos.x + (itemWidth - side) * 0.5f : pos.x + padding, pos.y + padding);
-                draw->AddRectFilled(preview, ImVec2(preview.x + side, preview.y + side), IM_COL32(24, 27, 33, 255), 3);
+                draw->AddRectFilled(preview, ImVec2(preview.x + side, preview.y + side), IM_COL32(0, 0, 0, 60), 4);
                 const bool previewable = kind == "texture" || kind == "model" || kind == "material" || kind == "prefab" || kind == "scene";
                 auto image = showThumbnails && previewable ? AssetThumbnail(path) : nullptr;
                 if (image) {
@@ -793,9 +922,13 @@ void NativeEditor::Impl::AssetsPanel() {
                     const ImVec2 start(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f);
                     draw->AddImage(ViewTexture(engine.Gpu()->ImageView(image)), start, start + size);
                 } else {
-                    const char* symbol = kind == "script" ? "</>" : kind == "audio" ? "SND" : kind == "font" ? "Aa" : "FILE";
-                    const ImVec2 size = ImGui::CalcTextSize(symbol);
-                    draw->AddText(ImVec2(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f),
+                    const char* symbol = kind == "script" ? kIconFileCode : kind == "audio" ? kIconMusic : kind == "font" ? kIconType :
+                                         kind == "vfx" ? kIconSparkles : kind == "shader" ? kIconWorkflow : kind == "material" ? kIconPalette :
+                                         kind == "prefab" ? kIconPackage : kind == "scene" ? kIconFileJson : kind == "model" ? kIconBox :
+                                         kind == "texture" ? kIconImage : kIconFile;
+                    const float iconSize = std::min(side * 0.5f, ImGui::GetFontSize() * 2.0f);
+                    const ImVec2 size = ImGui::GetFont()->CalcTextSizeA(iconSize, FLT_MAX, 0.0f, symbol);
+                    draw->AddText(ImGui::GetFont(), iconSize, ImVec2(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f),
                                   ImGui::GetColorU32(KindColor(kind)), symbol);
                 }
                 const float textX = useGrid ? pos.x + padding : preview.x + side + padding;
@@ -841,55 +974,79 @@ void NativeEditor::Impl::AssetsPanel() {
 
 // ----- Console -------------------------------------------------------------------
 
+void NativeEditor::FocusConsole() { impl_->showConsole = impl_->requestConsoleFocus = true; }
+
 void NativeEditor::Impl::ConsolePanel() {
-    if (!ImGui::Begin(TrId("Console").c_str(), &showConsole)) {
+    if (requestConsoleFocus) {
+        ImGui::SetNextWindowFocus();
+        requestConsoleFocus = false;
+    }
+    if (!ImGui::Begin(WithIcon(kIconTerminal, TrId("Console")).c_str(), &showConsole)) {
         ImGui::End();
         return;
     }
     static const char* levels[] = {"debug", "info", "warn", "error"};
     const char* labels[] = {Tr("Debug"), Tr("Info"), Tr("Warnings"), Tr("Errors")};
-    for (int i = 0; i < 4; ++i) {
-        if (i > 0) {
-            const float nextWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(labels[i]).x;
-            const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-            if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + nextWidth <= right) ImGui::SameLine();
-        }
-        ImGui::Checkbox(labels[i], &logShow[i]);
-    }
-    const float autoWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(Tr("Auto-scroll")).x;
-    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-    if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + autoWidth <= right) ImGui::SameLine();
-    ImGui::Checkbox(Tr("Auto-scroll"), &logAutoScroll);
-    const float clearWidth = ImGui::CalcTextSize(Tr("Clear")).x + ImGui::GetStyle().FramePadding.x * 2;
-    ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 3, ImGui::GetContentRegionAvail().x - clearWidth - ImGui::GetStyle().ItemSpacing.x));
-    ImGui::InputTextWithHint("##logfilter", Tr("Filter"), &logFilter);
-    ImGui::SameLine();
-    if (ImGui::Button(Tr("Clear"))) {
-        log.clear();
-        warnCount = errorCount = 0;
-        Call("script.errors", ObjectOf({{"clear", Json(true)}}), true);
-    }
-
-    float inputHeight = ImGui::GetFrameHeightWithSpacing();
-    ImGui::BeginChild("##log", ImVec2(0, -inputHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-    ImGui::PushFont(monoFont, 0.0f);
-    for (const LogLine& l : log) {
+    const char* icons[] = {kIconBug, kIconInfo, kIconTriangleAlert, kIconCircleX};
+    const ImVec4 colors[] = {ImVec4(0.66f, 0.69f, 0.75f, 1), ImVec4(0.58f, 0.74f, 1.0f, 1), ImVec4(0.95f, 0.78f, 0.35f, 1), ImVec4(1, 0.45f, 0.4f, 1)};
+    auto levelOf = [&](const LogLine& l) {
         int li = 1;
         for (int i = 0; i < 4; ++i) {
             if (l.level == levels[i]) li = i;
         }
+        return li;
+    };
+    int counts[4] = {};
+    for (const LogLine& l : log) ++counts[levelOf(l)];
+
+    // Level chips (with counts) and auto-scroll, wrapping onto a new row when the dock is narrow.
+    auto fits = [&](float width) {
+        const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+        return ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <= right;
+    };
+    for (int i = 0; i < 4; ++i) {
+        if (i > 0 && fits(ChipWidth(labels[i], counts[i]))) ImGui::SameLine(0, 4);
+        if (FilterChip(levels[i], icons[i], ImGui::ColorConvertFloat4ToU32(colors[i]), labels[i], counts[i], logShow[i])) logShow[i] = !logShow[i];
+    }
+    if (fits(ChipWidth(Tr("Auto-scroll"), -1))) ImGui::SameLine();
+    if (FilterChip("##autoscroll", kIconArrowDownToLine, IM_COL32(92, 148, 255, 255), Tr("Auto-scroll"), -1, logAutoScroll)) logAutoScroll = !logAutoScroll;
+    const float side = ImGui::GetFrameHeight();
+    ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 3, ImGui::GetContentRegionAvail().x - side - ImGui::GetStyle().ItemSpacing.x));
+    ImGui::InputTextWithHint("##logfilter", WithIcon(kIconSearch, Tr("Filter")).c_str(), &logFilter);
+    ImGui::SameLine();
+    if (GhostIconButton("##clear", kIconTrash2, side, ImGui::GetColorU32(ImGuiCol_Text))) {
+        log.clear();
+        warnCount = errorCount = 0;
+        Call("script.errors", ObjectOf({{"clear", Json(true)}}), true);
+    }
+    HelpTooltip(Tr("Clear"));
+
+    // Lines: level icon, dim category, message; on a slightly darker well.
+    float inputHeight = ImGui::GetFrameHeightWithSpacing();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.22f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, ImGui::GetStyle().FrameRounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+    ImGui::BeginChild("##log", ImVec2(0, -inputHeight), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    for (const LogLine& l : log) {
+        const int li = levelOf(l);
         if (!logShow[li]) continue;
         if (!logFilter.empty() && !ContainsNoCase(l.message, logFilter) && !ContainsNoCase(l.category, logFilter)) continue;
-        ImVec4 col = li == 3 ? ImVec4(1, 0.45f, 0.4f, 1) : li == 2 ? ImVec4(0.95f, 0.78f, 0.35f, 1) : li == 0 ? ImVec4(0.66f, 0.69f, 0.75f, 1) : ImVec4(0.90f, 0.91f, 0.94f, 1);
-        ImGui::PushStyleColor(ImGuiCol_Text, col);
-        ImGui::TextUnformatted((std::string(labels[li]) + " [" + l.category + "] " + l.message).c_str());
+        ImGui::TextColored(colors[li], "%s", icons[li]);
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+        ImGui::PushFont(monoFont, 0.0f);
+        ImGui::TextDisabled("%s", l.category.c_str());
+        ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x * 2);
+        ImGui::PushStyleColor(ImGuiCol_Text, li == 1 ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : colors[li]);
+        ImGui::TextUnformatted(l.message.c_str());
         ImGui::PopStyleColor();
+        ImGui::PopFont();
         if (ImGui::BeginPopupContextItem(("##l" + std::to_string(l.seq)).c_str())) {
             if (ImGui::MenuItem(Tr("Copy"))) ImGui::SetClipboardText(l.message.c_str());
             ImGui::EndPopup();
         }
     }
-    ImGui::PopFont();
     if (logAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
 
@@ -923,8 +1080,11 @@ void NativeEditor::Impl::ConsolePanel() {
         }
         return 0;
     };
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", kIconChevronRight);
+    ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGuiInputTextFlags f = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCompletion;
+    ImGuiInputTextFlags f =ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackCompletion;
     if (ImGui::InputTextWithHint("##cmd", Tr("command.name {\"json\": \"args\"}   (Tab completes, Up/Down history)"), &consoleInput, f, callback, &ctx)) {
         RunConsoleCommand(consoleInput);
         consoleInput.clear();
@@ -956,7 +1116,7 @@ void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(Tr("Params"));
+    ImGui::TextColored(ImVec4(0.66f, 0.67f, 0.70f, 1.0f), "%s", Tr("Params"));
     HelpTooltip(Tr("Values the script reads as self.params.<name>. Rows come from the script; dimmed values are the script's defaults."));
     ImGui::TableSetColumnIndex(1);
     if (ImGui::SmallButton(raw ? Tr("Fields") : "JSON")) {
@@ -1068,9 +1228,9 @@ void NativeEditor::Impl::ScriptParamsRows(EntityId id, const Json& script) {
         ImGui::TableSetColumnIndex(0);
         ImGui::AlignTextToFramePadding();
         ImGui::Indent(ImGui::GetStyle().IndentSpacing * 0.6f);
-        if (!row.info) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.3f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Text, row.info ? ImVec4(0.66f, 0.67f, 0.70f, 1) : ImVec4(0.95f, 0.72f, 0.3f, 1));
         ImGui::TextUnformatted(Humanize(name).c_str());
-        if (!row.info) ImGui::PopStyleColor();
+        ImGui::PopStyleColor();
         ImGui::Unindent(ImGui::GetStyle().IndentSpacing * 0.6f);
         {
             std::string tip = name;

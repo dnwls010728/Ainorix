@@ -1,6 +1,7 @@
 // Native editor core: lifecycle, window input -> Dear ImGui, command helpers,
 // menus, toolbar, status bar, dock layout, prompts and the main loop.
 // Panels live in EditorPanels.cpp, the Scene/Game views in EditorViewports.cpp.
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
 
@@ -28,10 +29,12 @@ namespace oe {
 
 extern const unsigned char kDefaultFontData[];
 extern const size_t kDefaultFontSize;
+extern const unsigned char kIconFontData[];
+extern const size_t kIconFontSize;
 
 namespace {
 
-constexpr float kBaseFontSize = 17.0f;
+constexpr float kBaseFontSize = 16.0f;
 // Korean/Japanese system fonts draw smaller and thinner than Roboto at the same size: merged a
 // little larger so mixed text reads as one size.
 constexpr float kCjkFontScale = 1.06f;
@@ -260,7 +263,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     }
 }
 
-// Toolbar icons drawn as shapes, so they do not depend on font glyphs.
+// Toolbar buttons with a Lucide icon (EditorIcons.h); the active tool shows its icon in the accent color.
 enum class Icon { Play, Pause, Stop, Step, Select, Move, Rotate, Scale };
 
 bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, bool enabled = true) {
@@ -274,47 +277,72 @@ bool IconButton(const char* id, Icon icon, bool active, const char* tooltip, boo
     if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tooltip);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 mn = ImGui::GetItemRectMin(), mx = ImGui::GetItemRectMax();
-    if (active) {
-        const ImU32 accent = ImGui::GetColorU32(ImGuiCol_CheckMark);
-        ImGui::GetWindowDrawList()->AddRect(mn, mx, accent, ImGui::GetStyle().FrameRounding, 2.0f);
-    }
-    ImVec2 c((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
-    float r = h * 0.26f;
+    const char* glyph = kIconPlay;
     ImU32 col = ImGui::GetColorU32(enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
     switch (icon) {
-        case Icon::Play: dl->AddTriangleFilled(ImVec2(c.x - r * 0.8f, c.y - r), ImVec2(c.x - r * 0.8f, c.y + r), ImVec2(c.x + r, c.y), IM_COL32(90, 200, 120, 255)); break;
-        case Icon::Pause:
-            dl->AddRectFilled(ImVec2(c.x - r * 0.8f, c.y - r), ImVec2(c.x - r * 0.25f, c.y + r), col);
-            dl->AddRectFilled(ImVec2(c.x + r * 0.25f, c.y - r), ImVec2(c.x + r * 0.8f, c.y + r), col);
-            break;
-        case Icon::Stop: dl->AddRectFilled(ImVec2(c.x - r * 0.85f, c.y - r * 0.85f), ImVec2(c.x + r * 0.85f, c.y + r * 0.85f), IM_COL32(230, 90, 80, 255)); break;
-        case Icon::Step:
-            dl->AddTriangleFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x - r, c.y + r), ImVec2(c.x + r * 0.5f, c.y), col);
-            dl->AddRectFilled(ImVec2(c.x + r * 0.55f, c.y - r), ImVec2(c.x + r, c.y + r), col);
-            break;
-        case Icon::Select:
-            dl->AddTriangleFilled(ImVec2(c.x - r * 0.7f, c.y - r), ImVec2(c.x - r * 0.7f, c.y + r * 0.7f), ImVec2(c.x + r * 0.7f, c.y + r * 0.2f), col);
-            break;
-        case Icon::Move:
-            dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), col, 1.6f);
-            dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), col, 1.6f);
-            dl->AddTriangleFilled(ImVec2(c.x + r * 1.2f, c.y), ImVec2(c.x + r * 0.7f, c.y - r * 0.35f), ImVec2(c.x + r * 0.7f, c.y + r * 0.35f), col);
-            dl->AddTriangleFilled(ImVec2(c.x - r * 1.2f, c.y), ImVec2(c.x - r * 0.7f, c.y + r * 0.35f), ImVec2(c.x - r * 0.7f, c.y - r * 0.35f), col);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y - r * 1.2f), ImVec2(c.x + r * 0.35f, c.y - r * 0.7f), ImVec2(c.x - r * 0.35f, c.y - r * 0.7f), col);
-            dl->AddTriangleFilled(ImVec2(c.x, c.y + r * 1.2f), ImVec2(c.x - r * 0.35f, c.y + r * 0.7f), ImVec2(c.x + r * 0.35f, c.y + r * 0.7f), col);
-            break;
-        case Icon::Rotate:
-            dl->PathArcTo(c, r, 0.4f, 5.6f, 20);
-            dl->PathStroke(col, 1.8f);
-            dl->AddTriangleFilled(ImVec2(c.x + r * 1.35f, c.y - r * 0.05f), ImVec2(c.x + r * 0.55f, c.y - r * 0.05f), ImVec2(c.x + r * 0.95f, c.y + r * 0.55f), col);
-            break;
-        case Icon::Scale:
-            dl->AddRect(ImVec2(c.x - r, c.y - r * 0.2f), ImVec2(c.x + r * 0.2f, c.y + r), col, 0.0f, 1.6f);
-            dl->AddLine(ImVec2(c.x - r * 0.1f, c.y + r * 0.1f), ImVec2(c.x + r, c.y - r), col, 1.6f);
-            dl->AddTriangleFilled(ImVec2(c.x + r * 1.1f, c.y - r * 1.1f), ImVec2(c.x + r * 0.4f, c.y - r), ImVec2(c.x + r, c.y - r * 0.4f), col);
-            break;
+        case Icon::Play: glyph = kIconPlay; if (enabled) col = IM_COL32(96, 208, 128, 255); break;
+        case Icon::Pause: glyph = kIconPause; break;
+        case Icon::Stop: glyph = kIconSquare; if (enabled) col = IM_COL32(236, 96, 86, 255); break;
+        case Icon::Step: glyph = kIconStepForward; break;
+        case Icon::Select: glyph = kIconMousePointer2; break;
+        case Icon::Move: glyph = kIconMove; break;
+        case Icon::Rotate: glyph = kIconRotate3d; break;
+        case Icon::Scale: glyph = kIconScale3d; break;
     }
+    if (active && icon != Icon::Stop) col = ImGui::GetColorU32(ImGuiCol_CheckMark);
+    const ImVec2 glyphSize = ImGui::CalcTextSize(glyph);
+    dl->AddText(ImVec2((mn.x + mx.x - glyphSize.x) * 0.5f, (mn.y + mx.y - glyphSize.y) * 0.5f), col, glyph);
     return pressed;
+}
+
+// A run of toolbar buttons on one rounded, slightly lifted background (drawn behind them once the
+// run's size is known).
+struct ToolbarGroup {
+    ImDrawList* draw;
+    ImVec2 start;
+    ToolbarGroup() : draw(ImGui::GetWindowDrawList()), start(ImGui::GetCursorScreenPos()) {
+        draw->ChannelsSplit(2);
+        draw->ChannelsSetCurrent(1);
+    }
+    ~ToolbarGroup() {
+        const ImVec2 end = ImGui::GetItemRectMax();
+        draw->ChannelsSetCurrent(0);
+        draw->AddRectFilled(ImVec2(start.x - 2, start.y - 1), ImVec2(end.x + 2, end.y + 1), IM_COL32(255, 255, 255, 16), 7.0f);
+        draw->ChannelsMerge();
+    }
+};
+
+// A thin vertical line between toolbar sections.
+void ToolbarDivider(float gap) {
+    ImGui::SameLine(0, gap);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetFrameHeight();
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y + h * 0.2f), ImVec2(p.x, p.y + h * 0.8f), ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+    ImGui::Dummy(ImVec2(1, h));
+    ImGui::SameLine(0, gap);
+}
+
+// A small toggle with an icon and a label (Local/World, Snap): lifted and bright when on.
+bool ToolbarToggle(const char* icon, const char* label, bool on, const char* tooltip) {
+    ImGui::PushStyleColor(ImGuiCol_Button, on ? ImVec4(1, 1, 1, 0.10f) : ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Text, on ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    const bool pressed = ImGui::Button(Format("%s %s", icon, label).c_str());
+    ImGui::PopStyleColor(2);
+    HelpTooltip(tooltip);
+    return pressed;
+}
+
+// A rounded label with a colored dot: the editor's mode (Editing / Playing / Paused).
+void ModePill(const char* text, ImU32 dot) {
+    const ImVec2 textSize = ImGui::CalcTextSize(text);
+    const float h = ImGui::GetFrameHeight(), pad = ImGui::GetStyle().FramePadding.x, dotR = h * 0.13f;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 size(pad * 2 + dotR * 2 + 6 + textSize.x, h);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(p, p + size, IM_COL32(255, 255, 255, 12), h * 0.5f);
+    draw->AddCircleFilled(ImVec2(p.x + pad + dotR, p.y + h * 0.5f), dotR, dot);
+    draw->AddText(ImVec2(p.x + pad + dotR * 2 + 6, p.y + (h - textSize.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), text);
+    ImGui::Dummy(size);
 }
 
 }  // namespace
@@ -801,83 +829,98 @@ void NativeEditor::Impl::ApplyStyle() {
     ImGuiStyle& st = ImGui::GetStyle();
     st = ImGuiStyle();
     ImGui::StyleColorsDark(&st);
-    st.WindowRounding = 4.0f;
-    st.ChildRounding = 4.0f;
-    st.FrameRounding = 3.0f;
-    st.PopupRounding = 4.0f;
-    st.GrabRounding = 3.0f;
-    st.TabRounding = 4.0f;
-    st.ScrollbarRounding = 6.0f;
-    // Readability first: roomy rows, fields that stand out from their panel (lighter fill and
-    // an outline), text hints bright enough to read, a selection that cannot be missed, and
-    // panel chrome (menu, tab bars, gaps between docks) clearly darker than the panels.
+    // Calm, neutral dark theme: near-black chrome, panels one step lighter, fields one more step,
+    // hairline separators instead of outlines, generous rounding, and a single soft blue accent
+    // kept for selection, focus and the active tab. Text stays bright enough to read at a glance.
+    st.WindowRounding = 6.0f;
+    st.ChildRounding = 6.0f;
+    st.FrameRounding = 5.0f;
+    st.PopupRounding = 6.0f;
+    st.GrabRounding = 4.0f;
+    st.TabRounding = 5.0f;
+    st.ScrollbarRounding = 8.0f;
     st.WindowPadding = ImVec2(10, 8);
-    st.FramePadding = ImVec2(7, 5);
-    st.ItemSpacing = ImVec2(8, 6);
+    st.FramePadding = ImVec2(8, 4);
+    st.ItemSpacing = ImVec2(8, 5);
     st.ItemInnerSpacing = ImVec2(6, 4);
     st.CellPadding = ImVec2(6, 3);
-    st.IndentSpacing = 18.0f;
-    st.ScrollbarSize = 16.0f;
-    st.GrabMinSize = 14.0f;
-    st.DisabledAlpha = 0.65f;
-    st.WindowBorderSize = 1.0f;
+    st.IndentSpacing = 16.0f;
+    st.ScrollbarSize = 10.0f;
+    st.GrabMinSize = 12.0f;
+    st.DisabledAlpha = 0.6f;
+    st.WindowBorderSize = 0.0f;
+    st.ChildBorderSize = 0.0f;
     st.PopupBorderSize = 1.0f;
-    st.FrameBorderSize = 1.0f;
+    st.FrameBorderSize = 0.0f;
+    st.TabBorderSize = 0.0f;
     st.TabBarBorderSize = 1.0f;
-    st.TabBarOverlineSize = 3.0f;
-    st.DockingSeparatorSize = 4.0f;
-    st.SeparatorTextBorderSize = 2.0f;
+    st.TabBarOverlineSize = 2.0f;
+    st.TabCloseButtonMinWidthUnselected = 0.0f;  // close buttons only on the hovered or selected tab
+    st.DockingSeparatorSize = 2.0f;
+    st.SeparatorTextBorderSize = 1.0f;
+    st.SelectableTextAlign = ImVec2(0.0f, 0.5f);
     st.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesToNodes;  // parent-child guides in the Hierarchy
     st.TreeLinesSize = 1.0f;
     ImVec4* c = st.Colors;
-    const ImVec4 bg(0.075f, 0.08f, 0.095f, 1.0f), panel(0.13f, 0.14f, 0.165f, 1.0f), frame(0.205f, 0.22f, 0.255f, 1.0f);
-    const ImVec4 accent(0.30f, 0.58f, 1.0f, 1.0f), accentDim(0.22f, 0.40f, 0.72f, 1.0f);
-    c[ImGuiCol_Text] = ImVec4(0.93f, 0.94f, 0.96f, 1.0f);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.72f, 0.75f, 0.80f, 1.0f);
+    auto gray = [](float v, float a = 1.0f) { return ImVec4(v, v, v * 1.04f, a); };
+    const ImVec4 bg = gray(0.071f), panel = gray(0.098f), raised = gray(0.125f), frame = gray(0.145f);
+    const ImVec4 accent(0.36f, 0.58f, 1.0f, 1.0f);
+    auto tint = [&](float a) { return ImVec4(accent.x, accent.y, accent.z, a); };
+    c[ImGuiCol_Text] = gray(0.90f);
+    c[ImGuiCol_TextDisabled] = gray(0.56f);
     c[ImGuiCol_WindowBg] = panel;
     c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
-    c[ImGuiCol_PopupBg] = ImVec4(0.105f, 0.115f, 0.14f, 0.99f);
-    c[ImGuiCol_Border] = ImVec4(0.40f, 0.435f, 0.50f, 0.8f);
+    c[ImGuiCol_PopupBg] = gray(0.118f, 0.98f);
+    c[ImGuiCol_Border] = gray(1.0f, 0.08f);
+    c[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_FrameBg] = frame;
-    c[ImGuiCol_FrameBgHovered] = ImVec4(0.25f, 0.27f, 0.315f, 1.0f);
-    c[ImGuiCol_FrameBgActive] = ImVec4(0.27f, 0.31f, 0.39f, 1.0f);
+    c[ImGuiCol_FrameBgHovered] = gray(0.17f);
+    c[ImGuiCol_FrameBgActive] = gray(0.19f);
     c[ImGuiCol_TitleBg] = bg;
     c[ImGuiCol_TitleBgActive] = bg;
+    c[ImGuiCol_TitleBgCollapsed] = bg;
     c[ImGuiCol_MenuBarBg] = bg;
-    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.18f);
-    c[ImGuiCol_ScrollbarGrab] = ImVec4(0.36f, 0.385f, 0.44f, 1.0f);
-    c[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.46f, 0.49f, 0.56f, 1.0f);
-    c[ImGuiCol_ScrollbarGrabActive] = accentDim;
-    c[ImGuiCol_CheckMark] = ImVec4(0.65f, 0.84f, 1.0f, 1.0f);
-    c[ImGuiCol_SliderGrab] = ImVec4(0.38f, 0.56f, 0.92f, 1.0f);
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ScrollbarGrab] = gray(1.0f, 0.12f);
+    c[ImGuiCol_ScrollbarGrabHovered] = gray(1.0f, 0.20f);
+    c[ImGuiCol_ScrollbarGrabActive] = gray(1.0f, 0.28f);
+    c[ImGuiCol_CheckMark] = accent;
+    c[ImGuiCol_SliderGrab] = tint(0.85f);
     c[ImGuiCol_SliderGrabActive] = accent;
-    c[ImGuiCol_Button] = ImVec4(0.235f, 0.25f, 0.295f, 1.0f);
-    c[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.33f, 0.40f, 1.0f);
-    c[ImGuiCol_ButtonActive] = accentDim;
-    c[ImGuiCol_Header] = ImVec4(0.18f, 0.36f, 0.60f, 1.0f);
-    c[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.27f, 0.36f, 1.0f);
-    c[ImGuiCol_HeaderActive] = ImVec4(0.24f, 0.40f, 0.68f, 1.0f);
-    c[ImGuiCol_Separator] = ImVec4(0.34f, 0.375f, 0.44f, 1.0f);
-    c[ImGuiCol_SeparatorHovered] = accentDim;
+    c[ImGuiCol_Button] = raised;
+    c[ImGuiCol_ButtonHovered] = gray(0.18f);
+    c[ImGuiCol_ButtonActive] = gray(0.22f);
+    c[ImGuiCol_Header] = tint(0.22f);
+    c[ImGuiCol_HeaderHovered] = gray(1.0f, 0.05f);
+    c[ImGuiCol_HeaderActive] = tint(0.30f);
+    c[ImGuiCol_Separator] = gray(1.0f, 0.07f);
+    c[ImGuiCol_SeparatorHovered] = tint(0.6f);
     c[ImGuiCol_SeparatorActive] = accent;
-    c[ImGuiCol_ResizeGrip] = ImVec4(0.30f, 0.33f, 0.38f, 0.6f);
+    c[ImGuiCol_ResizeGrip] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ResizeGripHovered] = tint(0.5f);
+    c[ImGuiCol_ResizeGripActive] = accent;
+    c[ImGuiCol_InputTextCursor] = gray(0.95f);
     c[ImGuiCol_Tab] = bg;
-    c[ImGuiCol_TabHovered] = ImVec4(0.22f, 0.27f, 0.36f, 1.0f);
-    c[ImGuiCol_TabSelected] = ImVec4(0.20f, 0.26f, 0.35f, 1.0f);
+    c[ImGuiCol_TabHovered] = raised;
+    c[ImGuiCol_TabSelected] = panel;
     c[ImGuiCol_TabSelectedOverline] = accent;
     c[ImGuiCol_TabDimmed] = bg;
-    c[ImGuiCol_TabDimmedSelected] = ImVec4(0.19f, 0.215f, 0.265f, 1.0f);
-    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.58f, 0.67f, 0.80f, 1.0f);
-    c[ImGuiCol_TreeLines] = ImVec4(0.30f, 0.325f, 0.375f, 1.0f);
-    c[ImGuiCol_TableHeaderBg] = ImVec4(0.17f, 0.185f, 0.215f, 1.0f);
-    c[ImGuiCol_TableBorderStrong] = ImVec4(0.26f, 0.28f, 0.33f, 1.0f);
-    c[ImGuiCol_TableBorderLight] = ImVec4(0.20f, 0.215f, 0.25f, 1.0f);
-    c[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.04f);
+    c[ImGuiCol_TabDimmedSelected] = panel;
+    c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_PlotLines] = gray(0.6f);
+    c[ImGuiCol_PlotHistogram] = tint(0.8f);
+    c[ImGuiCol_TreeLines] = gray(1.0f, 0.10f);
+    c[ImGuiCol_TableHeaderBg] = raised;
+    c[ImGuiCol_TableBorderStrong] = gray(1.0f, 0.08f);
+    c[ImGuiCol_TableBorderLight] = gray(1.0f, 0.05f);
+    c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_TableRowBgAlt] = gray(1.0f, 0.02f);
     c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
-    c[ImGuiCol_DockingPreview] = ImVec4(accent.x, accent.y, accent.z, 0.5f);
+    c[ImGuiCol_DockingPreview] = tint(0.4f);
     c[ImGuiCol_DockingEmptyBg] = bg;
-    c[ImGuiCol_TextSelectedBg] = ImVec4(accent.x, accent.y, accent.z, 0.35f);
-    c[ImGuiCol_NavCursor] = ImVec4(0.75f, 0.90f, 1.0f, 1.0f);
+    c[ImGuiCol_TextSelectedBg] = tint(0.35f);
+    c[ImGuiCol_TextLink] = ImVec4(0.55f, 0.72f, 1.0f, 1.0f);
+    c[ImGuiCol_NavCursor] = tint(0.9f);
     c[ImGuiCol_DragDropTarget] = ImVec4(1.0f, 0.62f, 0.1f, 1.0f);
     st.ScaleAllSizes(scale);
     st.FontSizeBase = kBaseFontSize;
@@ -1152,19 +1195,42 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
     ImGui::PopStyleVar();
     if (open && ImGui::BeginMenuBar()) {
         bool session = InPlaySession();
-        if (IconButton("##select", Icon::Select, gizmoOp == GizmoOp::None, Tr("Select (Q)"))) gizmoOp = GizmoOp::None;
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
+
+        // Left: project / scene, with a dot while the scene has unsaved changes.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(engine.ProjectName().c_str());
+        ImGui::SameLine(0, gap * 0.5f);
+        ImGui::TextDisabled("/");
+        ImGui::SameLine(0, gap * 0.5f);
+        const std::string scene = sceneName.empty() ? std::string(Tr("(unsaved scene)")) : sceneName;
+        ImGui::TextDisabled("%s", scene.c_str());
+        HelpTooltip(scenePath);
+        if (Dirty() && !session) {
+            ImGui::SameLine(0, gap * 0.6f);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetFrameHeight();
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 3, p.y + h * 0.5f), 3.0f, IM_COL32(240, 176, 72, 255));
+            ImGui::Dummy(ImVec2(6, h));
+            HelpTooltip(Tr("Unsaved changes"));
+        }
+
+        // Transform tools, gizmo space and snapping.
+        ToolbarDivider(gap * 1.5f);
+        {
+            ToolbarGroup group;
+            if (IconButton("##select", Icon::Select, gizmoOp == GizmoOp::None, Tr("Select (Q)"))) gizmoOp = GizmoOp::None;
+            ImGui::SameLine(0, 2);
+            if (IconButton("##move", Icon::Move, gizmoOp == GizmoOp::Translate, Tr("Move (W)"))) gizmoOp = GizmoOp::Translate;
+            ImGui::SameLine(0, 2);
+            if (IconButton("##rotate", Icon::Rotate, gizmoOp == GizmoOp::Rotate, Tr("Rotate (E)"))) gizmoOp = GizmoOp::Rotate;
+            ImGui::SameLine(0, 2);
+            if (IconButton("##scale", Icon::Scale, gizmoOp == GizmoOp::Scale, Tr("Scale (R)"))) gizmoOp = GizmoOp::Scale;
+        }
+        ImGui::SameLine(0, gap);
+        if (ToolbarToggle(gizmoLocal ? kIconBox : kIconGlobe, Tr(gizmoLocal ? "Local" : "World"), true, Tr("Gizmo orientation (X)"))) gizmoLocal = !gizmoLocal;
         ImGui::SameLine(0, 2);
-        if (IconButton("##move", Icon::Move, gizmoOp == GizmoOp::Translate, Tr("Move (W)"))) gizmoOp = GizmoOp::Translate;
-        ImGui::SameLine(0, 2);
-        if (IconButton("##rotate", Icon::Rotate, gizmoOp == GizmoOp::Rotate, Tr("Rotate (E)"))) gizmoOp = GizmoOp::Rotate;
-        ImGui::SameLine(0, 2);
-        if (IconButton("##scale", Icon::Scale, gizmoOp == GizmoOp::Scale, Tr("Scale (R)"))) gizmoOp = GizmoOp::Scale;
-        ImGui::SameLine();
-        if (ImGui::Button(Tr(gizmoLocal ? "Local" : "World"))) gizmoLocal = !gizmoLocal;
-        HelpTooltip(Tr("Gizmo orientation (X)"));
-        ImGui::SameLine();
-        ImGui::Checkbox(Tr("Snap"), &snap);
-        HelpTooltip(Tr("Snap gizmo moves (hold Ctrl to toggle while dragging)"));
+        if (ToolbarToggle(kIconMagnet, Tr("Snap"), snap, Tr("Snap gizmo moves (hold Ctrl to toggle while dragging)"))) snap = !snap;
         if (snap) {
             ImGui::SameLine();
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 3.5f);
@@ -1176,18 +1242,25 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
             HelpTooltip(Tr("Rotate snap"));
         }
 
-        // Play controls in the middle.
-        float group = ImGui::GetFrameHeight() * 1.25f * 3 + 4;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, (ImGui::GetWindowWidth() - group) * 0.5f));
-        if (session) {
-            if (IconButton("##stop", Icon::Stop, true, Tr("Stop (Ctrl+P) - restores the scene"))) TogglePlay();
-        } else if (IconButton("##play", Icon::Play, false, Tr("Play (Ctrl+P)"), engine.EditingPrefab().empty())) {
-            TogglePlay();
+        // Middle: play controls and the mode they leave the editor in.
+        const char* mode = Tr(!session ? "Editing" : Playing() ? "Playing" : "Paused");
+        const ImU32 modeDot = !session ? IM_COL32(150, 156, 168, 255) : Playing() ? IM_COL32(96, 208, 128, 255) : IM_COL32(240, 176, 72, 255);
+        const float buttons = ImGui::GetFrameHeight() * 1.25f * 3 + 4;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, (ImGui::GetWindowWidth() - buttons) * 0.5f));
+        {
+            ToolbarGroup group;
+            if (session) {
+                if (IconButton("##stop", Icon::Stop, true, Tr("Stop (Ctrl+P) - restores the scene"))) TogglePlay();
+            } else if (IconButton("##play", Icon::Play, false, Tr("Play (Ctrl+P)"), engine.EditingPrefab().empty())) {
+                TogglePlay();
+            }
+            ImGui::SameLine(0, 2);
+            if (IconButton("##pause", Icon::Pause, session && !Playing(), Tr(Playing() ? "Pause" : "Resume"), session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
+            ImGui::SameLine(0, 2);
+            if (IconButton("##step", Icon::Step, false, Tr("Step one frame (1/60 s)"), session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
         }
-        ImGui::SameLine(0, 2);
-        if (IconButton("##pause", Icon::Pause, session && !Playing(), Tr(Playing() ? "Pause" : "Resume"), session)) Call(Playing() ? "sim.pause" : "sim.play", Json());
-        ImGui::SameLine(0, 2);
-        if (IconButton("##step", Icon::Step, false, Tr("Step one frame (1/60 s)"), session && !Playing())) Call("sim.step", ObjectOf({{"frames", Json(1)}}));
+        ImGui::SameLine(0, gap);
+        ModePill(mode, modeDot);
 
         if (engine.NetworkEnabled()) {
             Json network = engine.NetworkCall("state", Json::MakeObject());
@@ -1204,16 +1277,20 @@ void NativeEditor::Impl::Toolbar(float barHeight) {
             ImGui::EndDisabled();
         }
 
-        // Scene name + save on the right.
-        std::string title = (sceneName.empty() ? std::string(Tr("(unsaved scene)")) : sceneName) + (Dirty() && !session ? " *" : "");
-        float w = ImGui::CalcTextSize(title.c_str()).x + ImGui::CalcTextSize(Tr("Save")).x + ImGui::GetStyle().FramePadding.x * 2 + 24;
-        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetWindowWidth() - w));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(title.c_str());
-        HelpTooltip(scenePath);
-        ImGui::SameLine();
+        // Right: save, highlighted while there is something to save.
+        const std::string save = Format("%s  %s", kIconSave, Tr("Save"));
+        const float w = ImGui::CalcTextSize(save.c_str()).x + ImGui::GetStyle().FramePadding.x * 2 + gap;
+        ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, ImGui::GetWindowWidth() - w));
         ImGui::BeginDisabled(session);
-        if (ImGui::Button(Tr("Save"))) Save();
+        const bool unsaved = Dirty() && !session;
+        if (unsaved) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.58f, 1.0f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.42f, 0.64f, 1.0f, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.32f, 0.52f, 0.92f, 1.0f));
+        }
+        if (ImGui::Button(save.c_str())) Save();
+        if (unsaved) ImGui::PopStyleColor(3);
+        HelpTooltip(Tr("Save (Ctrl+S)"));
         ImGui::EndDisabled();
         ImGui::EndMenuBar();
     }
@@ -1224,33 +1301,52 @@ void NativeEditor::Impl::StatusBar(float barHeight) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
     bool open = ImGui::BeginViewportSideBar("##StatusBar", ImGui::GetMainViewport(), ImGuiDir_Down, barHeight, flags);
     if (open && ImGui::BeginMenuBar()) {
-        bool session = InPlaySession();
+        const bool session = InPlaySession();
+        const float gap = ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        // Each entry: a dim icon and its value; the play mode itself is shown in the toolbar.
+        auto item = [&](const char* icon, const std::string& text, bool first = false) {
+            if (!first) ImGui::SameLine(0, gap);
+            ImGui::TextDisabled("%s", icon);
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+            ImGui::TextUnformatted(text.c_str());
+        };
         if (session) {
-            ImGui::TextColored(Playing() ? ImVec4(0.45f, 0.85f, 0.55f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1), "%s", Tr(Playing() ? "PLAYING" : "PAUSED"));
-            ImGui::SameLine();
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float h = ImGui::GetTextLineHeight();
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 4, p.y + ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset + h * 0.5f), 3.5f,
+                                                        Playing() ? IM_COL32(96, 208, 128, 255) : IM_COL32(240, 176, 72, 255));
+            ImGui::Dummy(ImVec2(8, h));
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
         }
-        ImGui::Text(Tr("frame %llu"), static_cast<unsigned long long>(sim["frame"].asNumber(0)));
+        item(kIconFilm, Format(Tr("frame %llu"), static_cast<unsigned long long>(sim["frame"].asNumber(0))), true);
+        item(kIconBox, Format(Tr("%d entities"), static_cast<int>(rows.size())));
+        item(kIconGauge, Format("%d fps", fps));
+        item(kIconCpu, engine.Gpu() ? engine.Gpu()->Name() : "software");
+        if (!options.serverInfo.empty()) item(kIconNetwork, options.serverInfo);
         if (!engine.EditingPrefab().empty()) {
-            ImGui::SameLine(); ImGui::Text("%s", Format(Tr("Editing prefab: %s"), engine.EditingPrefab().c_str()).c_str());
+            item(kIconPackage, Format(Tr("Editing prefab: %s"), engine.EditingPrefab().c_str()));
             ImGui::SameLine(); if (ImGui::SmallButton(Tr("Close Prefab"))) RequestAction({PendingAction::Kind::ClosePrefab, ""});
         }
-        ImGui::SameLine();
-        ImGui::Text(Tr("|  %d entities  |  %d fps  |  %s"), static_cast<int>(rows.size()), fps, engine.Gpu() ? engine.Gpu()->Name() : "software");
-        if (!options.serverInfo.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("|  %s", options.serverInfo.c_str());
-        }
-        int runtimeErrors = sim["scriptErrors"].asInt(0);
-        std::string counts = (errorCount + runtimeErrors > 0 ? Format(Tr("%d errors"), errorCount + runtimeErrors) + "  " : std::string()) +
-                             (warnCount > 0 ? Format(Tr("%d warnings"), warnCount) : std::string());
-        if (!counts.empty()) {
-            ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 8, ImGui::GetWindowWidth() - ImGui::CalcTextSize(counts.c_str()).x - 16));
-            ImGui::PushStyleColor(ImGuiCol_Text, errorCount + runtimeErrors > 0 ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(0.95f, 0.75f, 0.3f, 1));
-            if (ImGui::Selectable(counts.c_str(), false, 0, ImGui::CalcTextSize(counts.c_str()))) {
-                showConsole = true;
-                ImGui::SetWindowFocus("###Console");
-            }
-            ImGui::PopStyleColor();
+
+        // Right: error and warning counts, each opening the Console.
+        const int errors = errorCount + sim["scriptErrors"].asInt(0);
+        const std::string errorText = errors > 0 ? WithIcon(kIconCircleX, Format(Tr("%d errors"), errors)) : std::string();
+        const std::string warnText = warnCount > 0 ? WithIcon(kIconTriangleAlert, Format(Tr("%d warnings"), warnCount)) : std::string();
+        const float countsWidth = (errors > 0 ? ImGui::CalcTextSize(errorText.c_str()).x + gap : 0.0f) +
+                                  (warnCount > 0 ? ImGui::CalcTextSize(warnText.c_str()).x + gap : 0.0f);
+        if (countsWidth > 0) {
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX() + gap, ImGui::GetWindowWidth() - countsWidth - 4));
+            auto count = [&](const std::string& text, const ImVec4& color) {
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
+                if (ImGui::Selectable(text.c_str(), false, 0, ImGui::CalcTextSize(text.c_str()))) {
+                    showConsole = true;
+                    ImGui::SetWindowFocus("###Console");
+                }
+                ImGui::PopStyleColor();
+                ImGui::SameLine(0, gap);
+            };
+            if (errors > 0) count(errorText, ImVec4(1, 0.45f, 0.4f, 1));
+            if (warnCount > 0) count(warnText, ImVec4(0.95f, 0.75f, 0.3f, 1));
         }
         ImGui::EndMenuBar();
     }
@@ -1489,6 +1585,17 @@ bool NativeEditor::Init(std::string* error) {
     cfg.FontDataOwnedByAtlas = false;
     std::snprintf(cfg.Name, sizeof(cfg.Name), "Roboto");
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kDefaultFontData), static_cast<int>(kDefaultFontSize), kBaseFontSize, &cfg);
+    {
+        // Line icons (EditorIcons.h) in the private-use range, lowered a little onto the text line.
+        static const ImWchar kIconRange[] = {static_cast<ImWchar>(kIconFirst), static_cast<ImWchar>(kIconLast), 0};
+        ImFontConfig icons;
+        icons.MergeMode = true;
+        icons.FontDataOwnedByAtlas = false;
+        icons.GlyphRanges = kIconRange;
+        icons.GlyphMinAdvanceX = kBaseFontSize;
+        icons.GlyphOffset = ImVec2(0.0f, kBaseFontSize * 0.12f);
+        io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kIconFontData), static_cast<int>(kIconFontSize), kBaseFontSize, &icons);
+    }
     std::vector<const char*> korean = {"C:/Windows/Fonts/malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc",
                                        "/System/Library/Fonts/Supplemental/AppleGothic.ttf", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                                        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"};

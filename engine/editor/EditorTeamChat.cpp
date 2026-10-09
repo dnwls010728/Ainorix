@@ -2,10 +2,14 @@
 // of every running turn with its Stop button, and the input: files dropped on the panel are
 // attached, `@` completes an agent and `#` a project file, each with a preview. Reads
 // team.messages / team.state and writes through team.send / team.cancel only.
+#include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
+#include "editor/EditorMarkdown.h"
 #include "editor/EditorText.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -214,7 +218,7 @@ void NativeEditor::Impl::TeamChatPanel() {
         requestTeamChatFocus = false;
     }
     // The tab counts what arrived while it was hidden.
-    const std::string title = chatUnread > 0 ? Format("%s (%d)###Team Chat", Tr("Team Chat"), chatUnread) : TrId("Team Chat");
+    const std::string title = WithIcon(kIconMessagesSquare, chatUnread > 0 ? Format("%s (%d)###Team Chat", Tr("Team Chat"), chatUnread) : TrId("Team Chat"));
     chatVisible = ImGui::Begin(title.c_str(), &showTeamChat);
     if (!chatVisible) {
         ImGui::End();
@@ -286,7 +290,7 @@ void NativeEditor::Impl::TeamChatPanel() {
             ImGui::SameLine();
             const std::string summary = Format(Tr("%d steps, %d s"), turn["tools"].asInt(0), static_cast<int>(turn["seconds"].asNumber(0.0) + 0.5));
             if (turn["steps"].size() > 0) {
-                if (ImGui::SmallButton(((entry.open ? "v " : "> ") + summary + "##steps").c_str())) entry.open = !entry.open;
+                if (ImGui::SmallButton((std::string(entry.open ? kIconChevronDown : kIconChevronRight) + " " + summary + "##steps").c_str())) entry.open = !entry.open;
             } else {
                 ImGui::TextDisabled("%s", summary.c_str());
             }
@@ -300,41 +304,12 @@ void NativeEditor::Impl::TeamChatPanel() {
                 for (const Json& step : turn["steps"].items()) ImGui::TextDisabled("   %s", step.asString("").c_str());
             }
         }
-        // Text, with ``` fenced blocks in the monospace font on a darker band.
-        if (kind == "error") ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(240, 110, 110, 255));
-        ImGui::PushTextWrapPos(0.0f);
-        for (size_t start = 0; start < text.size();) {
-            const size_t fence = text.find("```", start);
-            const std::string plain = text.substr(start, fence == std::string::npos ? std::string::npos : fence - start);
-            if (plain.find_first_not_of(" \r\n") != std::string::npos) {
-                if (entry.rich) DrawChatText(plain, entry.files);  // references tinted
-                else ImGui::TextUnformatted(plain.c_str());
-            }
-            if (fence == std::string::npos) break;
-            const size_t codeStart = std::min(text.find('\n', fence), text.size());  // the rest of the fence line is the language
-            const size_t close = text.find("```", codeStart);
-            std::string code = text.substr(std::min(codeStart + 1, text.size()), close == std::string::npos ? std::string::npos : close - std::min(codeStart + 1, text.size()));
-            while (!code.empty() && (code.back() == '\n' || code.back() == '\r')) code.pop_back();
-            if (!code.empty()) {
-                ImGui::PushFont(monoFont, 0.0f);
-                const ImVec2 at = ImGui::GetCursorScreenPos(), extent = ImGui::CalcTextSize(code.c_str());
-                ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(at.x - 3.0f, at.y - 2.0f), ImVec2(at.x + std::max(extent.x, ImGui::GetContentRegionAvail().x) + 3.0f, at.y + extent.y + 2.0f),
-                                                          ImGui::GetColorU32(ImGuiCol_FrameBg), 3.0f);
-                ImGui::PopTextWrapPos();
-                ImGui::TextUnformatted(code.c_str());
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::PopFont();
-            }
-            start = close == std::string::npos ? text.size() : close + 3;
-        }
-        ImGui::PopTextWrapPos();
-        if (kind == "error") {
-            ImGui::PopStyleColor();
-            if (!message["hint"].asString("").empty()) {
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextDisabled("%s", message["hint"].asString("").c_str());
-                ImGui::PopTextWrapPos();
-            }
+        // Text as Markdown; errors in red with their hint below.
+        DrawChatMarkdown(text, entry.files, entry.rich, kind == "error" ? IM_COL32(240, 110, 110, 255) : ImGui::GetColorU32(ImGuiCol_Text));
+        if (kind == "error" && !message["hint"].asString("").empty()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", message["hint"].asString("").c_str());
+            ImGui::PopTextWrapPos();
         }
         // Attachments: pictures as thumbnails (click = the viewer), other files as buttons.
         int attachmentIndex = 0;
@@ -397,7 +372,7 @@ void NativeEditor::Impl::TeamChatPanel() {
         ImGui::PushID(static_cast<int>(i));
         if (i > 0) ImGui::SameLine();
         const std::string file = chatAttachments[i];
-        const bool remove = ImGui::Button((BaseName(file) + "  x").c_str());
+        const bool remove = ImGui::Button((BaseName(file) + "  " + kIconX).c_str());
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             DrawImageFile(file, ImVec2(font * 14.0f, font * 14.0f), 1.0f);
@@ -648,70 +623,398 @@ ImU32 NativeEditor::Impl::ChatTokenColor(const std::string& word, const std::vec
     return 0;
 }
 
-// Wrapped text like TextUnformatted, with references tinted (ChatTokenColor).
-void NativeEditor::Impl::DrawChatText(const std::string& text, const std::vector<std::string>& files) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-    const float wrap = std::max(ImGui::GetFontSize() * 4.0f, ImGui::GetContentRegionAvail().x), rowHeight = ImGui::GetTextLineHeight();
-    const float space = ImGui::CalcTextSize(" ").x;
-    const ImU32 plain = ImGui::GetColorU32(ImGuiCol_Text);
-    float x = 0.0f, y = 0.0f;
-    const char* data = text.c_str();
-    for (size_t lineStart = 0; lineStart <= text.size();) {
-        const size_t lineEnd = std::min(text.find('\n', lineStart), text.size());
-        for (size_t wordStart = lineStart; wordStart < lineEnd;) {
-            const size_t wordEnd = std::min(text.find(' ', wordStart), lineEnd);
-            if (wordEnd == wordStart) {  // a run of spaces keeps its wordWidth
-                x += space;
-                wordStart = wordEnd + 1;
+namespace {
+
+// ----- Markdown in chat messages
+
+bool IsWordChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0; }
+
+std::string Trim(const std::string& text) {
+    const size_t first = text.find_first_not_of(" \t\r");
+    if (first == std::string::npos) return std::string();
+    return text.substr(first, text.find_last_not_of(" \t\r") - first + 1);
+}
+
+}  // namespace
+
+std::vector<MarkdownSpan> ParseMarkdownInline(const std::string& s) {
+    std::vector<MarkdownSpan> out;
+    std::string current;
+    unsigned style = 0;
+    char italicMarker = 0;
+    auto flush = [&] {
+        if (!current.empty()) out.push_back({current, style, {}});
+        current.clear();
+    };
+    for (size_t i = 0; i < s.size();) {
+        const char c = s[i];
+        const char next = i + 1 < s.size() ? s[i + 1] : '\0';
+        if (c == '\\' && next && std::strchr("\\`*_~[]()#>|-", next)) {
+            current += next;
+            i += 2;
+            continue;
+        }
+        if (c == '`') {
+            size_t ticks = 1;
+            while (i + ticks < s.size() && s[i + ticks] == '`') ++ticks;
+            const size_t close = s.find(std::string(ticks, '`'), i + ticks);
+            if (close != std::string::npos) {
+                flush();
+                std::string code = s.substr(i + ticks, close - i - ticks);
+                if (code.size() > 2 && code.front() == ' ' && code.back() == ' ') code = code.substr(1, code.size() - 2);
+                out.push_back({code, style | kMdCode, {}});
+                i = close + ticks;
                 continue;
             }
-            size_t length = 0;
-            const ImU32 color = ChatTokenColor(text.substr(wordStart, wordEnd - wordStart), &files, length);
-            float wordWidth = ImGui::CalcTextSize(data + wordStart, data + wordEnd).x;
-            if (x > 0.0f && x + wordWidth > wrap) {
-                x = 0.0f;
-                y += rowHeight;
-            }
-            // A word longer than the line (text without spaces) is cut where the line ends.
-            size_t pieceStart = wordStart;
-            while (wordWidth > wrap && pieceStart < wordEnd) {
-                size_t pieceEnd = pieceStart;
-                float pieceWidth = 0.0f;
-                while (pieceEnd < wordEnd) {
-                    size_t next = pieceEnd + 1;
-                    while (next < wordEnd && (static_cast<unsigned char>(text[next]) & 0xC0) == 0x80) ++next;  // whole UTF-8 characters
-                    const float grown = ImGui::CalcTextSize(data + pieceStart, data + next).x;
-                    if (grown > wrap && pieceEnd > pieceStart) break;
-                    pieceEnd = next;
-                    pieceWidth = grown;
-                }
-                dl->AddText(ImVec2(origin.x, origin.y + y), plain, data + pieceStart, data + pieceEnd);
-                pieceStart = pieceEnd;
-                wordWidth = ImGui::CalcTextSize(data + pieceStart, data + wordEnd).x;
-                if (pieceStart < wordEnd) y += rowHeight;
-                else x = pieceWidth;
-            }
-            if (pieceStart < wordEnd) {
-                const ImVec2 at(origin.x + x, origin.y + y);
-                if (color && pieceStart == wordStart) {
-                    const float tinted = ImGui::CalcTextSize(data + wordStart, data + wordStart + length).x;
-                    dl->AddRectFilled(ImVec2(at.x - 2.0f, at.y), ImVec2(at.x + tinted + 2.0f, at.y + rowHeight), (color & 0x00FFFFFFu) | 0x30000000u, 3.0f);
-                    dl->AddText(at, color, data + wordStart, data + wordStart + length);
-                    dl->AddText(ImVec2(at.x + tinted, at.y), plain, data + wordStart + length, data + wordEnd);
-                } else {
-                    dl->AddText(at, plain, data + pieceStart, data + wordEnd);
-                }
-                x += wordWidth;
-            }
-            x += space;
-            wordStart = wordEnd + 1;
         }
-        x = 0.0f;
-        y += rowHeight;
-        lineStart = lineEnd + 1;
+        if (c == '[') {
+            const size_t middle = s.find("](", i + 1);
+            const size_t end = middle == std::string::npos ? std::string::npos : s.find(')', middle + 2);
+            if (end != std::string::npos && middle > i + 1) {
+                flush();
+                out.push_back({s.substr(i + 1, middle - i - 1), style | kMdLink, s.substr(middle + 2, end - middle - 2)});
+                i = end + 1;
+                continue;
+            }
+        }
+        if ((c == '*' || c == '_' || c == '~') && next == c) {
+            const unsigned flag = c == '~' ? kMdStrike : kMdBold;
+            const std::string pair(2, c);
+            if (style & flag) {
+                flush();
+                style &= ~flag;
+                i += 2;
+                continue;
+            }
+            const size_t close = s.find(pair, i + 2);
+            if (close != std::string::npos && close > i + 2 && s[i + 2] != ' ' && (c != '_' || i == 0 || !IsWordChar(s[i - 1]))) {
+                flush();
+                style |= flag;
+                i += 2;
+                continue;
+            }
+        }
+        if (c == '*' || c == '_') {
+            if ((style & kMdItalic) && c == italicMarker && (c != '_' || !IsWordChar(next))) {
+                flush();
+                style &= ~kMdItalic;
+                ++i;
+                continue;
+            }
+            if (!(style & kMdItalic) && next && next != ' ' && next != c && (c != '_' || i == 0 || !IsWordChar(s[i - 1])) &&
+                s.find(c, i + 1) != std::string::npos) {
+                flush();
+                style |= kMdItalic;
+                italicMarker = c;
+                ++i;
+                continue;
+            }
+        }
+        current += c;
+        ++i;
     }
-    ImGui::Dummy(ImVec2(wrap, std::max(rowHeight, y)));
+    flush();
+    return out;
+}
+
+bool IsMarkdownRule(const std::string& line) {
+    char mark = 0;
+    int count = 0;
+    for (char c : line) {
+        if (c == ' ') continue;
+        if (c != '-' && c != '*' && c != '_') return false;
+        if (mark && c != mark) return false;
+        mark = c;
+        ++count;
+    }
+    return count >= 3;
+}
+
+bool IsMarkdownTableSeparator(const std::string& line) {
+    const std::string t = Trim(line);
+    return !t.empty() && t.find('-') != std::string::npos && t.find_first_not_of("|-: ") == std::string::npos;
+}
+
+std::vector<std::string> MarkdownTableCells(const std::string& line) {
+    std::string t = Trim(line);
+    if (!t.empty() && t.front() == '|') t.erase(0, 1);
+    if (!t.empty() && t.back() == '|' && (t.size() < 2 || t[t.size() - 2] != '\\')) t.pop_back();
+    std::vector<std::string> cells;
+    std::string cell;
+    for (size_t i = 0; i < t.size(); ++i) {
+        if (t[i] == '\\' && i + 1 < t.size() && t[i + 1] == '|') {
+            cell += '|';
+            ++i;
+        } else if (t[i] == '|') {
+            cells.push_back(Trim(cell));
+            cell.clear();
+        } else {
+            cell += t[i];
+        }
+    }
+    cells.push_back(Trim(cell));
+    return cells;
+}
+
+float NativeEditor::Impl::DrawChatInline(const std::string& line, ImVec2 origin, float lineWidth, float size, ImU32 color, bool bold,
+                                         const std::vector<std::string>* files) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImFont* uiFont = ImGui::GetFont();
+    const float row = size + 4.0f;  // a little leading between wrapped lines
+    const float space = uiFont->CalcTextSizeA(size, FLT_MAX, 0.0f, " ").x;
+    const ImU32 linkColor = IM_COL32(110, 170, 255, 255), codeColor = IM_COL32(236, 190, 140, 255);
+    float x = 0.0f, y = 0.0f;
+    for (const MarkdownSpan& span : ParseMarkdownInline(line)) {
+        const bool code = (span.style & kMdCode) != 0, link = (span.style & kMdLink) != 0;
+        ImFont* font = code && monoFont ? monoFont : uiFont;
+        const float fontSize = code ? size * 0.92f : size;
+        const bool heavy = bold || (span.style & kMdBold);
+        ImU32 col = link ? linkColor : code ? codeColor : color;
+        if ((span.style & kMdItalic) && !link && !code) col = (col & 0x00FFFFFFu) | 0xC8000000u;  // no italic face: a softer tone
+        const char* data = span.text.c_str();
+        auto measure = [&](size_t b, size_t e) { return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, data + b, data + e).x; };
+        auto draw = [&](size_t b, size_t e, float at, float w) {
+            const ImVec2 pos(origin.x + at, origin.y + y + (row - fontSize) * 0.5f);
+            ImU32 wordColor = col;
+            size_t tinted = 0;
+            if (files && !code && !link) {
+                // @mentions and project files keep their colored chips inside Markdown text.
+                if (const ImU32 token = ChatTokenColor(std::string(data + b, data + e), files, tinted)) {
+                    const float tw = measure(b, b + tinted);
+                    dl->AddRectFilled(ImVec2(pos.x - 2.0f, origin.y + y), ImVec2(pos.x + tw + 2.0f, origin.y + y + row), (token & 0x00FFFFFFu) | 0x30000000u, 3.0f);
+                    wordColor = token;
+                }
+            }
+            if (code) dl->AddRectFilled(ImVec2(pos.x - 3.0f, origin.y + y + 1.0f), ImVec2(pos.x + w + 3.0f, origin.y + y + row - 1.0f), IM_COL32(255, 255, 255, 20), 3.0f);
+            auto text = [&](ImVec2 p) {
+                if (tinted) {
+                    dl->AddText(font, fontSize, p, wordColor, data + b, data + b + tinted);
+                    dl->AddText(font, fontSize, ImVec2(p.x + measure(b, b + tinted), p.y), col, data + b + tinted, data + e);
+                } else {
+                    dl->AddText(font, fontSize, p, wordColor, data + b, data + e);
+                }
+            };
+            text(pos);
+            if (heavy) text(ImVec2(pos.x + std::max(0.6f, fontSize * 0.045f), pos.y));  // no bold face: a doubled stroke
+            if (span.style & kMdStrike) dl->AddLine(ImVec2(pos.x, pos.y + fontSize * 0.55f), ImVec2(pos.x + w, pos.y + fontSize * 0.55f), col, 1.0f);
+            if (link) {
+                dl->AddLine(ImVec2(pos.x, pos.y + fontSize + 1.0f), ImVec2(pos.x + w, pos.y + fontSize + 1.0f), (col & 0x00FFFFFFu) | 0x80000000u, 1.0f);
+                if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(ImVec2(pos.x, origin.y + y), ImVec2(pos.x + w, origin.y + y + row))) {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    ImGui::SetTooltip("%s", span.target.c_str());
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) OpenChatLink(span.target);
+                }
+            }
+        };
+        for (size_t i = 0; i < span.text.size();) {
+            if (data[i] == ' ' && !code) {
+                x += space;
+                ++i;
+                continue;
+            }
+            // Inline code stays one piece with its spaces (cut only where a line ends).
+            size_t end = code ? span.text.size() : i;
+            while (end < span.text.size() && data[end] != ' ') ++end;
+            float w = measure(i, end);
+            if (x > 0.0f && x + w > lineWidth) {
+                x = 0.0f;
+                y += row;
+            }
+            // A word longer than the line (a path, a URL) is cut where the line ends, at whole UTF-8 characters.
+            size_t piece = i;
+            while (w > lineWidth && piece < end) {
+                size_t cut = piece;
+                float cutWidth = 0.0f;
+                while (cut < end) {
+                    size_t step = cut + 1;
+                    while (step < end && (static_cast<unsigned char>(data[step]) & 0xC0) == 0x80) ++step;
+                    const float grown = measure(piece, step);
+                    if (grown > lineWidth && cut > piece) break;
+                    cut = step;
+                    cutWidth = grown;
+                }
+                draw(piece, cut, x, cutWidth);
+                piece = cut;
+                w = measure(piece, end);
+                if (piece < end) {
+                    x = 0.0f;
+                    y += row;
+                } else {
+                    x += cutWidth;
+                }
+            }
+            if (piece < end) {
+                draw(piece, end, x, w);
+                x += w;
+            }
+            i = end;
+        }
+    }
+    return y + row;
+}
+
+// A fenced code block: monospace, unwrapped, on a dark rounded well with its language in the corner.
+// Right-click copies it.
+void NativeEditor::Impl::DrawChatCode(const std::string& code, const std::string& language, float lineWidth) {
+    const float pad = 8.0f;
+    ImGui::PushFont(monoFont, 0.0f);
+    const ImVec2 at = ImGui::GetCursorScreenPos(), extent = ImGui::CalcTextSize(code.c_str());
+    ImGui::PopFont();
+    const float blockHeight = extent.y + pad * 2.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(at, ImVec2(at.x + lineWidth, at.y + blockHeight), IM_COL32(0, 0, 0, 80), 6.0f);
+    if (!language.empty()) {
+        const float small = ImGui::GetFontSize() * 0.82f;
+        const float w = ImGui::GetFont()->CalcTextSizeA(small, FLT_MAX, 0.0f, language.c_str()).x;
+        dl->AddText(ImGui::GetFont(), small, ImVec2(at.x + lineWidth - pad - w, at.y + 4.0f), ImGui::GetColorU32(ImGuiCol_TextDisabled), language.c_str());
+    }
+    dl->PushClipRect(at, ImVec2(at.x + lineWidth, at.y + blockHeight), true);
+    dl->AddText(monoFont, ImGui::GetFontSize(), ImVec2(at.x + pad, at.y + pad), IM_COL32(222, 226, 234, 255), code.c_str());
+    dl->PopClipRect();
+    ImGui::Dummy(ImVec2(lineWidth, blockHeight));
+    if (ImGui::BeginPopupContextItem("##code")) {
+        if (ImGui::MenuItem(Tr("Copy"))) ImGui::SetClipboardText(code.c_str());
+        ImGui::EndPopup();
+    }
+}
+
+void NativeEditor::Impl::DrawChatMarkdown(const std::string& text, const std::vector<std::string>& files, bool tint, ImU32 color) {
+    const float font = ImGui::GetFontSize();
+    const float lineWidth = std::max(font * 4.0f, ImGui::GetContentRegionAvail().x);
+    const std::vector<std::string>* refs = tint ? &files : nullptr;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 rule = ImGui::GetColorU32(ImGuiCol_Separator), dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+
+    std::vector<std::string> lines;
+    for (size_t start = 0; start <= text.size();) {
+        const size_t end = std::min(text.find('\n', start), text.size());
+        std::string line = text.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(std::move(line));
+        start = end + 1;
+    }
+    while (!lines.empty() && Trim(lines.back()).empty()) lines.pop_back();
+    size_t first = 0;
+    while (first < lines.size() && Trim(lines[first]).empty()) ++first;
+
+    bool blank = false;
+    for (size_t k = first; k < lines.size(); ++k) {
+        ImGui::PushID(static_cast<int>(k));
+        const std::string& raw = lines[k];
+        const std::string body = Trim(raw);
+        const size_t indent = raw.find_first_not_of(" \t");
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        if (body.empty()) {
+            if (!blank) ImGui::Dummy(ImVec2(0.0f, font * 0.3f));  // paragraph gap
+            blank = true;
+            ImGui::PopID();
+            continue;
+        }
+        blank = false;
+        size_t hashes = 0;
+        while (hashes < body.size() && body[hashes] == '#') ++hashes;
+        size_t digits = 0;
+        while (digits < body.size() && std::isdigit(static_cast<unsigned char>(body[digits]))) ++digits;
+        const bool bullet = body.size() > 2 && std::strchr("-*+", body[0]) && body[1] == ' ';
+        const bool numbered = digits > 0 && digits < body.size() - 1 && (body[digits] == '.' || body[digits] == ')') && body[digits + 1] == ' ';
+
+        if (body.rfind("```", 0) == 0) {
+            // Fenced code: everything up to the closing fence (or the end of the message).
+            const std::string language = Trim(body.substr(3));
+            std::string code;
+            for (++k; k < lines.size() && Trim(lines[k]).rfind("```", 0) != 0; ++k) code += lines[k] + "\n";
+            while (!code.empty() && code.back() == '\n') code.pop_back();
+            ImGui::Dummy(ImVec2(0.0f, 2.0f));
+            DrawChatCode(code, language, lineWidth);
+            ImGui::Dummy(ImVec2(0.0f, 2.0f));
+        } else if (hashes >= 1 && hashes <= 6 && hashes < body.size() && body[hashes] == ' ') {
+            const float scale = hashes == 1 ? 1.3f : hashes == 2 ? 1.18f : hashes == 3 ? 1.08f : 1.0f;
+            ImGui::Dummy(ImVec2(0.0f, font * 0.25f));
+            const ImVec2 head = ImGui::GetCursorScreenPos();
+            const float blockHeight = DrawChatInline(body.substr(hashes + 1), head, lineWidth, font * scale, color, true, refs);
+            ImGui::Dummy(ImVec2(lineWidth, blockHeight + (hashes <= 2 ? 4.0f : 0.0f)));
+            if (hashes <= 2) dl->AddLine(ImVec2(head.x, head.y + blockHeight + 2.0f), ImVec2(head.x + lineWidth, head.y + blockHeight + 2.0f), rule, 1.0f);
+        } else if (IsMarkdownRule(body)) {
+            ImGui::Dummy(ImVec2(lineWidth, font * 0.8f));
+            dl->AddLine(ImVec2(at.x, at.y + font * 0.4f), ImVec2(at.x + lineWidth, at.y + font * 0.4f), rule, 1.0f);
+        } else if (body[0] == '|' && k + 1 < lines.size() && IsMarkdownTableSeparator(lines[k + 1])) {
+            std::vector<std::vector<std::string>> tableRows{MarkdownTableCells(body)};
+            for (k += 2; k < lines.size() && !Trim(lines[k]).empty() && Trim(lines[k])[0] == '|'; ++k) tableRows.push_back(MarkdownTableCells(lines[k]));
+            --k;
+            const int columns = static_cast<int>(std::min<size_t>(16, tableRows[0].size()));
+            ImGui::Dummy(ImVec2(0.0f, 2.0f));
+            if (columns > 0 && ImGui::BeginTable("##table", columns, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
+                for (size_t r = 0; r < tableRows.size(); ++r) {
+                    ImGui::TableNextRow();
+                    if (r == 0) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(255, 255, 255, 14));
+                    for (int c = 0; c < columns; ++c) {
+                        ImGui::TableSetColumnIndex(c);
+                        const std::string cell = c < static_cast<int>(tableRows[r].size()) ? tableRows[r][static_cast<size_t>(c)] : std::string();
+                        const ImVec2 cellAt = ImGui::GetCursorScreenPos();
+                        const float cellWidth = std::max(font, ImGui::GetContentRegionAvail().x);
+                        ImGui::Dummy(ImVec2(cellWidth, DrawChatInline(cell, cellAt, cellWidth, font, color, r == 0, refs)));
+                    }
+                }
+                ImGui::EndTable();
+            }
+            ImGui::Dummy(ImVec2(0.0f, 2.0f));
+        } else if (body[0] == '>') {
+            const std::string quoted = Trim(body.substr(1));
+            const float inset = font * 0.9f;
+            const float blockHeight = DrawChatInline(quoted, ImVec2(at.x + inset, at.y), lineWidth - inset, font, (color & 0x00FFFFFFu) | 0xB0000000u, false, refs);
+            dl->AddRectFilled(ImVec2(at.x + 2.0f, at.y), ImVec2(at.x + 5.0f, at.y + blockHeight), IM_COL32(255, 255, 255, 50), 1.5f);
+            ImGui::Dummy(ImVec2(lineWidth, blockHeight));
+        } else if (bullet || numbered) {
+            // Nesting from the indent (two spaces a level); bullets alternate dot / ring by level.
+            const int level = std::min(4, static_cast<int>(indent == std::string::npos ? 0 : indent) / 2);
+            const float markerWidth = font * 1.3f;
+            const float left = font * 1.1f * static_cast<float>(level) + markerWidth;
+            std::string item = Trim(body.substr(bullet ? 2 : digits + 2));
+            const float row = font + 4.0f, middle = at.y + row * 0.5f;
+            int task = 0;  // 1 = open box, 2 = checked box
+            if (bullet && item.size() >= 3 && item[0] == '[' && item[2] == ']' && (item[1] == ' ' || item[1] == 'x' || item[1] == 'X')) {
+                task = item[1] == ' ' ? 1 : 2;
+                item = Trim(item.substr(3));
+            }
+            if (task) {
+                const float box = font * 0.7f, bx = at.x + left - markerWidth * 0.5f - box * 0.5f;
+                if (task == 2) {
+                    dl->AddRectFilled(ImVec2(bx, middle - box * 0.5f), ImVec2(bx + box, middle + box * 0.5f), IM_COL32(92, 148, 255, 255), 3.0f);
+                    dl->AddPolyline(std::array<ImVec2, 3>{ImVec2(bx + box * 0.22f, middle), ImVec2(bx + box * 0.43f, middle + box * 0.2f), ImVec2(bx + box * 0.78f, middle - box * 0.22f)}.data(),
+                                    3, IM_COL32(255, 255, 255, 255), 1.6f);
+                } else {
+                    dl->AddRect(ImVec2(bx, middle - box * 0.5f), ImVec2(bx + box, middle + box * 0.5f), dim, 3.0f, 1.2f);
+                }
+            } else if (bullet) {
+                const ImVec2 dot(at.x + left - markerWidth * 0.55f, middle);
+                if (level % 2 == 0) dl->AddCircleFilled(dot, font * 0.13f, dim);
+                else dl->AddCircle(dot, font * 0.13f, dim, 0, 1.2f);
+            } else {
+                const std::string number = body.substr(0, digits + 1);
+                const float w = ImGui::CalcTextSize(number.c_str()).x;
+                dl->AddText(ImVec2(at.x + left - w - font * 0.35f, at.y + 2.0f), dim, number.c_str());
+            }
+            const ImU32 itemColor = task == 2 ? (color & 0x00FFFFFFu) | 0x90000000u : color;
+            ImGui::Dummy(ImVec2(lineWidth, DrawChatInline(item, ImVec2(at.x + left, at.y), lineWidth - left, font, itemColor, false, refs)));
+        } else {
+            ImGui::Dummy(ImVec2(lineWidth, DrawChatInline(body, at, lineWidth, font, color, false, refs)));
+        }
+        ImGui::PopID();
+    }
+}
+
+void NativeEditor::Impl::OpenChatLink(const std::string& target) {
+    if (target.rfind("http://", 0) == 0 || target.rfind("https://", 0) == 0) {
+        // Only web pages leave the editor; other schemes (file:, custom handlers) are ignored.
+        ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+        if (platform.Platform_OpenInShellFn) platform.Platform_OpenInShellFn(ImGui::GetCurrentContext(), target.c_str());
+        return;
+    }
+    const std::string path = target.substr(0, target.find('#'));
+    if (EndsWith(path, ".lua")) OpenScript(path);
+    else if (EndsWith(path, ".scene.json")) RequestAction({PendingAction::Kind::LoadScene, path});
+    else if (EndsWith(path, ".vfx.json")) OpenEffect(path);
+    else if (EndsWith(path, ".shader.json") || EndsWith(path, ".mat.json")) OpenShader(path);
 }
 
 void NativeEditor::Impl::ImportChatImage(const std::string& path) {

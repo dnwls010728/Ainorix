@@ -655,7 +655,12 @@ layout reset.
   "Name: activity..." (Stop comes first so the changing text does not move it). When the turn
   ends the agent's message appears with a "N steps, T s" button that expands to the turn's
   tool list.
-- Messages render plain text with fenced code blocks in the monospace font; project scripts and
+- Messages render as Markdown (`EditorMarkdown.h`, drawn in `EditorTeamChat.cpp`): headings,
+  bullet/numbered/task lists with nesting, quotes, rules, pipe tables, fenced code on a dark well
+  with its language (right-click copies it), and inline bold, italic, `code`, strike and links.
+  There is no bold/italic face: bold is a doubled stroke, italic a softer tone. Links open http(s)
+  pages in the browser and project scripts, scenes, effects and materials in their editor; other
+  schemes are ignored. @mentions and file references keep their tinted chips. Project scripts and
   scenes named in a message (`scripts/x.lua`, `scenes/x.scene.json`, existing files only) get a
   button under the text that opens them. Notices are dimmed lines; errors are red with their
   hint. Times are shown on the PC's clock. The panel keeps the newest 1,000 messages.
