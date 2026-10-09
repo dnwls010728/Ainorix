@@ -819,10 +819,16 @@ void NativeEditor::Impl::AssetsPanel() {
     const float actionsWidth = square * 3 + 2 + ImGui::GetStyle().ItemSpacing.x * 2;
     if (ImGui::GetContentRegionAvail().x > font * 9 + actionsWidth) ImGui::SameLine();
     auto viewButton = [&](const char* id, const char* icon, const char* tip, bool grid) {
-        ImGui::PushStyleColor(ImGuiCol_Button, assetGrid == grid ? ImVec4(1, 1, 1, 0.14f) : ImVec4(1, 1, 1, 0.03f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(assetGrid == grid ? ImGuiCol_Text : ImGuiCol_TextDisabled));
-        const bool clicked = ImGui::Button((std::string(icon) + id).c_str(), ImVec2(square, square));
-        ImGui::PopStyleColor(2);
+        // Drawn by hand: a Button would place the glyph after its frame padding, off center in a square.
+        const bool on = assetGrid == grid;
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(square, square));
+        const int alpha = on ? 36 : ImGui::IsItemHovered() ? 20 : 8;
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(p, ImVec2(p.x + square, p.y + square), IM_COL32(255, 255, 255, alpha), ImGui::GetStyle().FrameRounding);
+        const ImVec2 size = ImGui::CalcTextSize(icon);
+        draw->AddText(ImVec2(p.x + (square - size.x) * 0.5f, p.y + (square - size.y) * 0.5f),
+                      ImGui::GetColorU32(on ? ImGuiCol_Text : ImGuiCol_TextDisabled), icon);
         HelpTooltip(tip);
         if (clicked) assetGrid = grid;
     };
