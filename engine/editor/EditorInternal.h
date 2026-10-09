@@ -355,6 +355,22 @@ struct NativeEditor::Impl {
     bool AskBubbleBody(AskBubble& bubble);  // true: closed
     void AskSend(AskBubble& bubble);
     std::string AskContext(const AskBubble& bubble) const;
+    // A direct conversation's messages and running line (bubbles and the Agent Chat panel); a
+    // change in what is drawn scrolls to the newest. `details`: turn tools/time/cost under replies.
+    void DrawDirectConversation(const Json& state, const std::string& target, size_t& shown, bool details);
+
+    // ----- Agent Chat panel (EditorAsk.cpp): talk to one installed agent CLI, model chosen here,
+    // outside the team (team.ask conversations "chat-<cli>[-n]"; object bubbles' ones are listed too).
+    bool showAgentChat = true, requestAgentChatFocus = false, agentChatFocusInput = false;
+    std::string agentChatBackend, agentChatModel, agentChatThread, agentChatInput;
+    Json agentChatState;                          // team.thread of agentChatThread
+    Json agentChatThreads = Json::MakeArray();    // team.threads
+    double agentChatPolled = -100, agentChatThreadsPolled = -100;
+    size_t agentChatShown = 0;
+    std::array<float, 4> agentChatInputRect{0, 0, 0, 0};
+    void AgentChatPanel();
+    void AgentChatSelect(const std::string& backend, const std::string& thread);
+    void AgentChatSend();
 
     struct ChatEntry {
         Json message;                    // one team.messages entry

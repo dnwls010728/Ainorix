@@ -194,6 +194,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "HistoryPanel=%d", &i) == 1) m->showHistory = i != 0;
     else if (std::sscanf(line, "TeamPanel=%d", &i) == 1) m->showTeam = i != 0;
     else if (std::sscanf(line, "TeamChatPanel=%d", &i) == 1) m->showTeamChat = i != 0;
+    else if (std::sscanf(line, "AgentChatPanel=%d", &i) == 1) m->showAgentChat = i != 0;
     else if (std::sscanf(line, "Thumbnails=%d", &i) == 1) m->showThumbnails = i != 0;
     else if (std::sscanf(line, "AssetGrid=%d", &i) == 1) m->assetGrid = i != 0;
     else if (std::sscanf(line, "ShaderPanel=%d", &i) == 1) m->showShaders = i != 0;
@@ -242,7 +243,8 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
-    buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam, m->showTeamChat);
+    buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\nAgentChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam,
+                 m->showTeamChat, m->showAgentChat);
     buf->appendf("AssetGrid=%d\n", m->assetGrid);
     buf->appendf("ShaderPanel=%d\n", m->showShaders);
     buf->appendf("EffectsPanel=%d\n", m->showEffects);
@@ -715,7 +717,7 @@ Json NativeEditor::Impl::EditorState() {
 
     // Panels: the one with keyboard focus and those on screen (docked tabs in front, not collapsed).
     static const char* const kPanels[] = {"Hierarchy", "Team", "Tiles", "Inspector", "Network", "Scene", "Game", "Scripts",
-                                          "Shader Graph", "Effects", "Assets", "Console", "History", "Team Chat"};
+                                          "Shader Graph", "Effects", "Assets", "Console", "History", "Team Chat", "Agent Chat"};
     Json visible = Json::MakeArray();
     std::string focused;
     const ImGuiWindow* nav = ImGui::GetCurrentContext() ? ImGui::GetCurrentContext()->NavWindow : nullptr;
@@ -1269,6 +1271,7 @@ void NativeEditor::Impl::MainMenu() {
         if (ImGui::MenuItem(Tr("Network"), nullptr, &showNetwork) && showNetwork) requestNetworkFocus = true;
         if (teamAvailable && ImGui::MenuItem(Tr("Team"), nullptr, &showTeam) && showTeam) requestTeamFocus = true;
         if (teamAvailable && ImGui::MenuItem(Tr("Team Chat"), nullptr, &showTeamChat) && showTeamChat) requestTeamChatFocus = true;
+        if (teamAvailable && ImGui::MenuItem(Tr("Agent Chat"), nullptr, &showAgentChat) && showAgentChat) requestAgentChatFocus = true;
         ImGui::MenuItem(Tr("ImGui Metrics"), nullptr, &showMetrics);
         ImGui::EndMenu();
     }
@@ -1492,10 +1495,14 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
             ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("###Console"));
             if (console && console->DockId) ImGui::DockBuilderDockWindow("###Team Chat", console->DockId);
         }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Agent Chat"))) {
+            ImGuiWindowSettings* console = ImGui::FindWindowSettingsByID(ImHashStr("###Console"));
+            if (console && console->DockId) ImGui::DockBuilderDockWindow("###Agent Chat", console->DockId);
+        }
         return;
     }
     resetLayout = false;
-    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = showTeam = showTeamChat = true;
+    showHierarchy = showInspector = showScene = showGame = showConsole = showAssets = showScripts = showTiles = showNetwork = showTeam = showTeamChat = showAgentChat = true;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::DockBuilderRemoveNode(dockspace);
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -1518,6 +1525,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderDockWindow("###History", bottom);
     ImGui::DockBuilderDockWindow("###Team Chat", bottom);
+    ImGui::DockBuilderDockWindow("###Agent Chat", bottom);
     ImGui::DockBuilderFinish(dockspace);
     if (ImGuiDockNode* b = ImGui::DockBuilderGetNode(bottom)) b->SelectedTabId = ImHashStr("###Assets");  // as before the chat tab existed
     if (ImGuiDockNode* r = ImGui::DockBuilderGetNode(right)) r->SelectedTabId = ImHashStr("###Inspector");  // Tiles waits behind it
@@ -1804,6 +1812,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showHistory) m.HistoryPanel();
     if (m.teamAvailable && m.showTeam) m.TeamPanel();
     if (m.teamAvailable && m.showTeamChat) m.TeamChatPanel();
+    if (m.teamAvailable && m.showAgentChat) m.AgentChatPanel();
     if (m.showMetrics) ImGui::ShowMetricsWindow(&m.showMetrics);
     m.EffectsModals();
     m.Modals();
@@ -1955,6 +1964,11 @@ void NativeEditor::OpenAskSpot(const Vec3& point, EntityId surface, const std::s
     impl_->OpenAskSpot(point, Vec3(0, 1, 0), surface, backend);
 }
 Vec3 NativeEditor::AskMenuPoint() const { return impl_->askMenuPoint; }
+void NativeEditor::FocusAgentChat(const std::string& backend) {
+    impl_->showAgentChat = impl_->requestAgentChatFocus = impl_->agentChatFocusInput = true;
+    if (!backend.empty() && backend != impl_->agentChatBackend) impl_->AgentChatSelect(backend, "");
+}
+std::array<float, 4> NativeEditor::AgentChatInputRect() const { return impl_->agentChatInputRect; }
 int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }
 std::array<float, 4> NativeEditor::AskControlRect(int index, const std::string& name) const {
     if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {0, 0, 0, 0};

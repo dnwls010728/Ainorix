@@ -198,7 +198,9 @@ each other's changes.
 ### 3.3 The default team of a new project
 
 `oe new <dir>` writes `.oe/team/team.json` with five agents (`engine/team/TeamDefaults.cpp`,
-`SeedDefaultTeam`; `--no-team` skips it; a project that already has agents is never touched):
+`SeedDefaultTeam`; `--no-team` skips it; a project that already has agents is never touched).
+An existing project without agents (made before teams, or with `--no-team`) gets the same team
+from `team.add_defaults` or the **Add the default team** button of the empty Team panel:
 
 | Agent | CLI / model | Role |
 |---|---|---|
@@ -701,6 +703,16 @@ closes its bubbles, a spot's stays). Enter sends, Ctrl+Enter adds a line.
   entity and normal of the surface, and that "here" means that position) and the CLI's own conversation is
   resumed by the next message. Conversations are kept in `.oe/team/threads/<thread>.json` (the
   last 200 messages); `team.clear` removes them, `team.threads` lists them.
+
+### 7.5 Agent Chat panel
+
+A tab beside Team Chat (View > Agent Chat) to talk to one installed agent CLI directly, outside
+the team: CLI and model pickers, a conversation picker and **New**, the conversation (Markdown,
+"N tools · T s · $cost" under each reply, the running activity) and the input (Enter sends,
+Ctrl+Enter adds a line; Stop while a turn runs). It uses `team.ask` conversations named
+`chat-<cli>` (New: `chat-<cli>-<n>`); the picker also lists the CLI's Scene bubble conversations
+(object or spot), which can be continued here. The prompt says it comes from this panel and names
+the entity selected in the editor, if any. Like the bubbles, nothing goes to the team chat.
 
 ## 8. Commands
 

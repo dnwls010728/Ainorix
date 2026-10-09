@@ -113,7 +113,7 @@ public:
     Json DirectState(const std::string& thread);
     // Stops the thread's running turn; false when none was running.
     bool CancelDirect(const std::string& thread);
-    // Stored threads: [{thread, backend, model, messages, running}].
+    // Stored threads: [{thread, backend, model, messages, running, title (first message), updated}].
     Json DirectThreads();
 
 private:

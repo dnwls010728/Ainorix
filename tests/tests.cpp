@@ -11119,6 +11119,21 @@ TEST(TeamDelegationTurns) {
 
 // Direct conversations (team.ask): one CLI and model per conversation, outside the roster and the
 // team chat, resumed by the next message, stopped on request and kept on disk.
+// team.add_defaults gives an existing project without agents the team `oe new` creates.
+TEST(TeamAddDefaults) {
+    const std::string project = TempProject("team_defaults");
+    Engine e;
+    std::string error;
+    CHECK(e.Open(project, &error));
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), BuiltinBackends());
+    const Json added = Call(e, "team.add_defaults");
+    CHECK(added["ok"].asBool() && added["result"]["agents"].size() == 5 && added["result"]["lead"].asString() == "lead");
+    CHECK(Call(e, "team.list")["result"]["agents"].size() == 5);
+    CHECK(Call(e, "team.add_defaults")["error"]["code"].asString() == "team_not_empty");
+    team.reset();
+    RemoveAll(project);
+}
+
 TEST(TeamDirectConversations) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)
@@ -15124,6 +15139,21 @@ TEST(NativeEditorAskBubbles) {
         type("what is this?");
         const Json messages = Call(e, "team.messages")["result"]["messages"];
         CHECK(messages.size() >= 1 && messages[0]["text"].asString() == "[Target #" + std::to_string(target) + "] what is this?");
+        // The Agent Chat panel: a conversation with the CLI that is not about one object.
+        editor.FocusAgentChat("echo");
+        frames(4);
+        CHECK(editor.AgentChatInputRect()[2] > 0);
+        type("add a sound");
+        Json chatState;
+        for (int i = 0; i < 300; ++i) {
+            frames(1);
+            chatState = Call(e, "team.thread", R"J({"thread":"chat-echo"})J")["result"];
+            if (chatState["messages"].size() >= 2 && !chatState["running"].asBool()) break;
+            PlatformSleep(0.02);
+        }
+        CHECK(chatState["messages"].size() == 2 && chatState["messages"][0]["text"].asString() == "add a sound");
+        CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("Agent Chat panel") != std::string::npos);
+
         // Deleting the object closes its bubbles; the spot's stays.
         CHECK(Call(e, "entity.delete", R"J({"id":"Target"})J")["ok"].asBool());
         frames(2);

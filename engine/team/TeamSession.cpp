@@ -1478,6 +1478,13 @@ Json TeamSession::DirectThreads() {
         item["model"] = direct.model;
         item["messages"] = static_cast<uint64_t>(direct.messages.size());
         item["running"] = direct.turn != nullptr;
+        // What it is about: the person's first message, and when it last changed.
+        for (const ChatMessage& message : direct.messages) {
+            if (message.from != "user") continue;
+            item["title"] = Shorten(FirstLine(message.text), 80);
+            break;
+        }
+        if (!direct.messages.empty()) item["updated"] = direct.messages.back().time;
         list.push(std::move(item));
     }
     return list;

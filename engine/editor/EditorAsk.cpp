@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <functional>
 
 #include "imgui_internal.h"
 
@@ -52,6 +53,46 @@ bool IconButton(const char* id, const char* icon, float side, bool enabled = tru
     draw->AddText(ImVec2(p.x + (side - size.x) * 0.5f, p.y + (side - size.y) * 0.5f),
                   ImGui::GetColorU32(enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled), icon);
     return clicked && enabled;
+}
+
+// One message as a bubble or the Agent Chat panel shows it.
+struct AskLine {
+    std::string who, text, hint, kind, meta;  // meta: "4 tools · 18 s · $0.04" under a reply
+    bool mine = false;
+};
+
+// The lines, then the running activity with moving dots; a change in what is drawn scrolls to it.
+void DrawAskLines(const std::vector<AskLine>& lines, const std::string& activity, size_t& shown, double time,
+                  const std::function<void(const std::string&)>& markdown) {
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const AskLine& line = lines[i];
+        ImGui::PushID(static_cast<int>(i));
+        if (i > 0) ImGui::Dummy(ImVec2(0, 2));
+        ImGui::TextColored(line.mine ? ImVec4(0.62f, 0.64f, 0.68f, 1) : kAccent, "%s", line.who.c_str());
+        if (line.kind == "error") {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(ImVec4(0.94f, 0.43f, 0.43f, 1), "%s", line.text.c_str());
+            if (!line.hint.empty()) ImGui::TextDisabled("%s", line.hint.c_str());
+            ImGui::PopTextWrapPos();
+        } else if (line.kind == "notice") {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", line.text.c_str());
+            ImGui::PopTextWrapPos();
+        } else {
+            markdown(line.text);
+        }
+        if (!line.meta.empty()) ImGui::TextDisabled("%s", line.meta.c_str());
+        ImGui::PopID();
+    }
+    if (!activity.empty()) {
+        static const char* const kDots[] = {".", "..", "..."};
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s%s", activity.c_str(), kDots[static_cast<int>(time * 3.0) % 3]);
+        ImGui::PopTextWrapPos();
+    }
+    const size_t count = lines.size() * 2 + (activity.empty() ? 0 : 1);
+    if (count != shown) ImGui::SetScrollHereY(1.0f);
+    shown = count;
 }
 
 }  // namespace
@@ -266,21 +307,9 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
     }
 
     // The conversation: this CLI's thread, or what this bubble sent to the team and the answers since.
-    struct Line {
-        std::string who, text, hint, kind;
-        bool mine = false;
-    };
-    std::vector<Line> lines;
+    std::vector<AskLine> lines;
     std::string activity;
-    if (agent) {
-        for (const Json& message : bubble.state["messages"].items()) {
-            const bool mine = message["from"].asString("") == "user";
-            lines.push_back({mine ? Tr("You") : target, message["text"].asString(""), message["hint"].asString(""), message["kind"].asString("message"), mine});
-        }
-        if (bubble.state["running"].asBool()) {
-            activity = Format("%s  %.0fs", bubble.state["activity"].asString("Starting").c_str(), bubble.state["elapsed"].asNumber(0));
-        }
-    } else if (!bubble.sent.empty()) {
+    if (!agent && !bubble.sent.empty()) {
         for (const ChatEntry& entry : chat) {
             const Json& message = entry.message;
             const uint64_t id = static_cast<uint64_t>(message["id"].asNumber(0));
@@ -295,8 +324,13 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
             for (const Json& member : team["agents"].items()) {
                 if (member["id"].asString("") == from) who = member["name"].asString(from);
             }
-            lines.push_back({mine ? Tr("You") : who.empty() ? target : who, mine ? WithoutObjectPrefix(message["text"].asString("")) : message["text"].asString(""),
-                             message["hint"].asString(""), kind, mine});
+            AskLine line;
+            line.who = mine ? Tr("You") : who.empty() ? target : who;
+            line.text = mine ? WithoutObjectPrefix(message["text"].asString("")) : message["text"].asString("");
+            line.hint = message["hint"].asString("");
+            line.kind = kind;
+            line.mine = mine;
+            lines.push_back(std::move(line));
         }
         for (const Json& member : teamState["agents"].items()) {
             const std::string state = member["state"].asString("idle");
@@ -308,42 +342,17 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
             activity += (activity.empty() ? "" : "   ") + name + ": " + member["activity"].asString(state);
         }
     }
-    if (lines.empty() && activity.empty()) {
+    const bool empty = agent ? bubble.state["messages"].size() == 0 && !bubble.state["running"].asBool() : lines.empty() && activity.empty();
+    if (empty) {
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", agent ? Format(Tr("%s works on this object directly; the conversation stays in this bubble."), target.c_str()).c_str()
-                                        : Tr("Goes to the team chat: the lead answers unless you @mention someone."));
+        if (agent) ImGui::TextDisabled("%s", Format(Tr("%s works on this object directly; the conversation stays in this bubble."), target.c_str()).c_str());
+        else ImGui::TextDisabled("%s", Tr("Goes to the team chat: the lead answers unless you @mention someone."));
         ImGui::PopTextWrapPos();
     } else {
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, ImGui::GetFontSize() * kLogHeightEm));
         if (ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY)) {
-            for (size_t i = 0; i < lines.size(); ++i) {
-                const Line& line = lines[i];
-                ImGui::PushID(static_cast<int>(i));
-                if (i > 0) ImGui::Dummy(ImVec2(0, 2));
-                ImGui::TextColored(line.mine ? ImVec4(0.62f, 0.64f, 0.68f, 1) : kAccent, "%s", line.who.c_str());
-                if (line.kind == "error") {
-                    ImGui::PushTextWrapPos(0.0f);
-                    ImGui::TextColored(ImVec4(0.94f, 0.43f, 0.43f, 1), "%s", line.text.c_str());
-                    if (!line.hint.empty()) ImGui::TextDisabled("%s", line.hint.c_str());
-                    ImGui::PopTextWrapPos();
-                } else if (line.kind == "notice") {
-                    ImGui::PushTextWrapPos(0.0f);
-                    ImGui::TextDisabled("%s", line.text.c_str());
-                    ImGui::PopTextWrapPos();
-                } else {
-                    DrawChatMarkdown(line.text, {}, false, ImGui::GetColorU32(ImGuiCol_Text));
-                }
-                ImGui::PopID();
-            }
-            if (!activity.empty()) {
-                static const char* const kDots[] = {".", "..", "..."};
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextDisabled("%s%s", activity.c_str(), kDots[static_cast<int>(time * 3.0) % 3]);
-                ImGui::PopTextWrapPos();
-            }
-            const size_t count = lines.size() + (activity.empty() ? 0 : 1);
-            if (count != bubble.shown) ImGui::SetScrollHereY(1.0f);
-            bubble.shown = count;
+            if (agent) DrawDirectConversation(bubble.state, target, bubble.shown, false);
+            else DrawAskLines(lines, activity, bubble.shown, time, [&](const std::string& text) { DrawChatMarkdown(text, {}, false, ImGui::GetColorU32(ImGuiCol_Text)); });
         }
         ImGui::EndChild();
     }
@@ -398,7 +407,7 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
         // Agent conversations refresh often while a turn runs.
         if (!bubble.backend.empty() && time - bubble.polled > (bubble.state["running"].asBool() ? 0.25 : 2.0)) {
             bubble.polled = time;
-            const bool first = bubble.state.isNull();
+            const bool first = !bubble.state.has("thread");  // not read yet (indexing a null Json makes it an object)
             const Json state = Call("team.thread", ObjectOf({{"thread", Json(bubble.thread)}}), true);
             if (Ok(state)) bubble.state = state["result"];
             // Reopened: the conversation continues with the model it last used.
@@ -446,6 +455,218 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
         ImGui::PopID();
     }
     if (closed >= 0) askBubbles.erase(askBubbles.begin() + closed);
+}
+
+void NativeEditor::Impl::DrawDirectConversation(const Json& state, const std::string& target, size_t& shown, bool details) {
+    std::vector<AskLine> lines;
+    for (const Json& message : state["messages"].items()) {
+        AskLine line;
+        line.mine = message["from"].asString("") == "user";
+        line.who = line.mine ? Tr("You") : target;
+        line.text = message["text"].asString("");
+        line.hint = message["hint"].asString("");
+        line.kind = message["kind"].asString("message");
+        if (details && message.has("turn")) {
+            const Json& turn = message["turn"];
+            line.meta = Format(Tr("%d tools"), turn["tools"].asInt(0)) + Format("  \xc2\xb7  %.0f s", turn["seconds"].asNumber(0));
+            if (turn["costKnown"].asBool(false)) line.meta += Format("  \xc2\xb7  $%.2f", turn["costUsd"].asNumber(0));
+        }
+        lines.push_back(std::move(line));
+    }
+    std::string activity;
+    if (state["running"].asBool()) activity = Format("%s  %.0fs", state["activity"].asString("Starting").c_str(), state["elapsed"].asNumber(0));
+    DrawAskLines(lines, activity, shown, time, [&](const std::string& text) { DrawChatMarkdown(text, {}, false, ImGui::GetColorU32(ImGuiCol_Text)); });
+}
+
+void NativeEditor::Impl::AgentChatSelect(const std::string& backend, const std::string& thread) {
+    agentChatBackend = backend;
+    agentChatThread = thread.empty() ? "chat-" + backend : thread;
+    // The newest panel conversation of that CLI, when one exists and none was named.
+    if (thread.empty()) {
+        std::string newest;
+        for (const Json& item : agentChatThreads.items()) {
+            const std::string key = item["thread"].asString("");
+            if (item["backend"].asString("") != backend || key.rfind("chat-", 0) != 0) continue;
+            if (newest.empty() || item["updated"].asString("") > newest) {
+                newest = item["updated"].asString("");
+                agentChatThread = key;
+            }
+        }
+    }
+    agentChatState = Json();
+    agentChatModel.clear();
+    agentChatShown = 0;
+    agentChatPolled = -100;
+    agentChatFocusInput = true;
+}
+
+void NativeEditor::Impl::AgentChatSend() {
+    const std::string text = Trimmed(agentChatInput);
+    if (text.empty() || agentChatBackend.empty()) return;
+    std::string context = "The person writes from the editor's Agent Chat panel, outside the agent team.";
+    if (const EntityRow* row = Row(Primary())) {
+        std::string components;
+        for (const std::string& c : row->components) components += (components.empty() ? "" : ", ") + c;
+        context += " Selected in the editor: entity #" + std::to_string(Primary()) + " \"" + row->name + "\" (components: " + components + ").";
+    }
+    context += " editor.state shows what they see.";
+    const Json result = Call("team.ask", ObjectOf({{"thread", Json(agentChatThread)}, {"backend", Json(agentChatBackend)},
+                                                   {"model", Json(agentChatModel)}, {"text", Json(text)}, {"context", Json(context)}}), true);
+    if (!Ok(result)) {
+        const std::string hint = result["error"]["hint"].asString("");
+        Notify(result["error"]["message"].asString("") + (hint.empty() ? "" : " " + hint), true);
+        return;
+    }
+    agentChatState = result["result"];
+    agentChatPolled = time;
+    agentChatThreadsPolled = -100;
+    agentChatInput.clear();
+    agentChatFocusInput = true;
+}
+
+void NativeEditor::Impl::AgentChatPanel() {
+    if (requestAgentChatFocus) {
+        ImGui::SetNextWindowFocus();
+        requestAgentChatFocus = false;
+    }
+    if (!ImGui::Begin(WithIcon(kIconBot, TrId("Agent Chat")).c_str(), &showAgentChat)) {
+        ImGui::End();
+        return;
+    }
+    // The installed CLIs; the first one until the person picks another.
+    std::vector<const Json*> installed;
+    bool detecting = teamBackends.size() == 0;
+    for (const Json& backend : teamBackends.items()) {
+        detecting = detecting || backend["status"].asString("") == "detecting";
+        if (backend["status"].asString("") == "installed") installed.push_back(&backend);
+    }
+    if (installed.empty()) {
+        ImGui::TextDisabled("%s", Tr(detecting ? "Looking for agent CLIs..." : "No agent CLI is installed."));
+        if (!detecting) ImGui::TextDisabled("%s", Tr("Agents work through the coding-agent CLIs installed on this PC (Claude Code, Codex)."));
+        ImGui::End();
+        return;
+    }
+    if (time - agentChatThreadsPolled > 2.0) {
+        agentChatThreadsPolled = time;
+        const Json threads = Call("team.threads", Json(), true);
+        if (Ok(threads)) agentChatThreads = threads["result"];
+    }
+    const Json* backend = TeamBackend(agentChatBackend);
+    if (!backend || (*backend)["status"].asString("") != "installed") {
+        AgentChatSelect((*installed.front())["id"].asString(""), "");
+        backend = installed.front();
+    }
+    const bool running = agentChatState["running"].asBool();
+    if (time - agentChatPolled > (running ? 0.25 : 1.5)) {
+        agentChatPolled = time;
+        const bool first = !agentChatState.has("thread");  // not read yet (indexing a null Json makes it an object)
+        const Json state = Call("team.thread", ObjectOf({{"thread", Json(agentChatThread)}}), true);
+        if (Ok(state)) agentChatState = state["result"];
+        if (first && agentChatState["backend"].asString("") == agentChatBackend) agentChatModel = agentChatState["model"].asString("");
+    }
+    const std::string target = (*backend)["name"].asString(agentChatBackend);
+    const ImGuiStyle& style = ImGui::GetStyle();
+
+    // Toolbar: CLI, model, conversation, new conversation.
+    const float field = ImGui::GetFontSize() * 9.0f;
+    ImGui::SetNextItemWidth(field);
+    if (ImGui::BeginCombo("##cli", target.c_str())) {
+        for (const Json* item : installed) {
+            const std::string id = (*item)["id"].asString("");
+            if (ImGui::Selectable(((*item)["name"].asString(id) + "##" + id).c_str(), id == agentChatBackend) && id != agentChatBackend) AgentChatSelect(id, "");
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    std::string modelLabel = agentChatModel.empty() ? std::string(Tr("CLI default")) : agentChatModel;
+    for (const Json& model : (*backend)["models"].items()) {
+        if (model["id"].asString("") == agentChatModel) modelLabel = model["label"].asString(agentChatModel);
+    }
+    ImGui::SetNextItemWidth(field);
+    if (ImGui::BeginCombo("##model", modelLabel.c_str())) {
+        if (ImGui::Selectable(Tr("CLI default"), agentChatModel.empty())) agentChatModel.clear();
+        for (const Json& model : (*backend)["models"].items()) {
+            const std::string id = model["id"].asString("");
+            if (ImGui::Selectable((model["label"].asString(id) + "##" + id).c_str(), agentChatModel == id)) agentChatModel = id;
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Model of the next message"));
+    // Conversations of this CLI: the panel's own and those of Scene bubbles (object or spot).
+    auto threadLabel = [&](const Json& item) {
+        const std::string key = item["thread"].asString("");
+        std::string title = item["title"].asString("");
+        if (title.empty()) title = Tr("New conversation");
+        if (key.size() > 1 && key[0] == 'e' && key[1] >= '0' && key[1] <= '9') {
+            const EntityRow* row = Row(static_cast<EntityId>(std::strtoul(key.c_str() + 1, nullptr, 10)));
+            return std::string(kIconBox) + " " + (row ? row->name : std::string("#") + key.substr(1, key.find('-') - 1)) + ": " + title;
+        }
+        if (key.rfind("p", 0) == 0 && key.rfind("chat-", 0) != 0) return std::string(kIconMapPin) + " " + title;
+        return title;
+    };
+    std::string current = Tr("New conversation");
+    for (const Json& item : agentChatThreads.items()) {
+        if (item["thread"].asString("") == agentChatThread) current = threadLabel(item);
+    }
+    ImGui::SameLine();
+    const float newWidth = ImGui::CalcTextSize(Tr("New")).x + ImGui::CalcTextSize(kIconPlus).x + style.FramePadding.x * 2 + style.ItemInnerSpacing.x * 2;
+    ImGui::SetNextItemWidth(std::max(field, ImGui::GetContentRegionAvail().x - newWidth - style.ItemSpacing.x));
+    if (ImGui::BeginCombo("##thread", current.c_str())) {
+        for (const Json& item : agentChatThreads.items()) {
+            if (item["backend"].asString("") != agentChatBackend) continue;
+            const std::string key = item["thread"].asString("");
+            if (ImGui::Selectable((threadLabel(item) + "##" + key).c_str(), key == agentChatThread) && key != agentChatThread) AgentChatSelect(agentChatBackend, key);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("New")).c_str())) {
+        int n = 1;
+        for (const Json& item : agentChatThreads.items()) {
+            if (item["thread"].asString("").rfind("chat-" + agentChatBackend, 0) == 0) ++n;
+        }
+        AgentChatSelect(agentChatBackend, "chat-" + agentChatBackend + "-" + std::to_string(n));
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Start a new conversation (the CLI forgets the earlier one)"));
+
+    // The conversation, then the input.
+    const float inputHeight = ImGui::GetTextLineHeight() * 3.0f + style.FramePadding.y * 2.0f;
+    const float logHeight = ImGui::GetContentRegionAvail().y - inputHeight - style.ItemSpacing.y;
+    if (ImGui::BeginChild("##log", ImVec2(0, std::max(ImGui::GetFrameHeight(), logHeight)), ImGuiChildFlags_None)) {
+        if (agentChatState["messages"].size() == 0 && !agentChatState["running"].asBool()) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextDisabled("%s", Format(Tr("Talk to %s directly, outside the team. It works in this project through the open editor."), target.c_str()).c_str());
+            ImGui::PopTextWrapPos();
+        } else {
+            DrawDirectConversation(agentChatState, target, agentChatShown, true);
+        }
+    }
+    ImGui::EndChild();
+    const float side = ImGui::GetFrameHeight();
+    if (agentChatFocusInput) {
+        ImGui::SetKeyboardFocusHere();
+        agentChatFocusInput = false;
+    }
+    const ImVec2 inputPos = ImGui::GetCursorScreenPos();
+    const bool entered = ImGui::InputTextMultiline("##input", &agentChatInput, ImVec2(ImGui::GetContentRegionAvail().x - side - style.ItemInnerSpacing.x, inputHeight),
+                                                   ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CtrlEnterForNewLine);
+    {
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        agentChatInputRect = {a.x, a.y, b.x - a.x, b.y - a.y};
+    }
+    if (agentChatInput.empty() && !ImGui::IsItemActive()) {
+        ImGui::GetWindowDrawList()->AddText(ImVec2(inputPos.x + style.FramePadding.x, inputPos.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                            Format(Tr("Message %s (Enter sends, Ctrl+Enter adds a line)"), target.c_str()).c_str());
+    }
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    if (agentChatState["running"].asBool()) {
+        if (IconButton("##stop", kIconSquare, side)) Call("team.thread_cancel", ObjectOf({{"thread", Json(agentChatThread)}}), true);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Stop"));
+    } else {
+        if (IconButton("##send", kIconSend, side, !Trimmed(agentChatInput).empty()) || entered) AgentChatSend();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Send (Enter)"));
+    }
+    ImGui::End();
 }
 
 }  // namespace oe

@@ -94,6 +94,9 @@ public:
     EntityId AskMenuEntity() const;
     Vec3 AskMenuPoint() const;  // where the open menu was opened, in world space
     int AskBubbleCount() const;
+    // The Agent Chat panel in front, talking to `backend` (empty: as it was), and its input's bounds.
+    void FocusAgentChat(const std::string& backend = {});
+    std::array<float, 4> AgentChatInputRect() const;
     std::array<float, 4> AskControlRect(int index, const std::string& name) const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;

@@ -7,6 +7,7 @@
 #include "app/Engine.h"
 #include "core/Log.h"
 #include "platform/Platform.h"
+#include "team/TeamDefaults.h"
 #include "team/TeamStore.h"
 
 namespace oe {
@@ -137,6 +138,19 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  Json result = store.ToJson();
                  if (!store.LoadError().empty()) result["error"] = store.LoadError();  // the file is invalid: shown empty, not editable
                  return result;
+             });
+
+    Register(registry, "team.add_defaults",
+             "Give a project without agents the default team that `oe new` creates (docs/TEAM.md §3.3): Lead (Sonnet), Core (Opus), "
+             "Content (Sonnet), Art (Codex) and QA (Sonnet). For projects made before teams or with --no-team. Returns team.list.",
+             Params(), [state](Engine& e, const Json&) {
+                 state->Store(e);
+                 std::string error;
+                 if (!SeedDefaultTeam(e.ProjectDir(), &error)) {
+                     throw ApiError("team_not_empty", "cannot add the default team: " + error, "It only fills an empty team; use team.add for single agents.");
+                 }
+                 TeamStore& store = state->Store(e);  // reads the file it wrote
+                 return store.ToJson();
              });
 
     Register(registry, "team.get", "One agent profile.", Params().Req("id", "string", kAgentRef), [state](Engine& e, const Json& a) {
@@ -290,7 +304,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  out["cancelled"] = state->Session(e).CancelDirect(a["thread"].asString());
                  return out;
              });
-    Register(registry, "team.threads", "Stored direct conversations: [{thread, backend, model, messages, running}].", Params(),
+    Register(registry, "team.threads", "Stored direct conversations: [{thread, backend, model, messages, running, title (the first message), updated (UTC)}].", Params(),
              [state](Engine& e, const Json&) { return state->Session(e).DirectThreads(); });
 
     Register(registry, "team.delegate","Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.",

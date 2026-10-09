@@ -1459,6 +1459,10 @@ Names of the built-in profile pictures (use as avatar "preset:<name>").
 
 The project's agent team: settings (lead, maxConcurrent, maxHops, inheritUserTools), a revision that changes with every edit, and all agent profiles.
 
+### `team.add_defaults`
+
+Give a project without agents the default team that `oe new` creates (docs/TEAM.md §3.3): Lead (Sonnet), Core (Opus), Content (Sonnet), Art (Codex) and QA (Sonnet). For projects made before teams or with --no-team. Returns team.list.
+
 ### `team.get`
 
 One agent profile.
@@ -1572,7 +1576,7 @@ Stop the running turn of a direct conversation; {cancelled: false} when none ran
 
 ### `team.threads`
 
-Stored direct conversations: [{thread, backend, model, messages, running}].
+Stored direct conversations: [{thread, backend, model, messages, running, title (the first message), updated (UTC)}].
 
 ### `team.delegate`
 
