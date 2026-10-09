@@ -356,6 +356,8 @@ struct NativeEditor::Impl {
         bool focusInput = true;
         size_t shown = 0;            // messages drawn last frame: more scrolls to the newest
         ImVec2 size{0, 0};           // last frame's size, to keep it inside the view
+        ImVec2 pos{0, 0};            // last frame's top-left corner (files dropped on it are attached)
+        std::vector<std::string> attachments;  // files that go with the next message
     };
     std::vector<AskBubble> askBubbles;
     int askSerial = 0;
@@ -374,6 +376,12 @@ struct NativeEditor::Impl {
     // A direct conversation's messages and running line (bubbles and the Agent Chat panel); a
     // change in what is drawn scrolls to the newest. `details`: turn tools/time/cost under replies.
     void DrawDirectConversation(const Json& state, const std::string& target, size_t& shown, bool details);
+    // A message's attachments: pictures as thumbnails (click: the viewer), other files as buttons.
+    void DrawAttachments(const Json& attachments, float thumbnailEm);
+    // Files waiting to go with the next message, as chips (click removes one).
+    void AttachmentChips(std::vector<std::string>& files);
+    // The native file chooser; the chosen file is added to `files` (at most 8).
+    void ChooseAttachment(std::vector<std::string>& files);
 
     // ----- Agent Chat panel (EditorAsk.cpp): talk to one installed agent CLI, model chosen here,
     // outside the team (team.ask conversations "chat-<cli>[-n]"; object bubbles' ones are listed too).
@@ -385,6 +393,8 @@ struct NativeEditor::Impl {
     size_t agentChatShown = 0;
     std::array<float, 4> agentChatInputRect{0, 0, 0, 0};
     ChatCompleteState agentChatComplete;
+    std::vector<std::string> agentChatAttachments;  // files that go with the next message
+    std::array<float, 4> agentChatRect{0, 0, 0, 0};  // the panel's window: a file dropped inside it is attached
     void AgentChatPanel();
     void AgentChatSelect(const std::string& backend, const std::string& thread);
     void AgentChatSend();
@@ -434,6 +444,15 @@ struct NativeEditor::Impl {
     void ImportChatImage(const std::string& path);
     void ImageViewer();
     void TeamChatPanel();
+
+    // ----- Settings window (EditorSettings.cpp): Agents tab (CLIs installed, login, how they
+    // reach the editor, permissions of direct conversations).
+    bool showSettings = false;
+    std::string settingsTab;  // tab to select on the next frame ("agents"); empty = keep
+    void SettingsWindow();
+    void SettingsAgentsTab();
+    double settingsPolled = -100;
+    Json settingsConnection;  // team.connection
 
     // ----- Tile painting (EditorTiles.cpp): Tiles panel + brush in the Scene view
     bool showTiles = true;

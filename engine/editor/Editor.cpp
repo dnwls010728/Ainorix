@@ -1227,6 +1227,11 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::Separator();
         if (ImGui::MenuItem(Tr("Frame Selected"), "F", false, any)) FrameSelection();
         if (ImGui::MenuItem(Tr("Select None"), "Esc", false, any)) selection.clear();
+        ImGui::Separator();
+        if (ImGui::MenuItem(WithIcon(kIconSettings, Tr("Settings...")).c_str())) {
+            showSettings = true;
+            ImGui::SetWindowFocus(WithIcon(kIconSettings, TrId("Settings")).c_str());
+        }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu(Tr("Create"))) {
@@ -1818,6 +1823,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     m.Modals();
     if (m.teamAvailable) m.TeamModals();
     if (m.teamAvailable) m.ImageViewer();
+    m.SettingsWindow();
     if (m.teamAvailable && !m.droppedFiles.empty()) m.RouteDroppedFiles();  // onto the chat: attached, not imported
     m.Toasts();
     if (!m.droppedFiles.empty()) m.ImportDroppedFiles();
@@ -1970,6 +1976,16 @@ void NativeEditor::FocusAgentChat(const std::string& backend) {
 }
 std::array<float, 4> NativeEditor::AgentChatInputRect() const { return impl_->agentChatInputRect; }
 int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }
+std::vector<std::string> NativeEditor::AgentChatAttachments() const { return impl_->agentChatAttachments; }
+std::vector<std::string> NativeEditor::AskAttachments(int index) const {
+    if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {};
+    return impl_->askBubbles[index].attachments;
+}
+void NativeEditor::OpenSettings(const std::string& tab) {
+    impl_->showSettings = true;
+    impl_->settingsTab = tab;
+}
+bool NativeEditor::SettingsOpen() const { return impl_->showSettings; }
 std::array<float, 4> NativeEditor::AskControlRect(int index, const std::string& name) const {
     if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {0, 0, 0, 0};
     const auto found = impl_->askRects.find(std::to_string(impl_->askBubbles[index].serial) + ":" + name);

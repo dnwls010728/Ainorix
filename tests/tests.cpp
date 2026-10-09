@@ -1056,6 +1056,38 @@ TEST(ReflectionErrors) {
     CHECK(static_cast<MeshRenderer*>(c)->color.r == 1.0f);
 }
 
+// MCP clients drop tools (Claude Code headless with some models: the whole server) whose input
+// schema names a type JSON Schema does not have, such as "entity" or "bool".
+TEST(CommandSchemasUseJsonSchemaTypes) {
+    Engine engine;
+    const Json list = engine.Call("api.list", Json::parse(R"J({"verbose":true})J"));
+    const std::set<std::string> valid = {"object", "array", "string", "number", "integer", "boolean", "null"};
+    std::vector<std::string> bad;
+    std::function<void(const Json&, const std::string&)> walk = [&](const Json& schema, const std::string& at) {
+        if (schema.isArray()) {
+            for (const Json& item : schema.items()) walk(item, at);
+            return;
+        }
+        if (!schema.isObject()) return;
+        const Json& type = schema["type"];
+        if (type.isString() && !valid.count(type.asString())) bad.push_back(at + ": " + type.asString());
+        for (const Json& name : type.items()) {
+            if (name.isString() && !valid.count(name.asString())) bad.push_back(at + ": " + name.asString());
+        }
+        for (const auto& member : schema.members()) {
+            if (member.first == "properties") {
+                for (const auto& property : member.second.members()) walk(property.second, at + "." + property.first);
+            } else if (member.second.isObject() || member.second.isArray()) {
+                walk(member.second, at + "/" + member.first);
+            }
+        }
+    };
+    CHECK(list["result"].size() > 100);
+    for (const Json& command : list["result"].items()) walk(command["params"], command["name"].asString());
+    for (const std::string& entry : bad) std::fprintf(stderr, "  invalid schema type %s\n", entry.c_str());
+    CHECK(bad.empty());
+}
+
 TEST(CommandsAndUndo) {
     Engine engine;
     engine.Call("scene.new", Json());
@@ -10586,6 +10618,18 @@ TEST(TeamUsageParsingAndLedger) {
     CHECK(!events.back().usage.known);
     events.clear(); ParseClaudeLine(R"J({"type":"result","subtype":"error_max_budget_usd","session_id":"s","total_cost_usd":0.3,"usage":{"input_tokens":0,"output_tokens":0}})J", events);
     CHECK(events.back().kind == TurnEvent::Kind::Failed && events.back().costKnown && events.back().usage.known);
+    // The init line tells how each MCP server came up (Settings > Agents shows ownengine's).
+    events.clear(); ParseClaudeLine(R"J({"type":"system","subtype":"init","session_id":"s1","mcp_servers":[{"name":"ownengine","status":"failed"}]})J", events);
+    CHECK(events.size() == 2 && events[0].kind == TurnEvent::Kind::Session && events[1].kind == TurnEvent::Kind::Mcp &&
+          events[1].text == "ownengine" && events[1].detail == "failed");
+    // Edit access allows the engine tools and the same commands through the oe CLI, nothing else.
+    TurnRequest edit; edit.access = "edit"; edit.apiPort = 7777; edit.mcpConfigFile = "x.mcp.json";
+    const std::vector<std::string> editArgs = ClaudeBuildTurn(edit).arguments;
+    CHECK(std::find(editArgs.begin(), editArgs.end(), "Bash(oe exec:*)") != editArgs.end() &&
+          std::find(editArgs.begin(), editArgs.end(), "mcp__ownengine") != editArgs.end());
+    edit.oeExecutable = "oe";
+    const std::vector<std::string> codexArgs = CodexBuildTurn(edit).arguments;
+    CHECK(std::find(codexArgs.begin(), codexArgs.end(), "sandbox_workspace_write.network_access=true") != codexArgs.end());
     TurnRequest request; request.maxBudgetUsd = 0.123456;
     auto args = ClaudeBuildTurn(request).arguments;
     CHECK(std::find(args.begin(), args.end(), "--max-budget-usd") != args.end() && std::find(args.begin(), args.end(), "0.123456") != args.end());
@@ -10770,7 +10814,7 @@ TEST(TeamChatPull) {
     CHECK(Call(e, "team.send", R"J({"text":"@lead Say ok","wait":10})J")["ok"].asBool());
     CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt));
     CHECK(prompt.find("unrelated-secret") == std::string::npos && prompt.find("30 chat messages omitted") != std::string::npos);
-    CHECK(prompt.size() < baseline + 120 && prompt.find("team_messages") != std::string::npos);
+    CHECK(prompt.size() < baseline + 240 && prompt.find("team_messages") != std::string::npos);  // the omitted note + the editor connection lines
     std::string laterPrefix;
     CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/lead.system.md"), laterPrefix) && laterPrefix == stablePrefix);
     Json brief = Json::parse(R"J({"to":"lead","goal":"task protocol only"})J");
@@ -11152,7 +11196,7 @@ TEST(TeamDirectConversations) {
             ProcessOptions options;
             options.executable = request.executable;
             options.arguments = {request.sessionId.empty() ? "new" : request.sessionId, request.model.empty() ? "default" : request.model,
-                                 request.agentId.empty() ? "noagent" : request.agentId};
+                                 request.agentId.empty() ? "noagent" : request.agentId, request.access};
             return options;
         };
         backend.parseLine = &ParseClaudeLine;
@@ -11162,7 +11206,10 @@ TEST(TeamDirectConversations) {
     const std::string save = "findstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n";
     std::vector<Backend> backends = {fake("echo", save + "type \"%~dp0reply.jsonl\"\n"),
                                      fake("slow", "findstr \"^\" >nul\nping -n 30 127.0.0.1 >nul\n"),
-                                     fake("crash", "findstr \"^\" >nul\necho boom 1>&2\nexit /b 3\n"), fake("missing", "")};
+                                     fake("crash", "findstr \"^\" >nul\necho boom 1>&2\nexit /b 3\n"), fake("missing", ""),
+                                     fake("nomcp", "findstr \"^\" >nul\ntype \"%~dp0nomcp.jsonl\"\n")};
+    CHECK(WriteTextFile(JoinPath(dir, "nomcp.jsonl"), std::string(R"J({"type":"system","subtype":"init","session_id":"sess-8","mcp_servers":[{"name":"ownengine","status":"failed"}]})J") + "\n" +
+                                                         R"J({"type":"result","subtype":"success","is_error":false,"result":"No engine tools.","session_id":"sess-8"})J" + "\n"));
     backends[3].executable = "oe-no-such-agent-cli";
     CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), std::string(R"J({"type":"system","subtype":"init","session_id":"sess-7"})J") + "\n" +
                                                          R"J({"type":"result","subtype":"success","is_error":false,"result":"Tinted it red.","session_id":"sess-7","total_cost_usd":0.1})J" + "\n"));
@@ -11197,7 +11244,30 @@ TEST(TeamDirectConversations) {
     CHECK(Call(e, "team.ask", R"J({"thread":"e5-echo","backend":"echo","text":"Brighter"})J")["ok"].asBool());
     state = until("e5-echo");
     CHECK(state["messages"].size() == 4 && state["model"].asString() == "");
-    CHECK(ReadTextFile(JoinPath(dir, "ask-echo.args.txt"), args) && args.find("\"sess-7\" \"default\"") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(dir, "ask-echo.args.txt"), args) && args.find("\"sess-7\" \"default\"") != std::string::npos && args.find("edit") != std::string::npos);
+
+    // team.settings askAccess: what directly asked CLIs may do (read: plan mode, told to only look).
+    CHECK(Call(e, "team.settings", R"J({"askAccess":"read"})J")["result"]["askAccess"].asString() == "read");
+    CHECK(Call(e, "team.settings", R"J({"askAccess":"root"})J")["error"]["code"].asString() == "invalid_argument");
+    CHECK(Call(e, "team.ask", R"J({"thread":"e5-echo","backend":"echo","text":"Look only"})J")["ok"].asBool());
+    state = until("e5-echo");
+    CHECK(ReadTextFile(JoinPath(dir, "ask-echo.args.txt"), args) && args.find("read") != std::string::npos);
+    CHECK(ReadTextFile(JoinPath(dir, "ask-echo.prompt.txt"), prompt) && prompt.find("You may only look") != std::string::npos);
+    CHECK(Call(e, "team.settings", R"J({"askAccess":"edit"})J")["ok"].asBool() && Call(e, "team.connection")["result"]["askAccess"].asString() == "edit");
+
+    // A CLI whose ownengine MCP server did not come up: the reply is followed by a notice and
+    // team.backends shows the connection.
+    CHECK(Call(e, "team.ask", R"J({"thread":"e5-nomcp","backend":"nomcp","text":"Build a house"})J")["ok"].asBool());
+    state = until("e5-nomcp");
+    CHECK(state["messages"].size() == 3 && state["messages"][2]["kind"].asString() == "notice" &&
+          state["messages"][2]["text"].asString().find("did not connect (failed)") != std::string::npos);
+    CHECK(state["messages"][1]["turn"]["steps"].size() == 1 && state["messages"][1]["turn"]["steps"][0].asString() == "Engine MCP server: failed");
+    bool reported = false;
+    const Json detected = Call(e, "team.backends")["result"];
+    for (const Json& backend : detected.items()) {
+        reported = reported || (backend["id"].asString() == "nomcp" && backend["engine"]["status"].asString() == "failed" && backend["engine"]["agent"].asString() == "ask-nomcp");
+    }
+    CHECK(reported);
 
     // Busy, cancel, failures and bad arguments.
     CHECK(Call(e, "team.ask", R"J({"thread":"e6-slow","backend":"slow","text":"Wait"})J")["ok"].asBool());
@@ -11212,14 +11282,14 @@ TEST(TeamDirectConversations) {
     CHECK(Call(e, "team.ask", R"J({"thread":"Bad Key","backend":"echo","text":"Go"})J")["error"]["code"].asString() == "invalid_argument");
 
     // Kept on disk: a new session (editor restart) lists and reads them again.
-    CHECK(Call(e, "team.threads")["result"].size() == 3);
+    CHECK(Call(e, "team.threads")["result"].size() == 4);
     team.reset();
     Engine again;
     CHECK(again.Open(project, &error));
     std::shared_ptr<TeamHandle> reopened = RegisterTeamCommands(again.Commands(), backends);
     state = Call(again, "team.thread", R"J({"thread":"e5-echo"})J")["result"];
-    CHECK(state["messages"].size() == 4 && state["backend"].asString() == "echo");
-    CHECK(Call(again, "team.threads")["result"].size() == 3);
+    CHECK(state["messages"].size() == 6 && state["backend"].asString() == "echo");
+    CHECK(Call(again, "team.threads")["result"].size() == 4);
     reopened.reset();
     RemoveAll(project);
 #endif
@@ -15171,6 +15241,39 @@ TEST(NativeEditorAskBubbles) {
         }
         CHECK(chatState["messages"].size() >= 3 && chatState["messages"][2]["text"].asString() == "@Target");
         CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("Agent Chat panel") != std::string::npos);
+
+        // Files dropped on the Agent Chat panel or on a bubble go with that input's next message; one
+        // from outside the project is copied into it and named in the prompt.
+        const std::string note = JoinPath(dir, "note.txt");
+        CHECK(WriteTextFile(note, "notes"));
+        const std::array<float, 4> chatInput = editor.AgentChatInputRect();
+        WindowEvent drop;
+        drop.type = WindowEvent::Type::DropFile;
+        drop.path = note;
+        drop.x = chatInput[0] + chatInput[2] * 0.5f;
+        drop.y = chatInput[1] + chatInput[3] * 0.5f;
+        frames(3, {drop});
+        CHECK(editor.AgentChatAttachments() == std::vector<std::string>{note});
+        const std::array<float, 4> bubbleInput = editor.AskControlRect(0, "input");
+        drop.x = bubbleInput[0] + bubbleInput[2] * 0.5f;
+        drop.y = bubbleInput[1] + bubbleInput[3] * 0.5f;
+        frames(3, {drop});
+        CHECK(editor.AskAttachments(0) == std::vector<std::string>{note} && editor.AgentChatAttachments().size() == 1);
+        frames(30);
+        editor.FocusAgentChat("echo");
+        frames(3);
+        type("read this");
+        for (int i = 0; i < 300; ++i) {
+            frames(1);
+            chatState = Call(e, "team.thread", R"J({"thread":"chat-echo"})J")["result"];
+            if (chatState["messages"].size() >= 6 && !chatState["running"].asBool()) break;
+            PlatformSleep(0.02);
+        }
+        const Json withFile = chatState["messages"][4];
+        CHECK(withFile["text"].asString() == "read this" && withFile["attachments"].size() == 1 && editor.AgentChatAttachments().empty());
+        const std::string copied = withFile["attachments"][0]["path"].asString();
+        CHECK(copied.rfind(".oe/team/attachments/", 0) == 0 && FileExists(JoinPath(project, copied)));
+        CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("Attached file: " + copied) != std::string::npos);
 
         // Deleting the object closes its bubbles; the spot's stays.
         CHECK(Call(e, "entity.delete", R"J({"id":"Target"})J")["ok"].asBool());

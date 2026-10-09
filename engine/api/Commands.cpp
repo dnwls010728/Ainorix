@@ -61,6 +61,12 @@ Params& Params::Prop(const char* name, const char* type, const char* doc, bool r
         p["items"]["type"] = "number";
         p["minItems"] = 3;
         p["maxItems"] = 3;
+    } else if (t == "entity") {  // an id or a unique name; MCP clients reject unknown type names
+        p["type"] = Json::MakeArray();
+        p["type"].push("integer");
+        p["type"].push("string");
+    } else if (t == "bool") {
+        p["type"] = "boolean";
     } else {
         p["type"] = type;
     }

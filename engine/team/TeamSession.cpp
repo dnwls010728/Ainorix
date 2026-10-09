@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -265,6 +266,7 @@ struct TeamSession::Turn {
     std::deque<std::string> stderrTail;
     uint64_t seenUpTo = 0;
     std::map<std::string, int64_t> imagesBefore;  // ScanImages() when the turn started
+    std::string engineProblem;  // the ownengine MCP server did not connect: its status
 };
 
 TeamSession::TeamSession(TeamStore& store, const std::vector<Backend>& backends, const TeamHost& host) : store_(store), backends_(backends), host_(host) {}
@@ -519,7 +521,8 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime, const J
             }
         }
     }
-    prompt += host_.apiPort > 0 ? "\nConnection: ownengine MCP controls this project. Use its tools.\n" :
+    prompt += host_.apiPort > 0 ? "\nConnection: ownengine MCP controls this project. Use its tools; without them run the same commands with "
+                                  "`oe exec --connect " + std::to_string(host_.apiPort) + " <command> '<json args>'`.\n" :
                                  "\nConnection: no API attached; edit files or use oe exec.\n";
 
     if (backend.systemPromptFlag) {
@@ -528,11 +531,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime, const J
     } else if (task || runtime.session.empty()) {
         prompt = context + "\n---\n\n" + prompt;  // the CLI has no system prompt flag: said once, at the start of the conversation
     }
-    std::string oe = host_.oeExecutable;
-    if (oe.empty()) {
-        oe = JoinPath(ExecutableDirectory(), "oe.exe");
-        if (!FileExists(oe)) oe = JoinPath(ExecutableDirectory(), "oe");
-    }
+    const std::string oe = OeExecutable();
     Json config = Json::MakeObject();
     config["mcpServers"] = Json::MakeObject();
     if (host_.apiPort > 0) {
@@ -553,8 +552,7 @@ void TeamSession::StartTurn(const AgentProfile& agent, Runtime& runtime, const J
     }
     request.mcpConfigFile = relativeTmp + agent.id + ".mcp.json";
     ProcessOptions options = backend.buildTurn(request);
-    options.workingDirectory = projectDir_;
-    options.environment.emplace_back("OE_TEAM_AGENT", agent.id);
+    PrepareProcess(options, agent.id);
     options.environment.emplace_back("OE_TEAM_HOP", std::to_string(trigger.hop));
     if (task) {
         options.environment.emplace_back("OE_TEAM_TASK", (*task)["id"].asString());
@@ -634,6 +632,19 @@ void TeamSession::HandleLine(Turn& turn, const std::string& line, bool isStderr)
                 turn.costUsd = event.costUsd;
                 turn.costKnown = event.costKnown; turn.costCumulative = event.costCumulative; turn.usage = event.usage;
                 turn.failure.clear();
+                break;
+            case TurnEvent::Kind::Mcp:
+                if (event.text == "ownengine") {
+                    Json connection = Json::MakeObject();
+                    connection["status"] = event.detail;
+                    connection["time"] = NowUtc();
+                    connection["agent"] = turn.agentId;
+                    engineConnections_[turn.backend->id] = std::move(connection);
+                    if (event.detail != "connected") {
+                        turn.engineProblem = event.detail;
+                        if (turn.steps.size() < kMaxSteps) turn.steps.push_back("Engine MCP server: " + event.detail);
+                    }
+                }
                 break;
             case TurnEvent::Kind::Failed:
                 turn.done = false;
@@ -760,6 +771,10 @@ void TeamSession::FinishTurn(const std::string& id, Runtime& runtime) {
         }
         const int replyHop = reply.hop;
         Append(std::move(reply));
+        if (!turn->engineProblem.empty()) {
+            Notice("The ownengine MCP server did not connect for " + turn->backend->displayName + " (" + turn->engineProblem +
+                       "); it could only use `oe exec --connect`. Settings > Agents shows the connection.", id);
+        }
         runtime.session = turn->sessionId;
         runtime.contextTokens = turn->usage.contextTokens;
         runtime.sessionBackend = turn->backend->id;
@@ -887,6 +902,69 @@ int TeamSession::TurnHop(const std::string& id) const {
     return found != agents_.end() && found->second.turn ? found->second.turn->hop : 0;
 }
 
+std::vector<ChatAttachment> TeamSession::ResolveAttachments(const std::vector<std::string>& attachments, const std::string& prefix) const {
+    if (attachments.size() > kMaxSendAttachments) throw ApiError("invalid_argument", "a message carries at most 8 attachments");
+    // A file of the project is referred to in place; one from elsewhere is copied into
+    // .oe/team/attachments/ (agents work inside the project directory).
+    std::vector<ChatAttachment> resolved;
+    std::string root = Lower(AbsolutePath(projectDir_));
+    std::replace(root.begin(), root.end(), '\\', '/');
+    if (!root.empty() && root.back() != '/') root += '/';
+    for (size_t index = 0; index < attachments.size(); ++index) {
+        const std::string& given = attachments[index];
+        const bool absolute = given.size() > 1 && (given[1] == ':' || given[0] == '/');
+        std::string full = AbsolutePath(absolute ? given : JoinPath(projectDir_, given));
+        std::replace(full.begin(), full.end(), '\\', '/');
+        std::error_code ec;
+        const uintmax_t bytes = std::filesystem::file_size(std::filesystem::u8path(full), ec);
+        if (given.empty() || ec || IsDirectory(full)) throw ApiError("not_found", "cannot read attachment '" + given + "'", "Attach a file, by a path on this PC or one relative to the project.");
+        if (bytes > kMaxAttachmentBytes) throw ApiError("invalid_argument", "attachment '" + given + "' is larger than 32 MiB");
+        std::string relative;
+        if (Lower(full).compare(0, root.size(), root) == 0) {
+            relative = full.substr(root.size());
+        } else {
+            std::string name = full.substr(full.find_last_of('/') + 1);
+            for (char& c : name) {
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) c = '_';
+            }
+            if (name.size() > 64) name = name.substr(name.size() - 64);
+            relative = ".oe/team/attachments/" + prefix + "-" + std::to_string(index + 1) + "-" + name;
+            if (!CopyFileTo(full, JoinPath(projectDir_, relative))) throw ApiError("write_failed", "cannot copy attachment '" + given + "' into the project");
+        }
+        resolved.push_back(Describe(relative));
+    }
+    return resolved;
+}
+
+std::string TeamSession::OeExecutable() const {
+    std::string oe = host_.oeExecutable;
+    if (oe.empty()) {
+        oe = JoinPath(ExecutableDirectory(), "oe.exe");
+        if (!FileExists(oe)) oe = JoinPath(ExecutableDirectory(), "oe");
+    }
+    return oe;
+}
+
+void TeamSession::PrepareProcess(ProcessOptions& options, const std::string& agentId) const {
+    options.workingDirectory = projectDir_;
+    options.environment.emplace_back("OE_TEAM_AGENT", agentId);
+    // `oe exec --connect <port>` is the fallback when a CLI does not get the MCP tools: the
+    // agent finds `oe` by name (edit mode allows exactly those commands).
+    const std::string oe = OeExecutable();
+    if (FileExists(oe)) {
+        std::string directory = oe.substr(0, oe.find_last_of("/\\") == std::string::npos ? 0 : oe.find_last_of("/\\"));
+#ifdef _WIN32
+        std::replace(directory.begin(), directory.end(), '/', '\\');
+        const char separator = ';';
+#else
+        const char separator = ':';
+#endif
+        const char* path = std::getenv("PATH");
+        // Appended: the folder (oe's, or whatever a host names) never shadows the system's commands.
+        if (!directory.empty()) options.environment.emplace_back("PATH", (path && *path ? std::string(path) + separator : std::string()) + directory);
+    }
+}
+
 Json TeamSession::Send(const std::string& text, const std::string& from, const std::vector<std::string>& attachments, int hop) {
     auto sender = agents_.find(from);
     if (sender != agents_.end() && sender->second.turn && !sender->second.turn->taskId.empty()) {
@@ -916,34 +994,7 @@ Json TeamSession::Send(const std::string& text, const std::string& from, const s
     message.text = text;
     message.hop = std::max(0, hop);
     for (size_t i : recipients) message.to.push_back(roster[i].id);
-    // Attachments: a file of the project is referred to in place; one from elsewhere is copied
-    // into .oe/team/attachments/ (agents work inside the project directory).
-    std::string root = Lower(AbsolutePath(projectDir_));
-    std::replace(root.begin(), root.end(), '\\', '/');
-    if (!root.empty() && root.back() != '/') root += '/';
-    for (size_t index = 0; index < attachments.size(); ++index) {
-        const std::string& given = attachments[index];
-        const bool absolute = given.size() > 1 && (given[1] == ':' || given[0] == '/');
-        std::string full = AbsolutePath(absolute ? given : JoinPath(projectDir_, given));
-        std::replace(full.begin(), full.end(), '\\', '/');
-        std::error_code ec;
-        const uintmax_t bytes = std::filesystem::file_size(std::filesystem::u8path(full), ec);
-        if (given.empty() || ec || IsDirectory(full)) throw ApiError("not_found", "cannot read attachment '" + given + "'", "Attach a file, by a path on this PC or one relative to the project.");
-        if (bytes > kMaxAttachmentBytes) throw ApiError("invalid_argument", "attachment '" + given + "' is larger than 32 MiB");
-        std::string relative;
-        if (Lower(full).compare(0, root.size(), root) == 0) {
-            relative = full.substr(root.size());
-        } else {
-            std::string name = full.substr(full.find_last_of('/') + 1);
-            for (char& c : name) {
-                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')) c = '_';
-            }
-            if (name.size() > 64) name = name.substr(name.size() - 64);
-            relative = ".oe/team/attachments/" + std::to_string(lastMessageId_ + 1) + "-" + std::to_string(index + 1) + "-" + name;
-            if (!CopyFileTo(full, JoinPath(projectDir_, relative))) throw ApiError("write_failed", "cannot copy attachment '" + given + "' into the project");
-        }
-        message.attachments.push_back(Describe(relative));
-    }
+    message.attachments = ResolveAttachments(attachments, std::to_string(lastMessageId_ + 1));
     Json result = Json::MakeObject();
     result["message"] = ChatMessageToJson(Append(std::move(message)));
 
@@ -1236,9 +1287,9 @@ ChatMessage& TeamSession::AppendDirect(Direct& direct, ChatMessage message) {
 }
 
 Json TeamSession::Ask(const std::string& thread, const std::string& backendId, const std::string& model, const std::string& text,
-                      const std::string& context) {
+                      const std::string& context, const std::vector<std::string>& attachments) {
     if (!ValidThreadKey(thread)) throw ApiError("invalid_argument", "thread must be 1..64 characters of a-z, 0-9, '-' and '_'");
-    if (text.find_first_not_of(" \t\r\n") == std::string::npos) throw ApiError("invalid_argument", "the message is empty");
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos && attachments.empty()) throw ApiError("invalid_argument", "the message is empty");
     if (!ValidTeamText(text, kMaxSendBytes) || !ValidTeamText(context, kMaxSendBytes)) {
         throw ApiError("invalid_argument", "text and context must be UTF-8 text of at most 32768 bytes each");
     }
@@ -1259,6 +1310,8 @@ Json TeamSession::Ask(const std::string& thread, const std::string& backendId, c
     question.from = "user";
     question.to = {backend->id};
     question.text = text;
+    question.attachments = ResolveAttachments(attachments, thread + "-" + std::to_string(direct.messages.empty() ? 1 : direct.messages.back().id + 1));
+    const std::vector<ChatAttachment> attached = question.attachments;
     AppendDirect(direct, std::move(question));
     direct.backend = backend->id;
     direct.model = model;
@@ -1267,9 +1320,14 @@ Json TeamSession::Ask(const std::string& thread, const std::string& backendId, c
     std::string prompt;
     if (!context.empty()) prompt += context + "\n\n";
     prompt += text + "\n";
+    for (const ChatAttachment& attachment : attached) prompt += "  Attached " + attachment.type + ": " + attachment.path + "\n";
+    const std::string access = store_.Settings().askAccess;
     prompt += host_.apiPort > 0 ? "\nConnection: the ownengine MCP server controls this project in the open editor. Use its tools; "
-                                  "editor_state shows what the person sees and has selected.\n"
+                                  "editor_state shows what the person sees and has selected. Without those tools run the same commands with "
+                                  "`oe exec --connect " + std::to_string(host_.apiPort) + " <command> '<json args>'` (also `oe exec --connect " +
+                                  std::to_string(host_.apiPort) + " api.list`).\n"
                                 : "\nConnection: no editor API is attached; edit files or use oe exec.\n";
+    if (access == "read") prompt += "You may only look: do not change files or the scene; say what you would do.\n";
     const std::string standing =
         "You are " + backend->displayName + ", asked directly by the person working in the OwnEngine editor (not through the agent team). "
         "They write from a bubble attached to an object in the Scene view; the prompt starts with that object.\n"
@@ -1281,7 +1339,7 @@ Json TeamSession::Ask(const std::string& thread, const std::string& backendId, c
     TurnRequest request;
     request.executable = Executable(*backend);
     request.model = model;
-    request.access = "edit";
+    request.access = access;
     request.inheritUserTools = store_.Settings().inheritUserTools;
     request.sessionId = direct.session;
     auto fail = [&](const std::string& message, const std::string& failHint) {
@@ -1301,11 +1359,7 @@ Json TeamSession::Ask(const std::string& thread, const std::string& backendId, c
     } else if (direct.session.empty()) {
         prompt = standing + "\n---\n\n" + prompt;
     }
-    std::string oe = host_.oeExecutable;
-    if (oe.empty()) {
-        oe = JoinPath(ExecutableDirectory(), "oe.exe");
-        if (!FileExists(oe)) oe = JoinPath(ExecutableDirectory(), "oe");
-    }
+    const std::string oe = OeExecutable();
     Json config = Json::MakeObject();
     config["mcpServers"] = Json::MakeObject();
     if (host_.apiPort > 0 && FileExists(oe)) {
@@ -1322,8 +1376,7 @@ Json TeamSession::Ask(const std::string& thread, const std::string& backendId, c
     if (!WriteTextFileAtomic(JoinPath(tmp, name + ".mcp.json"), config.dump(2) + "\n", nullptr)) return fail("Cannot write the MCP config in .oe/team/tmp/.", "Check that the project folder is writable.");
     request.mcpConfigFile = relativeTmp + name + ".mcp.json";
     ProcessOptions options = backend->buildTurn(request);
-    options.workingDirectory = projectDir_;
-    options.environment.emplace_back("OE_TEAM_AGENT", agent.id);
+    PrepareProcess(options, agent.id);
     options.pipeStdin = true;
 
     auto turn = std::make_unique<Turn>();
@@ -1390,6 +1443,15 @@ void TeamSession::FinishDirectTurn(const std::string& thread, Direct& direct) {
             reply.attachments.push_back(Describe(image.first));
         }
         AppendDirect(direct, std::move(reply));
+        if (!turn->engineProblem.empty()) {
+            ChatMessage notice;
+            notice.from = "system";
+            notice.to = {"user"};
+            notice.kind = "notice";
+            notice.text = "The ownengine MCP server did not connect (" + turn->engineProblem + "): " + turn->backend->displayName +
+                          " could only use `oe exec --connect`. Settings > Agents shows the connection.";
+            AppendDirect(direct, std::move(notice));
+        }
         direct.session = turn->sessionId;
         direct.sessionBackend = turn->backend->id;
     } else {

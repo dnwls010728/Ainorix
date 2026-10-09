@@ -280,8 +280,17 @@ success.
   `error` even if the message contains a number that looks like a version. The profile dialog
   labels `error` entries "(not working)" with the message as tooltip, `notInstalled` ones
   "(not installed)".
-- Being installed does not prove the user is logged in. A login failure appears on the first
-  turn as an error message in the chat with the hint to run the CLI once in a terminal.
+- Login: an installed CLI is then asked whether the user is signed in: `claude auth status`
+  (JSON `loggedIn`, `authMethod`, `subscriptionType`), `codex login status` (exit 0 and
+  "Logged in using ChatGPT"); Gemini CLI has no such command, so a Google sign-in is
+  `~/.gemini/oauth_creds.json` and an API key `GEMINI_API_KEY` / `GOOGLE_API_KEY`. The entry gets
+  `login` (`loggedIn` | `loggedOut` | `unknown`), `loginDetail` ("claude.ai (pro)", "ChatGPT")
+  and `loginHint` (the command that signs in). A login failure that slips through still appears
+  on the first turn as an error message with the hint to run the CLI once in a terminal.
+- `engine`: how the ownengine MCP server came up in the CLI's latest turn this session
+  (`{status: connected | failed | pending | ..., time, agent}`, from Claude's `init` event),
+  absent before the first turn. `runsTurns: false` marks a CLI that is detected but has no turn
+  adapter yet (Gemini CLI).
 - An agent whose backend is not installed stays in the team, shows state `offline` and cannot be
   mentioned; nothing is deleted when a CLI is uninstalled.
 
@@ -538,11 +547,20 @@ instructions, callable agents or project facts intentionally changes the prefix.
   | `access` | Claude Code | Codex | Meaning |
   |---|---|---|---|
   | `read` | `--permission-mode plan` | `sandbox_mode='read-only'`, engine tools not approved | reads and answers, no edits |
-  | `edit` (default) | `--permission-mode acceptEdits` + `--allowedTools mcp__ownengine` | `sandbox_mode='workspace-write'` + engine tools approved | edits files in the project and drives the editor; other shell commands are refused |
+  | `edit` (default) | `--permission-mode acceptEdits` + `--allowedTools mcp__ownengine Bash(oe exec:*) Bash(oe script:*) Bash(oe render:*)` (and the same for PowerShell) | `sandbox_mode='workspace-write'` + `sandbox_workspace_write.network_access=true` + engine tools approved | edits files in the project and drives the editor (engine tools, or `oe exec --connect <port>` from the shell); other shell commands are refused |
   | `full` | `--permission-mode bypassPermissions` | `sandbox_mode='danger-full-access'` + engine tools approved | anything; the dialog shows a warning and asks for confirmation when selected |
 
   A headless turn cannot ask for permission, so a refused action appears as a `notice` in the
-  chat. Interactive approval (the CLI's permission-prompt hook surfaced as chat buttons) is
+  chat. Team agents use their profile's `access`; direct conversations (`team.ask`: Agent Chat,
+  Ask bubbles) use the team setting `askAccess` (default `edit`, Settings > Agents).
+- **Engine tools and the shell fallback**: each turn gets the editor's MCP server
+  (`<oe> mcp --connect <port> --agent <id>`). When a CLI starts without its tools (2026-10-09:
+  Claude Code with Opus dropped the whole server because a few command schemas named the types
+  `entity` and `bool`, which JSON Schema does not have; fixed in `Params::Prop`, checked by
+  `CommandSchemasUseJsonSchemaTypes`), the prompt names `oe exec --connect <port> <command>
+  '<json>'`, oe's folder is appended to the turn's `PATH` (appended: it never shadows system
+  commands) and edit access allows exactly `oe exec`, `oe script` and `oe render`. The turn's
+  steps then show "Engine MCP server: failed" and a notice follows the reply. Interactive approval (the CLI's permission-prompt hook surfaced as chat buttons) is
   listed under Later.
 - **Who may spawn**: `team.send`, `team.add/update/remove` are commands, so anything on
   127.0.0.1 can call them, the same trust boundary as the rest of the API. Recursion is bounded:
@@ -709,6 +727,13 @@ typed in; Up/Down choose, Tab or a click takes, and the caret stays after the in
   resumed by the next message. Conversations are kept in `.oe/team/threads/<thread>.json` (the
   last 200 messages); `team.clear` removes them, `team.threads` lists them.
 
+Files: the paperclip beside an input (bubbles, Agent Chat, Team Chat) opens the file chooser, and
+files dropped on a bubble or a chat panel are attached to that input's next message (at most 8,
+shown as chips above the input; click one to remove it). They travel like Team Chat attachments
+(`team.send` / `team.ask {attachments}`): a project file in place, another one copied into
+`.oe/team/attachments/`, named in the prompt as `Attached image|file: <path>`, and shown under the
+message (pictures as thumbnails that open the viewer).
+
 ### 7.5 Agent Chat panel
 
 A tab beside Team Chat (View > Agent Chat) to talk to one installed agent CLI directly, outside
@@ -718,6 +743,20 @@ Ctrl+Enter adds a line; Stop while a turn runs). It uses `team.ask` conversation
 `chat-<cli>` (New: `chat-<cli>-<n>`); the picker also lists the CLI's Scene bubble conversations
 (object or spot), which can be continued here. The prompt says it comes from this panel and names
 the entity selected in the editor, if any. Like the bubbles, nothing goes to the team chat.
+The gear opens Settings > Agents.
+
+### 7.6 Settings > Agents
+
+Edit > Settings (or the gear in Agent Chat) opens the Settings window. Its Agents tab lists
+each CLI with **Installed** (version, path as tooltip, or the install command), **Login**
+(signed in with the method, or the command that signs in, with Copy) and **Engine connection**
+(whether the ownengine MCP server connected in the CLI's latest turn this session, or that the
+turn had only the shell fallback), and **Check again** (`team.backends {refresh}`). Under it:
+the editor API port, the MCP command line every turn gets and the shell fallback
+(`team.connection`), the permission of Agent Chat and Ask bubbles (`team.settings
+{askAccess}`: read only, edit, full access) and whether turns also load the user's own MCP
+servers and skills (`inheritUserTools`). `oe editor <project> --screenshot f.png --settings
+agents` shows it.
 
 ## 8. Commands
 
@@ -726,7 +765,8 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 
 | Command | Params | Result |
 |---|---|---|
-| `team.backends` | `{refresh?, async?}` | array of backends: status, version, path, message, models, model source, image support, install hint |
+| `team.backends` | `{refresh?, async?}` | array of backends: status, version, path, message, models, model source, image support, install hint, `runsTurns`, `login`/`loginDetail`/`loginHint`, `engine` (MCP status of the latest turn) |
+| `team.connection` | | `{apiPort, oe, oeFound, mcp, shell, askAccess, inheritUserTools}`: how turns reach the editor |
 | `team.presets` | | avatar preset ids |
 | `team.list` | | `{version, revision, lead, maxConcurrent, maxHops, agents: [profile], error?}` |
 | `team.get` | `{id}` | one profile: every field, plus `avatarPath` (project-relative) for an uploaded picture |
@@ -735,7 +775,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
 | `team.avatar` | `{id, preset}` or `{id, source}` | the profile |
-| `team.settings` | `{lead?, maxConcurrent?, maxHops?, inheritUserTools?, rotateAboveInputTokens?}` | team settings; without arguments it only reads |
+| `team.settings` | `{lead?, maxConcurrent?, maxHops?, inheritUserTools?, rotateAboveInputTokens?, askAccess?}` | team settings; without arguments it only reads |
 
 Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |

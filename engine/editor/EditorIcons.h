@@ -78,6 +78,11 @@ constexpr const char* kIconRefreshCw             = "\xee\x85\x89";  // refresh-c
 constexpr const char* kIconCircleHelp            = "\xee\x82\x82";  // circle-help U+E082
 constexpr const char* kIconCpu                   = "\xee\x82\xad";  // cpu U+E0AD
 constexpr const char* kIconGauge                 = "\xee\x86\xbf";  // gauge U+E1BF
+constexpr const char* kIconPaperclip             = "\xee\x84\xb1";  // paperclip U+E131
+constexpr const char* kIconSettings              = "\xee\x85\x98";  // settings U+E158
+constexpr const char* kIconCircleCheck           = "\xee\x88\xa6";  // circle-check U+E226
+constexpr const char* kIconLogIn                 = "\xee\x84\x91";  // log-in U+E111
+constexpr const char* kIconPlug                  = "\xee\x8e\x83";  // plug U+E383
 
 // A window or popup title with an icon in front: WithIcon(kIconFolder, TrId("Assets")). The `###` id
 // part of TrId stays the same, so docked layouts and settings keep working.

@@ -98,6 +98,12 @@ public:
     void FocusAgentChat(const std::string& backend = {});
     std::array<float, 4> AgentChatInputRect() const;
     std::array<float, 4> AskControlRect(int index, const std::string& name) const;
+    // Files waiting to go with the next message of the Agent Chat panel / of the bubble at `index`.
+    std::vector<std::string> AgentChatAttachments() const;
+    std::vector<std::string> AskAttachments(int index) const;
+    // The Settings window, on a tab ("agents"; empty = as it was).
+    void OpenSettings(const std::string& tab = {});
+    bool SettingsOpen() const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).

@@ -761,7 +761,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `camera` | integer \| string | yes | Explicit Camera entity id or unique name. |
 | `position` | object | yes | Finite world point {x,y,z}. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
 
@@ -771,7 +771,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `camera` | integer \| string | yes | Explicit Camera entity id or unique name. |
 | `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
 
@@ -781,7 +781,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `camera` | entity | yes | Explicit Camera entity id or unique name. |
+| `camera` | integer \| string | yes | Explicit Camera entity id or unique name. |
 | `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
 | `plane` | object | yes | World plane {point:{x,y,z},normal:{x,y,z}}; nonzero normal. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
@@ -794,7 +794,7 @@ Read-only presentation coordinate query; local view dependent. See SCRIPTING.md 
 
 | arg | type | required | description |
 |---|---|---|---|
-| `canvas` | entity |  | Single effective UICanvas id/name; omitted uses first canvas or fallback. |
+| `canvas` | integer \| string |  | Single effective UICanvas id/name; omitted uses first canvas or fallback. |
 | `screen` | object | yes | Logical view pixel point {x,y}, top-left origin; not clamped. |
 | `view` | object |  | {width,height} integers 1..16384; omitted uses local input.viewSize state. |
 
@@ -808,7 +808,7 @@ Read-only text layout in reference pixels at effective view scale; actual render
 | `style` | object |  | font, size, letterSpacing, lineSpacing, bold, rich; defaults match UIText. |
 | `wrapWidth` | number |  | Reference pixels; omitted/zero = no wrap; maximum 65536. |
 | `view` | object |  | Logical {width,height}; omitted uses local input.viewSize(). |
-| `canvas` | entity |  | Single effective UICanvas; omitted uses first canvas/fallback. |
+| `canvas` | integer \| string |  | Single effective UICanvas; omitted uses first canvas/fallback. |
 
 ### `ui.layout`
 
@@ -1105,7 +1105,7 @@ Gameplay pause of the play session (like game.pause in Lua): scripts and UI keep
 
 | arg | type | required | description |
 |---|---|---|---|
-| `paused` | bool |  | true pauses, false resumes. |
+| `paused` | boolean |  | true pauses, false resumes. |
 
 ### `game.load_scene`
 
@@ -1444,12 +1444,16 @@ Redo the last undone edit.
 
 ### `team.backends`
 
-Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, its version, path, models and install hint. Detection runs once per session (it starts `<cli> --version`, a few seconds in total).
+Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, its version, path, models and install hint. Detection runs once per session (it starts `<cli> --version` and the CLI's login check, a few seconds in total): `login` is loggedIn | loggedOut | unknown with `loginDetail` and the `loginHint` command that signs in. `engine` is how the ownengine MCP server came up in the CLI's latest turn this session ({status: connected | failed | ..., time, agent}).
 
 | arg | type | required | description |
 |---|---|---|---|
 | `refresh` | boolean |  | Detect again, e.g. after installing a CLI (default false). |
 | `async` | boolean |  | Do not wait: detection runs in the background and entries report status "detecting" until a later call finds it done (what the editor does, so its window never freezes; default false). |
+
+### `team.connection`
+
+How agent turns reach this editor: {apiPort (0 = no editor API), oe (the program), mcp (the MCP server command line each turn gets), shell (the same commands from a shell, allowed without asking in edit access), askAccess}.
 
 ### `team.presets`
 
@@ -1534,6 +1538,7 @@ Read or change the team settings; without arguments it only reads them.
 | `maxHops` | integer |  | Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off). |
 | `inheritUserTools` | boolean |  | Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain. |
 | `rotateAboveInputTokens` | integer |  | Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000. |
+| `askAccess` | string |  | read | edit (default) | full: what an agent CLI asked directly (team.ask, the editor's Ask bubbles and Agent Chat) may do without asking. |
 
 ### `team.send`
 
@@ -1555,8 +1560,9 @@ Ask one agent CLI directly, outside the team roster and chat: a direct conversat
 | `thread` | string | yes | Conversation key, 1..64 characters of a-z, 0-9, '-' and '_' (the editor uses e<entity>-<backend>). |
 | `backend` | string | yes | Agent CLI id from team.backends (claude, codex, ...). |
 | `model` | string |  | Model id of that CLI (team.backends lists them); empty = the CLI's default. |
-| `text` | string | yes | The message, at most 32 KiB. |
+| `text` | string | yes | The message, at most 32 KiB (may be empty when files are attached). |
 | `context` | string |  | What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB. |
+| `attachments` | array |  | Files the agent should look at, as in team.send: paths on this PC or relative to the project, at most 8, 32 MiB each. |
 
 ### `team.thread`
 

@@ -17,6 +17,7 @@
 #include "app/Engine.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "platform/Platform.h"
 
 namespace oe {
 namespace {
@@ -32,6 +33,8 @@ std::string Trimmed(const std::string& text) {
     const size_t end = text.find_last_not_of(" \t\r\n");
     return text.substr(start, end - start + 1);
 }
+
+std::string BaseName(const std::string& path) { return path.substr(path.find_last_of("/\\") + 1); }
 
 // The "[Girl #605] " a team bubble puts before its messages, hidden again when it shows them.
 std::string WithoutObjectPrefix(const std::string& text) {
@@ -59,11 +62,12 @@ bool IconButton(const char* id, const char* icon, float side, bool enabled = tru
 struct AskLine {
     std::string who, text, hint, kind, meta;  // meta: "4 tools · 18 s · $0.04" under a reply
     bool mine = false;
+    Json attachments;  // the message's files (team.thread / team.messages form)
 };
 
 // The lines, then the running activity with moving dots; a change in what is drawn scrolls to it.
 void DrawAskLines(const std::vector<AskLine>& lines, const std::string& activity, size_t& shown, double time,
-                  const std::function<void(const std::string&)>& markdown) {
+                  const std::function<void(const std::string&)>& markdown, const std::function<void(const Json&)>& files) {
     for (size_t i = 0; i < lines.size(); ++i) {
         const AskLine& line = lines[i];
         ImGui::PushID(static_cast<int>(i));
@@ -78,9 +82,10 @@ void DrawAskLines(const std::vector<AskLine>& lines, const std::string& activity
             ImGui::PushTextWrapPos(0.0f);
             ImGui::TextDisabled("%s", line.text.c_str());
             ImGui::PopTextWrapPos();
-        } else {
+        } else if (!line.text.empty()) {
             markdown(line.text);
         }
+        if (line.attachments.size() > 0) files(line.attachments);
         if (!line.meta.empty()) ImGui::TextDisabled("%s", line.meta.c_str());
         ImGui::PopID();
     }
@@ -226,12 +231,14 @@ void NativeEditor::Impl::SceneAskMenu() {
 
 void NativeEditor::Impl::AskSend(AskBubble& bubble) {
     const std::string text = Trimmed(bubble.input);
-    if (text.empty()) return;
+    if (text.empty() && bubble.attachments.empty()) return;
+    Json files = Json::MakeArray();
+    for (const std::string& file : bubble.attachments) files.push(file);
     if (bubble.backend.empty()) {
         const EntityRow* row = Row(bubble.entity);
         const std::string prefix = bubble.spot ? "[" + std::string(Tr("This spot")) + " " + SpotLabel(bubble) + "] "
                                                : "[" + (row ? row->name : std::string()) + " #" + std::to_string(bubble.entity) + "] ";
-        const Json result = Call("team.send", ObjectOf({{"text", Json(prefix + text)}}), true);
+        const Json result = Call("team.send", ObjectOf({{"text", Json(prefix + text)}, {"attachments", files}}), true);
         if (!Ok(result)) {
             Notify(result["error"]["message"].asString(""), true);
             return;
@@ -240,7 +247,7 @@ void NativeEditor::Impl::AskSend(AskBubble& bubble) {
     } else {
         const Json result = Call("team.ask", ObjectOf({{"thread", Json(bubble.thread)}, {"backend", Json(bubble.backend)},
                                                        {"model", Json(bubble.model)}, {"text", Json(text)},
-                                                       {"context", Json(AskContext(bubble))}}), true);
+                                                       {"context", Json(AskContext(bubble))}, {"attachments", files}}), true);
         if (!Ok(result)) {
             const std::string hint = result["error"]["hint"].asString("");
             Notify(result["error"]["message"].asString("") + (hint.empty() ? "" : " " + hint), true);
@@ -250,6 +257,7 @@ void NativeEditor::Impl::AskSend(AskBubble& bubble) {
         bubble.polled = time;
     }
     bubble.input.clear();
+    bubble.attachments.clear();
     bubble.focusInput = true;
 }
 
@@ -318,6 +326,7 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
             line.hint = message["hint"].asString("");
             line.kind = kind;
             line.mine = mine;
+            line.attachments = message["attachments"];
             lines.push_back(std::move(line));
         }
         for (const Json& member : teamState["agents"].items()) {
@@ -340,7 +349,8 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
         ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, ImGui::GetFontSize() * kLogHeightEm));
         if (ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY)) {
             if (agent) DrawDirectConversation(bubble.state, target, bubble.shown, false);
-            else DrawAskLines(lines, activity, bubble.shown, time, [&](const std::string& text) { DrawChatMarkdown(text, {}, false, ImGui::GetColorU32(ImGuiCol_Text)); });
+            else DrawAskLines(lines, activity, bubble.shown, time, [&](const std::string& text) { DrawChatMarkdown(text, {}, false, ImGui::GetColorU32(ImGuiCol_Text)); },
+                              [&](const Json& files) { DrawAttachments(files, 8.0f); });
         }
         ImGui::EndChild();
     }
@@ -349,11 +359,12 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
     // (team bubbles) or a scene object (agent bubbles).
     const bool running = agent && bubble.state["running"].asBool();
     const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    AttachmentChips(bubble.attachments);
     const ImVec2 inputPos = ImGui::GetCursorScreenPos();
     const float inputHeight = ImGui::GetTextLineHeight() * 2.0f + ImGui::GetStyle().FramePadding.y * 2.0f;
     std::array<float, 4> inputRect{};
     bool typing = false;
-    const bool entered = ChatInput("##input", bubble.input, ImVec2(ImGui::GetContentRegionAvail().x - side - spacing, inputHeight), bubble.complete,
+    const bool entered = ChatInput("##input", bubble.input, ImVec2(ImGui::GetContentRegionAvail().x - (side + spacing) * 2.0f, inputHeight), bubble.complete,
                                    agent ? ChatMentions::Entities : ChatMentions::Agents, bubble.focusInput, &inputRect, &typing);
     askRects[std::to_string(bubble.serial) + ":input"] = inputRect;
     if (bubble.input.empty() && !typing) {
@@ -362,13 +373,16 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
                                             ImGui::GetColorU32(ImGuiCol_TextDisabled), hint.c_str());
     }
     ImGui::SameLine(0, spacing);
+    if (IconButton("##attach", kIconPaperclip, side)) ChooseAttachment(bubble.attachments);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Attach a file (or drop files on the bubble)"));
+    ImGui::SameLine(0, spacing);
     const ImVec2 buttonPos = ImGui::GetCursorScreenPos();
     askRects[std::to_string(bubble.serial) + ":send"] = {buttonPos.x, buttonPos.y, side, side};
     if (running) {
         if (IconButton("##stop", kIconSquare, side)) Call("team.thread_cancel", ObjectOf({{"thread", Json(bubble.thread)}}), true);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Stop"));
     } else {
-        if (IconButton("##send", kIconSend, side, !Trimmed(bubble.input).empty()) || entered) AskSend(bubble);
+        if (IconButton("##send", kIconSend, side, !Trimmed(bubble.input).empty() || !bubble.attachments.empty()) || entered) AskSend(bubble);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Send (Enter)"));
     }
     return false;
@@ -436,6 +450,7 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
             draw->AddCircle(anchor, 4.5f, IM_COL32(16, 18, 22, 255), 0, 1.5f);
         }
         ImGui::SetCursorScreenPos(at);
+        bubble.pos = at;
         ImGui::PushID(bubble.serial);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.12f, 0.14f, 0.96f));
         ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.42f, 0.62f, 1.0f, 0.45f));
@@ -463,6 +478,8 @@ void NativeEditor::Impl::DrawDirectConversation(const Json& state, const std::st
         line.text = message["text"].asString("");
         line.hint = message["hint"].asString("");
         line.kind = message["kind"].asString("message");
+        if (line.kind == "notice") line.who = Tr("Editor");
+        line.attachments = message["attachments"];
         if (details && message.has("turn")) {
             const Json& turn = message["turn"];
             line.meta = Format(Tr("%d tools"), turn["tools"].asInt(0)) + Format("  \xc2\xb7  %.0f s", turn["seconds"].asNumber(0));
@@ -472,7 +489,75 @@ void NativeEditor::Impl::DrawDirectConversation(const Json& state, const std::st
     }
     std::string activity;
     if (state["running"].asBool()) activity = Format("%s  %.0fs", state["activity"].asString("Starting").c_str(), state["elapsed"].asNumber(0));
-    DrawAskLines(lines, activity, shown, time, [&](const std::string& text) { DrawChatMarkdown(text, {}, false, ImGui::GetColorU32(ImGuiCol_Text)); });
+    DrawAskLines(lines, activity, shown, time, [&](const std::string& text) { DrawChatMarkdown(text, {}, false, ImGui::GetColorU32(ImGuiCol_Text)); },
+                 [&](const Json& files) { DrawAttachments(files, details ? 12.0f : 8.0f); });
+}
+
+void NativeEditor::Impl::DrawAttachments(const Json& attachments, float thumbnailEm) {
+    const float font = ImGui::GetFontSize();
+    int index = 0;
+    for (const Json& attachment : attachments.items()) {
+        const std::string path = attachment["path"].asString("");
+        ImGui::PushID(index++);
+        if (attachment["type"].asString("") == "image" &&
+            DrawImageFile(JoinPath(engine.ProjectDir(), path), ImVec2(font * thumbnailEm, font * thumbnailEm * 0.7f), 1.0f)) {
+            if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsItemClicked()) chatViewerPath = path;
+        } else if (ImGui::SmallButton(WithIcon(kIconFile, BaseName(path)).c_str())) {
+            OpenChatLink(path);
+        }
+        HelpTooltip(path);
+        ImGui::PopID();
+    }
+}
+
+void NativeEditor::Impl::AttachmentChips(std::vector<std::string>& files) {
+    if (files.empty()) return;
+    const float font = ImGui::GetFontSize();
+    float x = 0.0f;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    for (size_t i = 0; i < files.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+        const std::string label = BaseName(files[i]) + "  " + kIconX;
+        const float w = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        if (i > 0 && x + w < avail) ImGui::SameLine();
+        else x = 0.0f;
+        x += w + ImGui::GetStyle().ItemSpacing.x;
+        const bool remove = ImGui::SmallButton(label.c_str());
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            DrawImageFile(files[i], ImVec2(font * 14.0f, font * 14.0f), 1.0f);
+            ImGui::TextDisabled("%s", files[i].c_str());
+            ImGui::TextDisabled("%s", Tr("Click to remove"));
+            ImGui::EndTooltip();
+        }
+        ImGui::PopID();
+        if (remove) {
+            files.erase(files.begin() + static_cast<std::ptrdiff_t>(i));
+            break;
+        }
+    }
+}
+
+void NativeEditor::Impl::ChooseAttachment(std::vector<std::string>& files) {
+    if (files.size() >= 8) {
+        Notify(Tr("A message carries at most 8 attachments."), true);
+        return;
+    }
+    FileDialogOptions request;
+    request.title = Tr("Attach a File");
+    request.directory = engine.ProjectDir();
+    const FileDialogResult result = window ? window->ChooseFile(request) : FileDialogResult{};
+    if (result.status == FileDialogResult::Status::Cancelled) return;
+    if (result.status == FileDialogResult::Status::Unavailable) {
+        Notify(Tr("Native file dialogs unavailable; drop the file on the input instead."), true);
+        return;
+    }
+    if (result.status == FileDialogResult::Status::Error) {
+        Notify(result.error, true);
+        return;
+    }
+    if (std::find(files.begin(), files.end(), result.path) == files.end()) files.push_back(result.path);
 }
 
 void NativeEditor::Impl::AgentChatSelect(const std::string& backend, const std::string& thread) {
@@ -499,7 +584,9 @@ void NativeEditor::Impl::AgentChatSelect(const std::string& backend, const std::
 
 void NativeEditor::Impl::AgentChatSend() {
     const std::string text = Trimmed(agentChatInput);
-    if (text.empty() || agentChatBackend.empty()) return;
+    if ((text.empty() && agentChatAttachments.empty()) || agentChatBackend.empty()) return;
+    Json files = Json::MakeArray();
+    for (const std::string& file : agentChatAttachments) files.push(file);
     std::string context = "The person writes from the editor's Agent Chat panel, outside the agent team.";
     if (const EntityRow* row = Row(Primary())) {
         std::string components;
@@ -508,7 +595,8 @@ void NativeEditor::Impl::AgentChatSend() {
     }
     context += " editor.state shows what they see.";
     const Json result = Call("team.ask", ObjectOf({{"thread", Json(agentChatThread)}, {"backend", Json(agentChatBackend)},
-                                                   {"model", Json(agentChatModel)}, {"text", Json(text)}, {"context", Json(context)}}), true);
+                                                   {"model", Json(agentChatModel)}, {"text", Json(text)}, {"context", Json(context)},
+                                                   {"attachments", files}}), true);
     if (!Ok(result)) {
         const std::string hint = result["error"]["hint"].asString("");
         Notify(result["error"]["message"].asString("") + (hint.empty() ? "" : " " + hint), true);
@@ -518,6 +606,7 @@ void NativeEditor::Impl::AgentChatSend() {
     agentChatPolled = time;
     agentChatThreadsPolled = -100;
     agentChatInput.clear();
+    agentChatAttachments.clear();
     agentChatFocusInput = true;
 }
 
@@ -527,9 +616,11 @@ void NativeEditor::Impl::AgentChatPanel() {
         requestAgentChatFocus = false;
     }
     if (!ImGui::Begin(WithIcon(kIconBot, TrId("Agent Chat")).c_str(), &showAgentChat)) {
+        agentChatRect = {0, 0, 0, 0};
         ImGui::End();
         return;
     }
+    agentChatRect = {ImGui::GetWindowPos().x, ImGui::GetWindowPos().y, ImGui::GetWindowSize().x, ImGui::GetWindowSize().y};
     // The installed CLIs; the first one until the person picks another.
     std::vector<const Json*> installed;
     bool detecting = teamBackends.size() == 0;
@@ -607,7 +698,7 @@ void NativeEditor::Impl::AgentChatPanel() {
     }
     ImGui::SameLine();
     const float newWidth = ImGui::CalcTextSize(Tr("New")).x + ImGui::CalcTextSize(kIconPlus).x + style.FramePadding.x * 2 + style.ItemInnerSpacing.x * 2;
-    ImGui::SetNextItemWidth(std::max(field, ImGui::GetContentRegionAvail().x - newWidth - style.ItemSpacing.x));
+    ImGui::SetNextItemWidth(std::max(field, ImGui::GetContentRegionAvail().x - newWidth - ImGui::GetFrameHeight() - style.ItemSpacing.x * 2.0f));
     if (ImGui::BeginCombo("##thread", current.c_str())) {
         for (const Json& item : agentChatThreads.items()) {
             if (item["backend"].asString("") != agentChatBackend) continue;
@@ -625,10 +716,17 @@ void NativeEditor::Impl::AgentChatPanel() {
         AgentChatSelect(agentChatBackend, "chat-" + agentChatBackend + "-" + std::to_string(n));
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Start a new conversation (the CLI forgets the earlier one)"));
+    ImGui::SameLine();
+    if (IconButton("##settings", kIconSettings, ImGui::GetFrameHeight())) {
+        showSettings = true;
+        settingsTab = "agents";
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Agent settings: installed CLIs, login, engine connection, permissions"));
 
-    // The conversation, then the input.
+    // The conversation, then the files waiting to go and the input.
     const float inputHeight = ImGui::GetTextLineHeight() * 3.0f + style.FramePadding.y * 2.0f;
-    const float logHeight = ImGui::GetContentRegionAvail().y - inputHeight - style.ItemSpacing.y;
+    const float chipsHeight = agentChatAttachments.empty() ? 0.0f : ImGui::GetFrameHeight() + style.ItemSpacing.y;
+    const float logHeight = ImGui::GetContentRegionAvail().y - inputHeight - chipsHeight - style.ItemSpacing.y;
     if (ImGui::BeginChild("##log", ImVec2(0, std::max(ImGui::GetFrameHeight(), logHeight)), ImGuiChildFlags_None)) {
         if (agentChatState["messages"].size() == 0 && !agentChatState["running"].asBool()) {
             ImGui::PushTextWrapPos(0.0f);
@@ -639,21 +737,25 @@ void NativeEditor::Impl::AgentChatPanel() {
         }
     }
     ImGui::EndChild();
+    AttachmentChips(agentChatAttachments);
     const float side = ImGui::GetFrameHeight();
     const ImVec2 inputPos = ImGui::GetCursorScreenPos();
     bool typing = false;
-    const bool entered = ChatInput("##input", agentChatInput, ImVec2(ImGui::GetContentRegionAvail().x - side - style.ItemInnerSpacing.x, inputHeight),
+    const bool entered = ChatInput("##input", agentChatInput, ImVec2(ImGui::GetContentRegionAvail().x - (side + style.ItemInnerSpacing.x) * 2.0f, inputHeight),
                                    agentChatComplete, ChatMentions::Entities, agentChatFocusInput, &agentChatInputRect, &typing);
     if (agentChatInput.empty() && !typing) {
         ImGui::GetWindowDrawList()->AddText(ImVec2(inputPos.x + style.FramePadding.x, inputPos.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
                                             Format(Tr("Message %s (Enter sends; @ an object, # a file)"), target.c_str()).c_str());
     }
     ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    if (IconButton("##attach", kIconPaperclip, side)) ChooseAttachment(agentChatAttachments);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Attach a file (or drop files on this panel)"));
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
     if (agentChatState["running"].asBool()) {
         if (IconButton("##stop", kIconSquare, side)) Call("team.thread_cancel", ObjectOf({{"thread", Json(agentChatThread)}}), true);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Stop"));
     } else {
-        if (IconButton("##send", kIconSend, side, !Trimmed(agentChatInput).empty()) || entered) AgentChatSend();
+        if (IconButton("##send", kIconSend, side, !Trimmed(agentChatInput).empty() || !agentChatAttachments.empty()) || entered) AgentChatSend();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Send (Enter)"));
     }
     ImGui::End();

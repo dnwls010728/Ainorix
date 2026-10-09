@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "app/Engine.h"
+#include "core/FileSystem.h"
 #include "core/Log.h"
 #include "platform/Platform.h"
 #include "team/TeamDefaults.h"
@@ -98,7 +99,9 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
 
     Register(registry, "team.backends",
              "Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, its version, path, models and install hint. "
-             "Detection runs once per session (it starts `<cli> --version`, a few seconds in total).",
+             "Detection runs once per session (it starts `<cli> --version` and the CLI's login check, a few seconds in total): "
+             "`login` is loggedIn | loggedOut | unknown with `loginDetail` and the `loginHint` command that signs in. `engine` is how the "
+             "ownengine MCP server came up in the CLI's latest turn this session ({status: connected | failed | ..., time, agent}).",
              Params()
                  .Opt("refresh", "boolean", "Detect again, e.g. after installing a CLI (default false).")
                  .Opt("async", "boolean", "Do not wait: detection runs in the background and entries report status \"detecting\" until a later call finds it done "
@@ -116,14 +119,36 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                      }
                  }
                  const bool busy = state->detecting.valid();
+                 const Json engine = state->session.EngineConnections();
                  Json list = Json::MakeArray();
                  for (size_t i = 0; i < state->backends.size(); ++i) {
                      BackendState pending;
                      pending.status = BackendStatus::Detecting;
                      pending.models = state->backends[i].models;
-                     list.push(BackendToJson(state->backends[i], busy ? pending : state->detected[i]));
+                     Json entry = BackendToJson(state->backends[i], busy ? pending : state->detected[i]);
+                     if (engine.has(state->backends[i].id)) entry["engine"] = engine[state->backends[i].id];
+                     list.push(std::move(entry));
                  }
                  return list;
+             });
+
+    Register(registry, "team.connection",
+             "How agent turns reach this editor: {apiPort (0 = no editor API), oe (the program), mcp (the MCP server command line each turn gets), "
+             "shell (the same commands from a shell, allowed without asking in edit access), askAccess}.",
+             Params(), [state](Engine& e, const Json&) {
+                 TeamSession& session = state->Session(e);
+                 const int port = state->handle->host.apiPort;
+                 Json out = Json::MakeObject();
+                 out["apiPort"] = port;
+                 out["oe"] = session.OeExecutable();
+                 out["oeFound"] = FileExists(session.OeExecutable());
+                 if (port > 0) {
+                     out["mcp"] = "oe mcp --connect " + std::to_string(port) + " --agent <id>";
+                     out["shell"] = "oe exec --connect " + std::to_string(port) + " <command> '<json args>'";
+                 }
+                 out["askAccess"] = state->Store(e).Settings().askAccess;
+                 out["inheritUserTools"] = state->Store(e).Settings().inheritUserTools;
+                 return out;
              });
 
     Register(registry, "team.presets", "Names of the built-in profile pictures (use as avatar \"preset:<name>\").", Params(), [](Engine&, const Json&) {
@@ -224,7 +249,8 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  .Opt("maxConcurrent", "integer", "Agent turns that may run at the same time, 1..8 (default 3).")
                  .Opt("maxHops", "integer", "Chained agent-to-agent turns one user message may cause, 0..16 (default 0, off).")
                  .Opt("inheritUserTools", "boolean", "Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain.")
-                 .Opt("rotateAboveInputTokens", "integer", "Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000."),
+                 .Opt("rotateAboveInputTokens", "integer", "Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000.")
+                 .Opt("askAccess", "string", "read | edit (default) | full: what an agent CLI asked directly (team.ask, the editor's Ask bubbles and Agent Chat) may do without asking."),
              [state](Engine& e, const Json& a) {
                  TeamStore& store = state->Store(e);
                  if (a.size() > 0) store.SetSettings(a);
@@ -234,6 +260,7 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  result["maxHops"] = store.Settings().maxHops;
                  result["rotateAboveInputTokens"] = store.Settings().rotateAboveInputTokens;
                  result["inheritUserTools"] = store.Settings().inheritUserTools;
+                 result["askAccess"] = store.Settings().askAccess;
                  return result;
              });
 
@@ -289,11 +316,17 @@ std::shared_ptr<TeamHandle> RegisterTeamCommands(CommandRegistry& registry, std:
                  .Req("thread", "string", "Conversation key, 1..64 characters of a-z, 0-9, '-' and '_' (the editor uses e<entity>-<backend>).")
                  .Req("backend", "string", "Agent CLI id from team.backends (claude, codex, ...).")
                  .Opt("model", "string", "Model id of that CLI (team.backends lists them); empty = the CLI's default.")
-                 .Req("text", "string", "The message, at most 32 KiB.")
-                 .Opt("context", "string", "What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB."),
+                 .Req("text", "string", "The message, at most 32 KiB (may be empty when files are attached).")
+                 .Opt("context", "string", "What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB.")
+                 .OptWith("attachments", Json::parse(R"J({"type":"array","items":{"type":"string"},"maxItems":8,"description":"Files the agent should look at, as in team.send: paths on this PC or relative to the project, at most 8, 32 MiB each."})J")),
              [state](Engine& e, const Json& a) {
+                 std::vector<std::string> attachments;
+                 for (const Json& path : a["attachments"].items()) {
+                     if (!path.isString()) throw ApiError("invalid_argument", "attachments must be file paths (strings)");
+                     attachments.push_back(path.asString());
+                 }
                  return state->Session(e).Ask(a["thread"].asString(), a["backend"].asString(), a["model"].asString(""),
-                                              a["text"].asString(), a["context"].asString(""));
+                                              a["text"].asString(), a["context"].asString(""), attachments);
              });
     Register(registry, "team.thread", "One direct conversation (team.ask): backend, model, running, activity and its messages, oldest first.",
              Params().Req("thread", "string", "Conversation key."),

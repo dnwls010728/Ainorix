@@ -184,18 +184,36 @@ void NativeEditor::Impl::SendChat() {
     }
 }
 
-// Files dropped on the Team Chat panel are attached to the next message; the others are left
-// for the import (ImportDroppedFiles), as before.
+// Files dropped on the Team Chat or Agent Chat panel or on a Scene bubble are attached to its
+// next message; the others are left for the import (ImportDroppedFiles), as before.
 void NativeEditor::Impl::RouteDroppedFiles() {
     std::vector<std::string> other;
+    auto inside = [](ImVec2 at, const std::array<float, 4>& rect) {
+        return rect[2] > 0 && at.x >= rect[0] && at.y >= rect[1] && at.x < rect[0] + rect[2] && at.y < rect[1] + rect[3];
+    };
     for (size_t i = 0; i < droppedFiles.size(); ++i) {
         const ImVec2 at = i < droppedAt.size() ? droppedAt[i] : ImVec2(-1, -1);
-        const bool onChat = chatVisible && at.x >= chatRect[0] && at.y >= chatRect[1] && at.x < chatRect[0] + chatRect[2] && at.y < chatRect[1] + chatRect[3];
-        if (!onChat) {
+        std::vector<std::string>* target = nullptr;
+        bool* focus = nullptr;
+        for (AskBubble& bubble : askBubbles) {  // drawn on top of the Scene view
+            if (inside(at, {bubble.pos.x, bubble.pos.y, bubble.size.x, bubble.size.y})) {
+                target = &bubble.attachments;
+                focus = &bubble.focusInput;
+            }
+        }
+        if (!target && showAgentChat && inside(at, agentChatRect)) {
+            target = &agentChatAttachments;
+            focus = &agentChatFocusInput;
+        }
+        if (!target && chatVisible && inside(at, chatRect)) {
+            target = &chatAttachments;
+            focus = &chatFocusInput;
+        }
+        if (!target) {
             other.push_back(droppedFiles[i]);
-        } else if (chatAttachments.size() < kMaxPendingAttachments) {
-            if (std::find(chatAttachments.begin(), chatAttachments.end(), droppedFiles[i]) == chatAttachments.end()) chatAttachments.push_back(droppedFiles[i]);
-            chatFocusInput = true;
+        } else if (target->size() < kMaxPendingAttachments) {
+            if (std::find(target->begin(), target->end(), droppedFiles[i]) == target->end()) target->push_back(droppedFiles[i]);
+            *focus = true;
         } else {
             Notify(Tr("A message carries at most 8 attachments."), true);
         }
@@ -368,25 +386,17 @@ void NativeEditor::Impl::TeamChatPanel() {
     }
 
     // ----- Files waiting to go with the next message
-    for (size_t i = 0; i < chatAttachments.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        if (i > 0) ImGui::SameLine();
-        const std::string file = chatAttachments[i];
-        const bool remove = ImGui::Button((BaseName(file) + "  " + kIconX).c_str());
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            DrawImageFile(file, ImVec2(font * 14.0f, font * 14.0f), 1.0f);
-            ImGui::TextDisabled("%s", file.c_str());
-            ImGui::EndTooltip();
-        }
-        if (remove) chatAttachments.erase(chatAttachments.begin() + static_cast<std::ptrdiff_t>(i));
-        ImGui::PopID();
-    }
+    AttachmentChips(chatAttachments);
 
     // ----- Input: Enter sends, Shift+Enter is a new line; @agent and #file complete from a list
     const float sendWidth = ImGui::CalcTextSize(Tr("Send")).x + style.FramePadding.x * 2.0f;
+    const float attachWidth = ImGui::CalcTextSize(kIconPaperclip).x + style.FramePadding.x * 2.0f;
     ImGui::TextDisabled("%s", Tr("Enter sends, Shift+Enter starts a new line, @ mentions an agent, # refers to a project file."));
-    const bool enter = ChatInput("##chatInput", chatInput, ImVec2(-(sendWidth + style.ItemSpacing.x), inputHeight), chatComplete, ChatMentions::Agents, chatFocusInput);
+    const bool enter = ChatInput("##chatInput", chatInput, ImVec2(-(sendWidth + attachWidth + style.ItemSpacing.x * 2.0f), inputHeight), chatComplete,
+                                 ChatMentions::Agents, chatFocusInput);
+    ImGui::SameLine();
+    if (ImGui::Button(kIconPaperclip, ImVec2(attachWidth, inputHeight))) ChooseAttachment(chatAttachments);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Attach a file (or drop files on this panel)"));
     ImGui::SameLine();
     if (ImGui::Button(Tr("Send"), ImVec2(sendWidth, inputHeight)) || enter) {
         chatJustSent = true;

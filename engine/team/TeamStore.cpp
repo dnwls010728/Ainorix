@@ -171,6 +171,7 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
     if (settings.rotateAboveInputTokens != defaults.rotateAboveInputTokens) root["rotateAboveInputTokens"] = settings.rotateAboveInputTokens;
     if (settings.maxHops != defaults.maxHops) root["maxHops"] = settings.maxHops;
     if (settings.inheritUserTools) root["inheritUserTools"] = true;
+    if (settings.askAccess != defaults.askAccess) root["askAccess"] = settings.askAccess;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents) {
         Json j = Json::MakeObject();
@@ -296,6 +297,8 @@ bool TeamStore::Open(const std::string& projectDir, std::string* error) {
         settings.maxHops = IntegerSetting(root, "maxHops", 0, 16, settings.maxHops);
         settings.rotateAboveInputTokens = IntegerSetting(root, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
         settings.inheritUserTools = BooleanSetting(root, "inheritUserTools", settings.inheritUserTools);
+        settings.askAccess = root["askAccess"].asString(settings.askAccess);
+        if (!ValidAccess(settings.askAccess)) throw Invalid("askAccess must be read, edit or full");
         settings.lead = root["lead"].asString("");
         const bool leadExists = std::any_of(agents.begin(), agents.end(), [&](const AgentProfile& a) { return a.id == settings.lead; });
         if (!settings.lead.empty() && !leadExists) throw Invalid("lead \"" + settings.lead + "\" is not an agent of the team");
@@ -488,6 +491,10 @@ void TeamStore::SetSettings(const Json& values) {
     settings.maxHops = IntegerSetting(values, "maxHops", 0, 16, settings.maxHops);
     settings.rotateAboveInputTokens = IntegerSetting(values, "rotateAboveInputTokens", 0, 2000000, settings.rotateAboveInputTokens);
     settings.inheritUserTools = BooleanSetting(values, "inheritUserTools", settings.inheritUserTools);
+    if (const Json* access = values.find("askAccess")) {
+        if (!access->isString() || !ValidAccess(access->asString())) throw Invalid("askAccess must be read, edit or full");
+        settings.askAccess = access->asString();
+    }
     if (const Json* lead = values.find("lead")) {
         if (!lead->isString()) throw Invalid("lead must be an agent id or name, or \"\" for nobody");
         settings.lead = lead->asString().empty() ? std::string() : agents_[RequireIndex(lead->asString())].id;
@@ -521,6 +528,7 @@ Json TeamStore::ToJson() const {
     root["maxHops"] = settings_.maxHops;
     root["rotateAboveInputTokens"] = settings_.rotateAboveInputTokens;
     root["inheritUserTools"] = settings_.inheritUserTools;
+    root["askAccess"] = settings_.askAccess;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents_) list.push(AgentToJson(agent));
     root["agents"] = std::move(list);
