@@ -173,6 +173,8 @@ public:
         wc.lpfnWndProc = &Win32Window::Proc;
         wc.hInstance = inst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        // Dark until the first frame is presented (the default white flashes while a project loads).
+        wc.hbrBackground = CreateSolidBrush(RGB(18, 19, 22));
         wc.lpszClassName = L"OwnEngineWindow";
         RegisterClassExW(&wc);  // fails harmlessly if already registered
 
@@ -181,7 +183,8 @@ public:
         hwnd_ = CreateWindowExW(0, wc.lpszClassName, Widen(title).c_str(), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                                 rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, inst, this);
         if (!hwnd_) return false;
-        ShowWindow(hwnd_, SW_SHOW);
+        // Shown by the first PumpEvents, when the caller's frame loop starts (GPU setup and project
+        // loading come before that), unless a restored placement showed it already.
         width_ = width;
         height_ = height;
         // Raw mouse input gives unaccelerated relative motion for mouse look.
@@ -199,6 +202,7 @@ public:
     }
 
     bool PumpEvents(InputState& input) override {
+        if (!IsWindowVisible(hwnd_)) ShowWindow(hwnd_, SW_SHOW);
         input_ = &input;
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {

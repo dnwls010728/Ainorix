@@ -973,7 +973,10 @@ bool Engine::EnableGpu(Window* window, std::string* error) {
     if (gpu_) return true;
     gpuDevice_ = CreateGpuDevice(window, error);
     if (!gpuDevice_) return false;
-    gpu_ = std::make_unique<GpuRenderer>(*gpuDevice_, assets_.get());
+    GpuRenderer::Settings settings;
+    settings.shaderCacheDir = gpuShaderCache_;
+    settings.asyncShaders = gpuAsyncShaders_;
+    gpu_ = std::make_unique<GpuRenderer>(*gpuDevice_, assets_.get(), settings);
     OE_LOG_INFO("render", "GPU renderer ready: %s", gpu_->Name());
     return true;
 }

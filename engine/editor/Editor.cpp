@@ -1864,6 +1864,7 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
     }
     window.SetEventMode(true);
     double last = PlatformTimeSeconds();
+    bool firstFrame = false;
     while (!editor.QuitRequested()) {
         engine.RunPostedJobs();  // HTTP / MCP calls from agents
         window.PumpEvents(editor.WindowInput());
@@ -1871,7 +1872,12 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
         double dt = std::min(0.25, now - last);
         last = now;
         editor.Update(window.TakeEvents(), window.Width(), window.Height(), window.DpiScale(), dt);
-        if (!editor.DrawToWindow()) PlatformSleep(0.016);  // minimized
+        const bool drawn = editor.DrawToWindow();
+        if (!drawn) PlatformSleep(0.016);  // minimized
+        if (drawn && !firstFrame) {
+            firstFrame = true;
+            OE_LOG_INFO("editor", "first frame shown");
+        }
     }
     window.SetEventMode(false);
     return 0;

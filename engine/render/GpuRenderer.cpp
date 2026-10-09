@@ -3,10 +3,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <future>
+#include <iterator>
 #include <stdexcept>
 #include <unordered_map>
 
+#include "core/FileSystem.h"
 #include "core/Log.h"
 #include "render/GpuDevice.h"
 #include "render/GraphSource.h"
@@ -31,6 +35,78 @@ const Color kOutlineColor(1.0f, 0.62f, 0.1f);
 // composite_fs tone_mapping.y: 0 none, 1 Reinhard, 2 ACES.
 float ToneMappingMode(const PostProcess& post) {
     return post.toneMapping == "aces" ? 2.0f : post.toneMapping == "reinhard" ? 1.0f : 0.0f;
+}
+
+// ----- Shader bytecode (devices that compile source themselves, e.g. D3D11) -----
+
+// One program's two stages: source in, bytecode out.
+struct ProgramCode {
+    struct Stage {
+        std::string source, target, entry;
+        std::vector<uint8_t> bytecode;
+    };
+    Stage vs, fs;
+    bool ok = false;  // both stages have bytecode
+};
+
+uint64_t Fnv1a(const std::string& text, uint64_t hash = 1469598103934665603ull) {
+    for (unsigned char c : text) hash = (hash ^ c) * 1099511628211ull;
+    return hash;
+}
+
+ProgramCode::Stage StageOf(const sg_shader_function& function, const char* defaultTarget) {
+    ProgramCode::Stage stage;
+    stage.source = function.source ? function.source : "";
+    stage.target = function.d3d11_target ? function.d3d11_target : defaultTarget;
+    stage.entry = function.entry ? function.entry : "main";
+    return stage;
+}
+
+// Bytecode of one stage from `cacheDir` (file name = hash of compiler, target, entry and source),
+// else compiled and stored there. Any thread.
+bool CompileStage(const GpuDevice& device, const std::string& compiler, const std::string& cacheDir, ProgramCode::Stage& stage) {
+    char name[32];
+    const uint64_t key = Fnv1a(stage.source, Fnv1a(compiler + "\n" + stage.target + "\n" + stage.entry));
+    std::snprintf(name, sizeof(name), "%016llx.bin", static_cast<unsigned long long>(key));
+    const std::string path = cacheDir.empty() ? std::string() : JoinPath(cacheDir, name);
+    std::vector<unsigned char> cached;
+    if (!path.empty() && ReadBinaryFile(path, cached) && !cached.empty()) {
+        stage.bytecode.assign(cached.begin(), cached.end());
+        return true;
+    }
+    std::string error;
+    if (!device.CompileShader(stage.source, stage.target.c_str(), stage.entry.c_str(), &stage.bytecode, &error)) {
+        OE_LOG_WARN("gpu", "shader compile failed: %s", error.c_str());
+        return false;
+    }
+    if (!path.empty()) WriteTextFileAtomic(path, std::string(stage.bytecode.begin(), stage.bytecode.end()), nullptr);
+    return true;
+}
+
+bool CompileProgram(const GpuDevice& device, const std::string& compiler, const std::string& cacheDir, ProgramCode& code) {
+    code.ok = !code.vs.source.empty() && !code.fs.source.empty() && CompileStage(device, compiler, cacheDir, code.vs) &&
+              CompileStage(device, compiler, cacheDir, code.fs);
+    return code.ok;
+}
+
+// `desc` with the compiled stages in place of its source.
+sg_shader MakeCompiledShader(sg_shader_desc desc, const ProgramCode& code) {
+    desc.vertex_func.source = nullptr;
+    desc.vertex_func.bytecode = {code.vs.bytecode.data(), code.vs.bytecode.size()};
+    desc.fragment_func.source = nullptr;
+    desc.fragment_func.bytecode = {code.fs.bytecode.data(), code.fs.bytecode.size()};
+    return sg_make_shader(&desc);
+}
+
+// Keeps a shader cache folder bounded: the oldest files go first.
+void TrimShaderCache(const std::string& dir, size_t keep) {
+    if (dir.empty() || !IsDirectory(dir)) return;
+    std::vector<std::string> files = ListFiles(dir, ".bin", false);
+    if (files.size() <= keep) return;
+    std::vector<std::pair<int64_t, std::string>> dated;
+    for (const std::string& file : files) dated.emplace_back(FileModifiedTime(file), file);
+    std::sort(dated.begin(), dated.end());
+    for (size_t i = 0; i + keep < dated.size(); ++i) RemoveAll(dated[i].second);
 }
 
 struct MeshVertex {
@@ -547,6 +623,7 @@ struct GpuRenderer::Impl {
         sg_shader mesh{}, aux{};
         bool failed = false;
         std::unordered_map<uint32_t, sg_pipeline> pipelines;  // standard pipeline id -> this graph's
+        std::future<std::pair<ProgramCode, ProgramCode>> compiling;  // mesh + aux on a worker (asyncShaders)
         void Destroy() {
             for (auto& kv : pipelines) sg_destroy_pipeline(kv.second);
             if (mesh.id) sg_destroy_shader(mesh);
@@ -554,6 +631,7 @@ struct GpuRenderer::Impl {
         }
     };
     std::unordered_map<const ShaderGraph*, GraphProgram> graphPrograms;
+    std::string compiler;  // device.ShaderCompilerId(); empty = sokol_gfx compiles source
     std::unordered_map<uint32_t, sg_pipeline_desc> graphPipelineDescs;  // standard mesh/surface pipelines by id
 
     std::unordered_map<const Mesh*, GpuMesh> meshes;
@@ -565,16 +643,31 @@ struct GpuRenderer::Impl {
 
     void Init() {
         sg_backend backend = sg_query_backend();
-        meshShd = sg_make_shader(oe_mesh_shader_desc(backend));
-        surfaceAuxShd = sg_make_shader(oe_surface_aux_shader_desc(backend));
-        shadowShd = sg_make_shader(oe_shadow_shader_desc(backend));
-        solidShd = sg_make_shader(oe_solid_shader_desc(backend));
-        lineShd = sg_make_shader(oe_line_shader_desc(backend));
-        compositeShd = sg_make_shader(oe_composite_shader_desc(backend));
-        uiShd = sg_make_shader(oe_ui_shader_desc(backend));
-        bloomShd = sg_make_shader(oe_bloom_shader_desc(backend));
-        sceneDepthShd = sg_make_shader(oe_scene_depth_shader_desc(backend));
-        dofShd = sg_make_shader(oe_dof_shader_desc(backend));
+        compiler = device.ShaderCompilerId();
+        TrimShaderCache(settings.shaderCacheDir, 400);
+        sg_shader* const shaders[] = {&meshShd, &surfaceAuxShd, &shadowShd, &solidShd, &lineShd,
+                                      &compositeShd, &uiShd, &bloomShd, &sceneDepthShd, &dofShd};
+        const sg_shader_desc* const descs[] = {
+            oe_mesh_shader_desc(backend), oe_surface_aux_shader_desc(backend), oe_shadow_shader_desc(backend),
+            oe_solid_shader_desc(backend), oe_line_shader_desc(backend), oe_composite_shader_desc(backend),
+            oe_ui_shader_desc(backend), oe_bloom_shader_desc(backend), oe_scene_depth_shader_desc(backend),
+            oe_dof_shader_desc(backend)};
+        // Where the device compiles source itself the programs compile in parallel or come from the
+        // cache; otherwise sokol_gfx takes the source as it is.
+        std::vector<std::future<ProgramCode>> codes;
+        if (!compiler.empty()) {
+            for (const sg_shader_desc* desc : descs) {
+                codes.push_back(std::async(std::launch::async, [this, desc] {
+                    ProgramCode code{StageOf(desc->vertex_func, "vs_4_0"), StageOf(desc->fragment_func, "ps_4_0")};
+                    CompileProgram(device, compiler, settings.shaderCacheDir, code);
+                    return code;
+                }));
+            }
+        }
+        for (size_t i = 0; i < std::size(descs); ++i) {
+            const ProgramCode code = codes.empty() ? ProgramCode() : codes[i].get();
+            *shaders[i] = code.ok ? MakeCompiledShader(*descs[i], code) : sg_make_shader(descs[i]);
+        }
 
         const int msaa = settings.msaa;
         const sg_pixelformat_info hdrInfo = sg_query_pixelformat(kHdrFormat);
@@ -868,6 +961,15 @@ struct GpuRenderer::Impl {
     sg_pipeline GraphPipeline(sg_pipeline standard, const Material& material) {
         if (!material.shader) return standard;
         GraphProgram& program = ProgramFor(material.shader);
+        if (program.compiling.valid()) {
+            if (program.compiling.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return standard;
+            const std::pair<ProgramCode, ProgramCode> codes = program.compiling.get();
+            const sg_backend backend = sg_query_backend();
+            const bool ok = codes.first.ok && codes.second.ok;
+            FinishGraph(program, ok ? MakeGraphShader(*oe_mesh_shader_desc(backend), codes.first) : sg_shader{},
+                        ok ? MakeGraphShader(*oe_surface_aux_shader_desc(backend), codes.second) : sg_shader{});
+            OE_LOG_DEBUG("gpu", "shader graph program ready (compiled in the background)");
+        }
         if (program.failed) return standard;
         auto found = program.pipelines.find(standard.id);
         if (found != program.pipelines.end()) return found->second;
@@ -887,25 +989,59 @@ struct GpuRenderer::Impl {
         GraphProgram& program = graphPrograms[graph.get()];
         program.owner = graph;
         const sg_backend backend = sg_query_backend();
-        program.mesh = CompileGraph(*oe_mesh_shader_desc(backend), *graph);
-        program.aux = program.mesh.id ? CompileGraph(*oe_surface_aux_shader_desc(backend), *graph) : sg_shader{};
-        program.failed = !program.mesh.id || !program.aux.id;
-        if (program.failed) OE_LOG_WARN("gpu", "a shader graph did not compile for the GPU; it is interpreted instead");
+        ProgramCode mesh = GraphCode(*oe_mesh_shader_desc(backend), *graph);
+        ProgramCode aux = GraphCode(*oe_surface_aux_shader_desc(backend), *graph);
+        if (compiler.empty()) {  // sokol_gfx compiles the source
+            const sg_shader meshShader = MakeGraphShader(*oe_mesh_shader_desc(backend), mesh);
+            FinishGraph(program, meshShader, meshShader.id ? MakeGraphShader(*oe_surface_aux_shader_desc(backend), aux) : sg_shader{});
+        } else if (settings.asyncShaders) {  // GraphPipeline picks the result up once it is ready
+            program.compiling = std::async(std::launch::async, [this, mesh, aux]() mutable {
+                if (CompileProgram(device, compiler, settings.shaderCacheDir, mesh))
+                    CompileProgram(device, compiler, settings.shaderCacheDir, aux);
+                return std::make_pair(std::move(mesh), std::move(aux));
+            });
+        } else {
+            const bool ok = CompileProgram(device, compiler, settings.shaderCacheDir, mesh) &&
+                            CompileProgram(device, compiler, settings.shaderCacheDir, aux);
+            FinishGraph(program, ok ? MakeGraphShader(*oe_mesh_shader_desc(backend), mesh) : sg_shader{},
+                        ok ? MakeGraphShader(*oe_surface_aux_shader_desc(backend), aux) : sg_shader{});
+        }
         return program;
     }
 
-    // The generated program `standard` with the graph in place of the interpreter loops.
-    static sg_shader CompileGraph(sg_shader_desc desc, const ShaderGraph& graph) {
+    static void FinishGraph(GraphProgram& program, sg_shader mesh, sg_shader aux) {
+        program.mesh = mesh;
+        program.aux = aux;
+        program.failed = !mesh.id || !aux.id;
+        if (program.failed) OE_LOG_WARN("gpu", "a shader graph did not compile for the GPU; it is interpreted instead");
+    }
+
+    // The program `standard` with the graph in place of the interpreter loops, as source (none
+    // when `standard` has no source to patch).
+    static ProgramCode GraphCode(const sg_shader_desc& standard, const ShaderGraph& graph) {
+        ProgramCode code{StageOf(standard.vertex_func, "vs_4_0"), StageOf(standard.fragment_func, "ps_4_0")};
         const GraphDialect dialect = sg_query_backend() == SG_BACKEND_D3D11 ? GraphDialect::Hlsl : GraphDialect::Glsl;
-        if (!desc.vertex_func.source || !desc.fragment_func.source) return sg_shader{};  // bytecode: nothing to patch
-        std::string vertex = desc.vertex_func.source, fragment = desc.fragment_func.source;
-        if (!ReplaceFunctionBody(vertex, "VertexOffset", GraphVertexBody(graph, dialect)) ||
-            !ReplaceFunctionBody(fragment, "SurfaceGraph", GraphSurfaceBody(graph, dialect)))
-            return sg_shader{};
-        desc.vertex_func.source = vertex.c_str();
-        desc.fragment_func.source = fragment.c_str();
+        if (code.vs.source.empty() || code.fs.source.empty() ||
+            !ReplaceFunctionBody(code.vs.source, "VertexOffset", GraphVertexBody(graph, dialect)) ||
+            !ReplaceFunctionBody(code.fs.source, "SurfaceGraph", GraphSurfaceBody(graph, dialect))) {
+            code.vs.source.clear();
+            code.fs.source.clear();
+        }
+        return code;
+    }
+
+    // A graph program from compiled stages (code.ok) or else from its source; none when it fails.
+    static sg_shader MakeGraphShader(sg_shader_desc desc, const ProgramCode& code) {
+        if (code.vs.source.empty() || code.fs.source.empty()) return sg_shader{};
         desc.label = "oe-graph";
-        sg_shader shader = sg_make_shader(&desc);
+        sg_shader shader;
+        if (code.ok) {
+            shader = MakeCompiledShader(desc, code);
+        } else {
+            desc.vertex_func.source = code.vs.source.c_str();
+            desc.fragment_func.source = code.fs.source.c_str();
+            shader = sg_make_shader(&desc);
+        }
         if (sg_query_shader_state(shader) == SG_RESOURCESTATE_VALID) return shader;
         sg_destroy_shader(shader);
         return sg_shader{};

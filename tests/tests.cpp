@@ -15,6 +15,7 @@
 #include <limits>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include "api/HttpServer.h"
@@ -44,6 +45,7 @@
 #include "platform/Process.h"
 #include "platform/TouchInput.h"
 #include "render/Font.h"
+#include "render/GpuDevice.h"
 #include "render/GpuRenderer.h"
 #include "render/GraphSource.h"
 #include "render/shaders/Shaders.glsl.h"
@@ -7092,6 +7094,64 @@ TEST(ShaderMaterialRendering) {
     CHECK(Call(e, "material.set", R"J({"path":"stripes.mat.json","values":{"shader":"","shaderUniforms":{}}})J")["ok"].asBool());
     e.RenderGameView(again);
     CHECK(again.Hash() == original.Hash());
+}
+
+// The editor's shader cache (GpuRenderer::Settings): the first run stores compiled programs, the
+// next one reads them back, and a graph compiled in the background ends up drawing the same image.
+TEST(GpuShaderCacheAndBackgroundGraphs) {
+    const std::string project = TempProject("gpu_shader_cache");
+    const std::string cache = JoinPath(project, ".oe/shader-cache");
+    RenderTarget sync, async;
+    sync.Resize(96, 64);
+    async.Resize(96, 64);
+    size_t stored = 0;
+    {
+        Engine e;
+        std::string error;
+        CHECK(e.Open(project, &error));
+        Call(e, "scene.new", R"J({"empty":true})J");
+        CHECK(Call(e, "shader.create", R"J({"path":"materials/stripes.shader.json","graph":{
+          "nodes":[{"op":"uv"},{"op":"swizzle","args":[0],"value":[0,0,0,0]},{"op":"constant","value":4},
+          {"op":"multiply","args":[1,2]},{"op":"fract","args":[3]},{"op":"constant","value":0.5},{"op":"step","args":[5,4]},
+          {"op":"constant","value":[1,0,0,1]},{"op":"constant","value":[0,0,1,1]},{"op":"mix","args":[7,8,6]}],"color":9}})J")["ok"].asBool());
+        CHECK(Call(e, "material.create", R"J({"path":"stripes.mat.json","values":{"unlit":true,
+          "shader":"materials/stripes.shader.json"}})J")["ok"].asBool());
+        Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,0,10]},
+          "Camera":{"projection":"orthographic","clearColor":[0,0,0]}}})J");
+        Call(e, "entity.create", R"J({"name":"Cube","components":{"Transform":{"scale":[4,4,1]},
+          "MeshRenderer":{"material":"stripes.mat.json"}}})J");
+        CHECK(Call(e, "scene.save", R"J({"path":"scenes/main.scene.json"})J")["ok"].asBool());
+        e.SetGpuShaderOptions(cache, false);
+        if (!e.EnableGpu(nullptr, &error)) {
+            std::printf("  SKIP no GPU backend here (%s)\n", error.c_str());
+            return;
+        }
+        RenderView view;
+        MakeSceneView(e.GetScene(), 96.0f / 64, view);
+        e.Gpu()->Render(e.GetScene(), view, sync);
+        if (e.Gpu()->Device().ShaderCompilerId().empty()) {
+            std::printf("  SKIP the device compiles shader source itself (no cache)\n");
+            return;
+        }
+        stored = ListFiles(cache, ".bin", false).size();
+        CHECK(stored > 0);
+    }
+    Engine e;
+    std::string error;
+    CHECK(e.Open(project, &error));
+    e.SetGpuShaderOptions(cache, true);
+    CHECK(e.EnableGpu(nullptr, &error));
+    RenderView view;
+    MakeSceneView(e.GetScene(), 96.0f / 64, view);
+    // Until the background compile lands the interpreter draws; the compiled program then gives
+    // the synchronous image exactly.
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        e.Gpu()->Render(e.GetScene(), view, async);
+        if (async.color == sync.color) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(async.color == sync.color);
+    CHECK(ListFiles(cache, ".bin", false).size() == stored);  // everything came from the cache
 }
 
 TEST(MeshRendererShaderUniforms) {

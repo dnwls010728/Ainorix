@@ -1,5 +1,7 @@
 #pragma once
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "sokol_gfx.h"
 
@@ -27,6 +29,17 @@ public:
     // Copies a single-sampled RGBA8 color-attachment image into `out`
     // (width*height pixels, top row first, 0xAABBGGRR like RenderTarget).
     virtual bool ReadPixels(sg_image image, int width, int height, uint32_t* out) = 0;
+    // Compiles one shader stage from source into bytecode the backend accepts (D3D11: HLSL to
+    // DXBC) so GpuRenderer can cache programs on disk and compile them off the main thread. Safe to
+    // call from any thread. False where the backend only takes source (GL) or on a compile error
+    // (`error` gets the compiler output).
+    virtual bool CompileShader(const std::string& source, const char* target, const char* entry,
+                               std::vector<uint8_t>* bytecode, std::string* error) const {
+        (void)source; (void)target; (void)entry; (void)bytecode; (void)error;
+        return false;
+    }
+    // Names the compiler and its options for shader cache keys; empty = no CompileShader.
+    virtual std::string ShaderCompilerId() const { return ""; }
 };
 
 }  // namespace oe

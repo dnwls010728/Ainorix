@@ -17,11 +17,29 @@ validation error. Pool sizes are fixed; preview lifetimes must stay bounded rath
 
 D3D11 shader compiler diagnostics are logged with their actual text, including in Release builds.
 Sokol emits `D3D11_SHADER_COMPILATION_OUTPUT` (item 40) first as a marker and then sends the diagnostic
-at info level; the engine preserves the text as a warning instead of dropping it. The current HLSL
-compiler reports X3570 for the shadow comparison sampling inside the directional-light loop with a
-runtime exit: it attempts to unroll the loop to accommodate implicit gradients. Compilation and the
-Effects editor screenshot succeed on the tested D3D11 device. This change exposes diagnostics only;
-shader source and generated programs are unchanged.
+at info level; the engine preserves the text as a warning instead of dropping it. Keep the shaders
+free of them: a compare/implicit-gradient sample inside a loop with a runtime exit (X3570) or a write
+to `vec[i]` inside a loop (X3550) makes the compiler unroll the loop, which bloats the program and
+slows every compile. The directional-light loop therefore takes the shadow lookup computed before it,
+and `GraphFinite` clamps the four channels without a loop.
+
+### Shader compiling and the cache
+
+On D3D11 the generated header holds HLSL source, compiled at run time. The device compiles it
+itself (`GpuDevice::CompileShader`, d3dcompiler_47 with the flags sokol uses), so GpuRenderer can:
+
+- compile the ten built-in programs in parallel when it starts;
+- keep compiled programs in `GpuRenderer::Settings::shaderCacheDir`, one `<hash>.bin` per stage keyed
+  by compiler, target, entry point and full source (an edited shader or graph gets a new file; the
+  folder is trimmed to the newest 400 files on start);
+- with `asyncShaders`, compile shader graph programs on worker threads; until a program is ready its
+  materials draw through the interpreter in the standard program (the same image, slower shader).
+
+The editor uses `<project>/.oe/shader-cache` (async in the window, synchronous for
+`--screenshot`); games and tests compile on first use without a cache. GL backends (web, Android,
+EGL) have no `CompileShader`, so sokol_gfx compiles their GLSL as before. Measured on `games/RPG`
+(seven graphs): the first editor frame came 3.7 s after loading the scene before; now 0.65 s on a
+cold cache and 0.29 s on a warm one.
 
 ### Effect vertex streams
 

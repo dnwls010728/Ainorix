@@ -214,6 +214,12 @@ public:
     // Returns false (with `error`) when no GPU backend is available. Only one
     // GPU renderer can exist; a second call just reports whether it is on.
     bool EnableGpu(Window* window, std::string* error);
+    // Before EnableGpu: a disk cache for compiled shaders and background compiles of shader graphs
+    // (GpuRenderer::Settings). The editor turns both on; games and tests compile on first use.
+    void SetGpuShaderOptions(const std::string& cacheDir, bool async) {
+        gpuShaderCache_ = cacheDir;
+        gpuAsyncShaders_ = async;
+    }
     GpuRenderer* Gpu() { return gpu_.get(); }
     // GPU when enabled, otherwise the software renderer (editor viewport, game window).
     IRenderer& DisplayRenderer();
@@ -335,6 +341,8 @@ private:
     std::unique_ptr<IRenderer> renderer_;
     std::unique_ptr<GpuDevice> gpuDevice_;  // declared before gpu_: destroyed after it
     std::unique_ptr<GpuRenderer> gpu_;
+    std::string gpuShaderCache_;
+    bool gpuAsyncShaders_ = false;
     CommandRegistry commands_;
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;
