@@ -76,7 +76,22 @@ struct ChatCompletion {
     std::string label, detail;             // shown in the list
     std::string avatar, id;                // agents: picture key and id
     std::string file;                      // files: project-relative path
+    EntityId entity = kNullEntity;         // scene objects (ChatMentions::Entities)
     bool enabled = true;                   // an offline agent is listed but cannot be chosen
+};
+
+// What `@` completes to in a chat input: team agents (team chat, team bubbles) or the scene's
+// objects (direct conversations with one CLI, which has no teammates to mention).
+enum class ChatMentions { Agents, Entities };
+
+// The completion list of one chat input: the word it was built for, the chosen row and whether
+// to scroll it into view.
+struct ChatCompleteState {
+    std::string key;
+    int index = 0;
+    bool scroll = false;
+    bool listHovered = false;  // the pointer is on the list: it stays while the input loses focus to a click
+    bool caretToEnd = false;   // after a completion: caret to the end, nothing selected
 };
 
 enum class GizmoOp { None, Translate, Rotate, Scale };
@@ -337,6 +352,7 @@ struct NativeEditor::Impl {
         Json state;                  // team.thread (agent bubbles)
         std::vector<uint64_t> sent;  // team chat messages this bubble sent (team bubbles)
         double polled = -100;
+        ChatCompleteState complete;  // @ / # completion of its input
         bool focusInput = true;
         size_t shown = 0;            // messages drawn last frame: more scrolls to the newest
         ImVec2 size{0, 0};           // last frame's size, to keep it inside the view
@@ -368,6 +384,7 @@ struct NativeEditor::Impl {
     double agentChatPolled = -100, agentChatThreadsPolled = -100;
     size_t agentChatShown = 0;
     std::array<float, 4> agentChatInputRect{0, 0, 0, 0};
+    ChatCompleteState agentChatComplete;
     void AgentChatPanel();
     void AgentChatSelect(const std::string& backend, const std::string& thread);
     void AgentChatSend();
@@ -392,11 +409,17 @@ struct NativeEditor::Impl {
     bool chatViewerActual = false;                  // 100 % instead of fit
     std::vector<std::pair<std::string, bool>> MentionCandidates(const std::string& prefix) const;
     std::vector<std::string> FileCandidates(const std::string& prefix) const;
-    int chatCompleteIndex = 0;            // chosen row of the completion list (Up / Down, the pointer)
-    std::string chatCompleteKey;          // the word the list was built for; another word starts at the top
-    bool chatCompleteScroll = false;      // bring the chosen row into view
-    std::vector<ChatCompletion> Completions(char marker, const std::string& prefix) const;
-    ImU32 ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length) const;
+    ChatCompleteState chatComplete;
+    std::vector<ChatCompletion> Completions(char marker, const std::string& prefix, ChatMentions mentions) const;
+    ImU32 ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length,
+                         ChatMentions mentions = ChatMentions::Agents) const;
+    // A chat input (Team Chat, Agent Chat, Scene bubbles): multi-line, Enter sends (returns true),
+    // Shift+Enter or Ctrl+Enter adds a line; a typed @word or #word completes from a list floating
+    // above it (Up / Down choose, Tab or a click takes, files are previewed beside it) and the
+    // references in the text are tinted.
+    // `bounds` / `active`: the field's screen rectangle and whether it is being typed in.
+    bool ChatInput(const char* id, std::string& text, ImVec2 size, ChatCompleteState& complete, ChatMentions mentions, bool& focus,
+                   std::array<float, 4>* bounds = nullptr, bool* active = nullptr);
     // A message's text as Markdown (headings, lists, quotes, tables, rules, fenced code; inline bold,
     // italic, code, strike and links), wrapped to the panel; `tint` colors @mentions and `files`.
     void DrawChatMarkdown(const std::string& text, const std::vector<std::string>& files, bool tint, ImU32 color);

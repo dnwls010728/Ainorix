@@ -482,7 +482,7 @@ const Entry kCatalog[] = {
     {"Model of the next message", "다음 메시지에 쓸 모델", "次のメッセージのモデル"},
     {"Start a new conversation (the CLI forgets the earlier one)", "새 대화 시작 (CLI는 이전 대화를 기억하지 않습니다)", "新しい会話を始める (CLI は前の会話を覚えていません)"},
     {"Talk to %s directly, outside the team. It works in this project through the open editor.", "팀을 거치지 않고 %s에게 직접 말합니다. 열려 있는 에디터를 통해 이 프로젝트에서 작업합니다.", "チームを通さず %s と直接話します。開いているエディターを通してこのプロジェクトで作業します。"},
-    {"Message %s (Enter sends, Ctrl+Enter adds a line)", "%s에게 메시지 (Enter 보내기, Ctrl+Enter 줄바꿈)", "%s へのメッセージ (Enter で送信、Ctrl+Enter で改行)"},
+    {"Message %s (Enter sends; @ an object, # a file)", "%s에게 메시지 (Enter 보내기, @ 오브젝트, # 파일)", "%s へのメッセージ (Enter で送信、@ オブジェクト、# ファイル)"},
     {"Add the default team", "기본 팀 추가", "デフォルトのチームを追加"},
     {"Lead, Core, Content, Art and QA, as a new project gets them.", "새 프로젝트에 들어가는 Lead, Core, Content, Art, QA를 추가합니다.", "新しいプロジェクトと同じ Lead、Core、Content、Art、QA を追加します。"},
     {"This spot", "이 위치", "この場所"},

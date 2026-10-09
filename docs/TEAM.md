@@ -678,8 +678,8 @@ check, `--chat` the Team Chat (`--agent new` or `--agent <id>` also opens the pr
 ### 7.4 Asking about an object (Scene bubbles)
 
 Right-click in the Scene view (a click, not a fly/pan drag; also on the gizmo, which only takes
-the left button). The menu has two groups, each with **Ask the Team** and **Ask an Agent ▸** (the
-installed agent CLIs, `team.backends`):
+the left button). The menu lists two targets, each a submenu with **Ask the Team** and, under
+"Ask an Agent", the installed agent CLIs (`team.backends`):
 
 - the **object** under the pointer (choosing selects it; the right click alone does not), and
 - **this spot**: the point on the surface under the pointer (`render.pick` returns it with the
@@ -688,7 +688,12 @@ installed agent CLIs, `team.backends`):
 
 Either opens a bubble that stays next to its object or spot while the camera moves (a pin marks
 the spot; several bubbles may be open, those of one object side by side; deleting the object
-closes its bubbles, a spot's stays). Enter sends, Ctrl+Enter adds a line.
+closes its bubbles, a spot's stays; bubbles move out of each other's way). The inputs of
+bubbles, Agent Chat and Team Chat behave alike (`ChatInput` in `EditorTeamChat.cpp`): Enter
+sends, Shift+Enter or Ctrl+Enter adds a line, `#` completes a project file with a preview, and
+`@` completes an agent of the team (team inputs) or a scene object (direct conversations, which
+have no teammates; a name with spaces is inserted quoted). The list shows for the input being
+typed in; Up/Down choose, Tab or a click takes, and the caret stays after the inserted word.
 
 - **Team**: the text goes to the team chat as `[Name #id] text` or `[This spot (x, y, z) on Name] text` (`team.send`), so the lead
   answers unless someone is @mentioned. The bubble shows what it sent and the replies addressed

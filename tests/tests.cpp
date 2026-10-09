@@ -15144,6 +15144,14 @@ TEST(NativeEditorAskBubbles) {
         frames(4);
         CHECK(editor.AgentChatInputRect()[2] > 0);
         type("add a sound");
+        // @ completes a scene object in a direct conversation: "@Targ" + Tab becomes "@Target ".
+        {
+            std::vector<WindowEvent> events;
+            for (unsigned char c : std::string("@Targ")) { WindowEvent event; event.type = WindowEvent::Type::Text; event.codepoint = c; events.push_back(event); }
+            frames(3, events);
+            frames(2, {KeyEvent(WindowKey::Tab, true)});
+            frames(2, {KeyEvent(WindowKey::Tab, false)});
+        }
         Json chatState;
         for (int i = 0; i < 300; ++i) {
             frames(1);
@@ -15152,6 +15160,16 @@ TEST(NativeEditorAskBubbles) {
             PlatformSleep(0.02);
         }
         CHECK(chatState["messages"].size() == 2 && chatState["messages"][0]["text"].asString() == "add a sound");
+        frames(30);  // the panel reads the finished turn (it polls a few times a second)
+        frames(2, {KeyEvent(WindowKey::Enter, true)});
+        frames(2, {KeyEvent(WindowKey::Enter, false)});
+        for (int i = 0; i < 300; ++i) {
+            frames(1);
+            chatState = Call(e, "team.thread", R"J({"thread":"chat-echo"})J")["result"];
+            if (chatState["messages"].size() >= 4 && !chatState["running"].asBool()) break;
+            PlatformSleep(0.02);
+        }
+        CHECK(chatState["messages"].size() >= 3 && chatState["messages"][2]["text"].asString() == "@Target");
         CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("Agent Chat panel") != std::string::npos);
 
         // Deleting the object closes its bubbles; the spot's stays.

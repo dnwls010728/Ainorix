@@ -173,10 +173,19 @@ void NativeEditor::Impl::OpenAskSpot(const Vec3& point, const Vec3& normal, Enti
 
 void NativeEditor::Impl::SceneAskMenu() {
     if (!ImGui::BeginPopup("##sceneAsk")) return;
-    // The installed CLIs, for "Ask an Agent"; the chosen one's id.
-    auto agentMenu = [&](const char* id) {
+    // One submenu per target (the object, this spot): the team, then the installed CLIs.
+    // Returns "team", a CLI id, or "" while nothing was chosen.
+    const bool teamReady = teamAvailable && team["agents"].size() > 0;
+    auto targetMenu = [&](const std::string& label) {
         std::string chosen;
-        if (!ImGui::BeginMenu((WithIcon(kIconBot, Tr("Ask an Agent")) + id).c_str(), teamAvailable)) return chosen;
+        if (!ImGui::BeginMenu(label.c_str())) return chosen;
+        if (ImGui::MenuItem(WithIcon(kIconUsers, Tr("Ask the Team")).c_str(), nullptr, false, teamReady)) chosen = "team";
+        if (!teamReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (teamAvailable) ImGui::SetTooltip("%s", Tr("The team has no agents yet (Team panel)."));
+            else ImGui::SetTooltip("%s", Tr("Agent teams need `oe editor`."));
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", Tr("Ask an Agent"));
         int installed = 0;
         bool detecting = teamBackends.size() == 0;
         for (const Json& backend : teamBackends.items()) {
@@ -184,8 +193,8 @@ void NativeEditor::Impl::SceneAskMenu() {
             detecting = detecting || status == "detecting";
             if (status != "installed") continue;
             ++installed;
-            const std::string label = backend["name"].asString("") + "##" + backend["id"].asString("");
-            if (ImGui::MenuItem(label.c_str())) chosen = backend["id"].asString("");
+            const std::string id = backend["id"].asString("");
+            if (ImGui::MenuItem((WithIcon(kIconBot, backend["name"].asString(id)) + "##" + id).c_str())) chosen = id;
         }
         if (installed == 0) {
             if (detecting) ImGui::TextDisabled("%s", Tr("Looking for agent CLIs..."));
@@ -194,45 +203,24 @@ void NativeEditor::Impl::SceneAskMenu() {
         ImGui::EndMenu();
         return chosen;
     };
-    const bool teamReady = teamAvailable && team["agents"].size() > 0;
-    auto teamItem = [&](const char* id) {
-        const bool chosen = ImGui::MenuItem((WithIcon(kIconUsers, Tr("Ask the Team")) + id).c_str(), nullptr, false, teamReady);
-        if (!teamReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            if (teamAvailable) ImGui::SetTooltip("%s", Tr("The team has no agents yet (Team panel)."));
-            else ImGui::SetTooltip("%s", Tr("Agent teams need `oe editor`."));
-        }
-        return chosen;
-    };
 
-    // About the object under the pointer (choosing selects it) ...
-    const EntityRow* row = Row(askMenuEntity);
-    if (row) {
-        ImGui::TextColored(kAccent, "%s", kIconBox);
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", row->name.c_str());
-        std::string backend;
-        const bool toTeam = teamItem("##object");
-        if (!toTeam) backend = agentMenu("##object");
-        if (toTeam || !backend.empty()) {
+    // The object under the pointer (choosing selects it) ...
+    if (const EntityRow* row = Row(askMenuEntity)) {
+        const std::string chosen = targetMenu(WithIcon(kIconBox, row->name) + "##object");
+        if (!chosen.empty()) {
             SelectOnly(askMenuEntity);
             scrollToRow = askMenuEntity;
             Refresh(true);
-            OpenAskBubble(askMenuEntity, backend);
+            OpenAskBubble(askMenuEntity, chosen == "team" ? std::string() : chosen);
         }
-        ImGui::Separator();
     }
-    // ... and about the spot itself: "put something here".
+    // ... and the spot itself: "put something here".
     AskBubble probe;
     probe.spot = true;
     probe.point = askMenuPoint;
     probe.entity = askMenuEntity;
-    ImGui::TextColored(kAccent, "%s", kIconMapPin);
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", (std::string(Tr("This spot")) + " " + SpotLabel(probe)).c_str());
-    std::string backend;
-    const bool toTeam = teamItem("##spot");
-    if (!toTeam) backend = agentMenu("##spot");
-    if (toTeam || !backend.empty()) OpenAskSpot(askMenuPoint, askMenuNormal, askMenuEntity, backend);
+    const std::string chosen = targetMenu(WithIcon(kIconMapPin, std::string(Tr("This spot")) + "  " + SpotLabel(probe)) + "##spot");
+    if (!chosen.empty()) OpenAskSpot(askMenuPoint, askMenuNormal, askMenuEntity, chosen == "team" ? std::string() : chosen);
     ImGui::EndPopup();
 }
 
@@ -357,22 +345,18 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
         ImGui::EndChild();
     }
 
-    // Input: Enter sends, Ctrl+Enter adds a line.
+    // Input: Enter sends, Shift+Enter adds a line; # completes a file, @ an agent of the team
+    // (team bubbles) or a scene object (agent bubbles).
     const bool running = agent && bubble.state["running"].asBool();
     const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-    if (bubble.focusInput) {
-        ImGui::SetKeyboardFocusHere();
-        bubble.focusInput = false;
-    }
     const ImVec2 inputPos = ImGui::GetCursorScreenPos();
     const float inputHeight = ImGui::GetTextLineHeight() * 2.0f + ImGui::GetStyle().FramePadding.y * 2.0f;
-    const bool entered = ImGui::InputTextMultiline("##input", &bubble.input, ImVec2(ImGui::GetContentRegionAvail().x - side - spacing, inputHeight),
-                                                   ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CtrlEnterForNewLine);
-    {
-        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-        askRects[std::to_string(bubble.serial) + ":input"] = {a.x, a.y, b.x - a.x, b.y - a.y};
-    }
-    if (bubble.input.empty() && !ImGui::IsItemActive()) {
+    std::array<float, 4> inputRect{};
+    bool typing = false;
+    const bool entered = ChatInput("##input", bubble.input, ImVec2(ImGui::GetContentRegionAvail().x - side - spacing, inputHeight), bubble.complete,
+                                   agent ? ChatMentions::Entities : ChatMentions::Agents, bubble.focusInput, &inputRect, &typing);
+    askRects[std::to_string(bubble.serial) + ":input"] = inputRect;
+    if (bubble.input.empty() && !typing) {
         const std::string hint = Format(Tr("Ask %s about %s"), target.c_str(), bubble.spot ? Tr("this spot") : row ? row->name.c_str() : "");
         ImGui::GetWindowDrawList()->AddText(ImVec2(inputPos.x + ImGui::GetStyle().FramePadding.x, inputPos.y + ImGui::GetStyle().FramePadding.y),
                                             ImGui::GetColorU32(ImGuiCol_TextDisabled), hint.c_str());
@@ -400,7 +384,7 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
     const float bubbleWidth = ImGui::GetFontSize() * kBubbleWidthEm;
     const float margin = 8.0f;
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    std::map<EntityId, int> slots;
+    std::vector<ImRect> placed;  // bubbles already laid out this frame: later ones move out of their way
     int closed = -1;
     for (size_t i = 0; i < askBubbles.size(); ++i) {
         AskBubble& bubble = askBubbles[i];
@@ -422,11 +406,24 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
             anchor = ImVec2(viewPos.x + (clip.x / clip.w * 0.5f + 0.5f) * viewSize.x, viewPos.y + (0.5f - clip.y / clip.w * 0.5f) * viewSize.y);
             visible = anchor.x >= viewPos.x && anchor.x <= viewPos.x + viewSize.x && anchor.y >= viewPos.y && anchor.y <= viewPos.y + viewSize.y;
         }
-        const int slot = slots[bubble.entity]++;
         const float bubbleHeight = std::max(bubble.size.y, ImGui::GetFrameHeight() * 4.0f);
-        ImVec2 at(anchor.x + 56.0f + static_cast<float>(slot) * (bubbleWidth + margin), anchor.y - bubbleHeight - 48.0f);  // up and to the right, clear of the gizmo
-        at.x = std::clamp(at.x, viewPos.x + margin, std::max(viewPos.x + margin, viewPos.x + viewSize.x - bubbleWidth - margin));
-        at.y = std::clamp(at.y, viewPos.y + margin + ImGui::GetFrameHeight() * 1.6f, std::max(viewPos.y + margin, viewPos.y + viewSize.y - bubbleHeight - margin));
+        const float top = viewPos.y + margin + ImGui::GetFrameHeight() * 1.6f, bottom = viewPos.y + viewSize.y - margin;
+        auto clampInView = [&](ImVec2 p) {
+            p.x = std::clamp(p.x, viewPos.x + margin, std::max(viewPos.x + margin, viewPos.x + viewSize.x - bubbleWidth - margin));
+            p.y = std::clamp(p.y, top, std::max(top, bottom - bubbleHeight));
+            return p;
+        };
+        ImVec2 at = clampInView(ImVec2(anchor.x + 56.0f, anchor.y - bubbleHeight - 48.0f));  // up and to the right, clear of the gizmo
+        // Not on top of another bubble: below it, or (no room below) in a column to its left.
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            const ImRect self(at, ImVec2(at.x + bubbleWidth, at.y + bubbleHeight));
+            const auto hit = std::find_if(placed.begin(), placed.end(), [&](const ImRect& other) { return other.Overlaps(self); });
+            if (hit == placed.end()) break;
+            at.y = hit->Max.y + margin;
+            if (at.y + bubbleHeight > bottom) at = ImVec2(hit->Min.x - bubbleWidth - margin, top);
+            at = clampInView(at);
+        }
+        placed.emplace_back(at, ImVec2(at.x + bubbleWidth, at.y + bubbleHeight));
         if (visible) {
             // The nearest point of the bubble's outline.
             const float x = std::clamp(anchor.x, at.x + 14.0f, at.x + bubbleWidth - 14.0f);
@@ -643,20 +640,13 @@ void NativeEditor::Impl::AgentChatPanel() {
     }
     ImGui::EndChild();
     const float side = ImGui::GetFrameHeight();
-    if (agentChatFocusInput) {
-        ImGui::SetKeyboardFocusHere();
-        agentChatFocusInput = false;
-    }
     const ImVec2 inputPos = ImGui::GetCursorScreenPos();
-    const bool entered = ImGui::InputTextMultiline("##input", &agentChatInput, ImVec2(ImGui::GetContentRegionAvail().x - side - style.ItemInnerSpacing.x, inputHeight),
-                                                   ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CtrlEnterForNewLine);
-    {
-        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
-        agentChatInputRect = {a.x, a.y, b.x - a.x, b.y - a.y};
-    }
-    if (agentChatInput.empty() && !ImGui::IsItemActive()) {
+    bool typing = false;
+    const bool entered = ChatInput("##input", agentChatInput, ImVec2(ImGui::GetContentRegionAvail().x - side - style.ItemInnerSpacing.x, inputHeight),
+                                   agentChatComplete, ChatMentions::Entities, agentChatFocusInput, &agentChatInputRect, &typing);
+    if (agentChatInput.empty() && !typing) {
         ImGui::GetWindowDrawList()->AddText(ImVec2(inputPos.x + style.FramePadding.x, inputPos.y + style.FramePadding.y), ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                                            Format(Tr("Message %s (Enter sends, Ctrl+Enter adds a line)"), target.c_str()).c_str());
+                                            Format(Tr("Message %s (Enter sends; @ an object, # a file)"), target.c_str()).c_str());
     }
     ImGui::SameLine(0, style.ItemInnerSpacing.x);
     if (agentChatState["running"].asBool()) {
