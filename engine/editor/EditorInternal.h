@@ -249,6 +249,7 @@ struct NativeEditor::Impl {
     float effectsZoom = 6;
     Vec3 effectsTarget{0, 1, 0};
     std::map<std::string, std::array<float, 4>> effectsRects;  // automation: actual interactive widget bounds
+    std::map<std::string, std::array<float, 4>> inspectorRects;  // automation: "Type.field" value widget bounds
     void OpenEffect(const std::string& path, bool create = false);
     void EffectsPanel();
     void EffectsModals();

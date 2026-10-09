@@ -627,6 +627,8 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         }
     }
 
+    const ImVec2 itemMin = ImGui::GetItemRectMin(), itemMax = ImGui::GetItemRectMax();
+    inspectorRects[type + "." + field] = {itemMin.x, itemMin.y, itemMax.x - itemMin.x, itemMax.y - itemMin.y};
     if (changed) {
         Json args = ObjectOf({{"id", Json(id)}, {"type", Json(type)}, {"values", ObjectOf({{field.c_str(), newValue}})}});
         if (!merge.empty()) args["merge"] = Json(merge);
@@ -664,6 +666,7 @@ void NativeEditor::Impl::AxisLockRow(EntityId id, const std::string& type, const
         const bool clicked = ImGui::InvisibleButton("##axis", ImVec2(chipWidth, chipHeight));
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopID();
+        inspectorRects[type + "." + field] = {p.x, p.y, chipWidth, chipHeight};
         HelpTooltip(properties[field]["description"].asString(""));
         const ImVec2 q(p.x + chipWidth, p.y + chipHeight);
         if (on) {
@@ -694,7 +697,7 @@ void NativeEditor::Impl::AddComponentPopup(EntityId id) {
     ImGui::InputTextWithHint("##find", Tr("Search components"), &addComponentFilter);
     ImGui::Separator();
     ImGui::BeginChild("##list", ImVec2(ImGui::GetFontSize() * 16, ImGui::GetFontSize() * 18));
-    const Json& comps = selected["components"];
+    const Json comps = selected["components"];  // a copy: Refresh below replaces `selected`
     for (const Json& t : componentTypes.items()) {
         std::string name = t["name"].asString("");
         if (comps.has(name) || !ContainsNoCase(name, addComponentFilter)) continue;
@@ -715,6 +718,7 @@ void NativeEditor::Impl::InspectorPanel() {
         return;
     }
     EntityId id = Primary();
+    inspectorRects.clear();
     if (id != kNullEntity && selectedId != id) Refresh(true);
     if (id == kNullEntity || !selected.isObject()) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -724,6 +728,10 @@ void NativeEditor::Impl::InspectorPanel() {
         return;
     }
     if (selection.size() > 1) ImGui::TextDisabled(Tr("%d entities selected - showing the first"), static_cast<int>(selection.size()));
+    // The frame draws from a copy: an edit below calls Refresh(true), which replaces `selected`
+    // while its components are still being drawn (the rest of the panel then went missing for a
+    // frame, so it flickered and lost its scroll position). The next frame shows the new values.
+    const Json entity = selected;
 
     // Entity icon, name and id.
     std::string name;
@@ -735,7 +743,7 @@ void NativeEditor::Impl::InspectorPanel() {
     }
     const std::string idText = Format("#%u", id);
     ImGui::SetNextItemWidth(-ImGui::CalcTextSize(idText.c_str()).x - ImGui::GetStyle().ItemSpacing.x);
-    if (CommitText("##name", selected["name"].asString(""), name) && !name.empty()) {
+    if (CommitText("##name", entity["name"].asString(""), name) && !name.empty()) {
         Call("entity.rename", ObjectOf({{"id", Json(id)}, {"name", Json(name)}}));
         Refresh(true);
     }
@@ -744,7 +752,7 @@ void NativeEditor::Impl::InspectorPanel() {
     ImGui::TextDisabled("%s", idText.c_str());
     ImGui::Dummy(ImVec2(0, 2));
 
-    const Json& comps = selected["components"];
+    const Json& comps = entity["components"];
     std::string removeType;
     for (const auto& kv : comps.members()) {
         const std::string& type = kv.first;

@@ -83,6 +83,8 @@ public:
     // Select the Birth/Update value-node canvas and channel, as its toolbar does.
     void SetEffectsValues(bool on, bool update = true, int channel = 7);
     std::array<float, 4> EffectsControlRect(const std::string& name) const;
+    // Screen bounds of an Inspector value widget, "RigidBody.mass" (axis toggles: "RigidBody.lockPositionX"); zero when not drawn.
+    std::array<float, 4> InspectorControlRect(const std::string& name) const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;
     // Keyboard focus for the Game view (keys and mouse go to the game while playing).

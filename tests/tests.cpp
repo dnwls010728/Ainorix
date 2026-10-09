@@ -14773,6 +14773,68 @@ TEST(LinksAndLaunchArgs) {
     RemoveAll(dir);
 }
 
+// Editing a field keeps the Inspector where it was: the whole panel is drawn in the frame of the
+// edit (it once drew from data the edit replaced, then flickered and jumped back to the top).
+TEST(NativeEditorInspectorKeepsScroll) {
+    const std::string project = TempProject("editor_inspector_scroll");
+    Engine engine;
+    std::string error;
+    CHECK(engine.Open(project, &error));
+    if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    CHECK(Call(engine, "entity.create", R"J({"name":"Body","components":{"Transform":{},"MeshRenderer":{"mesh":"cube"},
+        "Collider":{},"RigidBody":{}}})J")["ok"].asBool());
+    const EntityId body = engine.GetScene().FindByName("Body");
+    NativeEditor::Options options;
+    options.language = "en";
+    {
+        NativeEditor editor(engine, nullptr, options);
+        CHECK(editor.Init(&error));
+        RenderTarget image;
+        std::vector<float> scrolls;  // the Inspector scroll after every frame
+        auto frames = [&](int count, const std::vector<WindowEvent>& events = std::vector<WindowEvent>()) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1280, 560, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+                if (ImGuiWindow* w = ImGui::FindWindowByName("###Inspector")) scrolls.push_back(w->Scroll.y);
+            }
+        };
+        auto click = [&](const std::string& control) {
+            const std::array<float, 4> r = editor.InspectorControlRect(control);
+            CHECK(r[2] > 0 && r[3] > 0);
+            WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = r[0] + r[2] * 0.5f; move.y = r[1] + r[3] * 0.5f;
+            WindowEvent press = move; press.type = WindowEvent::Type::MouseButton; press.button = 0; press.down = true;
+            WindowEvent release = press; release.down = false;
+            frames(2, {move}); frames(2, {press}); frames(3, {release});
+        };
+        frames(3);
+        editor.Select(body);
+        frames(4);
+        ImGuiWindow* inspector = ImGui::FindWindowByName("###Inspector");
+        CHECK(inspector && inspector->ScrollMax.y > 0);
+        if (!inspector) { RemoveAll(project); return; }
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove;
+        move.x = inspector->InnerRect.GetCenter().x; move.y = inspector->InnerRect.GetCenter().y;
+        WindowEvent wheel; wheel.type = WindowEvent::Type::MouseWheel; wheel.y = -3;
+        frames(2, {move}); frames(4, {wheel});
+        const float scrolled = inspector->Scroll.y;
+        CHECK(scrolled > 0 && scrolled < inspector->ScrollMax.y);  // somewhere in the middle
+        auto steady = [&] {
+            for (float s : scrolls) CHECK(std::fabs(s - scrolled) < 1.0f);
+            scrolls.clear();
+        };
+        scrolls.clear();
+        for (const char* control : {"RigidBody.continuous", "RigidBody.lockRotationY", "Collider.isTrigger", "MeshRenderer.unlit"}) {
+            if (editor.InspectorControlRect(control)[2] <= 0) continue;  // scrolled out of view
+            click(control);
+            std::printf("  %s: %zu frames, scroll %.1f..%.1f (at %.1f)\n", control, scrolls.size(),
+                        *std::min_element(scrolls.begin(), scrolls.end()), *std::max_element(scrolls.begin(), scrolls.end()), scrolled);
+            steady();
+        }
+        CHECK(engine.GetScene().Get<RigidBody>(body)->continuous || engine.GetScene().Get<MeshRenderer>(body)->unlit);
+    }
+    RemoveAll(project);
+}
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

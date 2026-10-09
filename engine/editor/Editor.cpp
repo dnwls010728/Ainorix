@@ -1837,6 +1837,11 @@ std::array<float, 4> NativeEditor::EffectsControlRect(const std::string& name) c
     return found == impl_->effectsRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
 }
 
+std::array<float, 4> NativeEditor::InspectorControlRect(const std::string& name) const {
+    const auto found = impl_->inspectorRects.find(name);
+    return found == impl_->inspectorRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
+
 std::vector<std::string> NativeEditor::OpenScripts() const {
     std::vector<std::string> paths;
     for (const ScriptTab& tab : impl_->scripts) paths.push_back(tab.path);
