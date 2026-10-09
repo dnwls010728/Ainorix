@@ -472,6 +472,7 @@ struct NativeEditor::Impl {
     void EntityContextMenu(const EntityRow* row);
     void InspectorPanel();
     bool FieldEditor(EntityId id, const std::string& type, const std::string& field, const Json& schema, const Json& value);
+    void AxisLockRow(EntityId id, const std::string& type, const std::string& group, const Json& properties, const Json& values);
     void AddComponentPopup(EntityId id);
     // Script component params as typed rows (from script.params), inside the inspector table.
     void ScriptParamsRows(EntityId id, const Json& script);

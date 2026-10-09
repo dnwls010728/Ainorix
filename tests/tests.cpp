@@ -3327,12 +3327,12 @@ TEST(Sprites2DAndTilemaps) {
     Call(e, "entity.create", R"J({"name": "Map", "components": {"Transform": {}, "Tilemap": {"tileset": "sheet.png", "columns": 2,
         "map": ["....", "#..#", "####"], "legend": {"#": 1}, "solid": "#"}}})J");
     Call(e, "entity.create", R"J({"name": "Hero", "components": {"Transform": {"position": [1.5, 0, 0]},
-        "CharacterBody": {"shape": "sphere", "radius": 0.3, "plane2D": true, "velocity": [0, 0, 5]}}})J");
+        "CharacterBody": {"shape": "sphere", "radius": 0.3, "lockPositionZ": true, "velocity": [0, 0, 5]}}})J");
     Call(e, "sim.step", R"J({"frames": 90})J");
     const Transform* hero = e.GetScene().Get<Transform>(e.GetScene().FindByName("Hero"));
     CHECK(std::fabs(hero->position.y + 1.7f) < 0.05f);  // resting on row 2 (top at y = -2)
     CHECK(std::fabs(hero->position.x - 1.5f) < 0.01f);
-    CHECK(hero->position.z == 0.0f);                    // plane2D ignores velocity.z
+    CHECK(hero->position.z == 0.0f);                    // lockPositionZ ignores velocity.z
     CHECK(e.GetScene().Get<CharacterBody>(e.GetScene().FindByName("Hero"))->grounded);
     Json r = Call(e, "script.eval", R"J({"code": "{tilemap.get('Map', 0, 1), tilemap.solid('Map', 1, 1), tilemap.get('Map', 9, 9)}"})J");
     CHECK(r["result"]["value"][0].asString() == "#" && !r["result"]["value"][1].asBool());
@@ -3425,6 +3425,66 @@ TEST(PhysicsBallRestsOnGround) {
     CHECK(Length(rb->velocity) < 0.05f);
     Json state = Call(e, "physics.state", "{}")["result"];
     CHECK(state["dynamicBodies"].asInt() == 1 && state["staticBodies"].asInt() == 1);
+}
+
+// Axis locks (lockPosition*/lockRotation*) on RigidBody, CharacterBody and RigidBody2D, and the
+// older fields they replace (plane2D, lockRotation, fixedRotation) still load.
+TEST(PhysicsAxisLocks) {
+    Engine e;
+    PhysicsScene(e);
+    // 3D: gravity cannot pull a Y-locked body; an X-locked body ignores its X velocity.
+    Call(e, "entity.create", R"J({"name": "Hover", "components": {"Transform": {"position": [-3, 3, 0]}, "Collider": {}, "RigidBody": {"lockPositionY": true}}})J");
+    Call(e, "entity.create", R"J({"name": "Rail", "components": {"Transform": {"position": [3, 3, 0]}, "Collider": {},
+        "RigidBody": {"gravityScale": 0, "lockPositionX": true, "velocity": [4, 0, 2]}}})J");
+    Call(e, "entity.create", R"J({"name": "Spin", "components": {"Transform": {"position": [0, 3, 6]}, "Collider": {},
+        "RigidBody": {"gravityScale": 0, "lockRotationY": true, "angularVelocity": [0, 90, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Free", "components": {"Transform": {"position": [0, 3, -6]}, "Collider": {},
+        "RigidBody": {"gravityScale": 0, "angularVelocity": [0, 90, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Walker", "components": {"Transform": {"position": [6, 1, 0]},
+        "CharacterBody": {"lockPositionX": true, "velocity": [5, 0, 1]}}})J");
+    Call(e, "sim.step", R"J({"frames": 60})J");
+    CHECK(std::fabs(PosOf(e, "Hover").y - 3.0f) < 1e-4f);
+    const Vec3 rail = PosOf(e, "Rail");
+    CHECK(std::fabs(rail.x - 3.0f) < 1e-4f && rail.z > 1.5f);
+    auto yaw = [&](const char* name) { return e.GetScene().Get<Transform>(e.GetScene().FindByName(name))->rotation; };
+    CHECK(Length(yaw("Spin")) < 0.01f);
+    CHECK(Length(yaw("Free")) > 30.0f);
+    const Vec3 walker = PosOf(e, "Walker");
+    CHECK(std::fabs(walker.x - 6.0f) < 1e-4f && walker.z > 0.5f);
+    Call(e, "sim.stop", "{}");
+
+    // Older fields become the new locks, in files and in calls.
+    Json r = Call(e, "component.set", R"J({"id": "Hover", "type": "RigidBody", "values": {"plane2D": true, "lockRotation": false}})J");
+    CHECK(r["ok"].asBool());
+    Json rb = Call(e, "entity.get", R"J({"id": "Hover"})J")["result"]["components"]["RigidBody"];
+    CHECK(!rb.has("plane2D") && !rb.has("lockRotation"));
+    CHECK(rb["lockPositionZ"].asBool() && rb["lockRotationX"].asBool() && rb["lockRotationY"].asBool() && !rb["lockRotationZ"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id": "Hover", "type": "RigidBody", "values": {"lockRotation": true}})J")["ok"].asBool());
+    rb = Call(e, "entity.get", R"J({"id": "Hover"})J")["result"]["components"]["RigidBody"];
+    CHECK(rb["lockRotationX"].asBool() && rb["lockRotationY"].asBool() && rb["lockRotationZ"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id": "Walker", "type": "CharacterBody", "values": {"plane2D": true}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.get", R"J({"id": "Walker"})J")["result"]["components"]["CharacterBody"]["lockPositionZ"].asBool());
+
+    // 2D: an X-locked body falls straight down, a Y-locked one slides sideways, both stay put.
+    Call(e, "entity.create", R"J({"name": "Drop", "components": {"Transform": {"position": [20, 5, 0]}, "Collider2D": {},
+        "RigidBody2D": {"lockPositionX": true, "velocity": [3, 0, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Slide", "components": {"Transform": {"position": [30, 5, 0]}, "Collider2D": {},
+        "RigidBody2D": {"lockPositionY": true, "velocity": [3, 0, 0]}}})J");
+    Call(e, "entity.create", R"J({"name": "Pin", "components": {"Transform": {"position": [40, 5, 0]}, "Collider2D": {},
+        "RigidBody2D": {"lockPositionX": true, "lockPositionY": true, "velocity": [3, 2, 0], "fixedRotation": true}}})J");
+    Call(e, "sim.step", R"J({"frames": 60})J");
+    const Vec3 drop = PosOf(e, "Drop"), slide = PosOf(e, "Slide"), pin = PosOf(e, "Pin");
+    std::printf("  2D locks: drop x %.5f, slide y %.5f, pin (%.5f, %.5f)\n", drop.x, slide.y, pin.x, pin.y);
+    CHECK(std::fabs(drop.x - 20.0f) < 1e-3f && drop.y < 1.0f);
+    CHECK(std::fabs(slide.y - 5.0f) < 1e-3f && slide.x > 31.0f);
+    CHECK(std::fabs(pin.x - 40.0f) < 1e-3f && std::fabs(pin.y - 5.0f) < 1e-3f);
+    Json pin2d = Call(e, "entity.get", R"J({"id": "Pin"})J")["result"]["components"]["RigidBody2D"];
+    CHECK(pin2d["lockRotationZ"].asBool() && !pin2d.has("fixedRotation"));
+    // Moving a locked body (editor, script) moves its lock with it.
+    Call(e, "component.set", R"J({"id": "Pin", "type": "Transform", "values": {"position": [45, 6, 0]}})J");
+    Call(e, "sim.step", R"J({"frames": 30})J");
+    const Vec3 moved = PosOf(e, "Pin");
+    CHECK(std::fabs(moved.x - 45.0f) < 1e-3f && std::fabs(moved.y - 6.0f) < 1e-3f);
 }
 
 TEST(PhysicsBoxStackIsStable) {

@@ -56,6 +56,18 @@ const char* ToString(PhysicsEvent::Kind kind) {
 
 namespace {
 
+// The degrees of freedom RigidBody's axis locks leave a dynamic body (world axes).
+JPH::EAllowedDOFs AllowedDOFs(const RigidBody& rb) {
+    JPH::EAllowedDOFs dofs = JPH::EAllowedDOFs::All;
+    const std::pair<bool, JPH::EAllowedDOFs> locks[] = {
+        {rb.lockPositionX, JPH::EAllowedDOFs::TranslationX}, {rb.lockPositionY, JPH::EAllowedDOFs::TranslationY},
+        {rb.lockPositionZ, JPH::EAllowedDOFs::TranslationZ}, {rb.lockRotationX, JPH::EAllowedDOFs::RotationX},
+        {rb.lockRotationY, JPH::EAllowedDOFs::RotationY},    {rb.lockRotationZ, JPH::EAllowedDOFs::RotationZ}};
+    for (const auto& lock : locks)
+        if (lock.first) dofs = dofs & ~lock.second;
+    return dofs;
+}
+
 // ----- Jolt global setup ------------------------------------------------------
 
 void JoltTrace(const char* fmt, ...) {
@@ -277,7 +289,7 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         std::string key;
         JPH::Vec3 lastPos;
         JPH::Ref<JPH::CharacterVirtualSettings> settings;
-        float planeZ = 0.0f;  // CharacterBody.plane2D keeps the character on this Z
+        JPH::Vec3 lockOrigin = JPH::Vec3::sZero();  // where CharacterBody.lockPosition* keep the character
     };
 
     explicit Impl(bool snapshots = false) : temp(16 * 1024 * 1024), jobs(JPH::cMaxPhysicsJobs), nativeIds(snapshots) {
@@ -384,12 +396,12 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                 bodyToEntity[rec.ch->GetInnerBodyID().GetIndexAndSequenceNumber()] = id;
                 rec.key = key;
                 rec.lastPos = wx.pos;
-                rec.planeZ = wx.pos.GetZ();
+                rec.lockOrigin = wx.pos;
                 if (scene.Get<Collider>(id)) Warn(warnings, "entity " + std::to_string(id) + " has both CharacterBody and Collider; the Collider is ignored (CharacterBody defines the shape)");
             } else if (!SamePos(wx.pos, rec.lastPos)) {
                 rec.ch->SetPosition(wx.pos);  // teleported by a script or the editor
                 rec.lastPos = wx.pos;
-                rec.planeZ = wx.pos.GetZ();
+                rec.lockOrigin = wx.pos;
             }
         }
         for (auto it = characters.begin(); it != characters.end();) {
@@ -450,10 +462,14 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
                     bs.mLinearVelocity = J(rb->velocity);
                     bs.mAngularVelocity = J(rb->angularVelocity) * (kPi / 180.0f);
                     bs.mMotionQuality = rb->continuous ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
-                    if (rb->plane2D) {
-                        bs.mAllowedDOFs = rb->lockRotation ? JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY : JPH::EAllowedDOFs::Plane2D;
-                    } else if (rb->lockRotation) {
-                        bs.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
+                    if (rec.kind == Kind::Dynamic) {
+                        bs.mAllowedDOFs = AllowedDOFs(*rb);
+                        // Every axis locked: it cannot move at all, so it is solid like a kinematic body.
+                        if (bs.mAllowedDOFs == JPH::EAllowedDOFs::None) {
+                            bs.mAllowedDOFs = JPH::EAllowedDOFs::All;
+                            bs.mMotionType = JPH::EMotionType::Kinematic;
+                            rec.kind = Kind::Kinematic;
+                        }
                     }
                     if (rec.kind == Kind::Dynamic) {
                         bs.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
@@ -579,17 +595,20 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
             CharacterBody* cb = scene.Get<CharacterBody>(kv.first);
             JPH::CharacterVirtual& ch = *kv.second.ch;
             JPH::Vec3 desired = J(cb->velocity);
-            if (cb->plane2D) desired.SetZ(0.0f);
+            if (cb->lockPositionX) desired.SetX(0.0f);
+            if (cb->lockPositionY) desired.SetY(0.0f);
+            if (cb->lockPositionZ) desired.SetZ(0.0f);
             JPH::Vec3 v = desired;
             bool onGround = ch.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
             if (onGround && desired.GetY() <= 0.0f) v.SetY(ch.GetGroundVelocity().GetY());
             else v.SetY(desired.GetY() + gravity.GetY() * cb->gravityScale * dt);
+            if (cb->lockPositionY) v.SetY(0.0f);  // no gravity either
             ch.SetLinearVelocity(v);
 
             JPH::CharacterVirtual::ExtendedUpdateSettings settings;
             settings.mWalkStairsStepUp = JPH::Vec3(0, std::max(0.0f, cb->stepHeight), 0);
             JPH::IgnoreSingleBodyFilter bodyFilter(ch.GetInnerBodyID());
-            ch.ExtendedUpdate(dt, gravity * cb->gravityScale, settings, bpFilter, layerFilter, bodyFilter, shapeFilter, temp);
+            ch.ExtendedUpdate(dt, gravity * (cb->lockPositionY ? 0.0f : cb->gravityScale), settings, bpFilter, layerFilter, bodyFilter, shapeFilter, temp);
 
             // Hitting a ceiling ends the upward motion (otherwise the character
             // hangs under it until gravity has eaten the jump velocity).
@@ -605,11 +624,16 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
             }
 
             JPH::Vec3 pos = ch.GetPosition();
-            if (cb->plane2D && pos.GetZ() != kv.second.planeZ) {
-                pos.SetZ(kv.second.planeZ);
+            const bool locks[3] = {cb->lockPositionX, cb->lockPositionY, cb->lockPositionZ};
+            JPH::Vec3 lv = ch.GetLinearVelocity();
+            bool snapped = false;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (!locks[axis]) continue;
+                if (pos[axis] != kv.second.lockOrigin[axis]) pos.SetComponent(axis, kv.second.lockOrigin[axis]), snapped = true;
+                if (lv[axis] != 0.0f) lv.SetComponent(axis, 0.0f), snapped = true;
+            }
+            if (snapped) {
                 ch.SetPosition(pos);
-                JPH::Vec3 lv = ch.GetLinearVelocity();
-                lv.SetZ(0.0f);
                 ch.SetLinearVelocity(lv);
             }
             Transform* t = scene.Get<Transform>(kv.first);

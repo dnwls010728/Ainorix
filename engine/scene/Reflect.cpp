@@ -181,7 +181,9 @@ bool ApplyComponentJson(const ComponentType& type, void* c, const Json& values, 
         if (error) *error = "component '" + type.name + "' values must be an object, got " + values.typeName();
         return false;
     }
-    for (const auto& kv : values.members()) {
+    Json upgraded;
+    const Json& fields = type.upgrade && type.upgrade(upgraded = values) ? upgraded : values;
+    for (const auto& kv : fields.members()) {
         const FieldInfo* f = type.FindField(kv.first);
         if (!f) {
             std::string names;
