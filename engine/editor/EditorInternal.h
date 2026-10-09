@@ -346,7 +346,13 @@ struct NativeEditor::Impl {
     bool chatCompleteScroll = false;      // bring the chosen row into view
     std::vector<ChatCompletion> Completions(char marker, const std::string& prefix) const;
     ImU32 ChatTokenColor(const std::string& word, const std::vector<std::string>* files, size_t& length) const;
-    void DrawChatText(const std::string& text, const std::vector<std::string>& files);
+    // A message's text as Markdown (headings, lists, quotes, tables, rules, fenced code; inline bold,
+    // italic, code, strike and links), wrapped to the panel; `tint` colors @mentions and `files`.
+    void DrawChatMarkdown(const std::string& text, const std::vector<std::string>& files, bool tint, ImU32 color);
+    // One line of inline Markdown laid out from `origin` within `width`; returns its height.
+    float DrawChatInline(const std::string& line, ImVec2 origin, float width, float size, ImU32 color, bool bold, const std::vector<std::string>* files);
+    void DrawChatCode(const std::string& code, const std::string& language, float width);
+    void OpenChatLink(const std::string& target);  // http(s) in the browser, project files in their editor
     void PollChat();
     void SendChat();
     void RouteDroppedFiles();

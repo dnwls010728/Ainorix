@@ -30,6 +30,7 @@
 #include "core/Json.h"
 #include "core/Log.h"
 #include "core/Zip.h"
+#include "editor/EditorMarkdown.h"
 #include "editor/EditorMath.h"
 #include "net/Bytes.h"
 #include "net/Channels.h"
@@ -11633,6 +11634,28 @@ std::vector<std::string> StringLiterals(const std::string& text) {
         out.push_back(lit);
     }
     return out;
+}
+
+TEST(ChatMarkdownInline) {
+    auto spans = ParseMarkdownInline("Set **`jumpSpeed` to 8.5** in [the script](scripts/player.lua), ~~not~~ *now*.");
+    CHECK(spans.size() == 10);
+    if (spans.size() == 10) {
+        CHECK(spans[0].text == "Set " && spans[0].style == 0);
+        CHECK(spans[1].text == "jumpSpeed" && spans[1].style == (kMdBold | kMdCode));
+        CHECK(spans[2].text == " to 8.5" && spans[2].style == kMdBold);
+        CHECK(spans[4].text == "the script" && spans[4].style == kMdLink && spans[4].target == "scripts/player.lua");
+        CHECK(spans[6].text == "not" && spans[6].style == kMdStrike);
+        CHECK(spans[8].text == "now" && spans[8].style == kMdItalic);
+    }
+    // snake_case, a lone asterisk and an unclosed marker stay plain text.
+    spans = ParseMarkdownInline("player_jump_speed is 2 * 3 and **open");
+    CHECK(spans.size() == 1 && spans[0].text == "player_jump_speed is 2 * 3 and **open" && spans[0].style == 0);
+    spans = ParseMarkdownInline("_quiet_ and \\*literal\\*");
+    CHECK(spans.size() == 2 && spans[0].style == kMdItalic && spans[0].text == "quiet" && spans[1].text == " and *literal*");
+    CHECK(IsMarkdownRule("---") && IsMarkdownRule("* * *") && !IsMarkdownRule("--") && !IsMarkdownRule("-a-"));
+    CHECK(IsMarkdownTableSeparator("|---|:--:|") && !IsMarkdownTableSeparator("| a | b |"));
+    const auto cells = MarkdownTableCells("| a | b \\| c |  |");
+    CHECK(cells.size() == 3 && cells[0] == "a" && cells[1] == "b | c" && cells[2].empty());
 }
 
 TEST(EditorTranslations) {
