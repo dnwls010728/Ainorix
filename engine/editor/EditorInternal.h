@@ -323,6 +323,34 @@ struct NativeEditor::Impl {
     void TeamModals();
     // Team Chat (EditorTeamChat.cpp)
     bool showTeamChat = true, requestTeamChatFocus = false;
+    // ----- Ask bubbles (EditorAsk.cpp): right-click an object in the Scene view and ask the team,
+    // or one installed agent CLI directly, from a bubble that stays next to the object.
+    struct AskBubble {
+        int serial = 0;              // ImGui id
+        EntityId entity = kNullEntity;
+        std::string backend;         // agent CLI id; empty = the team
+        std::string model;           // that CLI's model; empty = its default
+        std::string thread;          // team.ask conversation (agent bubbles)
+        std::string input;
+        Json state;                  // team.thread (agent bubbles)
+        std::vector<uint64_t> sent;  // team chat messages this bubble sent (team bubbles)
+        double polled = -100;
+        bool focusInput = true;
+        size_t shown = 0;            // messages drawn last frame: more scrolls to the newest
+        ImVec2 size{0, 0};           // last frame's size, to keep it inside the view
+    };
+    std::vector<AskBubble> askBubbles;
+    int askSerial = 0;
+    EntityId askMenuEntity = kNullEntity;  // the object the Scene context menu is for
+    bool sceneRightPressed = false;        // right button went down on the view (a click opens the menu)
+    std::map<std::string, std::array<float, 4>> askRects;  // automation: "<serial>:input", "<serial>:send"
+    void OpenAskBubble(EntityId entity, const std::string& backend);
+    void SceneAskMenu();
+    void AskBubbles(ImVec2 viewPos, ImVec2 viewSize);
+    bool AskBubbleBody(AskBubble& bubble);  // true: closed
+    void AskSend(AskBubble& bubble);
+    std::string AskContext(EntityId entity) const;
+
     struct ChatEntry {
         Json message;                    // one team.messages entry
         std::vector<std::string> links;  // project files named in the text (open on click)
@@ -499,6 +527,7 @@ struct NativeEditor::Impl {
     void SceneOverlays(ImDrawList* dl);
     void SceneGizmo();
     void ScenePick(float x, float y, bool additive);
+    EntityId ScenePickId(float x, float y);  // the entity drawn at a Scene view pixel (render.pick)
     void SceneDrop(const std::string& path, float x, float y);
     void GameInput();
     void ReleaseGameInput();

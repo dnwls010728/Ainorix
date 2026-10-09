@@ -673,6 +673,27 @@ layout reset.
 check, `--chat` the Team Chat (`--agent new` or `--agent <id>` also opens the profile dialog); a seeded `.oe/team/` in a
 `TempProject` gives tests a fixed roster and log.
 
+### 7.4 Asking about an object (Scene bubbles)
+
+Right-click an object in the Scene view (a click, not a fly/pan drag; also on the gizmo, which
+only takes the left button): it is selected and a menu offers **Ask the Team** and **Ask an
+Agent ▸** with the installed agent CLIs (`team.backends`). Either opens a bubble that stays next
+to the object while the camera moves (several may be open; bubbles of one object stand side by
+side; deleting the object closes them). Enter sends, Ctrl+Enter adds a line.
+
+- **Team**: the text goes to the team chat as `[Name #id] text` (`team.send`), so the lead
+  answers unless someone is @mentioned. The bubble shows what it sent and the replies addressed
+  to the person since then, plus the activity of working agents; the Team Chat has all of it.
+- **One agent**: a direct conversation outside the roster and the chat (`team.ask`, thread
+  `e<entity>-<cli>`). The bubble picks the model per message (the CLI's catalog or its
+  default) and shows the conversation, the running activity and a Stop button
+  (`team.thread_cancel`). The turn runs like a team turn: in the project directory, with
+  `edit` access, the editor's MCP server (`--agent ask-<cli>`, so edits show as notices with the
+  CLI's name), usage recorded under `ask-<cli>`. The prompt starts with the object (`entity #id
+  "Name" (components) in scene ...`, read with `entity.get`) and the CLI's own conversation is
+  resumed by the next message. Conversations are kept in `.oe/team/threads/<thread>.json` (the
+  last 200 messages); `team.clear` removes them, `team.threads` lists them.
+
 ## 8. Commands
 
 All in area `team`, registered only by the `oe` tool. None is `mutates` (the team is not part of

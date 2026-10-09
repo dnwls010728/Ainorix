@@ -284,7 +284,7 @@ void NativeEditor::Impl::SceneGizmo() {
     Refresh(true);
 }
 
-void NativeEditor::Impl::ScenePick(float x, float y, bool additive) {
+EntityId NativeEditor::Impl::ScenePickId(float x, float y) {
     Json camera = SceneCameraRequest(cam);
     Json r = Call("render.pick", ObjectOf({{"x", Json(static_cast<int>(x))},
                                            {"y", Json(static_cast<int>(y))},
@@ -292,7 +292,11 @@ void NativeEditor::Impl::ScenePick(float x, float y, bool additive) {
                                            {"height", Json(static_cast<int>(sceneImageSize.y))},
                                            {"camera", camera}}),
                   true);
-    EntityId id = static_cast<EntityId>(r["result"]["id"].asNumber(0));
+    return static_cast<EntityId>(r["result"]["id"].asNumber(0));
+}
+
+void NativeEditor::Impl::ScenePick(float x, float y, bool additive) {
+    EntityId id = ScenePickId(x, y);
     if (additive) {
         if (id != kNullEntity) ToggleSelect(id);
     } else {
@@ -551,6 +555,8 @@ void NativeEditor::Impl::ScenePanel() {
     if (gizmoUsing || compassHot) {
         sceneHovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(pos, pos + sceneImageSize);
         sceneButtonActive = false;
+        // The gizmo only takes the left button: a right click on its handles still opens the object menu.
+        clickedRight = gizmoUsing && !compassHot && sceneHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
     } else {
         ImGui::SetCursorScreenPos(pos);
         ImGui::SetNextItemAllowOverlap();
@@ -581,6 +587,23 @@ void NativeEditor::Impl::ScenePanel() {
     } else {
         tileStroke = TileStroke::None;
     }
+
+    // Right click (not a fly/pan drag) on an object: select it and offer to ask an agent about it.
+    if (clickedRight && !painting) sceneRightPressed = true;
+    if (sceneRightPressed && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        sceneRightPressed = false;
+        if (io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] < 16.0f) {
+            const EntityId id = markerHover != kNullEntity ? markerHover : ScenePickId(io.MousePos.x - pos.x, io.MousePos.y - pos.y);
+            if (id != kNullEntity) {
+                SelectOnly(id);
+                scrollToRow = id;
+                Refresh(true);
+                askMenuEntity = id;
+                ImGui::OpenPopup("##sceneAsk");
+            }
+        }
+    }
+    SceneAskMenu();
 
     // Click (not drag) selects: markers first, then the pixel's entity.
     if (clickedLeft && !io.KeyAlt && !gizmoUsing && !painting) {
@@ -630,6 +653,7 @@ void NativeEditor::Impl::ScenePanel() {
         ImVec2 ts = ImGui::CalcTextSize(t);
         ViewportLabel(dl, ImVec2(pos.x + sceneImageSize.x - ts.x - 10, pos.y + (showCompass ? compassSize + 16 : 8)), t, IM_COL32(255, 213, 128, 255));
     }
+    AskBubbles(pos, sceneImageSize);
     ImGui::End();
 }
 

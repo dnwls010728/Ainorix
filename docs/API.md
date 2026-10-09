@@ -1542,6 +1542,38 @@ Post a message to the team chat and give a turn to every agent it addresses: @id
 | `from` | string |  | Sender: "user" (default) or an agent id. |
 | `wait` | number |  | Block up to this many seconds until the addressed agents have finished, then also return the new messages and the state (for one-shot `oe exec`; default 0 = return at once). |
 
+### `team.ask`
+
+Ask one agent CLI directly, outside the team roster and chat: a direct conversation (`thread`) with the CLI and model chosen per message (the editor's "Ask an agent" bubble on a Scene object). The turn runs like a team turn, attached to the editor; follow it with team.thread. Returns the thread state at once.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `thread` | string | yes | Conversation key, 1..64 characters of a-z, 0-9, '-' and '_' (the editor uses e<entity>-<backend>). |
+| `backend` | string | yes | Agent CLI id from team.backends (claude, codex, ...). |
+| `model` | string |  | Model id of that CLI (team.backends lists them); empty = the CLI's default. |
+| `text` | string | yes | The message, at most 32 KiB. |
+| `context` | string |  | What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB. |
+
+### `team.thread`
+
+One direct conversation (team.ask): backend, model, running, activity and its messages, oldest first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `thread` | string | yes | Conversation key. |
+
+### `team.thread_cancel`
+
+Stop the running turn of a direct conversation; {cancelled: false} when none ran.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `thread` | string | yes | Conversation key. |
+
+### `team.threads`
+
+Stored direct conversations: [{thread, backend, model, messages, running}].
+
 ### `team.delegate`
 
 Start one bounded task in a fresh worker conversation, with no chat history or resume. Returns immediately; the MCP team_delegate tool waits for the final task record. A done task remains unverified until its caller checks the evidence.

@@ -63,6 +63,8 @@ Inspector field labels wrap within their column and alternating rows separate ne
 
 Scene overlay toggles have opaque backgrounds and an underline when enabled. Hovered entity names, fly controls and play/pause notices use dark backing plates so bright scene geometry does not hide them.
 
+**Asking about an object.** Right-click an object in the Scene view and choose **Ask the Team** or **Ask an Agent ▸** (an installed CLI such as Claude Code or Codex): a bubble opens next to the object, follows it while the camera moves, and holds the conversation. The team bubble posts to the Team Chat naming the object; an agent bubble is a direct conversation with that CLI (model chosen in the bubble), kept per object and CLI. Details: [TEAM.md §7.4](TEAM.md#74-asking-about-an-object-scene-bubbles).
+
 The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). Compiled shader programs are cached beside it in `.oe/shader-cache/` (D3D11; see [RENDERING.md](RENDERING.md#shader-compiling-and-the-cache)): shader graph programs compile in the background while their materials draw through the interpreter, and the window stays hidden until the frame loop starts (dark background, no white window while the project loads). View > Reset Layout restores the default. The native window also restores its last normal position/size and maximized state from the same file. A first launch without saved placement starts maximized. Minimized windows reopen in their previous normal/maximized state; Windows clamps saved placement to an available monitor work area.
 
 ## Controls
@@ -169,6 +171,7 @@ oe editor <project> --screenshot build/editor.png --play --frames 60  # Game vie
 oe editor <project> --screenshot build/editor.png --game --select Start  # stopped Game view: UI editing with a selection
 oe editor <project> --screenshot build/editor.png --lang ja          # Japanese interface (default for screenshots: en)
 oe editor <project> --screenshot build/editor.png --console         # Console tab in front
+oe editor <project> --screenshot build/editor.png --ask Player:claude --select Player   # an Ask bubble (Name = the team)
 oe editor <project> --screenshot build/effects.png --effects effects/x.vfx.json # Effects workspace
 oe editor <project> --screenshot build/editor.png --script scripts/x.lua  # code editor with the script's problems
 oe editor <project> --screenshot build/editor.png --team --agent new  # Team panel and the agent profile dialog (--agent <id> edits one)

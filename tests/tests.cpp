@@ -11117,6 +11117,99 @@ TEST(TeamDelegationTurns) {
 #endif
 }
 
+// Direct conversations (team.ask): one CLI and model per conversation, outside the roster and the
+// team chat, resumed by the next message, stopped on request and kept on disk.
+TEST(TeamDirectConversations) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("team_direct");
+    const std::string dir = ProcessFixtureDir("team direct");
+    std::string error;
+    auto fake = [&](const char* id, const std::string& script) {
+        Backend backend;
+        backend.id = id;
+        backend.displayName = std::string("Fake ") + id;
+        backend.executable = JoinPath(dir, std::string(id) + ".cmd");
+        backend.installHint = "npm install -g fake";
+        backend.models = {{"m", "M", true, 0}};
+        backend.systemPromptFlag = true;
+        backend.buildTurn = [](const TurnRequest& request) {
+            ProcessOptions options;
+            options.executable = request.executable;
+            options.arguments = {request.sessionId.empty() ? "new" : request.sessionId, request.model.empty() ? "default" : request.model,
+                                 request.agentId.empty() ? "noagent" : request.agentId};
+            return options;
+        };
+        backend.parseLine = &ParseClaudeLine;
+        CHECK(WriteTextFile(backend.executable, "@echo off\n" + script));
+        return backend;
+    };
+    const std::string save = "findstr \"^\" > \"%~dp0%OE_TEAM_AGENT%.prompt.txt\"\necho %*> \"%~dp0%OE_TEAM_AGENT%.args.txt\"\n";
+    std::vector<Backend> backends = {fake("echo", save + "type \"%~dp0reply.jsonl\"\n"),
+                                     fake("slow", "findstr \"^\" >nul\nping -n 30 127.0.0.1 >nul\n"),
+                                     fake("crash", "findstr \"^\" >nul\necho boom 1>&2\nexit /b 3\n"), fake("missing", "")};
+    backends[3].executable = "oe-no-such-agent-cli";
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), std::string(R"J({"type":"system","subtype":"init","session_id":"sess-7"})J") + "\n" +
+                                                         R"J({"type":"result","subtype":"success","is_error":false,"result":"Tinted it red.","session_id":"sess-7","total_cost_usd":0.1})J" + "\n"));
+    Engine e;
+    CHECK(e.Open(project, &error));
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), backends);
+    auto until = [&](const std::string& thread) {
+        const double end = PlatformTimeSeconds() + 30.0;
+        Json state;
+        while (PlatformTimeSeconds() < end) {
+            state = Call(e, "team.thread", ("{\"thread\":\"" + thread + "\"}").c_str())["result"];
+            if (!state["running"].asBool()) break;
+            PlatformSleep(0.02);
+        }
+        return state;
+    };
+
+    Json asked = Call(e, "team.ask", R"J({"thread":"e5-echo","backend":"echo","model":"m","text":"Make it red","context":"The person points at entity #5 \"Girl\"."})J");
+    CHECK(asked["ok"].asBool() && asked["result"]["running"].asBool());
+    Json state = until("e5-echo");
+    CHECK(state["messages"].size() == 2);
+    CHECK(state["messages"][0]["from"].asString() == "user" && state["messages"][0]["text"].asString() == "Make it red");
+    CHECK(state["messages"][1]["from"].asString() == "echo" && state["messages"][1]["text"].asString() == "Tinted it red.");
+    std::string prompt, args;
+    CHECK(ReadTextFile(JoinPath(dir, "ask-echo.prompt.txt"), prompt) && ReadTextFile(JoinPath(dir, "ask-echo.args.txt"), args));
+    CHECK(prompt.find("entity #5") != std::string::npos && prompt.find("Make it red") != std::string::npos);
+    CHECK(args.find("\"new\" \"m\" \"noagent\"") != std::string::npos);
+    // Not part of the team chat.
+    CHECK(Call(e, "team.messages")["result"]["messages"].size() == 0);
+
+    // The next message resumes the CLI's conversation, here with the default model.
+    CHECK(Call(e, "team.ask", R"J({"thread":"e5-echo","backend":"echo","text":"Brighter"})J")["ok"].asBool());
+    state = until("e5-echo");
+    CHECK(state["messages"].size() == 4 && state["model"].asString() == "");
+    CHECK(ReadTextFile(JoinPath(dir, "ask-echo.args.txt"), args) && args.find("\"sess-7\" \"default\"") != std::string::npos);
+
+    // Busy, cancel, failures and bad arguments.
+    CHECK(Call(e, "team.ask", R"J({"thread":"e6-slow","backend":"slow","text":"Wait"})J")["ok"].asBool());
+    CHECK(Call(e, "team.ask", R"J({"thread":"e6-slow","backend":"slow","text":"Again"})J")["error"]["code"].asString() == "agent_busy");
+    CHECK(Call(e, "team.thread_cancel", R"J({"thread":"e6-slow"})J")["result"]["cancelled"].asBool());
+    state = Call(e, "team.thread", R"J({"thread":"e6-slow"})J")["result"];
+    CHECK(!state["running"].asBool() && state["messages"][state["messages"].size() - 1]["kind"].asString() == "notice");
+    CHECK(Call(e, "team.ask", R"J({"thread":"e7-crash","backend":"crash","text":"Go"})J")["ok"].asBool());
+    state = until("e7-crash");
+    CHECK(state["messages"][1]["kind"].asString() == "error" && state["messages"][1]["text"].asString().find("boom") != std::string::npos);
+    CHECK(Call(e, "team.ask", R"J({"thread":"e8","backend":"missing","text":"Go"})J")["error"]["code"].asString() == "agent_offline");
+    CHECK(Call(e, "team.ask", R"J({"thread":"Bad Key","backend":"echo","text":"Go"})J")["error"]["code"].asString() == "invalid_argument");
+
+    // Kept on disk: a new session (editor restart) lists and reads them again.
+    CHECK(Call(e, "team.threads")["result"].size() == 3);
+    team.reset();
+    Engine again;
+    CHECK(again.Open(project, &error));
+    std::shared_ptr<TeamHandle> reopened = RegisterTeamCommands(again.Commands(), backends);
+    state = Call(again, "team.thread", R"J({"thread":"e5-echo"})J")["result"];
+    CHECK(state["messages"].size() == 4 && state["backend"].asString() == "echo");
+    CHECK(Call(again, "team.threads")["result"].size() == 3);
+    reopened.reset();
+    RemoveAll(project);
+#endif
+}
+
 TEST(TeamSessionTurns) {
     if (!PlatformProcessSupported()) return;
 #if defined(_WIN32)
@@ -14889,6 +14982,112 @@ TEST(EditorStateForAgents) {
     }
     CHECK(!Call(engine, "editor.state")["result"]["open"].asBool());  // closed again
     RemoveAll(project);
+}
+
+// Ask bubbles: a right click on an object in the Scene view offers the team or an installed CLI; a
+// bubble sends what is typed (team.ask / team.send) and shows the conversation.
+TEST(NativeEditorAskBubbles) {
+    if (!PlatformProcessSupported()) return;
+#if defined(_WIN32)
+    const std::string project = TempProject("editor_ask");
+    const std::string dir = ProcessFixtureDir("editor ask");
+    std::string error;
+    Backend echo;
+    echo.id = "echo";
+    echo.displayName = "Fake echo";
+    echo.executable = JoinPath(dir, "echo.cmd");
+    echo.installHint = "npm install -g fake";
+    echo.models = {{"m", "M", true, 0}};
+    echo.buildTurn = [](const TurnRequest& request) {
+        ProcessOptions options;
+        options.executable = request.executable;
+        return options;
+    };
+    echo.parseLine = &ParseClaudeLine;
+    CHECK(WriteTextFile(echo.executable, "@echo off\nfindstr \"^\" > \"%~dp0prompt.txt\"\ntype \"%~dp0reply.jsonl\"\n"));
+    CHECK(WriteTextFile(JoinPath(dir, "reply.jsonl"), R"J({"type":"result","subtype":"success","is_error":false,"result":"Made it blue.","session_id":"s1"})J" "\n"));
+    Engine e;
+    CHECK(e.Open(project, &error));
+    std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), {echo});
+    CHECK(Call(e, "team.add", R"J({"name":"Mina","backend":"echo"})J")["ok"].asBool());
+    CHECK(Call(e, "team.settings", R"J({"lead":"mina"})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Target","components":{"Transform":{"position":[30,1,30],"scale":[3,3,3]},"MeshRenderer":{"mesh":"cube"}}})J")["ok"].asBool());
+    const EntityId target = e.GetScene().FindByName("Target");
+    if (!e.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options;
+    options.language = "en";
+    options.onFrame = team->update;
+    {
+        NativeEditor editor(e, nullptr, options);
+        CHECK(editor.Init(&error));
+        RenderTarget image;
+        auto frames = [&](int count, const std::vector<WindowEvent>& events = std::vector<WindowEvent>()) {
+            for (int i = 0; i < count; ++i) {
+                editor.Update(i == 0 ? events : std::vector<WindowEvent>(), 1440, 900, 1, Engine::kFixedDt);
+                CHECK(editor.DrawToImage(image));
+            }
+        };
+        auto mouse = [&](float x, float y, int button, bool down) {
+            WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.x = x; event.y = y; event.button = button; event.down = down;
+            frames(2, {event});
+        };
+        auto type = [&](const std::string& text) {
+            std::vector<WindowEvent> events;
+            for (unsigned char c : text) { WindowEvent event; event.type = WindowEvent::Type::Text; event.codepoint = c; events.push_back(event); }
+            frames(2, events);
+            frames(2, {KeyEvent(WindowKey::Enter, true)});
+            frames(2, {KeyEvent(WindowKey::Enter, false)});
+        };
+        frames(3);
+        // A right click on the object (framed in the middle of the view) selects it and opens the menu.
+        CHECK(Call(e, "editor.select", R"J({"ids":["Target"],"frame":true})J")["ok"].asBool());
+        frames(3);
+        ImGuiWindow* scene = ImGui::FindWindowByName("###Scene");
+        CHECK(scene != nullptr);
+        if (!scene) { RemoveAll(project); return; }
+        const ImVec2 center = scene->InnerRect.GetCenter();
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = center.x; move.y = center.y;  // on the gizmo: it only takes the left button
+        frames(2, {move});
+        mouse(move.x, move.y, 1, true);
+        mouse(move.x, move.y, 1, false);
+        CHECK(editor.AskMenuEntity() == target && editor.Selected() == target);
+        WindowEvent escape = KeyEvent(WindowKey::Escape, true);
+        frames(2, {escape});
+        frames(2, {KeyEvent(WindowKey::Escape, false)});
+
+        // Ask the installed CLI directly: the conversation is the object's, outside the team chat.
+        editor.OpenAskBubble(target, "echo");
+        frames(3);
+        CHECK(editor.AskBubbleCount() == 1 && editor.AskControlRect(0, "input")[2] > 0);
+        type("make it blue");
+        const std::string thread = "{\"thread\":\"e" + std::to_string(target) + "-echo\"}";
+        Json state;
+        for (int i = 0; i < 300; ++i) {
+            frames(1);
+            state = Call(e, "team.thread", thread.c_str())["result"];
+            if (state["messages"].size() >= 2 && !state["running"].asBool()) break;
+            PlatformSleep(0.02);
+        }
+        CHECK(state["messages"].size() == 2 && state["messages"][1]["text"].asString() == "Made it blue.");
+        std::string prompt;
+        CHECK(ReadTextFile(JoinPath(dir, "prompt.txt"), prompt) && prompt.find("\"Target\"") != std::string::npos && prompt.find("make it blue") != std::string::npos);
+        CHECK(Call(e, "team.messages")["result"]["messages"].size() == 0);
+
+        // Ask the team: the message goes to the team chat, naming the object.
+        editor.OpenAskBubble(target, "");
+        frames(3);
+        CHECK(editor.AskBubbleCount() == 2);
+        type("what is this?");
+        const Json messages = Call(e, "team.messages")["result"]["messages"];
+        CHECK(messages.size() >= 1 && messages[0]["text"].asString() == "[Target #" + std::to_string(target) + "] what is this?");
+        // Deleting the object closes its bubbles.
+        CHECK(Call(e, "entity.delete", R"J({"id":"Target"})J")["ok"].asBool());
+        frames(2);
+        CHECK(editor.AskBubbleCount() == 0);
+    }
+    team.reset();
+    RemoveAll(project);
+#endif
 }
 
 int main() {

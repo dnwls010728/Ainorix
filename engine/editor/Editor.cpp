@@ -572,6 +572,9 @@ void NativeEditor::Impl::OnRemoteCall(const std::string& name, const Json& args,
     for (const Json& member : team["agents"].items()) {
         if (!agent.empty() && member["id"].asString("") == agent) who = member["name"].asString(agent);
     }
+    if (agent.rfind("ask-", 0) == 0) {  // asked directly from a Scene bubble (team.ask): the CLI's name
+        if (const Json* backend = TeamBackend(agent.substr(4))) who = (*backend)["name"].asString(agent);
+    }
     if (id != kNullEntity) {
         if (agent.empty()) remoteEditColors.erase(id);
         else remoteEditColors[id] = AgentColor(agent);
@@ -1942,6 +1945,17 @@ Json NativeEditor::EffectsDocument() const { return impl_->engine.VfxDocumentCal
 std::array<float, 4> NativeEditor::EffectsControlRect(const std::string& name) const {
     const auto found = impl_->effectsRects.find(name);
     return found == impl_->effectsRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
+
+void NativeEditor::OpenAskBubble(EntityId entity, const std::string& backend) { impl_->OpenAskBubble(entity, backend); }
+EntityId NativeEditor::AskMenuEntity() const {
+    return ImGui::IsPopupOpen("##sceneAsk", ImGuiPopupFlags_AnyPopupId) ? impl_->askMenuEntity : kNullEntity;
+}
+int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }
+std::array<float, 4> NativeEditor::AskControlRect(int index, const std::string& name) const {
+    if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {0, 0, 0, 0};
+    const auto found = impl_->askRects.find(std::to_string(impl_->askBubbles[index].serial) + ":" + name);
+    return found == impl_->askRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
 }
 
 std::array<float, 4> NativeEditor::InspectorControlRect(const std::string& name) const {
