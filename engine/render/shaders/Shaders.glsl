@@ -22,11 +22,11 @@
 // Shader graph arithmetic shared by the vertex (offset) and fragment (surface) evaluators.
 // Instruction numbering and finite semantics match ShaderGraph.cpp.
 @block graph_ops
+// Per channel without a loop: writing value[channel] in a loop makes the D3D compiler unroll it (X3550).
+float GraphFiniteChannel(float value) { return value != value ? 0.0 : clamp(value, -65504.0, 65504.0); }
 vec4 GraphFinite(vec4 value) {
-    for (int channel = 0; channel < 4; ++channel) {
-        value[channel] = value[channel] != value[channel] ? 0.0 : clamp(value[channel], -65504.0, 65504.0);
-    }
-    return value;
+    return vec4(GraphFiniteChannel(value.x), GraphFiniteChannel(value.y), GraphFiniteChannel(value.z),
+                GraphFiniteChannel(value.w));
 }
 
 // Instructions 8..24; `literal` is the instruction's value (swizzle channels).
@@ -400,11 +400,14 @@ void main() {
         }
         color = amb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
         int dirs = int(counts.x);
+        // The shadow lookup stays outside the light loop: a compare sample inside a loop with a
+        // varying count makes the D3D compiler unroll it (X3570) and slows every compile.
+        float sunLit = (dirs > 0 && counts.z > 0.5) ? shadow_lit(v_wpos, ng) : 1.0;
         for (int i = 0; i < 4; i++) {
             if (i >= dirs) {
                 break;
             }
-            float lit = (i == 0 && counts.z > 0.5) ? shadow_lit(v_wpos, ng) : 1.0;
+            float lit = i == 0 ? sunLit : 1.0;
             if (lit > 0.0) {
                 color += brdf(n, v, -dir_dir[i].xyz, diffuse, f0, a2, k, ndv, gv) * dir_color[i].rgb * lit;
             }
