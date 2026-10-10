@@ -756,6 +756,13 @@ A review of M1–M8 against this document found the defects below; each fix has 
       `LinksAndLaunchArgs` (a `TcpTransport` listener as the service); Windows Release 198 tests, zero failed checks.
       Limits: IPv4 literals only, no TLS, no TCP in browsers, session protocol unchanged (v4).
 - [x] Android runtime compilation refreshed for both ABIs on 2026-10-06 (Lua M1a-3), including protocol v4 networking; APK signed and externally validated.
+- [x] A client could stop an authoritative world (2026-10-10, found with the separate Ainorix Online project): a
+      client whose own ready barrier timed out (a tool stepping it faster than real time, a stall) sends `Stop`,
+      and the host stopped its whole match for every player. `Authority::Receive` now treats a `Stop` from a remote
+      participant of a running match as that player leaving (`TakeDropped`; the engine kicks it and removes its
+      avatars, a non-late-join match still ends when its last remote participant is gone); only a `Stop` from the
+      server ends a client's match. The kick reason of dropped players is "dropped from the match" (was "send queue
+      overflow"). Test: `NetworkAuthoritativeDeltaAckAndBounds`; Windows Release 311 tests, zero failed checks.
 - [ ] Android device networking/import execution and POSIX native build/tests remain unverified; no device/emulator or Linux toolchain was used. Runtime compilation does not verify a session on Android.
 
 ### Official Lua agreement (M1a-3, 2026-10-06)

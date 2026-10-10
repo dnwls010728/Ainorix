@@ -121,6 +121,12 @@ void Authority::Receive(uint32_t sender, const std::vector<uint8_t>& bytes) {
         SendMessage(sender, GoMessage, Json::MakeObject()); return;
     }
     if (epoch != epoch_ || !Active() || std::find(roster_.begin(), roster_.end(), sender) == roster_.end()) { reject(); return; }
+    // A client that stops (its own barrier timed out, it gave up) leaves a running world; only the
+    // server ends the match for everybody. The caller removes it from the session (TakeDropped).
+    if (kind == StopMessage && host_ && sender != 1 && Running()) {
+        if (std::find(dropped_.begin(), dropped_.end(), sender) == dropped_.end()) dropped_.push_back(sender);
+        return;
+    }
     if (kind == StopMessage && (host_ || sender == 1)) { Stop(body["reason"].asString("peer stopped")); return; }
     if (kind == ReadyMessage && host_ && state_ == "preparing") {
         ready_.insert(sender); if (ready_.size() == roster_.size()) { state_ = "running"; start_ = true; Broadcast(GoMessage, Json::MakeObject()); } return;

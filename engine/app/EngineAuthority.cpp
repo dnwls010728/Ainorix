@@ -380,7 +380,7 @@ void Engine::AdmitAuthorityPlayers() {
     for (uint32_t player : authority_->TakeJoined()) SpawnAuthorityPlayer(player);
 }
 void Engine::DropAuthorityPlayers() {
-    for (uint32_t player : authority_->TakeDropped()) { std::string error; network_->Kick(player, "send queue overflow", &error); }
+    for (uint32_t player : authority_->TakeDropped()) { std::string error; network_->Kick(player, "dropped from the match", &error); }
     std::set<uint32_t> present;
     const Json roster = network_->Players();
     for (const Json& player : roster.items()) present.insert(static_cast<uint32_t>(player["id"].asNumber()));
