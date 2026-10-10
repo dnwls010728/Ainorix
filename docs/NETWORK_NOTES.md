@@ -763,6 +763,16 @@ A review of M1–M8 against this document found the defects below; each fix has 
       avatars, a non-late-join match still ends when its last remote participant is gone); only a `Stop` from the
       server ends a client's match. The kick reason of dropped players is "dropped from the match" (was "send queue
       overflow"). Test: `NetworkAuthoritativeDeltaAckAndBounds`; Windows Release 311 tests, zero failed checks.
+- [x] Agreeing snapshots skip the correction (2026-10-10, measured with Ainorix Online): a predicting client
+      restored its acknowledged checkpoint and replayed every pending frame on every snapshot, 20 times a second,
+      even when its prediction was right; with a ~900-entity town a replay took 12-15 ms and a client frame averaged
+      6.6 ms (peaks 24 ms). The client now records, per input frame, its own predicted entities' replicated fields
+      the way the server sends them (`PredictedOwnedFields`, quantized); a snapshot whose owned records match within
+      2e-3 (`PredictionAgrees`) only prunes what is confirmed. Remote entities, spawns and despawns were already
+      applied every frame from the snapshots (`InterpolateAuthority`), so nothing else depends on the replay; a new
+      owned entity, an Entity-typed field or any difference still takes the full correction. `net.stats` reports
+      `agreedSnapshots` next to `corrections`. Measured: 3 corrections and 110 agreed snapshots in 4 s of walking,
+      client frame 2.7 ms average, 3.8 ms peak. Test: `NetworkAuthoritativePrefabAndNativeTcpUdp`.
 - [ ] Android device networking/import execution and POSIX native build/tests remain unverified; no device/emulator or Linux toolchain was used. Runtime compilation does not verify a session on Android.
 
 ### Official Lua agreement (M1a-3, 2026-10-06)

@@ -1514,7 +1514,11 @@ TEST(NetworkAuthoritativePrefabAndNativeTcpUdp) {
         NetworkSteps(host,client,150);
         CHECK(host.GetScene().Pool<NetPlayer>().size()==2 && client.GetScene().Pool<NetPlayer>().size()==2);
         CHECK(client.NetworkCall("state",Json())["sync"]["state"].asString()=="running");
-        CHECK(client.NetworkCall("stats",Json())["corrections"].asNumber()>10);
+        // Every snapshot is either a correction (restore + replay) or agrees with the prediction and
+        // needs none; a client walking on flat ground predicts most of them right.
+        const Json predictionStats=client.NetworkCall("stats",Json());
+        CHECK(predictionStats["corrections"].asNumber()+predictionStats["agreedSnapshots"].asNumber()>10);
+        CHECK(predictionStats["agreedSnapshots"].asNumber()>0);
         for (const auto& player:host.GetScene().Pool<NetPlayer>()) if(player.second.player==2) CHECK(host.GetScene().Get<Transform>(player.first)->position.x>50);
         CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty()); RemoveAll(project);
     }
@@ -5146,6 +5150,32 @@ TEST(OrthographicAndFollowCamera) {
     CHECK(Near(cam, run + Vec3(0, 3, 6), 1e-3f));
     Vec3 fwd = ForwardFromEuler(e.GetScene().Get<Transform>(e.GetScene().FindByName("Cam"))->rotation);
     CHECK(Dot(fwd, Normalize(run + Vec3(0, 0.5f, 0) - cam)) > 0.999f);
+}
+
+TEST(RenderInterpolation) {
+    // Windows draw between fixed steps: Begin/EndInterpolatedRender put each Transform between its
+    // previous and current step for the frame, then restore the simulated value exactly.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Hello", &err));
+    CHECK(Call(e, "entity.create", R"({"name":"Ball","components":{"Transform":{"position":[40,30,40]},"Collider":{"shape":"sphere"},"RigidBody":{}}})")["ok"].asBool());
+    EntityId ball = e.GetScene().FindByName("Ball");
+    e.Play();
+    e.Tick(Engine::kFixedDt * 10);  // falling by now
+    e.Tick(Engine::kFixedDt * 1.5);  // one more step, half a step left over
+    const float simulated = e.GetScene().Get<Transform>(ball)->position.y;
+    e.BeginInterpolatedRender();
+    const float drawn = e.GetScene().Get<Transform>(ball)->position.y;
+    e.EndInterpolatedRender();
+    CHECK(drawn > simulated && drawn - simulated < 0.1f);  // between the previous (higher) step and this one
+    CHECK(e.GetScene().Get<Transform>(ball)->position.y == simulated);
+    // Tools step exactly: what they draw is the simulated state.
+    e.Step(1);
+    const float stepped = e.GetScene().Get<Transform>(ball)->position.y;
+    e.BeginInterpolatedRender();
+    CHECK(e.GetScene().Get<Transform>(ball)->position.y == stepped);
+    e.EndInterpolatedRender();
+    e.Stop();
 }
 
 TEST(DebugDrawing) {

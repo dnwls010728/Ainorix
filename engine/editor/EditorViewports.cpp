@@ -795,12 +795,14 @@ void NativeEditor::Impl::GamePanel() {
     // not the project's window size or wherever the mouse last was.
     GameEngine().SetViewSize(w, h);
     Scene& scene = GameEngine().GetScene();
+    GameEngine().BeginInterpolatedRender();  // smooth motion between fixed steps, like the game window
     RenderView view;
     bool hasCamera = MakeSceneView(scene, static_cast<float>(w) / static_cast<float>(h), view);
     view.shaderTime = static_cast<float>(GameEngine().SimTime());
     view.drawUI = true;
     GameEngine().AppendDebugLines(view.lines);
     sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kGameSlot);
+    GameEngine().EndInterpolatedRender();
     gameImagePos = pos;
     gameImageSize = ImVec2(static_cast<float>(w), static_cast<float>(h));
 

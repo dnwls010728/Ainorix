@@ -1,6 +1,7 @@
 #include "app/Engine.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -308,6 +309,7 @@ std::string Engine::ScriptReloadBlockReason() const {
 void Engine::Step(int frames) {
     BeginSessionIfNeeded();
     if (!journal_ && (!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) { scripts_->PollHotReload(); assets_->PollChanges(); }
+    renderInterpolate_ = false;  // tools step exactly: draw the simulated state
     for (int i = 0; i < frames; ++i) SimulateFrame();
     if (frames > 0) Touch();
 }
@@ -323,11 +325,41 @@ void Engine::Tick(double realDt) {
     accumulator_ += std::min(realDt, 0.25);
     int steps = 0;
     while (accumulator_ >= kFixedDt && steps < 8) {
+        // The state before the step, for render interpolation (only the last step's is kept).
+        renderPrevious_.clear();
+        for (const auto& entry : scene_.Pool<Transform>()) renderPrevious_.emplace_back(entry.first, entry.second);
         SimulateFrame();
         accumulator_ -= kFixedDt;
         ++steps;
     }
-    if (steps > 0) Touch();
+    if (steps > 0) { Touch(); renderInterpolate_ = true; }
+    renderAlpha_ = std::clamp(accumulator_ / kFixedDt, 0.0, 1.0);
+}
+
+void Engine::BeginInterpolatedRender() {
+    renderSaved_.clear();
+    if (!renderInterpolate_ || !playing_ || renderAlpha_ >= 1.0) return;
+    const float t = static_cast<float>(renderAlpha_);
+    auto turn = [](float from, float to) { float d = std::fmod(to - from + 540.0f, 360.0f) - 180.0f; return d; };
+    for (const auto& previous : renderPrevious_) {
+        Transform* now = scene_.Get<Transform>(previous.first);
+        if (!now) continue;
+        const Transform& was = previous.second;
+        const Vec3 move = now->position - was.position;
+        if (move.x * move.x + move.y * move.y + move.z * move.z > 9.0f) continue;  // a teleport: no streak
+        renderSaved_.emplace_back(previous.first, *now);
+        now->position = was.position + move * t;
+        now->rotation = {was.rotation.x + turn(was.rotation.x, now->rotation.x) * t,
+                         was.rotation.y + turn(was.rotation.y, now->rotation.y) * t,
+                         was.rotation.z + turn(was.rotation.z, now->rotation.z) * t};
+        now->scale = was.scale + (now->scale - was.scale) * t;
+    }
+}
+
+void Engine::EndInterpolatedRender() {
+    for (const auto& saved : renderSaved_)
+        if (Transform* now = scene_.Get<Transform>(saved.first)) *now = saved.second;
+    renderSaved_.clear();
 }
 
 void Engine::AddDebugLine(const Vec3& a, const Vec3& b, const Color& color, float seconds) {
@@ -991,11 +1023,14 @@ bool Engine::PresentGameView(float renderScale) {
     int w = 0, h = 0;
     gpu_->WindowSize(&w, &h);
     if (w <= 0 || h <= 0) return false;
+    BeginInterpolatedRender();
     RenderView view;
     MakeSceneView(scene_, static_cast<float>(w) / static_cast<float>(h), view);
     view.shaderTime = static_cast<float>(SimTime());
     AppendDebugLines(view.lines);
-    return gpu_->RenderToWindow(scene_, view, renderScale);
+    const bool presented = gpu_->RenderToWindow(scene_, view, renderScale);
+    EndInterpolatedRender();
+    return presented;
 }
 
 // ----- History -------------------------------------------------------------

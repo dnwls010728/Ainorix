@@ -57,7 +57,7 @@ const FieldInfo* Field(const std::string& key, const ComponentType*& type) {
 }
 void Engine::ResetAuthority() {
     authority_.reset(); initialAuthorityEntities_.clear(); authorityIds_.clear(); replicatedEntities_.clear(); nextAuthorityId_ = 1;
-    predictionStates_.clear(); authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = 0;
+    predictionStates_.clear(); authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = 0;
     admitted_.clear();
 }
 bool Engine::PredictEntity(EntityId id) const {
@@ -216,6 +216,54 @@ void Engine::ApplyReplicatedWorld(const Json& world, bool owned, bool remotes) {
         std::string error; if (!scene_.SetParent(replicatedEntities_.at(id), replicatedEntities_.count(parent) ? replicatedEntities_.at(parent) : 0, &error)) throw ApiError("network_snapshot", error);
     }
 }
+Json Engine::PredictedOwnedFields() {
+    Json owned = Json::MakeObject();
+    for (const auto& item : replicatedEntities_) {
+        const NetSync* policy = scene_.Get<NetSync>(item.second);
+        if (!policy || static_cast<uint32_t>(policy->owner) != network_->LocalPlayer() || !policy->predict || !policy->fields.isObject()) continue;
+        Json entity = Json::MakeObject();
+        for (const auto& selected : policy->fields.members()) {
+            const ComponentType* type = nullptr; const FieldInfo* field = Field(selected.first, type);
+            const void* component = field ? scene_.GetComponent(item.second, *type) : nullptr;
+            if (!component || field->type == FieldType::Entity) return Json();  // not comparable: always correct
+            entity[selected.first] = Quantize(FieldToJson(*field, component), selected.second["quantize"].asNumber());
+        }
+        owned[std::to_string(item.first)] = entity;
+    }
+    return owned;
+}
+
+namespace {
+bool Close(const Json& a, const Json& b) {
+    if (a.isNumber() && b.isNumber()) return std::fabs(a.asNumber() - b.asNumber()) <= 2e-3;
+    if (a.isArray() && b.isArray()) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) if (!Close(a[i], b[i])) return false;
+        return true;
+    }
+    return a == b;
+}
+}  // namespace
+
+// True when the snapshot says about this client's own predicted entities what the client predicted
+// for that input frame: restoring the checkpoint and replaying would reproduce the present. Remote
+// entities, spawns and despawns are applied every frame from the snapshots (InterpolateAuthority).
+bool Engine::PredictionAgrees(const Authority::Update& update) const {
+    auto predicted = predictedOwned_.find(update.acknowledged);
+    if (predicted == predictedOwned_.end() || !predicted->second.isObject()) return false;
+    size_t owned = 0;
+    for (const auto& item : update.world.members()) {
+        const Json& record = item.second;
+        if (record["owner"].asNumber() != network_->LocalPlayer() || !record["predict"].asBool(true)) continue;
+        ++owned;
+        if (!predicted->second.has(item.first)) return false;  // new to this client: needs the full correction
+        const Json& mine = predicted->second[item.first];
+        for (const auto& field : record.members())
+            if (field.first.find('.') != std::string::npos && (!mine.has(field.first) || !Close(mine[field.first], field.second))) return false;
+    }
+    return owned == predicted->second.size();
+}
+
 void Engine::InterpolateAuthority(bool advance) {
     if (authorityWorlds_.empty()) return;
     const auto& latest = authorityWorlds_.back(); authorityRemoteFrame_ = std::max(authorityWorlds_.front().frame, std::min(authorityRemoteFrame_ + (advance ? 1 : 0), latest.frame));
@@ -252,7 +300,7 @@ bool Engine::PollAuthority() {
             std::string error; scene_.FromJson(*playSnapshot_, &error); ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
             frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
             journal_.reset(); snapshots_.clear(); checkpoints_.clear(); predictionStates_.clear(); replicatedEntities_.clear(); authorityIds_.clear(); nextAuthorityId_ = 1;
-            authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
+            authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
             uiHovered_ = uiPressed_ = uiFocus_ = 0; heldKeys_.clear(); heldButtons_.clear();
             saves_.FreezeReads(true); saves_.DeferFlush(true);
             if (network_->IsHost()) {
@@ -280,6 +328,16 @@ bool Engine::PollAuthority() {
             auto checkpoint = predictionStates_.find(update.acknowledged);
             if (checkpoint == predictionStates_.end()) { authority_->Stop("prediction checkpoint missing"); return false; }
             ValidateReplicatedWorld(update.world);
+            if (PredictionAgrees(update)) {
+                // The prediction was right: keep the present, only forget what is now confirmed.
+                audio_->Confirm(update.acknowledged); outputConfirmed_ = update.acknowledged;
+                predictionStates_.erase(predictionStates_.begin(), predictionStates_.lower_bound(update.acknowledged));
+                predictedOwned_.erase(predictedOwned_.begin(), predictedOwned_.lower_bound(update.acknowledged));
+                authorityEvents_.erase(authorityEvents_.begin(), authorityEvents_.lower_bound(update.acknowledged));
+                authorityLocal_.erase(authorityLocal_.begin(), authorityLocal_.upper_bound(update.acknowledged));
+                authorityRemoteFrame_ = std::max(authorityRemoteFrame_, update.frame > networkConfig_.interpolationFrames ? update.frame - networkConfig_.interpolationFrames : 0);
+                ++authoritySkipped_;
+            } else {
             InputState raw = input_; auto output = audio_->TakeOutput(); auto start = std::chrono::steady_clock::now();
             RestoreNative(*checkpoint->second); audio_->DropPendingBefore(update.acknowledged);
             // Native entity ids/map return to the acknowledged branch, then rebuild the server map.
@@ -304,6 +362,8 @@ bool Engine::PollAuthority() {
             authorityLocal_.erase(authorityLocal_.begin(), authorityLocal_.upper_bound(update.acknowledged));
             authorityRemoteFrame_ = std::max(authorityRemoteFrame_, update.frame > networkConfig_.interpolationFrames ? update.frame - networkConfig_.interpolationFrames : 0);
             replayMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); ++authorityCorrections_;
+            predictedOwned_.erase(predictedOwned_.begin(), predictedOwned_.lower_bound(update.acknowledged));
+            }
         }
         if (!network_->IsHost() && !authority_->CanPredict()) { InterpolateAuthority(); return false; }
         FrameInput sample = Sample(SampleNetworkInput(), networkConfig_.sync);
@@ -409,7 +469,11 @@ void Engine::AuthorityApplied() {
                 std::map<uint32_t, Json> worlds; for (uint32_t player : authority_->Players()) if (player != 1) worlds[player] = ReplicatedWorld(player);
                 authority_->Snapshot(frame_, worlds);
             }
-        } else { predictionStates_[authorityInput_] = CaptureNative(false); InterpolateAuthority(false); }
+        } else {
+            predictionStates_[authorityInput_] = CaptureNative(false);
+            predictedOwned_[authorityInput_] = PredictedOwnedFields();
+            InterpolateAuthority(false);
+        }
     } catch (const std::exception& error) { authority_->Stop(error.what()); }
 }
 }  // namespace oe

@@ -92,6 +92,14 @@ public:
     const InputState& PlayerInput(uint32_t player) const;
     // Advances the simulation by real elapsed time while playing (fixed steps).
     void Tick(double realDt);
+    // Render interpolation (display only, never part of the simulation): Tick runs fixed 1/60 s
+    // steps while windows draw at the monitor's rate, so without it moving things and the camera
+    // judder (a frame shows 0 or 2 steps). Between Begin and End every Transform that existed one
+    // step ago is put between its previous and current value by the time left in the accumulator;
+    // End restores the simulated values. Inactive after Step (tools, tests, screenshots) and in
+    // edit mode, so hashes and deterministic frames are unchanged. Moves longer than 3 m snap.
+    void BeginInterpolatedRender();
+    void EndInterpolatedRender();
     bool Playing() const { return playing_; }
     std::string ScriptReloadBlockReason() const;
     bool InPlaySession() const { return playSnapshot_ != nullptr; }
@@ -299,6 +307,8 @@ private:
     void DropAuthorityPlayers();
     std::vector<PhysicsEvent> StepAuthorityPhysics(float dt);
     Json ReplicatedWorld(uint32_t player);
+    Json PredictedOwnedFields();
+    bool PredictionAgrees(const Authority::Update& update) const;
     void ValidateReplicatedWorld(const Json& world) const;
     void ApplyReplicatedWorld(const Json& world, bool owned, bool remotes);
     // Poses remote entities from buffered snapshots; advance moves the playback frame (once per tick).
@@ -378,7 +388,10 @@ private:
     std::map<uint64_t, std::vector<SessionEvent>> authorityEvents_;
     std::map<uint64_t, InputState> authorityLocal_;  // device-only input per unacknowledged input frame, for replays
     std::set<uint32_t> admitted_;  // network.admission "script": lobby players the game let in (net.admit)
-    uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0;
+    uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0, authoritySkipped_ = 0;
+    // Per predicted input frame: the replicated fields of this client's own predicted entities, as
+    // the server would send them (quantized). A snapshot that agrees needs no restore and replay.
+    std::map<uint64_t, Json> predictedOwned_;
     std::map<uint32_t, InputState> playerInputs_;
     FrameInputs frameInputs_;
     std::set<std::string> networkButtonKeys_;  // device button edges, outside replay checkpoints
@@ -455,6 +468,9 @@ private:
     std::set<std::string> heldKeys_;    // keys those buttons hold down
     double simTime_ = 0.0;
     double accumulator_ = 0.0;
+    std::vector<std::pair<EntityId, Transform>> renderPrevious_, renderSaved_;  // see BeginInterpolatedRender
+    double renderAlpha_ = 1.0;
+    bool renderInterpolate_ = false;
 
     struct HistoryEntry {
         Json scene;
