@@ -1570,6 +1570,13 @@ TEST(NetworkAuthoritativeDeltaAckAndBounds) {
     client.Receive(2,AuthorityPacket(36,Json::MakeObject()));
     std::vector<uint8_t> deep(17,'['); deep.insert(deep.end(),17,']'); ByteWriter malformed(100); malformed.WriteU8(36); malformed.WriteU64(1); malformed.WriteBlob(deep.data(),deep.size()); client.Receive(1,malformed.Data());
     CHECK(client.State()["rejected"].asNumber()==2);
+    // A client that stops (its own ready barrier timed out, it gave up) only leaves: the server keeps
+    // running and hands the player to the caller to remove. It used to stop the whole world. A Stop
+    // from the server still ends the client's match.
+    host.Receive(2,AuthorityPacket(38,Json::parse(R"({"reason":"authoritative ready barrier timed out"})")));
+    CHECK(host.Running() && host.TakeDropped()==std::vector<uint32_t>{2} && host.TakeDropped().empty());
+    client.Receive(1,AuthorityPacket(38,Json::parse(R"({"reason":"server closing"})")));
+    CHECK(client.State()["state"].asString()=="stopped" && client.State()["error"].asString()=="server closing");
     SessionConfig bad; for(const char* value:{R"({"network":{"mode":"authoritative","snapshotRate":0}})",R"({"network":{"mode":"authoritative","predictionFrames":65}})",R"({"network":{"mode":"authoritative","interpolationFrames":31}})",R"({"network":{"mode":"authoritative","playerPrefab":"../escape.json"}})"}) CHECK(!SessionConfig::Parse(Json::parse(value),bad,&error));
 }
 TEST(NetworkAuthoritativeSeededSessionsTenThousandFrames) {
@@ -14168,6 +14175,9 @@ TEST(NativeEditorUIEditing) {
     frames(4);
     const std::array<float, 4> view = ed.GameViewRect();
     CHECK(view[2] > 200 && view[3] > 100);
+    // Scripts project with the Game view's own size (input.viewSize, camera.worldToScreen), not the
+    // project window's 1280x720 or wherever the mouse last was: name plates used to drift off heads.
+    CHECK(e.Input().viewWidth == static_cast<int>(view[2]) && e.Input().viewHeight == static_cast<int>(view[3]));
     const float k = view[3] / 720.0f;  // window pixels per reference pixel
     Scene& s = e.GetScene();
     const EntityId play = s.FindByName("Play"), corner = s.FindByName("Corner");

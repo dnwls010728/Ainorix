@@ -791,6 +791,9 @@ void NativeEditor::Impl::GamePanel() {
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImVec2 pos(std::floor(origin.x + (avail.x - size.x) * 0.5f), std::floor(origin.y + (avail.y - size.y) * 0.5f));
     int w = std::max(1, static_cast<int>(size.x)), h = std::max(1, static_cast<int>(size.y));
+    // Scripts project with the view they are drawn into (name plates, UI that follows the world),
+    // not the project's window size or wherever the mouse last was.
+    GameEngine().SetViewSize(w, h);
     Scene& scene = GameEngine().GetScene();
     RenderView view;
     bool hasCamera = MakeSceneView(scene, static_cast<float>(w) / static_cast<float>(h), view);

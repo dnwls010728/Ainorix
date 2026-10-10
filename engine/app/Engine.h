@@ -69,6 +69,13 @@ public:
     // ----- Simulation ------------------------------------------------------
     Scene& GetScene() { return scene_; }
     InputState& Input() { return input_; }
+    // The size of the view the game is drawn into (input.viewSize, camera.worldToScreen,
+    // ui.screenToCanvas), kept across the network input stream. The editor's Game view sets it
+    // every frame; windows set it through the platform input.
+    void SetViewSize(int width, int height) {
+        input_.viewWidth = deviceInput_.viewWidth = width;
+        input_.viewHeight = deviceInput_.viewHeight = height;
+    }
     // Lua input.setLook: stores the local look direction on the device input (see InputState::lookX).
     void SetLook(float x, float y);
     void Play();
