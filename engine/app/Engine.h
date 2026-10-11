@@ -4,7 +4,9 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <atomic>
 #include <mutex>
+#include <thread>
 #include <set>
 #include <string>
 #include <vector>
@@ -100,6 +102,13 @@ public:
     // edit mode, so hashes and deterministic frames are unchanged. Moves longer than 3 m snap.
     void BeginInterpolatedRender();
     void EndInterpolatedRender();
+    // Network watchdog for games in a window: when the main loop has not advanced the network
+    // session for 0.1 s (a GPU or driver hitch, a long OS call outside the engine), a background
+    // thread advances only the session's I/O at 60 Hz (heartbeats, acknowledgements, retransmits,
+    // buffered messages) until the loop is back, so peers do not take the stall for a lost
+    // connection. It never touches the scene or the simulation, and only runs while no engine
+    // entry point (Tick, Step, Call) is active. Off by default: tools and tests step exactly.
+    void EnableNetworkWatchdog(bool on);
     bool Playing() const { return playing_; }
     std::string ScriptReloadBlockReason() const;
     bool InPlaySession() const { return playSnapshot_ != nullptr; }
@@ -494,6 +503,13 @@ private:
     EditorHandler editorHandler_;
     std::string remoteAgent_;
     std::mutex jobsMutex_;
+    // Held by Tick, Step and Call (they may touch the network session); the watchdog advances the
+    // session only while it is free.
+    std::recursive_mutex engineMutex_;
+    std::thread watchdog_;
+    std::atomic<bool> watchdogStop_{false};
+    std::atomic<int64_t> lastNetworkTick_{0};  // steady clock, microseconds
+    std::atomic<uint64_t> watchdogTicks_{0};
     std::deque<std::function<void()>> jobs_;
 };
 

@@ -421,8 +421,10 @@ int CmdRun(const Args& a) {
     engine.SetUserLanguage(PlatformUserLanguage());
     if (!a.Has("--mute")) engine.EnableAudioOutput();
     engine.Play();
+    engine.EnableNetworkWatchdog(true);  // a stalled window keeps its connection
     std::atomic<bool> quit{false};
     MainLoop(engine, window.get(), quit, true);
+    engine.EnableNetworkWatchdog(false);
     return 0;
 }
 

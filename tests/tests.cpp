@@ -1459,6 +1459,36 @@ void AuthorityPrepare(Engine& host, Engine& client, const std::string& project, 
     NetworkSteps(host,client,320);
     CHECK(Call(host,"net.start")["ok"].asBool()); NetworkSteps(host,client,10);
 }
+TEST(NetworkWatchdogKeepsStalledClient) {
+#ifndef __EMSCRIPTEN__
+    // A client whose main loop stalls (it stops stepping) for longer than network.timeoutSeconds:
+    // without the watchdog the server drops it; with it the session keeps its I/O going and the
+    // client continues where it was. Real UDP sockets, 5 s timeout, 6 s stall.
+    for (bool watchdog : {false, true}) {
+        std::string project = AuthorityProject(watchdog ? "watchdog_on" : "watchdog_off", "udp"), text, error;
+        CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+        Json config = Json::parse(text); config["network"]["timeoutSeconds"] = 5;
+        CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+        Engine host, client;
+        AuthorityPrepare(host, client, project, "udp");
+        CHECK(client.NetworkCall("state", Json())["sync"]["state"].asString() == "running");
+        client.EnableNetworkWatchdog(watchdog);
+        for (int frame = 0; frame < 360; ++frame) { host.Step(1); PlatformSleep(1.0 / 60.0); }
+        client.EnableNetworkWatchdog(false);
+        const size_t players = host.NetworkCall("players", Json()).size();
+        if (watchdog) {
+            CHECK(players == 2);
+            CHECK(client.NetworkCall("stats", Json())["watchdogTicks"].asNumber() > 200);
+            NetworkSteps(host, client, 60);
+            CHECK(client.NetworkCall("state", Json())["sync"]["state"].asString() == "running");
+        } else {
+            CHECK(players == 1);  // the stalled client was taken for gone
+        }
+        host.Stop(); client.Stop(); RemoveAll(project);
+    }
+#endif
+}
+
 TEST(NetworkAuthoritativeOwnershipPredictionAndRelevance) {
     std::string project = AuthorityProject("authority","loopback"); Engine host,client;
     AuthorityPrepare(host,client,project,"loopback");

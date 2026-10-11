@@ -161,6 +161,7 @@ int RunPlayer(const std::string& dir, const std::vector<std::pair<bool, std::str
     PlatformHostPoll();  // web: installs Module.oeHostSend before the first frame
     engine.EnableAudioOutput();
     engine.Play();
+    engine.EnableNetworkWatchdog(true);  // a stalled window keeps its connection (no-op on the web)
     player->last = PlatformTimeSeconds();
 
 #ifdef __EMSCRIPTEN__

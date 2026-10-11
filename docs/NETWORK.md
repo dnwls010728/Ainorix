@@ -89,6 +89,14 @@ this long is dropped. It used to be a fixed 10 s, which a client lost to any sta
 in the OS move loop before `Window::SetModalFrame`, a loading hitch, a debugger break). A server that vanishes is
 also noticed only after this time when the transport reports no close (UDP).
 
+Network watchdog (`Engine::EnableNetworkWatchdog`, on in `oe run` and the packaged desktop/Android player, off in
+tools and tests): when the main loop has not advanced the session for 0.1 s, a background thread advances only the
+session's I/O at 60 Hz (heartbeats, acknowledgements, retransmits, buffered messages) until the loop is back. It
+never touches the scene or the simulation and runs only while no engine entry point (`Tick`, `Step`, `Call`) holds
+the engine lock, so it covers stalls outside the engine (GPU/driver hitches, OS calls) but not a long scene load
+inside a frame. Test: `NetworkWatchdogKeepsStalledClient` (real UDP, 5 s timeout, a 6 s stall: dropped without it,
+kept with it). `net.stats.watchdogTicks` counts its ticks.
+
 `admission` (with `lateJoin`): `auto` admits every ready lobby player; with `script` a player waits in the lobby
 until the server's Lua called `net.admit(id)`, so the game can verify it first. A server's scripts may also call
 `net.kick`. The engine stops there: accounts, tickets, channel lists and persistence are services of the game,

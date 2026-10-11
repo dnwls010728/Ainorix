@@ -145,7 +145,7 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         return players;
     }
     if (command == "stats") {
-        if (network_) { Json stats = network_->Stats(); stats["replayMilliseconds"] = replayMilliseconds_; if (sync_) stats["sync"] = sync_->State();
+        if (network_) { Json stats = network_->Stats(); stats["replayMilliseconds"] = replayMilliseconds_; stats["watchdogTicks"] = watchdogTicks_.load(); if (sync_) stats["sync"] = sync_->State();
             if (authority_) { stats["sync"] = authority_->State(); stats["corrections"] = authorityCorrections_; stats["agreedSnapshots"] = authoritySkipped_; stats["replicatedEntities"] = static_cast<uint64_t>(replicatedEntities_.size()); } return stats; }
         Json stats = Json::MakeObject(); stats["rejected"] = 0; stats["peers"] = Json::MakeArray(); return stats;
     }

@@ -1,6 +1,7 @@
 #include "app/Engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -44,7 +45,45 @@ Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std
     projectDir_ = AbsolutePath(".");
 }
 
-Engine::~Engine() = default;
+Engine::~Engine() { EnableNetworkWatchdog(false); }
+
+namespace {
+int64_t SteadyMicroseconds() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+
+void Engine::EnableNetworkWatchdog(bool on) {
+#ifndef __EMSCRIPTEN__
+    if (on == watchdog_.joinable()) return;
+    if (!on) {
+        watchdogStop_ = true;
+        watchdog_.join();
+        return;
+    }
+    watchdogStop_ = false;
+    lastNetworkTick_ = SteadyMicroseconds();
+    watchdog_ = std::thread([this] {
+        int64_t next = 0;  // when the next I/O tick is due: 60 Hz paced by the clock, not by sleep granularity
+        while (!watchdogStop_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            const int64_t now = SteadyMicroseconds();
+            if (now - lastNetworkTick_ < 100000) { next = 0; continue; }
+            if (next == 0) next = now;
+            if (now < next) continue;
+            std::unique_lock<std::recursive_mutex> lock(engineMutex_, std::try_to_lock);
+            if (!lock.owns_lock() || !network_) continue;
+            for (int i = 0; i < 4 && now >= next; ++i, next += 16667) {
+                network_->Advance(networkFrame_++);  // I/O only: drained and simulated when the loop is back
+                ++watchdogTicks_;
+            }
+            if (now >= next) next = now + 16667;  // far behind: no burst
+        }
+    });
+#else
+    (void)on;  // the browser drives the loop; no threads in this build
+#endif
+}
 
 bool Engine::Open(const std::string& rawPath, std::string* error) {
     std::string path = AbsolutePath(rawPath);
@@ -307,6 +346,7 @@ std::string Engine::ScriptReloadBlockReason() const {
 }
 
 void Engine::Step(int frames) {
+    std::lock_guard<std::recursive_mutex> lock(engineMutex_);
     BeginSessionIfNeeded();
     if (!journal_ && (!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) { scripts_->PollHotReload(); assets_->PollChanges(); }
     renderInterpolate_ = false;  // tools step exactly: draw the simulated state
@@ -315,6 +355,7 @@ void Engine::Step(int frames) {
 }
 
 void Engine::Tick(double realDt) {
+    std::lock_guard<std::recursive_mutex> lock(engineMutex_);
     if (!playing_) return;
     hotReloadTimer_ += realDt;
     if (hotReloadTimer_ >= 0.5 && !journal_ && (!sync_ || !sync_->Active()) && (!authority_ || !authority_->Active())) {
@@ -376,6 +417,7 @@ void Engine::SimulateFrame() {
     if (network_) {
         uint32_t seed = network_->Seed();
         network_->Advance(networkFrame_++);
+        lastNetworkTick_ = SteadyMicroseconds();  // the watchdog stays out while the loop advances the session
         if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
     }
     if (dedicated_) input_ = deviceInput_ = InputState{};
@@ -1171,6 +1213,7 @@ bool Engine::EndPrefabEdit(bool discard, std::string* error) {
 // ----- API -----------------------------------------------------------------
 
 Json Engine::Call(const std::string& name, const Json& rawArgs) {
+    std::lock_guard<std::recursive_mutex> lock(engineMutex_);
     Json response = Json::MakeObject();
     const Command* cmd = commands_.Find(name);
     try {
