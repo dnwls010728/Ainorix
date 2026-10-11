@@ -1436,6 +1436,9 @@ void AuthorityPrepare(Engine& host, Engine& client, const std::string& project, 
             CHECK(Call(*e,"entity.create",R"({"name":"P1","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":1,"team":1},"NetSync":{"owner":1,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-host"}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"P2","components":{"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{"player":2,"team":2},"NetSync":{"owner":2,"fields":{"Transform.position":{"onChange":true},"Tag.tags":{"ownerOnly":true}}},"Tag":{"tags":"secret-client"}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"Remote","components":{"Transform":{},"Script":{"path":"scripts/drift.lua"},"NetSync":{"fields":{"Transform.position":{"onChange":true,"quantize":0.1}}}}})")["ok"].asBool());
+            // Unreplicated children (what the entity looks like) come back with it on the client.
+            CHECK(Call(*e,"entity.create",R"({"name":"Remote Look","parent":"Remote","components":{"Transform":{"position":[0,1,0]},"Tag":{"tags":"look"}}})")["ok"].asBool());
+            CHECK(Call(*e,"entity.create",R"({"name":"Remote Shadow","parent":"Remote Look","components":{"Transform":{}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"Far","components":{"Transform":{"position":[5000,0,0]},"NetSync":{"distance":10}}})")["ok"].asBool());
             CHECK(Call(*e,"entity.create",R"({"name":"Team1","components":{"Transform":{},"NetSync":{"teamOnly":true,"team":1}}})")["ok"].asBool());
         }
@@ -1636,6 +1639,13 @@ TEST(NetworkAuthoritativeOwnershipPredictionAndRelevance) {
         }
     }
     CHECK(client.GetScene().Get<Transform>(own)->position.y==1);
+    {
+        // The scene's replicated Remote is rebuilt on the client together with its local children.
+        const Scene& s=client.GetScene(); EntityId remote=s.FindByName("Remote"),look=s.FindByName("Remote Look"),shadow=s.FindByName("Remote Shadow");
+        CHECK(remote!=0 && look!=0 && shadow!=0);
+        CHECK(look && s.Record(look)->parent==remote && shadow && s.Record(shadow)->parent==look);
+        CHECK(look && s.Get<Tag>(look) && s.Get<Tag>(look)->tags=="look" && s.Get<Transform>(look)->position.y==1);
+    }
     CHECK(client.NetworkCall("stats",Json())["corrections"].asNumber()>0);
     CHECK(Call(host,"net.rpc",R"({"target":"owner","entity":"P2","name":"owner-message","args":[2,7]})")["ok"].asBool());
     NetworkSteps(host,client,3);

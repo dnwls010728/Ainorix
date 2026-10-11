@@ -448,7 +448,8 @@ records in snapshots. Server-assigned network ids are monotonic within the match
 netId/local-id mappings and translate replicated entity references in two passes. Mark replicated
 parents with NetSync too; if a parent is irrelevant its descendants are also omitted. Prefab-local
 unreplicated children instantiate with their root. Initially replicated scene entities are hidden
-until relevant and can be restored from the shared initial blueprint without a prefab path.
+until relevant and can be restored from the shared initial blueprint without a prefab path; their
+unreplicated descendants (a sprite or shadow child) are kept with them and restored too.
 
 Snapshots use the last acknowledged per-client world as their delta baseline. Baselines retain
 16 snapshots; an evicted baseline falls back to a full image. Since protocol v4, snapshots and

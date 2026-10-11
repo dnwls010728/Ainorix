@@ -188,9 +188,16 @@ void Engine::ApplyReplicatedWorld(const Json& world, bool owned, bool remotes) {
             if (scene_.Exists(source) && scene_.Get<NetSync>(source) && std::none_of(replicatedEntities_.begin(), replicatedEntities_.end(), [&](const auto& entry) { return entry.second == source; })) id = source;
             if (!id && !record["prefab"].asString().empty()) id = InstantiatePrefabFile(record["prefab"].asString(), 0);
             if (!id && initialAuthorityEntities_.count(source)) {
-                Json original = initialAuthorityEntities_.at(source); original.erase("parent"); std::string error;
-                id = scene_.CreateFromJson(original, false, &error);
-                if (!id) throw ApiError("network_snapshot", error);
+                std::map<EntityId, EntityId> local;  // original id -> restored id
+                for (const Json& item : initialAuthorityEntities_.at(source).items()) {
+                    Json original = item; std::string error;
+                    if (local.empty()) original.erase("parent");
+                    else original["parent"] = local.at(static_cast<EntityId>(item["parent"].asNumber()));
+                    EntityId created = scene_.CreateFromJson(original, false, &error);
+                    if (!created) throw ApiError("network_snapshot", error);
+                    local[static_cast<EntityId>(item["id"].asNumber())] = created;
+                }
+                id = local.at(source);
             }
             if (!id) id = scene_.Create(record["name"].asString());
             replicatedEntities_[netId] = id;
@@ -355,8 +362,19 @@ bool Engine::PollAuthority() {
                 std::map<uint32_t, Json> worlds; for (uint32_t player : authority_->Players()) if (player != 1) worlds[player] = ReplicatedWorld(player);
                 authority_->Snapshot(0, worlds);
             } else {
+                // Each replicated scene entity is kept with its unreplicated descendants (a sprite child, a
+                // shadow), parents first, so restoring it brings back what it looks like, not only its root.
                 initialAuthorityEntities_.clear(); std::vector<EntityId> ids;
-                for (const auto& entry : scene_.Pool<NetSync>()) { initialAuthorityEntities_[entry.first] = scene_.EntityToJson(entry.first); ids.push_back(entry.first); }
+                for (const auto& entry : scene_.Pool<NetSync>()) {
+                    Json subtree = Json::MakeArray(); subtree.push(scene_.EntityToJson(entry.first));
+                    std::vector<EntityId> open = scene_.Children(entry.first);
+                    for (size_t i = 0; i < open.size(); ++i) {
+                        if (scene_.Get<NetSync>(open[i])) continue;  // replicated itself
+                        subtree.push(scene_.EntityToJson(open[i]));
+                        for (EntityId child : scene_.Children(open[i])) open.push_back(child);
+                    }
+                    initialAuthorityEntities_[entry.first] = subtree; ids.push_back(entry.first);
+                }
                 for (EntityId id : ids) scene_.Destroy(id);
                 RecordState(); predictionStates_[0] = CaptureNative(false);
             }
