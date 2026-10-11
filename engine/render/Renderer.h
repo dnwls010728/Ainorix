@@ -39,6 +39,10 @@ struct RenderView {
     EntityId cameraEntity = kNullEntity;
     PostProcess postProcess;  // selected camera's effects; defaults leave scene color unchanged
     float shaderTime = 0;     // fixed simulation seconds supplied by the engine/tools
+    // The game is being played (Engine::InPlaySession: running or paused), not its scene edited.
+    // Graphs read it as the reserved uniform `playing`, for effects that would be in the way while
+    // editing (a world that bends away from the camera).
+    bool playing = false;
     // Editor overlays.
     bool drawGrid = false;
     EntityId highlight = kNullEntity;

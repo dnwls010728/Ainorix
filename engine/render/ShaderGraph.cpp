@@ -53,6 +53,7 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
         result.defaults[result.uniformNames.size()] = value;
         if (item.first == "cameraPosition") result.cameraUniform = static_cast<int>(result.uniformNames.size());
         if (item.first == "lightDirection") result.lightUniform = static_cast<int>(result.uniformNames.size());
+        if (item.first == "playing") result.playingUniform = static_cast<int>(result.uniformNames.size());
         result.uniformNames.push_back(item.first);
     }
     for (size_t index = 0; index < nodes.size(); ++index) {

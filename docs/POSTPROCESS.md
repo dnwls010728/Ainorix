@@ -318,10 +318,15 @@ Example: a sine wave along world x that moves with time lifts the vertices of a
 }
 ```
 
-Two uniform names are reserved: a graph that declares `cameraPosition` receives the
-rendering view's world position (w = 1) and one that declares `lightDirection` receives the
-unit vector toward the first directional light (w = 0), every frame and in both renderers.
-Declared defaults and material overrides for these two names are replaced, so view- and
+Three uniform names are reserved: a graph that declares `cameraPosition` receives the
+rendering view's world position (w = 1), one that declares `lightDirection` receives the
+unit vector toward the first directional light (w = 0), and one that declares `playing`
+receives 1 while the game is played (a play session exists: running or paused, in the editor,
+`oe run`, a packaged game, after `sim.play`/`sim.step`) and 0 while its scene is edited (the
+editor's Scene and stopped Game view, `oe render` without `--frames`, effect previews), every
+frame and in both renderers. Multiply by `playing` what would be in the way while editing: a
+world that bends away from the camera is flat until Play is pressed.
+Declared defaults and material overrides for these names are replaced, so view- and
 light-dependent graphs follow a moving camera or sun without material edits
 They still count toward the eight uniforms. Graphs without these
 names are unaffected. Prebuilt web/Android players older than this change leave the

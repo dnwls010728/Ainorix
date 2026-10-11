@@ -367,7 +367,7 @@ void NativeEditor::Impl::ShaderProperties() {
         std::string picked;
         if (AssetPicker("##shadertexture", "texture", texture, picked)) shaderMaterial["baseTexture"] = picked;
         for (const auto& uniform : shaderDocument["uniforms"].members()) {
-            if (uniform.first == "cameraPosition" || uniform.first == "lightDirection") continue;
+            if (uniform.first == "cameraPosition" || uniform.first == "lightDirection" || uniform.first == "playing") continue;
             Json value = shaderMaterial["shaderUniforms"].has(uniform.first) ? shaderMaterial["shaderUniforms"][uniform.first] : uniform.second;
             ImGui::PushID(uniform.first.c_str());
             if (VectorField(uniform.first.c_str(), value)) shaderMaterial["shaderUniforms"][uniform.first] = value;

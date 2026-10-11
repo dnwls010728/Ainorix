@@ -1326,7 +1326,7 @@ struct GpuRenderer::Impl {
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
         RenderLights lights = GatherRenderLights(scene);
-        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights);
+        const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights, view.playing);
         std::vector<const GpuMesh*> gpuMeshes;
         gpuMeshes.reserve(items.size());
         for (const RenderItem& it : items) {

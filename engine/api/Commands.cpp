@@ -270,6 +270,7 @@ ViewRequest ParseView(Engine& e, const Json& args) {
     }
     r.view.drawGrid = args["grid"].asBool(false);
     r.view.shaderTime = static_cast<float>(e.SimTime());
+    r.view.playing = e.InPlaySession();
     if (args["colliders"].asBool(false)) {
         TilesetLookup tilesets = e.Assets().Tilesets();
         AppendColliderLines(e.GetScene(), r.view.lines, &tilesets);

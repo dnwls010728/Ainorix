@@ -519,7 +519,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::vector<Transformed> transformed;
     transformed.reserve(items.size());
     for (const RenderItem& it : items) transformed.push_back(TransformItem(it));
-    const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &gathered);
+    const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &gathered, view.playing);
     // Vertex stage of shader graphs with an `offset` output (mesh_vs runs the same instructions).
     for (const DrawCall& dc : draws) {
         std::vector<Vec3>& wpos = transformed[dc.item].wpos;

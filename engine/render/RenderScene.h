@@ -67,8 +67,10 @@ struct DrawCall {
 };
 struct RenderLights;
 // `lights` (optional) supplies the first directional light for shader graphs that declare
-// the reserved `lightDirection` uniform; `cameraPosition` is always bound to `eye`.
-std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights = nullptr);
+// the reserved `lightDirection` uniform; `cameraPosition` is always bound to `eye` and `playing`
+// to 1 or 0 (RenderView::playing).
+std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights = nullptr,
+                                    bool playing = false);
 
 // Vertex stage of a shader graph with an `offset` output, as mesh_vs runs it: calls
 // fn(vertex, world position before the offset, offset) once for every vertex the draw call's

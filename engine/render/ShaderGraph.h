@@ -39,10 +39,11 @@ struct ShaderGraph {
     // where `maxOffset` would grow them in every direction.
     bool hasOffsetBounds = false;
     Vec3 offsetMin, offsetMax;
-    // Slots of the reserved uniforms `cameraPosition` (xyz, w = 1) and `lightDirection`
-    // (unit vector toward the first directional light, w = 0); -1 = not declared. The
-    // renderers fill them per frame (BuildDrawList), replacing defaults and overrides.
-    int cameraUniform = -1, lightUniform = -1;
+    // Slots of the reserved uniforms `cameraPosition` (xyz, w = 1), `lightDirection`
+    // (unit vector toward the first directional light, w = 0) and `playing` (1 while the game is
+    // played, 0 while its scene is edited); -1 = not declared. The renderers fill them per frame
+    // (BuildDrawList), replacing defaults and overrides.
+    int cameraUniform = -1, lightUniform = -1, playingUniform = -1;
 };
 
 struct ShaderInputs {

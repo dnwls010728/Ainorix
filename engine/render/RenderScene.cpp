@@ -162,7 +162,7 @@ Mat4 RenderItem::VertexSkinMatrix(size_t vertex) const {
     return total > 0 ? matrix : Mat4{};
 }
 
-std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights) {
+std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const Vec3& eye, const RenderLights* lights, bool playing) {
     std::vector<DrawCall> opaque, blended;
     std::vector<float> distance;
     for (size_t i = 0; i < items.size(); ++i) {
@@ -179,6 +179,7 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
             if (dc.material.shader) {
                 const ShaderGraph& graph = *dc.material.shader;
                 if (graph.cameraUniform >= 0) dc.material.shaderUniforms[static_cast<size_t>(graph.cameraUniform)] = Vec4(eye, 1);
+                if (graph.playingUniform >= 0) dc.material.shaderUniforms[static_cast<size_t>(graph.playingUniform)] = playing ? Vec4(1, 1, 1, 1) : Vec4(0, 0, 0, 0);
                 if (graph.lightUniform >= 0 && lights && !lights->dirs.empty())
                     dc.material.shaderUniforms[static_cast<size_t>(graph.lightUniform)] = Vec4(-Normalize(lights->dirs[0].dir), 0);
             }

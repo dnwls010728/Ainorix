@@ -1041,6 +1041,7 @@ RenderStats Engine::RenderGameView(RenderTarget& target) {
     RenderView view;
     MakeSceneView(scene_, static_cast<float>(target.width) / static_cast<float>(target.height), view);
     view.shaderTime = static_cast<float>(SimTime());
+    view.playing = InPlaySession();
     AppendDebugLines(view.lines);
     return renderer_->Render(scene_, view, target);
 }
@@ -1071,6 +1072,7 @@ bool Engine::PresentGameView(float renderScale) {
     RenderView view;
     MakeSceneView(scene_, static_cast<float>(w) / static_cast<float>(h), view);
     view.shaderTime = static_cast<float>(SimTime());
+    view.playing = InPlaySession();
     AppendDebugLines(view.lines);
     const bool presented = gpu_->RenderToWindow(scene_, view, renderScale);
     EndInterpolatedRender();
