@@ -1510,6 +1510,81 @@ return M
     }
 }
 
+TEST(DataComponent) {
+    // Data.values: named game values on an entity, a flat object of scalars, saved and settable from Lua.
+    Engine e;
+    std::string error;
+    CHECK(e.Open(TestSourceDir() + "/tests/fixtures/Hello", &error));
+    CHECK(Call(e, "entity.create", R"({"name":"Hero","components":{"Data":{"values":{"mana":40,"state":"idle","ready":true}}}})")["ok"].asBool());
+    EntityId hero = e.GetScene().FindByName("Hero");
+    CHECK(e.GetScene().Get<Data>(hero)->values["mana"].asNumber() == 40 && e.GetScene().Get<Data>(hero)->values["state"].asString() == "idle");
+    for (const char* bad : {R"({"id":"Hero","type":"Data","values":{"values":{"nested":{"a":1}}}})",
+                            R"({"id":"Hero","type":"Data","values":{"values":[1,2]}})",
+                            R"({"id":"Hero","type":"Data","values":{"values":{"":1}}})"})
+        CHECK(!e.Call("component.set", Json::parse(bad))["ok"].asBool());
+    CHECK(e.GetScene().Get<Data>(hero)->values["mana"].asNumber() == 40);  // a refused value changes nothing
+    const Json saved = e.GetScene().EntityToJson(hero);
+    CHECK(saved["components"]["Data"]["values"]["ready"].asBool());
+    CHECK(Call(e, "sim.play")["ok"].asBool());
+    Json eval = Json::MakeObject();
+    eval["code"] = "local id = scene.find('Hero'); local d = scene.get(id, 'Data').values; d.mana = d.mana - 15; "
+                   "scene.set(id, 'Data', {values = d}); return scene.get(id, 'Data').values.mana";
+    CHECK(e.Call("script.eval", eval)["result"]["value"].asNumber() == 25);
+    e.Stop();
+}
+
+TEST(NetworkOwnedPredictionData) {
+    // A dash with a cooldown kept in Data.values, predicted with network.prediction "owned": the
+    // server knocks the player back while the client dashes; the correction takes the server's
+    // position and cooldown and replays the dash once, so client and server agree again.
+    std::string project = AuthorityProject("owned_data", "loopback"), text, error;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json config = Json::parse(text); config["network"]["prediction"] = "owned";
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/dash.lua"), R"(
+local M={}
+function M:onUpdate()
+ local p=input.player(self:get('NetPlayer').player)
+ local d=self:get('Data').values
+ d.cooldown=math.max(0,(d.cooldown or 0)-1)
+ local t=self:get('Transform')
+ if p.down('W') then t.position.x=t.position.x+1 end
+ if p.pressed('Space') and d.cooldown==0 then t.position.x=t.position.x+10; d.cooldown=30; d.dashes=(d.dashes or 0)+1 end
+ self:set('Transform',t); self:set('Data',{values=d})
+end
+return M
+)"));
+    Engine host, client;
+    CHECK(host.Open(project, &error) && client.Open(project, &error));
+    for (Engine* e : {&host, &client}) {
+        e->GetScene().Clear();
+        for (int player : {1, 2}) {
+            Json args = Json::MakeObject(); args["name"] = "P" + std::to_string(player);
+            args["components"] = Json::parse(R"({"Transform":{},"Script":{"path":"scripts/dash.lua"},"Data":{"values":{"cooldown":0}},"NetPlayer":{},"NetSync":{"fields":{"Transform.position":{"onChange":true},"Data.values":{"onChange":true}}}})");
+            args["components"]["NetPlayer"]["player"] = player; args["components"]["NetSync"]["owner"] = player;
+            CHECK(e->Call("entity.create", args)["ok"].asBool());
+        }
+    }
+    CHECK(Call(host, "net.host", R"({"seed":3,"room":"owned-data"})")["ok"].asBool());
+    CHECK(Call(client, "net.join", R"({"address":"owned-data"})")["ok"].asBool()); NetworkSteps(host, client, 30);
+    CHECK(Call(host, "net.ready", R"({"ready":true})")["ok"].asBool() && Call(client, "net.ready", R"({"ready":true})")["ok"].asBool());
+    NetworkSteps(host, client, 20); CHECK(Call(host, "net.start")["ok"].asBool()); NetworkSteps(host, client, 20);
+    auto p2 = [](Engine& e) { return e.GetScene().FindByName("P2"); };
+    auto x = [&](Engine& e) { return e.GetScene().Get<Transform>(p2(e))->position.x; };
+    auto value = [&](Engine& e, const char* name) { return e.GetScene().Get<Data>(p2(e))->values[name].asNumber(); };
+    client.Input().down.insert("W"); NetworkSteps(host, client, 40);
+    CHECK(client.NetworkCall("stats", Json())["agreedSnapshots"].asNumber() > 5);  // Data.values compares equal when predicted right
+    host.GetScene().Get<Transform>(p2(host))->position.x += 1000;  // knock-back on the server...
+    client.Input().pressedThisFrame.insert("Space"); NetworkSteps(host, client, 1);  // ...while the client dashes
+    NetworkSteps(host, client, 40);
+    CHECK(x(client) > 1000 && std::fabs(x(client) - x(host)) < 12);
+    CHECK(value(host, "dashes") == 1 && value(client, "dashes") == 1);  // the dash happened once, on both
+    CHECK(std::fabs(value(client, "cooldown") - value(host, "cooldown")) <= 12);
+    CHECK(client.NetworkCall("stats", Json())["ownedCorrections"].asNumber() >= 1);
+    CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty());
+    host.Stop(); client.Stop(); RemoveAll(project);
+}
+
 TEST(NetworkWatchdogKeepsStalledClient) {
 #ifndef __EMSCRIPTEN__
     // A client whose main loop stalls (it stops stepping) for longer than network.timeoutSeconds:

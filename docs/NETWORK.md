@@ -98,8 +98,9 @@ server's state and re-runs only their scripts' `onUpdate` and their CharacterBod
 is (`ScriptHost::UpdateEntities`, `PhysicsWorld::StepCharacters`): the same snapshot took 0.14 ms, and no world
 checkpoint is captured per frame (client frame 2.96 -> 2.06 ms). The rest of the world keeps its present state;
 remote entities follow the snapshots as always. Rule for `owned`: state the prediction depends on must live in
-components (Transform, CharacterBody, replicated fields), because the scripts' own variables (`self.x`) are not
-rewound. Owned entities with a RigidBody, RigidBody2D or CharacterBody2D are set to the server's state without
+components (Transform, CharacterBody, replicated fields; game values such as a cooldown in `Data.values`), because
+the scripts' own variables (`self.x`) are not rewound. Test: `NetworkOwnedPredictionData` (a dash with its
+cooldown in `Data`, corrected during a server knock-back, happens exactly once on both sides). Owned entities with a RigidBody, RigidBody2D or CharacterBody2D are set to the server's state without
 re-running their physics. `net.stats.ownedCorrections` counts these corrections. Test: `NetworkOwnedPrediction`.
 
 Network watchdog (`Engine::EnableNetworkWatchdog`, on in `oe run` and the packaged desktop/Android player, off in

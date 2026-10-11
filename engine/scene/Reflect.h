@@ -31,6 +31,9 @@ struct FieldInfo {
     bool hasRange = false;
     float min = 0, max = 0;
     std::vector<std::string> options;  // allowed values for String fields (empty = free text)
+    // Json fields: a flat object only, name (1..64 bytes) -> finite number, string (<= 256 bytes) or boolean,
+    // at most 64 names (Data.values).
+    bool flatValues = false;
 };
 
 class FieldList {

@@ -1,5 +1,7 @@
 #include "scene/Reflect.h"
 
+#include <cmath>
+
 namespace oe {
 
 const char* ToString(FieldType type) {
@@ -129,6 +131,16 @@ bool FieldFromJson(const FieldInfo& field, void* c, const Json& v, std::string* 
             return true;
         case FieldType::Json:
             if (!v.isObject() && !v.isArray()) return typeError("a JSON object or array");
+            if (field.flatValues) {
+                if (!v.isObject() || v.size() > 64) return typeError("an object of at most 64 names");
+                for (const auto& item : v.members()) {
+                    const Json& value = item.second;
+                    const bool ok = (value.isNumber() && std::isfinite(value.asNumber())) || value.isBool() ||
+                                    (value.isString() && value.asString().size() <= 256);
+                    if (item.first.empty() || item.first.size() > 64 || !ok)
+                        return typeError("names of 1..64 bytes with a finite number, a string of at most 256 bytes or a boolean each");
+                }
+            }
             At<Json>(c, field.offset) = v;
             return true;
         case FieldType::String: {

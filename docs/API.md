@@ -2379,3 +2379,11 @@ Live-linked .vfx.json effect with named parameters, independent emitters and a s
 | `playing` | bool | `true` | Automatic emission switch; existing particles and trail points keep aging while false. |
 | `autoDestroy` | bool | `false` | Destroy the owner and its children after the effect finishes (vfx.spawn defaults to true). |
 
+### Data
+
+Named game values kept on the entity (numbers, strings, booleans): cooldowns, charges, mana, a state name. Saved with the scene, editable in the inspector and replicable like any field (NetSync fields "Data.values"). With network.prediction "owned" a correction rewinds components, not script variables, so values the prediction depends on belong here.
+
+| field | type | default | description |
+|---|---|---|---|
+| `values` | json | `{}` | Name -> number, string or boolean (at most 64 names, names up to 64 bytes). |
+

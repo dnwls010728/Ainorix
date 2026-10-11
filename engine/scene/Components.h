@@ -656,6 +656,16 @@ struct Tag {
     static void Reflect(FieldList& f) { f.Add("tags", &Tag::tags, "Comma separated tags."); }
 };
 
+struct Data {
+    static constexpr const char* kTypeName = "Data";
+    static constexpr const char* kDoc = "Named game values kept on the entity (numbers, strings, booleans): cooldowns, charges, mana, a "
+                                        "state name. Saved with the scene, editable in the inspector and replicable like any field "
+                                        "(NetSync fields \"Data.values\"). With network.prediction \"owned\" a correction rewinds "
+                                        "components, not script variables, so values the prediction depends on belong here.";
+    Json values = Json::MakeObject();
+    static void Reflect(FieldList& f) { f.Add("values", &Data::values, "Name -> number, string or boolean (at most 64 names, names up to 64 bytes).").flatValues = true; }
+};
+
 struct Script {
     static constexpr const char* kTypeName = "Script";
     static constexpr const char* kDoc = "Runs a Lua script while simulating. The file returns a table with optional onStart(self), onUpdate(self, dt) and onDestroy(self). See docs/SCRIPTING.md.";

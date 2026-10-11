@@ -36,6 +36,7 @@ Json Quantize(const Json& value, double step) {
     if (step <= 0) return value;
     if (value.isNumber()) return Json(std::round(value.asNumber() / step) * step);
     if (value.isArray()) { Json result = Json::MakeArray(); for (const auto& item : value.items()) result.push(Quantize(item, step)); return result; }
+    if (value.isObject()) { Json result = Json::MakeObject(); for (const auto& item : value.members()) result[item.first] = Quantize(item.second, step); return result; }
     return value;
 }
 Json Interpolate(const Json& a, const Json& b, double t) {
@@ -239,6 +240,11 @@ bool Close(const Json& a, const Json& b) {
     if (a.isArray() && b.isArray()) {
         if (a.size() != b.size()) return false;
         for (size_t i = 0; i < a.size(); ++i) if (!Close(a[i], b[i])) return false;
+        return true;
+    }
+    if (a.isObject() && b.isObject()) {  // Data.values and other object fields
+        if (a.size() != b.size()) return false;
+        for (const auto& item : a.members()) if (!b.has(item.first) || !Close(item.second, b[item.first])) return false;
         return true;
     }
     return a == b;

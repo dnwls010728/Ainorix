@@ -555,6 +555,19 @@ checkpoints and replays at most eight frames. See [NETWORK_NOTES.md](NETWORK_NOT
 
 ### Authoritative gameplay
 
+Game values on an entity (cooldowns, charges, mana, a state name) go in the `Data` component: `values` is a flat
+object of up to 64 names, each a finite number, a string (up to 256 bytes) or a boolean. It is saved with the
+scene, shown in the inspector and replicated like any field (`NetSync.fields["Data.values"]`). With
+`network.prediction: "owned"` a correction rewinds components, not script variables, so anything the prediction
+depends on belongs there rather than in `self`:
+
+```lua
+local d = self:get("Data").values
+d.cooldown = math.max(0, (d.cooldown or 0) - dt)
+if keys.pressed("Q") and d.cooldown == 0 then self:dash(); d.cooldown = 3 end
+self:set("Data", { values = d })   -- the whole object is replaced
+```
+
 With `network.mode: "authoritative"`, put `NetSync` on replicated entities and `NetPlayer` on
 controlled entities. `network.playerPrefab` can spawn one per ready player automatically.
 The server owns state; a client's frame-tagged inputs only enter its authenticated player stream.
