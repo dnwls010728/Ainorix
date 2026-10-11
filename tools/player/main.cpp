@@ -225,9 +225,14 @@ int main(int argc, char** argv) {
     std::string dir = JoinPath(ExecutableDirectory(), "game");
     bool server = false; Json arguments = Json::MakeObject(); uint64_t ticks = 0; std::string argumentError;
     std::vector<std::pair<bool, std::string>> sets;  // --set-file?, name=value (launch parameters, game.arg)
+    std::vector<std::string> scenes;
     for (int i = 1; i < argc; ++i) {
         std::string flag = argv[i];
         if (flag == "--server") server = true;
+        else if (flag == "--scenes") {  // with --server: a world per scene in one session (players arrive in the first)
+            if (++i >= argc) { argumentError = "--scenes needs a,b,..."; break; }
+            scenes = SplitSceneList(argv[i]);
+        }
         else if (flag == "--set" || flag == "--set-file") {
             if (++i >= argc) { argumentError = flag + " needs name=value"; break; }
             sets.push_back({flag == "--set-file", argv[i]});
@@ -251,6 +256,11 @@ int main(int argc, char** argv) {
         if (!argumentError.empty() || !engine.Open(dir, &error)) {
             result["ok"] = false; result["error"]["code"] = "player_server";
             result["error"]["message"] = argumentError.empty() ? error : argumentError;
+        } else if (!scenes.empty()) {
+            result = RunDedicatedWorlds(dir, scenes, arguments, ticks, [&](Engine& world, std::string* failed) {
+                for (const auto& set : sets) if (!ApplyLaunchArg(world, set.second, set.first, failed)) return false;
+                return true;
+            });
         } else result = RunDedicatedServer(engine, arguments, ticks);
         std::string text = result.dump(); std::fputs(text.c_str(), stdout); std::fputc('\n', stdout); std::fflush(stdout);
         return result["ok"].asBool() ? 0 : 1;

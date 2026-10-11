@@ -54,7 +54,7 @@ struct Args {
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
 const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script", "--shader", "--effects",
-                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--seed", "--api-port", "--players", "--agent", "--ask", "--agent-chat", "--settings"};
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--scenes", "--seed", "--api-port", "--players", "--agent", "--ask", "--agent-chat", "--settings"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -209,6 +209,9 @@ int CmdHelp() {
                  "  serve-game [path] [--port P --min-players N --seed S --frames N --api-port P]\n"
                  "                                    Dedicated 60 Hz game server, no window/audio (Ctrl+C stops);\n"
                  "                                    with network.lateJoin it runs without players and admits them any time\n"
+                 "             --scenes a.scene.json,b.scene.json [--api-port A]\n"
+                 "                                    One server, a world per scene, one port: players arrive in the first\n"
+                 "                                    and are moved with net.move (the API of scene i is on A+i)\n"
                  "  --set name=value / --set-file name=path (any command that opens a project, repeatable):\n"
                  "                                    launch parameters the game reads with game.arg(name)\n"
                  "  serve <dir> [--port 8080] [--no-browser]\n"
@@ -1210,6 +1213,23 @@ int CmdServeGame(const Args& a) {
         if (!error.empty() || !value.isNumber() || !std::isfinite(n) || n < 1 || n > 2147483647 || std::floor(n) != n)
             return Fail("invalid_argument", "--frames requires 1..2147483647 I/O ticks");
         ticks = static_cast<uint64_t>(n);
+    }
+    if (a.Has("--scenes")) {
+        // A world per scene in this one process; `engine` above only proved that the project opens.
+        std::vector<std::unique_ptr<HttpServer>> apis;
+        Json result = RunDedicatedWorlds(a.positional.empty() ? "." : a.positional[0], SplitSceneList(a.Get("--scenes")), args, ticks,
+            [&](Engine& world, std::string* error) {
+                for (const auto& set : a.sets) if (!ApplyLaunchArg(world, set.second, set.first == "--set-file", error)) return false;
+                return true;
+            },
+            [&](size_t index, Engine& world, std::string* error) {
+                if (!a.Has("--api-port")) return true;
+                apis.push_back(std::make_unique<HttpServer>());
+                if (StartServer(*apis.back(), world, a.GetInt("--api-port", 7777) + static_cast<int>(index))) return true;
+                *error = "cannot start API server"; return false;
+            },
+            [](const Json& state) { PrintJson(state); });
+        PrintJson(result); return result["ok"].asBool() ? 0 : 1;
     }
     HttpServer api;
     if (a.Has("--api-port") && !StartServer(api, engine, a.GetInt("--api-port", 7777))) return Fail("server_failed", "cannot start API server");

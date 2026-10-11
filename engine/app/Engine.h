@@ -221,6 +221,11 @@ public:
     // Cheap opt-in check: editor UI skips network queries in single-player projects.
     bool NetworkEnabled() const { return networkConfig_.mode != "none"; }
     Session* Network() const { return network_.get(); }
+    std::shared_ptr<Session> SharedNetwork() const { return network_; }
+    // Dedicated server, one world of several: this idle engine (its scene loaded) serves world `world`
+    // of the session another engine hosts (net.serve there, then Session::SetWorlds). The engines must be
+    // stepped in world order, world 0 first, each tick.
+    void ServeWorld(std::shared_ptr<Session> session, uint32_t world);
     bool PredictEntity(EntityId id) const;
     PhysicsWorld& Physics() { return *physics_; }
     AudioSystem& Audio() { return *audio_; }
@@ -297,6 +302,7 @@ private:
     void ResetLocalPeers();
     void AdvanceLocalPeers();
     void AutoStartNetwork();
+    void EnterWorld(const std::string& scene);  // client: the host moved us to the world of that scene
     Json LocalPeersState();
     void SimulateWorld();
     void EnsureSync(bool refresh = false);
@@ -380,7 +386,11 @@ private:
     std::unique_ptr<PhysicsWorld> physics_;
     std::unique_ptr<AudioSystem> audio_;
     SessionConfig networkConfig_;
-    std::unique_ptr<Session> network_;
+    // Shared when this engine runs one world of a session with several (ServeWorld): the engine of
+    // world 0 made the session and advances it; the others only use their world's part of it.
+    std::shared_ptr<Session> network_;
+    uint32_t networkWorld_ = 0;
+    bool networkShared_ = false;
     uint64_t networkFrame_ = 0;
     std::vector<std::unique_ptr<Engine>> localPeers_;
     std::string previewTransport_;
@@ -441,6 +451,10 @@ private:
 
     bool playing_ = false;
     std::unique_ptr<Json> playSnapshot_;
+    // The scene game.loadScene put in place during this play session, as it was loaded. An
+    // authoritative match starts from it (else from playSnapshot_): a server started on another scene
+    // file and a client that loaded that scene before joining begin from the same world.
+    std::unique_ptr<Json> loadedScene_;
     uint64_t frame_ = 0;
     uint64_t revision_ = 1;
     Json gameData_ = Json::MakeObject();

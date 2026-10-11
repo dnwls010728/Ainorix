@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/Log.h"
 #include "script/ScriptHost.h"
 
 namespace oe {
@@ -14,14 +15,46 @@ uint32_t Number(const Json& args, const char* key, uint32_t fallback, uint32_t l
 }
 }
 
+void Engine::ServeWorld(std::shared_ptr<Session> session, uint32_t world) {
+    if (inWorld_ || InPlaySession()) throw ApiError("network_server", "dedicated serving requires an idle engine", "Use sim.stop first.");
+    if (!session || !session->IsHost() || world >= session->Worlds().size() || networkConfig_.mode != "authoritative" || !networkConfig_.lateJoin)
+        throw ApiError("network_server", "a world needs a hosted session with worlds and an authoritative lateJoin project", "Host with net.serve, then Session::SetWorlds.");
+    ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
+    ResetLocalPeers();
+    network_ = std::move(session); networkWorld_ = world; networkShared_ = world != 0; networkFrame_ = 0;
+    scripts_->SetNetworkSeed(network_->Seed());
+    dedicated_ = true; autoStart_ = true; minimumPlayers_ = 0;
+    Play();
+}
+
+// The host put us into another world of its session: the connection stays, the match we were in is
+// over for us, and the world we enter begins from its scene as for any late joiner. Ready tells the
+// host that the scene is loaded; it then admits us (network.admission) and the new match starts here.
+void Engine::EnterWorld(const std::string& scene) {
+    ResetAuthority(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
+    audio_->SetOutputMode(false, false); audio_->DiscardPending(); saves_.DeferFlush(false); saves_.FreezeReads(false);
+    uiHovered_ = uiPressed_ = uiFocus_ = 0; heldKeys_.clear(); heldButtons_.clear();
+    BeginSessionIfNeeded();
+    pendingScene_ = scene; ApplySceneChange();
+    if (runtimeScene_ != scene) {  // not a scene of this project: there is no world to stand in
+        OE_LOG_WARN("net", "moved to the world of %s, which cannot be loaded; leaving the session", scene.c_str());
+        network_->Leave(); return;
+    }
+    std::string error; network_->Ready(true, &error);
+    OE_LOG_INFO("net", "moved to the world of %s", scene.c_str());
+}
+
 Json Engine::NetworkCall(const std::string& command, const Json& args) {
     // An authoritative host is never hash-compared: its game rules may remove a player (a failed check, a ban).
     const bool hostRules = command == "kick" && authority_ && authority_->Active() && network_ && network_->IsHost();
-    if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && inWorld_ && !hostRules &&
+    // Nor does a client of an authoritative match decide anything: its game may leave (a way out, another server's world).
+    const bool clientLeaves = command == "leave" && authority_ && authority_->Active() && network_ && !network_->IsHost();
+    if (((sync_ && sync_->Active()) || (authority_ && authority_->Active())) && inWorld_ && !hostRules && !clientLeaves &&
         (command == "host" || command == "join" || command == "leave" || command == "kick" || command == "ready" || command == "start"))
         throw ApiError("match_control", "session controls cannot run in a synchronized game callback", "Control the lobby/session from tools; keep match updates deterministic.");
     auto state = [&] {
         if (network_) { Json out = network_->State(); out["syncImplemented"] = true; out["dedicated"] = dedicated_;
+            if (!network_->Worlds().empty() && networkWorld_ < network_->Worlds().size()) out["world"] = network_->Worlds()[networkWorld_];
             if (dedicated_) out["isHost"] = false;
             if (authority_) out["sync"] = authority_->State();
             if (sync_) { out["sync"] = sync_->State(); if (replaying_) out["sync"]["frame"] = frame_; } return out; }
@@ -123,7 +156,7 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         if (!network_ || !network_->Connected() || !network_->IsHost())
             throw ApiError("network_start", "start requires a ready host lobby", "Host, join, and ready all players first.");
         std::vector<uint32_t> roster;
-        Json players = network_->Players();
+        Json players = network_->Players(networkWorld_);
         for (const Json& player : players.items()) {
             if (!player["ready"].asBool()) throw ApiError("network_not_ready", "all players must be ready", "Call net.ready on every peer.");
             roster.push_back(static_cast<uint32_t>(player["id"].asNumber()));
@@ -136,7 +169,7 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
         return state();
     }
     if (command == "players") {
-        if (network_) return network_->Players();
+        if (network_) return network_->Players(networkWorld_);
         Json players = Json::MakeArray();
         if (networkConfig_.mode == "none") {
             Json player = Json::MakeObject(); player["id"] = 1; player["name"] = "Local";
@@ -156,7 +189,7 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
             throw ApiError("network_active", "a session is already active", "Use net.leave and advance sim.step until offline, or sim.stop first.");
         ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); syncHashes_.clear();
         audio_->SetOutputMode(false, false); audio_->DiscardPending(); saves_.DeferFlush(false); saves_.FreezeReads(false);
-        ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
+        ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0;
         std::string error, name = args["name"].asString("Player");
         if (command == "host") {
             uint32_t seed = Number(args, "seed", 1, 0, UINT32_MAX);
@@ -195,7 +228,7 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
             if (target != "server" && target != "all" && target != "others" && target != "1")
                 throw ApiError("invalid_rpc_target", "target is not available in single-player", "Use server, all, others or player 1. owner requires M6.");
             if (target != "others") scripts_->DispatchRpc(1, name, arguments);
-        } else if (!network_ || !network_->Rpc(target, name, arguments, &error)) {
+        } else if (!network_ || !network_->Rpc(networkWorld_, target, name, arguments, &error)) {
             throw ApiError("network_rpc", error.empty() ? "no active lobby" : error, "Host/join, advance sim.step until lobby, and use a supported target.");
         }
         Json result = Json::MakeObject(); result["queued"] = networkConfig_.mode != "none"; return result;
@@ -206,13 +239,24 @@ Json Engine::NetworkCall(const std::string& command, const Json& args) {
             throw ApiError("network_admit", "admit needs a host with network.admission \"script\"", "Set network.lateJoin and network.admission in project.json; only the server admits.");
         const uint32_t wanted = Number(args, "player", 0, 2, UINT32_MAX - 2);
         bool present = false;
-        const Json lobby = network_->Players();
+        const Json lobby = network_->Players(networkWorld_);
         for (const Json& player : lobby.items()) present = present || static_cast<uint32_t>(player["id"].asNumber()) == wanted;
         if (!present) throw ApiError("network_admit", "no such player in the lobby", "Use the id from onPlayerJoined or net.players.");
         admitted_.insert(wanted);
         Json out = Json::MakeObject(); out["player"] = wanted; out["admitted"] = true; return out;
     }
     if (!network_) throw ApiError("network_inactive", "no active network session", "Use net.host or net.join first.");
+    if (command == "move") {
+        // A server's game rule, like kick: allowed from its scripts while the world runs. A world moves its own players.
+        const uint32_t wanted = Number(args, "player", 0, 2, UINT32_MAX - 2);
+        bool here = false;
+        const Json roster = network_->Players(networkWorld_);
+        for (const Json& player : roster.items()) here = here || static_cast<uint32_t>(player["id"].asNumber()) == wanted;
+        if (!here) throw ApiError("network_move", "no such player in this world", "Use the id from onPlayerJoined or net.players.");
+        if (!network_->Move(Number(args, "player", 0, 2, UINT32_MAX - 2), args["scene"].asString(), args["data"], &error))
+            throw ApiError("network_move", error, "Only a server started with several worlds (oe serve-game --scenes) moves players; scene is one of net.state().worlds.");
+        return state();
+    }
     bool ok = false;
     if (command == "ready") ok = network_->Ready(args["ready"].asBool(), &error);
     else if (command == "kick") ok = network_->Kick(Number(args, "player", 0, 1, UINT32_MAX - 2), args["reason"].asString("kicked"), &error);

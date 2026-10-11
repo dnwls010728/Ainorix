@@ -111,6 +111,50 @@ the engine lock, so it covers stalls outside the engine (GPU/driver hitches, OS 
 inside a frame. Test: `NetworkWatchdogKeepsStalledClient` (real UDP, 5 s timeout, a 6 s stall: dropped without it,
 kept with it). `net.stats.watchdogTicks` counts its ticks.
 
+Worlds: an authoritative match starts from the scene that is loaded when it begins, as that scene was
+loaded: the project's start scene, the scene file a server was opened on (`oe serve-game
+scenes/field.scene.json`; the project is found above it) or the one `game.loadScene` put in place
+before the peer joined. Both sides must have loaded the same scene (the worlds' blueprints differ
+otherwise, and the client is not let in). The engine changes no scene under a running authoritative
+match (`match_scene`).
+
+One server, several worlds (maps, rooms, instances): `oe serve-game <project> --scenes
+a.scene.json,b.scene.json [--port P --api-port A]` (packaged player: `--server --scenes ...`) runs a
+world per scene in one session on one port. Each world is simulated by its own engine (its own scene,
+physics and Lua state; the same launch parameters; `game.scene()` or `net.state().world` tells a
+script which one it is in), all stepped by the same 60 Hz loop, world 0 first. The project needs
+`mode: authoritative` and `lateJoin`.
+- A player connects once and is in world 0 (the first scene): it must have loaded that scene. Every
+  player is in one world at a time. It sees that world's roster (`net.players`), its inputs and
+  snapshots belong to that world, and RPC stays inside it: `all` / `others` / a player id from a
+  world's server reach that world's players, a client's call reaches its own world's server. Each
+  world holds `maxPlayers - 1` players.
+- `net.move(player, scene, data?)` (command `net.move {player, scene, data}`; a server's game rule,
+  callable from its scripts like `net.kick`) puts a player of this world into the world of another
+  scene. Its connection and player id stay. The world it leaves gets `onPlayerLeft(id)` and destroys
+  its `NetPlayer` entities as for a player that left; the world it enters gets `onPlayerJoined(id,
+  data)` with the bounded JSON the first world sent (who it is, where it should stand: worlds share
+  no Lua state) and treats it as a late joiner: it is admitted when it is ready (and, with
+  `admission: "script"`, when the script called `net.admit(id)`), and its `playerPrefab` spawns.
+- On the player's side the engine does the rest: the match it was in ends for it, the scene of the
+  new world is loaded (scripts restart as for `game.loadScene`; the Lua state and game data survive
+  until the new match starts), Ready is sent, and the new match begins as for any late joiner. A
+  script that starts in a scene with `net.state().state == "lobby"` and no running match is between
+  two worlds (show a loading screen). A scene the project does not have ends the session.
+- On the wire (session protocol v5): the host's message kind 8 names the scene; match payloads carry
+  the connection's move count, so what was in flight for the world the player left is dropped on
+  both sides; rosters are sent per world.
+- `net.state()` on such a server has `worlds` (the scenes) and `world` (its own). The startup
+  envelope is printed once per world with `world` (index) and `scene`; the final result is
+  `{worlds: [...], ticks}`.
+- Limits: the worlds of a server share one thread; a scene runs as one world (no two instances of
+  the same scene yet); worlds cannot be added or removed while the server runs.
+Tests: `NetworkAuthoritativeMatchInLoadedScene`, `DedicatedWorldsPerScene`, `NetworkWorldsMovePlayers`.
+
+A client's script may also `net.leave` a running authoritative match (a way out to a menu, or to
+another server); a host's script and lockstep/rollback peers still may not control the session from
+game code.
+
 `admission` (with `lateJoin`): `auto` admits every ready lobby player; with `script` a player waits in the lobby
 until the server's Lua called `net.admit(id)`, so the game can verify it first. A server's scripts may also call
 `net.kick`. The engine stops there: accounts, tickets, channel lists and persistence are services of the game,

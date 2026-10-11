@@ -479,6 +479,10 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     Register(r, "net.kick", "Host removes a remote player with a bounded graceful close.",
              Params().Req("player", "integer", "Remote player id from net.players.").Opt("reason", "string", "1..64 printable bytes; default kicked."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("kick", a); });
+    Register(r, "net.move", "Server with several worlds (oe serve-game --scenes): put a connected player into the world of another scene. Its connection stays; the world it was in sees it leave, the other sees it join with `data` (Lua net.move, onPlayerJoined(id, data)).",
+             Params().Req("player", "integer", "Remote player id from net.players.").Req("scene", "string", "The scene of the world to move it to (net.state().worlds).")
+                     .Opt("data", "object", "Handed to the world it enters: at most 8 KiB of JSON, depth <=8."), false,
+             [](Engine& e, const Json& a) { return e.NetworkCall("move", a); });
     Register(r, "net.admit", "Server with network.admission \"script\": let a ready lobby player into the running world (Lua net.admit).",
              Params().Req("player", "integer", "Remote player id from net.players."), false,
              [](Engine& e, const Json& a) { return e.NetworkCall("admit", a); });

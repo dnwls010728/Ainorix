@@ -370,6 +370,16 @@ Host removes a remote player with a bounded graceful close.
 | `player` | integer | yes | Remote player id from net.players. |
 | `reason` | string |  | 1..64 printable bytes; default kicked. |
 
+### `net.move`
+
+Server with several worlds (oe serve-game --scenes): put a connected player into the world of another scene. Its connection stays; the world it was in sees it leave, the other sees it join with `data` (Lua net.move, onPlayerJoined(id, data)).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `player` | integer | yes | Remote player id from net.players. |
+| `scene` | string | yes | The scene of the world to move it to (net.state().worlds). |
+| `data` | object |  | Handed to the world it enters: at most 8 KiB of JSON, depth <=8. |
+
 ### `net.admit`
 
 Server with network.admission "script": let a ready lobby player into the running world (Lua net.admit).

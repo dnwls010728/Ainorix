@@ -16,7 +16,7 @@ namespace oe {
 // Authenticated lobby/RPC and match payload transport; FrameSync owns M5 synchronization.
 struct SessionConfig {
     std::string mode = "none", transport = "tcp", bind = "127.0.0.1", gameId;
-    uint16_t port = 7778, version = 4;
+    uint16_t port = 7778, version = 5;
     SyncConfig sync;
     uint32_t maxPlayers = 4, tickRate = 60, snapshotRate = 20, interpolationFrames = 6, predictionFrames = 32;
     std::string playerPrefab;
@@ -47,8 +47,16 @@ struct SessionEvent {
     uint32_t player = 0;
     uint64_t sequence = 0;
     std::string name;
-    Json args = Json::MakeArray();
+    Json args = Json::MakeArray();  // Rpc: the arguments. Joined: {data} when the player was moved here with data
 };
+
+// Worlds (authoritative hosts with lateJoin): one session, one port, several worlds, each simulated by
+// its own engine. Every player is in one world at a time: it sees that world's roster, its match
+// payloads and RPC reach only that world, and events are queued per world. A new connection is in
+// world 0. Move puts a player into another world while its connection stays: the old world sees it
+// leave, the new one sees it join (not ready), and the player's side is told which scene to load
+// (TakeWorldChange). Match payloads carry the connection's move count, so what was still on the wire
+// for the world it left is dropped on both sides. A session without SetWorlds has the one world 0.
 
 class Session final : private ITransport {
 public:
@@ -68,11 +76,22 @@ public:
     // reliable=false uses the unreliable channel: no retransmission, ordering or head-of-line
     // delay; a full queue simply drops the payload (authoritative snapshots and their ACKs).
     bool SendSync(uint32_t player, const std::vector<uint8_t>& bytes, bool reliable = true);
-    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> DrainSync();
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> DrainSync(uint32_t world = 0);
     void Seal() { sealed_ = true; }
-    std::vector<SessionEvent> DrainEvents();
+    std::vector<SessionEvent> DrainEvents(uint32_t world = 0);
     Json State() const;
     Json Players() const;
+    // The roster of one world: the host and the players that are in it.
+    Json Players(uint32_t world) const;
+    // Host: the worlds of this session, by the scene each runs (index = world). Before anybody joins.
+    bool SetWorlds(const std::vector<std::string>& scenes, std::string* error);
+    const std::vector<std::string>& Worlds() const { return worlds_; }
+    // Host: puts a connected player into the world that runs `scene`; `data` (bounded like RPC
+    // arguments) is handed to that world with its Joined event. Each world holds maxPlayers - 1 players.
+    bool Move(uint32_t player, const std::string& scene, const Json& data, std::string* error);
+    // Client: the scene of the world the host moved us to, once per move. The match of the world we
+    // were in is over for us; Ready says the scene is loaded.
+    bool TakeWorldChange(std::string& scene);
     Json Stats() const;
     // Fault controls are shared by all endpoints in an explicit loopback room.
     bool Simulate(const LoopbackConfig& config, std::string* error);
@@ -87,16 +106,18 @@ public:
     bool Kick(uint32_t player, const std::string& reason, std::string* error);
     bool Ready(bool ready, std::string* error);
     // Targets: server/all/others or decimal player id; owner is resolved by Engine from NetSync before routing.
-    bool Rpc(const std::string& target, const std::string& name, const Json& args, std::string* error);
+    bool Rpc(const std::string& target, const std::string& name, const Json& args, std::string* error) { return Rpc(0, target, name, args, error); }
+    // From the host's world `world`: all/others/a player id mean the players of that world.
+    bool Rpc(uint32_t world, const std::string& target, const std::string& name, const Json& args, std::string* error);
     static uint64_t InstancesCreated();
     static uint64_t PollCalls();
 private:
-    struct Player { std::string name; bool ready = false; };
+    struct Player { std::string name; bool ready = false; uint32_t world = 0; };
     struct Connection {
         uint64_t nonce = 0, cookieA = 0, cookieB = 0, started = 0, received = 0, sent = 0, closing = 0;
-        uint32_t player = 0;
+        uint32_t player = 0, world = 0;
         uint64_t rpcSequence = 0;
-        uint16_t udpPort = 0;
+        uint16_t udpPort = 0, moves = 0;  // moves: how often the player changed world; stamps its match payloads
         std::string name, phase = "challenge";
         bool hasSent = false;
     };
@@ -111,9 +132,13 @@ private:
     void ApplyMessage(const ChannelEvent& event);
     bool SendMessage(PeerId peer, uint8_t kind, uint32_t origin, uint32_t target,
                      uint64_t sequence, const std::string& name, const Json& args);
-    bool RouteRpc(uint32_t origin, uint32_t target, uint64_t sequence, const std::string& name, const Json& args);
+    bool RouteRpc(uint32_t world, uint32_t origin, uint32_t target, uint64_t sequence, const std::string& name, const Json& args);
     void SetState(const std::string& state, const std::string& error = "");
-    void Emit(SessionEvent event);  // bounded observer queue (256); a full observer never stalls I/O
+    // Bounded observer queue (256 per world); a full observer never stalls I/O. kEveryWorld: all of them.
+    static constexpr uint32_t kEveryWorld = 0xffffffff;
+    void Emit(SessionEvent event, uint32_t world = 0);
+    uint32_t WorldOf(uint32_t player) const;
+    size_t WorldLoad(uint32_t world) const;  // players in it, and connections on their way in
     void CloseTransport();  // releases listeners/endpoints as soon as the terminal state is observed
     SessionConfig config_;
     std::unique_ptr<ITransport> wire_;
@@ -127,15 +152,18 @@ private:
     Random random_;
     std::map<PeerId, Connection> connections_;
     std::map<uint32_t, Player> players_;
-    std::vector<SessionEvent> events_;
+    std::map<uint32_t, std::vector<SessionEvent>> events_;  // by world
+    std::vector<std::string> worlds_;                       // host: scene of each world (empty: the one world 0)
+    std::string worldChange_;                               // client: the scene of the world we were moved to
+    bool worldChanged_ = false;
     std::map<uint32_t, uint64_t> rpcSequences_;
     std::string state_, error_, name_, room_;
     PeerId server_ = 1;
     uint32_t localPlayer_ = 0, nextPlayer_ = 2, seed_ = 0;
     uint64_t frame_ = 0, sequence_ = 0, rejected_ = 0, started_ = 0;
     bool host_ = false, polled_ = false, sealed_ = false;
-    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> syncMessages_;
-    size_t syncBytes_ = 0;
+    std::map<uint32_t, std::vector<std::pair<uint32_t, std::vector<uint8_t>>>> syncMessages_;  // by world
+    size_t syncBytes_ = 0, syncCount_ = 0;
 };
 
 // Bounded JSON values for RPC: 16 arguments, depth 8, finite numbers, 8 KiB serialized.

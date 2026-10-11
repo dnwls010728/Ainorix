@@ -121,13 +121,13 @@ bool Engine::PollSync() {
     if (!network_ || networkConfig_.mode == "authoritative") return true;
     EnsureSync();
     if (!sync_) return true;
-    for (const auto& message : network_->DrainSync()) {
+    for (const auto& message : network_->DrainSync(networkWorld_)) {
         if (!message.second.empty() && message.second.front() == 1 && !network_->IsHost() && !sync_->Active()) EnsureSync(true);
         sync_->Receive(message.first, message.second);
     }
     if (sync_->Active()) {
-        network_->Seal(); network_->DrainEvents();
-        auto players = network_->Players();
+        network_->Seal(); network_->DrainEvents(networkWorld_);
+        auto players = network_->Players(networkWorld_);
         if (!network_->Connected() || players.size() != sync_->Players().size()) sync_->Stop("match participant disconnected");
     }
     sync_->Tick(networkFrame_);

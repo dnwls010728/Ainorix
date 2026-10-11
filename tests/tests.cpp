@@ -2767,7 +2767,7 @@ TEST(OfficialLuaManifestFingerprintIsStable) {
 }
 
 TEST(OfficialLuaBlueprintMismatchBarriers) {
-    CHECK(SessionConfig{}.version == 4);
+    CHECK(SessionConfig{}.version == 5);
     for (const char* mode : {"lockstep", "rollback", "authoritative"}) {
         for (int variant = 0; variant < 3; ++variant) {  // Match, changed official bytes, legacy v4 runtime.
             const std::string project = NetworkProject("official_barrier", "loopback");
@@ -15076,6 +15076,224 @@ TEST(NetworkAuthoritativeLateJoin) {
     CHECK(Call(b, "game.quit")["ok"].asBool() && Call(b, "game.state")["result"]["quitRequested"].asBool());
     b.Stop(); CHECK(!Call(b, "game.state")["result"]["quitRequested"].asBool());
     server.Stop(); a.Stop(); RemoveAll(project);
+}
+
+TEST(NetworkAuthoritativeMatchInLoadedScene) {
+    // A world per scene: a server started on a scene file other than the project's start scene, and a
+    // client that got there with game.loadScene before it joined, begin from the same world. A client
+    // still in the start scene is not let into it.
+    std::string project = AuthorityProject("authority_scenes", "loopback", true), text, error;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json config = Json::parse(text);
+    config["network"]["lateJoin"] = true; config["network"]["maxPlayers"] = 4;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    const std::string field = JoinPath(project, "scenes/field.scene.json");
+    {
+        Engine author; CHECK(author.Open(project, &error)); author.GetScene().Clear();
+        CHECK(Call(author, "entity.create", R"({"name":"Field Thing","components":{"Transform":{},"Script":{"path":"scripts/drift.lua"},"NetSync":{"fields":{"Transform.position":{"onChange":true}}}}})")["ok"].asBool());
+        CHECK(author.SaveScene(field, &error));
+    }
+    Engine server, a, b;
+    CHECK(server.Open(field, &error)); CHECK(a.Open(project, &error)); CHECK(b.Open(project, &error));
+    auto steps = [&](int count) { for (int i = 0; i < count; ++i) { server.Step(1); a.Step(1); b.Step(1); } };
+    auto sync = [](Engine& e) { return e.NetworkCall("state", Json())["sync"]["state"].asString(); };
+    const char* join = R"({"address":"scene-room"})";
+    CHECK(Call(server, "net.serve", R"({"seed":5,"room":"scene-room"})")["ok"].asBool());
+    steps(30);
+    CHECK(sync(server) == "running" && server.GetScene().FindByName("Field Thing") != kNullEntity);
+
+    CHECK(a.GetScene().FindByName("Field Thing") == kNullEntity);
+    CHECK(Call(a, "sim.play")["ok"].asBool());
+    CHECK(Call(a, "game.load_scene", R"({"path":"scenes/field.scene.json"})")["ok"].asBool()); steps(2);
+    CHECK(Call(a, "game.state")["result"]["scene"].asString() == "scenes/field.scene.json");
+    CHECK(Call(a, "net.join", join)["ok"].asBool()); steps(30);
+    CHECK(Call(a, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(80);
+    CHECK(sync(a) == "running" && server.GetScene().Pool<NetPlayer>().size() == 1 && a.GetScene().Pool<NetPlayer>().size() == 1);
+    const EntityId thing = a.GetScene().FindByName("Field Thing");
+    CHECK(thing != kNullEntity && a.GetScene().Get<Transform>(thing)->position.x > 1.0f);  // the server's world, in the field
+    CHECK(Call(a, "game.state")["result"]["scene"].asString() == "scenes/field.scene.json");
+
+    // The start scene is another world: no match for a client that did not change scene.
+    CHECK(Call(b, "net.join", join)["ok"].asBool()); steps(30);
+    Call(b, "net.ready", R"({"ready":true})"); steps(80);
+    CHECK(sync(b) != "running" && b.GetScene().FindByName("Field Thing") == kNullEntity);
+    CHECK(sync(a) == "running" && sync(server) == "running");
+
+    // Stopping the play session returns to the scene it started from, and forgets the loaded one.
+    a.Stop(); CHECK(a.GetScene().FindByName("Field Thing") == kNullEntity);
+    for (Engine* e : {&server, &a}) CHECK(e->Scripts().Errors().empty());
+    server.Stop(); b.Stop(); RemoveAll(project);
+}
+
+TEST(DedicatedWorldsPerScene) {
+    // One server, a world per scene: each scene is simulated by its own engine, all in one session,
+    // stepped by one loop. A client's script may leave an authoritative match.
+    std::string project = AuthorityProject("authority_worlds", "loopback", true), text, error;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json config = Json::parse(text);
+    config["network"]["lateJoin"] = true; config["network"]["maxPlayers"] = 4;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    for (const char* name : {"town", "field"}) {
+        Engine author; CHECK(author.Open(project, &error)); author.GetScene().Clear();
+        Json created = Json::MakeObject(); created["name"] = std::string(name) + " thing"; created["components"]["Transform"] = Json::MakeObject();
+        CHECK(author.Call("entity.create", created)["ok"].asBool());
+        CHECK(author.SaveScene(JoinPath(project, std::string("scenes/") + name + ".scene.json"), &error));
+    }
+    CHECK(SplitSceneList("a.scene.json,,b.scene.json,") == (std::vector<std::string>{"a.scene.json", "b.scene.json"}));
+    Json arguments = Json::MakeObject(); arguments["port"] = 41000; arguments["seed"] = 3; arguments["room"] = "worlds";
+    std::vector<Json> started; std::vector<std::string> things; int prepared = 0;
+    Json result = RunDedicatedWorlds(project, {"scenes/town.scene.json", "scenes/field.scene.json"}, arguments, 45,
+        [&](Engine& world, std::string* failed) { ++prepared; return world.SetLaunchArg("channel", "7", failed); },
+        [&](size_t, Engine& world, std::string*) {
+            things.push_back(world.GetScene().FindByName("town thing") != kNullEntity ? "town thing" : world.GetScene().FindByName("field thing") != kNullEntity ? "field thing" : "?");
+            return world.LaunchArgs().count("channel") && world.LaunchArgs().at("channel") == "7";
+        },
+        [&](const Json& envelope) { started.push_back(envelope); });
+    CHECK(result["ok"].asBool() && prepared == 2);
+    CHECK(things == (std::vector<std::string>{"town thing", "field thing"}));
+    CHECK(started.size() == 2 && started[0]["world"].asInt(-1) == 0 && started[1]["world"].asInt(-1) == 1 &&
+          started[1]["scene"].asString() == "scenes/field.scene.json");
+    const Json& worlds = result["result"]["worlds"];
+    CHECK(worlds.size() == 2 && result["result"]["ticks"].asInt(0) == 45);
+    for (size_t i = 0; i < worlds.size(); ++i) {
+        CHECK(worlds[i]["sync"]["state"].asString() == "running" && worlds[i]["frame"].asInt(0) >= 40);
+        CHECK(worlds[i]["room"].asString() == "worlds" && worlds[i]["world"].asString() == worlds[i]["scene"].asString());  // one session
+        CHECK(worlds[i]["worlds"].size() == 2);
+    }
+    CHECK(worlds[0]["scene"].asString() == "scenes/town.scene.json" && worlds[1]["scene"].asString() == "scenes/field.scene.json");
+    // A scene that does not exist stops the run; so does the same scene twice (a world each).
+    CHECK(!RunDedicatedWorlds(project, {"scenes/town.scene.json", "scenes/none.scene.json"}, arguments, 5)["ok"].asBool());
+    CHECK(!RunDedicatedWorlds(project, {"scenes/town.scene.json", "scenes/town.scene.json"}, arguments, 5)["ok"].asBool());
+
+    // A client leaves a running authoritative match from its own script; a host's script may not stop it.
+    CHECK(WriteTextFile(JoinPath(project, "scripts/leaver.lua"), R"(
+local M = {}
+function M:onUpdate()
+  local sync = net.state().sync
+  if sync and sync.state == "running" and time.frame() == 60 then game.set("left", (pcall(net.leave))) end
+end
+return M
+)"));
+    Engine server, client;
+    for (Engine* e : {&server, &client}) {
+        std::string failed; CHECK(e->SetLaunchArg("leave", "1", &failed));
+        CHECK(e->Open(project, &error)); e->GetScene().Clear();
+        CHECK(Call(*e, "entity.create", R"({"name":"Leaver","components":{"Transform":{},"Script":{"path":"scripts/leaver.lua"}}})")["ok"].asBool());
+    }
+    auto steps = [&](int count) { for (int i = 0; i < count; ++i) { server.Step(1); client.Step(1); } };
+    auto sync = [](Engine& e) { return e.NetworkCall("state", Json())["sync"]["state"].asString(); };
+    CHECK(Call(server, "net.serve", R"({"seed":9,"room":"leave-room"})")["ok"].asBool()); steps(10);
+    CHECK(Call(client, "net.join", R"({"address":"leave-room"})")["ok"].asBool()); steps(20);
+    CHECK(Call(client, "net.ready", R"({"ready":true})")["ok"].asBool()); steps(20);
+    CHECK(sync(client) == "running" && server.GetScene().Pool<NetPlayer>().size() == 1);
+    steps(120);
+    CHECK(Call(client, "game.state")["result"]["data"]["left"].asBool());
+    CHECK(sync(client) != "running" && server.GetScene().Pool<NetPlayer>().empty());
+    CHECK(sync(server) == "running" && !Call(server, "game.state")["result"]["data"]["left"].asBool());
+    server.Stop(); client.Stop(); RemoveAll(project);
+}
+
+TEST(NetworkWorldsMovePlayers) {
+    // One session, two worlds (a scene and an engine each). A player connects once, is in the first
+    // world, and the server moves it to the other and back: its connection and player id stay, each
+    // world sees it leave or join (with the data the other world gave), and RPC stays inside a world.
+    std::string project = AuthorityProject("authority_move", "loopback", true), text, error;
+    CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+    Json config = Json::parse(text);
+    config["network"]["lateJoin"] = true; config["network"]["maxPlayers"] = 4;
+    CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+    CHECK(WriteTextFile(JoinPath(project, "scripts/world.lua"), R"(
+local M = {}
+function M:onStart()
+  net.on("ping", function(n) game.set("ping", n) end)
+end
+function M:onPlayerJoined(id, data) game.set("joined", id); game.set("data", data and data.hp or -1) end
+function M:onPlayerLeft(id) game.set("left", id) end
+return M
+)"));
+    const std::string town = "scenes/town.scene.json", field = "scenes/field.scene.json";
+    for (const std::string& scene : {town, field}) {
+        Engine author; CHECK(author.Open(project, &error)); author.GetScene().Clear();
+        Json thing = Json::parse(R"({"components":{"Transform":{},"NetSync":{"fields":{"Transform.position":{"onChange":true}}}}})");
+        thing["name"] = scene == town ? "Town Thing" : "Field Thing";
+        CHECK(author.Call("entity.create", thing)["ok"].asBool());
+        // The rules run on every peer (not replicated): each has its own copy from the scene.
+        CHECK(Call(author, "entity.create", R"({"name":"Rules","components":{"Script":{"path":"scripts/world.lua"}}})")["ok"].asBool());
+        CHECK(author.SaveScene(JoinPath(project, scene), &error));
+    }
+    Engine s0, s1, a, b;
+    CHECK(s0.Open(JoinPath(project, town), &error)); CHECK(s1.Open(JoinPath(project, field), &error));
+    CHECK(a.Open(project, &error)); CHECK(b.Open(project, &error));
+    CHECK(Call(s0, "net.serve", R"({"seed":4,"room":"move-room"})")["ok"].asBool());
+    CHECK(!s0.SharedNetwork()->SetWorlds({town, town}, &error));
+    CHECK(s0.SharedNetwork()->SetWorlds({town, field}, &error));
+    s1.ServeWorld(s0.SharedNetwork(), 1);
+    auto steps = [&](int count) { for (int i = 0; i < count; ++i) { s0.Step(1); s1.Step(1); a.Step(1); b.Step(1); } };
+    auto sync = [](Engine& e) { return e.NetworkCall("state", Json())["sync"]["state"].asString(); };
+    auto scene = [](Engine& e) { return Call(e, "game.state")["result"]["scene"].asString(); };
+    auto data = [](Engine& e, const char* key) { return Call(e, "game.state")["result"]["data"][key].asInt(-99); };
+    auto avatars = [](Engine& e) { return e.GetScene().Pool<NetPlayer>().size(); };
+    auto ids = [](Engine& e) { std::string out; const Json players = Call(e, "net.players")["result"]; for (const auto& p : players.items()) out += std::to_string(p["id"].asInt(0)) + " "; return out; };
+    steps(30);
+    CHECK(sync(s0) == "running" && sync(s1) == "running");
+    CHECK(Call(s1, "net.state")["result"]["world"].asString() == field && Call(s0, "net.state")["result"]["worlds"].size() == 2);
+
+    // Both players arrive in the first world (they loaded its scene before joining).
+    for (Engine* e : {&a, &b}) {
+        CHECK(Call(*e, "sim.play")["ok"].asBool());
+        CHECK(Call(*e, "game.load_scene", R"({"path":"scenes/town.scene.json"})")["ok"].asBool());
+    }
+    steps(2);
+    for (Engine* e : {&a, &b}) CHECK(Call(*e, "net.join", R"({"address":"move-room"})")["ok"].asBool());
+    steps(30);
+    for (Engine* e : {&a, &b}) CHECK(Call(*e, "net.ready", R"({"ready":true})")["ok"].asBool());
+    steps(80);
+    CHECK(sync(a) == "running" && sync(b) == "running" && avatars(s0) == 2 && avatars(s1) == 0 && avatars(a) == 2);
+    CHECK(ids(s0) == "1 2 3 " && ids(s1) == "1 " && ids(a) == "1 2 3 ");
+
+    // Player 2 goes to the field: only its own world may send it, and only to a world that exists.
+    CHECK(!Call(s1, "net.move", R"({"player":2,"scene":"scenes/town.scene.json"})")["ok"].asBool());
+    CHECK(!Call(s0, "net.move", R"({"player":2,"scene":"scenes/cave.scene.json"})")["ok"].asBool());
+    CHECK(!Call(s0, "net.move", R"({"player":2,"scene":"scenes/town.scene.json"})")["ok"].asBool());
+    CHECK(!Call(a, "net.move", R"({"player":2,"scene":"scenes/field.scene.json"})")["ok"].asBool());  // a client
+    CHECK(Call(s0, "net.move", R"({"player":2,"scene":"scenes/field.scene.json","data":{"hp":7}})")["ok"].asBool());
+    steps(120);
+    CHECK(scene(a) == field && sync(a) == "running" && a.Network()->LocalPlayer() == 2 && a.Network()->Status() == "lobby");
+    CHECK(a.GetScene().FindByName("Field Thing") != kNullEntity && a.GetScene().FindByName("Town Thing") == kNullEntity);
+    CHECK(avatars(s0) == 1 && avatars(s1) == 1 && avatars(a) == 1 && avatars(b) == 1);
+    CHECK(ids(s0) == "1 3 " && ids(s1) == "1 2 " && ids(a) == "1 2 " && ids(b) == "1 3 ");
+    CHECK(data(s0, "left") == 2 && data(s1, "joined") == 2 && data(s1, "data") == 7);
+    CHECK(sync(b) == "running" && scene(b) == town && sync(s0) == "running" && sync(s1) == "running");
+    // Its avatar in the field is its own: it moves it there, and the town does not see it.
+    for (const auto& kv : s1.GetScene().Pool<NetPlayer>()) CHECK(kv.second.player == 2);
+    a.Input().down.insert("W"); steps(40); a.Input().down.clear();
+    for (const auto& kv : s1.GetScene().Pool<NetPlayer>()) CHECK(s1.GetScene().Get<Transform>(kv.first)->position.x > 20);
+
+    // RPC stays in a world: "all" from the town reaches the town's player only, a client's call its own world's server.
+    CHECK(Call(s0, "net.rpc", R"({"target":"all","name":"ping","args":[1]})")["ok"].asBool());
+    CHECK(Call(s1, "net.rpc", R"({"target":"all","name":"ping","args":[2]})")["ok"].asBool());
+    steps(30);
+    CHECK(data(a, "ping") == 2 && data(b, "ping") == 1);
+    CHECK(Call(a, "net.rpc", R"({"name":"ping","args":[5]})")["ok"].asBool());
+    CHECK(Call(b, "net.rpc", R"({"name":"ping","args":[6]})")["ok"].asBool());
+    steps(30);
+    CHECK(data(s1, "ping") == 5 && data(s0, "ping") == 6);
+    CHECK(!Call(s0, "net.rpc", R"({"target":"2","name":"ping","args":[9]})")["ok"].asBool());  // not in the town any more
+
+    // And back: the same player enters a world it has been in before.
+    CHECK(Call(s1, "net.move", R"({"player":2,"scene":"scenes/town.scene.json"})")["ok"].asBool());
+    steps(120);
+    CHECK(scene(a) == town && sync(a) == "running" && avatars(s0) == 2 && avatars(s1) == 0 && avatars(a) == 2 && avatars(b) == 2);
+    CHECK(ids(s0) == "1 2 3 " && data(s1, "left") == 2 && data(s0, "joined") == 2 && data(s0, "data") == -1);
+
+    // A player that goes away is gone from the world it was in.
+    CHECK(Call(s0, "net.move", R"({"player":3,"scene":"scenes/field.scene.json"})")["ok"].asBool());
+    steps(120);
+    CHECK(avatars(s1) == 1 && sync(b) == "running" && scene(b) == field);
+    CHECK(Call(b, "net.leave")["ok"].asBool()); steps(120);
+    CHECK(avatars(s1) == 0 && data(s1, "left") == 3 && ids(s1) == "1 " && sync(a) == "running" && avatars(s0) == 1);
+    for (Engine* e : {&s0, &s1, &a, &b}) CHECK(e->Scripts().Errors().empty());
+    s1.Stop(); s0.Stop(); a.Stop(); b.Stop(); RemoveAll(project);
 }
 
 TEST(NetworkScriptAdmission) {

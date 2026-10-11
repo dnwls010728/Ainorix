@@ -70,7 +70,7 @@ void Engine::EnsureAuthority(bool refresh) {
     if (!network_ || networkConfig_.mode != "authoritative" || !network_->Connected()) return;
     if (refresh && authority_ && !authority_->Active()) authority_.reset();
     if (authority_) return; BeginSessionIfNeeded();
-    std::string text = playSnapshot_->dump() + ":" + std::to_string(ContentHash()) + ":" + std::to_string(network_->Seed());
+    std::string text = (loadedScene_ ? loadedScene_ : playSnapshot_)->dump() + ":" + std::to_string(ContentHash()) + ":" + std::to_string(network_->Seed());
     uint64_t blueprint = Fnv1a64(reinterpret_cast<const uint8_t*>(text.data()), text.size());
     authority_ = std::make_unique<Authority>(networkConfig_, network_->IsHost(), network_->LocalPlayer(), blueprint,
         [this](uint32_t player, const std::vector<uint8_t>& bytes) { return network_ && network_->SendSync(player, bytes); });
@@ -339,7 +339,7 @@ bool Engine::PollAuthority() {
     if (!network_ || networkConfig_.mode != "authoritative") return true;
     EnsureAuthority(); if (!authority_) return true;
     try {
-        for (const auto& message : network_->DrainSync()) {
+        for (const auto& message : network_->DrainSync(networkWorld_)) {
             if (!message.second.empty() && message.second.front() == 32 && !network_->IsHost() && !authority_->Active()) EnsureAuthority(true);
             authority_->Receive(message.first, message.second);
         }
@@ -350,8 +350,9 @@ bool Engine::PollAuthority() {
             else if (network_->IsHost()) { DropAuthorityPlayers(); AdmitAuthorityPlayers(); }
         }
         if (authority_->TakeStart()) {
-            std::string error; scene_.FromJson(*playSnapshot_, &error); ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
-            frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
+            // The world begins from the scene that is loaded: the one of the play session, or the one game.loadScene put in place since.
+            std::string error; scene_.FromJson(loadedScene_ ? *loadedScene_ : *playSnapshot_, &error); ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
+            frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); if (!loadedScene_) runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
             journal_.reset(); snapshots_.clear(); checkpoints_.clear(); predictionStates_.clear(); replicatedEntities_.clear(); authorityIds_.clear(); nextAuthorityId_ = 1;
             authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = authorityOwnedCorrections_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
             uiHovered_ = uiPressed_ = uiFocus_ = 0; heldKeys_.clear(); heldButtons_.clear();
@@ -495,7 +496,7 @@ void Engine::SpawnAuthorityPlayer(uint32_t player) {
 void Engine::AdmitAuthorityPlayers() {
     if (!networkConfig_.lateJoin || !authority_->Running()) return;
     std::set<uint32_t> present;
-    const Json lobby = network_->Players();
+    const Json lobby = network_->Players(networkWorld_);
     for (const Json& player : lobby.items()) {
         uint32_t id = static_cast<uint32_t>(player["id"].asNumber()); present.insert(id);
         // Ready is the player's request to enter the world (its scene is loaded); Admit ignores participants.
@@ -509,7 +510,7 @@ void Engine::AdmitAuthorityPlayers() {
 void Engine::DropAuthorityPlayers() {
     for (uint32_t player : authority_->TakeDropped()) { std::string error; network_->Kick(player, "dropped from the match", &error); }
     std::set<uint32_t> present;
-    const Json roster = network_->Players();
+    const Json roster = network_->Players(networkWorld_);
     for (const Json& player : roster.items()) present.insert(static_cast<uint32_t>(player["id"].asNumber()));
     std::vector<uint32_t> gone;
     for (uint32_t player : authority_->Players()) if (player != 1 && !present.count(player)) gone.push_back(player);

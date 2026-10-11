@@ -807,3 +807,34 @@ state_resource error before restoration (`EngineSync.cpp:225`). No hidden handle
 or new snapshot field is needed. Desktop 221 and Wasm 186 tests pass, including all three
 OfficialLua agreement tests and existing frame-sync/native snapshot regressions. Android
 players were rebuilt and packaged, but device execution is unverified.
+
+### Worlds (2026-10-11)
+
+- [x] An authoritative match starts from the loaded scene (`Engine::loadedScene_`, set by
+      `game.loadScene`), not always from the play session's start scene.
+- [x] A client's script may `net.leave` a running authoritative match.
+- [x] One session, several worlds. `Session` (host): `SetWorlds(scenes)`, a world per player and
+      connection, `Move(player, scene, data)`, per-world event queues, match payload queues, rosters
+      and RPC scope; `Players(world)`, `DrainEvents(world)`, `DrainSync(world)`, `Rpc(world, ...)`.
+      Client: message kind 8 -> `TakeWorldChange`. Match payloads are stamped with the connection's
+      move count (2 bytes). **Session protocol v5**; v4 peers fail the handshake.
+- [x] `Engine`: `network_` is shared (`ServeWorld(session, world)`; the engine of world 0 hosts and
+      advances the session, the others use their world's part), `EnterWorld(scene)` on the client
+      (reset the authority replica, load the scene now, Ready), command and Lua `net.move`,
+      `onPlayerJoined(id, data)`.
+- [x] `RunDedicatedWorlds` / `oe serve-game --scenes` / player `--server --scenes`: an engine per
+      scene, one session, one port (a first version gave every world its own session and port, and a
+      client changed world by reconnecting: half a second and a ticket round trip per change).
+- Decisions: a world is a whole engine, not a second scene inside one engine: nothing in the
+  simulation (scene, physics, scripts, undo) had to learn about several scenes, and worlds cannot
+  leak state into each other. The price: worlds share no Lua state (data crosses with `net.move`),
+  and one thread steps them in turn. The client does the scene change itself, at the frame boundary
+  where the message arrives, so a game needs no code for it beyond a loading screen.
+- Not done: several instances of one scene (rooms of a match-making game: `SetWorlds` wants
+  distinct scenes, `Move` addresses a world by its scene), worlds created and removed at run time,
+  a thread per world, moving the host's own player (a listen server is in every world).
+  `runtime/web` and the Android runtime were not rebuilt for protocol v5.
+- Verified: `oe_tests` (320 tests; `NetworkWorldsMovePlayers`: two players, moves there and back,
+  rosters, avatar ownership, RPC scope, a player leaving from the second world), AinorixOnline's
+  `online_test.py` over UDP with script admission (a gate between two maps: 0.33 s from leaving one
+  world to standing in the other, same player id).

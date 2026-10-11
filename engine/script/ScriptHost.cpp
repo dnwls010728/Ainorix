@@ -1477,6 +1477,17 @@ int L_NetAdmit(lua_State* L) {
         return 0;
     });
 }
+// net.move(player, scene, data): a server with several worlds puts a player into another one.
+int L_NetMove(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["player"] = static_cast<int64_t>(luaL_checkinteger(L, 1));
+        args["scene"] = std::string(luaL_checkstring(L, 2));
+        if (!lua_isnoneornil(L, 3)) args["data"] = ToJson(L, 3);
+        Host(L).GetEngine().NetworkCall("move", args);
+        return 0;
+    });
+}
 int L_NetStart(lua_State* L) { return L_NetOperation(L, "start"); }
 
 // ----- link: framed TCP to services outside the engine session (net/Link.h) ----
@@ -1671,7 +1682,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "save", saveFuncs);
     const luaL_Reg netFuncs[] = {{"isHost", L_NetIsHost}, {"isServer", L_NetIsServer}, {"isClient", L_NetIsClient},
         {"entities", L_NetEntities}, {"localPlayer", L_NetLocalPlayer}, {"players", L_NetPlayers}, {"state", L_NetState}, {"rpc", L_NetRpc},
-        {"on", L_NetOn}, {"sender", L_NetSender}, {"name", L_NetName}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave},
+        {"on", L_NetOn}, {"sender", L_NetSender}, {"name", L_NetName}, {"host", L_NetHost}, {"join", L_NetJoin}, {"leave", L_NetLeave}, {"move", L_NetMove},
         {"start", L_NetStart}, {"desync_report", L_NetDesyncReport}, {"ready", L_NetReady}, {"kick", L_NetKick}, {"admit", L_NetAdmit}, {"stats", L_NetStats}, {nullptr, nullptr}};
     SetFuncs(L, "net", netFuncs);
     const luaL_Reg linkFuncs[] = {{"open", L_LinkOpen}, {"send", L_LinkSend}, {"poll", L_LinkPoll}, {"close", L_LinkClose},
@@ -1834,8 +1845,11 @@ void ScriptHost::DispatchNetwork(const std::vector<SessionEvent>& events) {
                 lua_pushvalue(L_, -2);
                 if (event.type == SessionEvent::Type::State) lua_pushlstring(L_, event.name.data(), event.name.size());
                 else lua_pushinteger(L_, event.player);
+                // A player moved here from another world of this server comes with what that world gave it.
+                const bool moved = event.type == SessionEvent::Type::Joined && event.args.isObject() && event.args.has("data");
+                if (moved) PushJson(L_, event.args["data"]);
                 ArmBudget();
-                if (lua_pcall(L_, 2, 0, 0) != LUA_OK) FaultInstance(id, std::string(method) + ": " + PopMessage(L_));
+                if (lua_pcall(L_, moved ? 3 : 2, 0, 0) != LUA_OK) FaultInstance(id, std::string(method) + ": " + PopMessage(L_));
             }
             lua_settop(L_, top);
         }

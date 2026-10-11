@@ -384,6 +384,7 @@ lobbies/RPC, M5 supplies lockstep/native rollback and M6 supplies authoritative 
 | `net.rpc(target, name, ...)` | Reliable RPC: target `server`, `all`, `others`, player id (number/string), or `owner` with an entity id/name as the first payload argument |
 | `net.sender()` | Sender player id inside an RPC handler; 0 outside it |
 | `net.name(id)` | The name that player joined with (`net.join {name}`), or `nil` for an unknown id. Names are what clients claim, not identities |
+| `net.move(id, scene, data?)` | Server that runs several worlds (`oe serve-game --scenes`): puts a player of this world into the world of `scene`; its connection and id stay. That world gets `onPlayerJoined(id, data)`; `data` is bounded JSON (8 KiB). Errors when that world is full or no world runs the scene. See docs/NETWORK.md "Worlds" |
 | `net.admit(id)` | Server with `network.admission: "script"`: lets that lobby player into the running world once it is ready. Without the call it waits in the lobby (see Authoritative gameplay) |
 
 ```lua
@@ -392,7 +393,7 @@ function Game:onStart()
     log.info("player " .. net.sender() .. ": " .. text)
   end)
 end
-function Game:onPlayerJoined(id) end
+function Game:onPlayerJoined(id, data) end -- data: only for a player another world of this server moved here (net.move)
 function Game:onPlayerLeft(id) end
 function Game:onNetState(state) end -- connecting/lobby/leaving/offline/error
 -- Works in single-player too:

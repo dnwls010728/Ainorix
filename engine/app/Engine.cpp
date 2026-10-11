@@ -72,7 +72,7 @@ void Engine::EnableNetworkWatchdog(bool on) {
             if (next == 0) next = now;
             if (now < next) continue;
             std::unique_lock<std::recursive_mutex> lock(engineMutex_, std::try_to_lock);
-            if (!lock.owns_lock() || !network_) continue;
+            if (!lock.owns_lock() || !network_ || networkShared_) continue;
             for (int i = 0; i < 4 && now >= next; ++i, next += 16667) {
                 network_->Advance(networkFrame_++);  // I/O only: drained and simulated when the loop is back
                 ++watchdogTicks_;
@@ -109,7 +109,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
         SessionConfig config;
         if (!SessionConfig::Parse(project, config, error)) return false;
         ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-        ResetLocalPeers(); network_.reset(); networkFrame_ = 0; networkConfig_ = config;
+        ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0; networkConfig_ = config;
         projectDir_ = ParentPath(projectFile);
         projectName_ = project["name"].asString("Untitled");
         // Headless sessions have no window: the game view starts at the project's window size,
@@ -129,7 +129,7 @@ bool Engine::Open(const std::string& rawPath, std::string* error) {
 
     // A bare scene file: use the nearest enclosing project if there is one.
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    ResetLocalPeers(); network_.reset(); networkFrame_ = 0; networkConfig_ = SessionConfig{};
+    ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0; networkConfig_ = SessionConfig{};
     std::string dir = ParentPath(path);
     projectDir_ = dir;
     for (std::string d = dir; !d.empty(); d = ParentPath(d)) {
@@ -165,8 +165,9 @@ bool Engine::LoadScene(const std::string& path, std::string* error) {
     }
     playing_ = false;
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
+    ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0;
     playSnapshot_.reset();
+    loadedScene_.reset();
     ResetRuntime();
     frame_ = 0;
     simTime_ = 0;
@@ -193,11 +194,12 @@ bool Engine::SaveScene(const std::string& path, std::string* error) {
 
 void Engine::NewScene(const std::string& name) {
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
+    ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0;
     scene_.Clear();
     scene_.name = name;
     playing_ = false;
     playSnapshot_.reset();
+    loadedScene_.reset();
     ResetRuntime();
     frame_ = 0;
     simTime_ = 0;
@@ -250,6 +252,7 @@ void Engine::BeginSessionIfNeeded() {
     gamePaused_ = false;
     runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
     pendingScene_.clear();
+    loadedScene_.reset();
 }
 
 void Engine::EnableAudioOutput() {
@@ -290,6 +293,7 @@ void Engine::ApplySceneChange() {
     scripts_->ResetInstances();
     audio_->OnSceneChanged();
     runtimeScene_ = path;
+    loadedScene_ = std::make_unique<Json>(scene_.ToJson());
     Touch();
     OE_LOG_INFO("game", "scene changed to %s at frame %llu", path.c_str(), static_cast<unsigned long long>(frame_));
 }
@@ -308,8 +312,9 @@ void Engine::Pause() {
 
 void Engine::Stop() {
     ResetAuthority(); sync_.reset(); checkpoints_.clear(); journal_.reset(); snapshots_.clear(); playerInputs_.clear(); frameInputs_.clear(); deviceInput_ = InputState{}; syncHashes_.clear();
-    ResetLocalPeers(); network_.reset(); networkFrame_ = 0;
+    ResetLocalPeers(); network_.reset(); networkWorld_ = 0; networkShared_ = false; networkFrame_ = 0;
     playing_ = false;
+    loadedScene_.reset();
     if (playSnapshot_) {
         std::string err;
         scene_.FromJson(*playSnapshot_, &err);
@@ -416,9 +421,12 @@ void Engine::SimulateFrame() {
     if (!localPeers_.empty()) AdvanceLocalPeers();
     if (network_) {
         uint32_t seed = network_->Seed();
-        network_->Advance(networkFrame_++);
+        if (networkShared_) ++networkFrame_;  // world 0's engine advanced the session this tick
+        else network_->Advance(networkFrame_++);
         lastNetworkTick_ = SteadyMicroseconds();  // the watchdog stays out while the loop advances the session
         if (seed != network_->Seed()) scripts_->SetNetworkSeed(network_->Seed());
+        std::string scene;
+        if (network_->TakeWorldChange(scene)) EnterWorld(scene);
     }
     if (dedicated_) input_ = deviceInput_ = InputState{};
     if (links_.Count()) links_.Pump();
@@ -477,14 +485,14 @@ void Engine::SimulateWorld() {
         if (replaying_) {
             auto it = authorityEvents_.find(frame_); if (it != authorityEvents_.end()) scripts_->DispatchNetwork(it->second);
         } else {
-            auto events = network_->DrainEvents();
+            auto events = network_->DrainEvents(networkWorld_);
             if (!events.empty()) {
                 size_t count = events.size(); for (const auto& batch : authorityEvents_) count += batch.second.size();
                 if (count > 256) throw ApiError("network_limit", "prediction RPC event window is full");
                 authorityEvents_[frame_] = events; scripts_->DispatchNetwork(events);
             }
         }
-    } else if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents());
+    } else if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents(networkWorld_));
     std::vector<UIEvent> uiEvents = UpdateUI();
     UpdateSystems(scene_, input_, dt, assets_.get());
     std::vector<PhysicsEvent> events;

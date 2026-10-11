@@ -22,7 +22,7 @@ void Engine::AdvanceLocalPeers() {
 void Engine::AutoStartNetwork() {
     if (!autoStart_ || !network_ || !network_->Connected() ||
         (sync_ && sync_->Active()) || (authority_ && authority_->Active())) return;
-    Json players = network_->Players();
+    Json players = network_->Players(networkWorld_);
     if (players.size() < static_cast<size_t>(minimumPlayers_) + 1) return;
     for (const Json& player : players.items()) if (!player["ready"].asBool()) return;
     NetworkCall("start", Json::MakeObject()); autoStart_ = false;

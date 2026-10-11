@@ -157,7 +157,7 @@ Session::Session(const SessionConfig& config, std::unique_ptr<ITransport> wire, 
     SetState(host ? "lobby" : "connecting");
     if (host) {
         players_[1] = {name, false};
-        Emit({SessionEvent::Type::Joined, 1});
+        Emit({SessionEvent::Type::Joined, 1}, kEveryWorld);
     } else {
         Connection connection;
         connection.name = name;
@@ -170,7 +170,7 @@ Session::~Session() { if (host_ && !room_.empty()) g_rooms.erase(room_); }
 void Session::CloseTransport() {
     for (const auto& item : connections_) channels_.RemovePeer(item.first);
     connections_.clear();
-    for (const auto& item : players_) Emit({SessionEvent::Type::Left, item.first});
+    for (const auto& item : players_) Emit({SessionEvent::Type::Left, item.first}, item.first == 1 ? kEveryWorld : item.second.world);
     players_.clear(); localPlayer_ = 0;
     fallback_.reset(); udp_.reset(); wire_.reset(); loopback_.reset(); tcp_ = nullptr; web_ = nullptr; webServer_ = nullptr;
     if (host_ && !room_.empty()) { g_rooms.erase(room_); room_.clear(); }
@@ -265,13 +265,68 @@ std::unique_ptr<Session> Session::Join(const SessionConfig& config, const std::s
 }
 
 void Session::SetState(const std::string& state, const std::string& error) {
-    if (state_ != state) Emit({SessionEvent::Type::State, 0, 0, state});
+    if (state_ != state) Emit({SessionEvent::Type::State, 0, 0, state}, kEveryWorld);
     state_ = state;
     error_ = error;
 }
-void Session::Emit(SessionEvent event) {
-    if (events_.size() >= 256) { ++rejected_; return; }
-    events_.push_back(std::move(event));
+void Session::Emit(SessionEvent event, uint32_t world) {
+    if (world == kEveryWorld) {
+        for (uint32_t i = 0; i < std::max<size_t>(1, worlds_.size()); ++i) Emit(event, i);
+        return;
+    }
+    auto& queue = events_[world];
+    if (queue.size() >= 256) { ++rejected_; return; }
+    queue.push_back(std::move(event));
+}
+uint32_t Session::WorldOf(uint32_t player) const {
+    auto it = players_.find(player);
+    return it == players_.end() ? 0 : it->second.world;
+}
+size_t Session::WorldLoad(uint32_t world) const {
+    size_t load = 0;
+    for (const auto& item : connections_) if (item.second.player && item.second.world == world) ++load;
+    return load;
+}
+bool Session::SetWorlds(const std::vector<std::string>& scenes, std::string* error) {
+    auto fail = [&](const char* message) { if (error) *error = message; return false; };
+    if (!host_ || config_.mode != "authoritative" || !config_.lateJoin) return fail("worlds need an authoritative host with network.lateJoin");
+    if (!connections_.empty() || !worlds_.empty()) return fail("worlds are set once, before anybody joins");
+    if (scenes.empty() || scenes.size() > 64) return fail("1..64 worlds");
+    for (size_t i = 0; i < scenes.size(); ++i) {
+        if (!Text(scenes[i], 256)) return fail("a world's scene is a path of 1..256 printable bytes");
+        for (size_t j = 0; j < i; ++j) if (scenes[j] == scenes[i]) return fail("each world runs another scene");
+    }
+    worlds_ = scenes;
+    return true;
+}
+bool Session::Move(uint32_t player, const std::string& scene, const Json& data, std::string* error) {
+    auto fail = [&](const char* message) { if (error) *error = message; return false; };
+    if (!host_ || worlds_.empty()) return fail("only the host of a session with worlds moves players");
+    const auto found = std::find(worlds_.begin(), worlds_.end(), scene);
+    if (found == worlds_.end()) return fail("no world runs that scene");
+    const uint32_t world = static_cast<uint32_t>(found - worlds_.begin());
+    auto it = players_.find(player);
+    if (player == 1 || it == players_.end()) return fail("no such player");
+    if (it->second.world == world) return fail("the player is in that world");
+    if (!Value(data, 0) || data.dump().size() > 8192) return fail("move data exceeds its bounds (8 KiB, depth 8)");
+    if (WorldLoad(world) + 1 >= config_.maxPlayers) return fail("that world is full");
+    for (auto& item : connections_) if (item.second.player == player && item.second.phase == "active") {
+        Connection& connection = item.second;
+        const uint16_t moves = static_cast<uint16_t>(connection.moves + 1);
+        if (!SendMessage(item.first, 8, 1, player, moves, "world", Json(scene))) return fail("the player's send queue is full");
+        Emit({SessionEvent::Type::Left, player}, connection.world);
+        connection.world = it->second.world = world; connection.moves = moves;
+        it->second.ready = false;
+        Json joined = Json::MakeObject(); joined["data"] = data;
+        Emit({SessionEvent::Type::Joined, player, 0, "", joined}, world);
+        BroadcastRoster();
+        return true;
+    }
+    return fail("the player is not connected");
+}
+bool Session::TakeWorldChange(std::string& scene) {
+    if (!worldChanged_) return false;
+    worldChanged_ = false; scene = worldChange_; return true;
 }
 
 void Session::SendControl(PeerId peer, uint8_t kind, const Connection& connection) {
@@ -329,7 +384,7 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
         auto it = connections_.find(peer);
         if (it == connections_.end()) {
             // Native peer ids are allocated by bounded TCP accept, never by UDP packets.
-            if (sealed_ || config_.transport != "loopback" || connections_.size() >= kMaxConnections) { ++rejected_; return; }
+            if (sealed_ || config_.transport != "loopback" || connections_.size() >= kMaxConnections * std::max<size_t>(1, worlds_.size())) { ++rejected_; return; }
             it = connections_.emplace(peer, Connection{}).first;
             // Both clocks start now: a host that has run for a while must not see a new loopback peer as silent since frame 0.
             it->second.started = it->second.received = frame_;
@@ -354,9 +409,8 @@ void Session::Control(PeerId peer, const std::vector<uint8_t>& bytes) {
     } else if (cookieA != connection.cookieA || cookieB != connection.cookieB) { ++rejected_; }
     else if (host_ && kind == 3 && connection.phase == "challenge") {
         if (nextPlayer_ >= kOthers || (config_.mode == "authoritative" && nextPlayer_ > static_cast<uint32_t>(INT32_MAX))) { Drop(peer, "player ids exhausted; restart host"); return; }
-        size_t admitted = 0;
-        for (const auto& item : connections_) if (item.second.player) ++admitted;
-        if (admitted + 1 >= config_.maxPlayers) { Drop(peer, "lobby is full"); return; }
+        // A newcomer is in world 0, and each world holds maxPlayers - 1 players.
+        if (WorldLoad(0) + 1 >= config_.maxPlayers) { Drop(peer, "lobby is full"); return; }
         connection.player = nextPlayer_++;
         connection.phase = "welcome"; connection.hasSent = false;
         RegisterPeer(peer, connection);
@@ -397,7 +451,7 @@ bool Session::Poll(uint64_t frame, std::vector<TransportEvent>& events) {
     for (const auto& event : incoming) {
         if (event.type == TransportEvent::Type::Connected) {
             if (host_) {
-                if (connections_.size() >= kMaxConnections || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); if (webServer_) webServer_->Disconnect(event.peer); continue; }
+                if (connections_.size() >= kMaxConnections * std::max<size_t>(1, worlds_.size()) || (state_ != "lobby" || sealed_)) { if (tcp_) tcp_->Disconnect(event.peer); if (webServer_) webServer_->Disconnect(event.peer); continue; }
                 Connection connection; connection.started = frame_; connection.received = frame_;
                 connections_.emplace(event.peer, connection);
             }
@@ -428,7 +482,7 @@ void Session::Drop(PeerId peer, const std::string& reason) {
     auto it = connections_.find(peer);
     if (it == connections_.end()) return;
     uint32_t player = it->second.player;
-    if (players_.erase(player)) Emit({SessionEvent::Type::Left, player});
+    if (players_.erase(player)) Emit({SessionEvent::Type::Left, player}, it->second.world);
     channels_.RemovePeer(peer);
     if (udp_) udp_->RemovePeer(peer);
     if (fallback_) fallback_->RemovePeer(peer);
@@ -452,29 +506,36 @@ bool Session::SendMessage(PeerId peer, uint8_t kind, uint32_t origin, uint32_t t
 }
 
 void Session::BroadcastRoster() {
-    Json roster = Json::MakeArray();
+    // Each player is told who is in its world (and the host).
+    std::map<uint32_t, Json> rosters;
     for (const auto& item : players_) {
         Json player = Json::MakeObject(); player["id"] = item.first; player["name"] = item.second.name; player["ready"] = item.second.ready;
-        roster.push(std::move(player));
+        for (uint32_t world = 0; world < std::max<size_t>(1, worlds_.size()); ++world) {
+            if (item.first != 1 && item.second.world != world) continue;
+            if (!rosters.count(world)) rosters[world] = Json::MakeArray();
+            rosters[world].push(player);
+        }
     }
     for (const auto& item : connections_)
-        if (item.second.phase == "active" && !SendMessage(item.first, 2, 1, 0, 0, "", roster)) {
+        if (item.second.phase == "active" && !SendMessage(item.first, 2, 1, 0, 0, "", rosters[item.second.world])) {
             // A slow peer must not block others; close it on the next Advance pass.
             connections_.at(item.first).phase = "overflow";
         }
 }
 
-bool Session::RouteRpc(uint32_t origin, uint32_t target, uint64_t sequence, const std::string& name, const Json& args) {
+bool Session::RouteRpc(uint32_t world, uint32_t origin, uint32_t target, uint64_t sequence, const std::string& name, const Json& args) {
     auto selected = [&](uint32_t player) { return target == kAll || (target == kOthers && player != origin) ||
         (target == 0 && player == 1) || target == player; };
+    // Only the players of the world the call comes from are reached.
+    auto reached = [&](const Connection& connection) { return connection.phase == "active" && connection.world == world && selected(connection.player); };
     // Check all destinations before queuing any, keeping the command atomic under backpressure.
-    for (const auto& item : connections_) if (item.second.phase == "active" && selected(item.second.player) &&
+    for (const auto& item : connections_) if (reached(item.second) &&
         channels_.PendingMessages(item.first) >= ChannelEndpoint::kMaxQueuedMessages) return false;
     if (selected(localPlayer_)) {
-        if (events_.size() >= 256) return false;
-        Emit({SessionEvent::Type::Rpc, origin, sequence, name, args});
+        if (events_[world].size() >= 256) return false;
+        Emit({SessionEvent::Type::Rpc, origin, sequence, name, args}, world);
     }
-    for (const auto& item : connections_) if (item.second.phase == "active" && selected(item.second.player))
+    for (const auto& item : connections_) if (reached(item.second))
         if (!SendMessage(item.first, 1, origin, target, sequence, name, args)) return false;
     return true;
 }
@@ -484,11 +545,13 @@ void Session::ApplyMessage(const ChannelEvent& event) {
     if (it == connections_.end()) return;
     if (event.type != ChannelEvent::Type::Message) { Drop(event.peer, "channel disconnected or reliable send timed out"); return; }
     if (!event.bytes.empty() && event.bytes[0] == 7) {
-        if (it->second.phase != "active" || event.bytes.size() > 60001 || syncMessages_.size() >= 256 ||
+        if (it->second.phase != "active" || event.bytes.size() < 3 || event.bytes.size() > 60003 || syncCount_ >= 256 * std::max<size_t>(1, worlds_.size()) ||
             syncBytes_ + event.bytes.size() > 4 * 1024 * 1024) { ++rejected_; return; }
+        // Sent for the world the player was in before it was moved: that match is over for it.
+        if (static_cast<uint16_t>(event.bytes[1] | (event.bytes[2] << 8)) != it->second.moves) return;
         uint32_t sender = host_ ? it->second.player : 1;
-        syncMessages_.emplace_back(sender, std::vector<uint8_t>(event.bytes.begin() + 1, event.bytes.end()));
-        syncBytes_ += event.bytes.size(); return;
+        syncMessages_[host_ ? it->second.world : 0].emplace_back(sender, std::vector<uint8_t>(event.bytes.begin() + 3, event.bytes.end()));
+        syncBytes_ += event.bytes.size(); ++syncCount_; return;
     }
     ByteReader reader(event.bytes.data(), event.bytes.size());
     uint8_t kind = 0; uint32_t origin = 0, target = 0; uint64_t sequence = 0;
@@ -503,9 +566,9 @@ void Session::ApplyMessage(const ChannelEvent& event) {
         if (sealed_ && config_.mode != "authoritative") { ++rejected_; return; }
         if (!ValidRpc(name, args) || !sequence || (target != 0 && target != kAll && target != kOthers && !players_.count(target))) { ++rejected_; return; }
         if (host_) {
-            if (origin != connection.player || sequence <= connection.rpcSequence || !RouteRpc(origin, target, sequence, name, args)) { ++rejected_; }
+            if (origin != connection.player || sequence <= connection.rpcSequence || !RouteRpc(connection.world, origin, target, sequence, name, args)) { ++rejected_; }
             else connection.rpcSequence = sequence;
-        } else if (players_.count(origin) && sequence > rpcSequences_[origin] && events_.size() < 256) {
+        } else if (players_.count(origin) && sequence > rpcSequences_[origin] && events_[0].size() < 256) {
             rpcSequences_[origin] = sequence;
             Emit({SessionEvent::Type::Rpc, origin, sequence, name, args});
         }
@@ -532,6 +595,12 @@ void Session::ApplyMessage(const ChannelEvent& event) {
         std::string ignored; Kick(connection.player, "left", &ignored);
     } else if (kind == 5 && !host_) {
         SetState("leaving"); Drop(event.peer, name);
+    } else if (kind == 8 && !host_ && origin == 1 && target == localPlayer_ && args.isString() && Text(args.asString(), 256) && sequence && sequence <= 0xffff) {
+        // Moved to another world: what the old one still sent is dropped, and the lobby is open again
+        // for our Ready (the scene is loaded).
+        connection.moves = static_cast<uint16_t>(sequence);
+        syncMessages_.clear(); syncBytes_ = 0; syncCount_ = 0; sealed_ = false;
+        worldChange_ = args.asString(); worldChanged_ = true;
     } else if (kind != 6) ++rejected_;
 }
 
@@ -539,13 +608,18 @@ bool Session::SendSync(uint32_t player, const std::vector<uint8_t>& bytes, bool 
     if (!Connected() || bytes.empty() || bytes.size() > 60000 || player == localPlayer_) return false;
     for (const auto& connection : connections_) {
         if (connection.second.phase != "active" || (host_ ? connection.second.player != player : player != 1)) continue;
-        std::vector<uint8_t> payload{7}; payload.insert(payload.end(), bytes.begin(), bytes.end());
+        std::vector<uint8_t> payload{7, static_cast<uint8_t>(connection.second.moves & 0xff), static_cast<uint8_t>(connection.second.moves >> 8)};
+        payload.insert(payload.end(), bytes.begin(), bytes.end());
         return channels_.Send(connection.first, reliable ? NetChannel::ReliableOrdered : NetChannel::Unreliable, payload.data(), payload.size());
     }
     return false;
 }
-std::vector<std::pair<uint32_t, std::vector<uint8_t>>> Session::DrainSync() {
-    auto messages = std::move(syncMessages_); syncMessages_.clear(); syncBytes_ = 0; return messages;
+std::vector<std::pair<uint32_t, std::vector<uint8_t>>> Session::DrainSync(uint32_t world) {
+    auto it = syncMessages_.find(world);
+    if (it == syncMessages_.end()) return {};
+    auto messages = std::move(it->second); syncMessages_.erase(it);
+    for (const auto& message : messages) { syncBytes_ -= std::min(syncBytes_, message.second.size() + 3); --syncCount_; }
+    return messages;
 }
 
 bool Session::Advance(uint64_t frame) {
@@ -594,9 +668,9 @@ bool Session::Advance(uint64_t frame) {
     return true;
 }
 
-std::vector<SessionEvent> Session::DrainEvents() {
+std::vector<SessionEvent> Session::DrainEvents(uint32_t world) {
     std::vector<SessionEvent> events;
-    events.swap(events_);
+    events.swap(events_[world]);
     std::stable_sort(events.begin(), events.end(), [](const SessionEvent& a, const SessionEvent& b) {
         return std::make_pair(a.player, a.sequence) < std::make_pair(b.player, b.sequence);
     });
@@ -610,12 +684,22 @@ Json Session::Players() const {
     }
     return players;
 }
+Json Session::Players(uint32_t world) const {
+    Json players = Json::MakeArray();
+    for (const auto& item : players_) {
+        if (item.first != 1 && item.second.world != world) continue;
+        Json player = Json::MakeObject(); player["id"] = item.first; player["name"] = item.second.name;
+        player["ready"] = item.second.ready; player["local"] = item.first == localPlayer_; players.push(std::move(player));
+    }
+    return players;
+}
 Json Session::State() const {
     Json state = Json::MakeObject(); state["mode"] = config_.mode; state["state"] = state_; state["transport"] = config_.transport;
     state["isHost"] = host_; state["isServer"] = host_; state["isClient"] = !host_; state["localPlayer"] = localPlayer_;
     state["seed"] = seed_; state["tickRate"] = config_.tickRate; state["maxPlayers"] = config_.maxPlayers;
     state["port"] = tcp_ ? tcp_->LocalAddress().port : webServer_ ? webServer_->LocalAddress().port : 0; state["room"] = room_; state["error"] = error_;
     state["syncImplemented"] = true;
+    if (!worlds_.empty()) { state["worlds"] = Json::MakeArray(); for (const auto& scene : worlds_) state["worlds"].push(scene); }
     return state;
 }
 bool Session::Simulate(const LoopbackConfig& config, std::string* error) {
@@ -665,7 +749,8 @@ bool Session::Kick(uint32_t player, const std::string& reason, std::string* erro
         if (!SendMessage(item.first, 5, 1, player, 0, reason, Json())) { item.second.phase = "overflow"; continue; }
         item.second.phase = "closing"; item.second.closing = frame_;
     }
-    players_.erase(player); Emit({SessionEvent::Type::Left, player}); BroadcastRoster(); return true;
+    const uint32_t world = WorldOf(player);
+    players_.erase(player); Emit({SessionEvent::Type::Left, player}, world); BroadcastRoster(); return true;
 }
 bool Session::Ready(bool ready, std::string* error) {
     if (!Connected() || sealed_) { if (error) *error = "join an unsealed lobby first"; return false; }
@@ -674,7 +759,7 @@ bool Session::Ready(bool ready, std::string* error) {
     if (error) *error = "peer send queue is full";
     return false;
 }
-bool Session::Rpc(const std::string& target, const std::string& name, const Json& args, std::string* error) {
+bool Session::Rpc(uint32_t world, const std::string& target, const std::string& name, const Json& args, std::string* error) {
     auto fail = [&](const char* message) { if (error) *error = message; return false; };
     if (!Connected() || (sealed_ && config_.mode != "authoritative")) return fail("RPC requires a lobby or authoritative match; use synchronized input during lockstep/rollback matches");
     if (!ValidRpc(name, args)) return fail("RPC requires a name of 1..64 bytes and at most 16 bounded JSON arguments (8 KiB)");
@@ -685,12 +770,13 @@ bool Session::Rpc(const std::string& target, const std::string& name, const Json
         uint64_t value = 0;
         if (target.empty() || target.size() > 10) return fail("target must be server, all, others or an existing player id; Engine resolves owner entities");
         for (char c : target) { if (c < '0' || c > '9') return fail("target must be server, all, others or an existing player id; Engine resolves owner entities"); value = value * 10 + static_cast<unsigned>(c - '0'); }
-        if (value >= kOthers || !players_.count(static_cast<uint32_t>(value))) return fail("target player is not in this lobby");
+        if (value >= kOthers || !players_.count(static_cast<uint32_t>(value)) || (host_ && value != 1 && WorldOf(static_cast<uint32_t>(value)) != world))
+            return fail("target player is not in this lobby");
         destination = static_cast<uint32_t>(value);
     }
     if (sequence_ == std::numeric_limits<uint64_t>::max()) return fail("RPC sequence exhausted; reconnect");
     uint64_t sequence = sequence_ + 1;
-    bool ok = host_ ? RouteRpc(localPlayer_, destination, sequence, name, args) : SendMessage(server_, 1, localPlayer_, destination, sequence, name, args);
+    bool ok = host_ ? RouteRpc(world, localPlayer_, destination, sequence, name, args) : SendMessage(server_, 1, localPlayer_, destination, sequence, name, args);
     if (!ok) return fail("RPC send/event queue is full; advance simulation and retry");
     sequence_ = sequence; return true;
 }
