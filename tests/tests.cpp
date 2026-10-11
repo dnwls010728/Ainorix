@@ -2860,6 +2860,10 @@ TEST(NetworkSessionConfigValidation) {
          R"({"network":{"mode":"lockstep","transport":"bad"}})"})
         CHECK(!SessionConfig::Parse(Json::parse(json), config, &error) && !error.empty());
     CHECK(SessionConfig::Parse(Json::parse(R"({"name":"Game","network":{"mode":"authoritative","bind":"0.0.0.0"}})"), config, &error));
+    // A silent peer is dropped after network.timeoutSeconds (default 30 s, 5..120), long enough for a stall.
+    CHECK(config.timeoutFrames == 30 * 60);
+    { SessionConfig timed; CHECK(SessionConfig::Parse(Json::parse(R"({"network":{"mode":"authoritative","timeoutSeconds":60}})"), timed, &error) && timed.timeoutFrames == 3600); }
+    { SessionConfig timed; CHECK(!SessionConfig::Parse(Json::parse(R"({"network":{"mode":"authoritative","timeoutSeconds":2}})"), timed, &error) && error.find("timeoutSeconds") != std::string::npos); }
     CHECK(config.bind == "0.0.0.0" && config.tickRate == 60);
 }
 

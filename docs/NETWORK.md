@@ -68,6 +68,7 @@ Non-goals (for now)
   "playerPrefab": "prefabs/player.prefab.json",
   "lateJoin": false,
   "admission": "auto | script",
+  "timeoutSeconds": 30,
   "bind": "127.0.0.1",
   "port": 7778
 }
@@ -82,6 +83,11 @@ Non-goals (for now)
 
 `lateJoin` (authoritative only): the host keeps accepting players while the match runs, and a dedicated server is a
 persistent world that starts without players and survives being empty (see NETWORK_NOTES.md, audit follow-up).
+
+`timeoutSeconds` (5..120, default 30): a peer that sends nothing, or leaves a reliable message unacknowledged, for
+this long is dropped. It used to be a fixed 10 s, which a client lost to any stall longer than that (a window held
+in the OS move loop before `Window::SetModalFrame`, a loading hitch, a debugger break). A server that vanishes is
+also noticed only after this time when the transport reports no close (UDP).
 
 `admission` (with `lateJoin`): `auto` admits every ready lobby player; with `script` a player waits in the lobby
 until the server's Lua called `net.admit(id)`, so the game can verify it first. A server's scripts may also call

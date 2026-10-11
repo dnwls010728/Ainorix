@@ -112,6 +112,9 @@ bool SessionConfig::Parse(const Json& project, SessionConfig& out, std::string* 
     config.admission = json["admission"].asString("auto");
     if (config.admission != "auto" && config.admission != "script") return fail("network.admission must be \"auto\" or \"script\"");
     if (config.admission == "script" && !config.lateJoin) return fail("network.admission \"script\" needs lateJoin");
+    uint32_t timeoutSeconds = 30;
+    if (!Integer(json, "timeoutSeconds", 30, 5, 120, timeoutSeconds)) return fail("network.timeoutSeconds must be 5..120");
+    config.timeoutFrames = timeoutSeconds * 60;
     if (config.playerPrefab.size() > 256 || config.playerPrefab.find("..") != std::string::npos ||
         config.playerPrefab.find(':') != std::string::npos || (!config.playerPrefab.empty() && (config.playerPrefab[0] == '/' || config.playerPrefab[0] == '\\')))
         return fail("playerPrefab must stay inside the project");
@@ -134,9 +137,17 @@ bool SessionConfig::Parse(const Json& project, SessionConfig& out, std::string* 
     return true;
 }
 
+namespace {
+ChannelConfig ChannelsFor(const SessionConfig& config) {
+    ChannelConfig channels;
+    channels.timeoutFrames = config.timeoutFrames;
+    return channels;
+}
+}  // namespace
+
 Session::Session(const SessionConfig& config, std::unique_ptr<ITransport> wire, bool host, PeerId server,
                  const std::string& name, uint32_t seed, Random random)
-    : config_(config), wire_(std::move(wire)), channels_(*this), random_(std::move(random)),
+    : config_(config), wire_(std::move(wire)), channels_(*this, ChannelsFor(config)), random_(std::move(random)),
       name_(name), server_(server), localPlayer_(host ? 1u : 0u), seed_(seed), host_(host) {
     ++g_created;
     SetState(host ? "lobby" : "connecting");
@@ -559,7 +570,7 @@ bool Session::Advance(uint64_t frame) {
             if (frame_ - connection.closing >= 6) drop.emplace_back(item.first, "session mismatch");
         } else if (connection.phase == "closing") {
             if (!channels_.PendingMessages(item.first) || frame_ - connection.closing >= 30) drop.emplace_back(item.first, "left");
-        } else if (connection.phase == "overflow" || frame_ - connection.received >= 600 ||
+        } else if (connection.phase == "overflow" || frame_ - connection.received >= config_.timeoutFrames ||
                    (connection.phase != "active" && frame_ - connection.started >= 300)) drop.emplace_back(item.first, "session timeout or queue overflow");
         else if (connection.phase != "active") {
             if (!connection.hasSent || frame_ - connection.sent >= 6) {

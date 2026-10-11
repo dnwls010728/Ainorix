@@ -26,6 +26,10 @@ struct SessionConfig {
     // With lateJoin: "auto" admits every ready lobby player; "script" waits until the game called
     // net.admit(player), so a server can check who it is first (a ticket, a ban list).
     std::string admission = "auto";
+    // network.timeoutSeconds (5..120, default 30): a peer silent this long, or a reliable message
+    // unacknowledged this long, is dropped. Long enough for a stall (a window held still, a loading
+    // hitch, a debugger) to recover; a client that is really gone frees its slot after it.
+    uint32_t timeoutFrames = 30 * 60;
     // Validates all supplied settings, including the bounded input schema and fixed tick rate.
     static bool Parse(const Json& project, SessionConfig& out, std::string* error);
 };
