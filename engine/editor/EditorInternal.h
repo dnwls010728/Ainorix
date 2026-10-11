@@ -479,6 +479,8 @@ struct NativeEditor::Impl {
     bool gameHovered = false;
     ImVec2 gameImagePos{0, 0}, gameImageSize{0, 0};
     std::set<std::string> gameKeysDown;
+    std::string composing;       // what the input method is composing (WindowEvent Composition), drawn at the caret
+    bool gameComposing = false;  // ... and the game's focused UIInput has it (input.text)
     std::set<std::string> gameAxesForwarded;  // only these axes are released when Game loses focus
     bool gameMouseDown[2] = {false, false};
     float lastGameMouse[2] = {-1, -1};
@@ -560,6 +562,7 @@ struct NativeEditor::Impl {
     void Modals();
     void Toasts();
     void UpdateCursor();
+    void UpdateTextInput();
 
     // Panels (EditorPanels.cpp)
     void HierarchyPanel();

@@ -724,11 +724,12 @@ Press or release a key ("W", "A", "Space", "Left", ...) or logical Gamepad butto
 
 ### `input.text`
 
-Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame (focus it with input.click or ui.focus; Backspace and Enter are keys: input.key).
+Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame (focus it with input.click or ui.focus; Backspace and Enter are keys: input.key). `composing` is what an input method (Korean, Japanese, Chinese) shows before a character is typed: the field draws it underlined at the caret.
 
 | arg | type | required | description |
 |---|---|---|---|
-| `text` | string | yes | Characters to type (UTF-8). |
+| `text` | string |  | Characters to type (UTF-8). |
+| `composing` | string |  | Text being composed, replacing the previous one ("" = none). Omit to leave it. |
 
 ## ui
 

@@ -254,6 +254,12 @@ function Name:onSubmit(text) save.set("name", text) end
   with an RPC). In an **authoritative** match it works on every peer (chat fields): the text stays on the device, the
   keyboard is kept out of the network input stream while the field has the focus, and what the player submits goes to
   the server by RPC.
+- Input methods (Korean, Japanese, Chinese) on Windows: the input method is on only while a field has the focus
+  (`Window::SetTextInput`), so game keys work whatever language the keyboard is set to. What it composes is not typed
+  yet: the field draws it at the caret, tinted and underlined (`InputState::composing` -> `UIInput.composing`, runtime
+  only), and a click elsewhere types it first. Tools show the same with `input.text {composing}`. The candidate list
+  (Hanja, Japanese conversion) is the OS's own window and is not placed at the field. The font must have the
+  glyphs: the built-in `default` (Roboto) has none for Korean or Japanese.
 - Phones: Android shows the on-screen keyboard while a field has the focus (`Window::SetTextInput`) and takes the
   characters the keyboard sends as key presses — Latin letters, digits, punctuation. Composed text (Korean, Japanese,
   swipe typing) needs a Java `InputConnection` and does not arrive yet. The web player reports key presses (no IME
@@ -363,8 +369,9 @@ texture, e.g. a gradient). Set the value from Lua: `scene.set(scene.find("HP"), 
       `runtime/android`, **not run on a device or emulator**: check that the keyboard appears, that letters arrive,
       Backspace (`AKEYCODE_DEL`) and that Back closes the keyboard. Composed text (Korean/Japanese IME, swipe typing)
       needs a Java `InputConnection` class in the APK (the packager writes no dex today); the clipboard is internal.
-- [ ] `UIInput`: IME composition preview (Windows shows only committed text), word-wise movement (Ctrl+arrows),
-      double-click to select a word, undo.
+- [x] `UIInput`: IME composition shown at the caret on Windows (`InputState::composing`); the input method is off
+      while no field has the focus. Not done: placing the OS candidate list at the field, other platforms.
+- [ ] `UIInput`: word-wise movement (Ctrl+arrows), double-click to select a word, undo.
 - [ ] `UIImage` radial fill (needs a shader change in both renderers and `sokol-shdc`).
 - [ ] Not verified: the new widgets in the GPU renderer and in the editor inspector / Add menu (`oe editor --screenshot`),
       `UIJoystick` axes inside a lockstep/rollback match.

@@ -674,6 +674,8 @@ void NativeEditor::Impl::ScenePanel() {
 void NativeEditor::Impl::ReleaseGameInput() {
     for (const std::string& k : gameKeysDown) Call("input.key", ObjectOf({{"key", Json(k)}, {"down", Json(false)}}), true);
     gameKeysDown.clear();
+    if (gameComposing) Call("input.text", ObjectOf({{"composing", Json("")}}), true);
+    gameComposing = false;
     for (const std::string& name : gameAxesForwarded)
         Call("input.axis", ObjectOf({{"name", Json(name)}, {"value", Json(0)}}), true);
     gameAxesForwarded.clear();

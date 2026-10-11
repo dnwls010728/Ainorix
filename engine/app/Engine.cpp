@@ -566,7 +566,7 @@ void Engine::MergeLocalInput(const InputState& device) {
     for (const std::string& key : device.pressedThisFrame) if (local(key)) input_.pressedThisFrame.insert(key);
     input_.mouseX = device.mouseX; input_.mouseY = device.mouseY;
     input_.viewWidth = device.viewWidth; input_.viewHeight = device.viewHeight;
-    input_.wheel = device.wheel; input_.touches = device.touches; input_.text = device.text;
+    input_.wheel = device.wheel; input_.touches = device.touches; input_.text = device.text; input_.composing = device.composing;
 }
 
 void Engine::SetLook(float x, float y) {
@@ -805,6 +805,8 @@ std::vector<Engine::UIEvent> Engine::UpdateUI() {
     for (auto& kv : scene_.Pool<UIInput>()) {
         kv.second.hovered = kv.first == uiHovered_;
         kv.second.focused = kv.first == uiFocus_;
+        if (kv.second.focused) kv.second.composing = input_.composing;
+        else kv.second.composing.clear();
     }
     for (auto& kv : scene_.Pool<UIDropdown>()) {
         kv.second.hovered = kv.first == uiHovered_;

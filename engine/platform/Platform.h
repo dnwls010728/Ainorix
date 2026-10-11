@@ -30,7 +30,7 @@ enum class WindowKey : int {
 // Raw window input for tools that need the whole keyboard, text entry and
 // every mouse button (the native editor). Games read InputState instead.
 struct WindowEvent {
-    enum class Type { MouseMove, MouseButton, MouseWheel, Key, Text, Focus, Close, DropFile };
+    enum class Type { MouseMove, MouseButton, MouseWheel, Key, Text, Composition, Focus, Close, DropFile };
     Type type = Type::MouseMove;
     float x = 0, y = 0;      // MouseMove: client pixels; MouseWheel: notches (y > 0 = away from the user)
     int button = 0;          // MouseButton: 0 left, 1 right, 2 middle
@@ -38,6 +38,7 @@ struct WindowEvent {
     WindowKey key = WindowKey::None;
     uint32_t codepoint = 0;  // Text: one Unicode character (IME results included)
     bool ctrl = false, shift = false, alt = false, super = false;  // modifier state (Key, MouseButton)
+    std::string text;        // Composition: what the input method is composing now (UTF-8; empty = nothing, it ended)
     std::string path;        // DropFile: UTF-8 path of a file dropped on the window (x, y: where, client pixels; 0, 0 when unknown)
 };
 
@@ -82,6 +83,10 @@ public:
     virtual int Height() const = 0;
     virtual void SetTitle(const std::string& title) = 0;
     // A text field has the focus (Engine::TextInputActive): phones show or hide the on-screen keyboard.
+    // Desktops switch the input method (Korean, Japanese, Chinese) on with it and off without it, so
+    // keys are keys while nothing is typed: W moves whatever language the keyboard is set to.
+    // The text being composed is not drawn by the OS: it arrives as InputState::composing and as
+    // Composition events, and whoever draws the field shows it at the caret.
     virtual void SetTextInput(bool) {}
     // OS handle for graphics APIs (HWND on Win32); nullptr where unused.
     virtual void* NativeHandle() const { return nullptr; }

@@ -1284,6 +1284,7 @@ struct UIInput {
     float caret = 0.0f;  // seconds since the caret last moved (blink)
     int caretAt = 0;     // byte offset of the caret in `text`
     int selectAt = 0;    // other end of the selection (== caretAt: nothing selected)
+    std::string composing;  // what an input method is composing at the caret (InputState::composing): drawn underlined, not in `text` yet
     static void Reflect(FieldList& f) {
         f.Add("text", &UIInput::text, "What the player typed (UTF-8). Scripts may set it.");
         f.Add("placeholder", &UIInput::placeholder, "Hint shown faded while the field is empty and not focused.");

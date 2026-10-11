@@ -111,6 +111,9 @@ struct InputState {
     // Characters typed since the last simulation step (UTF-8, no control characters; IME results
     // included), read by a focused UIInput and cleared like pressedThisFrame. The API adds to it with input.text.
     std::string text;
+    // What an input method (Korean, Japanese, Chinese) is composing now: not typed yet, shown at the
+    // caret of the focused UIInput. Device state like the mouse position: it never enters a match.
+    std::string composing;
     void AddText(uint32_t codepoint);
 };
 

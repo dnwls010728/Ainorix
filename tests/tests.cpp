@@ -5927,6 +5927,15 @@ return M
     CHECK(logText() == "text H\xC3\xA9" "llo");
     for (int i = 0; i < 4; ++i) tap("Backspace");  // removes whole characters, also the two-byte one
     CHECK(name->text == "H");
+    // An input method composing a syllable: shown at the caret, not typed until the method says so.
+    Call(e, "input.text", "{\"composing\": \"\xED\x95\x9C\"}");
+    step(1);
+    CHECK(name->text == "H" && name->composing == "\xED\x95\x9C");
+    Call(e, "input.text", "{\"text\": \"\xED\x95\x9C\", \"composing\": \"\"}");
+    step(1);
+    CHECK(name->text == "H\xED\x95\x9C" && name->composing.empty());
+    tap("Backspace");
+    CHECK(name->text == "H");
     Call(e, "input.key", R"J({"key": "Backspace", "down": true})J");  // held: repeats after a moment
     step(40);
     Call(e, "input.key", R"J({"key": "Backspace", "down": false})J");

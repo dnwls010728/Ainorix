@@ -978,9 +978,14 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              });
 
     Register(r, "input.text", "Type characters, as a keyboard would: the focused UIInput gets them on the next simulated frame "
-             "(focus it with input.click or ui.focus; Backspace and Enter are keys: input.key).",
-             Params().Req("text", "string", "Characters to type (UTF-8)."), false, [](Engine& e, const Json& a) {
-                 for (uint32_t c : DecodeUtf8(a["text"].asString())) e.Input().AddText(c);
+             "(focus it with input.click or ui.focus; Backspace and Enter are keys: input.key). `composing` is what an input method "
+             "(Korean, Japanese, Chinese) shows before a character is typed: the field draws it underlined at the caret.",
+             Params()
+                 .Opt("text", "string", "Characters to type (UTF-8).")
+                 .Opt("composing", "string", "Text being composed, replacing the previous one (\"\" = none). Omit to leave it."),
+             false, [](Engine& e, const Json& a) {
+                 for (uint32_t c : DecodeUtf8(a["text"].asString(""))) e.Input().AddText(c);
+                 if (a.has("composing")) e.Input().composing = a["composing"].asString("");
                  return SimState(e);
              });
 

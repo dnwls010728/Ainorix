@@ -2,6 +2,7 @@
 #include <mmsystem.h>
 #include <shellapi.h>
 #include <commdlg.h>
+#include <imm.h>
 #include <xinput.h>
 
 #include <fcntl.h>
@@ -213,6 +214,7 @@ public:
             DispatchMessageW(&msg);
         }
         input_ = nullptr;
+        input.composing = composing_;
         if (GetForegroundWindow() == hwnd_) gamepad_.Apply(input, PollXInput());
         else gamepad_.Reset(input);
         // Mouse lock requested by the game: hidden cursor kept inside the
@@ -254,6 +256,14 @@ public:
     int Height() const override { return height_; }
     void SetTitle(const std::string& title) override { SetWindowTextW(hwnd_, Widen(title).c_str()); }
     void* NativeHandle() const override { return hwnd_; }
+
+    void SetTextInput(bool on) override {
+        if (on == textInput_) return;
+        textInput_ = on;
+        if (!on) FinishComposition();
+        // Without an input context the keyboard sends plain keys (no VK_PROCESSKEY), whatever its language.
+        ImmAssociateContextEx(hwnd_, nullptr, on ? IACE_DEFAULT : 0);
+    }
 
     void SetEventMode(bool on) override {
         eventMode_ = on;
@@ -369,6 +379,35 @@ private:
         Push(e);
     }
 
+    void SetComposing(std::string text) {
+        if (text == composing_) return;
+        composing_ = std::move(text);
+        if (input_) input_->composing = composing_;
+        WindowEvent e;
+        e.type = WindowEvent::Type::Composition;
+        e.text = composing_;
+        Push(e);
+    }
+
+    // Types what is being composed, as the input method does when the next character starts: a click
+    // elsewhere or the end of text entry must not lose the syllable.
+    void FinishComposition() {
+        if (composing_.empty()) return;
+        if (HIMC context = ImmGetContext(hwnd_)) {
+            ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_COMPLETE, 0);
+            ImmReleaseContext(hwnd_, context);
+        }
+        SetComposing(std::string());
+    }
+
+    static std::wstring CompositionString(HIMC context, DWORD which) {
+        const LONG bytes = ImmGetCompositionStringW(context, which, nullptr, 0);
+        if (bytes <= 0) return std::wstring();
+        std::wstring text(static_cast<size_t>(bytes) / sizeof(wchar_t), L'\0');
+        ImmGetCompositionStringW(context, which, text.data(), static_cast<DWORD>(bytes));
+        return text;
+    }
+
     // Keeps the mouse captured while any button is held so drags continue outside the window.
     void UpdateCapture(HWND hwnd, bool down) {
         if (down) {
@@ -436,6 +475,26 @@ private:
                 case WM_CHAR:
                     self->PushText(static_cast<wchar_t>(wp));
                     return 0;
+                // Input methods: the composition is drawn by the application at its caret (SetComposing),
+                // not by the OS in a window of its own; candidate lists stay with the OS.
+                case WM_IME_SETCONTEXT:
+                    return DefWindowProcW(hwnd, msg, wp, lp & ~static_cast<LPARAM>(ISC_SHOWUICOMPOSITIONWINDOW));
+                case WM_IME_STARTCOMPOSITION:
+                    return 0;
+                case WM_IME_COMPOSITION: {
+                    std::wstring typed, composing;
+                    if (HIMC context = ImmGetContext(hwnd)) {
+                        if (lp & GCS_RESULTSTR) typed = CompositionString(context, GCS_RESULTSTR);
+                        if (lp & GCS_COMPSTR) composing = CompositionString(context, GCS_COMPSTR);
+                        ImmReleaseContext(hwnd, context);
+                    }
+                    for (wchar_t unit : typed) self->PushText(unit);  // not passed on: no WM_CHAR repeats it
+                    self->SetComposing(Narrow(composing));
+                    return 0;
+                }
+                case WM_IME_ENDCOMPOSITION:
+                    self->SetComposing(std::string());
+                    return 0;
                 case WM_MOUSEWHEEL:
                 case WM_MOUSEHWHEEL: {
                     WindowEvent e;
@@ -449,6 +508,7 @@ private:
                 }
                 case WM_MBUTTONDOWN:
                 case WM_MBUTTONUP: {
+                    if (msg == WM_MBUTTONDOWN) self->FinishComposition();
                     WindowEvent e;
                     e.type = WindowEvent::Type::MouseButton;
                     e.button = 2;
@@ -508,6 +568,7 @@ private:
                 case WM_LBUTTONUP:
                 case WM_RBUTTONDOWN:
                 case WM_RBUTTONUP: {
+                    if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN) self->FinishComposition();
                     if (self->eventMode_) {
                         WindowEvent e;
                         e.x = static_cast<float>(static_cast<short>(LOWORD(lp)));
@@ -626,6 +687,8 @@ private:
     std::vector<WindowEvent> events_;
     WindowCursor cursor_ = WindowCursor::Arrow;
     wchar_t highSurrogate_ = 0;
+    bool textInput_ = true;  // the OS gives a new window its input method
+    std::string composing_;  // UTF-8 of the input method's unfinished text
     int buttonsHeld_ = 0;
 };
 

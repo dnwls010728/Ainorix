@@ -516,6 +516,8 @@ struct InputView {
     Box inner;                 // where the text may show
     float x = 0, y = 0;        // top-left of the first line
     bool hint = false;         // the placeholder is shown instead of the text
+    int caret = 0;             // character the caret stands before (after what is being composed)
+    int composeFrom = 0;       // characters [composeFrom, caret) are an input method's unfinished text
 };
 
 InputView MakeInputView(const UIInput& in, const Box& b, float s, AssetManager* assets) {
@@ -523,15 +525,21 @@ InputView MakeInputView(const UIInput& in, const Box& b, float s, AssetManager* 
     const float pad = 12.0f * s, padY = in.multiline ? 8.0f * s : 0.0f;
     v.inner = {b.x + pad, b.y + padY, std::max(1.0f, b.w - 2 * pad), std::max(1.0f, b.h - 2 * padY)};
     v.hint = in.text.empty() && !in.focused;
-    v.offsets = CharOffsets(in.text);
-    const std::string shown = v.hint ? in.placeholder : in.password ? std::string(v.offsets.size() - 1, '*') : in.text;
+    // What an input method is composing is shown where it will be typed, and the caret follows it.
+    const bool composing = in.focused && !in.composing.empty();
+    const int at = std::max(0, std::min(in.caretAt, static_cast<int>(in.text.size())));
+    const std::string text = composing ? in.text.substr(0, static_cast<size_t>(at)) + in.composing + in.text.substr(static_cast<size_t>(at)) : in.text;
+    v.offsets = CharOffsets(text);
+    v.composeFrom = CharIndex(v.offsets, at);
+    v.caret = CharIndex(v.offsets, composing ? at + static_cast<int>(in.composing.size()) : in.caretAt);
+    const std::string shown = v.hint ? in.placeholder : in.password ? std::string(v.offsets.size() - 1, '*') : text;
     v.sh = Shape(ParseRich(shown, false, in.textColor, false), ResolveFont(in.font, assets), in.size * s, 0.0f, 1.0f, in.multiline ? v.inner.w : 0.0f);
     v.x = v.inner.x;
     v.y = in.multiline ? v.inner.y : b.y + (b.h - v.sh.height) * 0.5f;
     if (in.focused && !v.hint) {
         float cx = 0;
         int line = 0;
-        CaretSpot(v.sh, CharIndex(v.offsets, in.caretAt), &cx, &line);
+        CaretSpot(v.sh, v.caret, &cx, &line);
         if (in.multiline) v.y -= std::max(0.0f, static_cast<float>(line + 1) * v.sh.lineHeight - v.inner.h);
         else v.x -= std::max(0.0f, cx + 2.0f * s - v.inner.w);
     }
@@ -1189,9 +1197,8 @@ private:
         const Clip cut = clip.Intersect(v.inner);
         const int lines = static_cast<int>(v.sh.lines.size());
         const float lh = v.sh.lineHeight, ink = v.sh.height - static_cast<float>(lines - 1) * lh;
-        // Selection: a band behind the selected characters of each line.
-        if (in.focused && in.caretAt != in.selectAt && !v.hint) {
-            const int lo = CharIndex(v.offsets, std::min(in.caretAt, in.selectAt)), hi = CharIndex(v.offsets, std::max(in.caretAt, in.selectAt));
+        // A band over characters [lo, hi) of each line they are on, between `from` and `to` of the line's height.
+        auto band = [&](int lo, int hi, float from, float to, float opacity) {
             auto xOn = [&](size_t l, int index) {
                 for (const ShapedGlyph& g : v.sh.lines[l]) {
                     if (g.index >= index) return g.x;
@@ -1203,8 +1210,17 @@ private:
                 if (hi <= start || lo >= next) continue;
                 const float x0 = xOn(l, std::max(lo, start)), x1 = hi >= next ? v.sh.lineWidths[l] + 4.0f * s_ : xOn(l, hi);
                 const float top = v.y + static_cast<float>(l) * lh;
-                AddQuad(out, RectQuad(v.x + x0, top, v.x + x1, top + ink, in.textColor, a * 0.3f, n.id), cut);
+                AddQuad(out, RectQuad(v.x + x0, top + ink * from, v.x + x1, top + ink * to, in.textColor, opacity, n.id), cut);
             }
+        };
+        const bool composing = in.focused && !v.hint && v.caret > v.composeFrom;
+        // Selection: a band behind the selected characters. While an input method composes, its text is
+        // marked instead: tinted and underlined.
+        if (composing) {
+            band(v.composeFrom, v.caret, 0.0f, 1.0f, a * 0.15f);
+            band(v.composeFrom, v.caret, 1.0f - std::max(1.0f, std::round(2.0f * s_)) / std::max(ink, 1.0f), 1.0f, a);
+        } else if (in.focused && in.caretAt != in.selectAt && !v.hint) {
+            band(CharIndex(v.offsets, std::min(in.caretAt, in.selectAt)), CharIndex(v.offsets, std::max(in.caretAt, in.selectAt)), 0.0f, 1.0f, a * 0.3f);
         }
         TextDraw d;
         d.alpha = v.hint ? a * 0.45f : a;
@@ -1212,7 +1228,7 @@ private:
         if (in.focused && std::fmod(in.caret, 1.0f) < 0.5f) {
             float cx = 0;
             int line = 0;
-            if (!v.hint) CaretSpot(v.sh, CharIndex(v.offsets, in.caretAt), &cx, &line);
+            if (!v.hint) CaretSpot(v.sh, v.caret, &cx, &line);
             const float x = v.x + cx, top = v.y + static_cast<float>(line) * lh, cw = std::max(1.0f, std::round(2.0f * s_));
             AddQuad(out, RectQuad(x, top, x + cw, top + ink, in.textColor, a, n.id), clip.Intersect(b));
         }

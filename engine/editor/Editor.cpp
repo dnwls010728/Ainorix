@@ -1096,6 +1096,11 @@ void NativeEditor::Impl::ApplyEvents(const std::vector<WindowEvent>& events) {
                     if (!typed.text.empty()) Call("input.text", ObjectOf({{"text", Json(typed.text)}}), true);
                 }
                 break;
+            case WindowEvent::Type::Composition:
+                composing = e.text;
+                if (gameInput || gameComposing) Call("input.text", ObjectOf({{"composing", Json(gameInput ? e.text : std::string())}}), true);
+                gameComposing = gameInput && !e.text.empty();
+                break;
             case WindowEvent::Type::Focus:
                 io.AddFocusEvent(e.down);
                 if (!e.down) { ReleaseGameInput(); gameFocused = false; }
@@ -1127,6 +1132,29 @@ void NativeEditor::Impl::UpdateCursor() {
         default: break;
     }
     window->SetCursor(c);
+}
+
+// The input method (Korean, Japanese, Chinese) is on only while something takes text, so the Scene
+// view's W/A/S/D and the shortcuts work whatever language the keyboard is set to. What it composes is
+// drawn here at the caret of the active field (the platform shows no composition window of its own);
+// a UIInput of the playing game draws its own (InputState::composing).
+void NativeEditor::Impl::UpdateTextInput() {
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    const bool game = gameFocused && InPlaySession();
+    if (window) window->SetTextInput(game ? engine.TextInputActive() : g.IO.WantTextInput || g.PlatformImeData.WantTextInput);
+    const ImGuiPlatformImeData& ime = g.PlatformImeData;
+    if (composing.empty() || game || !ime.WantVisible) return;
+    ImFont* font = ImGui::GetFont();
+    const float size = ime.InputLineHeight > 0 ? ime.InputLineHeight : ImGui::GetFontSize();
+    const ImVec2 extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, composing.c_str());
+    const ImVec2 from(ime.InputPos.x + 1.0f, ime.InputPos.y), to(from.x + extent.x, from.y + size);
+    ImDrawList* draw = ImGui::GetForegroundDrawList();
+    ImVec4 back = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+    back.w = 1.0f;
+    draw->AddRectFilled(from, ImVec2(to.x + 1.0f, to.y), ImGui::GetColorU32(back));
+    draw->AddRectFilled(from, ImVec2(to.x + 1.0f, to.y), ImGui::GetColorU32(ImGuiCol_TextSelectedBg));
+    draw->AddText(font, size, from, ImGui::GetColorU32(ImGuiCol_Text), composing.c_str());
+    draw->AddLine(ImVec2(from.x, to.y), ImVec2(to.x, to.y), ImGui::GetColorU32(ImGuiCol_Text));
 }
 
 void NativeEditor::Impl::Shortcuts() {
@@ -1828,6 +1856,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     m.Toasts();
     if (!m.droppedFiles.empty()) m.ImportDroppedFiles();
     m.UpdateCursor();
+    m.UpdateTextInput();
 
     ++m.fpsFrames;
     if (m.time - m.fpsTimer >= 1.0) {
