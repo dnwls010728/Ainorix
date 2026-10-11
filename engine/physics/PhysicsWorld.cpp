@@ -587,11 +587,36 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
     }
 
     void UpdateCharacters(Scene& scene, float dt) {
+        for (auto& kv : characters) UpdateCharacter(scene, kv, dt);
+    }
+
+    // Re-prediction: only `only`, from where their Transforms are now.
+    void StepCharacters(Scene& scene, float dt, const std::set<EntityId>& only) {
+        JPH::DefaultBroadPhaseLayerFilter bpFilter = system.GetDefaultBroadPhaseLayerFilter(Layers::kMoving);
+        JPH::DefaultObjectLayerFilter layerFilter = system.GetDefaultLayerFilter(Layers::kMoving);
+        JPH::ShapeFilter shapeFilter;
+        for (EntityId id : only) {
+            auto it = characters.find(id);
+            if (it == characters.end() || !it->second.ch || !scene.Get<CharacterBody>(id)) continue;
+            WorldXf wx = WorldOf(scene, id);
+            if (!SamePos(wx.pos, it->second.lastPos)) {
+                // Set by the correction: start from there, with contacts (ground) found again.
+                it->second.ch->SetPosition(wx.pos);
+                it->second.lastPos = wx.pos;
+                it->second.lockOrigin = wx.pos;
+                JPH::IgnoreSingleBodyFilter bodyFilter(it->second.ch->GetInnerBodyID());
+                it->second.ch->RefreshContacts(bpFilter, layerFilter, bodyFilter, shapeFilter, temp);
+            }
+            UpdateCharacter(scene, *it, dt);
+        }
+    }
+
+    void UpdateCharacter(Scene& scene, std::pair<const EntityId, CharacterRec>& kv, float dt) {
         JPH::DefaultBroadPhaseLayerFilter bpFilter = system.GetDefaultBroadPhaseLayerFilter(Layers::kMoving);
         JPH::DefaultObjectLayerFilter layerFilter = system.GetDefaultLayerFilter(Layers::kMoving);
         JPH::ShapeFilter shapeFilter;
         JPH::Vec3 gravity = system.GetGravity();
-        for (auto& kv : characters) {
+        {
             CharacterBody* cb = scene.Get<CharacterBody>(kv.first);
             JPH::CharacterVirtual& ch = *kv.second.ch;
             JPH::Vec3 desired = J(cb->velocity);
@@ -765,6 +790,10 @@ Physics2D* PhysicsWorld::World2D(Scene& scene) {
         world2d_->SetTilesets(&tilesets_);
     }
     return world2d_.get();
+}
+
+void PhysicsWorld::StepCharacters(Scene& scene, float dt, const std::set<EntityId>& only) {
+    if (impl_) impl_->StepCharacters(scene, dt, only);
 }
 
 std::vector<PhysicsEvent> PhysicsWorld::Step(Scene& scene, float dt) {

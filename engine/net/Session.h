@@ -30,6 +30,12 @@ struct SessionConfig {
     // unacknowledged this long, is dropped. Long enough for a stall (a window held still, a loading
     // hitch, a debugger) to recover; a client that is really gone frees its slot after it.
     uint32_t timeoutFrames = 30 * 60;
+    // Authoritative clients, network.prediction: "full" (default) restores the whole world to the
+    // acknowledged frame and re-simulates every pending frame on a correction; "owned" sets only the
+    // client's own predicted entities to the server's state and re-runs only their scripts and
+    // CharacterBody movement. "owned" is far cheaper; state that prediction depends on must then
+    // live in components (scripts' own variables are not rewound).
+    std::string prediction = "full";
     // Validates all supplied settings, including the bounded input schema and fixed tick rate.
     static bool Parse(const Json& project, SessionConfig& out, std::string* error);
 };

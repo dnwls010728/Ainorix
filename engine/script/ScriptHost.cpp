@@ -2307,6 +2307,17 @@ void ScriptHost::Update(float dt) {
     }
 }
 
+void ScriptHost::UpdateEntities(float dt, const std::set<EntityId>& only) {
+    Scene& scene = engine_.GetScene();
+    currentDt = dt;
+    for (EntityId id : only) {
+        const Script* sc = scene.Get<Script>(id);
+        auto it = instances_.find(id);
+        if (!sc || !sc->enabled || it == instances_.end() || it->second.faulted) continue;
+        CallMethod(id, it->second, "onUpdate", dt, true);
+    }
+}
+
 Json ScriptHost::Eval(const std::string& code, EntityId entity) {
     lua_State* L = State();
     int top = lua_gettop(L);

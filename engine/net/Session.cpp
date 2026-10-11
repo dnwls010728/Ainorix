@@ -112,6 +112,10 @@ bool SessionConfig::Parse(const Json& project, SessionConfig& out, std::string* 
     config.admission = json["admission"].asString("auto");
     if (config.admission != "auto" && config.admission != "script") return fail("network.admission must be \"auto\" or \"script\"");
     if (config.admission == "script" && !config.lateJoin) return fail("network.admission \"script\" needs lateJoin");
+    if (json.has("prediction") && (!json["prediction"].isString() || (json["prediction"].asString() != "full" && json["prediction"].asString() != "owned")))
+        return fail("network.prediction must be \"full\" or \"owned\"");
+    config.prediction = json["prediction"].asString("full");
+    if (config.prediction == "owned" && config.mode != "authoritative") return fail("network.prediction \"owned\" needs mode authoritative");
     uint32_t timeoutSeconds = 30;
     if (!Integer(json, "timeoutSeconds", 30, 5, 120, timeoutSeconds)) return fail("network.timeoutSeconds must be 5..120");
     config.timeoutFrames = timeoutSeconds * 60;

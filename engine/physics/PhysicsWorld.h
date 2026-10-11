@@ -59,6 +59,10 @@ public:
     // Advances the simulation by dt and returns collision/trigger events
     // (sorted, deterministic) that happened during the step.
     std::vector<PhysicsEvent> Step(Scene& scene, float dt);
+    // Moves only these entities' CharacterBody by dt against the world as it is (nothing else moves,
+    // no events): a networked client re-predicting its own character after a correction. A
+    // character whose Transform was set since its last move is placed there first.
+    void StepCharacters(Scene& scene, float dt, const std::set<EntityId>& only);
     void Reset();
     // Reconcile corrected poses without repeating collision-enter callbacks.
     void RebuildSolvers();

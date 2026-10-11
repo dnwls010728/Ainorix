@@ -57,7 +57,7 @@ const FieldInfo* Field(const std::string& key, const ComponentType*& type) {
 }
 void Engine::ResetAuthority() {
     authority_.reset(); initialAuthorityEntities_.clear(); authorityIds_.clear(); replicatedEntities_.clear(); nextAuthorityId_ = 1;
-    predictionStates_.clear(); authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = 0;
+    predictionStates_.clear(); authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = authorityOwnedCorrections_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = 0;
     admitted_.clear();
 }
 bool Engine::PredictEntity(EntityId id) const {
@@ -264,6 +264,46 @@ bool Engine::PredictionAgrees(const Authority::Update& update) const {
     return owned == predicted->second.size();
 }
 
+// network.prediction "owned": the snapshot disagreed about this client's own predicted entities. Only
+// they are set to the server's state at the acknowledged frame, and only their scripts' onUpdate and
+// CharacterBody movement run again for each input frame the server has not acknowledged yet. The rest
+// of the world (remote entities, local UI, cameras, effects) keeps its present state; remote entities
+// follow the snapshots through InterpolateAuthority as every frame.
+void Engine::CorrectOwnedPrediction(const Authority::Update& update) {
+    InputState raw = input_; auto output = audio_->TakeOutput(); auto start = std::chrono::steady_clock::now();
+    const uint64_t present = authorityInput_;
+    ApplyReplicatedWorld(update.world, true, false);
+    std::set<EntityId> own; bool characters = true;
+    for (const auto& item : replicatedEntities_) {
+        const NetSync* policy = scene_.Get<NetSync>(item.second);
+        if (!policy || static_cast<uint32_t>(policy->owner) != network_->LocalPlayer() || !policy->predict) continue;
+        own.insert(item.second);
+        // Only CharacterBody movement can be re-run alone; anything else is left at the server's state.
+        if (scene_.Get<RigidBody>(item.second) || scene_.Get<RigidBody2D>(item.second) || scene_.Get<CharacterBody2D>(item.second)) characters = false;
+    }
+    const float dt = gamePaused_ ? 0.0f : static_cast<float>(kFixedDt);
+    replaying_ = true;
+    for (const auto& input : authority_->PendingInputs()) {
+        if (input.first <= update.acknowledged) continue;
+        authorityInput_ = input.first; ApplyInputs({{network_->LocalPlayer(), input.second}});
+        auto local = authorityLocal_.find(input.first); if (local != authorityLocal_.end()) MergeLocalInput(local->second);
+        input_.mouseLocked = raw.mouseLocked;
+        audio_->SetOutputMode(false, true);
+        scripts_->UpdateEntities(dt, own);
+        if (characters && dt > 0) physics_->StepCharacters(scene_, dt, own);
+        predictedOwned_[input.first] = PredictedOwnedFields();
+    }
+    replaying_ = false; input_ = raw; authorityInput_ = present; audio_->RestoreOutput(std::move(output));
+    audio_->Confirm(update.acknowledged); outputConfirmed_ = update.acknowledged;
+    predictionStates_.erase(predictionStates_.begin(), predictionStates_.lower_bound(update.acknowledged));
+    predictedOwned_.erase(predictedOwned_.begin(), predictedOwned_.lower_bound(update.acknowledged));
+    authorityEvents_.erase(authorityEvents_.begin(), authorityEvents_.lower_bound(update.acknowledged));
+    authorityLocal_.erase(authorityLocal_.begin(), authorityLocal_.upper_bound(update.acknowledged));
+    authorityRemoteFrame_ = std::max(authorityRemoteFrame_, update.frame > networkConfig_.interpolationFrames ? update.frame - networkConfig_.interpolationFrames : 0);
+    replayMilliseconds_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    ++authorityCorrections_; ++authorityOwnedCorrections_;
+}
+
 void Engine::InterpolateAuthority(bool advance) {
     if (authorityWorlds_.empty()) return;
     const auto& latest = authorityWorlds_.back(); authorityRemoteFrame_ = std::max(authorityWorlds_.front().frame, std::min(authorityRemoteFrame_ + (advance ? 1 : 0), latest.frame));
@@ -300,7 +340,7 @@ bool Engine::PollAuthority() {
             std::string error; scene_.FromJson(*playSnapshot_, &error); ResetRuntime(); audio_->ResetTimeline(); scripts_->ClearErrors(); scripts_->SetNetworkSeed(network_->Seed());
             frame_ = 0; simTime_ = 0; gameData_ = Json::MakeObject(); runtimeScene_ = scenePath_.empty() ? "" : RelativePath(scenePath_, projectDir_);
             journal_.reset(); snapshots_.clear(); checkpoints_.clear(); predictionStates_.clear(); replicatedEntities_.clear(); authorityIds_.clear(); nextAuthorityId_ = 1;
-            authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
+            authorityWorlds_.clear(); authorityEvents_.clear(); authorityLocal_.clear(); predictedOwned_.clear(); authoritySkipped_ = authorityOwnedCorrections_ = 0; authorityInput_ = authorityRemoteFrame_ = authorityCorrections_ = outputConfirmed_ = 0;
             uiHovered_ = uiPressed_ = uiFocus_ = 0; heldKeys_.clear(); heldButtons_.clear();
             saves_.FreezeReads(true); saves_.DeferFlush(true);
             if (network_->IsHost()) {
@@ -325,8 +365,9 @@ bool Engine::PollAuthority() {
             for (const auto& update : updates) authorityWorlds_.push_back(update);
             while (authorityWorlds_.size() > 32) authorityWorlds_.pop_front();
             const auto& update = updates.back();
+            const bool owned = networkConfig_.prediction == "owned";
             auto checkpoint = predictionStates_.find(update.acknowledged);
-            if (checkpoint == predictionStates_.end()) { authority_->Stop("prediction checkpoint missing"); return false; }
+            if (!owned && checkpoint == predictionStates_.end()) { authority_->Stop("prediction checkpoint missing"); return false; }
             ValidateReplicatedWorld(update.world);
             if (PredictionAgrees(update)) {
                 // The prediction was right: keep the present, only forget what is now confirmed.
@@ -337,6 +378,8 @@ bool Engine::PollAuthority() {
                 authorityLocal_.erase(authorityLocal_.begin(), authorityLocal_.upper_bound(update.acknowledged));
                 authorityRemoteFrame_ = std::max(authorityRemoteFrame_, update.frame > networkConfig_.interpolationFrames ? update.frame - networkConfig_.interpolationFrames : 0);
                 ++authoritySkipped_;
+            } else if (owned) {
+                CorrectOwnedPrediction(update);
             } else {
             InputState raw = input_; auto output = audio_->TakeOutput(); auto start = std::chrono::steady_clock::now();
             RestoreNative(*checkpoint->second); audio_->DropPendingBefore(update.acknowledged);
@@ -470,7 +513,8 @@ void Engine::AuthorityApplied() {
                 authority_->Snapshot(frame_, worlds);
             }
         } else {
-            predictionStates_[authorityInput_] = CaptureNative(false);
+            // "owned" prediction never restores the world: no checkpoint of it per frame.
+            if (networkConfig_.prediction != "owned") predictionStates_[authorityInput_] = CaptureNative(false);
             predictedOwned_[authorityInput_] = PredictedOwnedFields();
             InterpolateAuthority(false);
         }

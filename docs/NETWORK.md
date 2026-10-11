@@ -69,6 +69,7 @@ Non-goals (for now)
   "lateJoin": false,
   "admission": "auto | script",
   "timeoutSeconds": 30,
+  "prediction": "full | owned",
   "bind": "127.0.0.1",
   "port": 7778
 }
@@ -88,6 +89,18 @@ persistent world that starts without players and survives being empty (see NETWO
 this long is dropped. It used to be a fixed 10 s, which a client lost to any stall longer than that (a window held
 in the OS move loop before `Window::SetModalFrame`, a loading hitch, a debugger break). A server that vanishes is
 also noticed only after this time when the transport reports no close (UDP).
+
+`prediction` (authoritative clients): on a snapshot that disagrees with the client's prediction, `full` (default)
+restores the whole world (scene, Lua state, physics) to the acknowledged frame and re-simulates every pending frame
+— exact, but it costs a full frame per pending frame (15-17 ms for 5 frames in a 900-entity scene, more at higher
+ping). `owned` sets only the client's own predicted entities (NetSync owner = this player, `predict`) to the
+server's state and re-runs only their scripts' `onUpdate` and their CharacterBody movement against the world as it
+is (`ScriptHost::UpdateEntities`, `PhysicsWorld::StepCharacters`): the same snapshot took 0.14 ms, and no world
+checkpoint is captured per frame (client frame 2.96 -> 2.06 ms). The rest of the world keeps its present state;
+remote entities follow the snapshots as always. Rule for `owned`: state the prediction depends on must live in
+components (Transform, CharacterBody, replicated fields), because the scripts' own variables (`self.x`) are not
+rewound. Owned entities with a RigidBody, RigidBody2D or CharacterBody2D are set to the server's state without
+re-running their physics. `net.stats.ownedCorrections` counts these corrections. Test: `NetworkOwnedPrediction`.
 
 Network watchdog (`Engine::EnableNetworkWatchdog`, on in `oe run` and the packaged desktop/Android player, off in
 tools and tests): when the main loop has not advanced the session for 0.1 s, a background thread advances only the

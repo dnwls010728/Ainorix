@@ -317,6 +317,7 @@ private:
     std::vector<PhysicsEvent> StepAuthorityPhysics(float dt);
     Json ReplicatedWorld(uint32_t player);
     Json PredictedOwnedFields();
+    void CorrectOwnedPrediction(const Authority::Update& update);
     bool PredictionAgrees(const Authority::Update& update) const;
     void ValidateReplicatedWorld(const Json& world) const;
     void ApplyReplicatedWorld(const Json& world, bool owned, bool remotes);
@@ -398,6 +399,7 @@ private:
     std::map<uint64_t, InputState> authorityLocal_;  // device-only input per unacknowledged input frame, for replays
     std::set<uint32_t> admitted_;  // network.admission "script": lobby players the game let in (net.admit)
     uint64_t authorityInput_ = 0, authorityRemoteFrame_ = 0, authorityCorrections_ = 0, authoritySkipped_ = 0;
+    uint64_t authorityOwnedCorrections_ = 0;  // corrections done the network.prediction "owned" way
     // Per predicted input frame: the replicated fields of this client's own predicted entities, as
     // the server would send them (quantized). A snapshot that agrees needs no restore and replay.
     std::map<uint64_t, Json> predictedOwned_;

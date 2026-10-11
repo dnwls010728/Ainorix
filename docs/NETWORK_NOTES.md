@@ -773,6 +773,13 @@ A review of M1–M8 against this document found the defects below; each fix has 
       owned entity, an Entity-typed field or any difference still takes the full correction. `net.stats` reports
       `agreedSnapshots` next to `corrections`. Measured: 3 corrections and 110 agreed snapshots in 4 s of walking,
       client frame 2.7 ms average, 3.8 ms peak. Test: `NetworkAuthoritativePrefabAndNativeTcpUdp`.
+- [x] `network.prediction: "owned"` (2026-10-11): corrections re-run only the client's own predicted entities
+      (`Engine::CorrectOwnedPrediction`: `ApplyReplicatedWorld(world, owned, !remotes)`, then per pending input frame
+      `ScriptHost::UpdateEntities` + `PhysicsWorld::StepCharacters`, which refreshes Jolt CharacterVirtual contacts
+      after a correction moved it). No `CaptureNative` per frame in this mode. Measured in Ainorix Online (UDP,
+      localhost, ~5 pending frames): correction 15.6-17.1 ms -> 0.14 ms, client frame mean 2.96 -> 2.06 ms, max
+      18.2 -> 4.6 ms. Default stays `full`. Test `NetworkOwnedPrediction` (script-moved and CharacterBody avatars,
+      a server-side knock-back corrected and replayed).
 - [ ] Android device networking/import execution and POSIX native build/tests remain unverified; no device/emulator or Linux toolchain was used. Runtime compilation does not verify a session on Android.
 
 ### Official Lua agreement (M1a-3, 2026-10-06)

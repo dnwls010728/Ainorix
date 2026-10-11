@@ -41,6 +41,9 @@ public:
 
     // Called once per fixed simulation step, before built-in systems.
     void Update(float dt);
+    // onUpdate of these entities' running script instances only (no timers, tweens, new instances):
+    // a networked client re-predicting its own entities after a correction (network.prediction "owned").
+    void UpdateEntities(float dt, const std::set<EntityId>& only);
     // Destroys every script instance and the Lua state.
     void Reset();
     struct Snapshot;

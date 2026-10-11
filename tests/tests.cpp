@@ -1459,6 +1459,57 @@ void AuthorityPrepare(Engine& host, Engine& client, const std::string& project, 
     NetworkSteps(host,client,320);
     CHECK(Call(host,"net.start")["ok"].asBool()); NetworkSteps(host,client,10);
 }
+TEST(NetworkOwnedPrediction) {
+    // network.prediction "owned": a correction sets only the client's own predicted entity to the
+    // server's state and re-runs only its script (and CharacterBody) for the unacknowledged frames.
+    for (bool character : {false, true}) {
+        std::string project = AuthorityProject(character ? "owned_character" : "owned_script", "loopback"), text, error;
+        CHECK(ReadTextFile(JoinPath(project, "project.json"), text));
+        Json config = Json::parse(text); config["network"]["prediction"] = "owned";
+        CHECK(WriteTextFile(JoinPath(project, "project.json"), config.dump(2)));
+        CHECK(WriteTextFile(JoinPath(project, "scripts/owned_character.lua"), R"(
+local M={}
+function M:onUpdate()
+ local p=input.player(self:get('NetPlayer').player)
+ self:setVelocity(p.down('W') and 6 or 0, 0, 0)
+end
+return M
+)"));
+        Engine host, client;
+        CHECK(host.Open(project, &error) && client.Open(project, &error));
+        for (Engine* e : {&host, &client}) {
+            e->GetScene().Clear();
+            for (int player : {1, 2}) {
+                Json args = Json::MakeObject(); args["name"] = "P" + std::to_string(player);
+                args["components"] = Json::parse(character
+                    ? R"({"Transform":{},"Script":{"path":"scripts/owned_character.lua"},"CharacterBody":{"lockPositionY":true},"NetPlayer":{},"NetSync":{"fields":{"Transform.position":{"onChange":true},"CharacterBody.velocity":{"onChange":true}}}})"
+                    : R"({"Transform":{},"Script":{"path":"scripts/authority.lua"},"NetPlayer":{},"NetSync":{"fields":{"Transform.position":{"onChange":true}}}})");
+                args["components"]["NetPlayer"]["player"] = player; args["components"]["NetSync"]["owner"] = player;
+                CHECK(e->Call("entity.create", args)["ok"].asBool());
+            }
+        }
+        CHECK(Call(host, "net.host", R"({"seed":3,"room":"owned-room"})")["ok"].asBool());
+        CHECK(Call(client, "net.join", R"({"address":"owned-room"})")["ok"].asBool()); NetworkSteps(host, client, 30);
+        CHECK(Call(host, "net.ready", R"({"ready":true})")["ok"].asBool() && Call(client, "net.ready", R"({"ready":true})")["ok"].asBool());
+        NetworkSteps(host, client, 20); CHECK(Call(host, "net.start")["ok"].asBool()); NetworkSteps(host, client, 20);
+        CHECK(client.NetworkCall("state", Json())["sync"]["state"].asString() == "running");
+        auto x = [](Engine& e) { const Transform* t = e.GetScene().Get<Transform>(e.GetScene().FindByName("P2")); return t ? t->position.x : -1.0f; };
+        client.Input().down.insert("W"); NetworkSteps(host, client, 60);
+        const float step = character ? 0.1f : 1.0f;  // per frame
+        CHECK(x(host) > 30 * step && x(client) >= x(host) - step * 0.5f && x(client) - x(host) < 12 * step);
+        // The server moves the client's avatar on its own (a knock-back): the prediction is wrong, the
+        // correction takes the server's position and replays the client's inputs on top of it.
+        Transform* moved = host.GetScene().Get<Transform>(host.GetScene().FindByName("P2"));
+        moved->position.x += 1000;
+        NetworkSteps(host, client, 30);
+        CHECK(x(client) > 1000 && std::fabs(x(client) - x(host)) < 12 * step);
+        const Json stats = client.NetworkCall("stats", Json());
+        CHECK(stats["ownedCorrections"].asNumber() >= 1 && stats["agreedSnapshots"].asNumber() > 5);
+        CHECK(host.Scripts().Errors().empty() && client.Scripts().Errors().empty());
+        host.Stop(); client.Stop(); RemoveAll(project);
+    }
+}
+
 TEST(NetworkWatchdogKeepsStalledClient) {
 #ifndef __EMSCRIPTEN__
     // A client whose main loop stalls (it stops stepping) for longer than network.timeoutSeconds:
