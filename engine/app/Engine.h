@@ -33,6 +33,9 @@ class AudioSystem;
 class AssetManager;
 class GpuDevice;
 class GpuRenderer;
+struct Material;
+struct Mesh;
+struct Texture;
 class Window;
 
 // The engine instance: one scene, a fixed-step simulation, a renderer, an
@@ -250,6 +253,12 @@ public:
         gpuAsyncShaders_ = async;
     }
     GpuRenderer* Gpu() { return gpu_.get(); }
+    // Loads project files before they are needed, so that their first use does not stall a frame
+    // (asset.preload, Lua game.preload): effects with everything their emitters draw with, materials,
+    // textures, models, shader graphs, fonts and sounds. With a GPU renderer the textures and meshes
+    // are uploaded and graph programs compiled as well (at once, or when the GPU renderer is enabled). Returns {loaded: [{path, kind}], errors:
+    // [{path, message}], gpu}; a file that cannot be loaded is reported, the others are still loaded.
+    Json Preload(const std::vector<std::string>& paths);
     // GPU when enabled, otherwise the software renderer (editor viewport, game window).
     IRenderer& DisplayRenderer();
     // Draws the game view into the GPU window (EnableGpu with a window) and
@@ -379,6 +388,10 @@ private:
     std::unique_ptr<IRenderer> renderer_;
     std::unique_ptr<GpuDevice> gpuDevice_;  // declared before gpu_: destroyed after it
     std::unique_ptr<GpuRenderer> gpu_;
+    // Preloaded before a GPU renderer existed: handed to it when it is enabled.
+    std::vector<std::shared_ptr<const Material>> preloadMaterials_;
+    std::vector<std::shared_ptr<const Texture>> preloadTextures_;
+    std::vector<std::shared_ptr<const Mesh>> preloadMeshes_;
     std::string gpuShaderCache_;
     bool gpuAsyncShaders_ = false;
     CommandRegistry commands_;

@@ -7956,6 +7956,38 @@ return Effect)L"));
     CHECK(Call(e, "vfx.state", R"J({"id":"LuaFX"})J")["result"]["count"].asInt() == 6);
 }
 
+TEST(AssetPreload) {
+    // asset.preload / game.preload load files before their first use; what cannot be loaded is reported
+    // and the rest still is.
+    Engine e; std::string error; const std::string project = TempProject("asset_preload"); CHECK(e.Open(project, &error)); CreateTestVfx(e);
+    CHECK(Call(e, "audio.generate", R"J({"path":"sounds/hit.wav","preset":"hit"})J")["ok"].asBool());
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/tint.shader.json","graph":{"uniforms":{},"nodes":[{"op":"baseColor"}],"color":0}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"materials/tint.mat.json","values":{"shader":"materials/tint.shader.json"}})J")["ok"].asBool());
+    const char* paths = R"J({"paths":["effects/sparks.vfx.json","sounds/hit.wav","materials/tint.mat.json","materials/tint.shader.json","cube","missing.png","scripts/none.lua"]})J";
+    Json result = Call(e, "asset.preload", paths);
+    CHECK(result["ok"].asBool());
+    CHECK(result["result"]["loaded"].size() == 4 && result["result"]["errors"].size() == 3);
+    CHECK(result["result"]["loaded"][0]["kind"].asString() == "vfx" && result["result"]["loaded"][1]["kind"].asString() == "audio");
+    CHECK(result["result"]["errors"][1]["path"].asString() == "missing.png" && !result["result"]["gpu"].asBool());
+    CHECK(!Call(e, "asset.preload", R"J({"paths":[1]})J")["ok"].asBool());
+    CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());
+    CHECK(WriteTextFile(JoinPath(project, "scripts/load.lua"), R"L(local Load = {}
+function Load:onStart()
+    game.set("one", game.preload("effects/sparks.vfx.json"))
+    game.set("some", game.preload({"sounds/hit.wav", "sounds/none.wav", "materials/tint.mat.json"}))
+end
+return Load)L"));
+    CHECK(Call(e, "entity.create", R"J({"name":"Loader","components":{"Script":{"path":"scripts/load.lua"}}})J")["ok"].asBool());
+    e.Step(1); CHECK(e.Scripts().Errors().empty()); CHECK(e.GameData()["one"].asInt() == 0 && e.GameData()["some"].asInt() == 1);
+    if (e.EnableGpu(nullptr, &error)) {
+        // With the GPU renderer the graph program and the uploads are made here, and a frame drawn after it works.
+        result = Call(e, "asset.preload", paths);
+        CHECK(result["result"]["gpu"].asBool() && result["result"]["loaded"].size() == 4);
+        CHECK(Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{},"MeshRenderer":{"mesh":"cube","material":"materials/tint.mat.json"}}})J")["ok"].asBool());
+        CHECK(Call(e, "render.screenshot", R"J({"renderer":"gpu","width":64,"height":64,"inline":false})J")["ok"].asBool());
+    }
+}
+
 TEST(VfxNativeSnapshots) {
     Engine e; std::string error; CHECK(e.Open(TempProject("vfx_snapshots"), &error)); CreateTestVfx(e);
     CHECK(Call(e, "scene.new", R"J({"empty":true})J")["ok"].asBool());

@@ -35,6 +35,16 @@ std::shared_ptr<const AudioClip> AudioSystem::Load(const std::string& path) {
     return clip;
 }
 
+bool AudioSystem::Preload(const std::string& path, std::string* error) {
+    try {
+        Load(path);
+        return true;
+    } catch (const ApiError& e) {
+        if (error) *error = e.what();
+        return false;
+    }
+}
+
 int AudioSystem::Play(const std::string& path, float volume, float pitch, bool loop, EntityId owner) {
     Voice v;
     v.clip = Load(path);

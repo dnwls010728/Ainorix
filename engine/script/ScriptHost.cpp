@@ -566,6 +566,31 @@ int L_GameQuit(lua_State* L) {
     return 0;
 }
 
+// game.preload(path | {paths}) -> how many of them could not be loaded. Loads effects, materials, textures,
+// models, shaders, fonts and sounds now, so that their first use does not stall a frame (Engine::Preload).
+int L_GamePreload(lua_State* L) {
+    return Guard(L, [&]() {
+        std::vector<std::string> paths;
+        if (lua_istable(L, 1)) {
+            const lua_Integer count = luaL_len(L, 1);
+            for (lua_Integer i = 1; i <= count; ++i) {
+                lua_geti(L, 1, i);
+                if (lua_type(L, -1) != LUA_TSTRING) throw ApiError("invalid_argument", "game.preload: paths must be strings");
+                paths.emplace_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        } else {
+            paths.emplace_back(luaL_checkstring(L, 1));
+        }
+        const Json result = Host(L).GetEngine().Preload(paths);
+        for (size_t i = 0; i < result["errors"].size(); ++i)
+            OE_LOG_WARN("script", "game.preload: %s: %s", result["errors"][i]["path"].asString().c_str(),
+                        result["errors"][i]["message"].asString().c_str());
+        lua_pushinteger(L, static_cast<lua_Integer>(result["errors"].size()));
+        return 1;
+    });
+}
+
 // game.arg(name) -> the launch parameter given with --set name=value, or nil.
 int L_GameArg(lua_State* L) {
     const auto& args = Host(L).GetEngine().LaunchArgs();
@@ -1670,7 +1695,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "draw", drawFuncs);
     const luaL_Reg audioFuncs[] = {{"play", L_AudioPlay}, {"stop", L_AudioStop}, {"stopAll", L_AudioStopAll}, {nullptr, nullptr}};
     SetFuncs(L, "audio", audioFuncs);
-    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {"quit", L_GameQuit}, {"arg", L_GameArg}, {nullptr, nullptr}};
+    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {"quit", L_GameQuit}, {"arg", L_GameArg}, {"preload", L_GamePreload}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
     const luaL_Reg uiFuncs[] = {{"focus", L_UIFocus}, {"focused", L_UIFocused}, {"screenToCanvas", L_ScreenToCanvas}, {"measureText", L_MeasureText}, {nullptr, nullptr}};
     SetFuncs(L, "ui", uiFuncs);

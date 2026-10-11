@@ -1906,6 +1906,28 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
 sg_view GpuRenderer::ImageView(const std::shared_ptr<const Texture>& texture) { return impl_->UITextureFor(texture); }
 void GpuRenderer::CollectGarbage() { impl_->Evict(); }
 
+void GpuRenderer::Preload(const std::vector<std::shared_ptr<const Material>>& materials,
+                          const std::vector<std::shared_ptr<const Texture>>& textures,
+                          const std::vector<std::shared_ptr<const Mesh>>& meshes) {
+    for (const auto& texture : textures) impl_->TextureFor(texture);
+    for (const auto& mesh : meshes)
+        if (mesh && !mesh->positions.empty()) impl_->MeshFor(mesh, false);
+    for (const auto& material : materials) {
+        if (!material) continue;
+        for (const auto& texture : {material->baseTexture, material->normalTexture, material->metallicRoughnessTexture,
+                                    material->emissiveTexture, material->occlusionTexture})
+            impl_->TextureFor(texture);
+        if (!material->shader) continue;
+        // Every way the scene pass can draw it: a particle or a sprite blends a material that is opaque
+        // on a mesh, and the targets depend on the camera's effects.
+        for (auto* pipelines : {&impl_->meshPips, &impl_->hdrMeshPips})
+            for (auto& byBlend : *pipelines)
+                for (auto& bySide : byBlend)
+                    for (sg_pipeline standard : bySide)
+                        if (standard.id) impl_->GraphPipeline(standard, *material);
+    }
+}
+
 sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view, int width, int height, int slot, RenderStats* stats) {
     int w = std::max(1, width), h = std::max(1, height);
     Targets& t = impl_->panelTargets[slot];

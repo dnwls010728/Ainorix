@@ -2190,6 +2190,17 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params().Req("path", "string", "Project-relative path, or a built-in mesh name."), false,
              [](Engine& e, const Json& a) { return e.Assets().Info(a["path"].asString()); });
 
+    Register(r, "asset.preload", "Load project files before they are needed, so their first use does not stall a frame: effects (.vfx.json, with the textures, materials and meshes of their emitters), materials, textures, models, shader graphs, fonts and sounds. With the GPU renderer, textures and meshes are uploaded and graph shaders compiled too. Like game.preload(paths) in Lua. Returns {loaded: [{path, kind}], errors: [{path, message}], gpu}.",
+             Params().Req("paths", "array", "Project-relative paths, e.g. [\"effects/slash.vfx.json\", \"assets/sounds/slash.wav\"]."), false,
+             [](Engine& e, const Json& a) {
+                 std::vector<std::string> paths;
+                 for (size_t i = 0; i < a["paths"].size(); ++i) {
+                     if (!a["paths"][i].isString()) throw ApiError("invalid_argument", "paths must be an array of strings", "Example: {\"paths\": [\"effects/slash.vfx.json\"]}");
+                     paths.push_back(a["paths"][i].asString());
+                 }
+                 return e.Preload(paths);
+             });
+
     Register(r, "asset.reload", "Forget cached models/textures so they are reloaded from disk.", Params(), false, [](Engine& e, const Json&) {
         e.Assets().Clear();
         Json out = Json::MakeObject();

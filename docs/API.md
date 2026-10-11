@@ -1380,6 +1380,14 @@ Details of a project file: model vertices/triangles/materials/textures/bounds, j
 |---|---|---|---|
 | `path` | string | yes | Project-relative path, or a built-in mesh name. |
 
+### `asset.preload`
+
+Load project files before they are needed, so their first use does not stall a frame: effects (.vfx.json, with the textures, materials and meshes of their emitters), materials, textures, models, shader graphs, fonts and sounds. With the GPU renderer, textures and meshes are uploaded and graph shaders compiled too. Like game.preload(paths) in Lua. Returns {loaded: [{path, kind}], errors: [{path, message}], gpu}.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `paths` | array | yes | Project-relative paths, e.g. ["effects/slash.vfx.json", "assets/sounds/slash.wav"]. |
+
 ### `asset.reload`
 
 Forget cached models/textures so they are reloaded from disk.

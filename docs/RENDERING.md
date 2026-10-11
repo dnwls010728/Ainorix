@@ -36,7 +36,11 @@ itself (`GpuDevice::CompileShader`, d3dcompiler_47 with the flags sokol uses), s
   materials draw through the interpreter in the standard program (the same image, slower shader).
 
 The editor uses `<project>/.oe/shader-cache` (async in the window, synchronous for
-`--screenshot`); games and tests compile on first use without a cache. GL backends (web, Android,
+`--screenshot`); games and tests compile on first use without a cache. A game that cannot afford
+that first use in the middle of play (a skill effect: a stalled frame per new graph) loads ahead with
+`game.preload(paths)` / `asset.preload {paths}`: an effect's, material's or graph's programs and
+scene pipelines are built, textures and meshes uploaded, sounds decoded, at once or when the GPU
+renderer is enabled (`Engine::Preload`, `GpuRenderer::Preload`; test `AssetPreload`). GL backends (web, Android,
 EGL) have no `CompileShader`, so sokol_gfx compiles their GLSL as before. Measured on `games/RPG`
 (seven graphs): the first editor frame came 3.7 s after loading the scene before; now 0.65 s on a
 cold cache and 0.29 s on a warm one.

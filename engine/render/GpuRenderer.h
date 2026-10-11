@@ -9,6 +9,8 @@ namespace oe {
 
 class AssetManager;
 class GpuDevice;
+struct Material;
+struct Mesh;
 struct Texture;
 
 // Hardware renderer on top of sokol_gfx (engine/render/shaders/Shaders.glsl).
@@ -54,6 +56,12 @@ public:
     bool ReadTexture(int slot, RenderTarget& target);
     // A texture as a sampleable view (e.g. tileset thumbnails in the editor), kept while `texture` lives.
     sg_view ImageView(const std::shared_ptr<const Texture>& texture);
+    // Builds now what the first draw of these would build (asset.preload): texture and mesh uploads, and
+    // for a material with a shader graph its program and scene pipelines (with asyncShaders the compile
+    // is only started). Kept as long as the assets live, like everything drawn.
+    void Preload(const std::vector<std::shared_ptr<const Material>>& materials,
+                 const std::vector<std::shared_ptr<const Texture>>& textures,
+                 const std::vector<std::shared_ptr<const Mesh>>& meshes);
     // Release cached copies whose CPU owners expired. Call between frames, before creating UI image views.
     void CollectGarbage();
     // Size of the window swapchain (0 when headless or minimized).

@@ -52,6 +52,8 @@ public:
     // End of a play session: stops everything, forgets clips.
     void Reset();
 
+    // Reads and decodes a sound now instead of when it first plays (asset.preload). False + error if it cannot.
+    bool Preload(const std::string& path, std::string* error);
     void AttachDevice(std::unique_ptr<AudioDevice> device);
     bool HasDevice() const { return device_ != nullptr; }
 

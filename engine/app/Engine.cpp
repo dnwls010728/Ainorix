@@ -13,6 +13,7 @@
 #include "scene/Prefab.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
+#include "scene/Vfx.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 #include "render/GpuDevice.h"
@@ -1063,7 +1064,105 @@ bool Engine::EnableGpu(Window* window, std::string* error) {
     settings.asyncShaders = gpuAsyncShaders_;
     gpu_ = std::make_unique<GpuRenderer>(*gpuDevice_, assets_.get(), settings);
     OE_LOG_INFO("render", "GPU renderer ready: %s", gpu_->Name());
+    gpu_->Preload(preloadMaterials_, preloadTextures_, preloadMeshes_);
+    preloadMaterials_.clear();
+    preloadTextures_.clear();
+    preloadMeshes_.clear();
     return true;
+}
+
+Json Engine::Preload(const std::vector<std::string>& paths) {
+    std::vector<std::shared_ptr<const Material>> materials;
+    std::vector<std::shared_ptr<const Texture>> textures;
+    std::vector<std::shared_ptr<const Mesh>> meshes;
+    Json loaded = Json::MakeArray(), errors = Json::MakeArray();
+    // A file inside another (an effect's texture) is reported under the path that was asked for.
+    std::string asked;
+    bool failed = false;
+    auto fail = [&](const std::string& message) {
+        Json j = Json::MakeObject();
+        j["path"] = asked;
+        j["message"] = message;
+        errors.push(j);
+        failed = true;
+    };
+    auto texture = [&](const std::string& path) {
+        if (path.empty()) return;
+        std::string error;
+        if (auto t = assets_->GetTexture(path, &error)) textures.push_back(t);
+        else fail(error.empty() ? "cannot load texture '" + path + "'" : error);
+    };
+    auto material = [&](const std::string& path) {
+        if (path.empty()) return;
+        std::string error;
+        if (auto m = assets_->GetMaterial(path, &error)) materials.push_back(m);
+        else fail(error.empty() ? "cannot load material '" + path + "'" : error);
+    };
+    auto mesh = [&](const std::string& name) {
+        if (name.empty()) return;
+        std::string error;
+        if (auto m = assets_->GetMesh(name, &error)) meshes.push_back(m);
+        else fail(error.empty() ? "cannot load mesh '" + name + "'" : error);
+    };
+    for (const std::string& path : paths) {
+        asked = path;
+        failed = false;
+        const std::string kind = AssetManager::KindOf(path);
+        std::string error;
+        if (kind == "vfx") {
+            if (auto effect = assets_->GetVfx(path, &error)) {
+                for (const VfxEmitterDefinition& e : effect->emitters) {
+                    texture(e.emitter.texture);
+                    material(e.emitter.material);
+                    mesh(e.emitter.mesh);
+                }
+                for (const VfxTrailDefinition& t : effect->trails) {
+                    texture(t.trail.texture);
+                    material(t.trail.material);
+                }
+            } else {
+                fail(error.empty() ? "cannot load effect '" + path + "'" : error);
+            }
+        } else if (kind == "material") {
+            material(path);
+        } else if (kind == "texture") {
+            texture(path);
+        } else if (kind == "model") {
+            mesh(path);
+        } else if (kind == "shader") {
+            if (auto graph = assets_->GetShader(path, &error)) {
+                auto m = std::make_shared<Material>();
+                m->shader = graph;
+                materials.push_back(m);
+            } else {
+                fail(error.empty() ? "cannot load shader '" + path + "'" : error);
+            }
+        } else if (kind == "font") {
+            if (!assets_->GetFont(path, &error)) fail(error.empty() ? "cannot load font '" + path + "'" : error);
+        } else if (kind == "audio") {
+            if (!audio_->Preload(path, &error)) fail(error);
+        } else {
+            fail("nothing to preload for this kind of file (effects, materials, textures, models, shaders, fonts and sounds are)");
+        }
+        if (!failed) {
+            Json j = Json::MakeObject();
+            j["path"] = path;
+            j["kind"] = kind;
+            loaded.push(j);
+        }
+    }
+    if (gpu_) {
+        gpu_->Preload(materials, textures, meshes);
+    } else {  // a GPU renderer enabled later (a tool's first GPU screenshot) gets them then
+        preloadMaterials_.insert(preloadMaterials_.end(), materials.begin(), materials.end());
+        preloadTextures_.insert(preloadTextures_.end(), textures.begin(), textures.end());
+        preloadMeshes_.insert(preloadMeshes_.end(), meshes.begin(), meshes.end());
+    }
+    Json out = Json::MakeObject();
+    out["loaded"] = loaded;
+    out["errors"] = errors;
+    out["gpu"] = gpu_ != nullptr;
+    return out;
 }
 
 IRenderer& Engine::DisplayRenderer() {
