@@ -8,6 +8,7 @@
 #include <io.h>
 
 #include <chrono>
+#include <functional>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -201,6 +202,8 @@ public:
         if (hwnd_) DestroyWindow(hwnd_);
     }
 
+    void SetModalFrame(std::function<void()> frame) override { modalFrame_ = std::move(frame); }
+
     bool PumpEvents(InputState& input) override {
         if (!IsWindowVisible(hwnd_)) ShowWindow(hwnd_, SW_SHOW);
         input_ = &input;
@@ -390,6 +393,26 @@ private:
         }
         if (self) {
             switch (msg) {
+                // Moving / resizing by the frame and the window menu run a modal loop inside
+                // DispatchMessage: a timer keeps the game's frame going until it ends.
+                case WM_ENTERSIZEMOVE:
+                case WM_ENTERMENULOOP:
+                    if (self->modalFrame_) SetTimer(hwnd, kModalTimer, 15, nullptr);
+                    break;
+                case WM_EXITSIZEMOVE:
+                case WM_EXITMENULOOP:
+                    KillTimer(hwnd, kModalTimer);
+                    break;
+                case WM_TIMER:
+                    if (wp == kModalTimer) {
+                        if (self->modalFrame_ && !self->inModalFrame_) {
+                            self->inModalFrame_ = true;
+                            self->modalFrame_();
+                            self->inModalFrame_ = false;
+                        }
+                        return 0;
+                    }
+                    break;
                 case WM_CLOSE:
                     if (self->eventMode_) {
                         WindowEvent e;
@@ -589,6 +612,9 @@ private:
     }
 
     HWND hwnd_ = nullptr;
+    static constexpr UINT_PTR kModalTimer = 0x4F45;  // SetModalFrame while moving or resizing
+    std::function<void()> modalFrame_;
+    bool inModalFrame_ = false;
     int width_ = 0, height_ = 0;
     bool closed_ = false;
     bool mouseLocked_ = false;

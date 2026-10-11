@@ -2025,6 +2025,14 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
     window.SetEventMode(true);
     double last = PlatformTimeSeconds();
     bool firstFrame = false;
+    // While the editor window is moved or resized the platform runs a modal loop: keep a playing
+    // game (and its network session) simulating meanwhile; the panels wait.
+    window.SetModalFrame([&] {
+        engine.RunPostedJobs();
+        double now = PlatformTimeSeconds();
+        engine.Tick(std::min(0.25, now - last));
+        last = now;
+    });
     while (!editor.QuitRequested()) {
         engine.RunPostedJobs();  // HTTP / MCP calls from agents
         window.PumpEvents(editor.WindowInput());
@@ -2039,6 +2047,7 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
             OE_LOG_INFO("editor", "first frame shown");
         }
     }
+    window.SetModalFrame(nullptr);
     window.SetEventMode(false);
     return 0;
 }

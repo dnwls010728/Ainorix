@@ -61,6 +61,13 @@ struct Player {
         engine.UseSystemClipboard(true);
         if (!window->PumpEvents(engine.Input())) return false;
         if (engine.QuitRequested()) return false;  // game.quit
+        Advance();
+        return true;
+    }
+
+    // Everything of a frame but the window's events: also run by the platform while the window is
+    // being moved or resized (Window::SetModalFrame), so the game and its connection keep going.
+    void Advance() {
         for (auto& message : PlatformHostPoll()) {
             std::string parseError;
             Json data = Json::parse(message.second, &parseError);
@@ -78,7 +85,7 @@ struct Player {
 #else
             engine.PresentGameView(renderScale);
 #endif
-            return true;
+            return;
         }
         // The software renderer draws at most maxRenderWidth pixels wide; the
         // window stretches the image, so large or maximized windows stay fast.
@@ -92,7 +99,6 @@ struct Player {
             engine.RenderGameView(frame);
             window->Present(frame);
         }
-        return true;
     }
 };
 
@@ -132,6 +138,7 @@ int RunPlayer(const std::string& dir, const std::vector<std::pair<bool, std::str
         return 1;
     }
     player->window = CreatePlatformWindow(title, win["width"].asInt(1280), win["height"].asInt(720));
+    if (player->window) player->window->SetModalFrame([player] { player->Advance(); });
     if (!player->window) {
         PlatformShowError(title, std::string("This platform (") + PlatformName() + ") has no native window.");
         return 1;

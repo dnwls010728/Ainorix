@@ -70,6 +70,11 @@ public:
     virtual ~Window() = default;
     // Processes OS events, updates `input`. Returns false once the user closed the window.
     virtual bool PumpEvents(InputState& input) = 0;
+    // While the OS holds the window in a modal loop (Windows: dragging it by its title bar or
+    // resizing it by its frame) PumpEvents does not return, so nothing else runs: no simulation, no
+    // network traffic (a session drops a peer after 10 s of silence). The platform calls `frame`
+    // about 60 times a second meanwhile; it must not call PumpEvents. Empty = nothing runs.
+    virtual void SetModalFrame(std::function<void()> frame) { (void)frame; }
     // Shows a CPU frame (software renderer output). With a GPU device bound to
     // the window (CreateGpuDevice), GpuRenderer::RenderToWindow presents instead.
     virtual void Present(const RenderTarget& frame) = 0;

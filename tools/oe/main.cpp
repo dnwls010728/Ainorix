@@ -146,39 +146,41 @@ void MainLoop(Engine& engine, Window* window, const std::atomic<bool>& quit, boo
     double last = PlatformTimeSeconds();
     double fpsTimer = last;
     int frames = 0;
-    while (!quit) {
+    // Everything of an iteration but the window's events. The platform also runs it while the window
+    // is being moved or resized (Window::SetModalFrame), so the game and its connection keep going.
+    auto advance = [&] {
         engine.RunPostedJobs();
         if (team) team->update();
-        if (window && !window->PumpEvents(engine.Input())) break;
-        if (window && engine.QuitRequested()) break;  // game.quit
         double now = PlatformTimeSeconds();
         engine.Tick(now - last);
         last = now;
-        if (window) {
-            engine.UseSystemClipboard(true);
-            window->SetTextInput(engine.TextInputActive());
+        if (!window) return;
+        engine.UseSystemClipboard(true);
+        window->SetTextInput(engine.TextInputActive());
+        int w = window->Width(), h = window->Height();
+        if (engine.Gpu() && gpuWindow) {
+            engine.PresentGameView();
+        } else if (w > 0 && h > 0) {
+            if (frame.width != w || frame.height != h) frame.Resize(w, h);
+            engine.RenderGameView(frame);
+            window->Present(frame);
         }
-        if (window) {
-            int w = window->Width(), h = window->Height();
-            if (engine.Gpu() && gpuWindow) {
-                engine.PresentGameView();
-            } else if (w > 0 && h > 0) {
-                if (frame.width != w || frame.height != h) frame.Resize(w, h);
-                engine.RenderGameView(frame);
-                window->Present(frame);
-            }
-            ++frames;
-            if (now - fpsTimer >= 1.0) {
-                window->SetTitle(Format("OwnEngine - %s - %d fps - frame %llu", engine.GetScene().name.c_str(), frames,
-                                        static_cast<unsigned long long>(engine.Frame())));
-                frames = 0;
-                fpsTimer = now;
-            }
-            PlatformSleep(0.001);
-        } else {
-            PlatformSleep(0.002);
+        ++frames;
+        if (now - fpsTimer >= 1.0) {
+            window->SetTitle(Format("OwnEngine - %s - %d fps - frame %llu", engine.GetScene().name.c_str(), frames,
+                                    static_cast<unsigned long long>(engine.Frame())));
+            frames = 0;
+            fpsTimer = now;
         }
+    };
+    if (window) window->SetModalFrame(advance);
+    while (!quit) {
+        if (window && !window->PumpEvents(engine.Input())) break;
+        if (window && engine.QuitRequested()) break;  // game.quit
+        advance();
+        PlatformSleep(window ? 0.001 : 0.002);
     }
+    if (window) window->SetModalFrame(nullptr);
 }
 
 bool StartServer(HttpServer& server, Engine& engine, int port) {
