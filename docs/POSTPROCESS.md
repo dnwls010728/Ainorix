@@ -281,6 +281,16 @@ declares the largest distance the graph moves a vertex; without it the margin is
 shadow cut where it reaches past every other object of the scene, so declare
 `maxOffset` for large displacements. `shader.create`, `shader.check` and
 `asset.info` report a declared `maxOffset`.
+The same margin drives the GPU renderer's frustum culling: a vertex moved further
+than the margin can be culled while its moved position is on screen. For
+displacements that only go one way use `"offsetBounds": {"min": [x,y,z], "max":
+[x,y,z]}` instead (per world axis, min <= max, not together with `maxOffset`):
+boxes grow by exactly that range. A world bent down away from the camera (offset
+`-k * |(p - camera).xz|^2` on y) declares `{"min": [0, -k * R^2, 0], "max": [0, 0, 0]}`
+for the farthest on-screen distance R; with `maxOffset` its boxes would grow by
+hundreds of metres sideways too and nothing would be culled. Ainorix Online
+showed the problem: far objects popped in and out (36-45 draw calls instead of
+165-212 for the same views). Tested next to the `maxOffset` checks (parsing and bounds).
 `shader.create`, `shader.check` and `asset.info` report `normal` and `offset`
 (-1 = absent). Prebuilt web and Android players older than this change ignore both
 outputs and reject graphs with more than 32 nodes until they are rebuilt.

@@ -79,6 +79,8 @@ void ForEachVertexOffset(const RenderItem& item, const DrawCall& draw, float tim
 // `maxOffset`, else kDefaultOffsetMargin; 0 for materials without such a graph.
 constexpr float kDefaultOffsetMargin = 1.0f;
 float OffsetMargin(const Material& material);
+// The same as a per-axis range: the graph's `offsetBounds`, else -margin..+margin on every axis.
+void OffsetRange(const Material& material, Vec3& lo, Vec3& hi);
 // Grows lo..hi (world space) by the bounds of lit displaced items widened by their margin, so the
 // shadow map both renderers fit to the scene bounds also covers displaced surfaces. Like the
 // bounds margins of other engines it never runs the vertex stage on the CPU (that cost grew
@@ -87,6 +89,7 @@ float OffsetMargin(const Material& material);
 void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi);
 // World-space box around an item's bounds, widened by `margin` on every side.
 void ItemWorldBounds(const RenderItem& item, float margin, Vec3& lo, Vec3& hi);
+void ItemWorldBounds(const RenderItem& item, const Vec3& offsetLo, const Vec3& offsetHi, Vec3& lo, Vec3& hi);
 // False when the world box lies entirely outside one plane of viewProj's clip volume (OpenGL clip
 // space). `depth` false ignores the near and far planes (shadow casters in front of the light's
 // near plane still cast).

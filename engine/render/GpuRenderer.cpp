@@ -1340,7 +1340,9 @@ struct GpuRenderer::Impl {
         std::vector<char> inView(draws.size());
         const Mat4 cameraViewProj = view.proj * view.view;
         for (size_t k = 0; k < draws.size(); ++k) {
-            ItemWorldBounds(items[draws[k].item], OffsetMargin(draws[k].material), drawLo[k], drawHi[k]);
+            Vec3 offsetLo, offsetHi;
+            OffsetRange(draws[k].material, offsetLo, offsetHi);
+            ItemWorldBounds(items[draws[k].item], offsetLo, offsetHi, drawLo[k], drawHi[k]);
             inView[k] = BoxInFrustum(cameraViewProj, drawLo[k], drawHi[k]);
         }
 

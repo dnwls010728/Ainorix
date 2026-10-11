@@ -38,7 +38,7 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
     for (const auto& field : json.members())
         if (field.first != "format" && field.first != "nodes" && field.first != "uniforms" &&
             field.first != "color" && field.first != "emissive" && field.first != "normal" && field.first != "offset" &&
-            field.first != "maxOffset") return fail("unknown shader field '" + field.first + "'");
+            field.first != "maxOffset" && field.first != "offsetBounds") return fail("unknown shader field '" + field.first + "'");
     if (json.has("format") && json["format"].asString() != "ownengine.shader") return fail("format must be ownengine.shader");
     const Json& nodes = json["nodes"];
     if (!nodes.isArray() || nodes.size() == 0 || nodes.size() > ShaderGraph::kMaxNodes) return fail("nodes must contain 1.." + std::to_string(ShaderGraph::kMaxNodes) + " instructions");
@@ -120,6 +120,22 @@ bool CompileShaderGraph(const Json& json, ShaderGraph& out, std::string* error) 
         if (result.offset < 0) return fail("maxOffset requires an offset output");
         if (!limit.isNumber() || !(limit.asNumber() >= 0 && limit.asNumber() <= 65504)) return fail("maxOffset must be a number in 0..65504");
         result.maxOffset = limit.asFloat();
+    }
+    if (json.has("offsetBounds")) {
+        const Json& bounds = json["offsetBounds"];
+        if (result.offset < 0) return fail("offsetBounds requires an offset output");
+        if (json.has("maxOffset")) return fail("give either maxOffset or offsetBounds, not both");
+        auto vec = [&](const char* key, Vec3& out) {
+            const Json& v = bounds[key];
+            if (!v.isArray() || v.size() != 3) return false;
+            for (size_t i = 0; i < 3; ++i) if (!v[i].isNumber() || !(std::fabs(v[i].asNumber()) <= 65504)) return false;
+            out = Vec3(v[0].asFloat(), v[1].asFloat(), v[2].asFloat());
+            return true;
+        };
+        if (!bounds.isObject() || bounds.size() != 2 || !vec("min", result.offsetMin) || !vec("max", result.offsetMax) ||
+            result.offsetMin.x > result.offsetMax.x || result.offsetMin.y > result.offsetMax.y || result.offsetMin.z > result.offsetMax.z)
+            return fail("offsetBounds must be {min: [x,y,z], max: [x,y,z]} with min <= max per axis, each within 65504");
+        result.hasOffsetBounds = true;
     }
     out = std::move(result);
     if (error) error->clear();

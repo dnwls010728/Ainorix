@@ -707,25 +707,41 @@ float OffsetMargin(const Material& material) {
     return material.shader->maxOffset >= 0 ? material.shader->maxOffset : kDefaultOffsetMargin;
 }
 
+void OffsetRange(const Material& material, Vec3& lo, Vec3& hi) {
+    if (material.shader && material.shader->offset >= 0 && material.shader->hasOffsetBounds) {
+        lo = material.shader->offsetMin;
+        hi = material.shader->offsetMax;
+        return;
+    }
+    const float margin = OffsetMargin(material);
+    lo = Vec3(-margin, -margin, -margin);
+    hi = Vec3(margin, margin, margin);
+}
+
 void ExtendOffsetBounds(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws, Vec3& lo, Vec3& hi) {
     for (const DrawCall& draw : draws) {
         const RenderItem& it = items[draw.item];
         if (it.unlit || !draw.material.shader || draw.material.shader->offset < 0) continue;
-        Vec3 a, b;
-        ItemWorldBounds(it, OffsetMargin(draw.material), a, b);
+        Vec3 a, b, offsetLo, offsetHi;
+        OffsetRange(draw.material, offsetLo, offsetHi);
+        ItemWorldBounds(it, offsetLo, offsetHi, a, b);
         lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
         hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
     }
 }
 
 void ItemWorldBounds(const RenderItem& item, float margin, Vec3& lo, Vec3& hi) {
+    ItemWorldBounds(item, Vec3(-margin, -margin, -margin), Vec3(margin, margin, margin), lo, hi);
+}
+
+void ItemWorldBounds(const RenderItem& item, const Vec3& offsetLo, const Vec3& offsetHi, Vec3& lo, Vec3& hi) {
     lo = Vec3(1e30f, 1e30f, 1e30f);
     hi = Vec3(-1e30f, -1e30f, -1e30f);
     const Vec3 &a = item.boundsMin, &b = item.boundsMax;
     for (int c = 0; c < 8; ++c) {
         const Vec3 p = item.world.TransformPoint(Vec3(c & 1 ? b.x : a.x, c & 2 ? b.y : a.y, c & 4 ? b.z : a.z));
-        lo = Vec3(std::min(lo.x, p.x - margin), std::min(lo.y, p.y - margin), std::min(lo.z, p.z - margin));
-        hi = Vec3(std::max(hi.x, p.x + margin), std::max(hi.y, p.y + margin), std::max(hi.z, p.z + margin));
+        lo = Vec3(std::min(lo.x, p.x + offsetLo.x), std::min(lo.y, p.y + offsetLo.y), std::min(lo.z, p.z + offsetLo.z));
+        hi = Vec3(std::max(hi.x, p.x + offsetHi.x), std::max(hi.y, p.y + offsetHi.y), std::max(hi.z, p.z + offsetHi.z));
     }
 }
 

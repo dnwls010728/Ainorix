@@ -33,6 +33,12 @@ struct ShaderGraph {
     // by the author like a cull margin. Renderers grow shadow bounds by it instead of running the
     // vertex stage on the CPU; -1 = not declared (kDefaultOffsetMargin in RenderScene.h is used).
     float maxOffset = -1;
+    // Optional `offsetBounds` {min: [x,y,z], max: [x,y,z]}: the range of `offset` per world axis, for
+    // displacements that only go one way (a world bent down away from the camera moves vertices
+    // down by up to hundreds of metres, never up): culling and shadow bounds grow by exactly that,
+    // where `maxOffset` would grow them in every direction.
+    bool hasOffsetBounds = false;
+    Vec3 offsetMin, offsetMax;
     // Slots of the reserved uniforms `cameraPosition` (xyz, w = 1) and `lightDirection`
     // (unit vector toward the first directional light, w = 0); -1 = not declared. The
     // renderers fill them per frame (BuildDrawList), replacing defaults and overrides.

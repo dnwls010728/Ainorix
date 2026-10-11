@@ -9281,6 +9281,13 @@ TEST(ShaderGraphVertexOffset) {
     CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0})J"), graph, &err) && graph.maxOffset == -1);
     CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"maxOffset":-1})J"), graph, &err));
     CHECK(!CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"maxOffset":1})J"), graph, &err) && err.find("requires") != std::string::npos);
+    CHECK(CompileShaderGraph(Json::parse(R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"offsetBounds":{"min":[0,-300,0],"max":[0,0.5,0]}})J"), graph, &err) &&
+          graph.hasOffsetBounds && graph.offsetMin.y == -300 && graph.offsetMax.y == 0.5f);
+    for (const char* bad : {R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"offsetBounds":{"min":[0,1,0],"max":[0,0,0]}})J",
+                            R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"offsetBounds":{"min":[0,0],"max":[0,0,0]}})J",
+                            R"J({"nodes":[{"op":"uv"}],"color":0,"offsetBounds":{"min":[0,0,0],"max":[0,0,0]}})J",
+                            R"J({"nodes":[{"op":"uv"}],"color":0,"offset":0,"maxOffset":1,"offsetBounds":{"min":[0,0,0],"max":[0,0,0]}})J"})
+        CHECK(!CompileShaderGraph(Json::parse(bad), graph, &err));
     CHECK(GetBuiltinMesh("plane64")->positions.size() == 65 * 65 && GetBuiltinMesh("plane64")->TriangleCount() == 64 * 64 * 2);
 
     Engine e;
@@ -9361,6 +9368,15 @@ TEST(ShaderGraphVertexOffset) {
     CHECK(std::fabs((declared.first.y + 4) - (byDefault.first.y + kDefaultOffsetMargin)) < 1e-4f);
     CHECK(std::fabs(declared.second.x - declared.first.x - 12) < 1e-4f);
     CHECK(offsetBounds("").first.x > 1e29f);
+    // offsetBounds: a one-way range per axis (a world bent down away from the camera) grows the box
+    // downward only; the sides stay where the surface is, so culling still works around it.
+    CHECK(Call(e, "shader.create", R"J({"path":"bent.shader.json","graph":{"uniforms":{"shift":[3,1,0,0]},
+        "nodes":[{"op":"constant","value":[1,0,0,1]},{"op":"uniform","name":"shift"}],"color":0,"offset":1,
+        "offsetBounds":{"min":[0,-50,0],"max":[0,0,0]}}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"bent.mat.json","values":{"shader":"bent.shader.json","doubleSided":true}})J")["ok"].asBool());
+    const auto bent = offsetBounds("bent.mat.json");
+    CHECK(std::fabs((bent.second.x - bent.first.x) - (declared.second.x - declared.first.x - 8)) < 1e-4f);  // no sideways growth
+    CHECK(std::fabs(bent.first.y - (declared.first.y + 4 - 50)) < 1e-4f && std::fabs(bent.second.y - (declared.second.y - 4)) < 1e-4f);
     const RenderTarget software = check(e.Renderer(), "software");
     // Depth of field reads the moved surface's depth (GPU: its own depth pass).
     CHECK(Call(e, "component.set", R"J({"id":"Sheet","type":"MeshRenderer","values":{"material":"moved.mat.json"}})J")["ok"].asBool());
