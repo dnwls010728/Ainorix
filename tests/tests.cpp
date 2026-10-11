@@ -5496,6 +5496,24 @@ TEST(ShaderGraphSceneUniforms) {
     CHECK(Length(light.xyz() - toward) < 1e-6f && light.w == 0 && toward.y > 0.5f);
     draws = BuildDrawList(items, view.eye);  // no lights supplied: the declared value stays
     CHECK(draws[0].material.shaderUniforms[1].x == 9);
+
+    // `playing` is 1 while the game is played and 0 while its scene is edited, whatever the graph
+    // and the material say: an effect that is in the way while editing switches itself off.
+    CHECK(Call(e, "shader.create", R"J({"path":"materials/played.shader.json","graph":{
+      "uniforms":{"playing":[1,1,1,1]},
+      "nodes":[{"op":"uniform","name":"playing"},{"op":"constant","value":[0,0,1,1]},{"op":"constant","value":[1,0,0,1]},
+      {"op":"mix","args":[1,2,0]}],"color":3}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"played.mat.json","values":{"unlit":true,
+      "shader":"materials/played.shader.json","shaderUniforms":{"playing":1}}})J")["ok"].asBool());
+    Call(e, "component.set", R"J({"id":"Cube","type":"MeshRenderer","values":{"material":"played.mat.json"}})J");
+    CHECK(!e.InPlaySession() && count(0xFF0000) > 100 && count(0x0000FF) == 0);  // edited: 0, despite default and override
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(e.InPlaySession() && count(0x0000FF) > 100 && count(0xFF0000) == 0);   // played: 1
+    Call(e, "sim.stop");
+    CHECK(count(0xFF0000) > 100 && count(0x0000FF) == 0);
+    items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    CHECK(BuildDrawList(items, view.eye, nullptr, true)[0].material.shaderUniforms[0].x == 1);
+    CHECK(BuildDrawList(items, view.eye)[0].material.shaderUniforms[0].x == 0);
 }
 
 TEST(UIQuadsAreWhatSoftwareDraws) {
@@ -11487,6 +11505,23 @@ TEST(TeamDirectConversations) {
     CHECK(ReadTextFile(JoinPath(dir, "ask-echo.prompt.txt"), prompt) && prompt.find("You may only look") != std::string::npos);
     CHECK(Call(e, "team.settings", R"J({"askAccess":"edit"})J")["ok"].asBool() && Call(e, "team.connection")["result"]["askAccess"].asString() == "edit");
 
+    // The agent of direct conversations is a setting (Settings > Agents in the editor): team.ask
+    // without a backend asks it, with its model and its standing instructions.
+    CHECK(!Call(e, "team.connection")["result"]["askAgent"].asString().empty());  // unset: the first CLI that can run
+    Json agentSet = Call(e, "team.settings", R"J({"askBackend":"echo","askModel":"m","askInstructions":"Answer in Korean.\nCheck with a screenshot."})J");
+    CHECK(agentSet["result"]["askBackend"].asString() == "echo" && agentSet["result"]["askModel"].asString() == "m");
+    CHECK(Call(e, "team.connection")["result"]["askAgent"].asString() == "echo" && Call(e, "team.list")["result"]["askInstructions"].asString().find("Korean") != std::string::npos);
+    CHECK(Call(e, "team.ask", R"J({"thread":"chat-set","text":"Hello"})J")["ok"].asBool());
+    state = until("chat-set");
+    CHECK(state["backend"].asString() == "echo" && state["model"].asString() == "m" && state["messages"].size() == 2);
+    std::string standing;
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/tmp/ask-chat-set.system.md"), standing) && standing.find("Standing instructions from the person:\nAnswer in Korean.") != std::string::npos);
+    CHECK(Call(e, "team.settings", ("{\"askInstructions\":\"" + std::string(5000, 'x') + "\"}").c_str())["error"]["code"].asString() == "invalid_argument");
+    CHECK(Call(e, "team.settings", R"J({"askBackend":7})J")["error"]["code"].asString() == "invalid_argument");
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/team.json"), standing) && Json::parse(standing)["askBackend"].asString() == "echo");
+    CHECK(Call(e, "team.settings", R"J({"askBackend":"","askModel":"","askInstructions":""})J")["ok"].asBool());
+    CHECK(ReadTextFile(JoinPath(project, ".oe/team/team.json"), standing) && !Json::parse(standing).has("askBackend") && !Json::parse(standing).has("askInstructions"));
+
     // A CLI whose ownengine MCP server did not come up: the reply is followed by a notice and
     // team.backends shows the connection.
     CHECK(Call(e, "team.ask", R"J({"thread":"e5-nomcp","backend":"nomcp","text":"Build a house"})J")["ok"].asBool());
@@ -11514,14 +11549,14 @@ TEST(TeamDirectConversations) {
     CHECK(Call(e, "team.ask", R"J({"thread":"Bad Key","backend":"echo","text":"Go"})J")["error"]["code"].asString() == "invalid_argument");
 
     // Kept on disk: a new session (editor restart) lists and reads them again.
-    CHECK(Call(e, "team.threads")["result"].size() == 4);
+    CHECK(Call(e, "team.threads")["result"].size() == 5);
     team.reset();
     Engine again;
     CHECK(again.Open(project, &error));
     std::shared_ptr<TeamHandle> reopened = RegisterTeamCommands(again.Commands(), backends);
     state = Call(again, "team.thread", R"J({"thread":"e5-echo"})J")["result"];
     CHECK(state["messages"].size() == 6 && state["backend"].asString() == "echo");
-    CHECK(Call(again, "team.threads")["result"].size() == 4);
+    CHECK(Call(again, "team.threads")["result"].size() == 5);
     reopened.reset();
     RemoveAll(project);
 #endif
@@ -14441,6 +14476,95 @@ TEST(NativeEditorUIEditing) {
     CHECK(ed.Selected() == s.FindByName("Back"));
 }
 
+TEST(NativeEditorSceneUIEditing) {
+    // The Scene view draws the game's UI over the world and edits it in place, like the stopped Game
+    // view: a click on an element selects it, a drag moves it. What is behind the UI stays reachable:
+    // a panel that draws nothing does not take the click.
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("editor_scene_ui"), &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[0,30,60]},"Camera":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Box","components":{"Transform":{"scale":[2,2,2]},"MeshRenderer":{"mesh":"cube"}}})J");
+    Call(e, "entity.create", R"J({"name":"Back","components":{"UIPanel":{"anchor":"stretch","x":0,"y":0,"width":0,"height":0,"opacity":0}}})J");
+    Call(e, "entity.create", R"J({"name":"Play","parent":"Back","components":{"UIButton":{"text":"Play","anchor":"top-left","x":200,"y":150,"width":240,"height":80}}})J");
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 900, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    auto mouse = [](WindowEvent::Type type, float x, float y, int button = 0, bool down = false) {
+        WindowEvent ev;
+        ev.type = type;
+        ev.x = x;
+        ev.y = y;
+        ev.button = button;
+        ev.down = down;
+        return ev;
+    };
+    frames(3);
+    CHECK(Call(e, "editor.select", R"J({"ids":["Box"],"frame":true})J")["ok"].asBool());  // the box in the middle of the view
+    frames(3);
+    const std::array<float, 4> view = ed.SceneViewRect();
+    CHECK(view[2] > 400 && view[3] > 300);
+    const float k = view[3] / 720.0f;  // window pixels per reference pixel
+    Scene& s = e.GetScene();
+    const EntityId play = s.FindByName("Play"), box = s.FindByName("Box");
+    auto drag = [&](float x, float y, float dx, float dy) {
+        frames(2, {mouse(WindowEvent::Type::MouseMove, x, y)});
+        frames(2, {mouse(WindowEvent::Type::MouseButton, x, y, 0, true)});
+        for (int i = 1; i <= 4; ++i) frames(1, {mouse(WindowEvent::Type::MouseMove, x + dx * static_cast<float>(i) / 4, y + dy * static_cast<float>(i) / 4)});
+        frames(2, {mouse(WindowEvent::Type::MouseButton, x + dx, y + dy, 0, false)});
+    };
+    const size_t history = Call(e, "history.list", "{}")["result"]["entries"].size();
+    drag(view[0] + 320 * k, view[1] + 190 * k, 60 * k, 30 * k);
+    CHECK(ed.Selected() == play);
+    const UIButton* button = s.Get<UIButton>(play);
+    CHECK(std::fabs(button->x - 260) <= 1 && std::fabs(button->y - 180) <= 1);
+    CHECK(Call(e, "history.list", "{}")["result"]["entries"].size() == history + 1);  // one undo step, and no gizmo moved its Transform
+    // The bottom-right handle of the selected element resizes it.
+    drag(view[0] + (260 + 240) * k, view[1] + (180 + 80) * k, 40 * k, 20 * k);
+    CHECK(std::fabs(button->width - 280) <= 1 && std::fabs(button->height - 100) <= 1);
+    // The middle of the view is covered by the invisible screen-wide panel only: the click is the world's.
+    drag(view[0] + view[2] * 0.5f, view[1] + view[3] * 0.5f, 0, 0);
+    CHECK(ed.Selected() == box);
+    // A right click on an element asks about that element, and "this spot" is a place on the canvas;
+    // beside it the menu is about the world behind, as before.
+    auto rightClick = [&](float x, float y) {
+        frames(2, {mouse(WindowEvent::Type::MouseMove, x, y)});
+        frames(2, {mouse(WindowEvent::Type::MouseButton, x, y, 1, true)});
+        frames(2, {mouse(WindowEvent::Type::MouseButton, x, y, 1, false)});
+    };
+    auto closeMenu = [&] {  // with its submenu, which opened under the pointer
+        ImGui::ClosePopupsOverWindow(nullptr, false);
+        frames(2);
+    };
+    rightClick(view[0] + 300 * k, view[1] + 200 * k);
+    CHECK(ed.AskMenuEntity() == play);
+    CHECK(std::fabs(ed.AskMenuPoint().x - 300) <= 1 && std::fabs(ed.AskMenuPoint().y - 200) <= 1 && ed.AskMenuPoint().z == 0);
+    CHECK(ed.Selected() == box);  // a right click alone does not change the selection
+    closeMenu();
+    rightClick(view[0] + view[2] * 0.5f, view[1] + view[3] * 0.5f);
+    CHECK(ed.AskMenuEntity() == box);
+    closeMenu();
+    // While the game plays the Scene view leaves the UI to the Game view.
+    CHECK(Call(e, "sim.play")["ok"].asBool());
+    frames(3);
+    drag(view[0] + 320 * k, view[1] + 190 * k, 30 * k, 0);
+    CHECK(std::fabs(s.Get<UIButton>(play)->x - 260) <= 1);
+    CHECK(Call(e, "sim.stop")["ok"].asBool());
+}
+
 TEST(NativeEditorTilePainting) {
     Engine e;
     std::string err;
@@ -15445,7 +15569,7 @@ TEST(NativeEditorAskBubbles) {
         const Json messages = Call(e, "team.messages")["result"]["messages"];
         CHECK(messages.size() >= 1 && messages[0]["text"].asString() == "[Target #" + std::to_string(target) + "] what is this?");
         // The Agent Chat panel: a conversation with the CLI that is not about one object.
-        editor.FocusAgentChat("echo");
+        editor.FocusAgentChat();
         frames(4);
         CHECK(editor.AgentChatInputRect()[2] > 0);
         type("add a sound");
@@ -15495,7 +15619,7 @@ TEST(NativeEditorAskBubbles) {
         frames(3, {drop});
         CHECK(editor.AskAttachments(0) == std::vector<std::string>{note} && editor.AgentChatAttachments().size() == 1);
         frames(30);
-        editor.FocusAgentChat("echo");
+        editor.FocusAgentChat();
         frames(3);
         type("read this");
         for (int i = 0; i < 300; ++i) {

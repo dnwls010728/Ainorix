@@ -17,6 +17,7 @@ namespace {
 constexpr size_t kMaxNameCharacters = 40;
 constexpr size_t kMaxDescriptionBytes = 400;
 constexpr size_t kMaxInstructionsBytes = 16 * 1024;
+constexpr size_t kMaxAskInstructionsBytes = 4 * 1024;
 constexpr size_t kMaxTeamFileBytes = 1024 * 1024;
 constexpr uintmax_t kMaxAvatarSourceBytes = 16 * 1024 * 1024;
 constexpr int kMaxAvatarSourcePixels = 8192;
@@ -172,6 +173,9 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
     if (settings.maxHops != defaults.maxHops) root["maxHops"] = settings.maxHops;
     if (settings.inheritUserTools) root["inheritUserTools"] = true;
     if (settings.askAccess != defaults.askAccess) root["askAccess"] = settings.askAccess;
+    if (!settings.askBackend.empty()) root["askBackend"] = settings.askBackend;
+    if (!settings.askModel.empty()) root["askModel"] = settings.askModel;
+    if (!settings.askInstructions.empty()) root["askInstructions"] = settings.askInstructions;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents) {
         Json j = Json::MakeObject();
@@ -192,6 +196,22 @@ Json FileJson(const std::vector<AgentProfile>& agents, const TeamSettings& setti
     }
     root["agents"] = std::move(list);
     return root;
+}
+
+// The settings of the direct agent (askBackend, askModel, askInstructions), from the team file or team.settings.
+void AskSettings(const Json& values, TeamSettings& settings) {
+    auto text = [&](const char* key, std::string& out, size_t maxBytes, bool lines) {
+        const Json* value = values.find(key);
+        if (!value) return;
+        if (!value->isString() || value->asString().size() > maxBytes || HasControl(value->asString(), lines) ||
+            !ValidTeamText(value->asString(), maxBytes)) {
+            throw Invalid(std::string(key) + " must be text of at most " + std::to_string(maxBytes) + " bytes");
+        }
+        out = value->asString();
+    };
+    text("askBackend", settings.askBackend, 32, false);
+    text("askModel", settings.askModel, 128, false);
+    text("askInstructions", settings.askInstructions, kMaxAskInstructionsBytes, true);
 }
 
 int IntegerSetting(const Json& values, const char* key, int minimum, int maximum, int current) {
@@ -299,6 +319,7 @@ bool TeamStore::Open(const std::string& projectDir, std::string* error) {
         settings.inheritUserTools = BooleanSetting(root, "inheritUserTools", settings.inheritUserTools);
         settings.askAccess = root["askAccess"].asString(settings.askAccess);
         if (!ValidAccess(settings.askAccess)) throw Invalid("askAccess must be read, edit or full");
+        AskSettings(root, settings);
         settings.lead = root["lead"].asString("");
         const bool leadExists = std::any_of(agents.begin(), agents.end(), [&](const AgentProfile& a) { return a.id == settings.lead; });
         if (!settings.lead.empty() && !leadExists) throw Invalid("lead \"" + settings.lead + "\" is not an agent of the team");
@@ -495,6 +516,7 @@ void TeamStore::SetSettings(const Json& values) {
         if (!access->isString() || !ValidAccess(access->asString())) throw Invalid("askAccess must be read, edit or full");
         settings.askAccess = access->asString();
     }
+    AskSettings(values, settings);
     if (const Json* lead = values.find("lead")) {
         if (!lead->isString()) throw Invalid("lead must be an agent id or name, or \"\" for nobody");
         settings.lead = lead->asString().empty() ? std::string() : agents_[RequireIndex(lead->asString())].id;
@@ -529,6 +551,9 @@ Json TeamStore::ToJson() const {
     root["rotateAboveInputTokens"] = settings_.rotateAboveInputTokens;
     root["inheritUserTools"] = settings_.inheritUserTools;
     root["askAccess"] = settings_.askAccess;
+    root["askBackend"] = settings_.askBackend;
+    root["askModel"] = settings_.askModel;
+    root["askInstructions"] = settings_.askInstructions;
     Json list = Json::MakeArray();
     for (const AgentProfile& agent : agents_) list.push(AgentToJson(agent));
     root["agents"] = std::move(list);

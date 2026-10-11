@@ -183,6 +183,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "Grid=%d", &i) == 1) m->showGrid = i != 0;
     else if (std::sscanf(line, "Colliders=%d", &i) == 1) m->showColliders = i != 0;
     else if (std::sscanf(line, "Icons=%d", &i) == 1) m->showIcons = i != 0;
+    else if (std::sscanf(line, "SceneUI=%d", &i) == 1) m->showSceneUI = i != 0;
     else if (std::sscanf(line, "Snap=%d", &i) == 1) m->snap = i != 0;
     else if (std::sscanf(line, "SnapMove=%f", &f) == 1) m->snapMove = f;
     else if (std::sscanf(line, "SnapAngle=%f", &f) == 1) m->snapAngle = f;
@@ -240,7 +241,8 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     int panels = (m->showHierarchy ? 1 : 0) | (m->showInspector ? 2 : 0) | (m->showScene ? 4 : 0) | (m->showGame ? 8 : 0) |
                  (m->showConsole ? 16 : 0) | (m->showAssets ? 32 : 0) | (m->showScripts ? 64 : 0) | (m->showTiles ? 128 : 0) | (m->showNetwork ? 256 : 0);
     buf->appendf("[%s][Editor]\n", handler->TypeName);
-    buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons, m->snap);
+    buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSceneUI=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons,
+                 m->showSceneUI, m->snap);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\nAgentChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam,
@@ -1283,6 +1285,7 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::MenuItem(Tr("Grid"), "", &showGrid);
         ImGui::MenuItem(Tr("Colliders"), "", &showColliders);
         ImGui::MenuItem(Tr("Entity Icons"), "", &showIcons);
+        ImGui::MenuItem(Tr("UI in Scene View"), "", &showSceneUI);
         bool mode2D = cam.mode2D;
         if (ImGui::MenuItem(Tr("2D Scene View"), "", &mode2D)) cam.Set2D(mode2D);
         ImGui::Separator();
@@ -1999,10 +2002,7 @@ void NativeEditor::OpenAskSpot(const Vec3& point, EntityId surface, const std::s
     impl_->OpenAskSpot(point, Vec3(0, 1, 0), surface, backend);
 }
 Vec3 NativeEditor::AskMenuPoint() const { return impl_->askMenuPoint; }
-void NativeEditor::FocusAgentChat(const std::string& backend) {
-    impl_->showAgentChat = impl_->requestAgentChatFocus = impl_->agentChatFocusInput = true;
-    if (!backend.empty() && backend != impl_->agentChatBackend) impl_->AgentChatSelect(backend, "");
-}
+void NativeEditor::FocusAgentChat() { impl_->showAgentChat = impl_->requestAgentChatFocus = impl_->agentChatFocusInput = true; }
 std::array<float, 4> NativeEditor::AgentChatInputRect() const { return impl_->agentChatInputRect; }
 int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }
 std::vector<std::string> NativeEditor::AgentChatAttachments() const { return impl_->agentChatAttachments; }

@@ -1286,14 +1286,31 @@ ChatMessage& TeamSession::AppendDirect(Direct& direct, ChatMessage message) {
     return direct.messages.back();
 }
 
-Json TeamSession::Ask(const std::string& thread, const std::string& backendId, const std::string& model, const std::string& text,
+std::string TeamSession::AskBackend() {
+    const std::string& chosen = store_.Settings().askBackend;
+    if (!chosen.empty()) return chosen;
+    for (const Backend& backend : backends_) {
+        AgentProfile probe;
+        probe.backend = backend.id;
+        if (OfflineReason(probe, nullptr).empty()) return backend.id;
+    }
+    return std::string();
+}
+
+Json TeamSession::Ask(const std::string& thread, const std::string& givenBackend, const std::string& givenModel, const std::string& text,
                       const std::string& context, const std::vector<std::string>& attachments) {
+    // Nothing chosen for this message: the agent and model of the settings.
+    const std::string backendId = givenBackend.empty() ? AskBackend() : givenBackend;
+    const std::string model = givenBackend.empty() && givenModel.empty() && backendId == store_.Settings().askBackend ? store_.Settings().askModel : givenModel;
+    if (backendId.empty()) {
+        throw ApiError("agent_offline", "no agent CLI can run here", "Install one (team.backends shows how), then choose it with team.settings {askBackend}.");
+    }
     if (!ValidThreadKey(thread)) throw ApiError("invalid_argument", "thread must be 1..64 characters of a-z, 0-9, '-' and '_'");
     if (text.find_first_not_of(" \t\r\n") == std::string::npos && attachments.empty()) throw ApiError("invalid_argument", "the message is empty");
     if (!ValidTeamText(text, kMaxSendBytes) || !ValidTeamText(context, kMaxSendBytes)) {
         throw ApiError("invalid_argument", "text and context must be UTF-8 text of at most 32768 bytes each");
     }
-    // The CLI and model are what the person chose: OfflineReason checks a profile of them.
+    // OfflineReason checks a profile of the CLI and model.
     AgentProfile agent;
     agent.id = "ask-" + backendId;
     agent.backend = backendId;
@@ -1332,7 +1349,9 @@ Json TeamSession::Ask(const std::string& thread, const std::string& backendId, c
         "You are " + backend->displayName + ", asked directly by the person working in the OwnEngine editor (not through the agent team). "
         "They write from a bubble attached to an object in the Scene view; the prompt starts with that object.\n"
         "Keep replies short: say what you changed and what you verified.\n"
-        "Project directory: " + projectDir_ + " (working directory). Read AGENTS.md if present. Save generated images in .oe/team/images/.\n";
+        "Project directory: " + projectDir_ + " (working directory). Read AGENTS.md if present. Save generated images in .oe/team/images/.\n" +
+        (store_.Settings().askInstructions.empty() ? std::string()
+                                                   : "\nStanding instructions from the person:\n" + store_.Settings().askInstructions + "\n");
 
     const std::string tmp = JoinPath(Directory(), "tmp"), relativeTmp = ".oe/team/tmp/", name = "ask-" + thread;
     CreateDirectories(tmp);

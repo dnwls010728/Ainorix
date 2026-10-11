@@ -403,8 +403,14 @@ void NativeEditor::Impl::ScenePanel() {
     view.proj = cam.Projection(aspect);
     view.clearColor = sceneCam.clearColor;
     view.shaderTime = static_cast<float>(engine.SimTime());
+    view.playing = engine.InPlaySession();
     view.drawGrid = showGrid && !cam.mode2D;
     view.highlight = Primary();
+    // The game's UI over the world, laid out for this view's size, to be edited where it is seen.
+    // While the game plays its scripts own the UI: the Game view shows it.
+    const bool sceneUI = showSceneUI && !InPlaySession() && !TilePainting();
+    view.drawUI = sceneUI;
+    sceneUIShown = sceneUI;
     if (showGrid && cam.mode2D && cam.Eye().z > 1e-3f) {
         // 2D: a grid in the XY plane that follows the camera and coarsens with zoom.
         // Orthographic scale does not change with the grid's distance from the camera.
@@ -545,7 +551,14 @@ void NativeEditor::Impl::ScenePanel() {
     }
     ImGui::Dummy(sceneImageSize);
     gizmoUsing = false;
-    if (!painting && (!compassHot || gizmoWasUsing)) {
+    // A UI element is placed by its rectangle, not by a Transform: it gets handles instead of the gizmo.
+    bool selectedUI = false;
+    if (const EntityRow* row = Row(Primary())) {
+        for (const char* type : {"UIText", "UIPanel", "UIButton", "UIImage", "UISlider", "UIInput", "UIDropdown", "UIJoystick"}) selectedUI = selectedUI || row->Has(type);
+    }
+    if (sceneUI && selectedUI) {
+        gizmoWasUsing = false;
+    } else if (!painting && (!compassHot || gizmoWasUsing)) {
         // ImGuizmo also checks last frame's hovered item. The scene background
         // must not block a handle entered and pressed in the same event batch.
         ImGuiContext& context = *ImGui::GetCurrentContext();
@@ -571,6 +584,8 @@ void NativeEditor::Impl::ScenePanel() {
     }
     if (!compassHot) SceneCameraInput(io);
     else { sceneLooking = false; scenePressPending = false; }
+    // UI first: it is in front of the world. Alt+drag stays the camera's.
+    if (sceneUI && UIEdit(dl, pos, w, h, sceneHovered && !compassHot && !gizmoUsing && !io.KeyAlt, true)) clickedLeft = false;
 
     // Assets dropped into the view.
     if (ImGui::BeginDragDropTarget()) {
@@ -612,6 +627,19 @@ void NativeEditor::Impl::ScenePanel() {
             askMenuEntity = id;
             askMenuPoint = point;
             askMenuNormal = normal;
+            askMenuUI = false;
+            // The UI is in front of the world: over an element the menu is about that element, and
+            // "this spot" is a place on the canvas (reference pixels), not what lies behind it.
+            if (sceneUI) {
+                const EntityId element = UIElementAt(LayoutUI(scene, w, h, &engine.Assets()), x, y, true);
+                if (element != kNullEntity) {
+                    const float scale = std::max(1e-3f, UIScale(scene, w, h));
+                    askMenuEntity = element;
+                    askMenuPoint = Vec3(std::round(x / scale), std::round(y / scale), 0);
+                    askMenuNormal = Vec3(0, 0, 1);
+                    askMenuUI = true;
+                }
+            }
             ImGui::OpenPopup("##sceneAsk");
         }
     }
@@ -647,6 +675,8 @@ void NativeEditor::Impl::ScenePanel() {
         ImGui::SameLine(0, 3);
         bool mode2D = cam.mode2D;
         if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);
+        ImGui::SameLine(0, 3);
+        OverlayToggle("UI", &showSceneUI, Tr("The game's UI over the world: click an element to select it, drag to move, handles to resize"));
         if (Row(Primary()) && Row(Primary())->Has("Tilemap")) {
             ImGui::SameLine(0, 3);
             if (OverlayToggle(Tr("Paint Tiles"), &tilePaint, Tr("Paint the selected Tilemap (brush from the Tiles panel): left paint, right erase, Shift rectangle, Ctrl pick"))) {
@@ -801,6 +831,7 @@ void NativeEditor::Impl::GamePanel() {
     RenderView view;
     bool hasCamera = MakeSceneView(scene, static_cast<float>(w) / static_cast<float>(h), view);
     view.shaderTime = static_cast<float>(GameEngine().SimTime());
+    view.playing = GameEngine().InPlaySession();
     view.drawUI = true;
     GameEngine().AppendDebugLines(view.lines);
     sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kGameSlot);
@@ -855,7 +886,7 @@ void NativeEditor::Impl::GamePanel() {
 
     if (gameFocused && session && gameHovered && io.MouseWheel != 0)
         Call("input.mouse", ObjectOf({{"wheel", Json(io.MouseWheel)}}), true);
-    if (!session) GameUIEdit(dl, pos, w, h);
+    if (!session) UIEdit(dl, pos, w, h, gameHovered, false);
 
     if (session) dl->AddRect(pos, pos + gameImageSize, gameFocused ? IM_COL32(90, 200, 120, 255) : IM_COL32(255, 180, 60, 160), 0.0f, 2.0f);
     ImGui::End();
@@ -884,10 +915,29 @@ float AnchorPivot(const std::string& anchor, const char* low, const char* high) 
 }
 }  // namespace
 
-// Editing UI where it is drawn: click selects the topmost element under the pointer, dragging it
-// moves it (x, y), the eight handles resize it (width, height, keeping the opposite edge in place),
-// arrow keys nudge. Every drag is one undo step (component.set {merge}).
-void NativeEditor::Impl::GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h) {
+EntityId NativeEditor::Impl::UIElementAt(const std::vector<UIRect>& rects, float x, float y, bool inScene) const {
+    const Scene& scene = engine.GetScene();
+    const EntityId primary = Primary();
+    EntityId hit = kNullEntity;
+    for (const UIRect& r : rects) {  // last = topmost
+        if (x < r.x || x >= r.x + r.w || y < r.y || y >= r.y + r.h) continue;
+        if (r.clipped && !(x >= r.clip[0] && x < r.clip[2] && y >= r.clip[1] && y < r.clip[3])) continue;
+        // Over the world a panel that draws nothing (a screen-wide container) must not be in the way
+        // of what is behind it; the Hierarchy still selects it.
+        if (inScene && r.kind == UIRect::Kind::Panel) {
+            const UIPanel* panel = scene.Get<UIPanel>(r.entity);
+            if (panel && panel->opacity <= 0.0f && panel->texture.empty() && r.entity != primary) continue;
+        }
+        hit = r.entity;
+    }
+    return hit;
+}
+
+// Editing UI where it is drawn (the Scene view and the stopped Game view): click selects the topmost
+// element under the pointer, dragging it moves it (x, y), the eight handles resize it (width, height,
+// keeping the opposite edge in place), arrow keys nudge. Every drag is one undo step
+// (component.set {merge}).
+bool NativeEditor::Impl::UIEdit(ImDrawList* dl, ImVec2 pos, int w, int h, bool hovered, bool inScene) {
     Scene& scene = engine.GetScene();
     ImGuiIO& io = ImGui::GetIO();
     const std::vector<UIRect> rects = LayoutUI(scene, w, h, &engine.Assets());
@@ -915,19 +965,18 @@ void NativeEditor::Impl::GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h) {
         }
     }
 
-    if (gameHovered && uiDragHandle < 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    bool pressed = false;
+    if (hovered && uiDragHandle < 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        pressed = true;
         const UIRect* hit = nullptr;
         if (hoverHandle >= 0) {
             hit = sel;
         } else {
-            for (const UIRect& r : rects) {  // last = topmost
-                if (mouse.x < r.x || mouse.x >= r.x + r.w || mouse.y < r.y || mouse.y >= r.y + r.h) continue;
-                if (r.clipped && !(mouse.x >= r.clip[0] && mouse.x < r.clip[2] && mouse.y >= r.clip[1] && mouse.y < r.clip[3])) continue;
-                hit = &r;
-            }
+            hit = rectOf(UIElementAt(rects, mouse.x, mouse.y, inScene));
         }
         if (!hit) {
-            if (!io.KeyCtrl) SelectOnly(kNullEntity);
+            if (inScene) pressed = false;  // the world's click (ScenePanel picks)
+            else if (!io.KeyCtrl) SelectOnly(kNullEntity);
         } else if (io.KeyCtrl && hoverHandle < 0) {
             ToggleSelect(hit->entity);
         } else {
@@ -985,7 +1034,7 @@ void NativeEditor::Impl::GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h) {
         }
     }
     // Arrow keys nudge the selected elements by one reference pixel (ten with Shift).
-    if (gameHovered && sel && uiDragHandle < 0 && !io.WantTextInput) {
+    if (hovered && sel && uiDragHandle < 0 && !io.WantTextInput) {
         float nx = 0, ny = 0;
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) nx = -1;
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) nx = 1;
@@ -1005,7 +1054,7 @@ void NativeEditor::Impl::GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h) {
     }
 
     // Outlines: every selected element, handles and size readout on the primary one.
-    dl->PushClipRect(pos, pos + gameImageSize, true);
+    dl->PushClipRect(pos, pos + ImVec2(static_cast<float>(w), static_cast<float>(h)), true);
     for (EntityId id : selection) {
         const UIRect* r = rectOf(id);
         if (!r) continue;
@@ -1028,11 +1077,12 @@ void NativeEditor::Impl::GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h) {
         dl->AddText(at, IM_COL32(255, 220, 150, 255), label.c_str());
     }
     dl->PopClipRect();
-    if (gameHovered && uiDragHandle < 0 && hoverHandle >= 0) {
+    if (hovered && uiDragHandle < 0 && hoverHandle >= 0) {
         static const ImGuiMouseCursor cursors[8] = {ImGuiMouseCursor_ResizeNWSE, ImGuiMouseCursor_ResizeNS, ImGuiMouseCursor_ResizeNESW, ImGuiMouseCursor_ResizeEW,
                                                     ImGuiMouseCursor_ResizeNWSE, ImGuiMouseCursor_ResizeNS, ImGuiMouseCursor_ResizeNESW, ImGuiMouseCursor_ResizeEW};
         ImGui::SetMouseCursor(cursors[hoverHandle]);
     }
+    return uiDragHandle >= 0 || pressed;
 }
 
 }  // namespace oe

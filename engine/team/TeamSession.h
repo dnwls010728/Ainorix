@@ -101,9 +101,10 @@ public:
     Json Task(const std::string& id) const { return tasks_.Get(id); }
     Json Tasks() const { return tasks_.List(); }
 
-    // Direct conversations (docs/TEAM.md §7.4): one agent CLI and model chosen per conversation,
-    // outside the roster and the team chat; the editor's "Ask an agent" bubbles keep one per
-    // entity and CLI. `thread` is [a-z0-9_-]{1,64}; it resumes the CLI's own conversation.
+    // Direct conversations (docs/TEAM.md §7.4): one agent CLI, outside the roster and the team
+    // chat; the editor's Ask bubbles keep one per entity and CLI. An empty `backend` is the agent
+    // of the settings (AskBackend), with its model unless one is given.
+    // `thread` is [a-z0-9_-]{1,64}; it resumes the CLI's own conversation.
     // `context` goes before the text in the prompt only (what the person points at). Throws
     // ApiError for an unknown or missing CLI, a busy thread or invalid text. Result: DirectState.
     // `attachments` work as in Send (files the CLI is pointed to; the text may then be empty).
@@ -112,6 +113,9 @@ public:
     // {thread, backend, model, running, activity, elapsed, tools, revision, messages (oldest first)};
     // an unknown thread has no messages.
     Json DirectState(const std::string& thread);
+    // The CLI direct conversations use: the settings' askBackend, or (unset) the first one that can
+    // run turns here; empty when there is none.
+    std::string AskBackend();
     // Stops the thread's running turn; false when none was running.
     bool CancelDirect(const std::string& thread);
     // Stored threads: [{thread, backend, model, messages, running, title (first message), updated}].

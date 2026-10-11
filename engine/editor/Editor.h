@@ -94,8 +94,8 @@ public:
     EntityId AskMenuEntity() const;
     Vec3 AskMenuPoint() const;  // where the open menu was opened, in world space
     int AskBubbleCount() const;
-    // The Agent Chat panel in front, talking to `backend` (empty: as it was), and its input's bounds.
-    void FocusAgentChat(const std::string& backend = {});
+    // The Agent Chat panel in front (it talks to the agent of Settings > Agents), and its input's bounds.
+    void FocusAgentChat();
     std::array<float, 4> AgentChatInputRect() const;
     std::array<float, 4> AskControlRect(int index, const std::string& name) const;
     // Files waiting to go with the next message of the Agent Chat panel / of the bubble at `index`.

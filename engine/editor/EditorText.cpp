@@ -17,6 +17,19 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Ask the Agent", "에이전트에게 지시", "エージェントに依頼"},
+    {"The agent chosen in Settings > Agents is not installed.", "설정 > 에이전트에서 고른 에이전트가 설치되어 있지 않습니다.", "設定 > エージェントで選んだエージェントがインストールされていません。"},
+    {"Agent Settings", "에이전트 설정", "エージェント設定"},
+    {"Agent settings: which agent answers, its model and instructions, login, permissions", "에이전트 설정: 답할 에이전트, 모델, 지시문, 로그인, 권한", "エージェント設定：応答するエージェント、モデル、指示、ログイン、権限"},
+    {"Automatic (%s)", "자동 (%s)", "自動 (%s)"},
+    {"none installed", "설치된 것 없음", "インストールなし"},
+    {"The first installed CLI that can run turns", "설치된 CLI 중 실행 가능한 첫 번째", "実行できる最初のインストール済みCLI"},
+    {"Choose an agent to choose its model", "모델을 고르려면 에이전트를 먼저 고르세요", "モデルを選ぶには先にエージェントを選んでください"},
+    {"Given to the agent with every conversation, e.g. the language to answer in or what to check after a change.", "모든 대화에서 에이전트에게 전달됩니다. 예: 답변 언어, 수정 후 확인할 것.", "すべての会話でエージェントに渡されます。例：回答の言語、変更後に確認すること。"},
+    {"The agent that answers in Agent Chat and in the Scene view's Ask bubbles.", "에이전트 채팅과 씬 뷰의 지시 말풍선에서 답하는 에이전트입니다.", "エージェントチャットとシーンビューの依頼吹き出しで応答するエージェントです。"},
+    {"Installed agent CLIs", "설치된 에이전트 CLI", "インストール済みのエージェントCLI"},
+    {"UI in Scene View", "씬 뷰에 UI 표시", "シーンビューにUIを表示"},
+    {"The game's UI over the world: click an element to select it, drag to move, handles to resize", "월드 위에 게임 UI 표시: 요소를 클릭해 선택, 드래그로 이동, 핸들로 크기 조절", "ワールドの上にゲームUIを表示：要素をクリックで選択、ドラッグで移動、ハンドルでサイズ変更"},
     {"Parameter", "파라미터", "パラメーター"},
     {"Channel uses authored values until nodes are applied.", "노드 적용 전에는 기존 설정을 사용합니다.", "ノード適用前は既存の設定を使用します。"},
     {"Remove Node", "노드 삭제", "ノードを削除"},
@@ -479,7 +492,6 @@ const Entry kCatalog[] = {
     {"New", "새로", "新規"},
     {"New conversation", "새 대화", "新しい会話"},
     {"%d tools", "도구 %d회", "ツール %d 回"},
-    {"Model of the next message", "다음 메시지에 쓸 모델", "次のメッセージのモデル"},
     {"Start a new conversation (the CLI forgets the earlier one)", "새 대화 시작 (CLI는 이전 대화를 기억하지 않습니다)", "新しい会話を始める (CLI は前の会話を覚えていません)"},
     {"Talk to %s directly, outside the team. It works in this project through the open editor.", "팀을 거치지 않고 %s에게 직접 말합니다. 열려 있는 에디터를 통해 이 프로젝트에서 작업합니다.", "チームを通さず %s と直接話します。開いているエディターを通してこのプロジェクトで作業します。"},
     {"Message %s (Enter sends; @ an object, # a file)", "%s에게 메시지 (Enter 보내기, @ 오브젝트, # 파일)", "%s へのメッセージ (Enter で送信、@ オブジェクト、# ファイル)"},
@@ -488,7 +500,6 @@ const Entry kCatalog[] = {
     {"This spot", "이 위치", "この場所"},
     {"this spot", "이 위치", "この場所"},
     {"on %s", "%s 위", "%s の上"},
-    {"Ask an Agent", "에이전트에게 지시", "エージェントに依頼"},
     {"Send (Enter)", "보내기 (Enter)", "送信 (Enter)"},
     {"Looking for agent CLIs...", "에이전트 CLI를 찾는 중...", "エージェント CLI を検索中..."},
     {"No agent CLI is installed.", "설치된 에이전트 CLI가 없습니다.", "エージェント CLI がインストールされていません。"},
@@ -504,7 +515,6 @@ const Entry kCatalog[] = {
     {"Click to remove", "클릭하면 뺍니다", "クリックで外す"},
     {"Native file dialogs unavailable; drop the file on the input instead.", "파일 선택 창을 쓸 수 없습니다. 입력창에 파일을 끌어다 놓으세요.", "ファイル選択ダイアログを使えません。入力欄にファイルをドロップしてください。"},
     {"Editor", "에디터", "エディター"},
-    {"Agent settings: installed CLIs, login, engine connection, permissions", "에이전트 설정: 설치된 CLI, 로그인, 엔진 연결, 권한", "エージェント設定: インストール済み CLI、ログイン、エンジン接続、権限"},
 
     // ----- Settings
     {"Settings", "설정", "設定"},

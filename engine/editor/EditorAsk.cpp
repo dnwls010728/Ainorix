@@ -1,8 +1,9 @@
 // Ask bubbles (docs/EDITOR.md "Asking about an object"): right-click an object in the Scene view,
-// then ask the agent team (the message goes to the team chat, naming the object) or one installed
-// agent CLI directly (team.ask: one conversation per object and CLI, outside the team chat, with a
-// model picked in the bubble). The bubble stays next to the object while the camera moves and
-// shows the conversation. Reads team.thread / the chat cache, writes through team.ask / team.send.
+// then ask the agent team (the message goes to the team chat, naming the object) or the agent
+// directly (team.ask: one conversation per object and CLI, outside the team chat). Which CLI the
+// agent is, its model and its standing instructions are set once in Settings > Agents; nothing is
+// chosen here. The bubble stays next to the object while the camera moves and shows the
+// conversation. Reads team.thread / the chat cache, writes through team.ask / team.send.
 #include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include "editor/EditorText.h"
@@ -104,7 +105,8 @@ void DrawAskLines(const std::vector<AskLine>& lines, const std::string& activity
 
 std::string NativeEditor::Impl::SpotLabel(const AskBubble& bubble) const {
     const EntityRow* surface = Row(bubble.entity);
-    std::string label = Format("(%.2f, %.2f, %.2f)", bubble.point.x, bubble.point.y, bubble.point.z);
+    std::string label = bubble.ui ? Format("(%.0f, %.0f) px", bubble.point.x, bubble.point.y)
+                                  : Format("(%.2f, %.2f, %.2f)", bubble.point.x, bubble.point.y, bubble.point.z);
     if (surface) label += " " + Format(Tr("on %s"), surface->name.c_str());
     return label;
 }
@@ -125,6 +127,19 @@ std::string NativeEditor::Impl::AskContext(const AskBubble& bubble) const {
     }
     const Vec3& p = bubble.point;
     const Vec3& n = bubble.normal;
+    if (bubble.ui) {
+        // A place on the screen, not in the world: canvas reference pixels, as UI elements are placed.
+        const Scene& world = engine.GetScene();
+        const int w = std::max(1, static_cast<int>(sceneImageSize.x)), h = std::max(1, static_cast<int>(sceneImageSize.y));
+        const float scale = std::max(1e-3f, UIScale(world, w, h));
+        std::string text = Format("The person is pointing at a spot of the game's UI (drawn over the editor's Scene view): canvas position "
+                                  "(%.0f, %.0f) in reference pixels from the top-left corner, on a canvas of %.0f x %.0f reference pixels as shown there",
+                                  p.x, p.y, static_cast<float>(w) / scale, static_cast<float>(h) / scale);
+        if (row) text += ", over UI element #" + id + " \"" + row->name + "\" (components: " + components + ")";
+        return text + where + ". When they ask to put, add or move something \"here\", it is a UI element at that canvas position "
+                              "(mind the anchor of the element and of its parent; ui.layout gives the rectangles in pixels). "
+                              "editor.state shows what else they see.";
+    }
     std::string text = Format("The person is pointing at a spot in the editor's Scene view: world position (%.3f, %.3f, %.3f)", p.x, p.y, p.z);
     if (row) {
         text += Format(", on the surface of entity #%s \"%s\" (components: %s; surface normal (%.2f, %.2f, %.2f))", id.c_str(), row->name.c_str(),
@@ -136,7 +151,16 @@ std::string NativeEditor::Impl::AskContext(const AskBubble& bubble) const {
                           "editor.state shows what else they see.";
 }
 
-// One conversation per object (or spot) and CLI: opening the bubble again shows it, with its model.
+std::string NativeEditor::Impl::AskAgent() const {
+    const std::string chosen = team["askBackend"].asString("");
+    if (!chosen.empty()) return chosen;
+    for (const Json& backend : teamBackends.items()) {
+        if (backend["status"].asString("") == "installed" && backend["runsTurns"].asBool(true)) return backend["id"].asString("");
+    }
+    return std::string();
+}
+
+// One conversation per object (or spot) and CLI: opening the bubble again shows it.
 void NativeEditor::Impl::OpenAskBubble(EntityId entity, const std::string& backend) {
     for (AskBubble& bubble : askBubbles) {
         if (!bubble.spot && bubble.entity == entity && bubble.backend == backend) {
@@ -152,11 +176,11 @@ void NativeEditor::Impl::OpenAskBubble(EntityId entity, const std::string& backe
     askBubbles.push_back(std::move(bubble));
 }
 
-void NativeEditor::Impl::OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend) {
+void NativeEditor::Impl::OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend, bool ui) {
     // Spots a few centimetres apart are the same place (and the same conversation).
     const Vec3 rounded(std::round(point.x * 10.0f) / 10.0f, std::round(point.y * 10.0f) / 10.0f, std::round(point.z * 10.0f) / 10.0f);
     for (AskBubble& bubble : askBubbles) {
-        if (bubble.spot && bubble.backend == backend && Length(bubble.point - point) < 0.05f) {
+        if (bubble.spot && bubble.ui == ui && bubble.backend == backend && Length(bubble.point - point) < (ui ? 0.5f : 0.05f)) {
             bubble.focusInput = true;
             return;
         }
@@ -165,12 +189,13 @@ void NativeEditor::Impl::OpenAskSpot(const Vec3& point, const Vec3& normal, Enti
     bubble.serial = ++askSerial;
     bubble.entity = surface;
     bubble.spot = true;
+    bubble.ui = ui;
     bubble.point = point;
     bubble.normal = normal;
     bubble.backend = backend;
     if (!backend.empty()) {
         uint32_t hash = 2166136261u;
-        for (char c : Format("%.1f,%.1f,%.1f", rounded.x, rounded.y, rounded.z)) hash = (hash ^ static_cast<unsigned char>(c)) * 16777619u;
+        for (char c : Format(ui ? "ui:%.1f,%.1f,%.1f" : "%.1f,%.1f,%.1f", rounded.x, rounded.y, rounded.z)) hash = (hash ^ static_cast<unsigned char>(c)) * 16777619u;
         bubble.thread = Format("p%08x-", hash) + backend;
     }
     askBubbles.push_back(std::move(bubble));
@@ -178,9 +203,12 @@ void NativeEditor::Impl::OpenAskSpot(const Vec3& point, const Vec3& normal, Enti
 
 void NativeEditor::Impl::SceneAskMenu() {
     if (!ImGui::BeginPopup("##sceneAsk")) return;
-    // One submenu per target (the object, this spot): the team, then the installed CLIs.
-    // Returns "team", a CLI id, or "" while nothing was chosen.
+    // One submenu per target (the object, this spot): the team, or the agent of Settings > Agents.
+    // Returns "team", the agent's CLI id, or "" while nothing was chosen.
     const bool teamReady = teamAvailable && team["agents"].size() > 0;
+    const std::string agentId = AskAgent();
+    const Json* agentBackend = TeamBackend(agentId);
+    const bool agentReady = agentBackend && (*agentBackend)["status"].asString("") == "installed";
     auto targetMenu = [&](const std::string& label) {
         std::string chosen;
         if (!ImGui::BeginMenu(label.c_str())) return chosen;
@@ -189,21 +217,15 @@ void NativeEditor::Impl::SceneAskMenu() {
             if (teamAvailable) ImGui::SetTooltip("%s", Tr("The team has no agents yet (Team panel)."));
             else ImGui::SetTooltip("%s", Tr("Agent teams need `oe editor`."));
         }
-        ImGui::Separator();
-        ImGui::TextDisabled("%s", Tr("Ask an Agent"));
-        int installed = 0;
-        bool detecting = teamBackends.size() == 0;
-        for (const Json& backend : teamBackends.items()) {
-            const std::string status = backend["status"].asString("");
-            detecting = detecting || status == "detecting";
-            if (status != "installed") continue;
-            ++installed;
-            const std::string id = backend["id"].asString("");
-            if (ImGui::MenuItem((WithIcon(kIconBot, backend["name"].asString(id)) + "##" + id).c_str())) chosen = id;
+        if (ImGui::MenuItem(WithIcon(kIconBot, Tr("Ask the Agent")).c_str(), agentBackend ? (*agentBackend)["name"].asString(agentId).c_str() : nullptr, false, agentReady)) {
+            chosen = agentId;
         }
-        if (installed == 0) {
-            if (detecting) ImGui::TextDisabled("%s", Tr("Looking for agent CLIs..."));
-            else ImGui::TextDisabled("%s", Tr("No agent CLI is installed."));
+        if (!agentReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            bool detecting = teamBackends.size() == 0;
+            for (const Json& backend : teamBackends.items()) detecting = detecting || backend["status"].asString("") == "detecting";
+            if (detecting) ImGui::SetTooltip("%s", Tr("Looking for agent CLIs..."));
+            else if (agentId.empty()) ImGui::SetTooltip("%s", Tr("No agent CLI is installed."));
+            else ImGui::SetTooltip("%s", Tr("The agent chosen in Settings > Agents is not installed."));
         }
         ImGui::EndMenu();
         return chosen;
@@ -222,10 +244,11 @@ void NativeEditor::Impl::SceneAskMenu() {
     // ... and the spot itself: "put something here".
     AskBubble probe;
     probe.spot = true;
+    probe.ui = askMenuUI;
     probe.point = askMenuPoint;
     probe.entity = askMenuEntity;
     const std::string chosen = targetMenu(WithIcon(kIconMapPin, std::string(Tr("This spot")) + "  " + SpotLabel(probe)) + "##spot");
-    if (!chosen.empty()) OpenAskSpot(askMenuPoint, askMenuNormal, askMenuEntity, chosen == "team" ? std::string() : chosen);
+    if (!chosen.empty()) OpenAskSpot(askMenuPoint, askMenuNormal, askMenuEntity, chosen == "team" ? std::string() : chosen, askMenuUI);
     ImGui::EndPopup();
 }
 
@@ -246,8 +269,8 @@ void NativeEditor::Impl::AskSend(AskBubble& bubble) {
         bubble.sent.push_back(static_cast<uint64_t>(result["result"]["message"]["id"].asNumber(0)));
     } else {
         const Json result = Call("team.ask", ObjectOf({{"thread", Json(bubble.thread)}, {"backend", Json(bubble.backend)},
-                                                       {"model", Json(bubble.model)}, {"text", Json(text)},
-                                                       {"context", Json(AskContext(bubble))}, {"attachments", files}}), true);
+                                                       {"model", Json(bubble.backend == team["askBackend"].asString("") ? team["askModel"].asString("") : std::string())},
+                                                       {"text", Json(text)}, {"context", Json(AskContext(bubble))}, {"attachments", files}}), true);
         if (!Ok(result)) {
             const std::string hint = result["error"]["hint"].asString("");
             Notify(result["error"]["message"].asString("") + (hint.empty() ? "" : " " + hint), true);
@@ -280,27 +303,6 @@ bool NativeEditor::Impl::AskBubbleBody(AskBubble& bubble) {
     ImGui::SameLine(right - side);
     if (IconButton("##close", kIconX, side)) return true;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Close (the conversation is kept)"));
-
-    // Agent bubbles: the model of the next message.
-    if (agent) {
-        std::string label = bubble.model.empty() ? std::string(Tr("CLI default")) : bubble.model;
-        if (backend) {
-            for (const Json& model : (*backend)["models"].items()) {
-                if (model["id"].asString("") == bubble.model) label = model["label"].asString(bubble.model);
-            }
-        }
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::BeginCombo("##model", (std::string(Tr("Model")) + ": " + label).c_str())) {
-            if (ImGui::Selectable(Tr("CLI default"), bubble.model.empty())) bubble.model.clear();
-            if (backend) {
-                for (const Json& model : (*backend)["models"].items()) {
-                    const std::string id = model["id"].asString("");
-                    if (ImGui::Selectable((model["label"].asString(id) + "##" + id).c_str(), bubble.model == id)) bubble.model = id;
-                }
-            }
-            ImGui::EndCombo();
-        }
-    }
 
     // The conversation: this CLI's thread, or what this bubble sent to the team and the answers since.
     std::vector<AskLine> lines;
@@ -399,24 +401,44 @@ void NativeEditor::Impl::AskBubbles(ImVec2 viewPos, ImVec2 viewSize) {
     const float margin = 8.0f;
     ImDrawList* draw = ImGui::GetWindowDrawList();
     std::vector<ImRect> placed;  // bubbles already laid out this frame: later ones move out of their way
+    // The UI as the Scene view draws it, laid out once when a bubble needs it.
+    const int uiW = static_cast<int>(viewSize.x), uiH = static_cast<int>(viewSize.y);
+    const float uiScale = std::max(1e-3f, UIScale(scene, uiW, uiH));
+    std::vector<UIRect> laidOut;
+    bool laid = false;
+    auto uiRects = [&]() -> const std::vector<UIRect>& {
+        if (!laid && sceneUIShown) laidOut = LayoutUI(scene, uiW, uiH, &engine.Assets());
+        laid = true;
+        return laidOut;
+    };
     int closed = -1;
     for (size_t i = 0; i < askBubbles.size(); ++i) {
         AskBubble& bubble = askBubbles[i];
         // Agent conversations refresh often while a turn runs.
         if (!bubble.backend.empty() && time - bubble.polled > (bubble.state["running"].asBool() ? 0.25 : 2.0)) {
             bubble.polled = time;
-            const bool first = !bubble.state.has("thread");  // not read yet (indexing a null Json makes it an object)
             const Json state = Call("team.thread", ObjectOf({{"thread", Json(bubble.thread)}}), true);
             if (Ok(state)) bubble.state = state["result"];
-            // Reopened: the conversation continues with the model it last used.
-            if (first && bubble.state["backend"].asString("") == bubble.backend) bubble.model = bubble.state["model"].asString("");
         }
         // Next to the object's origin; bubbles of the same object stand side by side.
         const Vec3 world = bubble.spot ? bubble.point : scene.WorldMatrix(bubble.entity).TransformPoint(Vec3(0, 0, 0));
         const Vec4 clip = viewProj * Vec4(world, 1.0f);
         ImVec2 anchor(viewPos.x + viewSize.x * 0.5f, viewPos.y + viewSize.y * 0.5f);
         bool visible = clip.w > 1e-4f;
-        if (visible) {
+        // What is on the game's UI stands where the UI is drawn: the spot's pixel, the element's rectangle.
+        const UIRect* element = nullptr;
+        if (!bubble.ui) {
+            for (const UIRect& r : uiRects()) {
+                if (r.entity == bubble.entity && !bubble.spot && (!element || r.kind == UIRect::Kind::Panel)) element = &r;
+            }
+        }
+        if (bubble.ui) {
+            visible = sceneUIShown;
+            anchor = ImVec2(viewPos.x + bubble.point.x * uiScale, viewPos.y + bubble.point.y * uiScale);
+        } else if (element) {
+            visible = true;
+            anchor = ImVec2(viewPos.x + element->x + element->w * 0.5f, viewPos.y + element->y + element->h * 0.5f);
+        } else if (visible) {
             anchor = ImVec2(viewPos.x + (clip.x / clip.w * 0.5f + 0.5f) * viewSize.x, viewPos.y + (0.5f - clip.y / clip.w * 0.5f) * viewSize.y);
             visible = anchor.x >= viewPos.x && anchor.x <= viewPos.x + viewSize.x && anchor.y >= viewPos.y && anchor.y <= viewPos.y + viewSize.y;
         }
@@ -576,7 +598,6 @@ void NativeEditor::Impl::AgentChatSelect(const std::string& backend, const std::
         }
     }
     agentChatState = Json();
-    agentChatModel.clear();
     agentChatShown = 0;
     agentChatPolled = -100;
     agentChatFocusInput = true;
@@ -594,8 +615,8 @@ void NativeEditor::Impl::AgentChatSend() {
         context += " Selected in the editor: entity #" + std::to_string(Primary()) + " \"" + row->name + "\" (components: " + components + ").";
     }
     context += " editor.state shows what they see.";
-    const Json result = Call("team.ask", ObjectOf({{"thread", Json(agentChatThread)}, {"backend", Json(agentChatBackend)},
-                                                   {"model", Json(agentChatModel)}, {"text", Json(text)}, {"context", Json(context)},
+    // No CLI or model named: the agent of Settings > Agents answers (the server resolves it as AskAgent does).
+    const Json result = Call("team.ask", ObjectOf({{"thread", Json(agentChatThread)}, {"text", Json(text)}, {"context", Json(context)},
                                                    {"attachments", files}}), true);
     if (!Ok(result)) {
         const std::string hint = result["error"]["hint"].asString("");
@@ -621,16 +642,26 @@ void NativeEditor::Impl::AgentChatPanel() {
         return;
     }
     agentChatRect = {ImGui::GetWindowPos().x, ImGui::GetWindowPos().y, ImGui::GetWindowSize().x, ImGui::GetWindowSize().y};
-    // The installed CLIs; the first one until the person picks another.
-    std::vector<const Json*> installed;
+    // The agent of Settings > Agents; this panel does not choose one.
     bool detecting = teamBackends.size() == 0;
-    for (const Json& backend : teamBackends.items()) {
-        detecting = detecting || backend["status"].asString("") == "detecting";
-        if (backend["status"].asString("") == "installed") installed.push_back(&backend);
-    }
-    if (installed.empty()) {
-        ImGui::TextDisabled("%s", Tr(detecting ? "Looking for agent CLIs..." : "No agent CLI is installed."));
-        if (!detecting) ImGui::TextDisabled("%s", Tr("Agents work through the coding-agent CLIs installed on this PC (Claude Code, Codex)."));
+    for (const Json& item : teamBackends.items()) detecting = detecting || item["status"].asString("") == "detecting";
+    const std::string agentId = AskAgent();
+    const Json* backend = TeamBackend(agentId);
+    const ImGuiStyle& style = ImGui::GetStyle();
+    auto openSettings = [&] {
+        showSettings = true;
+        settingsTab = "agents";
+    };
+    if (!backend || (*backend)["status"].asString("") != "installed") {
+        if (detecting) {
+            ImGui::TextDisabled("%s", Tr("Looking for agent CLIs..."));
+        } else if (agentId.empty()) {
+            ImGui::TextDisabled("%s", Tr("No agent CLI is installed."));
+            ImGui::TextDisabled("%s", Tr("Agents work through the coding-agent CLIs installed on this PC (Claude Code, Codex)."));
+        } else {
+            ImGui::TextDisabled("%s", Tr("The agent chosen in Settings > Agents is not installed."));
+        }
+        if (!detecting && ImGui::Button(WithIcon(kIconSettings, Tr("Agent Settings")).c_str())) openSettings();
         ImGui::End();
         return;
     }
@@ -639,47 +670,29 @@ void NativeEditor::Impl::AgentChatPanel() {
         const Json threads = Call("team.threads", Json(), true);
         if (Ok(threads)) agentChatThreads = threads["result"];
     }
-    const Json* backend = TeamBackend(agentChatBackend);
-    if (!backend || (*backend)["status"].asString("") != "installed") {
-        AgentChatSelect((*installed.front())["id"].asString(""), "");
-        backend = installed.front();
-    }
+    if (agentChatBackend != agentId) AgentChatSelect(agentId, "");  // first frame, or another agent was set
     const bool running = agentChatState["running"].asBool();
     if (time - agentChatPolled > (running ? 0.25 : 1.5)) {
         agentChatPolled = time;
-        const bool first = !agentChatState.has("thread");  // not read yet (indexing a null Json makes it an object)
         const Json state = Call("team.thread", ObjectOf({{"thread", Json(agentChatThread)}}), true);
         if (Ok(state)) agentChatState = state["result"];
-        if (first && agentChatState["backend"].asString("") == agentChatBackend) agentChatModel = agentChatState["model"].asString("");
     }
     const std::string target = (*backend)["name"].asString(agentChatBackend);
-    const ImGuiStyle& style = ImGui::GetStyle();
 
-    // Toolbar: CLI, model, conversation, new conversation.
+    // Toolbar: who answers (set in Settings), conversation, new conversation.
     const float field = ImGui::GetFontSize() * 9.0f;
-    ImGui::SetNextItemWidth(field);
-    if (ImGui::BeginCombo("##cli", target.c_str())) {
-        for (const Json* item : installed) {
-            const std::string id = (*item)["id"].asString("");
-            if (ImGui::Selectable(((*item)["name"].asString(id) + "##" + id).c_str(), id == agentChatBackend) && id != agentChatBackend) AgentChatSelect(id, "");
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    std::string modelLabel = agentChatModel.empty() ? std::string(Tr("CLI default")) : agentChatModel;
+    std::string modelLabel = team["askModel"].asString("");
     for (const Json& model : (*backend)["models"].items()) {
-        if (model["id"].asString("") == agentChatModel) modelLabel = model["label"].asString(agentChatModel);
+        if (model["id"].asString("") == modelLabel) modelLabel = model["label"].asString(modelLabel);
     }
-    ImGui::SetNextItemWidth(field);
-    if (ImGui::BeginCombo("##model", modelLabel.c_str())) {
-        if (ImGui::Selectable(Tr("CLI default"), agentChatModel.empty())) agentChatModel.clear();
-        for (const Json& model : (*backend)["models"].items()) {
-            const std::string id = model["id"].asString("");
-            if (ImGui::Selectable((model["label"].asString(id) + "##" + id).c_str(), agentChatModel == id)) agentChatModel = id;
-        }
-        ImGui::EndCombo();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(kAccent, "%s", kIconBot);
+    ImGui::SameLine(0, style.ItemInnerSpacing.x);
+    ImGui::TextUnformatted(target.c_str());
+    if (!modelLabel.empty()) {
+        ImGui::SameLine(0, style.ItemInnerSpacing.x);
+        ImGui::TextDisabled("\xc2\xb7 %s", modelLabel.c_str());
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Model of the next message"));
     // Conversations of this CLI: the panel's own and those of Scene bubbles (object or spot).
     auto threadLabel = [&](const Json& item) {
         const std::string key = item["thread"].asString("");
@@ -717,11 +730,8 @@ void NativeEditor::Impl::AgentChatPanel() {
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Start a new conversation (the CLI forgets the earlier one)"));
     ImGui::SameLine();
-    if (IconButton("##settings", kIconSettings, ImGui::GetFrameHeight())) {
-        showSettings = true;
-        settingsTab = "agents";
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Agent settings: installed CLIs, login, engine connection, permissions"));
+    if (IconButton("##settings", kIconSettings, ImGui::GetFrameHeight())) openSettings();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Tr("Agent settings: which agent answers, its model and instructions, login, permissions"));
 
     // The conversation, then the files waiting to go and the input.
     const float inputHeight = ImGui::GetTextLineHeight() * 3.0f + style.FramePadding.y * 2.0f;

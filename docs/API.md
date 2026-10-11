@@ -1454,7 +1454,7 @@ Agent CLIs (Claude Code, Codex, ...) with whether each is installed on this PC, 
 
 ### `team.connection`
 
-How agent turns reach this editor: {apiPort (0 = no editor API), oe (the program), mcp (the MCP server command line each turn gets), shell (the same commands from a shell, allowed without asking in edit access), askAccess}.
+How agent turns reach this editor: {apiPort (0 = no editor API), oe (the program), mcp (the MCP server command line each turn gets), shell (the same commands from a shell, allowed without asking in edit access), askAccess, and the agent of direct conversations: askBackend/askModel/askInstructions as set, askAgent = the CLI that answers now ("" = none can run)}.
 
 ### `team.presets`
 
@@ -1540,6 +1540,9 @@ Read or change the team settings; without arguments it only reads them.
 | `inheritUserTools` | boolean |  | Load the CLI's user MCP servers and skills (default false). Codex ignores user config; discovered skills may remain. |
 | `rotateAboveInputTokens` | integer |  | Start fresh before the next turn at/above this input-size estimate: 0 disables rotation (default), up to 2000000. |
 | `askAccess` | string |  | read | edit (default) | full: what an agent CLI asked directly (team.ask, the editor's Ask bubbles and Agent Chat) may do without asking. |
+| `askBackend` | string |  | The agent CLI of direct conversations (id from team.backends); "" (default) = the first one that can run turns. |
+| `askModel` | string |  | Model id of askBackend; "" (default) = the CLI's default. |
+| `askInstructions` | string |  | Standing instructions for direct conversations, at most 4 KiB (a CLI without a system prompt file reads them when a conversation starts). |
 
 ### `team.send`
 
@@ -1554,13 +1557,13 @@ Post a message to the team chat and give a turn to every agent it addresses: @id
 
 ### `team.ask`
 
-Ask one agent CLI directly, outside the team roster and chat: a direct conversation (`thread`) with the CLI and model chosen per message (the editor's "Ask an agent" bubble on a Scene object). The turn runs like a team turn, attached to the editor; follow it with team.thread. Returns the thread state at once.
+Ask one agent CLI directly, outside the team roster and chat: a direct conversation (`thread`) with the agent of the settings (team.settings askBackend/askModel/askInstructions; the editor's Agent Chat and Ask bubbles), or with the CLI and model named here. The turn runs like a team turn, attached to the editor; follow it with team.thread. Returns the thread state at once.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `thread` | string | yes | Conversation key, 1..64 characters of a-z, 0-9, '-' and '_' (the editor uses e<entity>-<backend>). |
-| `backend` | string | yes | Agent CLI id from team.backends (claude, codex, ...). |
-| `model` | string |  | Model id of that CLI (team.backends lists them); empty = the CLI's default. |
+| `backend` | string |  | Agent CLI id from team.backends (claude, codex, ...); omitted = the settings' agent (team.connection askAgent). |
+| `model` | string |  | Model id of that CLI (team.backends lists them); empty = the settings' model for the settings' agent, else the CLI's default. |
 | `text` | string | yes | The message, at most 32 KiB (may be empty when files are attached). |
 | `context` | string |  | What the person points at (e.g. the entity), put before the text in the prompt only; at most 32 KiB. |
 | `attachments` | array |  | Files the agent should look at, as in team.send: paths on this PC or relative to the project, at most 8, 32 MiB each. |

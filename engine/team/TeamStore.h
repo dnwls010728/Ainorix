@@ -33,6 +33,11 @@ struct TeamSettings {
     int maxHops = 0;        // chained agent-to-agent turns per user message, 0..16; off by default
     bool inheritUserTools = false; // opt in to the CLI's user MCP servers and skills
     std::string askAccess = "edit"; // read | edit | full for direct conversations (team.ask), like an agent's access
+    // The one agent of direct conversations (the editor's Agent Chat and Ask bubbles), set once in
+    // Settings instead of chosen for every message.
+    std::string askBackend;       // backend id; empty = the first CLI that can run turns
+    std::string askModel;         // model id of that backend; empty = the CLI's default
+    std::string askInstructions;  // standing instructions for it, <= 4 KiB
 };
 
 constexpr size_t kMaxTeamAgents = 16;

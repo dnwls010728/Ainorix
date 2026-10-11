@@ -696,13 +696,20 @@ check, `--chat` the Team Chat (`--agent new` or `--agent <id>` also opens the pr
 ### 7.4 Asking about an object (Scene bubbles)
 
 Right-click in the Scene view (a click, not a fly/pan drag; also on the gizmo, which only takes
-the left button). The menu lists two targets, each a submenu with **Ask the Team** and, under
-"Ask an Agent", the installed agent CLIs (`team.backends`):
+the left button). The menu lists two targets, each a submenu with **Ask the Team** and **Ask the
+Agent** (beside it the name of the CLI that answers). The agent is not chosen here: it is the one
+of Settings > Agents (§7.6), or the first installed CLI that can run turns while none is set:
 
 - the **object** under the pointer (choosing selects it; the right click alone does not), and
 - **this spot**: the point on the surface under the pointer (`render.pick` returns it with the
   surface normal) or, over empty space, where the pointer's ray meets the ground plane (y = 0;
   z = 0 in 2D). For "put a tree here".
+
+Where the Scene view draws the game's UI (its **UI** toggle), a right click on a UI element is
+about the UI instead: the object is that element, and the spot is a place on the canvas (`(x, y)
+px`: reference pixels from the top-left corner, with the canvas size as shown, told to the agent
+as a UI position; thread `p<hash>-<cli>` as well). Their bubbles stand at the element's rectangle
+or at that pixel.
 
 Either opens a bubble that stays next to its object or spot while the camera moves (a pin marks
 the spot; several bubbles may be open, those of one object side by side; deleting the object
@@ -717,8 +724,7 @@ typed in; Up/Down choose, Tab or a click takes, and the caret stays after the in
   answers unless someone is @mentioned. The bubble shows what it sent and the replies addressed
   to the person since then, plus the activity of working agents; the Team Chat has all of it.
 - **One agent**: a direct conversation outside the roster and the chat (`team.ask`, thread
-  `e<entity>-<cli>`, or `p<hash of the spot to 0.1 m>-<cli>`). The bubble picks the model per message (the CLI's catalog or its
-  default) and shows the conversation, the running activity and a Stop button
+  `e<entity>-<cli>`, or `p<hash of the spot to 0.1 m>-<cli>`). The bubble shows the conversation, the running activity and a Stop button
   (`team.thread_cancel`). The turn runs like a team turn: in the project directory, with
   `edit` access, the editor's MCP server (`--agent ask-<cli>`, so edits show as notices with the
   CLI's name), usage recorded under `ask-<cli>`. The prompt starts with the object (`entity #id
@@ -736,8 +742,9 @@ message (pictures as thumbnails that open the viewer).
 
 ### 7.5 Agent Chat panel
 
-A tab beside Team Chat (View > Agent Chat) to talk to one installed agent CLI directly, outside
-the team: CLI and model pickers, a conversation picker and **New**, the conversation (Markdown,
+A tab beside Team Chat (View > Agent Chat) to talk to the agent directly, outside the team: the
+name of the CLI that answers and its model (both set in Settings > Agents; the panel has no
+pickers for them and follows the setting when it changes), a conversation picker and **New**, the conversation (Markdown,
 "N tools · T s · $cost" under each reply, the running activity) and the input (Enter sends,
 Ctrl+Enter adds a line; Stop while a turn runs). It uses `team.ask` conversations named
 `chat-<cli>` (New: `chat-<cli>-<n>`); the picker also lists the CLI's Scene bubble conversations
@@ -751,7 +758,14 @@ Edit > Settings (or the gear in Agent Chat) opens the Settings window. Its Agent
 each CLI with **Installed** (version, path as tooltip, or the install command), **Login**
 (signed in with the method, or the command that signs in, with Copy) and **Engine connection**
 (whether the ownengine MCP server connected in the CLI's latest turn this session, or that the
-turn had only the shell fallback), and **Check again** (`team.backends {refresh}`). Under it:
+turn had only the shell fallback), and **Check again** (`team.backends {refresh}`). Under it,
+**Agent Chat and Ask bubbles**: the one agent that is asked directly. **Agent** (`team.settings
+{askBackend}`: Automatic = the first installed CLI that can run turns, or one CLI), **Model**
+(`askModel`, of the chosen CLI; with Automatic the CLI's default) and **Instructions**
+(`askInstructions`, at most 4 KiB, saved when the field is left): standing instructions added to
+the agent's system prompt in every direct conversation, e.g. the language to answer in. A CLI
+without a system prompt file (Codex) reads them when a conversation starts, so a change reaches
+its running conversations only after **New**. Then:
 the editor API port, the MCP command line every turn gets and the shell fallback
 (`team.connection`), the permission of Agent Chat and Ask bubbles (`team.settings
 {askAccess}`: read only, edit, full access) and whether turns also load the user's own MCP
@@ -766,7 +780,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | Command | Params | Result |
 |---|---|---|
 | `team.backends` | `{refresh?, async?}` | array of backends: status, version, path, message, models, model source, image support, install hint, `runsTurns`, `login`/`loginDetail`/`loginHint`, `engine` (MCP status of the latest turn) |
-| `team.connection` | | `{apiPort, oe, oeFound, mcp, shell, askAccess, inheritUserTools}`: how turns reach the editor |
+| `team.connection` | | `{apiPort, oe, oeFound, mcp, shell, askAccess, inheritUserTools, askBackend, askModel, askInstructions, askAgent}`: how turns reach the editor; `askAgent` = the CLI that answers direct conversations now |
 | `team.presets` | | avatar preset ids |
 | `team.list` | | `{version, revision, lead, maxConcurrent, maxHops, agents: [profile], error?}` |
 | `team.get` | `{id}` | one profile: every field, plus `avatarPath` (project-relative) for an uploaded picture |
@@ -775,7 +789,7 @@ the scene, so no undo entry and no scene revision); team changes bump the team r
 | `team.remove` | `{id}` | `{removed: id}`; removes profile and uploaded picture (T3: also cancels its turn and drops its session) |
 | `team.move` | `{id, index}` | the team (as `team.list`) with the agent at position `index` (0 = first, clamped to the end) |
 | `team.avatar` | `{id, preset}` or `{id, source}` | the profile |
-| `team.settings` | `{lead?, maxConcurrent?, maxHops?, inheritUserTools?, rotateAboveInputTokens?, askAccess?}` | team settings; without arguments it only reads |
+| `team.settings` | `{lead?, maxConcurrent?, maxHops?, inheritUserTools?, rotateAboveInputTokens?, askAccess?, askBackend?, askModel?, askInstructions?}` | team settings; without arguments it only reads |
 
 Every `id` argument accepts the agent's id or its name.
 | `team.send` | `{text, attachments?, from?, wait?}` | `{message, started: [ids], queued: [ids], offline: [ids]}`; with `wait` also `replies` and `state` |

@@ -17,6 +17,7 @@
 #include "core/Json.h"
 #include "editor/Editor.h"
 #include "editor/EditorMath.h"
+#include "render/UI.h"
 
 namespace oe {
 
@@ -283,6 +284,7 @@ struct NativeEditor::Impl {
     // ----- Scene view
     EditorCamera cam;
     bool showGrid = true, showColliders = false, showIcons = true;
+    bool showSceneUI = true;  // the Scene view draws the game's UI over the world and edits it there (UIEdit)
     GizmoOp gizmoOp = GizmoOp::Translate;
     bool gizmoLocal = false;
     bool snap = false;
@@ -339,14 +341,16 @@ struct NativeEditor::Impl {
     // Team Chat (EditorTeamChat.cpp)
     bool showTeamChat = true, requestTeamChatFocus = false;
     // ----- Ask bubbles (EditorAsk.cpp): right-click an object in the Scene view and ask the team,
-    // or one installed agent CLI directly, from a bubble that stays next to the object.
+    // or the agent directly, from a bubble that stays next to the object. The agent is the one CLI
+    // of Settings > Agents (team.settings askBackend, askModel, askInstructions): nothing is chosen
+    // where the question is asked.
     struct AskBubble {
         int serial = 0;              // ImGui id
         EntityId entity = kNullEntity;  // the object asked about; for a spot, the surface it is on (or none)
         bool spot = false;           // about a place in the scene (point) rather than the object
+        bool ui = false;             // the spot is on the game's UI: point.x, point.y are canvas reference pixels
         Vec3 point, normal;          // the spot: world position and surface normal
         std::string backend;         // agent CLI id; empty = the team
-        std::string model;           // that CLI's model; empty = its default
         std::string thread;          // team.ask conversation (agent bubbles)
         std::string input;
         Json state;                  // team.thread (agent bubbles)
@@ -363,12 +367,17 @@ struct NativeEditor::Impl {
     int askSerial = 0;
     EntityId askMenuEntity = kNullEntity;  // the object the Scene context menu is for (none: empty space)
     Vec3 askMenuPoint, askMenuNormal{0, 1, 0};  // the spot it was opened on (surface, or the ground plane)
+    bool askMenuUI = false;      // it was opened on a UI element drawn over the Scene view: the spot is in canvas reference pixels
+    bool sceneUIShown = false;   // this frame the Scene view draws the UI (bubbles of UI elements stand at their rectangles)
     bool sceneRightPressed = false;        // right button went down on the view (a click opens the menu)
     std::map<std::string, std::array<float, 4>> askRects;  // automation: "<serial>:input", "<serial>:send"
     void OpenAskBubble(EntityId entity, const std::string& backend);
-    void OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend);
+    void OpenAskSpot(const Vec3& point, const Vec3& normal, EntityId surface, const std::string& backend, bool ui = false);
     std::string SpotLabel(const AskBubble& bubble) const;  // "(3.2, 0, -1.5) on Ground"
     void SceneAskMenu();
+    // The CLI that answers direct conversations: the one set in Settings, else the first installed
+    // one that can run turns; empty while none is known.
+    std::string AskAgent() const;
     void AskBubbles(ImVec2 viewPos, ImVec2 viewSize);
     bool AskBubbleBody(AskBubble& bubble);  // true: closed
     void AskSend(AskBubble& bubble);
@@ -386,7 +395,7 @@ struct NativeEditor::Impl {
     // ----- Agent Chat panel (EditorAsk.cpp): talk to one installed agent CLI, model chosen here,
     // outside the team (team.ask conversations "chat-<cli>[-n]"; object bubbles' ones are listed too).
     bool showAgentChat = true, requestAgentChatFocus = false, agentChatFocusInput = false;
-    std::string agentChatBackend, agentChatModel, agentChatThread, agentChatInput;
+    std::string agentChatBackend, agentChatThread, agentChatInput;
     Json agentChatState;                          // team.thread of agentChatThread
     Json agentChatThreads = Json::MakeArray();    // team.threads
     double agentChatPolled = -100, agentChatThreadsPolled = -100;
@@ -453,6 +462,8 @@ struct NativeEditor::Impl {
     void SettingsAgentsTab();
     double settingsPolled = -100;
     Json settingsConnection;  // team.connection
+    std::string settingsInstructions;        // the agent's instructions as typed (saved when the field is left)
+    bool settingsInstructionsLoaded = false;
 
     // ----- Tile painting (EditorTiles.cpp): Tiles panel + brush in the Scene view
     bool showTiles = true;
@@ -484,14 +495,20 @@ struct NativeEditor::Impl {
     std::set<std::string> gameAxesForwarded;  // only these axes are released when Game loses focus
     bool gameMouseDown[2] = {false, false};
     float lastGameMouse[2] = {-1, -1};
-    // UI editing in the stopped Game view: select, drag to move, handles to resize.
+    // UI editing where it is drawn (the Scene view, the stopped Game view): select, drag to move, handles to resize.
     int uiDragHandle = -1;        // -1 none, 0 = move, 1..8 = handles clockwise from the top-left corner
     EntityId uiDragEntity = kNullEntity;
     std::string uiDragType;       // UI component being edited
     float uiDragStart[4] = {0, 0, 0, 0};  // x, y, width, height when the drag began (reference pixels)
     ImVec2 uiDragMouse{0, 0};
     int uiDragSerial = 0;
-    void GameUIEdit(ImDrawList* dl, ImVec2 pos, int w, int h);
+    // `scene`: in the Scene view, where the world is behind the UI: a click that hits no element is
+    // left to the world (returns false), and panels that draw nothing do not take clicks.
+    // Returns true while the pointer is busy with UI (an element was pressed or is being dragged).
+    bool UIEdit(ImDrawList* dl, ImVec2 pos, int w, int h, bool hovered, bool scene);
+    // The topmost element of a layout under a point of its view, or kNullEntity. `scene`: as above,
+    // panels that draw nothing are passed through (unless selected).
+    EntityId UIElementAt(const std::vector<UIRect>& rects, float x, float y, bool scene) const;
     // Component that carries the entity's `visible` flag (UI, Sprite, MeshRenderer, Tilemap), or empty.
     std::string VisibilityComponent(EntityId id, bool* visible) const;
     bool gameWantsLock = false;

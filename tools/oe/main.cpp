@@ -202,7 +202,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat [cli] --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -277,6 +277,7 @@ int CmdRender(const Args& a) {
     }
     view.drawGrid = a.Has("--grid");
     view.shaderTime = static_cast<float>(engine.SimTime());
+    view.playing = engine.InPlaySession();
     if (a.Has("--colliders")) {
         TilesetLookup tilesets = engine.Assets().Tilesets();
         AppendColliderLines(engine.GetScene(), view.lines, &tilesets);
@@ -481,7 +482,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (i == 2 && a.Has("--shader")) editor.OpenShader(a.Get("--shader"));
         if (i == 0 && (a.Has("--agent-chat") || a.Has("--settings"))) engine.Call("team.backends", Json());  // detect the CLIs first (the editor polls in the background)
-        if (i == 3 && a.Has("--agent-chat")) editor.FocusAgentChat(a.Get("--agent-chat"));
+        if (i == 3 && a.Has("--agent-chat")) editor.FocusAgentChat();
         if (i == 3 && a.Has("--settings")) editor.OpenSettings(a.Get("--settings"));
         if (i == 2 && a.Has("--ask")) {  // an Ask bubble on an entity: Name (the team) or Name:cli (claude, codex, ...)
             const std::string spec = a.Get("--ask");
