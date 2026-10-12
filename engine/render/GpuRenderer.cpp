@@ -660,6 +660,9 @@ struct GpuRenderer::Impl {
     bool envHalfFloat = false;  // RGBA16F textures can be filtered here (else environments are stored as RGBA8)
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
+    sg_image spotImage{};  // Small immutable light-data image, replaced only when the light values change.
+    sg_view spotTex{};
+    float spotData[8 * 9 * 4]{};
     StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
     Targets offscreen, window;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
@@ -1127,6 +1130,8 @@ struct GpuRenderer::Impl {
     }
 
     void Shutdown() {
+        if (spotTex.id) sg_destroy_view(spotTex);
+        if (spotImage.id) sg_destroy_image(spotImage);
         for (auto& kv : graphPrograms) kv.second.Destroy();
         graphPrograms.clear();
         for (auto& kv : meshes) kv.second.Destroy();
@@ -1436,6 +1441,38 @@ struct GpuRenderer::Impl {
         sg_apply_bindings(&bindings);
     }
 
+    // Immutable replacements also permit several editor viewports with different scenes in one sokol frame.
+    sg_view SpotTextureFor(const RenderLights& lights, const std::vector<RenderProbe>& probes) {
+        if (lights.spots.empty() && !lights.env.map && probes.empty()) return whiteTex;
+        float data[8 * 9 * 4]{};
+        for (size_t i = 0; i < lights.spots.size(); ++i) {
+            const RenderSpotLight& light = lights.spots[i];
+            Put(data + i * 4, light.pos.x, light.pos.y, light.pos.z, light.range);
+            Put(data + (kMaxSpotLights + i) * 4, light.dir.x, light.dir.y, light.dir.z, light.outerCos);
+            Put(data + (kMaxSpotLights * 2 + i) * 4, light.color.r, light.color.g, light.color.b, light.innerCos);
+        }
+        for (int i = 0; i < 9; ++i) {
+            const Vec3& term = lights.env.sh[i];
+            Put(data + (24 + i) * 4, term.x, term.y, term.z, 0);
+        }
+        for (size_t i = 0; i < probes.size(); ++i) for (int k = 0; k < 9; ++k) {
+            const Vec3& term = probes[i].sh[k];
+            Put(data + (33 + i * 9 + k) * 4, term.x, term.y, term.z, 0);
+        }
+        if (spotTex.id && std::memcmp(data, spotData, sizeof(data)) == 0) return spotTex;
+        if (spotTex.id) sg_destroy_view(spotTex);
+        if (spotImage.id) sg_destroy_image(spotImage);
+        sg_image_desc desc{};
+        desc.width = 8; desc.height = 9;
+        desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
+        desc.data.mip_levels[0] = {data, sizeof(data)};
+        desc.label = "oe-spot-lights";
+        spotImage = sg_make_image(&desc);
+        spotTex = TextureView(spotImage);
+        std::memcpy(spotData, data, sizeof(data));
+        return spotTex;
+    }
+
     RenderStats Frame(const Scene& scene, const RenderView& view, Targets& t, int outW, int outH, const sg_swapchain* swapchain) {
         auto start = std::chrono::steady_clock::now();
         RenderStats stats;
@@ -1673,7 +1710,7 @@ struct GpuRenderer::Impl {
             const PostProcess fog = NormalizePostProcess(view.postProcess);
             Put(lu.ambient_ground, lights.groundAmbient.r, lights.groundAmbient.g, lights.groundAmbient.b, lights.hemisphere ? 1.0f : 0.0f);
             Put(lu.fog_color, fog.fogColor.r, fog.fogColor.g, fog.fogColor.b, fog.fog);
-            Put(lu.fog_range, fog.fogStart, fog.fogEnd, 0, 0);
+            Put(lu.fog_range, fog.fogStart, fog.fogEnd, static_cast<float>(lights.spots.size()), 0);
             // Camera forward: minus the third row of the view matrix.
             Put(lu.view_axis, -view.view.at(2, 0), -view.view.at(2, 1), -view.view.at(2, 2), 0);
             for (int i = 0; i < dirs; ++i) {
@@ -1690,9 +1727,9 @@ struct GpuRenderer::Impl {
             Put(lu.env_horizon, env.horizon.r, env.horizon.g, env.horizon.b, env.reflections);
             Put(lu.env_ground, env.ground.r, env.ground.g, env.ground.b, env.intensity);
             Put(lu.env_map, env.map ? 1.0f : 0.0f, env.map ? env.map->MaxLod() : 0.0f, env.yawCos, env.yawSin);
-            for (int i = 0; i < 9; ++i) Put(lu.env_sh[i], env.sh[i].x, env.sh[i].y, env.sh[i].z, 0);
             // Reflection probes of this frame; the slots without one keep the white texture.
             const std::vector<RenderProbe> probes = ActiveProbes(scene, assets, lights, viewProj, view.eye);
+            const sg_view spotLightTex = SpotTextureFor(lights, probes);
             sg_view probeTex[kMaxProbes];
             Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
             for (int i = 0; i < kMaxProbes; ++i) {
@@ -1704,7 +1741,6 @@ struct GpuRenderer::Impl {
                 Put(lu.probe_hi[i], p.hi.x, p.hi.y, p.hi.z, p.map->MaxLod());
                 Put(lu.probe_pos[i], p.pos.x, p.pos.y, p.pos.z, p.intensity);
                 Put(lu.probe_opt[i], p.boxProjection ? 1.0f : 0.0f, p.ambient ? 1.0f : 0.0f, 0, 0);
-                for (int k = 0; k < 9; ++k) Put(lu.probe_sh[i * 9 + k], p.sh[k].x, p.sh[k].y, p.sh[k].z, 0);
             }
             // Draw list order: opaque, then transparent back to front. Switching
             // pipelines drops uniforms, so the lights are re-applied each time.
@@ -1768,6 +1804,8 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_probe1_tex] = probeTex[1];
                 b.views[VIEW_oe_probe2_tex] = probeTex[2];
                 b.views[VIEW_oe_probe3_tex] = probeTex[3];
+                b.views[VIEW_oe_spot_tex] = spotLightTex;
+                b.samplers[SMP_oe_spot_smp] = nearestClamp;
                 b.samplers[SMP_oe_env_smp] = envSampler;
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;
                 b.samplers[SMP_oe_shadow_smp] = shadowCompare;

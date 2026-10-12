@@ -21,6 +21,7 @@
 #include "physics/PhysicsWorld.h"
 #include "platform/GamepadInput.h"
 #include "render/GpuRenderer.h"
+#include "render/RenderScene.h"
 #include "render/UI.h"
 #include "scene/Components.h"
 
@@ -212,6 +213,7 @@ void NativeEditor::Impl::SceneOverlays(ImDrawList* dl) {
         ImU32 col = 0;
         if (row.Has("Camera")) letter = "C", col = IM_COL32(120, 180, 255, 230);
         else if (row.Has("DirectionalLight")) letter = "D", col = IM_COL32(255, 210, 100, 230);
+        else if (row.Has("SpotLight") && !row.Has("MeshRenderer")) letter = "S", col = IM_COL32(255, 190, 90, 230);
         else if (row.Has("PointLight") && !row.Has("MeshRenderer")) letter = "P", col = IM_COL32(255, 190, 90, 230);
         else if (row.Has("ReflectionProbe") && !row.Has("MeshRenderer")) letter = "R", col = IM_COL32(140, 190, 255, 230);
         else if (row.Has("AudioSource") && !row.Has("MeshRenderer")) letter = "S", col = IM_COL32(140, 220, 255, 230);
@@ -476,6 +478,23 @@ void NativeEditor::Impl::ScenePanel() {
         ring(lightCenter, Vec3(1, 0, 0), Vec3(0, 1, 0), radius, color);
         ring(lightCenter, Vec3(1, 0, 0), Vec3(0, 0, 1), radius, color);
         ring(lightCenter, Vec3(0, 1, 0), Vec3(0, 0, 1), radius, color);
+    }
+    if (scene.Get<SpotLight>(lightId)) {
+        const RenderSpotLight light = MakeRenderSpotLight(scene, lightId);
+        const Vec3 right = Normalize(Cross(light.dir, std::fabs(light.dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0)));
+        const Vec3 up = Cross(right, light.dir);
+        const Color color = light.color.r + light.color.g + light.color.b > 0 ? Color(1, 0.7f, 0.2f) : Color(0.45f, 0.45f, 0.45f);
+        // A radial range ends on a sphere: the cone rim is at range*cos(angle), radius range*sin(angle).
+        auto cone = [&](float cosine, Color tint) {
+            const Vec3 center = light.pos + light.dir * (light.range * cosine);
+            const float radius = light.range * std::sqrt(std::max(0.0f, 1.0f - cosine * cosine));
+            ring(center, right, up, radius, tint);
+            for (const Vec3& axis : {right, -right, up, -up})
+                view.lines.push_back({light.pos, center + axis * radius, tint});
+        };
+        cone(light.outerCos, color);
+        cone(light.innerCos, color * 0.65f);
+        view.lines.push_back({light.pos, light.pos + light.dir * light.range, color});
     }
     if (const ReflectionProbe* probe = scene.Get<ReflectionProbe>(lightId)) {
         // The box the probe covers (world axes, whatever the entity's rotation) and where its picture is taken.

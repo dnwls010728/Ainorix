@@ -106,7 +106,7 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 
 | Area | What is there | Doc |
 |---|---|---|
-| Rendering | Two renderers for one scene: GPU (sokol_gfx: D3D11, WebGL2, GLES3; MSAA, filtered shadows) and a deterministic multithreaded software renderer. glTF and FBX models, PBR metallic-roughness materials, transparency, point and directional lights, shadows | [RENDERING](docs/RENDERING.md) |
+| Rendering | Two renderers for one scene: GPU (sokol_gfx: D3D11, WebGL2, GLES3; MSAA, filtered shadows) and a deterministic multithreaded software renderer. glTF and FBX models, PBR metallic-roughness materials, transparency, point, spot and directional lights, shadows | [RENDERING](docs/RENDERING.md) |
 | Post-processing and shaders | Exposure with Reinhard/ACES tone mapping, bloom, vignette, FXAA, depth of field, distance fog, colour grading; surface shader graphs (`.shader.json`) with color, emission, vertex offset and normal outputs, also on sprites | [POSTPROCESS](docs/POSTPROCESS.md) |
 | Animation | glTF/FBX skeletal animation (TRS, skins, up to 64 joints) in both renderers, `Animator`, Lua playback | [ANIMATION](docs/ANIMATION.md) |
 | Particles | Deterministic emitters (in `.vfx.json` assets) with birth shapes, lifetime curves, flipbooks, turbulence, velocity alignment; `Trail` ribbons | [PARTICLES](docs/PARTICLES.md) |

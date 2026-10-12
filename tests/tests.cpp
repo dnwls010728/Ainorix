@@ -4915,6 +4915,88 @@ RenderTarget RenderLook(Engine& e, Vec3 eye, Vec3 target, int w = 160, int h = 9
     return rt;
 }
 
+TEST(SpotLightContract) {
+    const std::string project = TempProject("spot_contract");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    e.GetScene().Clear();
+    CHECK(Call(e, "entity.create", R"({"name":"Rig","components":{"Transform":{"position":[1,2,3],"rotation":[0,90,0],"scale":[2,3,-4]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Spot","parent":"Rig","components":{"Transform":{"position":[0,0,1],"rotation":[30,0,0],"scale":[0,0,0]},"SpotLight":{"color":[1,0.5,0.25],"intensity":2,"range":7,"innerAngle":15,"outerAngle":30}}})")["ok"].asBool());
+    const EntityId id = e.GetScene().FindByName("Spot");
+    RenderSpotLight light = MakeRenderSpotLight(e.GetScene(), id);
+    CHECK(light.id == id && light.range == 7 && light.color == Color(2, 1, 0.5f));
+    CHECK(Length(light.pos - Vec3(-3, 2, 3)) < 1e-5f);
+    CHECK(Length(light.dir - Vec3(-std::cos(Radians(30)), 0.5f, 0)) < 1e-5f);
+    CHECK(SpotConeWeight(light, light.dir) == 1 && SpotConeWeight(light, -light.dir) == 0);
+    const Vec3 side = Normalize(Cross(light.dir, Vec3(0, 1, 0)));
+    const float middle = (light.innerCos + light.outerCos) * 0.5f;
+    CHECK(std::fabs(SpotConeWeight(light, light.dir * middle + side * std::sqrt(1 - middle * middle)) - 0.5f) < 1e-5f);
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"SpotLight","values":{"innerAngle":90,"outerAngle":25,"range":-1,"intensity":-2}})")["ok"].asBool());
+    light = MakeRenderSpotLight(e.GetScene(), id);
+    CHECK(light.innerCos == light.outerCos && light.range == 0.01f && light.color == Color(0, 0, 0));
+    CHECK(SpotConeWeight(light, light.dir) == 1 && SpotConeWeight(light, -light.dir) == 0);
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(e.GetScene().Get<SpotLight>(id)->range == 7);
+    const Json saved = e.GetScene().ToJson();
+    Scene restored; CHECK(restored.FromJson(saved, &error));
+    CHECK(restored.ToJson() == saved && restored.Get<SpotLight>(id)->innerAngle == 15);
+    for (int i = 0; i < kMaxSpotLights + 2; ++i)
+        CHECK(Call(e, "entity.create", R"({"name":"Extra","components":{"SpotLight":{}}})")["ok"].asBool());
+    const auto lights = GatherRenderLights(e.GetScene());
+    CHECK(lights.spots.size() == static_cast<size_t>(kMaxSpotLights) && lights.spots.front().id == id);
+    for (size_t i = 1; i < lights.spots.size(); ++i) CHECK(lights.spots[i - 1].id < lights.spots[i].id);
+    CHECK(RemoveAll(project));
+}
+
+TEST(SpotLightRendering) {
+    // Keep the fragment program inside GLES3/WebGL2 minimums, including a conservative sampler allowance.
+    const sg_shader_desc* descriptor = oe_mesh_shader_desc(SG_BACKEND_GLES3);
+    const size_t uniformVectors = (descriptor->uniform_blocks[UB_oe_mesh_lights].size +
+                                   descriptor->uniform_blocks[UB_oe_mesh_material].size) / (4 * sizeof(float));
+    CHECK(uniformVectors + 12 <= 224);
+    static_assert(VIEW_oe_spot_tex < 16, "Spot texture must fit the GLES3 fragment texture-unit minimum");
+    const std::string project = TempProject("spot_rendering");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    e.GetScene().Clear();
+    CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0,0,0]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Wall","components":{"Transform":{"scale":[8,8,0.1]},"MeshRenderer":{"mesh":"cube","color":[1,1,1]}}})")["ok"].asBool());
+    const RenderTarget before = RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128);
+    CHECK(Call(e, "entity.create", R"({"name":"Spot","components":{"Transform":{"position":[0,0,3]},"SpotLight":{"color":[1,0.25,0.05],"intensity":2,"range":7,"innerAngle":15,"outerAngle":30}}})")["ok"].asBool());
+    RenderTarget lit = RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128);
+    auto red = [&](int x) { return static_cast<int>(lit.color[64 * 128 + x] & 255); };
+    CHECK(red(64) > 100 && red(80) > red(88) + 20 && red(88) > red(103) + 10 && red(103) == 0);
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"Transform","values":{"rotation":[0,180,0]}})")["ok"].asBool());
+    CHECK(RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128).color == before.color);
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"Transform","values":{"rotation":[0,0,0]}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"SpotLight","values":{"range":2}})")["ok"].asBool());
+    CHECK(RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128).color == before.color);
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"SpotLight","values":{"range":7}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Wall","type":"MeshRenderer","values":{"unlit":true}})")["ok"].asBool());
+    const auto unlit = RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128);
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"SpotLight","values":{"intensity":0}})")["ok"].asBool());
+    CHECK(RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128).color == unlit.color);
+    CHECK(Call(e, "component.set", R"({"id":"Wall","type":"MeshRenderer","values":{"unlit":false}})")["ok"].asBool());
+    CHECK(RenderLook(e, Vec3(0, 0, 8), Vec3(), 128, 128).color == before.color);
+    CHECK(Call(e, "component.set", R"({"id":"Spot","type":"SpotLight","values":{"intensity":2}})")["ok"].asBool());
+    if (e.EnableGpu(nullptr, &error)) {
+        const RenderView view = MakeLookAtView(Vec3(0, 0, 8), Vec3(), 50, 1);
+        for (const char* angles : {R"({"innerAngle":15,"outerAngle":30})", R"({"innerAngle":25,"outerAngle":25})", R"({"innerAngle":0,"outerAngle":60})"}) {
+            CHECK(Call(e, "component.set", (std::string(R"({"id":"Spot","type":"SpotLight","values":)") + angles + "}").c_str())["ok"].asBool());
+            RenderTarget sw, gpu; sw.Resize(128, 128); gpu.Resize(128, 128);
+            e.Renderer().Render(e.GetScene(), view, sw);
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double difference = 0;
+            for (size_t i = 0; i < sw.color.size(); ++i) for (int shift : {0, 8, 16})
+                difference += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+            const double mean = difference / (static_cast<double>(sw.color.size()) * 3);
+            std::printf("  spotlight %s: software/GPU mean channel difference %.3f/255\n", angles, mean);
+            CHECK(mean < 1.0);
+        }
+    } else std::printf("  SKIP no GPU backend here (%s)\n", error.c_str());
+    CHECK(RemoveAll(project));
+}
+
 TEST(SkyboxEnvironmentLighting) {
     Engine e;
     Scene& s = e.GetScene();
@@ -14976,6 +15058,7 @@ TEST(NativeEditorLightGuides) {
     CHECK(engine.Open(project, &error));
     CHECK(Call(engine, "entity.create", R"({"name":"Light parent","components":{"Transform":{"position":[0,1,0],"rotation":[-25,35,0],"scale":[2,2,2]}}})")["ok"].asBool());
     CHECK(Call(engine, "entity.create", R"({"name":"Range bulb","parent":"Light parent","components":{"Transform":{},"PointLight":{"range":2}}})")["ok"].asBool());
+    CHECK(Call(engine, "entity.create", R"({"name":"Cone light","parent":"Light parent","components":{"Transform":{},"SpotLight":{"range":2}}})")["ok"].asBool());
     CHECK(Call(engine, "entity.create", R"({"name":"Direction sun","parent":"Light parent","components":{"Transform":{},"DirectionalLight":{}}})")["ok"].asBool());
     CHECK(Call(engine, "entity.create", R"({"name":"Flat light","parent":"Light parent","components":{"Transform":{},"Light2D":{"radius":2,"inner":0.5}}})")["ok"].asBool());
     if (!engine.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
@@ -14992,7 +15075,7 @@ TEST(NativeEditorLightGuides) {
         frames();
         const Json before = engine.GetScene().ToJson();
         const auto undo = engine.UndoDepth();
-        for (const char* name : {"Range bulb", "Direction sun", "Flat light"}) {
+        for (const char* name : {"Range bulb", "Cone light", "Direction sun", "Flat light"}) {
             editor.Select(engine.GetScene().FindByName(name));
             frames();
             CHECK(WritePng(JoinPath(OE_SOURCE_DIR, std::string("build/light-guide-") + name + ".png"), image.ToImage()));

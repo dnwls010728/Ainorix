@@ -99,6 +99,7 @@ struct Lighting {
     PostProcess fog;  // fog settings (normalized); fog == 0 disables it
     std::vector<RenderDirLight> dirs;
     std::vector<RenderPointLight> points;
+    std::vector<RenderSpotLight> spots;
     ShadowMap shadow;
     Vec3 eye;
 
@@ -191,6 +192,15 @@ struct Lighting {
             if (dist >= p.range || dist < 1e-5f) continue;
             float fall = 1.0f - dist / p.range;
             add(d / dist, p.color * (fall * fall));
+        }
+        for (const RenderSpotLight& spot : spots) {
+            const Vec3 d = spot.pos - wpos;
+            const float dist = Length(d);
+            if (dist >= spot.range || dist < 1e-5f) continue;
+            const float cone = SpotConeWeight(spot, -d / dist);
+            if (cone <= 0.0f) continue;
+            const float fall = 1.0f - dist / spot.range;
+            add(d / dist, spot.color * (fall * fall * cone));
         }
         return c;
     }
@@ -590,6 +600,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     lighting.fog = post;
     lighting.dirs = gathered.dirs;
     lighting.points = gathered.points;
+    lighting.spots = gathered.spots;
     lighting.eye = view.eye;
     const bool shadows = gathered.shadows;
     const float shadowStrength = gathered.shadowStrength;

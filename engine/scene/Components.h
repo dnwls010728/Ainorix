@@ -783,6 +783,23 @@ struct ReflectionProbe {
     }
 };
 
+struct SpotLight {
+    static constexpr const char* kTypeName = "SpotLight";
+    static constexpr const char* kDoc = "Cone light along local -Z (parent rotations included), with a soft edge; no shadows.";
+    Color color{1.0f, 0.85f, 0.6f};  // Light color.
+    float intensity = 1.5f;        // Brightness on the cone axis at the source.
+    float range = 6.0f;            // Radial reach in world meters, unaffected by scale.
+    float innerAngle = 20.0f;      // Half-angle in degrees, full strength inside.
+    float outerAngle = 30.0f;      // Half-angle in degrees, zero strength outside.
+    static void Reflect(FieldList& f) {
+        f.Add("color", &SpotLight::color, "Light color.");
+        f.Add("intensity", &SpotLight::intensity, "Brightness on the axis; negative values render as zero.");
+        f.Add("range", &SpotLight::range, "Radial distance in meters where the light reaches zero; minimum 0.01.");
+        f.Add("innerAngle", &SpotLight::innerAngle, "Full-strength cone half-angle in degrees; clamped to 0..outerAngle.");
+        f.Add("outerAngle", &SpotLight::outerAngle, "Cone half-angle in degrees; clamped to 0.1..89. Equal angles give a hard edge.");
+    }
+};
+
 struct PointLight {
     static constexpr const char* kTypeName = "PointLight";
     static constexpr const char* kDoc = "Light bulb at the entity position, fading to zero at `range`.";

@@ -2664,6 +2664,18 @@ How this entity and its children take part in the navigation mesh.
 |---|---|---|---|
 | `mode` | string | `"ignore"` | ignore = left out of the bake (sky domes, decoration); unwalkable = an obstacle agents never stand on (water, lava). |
 
+### SpotLight
+
+Cone light along local -Z (parent rotations included), with a soft edge; no shadows.
+
+| field | type | default | description |
+|---|---|---|---|
+| `color` | color | `[1,0.850000024,0.600000024]` | Light color. |
+| `intensity` | float | `1.5` | Brightness on the axis; negative values render as zero. |
+| `range` | float | `6` | Radial distance in meters where the light reaches zero; minimum 0.01. |
+| `innerAngle` | float | `20` | Full-strength cone half-angle in degrees; clamped to 0..outerAngle. |
+| `outerAngle` | float | `30` | Cone half-angle in degrees; clamped to 0.1..89. Equal angles give a hard edge. |
+
 ### Data
 
 Named game values kept on the entity (numbers, strings, booleans): cooldowns, charges, mana, a state name. Saved with the scene, editable in the inspector and replicable like any field (NetSync fields "Data.values"). With network.prediction "owned" a correction rewinds components, not script variables, so values the prediction depends on belong here.

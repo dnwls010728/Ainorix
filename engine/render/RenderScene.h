@@ -111,6 +111,28 @@ struct RenderPointLight {
     float range;
 };
 
+// Independent of the point-light budget; first eight entity ids, identical in both renderers.
+constexpr int kMaxSpotLights = 8;
+struct RenderSpotLight {
+    EntityId id = kNullEntity;  // Source for future shadow-map selection (R4).
+    Vec3 pos;                 // World position, including parent transforms.
+    Vec3 dir{0, 0, -1};       // Direction light travels; rotations only, independent of scale.
+    Color color{0, 0, 0};     // Color times nonnegative intensity.
+    float range = 6.0f;       // Radial distance, world meters.
+    float innerCos = 1.0f;    // Cosine of the inner half-angle.
+    float outerCos = 1.0f;    // Cosine of the outer half-angle.
+};
+
+// Shared normalization and rotation contract for renderer light gathering and editor cone guides.
+RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id);
+// Angular smoothstep, given a normalized direction from the light toward the surface.
+inline float SpotConeWeight(const RenderSpotLight& light, const Vec3& fromLight) {
+    const float cosine = Dot(light.dir, fromLight);
+    if (light.innerCos == light.outerCos) return cosine >= light.outerCos ? 1.0f : 0.0f;
+    const float t = Clamp((cosine - light.outerCos) / (light.innerCos - light.outerCos), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 // A scene's sky environment (the Skybox component), sampled by both renderers for image-based
 // lighting and the background: three colors (they already include the component's intensity), or
 // an image (`map`, with `intensity`, turned by the yaw).
@@ -240,6 +262,7 @@ struct RenderLights {
     std::vector<RenderProbe> probes;   // every ReflectionProbe, in entity id order, without pictures (see ActiveProbes)
     std::vector<RenderDirLight> dirs;  // never empty: a default light is added when the scene has none
     std::vector<RenderPointLight> points;
+    std::vector<RenderSpotLight> spots;  // bounded by kMaxSpotLights, in entity id order
     bool shadows = false;  // the first directional light casts shadows
     float shadowStrength = 0.75f;
     float shadowDistance = 0.0f;  // > 0: the shadow map covers the camera's view up to this distance

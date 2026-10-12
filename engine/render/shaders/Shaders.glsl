@@ -248,7 +248,7 @@ layout(binding=2) uniform mesh_lights {
     vec4 eye;            // camera position
     vec4 ambient_ground; // rgb: hemisphere ambient of downward faces, w: 1 = hemisphere ambient on
     vec4 fog_color;      // rgb: fog color, w: largest fog amount (0 = off)
-    vec4 fog_range;      // x: start distance, y: end distance
+    vec4 fog_range;      // x: start distance, y: end distance, z: spot count
     vec4 view_axis;      // xyz: camera forward; frag_depth = view depth along it (depth of field)
     vec4 dir_dir[4];     // direction the light travels
     vec4 dir_color[4];
@@ -258,13 +258,11 @@ layout(binding=2) uniform mesh_lights {
     vec4 env_horizon;    // rgb: horizon color, w: environment reflection strength
     vec4 env_ground;     // rgb: ground (below horizon) color, w: intensity of the environment image
     vec4 env_map;        // x: 1 = the environment is an image (env_tex), y: its last (most blurred) level, z/w: cos/sin of its rotation
-    vec4 env_sh[9];      // rgb: irradiance terms of the image, with intensity (EnvIrradianceSH in Environment.h)
     vec4 probe_count;    // x: reflection probes of this frame (0..4), smallest box first (ActiveProbes)
     vec4 probe_lo[4];    // xyz: box min, w: fade distance outside the box
     vec4 probe_hi[4];    // xyz: box max, w: last (most blurred) level of its picture
     vec4 probe_pos[4];   // xyz: where the picture was taken, w: intensity
     vec4 probe_opt[4];   // x: 1 = box projection, y: 1 = the picture replaces the diffuse ambient too
-    vec4 probe_sh[36];   // nine irradiance terms per probe, with intensity
 };
 
 // Analytic sky color along a world direction. Mirrors SampleSky in RenderScene.h; keep identical.
@@ -292,6 +290,19 @@ layout(binding=7) uniform texture2D probe0_tex;  // reflection probe pictures, l
 layout(binding=8) uniform texture2D probe1_tex;
 layout(binding=9) uniform texture2D probe2_tex;
 layout(binding=10) uniform texture2D probe3_tex;
+// 8x9 RGBA32F: 24 spot texels, nine sky SH terms, 36 probe SH terms; no filtering.
+layout(binding=11) uniform texture2D spot_tex;
+layout(binding=3) uniform sampler spot_smp;
+
+// RGB coefficients use one texel each, preserving the reference irradiance math.
+vec3 env_coefficient(int i) {
+    int index = 24 + i;
+    return texelFetch(sampler2D(spot_tex, spot_smp), ivec2(index % 8, index / 8), 0).rgb;
+}
+vec3 probe_coefficient(int i) {
+    int index = 33 + i;
+    return texelFetch(sampler2D(spot_tex, spot_smp), ivec2(index % 8, index / 8), 0).rgb;
+}
 
 // A world direction in the environment image: turned around +Y, then to equirectangular coordinates
 // (EnvMapDir in RenderScene.h, EnvUV in Environment.h).
@@ -443,10 +454,10 @@ void main() {
             vec3 envSpec;
             if (env_map.x > 0.5) {
                 vec3 m = env_dir(n);
-                ambDiffuse = max(env_sh[0].rgb + env_sh[1].rgb * m.y + env_sh[2].rgb * m.z + env_sh[3].rgb * m.x +
-                                 env_sh[4].rgb * (m.x * m.y) + env_sh[5].rgb * (m.y * m.z) +
-                                 env_sh[6].rgb * (3.0 * m.z * m.z - 1.0) + env_sh[7].rgb * (m.x * m.z) +
-                                 env_sh[8].rgb * (m.x * m.x - m.y * m.y), vec3(0.0));
+                ambDiffuse = max(env_coefficient(0) + env_coefficient(1) * m.y + env_coefficient(2) * m.z + env_coefficient(3) * m.x +
+                                 env_coefficient(4) * (m.x * m.y) + env_coefficient(5) * (m.y * m.z) +
+                                 env_coefficient(6) * (3.0 * m.z * m.z - 1.0) + env_coefficient(7) * (m.x * m.z) +
+                                 env_coefficient(8) * (m.x * m.x - m.y * m.y), vec3(0.0));
                 float lod = (r - 0.04) / 0.96 * env_map.y;
                 envSpec = textureLod(sampler2D(env_tex, env_smp), env_uv(env_dir(refl)), lod).rgb * env_ground.w;
             } else {
@@ -495,10 +506,10 @@ void main() {
             vec3 dif = dBase;
             if (probe_opt[i].y > 0.5) {
                 int b = i * 9;
-                dif = max(probe_sh[b].rgb + probe_sh[b + 1].rgb * n.y + probe_sh[b + 2].rgb * n.z + probe_sh[b + 3].rgb * n.x +
-                          probe_sh[b + 4].rgb * (n.x * n.y) + probe_sh[b + 5].rgb * (n.y * n.z) +
-                          probe_sh[b + 6].rgb * (3.0 * n.z * n.z - 1.0) + probe_sh[b + 7].rgb * (n.x * n.z) +
-                          probe_sh[b + 8].rgb * (n.x * n.x - n.y * n.y), vec3(0.0)) * diffuse;
+                dif = max(probe_coefficient(b) + probe_coefficient(b + 1) * n.y + probe_coefficient(b + 2) * n.z + probe_coefficient(b + 3) * n.x +
+                          probe_coefficient(b + 4) * (n.x * n.y) + probe_coefficient(b + 5) * (n.y * n.z) +
+                          probe_coefficient(b + 6) * (3.0 * n.z * n.z - 1.0) + probe_coefficient(b + 7) * (n.x * n.z) +
+                          probe_coefficient(b + 8) * (n.x * n.x - n.y * n.y), vec3(0.0)) * diffuse;
             }
             pd += dif * w;
             ps += fenv * probe_texel(i, env_uv(dir), (r - 0.04) / 0.96 * probe_hi[i].w) * probe_pos[i].w * w;
@@ -531,6 +542,23 @@ void main() {
             }
             float fall = 1.0 - dist / range;
             color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * point_color[i].rgb * (fall * fall);
+        }
+        int spots = int(fog_range.z);
+        for (int i = 0; i < 8; i++) {
+            if (i >= spots) break;
+            vec4 position = texelFetch(sampler2D(spot_tex, spot_smp), ivec2(i, 0), 0);
+            vec4 direction = texelFetch(sampler2D(spot_tex, spot_smp), ivec2(i, 1), 0);
+            vec4 radiance = texelFetch(sampler2D(spot_tex, spot_smp), ivec2(i, 2), 0);
+            vec3 d = position.xyz - v_wpos;
+            float dist = length(d);
+            if (dist >= position.w || dist < 1e-5) continue;
+            float cosine = dot(direction.xyz, -d / dist);
+            float inner = radiance.w, outer = direction.w;
+            float t = inner == outer ? (cosine >= outer ? 1.0 : 0.0) : clamp((cosine - outer) / (inner - outer), 0.0, 1.0);
+            float cone = t * t * (3.0 - 2.0 * t);
+            if (cone <= 0.0) continue;
+            float fall = 1.0 - dist / position.w;
+            color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * radiance.rgb * (fall * fall * cone);
         }
     }
     vec3 em = emissive.rgb;

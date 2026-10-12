@@ -824,6 +824,34 @@ bool BoxInFrustum(const Mat4& viewProj, const Vec3& lo, const Vec3& hi, bool dep
     return true;
 }
 
+RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id) {
+    RenderSpotLight result;
+    result.id = id;
+    const SpotLight* light = scene.Get<SpotLight>(id);
+    if (!light) return result;
+    auto finite = [](float value, float fallback) { return std::isfinite(value) ? value : fallback; };
+    result.pos = scene.WorldMatrix(id).TransformPoint(Vec3());
+    // Apply rotations from child to root, never scale/shear (including zero or mirrored scales).
+    Vec3 direction(0, 0, -1);
+    for (EntityId current = id; current != kNullEntity;) {
+        const EntityRecord* record = scene.Record(current);
+        if (!record) break;
+        if (const Transform* transform = scene.Get<Transform>(current))
+            direction = Mat4::RotationEuler(transform->rotation).TransformDir(direction);
+        current = record->parent;
+    }
+    result.dir = Normalize(direction);
+    const float intensity = std::max(0.0f, finite(light->intensity, 0.0f));
+    result.color = Color(std::max(0.0f, finite(light->color.r, 0.0f)), std::max(0.0f, finite(light->color.g, 0.0f)),
+                         std::max(0.0f, finite(light->color.b, 0.0f))) * intensity;
+    result.range = std::max(0.01f, finite(light->range, 6.0f));
+    const float outer = Clamp(finite(light->outerAngle, 30.0f), 0.1f, 89.0f);
+    const float inner = Clamp(finite(light->innerAngle, 20.0f), 0.0f, outer);
+    result.innerCos = std::cos(Radians(inner));
+    result.outerCos = std::cos(Radians(outer));
+    return result;
+}
+
 RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
     RenderLights lights;
     for (const auto& kv : scene.Pool<DirectionalLight>()) {
@@ -846,6 +874,10 @@ RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
     }
     for (const auto& kv : scene.Pool<PointLight>()) {
         lights.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity, std::max(0.01f, kv.second.range)});
+    }
+    for (const auto& kv : scene.Pool<SpotLight>()) {
+        if (lights.spots.size() == static_cast<size_t>(kMaxSpotLights)) break;
+        lights.spots.push_back(MakeRenderSpotLight(scene, kv.first));
     }
     for (const auto& kv : scene.Pool<Skybox>()) {  // first one wins
         const Skybox& s = kv.second;
