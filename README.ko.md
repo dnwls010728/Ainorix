@@ -108,6 +108,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(관절 64개까지), `Animator`, Lua 재생 | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
 | VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |
+| 내비게이션 | 정적 콜라이더나 모델에서 베이크하는 내비게이션 메시(Recast/Detour): 경로, 최근접 지점, 보행 레이캐스트, Lua 에이전트 | [NAVIGATION](docs/NAVIGATION.md) |
 | 물리 | Jolt 3D와 Box2D 2D: 강체, 트리거, 캐릭터 컨트롤러, 일방통행 플랫폼, 충돌 레이어, 레이캐스트. 결정적 | [PHYSICS](docs/PHYSICS.md) |
 | 2D | 스프라이트와 시트 애니메이션, 타일셋 파일을 쓰는 텍스트 타일맵, 오토타일과 타일별 충돌, 2D 조명, 3D 세계 속 HD-2D 스프라이트 | [2D](docs/2D.md) |
 | UI | 텍스트(TrueType, 리치 텍스트, 자동 축소), 패널, 버튼(토글, 라디오 그룹, 아이콘), 이미지, 슬라이더, 텍스트 입력, 드롭다운, 화면 조이스틱, 레이아웃, 스크롤 뷰, 등장 모션, 키보드/게임패드 포커스. 모든 요소에 색 대신 9-slice 이미지 사용 가능 | [UI](docs/UI.md) |
@@ -147,6 +148,7 @@ engine/core       Json, Math, Log, PNG, FileSystem, Zip
 engine/scene      리플렉션, 컴포넌트, Scene, 동작 시스템
 engine/script     Lua 스크립트 호스트와 정적 검사
 engine/physics    Jolt(PhysicsWorld), Box2D(Physics2D) 래퍼
+engine/nav        내비게이션 메시(Recast/Detour): 씬에서 베이크, 경로 질의
 engine/audio      믹서, WAV, 효과음 생성기
 engine/net        트랜스포트, 채널, 세션, 락스텝/롤백, 권위 서버
 engine/assets     에셋 캐시, glTF, FBX와 이미지 로딩
@@ -160,7 +162,7 @@ tools/oe          CLI          tools/player   게임 런타임          tools/sh
 tests/            자체 테스트 (WebAssembly로도 실행)
 templates/        `oe new`가 복사하는 것          games/   예제 게임
 runtime/          미리 빌드된 웹, Android 플레이어 런타임
-third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
+third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, Recast/Detour 1.6.0, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
 
 더 자세한 코드 지도는 [AGENTS.md](AGENTS.md), 구조 그림은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)에 있습니다.

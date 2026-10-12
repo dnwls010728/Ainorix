@@ -15,6 +15,7 @@
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
 #include "scene/Vfx.h"
+#include "nav/Navigation.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 #include "render/GpuDevice.h"
@@ -42,6 +43,7 @@ Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std
     scripts_ = std::make_unique<ScriptHost>(*this);
     physics_ = std::make_unique<PhysicsWorld>();
     physics_->SetTilesets(assets_->Tilesets());
+    nav_ = std::make_unique<Navigation>();
     audio_ = std::make_unique<AudioSystem>(*this);
     RegisterBuiltinCommands(commands_);
     projectDir_ = AbsolutePath(".");
@@ -274,6 +276,7 @@ void Engine::ResetRuntime() {
     links_.Clear();  // their ids lived in the Lua state that goes away
     scripts_->Reset();
     physics_->Reset();
+    navTried_ = false;
     audio_->Reset();
     pendingScene_.clear();
     audio_->SetOutputMode(false, false); saves_.DeferFlush(false); saves_.FreezeReads(false);
@@ -292,6 +295,7 @@ void Engine::ApplySceneChange() {
         return;
     }
     physics_->Reset();
+    navTried_ = false;
     scripts_->ResetInstances();
     audio_->OnSceneChanged();
     runtimeScene_ = path;
@@ -416,6 +420,38 @@ void Engine::EndInterpolatedRender() {
 void Engine::AddDebugLine(const Vec3& a, const Vec3& b, const Color& color, float seconds) {
     if (debugLines_.size() >= 20000) return;
     debugLines_.push_back({{a, b, color}, seconds < 0 ? -1.0 : simTime_ + static_cast<double>(seconds)});
+}
+
+Navigation& Engine::Nav(bool rebake) {
+    // Stopped, every edit may have moved the ground; playing, only an explicit bake looks again.
+    if (navTried_ && !rebake && (InPlaySession() || navRevision_ == revision_)) return *nav_;
+    NavGeometry geometry;
+    CollectNavGeometry(scene_, [this](const std::string& name) { return assets_->GetMesh(name); }, geometry);
+    const NavSettings settings = ReadNavSettings(scene_);
+    const uint64_t hash = geometry.Hash(settings);
+    const bool same = navTried_ && !rebake && hash == navHash_;
+    navTried_ = true;
+    navRevision_ = revision_;
+    if (same) return *nav_;
+    navHash_ = hash;
+    std::string error;
+    const bool baked = nav_->Build(geometry, settings, &error);
+    navInfo_ = baked ? nav_->Stats() : Json::MakeObject();
+    navInfo_["baked"] = baked;
+    navInfo_["colliders"] = geometry.colliders;
+    navInfo_["meshes"] = geometry.meshes;
+    navInfo_["triangles"] = static_cast<uint64_t>(geometry.triangles.size() / 3);
+    Json warnings = Json::MakeArray();
+    for (const std::string& warning : geometry.warnings) warnings.push(warning);
+    navInfo_["warnings"] = std::move(warnings);
+    if (!baked) {
+        navInfo_["error"] = error;
+        OE_LOG_WARN("nav", "navigation mesh not baked: %s", error.c_str());
+    } else {
+        OE_LOG_INFO("nav", "navigation mesh: %d polygons from %d colliders and %d meshes", static_cast<int>(navInfo_["polygons"].asNumber()),
+                    geometry.colliders, geometry.meshes);
+    }
+    return *nav_;
 }
 
 void Engine::AppendDebugLines(std::vector<DebugLine>& out) const {

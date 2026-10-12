@@ -68,6 +68,8 @@ public:
     void SetSceneView2D(bool on);
     // The Scene view's skeleton overlay, as its "Bones" toggle.
     void SetSceneBones(bool on);
+    // The Scene view's navigation mesh overlay, as its "NavMesh" toggle.
+    void SetSceneNavMesh(bool on);
     // The Inspector bone list's actions: hold `existing` (0 = a new entity) on a bone of `model`; create an IK goal on a bone; add a spring that swings the bone and those below it.
     void AttachToBone(EntityId model, const std::string& bone, EntityId existing);
     void AddIkGoal(EntityId model, const std::string& bone);

@@ -202,6 +202,7 @@ oe editor <project> --screenshot build/editor.png                    # default l
 oe editor <network-project> --players 3 --play --frames 100 --screenshot build/network-editor.png
 oe editor <project> --screenshot build/editor.png --select Player    # inspector + gizmo on Player
 oe editor <project> --screenshot build/editor.png --2d --select Player  # 2D Scene view: XY grid + planar gizmo
+oe editor <project> --screenshot build/editor.png --navmesh          # Scene view with the NavMesh toggle on (docs/NAVIGATION.md)
 oe editor <project> --screenshot build/editor.png --play --frames 60  # Game view after 1 s of play
 oe editor <project> --screenshot build/editor.png --select Start  # Scene view: the UI over the world, handles on the selected element
 oe editor <project> --screenshot build/editor.png --game --select Start  # stopped Game view: UI editing with a selection

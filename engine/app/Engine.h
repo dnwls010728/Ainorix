@@ -29,6 +29,7 @@ namespace oe {
 class ScriptHost;
 struct UIRect;
 class PhysicsWorld;
+class Navigation;
 class AudioSystem;
 class AssetManager;
 class GpuDevice;
@@ -215,6 +216,14 @@ public:
     void AppendDebugLines(std::vector<DebugLine>& out) const;
     size_t DebugLineCount() const { return debugLines_.size(); }
 
+    // ----- Navigation --------------------------------------------------------
+    // The scene's navigation mesh (engine/nav), baked from its static geometry when first asked for.
+    // While the game is stopped it follows edits; during play it stays as baked until `rebake`
+    // (nav.bake), since scripts move things every frame. Not baked: see NavInfo()["error"].
+    Navigation& Nav(bool rebake = false);
+    // The last bake: {baked, colliders, meshes, triangles, warnings, error?} + the mesh's numbers.
+    const Json& NavInfo() const { return navInfo_; }
+
     // ----- Scripting -------------------------------------------------------
     ScriptHost& Scripts() { return *scripts_; }
     // Shared command/Lua session surface; absent/none projects allocate no session.
@@ -397,6 +406,11 @@ private:
     CommandRegistry commands_;
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;
+    std::unique_ptr<Navigation> nav_;
+    bool navTried_ = false;       // a bake was attempted for the scene as it is
+    uint64_t navRevision_ = 0;    // revision_ the geometry was last collected at
+    uint64_t navHash_ = 0;        // NavGeometry::Hash of the baked input
+    Json navInfo_ = Json::MakeObject();
     std::unique_ptr<AudioSystem> audio_;
     SessionConfig networkConfig_;
     // Shared when this engine runs one world of a session with several (ServeWorld): the engine of

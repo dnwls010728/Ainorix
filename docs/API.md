@@ -923,6 +923,7 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 | `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees, projection:perspective|orthographic, orthoSize:half-height}. Free defaults: perspective, fov 60, orthoSize 5, clips 0.05..1000. Omit camera to use the scene's active camera. |
 | `grid` | boolean |  | Draw the editor ground grid (default false). |
 | `colliders` | boolean |  | Draw collider wireframes: green solid, yellow trigger, cyan character (default false). |
+| `navmesh` | boolean |  | Draw the navigation mesh: light blue borders, darker lines between its polygons (default false). |
 | `ui` | boolean |  | Draw the in-game UI (default: true with the scene camera, false with a free camera). |
 | `highlight` | integer |  | Entity id to outline. |
 | `path` | string |  | Also write the PNG to this path (relative to the project). |
@@ -940,6 +941,7 @@ Return the entity visible at a pixel of a rendered view, and where its surface i
 | `camera` | object |  | Optional free camera {eye:[x,y,z], target:[x,y,z], fov:degrees, projection:perspective|orthographic, orthoSize:half-height}. Free defaults: perspective, fov 60, orthoSize 5, clips 0.05..1000. Omit camera to use the scene's active camera. |
 | `grid` | boolean |  | Draw the editor ground grid (default false). |
 | `colliders` | boolean |  | Draw collider wireframes: green solid, yellow trigger, cyan character (default false). |
+| `navmesh` | boolean |  | Draw the navigation mesh: light blue borders, darker lines between its polygons (default false). |
 | `ui` | boolean |  | Draw the in-game UI (default: true with the scene camera, false with a free camera). |
 | `highlight` | integer |  | Entity id to outline. |
 | `x` | integer | yes | Pixel x (0 = left). |
@@ -1448,6 +1450,45 @@ Create a PNG texture procedurally (checker, grid, bricks, gradient, noise).
 | `color1` | array |  | First color [r,g,b] 0..1. |
 | `color2` | array |  | Second color [r,g,b] 0..1. |
 | `cells` | integer |  | Pattern repeats across the image (default 8). |
+
+## nav
+
+### `nav.bake`
+
+Build the navigation mesh again from the scene's static colliders/meshes (NavMesh component settings) and report it. Queries bake by themselves; call this during play after the level changed (a door opened, a bridge fell).
+
+### `nav.state`
+
+The navigation mesh as baked: {baked, polygons, area, bounds, colliders, meshes, triangles, warnings, settings}.
+
+### `nav.path`
+
+Shortest walk on the navigation mesh between two points: {found, partial, points:[[x,y,z],...], length}. partial = the goal cannot be reached and the path ends as close as it gets.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `from` | array | yes | Start [x,y,z] (snapped to the mesh). |
+| `to` | array | yes | Goal [x,y,z] (snapped to the mesh). |
+| `range` | number |  | How far from each point the mesh is searched, meters (default 2; twice that vertically). |
+
+### `nav.nearest`
+
+The closest point of the navigation mesh to a point: {found, point, distance}.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `point` | array | yes | Point [x,y,z]. |
+| `range` | number |  | Search distance in meters (default 2; twice that vertically). |
+
+### `nav.raycast`
+
+Walk straight from one point toward another on the navigation mesh: {onMesh, hit, point, normal, distance}. hit = an edge of the mesh (a wall, a drop) is in the way; point is where the walk stops.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `from` | array | yes | Start [x,y,z] (snapped to the mesh). |
+| `to` | array | yes | End [x,y,z]. |
+| `range` | number |  | How far from the start the mesh is searched, meters (default 2). |
 
 ## debug
 
@@ -2549,6 +2590,29 @@ Live-linked .vfx.json effect with named parameters, independent emitters and a s
 | `params` | json | `{}` | Named parameter overrides defined by the effect asset; unknown names/ranges are errors. |
 | `playing` | bool | `true` | Automatic emission switch; existing particles and trail points keep aging while false. |
 | `autoDestroy` | bool | `false` | Destroy the owner and its children after the effect finishes (vfx.spawn defaults to true). |
+
+### NavMesh
+
+Settings of the scene's navigation mesh: the ground an agent of this size can walk on, built from static colliders and/or meshes (nav.bake, nav.path, Lua nav.path). One per scene (the first in id order); a scene without one uses these defaults.
+
+| field | type | default | description |
+|---|---|---|---|
+| `agentRadius` | float | `0.400000006` | Agent radius in meters: the mesh keeps this far from walls and edges. |
+| `agentHeight` | float | `1.79999995` | Agent height in meters: lower passages are not walkable. |
+| `maxSlope` | float | `45` | Steepest walkable slope in degrees. |
+| `stepHeight` | float | `0.300000012` | Highest ledge the agent steps up or down (stairs, kerbs), meters. |
+| `cellSize` | float | `0.200000003` | Size of the cells the geometry is sampled with, meters. Smaller follows walls more closely and bakes slower; about agentRadius / 2. |
+| `minRegion` | float | `1` | Walkable islands smaller than this (square meters) are dropped, e.g. the tops of crates. |
+| `source` | string | `"colliders"` | Geometry taken as ground and obstacles: colliders (static Collider shapes, what characters stand on), meshes (static MeshRenderer models) or all. |
+| `collect` | string | `"all"` | all = every entity of the scene; children = only this entity and those below it. |
+
+### NavModifier
+
+How this entity and its children take part in the navigation mesh.
+
+| field | type | default | description |
+|---|---|---|---|
+| `mode` | string | `"ignore"` | ignore = left out of the bake (sky domes, decoration); unwalkable = an obstacle agents never stand on (water, lava). |
 
 ### Data
 

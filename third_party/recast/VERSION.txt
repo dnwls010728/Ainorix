@@ -1,0 +1,3 @@
+recastnavigation v1.6.0 (6dc1667f580357e8a2154c28b7867bea7e8ad3a7)
+https://github.com/recastnavigation/recastnavigation
+Only Recast/ and Detour/ (Include + Source) are vendored, unmodified.

@@ -17,6 +17,7 @@
 #include "app/Engine.h"
 #include "assets/Assets.h"
 #include "core/Log.h"
+#include "nav/Navigation.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/GamepadInput.h"
 #include "render/GpuRenderer.h"
@@ -444,6 +445,7 @@ void NativeEditor::Impl::ScenePanel() {
         TilesetLookup tilesets = engine.Assets().Tilesets();
         AppendColliderLines(scene, view.lines, &tilesets);
     }
+    if (showNavMesh) engine.Nav().AppendLines(view.lines);  // baked again when an edit changed the ground
     // Light ranges are in world units, independent of Transform.scale, as in GatherLights.
     auto ring = [&](const Vec3& center, const Vec3& right, const Vec3& up, float radius, Color color) {
         if (!std::isfinite(radius) || radius <= 0) return;
@@ -680,6 +682,8 @@ void NativeEditor::Impl::ScenePanel() {
         OverlayToggle("UI", &showSceneUI, Tr("The game's UI over the world: click an element to select it, drag to move, handles to resize"));
         ImGui::SameLine(0, 3);
         OverlayToggle(Tr("Bones"), &showBones, Tr("Skeleton of the selected model: hover a joint for its name; the bones a selected goal or attachment uses are lit"));
+        ImGui::SameLine(0, 3);
+        OverlayToggle(Tr("NavMesh"), &showNavMesh, Tr("Navigation mesh: where agents can walk, baked from the static colliders or meshes (NavMesh component)"));
         if (Row(Primary()) && Row(Primary())->Has("Tilemap")) {
             ImGui::SameLine(0, 3);
             if (OverlayToggle(Tr("Paint Tiles"), &tilePaint, Tr("Paint the selected Tilemap (brush from the Tiles panel): left paint, right erase, Shift rectangle, Ctrl pick"))) {

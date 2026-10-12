@@ -116,8 +116,23 @@ if(EMSCRIPTEN)
   target_compile_definitions(oe_box2d PRIVATE BOX2D_DISABLE_SIMD)  # scalar path: no -msimd128 needed
 endif()
 
+# ---------------------------------------------------------------------------
+# Recast + Detour 1.6.0 (vendored, unmodified): navigation mesh building and
+# path queries, used only by engine/nav/NavMesh.cpp. No FMA contraction, as
+# for the other simulation code.
+# ---------------------------------------------------------------------------
+file(GLOB OE_RECAST_SOURCES third_party/recast/Recast/Source/*.cpp third_party/recast/Detour/Source/*.cpp)
+add_library(oe_recast STATIC ${OE_RECAST_SOURCES})
+target_include_directories(oe_recast PUBLIC third_party/recast/Recast/Include third_party/recast/Detour/Include)
+if(MSVC)
+  target_compile_options(oe_recast PRIVATE /W0)
+else()
+  target_compile_options(oe_recast PRIVATE -w -ffp-contract=off)
+endif()
+
 file(GLOB OE_CORE_SOURCES CONFIGURE_DEPENDS
   engine/core/*.cpp
+  engine/nav/*.cpp
   engine/scene/*.cpp
   engine/script/*.cpp
   engine/physics/*.cpp
@@ -264,7 +279,7 @@ endif()
 
 add_library(OwnEngine STATIC ${OE_CORE_SOURCES} ${OE_PLATFORM_SOURCES})
 target_include_directories(OwnEngine PUBLIC engine third_party/sokol)
-target_link_libraries(OwnEngine PUBLIC oe_lua Jolt oe_box2d)
+target_link_libraries(OwnEngine PUBLIC oe_lua Jolt oe_box2d oe_recast)
 # Single-file decoders (stb_image, cgltf, ufbx); implementations in engine/assets/ThirdPartyImpl.cpp.
 target_include_directories(OwnEngine PRIVATE third_party/stb third_party/cgltf third_party/ufbx)
 target_compile_definitions(OwnEngine PUBLIC
@@ -304,7 +319,7 @@ if(EMSCRIPTEN)
   # tools/player/web/index.html and the game data (game.pak).
   # C++ exceptions (ApiError, Lua errors) use native WebAssembly exceptions.
   # ---------------------------------------------------------------------------
-  foreach(t OwnEngine oe_lua Jolt)
+  foreach(t OwnEngine oe_lua Jolt oe_recast)
     target_compile_options(${t} PUBLIC -fwasm-exceptions)
   endforeach()
   add_executable(oe_player tools/player/main.cpp)

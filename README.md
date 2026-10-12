@@ -111,6 +111,7 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 | Animation | glTF/FBX skeletal animation (TRS, skins, up to 64 joints) in both renderers, `Animator`, Lua playback | [ANIMATION](docs/ANIMATION.md) |
 | Particles | Deterministic emitters (in `.vfx.json` assets) with birth shapes, lifetime curves, flipbooks, turbulence, velocity alignment; `Trail` ribbons | [PARTICLES](docs/PARTICLES.md) |
 | VFX authoring | Reusable `.vfx.json` assets and linked VFXSystem, named parameters, Lua control, hot reload and total budgets; Effects panel with grouped fields, curves/gradients, isolated playback, document undo and a reference node graph; 15 presets (including sword slash and six expression effects), particle materials/mesh batching, two-anchor ribbons and bounded death chains, validation and `vfx.*` preview/analysis; axis motion curves, pivots, custom material channels and typed expressions with value nodes | [VFX](docs/VFX.md) |
+| Navigation | Navigation mesh baked from static colliders or models (Recast/Detour): paths, nearest point, walk raycast, Lua agents | [NAVIGATION](docs/NAVIGATION.md) |
 | Physics | 3D with Jolt and 2D with Box2D: rigid bodies, triggers, character controllers, one-way platforms, collision layers, raycasts; deterministic | [PHYSICS](docs/PHYSICS.md) |
 | 2D | Sprites and sheet animation, text tilemaps with tileset files, autotiling and per-tile collision, 2D lights and darkness, HD-2D sprites in a lit 3D world | [2D](docs/2D.md) |
 | UI | Text (TrueType, rich text, auto-shrink), panels, buttons (toggles, radio groups, icons), images, sliders, text fields, drop-downs, on-screen joystick, layouts, scroll views, entrance motion, keyboard/gamepad focus; every element takes 9-slice images instead of colors | [UI](docs/UI.md) |
@@ -150,6 +151,7 @@ engine/core       Json, Math, Log, PNG, FileSystem, Zip
 engine/scene      reflection, components, Scene, behaviour systems
 engine/script     Lua script host and static checks
 engine/physics    Jolt (PhysicsWorld) and Box2D (Physics2D) wrappers
+engine/nav        Navigation mesh (Recast/Detour): bake from the scene, path queries
 engine/audio      mixer, WAV, sound effect generator
 engine/net        transports, channels, sessions, lockstep/rollback, authority
 engine/assets     asset cache, glTF, FBX and image loading
@@ -163,7 +165,7 @@ tools/oe          CLI          tools/player   game runtime          tools/shader
 tests/            self tests (also run as WebAssembly) and their fixture projects
 templates/        what `oe new` copies          games/   the example game
 runtime/          prebuilt web and Android player runtimes
-third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
+third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, Recast/Detour 1.6.0, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
 
 A longer map of the code is in [AGENTS.md](AGENTS.md); the structure is drawn in

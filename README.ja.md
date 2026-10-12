@@ -111,6 +111,7 @@ Assets はグリッド/リスト表示、名前・パス検索、件数付きの
 | アニメーション | 両レンダラーで動く glTF / FBX スケルタルアニメーション (64 ジョイントまで)、`Animator`、Lua からの再生 | [ANIMATION](docs/ANIMATION.md) |
 | パーティクル | 発生形状、寿命カーブ、フリップブック、乱流、速度方向への整列を持つ決定的なエミッター。`Trail` リボン | [PARTICLES](docs/PARTICLES.md) |
 | VFX 制作 | 再利用可能な `.vfx.json` と VFXSystem、名前付きパラメータ、Lua 制御、ホットリロード、総粒子予算。モジュール別フィールド、カーブ／グラデーション、独立再生、文書 undo と参照ノードグラフを備える Effects パネル。剣撃と6種類の式エフェクトを含む15種類のプリセット、パーティクルマテリアル／メッシュのバッチ化、二点リボンと深度制限付き子エミッター、検証とプレビュー／分析用の `vfx.*` コマンド 軸別の移動・回転・スケールカーブ、基点ピボットと4つのcustom属性で氷柱の成長などをVFX内で制御。 | [VFX](docs/VFX.md) |
+| ナビゲーション | 静的なコライダーやモデルからベイクするナビゲーションメッシュ (Recast/Detour): 経路、最近点、歩行レイキャスト、Lua エージェント | [NAVIGATION](docs/NAVIGATION.md) |
 | 物理 | Jolt による 3D と Box2D による 2D: 剛体、トリガー、キャラクターコントローラー、一方通行の足場、衝突レイヤー、レイキャスト。決定的 | [PHYSICS](docs/PHYSICS.md) |
 | 2D | スプライトとシートアニメーション、タイルセットファイルを使うテキストタイルマップ、オートタイルとタイルごとの衝突、2D ライト、3D 世界の HD-2D スプライト | [2D](docs/2D.md) |
 | UI | テキスト (TrueType、リッチテキスト、自動縮小)、パネル、ボタン (トグル、ラジオグループ、アイコン)、画像、スライダー、テキスト入力、ドロップダウン、画面上のジョイスティック、レイアウト、スクロールビュー、登場モーション、キーボード/ゲームパッドのフォーカス。どの要素も色の代わりに 9-slice 画像を使えます | [UI](docs/UI.md) |
@@ -150,6 +151,7 @@ engine/core       Json, Math, Log, PNG, FileSystem, Zip
 engine/scene      リフレクション、コンポーネント、Scene、挙動システム
 engine/script     Lua スクリプトホストと静的チェック
 engine/physics    Jolt (PhysicsWorld) と Box2D (Physics2D) のラッパー
+engine/nav        ナビゲーションメッシュ (Recast/Detour): シーンからのベイク、経路クエリ
 engine/audio      ミキサー、WAV、効果音ジェネレーター
 engine/net        トランスポート、チャンネル、セッション、ロックステップ/ロールバック、権威サーバー
 engine/assets     アセットキャッシュ、glTF、FBX と画像の読み込み
@@ -163,7 +165,7 @@ tools/oe          CLI          tools/player   ゲームランタイム          
 tests/            セルフテスト (WebAssembly でも実行)
 templates/        `oe new` がコピーするもの          games/   サンプルゲーム
 runtime/          ビルド済みの Web と Android プレイヤーランタイム
-third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
+third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, Recast/Detour 1.6.0, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
 
 より詳しいコードマップは [AGENTS.md](AGENTS.md)、構造図は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) にあります。

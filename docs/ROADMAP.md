@@ -86,7 +86,7 @@ The web editor was removed. Details: [EDITOR.md](EDITOR.md)
 - ~~Particle system~~ ✅ (P3, [PARTICLES.md](PARTICLES.md))
 - ~~Hardware renderer~~ ✅ `GpuRenderer` on sokol_gfx (Windows D3D11, Web WebGL2, Linux GLES3) — same interface as the software renderer
 - GPU effects: custom shader materials, post-processing (tone mapping, bloom, FXAA, vignette) — implemented; Android device verification remains (P6, [POSTPROCESS.md](POSTPROCESS.md))
-- Navigation (grid path finding)
+- ~~Navigation~~ ✅ navigation mesh for 3D scenes ([NAVIGATION.md](NAVIGATION.md)) — grid path finding over tilemaps (P8) is not implemented
 
 ## Stage 7 — More platforms
 
@@ -128,9 +128,10 @@ leave a new line for every check that could not be made. If the order has to cha
 
 Each feature doc lists its own open items under **Status**.
 
-### P8. Navigation (grid path finding) — [ ]
+### P8. 2D navigation (grid path finding) — [ ]
 
-- A* over the solid cells of a `Tilemap` (command `tilemap.path {from,to}` + Lua `nav.path`). Deterministic
+- The 3D navigation mesh exists ([NAVIGATION.md](NAVIGATION.md)); this is its 2D counterpart.
+- A* over the solid cells of a `Tilemap` (command `tilemap.path {from,to}` + Lua `tilemap.path`). Deterministic
   tie-break (cell index order). Use it for enemy AI in 2D games.
 
 ### P9. Build without developer tools (`OE_ENABLE_DEVTOOLS`) — [ ]

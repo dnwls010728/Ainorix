@@ -275,6 +275,8 @@ const Entry kCatalog[] = {
     {"Grid", "그리드", "グリッド"},
     {"Colliders", "콜라이더", "コライダー"},
     {"Bones", "본", "ボーン"},
+    {"NavMesh", "내비메시", "ナビメッシュ"},
+    {"Navigation mesh: where agents can walk, baked from the static colliders or meshes (NavMesh component)", "내비게이션 메시: 에이전트가 걸을 수 있는 영역, 정적 콜라이더나 메시에서 베이크됩니다 (NavMesh 컴포넌트)", "ナビゲーションメッシュ: エージェントが歩ける範囲。静的なコライダーやメッシュからベイクされます (NavMesh コンポーネント)"},
     {"Search bones", "본 검색", "ボーンを検索"},
     {"Birth Expressions", "생성 시 수식", "誕生時の式"},
     {"Update Expressions", "갱신 수식", "更新の式"},

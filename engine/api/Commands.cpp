@@ -28,6 +28,7 @@
 #include "scene/Retarget.h"
 #include "scene/Prefab.h"
 #include "scene/Clipboard.h"
+#include "nav/Navigation.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/TileGrid.h"
 #include "script/ScriptCheck.h"
@@ -277,10 +278,29 @@ ViewRequest ParseView(Engine& e, const Json& args) {
         TilesetLookup tilesets = e.Assets().Tilesets();
         AppendColliderLines(e.GetScene(), r.view.lines, &tilesets);
     }
+    if (args["navmesh"].asBool(false)) e.Nav().AppendLines(r.view.lines);
     e.AppendDebugLines(r.view.lines);
     if (args.has("ui")) r.view.drawUI = args["ui"].asBool(true);
     if (args["highlight"].isNumber()) r.view.highlight = static_cast<EntityId>(args["highlight"].asNumber());
     return r;
+}
+
+Json PointJson(const Vec3& v) { return Json(Json::Array{v.x, v.y, v.z}); }
+
+// The baked mesh, or the error that says why there is none.
+Navigation& RequireNav(Engine& e, bool rebake = false) {
+    Navigation& nav = e.Nav(rebake);
+    if (!nav.Baked())
+        throw ApiError("no_navmesh", "the scene has no navigation mesh: " + e.NavInfo()["error"].asString("not baked"),
+                       "Give the ground a static Collider (no RigidBody), or add a NavMesh component with source \"meshes\" or \"all\" to bake from "
+                       "models; nav.state lists what was collected.");
+    return nav;
+}
+
+float NavRange(const Json& a) {
+    const float range = a["range"].asFloat(Navigation::kSnapRange);
+    if (!std::isfinite(range) || range <= 0) throw ApiError("invalid_argument", "range must be positive", "Meters around the point, e.g. 2.");
+    return range;
 }
 
 Json CameraSchema() {
@@ -297,6 +317,7 @@ Params ViewParams() {
         .OptWith("camera", CameraSchema())
         .Opt("grid", "boolean", "Draw the editor ground grid (default false).")
         .Opt("colliders", "boolean", "Draw collider wireframes: green solid, yellow trigger, cyan character (default false).")
+        .Opt("navmesh", "boolean", "Draw the navigation mesh: light blue borders, darker lines between its polygons (default false).")
         .Opt("ui", "boolean", "Draw the in-game UI (default: true with the scene camera, false with a free camera).")
         .Opt("highlight", "integer", "Entity id to outline.");
     return p;
@@ -2469,6 +2490,91 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  Json out = Json::MakeObject();
                  out["path"] = rel;
                  out["size"] = size;
+                 return out;
+             });
+
+    // ----- navigation ------------------------------------------------------------
+    Register(r, "nav.bake", "Build the navigation mesh again from the scene's static colliders/meshes (NavMesh component settings) and report it. "
+                            "Queries bake by themselves; call this during play after the level changed (a door opened, a bridge fell).",
+             Params(), false, [](Engine& e, const Json&) {
+                 RequireNav(e, true);
+                 return e.NavInfo();
+             });
+
+    Register(r, "nav.state", "The navigation mesh as baked: {baked, polygons, area, bounds, colliders, meshes, triangles, warnings, settings}.",
+             Params(), false, [](Engine& e, const Json&) {
+                 const Navigation& nav = e.Nav();
+                 Json out = e.NavInfo();
+                 const NavSettings settings = ReadNavSettings(e.GetScene());
+                 Json s = Json::MakeObject();
+                 s["agentRadius"] = settings.agentRadius;
+                 s["agentHeight"] = settings.agentHeight;
+                 s["maxSlope"] = settings.maxSlope;
+                 s["stepHeight"] = settings.stepHeight;
+                 s["cellSize"] = settings.cellSize;
+                 s["minRegion"] = settings.minRegion;
+                 out["settings"] = std::move(s);
+                 if (!nav.Baked())
+                     out["hint"] = "Give the ground a static Collider (no RigidBody), or add a NavMesh component with source \"meshes\" or \"all\".";
+                 return out;
+             });
+
+    Register(r, "nav.path", "Shortest walk on the navigation mesh between two points: {found, partial, points:[[x,y,z],...], length}. "
+                            "partial = the goal cannot be reached and the path ends as close as it gets.",
+             Params()
+                 .Req("from", "vec3", "Start [x,y,z] (snapped to the mesh).")
+                 .Req("to", "vec3", "Goal [x,y,z] (snapped to the mesh).")
+                 .Opt("range", "number", "How far from each point the mesh is searched, meters (default 2; twice that vertically)."),
+             false, [](Engine& e, const Json& a) {
+                 const Navigation& nav = RequireNav(e);
+                 const float range = NavRange(a);
+                 const Vec3 from = ReadVec3(a["from"], Vec3()), to = ReadVec3(a["to"], Vec3());
+                 const NavPath path = nav.FindPath(from, to, range);
+                 Json out = Json::MakeObject();
+                 out["found"] = path.found;
+                 if (!path.found) {
+                     out["reason"] = std::string(nav.Nearest(from, range).found ? "to" : "from") + " is not within range of the navigation mesh";
+                     out["hint"] = "Raise range, or check the mesh with render.screenshot {navmesh:true}.";
+                     return out;
+                 }
+                 out["partial"] = path.partial;
+                 Json points = Json::MakeArray();
+                 for (const Vec3& p : path.points) points.push(PointJson(p));
+                 out["points"] = std::move(points);
+                 out["length"] = path.length;
+                 return out;
+             });
+
+    Register(r, "nav.nearest", "The closest point of the navigation mesh to a point: {found, point, distance}.",
+             Params().Req("point", "vec3", "Point [x,y,z].").Opt("range", "number", "Search distance in meters (default 2; twice that vertically)."),
+             false, [](Engine& e, const Json& a) {
+                 const Vec3 point = ReadVec3(a["point"], Vec3());
+                 const NavPoint nearest = RequireNav(e).Nearest(point, NavRange(a));
+                 Json out = Json::MakeObject();
+                 out["found"] = nearest.found;
+                 if (nearest.found) {
+                     out["point"] = PointJson(nearest.point);
+                     out["distance"] = Length(nearest.point - point);
+                 }
+                 return out;
+             });
+
+    Register(r, "nav.raycast", "Walk straight from one point toward another on the navigation mesh: {onMesh, hit, point, normal, distance}. "
+                               "hit = an edge of the mesh (a wall, a drop) is in the way; point is where the walk stops.",
+             Params()
+                 .Req("from", "vec3", "Start [x,y,z] (snapped to the mesh).")
+                 .Req("to", "vec3", "End [x,y,z].")
+                 .Opt("range", "number", "How far from the start the mesh is searched, meters (default 2)."),
+             false, [](Engine& e, const Json& a) {
+                 const NavHit hit = RequireNav(e).Raycast(ReadVec3(a["from"], Vec3()), ReadVec3(a["to"], Vec3()), NavRange(a));
+                 Json out = Json::MakeObject();
+                 out["onMesh"] = hit.valid;
+                 out["hit"] = hit.hit;
+                 if (hit.valid) {
+                     out["point"] = PointJson(hit.point);
+                     if (hit.hit) out["normal"] = PointJson(hit.normal);
+                     out["distance"] = hit.distance;
+                 }
                  return out;
              });
 

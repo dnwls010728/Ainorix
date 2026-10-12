@@ -17432,6 +17432,174 @@ TEST(NativeEditorAskBubbles) {
 #endif
 }
 
+// ----- navigation mesh -------------------------------------------------------------
+
+// A 20 x 20 m floor cut by a wall that leaves a gap at +X, a ramp and a pillar.
+void NavScene(Engine& e) {
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Floor","components":{"Transform":{"position":[0,-0.5,0],"scale":[20,1,20]},"MeshRenderer":{},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Wall","components":{"Transform":{"position":[-2,1,0],"scale":[14,2,0.5]},"MeshRenderer":{},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Ramp","components":{"Transform":{"position":[6,0.6,-5],"rotation":[0,0,20],"scale":[6,0.2,3]},"MeshRenderer":{},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Pillar","components":{"Transform":{"position":[4,1,5]},"Collider":{"shape":"capsule","radius":0.6,"height":2}}})J");
+}
+
+TEST(NavMeshBakeAndQueries) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("navmesh"), &err));
+    auto vec = [](const Json& v) { return Vec3(v[0].asFloat(), v[1].asFloat(), v[2].asFloat()); };
+
+    // Nothing to stand on: the state says so, queries are errors with a hint.
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Json state = Call(e, "nav.state")["result"];
+    CHECK(!state["baked"].asBool() && state.has("error") && state.has("hint"));
+    Json none = Call(e, "nav.path", R"J({"from":[0,0,0],"to":[1,0,0]})J");
+    CHECK(!none["ok"].asBool() && none["error"]["code"].asString() == "no_navmesh" && !none["error"]["hint"].asString().empty());
+
+    NavScene(e);
+    state = Call(e, "nav.state")["result"];
+    CHECK(state["baked"].asBool() && state["colliders"].asInt() == 4 && state["meshes"].asInt() == 0);
+    CHECK(state["polygons"].asInt() > 4 && state["settings"]["agentRadius"].asFloat() == 0.4f);
+    // The floor less the agent's radius along its rim, the wall and the pillar.
+    CHECK(state["area"].asFloat() > 300.0f && state["area"].asFloat() < 369.0f);
+    CHECK(std::fabs(state["boundsMin"][0].asFloat() + 9.6f) < 0.25f && std::fabs(state["boundsMin"][1].asFloat()) < 0.06f);
+
+    // Around the end of the wall (x = 5) instead of the 16 m straight through it.
+    Json path = Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"];
+    CHECK(path["found"].asBool() && !path["partial"].asBool() && path["points"].size() >= 3);
+    CHECK(path["length"].asFloat() > 28.0f && path["length"].asFloat() < 36.0f);
+    bool around = false;
+    float walked = 0.0f;
+    for (size_t i = 0; i < path["points"].size(); ++i) {
+        const Vec3 at = vec(path["points"][i]);
+        around = around || at.x > 5.2f;
+        CHECK(std::fabs(at.y) < 0.06f);  // on the floor's top
+        if (i) walked += Length(at - vec(path["points"][i - 1]));
+    }
+    CHECK(around && std::fabs(walked - path["length"].asFloat()) < 1e-3f);
+    CHECK(Near(vec(path["points"][0]), Vec3(-8, 0, -8), 0.06f) && Near(vec(path["points"][path["points"].size() - 1]), Vec3(-8, 0, 8), 0.06f));
+    CHECK(Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"] == path);  // the same question, the same answer
+
+    // The walk stops at the wall (its face at z = -0.25, less the radius); along it nothing is in the way.
+    Json ray = Call(e, "nav.raycast", R"J({"from":[-5,0,-5],"to":[-5,0,5]})J")["result"];
+    CHECK(ray["onMesh"].asBool() && ray["hit"].asBool() && std::fabs(vec(ray["point"]).z + 0.7f) < 0.25f && vec(ray["normal"]).z < -0.9f);
+    ray = Call(e, "nav.raycast", R"J({"from":[-5,0,-5],"to":[2,0,-5]})J")["result"];
+    CHECK(!ray["hit"].asBool() && std::fabs(ray["distance"].asFloat() - 7.0f) < 0.01f);
+    CHECK(!Call(e, "nav.raycast", R"J({"from":[50,0,50],"to":[0,0,0]})J")["result"]["onMesh"].asBool());
+
+    // Above the wall the nearest ground is beside it; out of range there is none.
+    Json nearest = Call(e, "nav.nearest", R"J({"point":[0,3,0],"range":5})J")["result"];
+    CHECK(nearest["found"].asBool() && std::fabs(std::fabs(vec(nearest["point"]).z) - 0.7f) < 0.25f);
+    CHECK(!Call(e, "nav.nearest", R"J({"point":[0,3,0],"range":0.5})J")["result"]["found"].asBool());
+    CHECK(!Call(e, "nav.nearest", R"J({"point":[0,0,0],"range":-1})J")["ok"].asBool());
+    Json far = Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[80,0,0]})J")["result"];
+    CHECK(!far["found"].asBool() && far["reason"].asString().rfind("to ", 0) == 0);
+
+    // The overlay is part of the picture.
+    const std::string plain = Call(e, "render.screenshot", R"J({"width":160,"height":120,"camera":{"eye":[0,24,14],"target":[0,0,0]}})J")["result"]["hash"].asString();
+    CHECK(Call(e, "render.screenshot", R"J({"width":160,"height":120,"navmesh":true,"camera":{"eye":[0,24,14],"target":[0,0,0]}})J")["result"]["hash"].asString() != plain);
+
+    // Edits while stopped are followed. Things that move, triggers and ignored entities are not ground.
+    Call(e, "entity.create", R"J({"name":"Crate","components":{"Transform":{"position":[-8,0.5,-4]},"Collider":{},"RigidBody":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Zone","components":{"Transform":{"position":[-8,0.5,4]},"Collider":{"isTrigger":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Hero","components":{"Transform":{"position":[0,1,-6]},"CharacterBody":{}}})J");
+    state = Call(e, "nav.state")["result"];
+    CHECK(state["colliders"].asInt() == 4);
+    CHECK(Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"] == path);
+    Call(e, "component.add", R"J({"id":"Wall","type":"NavModifier"})J");
+    Json open = Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"];
+    CHECK(Call(e, "nav.state")["result"]["colliders"].asInt() == 3 && std::fabs(open["length"].asFloat() - 16.0f) < 0.05f && open["points"].size() == 2);
+    // Unwalkable: still in the way, and nobody stands on it.
+    Call(e, "component.set", R"J({"id":"Wall","type":"NavModifier","values":{"mode":"unwalkable"}})J");
+    CHECK(Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"] == path);
+    const float withRamp = Call(e, "nav.state")["result"]["area"].asFloat();
+    Call(e, "component.add", R"J({"id":"Ramp","type":"NavModifier","values":{"mode":"unwalkable"}})J");
+    CHECK(Call(e, "nav.state")["result"]["area"].asFloat() < withRamp - 5.0f);
+    Call(e, "component.remove", R"J({"id":"Ramp","type":"NavModifier"})J");
+    Call(e, "component.remove", R"J({"id":"Wall","type":"NavModifier"})J");
+
+    // A second floor nobody can get to: the path goes as near as the mesh allows.
+    Call(e, "entity.create", R"J({"name":"Island","components":{"Transform":{"position":[30,-0.5,0],"scale":[6,1,6]},"MeshRenderer":{},"Collider":{}}})J");
+    Json partial = Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[30,0,0]})J")["result"];
+    CHECK(partial["found"].asBool() && partial["partial"].asBool());
+    CHECK(vec(partial["points"][partial["points"].size() - 1]).x < 10.0f);
+
+    // Settings: a wider agent leaves less floor; models as the source; only what is below the NavMesh entity.
+    const float before = Call(e, "nav.state")["result"]["area"].asFloat();
+    Call(e, "entity.create", R"J({"name":"Nav","components":{"NavMesh":{"agentRadius":1.0}}})J");
+    state = Call(e, "nav.state")["result"];
+    CHECK(state["area"].asFloat() < before - 20.0f && state["settings"]["agentRadius"].asFloat() == 1.0f);
+    Call(e, "component.set", R"J({"id":"Nav","type":"NavMesh","values":{"agentRadius":0.4,"source":"meshes"}})J");
+    state = Call(e, "nav.state")["result"];
+    CHECK(state["baked"].asBool() && state["colliders"].asInt() == 0 && state["meshes"].asInt() == 4);  // the pillar has no mesh
+    CHECK(Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"]["length"].asFloat() > 28.0f);
+    Call(e, "component.set", R"J({"id":"Nav","type":"NavMesh","values":{"source":"all","collect":"children"}})J");
+    CHECK(!Call(e, "nav.state")["result"]["baked"].asBool());
+    Call(e, "entity.set_parent", R"J({"id":"Island","parent":"Nav"})J");
+    state = Call(e, "nav.state")["result"];
+    CHECK(state["baked"].asBool() && state["colliders"].asInt() == 1 && state["meshes"].asInt() == 1 && state["area"].asFloat() < 30.0f);
+    Call(e, "entity.delete", R"J({"id":"Nav"})J");
+
+    // Playing, the mesh stays as baked until the game asks: the wall goes, nav.bake() opens the way.
+    Json eval = Json::MakeObject();
+    eval["code"] = "local a, b = {x=-8,y=0,z=-8}, {x=-8,y=0,z=8}\n"
+                   "local first = #nav.path(a, b)\n"
+                   "scene.destroy(scene.find('Wall'))\n"
+                   "local stale = #nav.path(a, b)\n"
+                   "local baked = nav.bake()\n"
+                   "local path, partial = nav.path(a, b)\n"
+                   "local hit = nav.raycast({x=-5,y=0,z=-5}, {x=-5,y=0,z=30})\n"
+                   "return {first, stale, baked, #path, partial, nav.nearest({x=0,y=3,z=0}, 5).y, nav.nearest({x=90,y=0,z=0}) == nil, nav.path(a, {x=90,y=0,z=0}) == nil, hit.point.z}";
+    Call(e, "sim.step", R"J({"frames":1})J");
+    Json lua = e.Call("script.eval", eval);
+    CHECK(lua["ok"].asBool());
+    const Json& got = lua["result"]["value"];
+    CHECK(got[0].asInt() >= 3 && got[1].asInt() == got[0].asInt() && got[2].asBool() && got[3].asInt() == 2 && !got[4].asBool());
+    CHECK(std::fabs(got[5].asFloat()) < 0.06f && got[6].asBool() && got[7].asBool() && std::fabs(got[8].asFloat() - 9.6f) < 0.25f);
+    Call(e, "sim.stop");
+    CHECK(Call(e, "nav.path", R"J({"from":[-8,0,-8],"to":[-8,0,8]})J")["result"]["length"].asFloat() > 28.0f);  // the wall is back
+}
+
+TEST(NavAgentWalksPath) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("nav_agent");
+    CHECK(e.Open(project, &err));
+    NavScene(e);
+    CHECK(WriteTextFile(JoinPath(project, "scripts/walker.lua"),
+                        "local navigation = require('oe.nav')\n"
+                        "local Walker = {}\n"
+                        "function Walker:onStart()\n"
+                        "  self.agent = navigation.agent(self.id, {speed = 4})\n"
+                        "  game.set(scene.name(self.id) .. ':found', self.agent:moveTo({x = -8, y = 0, z = 8}))\n"
+                        "  game.set(scene.name(self.id) .. ':left', self.agent:remaining())\n"
+                        "end\n"
+                        "function Walker:onUpdate(dt)\n"
+                        "  game.set(scene.name(self.id) .. ':moving', self.agent:update(dt))\n"
+                        "end\n"
+                        "return Walker\n"));
+    // One moved by its Transform (it keeps its height above the mesh), one by physics.
+    Call(e, "entity.create", R"J({"name":"Ghost","components":{"Transform":{"position":[-8,1,-8]},"Script":{"path":"scripts/walker.lua"}}})J");
+    Call(e, "entity.create", R"J({"name":"Body","components":{"Transform":{"position":[-6,0.9,-8]},"CharacterBody":{},"Script":{"path":"scripts/walker.lua"}}})J");
+    Call(e, "sim.step", R"J({"frames":120})J");
+    Json values = Call(e, "game.state")["result"]["data"];
+    CHECK(values["Ghost:found"].asBool() && values["Body:found"].asBool() && values["Ghost:moving"].asBool());
+    CHECK(values["Ghost:left"].asFloat() > 28.0f && values["Ghost:left"].asFloat() < 36.0f);
+    Vec3 ghost = PosOf(e, "Ghost"), body = PosOf(e, "Body");
+    CHECK(Length(ghost - Vec3(-8, 1, -8)) > 7.0f && Length(ghost - Vec3(-8, 1, -8)) < 8.2f && std::fabs(ghost.y - 1.0f) < 0.06f);  // 2 s at 4 m/s
+    CHECK(body.x > -4.0f && body.z > -8.5f);
+    Call(e, "sim.step", R"J({"frames":480})J");
+    values = Call(e, "game.state")["result"]["data"];
+    ghost = PosOf(e, "Ghost");
+    body = PosOf(e, "Body");
+    CHECK(!values["Ghost:moving"].asBool() && !values["Body:moving"].asBool());
+    CHECK(std::fabs(ghost.x + 8.0f) < 0.15f && std::fabs(ghost.z - 8.0f) < 0.15f && std::fabs(ghost.y - 1.0f) < 0.06f);
+    CHECK(std::fabs(body.x + 8.0f) < 0.3f && std::fabs(body.z - 8.0f) < 0.3f && body.y > 0.8f && body.y < 1.0f);
+    // It turned to face where it was going last: from the gap back toward -X, +Z (yaw 90 looks along -X).
+    const Json rotation = Call(e, "entity.get", R"J({"id":"Ghost"})J")["result"]["components"]["Transform"]["rotation"];
+    CHECK(std::fabs(rotation[1].asFloat() - 116.0f) < 6.0f);
+}
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

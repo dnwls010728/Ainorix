@@ -48,6 +48,8 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<NetPlayer>();
     TypeRegistry::Register<Trail>();
     TypeRegistry::Register<VFXSystem>();
+    TypeRegistry::Register<NavMesh>();
+    TypeRegistry::Register<NavModifier>();
     TypeRegistry::Register<Data>();  // last: the earlier pools keep their order
 }
 

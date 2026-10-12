@@ -5,7 +5,7 @@
 
 ## Current build
 
-Built on 2026-10-12 with Emscripten 6.0.10, Release, from `main` (0925dd0 + models with up to 1024 joints drawn in ranges of 64, `MeshRenderer.materials`, `parentPose`, blend shapes / morph targets through `MeshRenderer.blendShapes`, spring bone patterns, colliders, `endLength`, `limit` and `air`, clips from other files (`<model>.clips.json`), `Animator.blend`, `BoneIK.keepRotation` / `turn`, `physics.raycast` with an entity to ignore and `CharacterBody` steps lower than the capsule radius; +135 KB of wasm). The build before it (same day, 5c20a25) added FBX model loading through ufbx, bone attachments, IK, spring bones and physics joints (+402 KB of wasm). The build before it (2026-10-10) made GL drivers' unused vertex inputs and uniforms log at debug level instead of
+Built on 2026-10-12 with Emscripten 6.0.10, Release, from `main` (158cb0d + the navigation mesh: Recast/Detour, `nav.*`, `oe.nav`, docs/NAVIGATION.md; +172 KB of wasm). The build before it (same day) was from 0925dd0 + models with up to 1024 joints drawn in ranges of 64, `MeshRenderer.materials`, `parentPose`, blend shapes / morph targets through `MeshRenderer.blendShapes`, spring bone patterns, colliders, `endLength`, `limit` and `air`, clips from other files (`<model>.clips.json`), `Animator.blend`, `BoneIK.keepRotation` / `turn`, `physics.raycast` with an entity to ignore and `CharacterBody` steps lower than the capsule radius; +135 KB of wasm). The build before it (same day, 5c20a25) added FBX model loading through ufbx, bone attachments, IK, spring bones and physics joints (+402 KB of wasm). The build before it (2026-10-10) made GL drivers' unused vertex inputs and uniforms log at debug level instead of
 nameless `sg item` warnings). The previous build, from branch `claude/axis-locks`, added per-axis physics locks and shaders without the
 loops the D3D compiler had to unroll: the shadow lookup moved out of the directional-light loop, `GraphFinite`
 without a loop. This build contains every engine feature up to then, including the
@@ -19,9 +19,9 @@ hemisphere ambient, `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket`/`Rig
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | cc2d3d2aed2277b9e88da446b7678132920ca424209736304046658d338e27ba |
-| oe_player.wasm | 5,599,619 | cd42cbf8dfa85a9ec670591cd83f5fe8d2d889dac3dfd59763762764c4397a46 |
+| oe_player.wasm | 5,771,548 | baaa489b8cbb8316a3ec6c01834d5da5ab81be4558df005591afcc25b5075fed |
 
-Windows Release: all engine tests pass. This build was not run in a browser (FBX models, models with more than 64 joints, blend shapes, `BoneAttachment`, `BoneIK`, `SpringBone`, `Joint` and `Joint2D` are covered by the Windows tests only). With the 2026-10-10 build, `games/RPG` ran in headless Edge (WebGL2 on SwiftShader):
+Windows Release: all engine tests pass. In headless Edge (WebGL2 on SwiftShader) this build baked a navigation mesh from colliders and walked an `oe.nav` agent along a path with the same polygon count, path length and end position as on Windows; nothing else was run in a browser for it (FBX models, models with more than 64 joints, blend shapes, `BoneAttachment`, `BoneIK`, `SpringBone`, `Joint` and `Joint2D` are covered by the Windows tests only). With the 2026-10-10 build, `games/RPG` ran in headless Edge (WebGL2 on SwiftShader):
 compiled shader graphs (swaying trees, terrain, water, sky), shadows, the depth-of-field MRT target and fog render
 with no shader compile warnings. Not verified in a browser for this build: frame rate on real GPUs, typing into `UIInput`,
 real ads, sound output and phone touch.

@@ -304,6 +304,7 @@ struct NativeEditor::Impl {
     // ----- Scene view
     EditorCamera cam;
     bool showGrid = true, showColliders = false, showIcons = true;
+    bool showNavMesh = false;  // the navigation mesh over the Scene view
     bool showSceneUI = true;  // the Scene view draws the game's UI over the world and edits it there (UIEdit)
     GizmoOp gizmoOp = GizmoOp::Translate;
     bool gizmoLocal = false;

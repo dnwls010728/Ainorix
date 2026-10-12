@@ -95,6 +95,10 @@ end
 | `physics.raycast(origin, dir, maxDist?, ignore?)` | `{entity, point, normal, distance}` or `nil`. `ignore` is an entity the ray passes through: a ray that starts inside a character's own capsule (ground under its feet) hits that capsule first otherwise |
 | `physics.overlapSphere(center, radius)` / `physics.contacts(id)` | Entity ids |
 | `physics.addImpulse(id, {x,y,z})` | Push a dynamic body |
+| `nav.path(from, to, range?)` | Corner points `{x,y,z}` of the shortest walk on the navigation mesh, plus `partial` (true when the goal is unreachable and the path ends as near as it gets); `nil` when an end is off the mesh. See [NAVIGATION.md](NAVIGATION.md) |
+| `nav.nearest(point, range?)` / `nav.raycast(from, to)` | Closest point of the mesh or `nil`; `{point, normal, distance}` where an edge of the mesh stops a straight walk, `nil` when the way is clear |
+| `nav.bake()` | Bake the mesh again after the level changed during play; true when there is one |
+| `require("oe.nav").agent(id, options)` | Official module: an agent with `moveTo(point)`, `update(dt)`, `stop()`, `remaining()` that walks an entity along a path (through its `CharacterBody` when it has one) |
 | `tilemap.get(id, col, row)` / `tilemap.set(id, col, row, ch)` / `tilemap.fill(id, col, row, w, h, ch)` | Read/change Tilemap cells (row 0 = top); changes update graphics, autotiles and collision |
 | `tilemap.solid(id, col, row)` / `tilemap.collision(id, col, row)` / `tilemap.size(id)` | Cell collides? / `"none"`, `"solid"`, `"oneway"`, `"shape"` / width, height in cells |
 | `tilemap.cellAt(id, {x,y,z})` / `tilemap.cellCenter(id, col, row)` | World point → `col, row`; cell → world position (see [2D.md](2D.md)) |

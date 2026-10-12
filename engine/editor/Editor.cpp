@@ -184,6 +184,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "Colliders=%d", &i) == 1) m->showColliders = i != 0;
     else if (std::sscanf(line, "Icons=%d", &i) == 1) m->showIcons = i != 0;
     else if (std::sscanf(line, "Bones=%d", &i) == 1) m->showBones = i != 0;
+    else if (std::sscanf(line, "NavMesh=%d", &i) == 1) m->showNavMesh = i != 0;
     else if (std::sscanf(line, "SceneUI=%d", &i) == 1) m->showSceneUI = i != 0;
     else if (std::sscanf(line, "Snap=%d", &i) == 1) m->snap = i != 0;
     else if (std::sscanf(line, "SnapMove=%f", &f) == 1) m->snapMove = f;
@@ -244,7 +245,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("[%s][Editor]\n", handler->TypeName);
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSceneUI=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons,
                  m->showSceneUI, m->snap);
-    buf->appendf("Bones=%d\n", m->showBones);
+    buf->appendf("Bones=%d\nNavMesh=%d\n", m->showBones, m->showNavMesh);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\nAgentChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam,
@@ -1306,6 +1307,7 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::Separator();
         ImGui::MenuItem(Tr("Grid"), "", &showGrid);
         ImGui::MenuItem(Tr("Colliders"), "", &showColliders);
+        ImGui::MenuItem(Tr("NavMesh"), "", &showNavMesh);
         ImGui::MenuItem(Tr("Entity Icons"), "", &showIcons);
         ImGui::MenuItem(Tr("Bones"), "", &showBones);
         ImGui::MenuItem(Tr("UI in Scene View"), "", &showSceneUI);
@@ -1968,6 +1970,7 @@ void NativeEditor::SetTileBrush(bool paint, char brush) {
 
 void NativeEditor::SetSceneView2D(bool on) { impl_->cam.Set2D(on); }
 void NativeEditor::SetSceneBones(bool on) { impl_->showBones = on; }
+void NativeEditor::SetSceneNavMesh(bool on) { impl_->showNavMesh = on; }
 void NativeEditor::AttachToBone(EntityId model, const std::string& bone, EntityId existing) { impl_->AttachToBone(model, bone, existing); }
 void NativeEditor::AddIkGoal(EntityId model, const std::string& bone) { impl_->AddIkGoal(model, bone); }
 void NativeEditor::AddSpringBone(EntityId model, const std::string& bone) { impl_->AddSpringBone(model, bone); }

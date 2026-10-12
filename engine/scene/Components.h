@@ -761,6 +761,46 @@ struct Tag {
     static void Reflect(FieldList& f) { f.Add("tags", &Tag::tags, "Comma separated tags."); }
 };
 
+// ----- navigation ------------------------------------------------------------------
+
+struct NavMesh {
+    static constexpr const char* kTypeName = "NavMesh";
+    static constexpr const char* kDoc = "Settings of the scene's navigation mesh: the ground an agent of this size can walk on, built from static colliders and/or meshes (nav.bake, nav.path, Lua nav.path). One per scene (the first in id order); a scene without one uses these defaults.";
+    float agentRadius = 0.4f;
+    float agentHeight = 1.8f;
+    float maxSlope = 45.0f;
+    float stepHeight = 0.3f;
+    float cellSize = 0.2f;
+    float minRegion = 1.0f;
+    std::string source = "colliders";
+    std::string collect = "all";
+    static void Reflect(FieldList& f) {
+        FieldInfo& r = f.Add("agentRadius", &NavMesh::agentRadius, "Agent radius in meters: the mesh keeps this far from walls and edges.");
+        r.hasRange = true; r.min = 0.0f; r.max = 10.0f;
+        FieldInfo& h = f.Add("agentHeight", &NavMesh::agentHeight, "Agent height in meters: lower passages are not walkable.");
+        h.hasRange = true; h.min = 0.1f; h.max = 50.0f;
+        FieldInfo& s = f.Add("maxSlope", &NavMesh::maxSlope, "Steepest walkable slope in degrees.");
+        s.hasRange = true; s.min = 0.0f; s.max = 89.0f;
+        FieldInfo& c = f.Add("stepHeight", &NavMesh::stepHeight, "Highest ledge the agent steps up or down (stairs, kerbs), meters.");
+        c.hasRange = true; c.min = 0.0f; c.max = 10.0f;
+        FieldInfo& cs = f.Add("cellSize", &NavMesh::cellSize, "Size of the cells the geometry is sampled with, meters. Smaller follows walls more closely and bakes slower; about agentRadius / 2.");
+        cs.hasRange = true; cs.min = 0.05f; cs.max = 5.0f;
+        FieldInfo& m = f.Add("minRegion", &NavMesh::minRegion, "Walkable islands smaller than this (square meters) are dropped, e.g. the tops of crates.");
+        m.hasRange = true; m.min = 0.0f; m.max = 10000.0f;
+        f.Add("source", &NavMesh::source, "Geometry taken as ground and obstacles: colliders (static Collider shapes, what characters stand on), meshes (static MeshRenderer models) or all.").options = {"colliders", "meshes", "all"};
+        f.Add("collect", &NavMesh::collect, "all = every entity of the scene; children = only this entity and those below it.").options = {"all", "children"};
+    }
+};
+
+struct NavModifier {
+    static constexpr const char* kTypeName = "NavModifier";
+    static constexpr const char* kDoc = "How this entity and its children take part in the navigation mesh.";
+    std::string mode = "ignore";
+    static void Reflect(FieldList& f) {
+        f.Add("mode", &NavModifier::mode, "ignore = left out of the bake (sky domes, decoration); unwalkable = an obstacle agents never stand on (water, lava).").options = {"ignore", "unwalkable"};
+    }
+};
+
 struct Data {
     static constexpr const char* kTypeName = "Data";
     static constexpr const char* kDoc = "Named game values kept on the entity (numbers, strings, booleans): cooldowns, charges, mana, a "

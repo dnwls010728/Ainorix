@@ -11,6 +11,7 @@
 #include "net/JsonCodec.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
+#include "nav/Navigation.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/Components.h"
 #include "scene/TileGrid.h"
@@ -1002,6 +1003,63 @@ int L_PhysicsRaycast(lua_State* L) {
     });
 }
 
+// ----- nav.* (the scene's navigation mesh; nil instead of errors) ----------------------
+
+int L_NavPath(lua_State* L) {
+    return Guard(L, [&] {
+        const Vec3 from = CheckVec3(L, 1), to = CheckVec3(L, 2);
+        const float range = static_cast<float>(luaL_optnumber(L, 3, Navigation::kSnapRange));
+        const NavPath path = Host(L).GetEngine().Nav().FindPath(from, to, range);
+        if (!path.found) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, static_cast<int>(path.points.size()), 0);
+        for (size_t i = 0; i < path.points.size(); ++i) {
+            PushVec3(L, path.points[i]);
+            lua_rawseti(L, -2, static_cast<lua_Integer>(i + 1));
+        }
+        lua_pushboolean(L, path.partial);
+        return 2;
+    });
+}
+
+int L_NavNearest(lua_State* L) {
+    return Guard(L, [&] {
+        const Vec3 point = CheckVec3(L, 1);
+        const NavPoint nearest = Host(L).GetEngine().Nav().Nearest(point, static_cast<float>(luaL_optnumber(L, 2, Navigation::kSnapRange)));
+        if (!nearest.found) lua_pushnil(L);
+        else PushVec3(L, nearest.point);
+        return 1;
+    });
+}
+
+int L_NavRaycast(lua_State* L) {
+    return Guard(L, [&] {
+        const Vec3 from = CheckVec3(L, 1), to = CheckVec3(L, 2);
+        const NavHit hit = Host(L).GetEngine().Nav().Raycast(from, to);
+        if (!hit.hit) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 3);
+        PushVec3(L, hit.point);
+        lua_setfield(L, -2, "point");
+        PushVec3(L, hit.normal);
+        lua_setfield(L, -2, "normal");
+        lua_pushnumber(L, hit.distance);
+        lua_setfield(L, -2, "distance");
+        return 1;
+    });
+}
+
+int L_NavBake(lua_State* L) {
+    return Guard(L, [&] {
+        lua_pushboolean(L, Host(L).GetEngine().Nav(true).Baked());
+        return 1;
+    });
+}
+
 int L_PhysicsOverlapSphere(lua_State* L) {
     return Guard(L, [&] {
         Vec3 center = CheckVec3(L, 1);
@@ -1749,6 +1807,8 @@ void ScriptHost::Open() {
     const luaL_Reg physicsFuncs[] = {{"raycast", L_PhysicsRaycast}, {"overlapSphere", L_PhysicsOverlapSphere},
                                      {"addImpulse", L_PhysicsAddImpulse}, {"contacts", L_PhysicsContacts}, {nullptr, nullptr}};
     SetFuncs(L, "physics", physicsFuncs);
+    const luaL_Reg navFuncs[] = {{"path", L_NavPath}, {"nearest", L_NavNearest}, {"raycast", L_NavRaycast}, {"bake", L_NavBake}, {nullptr, nullptr}};
+    SetFuncs(L, "nav", navFuncs);
     const luaL_Reg tilemapFuncs[] = {{"get", L_TilemapGet}, {"set", L_TilemapSet}, {"cellAt", L_TilemapCellAt},
                                      {"cellCenter", L_TilemapCellCenter}, {"solid", L_TilemapSolid}, {"collision", L_TilemapCollision},
                                      {"fill", L_TilemapFill}, {"size", L_TilemapSize}, {nullptr, nullptr}};
@@ -2146,7 +2206,7 @@ std::vector<std::string> ScriptHost::PollHotReload(const std::string& changedPat
     reloading_ = true; reloadViolation_ = false; reloadBlocked_ = reloadProtected_;
     // Block engine functions even when a module captured an unguarded binding earlier.
     const int top = lua_gettop(L_);
-    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "vfx", "trail", "physics", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
+    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "vfx", "trail", "physics", "nav", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
         lua_getglobal(L_, global);
         if (lua_istable(L_, -1)) { lua_pushnil(L_); while (lua_next(L_, -2)) { if (lua_isfunction(L_, -1)) reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1); } }
         lua_pop(L_, 1);
