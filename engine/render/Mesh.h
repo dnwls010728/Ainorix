@@ -27,6 +27,7 @@ struct Texture {
 enum class AlphaMode { Opaque, Mask, Blend };
 
 struct Material {
+    std::string name;  // model materials: the name in the source file (the slot MeshRenderer.materials replaces)
     Color baseColor{1, 1, 1};
     float opacity = 1.0f;                                     // alpha of the base color
     std::shared_ptr<const Texture> baseTexture;               // multiplies baseColor/opacity
@@ -61,6 +62,9 @@ struct Submesh {
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
     int material = -1;  // index into Mesh::materials; -1 = the default material
+    // Models with more joints than one GPU draw can address (Mesh::kDrawJoints): the joints this
+    // range uses. No vertex is shared with another range then. Empty = the whole palette.
+    std::vector<uint16_t> palette;
 };
 
 // Immutable glTF hierarchy; rotations use quaternion x/y/z/w, not Euler angles.
@@ -85,6 +89,15 @@ struct SkinVertex {
     std::array<float, 4> weights{};  // normalized; zero total means identity
 };
 
+// A named deformation of a model (FBX blend shape, glTF morph target): offsets added to some of its
+// vertices, scaled by a weight (MeshRenderer.blendShapes), before skinning. Faces: blink, mouth shapes.
+struct BlendShape {
+    std::string name;
+    std::vector<uint32_t> vertices;  // ascending indices into Mesh::positions
+    std::vector<Vec3> positions;     // offset per listed vertex, model space
+    std::vector<Vec3> normals;       // offset per listed vertex (zero where the source has none)
+};
+
 enum class AnimationPath { Translation, Rotation, Scale };
 enum class AnimationInterpolation { Linear, Step, CubicSpline };
 
@@ -103,7 +116,8 @@ struct AnimationClip {
 };
 
 struct Mesh {
-    static constexpr size_t kMaxJoints = 64;
+    static constexpr size_t kMaxJoints = 1024;  // palette entries of one model
+    static constexpr size_t kDrawJoints = 64;   // matrices in the GPU vertex uniforms of one draw
     std::vector<Vec3> positions;
     std::vector<Vec3> normals;      // one per position
     std::vector<float> uvs;         // two per position
@@ -120,6 +134,13 @@ struct Mesh {
     std::vector<ModelJoint> joints;    // flattened skins and rigid animated nodes
     std::vector<SkinVertex> skin;      // one per position for models with a palette
     std::vector<AnimationClip> clips;
+    std::vector<BlendShape> blendShapes;  // shapes of the same name in several parts of a model are one entry
+    // Filled by FinishSkeleton when a model is loaded (empty for meshes built in code, which are then
+    // walked the slow way): every node with the nodes below it, and the default pose in model space.
+    std::vector<std::vector<int>> subtrees;
+    std::vector<Mat4> restPose;
+    // With Submesh::palette: each vertex's joints as places in its range's palette (what the GPU addresses).
+    std::vector<std::array<uint8_t, 4>> drawJoints;
 
     size_t TriangleCount() const { return indices.size() / 3; }
     void ComputeBounds();
@@ -127,6 +148,16 @@ struct Mesh {
     void ComputeNormals();
     // Per-vertex tangents from the UVs (for normal maps).
     void ComputeTangents();
+    // With more than kDrawJoints joints: cuts every submesh into ranges that each use at most
+    // kDrawJoints of them (Submesh::palette), duplicating the vertices two ranges would share.
+    void SplitSkinPalettes();
+    // Lists the nodes below every node (after the hierarchy is complete).
+    void FinishSkeleton();
+    // The shape of that name, added when new.
+    BlendShape& BlendShapeNamed(const std::string& name);
+    // What a renderer draws with shapes applied: this mesh's geometry, materials and skin (not its
+    // nodes, clips and shapes) with `weights` (shape index, weight) added to positions and normals.
+    std::shared_ptr<Mesh> Morphed(const std::vector<std::pair<int, float>>& weights) const;
 };
 
 // Returns nullptr for unknown names. Meshes are unit sized (fit in [-0.5, 0.5]).

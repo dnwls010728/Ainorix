@@ -392,6 +392,9 @@ void Engine::BeginInterpolatedRender() {
     for (const auto& previous : renderPrevious_) {
         Transform* now = scene_.Get<Transform>(previous.first);
         if (!now) continue;
+        // An IK goal's position is an input of the pose that is drawn (this step's), not a place to glide to:
+        // put between two steps it would pull the limb back towards where the clip had it a step ago.
+        if (scene_.Get<BoneIK>(previous.first)) continue;
         const Transform& was = previous.second;
         const Vec3 move = now->position - was.position;
         if (move.x * move.x + move.y * move.y + move.z * move.z > 9.0f) continue;  // a teleport: no streak

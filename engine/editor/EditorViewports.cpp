@@ -752,6 +752,9 @@ void NativeEditor::Impl::GameInput() {
             else gameKeysDown.erase(name);
         }
     }
+    // The wheel while the game holds the mouse (ImGui does not see it then).
+    if (want && capturedWheel != 0) Call("input.mouse", ObjectOf({{"wheel", Json(capturedWheel)}}), true);
+    capturedWheel = 0;
     if (want && (windowInput.mouseDX != 0 || windowInput.mouseDY != 0)) {
         Call("input.mouse", ObjectOf({{"dx", Json(windowInput.mouseDX)}, {"dy", Json(windowInput.mouseDY)}}), true);
     }

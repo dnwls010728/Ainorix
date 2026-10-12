@@ -67,6 +67,7 @@ EntityIcon ComponentIcon(const std::string& type) {
     if (type == "BoneAttachment") return {kIconPaperclip, ImVec4(0.92f, 0.62f, 0.80f, 1)};
     if (type == "BoneIK") return {kIconMapPin, ImVec4(0.92f, 0.62f, 0.80f, 1)};
     if (type == "SpringBone") return {kIconAtom, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "SpringCollider") return {kIconAtom, ImVec4(0.70f, 0.62f, 0.92f, 1)};
     if (type == "Script") return {kIconBraces, ImVec4(0.92f, 0.84f, 0.50f, 1)};
     if (type == "Collider" || type == "Collider2D") return {kIconSquareDashed, physics};
     if (type == "Joint" || type == "Joint2D") return {kIconWorkflow, physics};
@@ -601,7 +602,8 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         std::string kind = AssetKindForField(type, field);
         std::string text;
         bool multiline = field == "text" || (field == "map" && type == "Tilemap");
-        const bool boneName = (type == "BoneIK" || type == "BoneAttachment" || type == "SpringBone") && field == "bone";
+        const bool boneName = ((type == "BoneIK" || type == "BoneAttachment" || type == "SpringBone") && field == "bone") ||
+                              (type == "SpringCollider" && (field == "bone" || field == "tail"));
         if (boneName || (type == "Animator" && field == "clip")) {
             // Names that exist in the model: typed, or picked from its bones / clips.
             const float button = ImGui::GetFrameHeight();
@@ -843,7 +845,7 @@ void NativeEditor::Impl::InspectorPanel() {
                 }
                 ImGui::EndTable();
             }
-            if (type == "MeshRenderer") BonesSection(id);
+            if (type == "MeshRenderer") BlendShapesSection(id), BonesSection(id);
         } else if (open) {
             ImGui::TextDisabled("%s", Tr("Unknown component type"));
         }

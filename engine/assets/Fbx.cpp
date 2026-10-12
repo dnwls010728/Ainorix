@@ -219,6 +219,7 @@ struct FbxLoader {
         if (it != materialIndex.end()) return it->second;
         const ufbx_material_pbr_maps& p = src->pbr;
         Material m;
+        m.name = Str(src->name);
         if (p.base_color.has_value) {
             float factor = p.base_factor.has_value ? Saturate(p.base_factor.value_real) : 1.0f;
             m.baseColor = Color(Saturate(p.base_color.value_vec3.x), Saturate(p.base_color.value_vec3.y), Saturate(p.base_color.value_vec3.z)) * factor;
@@ -264,7 +265,7 @@ struct FbxLoader {
             }
             if (same) return static_cast<uint16_t>(i);
         }
-        Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 64-entry skin palette limit");
+        Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 1024-entry skin palette limit");
         for (float value : inverseBind.m) Require(std::isfinite(value), "inverse bind matrix contains non-finite values");
         mesh.joints.push_back({node, inverseBind});
         return static_cast<uint16_t>(mesh.joints.size() - 1);
@@ -275,7 +276,8 @@ struct FbxLoader {
         if (src->num_triangles == 0) return;
         const ufbx_skin_deformer* skin = src->skin_deformers.count > 0 ? src->skin_deformers.data[0] : nullptr;
         if (src->skin_deformers.count > 1) Warn("only the first skin of a mesh is used");
-        if (src->blend_deformers.count > 0) Warn("blend shapes are not supported");
+        const uint32_t firstVertex = static_cast<uint32_t>(mesh.positions.size());
+        std::vector<uint32_t> sourceVertex;  // ufbx vertex of every vertex this mesh adds
         // Geometry is baked at the node's rest transform, so a model without a playing clip shows
         // its bind pose; the inverse bind matrices below undo the bake before a joint applies.
         const Mat4 world = ToMat4(node->geometry_to_world);
@@ -296,7 +298,7 @@ struct FbxLoader {
             if (animated) {
                 auto found = rigidBindings.find(node->typed_id);
                 if (found == rigidBindings.end()) {
-                    Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 64-entry skin palette limit");
+                    Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 1024-entry skin palette limit");
                     uint16_t binding = static_cast<uint16_t>(mesh.joints.size());
                     mesh.joints.push_back({static_cast<int>(node->typed_id), world.Inverse()});
                     found = rigidBindings.emplace(node->typed_id, binding).first;
@@ -387,6 +389,7 @@ struct FbxLoader {
                     influence.weights[0] = 1;
                 }
                 mesh.skin.push_back(influence);
+                sourceVertex.push_back(v.vertex);
             }
             Submesh sub;
             sub.firstIndex = static_cast<uint32_t>(mesh.indices.size());
@@ -402,6 +405,53 @@ struct FbxLoader {
                                           : part.index < src->materials.count ? src->materials.data[part.index] : nullptr;
             sub.material = MaterialFor(material);
             mesh.submeshes.push_back(sub);
+        }
+        AddBlendShapes(src, firstVertex, sourceVertex, world, normalMatrix);
+    }
+
+    // Blend shape channels of a mesh: the offsets of the channel's full-weight shape, baked like the
+    // geometry. Channels of the same name in several meshes (face, eyes, brows) become one shape.
+    void AddBlendShapes(const ufbx_mesh* src, uint32_t firstVertex, const std::vector<uint32_t>& sourceVertex,
+                        const Mat4& world, const Mat4& normalMatrix) {
+        std::vector<int> offsetOf(src->num_vertices, -1);
+        for (size_t d = 0; d < src->blend_deformers.count; ++d) {
+            const ufbx_blend_deformer* deformer = src->blend_deformers.data[d];
+            for (size_t c = 0; c < deformer->channels.count; ++c) {
+                const ufbx_blend_channel* channel = deformer->channels.data[c];
+                const ufbx_blend_shape* shape = channel->target_shape;
+                if (!shape || shape->num_offsets == 0) continue;
+                if (channel->keyframes.count > 1) Warn("in-between blend shapes are not used");
+                std::string name = Str(channel->name);
+                if (name.empty()) name = Str(shape->name);
+                if (name.empty()) continue;
+                std::fill(offsetOf.begin(), offsetOf.end(), -1);
+                bool moves = false;
+                for (size_t k = 0; k < shape->num_offsets; ++k) {
+                    const uint32_t vertex = shape->offset_vertices.data[k];
+                    if (vertex >= offsetOf.size()) continue;  // may be out of bounds, see ufbx.h
+                    const ufbx_vec3 p = shape->position_offsets.data[k];
+                    Require(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z), "blend shape contains non-finite values");
+                    offsetOf[vertex] = static_cast<int>(k);
+                    moves = moves || p.x != 0 || p.y != 0 || p.z != 0;
+                }
+                if (!moves) continue;
+                BlendShape& out = mesh.BlendShapeNamed(name);
+                const bool hasNormals = shape->normal_offsets.count == shape->num_offsets;
+                for (size_t i = 0; i < sourceVertex.size(); ++i) {
+                    const int k = sourceVertex[i] < offsetOf.size() ? offsetOf[sourceVertex[i]] : -1;
+                    if (k < 0) continue;
+                    const ufbx_vec3 p = shape->position_offsets.data[static_cast<size_t>(k)];
+                    out.vertices.push_back(firstVertex + static_cast<uint32_t>(i));
+                    out.positions.push_back(world.TransformDir(Vec3(static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z))));
+                    Vec3 normal;
+                    if (hasNormals) {
+                        const ufbx_vec3 n = shape->normal_offsets.data[static_cast<size_t>(k)];
+                        if (std::isfinite(n.x) && std::isfinite(n.y) && std::isfinite(n.z))
+                            normal = normalMatrix.TransformDir(Vec3(static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)));
+                    }
+                    out.normals.push_back(normal);
+                }
+            }
         }
     }
 };

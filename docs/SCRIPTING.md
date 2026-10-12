@@ -92,7 +92,7 @@ end
 | `time.dt()`, `time.frame()`, `time.now()` | Step length (0 while the game is paused), frame number, simulated seconds (they wait during a pause) |
 | `time.date()` | Calendar date `"YYYY-MM-DD"` in local time, for features outside the simulation (daily rewards). Tools pin it with `time.date {set}` |
 | `log.info(...)`, `log.warn(...)`, `log.error(...)`, `print(...)` | Engine log (`log.get`) |
-| `physics.raycast(origin, dir, maxDist?)` | `{entity, point, normal, distance}` or `nil` |
+| `physics.raycast(origin, dir, maxDist?, ignore?)` | `{entity, point, normal, distance}` or `nil`. `ignore` is an entity the ray passes through: a ray that starts inside a character's own capsule (ground under its feet) hits that capsule first otherwise |
 | `physics.overlapSphere(center, radius)` / `physics.contacts(id)` | Entity ids |
 | `physics.addImpulse(id, {x,y,z})` | Push a dynamic body |
 | `tilemap.get(id, col, row)` / `tilemap.set(id, col, row, ch)` / `tilemap.fill(id, col, row, w, h, ch)` | Read/change Tilemap cells (row 0 = top); changes update graphics, autotiles and collision |

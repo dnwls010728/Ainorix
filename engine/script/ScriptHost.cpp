@@ -983,7 +983,8 @@ int L_PhysicsRaycast(lua_State* L) {
         Vec3 dir = CheckVec3(L, 2);
         float maxDist = static_cast<float>(luaL_optnumber(L, 3, 1000.0));
         Engine& e = Host(L).GetEngine();
-        RaycastHit hit = e.Physics().Raycast(e.GetScene(), origin, dir, maxDist);
+        const EntityId ignore = lua_isnoneornil(L, 4) ? kNullEntity : CheckEntity(L, 4);
+        RaycastHit hit = e.Physics().Raycast(e.GetScene(), origin, dir, maxDist, ignore);
         if (!hit.hit) {
             lua_pushnil(L);
             return 1;

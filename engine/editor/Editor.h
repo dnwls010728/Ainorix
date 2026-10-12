@@ -109,6 +109,13 @@ public:
     std::vector<std::string> AskAttachments(int index) const;
     // The Settings window, on a tab ("agents"; empty = as it was).
     void OpenSettings(const std::string& tab = {});
+    // The Retarget Animation window: `target` = the character's model file, `source` = a model with clips
+    // (either may be empty and chosen in the window). RetargetControlRect: bounds of "target", "source",
+    // "auto" (Match by Name) and "run" (Retarget) for automation; RetargetMapped: rows of the bone list.
+    void OpenRetarget(const std::string& target = {}, const std::string& source = {});
+    bool RetargetOpen() const;
+    std::array<float, 4> RetargetControlRect(const std::string& name) const;
+    int RetargetMapped() const;
     bool SettingsOpen() const;
     // Problems the Scripts panel shows for an open script: "error 12: ..." / "warning 3: ...".
     std::vector<std::string> ScriptProblems(const std::string& path) const;

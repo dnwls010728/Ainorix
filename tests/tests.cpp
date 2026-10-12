@@ -5062,8 +5062,8 @@ TEST(GltfSkinAndAnimationLoading) {
     reject(invalid, bin, "four influences");
     invalid = source;
     invalid["skins"][0]["joints"] = Json::MakeArray();
-    for (int i = 0; i < 65; ++i) invalid["skins"][0]["joints"].push(1);
-    reject(invalid, bin, "64-entry");
+    for (int i = 0; i < 1025; ++i) invalid["skins"][0]["joints"].push(1);
+    reject(invalid, bin, "1024-entry");
     // Rigid child geometry is baked once, then receives a one-joint animation binding.
     invalid = source;
     invalid["nodes"][0].erase("skin");
@@ -5367,7 +5367,8 @@ TEST(FbxModelsSkinAndAnimation) {
     CHECK(mesh.textures.size() == 1 && mesh.materials[0].baseTexture == mesh.textures[0] && mesh.materials[0].baseColor == Color(1, 1, 1));
     CHECK(mesh.textures[0]->width == 1 && mesh.textures[0]->texels[0] == 0xFF0000FFu);
 
-    // Broken files report why; a file without triangles is not a model.
+    // Broken files report why; a file without triangles but with clips is an animation source (see
+    // <model>.clips.json), one with neither is not a model.
     CHECK(WriteTextFile(path, "not an fbx file"));
     CHECK(!LoadModelFile(path, mesh, &err) && err.find("cannot read FBX") != std::string::npos);
     CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "assets/models/broken.fbx"), "not an fbx file"));
@@ -5376,7 +5377,7 @@ TEST(FbxModelsSkinAndAnimation) {
     std::string empty = fbx("");
     empty.erase(empty.find("\tGeometry: 1000"), empty.find("\tModel: 2000") - empty.find("\tGeometry: 1000"));
     CHECK(WriteTextFile(path, empty));
-    CHECK(!LoadModelFile(path, mesh, &err) && err == "model contains no triangle meshes");
+    CHECK(LoadModelFile(path, mesh, &err) && mesh.indices.empty() && !mesh.clips.empty());
 
     // oe import / asset.import put .fbx files with the other models.
     const std::string outside = JoinPath(e.ProjectDir(), "hero.fbx");
@@ -15037,6 +15038,672 @@ TEST(JointsInSnapshots) {
     CHECK(pos("Bob") == bob && pos("Link") == chained && s.Get<Transform>(id("Door"))->rotation == door);
     CHECK(pos("Bob2D") == bob2 && pos("Rope2D") == rope);
     CHECK(std::abs(Length(pos("Bob2D") - Vec3(40, 5, 0)) - 1) < 0.02f && Length(pos("Rope2D") - Vec3(45, 8, 0)) < 1.53f);
+}
+
+// A model with more joints than one GPU draw addresses: 100 bars, each moved to its place by its own
+// joint. The loader cuts the submeshes into ranges of at most 64 joints; a wrong palette would stack bars.
+// Also: MeshRenderer.materials per model material, and a parentPose layer.
+TEST(ModelsWithManyJoints) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("many_joints");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    const int count = 100, leftBars = 70;  // the first material alone needs two ranges
+    std::vector<uint8_t> bin;
+    Json gltf = Json::parse(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0,"skin":0}],
+      "skins":[{"joints":[]}],"materials":[{"name":"Left"},{"name":"Right"}],
+      "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0},
+                               {"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":4,"material":1}]}],
+      "bufferViews":[],"accessors":[],"buffers":[{}]})J");
+    auto accessor = [&](const void* data, size_t bytes, int component, int n, const char* type) {
+        while (bin.size() % 4) bin.push_back(0);
+        Json view = Json::MakeObject();
+        view["buffer"] = 0;
+        view["byteOffset"] = static_cast<uint64_t>(bin.size());
+        view["byteLength"] = static_cast<uint64_t>(bytes);
+        Json a = Json::MakeObject();
+        a["bufferView"] = static_cast<uint64_t>(gltf["bufferViews"].size());
+        a["componentType"] = component;
+        a["count"] = n;
+        a["type"] = type;
+        gltf["bufferViews"].push(view);
+        gltf["accessors"].push(a);
+        const uint8_t* first = static_cast<const uint8_t*>(data);
+        bin.insert(bin.end(), first, first + bytes);
+    };
+    std::vector<float> positions, weights;
+    std::vector<uint8_t> joints;
+    std::vector<uint16_t> left, right;
+    for (int i = 0; i < count; ++i) {
+        // Every bar sits at the origin in the file; joint i carries it to x = 0.2 * i.
+        for (float corner : {0.0f, -0.3f, 0.0f, 0.12f, -0.3f, 0.0f, 0.12f, 0.3f, 0.0f, 0.0f, 0.3f, 0.0f}) positions.push_back(corner);
+        for (int v = 0; v < 4; ++v) {
+            for (uint8_t j : {static_cast<uint8_t>(i), uint8_t{0}, uint8_t{0}, uint8_t{0}}) joints.push_back(j);
+            for (float w : {1.0f, 0.0f, 0.0f, 0.0f}) weights.push_back(w);
+        }
+        for (int k : {0, 1, 2, 0, 2, 3}) (i < leftBars ? left : right).push_back(static_cast<uint16_t>(i * 4 + k));
+        Json node = Json::MakeObject();
+        node["name"] = "J" + std::to_string(i);
+        // The last joint hangs under the one before it, so an IK goal has a bone to turn.
+        node["translation"] = Json(Json::Array{i == count - 1 ? 0.2f : 0.2f * static_cast<float>(i), 0.0f, 0.0f});
+        if (i == count - 2) node["children"] = Json(Json::Array{count});
+        gltf["nodes"].push(node);
+        gltf["skins"][0]["joints"].push(i + 1);
+        if (i != count - 1) gltf["scenes"][0]["nodes"].push(i + 1);
+    }
+    accessor(positions.data(), positions.size() * 4, 5126, count * 4, "VEC3");
+    gltf["accessors"][0]["min"] = Json::parse("[0,-0.3,0]");
+    gltf["accessors"][0]["max"] = Json::parse("[0.12,0.3,0]");
+    accessor(joints.data(), joints.size(), 5121, count * 4, "VEC4");
+    accessor(weights.data(), weights.size() * 4, 5126, count * 4, "VEC4");
+    accessor(left.data(), left.size() * 2, 5123, static_cast<int>(left.size()), "SCALAR");
+    accessor(right.data(), right.size() * 2, 5123, static_cast<int>(right.size()), "SCALAR");
+    gltf["buffers"][0]["byteLength"] = static_cast<uint64_t>(bin.size());
+    gltf["buffers"][0]["uri"] = "data:application/octet-stream;base64," + Base64Encode(bin);
+    CreateDirectories(project + "/assets/models");
+    const std::string path = project + "/assets/models/bars.gltf";
+    CHECK(WriteTextFile(path, gltf.dump()));
+
+    Mesh mesh;
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.joints.size() == static_cast<size_t>(count) && mesh.TriangleCount() == static_cast<size_t>(count) * 2);
+    CHECK(mesh.submeshes.size() >= 3 && mesh.materials.size() == 2 && mesh.materials[1].name == "Right");
+    std::vector<int> owner(mesh.positions.size(), -1);
+    size_t triangles = 0;
+    for (size_t r = 0; r < mesh.submeshes.size(); ++r) {
+        const Submesh& range = mesh.submeshes[r];
+        CHECK(!range.palette.empty() && range.palette.size() <= Mesh::kDrawJoints);
+        triangles += range.indexCount / 3;
+        for (uint32_t k = range.firstIndex; k < range.firstIndex + range.indexCount; ++k) {
+            const uint32_t v = mesh.indices[k];
+            CHECK(owner[v] < 0 || owner[v] == static_cast<int>(r));  // no vertex in two ranges
+            owner[v] = static_cast<int>(r);
+            CHECK(std::find(range.palette.begin(), range.palette.end(), mesh.skin[v].joints[0]) != range.palette.end());
+        }
+    }
+    CHECK(triangles == mesh.TriangleCount());
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/bars.gltf"})J")["result"];
+    CHECK(info["joints"].asInt() == count && info["materials"][0]["name"].asString() == "Left");
+
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[10,0,5]},
+      "Camera":{"projection":"orthographic","orthoSize":0.52,"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Bars","components":{"MeshRenderer":{"mesh":"assets/models/bars.gltf","color":[1,1,1],"unlit":true}}})J");
+    CHECK(Call(e, "material.create", R"J({"path":"red.mat.json","values":{"baseColor":[1,0,0],"unlit":true}})J")["ok"].asBool());
+    // Bars along the middle row: how many there are, and how many of them are red.
+    auto bars = [](const RenderTarget& target, int* red) {
+        int runs = 0;
+        *red = 0;
+        bool inside = false;
+        for (int x = 0; x < target.width; ++x) {
+            const uint32_t c = target.color[static_cast<size_t>(target.height / 2) * target.width + x];
+            const bool lit = (c & 0xFF) > 128;
+            if (lit && !inside) {
+                ++runs;
+                *red += ((c >> 8) & 0xFF) < 64;
+            }
+            inside = lit;
+        }
+        return runs;
+    };
+    const int w = 1200, h = 60;
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget shot;
+    shot.Resize(w, h);
+    int red = 0;
+    e.Renderer().Render(e.GetScene(), view, shot);
+    CHECK(bars(shot, &red) == count && red == 0);
+    // MeshRenderer.materials: the second material of the model is replaced, the first keeps its own.
+    CHECK(Call(e, "component.set", R"J({"id":"Bars","type":"MeshRenderer","values":{"materials":["","red.mat.json"]}})J")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, shot);
+    CHECK(bars(shot, &red) == count && red == count - leftBars);
+    if (e.EnableGpu(nullptr, &err)) {
+        RenderTarget gpu;
+        gpu.Resize(w, h);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        CHECK(bars(gpu, &red) == count && red == count - leftBars);
+        // The selection mask draws every range with its own palette: the outline reaches bars of all ranges.
+        RenderTarget selected;
+        selected.Resize(w, h);
+        view.highlight = e.GetScene().FindByName("Bars");
+        e.Gpu()->Render(e.GetScene(), view, selected);
+        view.highlight = kNullEntity;
+        int outlined[10] = {};
+        for (int x = 0; x < w; ++x) {
+            const size_t i = static_cast<size_t>(h / 2) * w + x;
+            outlined[x * 10 / w] += selected.color[i] != gpu.color[i];
+        }
+        for (int part : outlined) CHECK(part >= 10);
+    } else {
+        std::printf("  SKIP GPU part: no GPU backend here (%s)\n", err.c_str());
+    }
+    CHECK(Call(e, "component.set", R"J({"id":"Bars","type":"MeshRenderer","values":{"materials":["missing.mat.json"]}})J")["ok"].asBool());
+    CHECK(GatherRenderItems(e.GetScene(), &e.Assets())[0].error);
+    Call(e, "component.set", R"J({"id":"Bars","type":"MeshRenderer","values":{"materials":[]}})J");
+
+    // parentPose: a second layer of the model follows the IK-posed parent instead of standing in the default pose.
+    Call(e, "entity.create", R"J({"name":"Goal","parent":"Bars","components":{"Transform":{"position":[19.6,0.2,0]},"BoneIK":{"bone":"J99","chain":1}}})J");
+    Call(e, "entity.create", R"J({"name":"Layer","parent":"Bars","components":{"MeshRenderer":{"mesh":"assets/models/bars.gltf","parentPose":true}}})J");
+    auto palettes = [&](std::vector<Mat4>& parent, std::vector<Mat4>& layer) {
+        for (const RenderItem& item : GatherRenderItems(e.GetScene(), &e.Assets()))
+            (item.id == e.GetScene().FindByName("Bars") ? parent : layer) = item.joints;
+    };
+    std::vector<Mat4> parent, layer;
+    palettes(parent, layer);
+    CHECK(parent.size() == static_cast<size_t>(count) && layer.size() == parent.size());
+    CHECK(std::abs(parent[98].m[1]) > 0.1f);  // the goal turned J98
+    bool same = true;
+    for (size_t i = 0; i < parent.size() && i < layer.size(); ++i)
+        for (size_t k = 0; k < 16; ++k) same = same && parent[i].m[k] == layer[i].m[k];
+    CHECK(same);
+    Call(e, "component.set", R"J({"id":"Layer","type":"MeshRenderer","values":{"parentPose":false}})J");
+    palettes(parent, layer);
+    CHECK(layer.size() == parent.size() && std::abs(layer[98].m[1]) < 1e-6f);
+}
+
+// Blend shapes (glTF morph targets): a square that the shape "Slide" moves 3 m to the right.
+TEST(BlendShapes) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("blend_shapes");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Json gltf = Json::parse(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+      "meshes":[{"extras":{"targetNames":["Slide","Nothing"]},
+        "primitives":[{"attributes":{"POSITION":0},"indices":1,"targets":[{"POSITION":2},{"POSITION":3}]}]}],
+      "bufferViews":[],"accessors":[],"buffers":[{}]})J");
+    std::vector<uint8_t> bin;
+    auto accessor = [&](const void* data, size_t bytes, int component, int n, const char* type) {
+        while (bin.size() % 4) bin.push_back(0);
+        Json view = Json::MakeObject();
+        view["buffer"] = 0;
+        view["byteOffset"] = static_cast<uint64_t>(bin.size());
+        view["byteLength"] = static_cast<uint64_t>(bytes);
+        Json a = Json::MakeObject();
+        a["bufferView"] = static_cast<uint64_t>(gltf["bufferViews"].size());
+        a["componentType"] = component;
+        a["count"] = n;
+        a["type"] = type;
+        gltf["bufferViews"].push(view);
+        gltf["accessors"].push(a);
+        const uint8_t* first = static_cast<const uint8_t*>(data);
+        bin.insert(bin.end(), first, first + bytes);
+    };
+    const float corners[] = {-0.5f, -0.5f, 0, 0.5f, -0.5f, 0, 0.5f, 0.5f, 0, -0.5f, 0.5f, 0};
+    const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
+    const float slide[] = {3, 0, 0, 3, 0, 0, 3, 0, 0, 3, 0, 0};
+    const float nothing[12] = {};
+    accessor(corners, sizeof(corners), 5126, 4, "VEC3");
+    gltf["accessors"][0]["min"] = Json::parse("[-0.5,-0.5,0]");
+    gltf["accessors"][0]["max"] = Json::parse("[0.5,0.5,0]");
+    accessor(indices, sizeof(indices), 5123, 6, "SCALAR");
+    accessor(slide, sizeof(slide), 5126, 4, "VEC3");
+    accessor(nothing, sizeof(nothing), 5126, 4, "VEC3");
+    gltf["buffers"][0]["byteLength"] = static_cast<uint64_t>(bin.size());
+    gltf["buffers"][0]["uri"] = "data:application/octet-stream;base64," + Base64Encode(bin);
+    CreateDirectories(project + "/assets/models");
+    CHECK(WriteTextFile(project + "/assets/models/square.gltf", gltf.dump()));
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/square.gltf"})J")["result"];
+    CHECK(info["blendShapes"].size() == 1 && info["blendShapes"][0].asString() == "Slide");  // a target that moves nothing is dropped
+
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Transform":{"position":[1.5,0,5]},
+      "Camera":{"projection":"orthographic","orthoSize":1,"clearColor":[0,0,0]}}})J");
+    Call(e, "entity.create", R"J({"name":"Square","components":{"MeshRenderer":{"mesh":"assets/models/square.gltf","color":[1,1,1],"unlit":true}}})J");
+    // The view is 8 m wide and centered on x = 1.5: where the square's center is on the middle row.
+    const int w = 320, h = 80;
+    auto center = [&](const RenderTarget& target) {
+        double sum = 0;
+        int lit = 0;
+        for (int x = 0; x < w; ++x) {
+            if ((target.color[static_cast<size_t>(h / 2) * w + x] & 0xFF) < 128) continue;
+            sum += x + 0.5;
+            ++lit;
+        }
+        return lit ? static_cast<float>((sum / lit - w / 2.0) * 8.0 / w + 1.5) : -100.0f;
+    };
+    RenderView view;
+    MakeSceneView(e.GetScene(), static_cast<float>(w) / h, view);
+    RenderTarget shot;
+    shot.Resize(w, h);
+    auto software = [&] { e.Renderer().Render(e.GetScene(), view, shot); return center(shot); };
+    CHECK(std::abs(software()) < 0.03f);
+    auto weight = [&](const char* values) {
+        CHECK(e.Call("component.set", Json::parse(std::string(R"J({"id":"Square","type":"MeshRenderer","values":{"blendShapes":)J") + values + "}}"))["ok"].asBool());
+    };
+    weight(R"J({"Slide":1})J");
+    CHECK(std::abs(software() - 3) < 0.03f);
+    weight(R"J({"Slide":0.5,"NoSuchShape":1})J");  // unknown names are ignored
+    CHECK(std::abs(software() - 1.5f) < 0.03f);
+    const bool gpu = e.EnableGpu(nullptr, &err);
+    if (gpu) {
+        RenderTarget target;
+        target.Resize(w, h);
+        e.Gpu()->Render(e.GetScene(), view, target);
+        CHECK(std::abs(center(target) - 1.5f) < 0.05f);
+        weight(R"J({"Slide":1})J");  // new weights: the renderer draws the new geometry
+        e.Gpu()->Render(e.GetScene(), view, target);
+        CHECK(std::abs(center(target) - 3) < 0.05f);
+    } else {
+        std::printf("  SKIP GPU part: no GPU backend here (%s)\n", err.c_str());
+        weight(R"J({"Slide":1})J");
+    }
+    // A parentPose layer without weights of its own takes the parent's.
+    Call(e, "entity.create", R"J({"name":"Layer","parent":"Square","components":{"Transform":{"position":[0,0,0.1]},
+      "MeshRenderer":{"mesh":"assets/models/square.gltf","color":[1,1,1],"unlit":true,"parentPose":true}}})J");
+    Call(e, "component.set", R"J({"id":"Square","type":"MeshRenderer","values":{"visible":false}})J");
+    CHECK(std::abs(software() - 3) < 0.03f);
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool() && Call(e, "history.undo", "{}")["ok"].asBool() && Call(e, "history.undo", "{}")["ok"].asBool());
+    CHECK(std::abs(software() - 1.5f) < 0.03f);
+
+    // Vertices that a model with many joints duplicates between draw ranges keep their offsets.
+    Mesh strip;
+    const int joints = 130;
+    for (int i = 0; i < joints; ++i) {
+        strip.joints.push_back({0, Mat4{}});
+        strip.positions.push_back(Vec3(static_cast<float>(i), 0, 0));
+        strip.normals.push_back(Vec3(0, 0, 1));
+        strip.uvs.insert(strip.uvs.end(), {0.0f, 0.0f});
+        SkinVertex influence;
+        influence.joints[0] = static_cast<uint16_t>(i);
+        influence.weights[0] = 1;
+        strip.skin.push_back(influence);
+    }
+    for (int i = 0; i + 2 < joints; ++i) strip.indices.insert(strip.indices.end(), {static_cast<uint32_t>(i), static_cast<uint32_t>(i + 1), static_cast<uint32_t>(i + 2)});
+    strip.submeshes.push_back({0, static_cast<uint32_t>(strip.indices.size()), -1, {}});
+    BlendShape& lift = strip.BlendShapeNamed("Lift");
+    for (int i = 0; i < joints; i += 2) {  // every second vertex rises by its own amount
+        lift.vertices.push_back(static_cast<uint32_t>(i));
+        lift.positions.push_back(Vec3(0, static_cast<float>(i + 1), 0));
+        lift.normals.push_back(Vec3());
+    }
+    strip.SplitSkinPalettes();
+    CHECK(strip.submeshes.size() >= 3 && strip.positions.size() > static_cast<size_t>(joints));
+    CHECK(std::is_sorted(strip.blendShapes[0].vertices.begin(), strip.blendShapes[0].vertices.end()));
+    const std::shared_ptr<Mesh> lifted = strip.Morphed({{0, 1.0f}, {7, 1.0f}});
+    CHECK(lifted->positions.size() == strip.positions.size() && lifted->submeshes.size() == strip.submeshes.size());
+    bool kept = true;
+    for (size_t v = 0; v < strip.positions.size(); ++v) {
+        const int source = static_cast<int>(strip.positions[v].x);
+        kept = kept && lifted->positions[v].y == (source % 2 == 0 ? static_cast<float>(source + 1) : 0.0f);
+    }
+    CHECK(kept);
+}
+
+// SpringBone name patterns, endLength and SpringCollider: the rig is Root at the origin with Tip 1 m above it.
+TEST(SpringCollidersAndPatterns) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("spring_colliders"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    std::string text = kRigFbx;
+    text.replace(text.find("%TEXTURE%"), 9, "");
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.fbx");
+    CreateDirectories(ParentPath(path));
+    CHECK(WriteTextFile(path, text));
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx","unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Swing","parent":"Rig","components":{"SpringBone":{"bone":"Ro*","radius":0.02}}})J");
+    auto vec = [](const Json& v) { return Vec3(v[0].asFloat(), v[1].asFloat(), v[2].asFloat()); };
+    auto info = [&] { return Call(e, "animation.bones", R"J({"id":"Rig"})J")["result"]; };
+    auto tip = [&] { return vec(Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"]["bones"][0]["position"]); };
+    // "Ro*" = every branch whose bones start with Ro: the Root bone, as if it were named.
+    Json state = info();
+    CHECK(state["springs"][0]["found"].asBool() && state["springs"][0]["bones"].asInt() == 1);
+    int skinned = 0;
+    for (const Json& bone : state["bones"].items()) skinned += bone["vertices"].asInt();
+    CHECK(skinned == 4 && state["colliders"].size() == 0);  // the quad's vertices, each under its strongest bone
+    // endLength gives the last bone of a branch an end of its own: Tip swings too.
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"endLength":0.5}})J");
+    CHECK(info()["springs"][0]["bones"].asInt() == 2);
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"endLength":0}})J");
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"bone":"Zz*"}})J");
+    CHECK(!info()["springs"][0]["found"].asBool());
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"bone":"Ro*"}})J");
+
+    // Without a collider the bone rests where the pose puts it.
+    Call(e, "sim.step", R"J({"frames":30})J");
+    CHECK(Length(tip() - Vec3(0, 1, 0)) < 1e-3f);
+    // A sphere around the place where Tip rests (a little to the side of it): the bone end leaves the
+    // sphere, keeping its length.
+    Call(e, "entity.create", R"J({"name":"Ball","parent":"Rig","components":{"SpringCollider":{"bone":"Root","radius":0.3,"offset":[0.05,1,0]}}})J");
+    state = info();
+    CHECK(state["colliders"].size() == 1 && state["colliders"][0]["found"].asBool());
+    Call(e, "sim.step", R"J({"frames":60})J");
+    const Vec3 pushed = tip();
+    CHECK(Length(pushed - Vec3(0.05f, 1, 0)) > 0.3f && Length(pushed - Vec3(0.05f, 1, 0)) < 0.34f);
+    CHECK(std::abs(Length(pushed) - 1) < 1e-3f && pushed.x < -0.2f);  // out on the nearer side
+    // It stays there (resting on the collider it does not creep), and comes back when the collider is gone.
+    Call(e, "sim.step", R"J({"frames":120})J");
+    CHECK(Length(tip() - pushed) < 1e-3f);
+    // A capsule to a second bone covers the bone's whole length; an unknown bone is reported.
+    Call(e, "component.set", R"J({"id":"Ball","type":"SpringCollider","values":{"tail":"Nose"}})J");
+    CHECK(!info()["colliders"][0]["found"].asBool());
+    // collide: false ignores the colliders.
+    Call(e, "component.set", R"J({"id":"Ball","type":"SpringCollider","values":{"tail":""}})J");
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"collide":false}})J");
+    Call(e, "sim.step", R"J({"frames":240})J");
+    CHECK(Length(tip() - Vec3(0, 1, 0)) < 0.01f);
+    Call(e, "entity.delete", R"J({"id":"Ball"})J");
+    // limit: however hard the model is thrown aside, the bone leaves its animated direction by 20 degrees at most.
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"collide":true,"stiffness":5,"damping":0,"limit":20}})J");
+    float widest = 0;
+    for (int i = 0; i < 20; ++i) {
+        Json args = Json::parse(R"J({"id":"Rig","type":"Transform","values":{}})J");
+        args["values"]["position"] = Json(Json::Array{0.3f * static_cast<float>(i + 1), 0.0f, 0.0f});
+        e.Call("component.set", args);
+        Call(e, "sim.step", R"J({"frames":1})J");
+        const Vec3 root(0.3f * static_cast<float>(i + 1), 0, 0), bone = tip() - root;
+        widest = std::max(widest, std::acos(Clamp(bone.y / Length(bone), -1.0f, 1.0f)) * 57.29578f);
+    }
+    CHECK(widest > 15 && widest < 20.5f);
+}
+
+// animation.retarget moves clips to a skeleton with other bone names and another rest pose, the
+// clip file is attached through <model>.clips.json, and Animator.blend fades between clips.
+TEST(AnimationRetargetAndClipFiles) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("retarget");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    std::string text = kRigFbx;  // target: Root at the origin, Tip 1 m above it
+    text.replace(text.find("%TEXTURE%"), 9, "");
+    CreateDirectories(project + "/assets/models");
+    CHECK(WriteTextFile(project + "/assets/models/rig.fbx", text));
+    // Source: Base with End 2 m along +X (another rest direction, other names, no mesh). "Turn" turns Base
+    // a quarter turn around Z and lifts it half a meter (the rig has a clip "Wave" of its own, which a clip file
+    // cannot replace); "Hold" keeps the rest pose.
+    Json gltf = Json::parse(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+      "nodes":[{"name":"Base","children":[1]},{"name":"End","translation":[2,0,0]}],
+      "animations":[{"name":"Turn","samplers":[{"input":0,"output":1},{"input":0,"output":2}],
+          "channels":[{"sampler":0,"target":{"node":0,"path":"rotation"}},{"sampler":1,"target":{"node":0,"path":"translation"}}]},
+        {"name":"Hold","samplers":[{"input":0,"output":3}],"channels":[{"sampler":0,"target":{"node":0,"path":"rotation"}}]}],
+      "bufferViews":[],"accessors":[],"buffers":[{}]})J");
+    std::vector<uint8_t> bin;
+    auto accessor = [&](std::initializer_list<float> values, int count, const char* type) {
+        Json view = Json::MakeObject();
+        view["buffer"] = 0;
+        view["byteOffset"] = static_cast<uint64_t>(bin.size());
+        view["byteLength"] = static_cast<uint64_t>(values.size() * 4);
+        Json a = Json::MakeObject();
+        a["bufferView"] = static_cast<uint64_t>(gltf["bufferViews"].size());
+        a["componentType"] = 5126;
+        a["count"] = count;
+        a["type"] = type;
+        gltf["bufferViews"].push(view);
+        gltf["accessors"].push(a);
+        for (float value : values) {
+            uint8_t bytes[4];
+            std::memcpy(bytes, &value, 4);
+            bin.insert(bin.end(), bytes, bytes + 4);
+        }
+    };
+    accessor({0, 1}, 2, "SCALAR");
+    gltf["accessors"][0]["min"] = Json::parse("[0]");
+    gltf["accessors"][0]["max"] = Json::parse("[1]");
+    accessor({0, 0, 0, 1, 0, 0, 0.70710678f, 0.70710678f}, 2, "VEC4");
+    accessor({0, 0, 0, 0, 0.5f, 0}, 2, "VEC3");
+    accessor({0, 0, 0, 1, 0, 0, 0, 1}, 2, "VEC4");
+    gltf["buffers"][0]["byteLength"] = static_cast<uint64_t>(bin.size());
+    gltf["buffers"][0]["uri"] = "data:application/octet-stream;base64," + Base64Encode(bin);
+    CreateDirectories(project + "/assets/anims");
+    CHECK(WriteTextFile(project + "/assets/anims/source.gltf", gltf.dump()));
+    Json source = Call(e, "asset.info", R"J({"path":"assets/anims/source.gltf"})J");
+    CHECK(source["ok"].asBool() && source["result"]["clips"].size() == 2);  // a file with clips only loads
+
+    Json bad = Call(e, "animation.retarget", R"J({"source":"assets/anims/source.gltf","target":"assets/models/rig.fbx",
+      "bones":{"Nope":"Base"},"out":"assets/anims/rig_clips.gltf"})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["code"].asString() == "retarget_failed");
+    Json done = Call(e, "animation.retarget", R"J({"source":"assets/anims/source.gltf","target":"assets/models/rig.fbx",
+      "bones":{"Root":"Base","Tip":"End","Ghost":"Base"},"hips":"Root","out":"assets/anims/rig_clips.gltf"})J");
+    CHECK(done["ok"].asBool() && done["result"]["bones"].asInt() == 2 && done["result"]["clips"].size() == 2);
+    CHECK(done["result"]["missing"].size() == 1 && done["result"]["attached"].asString() == "assets/models/rig.fbx.clips.json");
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/rig.fbx"})J")["result"];
+    bool wave = false, hold = false;
+    for (const Json& clip : info["clips"].items()) wave = wave || clip["name"].asString() == "Turn", hold = hold || clip["name"].asString() == "Hold";
+    CHECK(wave && hold);  // the model has the clips of the attached file
+
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx"},
+      "Animator":{"clip":"Turn","playing":false,"time":0}}})J");
+    auto tip = [&] {
+        const Json p = Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"]["bones"][0]["position"];
+        return Vec3(p[0].asFloat(), p[1].asFloat(), p[2].asFloat());
+    };
+    // At the source's rest the target bone lies along the source bone (+X), with its own length (1 m);
+    // at the end it has made the same quarter turn and the hips have risen with the source's.
+    CHECK(Length(tip() - Vec3(1, 0, 0)) < 0.01f);
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"time":1}})J");
+    CHECK(Length(tip() - Vec3(0, 1.5f, 0)) < 0.01f);
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"time":0.5}})J");
+    CHECK(Length(tip() - Vec3(0.7071f, 0.25f + 0.7071f, 0)) < 0.02f);
+
+    // Animator.blend: a new clip fades in from the pose that was shown.
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"time":0.5,"blend":0.5}})J");  // the old clip plays on while it fades
+    Call(e, "sim.step", R"J({"frames":2})J");
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"clip":"Hold","time":0}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(tip().y > 0.8f);                      // still close to where Turn was
+    Call(e, "sim.step", R"J({"frames":14})J");
+    CHECK(tip().y > 0.3f && tip().y < 1.2f);    // half way
+    Call(e, "sim.step", R"J({"frames":20})J");
+    CHECK(Length(tip() - Vec3(1, 0, 0)) < 0.01f);
+    // Without blend the change is at once.
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"clip":"Turn","time":1,"blend":0}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Length(tip() - Vec3(0, 1.5f, 0)) < 0.01f);
+}
+
+// What a third-person character needs: a ray that ignores its own capsule, steps lower than the capsule's
+// radius, a BoneIK turn for feet on slopes, and springs that trail in the air.
+TEST(CharacterStepsRayIgnoreAndIkTurn) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("character_ik");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Ground","components":{"Transform":{"position":[0,-0.5,0],"scale":[40,1,40]},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Step","components":{"Transform":{"position":[3,0.075,0],"scale":[2,0.15,4]},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Wall","components":{"Transform":{"position":[-3,1,0],"scale":[1,2,4]},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Hero","components":{"Transform":{"position":[0,0.9,0]},"CharacterBody":{"radius":0.3,"height":1.6,"stepHeight":0.3}}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    // A ray from inside the capsule meets the capsule itself, unless it is told to pass through it.
+    Json own = Call(e, "physics.raycast", R"J({"origin":[0.1,0.6,0],"direction":[0,-1,0],"maxDistance":3})J")["result"];
+    CHECK(own["hit"].asBool() && own["name"].asString() == "Hero");
+    Json ground = Call(e, "physics.raycast", R"J({"origin":[0.1,0.6,0],"direction":[0,-1,0],"maxDistance":3,"ignore":"Hero"})J")["result"];
+    CHECK(ground["hit"].asBool() && ground["name"].asString() == "Ground" && std::abs(ground["point"][1].asFloat()) < 1e-3f);
+    auto hero = [&] { return e.GetScene().Get<Transform>(e.GetScene().FindByName("Hero"))->position; };
+    auto walk = [&](float vx, int frames) {
+        for (int i = 0; i < frames; ++i) {
+            Json args = Json::parse(R"J({"id":"Hero","type":"CharacterBody","values":{}})J");
+            args["values"]["velocity"] = Json(Json::Array{vx, 0.0f, 0.0f});
+            e.Call("component.set", args);
+            Call(e, "sim.step", R"J({"frames":1})J");
+        }
+    };
+    const float floor = hero().y;
+    // The step is half as high as the capsule's radius: the round bottom meets it at its edge.
+    walk(1.5f, 150);
+    CHECK(hero().x > 2.6f && std::abs(hero().y - floor - 0.15f) < 0.03f);
+    // A wall is not a step.
+    walk(-3.0f, 150);
+    CHECK(hero().x > -2.25f && hero().x < -2.1f && std::abs(hero().y - floor) < 0.03f);
+
+    // BoneIK.turn: the bone is turned on top of its posed orientation (a foot on a slope).
+    std::string text = kRigFbx;
+    text.replace(text.find("%TEXTURE%"), 9, "");
+    CreateDirectories(project + "/assets/models");
+    CHECK(WriteTextFile(project + "/assets/models/rig.fbx", text));
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"Transform":{"position":[10,0,0]},"MeshRenderer":{"mesh":"assets/models/rig.fbx","unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Goal","parent":"Rig","components":{"Transform":{"position":[0,1,0]},"BoneIK":{"bone":"Tip","chain":1}}})J");
+    auto rotation = [&] {
+        const Json r = Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"]["bones"][0]["rotation"];
+        return Vec3(r[0].asFloat(), r[1].asFloat(), r[2].asFloat());
+    };
+    const Vec3 straight = rotation();
+    Call(e, "component.set", R"J({"id":"Goal","type":"BoneIK","values":{"turn":[0,0,30]}})J");
+    CHECK(std::abs(rotation().z - straight.z - 30) < 0.5f && std::abs(rotation().x - straight.x) < 0.5f);
+    Call(e, "component.set", R"J({"id":"Goal","type":"BoneIK","values":{"weight":0.5}})J");
+    CHECK(std::abs(rotation().z - straight.z - 15) < 0.5f);
+    // keepRotation: the limb turns to reach the goal, the bone itself keeps the orientation the pose gave it.
+    Call(e, "component.set", R"J({"id":"Goal","type":"BoneIK","values":{"weight":1,"turn":[0,0,0]}})J");
+    Call(e, "component.set", R"J({"id":"Goal","type":"Transform","values":{"position":[1,0,0]}})J");
+    CHECK(std::abs(std::abs(rotation().z - straight.z) - 90) < 0.5f);  // turned with the bone above it
+    Call(e, "component.set", R"J({"id":"Goal","type":"BoneIK","values":{"keepRotation":true}})J");
+    CHECK(Length(rotation() - straight) < 0.5f);
+    const Json reached = Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"]["bones"][0]["modelPosition"];
+    CHECK(std::abs(reached[0].asFloat() - 1) < 0.01f && std::abs(reached[1].asFloat()) < 0.01f);
+    Call(e, "entity.delete", R"J({"id":"Goal"})J");
+
+    // SpringBone.air: a damped bone moves with the model (air 0) or trails behind it while it moves.
+    Call(e, "entity.create", R"J({"name":"Swing","parent":"Rig","components":{"SpringBone":{"bone":"Root","stiffness":200,"damping":40}}})J");
+    auto trail = [&](float air) {
+        Json set = Json::parse(R"J({"id":"Swing","type":"SpringBone","values":{}})J");
+        set["values"]["air"] = air;
+        e.Call("component.set", set);
+        float x = hero().x + 20;
+        for (int i = 0; i < 120; ++i) {  // 3 m/s
+            x += 0.05f;
+            Json args = Json::parse(R"J({"id":"Rig","type":"Transform","values":{}})J");
+            args["values"]["position"] = Json(Json::Array{x, 0.0f, 0.0f});
+            e.Call("component.set", args);
+            Call(e, "sim.step", R"J({"frames":1})J");
+        }
+        const Json tip = Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"]["bones"][0]["position"];
+        return x - tip[0].asFloat();  // how far the bone's end is behind the root
+    };
+    const float held = trail(0), trailing = trail(0.5f);  // about speed * lost share * air / pull = 0.22 m
+    CHECK(std::abs(held) < 0.06f);
+    CHECK(trailing > held + 0.1f && trailing < 0.8f);
+    // The renderer may draw a model between two steps (render interpolation moves its Transform): the
+    // swinging bones stay where they are on the model instead of standing off by that distance.
+    auto onModel = [&] {
+        const Json p = Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"]["bones"][0]["modelPosition"];
+        return Vec3(p[0].asFloat(), p[1].asFloat(), p[2].asFloat());
+    };
+    const Vec3 stepped = onModel();
+    Transform* rig = e.GetScene().Get<Transform>(e.GetScene().FindByName("Rig"));
+    rig->position.x -= 0.04f;
+    CHECK(std::abs(stepped.x) > 0.05f && Length(onModel() - stepped) < 1e-4f);
+    rig->position.x += 0.04f;
+}
+
+// The editor's Game view: the wheel reaches a game that has captured the mouse (mouse look with zoom).
+TEST(NativeEditorWheelWhileGameHoldsMouse) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("editor_wheel"), &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Camera","components":{"Camera":{}}})J");
+    CHECK(Call(e, "script.write", R"J({"path":"scripts/zoom.lua","source":"local M = {}\nfunction M:onStart() self.total = 0 input.lockMouse(true) end\nfunction M:onUpdate(dt) self.total = self.total + input.wheel() end\nreturn M\n"})J")["ok"].asBool());
+    Call(e, "entity.create", R"J({"name":"Zoom","components":{"Script":{"path":"scripts/zoom.lua"}}})J");
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 900, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    auto total = [&] { return Call(e, "script.eval", R"J({"code":"self.total","entity":"Zoom"})J")["result"]["value"].asFloat(-1); };
+    frames(3);
+    CHECK(Call(e, "sim.play", "{}")["ok"].asBool());
+    ed.FocusGameView(true);
+    frames(6);
+    CHECK(e.Input().mouseLocked && total() == 0);
+    WindowEvent wheel;
+    wheel.type = WindowEvent::Type::MouseWheel;
+    wheel.y = 2;
+    frames(4, {wheel});
+    CHECK(total() == 2);
+    wheel.y = -3;
+    frames(4, {wheel});
+    CHECK(total() == -1);
+}
+
+// animation.retarget_map guesses a humanoid bone map from bone names; the editor's Retarget Animation window
+// fills its list with it and writes the clip file.
+TEST(NativeEditorRetarget) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("editor_retarget");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    // Two leg chains without meshes, one named like Mixamo and one like 3ds Max Biped, each with a clip.
+    auto rig = [&](const std::string& file, std::vector<std::string> names, const std::string& clip) {
+        Json gltf = Json::parse(R"J({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[],
+          "animations":[{"samplers":[{"input":0,"output":1}],"channels":[{"sampler":0,"target":{"node":1,"path":"rotation"}}]}],
+          "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":8},{"buffer":0,"byteOffset":8,"byteLength":32}],
+          "accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]},
+                       {"bufferView":1,"componentType":5126,"count":2,"type":"VEC4"}],"buffers":[{"byteLength":40}]})J");
+        gltf["animations"][0]["name"] = clip;
+        for (size_t i = 0; i < names.size(); ++i) {
+            Json node = Json::MakeObject();
+            node["name"] = names[i];
+            node["translation"] = Json(Json::Array{0.0f, i == 0 ? 1.0f : -0.4f, 0.0f});
+            if (i + 1 < names.size()) node["children"] = Json(Json::Array{static_cast<int>(i + 1)});
+            gltf["nodes"].push(node);
+        }
+        const float keys[] = {0, 1, 0, 0, 0, 1, 0.70710678f, 0, 0, 0.70710678f};
+        std::vector<uint8_t> bin(sizeof(keys));
+        std::memcpy(bin.data(), keys, sizeof(keys));
+        gltf["buffers"][0]["uri"] = "data:application/octet-stream;base64," + Base64Encode(bin);
+        CreateDirectories(project + "/assets/models");
+        CHECK(WriteTextFile(project + "/assets/models/" + file, gltf.dump()));
+    };
+    rig("mocap.gltf", {"mixamorig:Hips", "mixamorig:LeftUpLeg", "mixamorig:LeftLeg", "mixamorig:LeftFoot"}, "Stride");
+    rig("hero.gltf", {"Bip001 Pelvis", "Bip001 L Thigh", "Bip001 L Calf", "Bip001 L Foot"}, "Own");
+    Json guess = Call(e, "animation.retarget_map", R"J({"source":"assets/models/mocap.gltf","target":"assets/models/hero.gltf"})J")["result"];
+    CHECK(guess["bones"].size() == 4 && guess["bones"]["Bip001 L Thigh"].asString() == "mixamorig:LeftUpLeg");
+    CHECK(guess["hips"].asString() == "Bip001 Pelvis" && guess["ends"].size() == 1 && guess["ends"][0].asString() == "Bip001 L Foot");
+    bool noRightLeg = false;
+    for (const Json& part : guess["unmatched"].items()) noRightLeg = noRightLeg || part.asString() == "right thigh";
+    CHECK(noRightLeg);
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP editor part: no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n, std::vector<WindowEvent> events = {}) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update(i == 0 ? events : std::vector<WindowEvent>(), 1600, 1000, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    frames(3);
+    ed.OpenRetarget("assets/models/hero.gltf", "assets/models/mocap.gltf");
+    frames(4);
+    CHECK(ed.RetargetOpen() && ed.RetargetMapped() == 4);
+    const std::array<float, 4> run = ed.RetargetControlRect("run");
+    CHECK(run[2] > 0 && run[3] > 0 && run[1] + run[3] < 1000);  // the button is in view
+    WindowEvent move;
+    move.type = WindowEvent::Type::MouseMove;
+    move.x = run[0] + run[2] * 0.5f;
+    move.y = run[1] + run[3] * 0.5f;
+    WindowEvent press = move;
+    press.type = WindowEvent::Type::MouseButton;
+    press.button = 0;
+    press.down = true;
+    WindowEvent release = press;
+    release.down = false;
+    frames(2, {move});
+    frames(2, {press});
+    frames(3, {release});
+    CHECK(FileExists(project + "/assets/anims/hero_clips.gltf") && FileExists(project + "/assets/models/hero.gltf.clips.json"));
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/hero.gltf"})J")["result"];
+    bool own = false, stride = false;
+    for (const Json& clip : info["clips"].items()) own = own || clip["name"].asString() == "Own", stride = stride || clip["name"].asString() == "Stride";
+    CHECK(own && stride);
 }
 
 TEST(SpringBonesSwingAndSettle) {

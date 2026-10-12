@@ -16,10 +16,15 @@ web and Android players include it.
 Each model retains its node hierarchy and default local TRS (or matrix). Skin
 joints reference nodes plus inverse bind matrices; four influences are normalized
 per vertex. Static vertices retain their baked node transforms; animated rigid
-nodes use the same palette with one influence. The palette limit is 64 entries
-per model, including rigid animated nodes; models beyond it report a load error.
+nodes use the same palette with one influence. The palette limit is 1024 entries
+per model, including rigid animated nodes; models beyond it report a load error. One GPU draw addresses
+64 of them: a model with more is cut when it loads (`Mesh::SplitSkinPalettes`) into ranges that each use at
+most 64 joints, every range with its own list of joints (`Submesh::palette`), and the vertices two ranges would
+share are duplicated. `asset.info` then lists more submeshes than the file has materials. The software renderer
+and everything that reads bones (`animation.bones`, IK, springs, attachments) use the whole palette.
 Zero-weight vertices remain untransformed. FBX models (`.fbx`) fill the same structures: their
-curves are resampled into LINEAR keys at load time (see RENDERING.md, FBX models). Morph-target animations and additional
+curves are resampled into LINEAR keys at load time (see RENDERING.md, FBX models). Morph-target animations (keys on blend
+shape weights; the shapes themselves load, see [Blend shapes](#blend-shapes)) and additional
 JOINTS_1/WEIGHTS_1 influence sets are outside this stage and must be reported.
 
 Animation channels store times and values in source order. LINEAR rotations use
@@ -45,7 +50,8 @@ then transform positions/tangents with that matrix and normals with its inverse
 transpose. Zero-weight vertices use identity. Flat normals follow deformed
 triangles (GPU fragment derivatives); smooth normals are normalized per vertex.
 Pose bounds are recomputed for shadow fitting and transparent draw ordering.
-GPU vertex uniforms contain at most 64 matrices, including rigid node bindings.
+GPU vertex uniforms contain at most 64 matrices per draw, including rigid node bindings: the whole palette of
+a small model, or the joints of one draw range of a larger one (vertex joint indices then count within the range).
 
 Shaders were regenerated using the official sokol-tools-bin Windows compiler
 (SHA256 BD616287F9EA689D53C6D260E443EE733E61AE1B73A9B37ADC482EAD0364D561)
@@ -55,10 +61,13 @@ normal builds use the committed generated header without downloading it.
 ## Bones, attachments, IK and springs
 
 Models keep the names of their nodes (glTF node names, FBX model names). `animation.bones {id}` lists them for an
-entity's model in its current pose: `bones: [{name, parent, position, rotation, modelPosition}]` (world space, Euler
-degrees; `modelPosition` is the `Transform.position` a child entity needs to stand on the bone, e.g. a new goal), plus
+entity's model in its current pose: `bones: [{name, parent, position, rotation, modelPosition, vertices, vertexMin, vertexMax}]` (world space, Euler
+degrees; `modelPosition` is the `Transform.position` a child entity needs to stand on the bone, e.g. a new goal;
+`vertices` = how many vertices the bone is the strongest influence of, with their bounds in the default pose in model
+space (only in the whole list, not with `bone`), which tells a skirt, coat or hair bone from a body bone and shows how far the mesh hangs below a last bone), plus
 how the entity's `BoneIK`, `BoneAttachment` and `SpringBone` children resolve (`goals: [{id, name, bone, found, distance}]`,
-`attachments: [{id, name, bone, found}]`, `springs: [{id, name, bone, found, bones, simulating}]`). `bone: "Hand_R"` returns one node. Lua: `animation.bone(id, name, {ik = false}?)`
+`attachments: [{id, name, bone, found}]`, `springs: [{id, name, bone, found, bones, simulating}]`,
+`colliders: [{id, name, bone, tail, found}]`). `bone: "Hand_R"` returns one node. Lua: `animation.bone(id, name, {ik = false}?)`
 returns `{position, rotation, modelPosition}` (each `{x,y,z}`) or `nil` for an unknown name. Both read the pose that is
 drawn: the Animator's clip and time, then IK, then springs. `ik: false` stops after the clip, which is what a script that drives the
 goals itself needs to read.
@@ -81,7 +90,7 @@ axes, `Transform.scale` stays as set. Anything on that entity or below it follow
   "BoneAttachment": {"bone": "Hand_R", "position": [0, 0.05, 0], "rotation": [0, 0, 90]}}}}
 ```
 
-**BoneIK** `{bone, chain, weight, pole, soften, matchRotation}` is a goal: the bones above `bone` turn so that it reaches the
+**BoneIK** `{bone, chain, weight, pole, soften, keepRotation, turn, matchRotation}` is a goal: the bones above `bone` turn so that it reaches the
 goal entity's `Transform.position` (the child's local position, so the goal moves with the character; set it every
 frame from Lua to follow something in the world). It is applied on top of the clip in both renderers, so a walking
 character can still plant a foot or reach for a handle.
@@ -96,6 +105,16 @@ character can still plant a foot or reach for a handle.
 - `chain: 3..8` bends a spine, tail or tentacle with a fixed number of cyclic-coordinate-descent passes (deterministic).
 - `weight` blends from the animated pose (0) to the goal (1); animate it from Lua (`tween.to`) to reach in and out.
 - `matchRotation` also turns the bone to the goal entity's `Transform.rotation`.
+- `keepRotation`: the bone keeps the orientation the clip gave it while the limb above it is solved; otherwise it
+  turns with the limb. A goal that only corrects a clip (foot placement) needs it, with `pole` left at zero so the
+  knee keeps the clip's side: without them a running clip gets twisted ankles even on flat ground. Better still,
+  set `weight` from how much correction the ground asks for, so flat ground plays the clip untouched.
+- `turn` (Euler degrees, model axes, scaled by `weight`) turns the bone on top of the orientation the pose gives it,
+  without replacing it: a foot tilted to the slope under it. Foot placement from a script: read where the clip
+  puts the foot (`animation.bone(id, foot, {ik = false})`), cast `physics.raycast(origin, down, distance, body)` with
+  the character's own body as the entity to ignore (a ray that starts inside its capsule hits the capsule first
+  otherwise, and the feet only adapt while they are outside it), move the goal by the height found and set `turn`
+  from the hit normal.
 
 Bone lengths never change: a goal out of reach leaves the limb stretched towards it and `goals[].distance` reports
 the shortfall. Goals of one model run in entity id order, each on the result of the one before. Check a setup with
@@ -107,10 +126,12 @@ the shortfall. Goals of one model run in entity id order, each on the result of 
   "BoneIK": {"bone": "Foot_L", "chain": 2, "pole": [0, 0, 1]}}}}
 ```
 
-**SpringBone** `{bone, stiffness, damping, gravity, weight}` gives a branch of the skeleton secondary motion: a tail, ears,
+**SpringBone** `{bone, stiffness, damping, gravity, weight, radius, endLength, limit, air, collide}` gives a branch of the skeleton secondary motion: a tail, ears,
 hair strands, a cape strip, an antenna. `bone` and every bone below it lag behind when the character starts, stops,
 turns or lands, swing, and settle back into the animated pose. One component per branch (a tail and two ears are three
 child entities); a bone with several bones below it swings by the first, the others ride along and swing below.
+A `bone` ending in `*` takes every branch whose bones start with that text: `"Bone_Skirt*"` swings all strips of a
+skirt, `"Bone_Hair*"` every strand, with one component.
 
 - Simulated once per fixed step after physics, while playing, on top of the clip and IK: each bone's end is a point
   with inertia in world space (Verlet integration), pulled towards where the pose puts it under its already swung
@@ -125,14 +146,40 @@ child entities); a bone with several bones below it swings by the first, the oth
   down a long chain; raise `stiffness` and `damping` together until it reads right, or use the spring on bones the
   clips leave alone.
 - An entity that jumps more than about two meters in one step (respawn, scene cut) restarts the swing at rest.
-- There is no collision: a swinging bone can pass through the body or the ground. `BoneAttachment` children on a
+- `endLength` (meters): the last bone of a branch has nothing below it and stays rigid on the bone above. With
+  `endLength` above 0 it swings (and collides) too, as if it had a bone that far along it: set it to the length of
+  mesh that hangs below the last bone (the hem of a skirt, hair tips; see `vertexMin` of that bone in `animation.bones`).
+- **SpringCollider** `{bone, tail, radius, offset}`, a child of the model like the springs, is a body part the
+  swinging bones do not pass through: a sphere at `bone`, or a capsule from `bone` to `tail` (thigh to calf, calf to
+  foot). It follows the clip + IK pose. Every SpringBone of the model is kept `radius` (its own) away from every
+  collider. A collider that moves into a bone carries it along (a rising thigh lifts the skirt in front of it instead
+  of parting it), and a bone resting on a collider stays where it lies (friction), so it does not creep around the
+  limb. Limits: only the bone ends collide, not the mesh between two strips, so use radii a little larger than the
+  limb; a collider inside the resting cloth (a torso under a coat, a head under a fringe) pushes it out of shape;
+  there is no collision with the ground or with physics bodies. `BoneAttachment` children on a
   swinging bone follow it. Check with `animation.bones` (`springs[].bones` = how many bones swing, 0 for a bone with
   nothing below it; `simulating` once a step has run) and `render.screenshot` after `sim.step`.
 
 ```json
 {"command": "entity.create", "args": {"name": "TailSpring", "parent": "Fox", "components": {
   "SpringBone": {"bone": "b_Tail01_012", "stiffness": 600, "damping": 24}}}}
+{"command": "entity.create", "args": {"name": "SkirtSpring", "parent": "Hero", "components": {
+  "SpringBone": {"bone": "Bone_Skirt*", "stiffness": 500, "damping": 24, "endLength": 0.08}}}}
+{"command": "entity.create", "args": {"name": "ThighL", "parent": "Hero", "components": {
+  "SpringCollider": {"bone": "Bip001LThigh", "tail": "Bip001LCalf", "radius": 0.075}}}}
 ```
+
+Choosing values for long chains (hair, coat tails): a walk moves the head and hips about twice per second, and every
+bone of a chain adds its own swing to that of the bone above. With `damping` below `2 * sqrt(stiffness)` each bone
+overshoots and the swing grows down the chain until the hair stands out sideways, even when the character stands
+still in an idle clip. At or above it the chain follows late and settles without ringing: stiffness 300-500 with
+damping 40-55 reads as hair and cloth on a walking character. `air` (0..1) is the share of the damping that works against the
+air instead of against the pose: at 0 a damped bone moves with the character, above 0 it trails behind while the
+character moves and falls back when it stops, which is what makes hair and cloth stream in a run (0.02 with the
+values above: hair tips about 0.2 m behind at a walk, 0.3 m at a run). A slowly changing `gravity` of a few tenths
+of a m/s^2 set from a script reads as a breeze. `limit` (degrees) caps how far a bone leaves its
+animated direction when the character starts, stops or jumps (25-40); colliders may push further. `collide: false`
+keeps a spring out of the colliders (long hair behind legs whose colliders are there for the skirt).
 
 In the editor: select the model and the Inspector lists its bones under MeshRenderer (search, a paperclip button to
 attach a new entity, a pin button to add an IK goal on the bone, drop a Hierarchy entity on a bone to hold it there,
@@ -150,6 +197,94 @@ ask a foot to reach further down than the clip does while the body is still on i
 
 Not there: joint angle limits, twist-bone distribution, blending between clips, and goals or attachments on entities
 that are not direct children of the model's entity.
+
+## Blend shapes
+
+Faces of game characters often have no bones: eyes, brows and mouth move through **blend shapes** (FBX; glTF calls
+them morph targets), named sets of vertex offsets. A model's shapes load with it and `asset.info` lists their
+names in `blendShapes`. `MeshRenderer.blendShapes` holds the weights:
+
+```json
+{"command": "component.set", "args": {"id": "Hero", "type": "MeshRenderer",
+  "values": {"blendShapes": {"E_Close": 1, "M_Smile_L": 0.6, "M_Smile_R": 0.6}}}}
+```
+
+- A weight of 1 applies the shape as authored, 0.5 half of it; several shapes add up; weights below 0 or above 1
+  extrapolate. Names the model does not have are ignored; a missing name weighs 0. Setting the field replaces the
+  whole object.
+- Shapes are added to positions and normals **before** skinning, so they work together with clips, `BoneIK` and
+  `SpringBone`. Tangents, bounds, physics and picking keep the undeformed model.
+- From Lua, set them every frame: `self:set("MeshRenderer", {blendShapes = {E_Close = blink}})`. Blinking,
+  lip movement and glances are project scripts, not engine components.
+- Shapes with the same name in several parts of a model (face, lashes, brows) are one shape. FBX: the full-weight
+  target of each blend channel (in-between targets are not used); glTF: `POSITION` and `NORMAL` of each target,
+  named by the mesh's `extras.targetNames` (`target0`, ... without it). A target that moves nothing is dropped.
+- A child layer with `parentPose` and no weights of its own takes its parent's (an outline shell follows the face).
+- Cost: both renderers draw a copy of the model with the weights applied, made on the CPU **when the weights
+  change** and kept until they change again (the GPU renderer uploads its vertices once per change). A face that
+  moves every frame re-uploads the whole model every frame: round weights from scripts to steps (0.05) so idle
+  frames reuse the copy. No shader work is involved, so the web and Android players behave the same.
+- Not supported: clips that key shape weights (a script or tween drives them), tangent offsets, in-between shapes.
+- The editor's Inspector lists them under **Blend Shapes** in the MeshRenderer, a slider per shape.
+
+Verified by `BlendShapes` (glTF targets in both renderers, weights, undo, `parentPose`, vertices duplicated between
+draw ranges).
+
+## Clips from other files and retargeting
+
+A character file often has no animation of its own, or the animation was made for another rig.
+
+**Clip files.** A file named `<model file>.clips.json` next to a model lists files whose clips are added to it when
+it loads, their channels matched to the model's bones **by name**:
+
+```json
+// assets/models/Hero.fbx.clips.json   (paths are relative to the model file)
+{"clips": ["../anims/hero_clips.gltf"]}
+```
+
+The model then has those clips like its own: `asset.info` lists them, `Animator.clip` / `animation.play` play them.
+A listed file needs no mesh (a glTF with nodes and animations only loads as a model with clips). Channels of bones the
+model does not have are dropped; a clip whose name the model already has is skipped with a warning.
+
+**Retargeting.** `animation.retarget` moves clips to a skeleton with other bone names, proportions and rest pose (a
+mocap library for a T-pose rig onto a character modelled in an A-pose) and writes them as such a clip file:
+
+```json
+{"command": "animation.retarget", "args": {
+  "source": "assets/anims/mocap.glb", "target": "assets/models/Hero.fbx", "out": "assets/anims/hero_clips.gltf",
+  "hips": "Bip001Pelvis", "clips": {"Idle": "idle", "Walk": "walk", "Run": "run"},
+  "bones": {"Bip001Pelvis": "mixamorig:Hips", "Bip001Spine": "mixamorig:Spine", "Bip001Head": "mixamorig:Head",
+            "Bip001LUpperArm": "mixamorig:LeftArm", "Bip001LForearm": "mixamorig:LeftForeArm", "Bip001LHand": "mixamorig:LeftHand",
+            "Bip001LThigh": "mixamorig:LeftUpLeg", "Bip001LCalf": "mixamorig:LeftLeg", "Bip001LFoot": "mixamorig:LeftFoot"}}}
+```
+
+- `animation.retarget_map {source, target}` guesses `bones`, `hips` and `ends` from the bone names of two humanoid rigs
+  (Mixamo, 3ds Max Biped, Unreal, Unity / VRM styles) and lists the body parts it did not find in both (`unmatched`):
+  a starting point to check and complete. The editor's Retarget Animation window uses it.
+- `bones` maps target bone -> source bone for the body (hips, spine, neck, head, shoulders, arms, hands, legs, feet,
+  toes). Bones left out keep their rest pose: fingers, hair, cloth, twist and helper bones. Names come from
+  `animation.bones` of an entity showing each model.
+- How it works: each mapped bone takes the turn its source bone has made from the source's rest pose, in world space.
+  Before that the target's rest pose is laid over the source's: every bone is turned so that it points along its
+  source bone (direction = towards its only mapped bone below; hands, feet and the head take the turn of the bone
+  above them), which is what takes an A-pose character to a T-pose source. A turn around the vertical aligns models
+  that face different ways (`yaw` in the result). `hips` also takes the source's movement of that bone (the bob and
+  sway of the body), scaled by the ratio of the two hip heights (`scale`).
+- `ends` lists target bones that are not laid along their source bone but keep their rest orientation relative to the
+  limb above: **feet and toes**. Rigs disagree on where the toe bone sits (under the ankle in 3ds Max Biped, at the
+  ball of the foot in Mixamo) and heels tip the foot bone, so laying it along the source's tilts the shoes in every
+  clip (toes up when standing, pointed down when running).
+- The result: `clips` (name, duration, keys), `bones` (how many were mapped), `missing` (names of the map or clips
+  that do not exist) and `attached` (the `.clips.json` it was listed in; `attach: false` skips that). Keys are linear
+  at `rate` per second (default 30).
+- Limits: bone lengths are the target's, so hands and feet end up where the target's proportions put them (feet may
+  slide a little or hover: correct with `BoneIK` goals from a script); no finger retargeting unless mapped; clips that
+  travel keep their travel on the hips (use in-place clips for characters moved by physics).
+
+`Animator.blend` (seconds) fades a change of `clip` from the pose that was shown, while the old clip keeps playing,
+instead of jumping (0.2 suits idle/walk/run). It also works when a script drives `time` itself with `playing: false`.
+
+Verified by `AnimationRetargetAndClipFiles`.
 
 ## Playback controls
 

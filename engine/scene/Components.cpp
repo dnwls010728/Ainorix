@@ -9,6 +9,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<BoneAttachment>();
     TypeRegistry::Register<BoneIK>();
     TypeRegistry::Register<SpringBone>();
+    TypeRegistry::Register<SpringCollider>();
     TypeRegistry::Register<Camera>();
     TypeRegistry::Register<PostProcess>();
     TypeRegistry::Register<Light2D>();

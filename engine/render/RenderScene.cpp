@@ -119,14 +119,46 @@ std::shared_ptr<const Texture> TrailTexture(const Trail& trail, const std::share
     return texture;
 }
 
+// MeshRenderer.blendShapes: the model with the weighted shapes added, kept per entity until its weights
+// change (a renderer keeps its buffers for a mesh as long as the mesh lives).
+std::shared_ptr<const Mesh> MorphedMesh(EntityId id, const std::shared_ptr<const Mesh>& source, const Json& values) {
+    std::vector<std::pair<int, float>> weights;
+    for (size_t i = 0; i < source->blendShapes.size(); ++i) {
+        const Json& value = values[source->blendShapes[i].name];
+        const float weight = value.isNumber() ? value.asFloat() : 0.0f;
+        if (weight != 0 && std::isfinite(weight)) weights.emplace_back(static_cast<int>(i), weight);
+    }
+    if (weights.empty()) return source;
+    struct Entry {
+        std::weak_ptr<const Mesh> source;
+        std::vector<std::pair<int, float>> weights;
+        std::shared_ptr<const Mesh> mesh;
+    };
+    static std::mutex mutex;
+    static std::map<std::pair<const Mesh*, EntityId>, Entry> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto it = cache.begin(); it != cache.end();) it = it->second.source.expired() ? cache.erase(it) : std::next(it);
+    if (cache.size() > 256) cache.clear();
+    Entry& entry = cache[{source.get(), id}];
+    if (!entry.mesh || entry.weights != weights) {
+        entry.source = source;
+        entry.weights = weights;
+        entry.mesh = source->Morphed(weights);
+    }
+    return entry.mesh;
+}
+
 }  // namespace
 
 Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
     Material m;
-    if (materialOverride) m = *materialOverride;
+    const size_t slot = sub.material >= 0 ? static_cast<size_t>(sub.material) : slotMaterials.size();
+    const bool slotted = slot < slotMaterials.size() && slotMaterials[slot];
+    if (slotted) m = *slotMaterials[slot];
+    else if (materialOverride) m = *materialOverride;
     else if (sub.material >= 0 && sub.material < static_cast<int>(mesh->materials.size())) m = mesh->materials[static_cast<size_t>(sub.material)];
     m.baseColor = m.baseColor * tint;
-    if (hasShaderUniforms && m.shader) m.shaderUniforms = shaderUniforms;
+    if (hasShaderUniforms && m.shader && !slotted) m.shaderUniforms = shaderUniforms;  // MeshRenderer.shaderUniforms belong to `material`
     if (textureOverride) m.baseTexture = textureOverride;
     if (emission > 0.0f) {
         m.emissive = m.baseColor * emission;
@@ -237,6 +269,20 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 it.error = true;
             }
         }
+        if (mr.materials.isArray() && assets && !it.error) {
+            for (size_t slot = 0; slot < mr.materials.size() && !it.error; ++slot) {
+                const std::string path = mr.materials[slot].asString("");
+                if (path.empty()) continue;
+                it.slotMaterials.resize(mr.materials.size());
+                it.slotMaterials[slot] = assets->GetMaterial(path);
+                if (!it.slotMaterials[slot]) {  // broken material file: magenta, like a missing mesh
+                    it.tint = Color(1, 0, 1);
+                    it.unlit = true;
+                    it.error = true;
+                    it.slotMaterials.clear();
+                }
+            }
+        }
         if (!mr.texture.empty() && assets && !it.error) it.textureOverride = assets->GetTexture(mr.texture);
         if (mr.shaderUniforms.isObject() && mr.shaderUniforms.size() != 0 && !it.error) {
             // Per-entity uniform values over the material's; an unknown name or bad value is as loud as a broken material.
@@ -251,7 +297,26 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 it.materialOverride.reset();
             }
         }
-        if (!it.mesh->joints.empty()) it.joints = JointPalette(*it.mesh, EvaluateEntityPose(scene, kv.first, *it.mesh));
+        if (!it.mesh->joints.empty()) {
+            // parentPose: a layer of the parent's model moves with it instead of posing on its own.
+            EntityId posed = kv.first;
+            const EntityRecord* self = mr.parentPose ? scene.Record(kv.first) : nullptr;
+            const MeshRenderer* above = self ? scene.Get<MeshRenderer>(self->parent) : nullptr;
+            if (above && above->mesh == mr.mesh) posed = self->parent;
+            it.joints = JointPalette(*it.mesh, EvaluateEntityPose(scene, posed, *it.mesh));
+        }
+        if (!it.error && !it.mesh->blendShapes.empty()) {
+            // A parentPose layer without weights of its own wears the parent's face.
+            const Json* shapes = &mr.blendShapes;
+            EntityId owner = kv.first;
+            if (mr.parentPose && shapes->size() == 0) {
+                const EntityRecord* self = scene.Record(kv.first);
+                const MeshRenderer* above = self ? scene.Get<MeshRenderer>(self->parent) : nullptr;
+                // The same copy as the parent draws: made and uploaded once for both.
+                if (above && above->mesh == mr.mesh) shapes = &above->blendShapes, owner = self->parent;
+            }
+            if (shapes->isObject() && shapes->size() != 0) it.mesh = MorphedMesh(owner, it.mesh, *shapes);
+        }
         items.push_back(std::move(it));
     }
 

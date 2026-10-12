@@ -31,6 +31,8 @@ struct MeshRenderer {
     static constexpr const char* kDoc = "Draws a mesh: a built-in shape (cube, sphere, plane, plane64, pyramid, quad) or a glTF model file. Unknown meshes render as a magenta cube.";
     std::string mesh = "cube";
     std::string material;
+    Json materials = Json::MakeArray();
+    Json blendShapes = Json::MakeObject();
     Json shaderUniforms = Json::MakeObject();
     Color color{0.8f, 0.8f, 0.8f};
     float opacity = 1.0f;
@@ -39,11 +41,18 @@ struct MeshRenderer {
     bool unlit = false;
     bool castShadows = true;
     bool visible = true;
+    bool parentPose = false;
     static void Reflect(FieldList& f) {
         f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf/.fbx).");
         f.Add("material", &MeshRenderer::material,
               "Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. "
               "Empty = the model's own materials (glTF) or the default (white, roughness 0.7).");
+        f.Add("materials", &MeshRenderer::materials,
+              "Material files per material of a model, in the order asset.info lists its `materials` (their `name` says which part): "
+              "[\"materials/face.mat.json\", \"\", ...]. An empty or missing entry keeps `material`, or the model's own when that is empty.");
+        f.Add("blendShapes", &MeshRenderer::blendShapes,
+              "Weights of the model's blend shapes (morph targets), {name: weight}: {\"E_Close\": 1} closes the eyes, 0.5 half way; several add up. "
+              "asset.info lists a model's `blendShapes`; unknown names are ignored. Scripts animate faces by setting this every frame.");
         f.Add("shaderUniforms", &MeshRenderer::shaderUniforms,
               "Per-entity values for the material's shader graph uniforms: {name: number or [x, y, z, w]}. Unnamed uniforms keep the "
               "material's values; scripts can change them every frame. An unknown name or a material without a graph renders magenta.");
@@ -57,6 +66,7 @@ struct MeshRenderer {
         f.Add("unlit", &MeshRenderer::unlit, "Ignore lighting and shadows (UI-like, emissive look). Overrides the material.");
         f.Add("castShadows", &MeshRenderer::castShadows, "Casts shadows from the directional light.");
         f.Add("visible", &MeshRenderer::visible, "Whether the mesh is drawn.");
+        f.Add("parentPose", &MeshRenderer::parentPose, "Draw this model in the pose of the parent entity, which must show the same model: a second layer of a character (an outline shell, a glow) follows its Animator, BoneIK goals and SpringBones.");
     }
 };
 
@@ -68,12 +78,18 @@ struct Animator {
     bool loop = true;
     bool playing = true;
     float time = 0.0f;
+    float blend = 0.0f;
+    // Runtime, not serialized: the clip that is shown and where it was, and the clip it fades from.
+    std::string shown, from;
+    float shownTime = 0.0f, fromTime = 0.0f, fade = 0.0f;
     static void Reflect(FieldList& f) {
         f.Add("clip", &Animator::clip, "Exact model clip name; empty = default pose. animation.play changes clips and restarts by default.");
         f.Add("speed", &Animator::speed, "Playback multiplier; negative plays backwards, zero holds the pose.");
         f.Add("loop", &Animator::loop, "Wrap time at the clip duration; otherwise clamp and stop at either endpoint.");
         f.Add("playing", &Animator::playing, "Advance time while true; false holds the current pose.");
         f.Add("time", &Animator::time, "Seconds into the clip; set to seek. Direct clip edits preserve time.");
+        FieldInfo& blend = f.Add("blend", &Animator::blend, "Seconds a change of `clip` takes: the pose fades from the old clip (which keeps playing) to the new one instead of jumping. 0 = at once. 0.2 suits idle/walk/run.");
+        blend.hasRange = true; blend.min = 0; blend.max = 5;
     }
 };
 
@@ -99,12 +115,16 @@ struct BoneIK {
     Vec3 pole;
     float soften = 0.0f;
     bool matchRotation = false;
+    Vec3 turn;
+    bool keepRotation = false;
     static void Reflect(FieldList& f) {
         f.Add("bone", &BoneIK::bone, "Exact name of the node that should reach the goal (hand, foot, head); see animation.bones.");
         f.Add("chain", &BoneIK::chain, "How many bones above it turn, 1..8. 2 = an arm or a leg (exact two-bone solve); 1 aims the parent bone; more bend a spine or tail step by step.");
         f.Add("weight", &BoneIK::weight, "0 = the animated pose, 1 = reach the goal; between blends the goal position.");
         f.Add("pole", &BoneIK::pole, "chain 2: direction in model space the elbow or knee points to, e.g. [0,0,1]; [0,0,0] keeps the side the limb bends to in the model's default pose.");
         f.Add("soften", &BoneIK::soften, "chain 2: share of the limb length (0..0.5) over which it eases into full extension, so a goal near or beyond reach does not snap the limb straight; the bone then stops slightly short of such goals. 0 = exact reach. Try 0.1 for feet.");
+        f.Add("keepRotation", &BoneIK::keepRotation, "The bone keeps the orientation the clip gave it while the limb above it is solved; otherwise it turns with the limb. On for feet and hands whose goal only corrects a clip (foot placement): the ankle or wrist does not twist when the knee or elbow ends up elsewhere.");
+        f.Add("turn", &BoneIK::turn, "Turns the bone by these Euler degrees around the model's axes on top of the orientation the pose gives it (scaled by weight): a foot tilted to the slope it stands on, from a script. Without matchRotation.");
         f.Add("matchRotation", &BoneIK::matchRotation, "Also turn the bone to this entity's Transform rotation (a foot flat on a slope, a palm on a wall).");
     }
 };
@@ -117,18 +137,48 @@ struct SpringBone {
     float damping = 10.0f;
     Vec3 gravity;
     float weight = 1.0f;
+    float radius = 0.02f;
+    float endLength = 0.0f;
+    float limit = 0.0f;
+    float air = 0.0f;
+    bool collide = true;
     // Runtime, not serialized: where each swinging bone's end is and was one step ago and where the
     // pose last put it (world space), parents first, and the `bone` they were made for. Empty until
     // the first simulated step.
     std::vector<Vec3> tails, previous, rests;
     std::string simulated;
+    Mat4 stepWorld;  // the model's world matrix at the step the tails belong to
     static void Reflect(FieldList& f) {
         auto range = [](FieldInfo& field, float lo, float hi) { field.hasRange = true; field.min = lo; field.max = hi; };
-        f.Add("bone", &SpringBone::bone, "Exact name of the first bone that swings (tail root, ear base, first hair bone); the whole branch below it follows. See animation.bones.");
+        f.Add("bone", &SpringBone::bone, "Exact name of the first bone that swings (tail root, ear base, first hair bone); the whole branch below it follows. A name ending in * takes every branch whose bones start with that text (\"Bone_Skirt*\": all strips of a skirt with one component). See animation.bones.");
         range(f.Add("stiffness", &SpringBone::stiffness, "Pull back to the animated pose. 20 = loose and slow (long hair, cloth), 100 = a tail, 400+ = short stiff parts (ears, antennae). 0 = hangs freely."), 0, 3600);
         range(f.Add("damping", &SpringBone::damping, "How fast the swing dies out, per second. 3 = long wobble, 10 = one soft overshoot, 25+ = follows late without swinging back. A clip that already moves these bones in a rhythm (a walk) gets exaggerated when this is low; raise it together with stiffness."), 0, 60);
         f.Add("gravity", &SpringBone::gravity, "World-space acceleration in m/s^2, e.g. [0,-9.8,0] so the chain sags; [0,0,0] keeps the authored pose at rest. Other directions act as steady wind.");
         range(f.Add("weight", &SpringBone::weight, "0 = the animated pose, 1 = the simulated swing; between blends them."), 0, 1);
+        range(f.Add("radius", &SpringBone::radius, "Thickness of the swinging bones in meters when they meet a SpringCollider of the same model."), 0, 1);
+        range(f.Add("limit", &SpringBone::limit, "Largest angle in degrees a bone may swing away from its animated direction; 0 = no limit. 25-40 keeps hair and cloth from standing out sideways when the character starts, stops or jumps. Colliders may push further."), 0, 180);
+        range(f.Add("air", &SpringBone::air, "Share of the damping that works against the air instead of against the pose, 0..1. At 0 a damped bone moves with the character; above 0 it trails behind while the character moves and falls back when it stops: hair and cloth streaming in a run. Try 0.05-0.15; the trail grows with speed, damping and this value, and shrinks with stiffness."), 0, 1);
+        f.Add("collide", &SpringBone::collide, "Whether the SpringColliders of the model stop these bones. Off for parts that hang clear of them (long hair behind legs that have colliders for the skirt).");
+        range(f.Add("endLength", &SpringBone::endLength, "Meters of mesh that hang below the last bone of each branch (the hem of a skirt, hair tips). Above 0 the last bones swing and collide too, as if they had a bone that far along them; 0 = they stay rigid on the bone above."), 0, 5);
+    }
+};
+
+struct SpringCollider {
+    static constexpr const char* kTypeName = "SpringCollider";
+    static constexpr const char* kDoc = "A body part that the SpringBones of its parent's model do not pass through: a sphere at `bone`, or a capsule from `bone` to `tail` (thigh to calf, calf to foot) so a raised leg lifts a skirt instead of cutting through it. A child of the model entity, like SpringBone. It moves with the pose (clip + BoneIK); it is not a physics collider.";
+    std::string bone;
+    std::string tail;
+    float radius = 0.06f;
+    Vec3 offset;
+    // Runtime, not serialized: where the collider was one step ago (world space), for the direction it moves in.
+    Vec3 previousA, previousB;
+    bool tracked = false;
+    static void Reflect(FieldList& f) {
+        f.Add("bone", &SpringCollider::bone, "Exact name of the bone the collider sits on. See animation.bones.");
+        f.Add("tail", &SpringCollider::tail, "Second bone: the collider is a capsule between the two. Empty = a sphere at `bone`.");
+        FieldInfo& r = f.Add("radius", &SpringCollider::radius, "Radius in meters. Larger than the limb: the cloth between two swinging strips is not simulated.");
+        r.hasRange = true; r.min = 0; r.max = 5;
+        f.Add("offset", &SpringCollider::offset, "Moves the collider, in the model's own axes and meters (e.g. [0,0,0.03] = forward).");
     }
 };
 

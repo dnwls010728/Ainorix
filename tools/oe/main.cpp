@@ -53,7 +53,7 @@ struct Args {
 };
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
-const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script", "--shader", "--effects",
+const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script", "--shader", "--retarget", "--effects",
                             "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--scenes", "--seed", "--api-port", "--players", "--agent", "--ask", "--agent-chat", "--settings"};
 
 Args ParseArgs(int argc, char** argv, int start) {
@@ -472,7 +472,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") || a.Has("--retarget") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
@@ -484,6 +484,11 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         if (i == 4 && a.Has("--agent")) editor.EditAgent(a.Get("--agent") == "new" ? "" : a.Get("--agent"));  // the profile dialog
         if (i == 2 && a.Has("--script")) editor.OpenScript(a.Get("--script"));  // after the default layout settled
         if (i == 2 && a.Has("--shader")) editor.OpenShader(a.Get("--shader"));
+        if (i == 2 && a.Has("--retarget")) {  // the Retarget Animation window: character[,model with clips]
+            const std::string spec = a.Get("--retarget");
+            const size_t comma = spec.find(',');
+            editor.OpenRetarget(spec.substr(0, comma), comma == std::string::npos ? std::string() : spec.substr(comma + 1));
+        }
         if (i == 0 && (a.Has("--agent-chat") || a.Has("--settings"))) engine.Call("team.backends", Json());  // detect the CLIs first (the editor polls in the background)
         if (i == 3 && a.Has("--agent-chat")) editor.FocusAgentChat();
         if (i == 3 && a.Has("--settings")) editor.OpenSettings(a.Get("--settings"));

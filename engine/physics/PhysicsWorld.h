@@ -80,7 +80,8 @@ public:
     void LoadState(const Snapshot& state);
 
     // Queries (also valid outside simulation: the world is synced first).
-    RaycastHit Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance);
+    // `ignore`: an entity the ray passes through (the character that casts it from inside its own capsule).
+    RaycastHit Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance, EntityId ignore = kNullEntity);
     std::vector<EntityId> OverlapSphere(Scene& scene, const Vec3& center, float radius);
     std::vector<ContactPair> Contacts() const;
     // Joints the worlds know after the last step or query, 3D then 2D, in entity id order.

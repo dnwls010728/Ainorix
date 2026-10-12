@@ -462,6 +462,31 @@ Play a named model clip; add Animator if needed. Defaults to restarting at the b
 | `loop` | boolean |  | Repeat the clip. Keeps existing loop setting when omitted. |
 | `restart` | boolean |  | Reset time (default true); false preserves time. |
 
+### `animation.retarget`
+
+Move animation clips from one model's skeleton to another's (different bone names, proportions and rest pose, e.g. mocap for a T-pose rig onto a character in an A-pose) and write them as a clip file. With attach (default) the file is listed in '<target>.clips.json', which adds its clips to the target model: play them with Animator / animation.play like the model's own.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `source` | string | yes | Model file with the clips, e.g. "assets/anims/mocap.glb". |
+| `target` | string | yes | Model file of the character that should play them. |
+| `bones` | object | yes | Target bone name -> source bone name for the body: hips, spine, neck, head, shoulders, arms, hands, legs, feet. Bones left out keep their rest pose (fingers, hair, cloth). Names: animation.bones / asset.info. |
+| `out` | string | yes | Clip file to write, e.g. "assets/anims/hero_clips.gltf". |
+| `hips` | string |  | Target bone that also takes the source's movement (bob and sway of the body), scaled to the target's size. Usually the pelvis. |
+| `ends` | array |  | Target bones that keep their rest orientation relative to the limb above instead of being laid along their source bone: feet and toes (rigs disagree on where the toe bone sits, and heels tip the foot). Without it shoes can tilt in every clip. |
+| `clips` | object |  | New clip name -> source clip name. Default: every clip under its own name. |
+| `rate` | number |  | Keys per second, 1..120 (default 30). |
+| `attach` | boolean |  | List the file in '<target>.clips.json' so the target model has the clips (default true). |
+
+### `animation.retarget_map`
+
+Guess the bone map for animation.retarget from the bone names of two humanoid models (Mixamo, 3ds Max Biped, Unreal and Unity/VRM style names): {bones: {target: source}, hips, ends (feet and toes), unmatched (body parts not found in both)}. Check it, complete it by hand where a rig uses other names, then pass it on.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `source` | string | yes | Model file with the clips. |
+| `target` | string | yes | Model file of the character. |
+
 ### `animation.bones`
 
 Nodes (bones) of an entity's model in its current pose - Animator clip, BoneIK goals, SpringBone swing - with world position/rotation and modelPosition (the Transform.position a child entity needs to stand on the bone), and how its BoneIK / BoneAttachment / SpringBone children resolve. Use it for bone names and to check IK and springs.
@@ -1290,6 +1315,7 @@ Cast a ray against colliders and characters; returns the first hit (triggers are
 | `origin` | array | yes | Ray start [x,y,z]. |
 | `direction` | array | yes | Ray direction (normalized automatically). |
 | `maxDistance` | number |  | Maximum distance in meters (default 1000). |
+| `ignore` | integer \| string |  | Entity the ray passes through, e.g. the character it starts inside of. |
 
 ### `physics.overlap`
 
@@ -1723,6 +1749,8 @@ Draws a mesh: a built-in shape (cube, sphere, plane, plane64, pyramid, quad) or 
 |---|---|---|---|
 | `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf/.fbx). |
 | `material` | string | `""` | Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. Empty = the model's own materials (glTF) or the default (white, roughness 0.7). |
+| `materials` | json | `[]` | Material files per material of a model, in the order asset.info lists its `materials` (their `name` says which part): ["materials/face.mat.json", "", ...]. An empty or missing entry keeps `material`, or the model's own when that is empty. |
+| `blendShapes` | json | `{}` | Weights of the model's blend shapes (morph targets), {name: weight}: {"E_Close": 1} closes the eyes, 0.5 half way; several add up. asset.info lists a model's `blendShapes`; unknown names are ignored. Scripts animate faces by setting this every frame. |
 | `shaderUniforms` | json | `{}` | Per-entity values for the material's shader graph uniforms: {name: number or [x, y, z, w]}. Unnamed uniforms keep the material's values; scripts can change them every frame. An unknown name or a material without a graph renders magenta. |
 | `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the material/texture color, linear RGB 0..1 (or "#rrggbb"). |
 | `opacity` | float | `1` | Below 1 the mesh is drawn transparent (alpha blended, sorted back to front, no shadow). |
@@ -1731,6 +1759,7 @@ Draws a mesh: a built-in shape (cube, sphere, plane, plane64, pyramid, quad) or 
 | `unlit` | bool | `false` | Ignore lighting and shadows (UI-like, emissive look). Overrides the material. |
 | `castShadows` | bool | `true` | Casts shadows from the directional light. |
 | `visible` | bool | `true` | Whether the mesh is drawn. |
+| `parentPose` | bool | `false` | Draw this model in the pose of the parent entity, which must show the same model: a second layer of a character (an outline shell, a glow) follows its Animator, BoneIK goals and SpringBones. |
 
 ### Animator
 
@@ -1743,6 +1772,7 @@ Fixed-step glTF TRS animation on the entity's MeshRenderer; clips are listed by 
 | `loop` | bool | `true` | Wrap time at the clip duration; otherwise clamp and stop at either endpoint. |
 | `playing` | bool | `true` | Advance time while true; false holds the current pose. |
 | `time` | float | `0` | Seconds into the clip; set to seek. Direct clip edits preserve time. |
+| `blend` | float | `0` | Seconds a change of `clip` takes: the pose fades from the old clip (which keeps playing) to the new one instead of jumping. 0 = at once. 0.2 suits idle/walk/run. |
 
 ### BoneAttachment
 
@@ -1765,6 +1795,8 @@ Inverse kinematics goal for its parent's model: the bones above `bone` turn so t
 | `weight` | float | `1` | 0 = the animated pose, 1 = reach the goal; between blends the goal position. |
 | `pole` | vec3 | `[0,0,0]` | chain 2: direction in model space the elbow or knee points to, e.g. [0,0,1]; [0,0,0] keeps the side the limb bends to in the model's default pose. |
 | `soften` | float | `0` | chain 2: share of the limb length (0..0.5) over which it eases into full extension, so a goal near or beyond reach does not snap the limb straight; the bone then stops slightly short of such goals. 0 = exact reach. Try 0.1 for feet. |
+| `keepRotation` | bool | `false` | The bone keeps the orientation the clip gave it while the limb above it is solved; otherwise it turns with the limb. On for feet and hands whose goal only corrects a clip (foot placement): the ankle or wrist does not twist when the knee or elbow ends up elsewhere. |
+| `turn` | vec3 | `[0,0,0]` | Turns the bone by these Euler degrees around the model's axes on top of the orientation the pose gives it (scaled by weight): a foot tilted to the slope it stands on, from a script. Without matchRotation. |
 | `matchRotation` | bool | `false` | Also turn the bone to this entity's Transform rotation (a foot flat on a slope, a palm on a wall). |
 
 ### SpringBone
@@ -1773,11 +1805,27 @@ Secondary motion for bones of its parent's model (tail, ears, hair, a cape strip
 
 | field | type | default | description |
 |---|---|---|---|
-| `bone` | string | `""` | Exact name of the first bone that swings (tail root, ear base, first hair bone); the whole branch below it follows. See animation.bones. |
+| `bone` | string | `""` | Exact name of the first bone that swings (tail root, ear base, first hair bone); the whole branch below it follows. A name ending in * takes every branch whose bones start with that text ("Bone_Skirt*": all strips of a skirt with one component). See animation.bones. |
 | `stiffness` | float | `100` | Pull back to the animated pose. 20 = loose and slow (long hair, cloth), 100 = a tail, 400+ = short stiff parts (ears, antennae). 0 = hangs freely. |
 | `damping` | float | `10` | How fast the swing dies out, per second. 3 = long wobble, 10 = one soft overshoot, 25+ = follows late without swinging back. A clip that already moves these bones in a rhythm (a walk) gets exaggerated when this is low; raise it together with stiffness. |
 | `gravity` | vec3 | `[0,0,0]` | World-space acceleration in m/s^2, e.g. [0,-9.8,0] so the chain sags; [0,0,0] keeps the authored pose at rest. Other directions act as steady wind. |
 | `weight` | float | `1` | 0 = the animated pose, 1 = the simulated swing; between blends them. |
+| `radius` | float | `0.0199999996` | Thickness of the swinging bones in meters when they meet a SpringCollider of the same model. |
+| `limit` | float | `0` | Largest angle in degrees a bone may swing away from its animated direction; 0 = no limit. 25-40 keeps hair and cloth from standing out sideways when the character starts, stops or jumps. Colliders may push further. |
+| `air` | float | `0` | Share of the damping that works against the air instead of against the pose, 0..1. At 0 a damped bone moves with the character; above 0 it trails behind while the character moves and falls back when it stops: hair and cloth streaming in a run. Try 0.05-0.15; the trail grows with speed, damping and this value, and shrinks with stiffness. |
+| `collide` | bool | `true` | Whether the SpringColliders of the model stop these bones. Off for parts that hang clear of them (long hair behind legs that have colliders for the skirt). |
+| `endLength` | float | `0` | Meters of mesh that hang below the last bone of each branch (the hem of a skirt, hair tips). Above 0 the last bones swing and collide too, as if they had a bone that far along them; 0 = they stay rigid on the bone above. |
+
+### SpringCollider
+
+A body part that the SpringBones of its parent's model do not pass through: a sphere at `bone`, or a capsule from `bone` to `tail` (thigh to calf, calf to foot) so a raised leg lifts a skirt instead of cutting through it. A child of the model entity, like SpringBone. It moves with the pose (clip + BoneIK); it is not a physics collider.
+
+| field | type | default | description |
+|---|---|---|---|
+| `bone` | string | `""` | Exact name of the bone the collider sits on. See animation.bones. |
+| `tail` | string | `""` | Second bone: the collider is a capsule between the two. Empty = a sphere at `bone`. |
+| `radius` | float | `0.0599999987` | Radius in meters. Larger than the limb: the cloth between two swinging strips is not simulated. |
+| `offset` | vec3 | `[0,0,0]` | Moves the collider, in the model's own axes and meters (e.g. [0,0,0.03] = forward). |
 
 ### Camera
 

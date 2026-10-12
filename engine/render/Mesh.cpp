@@ -71,6 +71,154 @@ void Mesh::ComputeBounds() {
     }
 }
 
+void Mesh::FinishSkeleton() {
+    subtrees.assign(nodes.size(), {});
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        int node = static_cast<int>(i);
+        for (size_t steps = 0; node >= 0 && steps <= nodes.size(); ++steps, node = nodes[static_cast<size_t>(node)].parent)
+            subtrees[static_cast<size_t>(node)].push_back(static_cast<int>(i));
+    }
+}
+
+BlendShape& Mesh::BlendShapeNamed(const std::string& name) {
+    for (BlendShape& shape : blendShapes) if (shape.name == name) return shape;
+    blendShapes.emplace_back();
+    blendShapes.back().name = name;
+    return blendShapes.back();
+}
+
+std::shared_ptr<Mesh> Mesh::Morphed(const std::vector<std::pair<int, float>>& weights) const {
+    auto out = std::make_shared<Mesh>();
+    out->positions = positions;
+    out->normals = normals;
+    out->uvs = uvs;
+    out->colors = colors;
+    out->particleCustom = particleCustom;
+    out->particleData = particleData;
+    out->tangents = tangents;
+    out->indices = indices;
+    out->submeshes = submeshes;
+    out->materials = materials;
+    out->textures = textures;
+    out->boundsMin = boundsMin;
+    out->boundsMax = boundsMax;
+    out->joints = joints;
+    out->skin = skin;
+    out->drawJoints = drawJoints;
+    std::vector<uint32_t> touched;
+    for (const auto& item : weights) {
+        if (item.first < 0 || static_cast<size_t>(item.first) >= blendShapes.size()) continue;
+        const BlendShape& shape = blendShapes[static_cast<size_t>(item.first)];
+        for (size_t i = 0; i < shape.vertices.size(); ++i) {
+            const uint32_t v = shape.vertices[i];
+            if (v >= out->positions.size()) continue;
+            out->positions[v] = out->positions[v] + shape.positions[i] * item.second;
+            if (i < shape.normals.size() && v < out->normals.size()) {
+                out->normals[v] = out->normals[v] + shape.normals[i] * item.second;
+                touched.push_back(v);
+            }
+        }
+    }
+    for (uint32_t v : touched) {
+        const Vec3 n = out->normals[v];
+        out->normals[v] = Dot(n, n) > 1e-12f ? Normalize(n) : normals[v];
+    }
+    return out;
+}
+
+void Mesh::SplitSkinPalettes() {
+    if (joints.size() <= kDrawJoints || skin.size() != positions.size()) return;
+    std::vector<std::pair<uint32_t, uint32_t>> allCopies;  // vertex -> copy, copies ascending
+    std::vector<Submesh> ranges;
+    std::vector<int> owner(positions.size(), -1);  // range that draws each vertex
+    auto duplicate = [&](uint32_t v) {
+        const size_t i = v;
+        const Vec3 position = positions[i];
+        positions.push_back(position);
+        if (i < normals.size()) { const Vec3 n = normals[i]; normals.push_back(n); }
+        if (i * 2 + 1 < uvs.size()) { const float u = uvs[i * 2], w = uvs[i * 2 + 1]; uvs.push_back(u); uvs.push_back(w); }
+        if (i < colors.size()) { const Vec4 c = colors[i]; colors.push_back(c); }
+        if (i < particleCustom.size()) { const Vec4 c = particleCustom[i]; particleCustom.push_back(c); }
+        if (i < particleData.size()) { const Vec4 c = particleData[i]; particleData.push_back(c); }
+        if (i < tangents.size()) { const Vec4 t = tangents[i]; tangents.push_back(t); }
+        const SkinVertex influence = skin[i];
+        skin.push_back(influence);
+        return static_cast<uint32_t>(positions.size() - 1);
+    };
+    for (const Submesh& source : submeshes) {
+        Submesh range;
+        range.firstIndex = source.firstIndex;
+        range.material = source.material;
+        std::vector<std::pair<uint32_t, uint32_t>> copies;  // vertex -> its copy for this range
+        std::vector<uint16_t> added;
+        for (uint32_t k = source.firstIndex; k + 2 < source.firstIndex + source.indexCount; k += 3) {
+            auto collect = [&] {
+                added.clear();
+                for (uint32_t c = 0; c < 3; ++c) {
+                    const SkinVertex& influence = skin[indices[k + c]];
+                    for (size_t j = 0; j < 4; ++j) {
+                        if (influence.weights[j] == 0) continue;
+                        const uint16_t joint = influence.joints[j];
+                        if (std::find(range.palette.begin(), range.palette.end(), joint) == range.palette.end() &&
+                            std::find(added.begin(), added.end(), joint) == added.end()) added.push_back(joint);
+                    }
+                }
+            };
+            collect();
+            if (range.palette.size() + added.size() > kDrawJoints) {
+                ranges.push_back(range);
+                range.firstIndex = k;
+                range.indexCount = 0;
+                range.palette.clear();
+                copies.clear();
+                collect();
+            }
+            range.palette.insert(range.palette.end(), added.begin(), added.end());
+            const int id = static_cast<int>(ranges.size());
+            for (uint32_t c = 0; c < 3; ++c) {
+                uint32_t v = indices[k + c];
+                if (owner[v] < 0) owner[v] = id;
+                if (owner[v] != id) {
+                    auto found = std::find_if(copies.begin(), copies.end(), [&](const std::pair<uint32_t, uint32_t>& copy) { return copy.first == v; });
+                    if (found == copies.end()) {
+                        copies.emplace_back(v, duplicate(v));
+                        allCopies.push_back(copies.back());
+                        owner.push_back(id);
+                        found = copies.end() - 1;
+                    }
+                    indices[k + c] = found->second;
+                }
+            }
+            range.indexCount += 3;
+        }
+        if (range.indexCount > 0) ranges.push_back(range);
+    }
+    submeshes = std::move(ranges);
+    drawJoints.assign(positions.size(), std::array<uint8_t, 4>{});
+    for (const Submesh& range : submeshes) {
+        for (uint32_t k = range.firstIndex; k < range.firstIndex + range.indexCount; ++k) {
+            const uint32_t v = indices[k];
+            for (size_t j = 0; j < 4; ++j) {
+                const auto found = std::find(range.palette.begin(), range.palette.end(), skin[v].joints[j]);
+                drawJoints[v][j] = found == range.palette.end() ? 0 : static_cast<uint8_t>(found - range.palette.begin());  // absent = zero weight
+            }
+        }
+    }
+    // Copies move with the vertex they came from.
+    for (BlendShape& shape : blendShapes) {
+        const size_t original = shape.vertices.size();
+        for (const auto& copy : allCopies) {
+            auto found = std::lower_bound(shape.vertices.begin(), shape.vertices.begin() + static_cast<std::ptrdiff_t>(original), copy.first);
+            if (found == shape.vertices.begin() + static_cast<std::ptrdiff_t>(original) || *found != copy.first) continue;
+            const size_t i = static_cast<size_t>(found - shape.vertices.begin());
+            const Vec3 p = shape.positions[i], n = i < shape.normals.size() ? shape.normals[i] : Vec3();
+            shape.vertices.push_back(copy.second);
+            shape.positions.push_back(p);
+            shape.normals.push_back(n);
+        }
+    }
+}
+
 void Mesh::ComputeTangents() {
     const size_t n = positions.size();
     std::vector<Vec3> du(n, Vec3(0, 0, 0)), dv(n, Vec3(0, 0, 0));  // dP/du, dP/dv

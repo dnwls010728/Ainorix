@@ -18,6 +18,10 @@ const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name
 // Model-space matrix of every node of an immutable model with the clip sampled at `time`
 // (clamped to each channel's keys); nullptr gives the default pose. One entry per Mesh::nodes.
 std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time);
+// The same for a pose between two clips: `weight` 0 = `from` at `fromTime`, 1 = `clip` at `time`
+// (each node's translation, rotation and scale are blended before the hierarchy is applied).
+std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time,
+                                   const AnimationClip* from, float fromTime, float weight);
 // Joint palette (node matrix * inverse bind) for node matrices from EvaluateNodePose or scene/Pose.h.
 std::vector<Mat4> JointPalette(const Mesh& mesh, const std::vector<Mat4>& nodes);
 // Evaluates an immutable model's joint palette in model space, clamping channel times.

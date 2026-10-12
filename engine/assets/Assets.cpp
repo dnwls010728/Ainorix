@@ -14,6 +14,7 @@
 #include "render/Material.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "scene/Systems.h"
 #include "scene/Vfx.h"
 
 #if defined(_MSC_VER)
@@ -203,7 +204,7 @@ struct Loader {
         auto found = skinBases.find(skin);
         if (found != skinBases.end()) return found->second;
         Require(skin->joints_count > 0 && mesh.joints.size() + skin->joints_count <= Mesh::kMaxJoints,
-                "model exceeds the 64-entry skin palette limit");
+                "model exceeds the 1024-entry skin palette limit");
         uint16_t base = static_cast<uint16_t>(mesh.joints.size());
         if (skin->inverse_bind_matrices)
             Require(skin->inverse_bind_matrices->type == cgltf_type_mat4 &&
@@ -233,6 +234,7 @@ struct Loader {
         auto it = materialIndex.find(src);
         if (it != materialIndex.end()) return it->second;
         Material m;
+        if (src->name) m.name = src->name;
         m.metallic = 1.0f;  // glTF defaults
         m.roughness = 1.0f;
         if (src->has_pbr_metallic_roughness) {
@@ -325,7 +327,7 @@ struct Loader {
                 int index = NodeIndex(node);
                 auto found = rigidBindings.find(index);
                 if (found == rigidBindings.end()) {
-                    Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 64-entry skin palette limit");
+                    Require(mesh.joints.size() < Mesh::kMaxJoints, "model exceeds the 1024-entry skin palette limit");
                     uint16_t binding = static_cast<uint16_t>(mesh.joints.size());
                     mesh.joints.push_back({index, world.Inverse()});
                     found = rigidBindings.emplace(index, binding).first;
@@ -372,6 +374,33 @@ struct Loader {
                 influence.weights[0] = 1;
             }
             mesh.skin.push_back(influence);
+        }
+        // Morph targets: POSITION (and NORMAL) offsets per vertex, named by the mesh's extras.targetNames.
+        for (cgltf_size t = 0; t < prim.targets_count; ++t) {
+            const cgltf_accessor* offsets = nullptr;
+            const cgltf_accessor* normalOffsets = nullptr;
+            for (cgltf_size i = 0; i < prim.targets[t].attributes_count; ++i) {
+                const cgltf_attribute& a = prim.targets[t].attributes[i];
+                if (a.type == cgltf_attribute_type_position) offsets = a.data;
+                else if (a.type == cgltf_attribute_type_normal) normalOffsets = a.data;
+            }
+            if (!offsets) continue;
+            Require(offsets->count == pos->count && (!normalOffsets || normalOffsets->count == pos->count), "morph target must have one offset per vertex");
+            const std::string name = node->mesh && t < node->mesh->target_names_count && node->mesh->target_names[t] && node->mesh->target_names[t][0]
+                                         ? node->mesh->target_names[t] : "target" + std::to_string(t);
+            BlendShape* shape = nullptr;
+            for (cgltf_size i = 0; i < pos->count; ++i) {
+                float p[3] = {0, 0, 0}, n[3] = {0, 0, 0};
+                cgltf_accessor_read_float(offsets, i, p, 3);
+                if (normalOffsets) cgltf_accessor_read_float(normalOffsets, i, n, 3);
+                Require(std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]) && std::isfinite(n[0]) && std::isfinite(n[1]) && std::isfinite(n[2]),
+                        "morph target contains non-finite values");
+                if (p[0] == 0 && p[1] == 0 && p[2] == 0 && n[0] == 0 && n[1] == 0 && n[2] == 0) continue;
+                if (!shape) shape = &mesh.BlendShapeNamed(name);
+                shape->vertices.push_back(base + static_cast<uint32_t>(i));
+                shape->positions.push_back(world.TransformDir(Vec3(p[0], p[1], p[2])));
+                shape->normals.push_back(normalMatrix.TransformDir(Vec3(n[0], n[1], n[2])));
+            }
         }
         Submesh sub;
         sub.firstIndex = static_cast<uint32_t>(mesh.indices.size());
@@ -478,18 +507,71 @@ bool LoadGltfModel(const std::string& path, Mesh& out, std::string& warnings, st
 
 }  // namespace
 
+namespace {
+
+// "<model file>.clips.json" next to a model: {"clips": ["../anims/walk.gltf", ...]} (paths relative to
+// the model). The clips of those files are added to the model, their channels matched by node name:
+// animations kept apart from the character (one file per character, or retargeted from another rig).
+void AddSidecarClips(const std::string& path, Mesh& out, std::string& warnings) {
+    std::string text;
+    if (!FileExists(path + ".clips.json") || !ReadTextFile(path + ".clips.json", text)) return;
+    Json list;
+    try {
+        list = Json::parse(text);
+    } catch (const std::exception& ex) {
+        warnings += std::string("clips.json: ") + ex.what() + "; ";
+        return;
+    }
+    for (const Json& item : list["clips"].items()) {
+        const std::string file = JoinPath(ParentPath(path), item.asString(""));
+        Mesh source;
+        std::string error, ignored;
+        const bool fbx = EndsWith(Lower(file), ".fbx");
+        if (!(fbx ? LoadFbxModel(file, source, ignored, &error) : LoadGltfModel(file, source, ignored, &error))) {
+            warnings += "clips.json: " + item.asString("") + ": " + error + "; ";
+            continue;
+        }
+        std::vector<int> target(source.nodes.size(), -1);
+        for (size_t i = 0; i < source.nodes.size(); ++i) {
+            if (source.nodes[i].name.empty()) continue;
+            for (size_t k = 0; k < out.nodes.size(); ++k) if (out.nodes[k].name == source.nodes[i].name) { target[i] = static_cast<int>(k); break; }
+        }
+        for (AnimationClip& clip : source.clips) {
+            bool taken = false;
+            for (const AnimationClip& own : out.clips) taken = taken || own.name == clip.name;
+            if (taken) { warnings += "clips.json: the model already has a clip named " + clip.name + "; "; continue; }
+            std::vector<AnimationChannel> channels;
+            for (AnimationChannel& channel : clip.channels) {
+                const int node = channel.node >= 0 && static_cast<size_t>(channel.node) < target.size() ? target[static_cast<size_t>(channel.node)] : -1;
+                if (node < 0) continue;  // a bone this model does not have
+                channel.node = node;
+                channels.push_back(std::move(channel));
+            }
+            if (channels.empty()) { warnings += "clips.json: no bone of " + clip.name + " is in the model; "; continue; }
+            clip.channels = std::move(channels);
+            out.clips.push_back(std::move(clip));
+        }
+    }
+}
+
+}  // namespace
+
 bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
     out = Mesh{};
     std::string warnings;
     const bool fbx = EndsWith(Lower(path), ".fbx");
     if (!(fbx ? LoadFbxModel(path, out, warnings, error) : LoadGltfModel(path, out, warnings, error))) return false;
-    if (out.indices.empty()) {
+    AddSidecarClips(path, out, warnings);
+    if (out.indices.empty() && out.clips.empty()) {  // a file with clips only is an animation source
         if (error) *error = "model contains no triangle meshes";
         return false;
     }
     out.ComputeBounds();
     out.ComputeTangents();
     if (out.joints.empty()) out.skin.clear();
+    out.SplitSkinPalettes();
+    out.FinishSkeleton();
+    out.restPose = EvaluateNodePose(out, nullptr, 0);
     if (!warnings.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), warnings.c_str());
     return true;
 }
@@ -835,6 +917,7 @@ Json AssetManager::Info(const std::string& path) {
         Json mats = Json::MakeArray();
         for (const Material& m : mesh->materials) {
             Json j = Json::MakeObject();
+            j["name"] = m.name;
             j["baseColor"] = Json(Json::Array{m.baseColor.r, m.baseColor.g, m.baseColor.b});
             j["opacity"] = m.opacity;
             j["metallic"] = m.metallic;
@@ -852,6 +935,9 @@ Json AssetManager::Info(const std::string& path) {
             mats.push(j);
         }
         out["materials"] = mats;
+        Json shapes = Json::MakeArray();
+        for (const BlendShape& shape : mesh->blendShapes) shapes.push(shape.name);
+        out["blendShapes"] = shapes;
         Json texs = Json::MakeArray();
         for (const auto& t : mesh->textures) texs.push(Json(Json::Array{t->width, t->height}));
         out["textures"] = texs;

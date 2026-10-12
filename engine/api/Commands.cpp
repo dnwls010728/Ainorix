@@ -25,6 +25,7 @@
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
+#include "scene/Retarget.h"
 #include "scene/Prefab.h"
 #include "scene/Clipboard.h"
 #include "physics/PhysicsWorld.h"
@@ -569,6 +570,87 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
              });
+    Register(r, "animation.retarget", "Move animation clips from one model's skeleton to another's (different bone names, proportions and rest pose, e.g. mocap for a T-pose rig onto a character in an A-pose) and write them as a clip file. With attach (default) the file is listed in '<target>.clips.json', which adds its clips to the target model: play them with Animator / animation.play like the model's own.",
+             Params().Req("source", "string", "Model file with the clips, e.g. \"assets/anims/mocap.glb\".")
+                 .Req("target", "string", "Model file of the character that should play them.")
+                 .Req("bones", "object", "Target bone name -> source bone name for the body: hips, spine, neck, head, shoulders, arms, hands, legs, feet. Bones left out keep their rest pose (fingers, hair, cloth). Names: animation.bones / asset.info.")
+                 .Req("out", "string", "Clip file to write, e.g. \"assets/anims/hero_clips.gltf\".")
+                 .Opt("hips", "string", "Target bone that also takes the source's movement (bob and sway of the body), scaled to the target's size. Usually the pelvis.")
+                 .Opt("ends", "array", "Target bones that keep their rest orientation relative to the limb above instead of being laid along their source bone: feet and toes (rigs disagree on where the toe bone sits, and heels tip the foot). Without it shoes can tilt in every clip.")
+                 .Opt("clips", "object", "New clip name -> source clip name. Default: every clip under its own name.")
+                 .Opt("rate", "number", "Keys per second, 1..120 (default 30).")
+                 .Opt("attach", "boolean", "List the file in '<target>.clips.json' so the target model has the clips (default true)."),
+             false, [](Engine& e, const Json& a) {
+                 auto load = [&](const std::string& path) {
+                     std::string error;
+                     std::shared_ptr<const Mesh> mesh = e.Assets().GetMesh(path, &error);
+                     if (!mesh) throw ApiError("asset_error", path + ": " + error, "Pass project-relative model paths (.glb/.gltf/.fbx); check them with asset.info.");
+                     return mesh;
+                 };
+                 const std::string out = a["out"].asString();
+                 if (out.size() < 6 || Lower(out).compare(out.size() - 5, 5, ".gltf") != 0) throw ApiError("invalid_path", "out must end with .gltf", "e.g. assets/anims/hero_clips.gltf");
+                 const std::shared_ptr<const Mesh> source = load(a["source"].asString()), target = load(a["target"].asString());
+                 RetargetOptions options;
+                 for (const auto& pair : a["bones"].members()) options.bones[pair.first] = pair.second.asString("");
+                 for (const auto& pair : a["clips"].members()) options.clips[pair.first] = pair.second.asString("");
+                 options.hips = a["hips"].asString("");
+                 for (const Json& name : a["ends"].items()) options.ends.push_back(name.asString(""));
+                 options.rate = a["rate"].asFloat(30);
+                 Json gltf, report;
+                 std::string error;
+                 if (!RetargetClips(*source, *target, options, gltf, report, &error))
+                     throw ApiError("retarget_failed", error, "Check the bone names of both models with animation.bones / asset.info and the clip names with asset.info.");
+                 const std::string full = e.ResolvePath(out);
+                 CreateDirectories(ParentPath(full));
+                 if (!WriteTextFile(full, gltf.dump())) throw ApiError("write_failed", "cannot write " + out);
+                 report["out"] = out;
+                 if (a["attach"].asBool(true)) {
+                     // Paths in the list are relative to the model file.
+                     const std::string model = e.ResolvePath(a["target"].asString()), list = model + ".clips.json";
+                     std::vector<std::string> from, to;
+                     auto split = [](const std::string& path, std::vector<std::string>& parts) {
+                         std::string part;
+                         for (char c : path) {
+                             if (c == '/' || c == '\\') { if (!part.empty()) parts.push_back(part); part.clear(); }
+                             else part += c;
+                         }
+                         if (!part.empty()) parts.push_back(part);
+                     };
+                     split(ParentPath(model), from);
+                     split(full, to);
+                     size_t common = 0;
+                     while (common < from.size() && common + 1 < to.size() && from[common] == to[common]) ++common;
+                     std::string relative;
+                     for (size_t i = common; i < from.size(); ++i) relative += "../";
+                     for (size_t i = common; i < to.size(); ++i) relative += (i > common ? "/" : "") + to[i];
+                     Json sidecar = Json::MakeObject();
+                     std::string text;
+                     if (FileExists(list) && ReadTextFile(list, text)) {
+                         try { sidecar = Json::parse(text); } catch (const std::exception&) { sidecar = Json::MakeObject(); }
+                     }
+                     if (!sidecar.isObject()) sidecar = Json::MakeObject();
+                     if (!sidecar["clips"].isArray()) sidecar["clips"] = Json::MakeArray();
+                     bool listed = false;
+                     for (const Json& entry : sidecar["clips"].items()) listed = listed || entry.asString("") == relative;
+                     if (!listed) sidecar["clips"].push(relative);
+                     if (!WriteTextFile(list, sidecar.dump(2))) throw ApiError("write_failed", "cannot write " + a["target"].asString() + ".clips.json");
+                     report["attached"] = a["target"].asString() + ".clips.json";
+                 }
+                 e.Assets().Clear();  // the target model now has the clips
+                 return report;
+             });
+    Register(r, "animation.retarget_map", "Guess the bone map for animation.retarget from the bone names of two humanoid models (Mixamo, 3ds Max Biped, Unreal and Unity/VRM style names): {bones: {target: source}, hips, ends (feet and toes), unmatched (body parts not found in both)}. Check it, complete it by hand where a rig uses other names, then pass it on.",
+             Params().Req("source", "string", "Model file with the clips.").Req("target", "string", "Model file of the character."),
+             false, [](Engine& e, const Json& a) {
+                 auto load = [&](const std::string& path) {
+                     std::string error;
+                     std::shared_ptr<const Mesh> mesh = e.Assets().GetMesh(path, &error);
+                     if (!mesh) throw ApiError("asset_error", path + ": " + error, "Pass project-relative model paths (.glb/.gltf/.fbx); check them with asset.info.");
+                     return mesh;
+                 };
+                 const std::shared_ptr<const Mesh> source = load(a["source"].asString()), target = load(a["target"].asString());
+                 return GuessRetargetMap(*source, *target);
+             });
     Register(r, "animation.bones", "Nodes (bones) of an entity's model in its current pose - Animator clip, BoneIK goals, SpringBone swing - with world position/rotation and modelPosition (the Transform.position a child entity needs to stand on the bone), and how its BoneIK / BoneAttachment / SpringBone children resolve. Use it for bone names and to check IK and springs.",
              Params().ReqWith("id", EntityRefSchema("Entity with a MeshRenderer model.")).Opt("bone", "string", "Only this node (exact name).")
                  .Opt("ik", "boolean", "false = the clip's pose before BoneIK goals and SpringBone swing: where the animation alone puts a bone (foot placement adds the ground height to it). Default true."),
@@ -587,6 +669,21 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  const Mat4 world = scene.WorldMatrix(id);
                  auto vec3 = [](const Vec3& v) { return Json(Json::Array{v.x, v.y, v.z}); };
                  auto worldPosition = [&](int node) { return (world * nodes[static_cast<size_t>(node)]).TransformPoint(Vec3(0, 0, 0)); };
+                 // What each bone moves: how many vertices it is the strongest influence of, and where they are
+                 // in the default pose (model space), so a skirt or hair bone can be told from a body bone.
+                 std::vector<int> skinned(mesh->nodes.size(), 0);
+                 std::vector<Vec3> lowest(mesh->nodes.size()), highest(mesh->nodes.size());
+                 // Only for the whole list: a script asking for one bone every frame should not pay for it.
+                 for (size_t v = 0; only.empty() && v < mesh->skin.size() && v < mesh->positions.size(); ++v) {
+                     size_t strongest = 0;
+                     for (size_t k = 1; k < 4; ++k) if (mesh->skin[v].weights[k] > mesh->skin[v].weights[strongest]) strongest = k;
+                     if (!(mesh->skin[v].weights[strongest] > 0) || mesh->skin[v].joints[strongest] >= mesh->joints.size()) continue;
+                     const size_t owner = static_cast<size_t>(mesh->joints[mesh->skin[v].joints[strongest]].node);
+                     const Vec3& p = mesh->positions[v];
+                     if (skinned[owner]++ == 0) lowest[owner] = highest[owner] = p;
+                     lowest[owner] = Vec3(std::min(lowest[owner].x, p.x), std::min(lowest[owner].y, p.y), std::min(lowest[owner].z, p.z));
+                     highest[owner] = Vec3(std::max(highest[owner].x, p.x), std::max(highest[owner].y, p.y), std::max(highest[owner].z, p.z));
+                 }
                  Json out = Json::MakeObject();
                  out["bones"] = Json::MakeArray();
                  for (size_t i = 0; i < mesh->nodes.size(); ++i) {
@@ -601,11 +698,14 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      bone["rotation"] = vec3(rotation);
                      // Where a child entity of the model would stand to be on the bone (BoneIK goals, Transform.position).
                      bone["modelPosition"] = vec3(nodes[i].TransformPoint(Vec3(0, 0, 0)));
+                     if (only.empty()) bone["vertices"] = skinned[i];
+                     if (skinned[i] > 0) bone["vertexMin"] = vec3(lowest[i]), bone["vertexMax"] = vec3(highest[i]);
                      out["bones"].push(std::move(bone));
                  }
                  out["goals"] = Json::MakeArray();
                  out["attachments"] = Json::MakeArray();
                  out["springs"] = Json::MakeArray();
+                 out["colliders"] = Json::MakeArray();
                  for (EntityId child : scene.Children(id)) {
                      const EntityRecord* record = scene.Record(child);
                      if (const BoneIK* ik = scene.Get<BoneIK>(child)) {
@@ -628,15 +728,24 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                          out["attachments"].push(std::move(item));
                      }
                      if (const SpringBone* spring = scene.Get<SpringBone>(child)) {
-                         const int count = SpringBoneCount(*mesh, spring->bone);
+                         const int count = SpringBoneCount(*mesh, spring->bone, spring->endLength);
                          Json item = Json::MakeObject();
                          item["id"] = child;
                          item["name"] = record->name;
                          item["bone"] = spring->bone;
-                         item["found"] = FindModelNode(*mesh, spring->bone) >= 0;
+                         item["found"] = count > 0 || FindModelNode(*mesh, spring->bone) >= 0;
                          item["bones"] = count;  // how many bones swing; 0 = nothing below the bone
                          item["simulating"] = count > 0 && spring->simulated == spring->bone && spring->tails.size() == static_cast<size_t>(count);
                          out["springs"].push(std::move(item));
+                     }
+                     if (const SpringCollider* collider = scene.Get<SpringCollider>(child)) {
+                         Json item = Json::MakeObject();
+                         item["id"] = child;
+                         item["name"] = record->name;
+                         item["bone"] = collider->bone;
+                         item["tail"] = collider->tail;
+                         item["found"] = FindModelNode(*mesh, collider->bone) >= 0 && (collider->tail.empty() || FindModelNode(*mesh, collider->tail) >= 0);
+                         out["colliders"].push(std::move(item));
                      }
                  }
                  return out;
@@ -2071,10 +2180,12 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params()
                  .Req("origin", "vec3", "Ray start [x,y,z].")
                  .Req("direction", "vec3", "Ray direction (normalized automatically).")
-                 .Opt("maxDistance", "number", "Maximum distance in meters (default 1000)."),
+                 .Opt("maxDistance", "number", "Maximum distance in meters (default 1000).")
+                 .Opt("ignore", "entity", "Entity the ray passes through, e.g. the character it starts inside of."),
              false, [](Engine& e, const Json& a) {
+                 const EntityId ignore = a.has("ignore") ? RequireEntity(e, a, "ignore") : kNullEntity;
                  RaycastHit hit = e.Physics().Raycast(e.GetScene(), ReadVec3(a["origin"], Vec3()), ReadVec3(a["direction"], Vec3(0, -1, 0)),
-                                                      a["maxDistance"].asFloat(1000.0f));
+                                                      a["maxDistance"].asFloat(1000.0f), ignore);
                  Json out = Json::MakeObject();
                  out["hit"] = hit.hit;
                  if (hit.hit) {

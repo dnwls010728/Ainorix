@@ -1177,7 +1177,8 @@ struct GpuRenderer::Impl {
             v.tan[2] = t.z;
             v.tan[3] = t.w;
             if (i < m.skin.size()) for (size_t k = 0; k < 4; ++k) {
-                v.joints[k] = static_cast<float>(m.skin[i].joints[k]);
+                // Ranges with their own palette address joints by their place in it (see ApplySkin).
+                v.joints[k] = static_cast<float>(i < m.drawJoints.size() ? m.drawJoints[i][k] : m.skin[i].joints[k]);
                 v.weights[k] = m.skin[i].weights[k];
             }
             const Vec3& p = m.positions[i];
@@ -1267,11 +1268,20 @@ struct GpuRenderer::Impl {
         sg_apply_pipeline(pipeline);
         skinApplied = false;
     }
-    void ApplySkin(int slot, const RenderItem& item) {
+    // `submesh` selects the range's own palette in models with more joints than one draw holds.
+    void ApplySkin(int slot, const RenderItem& item, int submesh) {
         static_assert(sizeof(oe_mesh_vs_skin_t) == sizeof(oe_pos_vs_skin_t), "both skin blocks hold the same palette");
         if (item.joints.empty() && skinApplied) return;
         oe_mesh_vs_skin_t skin{};
-        for (size_t j = 0; j < item.joints.size(); ++j) Put(skin.joint_palette[j], item.joints[j]);
+        const std::vector<uint16_t>* palette = nullptr;
+        if (!item.joints.empty() && submesh >= 0 && static_cast<size_t>(submesh) < item.mesh->submeshes.size() &&
+            !item.mesh->submeshes[static_cast<size_t>(submesh)].palette.empty()) palette = &item.mesh->submeshes[static_cast<size_t>(submesh)].palette;
+        if (palette) {
+            for (size_t j = 0; j < palette->size() && j < oe::Mesh::kDrawJoints; ++j)
+                if ((*palette)[j] < item.joints.size()) Put(skin.joint_palette[j], item.joints[(*palette)[j]]);
+        } else {
+            for (size_t j = 0; j < item.joints.size() && j < oe::Mesh::kDrawJoints; ++j) Put(skin.joint_palette[j], item.joints[j]);
+        }
         sg_apply_uniforms(slot, SG_RANGE(skin));
         skinApplied = true;
     }
@@ -1299,7 +1309,7 @@ struct GpuRenderer::Impl {
         Put(vertex.item_custom, item.particleCustom.x, item.particleCustom.y, item.particleCustom.z, item.particleCustom.w);
         Put(vertex.item_particle, item.particleInput.x, item.particleInput.y, item.particleInput.z, item.particleInput.w);
         sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vertex));
-        ApplySkin(UB_oe_mesh_vs_skin, item);
+        ApplySkin(UB_oe_mesh_vs_skin, item, static_cast<int>(draw.submesh));
         oe_mesh_vs_graph_t vertexGraph{};
         PutVertexGraph(vertexGraph, material, item, time);
         sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vertexGraph));
@@ -1327,6 +1337,14 @@ struct GpuRenderer::Impl {
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
         RenderLights lights = GatherRenderLights(scene);
         const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights, view.playing);
+        // Meshes that are gone (blend shape weights changed, assets reloaded) give their buffers back.
+        for (auto* map : {&meshes, &flatMeshes}) {
+            for (auto it = map->begin(); it != map->end();) {
+                if (OwnerAlive(it->second.permanent, it->second.owner)) { ++it; continue; }
+                it->second.Destroy();
+                it = map->erase(it);
+            }
+        }
         std::vector<const GpuMesh*> gpuMeshes;
         gpuMeshes.reserve(items.size());
         for (const RenderItem& it : items) {
@@ -1431,7 +1449,7 @@ struct GpuRenderer::Impl {
                 oe_pos_vs_params_t u{};
                 Put(u.mvp, fit.viewProj * it.world);
                 sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
-                ApplySkin(UB_oe_pos_vs_skin, it);
+                ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
                 sg_bindings b{};
                 Bind(b, mesh);
                 sg_apply_bindings(&b);
@@ -1555,7 +1573,7 @@ struct GpuRenderer::Impl {
                 Put(vu.item_custom, it.particleCustom.x, it.particleCustom.y, it.particleCustom.z, it.particleCustom.w);
                 Put(vu.item_particle, it.particleInput.x, it.particleInput.y, it.particleInput.z, it.particleInput.w);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
-                ApplySkin(UB_oe_mesh_vs_skin, it);
+                ApplySkin(UB_oe_mesh_vs_skin, it, static_cast<int>(dc.submesh));
                 oe_mesh_vs_graph_t vg{};
                 PutVertexGraph(vg, m, it, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vg));
@@ -1635,7 +1653,7 @@ struct GpuRenderer::Impl {
                         oe_pos_vs_params_t u{};
                         Put(u.mvp, viewProj * it.world);
                         sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
-                        ApplySkin(UB_oe_pos_vs_skin, it);
+                        ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
                         sg_bindings b{};
                         b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
                         b.index_buffer = gpuMeshes[dc.item]->ibuf;
@@ -1715,12 +1733,20 @@ struct GpuRenderer::Impl {
                         oe_pos_vs_params_t u{};
                         Put(u.mvp, viewProj * items[i].world);
                         sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
-                        ApplySkin(UB_oe_pos_vs_skin, items[i]);
                         sg_bindings b{};
                         b.vertex_buffers[0] = gpuMeshes[i]->vbuf;
                         b.index_buffer = gpuMeshes[i]->ibuf;
                         sg_apply_bindings(&b);
-                        sg_draw(0, static_cast<int>(items[i].mesh->indices.size()), 1);
+                        const oe::Mesh& whole = *items[i].mesh;
+                        if (items[i].joints.size() > oe::Mesh::kDrawJoints) {
+                            for (size_t s = 0; s < whole.submeshes.size(); ++s) {  // a palette per range
+                                ApplySkin(UB_oe_pos_vs_skin, items[i], static_cast<int>(s));
+                                sg_draw(static_cast<int>(whole.submeshes[s].firstIndex), static_cast<int>(whole.submeshes[s].indexCount), 1);
+                            }
+                            continue;
+                        }
+                        ApplySkin(UB_oe_pos_vs_skin, items[i], -1);
+                        sg_draw(0, static_cast<int>(whole.indices.size()), 1);
                     }
                 }
             }

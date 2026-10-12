@@ -892,7 +892,25 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
             JPH::CharacterVirtual::ExtendedUpdateSettings settings;
             settings.mWalkStairsStepUp = JPH::Vec3(0, std::max(0.0f, cb->stepHeight), 0);
             JPH::IgnoreSingleBodyFilter bodyFilter(ch.GetInnerBodyID());
+            const JPH::RVec3 before = ch.GetPosition();
+            const bool supported = ch.IsSupported();
             ch.ExtendedUpdate(dt, gravity * (cb->lockPositionY ? 0.0f : cb->gravityScale), settings, bpFilter, layerFilter, bodyFilter, shapeFilter, temp);
+            // Jolt climbs a step only when it meets it as a steep surface. The round bottom of a capsule meets
+            // a step lower than its radius at the step's edge, which reports the flat top as its surface, so
+            // the character would stay in front of low stairs and curbs. Blocked on the ground and wanting to
+            // move: try the step anyway (WalkStairs itself checks that there is floor to stand on up there).
+            const JPH::Vec3 wanted = JPH::Vec3(v.GetX(), 0, v.GetZ()) * dt;
+            const float wantedLength = wanted.Length();
+            if (cb->stepHeight > 0 && supported && wantedLength > 1e-5f && !cb->lockPositionY) {
+                const JPH::Vec3 forward = wanted / wantedLength;
+                const JPH::Vec3 moved = JPH::Vec3(ch.GetPosition() - before);
+                const float achieved = std::max(0.0f, JPH::Vec3(moved.GetX(), 0, moved.GetZ()).Dot(forward));
+                if (achieved + 1e-4f < wantedLength * 0.5f && moved.GetY() < 0.5f * cb->stepHeight) {
+                    ch.WalkStairs(dt, settings.mWalkStairsStepUp, forward * std::max(settings.mWalkStairsMinStepForward, wantedLength - achieved),
+                                  forward * std::max(settings.mWalkStairsStepForwardTest, cb->radius * 1.1f), settings.mWalkStairsStepDownExtra,
+                                  bpFilter, layerFilter, bodyFilter, shapeFilter, temp);
+                }
+            }
 
             // Hitting a ceiling ends the upward motion (otherwise the character
             // hangs under it until gravity has eaten the jump velocity).
@@ -1100,7 +1118,7 @@ std::vector<PhysicsEvent> PhysicsWorld::Step(Scene& scene, float dt) {
     return events;
 }
 
-RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance) {
+RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance, EntityId ignore) {
     RaycastHit out;
     if (!impl_) {
         EnsureJolt();
@@ -1111,7 +1129,15 @@ RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& d
     if (Length(dir) < 0.5f || maxDistance <= 0) return out;
     JPH::RRayCast ray{J(origin), J(dir * maxDistance)};
     JPH::RayCastResult result;
-    if (impl_->system.GetNarrowPhaseQuery().CastRay(ray, result)) {
+    // Bodies of the ignored entity are skipped one by one as the ray meets them.
+    JPH::IgnoreMultipleBodiesFilter skip;
+    bool found = impl_->system.GetNarrowPhaseQuery().CastRay(ray, result, {}, {}, skip);
+    for (int tries = 0; found && ignore != kNullEntity && impl_->EntityOf(result.mBodyID) == ignore && tries < 8; ++tries) {
+        skip.IgnoreBody(result.mBodyID);
+        result = JPH::RayCastResult();
+        found = impl_->system.GetNarrowPhaseQuery().CastRay(ray, result, {}, {}, skip);
+    }
+    if (found && (ignore == kNullEntity || impl_->EntityOf(result.mBodyID) != ignore)) {
         out.hit = true;
         out.entity = impl_->EntityOf(result.mBodyID);
         JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
@@ -1123,7 +1149,7 @@ RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& d
     if (Physics2D* w2 = World2D(scene)) {
         w2->Sync(scene, warnings_);
         RaycastHit hit2;
-        if (w2->Raycast(origin, dir, maxDistance, hit2) && (!out.hit || hit2.distance < out.distance)) out = hit2;
+        if (w2->Raycast(origin, dir, maxDistance, hit2) && (ignore == kNullEntity || hit2.entity != ignore) && (!out.hit || hit2.distance < out.distance)) out = hit2;
     }
     return out;
 }

@@ -106,9 +106,30 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt) {
     for (auto& kv : scene.Pool<Animator>()) {
         Animator& a = kv.second;
         const MeshRenderer* renderer = scene.Get<MeshRenderer>(kv.first);
-        if (!renderer || !a.playing || !std::isfinite(a.time) || !std::isfinite(a.speed)) continue;
+        // A new clip fades in from the one that was shown (Animator.blend), which keeps playing meanwhile.
+        if (a.shown != a.clip) {
+            const bool fade = !a.shown.empty() && !a.clip.empty() && std::isfinite(a.blend) && a.blend > 0;
+            a.from = fade ? a.shown : std::string();
+            a.fromTime = a.shownTime;
+            a.fade = fade ? a.blend : 0.0f;
+            a.shown = a.clip;
+        }
+        if (!renderer || !std::isfinite(a.time) || !std::isfinite(a.speed)) continue;
+        if (!a.playing && !(a.fade > 0)) { a.shownTime = a.time; continue; }
         std::shared_ptr<const Mesh> mesh = assets.GetMesh(renderer->mesh);
         const AnimationClip* clip = mesh ? FindAnimationClip(*mesh, a.clip) : nullptr;
+        if (a.fade > 0) {  // also while a script drives `time` itself (playing: false)
+            const AnimationClip* from = mesh ? FindAnimationClip(*mesh, a.from) : nullptr;
+            a.fade -= dt;
+            if (!from || !(a.fade > 0)) {
+                a.fade = 0;
+                a.from.clear();
+            } else if (from->duration > 0) {
+                a.fromTime = std::fmod(a.fromTime + dt * a.speed, from->duration);
+                if (a.fromTime < 0) a.fromTime += from->duration;
+            }
+        }
+        if (!a.playing) { a.shownTime = a.time; continue; }
         if (!clip) continue;
         if (clip->duration <= 0) { a.time = 0; if (!a.loop) a.playing = false; continue; }
         double next = static_cast<double>(a.time) + static_cast<double>(dt) * a.speed;
@@ -120,6 +141,7 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt) {
             next = std::max(0.0, std::min(next, static_cast<double>(clip->duration)));
         }
         a.time = static_cast<float>(next);
+        a.shownTime = a.time;
     }
 }
 
@@ -335,17 +357,60 @@ const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name
     return nullptr;
 }
 
-std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time) {
-    std::vector<ModelNode> nodes = mesh.nodes;
+namespace {
+
+// A node's local transform (the names and parents stay in the model).
+struct LocalNode {
+    Vec3 translation;
+    Vec4 rotation;
+    Vec3 scale;
+};
+
+// The model's nodes with the clip's channels sampled into their local translation/rotation/scale.
+std::vector<LocalNode> SampleNodes(const Mesh& mesh, const AnimationClip* clip, float time) {
+    std::vector<LocalNode> nodes(mesh.nodes.size());
+    for (size_t i = 0; i < nodes.size(); ++i) nodes[i] = {mesh.nodes[i].translation, mesh.nodes[i].rotation, mesh.nodes[i].scale};
     if (clip && std::isfinite(time)) {
         for (const AnimationChannel& channel : clip->channels) {
-            ModelNode& node = nodes[static_cast<size_t>(channel.node)];
+            LocalNode& node = nodes[static_cast<size_t>(channel.node)];
             Vec4 value = SampleChannel(channel, time);
             if (channel.path == AnimationPath::Translation) node.translation = value.xyz();
             else if (channel.path == AnimationPath::Scale) node.scale = value.xyz();
             else node.rotation = value;
         }
     }
+    return nodes;
+}
+
+std::vector<Mat4> ComposeNodes(const Mesh& mesh, const std::vector<LocalNode>& nodes);
+
+}  // namespace
+
+std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time) {
+    if (!clip && mesh.restPose.size() == mesh.nodes.size()) return mesh.restPose;  // the default pose of a loaded model
+    return ComposeNodes(mesh, SampleNodes(mesh, clip, time));
+}
+
+std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time,
+                                   const AnimationClip* from, float fromTime, float weight) {
+    if (!(weight < 1) || !std::isfinite(weight)) return EvaluateNodePose(mesh, clip, time);
+    std::vector<LocalNode> nodes = SampleNodes(mesh, from, fromTime);
+    if (weight <= 0) return ComposeNodes(mesh, nodes);
+    const std::vector<LocalNode> to = SampleNodes(mesh, clip, time);
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        nodes[i].translation = nodes[i].translation * (1 - weight) + to[i].translation * weight;
+        nodes[i].scale = nodes[i].scale * (1 - weight) + to[i].scale * weight;
+        Vec4 a = NormalizeQuaternion(nodes[i].rotation), b = NormalizeQuaternion(to[i].rotation);
+        if (QuaternionDot(a, b) < 0) b = b * -1;  // the short way round
+        nodes[i].rotation = NormalizeQuaternion(a * (1 - weight) + b * weight);
+    }
+    return ComposeNodes(mesh, nodes);
+}
+
+namespace {
+
+std::vector<Mat4> ComposeNodes(const Mesh& mesh, const std::vector<LocalNode>& locals) {
+    const std::vector<ModelNode>& nodes = mesh.nodes;
     std::vector<Mat4> world(nodes.size());
     std::vector<bool> evaluated(nodes.size(), false);
     std::vector<size_t> chain;
@@ -360,14 +425,17 @@ std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, 
             size_t current = chain.back();
             chain.pop_back();
             const ModelNode& node = nodes[current];
+            const LocalNode& pose = locals[current];
             Mat4 local = node.usesMatrix ? node.matrix :
-                Mat4::Translation(node.translation) * QuaternionMatrix(node.rotation) * Mat4::Scale(node.scale);
+                Mat4::Translation(pose.translation) * QuaternionMatrix(pose.rotation) * Mat4::Scale(pose.scale);
             world[current] = node.parent < 0 ? local : world[static_cast<size_t>(node.parent)] * local;
             evaluated[current] = true;
         }
     }
     return world;
 }
+
+}  // namespace
 
 std::vector<Mat4> JointPalette(const Mesh& mesh, const std::vector<Mat4>& nodes) {
     std::vector<Mat4> palette;

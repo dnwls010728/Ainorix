@@ -76,7 +76,7 @@ std::shared_ptr<const Mesh> NativeEditor::Impl::BoneModel(EntityId id, EntityId*
     Scene& scene = engine.GetScene();
     const EntityRecord* record = scene.Record(id);
     if (!record) return nullptr;
-    const bool child = scene.Get<BoneIK>(id) || scene.Get<BoneAttachment>(id) || scene.Get<SpringBone>(id);
+    const bool child = scene.Get<BoneIK>(id) || scene.Get<BoneAttachment>(id) || scene.Get<SpringBone>(id) || scene.Get<SpringCollider>(id);
     const EntityId owner = child ? record->parent : id;
     const MeshRenderer* renderer = scene.Get<MeshRenderer>(owner);
     if (!renderer || renderer->mesh.empty()) return nullptr;
@@ -90,7 +90,7 @@ bool NativeEditor::Impl::NameInModel(EntityId id, bool bone, const std::string& 
     EntityId model = kNullEntity;
     std::shared_ptr<const Mesh> mesh = BoneModel(id, &model);
     if (!mesh) return false;
-    if (bone) return FindModelNode(*mesh, name) >= 0;
+    if (bone) return FindModelNode(*mesh, name) >= 0 || SpringBoneCount(*mesh, name) > 0;  // or a SpringBone pattern ("Skirt*")
     return std::any_of(mesh->clips.begin(), mesh->clips.end(), [&](const AnimationClip& clip) { return clip.name == name; });
 }
 
@@ -208,6 +208,49 @@ void NativeEditor::Impl::AddSpringBone(EntityId model, const std::string& bone) 
     Refresh(true);
 }
 
+// Sliders for the blend shapes of the selected model (MeshRenderer.blendShapes): one undo step per drag.
+void NativeEditor::Impl::BlendShapesSection(EntityId id) {
+    const MeshRenderer* renderer = engine.GetScene().Get<MeshRenderer>(id);
+    std::shared_ptr<const Mesh> mesh = renderer ? engine.Assets().GetMesh(renderer->mesh) : nullptr;
+    if (!mesh || mesh->blendShapes.empty()) return;
+    const std::string title = Format("%s (%d)###blendshapes", Tr("Blend Shapes"), static_cast<int>(mesh->blendShapes.size()));
+    if (!ImGui::TreeNodeEx(title.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen)) return;
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##shapefilter", WithIcon(kIconSearch, Tr("Search blend shapes")).c_str(), &shapeFilter);
+    Json weights = renderer->blendShapes.isObject() ? renderer->blendShapes : Json::MakeObject();
+    std::string merge;
+    bool changed = false;
+    if (ImGui::Button(Tr("Reset All")) && weights.size() != 0) weights = Json::MakeObject(), changed = true;
+    const float rowHeight = ImGui::GetFrameHeightWithSpacing();
+    const float listHeight = rowHeight * static_cast<float>(std::min<size_t>(mesh->blendShapes.size(), 10)) + ImGui::GetStyle().WindowPadding.y;
+    if (ImGui::BeginChild("##shapelist", ImVec2(0, listHeight), ImGuiChildFlags_Borders)) {
+        for (const BlendShape& shape : mesh->blendShapes) {
+            if (!ContainsNoCase(shape.name, shapeFilter)) continue;
+            ImGui::PushID(shape.name.c_str());
+            float value = weights[shape.name].asFloat(0);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+            const bool edited = ImGui::SliderFloat(shape.name.c_str(), &value, 0.0f, 1.0f, "%.2f");
+            const std::string key = std::to_string(id) + ":MeshRenderer:blendShapes:" + shape.name;
+            if (ImGui::IsItemActivated()) ++dragSerial[key];
+            if (edited) {
+                if (value == 0) weights.erase(shape.name);
+                else weights[shape.name] = value;
+                merge = "insp:" + key + ":" + std::to_string(dragSerial[key]);
+                changed = true;
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::TreePop();
+    if (changed) {
+        Json args = ObjectOf({{"id", Json(id)}, {"type", Json("MeshRenderer")}, {"values", ObjectOf({{"blendShapes", weights}})}});
+        if (!merge.empty()) args["merge"] = Json(merge);
+        Call("component.set", args);
+        Refresh(true);
+    }
+}
+
 void NativeEditor::Impl::BonesSection(EntityId id) {
     EntityId model = kNullEntity;
     std::shared_ptr<const Mesh> mesh = BoneModel(id, &model);
@@ -216,6 +259,11 @@ void NativeEditor::Impl::BonesSection(EntityId id) {
     if (bones.empty()) return;
     const std::string title = Format("%s (%d)###bones", Tr("Bones"), static_cast<int>(bones.size()));
     if (!ImGui::TreeNodeEx(title.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!mesh->joints.empty()) {
+        const MeshRenderer* renderer = engine.GetScene().Get<MeshRenderer>(id);
+        if (ImGui::Button(WithIcon(kIconPersonStanding, Tr("Retarget Animation...")).c_str()) && renderer) OpenRetarget(renderer->mesh, std::string());
+        ImGui::SetItemTooltip("%s", Tr("Give this character the clips of another model (motion capture made for another rig)"));
+    }
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##bonefilter", WithIcon(kIconSearch, Tr("Search bones")).c_str(), &boneFilter);
     const float rowHeight = ImGui::GetFrameHeightWithSpacing();

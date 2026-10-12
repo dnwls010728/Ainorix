@@ -279,6 +279,7 @@ struct NativeEditor::Impl {
     void EffectsRect(const std::string& name);
     std::string addComponentFilter;
     std::map<std::string, int> dragSerial;  // inspector drag -> undo merge group
+    float capturedWheel = 0;                // wheel notches turned while the game held the mouse
     int gizmoSerial = 0;
 
     // ----- Scene view
@@ -611,7 +612,7 @@ struct NativeEditor::Impl {
 
     // Bones (EditorBones.cpp).
     bool showBones = true;                 // skeleton of the selected model over the Scene view
-    std::string boneFilter, namePickFilter;
+    std::string boneFilter, namePickFilter, shapeFilter;
     EntityId boneHoverModel = kNullEntity;  // bone under the mouse in the inspector, lit in the Scene view
     std::string boneHover;
     int boneHoverFrame = -1;
@@ -626,6 +627,20 @@ struct NativeEditor::Impl {
     // A child entity whose SpringBone swings `bone` and the bones below it.
     void AddSpringBone(EntityId model, const std::string& bone);
     void BonesSection(EntityId id);
+    // Retarget Animation window (EditorRetarget.cpp).
+    struct RetargetRow { std::string target, source; bool end = false; };
+    struct RetargetClip { std::string source, name; float duration = 0; bool use = true; };
+    bool showRetarget = false, focusRetarget = false, retargetError = false, retargetAttach = true;
+    std::string retargetTarget, retargetSource, retargetOut, retargetHips, retargetStatus, retargetLoaded, retargetFilter;
+    std::vector<RetargetRow> retargetRows;
+    std::vector<RetargetClip> retargetClips;
+    std::map<std::string, std::array<float, 4>> retargetRects;  // automation: control bounds by name
+    void OpenRetarget(const std::string& target, const std::string& source);
+    void RetargetLoad();
+    void RetargetAutoMap();
+    void RetargetRun();
+    void RetargetWindow();
+    void BlendShapesSection(EntityId id);
     void BonesOverlay(ImDrawList* dl);
     void SceneGizmo();
     void ScenePick(float x, float y, bool additive);

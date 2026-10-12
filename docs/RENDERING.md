@@ -88,7 +88,7 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 
 Models and textures are cached and **hot-reloaded** when their files change (checked twice a second while playing and before every `sim.step`).
 
-Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf and **FBX** (`.fbx`, binary or ASCII; see [FBX models](#fbx-models)) via ufbx; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. `COLOR_0` vertex colors (RGB or RGBA) multiply the material color in both renderers and reach shader graphs through `baseColor`. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
+Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf and **FBX** (`.fbx`, binary or ASCII; see [FBX models](#fbx-models)) via ufbx; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. `COLOR_0` vertex colors (RGB or RGBA) multiply the material color in both renderers and reach shader graphs through `baseColor`. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 1024 entries per model; a model with more than 64 is cut at load time into draw ranges of at most 64 joints each, see [ANIMATION.md](ANIMATION.md#model-contract)). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips (a model also takes the clips of the files listed in `<model file>.clips.json`, see ANIMATION.md). See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
 
 ### FBX models
 
@@ -100,9 +100,9 @@ The loader (`engine/assets/Fbx.cpp`) fills the same `Mesh` as the glTF loader, s
 - **Geometry**: polygons are triangulated and equal corners merged; missing normals are generated. Geometric
   transforms, pivots and scale-inheritance modes are resolved into plain TRS nodes (helper nodes where needed).
 - **Skins and animation**: the first skin of a mesh, four strongest influences per vertex. Meshes that bind the same
-  bones share palette entries and unused clusters take none, but the 64-entry palette limit still applies. Every
+  bones share palette entries and unused clusters take none; the palette holds up to 1024 entries (game characters with a few hundred bones load). Every
   animation stack becomes a clip of linear TRS keys (Euler curves are resampled at 30 Hz and reduced); clips without
-  keys are skipped. Blend shapes are not supported.
+  keys are skipped. Blend shapes load (the full-weight target of each channel) and are weighted by `MeshRenderer.blendShapes`, see [ANIMATION.md](ANIMATION.md#blend-shapes); clips do not key them.
 - **Materials**: base color, metallic, roughness, emission, opacity, double-sided and unlit come from the file
   (Lambert/Phong values are converted). A base color image replaces the color. Separate roughness and metalness
   images are not combined: use a `.mat.json` material for those.
@@ -116,6 +116,9 @@ The loader (`engine/assets/Fbx.cpp`) fills the same `Mesh` as the glTF loader, s
 |---|---|
 | `mesh` | `cube`, `sphere`, `plane`, `plane64` (the same 1×1 plane split into 64×64 cells, for vertex offsets), `pyramid`, `quad` (1×1 in XY facing +Z) or a model path. A missing or broken model renders as an **unlit magenta cube** (and a log warning), so problems are visible in screenshots |
 | `material` | Path to a `.mat.json` applied to every submesh; empty = the model's own glTF materials (default material for built-in meshes). See [Materials](#materials) |
+| `materials` | Material files per material of a model, in the order `asset.info` lists its `materials` (each has the `name` from the source file): `["materials/face.mat.json", "", ...]`. An empty or missing entry keeps `material`, or the model's own when that is empty. `shaderUniforms` belong to `material` only |
+| `blendShapes` | Weights of the model's blend shapes (morph targets), `{"E_Close": 1}`; names from `asset.info`. See [ANIMATION.md](ANIMATION.md#blend-shapes) |
+| `parentPose` | Draw this model in the pose of the parent entity, which must show the same model: a second layer of a character (an outline shell, a glow) follows the parent's Animator, `BoneIK` goals and `SpringBone`s |
 | `color` | Tint multiplied with the material's base color / texture |
 | `texture` | Image overriding the material's base color texture (UVs: built-in meshes have 0..1 per face) |
 | `opacity` | 0..1; below 1 the object is drawn transparent (see [Transparency](#transparency)) |
@@ -187,7 +190,7 @@ oe exec <project> asset.info '{"path":"materials/gold.mat.json"}'
 
 A shader graph can also bend the surface: its optional `offset` output is added to every vertex's world position in the vertex stage (shadows, depth of field and the selection outline follow it; physics and picking do not), and its `normal` output replaces the lighting normal per fragment. Use the `plane64` built-in mesh for a flat surface with enough vertices; see the same POSTPROCESS.md section; `games/RPG` uses `offset` for swaying grass and trees.
 
-`MeshRenderer.material` is applied to every submesh. If it is empty, a model uses its own glTF materials and a built-in mesh (`cube`, `sphere`, ...) uses the default material (white, metallic 0, roughness 0.7, opaque). On top of that:
+`MeshRenderer.material` is applied to every submesh, except those whose material has an entry in `MeshRenderer.materials` (a character with a file per part: face, hair, clothes). If it is empty, a model uses its own glTF materials and a built-in mesh (`cube`, `sphere`, ...) uses the default material (white, metallic 0, roughness 0.7, opaque). On top of that:
 
 | Field | Effect |
 |---|---|

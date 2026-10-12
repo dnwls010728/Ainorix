@@ -1071,6 +1071,7 @@ void NativeEditor::Impl::ApplyEvents(const std::vector<WindowEvent>& events) {
                 break;
             case WindowEvent::Type::MouseWheel:
                 if (!locked) io.AddMouseWheelEvent(e.x, e.y);
+                else capturedWheel += e.y;  // forwarded by GameInput
                 break;
             case WindowEvent::Type::Key: {
                 ImGuiKey k = ToImGuiKey(e.key);
@@ -1260,6 +1261,12 @@ void NativeEditor::Impl::MainMenu() {
         if (ImGui::MenuItem(Tr("Frame Selected"), "F", false, any)) FrameSelection();
         if (ImGui::MenuItem(Tr("Select None"), "Esc", false, any)) selection.clear();
         ImGui::Separator();
+        if (ImGui::MenuItem(WithIcon(kIconPersonStanding, Tr("Retarget Animation...")).c_str())) {
+            // With a model selected: that character.
+            const MeshRenderer* renderer = selection.empty() ? nullptr : engine.GetScene().Get<MeshRenderer>(*selection.begin());
+            const bool model = renderer && renderer->mesh.find('.') != std::string::npos;
+            OpenRetarget(model ? renderer->mesh : std::string(), std::string());
+        }
         if (ImGui::MenuItem(WithIcon(kIconSettings, Tr("Settings...")).c_str())) {
             showSettings = true;
             ImGui::SetWindowFocus(WithIcon(kIconSettings, TrId("Settings")).c_str());
@@ -1858,6 +1865,7 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.teamAvailable) m.TeamModals();
     if (m.teamAvailable) m.ImageViewer();
     m.SettingsWindow();
+    m.RetargetWindow();
     if (m.teamAvailable && !m.droppedFiles.empty()) m.RouteDroppedFiles();  // onto the chat: attached, not imported
     m.Toasts();
     if (!m.droppedFiles.empty()) m.ImportDroppedFiles();
@@ -2022,6 +2030,14 @@ void NativeEditor::OpenSettings(const std::string& tab) {
     impl_->settingsTab = tab;
 }
 bool NativeEditor::SettingsOpen() const { return impl_->showSettings; }
+
+void NativeEditor::OpenRetarget(const std::string& target, const std::string& source) { impl_->OpenRetarget(target, source); }
+bool NativeEditor::RetargetOpen() const { return impl_->showRetarget; }
+int NativeEditor::RetargetMapped() const { return static_cast<int>(impl_->retargetRows.size()); }
+std::array<float, 4> NativeEditor::RetargetControlRect(const std::string& name) const {
+    const auto found = impl_->retargetRects.find(name);
+    return found == impl_->retargetRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
 std::array<float, 4> NativeEditor::AskControlRect(int index, const std::string& name) const {
     if (index < 0 || index >= static_cast<int>(impl_->askBubbles.size())) return {0, 0, 0, 0};
     const auto found = impl_->askRects.find(std::to_string(impl_->askBubbles[index].serial) + ":" + name);

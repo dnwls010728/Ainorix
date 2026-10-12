@@ -19,6 +19,8 @@ struct IkGoal {
     float soften = 0;    // chain 2: share of the limb length over which it eases into full extension (0 = none)
     bool matchRotation = false;
     Mat4 rotation;       // model-space orientation for matchRotation (rotation part only)
+    Vec3 turn;           // Euler degrees in model axes added to the bone's posed orientation (BoneIK.turn)
+    bool keepRotation = false;  // the bone keeps the orientation it had before the limb was solved
 };
 
 // First node with this exact name, -1 when there is none (or the name is empty).
@@ -47,7 +49,7 @@ std::vector<Mat4> EvaluateEntityPose(const Scene& scene, EntityId id, const Mesh
 void UpdateSpringBones(Scene& scene, AssetManager& assets, float dt);
 
 // How many bones SpringBone.bone = `bone` swings in this model (0 = unknown name or a bone with nothing below it).
-int SpringBoneCount(const Mesh& mesh, const std::string& bone);
+int SpringBoneCount(const Mesh& mesh, const std::string& bone, float endLength = 0);
 
 // Writes the Transform (position, rotation) of every BoneAttachment entity from its parent's pose.
 void UpdateBoneAttachments(Scene& scene, AssetManager& assets);

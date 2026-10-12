@@ -24,6 +24,7 @@ struct RenderItem {
     Color tint;
     std::shared_ptr<const Texture> textureOverride;    // MeshRenderer.texture; null = the material's own
     std::shared_ptr<const Material> materialOverride;  // MeshRenderer.material; null = the mesh's materials
+    std::vector<std::shared_ptr<const Material>> slotMaterials;  // MeshRenderer.materials by Submesh::material; null = no entry
     // MeshRenderer.shaderUniforms applied over the material's graph uniforms; used when hasShaderUniforms.
     std::array<Vec4, ShaderGraph::kMaxUniforms> shaderUniforms{};
     bool hasShaderUniforms = false;

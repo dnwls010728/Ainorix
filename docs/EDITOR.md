@@ -111,6 +111,15 @@ For a model with bones (glTF or FBX; components and commands in [ANIMATION.md](A
   limb at once. Dropping an entity from the Hierarchy on a row reparents it to the model and holds it on that bone.
   The same actions are in the row's right-click menu, with **Add Spring**: a child entity whose `SpringBone` swings that
   bone and the ones below it while the game plays (refused for a bone with nothing below it).
+- **Retarget Animation** (Edit > Retarget Animation..., or the button above a model's bone list): gives a character the
+  clips of another model. Choose the character and the model with the clips; **Match by Name** fills the bone list
+  from the names of both rigs (Mixamo, 3ds Max Biped, Unreal, Unity / VRM styles; `animation.retarget_map`), every row
+  can be changed, removed or added by hand (bone pickers with search), **End** marks feet and toes, **Hips** is the
+  bone that takes the body's movement. Tick the clips, rename them for the character, and **Retarget** writes the
+  clip file and lists it in `<model>.clips.json` (`animation.retarget`). Check it with
+  `oe editor <project> --screenshot f.png --retarget <character>[,<model with clips>]`.
+- **Blend Shapes**: a model with blend shapes (morph targets) gets a **Blend Shapes (n)** list above the bones: a search
+  field, a 0..1 slider per shape that edits `MeshRenderer.blendShapes` (one undo step per drag) and **Reset All**.
 - **Name fields**: `BoneIK.bone`, `BoneAttachment.bone`, `SpringBone.bone` and `Animator.clip` have a `...` button that lists the model's
   bones (indented, searchable) or clips (with durations). A name the model does not have is shown in red.
 - **Scene view**: the **Bones** toggle (also View > Bones, saved with the layout) draws the skeleton of the selected
