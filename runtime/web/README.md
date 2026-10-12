@@ -5,28 +5,26 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from `main` (cdc4ac2 + reflection probes, docs/ENVIRONMENT.md: the `ReflectionProbe` component, its picture taken by the software renderer, box projection, four probe textures in the mesh shader; +59 KB of wasm). The build before it (same day, 62d0bc5) added the image environment: the `Skybox` component with three colors or an equirectangular `.hdr`/`.png` panorama, image-based ambient and reflections, the sky background and sun disc, `.hdr` decoding; +56 KB of wasm. The build before that (2026-10-12) was from cc8b3a0 + packaged game data read in place: `game.pak` in the packed, per-game-key-enciphered `OEPAK002` format is stored at `/game.pak` by the page and mounted as `/game`, scripts load as stripped Lua bytecode, and the wasm carries the game's key in a slot `oe package` fills, docs/PACKAGING.md; +24 KB of wasm; needs the `index.html` of that commit or later. The build before it (same day, cc8b3a0) added the navigation mesh: Recast/Detour, `nav.*`, `oe.nav`, docs/NAVIGATION.md (+172 KB of wasm). The build before it (same day) was from 0925dd0 + models with up to 1024 joints drawn in ranges of 64, `MeshRenderer.materials`, `parentPose`, blend shapes / morph targets through `MeshRenderer.blendShapes`, spring bone patterns, colliders, `endLength`, `limit` and `air`, clips from other files (`<model>.clips.json`), `Animator.blend`, `BoneIK.keepRotation` / `turn`, `physics.raycast` with an entity to ignore and `CharacterBody` steps lower than the capsule radius; +135 KB of wasm). The build before it (same day, 5c20a25) added FBX model loading through ufbx, bone attachments, IK, spring bones and physics joints (+402 KB of wasm). The build before it (2026-10-10) made GL drivers' unused vertex inputs and uniforms log at debug level instead of
-nameless `sg item` warnings). The previous build, from branch `claude/axis-locks`, added per-axis physics locks and shaders without the
-loops the D3D compiler had to unroll: the shadow lookup moved out of the directional-light loop, `GraphFinite`
-without a loop. This build contains every engine feature up to then, including the
-GPU performance work of docs/RENDER_PERF.md (shadow fit without the CPU vertex stage, depth of field from the scene
-pass's second target, frustum culling, dynamic batching, `shadowDistance`, shader graphs compiled to GLSL ES): scripting and official
-Lua modules, physics (Jolt, Box2D), UI widgets, saves, animation, gamepads and multi-touch, host bridge,
-networking (WebSocket client, protocol v4), asset-based VFX with expressions, surface shader graphs (vertex offset,
-normal, `Sprite.material`), post effects (tone mapping incl. ACES, bloom, DOF, FXAA, fog, colour grading),
-hemisphere ambient, `Sprite.emission`, glTF `COLOR_0` and the `LeftBracket`/`RightBracket` key names.
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (d24d743). R2 adds the SpotLight
+component, soft cone attenuation and an 8x9 RGBA32F light-data texture shared with sky/probe irradiance.
+See [LIGHTING.md](../../docs/LIGHTING.md). All earlier player features remain included; earlier build
+history is preserved in Git. Packaging still patches the game's key into the runtime for keyed OEPAK002
+archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 3ad966f135787b1393f8806f79de30cfcadcfb414ddfc06bc7b4126edd91e8e6 |
-| oe_player.wasm | 5,913,391 | ee9c23a0a9234700d65666a7bae520676af074dd163497ff4ca8d795cb914cb5 |
+| oe_player.wasm | 5,929,528 | 36e713fc3dcef9caa7d1e8ffe40f5698caec71f8abc65384e76b82cf4378f001 |
 
-Windows Release: all engine tests pass. In headless Edge (WebGL2 on SwiftShader) this build drew a closed room with a `ReflectionProbe` out of a keyed `game.pak`: the probe's picture was taken in the browser (181 ms for 128 pixel faces, one thread) and a chrome and a satin sphere and a glossy floor reflected the room's colored walls instead of the sky, with no shader or WebGL warnings, looking like the Windows GPU frame. The build before it drew a scene with a `.hdr` `Skybox` out of a keyed `game.pak`: the panorama as the background, metal spheres from mirror to rough reflecting its blurred levels (the half-float texture with `textureLod`), image-based ambient, bloom and ACES, with no shader or WebGL warnings, looking like the Windows GPU frame. The build before that, in headless Edge, read a game out of an `OEPAK002` `game.pak` keyed to that game (its key patched into the wasm, scripts as bytecode compiled on Windows), baked a navigation mesh from colliders and walked an `oe.nav` agent along a path with the same polygon count, path length and end position as on Windows; nothing else was run in a browser for these builds (FBX models, models with more than 64 joints, blend shapes, `BoneAttachment`, `BoneIK`, `SpringBone`, `Joint` and `Joint2D` are covered by the Windows tests only). With the 2026-10-10 build, `games/RPG` ran in headless Edge (WebGL2 on SwiftShader):
-compiled shader graphs (swaying trees, terrain, water, sky), shadows, the depth-of-field MRT target and fog render
-with no shader compile warnings. Not verified in a browser for this build: frame rate on real GPUs, typing into `UIInput`,
-real ads, sound output and phone touch.
-A browser can join binary WebSocket sessions but cannot host or use raw UDP/TCP (`link.open` returns `nil`).
-Earlier per-build notes are in the git history of this file.
+Windows Release: 346 tests pass. Headless Edge (WebGL2 on SwiftShader) rendered the packaged spotlight
+demo and the existing reflection-probe room without shader/WebGL warnings. The room's probe captured
+128-pixel faces in 185 ms. The shader has 12 texture units and 187 fragment uniform vectors, plus twelve
+sampler uniforms, within the GLES3/WebGL2 fragment minimums. The pre-existing vertex skin/graph uniform
+budget is unchanged; execution on devices exposing only the vertex-stage minimum remains unverified.
+
+Not verified on real browser GPUs or phones: frame rate, UIInput typing, sound output, touch, ads, and
+the newer animation/physics/networking paths beyond the earlier recorded browser checks. A browser can
+join binary WebSocket sessions but cannot host or use raw UDP/TCP (link.open returns nil).
 
 ## Rebuild
 

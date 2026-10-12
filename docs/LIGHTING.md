@@ -81,10 +81,12 @@ Windows Release validation: **346 tests, zero failed checks**. Headless Edge on 
 spotlight demo and the existing probe room without shader/WebGL warnings; the probe capture took 185 ms.
 Android arm64-v8a and x86_64 players build successfully with 16 KB ELF load alignment; no device run.
 
-## Implementation status (work log)
+## Status
 
-- [x] R2 M1: component/schema, shared light data, software/GPU shading, editor creation/icon/cone,
-  API and feature documentation, automated tests and software/GPU/editor screenshots.
-- [ ] R2 M2: rebuild web and Android players; package and check the web demo in headless Edge.
-- [ ] Android physical-device rendering (not available here; build only).
+R2 is complete: component, both renderers, editor guides, documentation, 346 Windows tests, and rebuilt
+web/Android runtimes. The packaged demo and reflection-probe room were checked in headless Edge.
+R3 cascaded shadows and R4 local-light shadows remain separate roadmap items.
+
+- [ ] Android physical-device rendering (build only here; package/install and verify on GLES3 hardware).
 - [ ] Linux/EGL rendering (requires a Linux environment).
+- [ ] Existing skin/vertex-graph shader execution on minimum-capability devices; R2 leaves that vertex budget unchanged.

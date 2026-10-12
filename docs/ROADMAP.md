@@ -125,8 +125,53 @@ leave a new line for every check that could not be made. If the order has to cha
 | P5 Web multi-touch | [TOUCH.md](TOUCH.md) | Real mobile browsers |
 | P6 GPU effects: shader graphs, tone mapping, bloom, DOF, FXAA, fog, grading | [POSTPROCESS.md](POSTPROCESS.md) | WebGL2/GLES3/EGL execution of the newer shaders |
 | P7 Editor improvements | [EDITOR.md](EDITOR.md) | Native file chooser by hand; Linux editor |
+| R1 Environment: `Skybox`, image-based lighting, `ReflectionProbe` | [ENVIRONMENT.md](ENVIRONMENT.md) | Android device |
+| R2 Spotlight: soft cone, both renderers, editor cone guide | [LIGHTING.md](LIGHTING.md) | Android device; Linux/EGL; existing minimum-capability vertex shader path |
 
 Each feature doc lists its own open items under **Status**.
+
+### R. Rendering baseline — before P8
+
+Order changed: these come before P8–P10 because they are what any 3D game expects from a renderer, while P8–P10
+wait for a game that needs them. R1 (environment) is done and is the model for the others: read
+[ENVIRONMENT.md](ENVIRONMENT.md) and its commits (`93da244`..`1ead30b`) to see what one item contains — the
+component, both renderers, the editor (Create menu entry, icon, gizmo, `Tr()` rows), a test, the docs, the rebuilt
+web and Android runtimes.
+
+Rules for every item here:
+
+- Both renderers get the same math (`GpuRendererMatchesSoftware`); render the same scene with `oe render` and
+  `oe render --renderer gpu`, compare the PNGs and report the difference.
+- A scene that does not use the feature keeps its software frame hash, and old scene files still load.
+- Limits are fixed numbers stated in the doc (lights per frame, map sizes); the shaders must stay inside the
+  WebGL2 / GLES3 minimums (uniform count, texture units — the mesh program already uses bindings 0–10).
+- Leave a small project under `build/` that shows the feature and say how to open it.
+- The work log of R2–R4 goes into a new `docs/LIGHTING.md`; R5 and R9 into [POSTPROCESS.md](POSTPROCESS.md);
+  the others into a doc of their own.
+
+- [x] **R2 — Spotlight.** A cone light: color, intensity, range, inner and outer angle (soft edge), aimed by
+  the entity's rotation. A new component or more fields on `PointLight` — decide from the code. Keep the light
+  data ready for a shadow (R4) but do not build the shadow here. Editor: cone gizmo.
+  Implemented: `SpotLight`, eight spots per frame; Windows tests and WebGL2 demo checked, web/Android runtimes rebuilt.
+  Remaining: Android physical-device rendering; Linux/EGL rendering; existing skin/vertex-graph path on minimum-capability devices.
+- [ ] **R3 — Cascaded shadows.** The sun's shadow in several maps by distance (`DirectionalLight` fields for
+  the count and the far distance) so a large outdoor scene keeps sharp shadows near the camera. Blend between
+  cascades; stable under camera motion (texel snapping).
+- [ ] **R4 — Point and spot light shadows.** `shadows` on those lights; a fixed budget of shadowed lights per
+  frame, chosen like the probes (in view, nearest first).
+- [ ] **R5 — Ambient occlusion (SSAO).** A `PostProcess` effect darkening the ambient term in creases and
+  contacts, from the depth buffer, in both renderers.
+- [ ] **R6 — Planar reflection.** A mirror or water plane that shows what moves (characters), which probes
+  cannot: the scene drawn again from the mirrored camera, used by one flat surface.
+- [ ] **R7 — Decals.** A box that projects a texture onto the surfaces inside it (bullet marks, stains, floor
+  markings), with its own draw order and fade.
+- [ ] **R8 — Particles colliding with the world.** A VFX emitter option: particles stop, bounce or die on
+  static colliders (rain on the ground, sparks), deterministic.
+- [ ] **R9 — Screen-space reflection.** A `PostProcess` effect for glossy floors; falls back to the probe or
+  sky where the ray leaves the screen.
+
+Later, in no fixed order: motion blur, chromatic aberration, temporal anti-aliasing; volumetric light and fog;
+refraction, water, caustics; clear coat.
 
 ### P8. 2D navigation (grid path finding) — [ ]
 
