@@ -467,6 +467,42 @@ bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::stri
     return true;
 }
 
+bool DecodeImageFloat(const unsigned char* data, size_t size, std::vector<float>& rgb, int& width, int& height, std::string* error) {
+    int w = 0, h = 0, channels = 0;
+    if (size > 0x7fffffff || !stbi_info_from_memory(data, static_cast<int>(size), &w, &h, &channels)) {
+        if (error) *error = "cannot decode image: not a supported image file";
+        return false;
+    }
+    if (w <= 0 || h <= 0 || static_cast<int64_t>(w) * h > static_cast<int64_t>(8192) * 4096) {
+        if (error) *error = "image is too large for an environment (at most 8192 x 4096)";
+        return false;
+    }
+    const size_t count = static_cast<size_t>(w) * static_cast<size_t>(h) * 3;
+    if (stbi_is_hdr_from_memory(data, static_cast<int>(size))) {
+        float* pixels = stbi_loadf_from_memory(data, static_cast<int>(size), &w, &h, &channels, 3);
+        if (!pixels) {
+            if (error) *error = std::string("cannot decode image: ") + stbi_failure_reason();
+            return false;
+        }
+        rgb.resize(count);
+        // Linear light to display colors (what the renderers light in), keeping the highlights above 1.
+        for (size_t i = 0; i < count; ++i) rgb[i] = pixels[i] > 0.0f ? std::pow(pixels[i], 1.0f / 2.2f) : 0.0f;
+        stbi_image_free(pixels);
+    } else {
+        unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &channels, 3);
+        if (!pixels) {
+            if (error) *error = std::string("cannot decode image: ") + stbi_failure_reason();
+            return false;
+        }
+        rgb.resize(count);
+        for (size_t i = 0; i < count; ++i) rgb[i] = static_cast<float>(pixels[i]) / 255.0f;
+        stbi_image_free(pixels);
+    }
+    width = w;
+    height = h;
+    return true;
+}
+
 bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& height) {
     int channels = 0;
     return size <= 0x7fffffff && stbi_info_from_memory(data, static_cast<int>(size), &width, &height, &channels) != 0;
@@ -598,7 +634,7 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
 std::string AssetManager::KindOf(const std::string& path) {
     std::string p = Lower(path);
     if (EndsWith(p, ".glb") || EndsWith(p, ".gltf") || EndsWith(p, ".fbx")) return "model";
-    if (EndsWith(p, ".png") || EndsWith(p, ".jpg") || EndsWith(p, ".jpeg") || EndsWith(p, ".bmp") || EndsWith(p, ".tga")) return "texture";
+    if (EndsWith(p, ".png") || EndsWith(p, ".jpg") || EndsWith(p, ".jpeg") || EndsWith(p, ".bmp") || EndsWith(p, ".tga") || EndsWith(p, ".hdr")) return "texture";
     if (EndsWith(p, ".wav")) return "audio";
     if (EndsWith(p, ".ttf") || EndsWith(p, ".otf") || EndsWith(p, ".ttc")) return "font";
     if (EndsWith(p, ".lua")) return "script";
@@ -638,6 +674,24 @@ AssetManager::Entry<Texture> AssetManager::LoadTexture(const std::string& path) 
         if (!ReadBinaryFile(full, bytes)) e.error = "texture file not found: " + path;
         else if (DecodeImage(bytes.data(), bytes.size(), *tex, &e.error)) e.asset = tex;
         else e.error = path + ": " + e.error;
+    } catch (const std::exception& ex) {
+        e.error = ex.what();
+    }
+    if (!e.error.empty()) OE_LOG_WARN("assets", "%s", e.error.c_str());
+    return e;
+}
+
+AssetManager::Entry<EnvironmentMap> AssetManager::LoadEnvironment(const std::string& path) {
+    Entry<EnvironmentMap> e;
+    try {
+        std::string full = engine_.ResolvePath(path);
+        e.mtime = FileModifiedTime(full);
+        std::vector<unsigned char> bytes;
+        std::vector<float> rgb;
+        int w = 0, h = 0;
+        if (!ReadBinaryFile(full, bytes)) e.error = "environment image not found: " + path;
+        else if (!DecodeImageFloat(bytes.data(), bytes.size(), rgb, w, h, &e.error)) e.error = path + ": " + e.error;
+        else e.asset = BuildEnvironmentMap(rgb.data(), w, h);
     } catch (const std::exception& ex) {
         e.error = ex.what();
     }
@@ -806,6 +860,13 @@ std::shared_ptr<const Texture> AssetManager::GetTexture(const std::string& path,
     return it->second.asset;
 }
 
+std::shared_ptr<const EnvironmentMap> AssetManager::GetEnvironment(const std::string& path, std::string* error) {
+    auto it = environments_.find(path);
+    if (it == environments_.end()) it = environments_.emplace(path, LoadEnvironment(path)).first;
+    if (error) *error = it->second.error;
+    return it->second.asset;
+}
+
 std::vector<std::string> AssetManager::PollChanges() {
     std::vector<std::string> changed;
     auto mtimeOf = [&](const std::string& path) -> int64_t {
@@ -825,6 +886,12 @@ std::vector<std::string> AssetManager::PollChanges() {
         if (mtimeOf(kv.first) != kv.second.mtime) {
             kv.second = LoadTexture(kv.first);
             changed.push_back(kv.first);
+        }
+    }
+    for (auto& kv : environments_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            kv.second = LoadEnvironment(kv.first);
+            if (std::find(changed.begin(), changed.end(), kv.first) == changed.end()) changed.push_back(kv.first);
         }
     }
     for (auto& kv : shaders_) {
@@ -872,6 +939,7 @@ void AssetManager::Forget(const std::string& path) {
     }
     meshes_.erase(path);
     textures_.erase(path);
+    environments_.erase(path);
     materials_.erase(path);
     fonts_.erase(path);
     tilesets_.erase(path);
@@ -882,6 +950,7 @@ void AssetManager::Clear() {
     shaders_.clear();
     meshes_.clear();
     textures_.clear();
+    environments_.clear();
     materials_.clear();
     fonts_.clear();
     tilesets_.clear();

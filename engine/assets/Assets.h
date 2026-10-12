@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Json.h"
+#include "render/Environment.h"
 #include "render/Font.h"
 #include "render/Mesh.h"
 #include "scene/TileGrid.h"
@@ -20,6 +21,9 @@ bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::stri
 // Size of an encoded image from its header, without decoding the pixels (callers bound the
 // memory a decode may take). False when the data is not a supported image.
 bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& height);
+// An image as floats (width * height * 3, display colors): Radiance .hdr keeps values above 1
+// (converted from linear light like the 8-bit decode does), other formats give 0..1.
+bool DecodeImageFloat(const unsigned char* data, size_t size, std::vector<float>& rgb, int& width, int& height, std::string* error);
 // glTF 2.0 (.glb/.gltf) or FBX (.fbx, see assets/Fbx.h), chosen by the extension.
 bool LoadModelFile(const std::string& path, Mesh& out, std::string* error);
 
@@ -33,6 +37,9 @@ public:
     // Built-in mesh name or model path (.glb/.gltf/.fbx). nullptr + error on failure.
     std::shared_ptr<const Mesh> GetMesh(const std::string& name, std::string* error = nullptr);
     std::shared_ptr<const Texture> GetTexture(const std::string& path, std::string* error = nullptr);
+    // An equirectangular image (.hdr/.png/.jpg) prepared as an environment (Skybox.texture): blurred
+    // levels for reflections and the irradiance terms. nullptr + error on failure.
+    std::shared_ptr<const EnvironmentMap> GetEnvironment(const std::string& path, std::string* error = nullptr);
     // Material file (*.mat.json). nullptr + error on failure.
     std::shared_ptr<const Material> GetMaterial(const std::string& path, std::string* error = nullptr);
     // Portable surface graph (*.shader.json); validated and cached including failures.
@@ -65,6 +72,7 @@ private:
     };
     Entry<Mesh> LoadMesh(const std::string& path);
     Entry<Texture> LoadTexture(const std::string& path);
+    Entry<EnvironmentMap> LoadEnvironment(const std::string& path);
     Entry<Material> LoadMaterial(const std::string& path);
     Entry<ShaderGraph> LoadShader(const std::string& path);
     Entry<Tileset> LoadTileset(const std::string& path);
@@ -79,6 +87,7 @@ private:
     Engine& engine_;
     std::map<std::string, Entry<Mesh>> meshes_;
     std::map<std::string, Entry<Texture>> textures_;
+    std::map<std::string, Entry<EnvironmentMap>> environments_;
     std::map<std::string, Entry<Material>> materials_;
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;

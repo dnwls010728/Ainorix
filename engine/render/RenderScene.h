@@ -1,9 +1,11 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "core/Math.h"
+#include "render/Environment.h"
 #include "render/Mesh.h"
 #include "scene/Scene.h"
 
@@ -109,8 +111,9 @@ struct RenderPointLight {
     float range;
 };
 
-// A scene's analytic sky environment (the Skybox component), sampled by both renderers for
-// image-based lighting and the background. Colors already include the component's intensity.
+// A scene's sky environment (the Skybox component), sampled by both renderers for image-based
+// lighting and the background: three colors (they already include the component's intensity), or
+// an image (`map`, with `intensity`, turned by the yaw).
 struct RenderEnvironment {
     bool present = false;
     Color sky{0, 0, 0};      // zenith
@@ -122,6 +125,11 @@ struct RenderEnvironment {
     Vec3 sunDir{0, -1, 0};     // direction the sun's light travels (the disc is toward -sunDir)
     Color sunColor{0, 0, 0};   // sun disc color (the first directional light's color)
     float sunCos = 0.9995f;    // cosine of the sun disc's angular radius
+    std::string texture;       // Skybox.texture; `map` is its prepared image when it loaded
+    std::shared_ptr<const EnvironmentMap> map;
+    float intensity = 1.0f;    // multiplies the image
+    float yawCos = 1.0f, yawSin = 0.0f;  // rotation of the image around +Y
+    Vec3 sh[9];                // the image's irradiance terms times intensity (see EnvIrradianceSH)
 };
 
 // The sky color along a world direction: ground below the horizon, sky above, the horizon between.
@@ -136,9 +144,35 @@ inline Color SampleSky(const RenderEnvironment& e, const Vec3& dir) {
     return e.horizon * (1.0f - t) + e.ground * t;
 }
 
-// The sky as the background: the gradient plus a soft sun disc toward the light. Not used for the
-// reflection/ambient (the directional light already lights surfaces); mirrors sky_bg in Shaders.glsl.
+// A world direction in the image's space (the image turned around +Y). env_dir in Shaders.glsl.
+inline Vec3 EnvMapDir(const RenderEnvironment& e, const Vec3& d) {
+    return Vec3(e.yawCos * d.x + e.yawSin * d.z, d.y, -e.yawSin * d.x + e.yawCos * d.z);
+}
+
+// Diffuse ambient on a surface facing `n`. The three functions below are the environment branch of
+// Lighting::Shade and of mesh_fs (Shaders.glsl); keep the shader identical.
+inline Color EnvDiffuse(const RenderEnvironment& e, const Vec3& n) {
+    if (e.map) {
+        const Vec3 v = EnvIrradianceSH(e.sh, EnvMapDir(e, n));
+        return Color(std::max(0.0f, v.x), std::max(0.0f, v.y), std::max(0.0f, v.z));
+    }
+    const float up = n.y * 0.5f + 0.5f;
+    return SampleSky(e, Vec3(0, -1, 0)) * (1.0f - up) + SampleSky(e, Vec3(0, 1, 0)) * up;
+}
+
+// What a surface of roughness `r` (0.04..1) reflects along `refl`: the image's blurred level for
+// that roughness, or the gradient blurred toward the sky/ground average.
+inline Color EnvSpecular(const RenderEnvironment& e, const Vec3& refl, float r) {
+    if (e.map) return e.map->Sample(EnvMapDir(e, refl), (r - 0.04f) / 0.96f * e.map->MaxLod()) * e.intensity;
+    const Color dull = (SampleSky(e, Vec3(0, 1, 0)) + SampleSky(e, Vec3(0, -1, 0))) * 0.5f;
+    return SampleSky(e, refl) * (1.0f - r) + dull * r;
+}
+
+// The sky as the background: the image, or the gradient plus a soft sun disc toward the light (the
+// disc is not part of the reflection/ambient: the directional light already lights surfaces).
+// Mirrors sky_fs in Shaders.glsl.
 inline Color SampleSkyBackground(const RenderEnvironment& e, const Vec3& dir) {
+    if (e.map) return e.map->Sample(EnvMapDir(e, dir), 0.0f) * e.intensity;
     Color c = SampleSky(e, dir);
     if (e.sun) {
         const float d = Dot(dir, e.sunDir * -1.0f);
@@ -162,7 +196,8 @@ struct RenderLights {
 
 // The camera view orients particle billboards; identity faces +Z for callers without a camera.
 std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView = Mat4{});
-RenderLights GatherRenderLights(const Scene& scene);
+// `assets` (optional) loads the image of a textured Skybox; without it the Skybox keeps its colors.
+RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets = nullptr);
 
 // Orthographic view-projection of the first directional light, fitted to a
 // bounding box of the shadow casters and receivers.

@@ -125,14 +125,9 @@ struct Lighting {
         Color fenv = f0 + (fr + f0 * -1.0f) * fe;
         Color c;
         if (env.present) {
-            // Image-based lighting from the analytic sky: diffuse ambient from the sky above and
-            // ground below, specular from the sky along the reflection vector (blurred toward the
-            // sky/ground average as the surface roughens). Mirrors the env branch of mesh_fs.
-            const float up = n.y * 0.5f + 0.5f;
-            const Color ambDiffuse = SampleSky(env, Vec3(0, -1, 0)) * (1.0f - up) + SampleSky(env, Vec3(0, 1, 0)) * up;
-            const Color dull = (SampleSky(env, Vec3(0, 1, 0)) + SampleSky(env, Vec3(0, -1, 0))) * 0.5f;
-            const Color envSpec = SampleSky(env, refl) * (1.0f - r) + dull * r;
-            c = (ambDiffuse * diffuse + fenv * envSpec * env.reflections) * ao;
+            // Image-based lighting: diffuse ambient from the whole sky, specular from the sky along
+            // the reflection vector, blurrier as the surface roughens (RenderScene.h; mesh_fs mirrors it).
+            c = (EnvDiffuse(env, n) * diffuse + fenv * EnvSpecular(env, refl, r) * env.reflections) * ao;
         } else {
             Color amb = ambient;
             if (hemisphere) {  // mesh_fs: mix(ground, sky, n.y * 0.5 + 0.5)
@@ -510,27 +505,34 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     auto start = std::chrono::steady_clock::now();
     RenderStats stats;
     const PostProcess post = NormalizePostProcess(view.postProcess);
-    RenderLights gathered = GatherRenderLights(scene);
+    RenderLights gathered = GatherRenderLights(scene, assets_);
     auto fillFloor = [&](Color c) {
         return view.editorFill > 0.0f
             ? Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)) : c;
     };
     RenderEnvironment env = gathered.env;  // analytic sky (image-based lighting + background)
     if (env.present) { env.sky = fillFloor(env.sky); env.horizon = fillFloor(env.horizon); env.ground = fillFloor(env.ground); }
+    if (env.map && view.editorFill > 0.0f) env.sh[0] = env.sh[0] + Vec3(view.editorFill, view.editorFill, view.editorFill);
 
     std::vector<Color> hdr;
     const bool usesHdr = UsesHdr(post);
     if (usesHdr) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
     if (env.present && env.background) {
         // Background is the sky along each pixel's world ray (the skybox), not a flat clear color.
+        // The ray (far point minus near point) is linear across the screen: four corners give all.
         const Mat4 invVP = (view.proj * view.view).Inverse();
+        auto ray = [&](float nx, float ny) {
+            const Vec4 a = invVP * Vec4(nx, ny, -1.0f, 1.0f), b = invVP * Vec4(nx, ny, 1.0f, 1.0f);
+            return b.xyz() * (1.0f / b.w) - a.xyz() * (1.0f / a.w);
+        };
+        const Vec3 r00 = ray(-1, 1), r10 = ray(1, 1), r01 = ray(-1, -1), r11 = ray(1, -1);
         const int w = target.width, h = target.height;
         for (int y = 0; y < h; ++y) {
+            const float ty = (static_cast<float>(y) + 0.5f) / static_cast<float>(h);
+            const Vec3 left = r00 * (1.0f - ty) + r01 * ty, right = r10 * (1.0f - ty) + r11 * ty;
             for (int x = 0; x < w; ++x) {
-                const float nx = (static_cast<float>(x) + 0.5f) / static_cast<float>(w) * 2.0f - 1.0f;
-                const float ny = 1.0f - (static_cast<float>(y) + 0.5f) / static_cast<float>(h) * 2.0f;
-                const Vec4 a = invVP * Vec4(nx, ny, -1.0f, 1.0f), b = invVP * Vec4(nx, ny, 1.0f, 1.0f);
-                const Vec3 dir = Normalize(b.xyz() * (1.0f / b.w) - a.xyz() * (1.0f / a.w));
+                const float tx = (static_cast<float>(x) + 0.5f) / static_cast<float>(w);
+                const Vec3 dir = Normalize(left * (1.0f - tx) + right * tx);
                 const Color sky = SampleSkyBackground(env, dir);
                 const size_t i = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
                 target.color[i] = Pack(sky);

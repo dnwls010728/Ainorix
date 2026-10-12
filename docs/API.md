@@ -2457,17 +2457,19 @@ Light bulb at the entity position, fading to zero at `range`.
 
 ### Skybox
 
-Analytic sky environment: surfaces reflect the sky/horizon/ground colors (image-based lighting). One per scene.
+Sky environment: lights the scene, is reflected by smooth/metallic surfaces (image-based lighting) and drawn as the background. Three colors, or an equirectangular image. One per scene.
 
 | field | type | default | description |
 |---|---|---|---|
-| `sky` | color | `[0.300000012,0.469999999,0.800000012]` | Color straight up (zenith). |
-| `horizon` | color | `[0.699999988,0.779999971,0.899999976]` | Color at the horizon. |
-| `ground` | color | `[0.280000001,0.270000011,0.300000012]` | Color below the horizon (light bounced from the ground). |
+| `texture` | string | `""` | Equirectangular (2:1 panorama) image of the surroundings, .hdr (keeps bright lights) or .png/.jpg. Lights the scene, is reflected (blurrier on rougher surfaces) and drawn as the background. Empty = the sky/horizon/ground colors. |
+| `rotation` | float | `0` | Turns the image around the vertical axis, degrees. |
+| `sky` | color | `[0.300000012,0.469999999,0.800000012]` | Color straight up (zenith). Used without a texture. |
+| `horizon` | color | `[0.699999988,0.779999971,0.899999976]` | Color at the horizon. Used without a texture. |
+| `ground` | color | `[0.280000001,0.270000011,0.300000012]` | Color below the horizon (light bounced from the ground). Used without a texture. |
 | `intensity` | float | `1` | Multiplies the whole environment. |
 | `reflections` | float | `1` | 0 = ambient light only, 1 = full sky reflection on smooth metal/wet surfaces. |
 | `background` | bool | `true` | Draw the sky behind the scene (off = keep the camera's clear color). |
-| `sun` | bool | `true` | Draw a sun disc in the first directional light's direction. |
+| `sun` | bool | `true` | Draw a sun disc in the first directional light's direction (not with a texture: the image has its own sun). |
 | `sunSize` | float | `2.5` | Sun disc size in degrees. |
 
 ### CameraFollow

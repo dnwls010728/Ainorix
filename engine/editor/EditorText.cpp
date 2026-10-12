@@ -787,6 +787,7 @@ const Entry kCatalog[] = {
     {"Camera", "카메라", "カメラ"},
     {"Directional Light", "방향 조명", "ディレクショナルライト"},
     {"Point Light", "점 조명", "ポイントライト"},
+    {"Sky", "하늘", "空"},
     {"Physics Crate", "물리 상자", "物理ボックス"},
     {"Physics Ball", "물리 공", "物理ボール"},
     {"Static Wall", "고정 벽", "静的な壁"},

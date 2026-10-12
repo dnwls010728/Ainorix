@@ -256,7 +256,9 @@ layout(binding=2) uniform mesh_lights {
     vec4 point_color[16];
     vec4 env_sky;        // rgb: sky (zenith) color with intensity, w: 1 = sky environment present
     vec4 env_horizon;    // rgb: horizon color, w: environment reflection strength
-    vec4 env_ground;     // rgb: ground (below horizon) color
+    vec4 env_ground;     // rgb: ground (below horizon) color, w: intensity of the environment image
+    vec4 env_map;        // x: 1 = the environment is an image (env_tex), y: its last (most blurred) level, z/w: cos/sin of its rotation
+    vec4 env_sh[9];      // rgb: irradiance terms of the image, with intensity (EnvIrradianceSH in Environment.h)
 };
 
 // Analytic sky color along a world direction. Mirrors SampleSky in RenderScene.h; keep identical.
@@ -278,6 +280,13 @@ layout(binding=2) uniform texture2D normal_tex;
 layout(binding=3) uniform texture2D mr_tex;
 layout(binding=4) uniform texture2D emissive_tex;
 layout(binding=5) uniform texture2D occlusion_tex;
+layout(binding=6) uniform texture2D env_tex;  // equirectangular environment, blurrier level by level
+layout(binding=2) uniform sampler env_smp;
+
+// A world direction in the environment image: turned around +Y, then to equirectangular coordinates
+// (EnvMapDir in RenderScene.h, EnvUV in Environment.h).
+vec3 env_dir(vec3 d) { return vec3(env_map.z * d.x + env_map.w * d.z, d.y, -env_map.w * d.x + env_map.z * d.z); }
+vec2 env_uv(vec3 d) { return vec2(atan(d.x, -d.z) * 0.15915494 + 0.5, acos(clamp(d.y, -1.0, 1.0)) * 0.31830989); }
 
 in vec4 v_color;
 in vec4 v_particle;
@@ -408,13 +417,25 @@ void main() {
         float fe = pow(1.0 - ndv, 5.0);
         vec3 fenv = f0 + (max(vec3(1.0 - r), f0) - f0) * fe;
         if (env_sky.w > 0.5) {
-            // Image-based lighting from the analytic sky: diffuse ambient from the sky above and
-            // ground below, specular from the sky along the reflection vector (blurred toward the
-            // sky/ground average as the surface roughens). Mirrors the env branch of Shade().
-            float up = n.y * 0.5 + 0.5;
-            vec3 ambDiffuse = mix(sky_color(vec3(0.0, -1.0, 0.0)), sky_color(vec3(0.0, 1.0, 0.0)), up);
-            vec3 dull = (sky_color(vec3(0.0, 1.0, 0.0)) + sky_color(vec3(0.0, -1.0, 0.0))) * 0.5;
-            vec3 envSpec = mix(sky_color(refl), dull, r);
+            // Image-based lighting: diffuse ambient from the whole sky, specular from the sky along
+            // the reflection vector, blurrier as the surface roughens. Mirrors EnvDiffuse / EnvSpecular
+            // in RenderScene.h (the software renderer).
+            vec3 ambDiffuse;
+            vec3 envSpec;
+            if (env_map.x > 0.5) {
+                vec3 m = env_dir(n);
+                ambDiffuse = max(env_sh[0].rgb + env_sh[1].rgb * m.y + env_sh[2].rgb * m.z + env_sh[3].rgb * m.x +
+                                 env_sh[4].rgb * (m.x * m.y) + env_sh[5].rgb * (m.y * m.z) +
+                                 env_sh[6].rgb * (3.0 * m.z * m.z - 1.0) + env_sh[7].rgb * (m.x * m.z) +
+                                 env_sh[8].rgb * (m.x * m.x - m.y * m.y), vec3(0.0));
+                float lod = (r - 0.04) / 0.96 * env_map.y;
+                envSpec = textureLod(sampler2D(env_tex, env_smp), env_uv(env_dir(refl)), lod).rgb * env_ground.w;
+            } else {
+                float up = n.y * 0.5 + 0.5;
+                ambDiffuse = mix(sky_color(vec3(0.0, -1.0, 0.0)), sky_color(vec3(0.0, 1.0, 0.0)), up);
+                vec3 dull = (sky_color(vec3(0.0, 1.0, 0.0)) + sky_color(vec3(0.0, -1.0, 0.0))) * 0.5;
+                envSpec = mix(sky_color(refl), dull, r);
+            }
             color = (ambDiffuse * diffuse + fenv * envSpec * env_horizon.w) * ao;
         } else {
             vec3 amb = ambient.rgb;
@@ -859,8 +880,9 @@ void main() {
 @program dof fsq_vs dof_fs
 
 // ----- Skybox background -----------------------------------------------------------
-// A fullscreen triangle drawn first in the scene pass: the analytic sky along each pixel's world
-// ray, plus a soft sun disc. Mirrors SampleSkyBackground in RenderScene.h.
+// A fullscreen triangle drawn first in the scene pass: the sky along each pixel's world ray - the
+// environment image, or the analytic gradient plus a soft sun disc. Mirrors SampleSkyBackground in
+// RenderScene.h.
 @vs sky_vs
 @hlsl_options fixup_clipspace
 out vec2 v_ndc;
@@ -879,7 +901,10 @@ layout(binding=0) uniform sky_params {
     vec4 ground_c;       // rgb: ground color
     vec4 sun_p;          // xyz: toward the sun (-light direction), w: cosine of the disc radius
     vec4 sun_c;          // rgb: sun color, w: 1 = draw the sun
+    vec4 sky_map;        // x: 1 = the sky is an image (sky_tex), y: its intensity, z/w: cos/sin of its rotation
 };
+layout(binding=0) uniform texture2D sky_tex;
+layout(binding=0) uniform sampler sky_smp;
 in vec2 v_ndc;
 out vec4 frag_color;
 out vec4 frag_depth;   // scene pass MRT (depth of field): background is far
@@ -892,11 +917,18 @@ void main() {
     vec4 a = inv_view_proj * vec4(v_ndc, -1.0, 1.0);
     vec4 b = inv_view_proj * vec4(v_ndc, 1.0, 1.0);
     vec3 dir = normalize(b.xyz / b.w - a.xyz / a.w);
-    vec3 c = skyc(dir);
-    if (sun_c.w > 0.5) {
-        float d = dot(dir, sun_p.xyz);
-        float disc = clamp((d - sun_p.w) / max(1e-5, 1.0 - sun_p.w), 0.0, 1.0);
-        c += sun_c.rgb * (disc * disc);
+    vec3 c;
+    if (sky_map.x > 0.5) {
+        vec3 m = vec3(sky_map.z * dir.x + sky_map.w * dir.z, dir.y, -sky_map.w * dir.x + sky_map.z * dir.z);
+        vec2 uv = vec2(atan(m.x, -m.z) * 0.15915494 + 0.5, acos(clamp(m.y, -1.0, 1.0)) * 0.31830989);
+        c = textureLod(sampler2D(sky_tex, sky_smp), uv, 0.0).rgb * sky_map.y;
+    } else {
+        c = skyc(dir);
+        if (sun_c.w > 0.5) {
+            float d = dot(dir, sun_p.xyz);
+            float disc = clamp((d - sun_p.w) / max(1e-5, 1.0 - sun_p.w), 0.0, 1.0);
+            c += sun_c.rgb * (disc * disc);
+        }
     }
     frag_color = vec4(c, 1.0);
     frag_depth = vec4(1.0e6, 0.0, 0.0, 1.0);

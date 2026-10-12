@@ -129,6 +129,7 @@ const Preset kPresets[] = {
     {"pyramid", "Basic", "Pyramid", "Pyramid", R"({"Transform":{"position":[0,0.5,0]},"MeshRenderer":{"mesh":"pyramid"}})"},
     {"camera", "Rendering", "Camera", "Camera", R"({"Transform":{"position":[0,3,8],"rotation":[-15,0,0]},"Camera":{"active":false}})"},
     {"light", "Rendering", "Directional Light", "Directional Light", R"({"Transform":{"rotation":[-50,30,0]},"DirectionalLight":{}})"},
+    {"sky", "Rendering", "Sky", "Sky", R"({"Skybox":{}})"},
     {"pointlight", "Rendering", "Point Light", "Point Light",
      R"({"Transform":{"position":[0,2,0],"scale":[0.2,0.2,0.2]},"MeshRenderer":{"mesh":"sphere","color":[1,0.85,0.6],"unlit":true,"castShadows":false},"PointLight":{}})"},
     {"crate", "Physics", "Physics Crate", "Crate", R"({"Transform":{"position":[0,3,0]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.5,0.3]},"Collider":{},"RigidBody":{}})"},

@@ -251,6 +251,34 @@ struct GpuTexture {
     }
 };
 
+// GPU copy of an environment image: every blur level as a mip level of one texture.
+struct GpuEnvironment {
+    sg_image image{};
+    sg_view view{};
+    std::weak_ptr<const EnvironmentMap> owner;
+    bool permanent = false;
+    void Destroy() {
+        sg_destroy_view(view);
+        sg_destroy_image(image);
+    }
+};
+
+// A non-negative float as a 16-bit half float (rounded to nearest; above the range gives the largest half).
+uint16_t HalfFloat(float value) {
+    value = std::isfinite(value) ? std::min(std::max(value, 0.0f), 65504.0f) : 0.0f;
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    const int exponent = static_cast<int>((bits >> 23) & 0xFF) - 127 + 15;
+    uint32_t mantissa = bits & 0x7FFFFF;
+    if (exponent <= 0) {  // too small for a normal half: a subnormal one, or zero
+        if (exponent < -10) return 0;
+        mantissa |= 0x800000;
+        const uint32_t shift = static_cast<uint32_t>(14 - exponent);
+        return static_cast<uint16_t>((mantissa >> shift) + ((mantissa >> (shift - 1)) & 1));
+    }
+    return static_cast<uint16_t>(((static_cast<uint32_t>(exponent) << 10) | (mantissa >> 13)) + ((mantissa >> 12) & 1));
+}
+
 // Where a draw's geometry lives: its mesh's buffers, or a range of this frame's batch streams.
 struct MeshBinding {
     sg_buffer vbuf{}, ibuf{};
@@ -628,6 +656,8 @@ struct GpuRenderer::Impl {
     bool dofSupported = false;
     bool dofMrtSupported = false;  // RGBA16F view depth beside the scene color at the scene pass's sample count
     sg_sampler linearRepeat{}, linearClamp{}, nearestClamp{}, pixelArt{}, shadowCompare{};
+    sg_sampler envSampler{};  // environment images: around the horizon it repeats, at the poles it clamps
+    bool envHalfFloat = false;  // RGBA16F textures can be filtered here (else environments are stored as RGBA8)
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
     StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
@@ -656,6 +686,7 @@ struct GpuRenderer::Impl {
     std::unordered_map<const Mesh*, GpuMesh> meshes;
     std::unordered_map<const Mesh*, GpuMesh> flatMeshes;
     std::unordered_map<const Texture*, GpuTexture> textures;
+    std::unordered_map<const EnvironmentMap*, GpuEnvironment> environments;
     std::unordered_map<const Texture*, GpuTexture> uiTextures;  // no mips; re-uploaded when Texture::version changes
 
     Impl(GpuDevice& d, AssetManager* a, const Settings& s) : device(d), assets(a), settings(s) {}
@@ -973,6 +1004,14 @@ struct GpuRenderer::Impl {
             d.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
             d.compare = SG_COMPAREFUNC_LESS_EQUAL;
             shadowCompare = sg_make_sampler(&d);
+            d = sg_sampler_desc{};
+            d.min_filter = SG_FILTER_LINEAR;
+            d.mag_filter = SG_FILTER_LINEAR;
+            d.mipmap_filter = SG_FILTER_LINEAR;
+            d.wrap_u = SG_WRAP_REPEAT;
+            d.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+            envSampler = sg_make_sampler(&d);
+            envHalfFloat = sg_query_pixelformat(kHdrFormat).filter;
         }
         {
             static const uint32_t kWhite[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
@@ -1140,6 +1179,7 @@ struct GpuRenderer::Impl {
         sweep(flatMeshes);
         sweep(textures);
         sweep(uiTextures);
+        sweep(environments);
         for (auto it = graphPrograms.begin(); it != graphPrograms.end();) {
             if (it->second.owner.expired()) {
                 it->second.Destroy();
@@ -1282,6 +1322,49 @@ struct GpuRenderer::Impl {
         return (textures[tex] = g).view;
     }
 
+    // GPU copy of an environment image (its blur levels as mip levels); the white texture when there is none.
+    sg_view EnvironmentFor(const std::shared_ptr<const EnvironmentMap>& owner) {
+        const EnvironmentMap* map = owner.get();
+        if (!map || map->levels.empty()) return whiteTex;
+        auto found = environments.find(map);
+        if (found != environments.end() && OwnerAlive(found->second.permanent, found->second.owner)) return found->second.view;
+        if (found != environments.end()) {
+            found->second.Destroy();
+            environments.erase(found);
+        }
+        sg_image_desc d{};
+        d.width = map->levels[0].width;
+        d.height = map->levels[0].height;
+        d.num_mipmaps = static_cast<int>(std::min<size_t>(map->levels.size(), SG_MAX_MIPMAPS));
+        d.pixel_format = envHalfFloat ? kHdrFormat : kColorFormat;
+        std::vector<std::vector<uint16_t>> halves;
+        std::vector<std::vector<uint32_t>> bytes;
+        for (int i = 0; i < d.num_mipmaps; ++i) {
+            const EnvironmentMap::Level& level = map->levels[static_cast<size_t>(i)];
+            const size_t texels = static_cast<size_t>(level.width) * static_cast<size_t>(level.height);
+            if (envHalfFloat) {
+                halves.emplace_back(texels * 4);
+                for (size_t k = 0; k < texels; ++k) {
+                    for (size_t c = 0; c < 3; ++c) halves.back()[k * 4 + c] = HalfFloat(level.rgb[k * 3 + c]);
+                    halves.back()[k * 4 + 3] = 0x3C00;  // 1.0
+                }
+                d.data.mip_levels[i] = {halves.back().data(), texels * 4 * sizeof(uint16_t)};
+            } else {
+                bytes.emplace_back(texels);
+                auto byte = [](float v) { return static_cast<uint32_t>(std::min(std::max(v, 0.0f), 1.0f) * 255.0f + 0.5f); };
+                for (size_t k = 0; k < texels; ++k)
+                    bytes.back()[k] = 0xFF000000u | (byte(level.rgb[k * 3 + 2]) << 16) | (byte(level.rgb[k * 3 + 1]) << 8) | byte(level.rgb[k * 3]);
+                d.data.mip_levels[i] = {bytes.back().data(), texels * sizeof(uint32_t)};
+            }
+        }
+        d.label = "oe-environment";
+        GpuEnvironment g;
+        g.image = sg_make_image(&d);
+        g.view = TextureView(g.image);
+        g.owner = owner;
+        return (environments[map] = g).view;
+    }
+
     // ----- Frame ------------------------------------------------------------------
 
     // The joint palette has its own uniform block, uploaded for skinned items only. Unskinned vertices
@@ -1358,7 +1441,7 @@ struct GpuRenderer::Impl {
         RenderStats stats;
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
-        RenderLights lights = GatherRenderLights(scene);
+        RenderLights lights = GatherRenderLights(scene, assets);
         if (view.editorFill > 0.0f) {  // editor fill: lift the ambient floor so a script-lit scene is visible to edit (matches the software renderer)
             lights.ambient = Color(std::max(lights.ambient.r, view.editorFill), std::max(lights.ambient.g, view.editorFill),
                                    std::max(lights.ambient.b, view.editorFill));
@@ -1556,7 +1639,9 @@ struct GpuRenderer::Impl {
             if (view.editorFill > 0.0f && env.present) {  // editor fill lifts a sky environment's floor (matches the software renderer)
                 auto lift = [&](Color& c) { c = Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)); };
                 lift(env.sky); lift(env.horizon); lift(env.ground);
+                if (env.map) env.sh[0] = env.sh[0] + Vec3(view.editorFill, view.editorFill, view.editorFill);
             }
+            const sg_view envTex = EnvironmentFor(env.map);  // the white texture without an image
             if (env.present && env.background) {
                 // Skybox background: fill the frame with the sky before any geometry (depth test always/no write).
                 sg_apply_pipeline(skyPips[t.hdr ? 1 : 0][t.dofMrt ? 1 : 0]);
@@ -1568,8 +1653,11 @@ struct GpuRenderer::Impl {
                 const Vec3 toSun = env.sunDir * -1.0f;
                 Put(sp.sun_p, toSun.x, toSun.y, toSun.z, env.sunCos);
                 Put(sp.sun_c, env.sunColor.r, env.sunColor.g, env.sunColor.b, env.sun ? 1.0f : 0.0f);
+                Put(sp.sky_map, env.map ? 1.0f : 0.0f, env.intensity, env.yawCos, env.yawSin);
                 sg_apply_uniforms(UB_oe_sky_params, SG_RANGE(sp));
                 sg_bindings skyBind{};
+                skyBind.views[VIEW_oe_sky_tex] = envTex;
+                skyBind.samplers[SMP_oe_sky_smp] = envSampler;
                 sg_apply_bindings(&skyBind);
                 sg_draw(0, 3, 1);
             }
@@ -1600,7 +1688,9 @@ struct GpuRenderer::Impl {
             }
             Put(lu.env_sky, env.sky.r, env.sky.g, env.sky.b, env.present ? 1.0f : 0.0f);
             Put(lu.env_horizon, env.horizon.r, env.horizon.g, env.horizon.b, env.reflections);
-            Put(lu.env_ground, env.ground.r, env.ground.g, env.ground.b, 0);
+            Put(lu.env_ground, env.ground.r, env.ground.g, env.ground.b, env.intensity);
+            Put(lu.env_map, env.map ? 1.0f : 0.0f, env.map ? env.map->MaxLod() : 0.0f, env.yawCos, env.yawSin);
+            for (int i = 0; i < 9; ++i) Put(lu.env_sh[i], env.sh[i].x, env.sh[i].y, env.sh[i].z, 0);
             // Draw list order: opaque, then transparent back to front. Switching
             // pipelines drops uniforms, so the lights are re-applied each time.
             sg_pipeline current{};
@@ -1658,6 +1748,8 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_mr_tex] = mr.id ? mr : whiteTex;
                 b.views[VIEW_oe_emissive_tex] = emissive.id ? emissive : whiteTex;
                 b.views[VIEW_oe_occlusion_tex] = occlusion.id ? occlusion : whiteTex;
+                b.views[VIEW_oe_env_tex] = envTex;
+                b.samplers[SMP_oe_env_smp] = envSampler;
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;
                 b.samplers[SMP_oe_shadow_smp] = shadowCompare;
                 sg_apply_bindings(&b);

@@ -39,6 +39,7 @@ EntityIcon EntityKindIcon(const EntityRow& r) {
     if (r.Has("Camera")) return {kIconVideo, ImVec4(0.58f, 0.74f, 1.0f, 1)};
     if (r.Has("DirectionalLight")) return {kIconSun, ImVec4(1.0f, 0.80f, 0.42f, 1)};
     if (r.Has("PointLight")) return {kIconLightbulb, ImVec4(1.0f, 0.80f, 0.42f, 1)};
+    if (r.Has("Skybox")) return {kIconSun, ImVec4(0.55f, 0.75f, 1.0f, 1)};
     if (r.Has("CharacterBody") || r.Has("CharacterBody2D")) return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
     if (r.Has("RigidBody") || r.Has("RigidBody2D")) return {kIconAtom, ImVec4(0.58f, 0.86f, 0.58f, 1)};
     if (r.Has("Tilemap")) return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};
@@ -60,6 +61,7 @@ EntityIcon ComponentIcon(const std::string& type) {
     if (type == "Camera" || type == "CameraFollow") return {kIconVideo, ImVec4(0.58f, 0.74f, 1.0f, 1)};
     if (type == "PostProcess") return {kIconAperture, ImVec4(0.58f, 0.74f, 1.0f, 1)};
     if (type == "DirectionalLight") return {kIconSun, light};
+    if (type == "Skybox") return {kIconSun, ImVec4(0.55f, 0.75f, 1.0f, 1)};
     if (type == "PointLight" || type == "Light2D" || type == "Darkness2D") return {kIconLightbulb, light};
     if (type == "MeshRenderer") return {kIconBox, neutral};
     if (type == "Sprite") return {kIconImage, ImVec4(0.92f, 0.62f, 0.80f, 1)};

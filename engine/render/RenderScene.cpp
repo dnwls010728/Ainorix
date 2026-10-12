@@ -824,7 +824,7 @@ bool BoxInFrustum(const Mat4& viewProj, const Vec3& lo, const Vec3& hi, bool dep
     return true;
 }
 
-RenderLights GatherRenderLights(const Scene& scene) {
+RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
     RenderLights lights;
     for (const auto& kv : scene.Pool<DirectionalLight>()) {
         RenderDirLight l;
@@ -860,6 +860,16 @@ RenderLights GatherRenderLights(const Scene& scene) {
             e.sunDir = lights.dirs[0].dir;         // the first directional light is the sun
             e.sunColor = lights.dirs[0].color;
             e.sunCos = std::cos(Radians(Clamp(s.sunSize, 0.1f, 30.0f)));
+        }
+        e.texture = s.texture;
+        if (!s.texture.empty() && assets) e.map = assets->GetEnvironment(s.texture);  // a failed load keeps the colors
+        if (e.map) {
+            e.intensity = i;
+            const float yaw = Radians(std::isfinite(s.rotation) ? s.rotation : 0.0f);
+            e.yawCos = std::cos(yaw);
+            e.yawSin = std::sin(yaw);
+            for (int k = 0; k < 9; ++k) e.sh[k] = e.map->sh[k] * i;
+            e.sun = false;  // the image has its own sun
         }
         break;
     }

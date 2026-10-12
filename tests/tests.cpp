@@ -4946,6 +4946,231 @@ TEST(SkyboxEnvironmentLighting) {
     CHECK(bgBot.b > bgBot.r + 0.1f);
 }
 
+// A panorama for the environment tests: the upper half one color, the lower half another; "front"
+// (optional) paints the part of the upper half around -Z, a quarter turn wide.
+std::vector<float> TestPanorama(int w, int h, Color up, Color down, const Color* front = nullptr) {
+    std::vector<float> rgb(static_cast<size_t>(w) * static_cast<size_t>(h) * 3);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            Color c = y < h / 2 ? up : down;
+            if (front && y < h / 2 && x >= w * 3 / 8 && x < w * 5 / 8) c = *front;
+            float* p = &rgb[(static_cast<size_t>(y) * w + x) * 3];
+            p[0] = c.r; p[1] = c.g; p[2] = c.b;
+        }
+    }
+    return rgb;
+}
+
+TEST(EnvironmentMapLevelsAndIrradiance) {
+    auto about = [](float a, float b, float tolerance) { return std::fabs(a - b) <= tolerance; };
+    // Where a direction lands in the image: -Z in the middle, +X a quarter to the right, up at the top.
+    float u = 0, v = 0;
+    EnvUV(Vec3(0, 0, -1), u, v);
+    CHECK(about(u, 0.5f, 1e-5f) && about(v, 0.5f, 1e-5f));
+    EnvUV(Vec3(1, 0, 0), u, v);
+    CHECK(about(u, 0.75f, 1e-5f) && about(v, 0.5f, 1e-5f));
+    EnvUV(Vec3(0, 1, 0), u, v);
+    CHECK(about(v, 0.0f, 1e-5f));
+    CHECK(BuildEnvironmentMap(nullptr, 4, 4) == nullptr);
+
+    // One color everywhere: every level keeps it, and so does the light it gives and every sample.
+    const Color flatColor(0.5f, 0.25f, 1.0f);
+    std::vector<float> flat = TestPanorama(100, 30, flatColor, flatColor);
+    auto same = BuildEnvironmentMap(flat.data(), 100, 30);
+    CHECK(same != nullptr);
+    if (!same) return;
+    CHECK(same->levels.size() == 5 && same->levels[0].width == 64 && same->levels[0].height == 32 && same->levels.back().width == 4);
+    bool constant = true;
+    for (const EnvironmentMap::Level& level : same->levels) {
+        CHECK(level.rgb.size() == static_cast<size_t>(level.width) * static_cast<size_t>(level.height) * 3);
+        for (size_t i = 0; i + 2 < level.rgb.size(); i += 3)
+            constant = constant && about(level.rgb[i], flatColor.r, 1e-3f) && about(level.rgb[i + 1], flatColor.g, 1e-3f) && about(level.rgb[i + 2], flatColor.b, 1e-3f);
+    }
+    CHECK(constant);
+    for (const Vec3& d : {Vec3(0, 1, 0), Vec3(0, -1, 0), Vec3(1, 0, 0), Vec3(0, 0, 1), Normalize(Vec3(1, 2, -3))}) {
+        const Color light = same->Irradiance(d);
+        CHECK(about(light.r, flatColor.r, 0.01f) && about(light.g, flatColor.g, 0.01f) && about(light.b, flatColor.b, 0.01f));
+        for (float lod : {0.0f, 1.5f, 4.0f, 99.0f}) {
+            const Color s = same->Sample(d, lod);
+            CHECK(about(s.r, flatColor.r, 2e-3f) && about(s.b, flatColor.b, 2e-3f));
+        }
+    }
+
+    // Values that are not light (NaN, infinity, negative) are cleaned away.
+    std::vector<float> dirty(static_cast<size_t>(16) * 8 * 3, 0.5f);
+    dirty[0] = std::numeric_limits<float>::quiet_NaN();
+    dirty[4] = -3.0f;
+    dirty[8] = std::numeric_limits<float>::infinity();
+    auto cleaned = BuildEnvironmentMap(dirty.data(), 16, 8);
+    CHECK(cleaned != nullptr);
+    if (cleaned) for (float value : cleaned->levels[0].rgb) CHECK(std::isfinite(value) && value >= 0.0f);
+
+    // Red above, blue below: surfaces facing up are lit red, facing down blue, sideways by both;
+    // sharp samples keep the two apart and the last level blends them at the horizon.
+    const std::vector<float> halves = TestPanorama(256, 128, Color(1, 0, 0), Color(0, 0, 1));
+    auto sky = BuildEnvironmentMap(halves.data(), 256, 128);
+    CHECK(sky && sky->levels.size() == 7 && sky->levels[0].width == 256);
+    if (!sky) return;
+    const Color up = sky->Irradiance(Vec3(0, 1, 0)), down = sky->Irradiance(Vec3(0, -1, 0)), side = sky->Irradiance(Vec3(1, 0, 0));
+    CHECK(up.r > 0.9f && up.b < 0.1f && down.b > 0.9f && down.r < 0.1f);
+    CHECK(about(side.r, 0.5f, 0.05f) && about(side.b, 0.5f, 0.05f));
+    CHECK(sky->Sample(Normalize(Vec3(0, 1, -1)), 0).r > 0.99f && sky->Sample(Normalize(Vec3(1, -1, 0)), 0).b > 0.99f);
+    const Color horizon = sky->Sample(Vec3(0, 0, -1), sky->MaxLod());
+    CHECK(about(horizon.r, 0.5f, 0.15f) && about(horizon.b, 0.5f, 0.15f));
+    // Just above the horizon: red when sharp, more and more blue as the level blurs.
+    const Vec3 low = Normalize(Vec3(0, 0.12f, -1));
+    float before = -1;
+    bool grows = true;
+    for (float lod = 0; lod <= sky->MaxLod(); lod += 1) {
+        const float blue = sky->Sample(low, lod).b;
+        grows = grows && blue >= before - 1e-3f;
+        before = blue;
+    }
+    CHECK(grows && sky->Sample(low, 0).b < 0.01f && before > 0.2f);
+
+    // A small bright light: wider and dimmer level by level, with about the same light in total.
+    std::vector<float> dot(static_cast<size_t>(256) * 128 * 3, 0.0f);
+    for (int y = 60; y < 68; ++y) for (int x = 124; x < 132; ++x) for (int c = 0; c < 3; ++c) dot[(static_cast<size_t>(y) * 256 + x) * 3 + c] = 100.0f;
+    auto lamp = BuildEnvironmentMap(dot.data(), 256, 128);
+    CHECK(lamp != nullptr);
+    if (!lamp) return;
+    auto peak = [](const EnvironmentMap::Level& level) { return *std::max_element(level.rgb.begin(), level.rgb.end()); };
+    auto total = [](const EnvironmentMap::Level& level) {  // light over the sphere: texels weighed by their solid angle
+        double sum = 0;
+        for (int y = 0; y < level.height; ++y) {
+            const double weight = std::sin((y + 0.5) * kPi / level.height) * (kPi / level.height) * (2.0 * kPi / level.width);
+            for (int x = 0; x < level.width; ++x) sum += level.rgb[(static_cast<size_t>(y) * level.width + x) * 3] * weight;
+        }
+        return sum;
+    };
+    CHECK(about(peak(lamp->levels[0]), 100.0f, 1e-3f));
+    for (size_t k = 1; k < lamp->levels.size(); ++k) CHECK(peak(lamp->levels[k]) < peak(lamp->levels[k - 1]));
+    CHECK(peak(lamp->levels.back()) < 2.0f);
+    for (size_t k = 1; k + 1 < lamp->levels.size(); ++k) CHECK(std::fabs(total(lamp->levels[k]) / total(lamp->levels[0]) - 1.0) < 0.15);
+    CHECK(lamp->Irradiance(Vec3(0, 0, -1)).r > lamp->Irradiance(Vec3(0, 0, 1)).r);  // lit from the front
+}
+
+// A Radiance .hdr file (flat RGBE) of one color per row band: "top" for the upper half, "bottom" below.
+std::string TestHdrFile(int w, int h, Color top, Color bottom) {
+    std::string file = "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " + std::to_string(h) + " +X " + std::to_string(w) + "\n";
+    for (int y = 0; y < h; ++y) {
+        const Color c = y < h / 2 ? top : bottom;
+        const float largest = std::max(c.r, std::max(c.g, c.b));
+        int exponent = 0;
+        std::frexp(largest, &exponent);
+        const float scale = std::ldexp(1.0f, 8 - exponent);
+        for (int x = 0; x < w; ++x) {
+            file += static_cast<char>(static_cast<unsigned char>(c.r * scale));
+            file += static_cast<char>(static_cast<unsigned char>(c.g * scale));
+            file += static_cast<char>(static_cast<unsigned char>(c.b * scale));
+            file += static_cast<char>(static_cast<unsigned char>(exponent + 128));
+        }
+    }
+    return file;
+}
+
+TEST(SkyboxTextureEnvironment) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("sky_texture");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty": true})J");
+    // The panorama: red above, blue below, green ahead (around -Z) in the upper half.
+    const Color green(0, 1, 0);
+    const std::vector<float> pano = TestPanorama(128, 64, Color(1, 0, 0), Color(0, 0, 1), &green);
+    Image image;
+    image.width = 128;
+    image.height = 64;
+    image.rgba.resize(static_cast<size_t>(128) * 64 * 4, 255);
+    for (size_t i = 0; i < static_cast<size_t>(128) * 64; ++i) for (size_t c = 0; c < 3; ++c) image.rgba[i * 4 + c] = static_cast<uint8_t>(pano[i * 3 + c] * 255.0f);
+    CHECK(CreateDirectories(JoinPath(project, "assets")));
+    CHECK(WritePng(JoinPath(project, "assets/sky.png"), image));
+    // A .hdr keeps light brighter than white: linear 8 is about 2.57 in display colors.
+    CHECK(WriteTextFile(JoinPath(project, "assets/bright.hdr"), TestHdrFile(16, 8, Color(8, 4, 2), Color(0.25f, 0.25f, 0.25f))));
+    std::vector<unsigned char> bytes;
+    std::vector<float> rgb;
+    int w = 0, h = 0;
+    CHECK(ReadBinaryFile(JoinPath(project, "assets/bright.hdr"), bytes));
+    CHECK(DecodeImageFloat(bytes.data(), bytes.size(), rgb, w, h, &err));
+    CHECK(w == 16 && h == 8 && rgb.size() == static_cast<size_t>(16) * 8 * 3);
+    if (rgb.size() == static_cast<size_t>(16) * 8 * 3) {
+        CHECK(std::fabs(rgb[0] - std::pow(8.0f, 1.0f / 2.2f)) < 0.03f && std::fabs(rgb[1] - std::pow(4.0f, 1.0f / 2.2f)) < 0.03f);
+        CHECK(std::fabs(rgb[rgb.size() - 1] - std::pow(0.25f, 1.0f / 2.2f)) < 0.01f);
+    }
+    CHECK(AssetManager::KindOf("assets/bright.hdr") == "texture");
+    CHECK(Call(e, "asset.info", R"J({"path":"assets/bright.hdr"})J")["ok"].asBool());
+    const unsigned char junk[] = {1, 2, 3, 4};
+    CHECK(!DecodeImageFloat(junk, sizeof(junk), rgb, w, h, &err) && !err.empty());
+
+    CHECK(Call(e, "entity.create", R"J({"name":"Sky","components":{"Skybox":{"texture":"assets/sky.png"}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{},"DirectionalLight":{"intensity":0}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{},"MeshRenderer":{"mesh":"sphere","color":[1,1,1]}}})J")["ok"].asBool());
+    const RenderLights lights = GatherRenderLights(e.GetScene(), &e.Assets());
+    CHECK(lights.env.present && lights.env.map && !lights.env.sun && lights.env.map->levels[0].width == 128);
+    CHECK(!GatherRenderLights(e.GetScene()).env.map);  // without an asset manager: the colors
+    RenderTarget rt;
+    auto px = [&](int x, int y) {
+        uint32_t c = rt.color[static_cast<size_t>(y) * 80 + x];
+        return Color((c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f);
+    };
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    // The ball is lit by the image: red (and some green) from above, blue from below.
+    CHECK(px(40, 30).r > px(40, 30).b + 0.1f && px(40, 50).b > px(40, 50).r + 0.1f);
+    // The background is the image: green ahead and up, blue below.
+    CHECK(px(3, 3).g > 0.9f && px(3, 3).r < 0.1f && px(3, 76).b > 0.9f && px(76, 3).g > 0.9f);
+    // Half a turn brings the red behind the camera to the front; intensity scales the image.
+    CHECK(Call(e, "component.set", R"J({"id":"Sky","type":"Skybox","values":{"rotation":180,"intensity":0.5}})J")["ok"].asBool());
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(std::fabs(px(3, 3).r - 0.5f) < 0.02f && px(3, 3).g < 0.05f && std::fabs(px(3, 76).b - 0.5f) < 0.02f);
+    // background: false keeps the clear color behind the scene while the image still lights it.
+    CHECK(Call(e, "component.set", R"J({"id":"Sky","type":"Skybox","values":{"rotation":0,"intensity":1,"background":false}})J")["ok"].asBool());
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(px(3, 3).g < 0.5f && px(40, 30).r > px(40, 30).b + 0.1f);
+    // A missing image: the three colors take over (an error is kept for asset.info), nothing breaks.
+    CHECK(Call(e, "component.set", R"J({"id":"Sky","type":"Skybox","values":{"texture":"assets/none.png","background":true,"sky":[1,1,0],"horizon":[1,1,0],"ground":[1,1,0]}})J")["ok"].asBool());
+    CHECK(e.Assets().GetEnvironment("assets/none.png", &err) == nullptr && !err.empty());
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(px(3, 3).r > 0.95f && px(3, 3).g > 0.95f && px(3, 3).b < 0.05f);
+
+    // Both renderers show the same sky, light and reflections: three colors, an image and a .hdr.
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    CHECK(Call(e, "material.create", R"J({"path":"materials/chrome.mat.json","values":{"baseColor":[0.9,0.9,0.9],"metallic":1,"roughness":0.05}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"materials/satin.mat.json","values":{"baseColor":[0.9,0.9,0.9],"metallic":1,"roughness":0.5}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Ball","type":"MeshRenderer","values":{"material":"materials/chrome.mat.json"}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Ball","type":"Transform","values":{"position":[-0.6,0,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Satin","components":{"Transform":{"position":[0.6,0,0]},"MeshRenderer":{"mesh":"sphere","material":"materials/satin.mat.json"}}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"Transform","values":{"rotation":[-30,160,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"DirectionalLight","values":{"intensity":1}})J")["ok"].asBool());
+    const int gw = 160, gh = 90;
+    RenderView view = MakeLookAtView(Vec3(0, 0.6f, 3), Vec3(0, 0.3f, 0), 50.0f, static_cast<float>(gw) / gh);
+    for (const char* sky : {R"J({"texture":"","sky":[0.2,0.4,0.9],"horizon":[0.9,0.7,0.5],"ground":[0.2,0.2,0.2],"sunSize":12})J",
+                            R"J({"texture":"assets/sky.png","rotation":40})J", R"J({"texture":"assets/bright.hdr","rotation":0})J"}) {
+        CHECK(Call(e, "component.set", (std::string(R"J({"id":"Sky","type":"Skybox","values":)J") + sky + "}").c_str())["ok"].asBool());
+        RenderTarget sw, gpu;
+        sw.Resize(gw, gh);
+        gpu.Resize(gw, gh);
+        e.Renderer().Render(e.GetScene(), view, sw);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double sum = 0;
+        int outliers = 0;
+        for (size_t i = 0; i < sw.color.size(); ++i) {
+            int worst = 0;
+            for (int shift : {0, 8, 16}) {
+                const int d = std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+                sum += d;
+                worst = std::max(worst, d);
+            }
+            outliers += worst > 48;
+        }
+        const double mean = sum / (static_cast<double>(sw.color.size()) * 3.0);
+        std::printf("  sky %.40s: software/GPU mean difference %.3f, outliers %d\n", sky, mean, outliers);
+        CHECK(mean < 2.0 && outliers < static_cast<int>(sw.color.size()) / 30);
+    }
+}
+
 TEST(TexturesAndGltfModels) {
     Engine e;
     std::string err;

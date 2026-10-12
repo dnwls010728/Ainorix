@@ -720,13 +720,15 @@ struct DirectionalLight {
     }
 };
 
-// An analytic environment: a gradient sky (and later a background) that lights the scene. When a
-// scene has one, metallic and smooth surfaces reflect the sky colors (image-based lighting) instead
-// of the flat hemisphere tint, and the ambient comes from the sky above and the ground below. One
-// per scene (the first is used). Absent = the previous flat/hemisphere ambient, unchanged.
+// The environment of a scene: a sky that lights it, that smooth and metallic surfaces reflect
+// (image-based lighting) and that is drawn behind it. Either three colors (an analytic gradient)
+// or an equirectangular image (`texture`). One per scene (the first is used). Absent = the flat /
+// hemisphere ambient of the directional light and the camera's clear color, unchanged.
 struct Skybox {
     static constexpr const char* kTypeName = "Skybox";
-    static constexpr const char* kDoc = "Analytic sky environment: surfaces reflect the sky/horizon/ground colors (image-based lighting). One per scene.";
+    static constexpr const char* kDoc = "Sky environment: lights the scene, is reflected by smooth/metallic surfaces (image-based lighting) and drawn as the background. Three colors, or an equirectangular image. One per scene.";
+    std::string texture;                 // equirectangular image (.hdr/.png/.jpg); empty = the three colors below
+    float rotation = 0.0f;               // turns the image around the vertical axis, degrees
     Color sky{0.30f, 0.47f, 0.80f};      // zenith (straight up)
     Color horizon{0.70f, 0.78f, 0.90f};  // at the horizon
     Color ground{0.28f, 0.27f, 0.30f};   // below the horizon (bounced ground light)
@@ -736,15 +738,18 @@ struct Skybox {
     bool sun = true;                     // draw a sun disc in the first directional light's direction
     float sunSize = 2.5f;                // sun disc angular size in degrees
     static void Reflect(FieldList& f) {
-        f.Add("sky", &Skybox::sky, "Color straight up (zenith).");
-        f.Add("horizon", &Skybox::horizon, "Color at the horizon.");
-        f.Add("ground", &Skybox::ground, "Color below the horizon (light bounced from the ground).");
+        f.Add("texture", &Skybox::texture, "Equirectangular (2:1 panorama) image of the surroundings, .hdr (keeps bright lights) or .png/.jpg. Lights the scene, is reflected (blurrier on rougher surfaces) and drawn as the background. Empty = the sky/horizon/ground colors.");
+        FieldInfo& ro = f.Add("rotation", &Skybox::rotation, "Turns the image around the vertical axis, degrees.");
+        ro.hasRange = true; ro.min = -360.0f; ro.max = 360.0f;
+        f.Add("sky", &Skybox::sky, "Color straight up (zenith). Used without a texture.");
+        f.Add("horizon", &Skybox::horizon, "Color at the horizon. Used without a texture.");
+        f.Add("ground", &Skybox::ground, "Color below the horizon (light bounced from the ground). Used without a texture.");
         FieldInfo& in = f.Add("intensity", &Skybox::intensity, "Multiplies the whole environment.");
         in.hasRange = true; in.min = 0.0f; in.max = 8.0f;
         FieldInfo& rf = f.Add("reflections", &Skybox::reflections, "0 = ambient light only, 1 = full sky reflection on smooth metal/wet surfaces.");
         rf.hasRange = true; rf.min = 0.0f; rf.max = 1.0f;
         f.Add("background", &Skybox::background, "Draw the sky behind the scene (off = keep the camera's clear color).");
-        f.Add("sun", &Skybox::sun, "Draw a sun disc in the first directional light's direction.");
+        f.Add("sun", &Skybox::sun, "Draw a sun disc in the first directional light's direction (not with a texture: the image has its own sun).");
         FieldInfo& ss = f.Add("sunSize", &Skybox::sunSize, "Sun disc size in degrees.");
         ss.hasRange = true; ss.min = 0.1f; ss.max = 30.0f;
     }
