@@ -25,10 +25,13 @@ feeds lighting, and `docs/API.md` for its fields.
   the sky above / ground below; specular reflection sampling the sky along the reflection vector,
   blurred toward the sky/ground average with roughness. Both renderers, matched. Test
   `SkyboxEnvironmentLighting`. (The sky is not yet drawn as the background.)
-- [ ] **M2 — skybox background.** Draw the sky along each pixel's view ray as the background (both
-  renderers), plus an optional sun disc from the first directional light. Needs a fullscreen sky pass
-  in the GPU scene pass (two color outputs: color and far view-depth for depth of field) and a
-  per-pixel background fill in the software renderer.
+- [x] **M2 — skybox background + sun disc.** The sky is drawn along each pixel's view ray as the
+  background (`Skybox.background`), with a soft sun disc toward the first directional light
+  (`Skybox.sun`, `sunSize`). GPU: a fullscreen triangle (`sky` program in `Shaders.glsl`) drawn first
+  in the scene pass, depth test always / no write, leaving the depth-of-field target at its far clear.
+  Software: a per-pixel background fill. `SampleSkyBackground` (RenderScene.h) and `sky_fs` match.
+  The sun disc is background only — surfaces are still lit by the directional light, so it is not
+  double-counted in the reflection.
 - [ ] **M3 — textured / HDR environment.** An equirectangular or cubemap image as the environment,
   with a prefiltered mip chain for rough reflections and an irradiance term for diffuse ambient.
 - [ ] **M4 — reflection probes.** Local captures / box projection so interiors reflect their own room

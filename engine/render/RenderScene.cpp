@@ -850,7 +850,17 @@ RenderLights GatherRenderLights(const Scene& scene) {
     for (const auto& kv : scene.Pool<Skybox>()) {  // first one wins
         const Skybox& s = kv.second;
         const float i = std::max(0.0f, s.intensity);
-        lights.env = {true, s.sky * i, s.horizon * i, s.ground * i, Clamp(s.reflections, 0.0f, 1.0f)};
+        RenderEnvironment& e = lights.env;
+        e.present = true;
+        e.sky = s.sky * i; e.horizon = s.horizon * i; e.ground = s.ground * i;
+        e.reflections = Clamp(s.reflections, 0.0f, 1.0f);
+        e.background = s.background;
+        e.sun = s.sun && !lights.dirs.empty();
+        if (e.sun) {
+            e.sunDir = lights.dirs[0].dir;         // the first directional light is the sun
+            e.sunColor = lights.dirs[0].color;
+            e.sunCos = std::cos(Radians(Clamp(s.sunSize, 0.1f, 30.0f)));
+        }
         break;
     }
     return lights;

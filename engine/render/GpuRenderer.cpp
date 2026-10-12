@@ -611,6 +611,8 @@ struct GpuRenderer::Impl {
     // Scene pass: [1 = second view-depth target for depth of field][0 opaque, 1 alpha blend, 2 additive][double sided]
     sg_pipeline meshPips[2][3][2]{};
     sg_pipeline hdrMeshPips[2][3][2]{};
+    sg_pipeline skyPips[2][2]{};  // [hdr][mrt]: fullscreen skybox background drawn first in the scene pass
+    sg_shader skyShd{};
     sg_pipeline linePips[2]{}, hdrLinePips[2]{};
     sg_pipeline bloomPip{};
     sg_shader bloomShd{};
@@ -663,12 +665,12 @@ struct GpuRenderer::Impl {
         compiler = device.ShaderCompilerId();
         TrimShaderCache(settings.shaderCacheDir, 400);
         sg_shader* const shaders[] = {&meshShd, &surfaceAuxShd, &shadowShd, &solidShd, &lineShd,
-                                      &compositeShd, &uiShd, &bloomShd, &sceneDepthShd, &dofShd};
+                                      &compositeShd, &uiShd, &bloomShd, &sceneDepthShd, &dofShd, &skyShd};
         const sg_shader_desc* const descs[] = {
             oe_mesh_shader_desc(backend), oe_surface_aux_shader_desc(backend), oe_shadow_shader_desc(backend),
             oe_solid_shader_desc(backend), oe_line_shader_desc(backend), oe_composite_shader_desc(backend),
             oe_ui_shader_desc(backend), oe_bloom_shader_desc(backend), oe_scene_depth_shader_desc(backend),
-            oe_dof_shader_desc(backend)};
+            oe_dof_shader_desc(backend), oe_sky_shader_desc(backend)};
         // Where the device compiles source itself the programs compile in parallel or come from the
         // cache; otherwise sokol_gfx takes the source as it is.
         std::vector<std::future<ProgramCode>> codes;
@@ -762,6 +764,27 @@ struct GpuRenderer::Impl {
                 }
             }
         }
+        // Skybox background: a fullscreen triangle (no vertex buffer) drawn first in the scene pass,
+        // depth test always/no write so every later surface draws over it. One variant per scene
+        // color format (RGBA8 / HDR) and per depth-of-field MRT state.
+        for (int hdr = 0; hdr < 2; ++hdr) {
+            if (hdr && !hdrSupported) continue;
+            for (int mrt = 0; mrt < 2; ++mrt) {
+                if (mrt && !dofMrtSupported) continue;
+                sg_pipeline_desc d{};
+                d.shader = skyShd;
+                d.depth.pixel_format = kDepthFormat;
+                d.depth.compare = SG_COMPAREFUNC_ALWAYS;
+                d.depth.write_enabled = false;
+                d.cull_mode = SG_CULLMODE_NONE;
+                d.colors[0].pixel_format = hdr ? kHdrFormat : kColorFormat;
+                d.sample_count = hdr ? hdrSamples : msaa;
+                viewDepthTarget(d, mrt != 0, false);  // leave the depth-of-field target at its cleared far value
+                d.label = "oe-sky";
+                skyPips[hdr][mrt] = sg_make_pipeline(&d);
+            }
+        }
+
         // Shadow and selection passes use the same skin influences as the scene.
         auto positionOnly = [](sg_pipeline_desc& d) {
             d.layout.buffers[0].stride = sizeof(MeshVertex);
@@ -1529,6 +1552,28 @@ struct GpuRenderer::Impl {
             pass.label = "oe-scene";
             sg_begin_pass(&pass);
 
+            RenderEnvironment env = lights.env;  // analytic sky environment (image-based lighting + background)
+            if (view.editorFill > 0.0f && env.present) {  // editor fill lifts a sky environment's floor (matches the software renderer)
+                auto lift = [&](Color& c) { c = Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)); };
+                lift(env.sky); lift(env.horizon); lift(env.ground);
+            }
+            if (env.present && env.background) {
+                // Skybox background: fill the frame with the sky before any geometry (depth test always/no write).
+                sg_apply_pipeline(skyPips[t.hdr ? 1 : 0][t.dofMrt ? 1 : 0]);
+                oe_sky_params_t sp{};
+                Put(sp.inv_view_proj, (view.proj * view.view).Inverse());
+                Put(sp.sky_c, env.sky.r, env.sky.g, env.sky.b, 0);
+                Put(sp.horizon_c, env.horizon.r, env.horizon.g, env.horizon.b, 0);
+                Put(sp.ground_c, env.ground.r, env.ground.g, env.ground.b, 0);
+                const Vec3 toSun = env.sunDir * -1.0f;
+                Put(sp.sun_p, toSun.x, toSun.y, toSun.z, env.sunCos);
+                Put(sp.sun_c, env.sunColor.r, env.sunColor.g, env.sunColor.b, env.sun ? 1.0f : 0.0f);
+                sg_apply_uniforms(UB_oe_sky_params, SG_RANGE(sp));
+                sg_bindings skyBind{};
+                sg_apply_bindings(&skyBind);
+                sg_draw(0, 3, 1);
+            }
+
             oe_mesh_lights_t lu{};
             Put(lu.shadow_vp, fit.viewProj);
             Put(lu.ambient, lights.ambient.r, lights.ambient.g, lights.ambient.b, 0);
@@ -1552,11 +1597,6 @@ struct GpuRenderer::Impl {
                 const RenderPointLight& l = lights.points[static_cast<size_t>(i)];
                 Put(lu.point_pos[i], l.pos.x, l.pos.y, l.pos.z, l.range);
                 Put(lu.point_color[i], l.color.r, l.color.g, l.color.b, 0);
-            }
-            RenderEnvironment env = lights.env;  // analytic sky environment (image-based lighting); see sky_color in Shaders.glsl
-            if (view.editorFill > 0.0f && env.present) {  // editor fill lifts a sky environment's floor (matches the software renderer)
-                auto lift = [&](Color& c) { c = Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)); };
-                lift(env.sky); lift(env.horizon); lift(env.ground);
             }
             Put(lu.env_sky, env.sky.r, env.sky.g, env.sky.b, env.present ? 1.0f : 0.0f);
             Put(lu.env_horizon, env.horizon.r, env.horizon.g, env.horizon.b, env.reflections);

@@ -732,6 +732,9 @@ struct Skybox {
     Color ground{0.28f, 0.27f, 0.30f};   // below the horizon (bounced ground light)
     float intensity = 1.0f;              // multiplies the whole environment
     float reflections = 1.0f;            // 0 = light only, 1 = full environment reflection on smooth surfaces
+    bool background = true;              // draw the sky behind the scene (else the flat clear color stays)
+    bool sun = true;                     // draw a sun disc in the first directional light's direction
+    float sunSize = 2.5f;                // sun disc angular size in degrees
     static void Reflect(FieldList& f) {
         f.Add("sky", &Skybox::sky, "Color straight up (zenith).");
         f.Add("horizon", &Skybox::horizon, "Color at the horizon.");
@@ -740,6 +743,10 @@ struct Skybox {
         in.hasRange = true; in.min = 0.0f; in.max = 8.0f;
         FieldInfo& rf = f.Add("reflections", &Skybox::reflections, "0 = ambient light only, 1 = full sky reflection on smooth metal/wet surfaces.");
         rf.hasRange = true; rf.min = 0.0f; rf.max = 1.0f;
+        f.Add("background", &Skybox::background, "Draw the sky behind the scene (off = keep the camera's clear color).");
+        f.Add("sun", &Skybox::sun, "Draw a sun disc in the first directional light's direction.");
+        FieldInfo& ss = f.Add("sunSize", &Skybox::sunSize, "Sun disc size in degrees.");
+        ss.hasRange = true; ss.min = 0.1f; ss.max = 30.0f;
     }
 };
 

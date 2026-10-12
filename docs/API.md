@@ -2466,6 +2466,9 @@ Analytic sky environment: surfaces reflect the sky/horizon/ground colors (image-
 | `ground` | color | `[0.280000001,0.270000011,0.300000012]` | Color below the horizon (light bounced from the ground). |
 | `intensity` | float | `1` | Multiplies the whole environment. |
 | `reflections` | float | `1` | 0 = ambient light only, 1 = full sky reflection on smooth metal/wet surfaces. |
+| `background` | bool | `true` | Draw the sky behind the scene (off = keep the camera's clear color). |
+| `sun` | bool | `true` | Draw a sun disc in the first directional light's direction. |
+| `sunSize` | float | `2.5` | Sun disc size in degrees. |
 
 ### CameraFollow
 

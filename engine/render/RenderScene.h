@@ -117,6 +117,11 @@ struct RenderEnvironment {
     Color horizon{0, 0, 0};
     Color ground{0, 0, 0};
     float reflections = 1.0f;  // strength of the environment reflection on smooth surfaces
+    bool background = true;    // draw the sky behind the scene
+    bool sun = false;          // draw a sun disc (needs a directional light)
+    Vec3 sunDir{0, -1, 0};     // direction the sun's light travels (the disc is toward -sunDir)
+    Color sunColor{0, 0, 0};   // sun disc color (the first directional light's color)
+    float sunCos = 0.9995f;    // cosine of the sun disc's angular radius
 };
 
 // The sky color along a world direction: ground below the horizon, sky above, the horizon between.
@@ -129,6 +134,18 @@ inline Color SampleSky(const RenderEnvironment& e, const Vec3& dir) {
     }
     const float t = std::pow(-y, 0.5f);
     return e.horizon * (1.0f - t) + e.ground * t;
+}
+
+// The sky as the background: the gradient plus a soft sun disc toward the light. Not used for the
+// reflection/ambient (the directional light already lights surfaces); mirrors sky_bg in Shaders.glsl.
+inline Color SampleSkyBackground(const RenderEnvironment& e, const Vec3& dir) {
+    Color c = SampleSky(e, dir);
+    if (e.sun) {
+        const float d = Dot(dir, e.sunDir * -1.0f);
+        const float disc = Clamp((d - e.sunCos) / std::max(1e-5f, 1.0f - e.sunCos), 0.0f, 1.0f);
+        c = c + e.sunColor * (disc * disc);
+    }
+    return c;
 }
 
 struct RenderLights {

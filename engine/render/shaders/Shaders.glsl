@@ -857,3 +857,50 @@ void main() {
 @end
 
 @program dof fsq_vs dof_fs
+
+// ----- Skybox background -----------------------------------------------------------
+// A fullscreen triangle drawn first in the scene pass: the analytic sky along each pixel's world
+// ray, plus a soft sun disc. Mirrors SampleSkyBackground in RenderScene.h.
+@vs sky_vs
+@hlsl_options fixup_clipspace
+out vec2 v_ndc;
+void main() {
+    vec2 p = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+    v_ndc = p * 2.0 - 1.0;
+    gl_Position = vec4(v_ndc, 1.0, 1.0);
+}
+@end
+
+@fs sky_fs
+layout(binding=0) uniform sky_params {
+    mat4 inv_view_proj;  // (proj * view)^-1, engine (OpenGL) convention
+    vec4 sky_c;          // rgb: zenith color
+    vec4 horizon_c;      // rgb: horizon color
+    vec4 ground_c;       // rgb: ground color
+    vec4 sun_p;          // xyz: toward the sun (-light direction), w: cosine of the disc radius
+    vec4 sun_c;          // rgb: sun color, w: 1 = draw the sun
+};
+in vec2 v_ndc;
+out vec4 frag_color;
+out vec4 frag_depth;   // scene pass MRT (depth of field): background is far
+vec3 skyc(vec3 d) {
+    float y = clamp(d.y, -1.0, 1.0);
+    if (y >= 0.0) return mix(horizon_c.rgb, sky_c.rgb, pow(y, 0.45));
+    return mix(horizon_c.rgb, ground_c.rgb, pow(-y, 0.5));
+}
+void main() {
+    vec4 a = inv_view_proj * vec4(v_ndc, -1.0, 1.0);
+    vec4 b = inv_view_proj * vec4(v_ndc, 1.0, 1.0);
+    vec3 dir = normalize(b.xyz / b.w - a.xyz / a.w);
+    vec3 c = skyc(dir);
+    if (sun_c.w > 0.5) {
+        float d = dot(dir, sun_p.xyz);
+        float disc = clamp((d - sun_p.w) / max(1e-5, 1.0 - sun_p.w), 0.0, 1.0);
+        c += sun_c.rgb * (disc * disc);
+    }
+    frag_color = vec4(c, 1.0);
+    frag_depth = vec4(1.0e6, 0.0, 0.0, 1.0);
+}
+@end
+
+@program sky sky_vs sky_fs

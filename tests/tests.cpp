@@ -4939,6 +4939,11 @@ TEST(SkyboxEnvironmentLighting) {
     const Color bot = px(40, 50);  // lower sphere: normals point down, lit by the blue ground
     CHECK(top.r > top.b + 0.1f);
     CHECK(bot.b > bot.r + 0.1f);
+    // The background is the sky itself: the top corners show the red sky, the bottom the blue ground
+    // (the sun disc is black here because the light's intensity is 0).
+    const Color bgTop = px(3, 3), bgBot = px(3, 76);
+    CHECK(bgTop.r > bgTop.b + 0.1f);
+    CHECK(bgBot.b > bgBot.r + 0.1f);
 }
 
 TEST(TexturesAndGltfModels) {

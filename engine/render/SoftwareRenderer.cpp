@@ -519,8 +519,27 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     if (env.present) { env.sky = fillFloor(env.sky); env.horizon = fillFloor(env.horizon); env.ground = fillFloor(env.ground); }
 
     std::vector<Color> hdr;
-    if (UsesHdr(post)) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
-    std::fill(target.color.begin(), target.color.end(), Pack(view.clearColor));
+    const bool usesHdr = UsesHdr(post);
+    if (usesHdr) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
+    if (env.present && env.background) {
+        // Background is the sky along each pixel's world ray (the skybox), not a flat clear color.
+        const Mat4 invVP = (view.proj * view.view).Inverse();
+        const int w = target.width, h = target.height;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const float nx = (static_cast<float>(x) + 0.5f) / static_cast<float>(w) * 2.0f - 1.0f;
+                const float ny = 1.0f - (static_cast<float>(y) + 0.5f) / static_cast<float>(h) * 2.0f;
+                const Vec4 a = invVP * Vec4(nx, ny, -1.0f, 1.0f), b = invVP * Vec4(nx, ny, 1.0f, 1.0f);
+                const Vec3 dir = Normalize(b.xyz() * (1.0f / b.w) - a.xyz() * (1.0f / a.w));
+                const Color sky = SampleSkyBackground(env, dir);
+                const size_t i = static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x);
+                target.color[i] = Pack(sky);
+                if (usesHdr) hdr[i] = ClampHdr(sky);
+            }
+        }
+    } else {
+        std::fill(target.color.begin(), target.color.end(), Pack(view.clearColor));
+    }
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
