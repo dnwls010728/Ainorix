@@ -71,6 +71,7 @@ end
 |---|---|
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
 | `animation.play(id, clip, options?)` | Play a glTF clip on MeshRenderer; add Animator if needed. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
+| `animation.bone(id, name, {ik = false}?)` | World-space `position` and `rotation` (Euler degrees) plus `modelPosition` (the `Transform.position` a child entity needs to stand on the bone), each `{x,y,z}`, of a model node in the pose that is drawn (clip + `BoneIK`), or `nil` for an unknown name. `ik = false` gives the clip's pose without the goals (foot placement). Hold entities on bones with `BoneAttachment` and move `BoneIK` goal entities with `scene.set(goal, "Transform", {position = ...})`. See [ANIMATION.md](ANIMATION.md) |
 | `vfx.spawn(path, options?)` | Create a linked .vfx.json effect; returns owner id. Options: name, parent, position, params, autoDestroy (default true). See [VFX.md](VFX.md). |
 | `vfx.play(id, {restart=true}?)`, `vfx.stop(id, {kill=false}?)` | Restart/resume emission or stop and drain; kill empties particles/trails. |
 | `vfx.burst(id, countOrOptions?)`, `vfx.clear(id, options?)` | Accepted manual births, capped per emitter/system; options may include emitter and count. Clear keeps clocks/RNG when restart is omitted; restart=true/false resets clocks/counters/RNG and rearms/consumes startup births. Playback is retained. |

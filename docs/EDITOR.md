@@ -100,6 +100,29 @@ paused and the scene revision does not change. Scene gizmos take priority over
 background selection when a pointer move and press arrive in the same frame;
 move, rotate and scale do not require hovering over a handle first.
 
+## Bones, attachments, IK and springs
+
+For a model with bones (glTF or FBX; components and commands in [ANIMATION.md](ANIMATION.md)):
+
+- **Bone list**: select the entity with the model; under MeshRenderer the Inspector shows **Bones (n)**, the node
+  hierarchy with a search box. Hovering a row lights that bone in the Scene view; a click copies its name.
+  The paperclip button creates a child entity held on the bone (`BoneAttachment`), the pin button creates an IK goal
+  standing on the bone (`BoneIK`, chain 2 where the bone has two parents) and selects it, so dragging the gizmo poses the
+  limb at once. Dropping an entity from the Hierarchy on a row reparents it to the model and holds it on that bone.
+  The same actions are in the row's right-click menu, with **Add Spring**: a child entity whose `SpringBone` swings that
+  bone and the ones below it while the game plays (refused for a bone with nothing below it).
+- **Name fields**: `BoneIK.bone`, `BoneAttachment.bone`, `SpringBone.bone` and `Animator.clip` have a `...` button that lists the model's
+  bones (indented, searchable) or clips (with durations). A name the model does not have is shown in red.
+- **Scene view**: the **Bones** toggle (also View > Bones, saved with the layout) draws the skeleton of the selected
+  model, or of the parent's model when a goal or attachment is selected: joints of a skinned model, every named node of
+  a rigid one. A joint under the mouse shows its name. With a goal selected its chain is orange and a thin line runs
+  from the bone to the goal (visible when the goal is out of reach); with an attachment selected its bone is orange.
+
+Everything goes through `entity.create`, `entity.set_parent` and `component.add/set`, so each action is an undo step
+and an agent can do the same with `animation.bones` (names, `modelPosition`).
+
+Check: `oe editor <project> --screenshot build/editor.png --select <model or goal entity>`.
+
 ## Clipboard, history and prefab sources
 
 Ctrl+C copies selected hierarchy subtrees; Ctrl+V pastes fresh entities in one undo
@@ -197,6 +220,7 @@ Tests drive it the same way: `NativeEditor::Update(events, w, h, dpi, dt)` takes
 - `EditorViewports.cpp` - Scene view (camera, picking, gizmo, markers, drops) and Game view (input forwarding, mouse lock).
 - `EditorNetwork.cpp` - multiplayer preview diagnostics, latency controls and peer selection helpers.
 - `EditorTiles.cpp` - Tiles panel and the Scene view tile brush.
+- `EditorBones.cpp` - skeleton overlay in the Scene view, bone/clip name pickers, the Inspector bone list with attach, IK-goal and spring actions.
 - `EditorTeamChat.cpp` - Team Chat panel (messages, live lines, input with mention completion).
 - `EditorTeam.cpp` - Team panel and the agent profile dialog; `avatars/*.png` are the built-in profile pictures, embedded at build time.
 - `EditorText.h/.cpp` - interface languages and the translation catalog (`Tr`, `TrId`).

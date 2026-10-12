@@ -24,6 +24,7 @@
 #include "render/Font.h"
 #include "render/UI.h"
 #include "scene/Components.h"
+#include "scene/Pose.h"
 #include "scene/Prefab.h"
 #include "scene/Clipboard.h"
 #include "physics/PhysicsWorld.h"
@@ -532,7 +533,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         out["duration"] = clip ? clip->duration : 0;
         if (includePose) {
             out["jointMatrices"] = Json::MakeArray();
-            if (mesh) for (const Mat4& matrix : EvaluateAnimationPose(*mesh, clip, animator->time)) {
+            if (mesh) for (const Mat4& matrix : JointPalette(*mesh, EvaluateEntityPose(e.GetScene(), id, *mesh))) {
                 Json values = Json::MakeArray();
                 for (float value : matrix.m) values.push(value);
                 out["jointMatrices"].push(values);
@@ -567,6 +568,78 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  next.playing = true;
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
+             });
+    Register(r, "animation.bones", "Nodes (bones) of an entity's model in its current pose - Animator clip, BoneIK goals, SpringBone swing - with world position/rotation and modelPosition (the Transform.position a child entity needs to stand on the bone), and how its BoneIK / BoneAttachment / SpringBone children resolve. Use it for bone names and to check IK and springs.",
+             Params().ReqWith("id", EntityRefSchema("Entity with a MeshRenderer model.")).Opt("bone", "string", "Only this node (exact name).")
+                 .Opt("ik", "boolean", "false = the clip's pose before BoneIK goals and SpringBone swing: where the animation alone puts a bone (foot placement adds the ground height to it). Default true."),
+             false, [](Engine& e, const Json& a) {
+                 const EntityId id = RequireEntity(e, a);
+                 const Scene& scene = e.GetScene();
+                 const MeshRenderer* renderer = scene.Get<MeshRenderer>(id);
+                 if (!renderer) throw ApiError("missing_component", "entity has no MeshRenderer", "Add MeshRenderer with a glTF or FBX model first.");
+                 std::string error;
+                 std::shared_ptr<const Mesh> mesh = e.Assets().GetMesh(renderer->mesh, &error);
+                 if (!mesh) throw ApiError("asset_error", error, "Check MeshRenderer.mesh with asset.info.");
+                 const std::string only = a["bone"].asString("");
+                 if (!only.empty() && FindModelNode(*mesh, only) < 0)
+                     throw ApiError("bone_not_found", "model has no node '" + only + "'", "Call animation.bones without bone to list the names.");
+                 const std::vector<Mat4> nodes = EvaluateEntityPose(scene, id, *mesh, a["ik"].asBool(true));
+                 const Mat4 world = scene.WorldMatrix(id);
+                 auto vec3 = [](const Vec3& v) { return Json(Json::Array{v.x, v.y, v.z}); };
+                 auto worldPosition = [&](int node) { return (world * nodes[static_cast<size_t>(node)]).TransformPoint(Vec3(0, 0, 0)); };
+                 Json out = Json::MakeObject();
+                 out["bones"] = Json::MakeArray();
+                 for (size_t i = 0; i < mesh->nodes.size(); ++i) {
+                     const ModelNode& node = mesh->nodes[i];
+                     if (node.name.empty() || (!only.empty() && node.name != only)) continue;
+                     Vec3 position, rotation, scale;
+                     DecomposeTRS(world * nodes[i], position, rotation, scale);
+                     Json bone = Json::MakeObject();
+                     bone["name"] = node.name;
+                     bone["parent"] = node.parent >= 0 ? mesh->nodes[static_cast<size_t>(node.parent)].name : std::string();
+                     bone["position"] = vec3(position);
+                     bone["rotation"] = vec3(rotation);
+                     // Where a child entity of the model would stand to be on the bone (BoneIK goals, Transform.position).
+                     bone["modelPosition"] = vec3(nodes[i].TransformPoint(Vec3(0, 0, 0)));
+                     out["bones"].push(std::move(bone));
+                 }
+                 out["goals"] = Json::MakeArray();
+                 out["attachments"] = Json::MakeArray();
+                 out["springs"] = Json::MakeArray();
+                 for (EntityId child : scene.Children(id)) {
+                     const EntityRecord* record = scene.Record(child);
+                     if (const BoneIK* ik = scene.Get<BoneIK>(child)) {
+                         const int node = FindModelNode(*mesh, ik->bone);
+                         Json goal = Json::MakeObject();
+                         goal["id"] = child;
+                         goal["name"] = record->name;
+                         goal["bone"] = ik->bone;
+                         goal["found"] = node >= 0;
+                         // How far the bone ends up from the goal: 0 when reached, the shortfall when out of reach.
+                         if (node >= 0) goal["distance"] = Length(worldPosition(node) - scene.WorldMatrix(child).TransformPoint(Vec3(0, 0, 0)));
+                         out["goals"].push(std::move(goal));
+                     }
+                     if (const BoneAttachment* attachment = scene.Get<BoneAttachment>(child)) {
+                         Json item = Json::MakeObject();
+                         item["id"] = child;
+                         item["name"] = record->name;
+                         item["bone"] = attachment->bone;
+                         item["found"] = FindModelNode(*mesh, attachment->bone) >= 0;
+                         out["attachments"].push(std::move(item));
+                     }
+                     if (const SpringBone* spring = scene.Get<SpringBone>(child)) {
+                         const int count = SpringBoneCount(*mesh, spring->bone);
+                         Json item = Json::MakeObject();
+                         item["id"] = child;
+                         item["name"] = record->name;
+                         item["bone"] = spring->bone;
+                         item["found"] = FindModelNode(*mesh, spring->bone) >= 0;
+                         item["bones"] = count;  // how many bones swing; 0 = nothing below the bone
+                         item["simulating"] = count > 0 && spring->simulated == spring->bone && spring->tails.size() == static_cast<size_t>(count);
+                         out["springs"].push(std::move(item));
+                     }
+                 }
+                 return out;
              });
     auto requireTrail = [](Engine& e, const Json& args) -> Trail& {
         EntityId id = RequireEntity(e, args);
@@ -2040,6 +2113,35 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      j["kind"] = c.trigger ? "trigger" : "collision";
                      list.push(j);
                  }
+                 return list;
+             });
+
+    Register(r, "physics.joints", "Joint and Joint2D components as the physics worlds hold them after the last simulation step: `active` (false = a body is missing, see physics.state warnings, or it broke), `broken`, and `force` in N (what the joint held during the last step; compare with breakForce).",
+             Params().OptWith("id", EntityRefSchema("Only the joint on this entity, or joints connected to it.")), false, [](Engine& e, const Json& a) {
+                 EntityId filter = a.has("id") ? RequireEntity(e, a) : kNullEntity;
+                 const Scene& scene = e.GetScene();
+                 std::map<std::pair<EntityId, bool>, JointInfo> held;
+                 for (const JointInfo& info : e.Physics().Joints()) held[{info.id, info.is2D}] = info;
+                 Json list = Json::MakeArray();
+                 auto add = [&](EntityId id, bool is2D, const std::string& type, EntityId connected, bool broken) {
+                     if (filter != kNullEntity && id != filter && connected != filter) return;
+                     auto it = held.find({id, is2D});
+                     const EntityRecord* record = scene.Record(id);
+                     const EntityRecord* other = connected != kNullEntity ? scene.Record(connected) : nullptr;
+                     Json j = Json::MakeObject();
+                     j["id"] = id;
+                     j["name"] = record ? record->name : "?";
+                     j["component"] = is2D ? "Joint2D" : "Joint";
+                     j["type"] = type;
+                     j["connected"] = connected;
+                     j["connectedName"] = connected == kNullEntity ? "(world)" : other ? other->name : "?";
+                     j["active"] = it != held.end() && it->second.active;
+                     j["broken"] = broken;
+                     j["force"] = it != held.end() ? it->second.force : 0.0f;
+                     list.push(j);
+                 };
+                 for (const auto& kv : scene.Pool<Joint>()) add(kv.first, false, kv.second.type, kv.second.connected, kv.second.broken);
+                 for (const auto& kv : scene.Pool<Joint2D>()) add(kv.first, true, kv.second.type, kv.second.connected, kv.second.broken);
                  return list;
              });
 

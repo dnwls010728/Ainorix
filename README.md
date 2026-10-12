@@ -21,7 +21,7 @@ CLI, HTTP and MCP — an agent and a person can work in the same session at the 
   gives the same frame hash for the same scene and inputs on every platform. An agent can step the game,
   inject input, take a screenshot and read it back.
 - **Nothing to install.** Visual Studio 2022 is the only requirement on Windows. Lua, Jolt Physics, Box2D,
-  sokol_gfx, stb, cgltf and Dear ImGui are vendored; the web and Android player runtimes are prebuilt in
+  sokol_gfx, stb, cgltf, ufbx and Dear ImGui are vendored; the web and Android player runtimes are prebuilt in
   `runtime/`.
 - **Engine or project.** Behaviour a Lua script can express lives in the project (templates and games), not in
   engine components. The engine keeps what scripts cannot do and what both renderers and the deterministic core
@@ -106,9 +106,9 @@ Details and shortcuts: [docs/EDITOR.md](docs/EDITOR.md).
 
 | Area | What is there | Doc |
 |---|---|---|
-| Rendering | Two renderers for one scene: GPU (sokol_gfx: D3D11, WebGL2, GLES3; MSAA, filtered shadows) and a deterministic multithreaded software renderer. glTF models, PBR metallic-roughness materials, transparency, point and directional lights, shadows | [RENDERING](docs/RENDERING.md) |
+| Rendering | Two renderers for one scene: GPU (sokol_gfx: D3D11, WebGL2, GLES3; MSAA, filtered shadows) and a deterministic multithreaded software renderer. glTF and FBX models, PBR metallic-roughness materials, transparency, point and directional lights, shadows | [RENDERING](docs/RENDERING.md) |
 | Post-processing and shaders | Exposure with Reinhard/ACES tone mapping, bloom, vignette, FXAA, depth of field, distance fog, colour grading; surface shader graphs (`.shader.json`) with color, emission, vertex offset and normal outputs, also on sprites | [POSTPROCESS](docs/POSTPROCESS.md) |
-| Animation | glTF skeletal animation (TRS, skins, up to 64 joints) in both renderers, `Animator`, Lua playback | [ANIMATION](docs/ANIMATION.md) |
+| Animation | glTF/FBX skeletal animation (TRS, skins, up to 64 joints) in both renderers, `Animator`, Lua playback | [ANIMATION](docs/ANIMATION.md) |
 | Particles | Deterministic emitters (in `.vfx.json` assets) with birth shapes, lifetime curves, flipbooks, turbulence, velocity alignment; `Trail` ribbons | [PARTICLES](docs/PARTICLES.md) |
 | VFX authoring | Reusable `.vfx.json` assets and linked VFXSystem, named parameters, Lua control, hot reload and total budgets; Effects panel with grouped fields, curves/gradients, isolated playback, document undo and a reference node graph; 15 presets (including sword slash and six expression effects), particle materials/mesh batching, two-anchor ribbons and bounded death chains, validation and `vfx.*` preview/analysis; axis motion curves, pivots, custom material channels and typed expressions with value nodes | [VFX](docs/VFX.md) |
 | Physics | 3D with Jolt and 2D with Box2D: rigid bodies, triggers, character controllers, one-way platforms, collision layers, raycasts; deterministic | [PHYSICS](docs/PHYSICS.md) |
@@ -152,7 +152,7 @@ engine/script     Lua script host and static checks
 engine/physics    Jolt (PhysicsWorld) and Box2D (Physics2D) wrappers
 engine/audio      mixer, WAV, sound effect generator
 engine/net        transports, channels, sessions, lockstep/rollback, authority
-engine/assets     asset cache, glTF and image loading
+engine/assets     asset cache, glTF, FBX and image loading
 engine/render     IRenderer, software and GPU renderers, shaders, materials, UI, fonts
 engine/api        command registry, HTTP server, MCP server
 engine/app        Engine (simulation, undo, jobs), packaging, dedicated server
@@ -163,7 +163,7 @@ tools/oe          CLI          tools/player   game runtime          tools/shader
 tests/            self tests (also run as WebAssembly) and their fixture projects
 templates/        what `oe new` copies          games/   the example game
 runtime/          prebuilt web and Android player runtimes
-third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
+third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
 
 A longer map of the code is in [AGENTS.md](AGENTS.md); the structure is drawn in

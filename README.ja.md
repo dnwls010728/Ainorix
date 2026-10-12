@@ -23,7 +23,7 @@ AI エージェントが人と同じくらい簡単に操作・検証できる�
   入力に対してどのプラットフォームでも同じフレームハッシュを返します。エージェントはゲームを進め、入力を与え、
   スクリーンショットを撮って自分で確認できます。
 - **インストール不要。** Windows では Visual Studio 2022 だけが必要です。Lua、Jolt Physics、Box2D、sokol_gfx、stb、
-  cgltf、Dear ImGui は同梱されており、Web と Android のプレイヤーランタイムは `runtime/` にビルド済みです。
+  cgltf、ufbx、Dear ImGui は同梱されており、Web と Android のプレイヤーランタイムは `runtime/` にビルド済みです。
 - **エンジンかプロジェクトか。** Lua スクリプトで表現できる挙動は、エンジンのコンポーネントではなくプロジェクト
   (テンプレートとゲーム)に置きます。エンジンにはスクリプトではできないこと、そして 2 つのレンダラーと決定的な
   コアが一致しなければならないものだけを残します。
@@ -106,9 +106,9 @@ Assets はグリッド/リスト表示、名前・パス検索、件数付きの
 
 | 分野 | 内容 | ドキュメント |
 |---|---|---|
-| レンダリング | 1 つのシーンを描く 2 つのレンダラー: GPU (sokol_gfx: D3D11、WebGL2、GLES3、MSAA、フィルター付き影) と決定的なマルチスレッドのソフトウェアレンダラー。glTF モデル、PBR マテリアル、透過、点光源と平行光源、影 | [RENDERING](docs/RENDERING.md) |
+| レンダリング | 1 つのシーンを描く 2 つのレンダラー: GPU (sokol_gfx: D3D11、WebGL2、GLES3、MSAA、フィルター付き影) と決定的なマルチスレッドのソフトウェアレンダラー。glTF / FBX モデル、PBR マテリアル、透過、点光源と平行光源、影 | [RENDERING](docs/RENDERING.md) |
 | ポストプロセスとシェーダー | 露出と Reinhard/ACES トーンマッピング、ブルーム、ビネット、FXAA、被写界深度、距離フォグ、カラーグレーディング。色、発光、頂点オフセット、法線を出力できるサーフェスシェーダーグラフ (`.shader.json`)、スプライトにも適用可能 | [POSTPROCESS](docs/POSTPROCESS.md) |
-| アニメーション | 両レンダラーで動く glTF スケルタルアニメーション (64 ジョイントまで)、`Animator`、Lua からの再生 | [ANIMATION](docs/ANIMATION.md) |
+| アニメーション | 両レンダラーで動く glTF / FBX スケルタルアニメーション (64 ジョイントまで)、`Animator`、Lua からの再生 | [ANIMATION](docs/ANIMATION.md) |
 | パーティクル | 発生形状、寿命カーブ、フリップブック、乱流、速度方向への整列を持つ決定的なエミッター。`Trail` リボン | [PARTICLES](docs/PARTICLES.md) |
 | VFX 制作 | 再利用可能な `.vfx.json` と VFXSystem、名前付きパラメータ、Lua 制御、ホットリロード、総粒子予算。モジュール別フィールド、カーブ／グラデーション、独立再生、文書 undo と参照ノードグラフを備える Effects パネル。剣撃と6種類の式エフェクトを含む15種類のプリセット、パーティクルマテリアル／メッシュのバッチ化、二点リボンと深度制限付き子エミッター、検証とプレビュー／分析用の `vfx.*` コマンド 軸別の移動・回転・スケールカーブ、基点ピボットと4つのcustom属性で氷柱の成長などをVFX内で制御。 | [VFX](docs/VFX.md) |
 | 物理 | Jolt による 3D と Box2D による 2D: 剛体、トリガー、キャラクターコントローラー、一方通行の足場、衝突レイヤー、レイキャスト。決定的 | [PHYSICS](docs/PHYSICS.md) |
@@ -152,7 +152,7 @@ engine/script     Lua スクリプトホストと静的チェック
 engine/physics    Jolt (PhysicsWorld) と Box2D (Physics2D) のラッパー
 engine/audio      ミキサー、WAV、効果音ジェネレーター
 engine/net        トランスポート、チャンネル、セッション、ロックステップ/ロールバック、権威サーバー
-engine/assets     アセットキャッシュ、glTF と画像の読み込み
+engine/assets     アセットキャッシュ、glTF、FBX と画像の読み込み
 engine/render     IRenderer、ソフトウェア/GPU レンダラー、シェーダー、マテリアル、UI、フォント
 engine/api        コマンドレジストリ、HTTP サーバー、MCP サーバー
 engine/app        Engine (シミュレーション、アンドゥ、ジョブ)、パッケージング、専用サーバー
@@ -163,7 +163,7 @@ tools/oe          CLI          tools/player   ゲームランタイム          
 tests/            セルフテスト (WebAssembly でも実行)
 templates/        `oe new` がコピーするもの          games/   サンプルゲーム
 runtime/          ビルド済みの Web と Android プレイヤーランタイム
-third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
+third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
 
 より詳しいコードマップは [AGENTS.md](AGENTS.md)、構造図は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) にあります。

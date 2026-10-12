@@ -185,6 +185,36 @@ struct Mat4 {
     }
 };
 
+// Splits a matrix built like Mat4::TRS (T * Rz * Ry * Rx * S) back into
+// position, Euler degrees (X then Y then Z, the Transform convention) and
+// scale. Negative scale is folded into the rotation.
+inline void DecomposeTRS(const Mat4& m, Vec3& position, Vec3& eulerDeg, Vec3& scale) {
+    position = Vec3(m.at(0, 3), m.at(1, 3), m.at(2, 3));
+    Vec3 c0(m.at(0, 0), m.at(1, 0), m.at(2, 0));
+    Vec3 c1(m.at(0, 1), m.at(1, 1), m.at(2, 1));
+    Vec3 c2(m.at(0, 2), m.at(1, 2), m.at(2, 2));
+    scale = Vec3(Length(c0), Length(c1), Length(c2));
+    if (scale.x > 1e-8f) c0 = c0 * (1.0f / scale.x);
+    if (scale.y > 1e-8f) c1 = c1 * (1.0f / scale.y);
+    if (scale.z > 1e-8f) c2 = c2 * (1.0f / scale.z);
+    // R = [c0 c1 c2]; element R(row, col).
+    float r00 = c0.x, r10 = c0.y, r20 = c0.z;
+    float r11 = c1.y, r21 = c1.z;
+    float r12 = c2.y, r22 = c2.z;
+    float sy = Clamp(-r20, -1.0f, 1.0f);
+    float x, y, z;
+    if (std::fabs(sy) < 0.99999f) {
+        y = std::asin(sy);
+        x = std::atan2(r21, r22);
+        z = std::atan2(r10, r00);
+    } else {  // gimbal lock: Y = +-90 degrees, put everything into X
+        y = sy > 0 ? kPi * 0.5f : -kPi * 0.5f;
+        x = std::atan2(-r12, r11);
+        z = 0.0f;
+    }
+    eulerDeg = Vec3(Degrees(x), Degrees(y), Degrees(z));
+}
+
 // Euler angles (degrees, no roll) that point the local -Z axis along `dir`.
 inline Vec3 EulerLookDirection(const Vec3& dir) {
     Vec3 d = Normalize(dir);

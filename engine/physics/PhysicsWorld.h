@@ -37,9 +37,17 @@ struct ContactPair {
     bool trigger = false;
 };
 
+// One Joint / Joint2D component as the solvers hold it.
+struct JointInfo {
+    EntityId id = kNullEntity;
+    bool is2D = false;
+    bool active = false;  // false: a body is missing, or it broke
+    float force = 0.0f;   // held during the last step, N
+};
+
 // Mirrors the scene's Collider / RigidBody / CharacterBody components into a
-// Jolt PhysicsSystem (3D) and Collider2D / RigidBody2D / CharacterBody2D into
-// a Box2D world (2D, engine/physics/Physics2D) and writes the simulated
+// Jolt PhysicsSystem (3D, with Joint as constraints) and Collider2D / RigidBody2D /
+// CharacterBody2D / Joint2D into a Box2D world (2D, engine/physics/Physics2D) and writes the simulated
 // results back. Each world is created only when the scene has bodies for it;
 // tilemaps collide in both. Events and queries merge both worlds. The worlds
 // live for one play session (Reset() discards them); bodies are created and
@@ -75,6 +83,8 @@ public:
     RaycastHit Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance);
     std::vector<EntityId> OverlapSphere(Scene& scene, const Vec3& center, float radius);
     std::vector<ContactPair> Contacts() const;
+    // Joints the worlds know after the last step or query, 3D then 2D, in entity id order.
+    std::vector<JointInfo> Joints() const;
     void AddImpulse(EntityId id, const Vec3& impulse);
 
     Json Stats() const;

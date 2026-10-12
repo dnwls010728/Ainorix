@@ -66,6 +66,12 @@ public:
     EntityId Selected() const;
     // The Scene view's 2D mode (XY grid, planar gizmo), as its "2D" toggle.
     void SetSceneView2D(bool on);
+    // The Scene view's skeleton overlay, as its "Bones" toggle.
+    void SetSceneBones(bool on);
+    // The Inspector bone list's actions: hold `existing` (0 = a new entity) on a bone of `model`; create an IK goal on a bone; add a spring that swings the bone and those below it.
+    void AttachToBone(EntityId model, const std::string& bone, EntityId existing);
+    void AddIkGoal(EntityId model, const std::string& bone);
+    void AddSpringBone(EntityId model, const std::string& bone);
     // Opens a project script in the Scripts panel (code editor).
     void OpenScript(const std::string& path);
     // Project-relative paths of the current script tabs, including unsaved buffers awaiting a close decision.

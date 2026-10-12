@@ -1,0 +1,3 @@
+ufbx v0.23.1 (ufbx.h, ufbx.c) from https://github.com/ufbx/ufbx, unmodified. License: MIT or public domain (LICENSE).
+SHA-256 ufbx.h: f787be529af577efc04f3e3e735844a08556718dbb613d1211c2b313d72895dc
+SHA-256 ufbx.c: 4a956c26a708e40d82ecb0aeaee54da709d5ba7c144c9642174970059bda7e1d

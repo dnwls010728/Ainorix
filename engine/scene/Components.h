@@ -40,7 +40,7 @@ struct MeshRenderer {
     bool castShadows = true;
     bool visible = true;
     static void Reflect(FieldList& f) {
-        f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf).");
+        f.Add("mesh", &MeshRenderer::mesh, "Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. \"assets/models/fox.glb\" (.glb/.gltf/.fbx).");
         f.Add("material", &MeshRenderer::material,
               "Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. "
               "Empty = the model's own materials (glTF) or the default (white, roughness 0.7).");
@@ -74,6 +74,61 @@ struct Animator {
         f.Add("loop", &Animator::loop, "Wrap time at the clip duration; otherwise clamp and stop at either endpoint.");
         f.Add("playing", &Animator::playing, "Advance time while true; false holds the current pose.");
         f.Add("time", &Animator::time, "Seconds into the clip; set to seek. Direct clip edits preserve time.");
+    }
+};
+
+struct BoneAttachment {
+    static constexpr const char* kTypeName = "BoneAttachment";
+    static constexpr const char* kDoc = "Holds this entity on a bone of its parent's model (weapon in a hand, hat on a head): after physics each frame its Transform position and rotation are set from the posed bone, IK included. Bone names: animation.bones.";
+    std::string bone;
+    Vec3 position;
+    Vec3 rotation;
+    static void Reflect(FieldList& f) {
+        f.Add("bone", &BoneAttachment::bone, "Exact node name in the parent's MeshRenderer model; an unknown name leaves the Transform alone.");
+        f.Add("position", &BoneAttachment::position, "Offset from the bone in the bone's own axes, in model units.");
+        f.Add("rotation", &BoneAttachment::rotation, "Rotation offset from the bone (Euler degrees). Transform.scale stays yours.");
+    }
+};
+
+struct BoneIK {
+    static constexpr const char* kTypeName = "BoneIK";
+    static constexpr const char* kDoc = "Inverse kinematics goal for its parent's model: the bones above `bone` turn so that it reaches this entity's Transform position (move the entity to move the hand or foot). Applied after the Animator's clip in both renderers; goals run in entity id order.";
+    std::string bone;
+    int chain = 2;
+    float weight = 1.0f;
+    Vec3 pole;
+    float soften = 0.0f;
+    bool matchRotation = false;
+    static void Reflect(FieldList& f) {
+        f.Add("bone", &BoneIK::bone, "Exact name of the node that should reach the goal (hand, foot, head); see animation.bones.");
+        f.Add("chain", &BoneIK::chain, "How many bones above it turn, 1..8. 2 = an arm or a leg (exact two-bone solve); 1 aims the parent bone; more bend a spine or tail step by step.");
+        f.Add("weight", &BoneIK::weight, "0 = the animated pose, 1 = reach the goal; between blends the goal position.");
+        f.Add("pole", &BoneIK::pole, "chain 2: direction in model space the elbow or knee points to, e.g. [0,0,1]; [0,0,0] keeps the side the limb bends to in the model's default pose.");
+        f.Add("soften", &BoneIK::soften, "chain 2: share of the limb length (0..0.5) over which it eases into full extension, so a goal near or beyond reach does not snap the limb straight; the bone then stops slightly short of such goals. 0 = exact reach. Try 0.1 for feet.");
+        f.Add("matchRotation", &BoneIK::matchRotation, "Also turn the bone to this entity's Transform rotation (a foot flat on a slope, a palm on a wall).");
+    }
+};
+
+struct SpringBone {
+    static constexpr const char* kTypeName = "SpringBone";
+    static constexpr const char* kDoc = "Secondary motion for bones of its parent's model (tail, ears, hair, a cape strip): `bone` and every bone below it lag behind and swing as the character moves, then settle back into the animated pose. Simulated after physics each fixed step while playing, on top of the Animator's clip and BoneIK; stopped scenes show the plain pose.";
+    std::string bone;
+    float stiffness = 100.0f;
+    float damping = 10.0f;
+    Vec3 gravity;
+    float weight = 1.0f;
+    // Runtime, not serialized: where each swinging bone's end is and was one step ago and where the
+    // pose last put it (world space), parents first, and the `bone` they were made for. Empty until
+    // the first simulated step.
+    std::vector<Vec3> tails, previous, rests;
+    std::string simulated;
+    static void Reflect(FieldList& f) {
+        auto range = [](FieldInfo& field, float lo, float hi) { field.hasRange = true; field.min = lo; field.max = hi; };
+        f.Add("bone", &SpringBone::bone, "Exact name of the first bone that swings (tail root, ear base, first hair bone); the whole branch below it follows. See animation.bones.");
+        range(f.Add("stiffness", &SpringBone::stiffness, "Pull back to the animated pose. 20 = loose and slow (long hair, cloth), 100 = a tail, 400+ = short stiff parts (ears, antennae). 0 = hangs freely."), 0, 3600);
+        range(f.Add("damping", &SpringBone::damping, "How fast the swing dies out, per second. 3 = long wobble, 10 = one soft overshoot, 25+ = follows late without swinging back. A clip that already moves these bones in a rhythm (a walk) gets exaggerated when this is low; raise it together with stiffness."), 0, 60);
+        f.Add("gravity", &SpringBone::gravity, "World-space acceleration in m/s^2, e.g. [0,-9.8,0] so the chain sags; [0,0,0] keeps the authored pose at rest. Other directions act as steady wind.");
+        range(f.Add("weight", &SpringBone::weight, "0 = the animated pose, 1 = the simulated swing; between blends them."), 0, 1);
     }
 };
 
@@ -908,6 +963,86 @@ struct CharacterBody2D {
 };
 
 // ----- Prefabs ------------------------------------------------------------------
+
+struct Joint {
+    static constexpr const char* kTypeName = "Joint";
+    static constexpr const char* kDoc = "Connects this entity's body (Collider + RigidBody) to another body, or to the world when `connected` is 0 (Jolt): hinge = doors, wheels, levers; ball = ropes, chains, pendulums; slider = pistons, drawers, lifts; distance = rods, ropes, springs; fixed = glued parts that can break. The bodies are joined as they stand when the joint is made. One per entity: a body with two joints carries one, the other body carries the second. See physics.joints.";
+    std::string type = "hinge";
+    EntityId connected = kNullEntity;
+    Vec3 anchor;
+    Vec3 connectedAnchor;
+    bool autoAnchor = true;
+    Vec3 axis{0, 1, 0};
+    bool useLimits = false;
+    float min = 0.0f, max = 0.0f;
+    bool useMotor = false;
+    float motorSpeed = 0.0f;
+    float maxMotorForce = 100.0f;
+    float frequency = 0.0f;
+    float damping = 0.5f;
+    bool collideConnected = false;
+    float breakForce = 0.0f;
+    bool broken = false;
+    static void Reflect(FieldList& f) {
+        f.Add("type", &Joint::type, "fixed = no relative motion; hinge = turns around `axis` through `anchor`; ball = turns freely around `anchor`; slider = moves along `axis` only; distance = keeps `anchor` and `connectedAnchor` a length apart.").options = {"fixed", "hinge", "ball", "slider", "distance"};
+        f.Add("connected", &Joint::connected, "Entity id of the other body (Collider, with or without RigidBody). 0 = the world: the joint holds this body in place.");
+        f.Add("anchor", &Joint::anchor, "Joint point on this entity, in its local units (like Collider.center): the hinge pin, the ball, the rope's end.");
+        f.Add("connectedAnchor", &Joint::connectedAnchor, "Joint point on the connected entity in its local units (world coordinates when connected is 0). Used when autoAnchor is false; a distance joint needs it.");
+        f.Add("autoAnchor", &Joint::autoAnchor, "true = the connected anchor is the same world point as `anchor` when the joint is made. Set false for distance joints and to pull two bodies together.");
+        f.Add("axis", &Joint::axis, "hinge: the pin's direction; slider: the direction of travel; ball with limits: the cone's middle. In this entity's local axes.");
+        f.Add("useLimits", &Joint::useLimits, "Enables min/max. hinge: angles in degrees from the starting pose (min -180..0, max 0..180); slider: meters from the start (min <= 0 <= max); distance: shortest and longest length (a rope is min 0, max = its length); ball: max = how far it may swing from `axis` in degrees.");
+        f.Add("min", &Joint::min, "Lower limit, see useLimits.");
+        f.Add("max", &Joint::max, "Upper limit, see useLimits.");
+        f.Add("useMotor", &Joint::useMotor, "hinge/slider: drive the joint at motorSpeed (wheels, fans, lifts). May be changed every frame.");
+        f.Add("motorSpeed", &Joint::motorSpeed, "Target speed: degrees/s (hinge) or m/s (slider).");
+        f.Add("maxMotorForce", &Joint::maxMotorForce, "Strongest torque (hinge, N m) or force (slider, N) the motor uses; a heavy body needs more.");
+        f.Add("frequency", &Joint::frequency, "Spring in Hz. distance: above 0 the rod is a spring; hinge/slider: soft limits. 0 = rigid.");
+        f.Add("damping", &Joint::damping, "Spring damping ratio (0 = keeps bouncing, 1 = no overshoot).");
+        f.Add("collideConnected", &Joint::collideConnected, "Whether the two jointed bodies collide with each other (a door and its frame usually should not).");
+        f.Add("breakForce", &Joint::breakForce, "The joint breaks when it has to hold more than this force in N (0 = never).");
+        f.Add("broken", &Joint::broken, "Runtime state: true after the joint broke; set false to join the bodies again as they stand.");
+    }
+};
+
+struct Joint2D {
+    static constexpr const char* kTypeName = "Joint2D";
+    static constexpr const char* kDoc = "Connects this entity's 2D body (Collider2D + RigidBody2D) to another 2D body, or to the world when `connected` is 0 (Box2D): hinge = swings, wheels, flippers; slider = lifts, pistons; distance = rods, ropes, springs; wheel = a car wheel with suspension; fixed = glued parts that can break. The bodies are joined as they stand when the joint is made. One per entity. See physics.joints.";
+    std::string type = "hinge";
+    EntityId connected = kNullEntity;
+    Vec3 anchor;
+    Vec3 connectedAnchor;
+    bool autoAnchor = true;
+    Vec3 axis{0, 1, 0};
+    bool useLimits = false;
+    float min = 0.0f, max = 0.0f;
+    bool useMotor = false;
+    float motorSpeed = 0.0f;
+    float maxMotorForce = 100.0f;
+    float frequency = 0.0f;
+    float damping = 0.5f;
+    bool collideConnected = false;
+    float breakForce = 0.0f;
+    bool broken = false;
+    static void Reflect(FieldList& f) {
+        f.Add("type", &Joint2D::type, "fixed = welded; hinge = turns around `anchor`; slider = moves along `axis` only, no turning; distance = keeps `anchor` and `connectedAnchor` a length apart; wheel = slides along `axis` on a spring and spins freely.").options = {"fixed", "hinge", "slider", "distance", "wheel"};
+        f.Add("connected", &Joint2D::connected, "Entity id of the other 2D body (Collider2D, with or without RigidBody2D). 0 = the world: the joint holds this body in place.");
+        f.Add("anchor", &Joint2D::anchor, "Joint point on this entity (x, y) in its local units: the hinge pin, the rope's end, the wheel axle.");
+        f.Add("connectedAnchor", &Joint2D::connectedAnchor, "Joint point on the connected entity (x, y) in its local units (world coordinates when connected is 0). Used when autoAnchor is false; a distance joint needs it.");
+        f.Add("autoAnchor", &Joint2D::autoAnchor, "true = the connected anchor is the same world point as `anchor` when the joint is made.");
+        f.Add("axis", &Joint2D::axis, "slider/wheel: direction of travel (x, y) in this entity's local axes; [0,1,0] is a vertical suspension or lift.");
+        f.Add("useLimits", &Joint2D::useLimits, "Enables min/max. hinge: angles in degrees from the starting pose; slider/wheel: meters from the start; distance: shortest and longest length (a rope is min 0, max = its length).");
+        f.Add("min", &Joint2D::min, "Lower limit, see useLimits.");
+        f.Add("max", &Joint2D::max, "Upper limit, see useLimits.");
+        f.Add("useMotor", &Joint2D::useMotor, "hinge/slider/wheel: drive the joint at motorSpeed. May be changed every frame.");
+        f.Add("motorSpeed", &Joint2D::motorSpeed, "Target speed: degrees/s counter-clockwise (hinge, wheel) or m/s (slider).");
+        f.Add("maxMotorForce", &Joint2D::maxMotorForce, "Strongest torque (hinge, wheel: N m) or force (slider: N) the motor uses.");
+        f.Add("frequency", &Joint2D::frequency, "Spring in Hz. distance: above 0 the rod is a spring; wheel: the suspension (0 = rigid); fixed: above 0 the weld flexes. 0 = rigid.");
+        f.Add("damping", &Joint2D::damping, "Spring damping ratio (0 = keeps bouncing, 1 = no overshoot).");
+        f.Add("collideConnected", &Joint2D::collideConnected, "Whether the two jointed bodies collide with each other.");
+        f.Add("breakForce", &Joint2D::breakForce, "The joint breaks when it has to hold more than this force in N (0 = never).");
+        f.Add("broken", &Joint2D::broken, "Runtime state: true after the joint broke; set false to join the bodies again as they stand.");
+    }
+};
 
 struct Prefab {
     static constexpr const char* kTypeName = "Prefab";

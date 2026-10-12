@@ -58,7 +58,7 @@ slopes), editor tile brush — [2D.md](2D.md)
 ## Stage 4 — Assets and rendering quality ✅ done
 
 - **Asset management**: the `assets/` folder, listing and query commands (`asset.list`, `asset.info`)
-- **Mesh import**: glTF (.glb)
+- **Mesh import**: glTF (.glb), FBX (.fbx)
 - **Textures**: PNG decoder, UV mapping, material component (color + texture)
 - **Shading**: smooth shading (vertex normals), point lights, simple shadows
 - **Camera**: orthographic projection, follow component

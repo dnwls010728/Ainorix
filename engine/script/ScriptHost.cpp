@@ -34,6 +34,7 @@ const char* kLoadedKey = "oe.loaded";
 const char* kOfficialLoadingKey = "oe.officialLoading";
 std::string PopMessage(lua_State* L);
 Vec3 CheckVec3(lua_State* L, int idx);
+void PushVec3(lua_State* L, const Vec3& v);
 
 ScriptHost& Host(lua_State* L) { return **static_cast<ScriptHost**>(lua_getextraspace(L)); }
 Scene& SceneOf(lua_State* L) { return Host(L).GetEngine().GetScene(); }
@@ -748,6 +749,36 @@ int L_AnimationPlay(lua_State* L) {
         Json result = Host(L).GetEngine().Call("animation.play", args);
         if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
         PushJson(L, result["result"]);
+        return 1;
+    });
+}
+
+// animation.bone(id, name, {ik = false}?) -> {position, rotation} in world space and modelPosition (each {x,y,z}), nil for an unknown bone.
+int L_AnimationBone(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        args["bone"] = luaL_checkstring(L, 2);
+        if (lua_istable(L, 3)) {
+            lua_getfield(L, 3, "ik");
+            if (lua_isboolean(L, -1)) args["ik"] = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        Json result = Host(L).GetEngine().Call("animation.bones", args);
+        if (!result["ok"].asBool()) {
+            if (result["error"]["code"].asString() == "bone_not_found") { lua_pushnil(L); return 1; }
+            return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        }
+        if (result["result"]["bones"].size() == 0) { lua_pushnil(L); return 1; }
+        const Json& bone = result["result"]["bones"][0];
+        auto vec3 = [](const Json& v) { return Vec3(v[0].asFloat(), v[1].asFloat(), v[2].asFloat()); };
+        lua_createtable(L, 0, 3);
+        PushVec3(L, vec3(bone["position"]));
+        lua_setfield(L, -2, "position");
+        PushVec3(L, vec3(bone["rotation"]));
+        lua_setfield(L, -2, "rotation");
+        PushVec3(L, vec3(bone["modelPosition"]));
+        lua_setfield(L, -2, "modelPosition");
         return 1;
     });
 }
@@ -1678,7 +1709,7 @@ void ScriptHost::Open() {
                                    {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"children", L_SceneChildren}, {"child", L_SceneChild}, {"all", L_SceneAll},
                                    {"withTag", L_SceneWithTag}, {"epoch", L_SceneEpoch}, {nullptr, nullptr}};
     SetFuncs(L, "scene", sceneFuncs);
-    const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {nullptr, nullptr}};
+    const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {"bone", L_AnimationBone}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg vfxFuncs[] = {{"spawn", L_VfxSpawn}, {"play", L_VfxPlay}, {"stop", L_VfxStop},
         {"burst", L_VfxBurst}, {"clear", L_VfxClear}, {"set", L_VfxSet}, {"state", L_VfxState}, {nullptr, nullptr}};

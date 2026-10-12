@@ -326,7 +326,7 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
         return static_cast<EntityId>(r["result"]["id"].asNumber(0));
     };
     Json r;
-    if (EndsWith(path, ".glb") || EndsWith(path, ".gltf")) {
+    if (AssetManager::KindOf(path) == "model") {
         r = Call("entity.create", ObjectOf({{"name", Json(UniqueName(Stem(path)))},
                                             {"components", ObjectOf({{"Transform", ObjectOf({{"position", Vec3Json(hit)}})},
                                                                      {"MeshRenderer", ObjectOf({{"mesh", Json(path)}})}})}}));
@@ -598,6 +598,7 @@ void NativeEditor::Impl::ScenePanel() {
     if (showCompass) SceneCompass(cam, compassPos, compassSize);
 
     SceneOverlays(dl);
+    BonesOverlay(dl);
     if (painting) {
         // Tile brush: clicks paint the selected tilemap instead of selecting.
         gizmoUsing = false;
@@ -677,6 +678,8 @@ void NativeEditor::Impl::ScenePanel() {
         if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);
         ImGui::SameLine(0, 3);
         OverlayToggle("UI", &showSceneUI, Tr("The game's UI over the world: click an element to select it, drag to move, handles to resize"));
+        ImGui::SameLine(0, 3);
+        OverlayToggle(Tr("Bones"), &showBones, Tr("Skeleton of the selected model: hover a joint for its name; the bones a selected goal or attachment uses are lit"));
         if (Row(Primary()) && Row(Primary())->Has("Tilemap")) {
             ImGui::SameLine(0, 3);
             if (OverlayToggle(Tr("Paint Tiles"), &tilePaint, Tr("Paint the selected Tilemap (brush from the Tiles panel): left paint, right erase, Shift rectangle, Ctrl pick"))) {

@@ -265,8 +265,8 @@ endif()
 add_library(OwnEngine STATIC ${OE_CORE_SOURCES} ${OE_PLATFORM_SOURCES})
 target_include_directories(OwnEngine PUBLIC engine third_party/sokol)
 target_link_libraries(OwnEngine PUBLIC oe_lua Jolt oe_box2d)
-# Single-header decoders (stb_image, cgltf); implementations in engine/assets/ThirdPartyImpl.cpp.
-target_include_directories(OwnEngine PRIVATE third_party/stb third_party/cgltf)
+# Single-file decoders (stb_image, cgltf, ufbx); implementations in engine/assets/ThirdPartyImpl.cpp.
+target_include_directories(OwnEngine PRIVATE third_party/stb third_party/cgltf third_party/ufbx)
 target_compile_definitions(OwnEngine PUBLIC
   OE_VERSION="${PROJECT_VERSION}"
   OE_PLATFORM_NAME="${OE_PLATFORM}"

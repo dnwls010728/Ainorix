@@ -23,6 +23,16 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
+// ufbx: FBX only, read from memory (no file access of its own); the unused evaluators are left out.
+#define UFBX_NO_STDIO
+#define UFBX_NO_FORMAT_OBJ
+#define UFBX_NO_SUBDIVISION
+#define UFBX_NO_TESSELLATION
+#define UFBX_NO_GEOMETRY_CACHE
+#define UFBX_NO_SCENE_EVALUATION
+#define UFBX_NO_SKINNING_EVALUATION
+#include "ufbx.c"
+
 #if defined(_MSC_VER)
 #pragma warning(pop)
 #elif defined(__GNUC__)

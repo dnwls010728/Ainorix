@@ -65,6 +65,7 @@ struct Submesh {
 
 // Immutable glTF hierarchy; rotations use quaternion x/y/z/w, not Euler angles.
 struct ModelNode {
+    std::string name;  // source node/bone name; may be empty or repeated
     int parent = -1;
     Vec3 translation;
     Vec4 rotation{0, 0, 0, 1};

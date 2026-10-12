@@ -299,6 +299,16 @@ struct Physics2D::Impl {
         // this one (Box2D 3.1 has no axis locks). Destroying it removes the joint.
         b2BodyId anchor = b2_nullBodyId;
     };
+    enum class JointType { Fixed, Hinge, Slider, Distance, Wheel };
+    struct JointRec {
+        b2JointId id = b2_nullJointId;      // invalid while a body is missing or after it broke
+        b2BodyId ground = b2_nullBodyId;    // connected = 0: a shapeless static body at the anchor
+        std::string key;
+        JointType type = JointType::Hinge;
+        bool motorSet = false, motorOn = false;
+        float motorSpeed = 0, motorLimit = 0;
+        float force = 0;  // held during the last step, N
+    };
     struct CharacterRec {
         b2BodyId body = b2_nullBodyId;
         std::string key;
@@ -740,11 +750,227 @@ struct Physics2D::Impl {
             }
         }
 
+        SyncJoints(scene, warnings);
+
         for (const auto& imp : pendingImpulses) {
             auto it = bodies.find(imp.first);
             if (it != bodies.end() && it->second.kind == Kind::Dynamic) b2Body_ApplyLinearImpulseToCenter(it->second.id, V2(imp.second), true);
         }
         pendingImpulses.clear();
+    }
+
+    // ----- Joints -----
+
+    void DestroyJoint(JointRec& rec) {
+        if (b2Joint_IsValid(rec.id)) b2DestroyJoint(rec.id);
+        rec.id = b2_nullJointId;
+        if (b2Body_IsValid(rec.ground)) b2DestroyBody(rec.ground);
+        rec.ground = b2_nullBodyId;
+        rec.force = 0;
+    }
+
+    // Everything that needs a new joint when it changes; motors and `broken` are applied live.
+    static std::string JointKey(const Joint2D& joint) {
+        Json j = ComponentToJson(*TypeRegistry::Find("Joint2D"), &joint);
+        for (const char* live : {"broken", "useMotor", "motorSpeed", "maxMotorForce"}) j.erase(live);
+        return j.dump();
+    }
+
+    void ApplyMotor(JointRec& rec, const Joint2D& joint) {
+        const float limit = std::max(0.0f, std::isfinite(joint.maxMotorForce) ? joint.maxMotorForce : 0.0f);
+        const float speed = std::isfinite(joint.motorSpeed) ? joint.motorSpeed : 0.0f;
+        if (rec.type != JointType::Hinge && rec.type != JointType::Slider && rec.type != JointType::Wheel) return;
+        if (rec.motorSet && rec.motorOn == joint.useMotor && rec.motorSpeed == speed && rec.motorLimit == limit) return;
+        if (rec.type == JointType::Hinge) {
+            b2RevoluteJoint_SetMaxMotorTorque(rec.id, limit);
+            b2RevoluteJoint_SetMotorSpeed(rec.id, Radians(speed));
+            b2RevoluteJoint_EnableMotor(rec.id, joint.useMotor);
+        } else if (rec.type == JointType::Slider) {
+            b2PrismaticJoint_SetMaxMotorForce(rec.id, limit);
+            b2PrismaticJoint_SetMotorSpeed(rec.id, speed);
+            b2PrismaticJoint_EnableMotor(rec.id, joint.useMotor);
+        } else {
+            b2WheelJoint_SetMaxMotorTorque(rec.id, limit);
+            b2WheelJoint_SetMotorSpeed(rec.id, Radians(speed));
+            b2WheelJoint_EnableMotor(rec.id, joint.useMotor);
+        }
+        b2Joint_WakeBodies(rec.id);  // a sleeping body would not start
+        rec.motorSet = true;
+        rec.motorOn = joint.useMotor;
+        rec.motorSpeed = speed;
+        rec.motorLimit = limit;
+    }
+
+    bool CreateJoint(Scene& scene, EntityId id, const Joint2D& joint, JointRec& rec, std::vector<std::string>& warnings) {
+        const std::string who = "entity " + std::to_string(id) + " Joint2D: ";
+        auto self = bodies.find(id);
+        if (self == bodies.end() || self->second.tilemap || !b2Body_IsValid(self->second.id)) {
+            Warn(warnings, who + "this entity has no 2D body (add a Collider2D and a RigidBody2D; a CharacterBody2D cannot be jointed)");
+            return false;
+        }
+        auto other = bodies.end();
+        if (joint.connected != kNullEntity) {
+            other = bodies.find(joint.connected);
+            if (joint.connected == id || other == bodies.end() || !b2Body_IsValid(other->second.id)) {
+                Warn(warnings, who + "connected entity " + std::to_string(joint.connected) + " has no 2D body (it needs a Collider2D; 0 joins to the world)");
+                return false;
+            }
+        }
+        if (self->second.kind != Kind::Dynamic && (other == bodies.end() || other->second.kind != Kind::Dynamic)) {
+            Warn(warnings, who + "neither body is dynamic, so the joint has nothing to move (add a RigidBody2D of type dynamic)");
+            return false;
+        }
+        const Mat4 matrix = scene.WorldMatrix(id);
+        const Vec3 at = matrix.TransformPoint(Vec3(joint.anchor.x, joint.anchor.y, 0));
+        const b2Vec2 pointB{at.x, at.y};
+        b2Vec2 pointA = pointB;
+        if (!joint.autoAnchor) {
+            const Vec3 local(joint.connectedAnchor.x, joint.connectedAnchor.y, 0);
+            const Vec3 to = joint.connected != kNullEntity ? scene.WorldMatrix(joint.connected).TransformPoint(local) : local;
+            pointA = b2Vec2{to.x, to.y};
+        }
+        const Vec3 dir = matrix.TransformDir(Vec3(joint.axis.x, joint.axis.y, 0));
+        b2Vec2 axis{dir.x, dir.y};
+        const float axisLength = b2Length(axis);
+        axis = std::isfinite(axisLength) && axisLength > 1e-6f ? b2MulSV(1.0f / axisLength, axis) : b2Vec2{0, 1};
+        if (!std::isfinite(pointA.x + pointA.y + pointB.x + pointB.y)) {
+            Warn(warnings, who + "anchor is not a number");
+            return false;
+        }
+        const b2BodyId bodyB = self->second.id;
+        b2BodyId bodyA;
+        if (other != bodies.end()) {
+            bodyA = other->second.id;
+        } else {  // the world: a shapeless static body at the anchor
+            b2BodyDef bd = b2DefaultBodyDef();
+            bd.position = pointA;
+            rec.ground = b2CreateBody(world, &bd);
+            bodyA = rec.ground;
+        }
+        const b2Vec2 localA = b2Body_GetLocalPoint(bodyA, pointA), localB = b2Body_GetLocalPoint(bodyB, pointB);
+        const float reference = b2RelativeAngle(b2Body_GetRotation(bodyB), b2Body_GetRotation(bodyA));
+        const float lo = std::isfinite(joint.min) ? joint.min : 0.0f, hi = std::isfinite(joint.max) ? joint.max : 0.0f;
+        const float hertz = std::max(0.0f, std::isfinite(joint.frequency) ? joint.frequency : 0.0f);
+        const float ratio = std::max(0.0f, std::isfinite(joint.damping) ? joint.damping : 0.0f);
+        if (joint.type == "fixed") {
+            b2WeldJointDef jd = b2DefaultWeldJointDef();
+            jd.bodyIdA = bodyA; jd.bodyIdB = bodyB;
+            jd.localAnchorA = localA; jd.localAnchorB = localB;
+            jd.referenceAngle = reference;
+            jd.linearHertz = jd.angularHertz = hertz;
+            jd.linearDampingRatio = jd.angularDampingRatio = ratio;
+            jd.collideConnected = joint.collideConnected;
+            rec.id = b2CreateWeldJoint(world, &jd);
+            rec.type = JointType::Fixed;
+        } else if (joint.type == "slider") {
+            b2PrismaticJointDef jd = b2DefaultPrismaticJointDef();
+            jd.bodyIdA = bodyA; jd.bodyIdB = bodyB;
+            jd.localAnchorA = localA; jd.localAnchorB = localB;
+            jd.localAxisA = b2Body_GetLocalVector(bodyA, axis);
+            jd.referenceAngle = reference;
+            jd.enableLimit = joint.useLimits;
+            jd.lowerTranslation = std::min(lo, hi);
+            jd.upperTranslation = std::max(lo, hi);
+            jd.collideConnected = joint.collideConnected;
+            rec.id = b2CreatePrismaticJoint(world, &jd);
+            rec.type = JointType::Slider;
+        } else if (joint.type == "distance") {
+            b2DistanceJointDef jd = b2DefaultDistanceJointDef();
+            jd.bodyIdA = bodyA; jd.bodyIdB = bodyB;
+            jd.localAnchorA = localA; jd.localAnchorB = localB;
+            jd.length = b2Distance(pointA, pointB);
+            if (joint.useLimits) {  // a range: free between the two lengths unless a spring pulls to the starting one
+                jd.minLength = std::max(0.0f, std::min(lo, hi));
+                jd.maxLength = std::max(jd.minLength, std::max(lo, hi));
+                jd.length = Clamp(jd.length, jd.minLength, jd.maxLength);
+                jd.enableLimit = true;
+                jd.enableSpring = true;
+                jd.hertz = hertz;
+                jd.dampingRatio = hertz > 0 ? ratio : 0.0f;
+            } else if (hertz > 0) {
+                jd.enableSpring = true;
+                jd.hertz = hertz;
+                jd.dampingRatio = ratio;
+            }
+            jd.collideConnected = joint.collideConnected;
+            rec.id = b2CreateDistanceJoint(world, &jd);
+            rec.type = JointType::Distance;
+        } else if (joint.type == "wheel") {
+            b2WheelJointDef jd = b2DefaultWheelJointDef();
+            jd.bodyIdA = bodyA; jd.bodyIdB = bodyB;
+            jd.localAnchorA = localA; jd.localAnchorB = localB;
+            jd.localAxisA = b2Body_GetLocalVector(bodyA, axis);
+            jd.enableSpring = hertz > 0;
+            jd.hertz = hertz;
+            jd.dampingRatio = ratio;
+            jd.enableLimit = joint.useLimits;
+            jd.lowerTranslation = std::min(lo, hi);
+            jd.upperTranslation = std::max(lo, hi);
+            jd.collideConnected = joint.collideConnected;
+            rec.id = b2CreateWheelJoint(world, &jd);
+            rec.type = JointType::Wheel;
+        } else {
+            if (joint.type != "hinge") Warn(warnings, who + "unknown type '" + joint.type + "', using hinge");
+            b2RevoluteJointDef jd = b2DefaultRevoluteJointDef();
+            jd.bodyIdA = bodyA; jd.bodyIdB = bodyB;
+            jd.localAnchorA = localA; jd.localAnchorB = localB;
+            jd.referenceAngle = reference;
+            jd.enableLimit = joint.useLimits;
+            jd.lowerAngle = Radians(Clamp(std::min(lo, hi), -180.0f, 180.0f));
+            jd.upperAngle = Radians(Clamp(std::max(lo, hi), -180.0f, 180.0f));
+            jd.collideConnected = joint.collideConnected;
+            rec.id = b2CreateRevoluteJoint(world, &jd);
+            rec.type = JointType::Hinge;
+        }
+        if (!b2Joint_IsValid(rec.id)) {
+            DestroyJoint(rec);
+            Warn(warnings, who + "could not be created");
+            return false;
+        }
+        b2Joint_WakeBodies(rec.id);
+        rec.motorSet = false;
+        rec.force = 0;
+        return true;
+    }
+
+    // After the bodies: every Joint2D whose two bodies exist gets its joint, in entity id order. Box2D
+    // destroys a joint with either of its bodies, which shows here as an id that is no longer valid.
+    void SyncJoints(Scene& scene, std::vector<std::string>& warnings) {
+        for (auto& kv : scene.Pool<Joint2D>()) {
+            JointRec& rec = joints[kv.first];
+            if (kv.second.broken) {
+                DestroyJoint(rec);
+                rec.key.clear();
+                continue;
+            }
+            const std::string key = JointKey(kv.second);
+            if (!b2Joint_IsValid(rec.id) || rec.key != key) {
+                DestroyJoint(rec);
+                rec.key.clear();
+                if (!CreateJoint(scene, kv.first, kv.second, rec, warnings)) continue;
+                rec.key = key;
+            }
+            ApplyMotor(rec, kv.second);
+        }
+        for (auto it = joints.begin(); it != joints.end();) {
+            if (scene.Get<Joint2D>(it->first)) { ++it; continue; }
+            DestroyJoint(it->second);
+            it = joints.erase(it);
+        }
+    }
+
+    // The force each joint held during the step; one that held more than Joint2D.breakForce comes apart.
+    void AfterStepJoints(Scene& scene) {
+        for (auto& kv : joints) {
+            JointRec& rec = kv.second;
+            if (!b2Joint_IsValid(rec.id)) continue;
+            rec.force = b2Length(b2Joint_GetConstraintForce(rec.id));
+            Joint2D* joint = scene.Get<Joint2D>(kv.first);
+            if (!joint || !(joint->breakForce > 0) || !(rec.force > joint->breakForce)) continue;
+            DestroyJoint(rec);
+            rec.key.clear();
+            joint->broken = true;
+        }
     }
 
     // ----- Characters -----
@@ -1081,6 +1307,7 @@ struct Physics2D::Impl {
     b2WorldId world;
     std::map<EntityId, BodyRec> bodies;
     std::map<EntityId, CharacterRec> characters;
+    std::map<EntityId, JointRec> joints;
     std::vector<std::pair<EntityId, Vec3>> pendingImpulses;
     uint64_t steps = 0;
 };
@@ -1100,6 +1327,7 @@ void Physics2D::Step(Scene& scene, float dt, std::vector<std::string>& warnings)
     impl_->UpdateCharacters(scene, dt);
     b2World_Step(impl_->world, dt, 4);
     impl_->SyncOut(scene);
+    if (dt > 0) impl_->AfterStepJoints(scene);
     ++impl_->steps;
 }
 
@@ -1142,6 +1370,11 @@ void Physics2D::AddImpulse(EntityId id, const Vec3& impulse) { impl_->pendingImp
 
 bool Physics2D::Has(EntityId id) const { return impl_->bodies.count(id) > 0 || impl_->characters.count(id) > 0; }
 
+void Physics2D::AppendJoints(std::vector<JointInfo>& out) const {
+    HeapScope scope(impl_->heap.get(), &impl_->logicalBytes);
+    for (const auto& kv : impl_->joints) out.push_back({kv.first, true, b2Joint_IsValid(kv.second.id), kv.second.force});
+}
+
 void Physics2D::AppendStats(Json& s) const {
     HeapScope scope(impl_->heap.get(), &impl_->logicalBytes);
     int statics = 0, dynamics = 0, kinematics = 0, triggers = 0;
@@ -1158,6 +1391,9 @@ void Physics2D::AppendStats(Json& s) const {
     j["kinematicBodies"] = kinematics;
     j["characters"] = static_cast<uint64_t>(impl_->characters.size());
     j["triggers"] = triggers;
+    int joints = 0;
+    for (const auto& kv : impl_->joints) joints += b2Joint_IsValid(kv.second.id) ? 1 : 0;
+    j["joints"] = joints;
     j["steps"] = static_cast<uint64_t>(impl_->steps);
     b2Counters c = b2World_GetCounters(impl_->world);
     j["shapes"] = c.shapeCount;
@@ -1171,6 +1407,7 @@ struct Physics2D::Snapshot {
     b2World world;
     std::map<EntityId, Impl::BodyRec> bodies;
     std::map<EntityId, Impl::CharacterRec> characters;
+    std::map<EntityId, Impl::JointRec> joints;  // the joints themselves are in the heap image
     std::vector<std::pair<EntityId, Vec3>> impulses;
     uint64_t steps = 0; int logicalBytes = 0;
 };
@@ -1179,7 +1416,7 @@ std::shared_ptr<const Physics2D::Snapshot> Physics2D::SaveState() const {
     HeapScope scope(impl_->heap.get(), &impl_->logicalBytes);
     auto state = std::make_shared<Snapshot>(); state->owner = impl_;
     state->image = impl_->heap->Capture(); state->world = *b2GetWorldFromId(impl_->world);
-    state->bodies = impl_->bodies; state->characters = impl_->characters;
+    state->bodies = impl_->bodies; state->characters = impl_->characters; state->joints = impl_->joints;
     state->impulses = impl_->pendingImpulses; state->steps = impl_->steps; state->logicalBytes = impl_->logicalBytes; return state;
 }
 void Physics2D::LoadState(const Snapshot& state) {
@@ -1188,7 +1425,7 @@ void Physics2D::LoadState(const Snapshot& state) {
     b2AtomicFetchAddInt(&b2_byteCount, state.logicalBytes - impl_->logicalBytes);
     impl_->logicalBytes = state.logicalBytes;
     impl_->heap->Restore(state.image); *b2GetWorldFromId(impl_->world) = state.world;
-    impl_->bodies = state.bodies; impl_->characters = state.characters;
+    impl_->bodies = state.bodies; impl_->characters = state.characters; impl_->joints = state.joints;
     impl_->pendingImpulses = state.impulses; impl_->steps = state.steps;
 }
 

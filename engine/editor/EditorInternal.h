@@ -608,6 +608,25 @@ struct NativeEditor::Impl {
     void GamePanel();
     void SceneCameraInput(ImGuiIO& io);
     void SceneOverlays(ImDrawList* dl);
+
+    // Bones (EditorBones.cpp).
+    bool showBones = true;                 // skeleton of the selected model over the Scene view
+    std::string boneFilter, namePickFilter;
+    EntityId boneHoverModel = kNullEntity;  // bone under the mouse in the inspector, lit in the Scene view
+    std::string boneHover;
+    int boneHoverFrame = -1;
+    // Model the selection's bones belong to: the entity's own, or its parent's for a BoneIK / BoneAttachment entity.
+    std::shared_ptr<const Mesh> BoneModel(EntityId id, EntityId* model);
+    bool NameInModel(EntityId id, bool bone, const std::string& name);
+    // Popup listing the model's bones (bone = true) or clips; true when one was picked into `out`.
+    bool NamePicker(const char* popupId, EntityId id, bool bone, const std::string& current, std::string& out);
+    // Holds `existing` (or a new entity) on a bone of `model`; AddIkGoal creates a goal entity on the bone.
+    void AttachToBone(EntityId model, const std::string& bone, EntityId existing);
+    void AddIkGoal(EntityId model, const std::string& bone);
+    // A child entity whose SpringBone swings `bone` and the bones below it.
+    void AddSpringBone(EntityId model, const std::string& bone);
+    void BonesSection(EntityId id);
+    void BonesOverlay(ImDrawList* dl);
     void SceneGizmo();
     void ScenePick(float x, float y, bool additive);
     EntityId ScenePickId(float x, float y, Vec3* point = nullptr, Vec3* normal = nullptr);  // render.pick at a Scene view pixel

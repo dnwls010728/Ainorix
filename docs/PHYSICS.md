@@ -28,6 +28,54 @@ oe exec my_game entity.create '{"name":"Crate","components":{"Transform":{"posit
 oe exec my_game entity.create '{"name":"Ball","components":{"Transform":{"position":[1,4,0]},"MeshRenderer":{"mesh":"sphere"},"Collider":{"shape":"sphere","bounciness":0.7},"RigidBody":{}}}' --save
 ```
 
+## Joints
+
+`Joint` (3D, Jolt) and `Joint2D` (Box2D) connect the body of their entity to another body, or to the world when
+`connected` is 0. The entity needs a body of its own (`Collider` + `RigidBody`, or the 2D pair); the connected
+entity needs at least a collider; one of the two must be dynamic. The bodies are joined **as they stand** when the
+joint is made: place them first, then add the joint (the hinge angle, slider position and rod length start from that
+pose).
+
+| type | 3D | 2D | What it leaves free |
+|---|---|---|---|
+| `fixed` | yes | yes | Nothing: glued parts, something that breaks off (`breakForce`). 2D: `frequency` above 0 lets the weld flex. |
+| `hinge` | yes | yes | Turning around `axis` through `anchor` (2D: around `anchor`): doors, wheels, levers, swings, flippers. Limits in degrees, motor in degrees/s. |
+| `ball` | yes | - | Turning any way around `anchor`: rope and chain links, pendulums, ragdoll shoulders. `useLimits` + `max` keeps it inside a cone around `axis`. |
+| `slider` | yes | yes | Moving along `axis`, no turning: lifts, pistons, drawers. Limits in meters, motor in m/s. |
+| `distance` | yes | yes | Everything except the distance between `anchor` and `connectedAnchor`: a rod; with `useLimits` a rope (`min` 0, `max` its length); with `frequency` a spring. |
+| `wheel` | - | yes | Sliding along `axis` on a spring (`frequency`, `damping`) and spinning: a car wheel with suspension, motor in degrees/s. |
+
+- **Anchors**: `anchor` is a point on this entity in its local units (like `Collider.center`). With `autoAnchor`
+  (default) the other body is held at the same world point. For a `distance` joint, or to pull two bodies together,
+  set `autoAnchor: false` and `connectedAnchor` (local to the connected entity; world coordinates when `connected`
+  is 0). `axis` is in this entity's local axes.
+- **Limits** (`useLimits`, `min`, `max`) are measured from the starting pose: hinge angles (3D: `min` in -180..0 and
+  `max` in 0..180), slider meters, distance lengths. **Motors** (`useMotor`, `motorSpeed`, `maxMotorForce`) drive a
+  hinge, slider or 2D wheel; they may change every frame from Lua without the joint being made again
+  (`self:set("Joint", {motorSpeed = 180})`). A motor that cannot move its load needs a larger `maxMotorForce`.
+- **Springs**: `frequency` (Hz) and `damping` (ratio, 1 = no overshoot). 3D: the distance rod, and the limits of a
+  hinge or slider. 2D: the distance rod, the wheel suspension, the fixed weld.
+- **Collision**: the two jointed bodies do not collide with each other unless `collideConnected`.
+- **Breaking**: with `breakForce` above 0 the joint comes apart when it had to hold more than that many newtons in a
+  step; `broken` becomes true (read it from Lua) and setting it false joins the bodies again where they are.
+  `physics.joints` reports the `force` each joint held in the last step, which is how to pick a threshold.
+- One joint component per entity. A body with two joints carries one of them; the other body carries the second
+  (a chain: every link holds the joint to the link before it).
+- Changing any other field, or replacing either body, makes the joint again from the current poses. A body that is
+  removed takes its joints with it. `CharacterBody`, `CharacterBody2D` and triggers cannot be jointed.
+- `physics.joints {id?}` lists `{id, name, component, type, connected, connectedName, active, broken, force}`;
+  `active: false` means a body is missing (the reason is in `physics.state` warnings) or the joint broke.
+  `render.screenshot {colliders: true}` draws a magenta cross at each anchor, the hinge or slider axis and the line
+  to a separate connected anchor.
+- Joints are part of rollback and `sim.save_state` snapshots.
+
+```json
+{"command": "entity.create", "args": {"name": "Door", "components": {
+  "Transform": {"position": [0, 1, 0]}, "MeshRenderer": {"mesh": "cube"},
+  "Collider": {"size": [1, 2, 0.1]}, "RigidBody": {},
+  "Joint": {"type": "hinge", "anchor": [-0.5, 0, 0], "axis": [0, 1, 0], "useLimits": true, "min": -90, "max": 90}}}}
+```
+
 ## 2D physics (Box2D)
 
 For 2D games use the 2D components: shapes are exact in the plane (no Z depth), and Box2D brings one-way platforms, polygons, smooth tile outlines and collision layers. Bodies move in their entity's XY plane: position x/y and rotation around Z are simulated, z and the X/Y rotation are kept; `Transform.scale` x/y scales shapes.
@@ -71,6 +119,6 @@ Lua API: `physics.raycast(origin, dir, maxDist?)` → `{entity, point, normal, d
 ## Limits (current)
 
 - Gravity is fixed at 9.81 m/s² downward (`gravityScale` per body/character).
-- Collision layers exist in 2D only; no joints yet; no mesh colliders.
+- Collision layers exist in 2D only; no mesh colliders. Joints: no gears, pulleys or ragdoll (swing-twist) joints yet, 3D joints have no drive to a target angle or position, and a joint cannot hold a `CharacterBody`.
 - Characters ignore entity scale (their size is `radius`/`height` in meters).
 - 2D and 3D bodies live in separate worlds and never collide with each other.

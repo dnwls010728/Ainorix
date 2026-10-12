@@ -15,11 +15,12 @@ namespace oe {
 class Engine;
 struct VfxAsset;
 
-// Decoders (stb_image / cgltf). `baseDir` resolves external files of .gltf.
+// Decoders (stb_image / cgltf / ufbx). External files of a model resolve beside it.
 bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::string* error);
 // Size of an encoded image from its header, without decoding the pixels (callers bound the
 // memory a decode may take). False when the data is not a supported image.
 bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& height);
+// glTF 2.0 (.glb/.gltf) or FBX (.fbx, see assets/Fbx.h), chosen by the extension.
 bool LoadModelFile(const std::string& path, Mesh& out, std::string* error);
 
 // Loads models and textures referenced by the scene, caches them, and
@@ -29,7 +30,7 @@ class AssetManager {
 public:
     explicit AssetManager(Engine& engine) : engine_(engine) {}
 
-    // Built-in mesh name or model path (.glb/.gltf). nullptr + error on failure.
+    // Built-in mesh name or model path (.glb/.gltf/.fbx). nullptr + error on failure.
     std::shared_ptr<const Mesh> GetMesh(const std::string& name, std::string* error = nullptr);
     std::shared_ptr<const Texture> GetTexture(const std::string& path, std::string* error = nullptr);
     // Material file (*.mat.json). nullptr + error on failure.

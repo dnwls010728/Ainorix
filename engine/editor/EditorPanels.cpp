@@ -64,8 +64,12 @@ EntityIcon ComponentIcon(const std::string& type) {
     if (type == "MeshRenderer") return {kIconBox, neutral};
     if (type == "Sprite") return {kIconImage, ImVec4(0.92f, 0.62f, 0.80f, 1)};
     if (type == "SpriteAnimation" || type == "Animator") return {kIconFilm, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "BoneAttachment") return {kIconPaperclip, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "BoneIK") return {kIconMapPin, ImVec4(0.92f, 0.62f, 0.80f, 1)};
+    if (type == "SpringBone") return {kIconAtom, ImVec4(0.92f, 0.62f, 0.80f, 1)};
     if (type == "Script") return {kIconBraces, ImVec4(0.92f, 0.84f, 0.50f, 1)};
     if (type == "Collider" || type == "Collider2D") return {kIconSquareDashed, physics};
+    if (type == "Joint" || type == "Joint2D") return {kIconWorkflow, physics};
     if (type == "RigidBody" || type == "RigidBody2D") return {kIconAtom, physics};
     if (type == "CharacterBody" || type == "CharacterBody2D") return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
     if (type == "Tilemap") return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};
@@ -597,7 +601,24 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         std::string kind = AssetKindForField(type, field);
         std::string text;
         bool multiline = field == "text" || (field == "map" && type == "Tilemap");
-        if (!kind.empty()) {
+        const bool boneName = (type == "BoneIK" || type == "BoneAttachment" || type == "SpringBone") && field == "bone";
+        if (boneName || (type == "Animator" && field == "clip")) {
+            // Names that exist in the model: typed, or picked from its bones / clips.
+            const float button = ImGui::GetFrameHeight();
+            const bool missing = !cur.empty() && !NameInModel(id, boneName, cur);
+            ImGui::SetNextItemWidth(-(button + ImGui::GetStyle().ItemInnerSpacing.x));
+            if (missing) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.45f, 0.40f, 1.0f));
+            if (CommitText(label.c_str(), cur, text)) newValue = Json(text), changed = true;
+            if (missing) {
+                ImGui::PopStyleColor();
+                HelpTooltip(Format(boneName ? Tr("The model has no bone named %s") : Tr("The model has no clip named %s"), cur.c_str()));
+            }
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+            if (ImGui::Button(("..." + label).c_str(), ImVec2(button, 0))) ImGui::OpenPopup("##pickname");
+            HelpTooltip(boneName ? Tr("Pick a bone of the parent's model") : Tr("Pick a clip of the model"));
+            std::string picked;
+            if (NamePicker("##pickname", id, boneName, cur, picked)) newValue = Json(picked), changed = true;
+        } else if (!kind.empty()) {
             float button = ImGui::GetFrameHeight();
             ImGui::SetNextItemWidth(-(button + ImGui::GetStyle().ItemInnerSpacing.x));
             if (CommitText(label.c_str(), cur, text)) newValue = Json(text), changed = true;
@@ -822,6 +843,7 @@ void NativeEditor::Impl::InspectorPanel() {
                 }
                 ImGui::EndTable();
             }
+            if (type == "MeshRenderer") BonesSection(id);
         } else if (open) {
             ImGui::TextDisabled("%s", Tr("Unknown component type"));
         }

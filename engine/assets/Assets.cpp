@@ -9,6 +9,7 @@
 #include <stdexcept>
 
 #include "app/Engine.h"
+#include "assets/Fbx.h"
 #include "audio/Wav.h"
 #include "render/Material.h"
 #include "core/FileSystem.h"
@@ -115,6 +116,7 @@ struct Loader {
         for (cgltf_size i = 0; i < data->nodes_count; ++i) {
             const cgltf_node& src = data->nodes[i];
             ModelNode node;
+            if (src.name) node.name = src.name;
             node.parent = NodeIndex(src.parent);
             if (src.has_translation) node.translation = Vec3(src.translation[0], src.translation[1], src.translation[2]);
             if (src.has_rotation) node.rotation = Vec4(src.rotation[0], src.rotation[1], src.rotation[2], src.rotation[3]);
@@ -440,7 +442,9 @@ bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& he
     return size <= 0x7fffffff && stbi_info_from_memory(data, static_cast<int>(size), &width, &height, &channels) != 0;
 }
 
-bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
+namespace {
+
+bool LoadGltfModel(const std::string& path, Mesh& out, std::string& warnings, std::string* error) {
     cgltf_options options{};
     cgltf_data* data = nullptr;
     cgltf_result r = cgltf_parse_file(&options, path.c_str(), &data);
@@ -451,7 +455,6 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
         if (data) cgltf_free(data);
         return false;
     }
-    out = Mesh{};
     Loader loader{out, ParentPath(path), {}, {}, {}, nullptr, {}, {}, {}};
     try {
         loader.Init(data);
@@ -469,6 +472,17 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
         return false;
     }
     cgltf_free(data);
+    warnings = loader.warnings;
+    return true;
+}
+
+}  // namespace
+
+bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
+    out = Mesh{};
+    std::string warnings;
+    const bool fbx = EndsWith(Lower(path), ".fbx");
+    if (!(fbx ? LoadFbxModel(path, out, warnings, error) : LoadGltfModel(path, out, warnings, error))) return false;
     if (out.indices.empty()) {
         if (error) *error = "model contains no triangle meshes";
         return false;
@@ -476,7 +490,7 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
     out.ComputeBounds();
     out.ComputeTangents();
     if (out.joints.empty()) out.skin.clear();
-    if (!loader.warnings.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), loader.warnings.c_str());
+    if (!warnings.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), warnings.c_str());
     return true;
 }
 
@@ -484,7 +498,7 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
 
 std::string AssetManager::KindOf(const std::string& path) {
     std::string p = Lower(path);
-    if (EndsWith(p, ".glb") || EndsWith(p, ".gltf")) return "model";
+    if (EndsWith(p, ".glb") || EndsWith(p, ".gltf") || EndsWith(p, ".fbx")) return "model";
     if (EndsWith(p, ".png") || EndsWith(p, ".jpg") || EndsWith(p, ".jpeg") || EndsWith(p, ".bmp") || EndsWith(p, ".tga")) return "texture";
     if (EndsWith(p, ".wav")) return "audio";
     if (EndsWith(p, ".ttf") || EndsWith(p, ".otf") || EndsWith(p, ".ttc")) return "font";
@@ -505,7 +519,7 @@ AssetManager::Entry<Mesh> AssetManager::LoadMesh(const std::string& path) {
         e.mtime = FileModifiedTime(full);
         auto mesh = std::make_shared<Mesh>();
         if (!FileExists(full)) e.error = "model file not found: " + path;
-        else if (KindOf(path) != "model") e.error = "'" + path + "' is not a built-in mesh (cube, sphere, plane, pyramid, quad) or a .glb/.gltf model";
+        else if (KindOf(path) != "model") e.error = "'" + path + "' is not a built-in mesh (cube, sphere, plane, pyramid, quad) or a .glb/.gltf/.fbx model";
         else if (LoadModelFile(full, *mesh, &e.error)) e.asset = mesh;
         else e.error = path + ": " + e.error;
     } catch (const std::exception& ex) {

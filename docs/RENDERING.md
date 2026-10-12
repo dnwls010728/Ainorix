@@ -88,7 +88,27 @@ Project files are referenced by project-relative paths. Conventional folders: `a
 
 Models and textures are cached and **hot-reloaded** when their files change (checked twice a second while playing and before every `sim.step`).
 
-Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. `COLOR_0` vertex colors (RGB or RGBA) multiply the material color in both renderers and reach shader graphs through `baseColor`. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
+Formats: **glTF 2.0** (`.glb`, `.gltf` with embedded, data-URI or external buffers/images) via cgltf and **FBX** (`.fbx`, binary or ASCII; see [FBX models](#fbx-models)) via ufbx; images **PNG, JPEG, BMP, TGA** via stb_image. Each glTF primitive becomes a submesh with its full material (see [Materials](#materials)); static node transforms are baked in. `COLOR_0` vertex colors (RGB or RGBA) multiply the material color in both renderers and reach shader graphs through `baseColor`. Skinned and rigid animated nodes use a shared model-space palette in both renderers (up to 64 entries per model). Add `Animator` or call `animation.play` to animate TRS channels; `asset.info` lists clips. See [ANIMATION.md](ANIMATION.md) for playback controls and supported interpolation.
+
+### FBX models
+
+`.fbx` files load directly, like glTF: `oe import <project> hero.fbx`, then `MeshRenderer {mesh: "assets/models/hero.fbx"}`.
+The loader (`engine/assets/Fbx.cpp`) fills the same `Mesh` as the glTF loader, so everything after loading is shared.
+
+- **Space**: the file's axes and unit are converted to right-handed, Y up, meters (a model authored in centimeters
+  arrives 100 times smaller than its raw numbers; `asset.info` reports the size). V is flipped to the top-left origin.
+- **Geometry**: polygons are triangulated and equal corners merged; missing normals are generated. Geometric
+  transforms, pivots and scale-inheritance modes are resolved into plain TRS nodes (helper nodes where needed).
+- **Skins and animation**: the first skin of a mesh, four strongest influences per vertex. Meshes that bind the same
+  bones share palette entries and unused clusters take none, but the 64-entry palette limit still applies. Every
+  animation stack becomes a clip of linear TRS keys (Euler curves are resampled at 30 Hz and reduced); clips without
+  keys are skipped. Blend shapes are not supported.
+- **Materials**: base color, metallic, roughness, emission, opacity, double-sided and unlit come from the file
+  (Lambert/Phong values are converted). A base color image replaces the color. Separate roughness and metalness
+  images are not combined: use a `.mat.json` material for those.
+- **Textures**: embedded media first; else the file's relative path beside the model, else just its file name in the
+  model's folder. Absolute paths stored by the exporter are never opened. Only PNG, JPEG, BMP and TGA decode; other
+  formats (PSD, TIFF, DDS) are reported in the log and the material keeps its color.
 
 ## MeshRenderer
 

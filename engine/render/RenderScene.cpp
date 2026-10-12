@@ -7,6 +7,7 @@
 
 #include "assets/Assets.h"
 #include "scene/Components.h"
+#include "scene/Pose.h"
 #include "scene/Systems.h"
 #include "scene/Vfx.h"
 #include "scene/TileGrid.h"
@@ -250,11 +251,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 it.materialOverride.reset();
             }
         }
-        if (!it.mesh->joints.empty()) {
-            const Animator* animator = scene.Get<Animator>(kv.first);
-            const AnimationClip* clip = animator ? FindAnimationClip(*it.mesh, animator->clip) : nullptr;
-            it.joints = EvaluateAnimationPose(*it.mesh, clip, animator ? animator->time : 0);
-        }
+        if (!it.mesh->joints.empty()) it.joints = JointPalette(*it.mesh, EvaluateEntityPose(scene, kv.first, *it.mesh));
         items.push_back(std::move(it));
     }
 

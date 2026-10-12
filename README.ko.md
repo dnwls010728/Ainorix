@@ -22,7 +22,7 @@ AI 에이전트가 사람만큼 쉽게 조작하고 검증할 수 있도록 만�
 - **창 없이 검증 가능.** 시뮬레이션은 고정 스텝이고 결정적이며, 소프트웨어 렌더러는 같은 씬과 입력에 대해 모든
   플랫폼에서 같은 프레임 해시를 냅니다. 에이전트가 게임을 진행시키고, 입력을 넣고, 스크린샷을 찍어 직접 확인합니다.
 - **설치할 것이 없음.** Windows에서는 Visual Studio 2022만 있으면 됩니다. Lua, Jolt Physics, Box2D, sokol_gfx,
-  stb, cgltf, Dear ImGui가 저장소에 포함되어 있고, 웹과 Android 플레이어 런타임은 `runtime/`에 미리 빌드되어 있습니다.
+  stb, cgltf, ufbx, Dear ImGui가 저장소에 포함되어 있고, 웹과 Android 플레이어 런타임은 `runtime/`에 미리 빌드되어 있습니다.
 - **엔진이냐 프로젝트냐.** Lua 스크립트로 표현할 수 있는 동작은 엔진 컴포넌트가 아니라 프로젝트(템플릿, 게임)에
   둡니다. 엔진에는 스크립트가 할 수 없는 것과 두 렌더러 및 결정적 코어가 일치해야 하는 것만 남깁니다.
 
@@ -103,9 +103,9 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 
 | 영역 | 내용 | 문서 |
 |---|---|---|
-| 렌더링 | 하나의 씬을 그리는 두 렌더러: GPU(sokol_gfx: D3D11, WebGL2, GLES3, MSAA, 필터링된 그림자)와 결정적인 멀티스레드 소프트웨어 렌더러. glTF 모델, PBR 머티리얼, 투명, 점광원/방향광, 그림자 | [RENDERING](docs/RENDERING.md) |
+| 렌더링 | 하나의 씬을 그리는 두 렌더러: GPU(sokol_gfx: D3D11, WebGL2, GLES3, MSAA, 필터링된 그림자)와 결정적인 멀티스레드 소프트웨어 렌더러. glTF/FBX 모델, PBR 머티리얼, 투명, 점광원/방향광, 그림자 | [RENDERING](docs/RENDERING.md) |
 | 포스트 프로세싱과 셰이더 | 노출과 Reinhard/ACES 톤 매핑, 블룸, 비네트, FXAA, 피사계 심도, 거리 안개, 컬러 그레이딩. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`), 스프라이트에도 적용 가능 | [POSTPROCESS](docs/POSTPROCESS.md) |
-| 애니메이션 | 두 렌더러에서 동작하는 glTF 스켈레탈 애니메이션(관절 64개까지), `Animator`, Lua 재생 | [ANIMATION](docs/ANIMATION.md) |
+| 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(관절 64개까지), `Animator`, Lua 재생 | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
 | VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |
 | 물리 | Jolt 3D와 Box2D 2D: 강체, 트리거, 캐릭터 컨트롤러, 일방통행 플랫폼, 충돌 레이어, 레이캐스트. 결정적 | [PHYSICS](docs/PHYSICS.md) |
@@ -149,7 +149,7 @@ engine/script     Lua 스크립트 호스트와 정적 검사
 engine/physics    Jolt(PhysicsWorld), Box2D(Physics2D) 래퍼
 engine/audio      믹서, WAV, 효과음 생성기
 engine/net        트랜스포트, 채널, 세션, 락스텝/롤백, 권위 서버
-engine/assets     에셋 캐시, glTF와 이미지 로딩
+engine/assets     에셋 캐시, glTF, FBX와 이미지 로딩
 engine/render     IRenderer, 소프트웨어/GPU 렌더러, 셰이더, 머티리얼, UI, 폰트
 engine/api        명령 레지스트리, HTTP 서버, MCP 서버
 engine/app        Engine(시뮬레이션, 실행 취소, 작업 큐), 패키징, 전용 서버
@@ -160,7 +160,7 @@ tools/oe          CLI          tools/player   게임 런타임          tools/sh
 tests/            자체 테스트 (WebAssembly로도 실행)
 templates/        `oe new`가 복사하는 것          games/   예제 게임
 runtime/          미리 빌드된 웹, Android 플레이어 런타임
-third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
+third_party/      Lua 5.4.8, Jolt 5.6.0, Box2D 3.1.1, sokol, stb, cgltf, ufbx, Dear ImGui, ImGuizmo, ImGuiColorTextEdit, Roboto
 ```
 
 더 자세한 코드 지도는 [AGENTS.md](AGENTS.md), 구조 그림은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)에 있습니다.

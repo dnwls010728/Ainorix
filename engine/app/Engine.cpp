@@ -10,6 +10,7 @@
 
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "scene/Pose.h"
 #include "scene/Prefab.h"
 #include "assets/Assets.h"
 #include "audio/AudioSystem.h"
@@ -498,7 +499,7 @@ void Engine::SimulateWorld() {
     UpdateSystems(scene_, input_, dt, assets_.get());
     std::vector<PhysicsEvent> events;
     if (!paused) events = authority_ && authority_->Running() && !network_->IsHost() ? StepAuthorityPhysics(dt) : physics_->Step(scene_, dt);
-    if (!paused) UpdateLateSystems(scene_, dt);
+    if (!paused) UpdateLateSystems(scene_, dt, assets_.get());
     scripts_->DispatchPhysicsEvents(events);
     for (const UIEvent& ev : uiEvents) {
         if (!scene_.Exists(ev.id)) continue;
@@ -1365,6 +1366,8 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
         const bool record = cmd->mutates && !playSnapshot_;
         Json before = record ? scene_.ToJson() : Json();
         Json result = cmd->run(*this, args);
+        // While editing nothing steps the systems: keep entities held by a bone on it after every edit (moved goal, sought clip).
+        if (record && assets_ && !scene_.Pool<BoneAttachment>().empty()) UpdateBoneAttachments(scene_, *assets_);
         if (record) {
             // Consecutive calls with the same non-empty merge key (e.g. an
             // editor drag) collapse into one undo step.

@@ -462,6 +462,16 @@ Play a named model clip; add Animator if needed. Defaults to restarting at the b
 | `loop` | boolean |  | Repeat the clip. Keeps existing loop setting when omitted. |
 | `restart` | boolean |  | Reset time (default true); false preserves time. |
 
+### `animation.bones`
+
+Nodes (bones) of an entity's model in its current pose - Animator clip, BoneIK goals, SpringBone swing - with world position/rotation and modelPosition (the Transform.position a child entity needs to stand on the bone), and how its BoneIK / BoneAttachment / SpringBone children resolve. Use it for bone names and to check IK and springs.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Entity with a MeshRenderer model. |
+| `bone` | string |  | Only this node (exact name). |
+| `ik` | boolean |  | false = the clip's pose before BoneIK goals and SpringBone swing: where the animation alone puts a bone (foot placement adds the ground height to it). Default true. |
+
 ## trail
 
 ### `trail.state`
@@ -1298,6 +1308,14 @@ Pairs touching after the last simulation step (collisions and trigger overlaps).
 |---|---|---|---|
 | `id` | integer \| string |  | Only pairs involving this entity. |
 
+### `physics.joints`
+
+Joint and Joint2D components as the physics worlds hold them after the last simulation step: `active` (false = a body is missing, see physics.state warnings, or it broke), `broken`, and `force` in N (what the joint held during the last step; compare with breakForce).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string |  | Only the joint on this entity, or joints connected to it. |
+
 ### `physics.state`
 
 Physics backend, gravity, body counts and warnings (e.g. invalid shapes).
@@ -1703,7 +1721,7 @@ Draws a mesh: a built-in shape (cube, sphere, plane, plane64, pyramid, quad) or 
 
 | field | type | default | description |
 |---|---|---|---|
-| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf). |
+| `mesh` | string | `"cube"` | Built-in name (cube, sphere, plane, plane64 = plane split into 64x64 cells for shader graph vertex offsets, pyramid, quad) or model path, e.g. "assets/models/fox.glb" (.glb/.gltf/.fbx). |
 | `material` | string | `""` | Material file (*.mat.json: PBR color/metallic/roughness/normal/emissive maps, transparency) used for every part of the mesh. Empty = the model's own materials (glTF) or the default (white, roughness 0.7). |
 | `shaderUniforms` | json | `{}` | Per-entity values for the material's shader graph uniforms: {name: number or [x, y, z, w]}. Unnamed uniforms keep the material's values; scripts can change them every frame. An unknown name or a material without a graph renders magenta. |
 | `color` | color | `[0.800000012,0.800000012,0.800000012]` | Tint multiplied with the material/texture color, linear RGB 0..1 (or "#rrggbb"). |
@@ -1725,6 +1743,41 @@ Fixed-step glTF TRS animation on the entity's MeshRenderer; clips are listed by 
 | `loop` | bool | `true` | Wrap time at the clip duration; otherwise clamp and stop at either endpoint. |
 | `playing` | bool | `true` | Advance time while true; false holds the current pose. |
 | `time` | float | `0` | Seconds into the clip; set to seek. Direct clip edits preserve time. |
+
+### BoneAttachment
+
+Holds this entity on a bone of its parent's model (weapon in a hand, hat on a head): after physics each frame its Transform position and rotation are set from the posed bone, IK included. Bone names: animation.bones.
+
+| field | type | default | description |
+|---|---|---|---|
+| `bone` | string | `""` | Exact node name in the parent's MeshRenderer model; an unknown name leaves the Transform alone. |
+| `position` | vec3 | `[0,0,0]` | Offset from the bone in the bone's own axes, in model units. |
+| `rotation` | vec3 | `[0,0,0]` | Rotation offset from the bone (Euler degrees). Transform.scale stays yours. |
+
+### BoneIK
+
+Inverse kinematics goal for its parent's model: the bones above `bone` turn so that it reaches this entity's Transform position (move the entity to move the hand or foot). Applied after the Animator's clip in both renderers; goals run in entity id order.
+
+| field | type | default | description |
+|---|---|---|---|
+| `bone` | string | `""` | Exact name of the node that should reach the goal (hand, foot, head); see animation.bones. |
+| `chain` | int | `2` | How many bones above it turn, 1..8. 2 = an arm or a leg (exact two-bone solve); 1 aims the parent bone; more bend a spine or tail step by step. |
+| `weight` | float | `1` | 0 = the animated pose, 1 = reach the goal; between blends the goal position. |
+| `pole` | vec3 | `[0,0,0]` | chain 2: direction in model space the elbow or knee points to, e.g. [0,0,1]; [0,0,0] keeps the side the limb bends to in the model's default pose. |
+| `soften` | float | `0` | chain 2: share of the limb length (0..0.5) over which it eases into full extension, so a goal near or beyond reach does not snap the limb straight; the bone then stops slightly short of such goals. 0 = exact reach. Try 0.1 for feet. |
+| `matchRotation` | bool | `false` | Also turn the bone to this entity's Transform rotation (a foot flat on a slope, a palm on a wall). |
+
+### SpringBone
+
+Secondary motion for bones of its parent's model (tail, ears, hair, a cape strip): `bone` and every bone below it lag behind and swing as the character moves, then settle back into the animated pose. Simulated after physics each fixed step while playing, on top of the Animator's clip and BoneIK; stopped scenes show the plain pose.
+
+| field | type | default | description |
+|---|---|---|---|
+| `bone` | string | `""` | Exact name of the first bone that swings (tail root, ear base, first hair bone); the whole branch below it follows. See animation.bones. |
+| `stiffness` | float | `100` | Pull back to the animated pose. 20 = loose and slow (long hair, cloth), 100 = a tail, 400+ = short stiff parts (ears, antennae). 0 = hangs freely. |
+| `damping` | float | `10` | How fast the swing dies out, per second. 3 = long wobble, 10 = one soft overshoot, 25+ = follows late without swinging back. A clip that already moves these bones in a rhythm (a walk) gets exaggerated when this is low; raise it together with stiffness. |
+| `gravity` | vec3 | `[0,0,0]` | World-space acceleration in m/s^2, e.g. [0,-9.8,0] so the chain sags; [0,0,0] keeps the authored pose at rest. Other directions act as steady wind. |
+| `weight` | float | `1` | 0 = the animated pose, 1 = the simulated swing; between blends them. |
 
 ### Camera
 
@@ -1938,6 +1991,54 @@ Makes a Collider2D move in the XY plane (Box2D). dynamic = gravity and collision
 | `dropThrough` | bool | `false` | Set true to fall through one-way platforms (e.g. Down + Jump); reset it when the character is below. |
 | `layer` | int | `0` | Collision layer 0-15. |
 | `ignoreLayers` | json | `[]` | Layers the character does not collide with. |
+
+### Joint
+
+Connects this entity's body (Collider + RigidBody) to another body, or to the world when `connected` is 0 (Jolt): hinge = doors, wheels, levers; ball = ropes, chains, pendulums; slider = pistons, drawers, lifts; distance = rods, ropes, springs; fixed = glued parts that can break. The bodies are joined as they stand when the joint is made. One per entity: a body with two joints carries one, the other body carries the second. See physics.joints.
+
+| field | type | default | description |
+|---|---|---|---|
+| `type` | string | `"hinge"` | fixed = no relative motion; hinge = turns around `axis` through `anchor`; ball = turns freely around `anchor`; slider = moves along `axis` only; distance = keeps `anchor` and `connectedAnchor` a length apart. |
+| `connected` | entity | `0` | Entity id of the other body (Collider, with or without RigidBody). 0 = the world: the joint holds this body in place. |
+| `anchor` | vec3 | `[0,0,0]` | Joint point on this entity, in its local units (like Collider.center): the hinge pin, the ball, the rope's end. |
+| `connectedAnchor` | vec3 | `[0,0,0]` | Joint point on the connected entity in its local units (world coordinates when connected is 0). Used when autoAnchor is false; a distance joint needs it. |
+| `autoAnchor` | bool | `true` | true = the connected anchor is the same world point as `anchor` when the joint is made. Set false for distance joints and to pull two bodies together. |
+| `axis` | vec3 | `[0,1,0]` | hinge: the pin's direction; slider: the direction of travel; ball with limits: the cone's middle. In this entity's local axes. |
+| `useLimits` | bool | `false` | Enables min/max. hinge: angles in degrees from the starting pose (min -180..0, max 0..180); slider: meters from the start (min <= 0 <= max); distance: shortest and longest length (a rope is min 0, max = its length); ball: max = how far it may swing from `axis` in degrees. |
+| `min` | float | `0` | Lower limit, see useLimits. |
+| `max` | float | `0` | Upper limit, see useLimits. |
+| `useMotor` | bool | `false` | hinge/slider: drive the joint at motorSpeed (wheels, fans, lifts). May be changed every frame. |
+| `motorSpeed` | float | `0` | Target speed: degrees/s (hinge) or m/s (slider). |
+| `maxMotorForce` | float | `100` | Strongest torque (hinge, N m) or force (slider, N) the motor uses; a heavy body needs more. |
+| `frequency` | float | `0` | Spring in Hz. distance: above 0 the rod is a spring; hinge/slider: soft limits. 0 = rigid. |
+| `damping` | float | `0.5` | Spring damping ratio (0 = keeps bouncing, 1 = no overshoot). |
+| `collideConnected` | bool | `false` | Whether the two jointed bodies collide with each other (a door and its frame usually should not). |
+| `breakForce` | float | `0` | The joint breaks when it has to hold more than this force in N (0 = never). |
+| `broken` | bool | `false` | Runtime state: true after the joint broke; set false to join the bodies again as they stand. |
+
+### Joint2D
+
+Connects this entity's 2D body (Collider2D + RigidBody2D) to another 2D body, or to the world when `connected` is 0 (Box2D): hinge = swings, wheels, flippers; slider = lifts, pistons; distance = rods, ropes, springs; wheel = a car wheel with suspension; fixed = glued parts that can break. The bodies are joined as they stand when the joint is made. One per entity. See physics.joints.
+
+| field | type | default | description |
+|---|---|---|---|
+| `type` | string | `"hinge"` | fixed = welded; hinge = turns around `anchor`; slider = moves along `axis` only, no turning; distance = keeps `anchor` and `connectedAnchor` a length apart; wheel = slides along `axis` on a spring and spins freely. |
+| `connected` | entity | `0` | Entity id of the other 2D body (Collider2D, with or without RigidBody2D). 0 = the world: the joint holds this body in place. |
+| `anchor` | vec3 | `[0,0,0]` | Joint point on this entity (x, y) in its local units: the hinge pin, the rope's end, the wheel axle. |
+| `connectedAnchor` | vec3 | `[0,0,0]` | Joint point on the connected entity (x, y) in its local units (world coordinates when connected is 0). Used when autoAnchor is false; a distance joint needs it. |
+| `autoAnchor` | bool | `true` | true = the connected anchor is the same world point as `anchor` when the joint is made. |
+| `axis` | vec3 | `[0,1,0]` | slider/wheel: direction of travel (x, y) in this entity's local axes; [0,1,0] is a vertical suspension or lift. |
+| `useLimits` | bool | `false` | Enables min/max. hinge: angles in degrees from the starting pose; slider/wheel: meters from the start; distance: shortest and longest length (a rope is min 0, max = its length). |
+| `min` | float | `0` | Lower limit, see useLimits. |
+| `max` | float | `0` | Upper limit, see useLimits. |
+| `useMotor` | bool | `false` | hinge/slider/wheel: drive the joint at motorSpeed. May be changed every frame. |
+| `motorSpeed` | float | `0` | Target speed: degrees/s counter-clockwise (hinge, wheel) or m/s (slider). |
+| `maxMotorForce` | float | `100` | Strongest torque (hinge, wheel: N m) or force (slider: N) the motor uses. |
+| `frequency` | float | `0` | Spring in Hz. distance: above 0 the rod is a spring; wheel: the suspension (0 = rigid); fixed: above 0 the weld flexes. 0 = rigid. |
+| `damping` | float | `0.5` | Spring damping ratio (0 = keeps bouncing, 1 = no overshoot). |
+| `collideConnected` | bool | `false` | Whether the two jointed bodies collide with each other. |
+| `breakForce` | float | `0` | The joint breaks when it has to hold more than this force in N (0 = never). |
+| `broken` | bool | `false` | Runtime state: true after the joint broke; set false to join the bodies again as they stand. |
 
 ### Prefab
 

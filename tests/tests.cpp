@@ -54,6 +54,7 @@
 #include "render/UI.h"
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
+#include "scene/Pose.h"
 #include "scene/TileGrid.h"
 #include "scene/Vfx.h"
 #include "scene/VfxExpression.h"
@@ -5094,6 +5095,488 @@ TEST(GltfSkinAndAnimationLoading) {
     CHECK(mesh.skin[0].weights[0] == 0.5f && mesh.skin[0].weights[1] == 0.5f);
     invalid["accessors"][2]["normalized"] = false;
     reject(invalid, broken, "normalized unsigned");
+}
+
+// A 1x1 m quad (authored in centimeters) skinned to two bones, one clip that slides the upper
+// bone and a Phong material: ASCII FBX 7.4 written by hand. %TEXTURE% takes extra objects.
+const char* const kRigFbx = R"FBX(; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+	FBXHeaderVersion: 1003
+	FBXVersion: 7400
+}
+GlobalSettings:  {
+	Version: 1000
+	Properties70:  {
+		P: "UpAxis", "int", "Integer", "",1
+		P: "UpAxisSign", "int", "Integer", "",1
+		P: "FrontAxis", "int", "Integer", "",2
+		P: "FrontAxisSign", "int", "Integer", "",1
+		P: "CoordAxis", "int", "Integer", "",0
+		P: "CoordAxisSign", "int", "Integer", "",1
+		P: "UnitScaleFactor", "double", "Number", "",1
+	}
+}
+Objects:  {
+	Geometry: 1000, "Geometry::Quad", "Mesh" {
+		Vertices: *12 {
+			a: 0,0,0,100,0,0,100,100,0,0,100,0
+		}
+		PolygonVertexIndex: *4 {
+			a: 0,1,2,-4
+		}
+		LayerElementNormal: 0 {
+			Version: 101
+			Name: ""
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "Direct"
+			Normals: *12 {
+				a: 0,0,1,0,0,1,0,0,1,0,0,1
+			}
+		}
+		LayerElementUV: 0 {
+			Version: 101
+			Name: "UVMap"
+			MappingInformationType: "ByPolygonVertex"
+			ReferenceInformationType: "IndexToDirect"
+			UV: *8 {
+				a: 0,0,1,0,1,1,0,1
+			}
+			UVIndex: *4 {
+				a: 0,1,2,3
+			}
+		}
+		LayerElementMaterial: 0 {
+			Version: 101
+			Name: ""
+			MappingInformationType: "AllSame"
+			ReferenceInformationType: "IndexToDirect"
+			Materials: *1 {
+				a: 0
+			}
+		}
+		Layer: 0 {
+			Version: 100
+			LayerElement:  {
+				Type: "LayerElementNormal"
+				TypedIndex: 0
+			}
+			LayerElement:  {
+				Type: "LayerElementUV"
+				TypedIndex: 0
+			}
+			LayerElement:  {
+				Type: "LayerElementMaterial"
+				TypedIndex: 0
+			}
+		}
+	}
+	Model: 2000, "Model::Quad", "Mesh" {
+		Version: 232
+	}
+	Model: 2001, "Model::Root", "LimbNode" {
+		Version: 232
+	}
+	Model: 2002, "Model::Tip", "LimbNode" {
+		Version: 232
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",0,100,0
+		}
+	}
+	Material: 3000, "Material::Red", "" {
+		Version: 102
+		ShadingModel: "phong"
+		Properties70:  {
+			P: "DiffuseColor", "Color", "", "A",1,0,0
+		}
+	}
+	Deformer: 4000, "Deformer::", "Skin" {
+		Version: 101
+	}
+	Deformer: 4001, "SubDeformer::", "Cluster" {
+		Version: 100
+		Indexes: *2 {
+			a: 0,1
+		}
+		Weights: *2 {
+			a: 1,1
+		}
+		Transform: *16 {
+			a: 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1
+		}
+		TransformLink: *16 {
+			a: 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1
+		}
+	}
+	Deformer: 4002, "SubDeformer::", "Cluster" {
+		Version: 100
+		Indexes: *2 {
+			a: 2,3
+		}
+		Weights: *2 {
+			a: 1,1
+		}
+		Transform: *16 {
+			a: 1,0,0,0,0,1,0,0,0,0,1,0,0,-100,0,1
+		}
+		TransformLink: *16 {
+			a: 1,0,0,0,0,1,0,0,0,0,1,0,0,100,0,1
+		}
+	}
+	AnimationStack: 5000, "AnimStack::Wave", "" {
+		Properties70:  {
+			P: "LocalStop", "KTime", "Time", "",46186158000
+			P: "ReferenceStop", "KTime", "Time", "",46186158000
+		}
+	}
+	AnimationLayer: 5001, "AnimLayer::Base", "" {
+	}
+	AnimationCurveNode: 5002, "AnimCurveNode::T", "" {
+		Properties70:  {
+			P: "d|X", "Number", "", "A",0
+			P: "d|Y", "Number", "", "A",100
+			P: "d|Z", "Number", "", "A",0
+		}
+	}
+	AnimationCurve: 5003, "AnimCurve::", "" {
+		Default: 0
+		KeyVer: 4008
+		KeyTime: *2 {
+			a: 0,46186158000
+		}
+		KeyValueFloat: *2 {
+			a: 0,50
+		}
+		KeyAttrFlags: *1 {
+			a: 4
+		}
+		KeyAttrDataFloat: *4 {
+			a: 0,0,0,0
+		}
+		KeyAttrRefCount: *1 {
+			a: 2
+		}
+	}
+%TEXTURE%}
+Connections:  {
+	C: "OO",2000,0
+	C: "OO",2001,0
+	C: "OO",2002,2001
+	C: "OO",1000,2000
+	C: "OO",3000,2000
+	C: "OO",4000,1000
+	C: "OO",4001,4000
+	C: "OO",4002,4000
+	C: "OO",2001,4001
+	C: "OO",2002,4002
+	C: "OO",5001,5000
+	C: "OO",5002,5001
+	C: "OP",5002,2002, "Lcl Translation"
+	C: "OP",5003,5002, "d|X"
+	C: "OP",6000,3000, "DiffuseColor"
+}
+)FBX";
+
+TEST(FbxModelsSkinAndAnimation) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("fbx_loader"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    auto fbx = [](const std::string& texture) {
+        std::string text = kRigFbx;
+        text.replace(text.find("%TEXTURE%"), 9, texture);
+        return text;
+    };
+    auto replace = [](std::string text, const std::string& from, const std::string& to) {
+        size_t at = text.find(from);
+        CHECK(at != std::string::npos);
+        return text.replace(at, from.size(), to);
+    };
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.fbx");
+    CreateDirectories(ParentPath(path));
+    CHECK(WriteTextFile(path, fbx("")));
+    CHECK(AssetManager::KindOf("assets/models/Rig.FBX") == "model");
+    Json info = Call(e, "asset.info", R"J({"path":"assets/models/rig.fbx"})J")["result"];
+    CHECK(info["kind"].asString() == "model" && info["vertices"].asInt() == 4 && info["triangles"].asInt() == 2);
+    CHECK(info["joints"].asInt() == 2 && info["clips"].size() == 1 && info["clips"][0]["name"].asString() == "Wave");
+    CHECK(info["clips"][0]["duration"].asFloat() == 1 && info["clips"][0]["channels"].asInt() == 1);
+    CHECK(Call(e, "asset.list", R"J({"kind":"model"})J")["result"].size() == 1);
+
+    // Centimeters become meters, V flips to the top-left origin, weights follow the clusters.
+    Mesh mesh;
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(Near(mesh.boundsMin, Vec3(0, 0, 0), 1e-5f) && Near(mesh.boundsMax, Vec3(1, 1, 0), 1e-5f));
+    CHECK(mesh.positions.size() == 4 && mesh.skin.size() == 4 && mesh.joints.size() == 2 && mesh.submeshes.size() == 1);
+    for (size_t i = 0; i < mesh.positions.size(); ++i) {
+        const bool top = mesh.positions[i].y > 0.5f;
+        CHECK(std::abs(mesh.uvs[i * 2] - mesh.positions[i].x) < 1e-5f && std::abs(mesh.uvs[i * 2 + 1] - (1 - mesh.positions[i].y)) < 1e-5f);
+        CHECK(mesh.skin[i].weights[0] == 1 && mesh.skin[i].joints[0] == (top ? 1 : 0));
+        CHECK(Near(mesh.normals[i], Vec3(0, 0, 1), 1e-5f));
+    }
+    const ModelNode& tip = mesh.nodes[static_cast<size_t>(mesh.joints[1].node)];
+    CHECK(Near(tip.translation, Vec3(0, 1, 0), 1e-5f) && mesh.joints[0].node == tip.parent);
+    CHECK(std::abs(mesh.joints[1].inverseBind.m[13] + 1) < 1e-5f && std::abs(mesh.joints[0].inverseBind.m[13]) < 1e-5f);
+    CHECK(mesh.materials.size() == 1 && mesh.materials[0].baseColor == Color(1, 0, 0) && !mesh.materials[0].baseTexture);
+    // The curve is resampled into linear keys in seconds and meters.
+    CHECK(mesh.clips.size() == 1 && mesh.clips[0].channels.size() == 1);
+    const AnimationChannel& channel = mesh.clips[0].channels[0];
+    CHECK(channel.node == mesh.joints[1].node && channel.path == AnimationPath::Translation);
+    CHECK(channel.interpolation == AnimationInterpolation::Linear && channel.times.size() >= 2 && channel.times.front() == 0);
+    CHECK(std::abs(channel.times.back() - 1) < 1e-5f && Near(channel.values.front().xyz(), Vec3(0, 1, 0), 1e-5f));
+    CHECK(Near(channel.values.back().xyz(), Vec3(0.5f, 1, 0), 1e-5f));
+
+    // The clip moves the upper edge half a meter along +x in both the pose and the picture.
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx","unlit":true},
+                                 "Animator":{"clip":"Wave","playing":false}}})J");
+    EntityId rig = e.GetScene().FindByName("Rig");
+    RenderTarget rest = RenderLook(e, Vec3(0.75f, 0.5f, 3), Vec3(0.75f, 0.5f, 0));
+    CHECK(Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"time":1}})J")["ok"].asBool());
+    RenderTarget moved = RenderLook(e, Vec3(0.75f, 0.5f, 3), Vec3(0.75f, 0.5f, 0));
+    auto columns = [&](const RenderTarget& rt, int row) {  // first and last column the quad covers in a row
+        std::pair<int, int> range(-1, -1);
+        for (int x = 0; x < rt.width; ++x) {
+            if (rt.ids[static_cast<size_t>(row * rt.width + x)] != rig) continue;
+            if (range.first < 0) range.first = x;
+            range.second = x;
+        }
+        return range;
+    };
+    CHECK(CountId(rest, rig) > 500 && rest.Hash() != moved.Hash());
+    CHECK(columns(rest, 32).first > 0 && columns(moved, 32).first > columns(rest, 32).first + 8);   // upper rows shift right
+    CHECK(columns(moved, 32).second > columns(rest, 32).second + 8);
+    CHECK(columns(rest, 58).first > 0 && columns(moved, 58).first < columns(rest, 58).first + 4);   // the lower edge stays
+    CHECK(WritePng("build/fbx-rig-moved.png", moved.ToImage(), true));
+
+    // Z-up files are turned to Y up.
+    std::string zUp = replace(fbx(""), "\"UpAxis\", \"int\", \"Integer\", \"\",1", "\"UpAxis\", \"int\", \"Integer\", \"\",2");
+    zUp = replace(zUp, "\"FrontAxis\", \"int\", \"Integer\", \"\",2", "\"FrontAxis\", \"int\", \"Integer\", \"\",1");
+    zUp = replace(zUp, "\"FrontAxisSign\", \"int\", \"Integer\", \"\",1", "\"FrontAxisSign\", \"int\", \"Integer\", \"\",-1");
+    CHECK(WriteTextFile(path, zUp));
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(Near(mesh.boundsMin, Vec3(0, 0, -1), 1e-5f) && Near(mesh.boundsMax, Vec3(1, 0, 0), 1e-5f));
+    CHECK(Near(mesh.normals[0], Vec3(0, 1, 0), 1e-5f));
+
+    // An image is found by its file name beside the model; the absolute path in the file is never opened.
+    Image red;
+    red.width = red.height = 1;
+    red.rgba = {255, 0, 0, 255};
+    CHECK(WritePng(JoinPath(e.ProjectDir(), "assets/models/red.png"), red, true));
+    const std::string texture = "\tTexture: 6000, \"Texture::Diffuse\", \"\" {\n\t\tType: \"TextureVideoClip\"\n\t\tVersion: 202\n"
+                                "\t\tFileName: \"C:\\art\\tex\\red.png\"\n\t\tRelativeFilename: \"..\\tex\\red.png\"\n\t}\n";
+    CHECK(WriteTextFile(path, replace(fbx(texture), "\"A\",1,0,0", "\"A\",0.2,0.2,0.2")));
+    CHECK(LoadModelFile(path, mesh, &err));
+    CHECK(mesh.textures.size() == 1 && mesh.materials[0].baseTexture == mesh.textures[0] && mesh.materials[0].baseColor == Color(1, 1, 1));
+    CHECK(mesh.textures[0]->width == 1 && mesh.textures[0]->texels[0] == 0xFF0000FFu);
+
+    // Broken files report why; a file without triangles is not a model.
+    CHECK(WriteTextFile(path, "not an fbx file"));
+    CHECK(!LoadModelFile(path, mesh, &err) && err.find("cannot read FBX") != std::string::npos);
+    CHECK(WriteTextFile(JoinPath(e.ProjectDir(), "assets/models/broken.fbx"), "not an fbx file"));
+    Json bad = Call(e, "asset.info", R"J({"path":"assets/models/broken.fbx"})J");
+    CHECK(!bad["ok"].asBool() && bad["error"]["code"].asString() == "invalid_model");
+    std::string empty = fbx("");
+    empty.erase(empty.find("\tGeometry: 1000"), empty.find("\tModel: 2000") - empty.find("\tGeometry: 1000"));
+    CHECK(WriteTextFile(path, empty));
+    CHECK(!LoadModelFile(path, mesh, &err) && err == "model contains no triangle meshes");
+
+    // oe import / asset.import put .fbx files with the other models.
+    const std::string outside = JoinPath(e.ProjectDir(), "hero.fbx");
+    CHECK(WriteTextFile(outside, fbx("")));
+    Json imported = Json::MakeObject();
+    imported["source"] = outside;
+    CHECK(e.Call("asset.import", imported)["result"]["path"].asString() == "assets/models/hero.fbx");
+}
+
+TEST(IkSolverReachesGoals) {
+    // Shoulder at the origin, elbow and hand one unit apart along +x, a finger past the hand.
+    Mesh mesh;
+    auto bone = [&](const char* name, int parent, Vec3 translation) {
+        ModelNode node;
+        node.name = name;
+        node.parent = parent;
+        node.translation = translation;
+        mesh.nodes.push_back(node);
+    };
+    bone("Shoulder", -1, Vec3(0, 0, 0));
+    bone("Elbow", 0, Vec3(1, 0, 0));
+    bone("Hand", 1, Vec3(1, 0, 0));
+    bone("Finger", 2, Vec3(0.25f, 0, 0));
+    CHECK(FindModelNode(mesh, "Hand") == 2 && FindModelNode(mesh, "Foot") == -1 && FindModelNode(mesh, "") == -1);
+    auto position = [](const std::vector<Mat4>& nodes, int node) { return nodes[static_cast<size_t>(node)].TransformPoint(Vec3(0, 0, 0)); };
+    auto solve = [&](IkGoal goal) {
+        std::vector<Mat4> nodes = EvaluateNodePose(mesh, nullptr, 0);
+        goal.node = goal.node < 0 ? 2 : goal.node;
+        SolveIk(mesh, nodes, goal);
+        // Bones keep their lengths whatever the goal.
+        CHECK(std::abs(Length(position(nodes, 1) - position(nodes, 0)) - 1) < 1e-4f);
+        CHECK(std::abs(Length(position(nodes, 2) - position(nodes, 1)) - 1) < 1e-4f);
+        CHECK(std::abs(Length(position(nodes, 3) - position(nodes, 2)) - 0.25f) < 1e-4f);
+        return nodes;
+    };
+    IkGoal goal;
+    goal.target = Vec3(1.2f, 0, 0);
+    // A straight arm folds; the pole picks the side the elbow goes to.
+    goal.pole = Vec3(0, 1, 0);
+    std::vector<Mat4> nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), goal.target, 1e-4f) && position(nodes, 1).y > 0.5f && std::abs(position(nodes, 1).z) < 1e-4f);
+    goal.pole = Vec3(0, 0, -1);
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), goal.target, 1e-4f) && position(nodes, 1).z < -0.5f && std::abs(position(nodes, 1).y) < 1e-4f);
+    CHECK(Near(position(nodes, 0), Vec3(0, 0, 0), 1e-6f));  // the shoulder turns, it does not move
+    goal.pole = Vec3();
+    goal.target = Vec3(0.6f, 1.1f, -0.4f);
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), goal.target, 1e-4f));
+    // Out of reach: the arm stretches towards the goal.
+    goal.target = Vec3(0, 5, 0);
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), Vec3(0, 2, 0), 1e-2f) && Near(position(nodes, 3), Vec3(0, 2.25f, 0), 2e-2f));
+    // Half weight reaches half way; zero leaves the pose alone.
+    goal.target = Vec3(1, 1, 0);
+    goal.weight = 0.5f;
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), Vec3(1.5f, 0.5f, 0), 1e-4f));
+    goal.weight = 0;
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), Vec3(2, 0, 0), 1e-6f));
+    // matchRotation turns the hand (and its finger) to the goal's orientation.
+    goal.weight = 1;
+    goal.matchRotation = true;
+    goal.rotation = Mat4::RotationEuler(Vec3(0, 0, 90));
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 2), Vec3(1, 1, 0), 1e-4f) && Near(position(nodes, 3), Vec3(1, 1.25f, 0), 1e-4f));
+    goal.matchRotation = false;
+    // soften eases into full extension: exact below the soft zone, short of the goal inside it, never past the length.
+    goal.pole = Vec3(0, 1, 0);
+    goal.soften = 0.1f;  // the last 0.2 of this 2-unit arm
+    goal.target = Vec3(1.7f, 0, 0);
+    CHECK(Near(position(solve(goal), 2), goal.target, 1e-4f));
+    goal.target = Vec3(1.9f, 0, 0);
+    CHECK(Near(position(solve(goal), 2), Vec3(2 - 0.2f * std::exp(-0.5f), 0, 0), 1e-4f));
+    goal.target = Vec3(2.0f, 0, 0);
+    const float atLength = position(solve(goal), 2).x;
+    goal.target = Vec3(2.1f, 0, 0);
+    const float beyond = position(solve(goal), 2).x;
+    CHECK(atLength > 1.9f && beyond > atLength && beyond < 2 && position(solve(goal), 1).y > 0.2f);  // still bent, no snap
+    goal.soften = 0;
+    goal.pole = Vec3();
+    // Without a pole the limb bends to the side it bends in the model's default pose, also when the
+    // clip has pushed it slightly the other way; with neither, the posed side decides.
+    {
+        Mesh bent = mesh, posed = mesh;
+        bent.nodes[1].translation = Vec3(1, 0.2f, 0);
+        bent.nodes[2].translation = Vec3(1, -0.2f, 0);
+        posed.nodes[1].translation = Vec3(1, -0.02f, 0);
+        posed.nodes[2].translation = Vec3(1, 0.02f, 0);
+        const std::vector<Mat4> rest = EvaluateNodePose(bent, nullptr, 0);
+        IkGoal fold;
+        fold.node = 2;
+        fold.target = Vec3(1.5f, 0, 0);
+        std::vector<Mat4> pose = EvaluateNodePose(posed, nullptr, 0);
+        SolveIk(posed, pose, fold, &rest);
+        CHECK(Near(position(pose, 2), fold.target, 1e-4f) && position(pose, 1).y > 0.5f);
+        pose = EvaluateNodePose(posed, nullptr, 0);
+        SolveIk(posed, pose, fold);
+        CHECK(Near(position(pose, 2), fold.target, 1e-4f) && position(pose, 1).y < -0.5f);
+    }
+    // One bone aims; three bones descend to the goal; a chain longer than the skeleton does nothing.
+    goal.chain = 1;
+    goal.target = Vec3(1, 3, 0);
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 1), Vec3(1, 0, 0), 1e-6f) && Near(position(nodes, 2), Vec3(1, 1, 0), 1e-4f));
+    goal.node = 3;
+    goal.chain = 3;
+    goal.target = Vec3(0.8f, 1.2f, 0.5f);
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 3), goal.target, 2e-3f));
+    std::vector<Mat4> again = solve(goal);
+    CHECK(std::memcmp(nodes.data(), again.data(), nodes.size() * sizeof(Mat4)) == 0);
+    goal.chain = 4;
+    nodes = solve(goal);
+    CHECK(Near(position(nodes, 3), Vec3(2.25f, 0, 0), 1e-6f));
+}
+
+TEST(BoneAttachmentAndIkOnModels) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("bone_ik"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    std::string text = kRigFbx;
+    text.replace(text.find("%TEXTURE%"), 9, "");
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.fbx");
+    CreateDirectories(ParentPath(path));
+    CHECK(WriteTextFile(path, text));
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"Transform":{"position":[10,0,0]},"MeshRenderer":{"mesh":"assets/models/rig.fbx","unlit":true},
+                                 "Animator":{"clip":"Wave","playing":false}}})J");
+    Call(e, "entity.create", R"J({"name":"Hat","parent":"Rig","components":{"Transform":{"scale":[0.2,0.2,0.2]},"MeshRenderer":{"mesh":"cube"},
+                                 "BoneAttachment":{"bone":"Tip","position":[0,0.2,0]}}})J");
+    EntityId hat = e.GetScene().FindByName("Hat");
+    CHECK(e.GetScene().Record(hat)->parent == e.GetScene().FindByName("Rig"));
+    auto bones = [&](const char* args) { return Call(e, "animation.bones", args)["result"]; };
+    auto vec = [](const Json& v) { return Vec3(v[0].asFloat(), v[1].asFloat(), v[2].asFloat()); };
+    auto boneNamed = [&](const Json& list, const char* name) {
+        for (size_t i = 0; i < list["bones"].size(); ++i) if (list["bones"][i]["name"].asString() == name) return list["bones"][i];
+        return Json();
+    };
+    // Names, parents and world positions (the entity stands at x = 10).
+    Json all = bones(R"J({"id":"Rig"})J");
+    CHECK(boneNamed(all, "Tip")["parent"].asString() == "Root" && Near(vec(boneNamed(all, "Tip")["position"]), Vec3(10, 1, 0), 1e-4f));
+    CHECK(Near(vec(boneNamed(all, "Root")["position"]), Vec3(10, 0, 0), 1e-4f) && all["goals"].size() == 0);
+    CHECK(Near(vec(boneNamed(all, "Tip")["modelPosition"]), Vec3(0, 1, 0), 1e-4f));  // where a child entity stands to be on the bone
+    CHECK(all["attachments"].size() == 1 && all["attachments"][0]["found"].asBool() && all["attachments"][0]["name"].asString() == "Hat");
+    CHECK(bones(R"J({"id":"Rig","bone":"Tip"})J")["bones"].size() == 1);
+    CHECK(Call(e, "animation.bones", R"J({"id":"Rig","bone":"Nose"})J")["error"]["code"].asString() == "bone_not_found");
+    CHECK(Call(e, "animation.bones", R"J({"id":"Hat"})J")["ok"].asBool());  // built-in meshes simply have no bones
+
+    // The attachment follows the bone after a step, through the clip...
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Near(e.GetScene().Get<Transform>(hat)->position, Vec3(0, 1.2f, 0), 1e-4f));
+    CHECK(Near(e.GetScene().Get<Transform>(hat)->scale, Vec3(0.2f, 0.2f, 0.2f), 1e-6f));
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"time":1}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Near(e.GetScene().Get<Transform>(hat)->position, Vec3(0.5f, 1.2f, 0), 1e-4f));
+    CHECK(Near(e.GetScene().WorldMatrix(hat).TransformPoint(Vec3(0, 0, 0)), Vec3(10.5f, 1.2f, 0), 1e-4f));
+    Json eval = Json::MakeObject();
+    eval["code"] = "local b = animation.bone(scene.find('Rig'), 'Tip'); "
+                   "return b.position.x * 100 + b.position.y + (animation.bone(scene.find('Rig'), 'Nose') == nil and 0 or 5000)";
+    Json lua = e.Call("script.eval", eval);
+    CHECK(std::abs(lua["result"]["value"].asNumber() - 1051) < 1e-3);
+    Call(e, "sim.stop");
+
+    // ...and through IK: a goal entity pulls the upper bone down to the side.
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"time":0}})J");
+    RenderTarget before = RenderLook(e, Vec3(10.5f, 0.5f, 4), Vec3(10.5f, 0.5f, 0));
+    Call(e, "entity.create", R"J({"name":"Goal","parent":"Rig","components":{"Transform":{"position":[1,0,0]},"BoneIK":{"bone":"Tip","chain":1}}})J");
+    Json solved = bones(R"J({"id":"Rig","bone":"Tip"})J");
+    CHECK(Near(vec(solved["bones"][0]["position"]), Vec3(11, 0, 0), 1e-4f));
+    // ik:false is the clip alone: what a foot-placement script adds the ground height to.
+    CHECK(Near(vec(bones(R"J({"id":"Rig","bone":"Tip","ik":false})J")["bones"][0]["position"]), Vec3(10, 1, 0), 1e-4f));
+    Call(e, "sim.play");
+    eval["code"] = "local rig = scene.find('Rig'); local a, b = animation.bone(rig, 'Tip'), animation.bone(rig, 'Tip', {ik = false}); "
+                   "return a.position.x * 100 + b.position.x + b.modelPosition.y * 0.5";
+    CHECK(std::abs(e.Call("script.eval", eval)["result"]["value"].asNumber() - 1110.5) < 1e-3);
+    Call(e, "sim.stop");
+    CHECK(solved["goals"].size() == 1 && solved["goals"][0]["found"].asBool() && solved["goals"][0]["distance"].asFloat() < 1e-4f);
+    // Outside play an edit is enough to move what a bone holds.
+    CHECK(Near(e.GetScene().Get<Transform>(hat)->position, Vec3(1.2f, 0, 0), 1e-4f));
+    RenderTarget after = RenderLook(e, Vec3(10.5f, 0.5f, 4), Vec3(10.5f, 0.5f, 0));
+    CHECK(before.Hash() != after.Hash());
+    CHECK(WritePng("build/bone-ik.png", after.ToImage(), true));
+    Json state = Call(e, "animation.state", R"J({"id":"Rig","pose":true})J")["result"];
+    CHECK(state["jointMatrices"].size() == 2 && std::abs(state["jointMatrices"][0][1].asFloat() + 1) < 1e-4f);  // Root turned -90 degrees about z
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Near(e.GetScene().Get<Transform>(hat)->position, Vec3(1.2f, 0, 0), 1e-4f));
+    CHECK(std::abs(std::abs(e.GetScene().Get<Transform>(hat)->rotation.z) - 90) < 1e-2f);
+    // An unreachable goal and an unknown bone.
+    Call(e, "sim.stop");
+    Call(e, "component.set", R"J({"id":"Goal","type":"Transform","values":{"position":[3,0,0]}})J");
+    solved = bones(R"J({"id":"Rig","bone":"Tip"})J");
+    CHECK(Near(vec(solved["bones"][0]["position"]), Vec3(11, 0, 0), 1e-4f) && std::abs(solved["goals"][0]["distance"].asFloat() - 2) < 1e-4f);
+    Call(e, "component.set", R"J({"id":"Goal","type":"BoneIK","values":{"bone":"Nose"}})J");
+    solved = bones(R"J({"id":"Rig","bone":"Tip"})J");
+    CHECK(!solved["goals"][0]["found"].asBool() && Near(vec(solved["bones"][0]["position"]), Vec3(10, 1, 0), 1e-4f));
+    // Both are ordinary reflected components.
+    Json saved = e.GetScene().EntityToJson(e.GetScene().FindByName("Goal"));
+    CHECK(saved["components"]["BoneIK"]["bone"].asString() == "Nose" && saved["components"]["BoneIK"]["chain"].asInt() == 1);
 }
 
 TEST(AnimationPoseInterpolation) {
@@ -14333,6 +14816,404 @@ TEST(NativeEditorPauseAndGizmoInput) {
         CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/editor-gizmo-input.png"), image.ToImage()));
     }
     CHECK(RemoveAll(project));
+}
+
+namespace {
+// Entity by name in a joint test scene, its world position and one component field.
+Vec3 JointTestPosition(Engine& e, const char* name) {
+    return e.GetScene().WorldMatrix(e.GetScene().FindByName(name)).TransformPoint(Vec3(0, 0, 0));
+}
+Json JointTestInfo(Engine& e, const char* name) {
+    Json args = Json::MakeObject();
+    args["id"] = name;
+    Json list = e.Call("physics.joints", args)["result"];
+    for (size_t i = 0; i < list.size(); ++i) if (list[i]["name"].asString() == name) return list[i];
+    return Json::MakeObject();
+}
+bool JointTestWarned(Engine& e, const char* part) {
+    Json warnings = Call(e, "physics.state")["result"]["warnings"];
+    for (size_t i = 0; i < warnings.size(); ++i) if (warnings[i].asString().find(part) != std::string::npos) return true;
+    return false;
+}
+}  // namespace
+
+TEST(Joints3D) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("joints3d"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    auto create = [&](const char* json) { CHECK(Call(e, "entity.create", json)["ok"].asBool()); };
+    Scene& s = e.GetScene();
+    auto id = [&](const char* name) { return s.FindByName(name); };
+    auto pos = [&](const char* name) { return JointTestPosition(e, name); };
+    // ball to the world: a pendulum whose anchor is one meter to the side.
+    create(R"J({"name":"Bob","components":{"Transform":{"position":[1,5,0]},"Collider":{"size":[0.4,0.4,0.4]},"RigidBody":{},
+               "Joint":{"type":"ball","anchor":[-1,0,0]}}})J");
+    // hinge with a motor: spins in place around Z.
+    create(R"J({"name":"Wheel","components":{"Transform":{"position":[10,5,0]},"Collider":{},"RigidBody":{},
+               "Joint":{"type":"hinge","axis":[0,0,1],"useMotor":true,"motorSpeed":90,"maxMotorForce":1000}}})J");
+    // hinge with limits: a door pushed hard stops at 30 degrees.
+    create(R"J({"name":"Door","components":{"Transform":{"position":[20,5,0]},"Collider":{},"RigidBody":{"gravityScale":0,"angularVelocity":[0,200,0]},
+               "Joint":{"type":"hinge","axis":[0,1,0],"useLimits":true,"min":-30,"max":30}}})J");
+    // slider with limits: a lift that drops one meter and no further.
+    create(R"J({"name":"Lift","components":{"Transform":{"position":[30,5,0]},"Collider":{},"RigidBody":{},
+               "Joint":{"type":"slider","axis":[0,1,0],"useLimits":true,"min":-1,"max":0}}})J");
+    // distance to another body: a rod of the length the two anchors start apart.
+    create(R"J({"name":"Hook","components":{"Transform":{"position":[40,8,0]},"Collider":{"size":[0.2,0.2,0.2]}}})J");
+    Json weight = Json::parse(R"J({"name":"Weight","components":{"Transform":{"position":[40,6,0]},"Collider":{"size":[0.4,0.4,0.4]},
+               "RigidBody":{"velocity":[3,0,0]},"Joint":{"type":"distance","autoAnchor":false}}})J");
+    weight["components"]["Joint"]["connected"] = id("Hook");
+    CHECK(e.Call("entity.create", weight)["ok"].asBool());
+    // fixed to the world: holds a 1 kg box against gravity.
+    create(R"J({"name":"Shelf","components":{"Transform":{"position":[50,5,0]},"Collider":{},"RigidBody":{"mass":1},
+               "Joint":{"type":"fixed","breakForce":50}}})J");
+    // Two overlapping bodies on a joint do not push each other apart unless collideConnected.
+    create(R"J({"name":"LinkA","components":{"Transform":{"position":[60,5,0]},"Collider":{},"RigidBody":{"gravityScale":0}}})J");
+    Json link = Json::parse(R"J({"name":"LinkB","components":{"Transform":{"position":[60.5,5,0]},"Collider":{},"RigidBody":{"gravityScale":0},
+               "Joint":{"type":"ball","anchor":[-0.25,0,0]}}})J");
+    link["components"]["Joint"]["connected"] = id("LinkA");
+    CHECK(e.Call("entity.create", link)["ok"].asBool());
+    // A joint without a body reports why it does nothing.
+    create(R"J({"name":"Loose","components":{"Joint":{"type":"fixed"}}})J");
+
+    Call(e, "sim.step", R"J({"frames":120})J");
+    CHECK(pos("Bob").y < 4.7f && std::abs(Length(pos("Bob") - Vec3(0, 5, 0)) - 1) < 0.02f);
+    CHECK(Near(pos("Wheel"), Vec3(10, 5, 0), 0.01f));
+    CHECK(std::abs(s.Get<RigidBody>(id("Wheel"))->angularVelocity.z - 90) < 3);
+    CHECK(Near(pos("Door"), Vec3(20, 5, 0), 0.01f));
+    CHECK(std::abs(s.Get<Transform>(id("Door"))->rotation.y) < 31.5f && std::abs(s.Get<Transform>(id("Door"))->rotation.y) > 20);
+    CHECK(Near(pos("Lift"), Vec3(30, 4, 0), 0.02f));
+    CHECK(std::abs(Length(pos("Weight") - Vec3(40, 8, 0)) - 2) < 0.02f && std::abs(pos("Weight").x - 40) > 0.05f);
+    CHECK(Near(pos("Shelf"), Vec3(50, 5, 0), 0.01f));
+    CHECK(std::abs(Length(pos("LinkB") - pos("LinkA")) - 0.5f) < 0.02f);
+    Json contacts = Call(e, "physics.contacts")["result"];
+    CHECK(contacts.size() == 0);
+    Json shelf = JointTestInfo(e, "Shelf");
+    CHECK(shelf["active"].asBool() && !shelf["broken"].asBool() && shelf["component"].asString() == "Joint" && shelf["connectedName"].asString() == "(world)");
+    CHECK(std::abs(shelf["force"].asFloat() - 9.81f) < 0.5f);  // the box's weight
+    CHECK(JointTestInfo(e, "Weight")["connectedName"].asString() == "Hook" && JointTestInfo(e, "Weight")["active"].asBool());
+    CHECK(!JointTestInfo(e, "Loose")["active"].asBool() && JointTestWarned(e, "Joint: this entity has no body"));
+    CHECK(Call(e, "physics.state")["result"]["joints"].asInt() == 7);
+
+    // The motor follows the component from one step to the next, without a new joint.
+    Call(e, "component.set", R"J({"id":"Wheel","type":"Joint","values":{"motorSpeed":-45}})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(std::abs(s.Get<RigidBody>(id("Wheel"))->angularVelocity.z + 45) < 3);
+    // More load than breakForce: the joint lets go and says so; clearing `broken` joins again in place.
+    Call(e, "component.set", R"J({"id":"Shelf","type":"Joint","values":{"breakForce":5}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    CHECK(s.Get<Joint>(id("Shelf"))->broken && pos("Shelf").y < 4.9f);
+    CHECK(!JointTestInfo(e, "Shelf")["active"].asBool() && JointTestInfo(e, "Shelf")["broken"].asBool());
+    Call(e, "component.set", R"J({"id":"Shelf","type":"Joint","values":{"breakForce":0,"broken":false}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    const float caught = pos("Shelf").y;
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(JointTestInfo(e, "Shelf")["active"].asBool() && std::abs(pos("Shelf").y - caught) < 0.02f);
+    // Removing a body or the component removes the joint; the other body is free again.
+    Call(e, "component.remove", R"J({"id":"Lift","type":"Joint"})J");
+    Call(e, "entity.delete", R"J({"id":"Hook"})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(pos("Lift").y < 3.5f && pos("Weight").y < 4);
+    CHECK(!JointTestInfo(e, "Weight")["active"].asBool());
+    // Joints draw with the collider wireframes.
+    std::vector<DebugLine> lines;
+    AppendColliderLines(s, lines);
+    size_t jointLines = 0;
+    for (const DebugLine& line : lines) jointLines += line.color.r > 0.95f && line.color.b > 0.85f && line.color.g < 0.4f;
+    CHECK(jointLines >= 3 * 5);
+    Call(e, "sim.stop");
+    CHECK(!s.Get<Joint>(id("Shelf"))->broken);
+}
+
+TEST(Joints2D) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("joints2d"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    auto create = [&](const char* json) { CHECK(Call(e, "entity.create", json)["ok"].asBool()); };
+    Scene& s = e.GetScene();
+    auto id = [&](const char* name) { return s.FindByName(name); };
+    auto pos = [&](const char* name) { return JointTestPosition(e, name); };
+    // hinge to the world: a pendulum.
+    create(R"J({"name":"Bob","components":{"Transform":{"position":[1,5,0]},"Collider2D":{"size":[0.4,0.4,0]},"RigidBody2D":{},
+               "Joint2D":{"type":"hinge","anchor":[-1,0,0]}}})J");
+    // hinge with a motor.
+    create(R"J({"name":"Wheel","components":{"Transform":{"position":[10,5,0]},"Collider2D":{"shape":"circle"},"RigidBody2D":{},
+               "Joint2D":{"type":"hinge","useMotor":true,"motorSpeed":90,"maxMotorForce":1000}}})J");
+    // hinge with limits.
+    create(R"J({"name":"Flipper","components":{"Transform":{"position":[20,5,0]},"Collider2D":{},"RigidBody2D":{"gravityScale":0,"angularVelocity":200},
+               "Joint2D":{"type":"hinge","useLimits":true,"min":-30,"max":30}}})J");
+    // slider with limits: drops one meter, never turns.
+    create(R"J({"name":"Lift","components":{"Transform":{"position":[30,5,0]},"Collider2D":{},"RigidBody2D":{},
+               "Joint2D":{"type":"slider","axis":[0,1,0],"useLimits":true,"min":-1,"max":0}}})J");
+    // distance to another body.
+    create(R"J({"name":"Hook","components":{"Transform":{"position":[40,8,0]},"Collider2D":{"size":[0.2,0.2,0]}}})J");
+    Json weight = Json::parse(R"J({"name":"Weight","components":{"Transform":{"position":[40,6,0]},"Collider2D":{"size":[0.4,0.4,0]},
+               "RigidBody2D":{"velocity":[3,0,0]},"Joint2D":{"type":"distance","autoAnchor":false}}})J");
+    weight["components"]["Joint2D"]["connected"] = id("Hook");
+    CHECK(e.Call("entity.create", weight)["ok"].asBool());
+    // a rope: free up to its length.
+    create(R"J({"name":"Rope","components":{"Transform":{"position":[45,8,0]},"Collider2D":{"size":[0.4,0.4,0]},"RigidBody2D":{},
+               "Joint2D":{"type":"distance","autoAnchor":false,"connectedAnchor":[45,8,0],"useLimits":true,"min":0,"max":1.5}}})J");
+    // fixed to the world, breakable.
+    create(R"J({"name":"Shelf","components":{"Transform":{"position":[50,5,0]},"Collider2D":{},"RigidBody2D":{"mass":1},
+               "Joint2D":{"type":"fixed","breakForce":50}}})J");
+    // wheel: a body on a vertical spring under a chassis held in place.
+    create(R"J({"name":"Chassis","components":{"Transform":{"position":[60,5,0]},"Collider2D":{"size":[2,0.4,0]}}})J");
+    Json tire = Json::parse(R"J({"name":"Tire","components":{"Transform":{"position":[60,4,0]},"Collider2D":{"shape":"circle","radius":0.3},"RigidBody2D":{},
+               "Joint2D":{"type":"wheel","axis":[0,1,0],"frequency":4,"damping":0.7,"useMotor":true,"motorSpeed":180,"maxMotorForce":100}}})J");
+    tire["components"]["Joint2D"]["connected"] = id("Chassis");
+    CHECK(e.Call("entity.create", tire)["ok"].asBool());
+    create(R"J({"name":"Loose","components":{"Joint2D":{"type":"fixed"}}})J");
+
+    Call(e, "sim.step", R"J({"frames":120})J");
+    CHECK(pos("Bob").y < 4.7f && std::abs(Length(pos("Bob") - Vec3(0, 5, 0)) - 1) < 0.02f);
+    CHECK(Near(pos("Wheel"), Vec3(10, 5, 0), 0.01f) && std::abs(s.Get<RigidBody2D>(id("Wheel"))->angularVelocity - 90) < 3);
+    const float flipper = s.Get<Transform>(id("Flipper"))->rotation.z;
+    CHECK(Near(pos("Flipper"), Vec3(20, 5, 0), 0.01f) && std::abs(flipper) < 31.5f && std::abs(flipper) > 20);
+    CHECK(Near(pos("Lift"), Vec3(30, 4, 0), 0.02f) && std::abs(s.Get<Transform>(id("Lift"))->rotation.z) < 0.01f);
+    CHECK(std::abs(Length(pos("Weight") - Vec3(40, 8, 0)) - 2) < 0.02f && std::abs(pos("Weight").x - 40) > 0.05f);
+    CHECK(Near(pos("Rope"), Vec3(45, 6.5f, 0), 0.03f));
+    CHECK(Near(pos("Shelf"), Vec3(50, 5, 0), 0.01f));
+    CHECK(std::abs(pos("Tire").x - 60) < 0.01f && pos("Tire").y < 4 && pos("Tire").y > 3.8f);  // sags on its spring
+    CHECK(std::abs(s.Get<RigidBody2D>(id("Tire"))->angularVelocity - 180) < 6);
+    Json shelf = JointTestInfo(e, "Shelf");
+    CHECK(shelf["active"].asBool() && shelf["component"].asString() == "Joint2D" && std::abs(shelf["force"].asFloat() - 9.81f) < 0.5f);
+    CHECK(!JointTestInfo(e, "Loose")["active"].asBool() && JointTestWarned(e, "Joint2D: this entity has no 2D body"));
+    CHECK(Call(e, "physics.state")["result"]["world2D"]["joints"].asInt() == 8);
+
+    Call(e, "component.set", R"J({"id":"Wheel","type":"Joint2D","values":{"motorSpeed":-45}})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(std::abs(s.Get<RigidBody2D>(id("Wheel"))->angularVelocity + 45) < 3);
+    Call(e, "component.set", R"J({"id":"Shelf","type":"Joint2D","values":{"breakForce":5}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    CHECK(s.Get<Joint2D>(id("Shelf"))->broken && pos("Shelf").y < 4.9f && !JointTestInfo(e, "Shelf")["active"].asBool());
+    Call(e, "component.set", R"J({"id":"Shelf","type":"Joint2D","values":{"breakForce":0,"broken":false}})J");
+    Call(e, "sim.step", R"J({"frames":30})J");
+    const float caught = pos("Shelf").y;
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(JointTestInfo(e, "Shelf")["active"].asBool() && std::abs(pos("Shelf").y - caught) < 0.02f);
+    Call(e, "component.remove", R"J({"id":"Lift","type":"Joint2D"})J");
+    Call(e, "entity.delete", R"J({"id":"Hook"})J");
+    Call(e, "sim.step", R"J({"frames":60})J");
+    CHECK(pos("Lift").y < 3.5f && pos("Weight").y < 4 && !JointTestInfo(e, "Weight")["active"].asBool());
+    Call(e, "sim.stop");
+    CHECK(!s.Get<Joint2D>(id("Shelf"))->broken);
+}
+
+// Snapshots carry the joints of both worlds: the same steps from a restored state end in the same place.
+TEST(JointsInSnapshots) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("joint_snapshots"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    auto create = [&](const char* json) { CHECK(Call(e, "entity.create", json)["ok"].asBool()); };
+    Scene& s = e.GetScene();
+    auto id = [&](const char* name) { return s.FindByName(name); };
+    auto pos = [&](const char* name) { return JointTestPosition(e, name); };
+    create(R"J({"name":"Bob","components":{"Transform":{"position":[1,5,0]},"Collider":{"size":[0.4,0.4,0.4]},"RigidBody":{},
+               "Joint":{"type":"ball","anchor":[-1,0,0]}}})J");
+    create(R"J({"name":"Door","components":{"Transform":{"position":[20,5,0]},"Collider":{},"RigidBody":{"gravityScale":0,"angularVelocity":[0,200,0]},
+               "Joint":{"type":"hinge","axis":[0,1,0],"useLimits":true,"min":-30,"max":30,"useMotor":true,"motorSpeed":40,"maxMotorForce":5}}})J");
+    // A chain of two links: the second joint is held by the second body.
+    Json link = Json::parse(R"J({"name":"Link","components":{"Transform":{"position":[2,5,0]},"Collider":{"size":[0.4,0.4,0.4]},"RigidBody":{},
+               "Joint":{"type":"ball","anchor":[-0.5,0,0]}}})J");
+    link["components"]["Joint"]["connected"] = id("Bob");
+    CHECK(e.Call("entity.create", link)["ok"].asBool());
+    create(R"J({"name":"Bob2D","components":{"Transform":{"position":[41,5,0]},"Collider2D":{"size":[0.4,0.4,0]},"RigidBody2D":{},
+               "Joint2D":{"type":"hinge","anchor":[-1,0,0]}}})J");
+    create(R"J({"name":"Rope2D","components":{"Transform":{"position":[45,8,0]},"Collider2D":{"size":[0.4,0.4,0]},"RigidBody2D":{"velocity":[2,0,0]},
+               "Joint2D":{"type":"distance","autoAnchor":false,"connectedAnchor":[45,8,0],"useLimits":true,"min":0,"max":1.5}}})J");
+    CHECK(Call(e, "sim.record_state")["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":50})J");
+    CHECK(Call(e, "sim.save_state", R"J({"slot":"joints"})J")["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":70})J");
+    const Vec3 bob = pos("Bob"), chained = pos("Link"), door = s.Get<Transform>(id("Door"))->rotation, bob2 = pos("Bob2D"), rope = pos("Rope2D");
+    CHECK(std::abs(Length(bob - Vec3(0, 5, 0)) - 1) < 0.02f && std::abs(Length(chained - bob) - 0.5f) > 0.01f);
+    CHECK(Call(e, "sim.load_state", R"J({"slot":"joints"})J")["ok"].asBool());
+    Json state = Call(e, "physics.state")["result"];
+    CHECK(state["joints"].asInt() == 3 && state["world2D"]["joints"].asInt() == 2);
+    Call(e, "sim.step", R"J({"frames":70})J");
+    CHECK(pos("Bob") == bob && pos("Link") == chained && s.Get<Transform>(id("Door"))->rotation == door);
+    CHECK(pos("Bob2D") == bob2 && pos("Rope2D") == rope);
+    CHECK(std::abs(Length(pos("Bob2D") - Vec3(40, 5, 0)) - 1) < 0.02f && Length(pos("Rope2D") - Vec3(45, 8, 0)) < 1.53f);
+}
+
+TEST(SpringBonesSwingAndSettle) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("spring_bones"), &err));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    std::string text = kRigFbx;
+    text.replace(text.find("%TEXTURE%"), 9, "");
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.fbx");
+    CreateDirectories(ParentPath(path));
+    CHECK(WriteTextFile(path, text));
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"Transform":{"position":[10,0,0]},"MeshRenderer":{"mesh":"assets/models/rig.fbx","unlit":true}}})J");
+    Call(e, "entity.create", R"J({"name":"Swing","parent":"Rig","components":{"SpringBone":{"bone":"Root","damping":5}}})J");
+    Call(e, "entity.create", R"J({"name":"Hat","parent":"Rig","components":{"BoneAttachment":{"bone":"Tip"}}})J");
+    Call(e, "entity.create", R"J({"name":"Leaf","parent":"Rig","components":{"SpringBone":{"bone":"Tip"}}})J");
+    Call(e, "entity.create", R"J({"name":"Lost","parent":"Rig","components":{"SpringBone":{"bone":"Nose"}}})J");
+    const EntityId hat = e.GetScene().FindByName("Hat");
+    auto vec = [](const Json& v) { return Vec3(v[0].asFloat(), v[1].asFloat(), v[2].asFloat()); };
+    auto tip = [&](bool swing = true) {
+        Json args = Json::MakeObject();
+        args["id"] = "Rig";
+        args["bone"] = "Tip";
+        args["ik"] = swing;
+        return vec(e.Call("animation.bones", args)["result"]["bones"][0]["position"]);
+    };
+    auto springs = [&] { return Call(e, "animation.bones", R"J({"id":"Rig"})J")["result"]["springs"]; };
+    auto moveTo = [&](float x) {
+        Json args = Json::MakeObject(), values = Json::MakeObject();
+        values["position"] = Json(Json::Array{x, 0.0f, 0.0f});
+        args["id"] = "Rig"; args["type"] = "Transform"; args["values"] = values;
+        CHECK(e.Call("component.set", args)["ok"].asBool());
+    };
+    // Reported per child: Root swings one bone (towards Tip); a leaf and an unknown name swing nothing.
+    Json list = springs();
+    CHECK(list.size() == 3 && list[0]["name"].asString() == "Swing" && list[0]["found"].asBool() && list[0]["bones"].asInt() == 1);
+    CHECK(!list[0]["simulating"].asBool());  // not playing: the plain pose
+    CHECK(list[1]["found"].asBool() && list[1]["bones"].asInt() == 0 && !list[2]["found"].asBool() && list[2]["bones"].asInt() == 0);
+    CHECK(Near(tip(), Vec3(10, 1, 0), 1e-4f));
+
+    // At rest nothing moves.
+    Call(e, "sim.step", R"J({"frames":5})J");
+    CHECK(springs()[0]["simulating"].asBool() && !springs()[1]["simulating"].asBool());
+    CHECK(Near(tip(), Vec3(10, 1, 0), 1e-4f));
+    // The model moves a meter in one step: the end stays behind, the bone keeps its length, and
+    // what hangs on the bone goes with it. ik:false is still the pose without the swing.
+    moveTo(11);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    Vec3 lagging = tip();
+    CHECK(lagging.x < 10.6f && lagging.y > 0.5f && std::abs(Length(lagging - Vec3(11, 0, 0)) - 1) < 1e-3f);
+    CHECK(Near(tip(false), Vec3(11, 1, 0), 1e-4f));
+    CHECK(Near(e.GetScene().WorldMatrix(hat).TransformPoint(Vec3(0, 0, 0)), lagging, 1e-3f));
+    // It swings past the pose, then settles into it.
+    float furthest = 0;
+    for (int i = 0; i < 60; ++i) {
+        Call(e, "sim.step", R"J({"frames":1})J");
+        furthest = std::max(furthest, tip().x);
+    }
+    CHECK(furthest > 11.05f);
+    Call(e, "sim.step", R"J({"frames":360})J");
+    CHECK(Near(tip(), Vec3(11, 1, 0), 2e-3f));
+    // Gravity pulls the bone off its pose and holds it there.
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"gravity":[30,0,0]}})J");
+    Call(e, "sim.step", R"J({"frames":360})J");
+    Vec3 sagging = tip();
+    CHECK(sagging.x > 11.15f && sagging.x < 11.6f && std::abs(Length(sagging - Vec3(11, 0, 0)) - 1) < 1e-3f);
+    // weight blends back to the pose.
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"weight":0}})J");
+    CHECK(Near(tip(), Vec3(11, 1, 0), 1e-4f));
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"weight":1,"gravity":[0,0,0]}})J");
+    Call(e, "sim.step", R"J({"frames":360})J");
+    // A jump across the level restarts the bone at rest instead of whipping it.
+    moveTo(100);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Near(tip(), Vec3(100, 1, 0), 1e-3f));
+    // Extreme settings stay finite and keep the length.
+    Call(e, "component.set", R"J({"id":"Swing","type":"SpringBone","values":{"stiffness":3600,"damping":0,"gravity":[0,-500,0]}})J");
+    moveTo(101);
+    Call(e, "sim.step", R"J({"frames":120})J");
+    CHECK(std::abs(Length(tip() - Vec3(101, 0, 0)) - 1) < 1e-3f);
+    // Stopping restores the scene: no swing left.
+    Call(e, "sim.stop");
+    CHECK(!springs()[0]["simulating"].asBool() && Near(tip(), Vec3(10, 1, 0), 1e-4f));
+    CHECK(e.GetScene().ToJson().dump().find("tails") == std::string::npos);
+}
+
+TEST(NativeEditorBones) {
+    Engine e;
+    std::string err;
+    CHECK(e.Open(TempProject("editor_bones"), &err));
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    Call(e, "scene.new", R"J({"empty":true})J");
+    std::string text = kRigFbx;
+    text.replace(text.find("%TEXTURE%"), 9, "");
+    const std::string path = JoinPath(e.ProjectDir(), "assets/models/rig.fbx");
+    CreateDirectories(ParentPath(path));
+    CHECK(WriteTextFile(path, text));
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx"},"Animator":{"clip":"Wave","playing":false}}})J");
+    Call(e, "entity.create", R"J({"name":"Sword","components":{"MeshRenderer":{"mesh":"cube"}}})J");
+    Scene& s = e.GetScene();
+    const EntityId rig = s.FindByName("Rig"), sword = s.FindByName("Sword");
+
+    NativeEditor::Options options;
+    options.language = "en";
+    NativeEditor ed(e, nullptr, options);
+    CHECK(ed.Init(&err));
+    RenderTarget img;
+    auto frames = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            ed.Update({}, 1280, 720, 1.0f, Engine::kFixedDt);
+            CHECK(ed.DrawToImage(img));
+        }
+    };
+    // The model's Inspector lists its bones; the Scene view draws them only while the toggle is on.
+    ed.Select(rig);
+    frames(3);
+    auto boneBlue = [&] {  // pixels in the overlay's light blue
+        size_t count = 0;
+        for (uint32_t c : img.color) {
+            const int r = static_cast<int>(c & 255), g = static_cast<int>((c >> 8) & 255), b = static_cast<int>((c >> 16) & 255);
+            count += std::abs(r - 120) < 24 && std::abs(g - 200) < 24 && b > 225;
+        }
+        return count;
+    };
+    const size_t withBones = boneBlue();
+    ed.SetSceneBones(false);
+    frames(2);
+    const size_t withoutBones = boneBlue();
+    CHECK(withBones > withoutBones + 20);
+    ed.SetSceneBones(true);
+    frames(2);
+    CHECK(boneBlue() == withBones);
+
+    // The paperclip button: a new child held on the bone, selected, one undo step.
+    ed.AttachToBone(rig, "Tip", kNullEntity);
+    frames(2);
+    const EntityId held = ed.Selected();
+    CHECK(held != rig && s.Record(held)->parent == rig && s.Record(held)->name == "Tip");
+    CHECK(s.Get<BoneAttachment>(held)->bone == "Tip" && Near(s.Get<Transform>(held)->position, Vec3(0, 1, 0), 1e-4f));
+    CHECK(Call(e, "history.undo")["ok"].asBool());
+    frames(2);
+    CHECK(!s.Exists(held));
+    // Dropping a Hierarchy entity on a bone row: reparented and held there; again moves it to another bone.
+    ed.AttachToBone(rig, "Tip", sword);
+    frames(2);
+    CHECK(ed.Selected() == sword && s.Record(sword)->parent == rig && s.Get<BoneAttachment>(sword)->bone == "Tip");
+    CHECK(Near(s.Get<Transform>(sword)->position, Vec3(0, 1, 0), 1e-4f));
+    ed.AttachToBone(rig, "Root", sword);
+    CHECK(s.Get<BoneAttachment>(sword)->bone == "Root" && Near(s.Get<Transform>(sword)->position, Vec3(0, 0, 0), 1e-4f));
+    // The pin button: a goal standing on the bone (nothing moves yet), chain as long as the bone has parents (up to 2).
+    ed.AddIkGoal(rig, "Tip");
+    frames(2);
+    const EntityId goal = ed.Selected();
+    CHECK(s.Record(goal)->parent == rig && s.Record(goal)->name == "Tip Goal" && s.Get<BoneIK>(goal)->bone == "Tip");
+    CHECK(s.Get<BoneIK>(goal)->chain == 2 && Near(s.Get<Transform>(goal)->position, Vec3(0, 1, 0), 1e-4f));
+    Json solved = Call(e, "animation.bones", R"J({"id":"Rig","bone":"Tip"})J")["result"];
+    CHECK(solved["goals"].size() == 1 && solved["goals"][0]["distance"].asFloat() < 1e-4f);
+    // A goal's name fields are drawn (the picker sits beside them) and an unknown bone does not break a frame.
+    CHECK(ed.InspectorControlRect("BoneIK.bone")[2] > 0);
+    Call(e, "component.set", R"J({"id":"Tip Goal","type":"BoneIK","values":{"bone":"Nose"}})J");
+    frames(2);
+    CHECK(ed.InspectorControlRect("BoneIK.bone")[2] > 0);
+    // A bone without a parent cannot be a goal.
+    const size_t before = s.Entities().size();
+    ed.AddIkGoal(rig, "Nose");
+    CHECK(s.Entities().size() == before);
+    // "Add Spring" in a bone's menu: a child whose SpringBone names the bone; a bone with nothing below it gets none.
+    ed.AddSpringBone(rig, "Root");
+    frames(2);
+    const EntityId spring = ed.Selected();
+    CHECK(s.Record(spring)->parent == rig && s.Record(spring)->name == "Root Spring" && s.Get<SpringBone>(spring)->bone == "Root");
+    CHECK(ed.InspectorControlRect("SpringBone.bone")[2] > 0);
+    ed.AddSpringBone(rig, "Tip");
+    CHECK(s.Entities().size() == before + 1);
 }
 
 TEST(NativeEditorHeadless) {

@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "core/Log.h"
 #include "scene/Components.h"
+#include "scene/Pose.h"
 #include "scene/Vfx.h"
 
 namespace oe {
@@ -334,7 +335,7 @@ const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name
     return nullptr;
 }
 
-std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time) {
+std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time) {
     std::vector<ModelNode> nodes = mesh.nodes;
     if (clip && std::isfinite(time)) {
         for (const AnimationChannel& channel : clip->channels) {
@@ -365,10 +366,18 @@ std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* c
             evaluated[current] = true;
         }
     }
+    return world;
+}
+
+std::vector<Mat4> JointPalette(const Mesh& mesh, const std::vector<Mat4>& nodes) {
     std::vector<Mat4> palette;
     palette.reserve(mesh.joints.size());
-    for (const ModelJoint& joint : mesh.joints) palette.push_back(world[static_cast<size_t>(joint.node)] * joint.inverseBind);
+    for (const ModelJoint& joint : mesh.joints) palette.push_back(nodes[static_cast<size_t>(joint.node)] * joint.inverseBind);
     return palette;
+}
+
+std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time) {
+    return JointPalette(mesh, EvaluateNodePose(mesh, clip, time));
 }
 
 bool ParticleSettingsValid(const ParticleEmitter& emitter) {
@@ -652,7 +661,11 @@ void StepAnchoredTrail(Trail& trail, const Vec3& base, const Vec3& tip, float dt
     trail.emitting = authored;
 }
 
-void UpdateLateSystems(Scene& scene, float dt) {
+void UpdateLateSystems(Scene& scene, float dt, AssetManager* assets) {
+    // First: springs swing behind where physics left the model, and cameras and trails below may
+    // follow an entity held by a bone.
+    if (assets) UpdateSpringBones(scene, *assets, dt);
+    if (assets) UpdateBoneAttachments(scene, *assets);
     for (auto& kv : scene.Pool<CameraFollow>()) {
         const CameraFollow& f = kv.second;
         Transform* t = scene.Get<Transform>(kv.first);

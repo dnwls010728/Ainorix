@@ -14,12 +14,13 @@ namespace oe {
 
 class Scene;
 struct RaycastHit;
+struct JointInfo;
 
 // Pair of entities; for collisions ordered (a < b), for triggers (trigger, other).
 using EntityPair = std::pair<EntityId, EntityId>;
 
-// Mirrors Collider2D / RigidBody2D / CharacterBody2D (and the collision of
-// Tilemaps) into a Box2D world in the XY plane and writes the results back.
+// Mirrors Collider2D / RigidBody2D / CharacterBody2D / Joint2D (and the collision
+// of Tilemaps) into a Box2D world in the XY plane and writes the results back.
 // The only code that knows Box2D. Owned by PhysicsWorld, which merges its
 // events and queries with the 3D (Jolt) world. Bodies are created and updated
 // in entity-id order, so simulations are deterministic.
@@ -51,6 +52,8 @@ public:
     std::vector<EntityId> OverlapCircle(const Vec3& center, float radius) const;
     void AddImpulse(EntityId id, const Vec3& impulse);
     bool Has(EntityId id) const;
+    // Adds every Joint2D as the world holds it, in entity id order.
+    void AppendJoints(std::vector<JointInfo>& out) const;
 
     void AppendStats(Json& stats) const;
 

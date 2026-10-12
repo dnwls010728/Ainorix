@@ -6,6 +6,9 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Transform>();
     TypeRegistry::Register<MeshRenderer>();
     TypeRegistry::Register<Animator>();
+    TypeRegistry::Register<BoneAttachment>();
+    TypeRegistry::Register<BoneIK>();
+    TypeRegistry::Register<SpringBone>();
     TypeRegistry::Register<Camera>();
     TypeRegistry::Register<PostProcess>();
     TypeRegistry::Register<Light2D>();
@@ -19,6 +22,8 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Collider2D>();
     TypeRegistry::Register<RigidBody2D>();
     TypeRegistry::Register<CharacterBody2D>();
+    TypeRegistry::Register<Joint>();
+    TypeRegistry::Register<Joint2D>();
     TypeRegistry::Register<Prefab>();
     TypeRegistry::Register<UIText>();
     TypeRegistry::Register<UIPanel>();

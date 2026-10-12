@@ -15,6 +15,11 @@ struct AnimationClip;
 
 // Exact named clip lookup; nullptr means the model's default pose.
 const AnimationClip* FindAnimationClip(const Mesh& mesh, const std::string& name);
+// Model-space matrix of every node of an immutable model with the clip sampled at `time`
+// (clamped to each channel's keys); nullptr gives the default pose. One entry per Mesh::nodes.
+std::vector<Mat4> EvaluateNodePose(const Mesh& mesh, const AnimationClip* clip, float time);
+// Joint palette (node matrix * inverse bind) for node matrices from EvaluateNodePose or scene/Pose.h.
+std::vector<Mat4> JointPalette(const Mesh& mesh, const std::vector<Mat4>& nodes);
 // Evaluates an immutable model's joint palette in model space, clamping channel times.
 std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time);
 struct Particle;
@@ -119,7 +124,7 @@ struct InputState {
 
 // Advances all behavior components by dt seconds (before physics).
 void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr);
-// Runs after physics: CameraFollow, Trail paths (so they follow physics bodies too).
-void UpdateLateSystems(Scene& scene, float dt);
+// Runs after physics: SpringBone and BoneAttachment (need `assets`), CameraFollow, Trail paths (so they follow physics bodies too).
+void UpdateLateSystems(Scene& scene, float dt, AssetManager* assets = nullptr);
 
 }  // namespace oe
