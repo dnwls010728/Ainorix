@@ -1553,6 +1553,14 @@ struct GpuRenderer::Impl {
                 Put(lu.point_pos[i], l.pos.x, l.pos.y, l.pos.z, l.range);
                 Put(lu.point_color[i], l.color.r, l.color.g, l.color.b, 0);
             }
+            RenderEnvironment env = lights.env;  // analytic sky environment (image-based lighting); see sky_color in Shaders.glsl
+            if (view.editorFill > 0.0f && env.present) {  // editor fill lifts a sky environment's floor (matches the software renderer)
+                auto lift = [&](Color& c) { c = Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)); };
+                lift(env.sky); lift(env.horizon); lift(env.ground);
+            }
+            Put(lu.env_sky, env.sky.r, env.sky.g, env.sky.b, env.present ? 1.0f : 0.0f);
+            Put(lu.env_horizon, env.horizon.r, env.horizon.g, env.horizon.b, env.reflections);
+            Put(lu.env_ground, env.ground.r, env.ground.g, env.ground.b, 0);
             // Draw list order: opaque, then transparent back to front. Switching
             // pipelines drops uniforms, so the lights are re-applied each time.
             sg_pipeline current{};

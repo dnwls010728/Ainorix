@@ -94,6 +94,7 @@ struct Lighting {
     Color ambient{0, 0, 0};
     Color groundAmbient{0, 0, 0};
     bool hemisphere = false;
+    RenderEnvironment env;  // analytic sky environment (image-based lighting), if any
     PostProcess fog;  // fog settings (normalized); fog == 0 disables it
     std::vector<RenderDirLight> dirs;
     std::vector<RenderPointLight> points;
@@ -122,12 +123,24 @@ struct Lighting {
         float fe = std::pow(1.0f - ndv, 5.0f);
         Color fr(std::max(1.0f - r, f0.r), std::max(1.0f - r, f0.g), std::max(1.0f - r, f0.b));
         Color fenv = f0 + (fr + f0 * -1.0f) * fe;
-        Color amb = ambient;
-        if (hemisphere) {  // mesh_fs: mix(ground, sky, n.y * 0.5 + 0.5)
+        Color c;
+        if (env.present) {
+            // Image-based lighting from the analytic sky: diffuse ambient from the sky above and
+            // ground below, specular from the sky along the reflection vector (blurred toward the
+            // sky/ground average as the surface roughens). Mirrors the env branch of mesh_fs.
             const float up = n.y * 0.5f + 0.5f;
-            amb = groundAmbient * (1.0f - up) + ambient * up;
+            const Color ambDiffuse = SampleSky(env, Vec3(0, -1, 0)) * (1.0f - up) + SampleSky(env, Vec3(0, 1, 0)) * up;
+            const Color dull = (SampleSky(env, Vec3(0, 1, 0)) + SampleSky(env, Vec3(0, -1, 0))) * 0.5f;
+            const Color envSpec = SampleSky(env, refl) * (1.0f - r) + dull * r;
+            c = (ambDiffuse * diffuse + fenv * envSpec * env.reflections) * ao;
+        } else {
+            Color amb = ambient;
+            if (hemisphere) {  // mesh_fs: mix(ground, sky, n.y * 0.5 + 0.5)
+                const float up = n.y * 0.5f + 0.5f;
+                amb = groundAmbient * (1.0f - up) + ambient * up;
+            }
+            c = amb * (diffuse + fenv * (sky * (1.0f - 0.75f * r))) * ao;
         }
-        Color c = amb * (diffuse + fenv * (sky * (1.0f - 0.75f * r))) * ao;
         auto add = [&](const Vec3& l, const Color& radiance) {
             float ndl = Dot(n, l);
             if (ndl <= 0.0f) return;
@@ -497,6 +510,14 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     auto start = std::chrono::steady_clock::now();
     RenderStats stats;
     const PostProcess post = NormalizePostProcess(view.postProcess);
+    RenderLights gathered = GatherRenderLights(scene);
+    auto fillFloor = [&](Color c) {
+        return view.editorFill > 0.0f
+            ? Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)) : c;
+    };
+    RenderEnvironment env = gathered.env;  // analytic sky (image-based lighting + background)
+    if (env.present) { env.sky = fillFloor(env.sky); env.horizon = fillFloor(env.horizon); env.ground = fillFloor(env.ground); }
+
     std::vector<Color> hdr;
     if (UsesHdr(post)) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
     std::fill(target.color.begin(), target.color.end(), Pack(view.clearColor));
@@ -504,17 +525,11 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
     std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view);
-    RenderLights gathered = GatherRenderLights(scene);
     Lighting lighting;
-    lighting.ambient = gathered.ambient;
-    lighting.groundAmbient = gathered.groundAmbient;
-    if (view.editorFill > 0.0f) {  // editor fill: lift the ambient floor so a script-lit scene is visible to edit
-        lighting.ambient = Color(std::max(lighting.ambient.r, view.editorFill), std::max(lighting.ambient.g, view.editorFill),
-                                 std::max(lighting.ambient.b, view.editorFill));
-        lighting.groundAmbient = Color(std::max(lighting.groundAmbient.r, view.editorFill), std::max(lighting.groundAmbient.g, view.editorFill),
-                                       std::max(lighting.groundAmbient.b, view.editorFill));
-    }
+    lighting.ambient = fillFloor(gathered.ambient);
+    lighting.groundAmbient = fillFloor(gathered.groundAmbient);
     lighting.hemisphere = gathered.hemisphere;
+    lighting.env = env;
     lighting.fog = post;
     lighting.dirs = gathered.dirs;
     lighting.points = gathered.points;

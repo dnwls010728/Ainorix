@@ -847,6 +847,12 @@ RenderLights GatherRenderLights(const Scene& scene) {
     for (const auto& kv : scene.Pool<PointLight>()) {
         lights.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity, std::max(0.01f, kv.second.range)});
     }
+    for (const auto& kv : scene.Pool<Skybox>()) {  // first one wins
+        const Skybox& s = kv.second;
+        const float i = std::max(0.0f, s.intensity);
+        lights.env = {true, s.sky * i, s.horizon * i, s.ground * i, Clamp(s.reflections, 0.0f, 1.0f)};
+        break;
+    }
     return lights;
 }
 

@@ -2455,6 +2455,18 @@ Light bulb at the entity position, fading to zero at `range`.
 | `intensity` | float | `1.5` | Brightness at the center. |
 | `range` | float | `6` | Distance in meters where the light reaches zero. |
 
+### Skybox
+
+Analytic sky environment: surfaces reflect the sky/horizon/ground colors (image-based lighting). One per scene.
+
+| field | type | default | description |
+|---|---|---|---|
+| `sky` | color | `[0.300000012,0.469999999,0.800000012]` | Color straight up (zenith). |
+| `horizon` | color | `[0.699999988,0.779999971,0.899999976]` | Color at the horizon. |
+| `ground` | color | `[0.280000001,0.270000011,0.300000012]` | Color below the horizon (light bounced from the ground). |
+| `intensity` | float | `1` | Multiplies the whole environment. |
+| `reflections` | float | `1` | 0 = ambient light only, 1 = full sky reflection on smooth metal/wet surfaces. |
+
 ### CameraFollow
 
 Moves this entity (usually the camera) to target + offset after physics each frame and aims it at the target.

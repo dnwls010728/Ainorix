@@ -720,6 +720,29 @@ struct DirectionalLight {
     }
 };
 
+// An analytic environment: a gradient sky (and later a background) that lights the scene. When a
+// scene has one, metallic and smooth surfaces reflect the sky colors (image-based lighting) instead
+// of the flat hemisphere tint, and the ambient comes from the sky above and the ground below. One
+// per scene (the first is used). Absent = the previous flat/hemisphere ambient, unchanged.
+struct Skybox {
+    static constexpr const char* kTypeName = "Skybox";
+    static constexpr const char* kDoc = "Analytic sky environment: surfaces reflect the sky/horizon/ground colors (image-based lighting). One per scene.";
+    Color sky{0.30f, 0.47f, 0.80f};      // zenith (straight up)
+    Color horizon{0.70f, 0.78f, 0.90f};  // at the horizon
+    Color ground{0.28f, 0.27f, 0.30f};   // below the horizon (bounced ground light)
+    float intensity = 1.0f;              // multiplies the whole environment
+    float reflections = 1.0f;            // 0 = light only, 1 = full environment reflection on smooth surfaces
+    static void Reflect(FieldList& f) {
+        f.Add("sky", &Skybox::sky, "Color straight up (zenith).");
+        f.Add("horizon", &Skybox::horizon, "Color at the horizon.");
+        f.Add("ground", &Skybox::ground, "Color below the horizon (light bounced from the ground).");
+        FieldInfo& in = f.Add("intensity", &Skybox::intensity, "Multiplies the whole environment.");
+        in.hasRange = true; in.min = 0.0f; in.max = 8.0f;
+        FieldInfo& rf = f.Add("reflections", &Skybox::reflections, "0 = ambient light only, 1 = full sky reflection on smooth metal/wet surfaces.");
+        rf.hasRange = true; rf.min = 0.0f; rf.max = 1.0f;
+    }
+};
+
 struct PointLight {
     static constexpr const char* kTypeName = "PointLight";
     static constexpr const char* kDoc = "Light bulb at the entity position, fading to zero at `range`.";

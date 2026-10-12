@@ -40,6 +40,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<UICanvas>();
     TypeRegistry::Register<AudioSource>();
     TypeRegistry::Register<PointLight>();
+    TypeRegistry::Register<Skybox>();
     TypeRegistry::Register<CameraFollow>();
     TypeRegistry::Register<Sprite>();
     TypeRegistry::Register<SpriteAnimation>();

@@ -254,7 +254,21 @@ layout(binding=2) uniform mesh_lights {
     vec4 dir_color[4];
     vec4 point_pos[16];  // xyz: position, w: range
     vec4 point_color[16];
+    vec4 env_sky;        // rgb: sky (zenith) color with intensity, w: 1 = sky environment present
+    vec4 env_horizon;    // rgb: horizon color, w: environment reflection strength
+    vec4 env_ground;     // rgb: ground (below horizon) color
 };
+
+// Analytic sky color along a world direction. Mirrors SampleSky in RenderScene.h; keep identical.
+vec3 sky_color(vec3 d) {
+    float y = clamp(d.y, -1.0, 1.0);
+    if (y >= 0.0) {
+        float t = pow(y, 0.45);
+        return mix(env_horizon.rgb, env_sky.rgb, t);
+    }
+    float t = pow(-y, 0.5);
+    return mix(env_horizon.rgb, env_ground.rgb, t);
+}
 
 layout(binding=0) uniform texture2D base_tex;
 layout(binding=0) uniform sampler base_smp;
@@ -393,12 +407,23 @@ void main() {
         float sky = 0.6 + 1.6 * (refl.y * 0.5 + 0.5);
         float fe = pow(1.0 - ndv, 5.0);
         vec3 fenv = f0 + (max(vec3(1.0 - r), f0) - f0) * fe;
-        vec3 amb = ambient.rgb;
-        if (ambient_ground.w > 0.5) {
+        if (env_sky.w > 0.5) {
+            // Image-based lighting from the analytic sky: diffuse ambient from the sky above and
+            // ground below, specular from the sky along the reflection vector (blurred toward the
+            // sky/ground average as the surface roughens). Mirrors the env branch of Shade().
             float up = n.y * 0.5 + 0.5;
-            amb = ambient_ground.rgb * (1.0 - up) + ambient.rgb * up;
+            vec3 ambDiffuse = mix(sky_color(vec3(0.0, -1.0, 0.0)), sky_color(vec3(0.0, 1.0, 0.0)), up);
+            vec3 dull = (sky_color(vec3(0.0, 1.0, 0.0)) + sky_color(vec3(0.0, -1.0, 0.0))) * 0.5;
+            vec3 envSpec = mix(sky_color(refl), dull, r);
+            color = (ambDiffuse * diffuse + fenv * envSpec * env_horizon.w) * ao;
+        } else {
+            vec3 amb = ambient.rgb;
+            if (ambient_ground.w > 0.5) {
+                float up = n.y * 0.5 + 0.5;
+                amb = ambient_ground.rgb * (1.0 - up) + ambient.rgb * up;
+            }
+            color = amb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
         }
-        color = amb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
         int dirs = int(counts.x);
         // The shadow lookup stays outside the light loop: a compare sample inside a loop with a
         // varying count makes the D3D compiler unroll it (X3570) and slows every compile.

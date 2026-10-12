@@ -109,10 +109,33 @@ struct RenderPointLight {
     float range;
 };
 
+// A scene's analytic sky environment (the Skybox component), sampled by both renderers for
+// image-based lighting and the background. Colors already include the component's intensity.
+struct RenderEnvironment {
+    bool present = false;
+    Color sky{0, 0, 0};      // zenith
+    Color horizon{0, 0, 0};
+    Color ground{0, 0, 0};
+    float reflections = 1.0f;  // strength of the environment reflection on smooth surfaces
+};
+
+// The sky color along a world direction: ground below the horizon, sky above, the horizon between.
+// The same gradient runs in the GPU shader (sky_color in Shaders.glsl); keep the two identical.
+inline Color SampleSky(const RenderEnvironment& e, const Vec3& dir) {
+    const float y = Clamp(dir.y, -1.0f, 1.0f);
+    if (y >= 0.0f) {
+        const float t = std::pow(y, 0.45f);
+        return e.horizon * (1.0f - t) + e.sky * t;
+    }
+    const float t = std::pow(-y, 0.5f);
+    return e.horizon * (1.0f - t) + e.ground * t;
+}
+
 struct RenderLights {
     Color ambient{0, 0, 0};
     Color groundAmbient{0, 0, 0};  // hemisphere: ambient seen by downward faces (sum over lights)
     bool hemisphere = false;       // a directional light asked for hemisphere ambient
+    RenderEnvironment env;         // the Skybox component, if any
     std::vector<RenderDirLight> dirs;  // never empty: a default light is added when the scene has none
     std::vector<RenderPointLight> points;
     bool shadows = false;  // the first directional light casts shadows

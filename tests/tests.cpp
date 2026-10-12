@@ -4915,6 +4915,32 @@ RenderTarget RenderLook(Engine& e, Vec3 eye, Vec3 target, int w = 160, int h = 9
     return rt;
 }
 
+TEST(SkyboxEnvironmentLighting) {
+    Engine e;
+    Scene& s = e.GetScene();
+    EntityId sky = s.Create("Sky");
+    Skybox& sb = s.Add<Skybox>(sky);
+    sb.sky = Color(1.0f, 0.1f, 0.1f);     // red straight up
+    sb.horizon = Color(0.3f, 0.3f, 0.3f);
+    sb.ground = Color(0.1f, 0.1f, 1.0f);  // blue below the horizon
+    EntityId sun = s.Create("Sun");
+    s.Add<DirectionalLight>(sun).intensity = 0.0f;  // no direct light: isolate the sky's own lighting
+    EntityId ball = s.Create("Ball");
+    s.Add<Transform>(ball);
+    MeshRenderer& mr = s.Add<MeshRenderer>(ball);
+    mr.mesh = "sphere";
+    mr.color = Color(1, 1, 1);
+    RenderTarget rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    auto px = [&](int x, int y) {
+        uint32_t c = rt.color[static_cast<size_t>(y) * 80 + x];
+        return Color((c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f);
+    };
+    const Color top = px(40, 30);  // upper sphere: normals point up, lit by the red sky
+    const Color bot = px(40, 50);  // lower sphere: normals point down, lit by the blue ground
+    CHECK(top.r > top.b + 0.1f);
+    CHECK(bot.b > bot.r + 0.1f);
+}
+
 TEST(TexturesAndGltfModels) {
     Engine e;
     std::string err;
