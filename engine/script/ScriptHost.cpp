@@ -1053,6 +1053,14 @@ int L_NavRaycast(lua_State* L) {
     });
 }
 
+// game.bakeProbes() -> how many reflection probes had their picture taken again (probe.bake).
+int L_GameBakeProbes(lua_State* L) {
+    return Guard(L, [&] {
+        lua_pushinteger(L, static_cast<lua_Integer>(Host(L).GetEngine().ProbeState(true)["probes"].size()));
+        return 1;
+    });
+}
+
 int L_NavBake(lua_State* L) {
     return Guard(L, [&] {
         lua_pushboolean(L, Host(L).GetEngine().Nav(true).Baked());
@@ -1785,7 +1793,7 @@ void ScriptHost::Open() {
     SetFuncs(L, "draw", drawFuncs);
     const luaL_Reg audioFuncs[] = {{"play", L_AudioPlay}, {"stop", L_AudioStop}, {"stopAll", L_AudioStopAll}, {nullptr, nullptr}};
     SetFuncs(L, "audio", audioFuncs);
-    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {"quit", L_GameQuit}, {"arg", L_GameArg}, {"preload", L_GamePreload}, {nullptr, nullptr}};
+    const luaL_Reg gameFuncs[] = {{"get", L_GameGet}, {"set", L_GameSet}, {"loadScene", L_GameLoadScene}, {"scene", L_GameScene}, {"pause", L_GamePause}, {"paused", L_GamePaused}, {"quit", L_GameQuit}, {"arg", L_GameArg}, {"preload", L_GamePreload}, {"bakeProbes", L_GameBakeProbes}, {nullptr, nullptr}};
     SetFuncs(L, "game", gameFuncs);
     const luaL_Reg uiFuncs[] = {{"focus", L_UIFocus}, {"focused", L_UIFocused}, {"screenToCanvas", L_ScreenToCanvas}, {"measureText", L_MeasureText}, {nullptr, nullptr}};
     SetFuncs(L, "ui", uiFuncs);

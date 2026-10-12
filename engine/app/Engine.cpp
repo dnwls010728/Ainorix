@@ -20,6 +20,7 @@
 #include "platform/Platform.h"
 #include "render/GpuDevice.h"
 #include "render/GpuRenderer.h"
+#include "render/RenderScene.h"
 #include "render/UI.h"
 #include "scene/Components.h"
 #include "script/ScriptHost.h"
@@ -40,6 +41,7 @@ std::string Lower(std::string s) {
 }  // namespace
 
 Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std::make_unique<SoftwareRenderer>(assets_.get())) {
+    assets_->SetProbeScene(&scene_);
     scripts_ = std::make_unique<ScriptHost>(*this);
     physics_ = std::make_unique<PhysicsWorld>();
     physics_->SetTilesets(assets_->Tilesets());
@@ -246,6 +248,52 @@ EntityId Engine::InstantiatePrefabFile(const std::string& path, EntityId parent)
 
 // ----- Simulation ----------------------------------------------------------
 
+// Stopped, every edit may have changed what reflection probes see; playing, their pictures stay as
+// taken at the start (scripts move things every frame) until probe.bake or a scene change.
+void Engine::Touch() {
+    ++revision_;
+    if (!InPlaySession()) assets_->InvalidateProbes(true);
+}
+
+Json Engine::ProbeState(bool bake) {
+    if (bake) assets_->InvalidateProbes();
+    const RenderLights lights = GatherRenderLights(scene_, assets_.get());
+    Json probes = Json::MakeArray();
+    for (const RenderProbe& p : lights.probes) {
+        std::shared_ptr<const EnvironmentMap> map;
+        if (bake) {
+            map = CaptureProbe(scene_, assets_.get(), p);
+        } else {
+            const auto found = assets_->ProbePictures().find(p.id);
+            if (found != assets_->ProbePictures().end()) map = found->second;
+        }
+        auto vec = [](const Vec3& v) {
+            Json a = Json::MakeArray();
+            a.push(v.x); a.push(v.y); a.push(v.z);
+            return a;
+        };
+        Json row = Json::MakeObject();
+        row["id"] = static_cast<uint64_t>(p.id);
+        const EntityRecord* record = scene_.Record(p.id);
+        row["name"] = record ? record->name : std::string();
+        row["position"] = vec(p.pos);
+        row["min"] = vec(p.lo);
+        row["max"] = vec(p.hi);
+        row["resolution"] = p.resolution;
+        row["captured"] = map != nullptr && !map->levels.empty();
+        if (map && !map->levels.empty()) {
+            row["width"] = map->levels[0].width;
+            row["height"] = map->levels[0].height;
+            row["levels"] = static_cast<uint64_t>(map->levels.size());
+        }
+        probes.push(std::move(row));
+    }
+    Json out = Json::MakeObject();
+    out["probes"] = std::move(probes);
+    out["max"] = kMaxProbes;
+    return out;
+}
+
 void Engine::BeginSessionIfNeeded() {
     if (playSnapshot_) return;
     playSnapshot_ = std::make_unique<Json>(scene_.ToJson());
@@ -277,6 +325,7 @@ void Engine::ResetRuntime() {
     scripts_->Reset();
     physics_->Reset();
     navTried_ = false;
+    assets_->InvalidateProbes();
     audio_->Reset();
     pendingScene_.clear();
     audio_->SetOutputMode(false, false); saves_.DeferFlush(false); saves_.FreezeReads(false);
@@ -296,6 +345,7 @@ void Engine::ApplySceneChange() {
     }
     physics_->Reset();
     navTried_ = false;
+    assets_->InvalidateProbes();
     scripts_->ResetInstances();
     audio_->OnSceneChanged();
     runtimeScene_ = path;

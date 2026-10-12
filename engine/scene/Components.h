@@ -755,6 +755,34 @@ struct Skybox {
     }
 };
 
+struct ReflectionProbe {
+    static constexpr const char* kTypeName = "ReflectionProbe";
+    static constexpr const char* kDoc = "Local reflection: a picture of the surroundings taken from the entity's position. Surfaces inside its box reflect (and are ambient-lit by) that picture instead of the sky, so a room reflects its own walls. Shows the scenery, not moving bodies; taken when the scene loads, play starts, the stopped scene is edited, or on probe.bake.";
+    Vec3 size{10.0f, 5.0f, 10.0f};  // the box (world axes) the probe covers
+    Vec3 offset{0, 0, 0};           // box center relative to the entity (the picture is taken at the entity)
+    float blend = 0.5f;             // fade distance outside the box, meters
+    float intensity = 1.0f;
+    bool boxProjection = true;      // reflections follow the box walls (rooms); off = infinitely far surroundings
+    bool ambient = true;            // the picture also replaces the sky's diffuse light inside the box
+    int resolution = 128;           // pixels along one of the six faces of the picture
+    float nearPlane = 0.1f;
+    float farPlane = 200.0f;
+    static void Reflect(FieldList& f) {
+        f.Add("size", &ReflectionProbe::size, "Size of the box the probe covers, meters along the world axes (the entity's rotation and scale are ignored). Make it the size of the room: with boxProjection its walls are where the reflections sit.");
+        f.Add("offset", &ReflectionProbe::offset, "Box center relative to the entity. The picture is taken at the entity's position (keep that clear of walls and furniture).");
+        FieldInfo& bl = f.Add("blend", &ReflectionProbe::blend, "Distance outside the box over which the probe fades into the sky or a larger probe, meters.");
+        bl.hasRange = true; bl.min = 0.0f; bl.max = 10.0f;
+        FieldInfo& in = f.Add("intensity", &ReflectionProbe::intensity, "Multiplies the picture.");
+        in.hasRange = true; in.min = 0.0f; in.max = 8.0f;
+        f.Add("boxProjection", &ReflectionProbe::boxProjection, "Reflections are placed on the box walls, so they line up in a room. Off = the surroundings are treated as infinitely far (outdoors).");
+        f.Add("ambient", &ReflectionProbe::ambient, "The picture also replaces the sky's diffuse ambient light inside the box (an interior is lit by its own walls, not the sky).");
+        FieldInfo& re = f.Add("resolution", &ReflectionProbe::resolution, "Pixels along one face of the picture (16..256). Larger = sharper mirror reflections, slower to take.");
+        re.hasRange = true; re.min = 16.0f; re.max = 256.0f;
+        f.Add("nearPlane", &ReflectionProbe::nearPlane, "Nearest distance the picture shows, meters.");
+        f.Add("farPlane", &ReflectionProbe::farPlane, "Farthest distance the picture shows, meters.");
+    }
+};
+
 struct PointLight {
     static constexpr const char* kTypeName = "PointLight";
     static constexpr const char* kDoc = "Light bulb at the entity position, fading to zero at `range`.";

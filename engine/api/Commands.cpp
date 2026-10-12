@@ -20,6 +20,7 @@
 #include "render/GpuRenderer.h"
 #include "render/Material.h"
 #include "render/Mesh.h"
+#include "render/RenderScene.h"
 #include "render/ShaderGraph.h"
 #include "render/Font.h"
 #include "render/UI.h"
@@ -2499,6 +2500,41 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params(), false, [](Engine& e, const Json&) {
                  RequireNav(e, true);
                  return e.NavInfo();
+             });
+
+    Register(r, "probe.bake", "Take the picture of every ReflectionProbe again now and report them (as probe.state). Pictures are taken by "
+                              "themselves when a scene loads, play starts and after edits while stopped; call this during play after the "
+                              "scenery or its lighting changed (a door opened, the lights went out). Lua: game.bakeProbes().",
+             Params(), false, [](Engine& e, const Json&) { return e.ProbeState(true); });
+
+    Register(r, "probe.state", "The scene's reflection probes: {probes: [{id, name, position, min, max, resolution, captured, width, height, levels}], max}. "
+                               "captured = its picture exists (it is taken when a frame first uses the probe); max = probes one frame uses "
+                               "(the nearest to the camera). With id and out, writes that probe's picture (equirectangular, taken now if needed) as a PNG to look at.",
+             Params().OptWith("id", EntityRefSchema("Probe whose picture to write (needs out).")).Opt("out", "string", "PNG path inside the project, e.g. \"build/probe.png\"."),
+             false, [](Engine& e, const Json& a) {
+                 Json out = e.ProbeState(false);
+                 if (!a.has("out")) return out;
+                 const EntityId id = RequireEntity(e, a);
+                 const RenderLights lights = GatherRenderLights(e.GetScene(), &e.Assets());
+                 for (const RenderProbe& p : lights.probes) {
+                     if (p.id != id) continue;
+                     const std::shared_ptr<const EnvironmentMap> map = CaptureProbe(e.GetScene(), &e.Assets(), p);
+                     if (!map || map->levels.empty()) throw ApiError("capture_failed", "the probe's picture could not be taken");
+                     const EnvironmentMap::Level& level = map->levels[0];
+                     Image img;
+                     img.width = level.width;
+                     img.height = level.height;
+                     img.rgba.resize(static_cast<size_t>(level.width) * static_cast<size_t>(level.height) * 4, 255);
+                     for (size_t i = 0; i < static_cast<size_t>(level.width) * static_cast<size_t>(level.height); ++i)
+                         for (size_t c = 0; c < 3; ++c) img.rgba[i * 4 + c] = static_cast<uint8_t>(Clamp(level.rgb[i * 3 + c], 0.0f, 1.0f) * 255.0f + 0.5f);
+                     const std::string full = e.ResolvePath(a["out"].asString());
+                     CreateDirectories(ParentPath(full));
+                     if (!WritePng(full, img)) throw ApiError("write_failed", "cannot write " + full);
+                     out = e.ProbeState(false);
+                     out["path"] = full;
+                     return out;
+                 }
+                 throw ApiError("not_a_probe", "that entity has no ReflectionProbe", "probe.state without arguments lists the probes.");
              });
 
     Register(r, "nav.state", "The navigation mesh as baked: {baked, polygons, area, bounds, colliders, meshes, triangles, warnings, settings}.",

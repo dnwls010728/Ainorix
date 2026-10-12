@@ -5171,6 +5171,161 @@ TEST(SkyboxTextureEnvironment) {
     }
 }
 
+TEST(ReflectionProbeLocalReflections) {
+    Engine e;
+    std::string err;
+    const std::string project = TempProject("probe");
+    CHECK(e.Open(project, &err));
+    Call(e, "scene.new", R"J({"empty": true})J");
+    // A blue sky, a red wall on the left, a green one on the right and a chrome ball between them.
+    CHECK(Call(e, "entity.create", R"J({"name":"Sky","components":{"Skybox":{"sky":[0,0,1],"horizon":[0,0,1],"ground":[0,0,1]}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Sun","components":{"Transform":{},"DirectionalLight":{"intensity":0}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Red","components":{"Transform":{"position":[-3,0,0],"scale":[0.2,4,6]},"MeshRenderer":{"mesh":"cube","color":[1,0,0],"unlit":true}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Green","components":{"Transform":{"position":[3,0,0],"scale":[0.2,4,6]},"MeshRenderer":{"mesh":"cube","color":[0,1,0],"unlit":true}}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"materials/chrome.mat.json","values":{"baseColor":[1,1,1],"metallic":1,"roughness":0.04}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Ball","components":{"Transform":{},"MeshRenderer":{"mesh":"sphere","material":"materials/chrome.mat.json"}}})J")["ok"].asBool());
+    // Something that moves in play: never in a probe's picture (nor its children).
+    CHECK(Call(e, "entity.create", R"J({"name":"Crate","components":{"Transform":{"position":[0,1.5,1.5],"scale":[2,0.5,2]},"MeshRenderer":{"mesh":"cube","color":[1,0,1],"unlit":true},"Collider":{},"RigidBody":{"gravityScale":0}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Lid","parent":"Crate","components":{"Transform":{},"MeshRenderer":{"mesh":"cube","color":[1,0,1],"unlit":true}}})J")["ok"].asBool());
+    CHECK(!ProbeShows(e.GetScene(), e.GetScene().FindByName("Crate")) && !ProbeShows(e.GetScene(), e.GetScene().FindByName("Lid")));
+    CHECK(ProbeShows(e.GetScene(), e.GetScene().FindByName("Red")));
+
+    RenderTarget rt;
+    auto px = [&](int x, int y) {
+        uint32_t c = rt.color[static_cast<size_t>(y) * 80 + x];
+        return Color((c & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, ((c >> 16) & 0xFF) / 255.0f);
+    };
+    // Without a probe the ball reflects the sky on both sides.
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(px(28, 40).b > 0.5f && px(28, 40).r < 0.2f && px(52, 40).b > 0.5f && px(52, 40).g < 0.2f);
+    const uint64_t skyOnly = rt.Hash();
+
+    // The probe: its picture is taken in front of the ball, its box is the room.
+    CHECK(Call(e, "entity.create", R"J({"name":"Probe","components":{"Transform":{"position":[0,0,1.5]},"ReflectionProbe":{"size":[6,4,6],"offset":[0,0,-1.5],"blend":1,"resolution":32}}})J")["ok"].asBool());
+    CHECK(!Call(e, "probe.state")["result"]["probes"][size_t(0)]["captured"].asBool());  // taken when a frame first needs it
+    const RenderView look = MakeLookAtView(Vec3(0, 0, 3), Vec3(0, 0, 0), 50.0f, 1.0f);
+    auto active = [&] { return ActiveProbes(e.GetScene(), &e.Assets(), GatherRenderLights(e.GetScene(), &e.Assets()), look.proj * look.view, look.eye); };
+    std::vector<RenderProbe> probes = active();
+    CHECK(probes.size() == 1 && probes[0].map && probes[0].map->levels[0].width == 128 && probes[0].map->levels[0].height == 64);
+    CHECK(ActiveProbes(e.GetScene(), nullptr, GatherRenderLights(e.GetScene()), look.proj * look.view, look.eye).empty());
+    Scene foreign;  // another scene drawn with the same assets (a thumbnail) has ids of its own: no probes
+    CHECK(foreign.FromJson(e.GetScene().ToJson(), &err));
+    CHECK(GatherRenderLights(foreign, &e.Assets()).probes.size() == 1);
+    CHECK(ActiveProbes(foreign, &e.Assets(), GatherRenderLights(foreign, &e.Assets()), look.proj * look.view, look.eye).empty());
+    if (probes.size() != 1 || !probes[0].map) return;
+    const RenderProbe probe = probes[0];
+    const Color left = probe.map->Sample(Vec3(-1, 0, 0), 0), right = probe.map->Sample(Vec3(1, 0, 0), 0), up = probe.map->Sample(Vec3(0, 1, 0), 0);
+    CHECK(left.r > 0.9f && left.g < 0.1f && left.b < 0.1f && right.g > 0.9f && right.r < 0.1f);
+    CHECK(up.b > 0.9f && up.r < 0.1f);  // the sky above; the crate hanging there is left out
+    // Its ambient light: red from the left, green from the right.
+    CHECK(ProbeDiffuse(probe, Vec3(-1, 0, 0)).r > ProbeDiffuse(probe, Vec3(-1, 0, 0)).g + 0.1f);
+    CHECK(ProbeDiffuse(probe, Vec3(1, 0, 0)).g > ProbeDiffuse(probe, Vec3(1, 0, 0)).r + 0.1f);
+    // Box projection: a reflection leaving the room's middle sideways reads the picture toward the wall point it hits.
+    CHECK(probe.lo.x == -3 && probe.hi.x == 3 && probe.lo.z == -3 && probe.hi.z == 3 && probe.pos.z == 1.5f);
+    const Vec3 dir = ProbeDir(probe, Vec3(0, 0, 0), Vec3(1, 0, 0)), want = Normalize(Vec3(3, 0, -1.5f));
+    CHECK(Length(dir - want) < 1e-4f);
+    RenderProbe far = probe;
+    far.boxProjection = false;
+    CHECK(Length(ProbeDir(far, Vec3(0, 0, 0), Vec3(1, 0, 0)) - Vec3(1, 0, 0)) < 1e-6f);
+    // Weight: all inside the box, fading over `blend` outside it.
+    CHECK(ProbeWeight(probe, Vec3(0, 0, 0)) == 1.0f && ProbeWeight(probe, Vec3(2.9f, 1.9f, -2.9f)) == 1.0f);
+    CHECK(std::fabs(ProbeWeight(probe, Vec3(3.5f, 0, 0)) - 0.5f) < 1e-4f && ProbeWeight(probe, Vec3(0, 3.2f, 0)) == 0.0f);
+
+    // The ball now reflects the walls of its room.
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(rt.Hash() != skyOnly);
+    CHECK(px(28, 40).r > 0.5f && px(28, 40).r > px(28, 40).b + 0.3f);
+    CHECK(px(52, 40).g > 0.5f && px(52, 40).g > px(52, 40).b + 0.3f);
+    const uint64_t withProbe = rt.Hash();
+    CHECK(RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80).Hash() == withProbe);  // the picture is kept
+    Json state = Call(e, "probe.state", R"J({"id":"Probe","out":"build/probe.png"})J");
+    CHECK(state["ok"].asBool() && state["result"]["probes"][size_t(0)]["captured"].asBool() && state["result"]["probes"][size_t(0)]["width"].asInt() == 128);
+    CHECK(FileExists(JoinPath(project, "build/probe.png")));
+    CHECK(!Call(e, "probe.state", R"J({"id":"Ball","out":"build/ball.png"})J")["ok"].asBool());
+
+    // An edit while stopped: the picture is taken again.
+    CHECK(Call(e, "component.set", R"J({"id":"Red","type":"MeshRenderer","values":{"color":[1,1,0]}})J")["ok"].asBool());
+    probes = active();
+    CHECK(probes.size() == 1 && probes[0].map != probe.map && probes[0].map->Sample(Vec3(-1, 0, 0), 0).g > 0.9f);
+    // An interactive editor defers that until the edits pause.
+    e.Assets().DeferProbeEdits(true);
+    const std::shared_ptr<const EnvironmentMap> kept = probes[0].map;
+    CHECK(Call(e, "component.set", R"J({"id":"Red","type":"MeshRenderer","values":{"color":[1,0,0]}})J")["ok"].asBool());
+    CHECK(e.Assets().ProbesStale() && active()[0].map == kept);
+    e.Assets().InvalidateProbes();
+    CHECK(!e.Assets().ProbesStale() && active()[0].map != kept && active()[0].map->Sample(Vec3(-1, 0, 0), 0).g < 0.1f);
+    e.Assets().DeferProbeEdits(false);
+
+    // Playing: taken at the start, then only on probe.bake / game.bakeProbes().
+    CHECK(Call(e, "sim.play", "{}")["ok"].asBool());
+    const std::shared_ptr<const EnvironmentMap> atStart = active()[0].map;
+    CHECK(Call(e, "component.set", R"J({"id":"Red","type":"MeshRenderer","values":{"color":[1,1,1]}})J")["ok"].asBool());
+    CHECK(Call(e, "sim.step", R"J({"frames":2})J")["ok"].asBool());
+    CHECK(active()[0].map == atStart);
+    CHECK(Call(e, "probe.bake")["result"]["probes"][size_t(0)]["captured"].asBool());
+    CHECK(active()[0].map != atStart && active()[0].map->Sample(Vec3(-1, 0, 0), 0).b > 0.9f);
+    CHECK(Call(e, "script.eval", R"J({"code":"return game.bakeProbes()"})J")["result"]["value"].asNumber() == 1);
+    CHECK(Call(e, "sim.stop", "{}")["ok"].asBool());
+    CHECK(active()[0].map->Sample(Vec3(-1, 0, 0), 0).b < 0.1f);  // the stopped scene again
+
+    // intensity 0 switches a probe off; outside its box (and fade) the sky is back.
+    CHECK(Call(e, "component.set", R"J({"id":"Probe","type":"ReflectionProbe","values":{"intensity":0}})J")["ok"].asBool());
+    CHECK(active().empty());
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(px(28, 40).b > 0.5f && px(28, 40).r < 0.2f);
+    CHECK(Call(e, "component.set", R"J({"id":"Probe","type":"ReflectionProbe","values":{"intensity":1,"size":[6,4,1],"offset":[0,0,-8],"blend":0.5}})J")["ok"].asBool());
+    rt = RenderLook(e, Vec3(0, 0, 3), Vec3(0, 0, 0), 80, 80);
+    CHECK(px(28, 40).b > 0.5f && px(28, 40).r < 0.2f);
+    // Only the nearest kMaxProbes are used, the smallest box first.
+    CHECK(Call(e, "component.set", R"J({"id":"Probe","type":"ReflectionProbe","values":{"size":[6,4,6],"offset":[0,0,-1.5],"blend":1}})J")["ok"].asBool());
+    for (int i = 0; i < 5; ++i)
+        CHECK(Call(e, "entity.create", (std::string(R"J({"name":"More)J") + std::to_string(i) + R"J(","components":{"Transform":{"position":[0,0,1.5]},"ReflectionProbe":{"size":[)J" +
+                                        std::to_string(8 + i) + R"J(,8,8],"resolution":16}}})J").c_str())["ok"].asBool());
+    probes = active();
+    CHECK(probes.size() == static_cast<size_t>(kMaxProbes) && probes[0].id == probe.id);
+    for (size_t i = 1; i < probes.size(); ++i) CHECK(probes[i].hi.x - probes[i].lo.x >= probes[i - 1].hi.x - probes[i - 1].lo.x);
+    CHECK(Call(e, "probe.state")["result"]["probes"].size() == 6);
+    for (int i = 0; i < 5; ++i) CHECK(Call(e, "entity.delete", (std::string(R"J({"id":"More)J") + std::to_string(i) + R"J("})J").c_str())["ok"].asBool());
+
+    // Both renderers show the same room: sharp and blurred reflections, a lit floor, a probe next to a sky.
+    if (!e.EnableGpu(nullptr, &err)) {
+        std::printf("  SKIP no GPU backend here (%s)\n", err.c_str());
+        return;
+    }
+    CHECK(Call(e, "material.create", R"J({"path":"materials/satin.mat.json","values":{"baseColor":[0.9,0.9,0.9],"metallic":1,"roughness":0.45}})J")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"J({"path":"materials/wet.mat.json","values":{"baseColor":[0.3,0.3,0.3],"roughness":0.1}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Ball","type":"Transform","values":{"position":[-0.7,0,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Satin","components":{"Transform":{"position":[0.7,0,0]},"MeshRenderer":{"mesh":"sphere","material":"materials/satin.mat.json"}}})J")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"J({"name":"Floor","components":{"Transform":{"position":[0,-0.6,0],"scale":[12,0.2,6]},"MeshRenderer":{"mesh":"cube","material":"materials/wet.mat.json"}}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"Transform","values":{"rotation":[-50,150,0]}})J")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"J({"id":"Sun","type":"DirectionalLight","values":{"intensity":0.8}})J")["ok"].asBool());
+    const int gw = 160, gh = 90;
+    RenderView view = MakeLookAtView(Vec3(0, 0.8f, 3.2f), Vec3(0, 0, 0), 55.0f, static_cast<float>(gw) / gh);
+    for (const char* values : {R"J({"size":[6,4,6],"offset":[0,0,-1.5],"blend":1,"boxProjection":true,"ambient":true})J",
+                               R"J({"size":[3,4,6],"offset":[-1.5,0,-1.5],"blend":1.5,"boxProjection":false,"ambient":false})J"}) {
+        CHECK(Call(e, "component.set", (std::string(R"J({"id":"Probe","type":"ReflectionProbe","values":)J") + values + "}").c_str())["ok"].asBool());
+        RenderTarget sw, gpu;
+        sw.Resize(gw, gh);
+        gpu.Resize(gw, gh);
+        e.Renderer().Render(e.GetScene(), view, sw);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double sum = 0;
+        int outliers = 0;
+        for (size_t i = 0; i < sw.color.size(); ++i) {
+            int worst = 0;
+            for (int shift : {0, 8, 16}) {
+                const int d = std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+                sum += d;
+                worst = std::max(worst, d);
+            }
+            outliers += worst > 48;
+        }
+        const double mean = sum / (static_cast<double>(sw.color.size()) * 3.0);
+        std::printf("  probe %.44s: software/GPU mean difference %.3f, outliers %d\n", values, mean, outliers);
+        CHECK(mean < 2.0 && outliers < static_cast<int>(sw.color.size()) / 30);
+    }
+}
+
 TEST(TexturesAndGltfModels) {
     Engine e;
     std::string err;

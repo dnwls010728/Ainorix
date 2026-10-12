@@ -4,7 +4,9 @@ A long feature (DESIGN.md §5). It gives a scene an environment — a sky that l
 smooth/metallic surfaces reflect and that is drawn behind the scene — so PBR materials stop looking
 flat. Built in milestones; each milestone is a commit.
 
-The environment is the `Skybox` component (one per scene; Create > Rendering > Sky in the editor).
+The environment is the `Skybox` component (one per scene; Create > Rendering > Sky in the editor),
+plus any number of `ReflectionProbe` components (Create > Rendering > Reflection Probe) for places
+that should reflect their own surroundings rather than the sky.
 See [RENDERING.md](RENDERING.md) for how it feeds lighting, and `docs/API.md` for its fields.
 
 ```bash
@@ -13,6 +15,9 @@ oe exec <project> entity.create '{"name":"Sky","components":{"Skybox":{"sky":[0.
 # an equirectangular panorama (2:1), .hdr or .png/.jpg
 oe import <project> studio.hdr          # -> assets/textures/studio.hdr
 oe exec <project> component.set '{"id":"Sky","type":"Skybox","values":{"texture":"assets/textures/studio.hdr","rotation":90}}' --save
+# a room that reflects its own walls: a probe in its middle, its box the size of the room
+oe exec <project> entity.create '{"name":"Room Probe","components":{"Transform":{"position":[0,1.5,0]},"ReflectionProbe":{"size":[8,3,8]}}}' --save
+oe exec <project> probe.state '{"id":"Room Probe","out":"build/probe.png"}'   # look at its picture
 ```
 
 ## Design
@@ -53,6 +58,49 @@ Two kinds of sky, one component:
   scenes without one are not affected and the parity fixtures keep their hashes. An image that does
   not load falls back to the three colors (the error is reported once, and by `asset.info`).
 
+### Reflection probes
+
+A `ReflectionProbe` is a picture of the surroundings taken from the entity's position, used instead
+of the sky by the surfaces inside its box.
+
+- **The picture** (`CaptureProbe` in `engine/render/Probes.cpp`): the software renderer draws the
+  scene six times from the probe (90 degree faces of `resolution` pixels, one texel wider on every
+  side) into float colors before any post effect; the faces are resampled into an equirectangular
+  image in world axes (4 x 2 faces) and prepared by `BuildEnvironmentMap` — so a probe is an
+  `EnvironmentMap` like an image sky: blurred levels by roughness, irradiance terms. Because the
+  software renderer takes it, both renderers and every platform use the same picture. For 128 pixel
+  faces in a small scene it costs about 40 ms on a desktop and about 180 ms in a browser (one thread).
+- **What it shows**: the scenery, lit as usual (sun with its shadow, point lights, the sky or flat
+  ambient, the sky background or the game camera's clear color) but without probes — one bounce, no
+  reflections of reflections. Left out (`ProbeShows`): entities that move while the game runs — a
+  `RigidBody`, `CharacterBody`, their 2D kinds, an `Animator`, a `VFXSystem` or a `Trail` on the
+  entity or an ancestor — which would otherwise stay in the reflections as ghosts where they stood.
+  Things only a script moves are not recognised: they are in the picture where they were.
+- **When it is taken**: when a frame first needs it, then kept (`AssetManager::ProbePictures`) until
+  `AssetManager::InvalidateProbes`. The engine drops the pictures when a scene loads, play starts or
+  stops, the game changes scene, and after every edit while stopped (`Engine::Touch`). While
+  playing they stay as taken at the start, since scripts change things every frame: call
+  `probe.bake` (Lua `game.bakeProbes()`) after the scenery or its lighting changed. The interactive
+  editor defers the edits (`DeferProbeEdits`): during a gizmo drag every frame is an edit, so the
+  pictures refresh 0.3 s after the edits pause.
+- **Which probes a frame uses** (`ActiveProbes`): those whose box, with its fade, is in view; the
+  nearest `kMaxProbes` (4) to the eye; smallest box first. Only the engine's own scene uses probes:
+  asset thumbnails and effect previews drawn with the same assets do not.
+- **Shading** (the probe loop of `Lighting::Shade` and of `mesh_fs`; `ProbeWeight`, `ProbeDir`,
+  `ProbeSpecular`, `ProbeDiffuse` in `RenderScene.h`), per pixel: a probe's weight is 1 inside its
+  box and falls to 0 over `blend` meters outside it. Probes are visited smallest first, each taking
+  its weight of what the ones before it left; the sky (or the flat ambient of a scene without a
+  `Skybox`) keeps the rest. A probe replaces the reflected ambient and, with `ambient`, the diffuse
+  ambient too — an interior is lit by its own walls, not by the sky.
+- **Box projection** (`boxProjection`, on by default): the reflected ray is followed to where it
+  leaves the box and the picture is read in the direction from the capture position to that point,
+  so the reflection of a wall stays on the wall as the viewer moves. Off = the surroundings are
+  treated as infinitely far, for probes outdoors.
+- GPU: the probes' pictures are four more textures of the mesh program (`probe0_tex`..`probe3_tex`,
+  uploaded like the sky image) and their boxes are in `mesh_lights`.
+- `probe.state` lists the probes and whether their picture exists; with `id` and `out` it writes
+  the picture as a PNG. In the editor a selected probe shows its box and capture point.
+
 ## Milestones
 
 - [x] **M1 — analytic sky lighting (image-based lighting).** `Skybox` component; diffuse ambient from
@@ -70,14 +118,28 @@ Two kinds of sky, one component:
   `AssetManager::GetEnvironment`, the editor's Create > Rendering > Sky and the texture picker.
   Tests `EnvironmentMapLevelsAndIrradiance`, `SkyboxTextureEnvironment` (software, and software
   against GPU for colors, a `.png` and a `.hdr`). Web and Android runtimes rebuilt.
-- [ ] **M4 — reflection probes.** Local captures / box projection so interiors reflect their own room
-  rather than the global sky.
+- [x] **M4 — reflection probes.** `ReflectionProbe` (`size`, `offset`, `blend`, `intensity`,
+  `boxProjection`, `ambient`, `resolution`, `nearPlane`, `farPlane`): a picture of the scenery
+  taken by the software renderer, box projection, up to four probes per frame blended per pixel, in
+  both renderers (see Reflection probes). `probe.bake`, `probe.state`, Lua `game.bakeProbes()`,
+  the editor's Create > Rendering > Reflection Probe and box gizmo. Test
+  `ReflectionProbeLocalReflections`. Web and Android runtimes rebuilt.
 
 ## Limits (current)
 
-- The reflection is the global sky for every surface: no local reflections, no occlusion of the
-  environment by nearby geometry (a wall does not block the sky reflection; an interior still
-  reflects the sky), no parallax. Ambient occlusion textures are the only thing that darkens it. M4.
+- Without a probe the reflection is the global sky for every surface: a wall does not block the sky
+  reflection and an interior still reflects the sky. Put a `ReflectionProbe` in each room.
+- A probe is a static picture from one point: moving things are not in it (see What it shows), it
+  does not follow lights that change during play until `probe.bake`, and reflections are exact only
+  for surfaces on the box (a table in the middle of the room is reflected as if it were painted on
+  the wall behind it). Its box follows the world axes; the entity's rotation and scale are ignored.
+  No reflections of reflections; no screen-space or planar reflections (a mirror, water showing the
+  character) — those are separate features.
+- At most four probes light one frame (the nearest to the camera); a level with more shows the sky
+  where the fifth would be. Pictures are not saved with the scene or the packaged game: they are
+  taken when the scene is first drawn (about 40 ms each on a desktop at the default 128 pixel faces,
+  several times that in a browser or on a phone, on the thread that draws), so a level with many
+  probes hitches once as they come into view; lower `resolution` where reflections are rough anyway.
 - The blur of the levels is a Gaussian lobe per roughness, not a split-sum GGX prefilter with a BRDF
   lookup table: the Fresnel term is the same approximation the engine used before. Good to look at,
   not a reference renderer. The separable blur is slightly off right at the poles.
@@ -86,7 +148,8 @@ Two kinds of sky, one component:
 - Distance fog does not tint the sky: with fog on, pick a `fogColor` close to the horizon of the sky.
 - A `.hdr` panorama costs about 60 MB of memory while loaded (floats in the asset cache plus the GPU
   copy at 2048 x 1024) and a fraction of a second to prepare at load; `asset.preload` does not
-  prepare environments yet (the first frame that shows the scene does).
+  prepare environments or probe pictures yet (the first frame that shows the scene does;
+  `probe.bake` takes every probe's picture at once).
 - One environment per scene, no blending between two (day to night: animate the three colors, or
   `intensity`, from Lua; swapping `texture` cuts).
 - The three-color sky has no clouds or stars; draw those with scene geometry as `games/RPG` does.

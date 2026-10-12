@@ -53,6 +53,10 @@ struct RenderView {
     EntityId highlight = kNullEntity;
     std::vector<DebugLine> lines;  // drawn after geometry (depth tested)
     bool drawUI = true;            // screen-space UIText/UIPanel/UIButton
+    // Reflection probe pictures (software renderer only): when set, the frame is the scenery alone
+    // (see ProbeShows), lit without probes, and the lit colors before any post effect are written
+    // here (width * height, values above 1 kept); the target's color is not meaningful.
+    std::vector<Color>* sceneColor = nullptr;
 };
 
 struct RenderStats {

@@ -130,6 +130,7 @@ const Preset kPresets[] = {
     {"camera", "Rendering", "Camera", "Camera", R"({"Transform":{"position":[0,3,8],"rotation":[-15,0,0]},"Camera":{"active":false}})"},
     {"light", "Rendering", "Directional Light", "Directional Light", R"({"Transform":{"rotation":[-50,30,0]},"DirectionalLight":{}})"},
     {"sky", "Rendering", "Sky", "Sky", R"({"Skybox":{}})"},
+    {"probe", "Rendering", "Reflection Probe", "Reflection Probe", R"({"Transform":{"position":[0,1.5,0]},"ReflectionProbe":{}})"},
     {"pointlight", "Rendering", "Point Light", "Point Light",
      R"({"Transform":{"position":[0,2,0],"scale":[0.2,0.2,0.2]},"MeshRenderer":{"mesh":"sphere","color":[1,0.85,0.6],"unlit":true,"castShadows":false},"PointLight":{}})"},
     {"crate", "Physics", "Physics Crate", "Crate", R"({"Transform":{"position":[0,3,0]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.5,0.3]},"Collider":{},"RigidBody":{}})"},
@@ -2191,6 +2192,10 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
     window.SetEventMode(true);
     double last = PlatformTimeSeconds();
     bool firstFrame = false;
+    // Reflection probe pictures follow edits once they pause, not on every frame of a gizmo drag.
+    engine.Assets().DeferProbeEdits(true);
+    uint64_t probeRevision = engine.Revision();
+    double probeEdited = last;
     // While the editor window is moved or resized the platform runs a modal loop: keep a playing
     // game (and its network session) simulating meanwhile; the panels wait.
     window.SetModalFrame([&] {
@@ -2205,6 +2210,12 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
         double now = PlatformTimeSeconds();
         double dt = std::min(0.25, now - last);
         last = now;
+        if (engine.Revision() != probeRevision) {
+            probeRevision = engine.Revision();
+            probeEdited = now;
+        } else if (engine.Assets().ProbesStale() && now - probeEdited > 0.3) {
+            engine.Assets().InvalidateProbes();
+        }
         editor.Update(window.TakeEvents(), window.Width(), window.Height(), window.DpiScale(), dt);
         const bool drawn = editor.DrawToWindow();
         if (!drawn) PlatformSleep(0.016);  // minimized
@@ -2215,6 +2226,7 @@ int RunNativeEditor(Engine& engine, Window& window, const NativeEditor::Options&
     }
     window.SetModalFrame(nullptr);
     window.SetEventMode(false);
+    engine.Assets().DeferProbeEdits(false);
     return 0;
 }
 

@@ -1691,6 +1691,21 @@ struct GpuRenderer::Impl {
             Put(lu.env_ground, env.ground.r, env.ground.g, env.ground.b, env.intensity);
             Put(lu.env_map, env.map ? 1.0f : 0.0f, env.map ? env.map->MaxLod() : 0.0f, env.yawCos, env.yawSin);
             for (int i = 0; i < 9; ++i) Put(lu.env_sh[i], env.sh[i].x, env.sh[i].y, env.sh[i].z, 0);
+            // Reflection probes of this frame; the slots without one keep the white texture.
+            const std::vector<RenderProbe> probes = ActiveProbes(scene, assets, lights, viewProj, view.eye);
+            sg_view probeTex[kMaxProbes];
+            Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
+            for (int i = 0; i < kMaxProbes; ++i) {
+                probeTex[i] = whiteTex;
+                if (static_cast<size_t>(i) >= probes.size()) continue;
+                const RenderProbe& p = probes[static_cast<size_t>(i)];
+                probeTex[i] = EnvironmentFor(p.map);
+                Put(lu.probe_lo[i], p.lo.x, p.lo.y, p.lo.z, p.blend);
+                Put(lu.probe_hi[i], p.hi.x, p.hi.y, p.hi.z, p.map->MaxLod());
+                Put(lu.probe_pos[i], p.pos.x, p.pos.y, p.pos.z, p.intensity);
+                Put(lu.probe_opt[i], p.boxProjection ? 1.0f : 0.0f, p.ambient ? 1.0f : 0.0f, 0, 0);
+                for (int k = 0; k < 9; ++k) Put(lu.probe_sh[i * 9 + k], p.sh[k].x, p.sh[k].y, p.sh[k].z, 0);
+            }
             // Draw list order: opaque, then transparent back to front. Switching
             // pipelines drops uniforms, so the lights are re-applied each time.
             sg_pipeline current{};
@@ -1749,6 +1764,10 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_emissive_tex] = emissive.id ? emissive : whiteTex;
                 b.views[VIEW_oe_occlusion_tex] = occlusion.id ? occlusion : whiteTex;
                 b.views[VIEW_oe_env_tex] = envTex;
+                b.views[VIEW_oe_probe0_tex] = probeTex[0];
+                b.views[VIEW_oe_probe1_tex] = probeTex[1];
+                b.views[VIEW_oe_probe2_tex] = probeTex[2];
+                b.views[VIEW_oe_probe3_tex] = probeTex[3];
                 b.samplers[SMP_oe_env_smp] = envSampler;
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;
                 b.samplers[SMP_oe_shadow_smp] = shadowCompare;

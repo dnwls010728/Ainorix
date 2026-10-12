@@ -1457,6 +1457,23 @@ Create a PNG texture procedurally (checker, grid, bricks, gradient, noise).
 
 Build the navigation mesh again from the scene's static colliders/meshes (NavMesh component settings) and report it. Queries bake by themselves; call this during play after the level changed (a door opened, a bridge fell).
 
+## probe
+
+### `probe.bake`
+
+Take the picture of every ReflectionProbe again now and report them (as probe.state). Pictures are taken by themselves when a scene loads, play starts and after edits while stopped; call this during play after the scenery or its lighting changed (a door opened, the lights went out). Lua: game.bakeProbes().
+
+### `probe.state`
+
+The scene's reflection probes: {probes: [{id, name, position, min, max, resolution, captured, width, height, levels}], max}. captured = its picture exists (it is taken when a frame first uses the probe); max = probes one frame uses (the nearest to the camera). With id and out, writes that probe's picture (equirectangular, taken now if needed) as a PNG to look at.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string |  | Probe whose picture to write (needs out). |
+| `out` | string |  | PNG path inside the project, e.g. "build/probe.png". |
+
+## nav
+
 ### `nav.state`
 
 The navigation mesh as baked: {baked, polygons, area, bounds, colliders, meshes, triangles, warnings, settings}.
@@ -2471,6 +2488,22 @@ Sky environment: lights the scene, is reflected by smooth/metallic surfaces (ima
 | `background` | bool | `true` | Draw the sky behind the scene (off = keep the camera's clear color). |
 | `sun` | bool | `true` | Draw a sun disc in the first directional light's direction (not with a texture: the image has its own sun). |
 | `sunSize` | float | `2.5` | Sun disc size in degrees. |
+
+### ReflectionProbe
+
+Local reflection: a picture of the surroundings taken from the entity's position. Surfaces inside its box reflect (and are ambient-lit by) that picture instead of the sky, so a room reflects its own walls. Shows the scenery, not moving bodies; taken when the scene loads, play starts, the stopped scene is edited, or on probe.bake.
+
+| field | type | default | description |
+|---|---|---|---|
+| `size` | vec3 | `[10,5,10]` | Size of the box the probe covers, meters along the world axes (the entity's rotation and scale are ignored). Make it the size of the room: with boxProjection its walls are where the reflections sit. |
+| `offset` | vec3 | `[0,0,0]` | Box center relative to the entity. The picture is taken at the entity's position (keep that clear of walls and furniture). |
+| `blend` | float | `0.5` | Distance outside the box over which the probe fades into the sky or a larger probe, meters. |
+| `intensity` | float | `1` | Multiplies the picture. |
+| `boxProjection` | bool | `true` | Reflections are placed on the box walls, so they line up in a room. Off = the surroundings are treated as infinitely far (outdoors). |
+| `ambient` | bool | `true` | The picture also replaces the sky's diffuse ambient light inside the box (an interior is lit by its own walls, not the sky). |
+| `resolution` | int | `128` | Pixels along one face of the picture (16..256). Larger = sharper mirror reflections, slower to take. |
+| `nearPlane` | float | `0.100000001` | Nearest distance the picture shows, meters. |
+| `farPlane` | float | `200` | Farthest distance the picture shows, meters. |
 
 ### CameraFollow
 

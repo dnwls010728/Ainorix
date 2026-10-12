@@ -123,7 +123,7 @@ public:
     // Increments on every scene change (edits, undo, loads, simulation steps).
     // Tools poll it cheaply to know when to refresh.
     uint64_t Revision() const { return revision_; }
-    void Touch() { ++revision_; }
+    void Touch();
     double SimTime() const { return simTime_; }
     // Calendar date "YYYY-MM-DD" in local time for game features outside the simulation (daily rewards).
     // Not part of the deterministic state: tests and tools fix it with SetDateOverride (time.date {set}).
@@ -271,6 +271,10 @@ public:
     // are uploaded and graph programs compiled as well (at once, or when the GPU renderer is enabled). Returns {loaded: [{path, kind}], errors:
     // [{path, message}], gpu}; a file that cannot be loaded is reported, the others are still loaded.
     Json Preload(const std::vector<std::string>& paths);
+    // Reflection probes: {probes: [{id, name, position, min, max, resolution, captured, width, height, levels}], max}.
+    // `bake` takes every probe's picture again now (probe.bake); otherwise pictures are taken when a
+    // frame first needs them and `captured` tells which exist.
+    Json ProbeState(bool bake);
     // GPU when enabled, otherwise the software renderer (editor viewport, game window).
     IRenderer& DisplayRenderer();
     // Draws the game view into the GPU window (EnableGpu with a window) and

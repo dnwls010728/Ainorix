@@ -873,6 +873,25 @@ RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
         }
         break;
     }
+    for (const auto& kv : scene.Pool<ReflectionProbe>()) {
+        const ReflectionProbe& r = kv.second;
+        auto positive = [](float v, float least) { return std::isfinite(v) ? std::max(least, v) : least; };
+        RenderProbe p;
+        p.id = kv.first;
+        p.pos = scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0));
+        const Vec3 half(positive(r.size.x, 0.01f) * 0.5f, positive(r.size.y, 0.01f) * 0.5f, positive(r.size.z, 0.01f) * 0.5f);
+        const Vec3 center = p.pos + r.offset;
+        p.lo = center - half;
+        p.hi = center + half;
+        p.blend = positive(r.blend, 1e-3f);
+        p.intensity = positive(r.intensity, 0.0f);
+        p.boxProjection = r.boxProjection;
+        p.ambient = r.ambient;
+        p.resolution = std::clamp(r.resolution, 16, 256);
+        p.nearPlane = positive(r.nearPlane, 0.01f);
+        p.farPlane = std::max(p.nearPlane * 2.0f, positive(r.farPlane, 1.0f));
+        lights.probes.push_back(p);
+    }
     return lights;
 }
 

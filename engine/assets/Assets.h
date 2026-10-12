@@ -14,6 +14,7 @@
 namespace oe {
 
 class Engine;
+class Scene;
 struct VfxAsset;
 
 // Decoders (stb_image / cgltf / ufbx). External files of a model resolve beside it.
@@ -53,6 +54,28 @@ public:
     // GetTileset as a TilesetLookup (for BuildTileRules, physics, overlays).
     TilesetLookup Tilesets();
 
+    // Reflection probe pictures by probe entity (taken and read by ActiveProbes / CaptureProbe in
+    // RenderScene.h). InvalidateProbes drops them, so each is taken again when it is next drawn:
+    // the engine calls it when the scenery may have changed (scene loaded, play started or stopped,
+    // probe.bake, and - with `edit` - an edit while stopped).
+    // An interactive editor defers the edits (DeferProbeEdits): while a gizmo is dragged every frame
+    // is an edit, so the pictures are only marked stale and it drops them once the edits pause.
+    std::map<EntityId, std::shared_ptr<const EnvironmentMap>>& ProbePictures() { return probes_; }
+    void InvalidateProbes(bool edit = false) {
+        if (edit && deferProbeEdits_) {
+            probesStale_ = !probes_.empty();
+            return;
+        }
+        probes_.clear();
+        probesStale_ = false;
+    }
+    // The scene the pictures belong to (the engine's own): other scenes drawn with these assets
+    // (asset thumbnails, effect previews) have entity ids of their own and use no probes.
+    void SetProbeScene(const Scene* scene) { probeScene_ = scene; }
+    const Scene* ProbeScene() const { return probeScene_; }
+    void DeferProbeEdits(bool on) { deferProbeEdits_ = on; }
+    bool ProbesStale() const { return probesStale_; }
+
     // Reloads assets whose files changed; returns their paths.
     std::vector<std::string> PollChanges();
     void Clear();
@@ -88,6 +111,9 @@ private:
     std::map<std::string, Entry<Mesh>> meshes_;
     std::map<std::string, Entry<Texture>> textures_;
     std::map<std::string, Entry<EnvironmentMap>> environments_;
+    std::map<EntityId, std::shared_ptr<const EnvironmentMap>> probes_;
+    bool deferProbeEdits_ = false, probesStale_ = false;
+    const Scene* probeScene_ = nullptr;
     std::map<std::string, Entry<Material>> materials_;
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;

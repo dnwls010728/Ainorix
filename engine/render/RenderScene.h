@@ -182,11 +182,62 @@ inline Color SampleSkyBackground(const RenderEnvironment& e, const Vec3& dir) {
     return c;
 }
 
+// A local reflection (the ReflectionProbe component): the surroundings as seen from `pos`, used by
+// the surfaces inside the box lo..hi and fading out over `blend` meters outside it. `map` is taken
+// by ActiveProbes; a probe without one is not used.
+constexpr int kMaxProbes = 4;  // probes one frame uses (the nearest to the camera)
+struct RenderProbe {
+    EntityId id = kNullEntity;
+    Vec3 pos;
+    Vec3 lo, hi;
+    float blend = 0.5f;
+    float intensity = 1.0f;
+    bool boxProjection = true;
+    bool ambient = true;
+    int resolution = 128;
+    float nearPlane = 0.1f, farPlane = 200.0f;
+    std::shared_ptr<const EnvironmentMap> map;
+    Vec3 sh[9];  // the picture's irradiance terms times intensity
+};
+
+// How much of a surface point's ambient light comes from the probe: 1 inside the box, fading to 0
+// `blend` meters outside it. The four functions below are the probe loop of Lighting::Shade and of
+// mesh_fs (Shaders.glsl); keep the shader identical.
+inline float ProbeWeight(const RenderProbe& p, const Vec3& w) {
+    const float d = std::max({p.lo.x - w.x, w.x - p.hi.x, p.lo.y - w.y, w.y - p.hi.y, p.lo.z - w.z, w.z - p.hi.z});
+    return 1.0f - Clamp(d / p.blend, 0.0f, 1.0f);
+}
+
+// Where the picture is read for a reflection leaving `wpos` along `refl`: with box projection the
+// direction from the capture position to the point where the reflected ray leaves the box, so the
+// reflection of a wall stays on the wall as the viewer moves.
+inline Vec3 ProbeDir(const RenderProbe& p, const Vec3& wpos, const Vec3& refl) {
+    if (!p.boxProjection) return refl;
+    const Vec3 rd(std::fabs(refl.x) < 1e-6f ? 1e-6f : refl.x, std::fabs(refl.y) < 1e-6f ? 1e-6f : refl.y,
+                  std::fabs(refl.z) < 1e-6f ? 1e-6f : refl.z);
+    const float tx = std::max((p.hi.x - wpos.x) / rd.x, (p.lo.x - wpos.x) / rd.x);
+    const float ty = std::max((p.hi.y - wpos.y) / rd.y, (p.lo.y - wpos.y) / rd.y);
+    const float tz = std::max((p.hi.z - wpos.z) / rd.z, (p.lo.z - wpos.z) / rd.z);
+    const float t = std::max(std::min(tx, std::min(ty, tz)), 0.0f);
+    const Vec3 hit = wpos + refl * t - p.pos;
+    return Dot(hit, hit) > 1e-12f ? Normalize(hit) : refl;
+}
+
+inline Color ProbeSpecular(const RenderProbe& p, const Vec3& wpos, const Vec3& refl, float r) {
+    return p.map->Sample(ProbeDir(p, wpos, refl), (r - 0.04f) / 0.96f * p.map->MaxLod()) * p.intensity;
+}
+
+inline Color ProbeDiffuse(const RenderProbe& p, const Vec3& n) {
+    const Vec3 v = EnvIrradianceSH(p.sh, n);
+    return Color(std::max(0.0f, v.x), std::max(0.0f, v.y), std::max(0.0f, v.z));
+}
+
 struct RenderLights {
     Color ambient{0, 0, 0};
     Color groundAmbient{0, 0, 0};  // hemisphere: ambient seen by downward faces (sum over lights)
     bool hemisphere = false;       // a directional light asked for hemisphere ambient
     RenderEnvironment env;         // the Skybox component, if any
+    std::vector<RenderProbe> probes;   // every ReflectionProbe, in entity id order, without pictures (see ActiveProbes)
     std::vector<RenderDirLight> dirs;  // never empty: a default light is added when the scene has none
     std::vector<RenderPointLight> points;
     bool shadows = false;  // the first directional light casts shadows
@@ -198,6 +249,21 @@ struct RenderLights {
 std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView = Mat4{});
 // `assets` (optional) loads the image of a textured Skybox; without it the Skybox keeps its colors.
 RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets = nullptr);
+
+// The reflection probes a frame uses: those whose box (with its fade) is in view, the nearest
+// kMaxProbes to the eye, smallest box first (a small probe inside a large one wins where they
+// overlap), each with its picture. A probe that has no picture yet gets one here (CaptureProbe),
+// kept in the asset manager until AssetManager::InvalidateProbes. Empty without `assets`, and for a
+// scene other than the one the pictures belong to (AssetManager::SetProbeScene).
+std::vector<RenderProbe> ActiveProbes(const Scene& scene, AssetManager* assets, const RenderLights& lights,
+                                      const Mat4& viewProj, const Vec3& eye);
+// The picture of one probe (taken now if it has none): the scenery around its position drawn by the
+// software renderer on six faces, as an equirectangular environment in world axes. null without assets.
+std::shared_ptr<const EnvironmentMap> CaptureProbe(const Scene& scene, AssetManager* assets, const RenderProbe& probe);
+// False for what a probe's picture leaves out: entities that move while the game runs (a RigidBody,
+// character, animated model, effect or trail on it or on an ancestor), which would stay in the
+// reflections as ghosts where they stood when the picture was taken.
+bool ProbeShows(const Scene& scene, EntityId id);
 
 // Orthographic view-projection of the first directional light, fitted to a
 // bounding box of the shadow casters and receivers.

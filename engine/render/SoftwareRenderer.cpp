@@ -95,6 +95,7 @@ struct Lighting {
     Color groundAmbient{0, 0, 0};
     bool hemisphere = false;
     RenderEnvironment env;  // analytic sky environment (image-based lighting), if any
+    std::vector<RenderProbe> probes;  // reflection probes of this frame (ActiveProbes), each with its picture
     PostProcess fog;  // fog settings (normalized); fog == 0 disables it
     std::vector<RenderDirLight> dirs;
     std::vector<RenderPointLight> points;
@@ -135,6 +136,37 @@ struct Lighting {
                 amb = groundAmbient * (1.0f - up) + ambient * up;
             }
             c = amb * (diffuse + fenv * (sky * (1.0f - 0.75f * r))) * ao;
+        }
+        if (!probes.empty()) {
+            // Reflection probes take over the ambient light where their boxes are: each one its share
+            // of what the probes before it left, the sky (or flat ambient) keeps the rest. mesh_fs
+            // runs the same loop.
+            float remaining = 1.0f;
+            Color pd(0, 0, 0), ps(0, 0, 0), dBase, sBase;  // diffuse and reflected ambient
+            bool split = false;
+            for (const RenderProbe& p : probes) {
+                const float w = ProbeWeight(p, wpos) * remaining;
+                if (w <= 0.0f) continue;
+                if (!split) {  // the ambient above, as its two parts
+                    split = true;
+                    if (env.present) {
+                        dBase = EnvDiffuse(env, n) * diffuse;
+                        sBase = fenv * EnvSpecular(env, refl, r) * env.reflections;
+                    } else {
+                        Color amb = ambient;
+                        if (hemisphere) {
+                            const float up = n.y * 0.5f + 0.5f;
+                            amb = groundAmbient * (1.0f - up) + ambient * up;
+                        }
+                        dBase = amb * diffuse;
+                        sBase = amb * fenv * (sky * (1.0f - 0.75f * r));
+                    }
+                }
+                pd = pd + (p.ambient ? ProbeDiffuse(p, n) * diffuse : dBase) * w;
+                ps = ps + fenv * ProbeSpecular(p, wpos, refl, r) * w;
+                remaining -= w;
+            }
+            if (split) c = (dBase * remaining + pd + sBase * remaining + ps) * ao;
         }
         auto add = [&](const Vec3& l, const Color& radiance) {
             float ndl = Dot(n, l);
@@ -506,6 +538,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     RenderStats stats;
     const PostProcess post = NormalizePostProcess(view.postProcess);
     RenderLights gathered = GatherRenderLights(scene, assets_);
+    const bool picture = view.sceneColor != nullptr;  // a reflection probe's picture: scenery only, no probes, no post
     auto fillFloor = [&](Color c) {
         return view.editorFill > 0.0f
             ? Color(std::max(c.r, view.editorFill), std::max(c.g, view.editorFill), std::max(c.b, view.editorFill)) : c;
@@ -515,7 +548,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     if (env.map && view.editorFill > 0.0f) env.sh[0] = env.sh[0] + Vec3(view.editorFill, view.editorFill, view.editorFill);
 
     std::vector<Color> hdr;
-    const bool usesHdr = UsesHdr(post);
+    const bool usesHdr = UsesHdr(post) || picture;
     if (usesHdr) hdr.assign(target.color.size(), ClampHdr(view.clearColor));
     if (env.present && env.background) {
         // Background is the sky along each pixel's world ray (the skybox), not a flat clear color.
@@ -546,11 +579,14 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
     std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view);
+    if (picture)
+        items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return !ProbeShows(scene, it.id); }), items.end());
     Lighting lighting;
     lighting.ambient = fillFloor(gathered.ambient);
     lighting.groundAmbient = fillFloor(gathered.groundAmbient);
     lighting.hemisphere = gathered.hemisphere;
     lighting.env = env;
+    if (!picture) lighting.probes = ActiveProbes(scene, assets_, gathered, view.proj * view.view, view.eye);
     lighting.fog = post;
     lighting.dirs = gathered.dirs;
     lighting.points = gathered.points;
@@ -698,6 +734,10 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     });
     stats.triangles = bandTriangles;
     stats.drawnEntities = static_cast<int>(items.size());
+    if (picture) {
+        *view.sceneColor = std::move(hdr);
+        return stats;
+    }
 
     // ----- Overlays
     Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), 0, -1,

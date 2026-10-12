@@ -213,6 +213,7 @@ void NativeEditor::Impl::SceneOverlays(ImDrawList* dl) {
         if (row.Has("Camera")) letter = "C", col = IM_COL32(120, 180, 255, 230);
         else if (row.Has("DirectionalLight")) letter = "D", col = IM_COL32(255, 210, 100, 230);
         else if (row.Has("PointLight") && !row.Has("MeshRenderer")) letter = "P", col = IM_COL32(255, 190, 90, 230);
+        else if (row.Has("ReflectionProbe") && !row.Has("MeshRenderer")) letter = "R", col = IM_COL32(140, 190, 255, 230);
         else if (row.Has("AudioSource") && !row.Has("MeshRenderer")) letter = "S", col = IM_COL32(140, 220, 255, 230);
         if (!letter || !scene.Exists(row.id)) continue;
         ImVec2 s;
@@ -475,6 +476,19 @@ void NativeEditor::Impl::ScenePanel() {
         ring(lightCenter, Vec3(1, 0, 0), Vec3(0, 1, 0), radius, color);
         ring(lightCenter, Vec3(1, 0, 0), Vec3(0, 0, 1), radius, color);
         ring(lightCenter, Vec3(0, 1, 0), Vec3(0, 0, 1), radius, color);
+    }
+    if (const ReflectionProbe* probe = scene.Get<ReflectionProbe>(lightId)) {
+        // The box the probe covers (world axes, whatever the entity's rotation) and where its picture is taken.
+        const Vec3 center = lightCenter + probe->offset, half = probe->size * 0.5f;
+        const Color color = probe->intensity > 0 ? Color(0.45f, 0.72f, 1.0f) : Color(0.45f, 0.45f, 0.45f);
+        auto corner = [&](int c) {
+            return center + Vec3(c & 1 ? half.x : -half.x, c & 2 ? half.y : -half.y, c & 4 ? half.z : -half.z);
+        };
+        for (int c = 0; c < 8; ++c)
+            for (int bit : {1, 2, 4})
+                if (!(c & bit)) view.lines.push_back({corner(c), corner(c | bit), color});
+        for (const Vec3& axis : {Vec3(0.25f, 0, 0), Vec3(0, 0.25f, 0), Vec3(0, 0, 0.25f)})
+            view.lines.push_back({lightCenter - axis, lightCenter + axis, color});
     }
     if (const DirectionalLight* light = scene.Get<DirectionalLight>(lightId)) {
         // Infinite reach: draw parallel rays, never a misleading finite range box.

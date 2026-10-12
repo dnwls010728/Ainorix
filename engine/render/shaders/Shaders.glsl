@@ -259,6 +259,12 @@ layout(binding=2) uniform mesh_lights {
     vec4 env_ground;     // rgb: ground (below horizon) color, w: intensity of the environment image
     vec4 env_map;        // x: 1 = the environment is an image (env_tex), y: its last (most blurred) level, z/w: cos/sin of its rotation
     vec4 env_sh[9];      // rgb: irradiance terms of the image, with intensity (EnvIrradianceSH in Environment.h)
+    vec4 probe_count;    // x: reflection probes of this frame (0..4), smallest box first (ActiveProbes)
+    vec4 probe_lo[4];    // xyz: box min, w: fade distance outside the box
+    vec4 probe_hi[4];    // xyz: box max, w: last (most blurred) level of its picture
+    vec4 probe_pos[4];   // xyz: where the picture was taken, w: intensity
+    vec4 probe_opt[4];   // x: 1 = box projection, y: 1 = the picture replaces the diffuse ambient too
+    vec4 probe_sh[36];   // nine irradiance terms per probe, with intensity
 };
 
 // Analytic sky color along a world direction. Mirrors SampleSky in RenderScene.h; keep identical.
@@ -282,11 +288,22 @@ layout(binding=4) uniform texture2D emissive_tex;
 layout(binding=5) uniform texture2D occlusion_tex;
 layout(binding=6) uniform texture2D env_tex;  // equirectangular environment, blurrier level by level
 layout(binding=2) uniform sampler env_smp;
+layout(binding=7) uniform texture2D probe0_tex;  // reflection probe pictures, laid out like env_tex in world axes
+layout(binding=8) uniform texture2D probe1_tex;
+layout(binding=9) uniform texture2D probe2_tex;
+layout(binding=10) uniform texture2D probe3_tex;
 
 // A world direction in the environment image: turned around +Y, then to equirectangular coordinates
 // (EnvMapDir in RenderScene.h, EnvUV in Environment.h).
 vec3 env_dir(vec3 d) { return vec3(env_map.z * d.x + env_map.w * d.z, d.y, -env_map.w * d.x + env_map.z * d.z); }
 vec2 env_uv(vec3 d) { return vec2(atan(d.x, -d.z) * 0.15915494 + 0.5, acos(clamp(d.y, -1.0, 1.0)) * 0.31830989); }
+
+vec3 probe_texel(int i, vec2 uv, float lod) {
+    if (i == 0) return textureLod(sampler2D(probe0_tex, env_smp), uv, lod).rgb;
+    if (i == 1) return textureLod(sampler2D(probe1_tex, env_smp), uv, lod).rgb;
+    if (i == 2) return textureLod(sampler2D(probe2_tex, env_smp), uv, lod).rgb;
+    return textureLod(sampler2D(probe3_tex, env_smp), uv, lod).rgb;
+}
 
 in vec4 v_color;
 in vec4 v_particle;
@@ -416,6 +433,8 @@ void main() {
         float sky = 0.6 + 1.6 * (refl.y * 0.5 + 0.5);
         float fe = pow(1.0 - ndv, 5.0);
         vec3 fenv = f0 + (max(vec3(1.0 - r), f0) - f0) * fe;
+        vec3 dBase;  // ambient light: diffuse, and reflected (sBase)
+        vec3 sBase;
         if (env_sky.w > 0.5) {
             // Image-based lighting: diffuse ambient from the whole sky, specular from the sky along
             // the reflection vector, blurrier as the surface roughens. Mirrors EnvDiffuse / EnvSpecular
@@ -436,15 +455,56 @@ void main() {
                 vec3 dull = (sky_color(vec3(0.0, 1.0, 0.0)) + sky_color(vec3(0.0, -1.0, 0.0))) * 0.5;
                 envSpec = mix(sky_color(refl), dull, r);
             }
-            color = (ambDiffuse * diffuse + fenv * envSpec * env_horizon.w) * ao;
+            dBase = ambDiffuse * diffuse;
+            sBase = fenv * envSpec * env_horizon.w;
         } else {
             vec3 amb = ambient.rgb;
             if (ambient_ground.w > 0.5) {
                 float up = n.y * 0.5 + 0.5;
                 amb = ambient_ground.rgb * (1.0 - up) + ambient.rgb * up;
             }
-            color = amb * (diffuse + fenv * (sky * (1.0 - 0.75 * r))) * ao;
+            dBase = amb * diffuse;
+            sBase = amb * fenv * (sky * (1.0 - 0.75 * r));
         }
+        // Reflection probes take over the ambient light where their boxes are: each one its share of
+        // what the probes before it left. Mirrors the probe loop of Lighting::Shade (ProbeWeight,
+        // ProbeDir, ProbeSpecular, ProbeDiffuse in RenderScene.h).
+        float remaining = 1.0;
+        vec3 pd = vec3(0.0);
+        vec3 ps = vec3(0.0);
+        int probes = int(probe_count.x);
+        for (int i = 0; i < 4; i++) {
+            if (i >= probes) {
+                break;
+            }
+            vec3 over = max(probe_lo[i].xyz - v_wpos, v_wpos - probe_hi[i].xyz);
+            float w = (1.0 - clamp(max(over.x, max(over.y, over.z)) / probe_lo[i].w, 0.0, 1.0)) * remaining;
+            if (w <= 0.0) {
+                continue;
+            }
+            vec3 dir = refl;
+            if (probe_opt[i].x > 0.5) {
+                vec3 rd = vec3(abs(refl.x) < 1e-6 ? 1e-6 : refl.x, abs(refl.y) < 1e-6 ? 1e-6 : refl.y, abs(refl.z) < 1e-6 ? 1e-6 : refl.z);
+                vec3 tf = max((probe_hi[i].xyz - v_wpos) / rd, (probe_lo[i].xyz - v_wpos) / rd);
+                float t = max(min(tf.x, min(tf.y, tf.z)), 0.0);
+                vec3 hit = v_wpos + refl * t - probe_pos[i].xyz;
+                if (dot(hit, hit) > 1e-12) {
+                    dir = normalize(hit);
+                }
+            }
+            vec3 dif = dBase;
+            if (probe_opt[i].y > 0.5) {
+                int b = i * 9;
+                dif = max(probe_sh[b].rgb + probe_sh[b + 1].rgb * n.y + probe_sh[b + 2].rgb * n.z + probe_sh[b + 3].rgb * n.x +
+                          probe_sh[b + 4].rgb * (n.x * n.y) + probe_sh[b + 5].rgb * (n.y * n.z) +
+                          probe_sh[b + 6].rgb * (3.0 * n.z * n.z - 1.0) + probe_sh[b + 7].rgb * (n.x * n.z) +
+                          probe_sh[b + 8].rgb * (n.x * n.x - n.y * n.y), vec3(0.0)) * diffuse;
+            }
+            pd += dif * w;
+            ps += fenv * probe_texel(i, env_uv(dir), (r - 0.04) / 0.96 * probe_hi[i].w) * probe_pos[i].w * w;
+            remaining -= w;
+        }
+        color = (dBase * remaining + pd + sBase * remaining + ps) * ao;
         int dirs = int(counts.x);
         // The shadow lookup stays outside the light loop: a compare sample inside a loop with a
         // varying count makes the D3D compiler unroll it (X3570) and slows every compile.
