@@ -53,7 +53,7 @@ CMake와 Ninja를 씁니다. 첫 빌드는 Jolt를 컴파일하느라 몇 분 �
 | `oe script <project> [--save]` | 표준 입력의 `{"command":..,"args":..}` 줄들을 실행 |
 | `oe mcp <project> [--port 7777]` / `oe mcp --connect 7777` | stdio MCP 서버 / 실행 중인 에디터에 연결 |
 | `oe import <project> <file>` | 모델, 텍스처, 사운드, 폰트를 프로젝트로 복사 |
-| `oe package <project> [--web\|--android]` | 독립 실행 게임: `Name.exe` + 데이터, 정적 웹 폴더, 서명된 APK / App Bundle |
+| `oe package <project> [--web\|--android]` | 독립 실행 게임: `Name.exe` + `game.pak`(압축·게임별 키 암호화, 스크립트는 스트립된 바이트코드. [PACKAGING](docs/PACKAGING.md)), 정적 웹 폴더, 서명된 APK / App Bundle |
 | `oe serve <dir>` / `oe serve-game <project>` | 웹 빌드 로컬 서버 / 헤드리스 전용 서버 |
 | `oe api --markdown` | 명령 레퍼런스 출력 ([docs/API.md](docs/API.md)) |
 

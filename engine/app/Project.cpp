@@ -11,8 +11,10 @@
 #include "audio/Wav.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "core/Pak.h"
 #include "platform/Platform.h"
 #include "scene/Scene.h"
+#include "script/ScriptCheck.h"
 
 namespace oe {
 
@@ -95,63 +97,47 @@ std::vector<std::string> GameFiles(const std::string& projectDir) {
 }
 
 bool WriteGamePak(const std::string& projectDir, const std::vector<std::string>& files, const std::string& outPath, std::string* error,
-                  double* dataBytes) {
-    Json index = Json::MakeObject();
-    index["files"] = Json::MakeArray();
-    std::string data;
+                  double* dataBytes, const unsigned char* key, bool stripScripts) {
+    std::vector<std::pair<std::string, std::vector<unsigned char>>> entries;
+    double total = 0;
     for (const std::string& rel : files) {
         std::vector<unsigned char> bytes;
         if (!ReadBinaryFile(JoinPath(projectDir, rel), bytes)) {
             if (error) *error = "cannot read " + rel;
             return false;
         }
-        Json entry = Json::MakeObject();
-        entry["path"] = rel;
-        entry["offset"] = static_cast<double>(data.size());
-        entry["size"] = static_cast<double>(bytes.size());
-        index["files"].push(entry);
-        data.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        total += static_cast<double>(bytes.size());
+        if (rel.size() > 4 && rel.compare(rel.size() - 4, 4, ".lua") == 0) {
+            // The chunk name is the one ScriptHost gives the file, so messages read the same.
+            std::string bytecode, compileError;
+            if (CompileLuaBytecode(std::string(bytes.begin(), bytes.end()), "@" + rel, bytecode, &compileError, stripScripts)) bytes.assign(bytecode.begin(), bytecode.end());
+            else OE_LOG_WARN("package", "%s is packaged as source: %s", rel.c_str(), compileError.c_str());
+        }
+        entries.emplace_back(rel, std::move(bytes));
     }
-    std::string header = index.dump();
-    std::string pak = "OEPAK001";
-    uint32_t n = static_cast<uint32_t>(header.size());
-    for (int i = 0; i < 4; ++i) pak += static_cast<char>((n >> (8 * i)) & 0xFF);
-    pak += header;
-    pak += data;
-    if (!WriteTextFile(outPath, pak)) {
+    if (!WriteTextFile(outPath, BuildPak(entries, key))) {
         if (error) *error = "cannot write " + outPath;
         return false;
     }
-    if (dataBytes) *dataBytes = static_cast<double>(data.size());
+    if (dataBytes) *dataBytes = total;
     return true;
 }
 
-bool ExtractGamePak(const std::vector<unsigned char>& pak, const std::string& dir, std::string* error) {
+bool ExtractGamePak(const std::vector<unsigned char>& pak, const std::string& dir, std::string* error, const unsigned char* key) {
     auto fail = [&](const std::string& message) {
         if (error) *error = message;
         return false;
     };
-    if (pak.size() < 12 || std::memcmp(pak.data(), "OEPAK001", 8) != 0) return fail("not an OwnEngine game.pak");
-    const size_t indexSize = static_cast<size_t>(pak[8]) | (static_cast<size_t>(pak[9]) << 8) | (static_cast<size_t>(pak[10]) << 16) |
-                             (static_cast<size_t>(pak[11]) << 24);
-    if (12 + indexSize > pak.size()) return fail("damaged game.pak (index)");
-    std::string err;
-    Json index = Json::parse(std::string(reinterpret_cast<const char*>(pak.data()) + 12, indexSize), &err);
-    if (!err.empty()) return fail("damaged game.pak: " + err);
-    const size_t base = 12 + indexSize;
-    for (const Json& f : index["files"].items()) {
-        std::string rel = f["path"].asString();
-        const double offset = f["offset"].asNumber(-1), size = f["size"].asNumber(-1);
-        bool unsafe = rel.empty() || rel[0] == '/' || rel.find('\\') != std::string::npos || rel.find(':') != std::string::npos ||
-                      rel == ".." || rel.rfind("../", 0) == 0 || rel.find("/../") != std::string::npos ||
-                      (rel.size() >= 3 && rel.compare(rel.size() - 3, 3, "/..") == 0);
-        if (unsafe) return fail("game.pak: invalid path '" + rel + "'");
-        if (offset < 0 || size < 0 || base + offset + size > static_cast<double>(pak.size())) return fail("game.pak: damaged entry " + rel);
+    PakReader reader;
+    if (!reader.OpenMemory(pak, error, key)) return false;
+    for (const std::string& rel : reader.Paths()) {
+        std::vector<unsigned char> data;
+        std::string readError;
+        if (!reader.Read(rel, data, &readError)) return fail(readError);
         std::string path = JoinPath(dir, rel);
         CreateDirectories(ParentPath(path));
         FILE* out = std::fopen(path.c_str(), "wb");
-        const unsigned char* data = pak.data() + base + static_cast<size_t>(offset);
-        bool ok = out && (size == 0 || std::fwrite(data, 1, static_cast<size_t>(size), out) == static_cast<size_t>(size));
+        bool ok = out && (data.empty() || std::fwrite(data.data(), 1, data.size(), out) == data.size());
         if (out) ok = std::fclose(out) == 0 && ok;
         if (!ok) return fail("cannot write " + path);
     }

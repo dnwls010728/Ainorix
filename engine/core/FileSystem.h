@@ -28,4 +28,13 @@ std::vector<std::string> ListFiles(const std::string& dir, const std::string& ex
 // Names (not paths) of the folders directly inside `dir`, sorted.
 std::vector<std::string> ListDirectories(const std::string& dir);
 
+// Packaged games: the files of a pak (core/Pak.h) appear below `root`, a folder that need not exist.
+// ReadTextFile, ReadBinaryFile, FileExists, FileModifiedTime, IsDirectory, ListFiles and ListDirectories
+// answer from the pak for paths below root and never look at the disk there, so loose files cannot
+// replace packaged ones. Nothing can be written below root. Mount before other threads read files.
+// `key` is the master secret the pak was built with (nullptr = the engine seed; see core/Pak.h).
+bool MountPakFile(const std::string& root, const std::string& pakPath, std::string* error, const unsigned char* key = nullptr);
+bool MountPakMemory(const std::string& root, std::vector<unsigned char> pak, std::string* error, const unsigned char* key = nullptr);
+void UnmountPaks();
+
 }  // namespace oe

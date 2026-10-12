@@ -55,7 +55,7 @@ CMake と Ninja を使います。最初のビルドは Jolt のコンパイル�
 | `oe script <project> [--save]` | 標準入力の `{"command":..,"args":..}` 行を実行 |
 | `oe mcp <project> [--port 7777]` / `oe mcp --connect 7777` | stdio の MCP サーバー / 実行中のエディターに接続 |
 | `oe import <project> <file>` | モデル、テクスチャ、サウンド、フォントをプロジェクトにコピー |
-| `oe package <project> [--web\|--android]` | 単体ゲーム: `Name.exe` + データ、静的 Web フォルダー、署名済み APK / App Bundle |
+| `oe package <project> [--web\|--android]` | 単体ゲーム: `Name.exe` + `game.pak` (圧縮・ゲーム別キーで暗号化、スクリプトはストリップ済みバイトコード。[PACKAGING](docs/PACKAGING.md))、静的 Web フォルダー、署名済み APK / App Bundle |
 | `oe serve <dir>` / `oe serve-game <project>` | Web ビルドのローカルサーバー / ヘッドレス専用サーバー |
 | `oe api --markdown` | コマンドリファレンスを出力 ([docs/API.md](docs/API.md)) |
 

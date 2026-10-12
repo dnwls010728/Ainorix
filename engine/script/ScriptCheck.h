@@ -35,4 +35,12 @@ struct ScriptParam {
 
 std::vector<ScriptParam> InferScriptParams(const std::string& source);
 
+// Lua source as the bytecode a packaged game ships (lua_dump with debug information, so errors keep
+// their file and line). `chunkName` is what messages call the file, e.g. "@scripts/player.lua".
+// The same bytes load on every platform the engine builds for (little-endian, 64-bit numbers).
+// `strip` leaves out debug information (line numbers, local and upvalue names, the chunk name), so a
+// decompiler recovers less; error messages from the script then have no file or line. False with the
+// compiler's message when the source does not compile.
+bool CompileLuaBytecode(const std::string& source, const std::string& chunkName, std::string& bytecode, std::string* error, bool strip = false);
+
 }  // namespace oe

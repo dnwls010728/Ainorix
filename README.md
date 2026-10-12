@@ -54,7 +54,7 @@ builds the headless tools (CLI, MCP, tests, GPU screenshots through EGL when `li
 | `oe script <project> [--save]` | Run `{"command":..,"args":..}` lines from stdin |
 | `oe mcp <project> [--port 7777]` / `oe mcp --connect 7777` | MCP server on stdio / attach to a running editor |
 | `oe import <project> <file>` | Copy a model, texture, sound or font into the project |
-| `oe package <project> [--web\|--android]` | Standalone game: `Name.exe` + data, a static web folder, or a signed APK / App Bundle |
+| `oe package <project> [--web\|--android]` | Standalone game: `Name.exe` + `game.pak` (packed, per-game key, scripts as stripped bytecode; [PACKAGING](docs/PACKAGING.md)), a static web folder, or a signed APK / App Bundle |
 | `oe serve <dir>` / `oe serve-game <project>` | Serve a web build locally / run a headless dedicated server |
 | `oe api --markdown` | Print the command reference ([docs/API.md](docs/API.md)) |
 

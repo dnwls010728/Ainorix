@@ -114,6 +114,9 @@ public:
     // entry point (Tick, Step, Call) is active. Off by default: tools and tests step exactly.
     void EnableNetworkWatchdog(bool on);
     bool Playing() const { return playing_; }
+    // The packaged player runs this engine: game data came from `oe package` (scripts may be bytecode).
+    void SetPackaged(bool on) { packaged_ = on; }
+    bool Packaged() const { return packaged_; }
     std::string ScriptReloadBlockReason() const;
     bool InPlaySession() const { return playSnapshot_ != nullptr; }
     uint64_t Frame() const { return frame_; }
@@ -407,6 +410,7 @@ private:
     std::unique_ptr<ScriptHost> scripts_;
     std::unique_ptr<PhysicsWorld> physics_;
     std::unique_ptr<Navigation> nav_;
+    bool packaged_ = false;
     bool navTried_ = false;       // a bake was attempted for the scene as it is
     uint64_t navRevision_ = 0;    // revision_ the geometry was last collected at
     uint64_t navHash_ = 0;        // NavGeometry::Hash of the baked input

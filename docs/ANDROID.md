@@ -98,10 +98,12 @@ stores and testing.
 
 ## How the game runs on the device
 
-- `assets/game.pak` (the same format as the web build) is unpacked into the
+- `assets/game.pak` (the same format as the other packages: packed, enciphered with the game's own
+  key and scripts as stripped bytecode, [PACKAGING.md](PACKAGING.md)) is unpacked into the
   app's private files folder on the first start after each install/update
   (`assets/game.id` changes with the data), then the engine opens it like a
-  desktop project folder.
+  desktop project folder. The key is embedded in `liboe_player.so` (a copy is keyed per ABI during
+  packaging; the folder other apps cannot read without root holds the unpacked files).
 - **Input**: every finger is in `input.touches()`; the first one is also
   `MouseLeft` at `mouseX/mouseY` (so `UIButton`, `onClick` and pointer events
   work with touch). On-screen controls: `UIButton {key: "Left"}` holds that key

@@ -38,6 +38,7 @@
 #include "app/DedicatedServer.h"
 #include "core/FileSystem.h"
 #include "core/Json.h"
+#include "core/Pak.h"
 #include "core/Log.h"
 #include "platform/Platform.h"
 #include "render/GpuRenderer.h"
@@ -45,7 +46,24 @@
 
 using namespace oe;
 
+// A key slot oe package overwrites with the game's master secret (engine/core/Pak.h). Volatile and
+// external so the compiler keeps it; a committed runtime ships it all zero, which means the engine
+// seed, so an unkeyed build behaves as before.
+// 16 mark bytes then 32 key bytes, filled with the unkeyed placeholder 0xee (not zero, so the wasm
+// data segment keeps them for `oe package` to overwrite).
+extern "C" volatile unsigned char oePakKeySlot[16 + 32] = {
+    'O', 'E', 'P', 'A', 'K', 0xb1, 0x5c, 0x27, 0xe9, 0x40, 0x8d, 0x36, 0xca, 0x72, 0x1f, 0x94,
+    0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee,
+    0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee, 0xee};
+
 namespace {
+
+// The game's key, copied out of the slot once; nullptr when the slot is still zero.
+const unsigned char* GameKey() {
+    static unsigned char slot[sizeof(oePakKeySlot)];
+    for (size_t i = 0; i < sizeof(slot); ++i) slot[i] = oePakKeySlot[i];
+    return EmbeddedPakKey(slot);
+}
 
 struct Player {
     Engine engine;
@@ -122,6 +140,7 @@ int RunPlayer(const std::string& dir, const std::vector<std::pair<bool, std::str
     // Heap allocated: on the web main() returns while the loop keeps running.
     auto* player = new Player();
     Engine& engine = player->engine;
+    engine.SetPackaged(true);
     for (const auto& set : sets) {
         if (ApplyLaunchArg(engine, set.second, set.first, &err)) continue;
         PlatformShowError(title, "Cannot start the game.\n\n--set " + set.second + ": " + err);
@@ -197,7 +216,7 @@ bool PrepareAndroidGame(std::string& dir, std::string& err) {
         return false;
     }
     RemoveAll(dir);
-    if (!ExtractGamePak(pak, dir, &err)) return false;
+    if (!ExtractGamePak(pak, dir, &err, GameKey())) return false;
     WriteTextFile(stampFile, stamp);
     OE_LOG_INFO("player", "unpacked game data (%zu bytes) into %s", pak.size(), dir.c_str());
     return true;
@@ -219,7 +238,13 @@ void android_main(android_app* app) {
 #else
 int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
-    std::string dir = argc > 1 ? argv[1] : "/game";  // the page loader unpacks game.pak there
+    std::string dir = argc > 1 ? argv[1] : "/game";
+    // The page stores game.pak as it came; its files are read from there, below /game.
+    std::string pakError;
+    if (FileExists("/game.pak") && !MountPakFile(dir, "/game.pak", &pakError, GameKey())) {
+        PlatformShowError("OwnEngine", "Cannot read the game data.\n\n" + pakError);
+        return 1;
+    }
     return RunPlayer(dir);
 #else
     std::string dir = JoinPath(ExecutableDirectory(), "game");
@@ -248,9 +273,21 @@ int main(int argc, char** argv) {
         } else if (flag.compare(0, 2, "--") == 0) argumentError = "unknown argument: " + flag;
         else dir = flag;
     }
+    // A packaged game is the player beside game.pak: its files are read out of the archive as if
+    // they were in game/. Without one (oe package --loose, or a folder given) the folder is used.
+    const std::string pakFile = JoinPath(ExecutableDirectory(), "game.pak");
+    if (argumentError.empty() && dir == JoinPath(ExecutableDirectory(), "game") && FileExists(pakFile)) {
+        std::string pakError;
+        if (!MountPakFile(dir, pakFile, &pakError, GameKey())) argumentError = "cannot read game.pak: " + pakError;
+    }
+    if (!server && !argumentError.empty() && argumentError.rfind("cannot read game.pak", 0) == 0) {
+        PlatformShowError("OwnEngine", argumentError);
+        return 1;
+    }
     if (server || !argumentError.empty()) {
         PlatformAttachParentConsole();
         Engine engine; std::string error; Json result;
+        engine.SetPackaged(true);
         for (const auto& set : sets)
             if (argumentError.empty() && !ApplyLaunchArg(engine, set.second, set.first, &error)) argumentError = "--set " + set.second + ": " + error;
         if (!argumentError.empty() || !engine.Open(dir, &error)) {
@@ -258,6 +295,7 @@ int main(int argc, char** argv) {
             result["error"]["message"] = argumentError.empty() ? error : argumentError;
         } else if (!scenes.empty()) {
             result = RunDedicatedWorlds(dir, scenes, arguments, ticks, [&](Engine& world, std::string* failed) {
+                world.SetPackaged(true);
                 for (const auto& set : sets) if (!ApplyLaunchArg(world, set.second, set.first, failed)) return false;
                 return true;
             });

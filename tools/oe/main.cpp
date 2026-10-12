@@ -27,6 +27,8 @@
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
 #include "core/Log.h"
+#include "core/Pak.h"
+#include "platform/Network.h"
 #include "physics/PhysicsWorld.h"
 #include "platform/Platform.h"
 #include "render/GpuRenderer.h"
@@ -224,9 +226,11 @@ int CmdHelp() {
                  "  exec --connect <port> <command> [json] [--save]   one command to a running editor, without MCP\n"
                  "  script --connect <port> [--save]  many commands (JSON lines on stdin) to a running editor\n"
                  "  import <path> <file> [--to rel]   Copy a model/texture/sound into the project (prints asset.info)\n"
-                 "  package [path] [--out dist/Name] [--name N] [--web]\n"
-                 "                                    Build a standalone game: Name.exe + game data, or with --web\n"
-                 "                                    an HTML5/WebGL2 folder (index.html + wasm) for any web host\n"
+                 "  package [path] [--out dist/Name] [--name N] [--web] [--loose] [--script-lines]\n"
+                 "                                    Build a standalone game: Name.exe + game.pak (the project's files in one\n"
+                 "                                    enciphered archive keyed to this game, scripts as stripped bytecode;\n"
+                 "                                    --loose: plain files in game/; --script-lines: keep script line numbers),\n"
+                 "                                    or with --web an HTML5/WebGL2 folder (index.html + wasm) for any web host\n"
                  "  package [path] --android [--aab] [--package com.x.y] [--install] [--keystore f --ks-pass P --key-alias A]\n"
                  "                                    Build a signed Android APK, or with --aab an App Bundle for Google Play\n"
                  "                                    (debug key unless --keystore); see docs/ANDROID.md\n"
@@ -867,6 +871,37 @@ std::string PassArg(const std::string& v) {
 }
 
 //   --android: <out>/<Name>.apk (signed; debug key unless --keystore), installable with adb or by copying it to a phone
+// A game's own 32-byte pak key, kept in <project>/.oe/package.key (a git-ignored dot folder). Generated
+// once and reused, so the same project always packs to the same bytes and a lost key only means the
+// next package reads differently. Empty on failure (then the engine seed is used).
+std::vector<unsigned char> ProjectPakKey(const std::string& projectDir) {
+    const std::string path = JoinPath(projectDir, ".oe/package.key");
+    std::vector<unsigned char> key;
+    if (ReadBinaryFile(path, key) && key.size() == kPakKeySize) return key;
+    key.resize(kPakKeySize);
+    if (!NetworkRandom(key.data(), key.size())) return {};
+    CreateDirectories(ParentPath(path));
+    WriteTextFile(path, std::string(key.begin(), key.end()));
+    return key;
+}
+
+// Writes the game's key into a player binary on disk (EmbedPakKey). A binary without a slot is left
+// as it is with a warning: it reads paks with the engine seed, which still opens this game's pak only
+// if the pak too used the seed. False only when the file cannot be read or written.
+bool KeyPlayerBinary(const std::string& path, const std::vector<unsigned char>& key) {
+    if (key.empty()) return true;
+    std::vector<unsigned char> bytes;
+    if (!ReadBinaryFile(path, bytes)) return false;
+    if (!EmbedPakKey(bytes, key.data())) {
+        OE_LOG_WARN("package", "no key slot in %s; it reads game.pak with the engine seed", path.c_str());
+        return true;
+    }
+    FILE* f = std::fopen(path.c_str(), "wb");
+    bool ok = f && std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    if (f) ok = std::fclose(f) == 0 && ok;
+    return ok;
+}
+
 int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::string& name, const std::vector<std::string>& files,
                       const Json& fileList) {
     Json project;
@@ -917,6 +952,8 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     app.debuggable = a.Has("--debuggable");
     if (app.versionCode < 1) return Fail("invalid_argument", "versionCode must be a positive integer", "Use --version-code 1.");
 
+    const std::vector<unsigned char> key = ProjectPakKey(projectDir);
+    const bool stripScripts = !a.Has("--script-lines");
     ApkContents apk;
     apk.app = app;
     for (const std::string& abi : abis) apk.nativeLibs.push_back({abi, JoinPath(JoinPath(runtime, abi), "liboe_player.so")});
@@ -938,9 +975,18 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
         return Fail("output_not_empty", out + " exists and is not an OwnEngine Android package", "Pick another --out folder or empty it.");
     }
     CreateDirectories(out);
+    // The game's key goes into a copy of each library (the runtime files are shared, never patched).
+    const std::string libDir = JoinPath(out, ".oe-lib");
+    if (!key.empty()) {
+        for (auto& lib : apk.nativeLibs) {
+            const std::string copy = JoinPath(JoinPath(libDir, lib.first), "liboe_player.so");
+            if (!CopyFileTo(lib.second, copy) || !KeyPlayerBinary(copy, key)) { RemoveAll(libDir); return Fail("write_failed", "cannot prepare " + lib.first + " library"); }
+            lib.second = copy;
+        }
+    }
     const std::string pak = JoinPath(out, ".game.pak.tmp");
     double bytes = 0;
-    if (!WriteGamePak(projectDir, files, pak, &err, &bytes)) return Fail("write_failed", err);
+    if (!WriteGamePak(projectDir, files, pak, &err, &bytes, key.empty() ? nullptr : key.data(), stripScripts)) { RemoveAll(libDir); return Fail("write_failed", err); }
     ReadBinaryFile(pak, apk.gamePak);
     RemoveAll(pak);
 
@@ -954,7 +1000,9 @@ int CmdPackageAndroid(const Args& a, const std::string& projectDir, const std::s
     const std::string apkPath = JoinPath(out, name + ext);
     const std::string unsignedPath = JoinPath(out, name + "-unsigned" + ext);
     const std::string log = JoinPath(out, ".oe-tool.log");
-    if (!(aab ? WriteUnsignedAppBundle(apk, unsignedPath, &err) : WriteUnsignedApk(apk, unsignedPath, &err))) return Fail("write_failed", err);
+    const bool wrote = aab ? WriteUnsignedAppBundle(apk, unsignedPath, &err) : WriteUnsignedApk(apk, unsignedPath, &err);
+    RemoveAll(libDir);
+    if (!wrote) return Fail("write_failed", err);
 
     Json res = Json::MakeObject();
     res["ok"] = true;
@@ -1137,11 +1185,13 @@ int CmdPackage(const Args& a) {
         }
         double bytes = 0;
         std::string err;
-        if (!WriteGamePak(projectDir, files, JoinPath(out, "game.pak"), &err, &bytes)) return Fail("write_failed", err);
+        const std::vector<unsigned char> key = ProjectPakKey(projectDir);
+        if (!WriteGamePak(projectDir, files, JoinPath(out, "game.pak"), &err, &bytes, key.empty() ? nullptr : key.data(), !a.Has("--script-lines"))) return Fail("write_failed", err);
         if (!WriteTextFile(JoinPath(out, "index.html"), page)) return Fail("write_failed", "cannot write " + JoinPath(out, "index.html"));
         for (const char* f : {"oe_player.js", "oe_player.wasm"}) {
             if (!CopyFileTo(JoinPath(runtime, f), JoinPath(out, f))) return Fail("write_failed", std::string("cannot write ") + f);
         }
+        if (!KeyPlayerBinary(JoinPath(out, "oe_player.wasm"), key)) return Fail("write_failed", "cannot key oe_player.wasm");
         for (const std::string& f : pageFiles) {
             if (f == "index.html" || f == "game.pak" || f == "oe_player.js" || f == "oe_player.wasm") {
                 return Fail("invalid_web_file", "web/" + f + " would replace a file of the web package", "Rename it; web/ is for extra page files such as host.js.");
@@ -1173,28 +1223,42 @@ int CmdPackage(const Args& a) {
     std::string player = JoinPath(ExecutableDirectory(), "oe_player" + exeExt);
     if (!FileExists(player)) return Fail("player_missing", "player runtime not found at " + player, "Build it with build.bat (target oe_player).");
 
-    // Only reuse a folder that is empty or an earlier package (has game/project.json).
+    // Only reuse a folder that is empty or an earlier package (has game.pak or game/project.json).
     std::string gameDir = JoinPath(out, "game");
-    if (IsDirectory(out) && !ListFiles(out, "", false).empty() && !FileExists(JoinPath(gameDir, "project.json"))) {
+    const std::string pakPath = JoinPath(out, "game.pak");
+    if (IsDirectory(out) && !ListFiles(out, "", false).empty() && !FileExists(pakPath) && !FileExists(JoinPath(gameDir, "project.json"))) {
         return Fail("output_not_empty", out + " exists and is not an OwnEngine package", "Pick another --out folder or empty it.");
     }
-    if (!RemoveAll(gameDir)) return Fail("write_failed", "cannot clean " + gameDir, "Close the running game first.");
+    if (!RemoveAll(gameDir) || !RemoveAll(pakPath)) return Fail("write_failed", "cannot clean " + out, "Close the running game first.");
 
-    // Game data: everything in the project except hidden files and agent notes.
+    // Game data: everything in the project except hidden files and agent notes, in one enciphered
+    // archive the player reads in place (scripts as bytecode). --loose: the files as they are, in game/.
+    const bool loose = a.Has("--loose");
     double bytes = 0;
-    for (const std::string& rel : files) {
-        std::string src = JoinPath(projectDir, rel);
-        if (!CopyFileTo(src, JoinPath(gameDir, rel))) return Fail("write_failed", "cannot copy " + rel);
-        std::vector<unsigned char> data;
-        if (ReadBinaryFile(src, data)) bytes += static_cast<double>(data.size());
+    if (loose) {
+        for (const std::string& rel : files) {
+            std::string src = JoinPath(projectDir, rel);
+            if (!CopyFileTo(src, JoinPath(gameDir, rel))) return Fail("write_failed", "cannot copy " + rel);
+            std::vector<unsigned char> data;
+            if (ReadBinaryFile(src, data)) bytes += static_cast<double>(data.size());
+        }
+    }
+    std::vector<unsigned char> key;
+    if (!loose) {
+        key = ProjectPakKey(projectDir);
+        std::string err;
+        CreateDirectories(out);
+        if (!WriteGamePak(projectDir, files, pakPath, &err, &bytes, key.empty() ? nullptr : key.data(), !a.Has("--script-lines"))) return Fail("write_failed", err, "Close the running game first.");
     }
     std::string exe = JoinPath(out, name + exeExt);
     if (!CopyFileTo(player, exe)) return Fail("write_failed", "cannot write " + exe, "Close the running game first.");
+    if (!KeyPlayerBinary(exe, key)) return Fail("write_failed", "cannot key " + exe, "Close the running game first.");
 
     Json res = Json::MakeObject();
     res["ok"] = true;
     res["result"]["exe"] = exe;
-    res["result"]["gameDir"] = gameDir;
+    if (loose) res["result"]["gameDir"] = gameDir;
+    else res["result"]["pak"] = pakPath;
     res["result"]["files"] = fileList;
     res["result"]["dataBytes"] = bytes;
     res["result"]["next"] = "Run " + exe + " or zip the folder " + out + " to share it.";

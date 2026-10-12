@@ -35,15 +35,16 @@ std::string ImportAssetFile(Engine& engine, const std::string& sourcePath, const
 // and agent notes (AGENTS.md, CLAUDE.md). Relative paths with '/', sorted.
 std::vector<std::string> GameFiles(const std::string& projectDir);
 
-// Writes the web player's game data archive:
-//   "OEPAK001" | uint32 little-endian index size | JSON index
-//   {"files":[{"path","offset","size"}]} | file bytes (offsets relative to their start)
-// tools/player/web/index.html unpacks it into /game before the engine starts.
+// Writes a packaged game's data archive (core/Pak.h, OEPAK002: enciphered, read in place by the
+// players through MountPakFile). Lua files that compile are stored as bytecode under the same path,
+// so the source text does not ship; one that does not compile is stored as it is. `key` is the
+// game's master secret (kPakKeySize bytes, nullptr = the engine seed); `stripScripts` leaves debug
+// information out of the bytecode. `dataBytes`: the size of the project's files as they are on disk.
 bool WriteGamePak(const std::string& projectDir, const std::vector<std::string>& files, const std::string& outPath,
-                  std::string* error, double* dataBytes = nullptr);
-// Writes every file of a game.pak (WriteGamePak) below `dir` (the Android
+                  std::string* error, double* dataBytes = nullptr, const unsigned char* key = nullptr, bool stripScripts = false);
+// Writes every file of a game.pak (OEPAK002 or the older OEPAK001) below `dir` (the Android
 // player unpacks assets/game.pak into its data folder). Rejects paths that
 // would leave `dir`.
-bool ExtractGamePak(const std::vector<unsigned char>& pak, const std::string& dir, std::string* error);
+bool ExtractGamePak(const std::vector<unsigned char>& pak, const std::string& dir, std::string* error, const unsigned char* key = nullptr);
 
 }  // namespace oe

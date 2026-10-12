@@ -1983,7 +1983,9 @@ bool ScriptHost::LoadFile(const std::string& path) {
     }
     sources_[path] = source;
     std::string chunkName = "@" + RelativePath(full, engine_.ProjectDir());
-    if (luaL_loadbufferx(L, source.data(), source.size(), chunkName.c_str(), "t") != LUA_OK) return false;
+    // A packaged game ships its scripts as bytecode (oe package); anything else must be source text,
+    // since crafted bytecode can crash the interpreter.
+    if (luaL_loadbufferx(L, source.data(), source.size(), chunkName.c_str(), engine_.Packaged() ? "bt" : "t") != LUA_OK) return false;
     if (!reloading_ && loadStack_.empty()) ArmBudget();
     dependencies_[path].clear();
     loadStack_.push_back(path);

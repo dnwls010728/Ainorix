@@ -46,8 +46,8 @@
   }
   if (!window.WebAssembly) { fail("This browser does not support WebAssembly."); return; }
 
-  // game.pak = "OEPAK001" + uint32 (little endian) index length + JSON index
-  // {"files":[{"path","offset","size"}]} + the file bytes. Unpacked to /game.
+  // game.pak (engine/core/Pak.h) is stored as it came at /game.pak; the player reads the game's
+  // files out of it as if they were in /game.
   function loadPak(done) {
     fetch("game.pak").then(function (r) {
       if (!r.ok) throw new Error("game.pak: HTTP " + r.status);
@@ -69,10 +69,8 @@
       })();
     }).then(function (buf) {
       var bytes = new Uint8Array(buf);
-      if (new TextDecoder().decode(bytes.subarray(0, 8)) !== "OEPAK001") throw new Error("game.pak is not an OwnEngine game package");
-      var n = new DataView(buf).getUint32(8, true);
-      var index = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + n)));
-      done(index.files, bytes, 12 + n);
+      if (new TextDecoder().decode(bytes.subarray(0, 6)) !== "OEPAK0") throw new Error("game.pak is not an OwnEngine game package");
+      done(bytes);
     }).catch(function (e) { fail("Cannot load the game data.\n\n" + e.message); });
   }
 
@@ -83,12 +81,8 @@
     printErr: function (t) { console.warn(t); },
     preRun: [function () {
       Module.addRunDependency("game.pak");
-      loadPak(function (files, bytes, base) {
-        files.forEach(function (f) {
-          var path = "/game/" + f.path;
-          FS.mkdirTree(path.substring(0, path.lastIndexOf("/")));
-          FS.writeFile(path, bytes.subarray(base + f.offset, base + f.offset + f.size));
-        });
+      loadPak(function (bytes) {
+        FS.writeFile("/game.pak", bytes);
         Module.removeRunDependency("game.pak");
       });
     }],

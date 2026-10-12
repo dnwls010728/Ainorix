@@ -16,6 +16,12 @@ struct Image {
 std::vector<uint8_t> EncodePng(const Image& image, bool alpha = false);
 bool WritePng(const std::string& path, const Image& image, bool alpha = false);
 
+// zlib streams (RFC 1950/1951). ZlibPack is the PNG encoder's compressor: one fixed-Huffman block
+// with greedy LZ77, deterministic. ZlibUnpack reads any zlib stream (stored, fixed and dynamic
+// blocks) whose plain size is known; false when the stream is damaged or the size does not match.
+std::vector<uint8_t> ZlibPack(const std::vector<uint8_t>& data);
+bool ZlibUnpack(const uint8_t* data, size_t size, size_t plainSize, std::vector<uint8_t>& out);
+
 
 std::string Base64Encode(const uint8_t* data, size_t size);
 inline std::string Base64Encode(const std::vector<uint8_t>& data) { return Base64Encode(data.data(), data.size()); }

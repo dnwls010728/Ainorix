@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <set>
 #include <sstream>
 
+#include "core/Pak.h"
 #include "platform/Platform.h"
 
 namespace fs = std::filesystem;
@@ -17,9 +20,61 @@ std::string ToU8(const fs::path& p) {
     auto s = p.generic_u8string();
     return std::string(s.begin(), s.end());
 }
+
+struct Mount {
+    std::string root;  // absolute, forward slashes, no trailing slash
+    PakReader pak;
+};
+std::vector<std::unique_ptr<Mount>>& Mounts() {
+    static std::vector<std::unique_ptr<Mount>> mounts;
+    return mounts;
+}
+
+// The mount a path lies in and the path inside it ("" for the root itself); nullptr for the disk.
+const Mount* FindMount(const std::string& path, std::string* inside) {
+    if (Mounts().empty()) return nullptr;
+    std::error_code ec;
+    const std::string full = ToU8(fs::absolute(U8Path(path), ec).lexically_normal());
+    for (const auto& mount : Mounts()) {
+        const std::string& root = mount->root;
+        if (full.size() < root.size() || full.compare(0, root.size(), root) != 0) continue;
+        if (full.size() > root.size() && full[root.size()] != '/') continue;
+        *inside = full.size() > root.size() ? full.substr(root.size() + 1) : std::string();
+        while (!inside->empty() && inside->back() == '/') inside->pop_back();
+        return mount.get();
+    }
+    return nullptr;
+}
+
+bool AddMount(const std::string& root, std::unique_ptr<Mount> mount) {
+    std::error_code ec;
+    mount->root = ToU8(fs::absolute(U8Path(root), ec).lexically_normal());
+    while (mount->root.size() > 1 && mount->root.back() == '/') mount->root.pop_back();
+    Mounts().push_back(std::move(mount));
+    return true;
+}
 }  // namespace
 
+bool MountPakFile(const std::string& root, const std::string& pakPath, std::string* error, const unsigned char* key) {
+    auto mount = std::make_unique<Mount>();
+    return mount->pak.OpenFile(pakPath, error, key) && AddMount(root, std::move(mount));
+}
+
+bool MountPakMemory(const std::string& root, std::vector<unsigned char> pak, std::string* error, const unsigned char* key) {
+    auto mount = std::make_unique<Mount>();
+    return mount->pak.OpenMemory(std::move(pak), error, key) && AddMount(root, std::move(mount));
+}
+
+void UnmountPaks() { Mounts().clear(); }
+
 bool ReadTextFile(const std::string& path, std::string& out) {
+    std::string inside;
+    if (const Mount* mount = FindMount(path, &inside)) {
+        std::vector<unsigned char> bytes;
+        if (!mount->pak.Read(inside, bytes)) return false;
+        out.assign(bytes.begin(), bytes.end());
+        return true;
+    }
     std::ifstream f(U8Path(path), std::ios::binary);
     if (!f) return false;
     std::ostringstream ss;
@@ -29,6 +84,8 @@ bool ReadTextFile(const std::string& path, std::string& out) {
 }
 
 bool WriteTextFile(const std::string& path, const std::string& text) {
+    std::string inside;
+    if (FindMount(path, &inside)) return false;  // packaged game data is read-only
     std::error_code ec;
     fs::path p = U8Path(path);
     if (p.has_parent_path()) fs::create_directories(p.parent_path(), ec);
@@ -65,6 +122,8 @@ bool WriteTextFileAtomic(const std::string& path, const std::string& text, std::
 }
 
 bool ReadBinaryFile(const std::string& path, std::vector<unsigned char>& out) {
+    std::string inside;
+    if (const Mount* mount = FindMount(path, &inside)) return mount->pak.Read(inside, out);
     std::ifstream f(U8Path(path), std::ios::binary);
     if (!f) return false;
     out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
@@ -72,17 +131,29 @@ bool ReadBinaryFile(const std::string& path, std::vector<unsigned char>& out) {
 }
 
 bool FileExists(const std::string& path) {
+    std::string inside;
+    if (const Mount* mount = FindMount(path, &inside)) return mount->pak.Find(inside) != nullptr || IsDirectory(path);
     std::error_code ec;
     return fs::exists(U8Path(path), ec);
 }
 
 int64_t FileModifiedTime(const std::string& path) {
+    std::string inside;
+    if (const Mount* mount = FindMount(path, &inside)) return mount->pak.Find(inside) ? 1 : 0;  // never changes
     std::error_code ec;
     auto t = fs::last_write_time(U8Path(path), ec);
     return ec ? 0 : static_cast<int64_t>(t.time_since_epoch().count());
 }
 
 bool IsDirectory(const std::string& path) {
+    std::string inside;
+    if (const Mount* mount = FindMount(path, &inside)) {
+        if (inside.empty()) return true;
+        const std::string prefix = inside + "/";
+        for (const std::string& file : mount->pak.Paths())
+            if (file.size() > prefix.size() && file.compare(0, prefix.size(), prefix) == 0) return true;
+        return false;
+    }
     std::error_code ec;
     return fs::is_directory(U8Path(path), ec);
 }
@@ -132,6 +203,19 @@ std::string RelativePath(const std::string& path, const std::string& base) {
 
 std::vector<std::string> ListFiles(const std::string& dir, const std::string& extension, bool recursive) {
     std::vector<std::string> out;
+    std::string inside;
+    if (const Mount* mount = FindMount(dir, &inside)) {
+        const std::string prefix = inside.empty() ? std::string() : inside + "/";
+        for (const std::string& file : mount->pak.Paths()) {
+            if (file.size() <= prefix.size() || file.compare(0, prefix.size(), prefix) != 0) continue;
+            const std::string rest = file.substr(prefix.size());
+            if (!recursive && rest.find('/') != std::string::npos) continue;
+            if (!extension.empty() && (rest.size() < extension.size() || rest.compare(rest.size() - extension.size(), extension.size(), extension) != 0)) continue;
+            out.push_back(JoinPath(dir, rest));
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
     std::error_code ec;
     auto consider = [&](const fs::directory_entry& e) {
         if (!e.is_regular_file()) return;
@@ -151,6 +235,18 @@ std::vector<std::string> ListFiles(const std::string& dir, const std::string& ex
 
 std::vector<std::string> ListDirectories(const std::string& dir) {
     std::vector<std::string> out;
+    std::string inside;
+    if (const Mount* mount = FindMount(dir, &inside)) {
+        const std::string prefix = inside.empty() ? std::string() : inside + "/";
+        std::set<std::string> names;
+        for (const std::string& file : mount->pak.Paths()) {
+            if (file.size() <= prefix.size() || file.compare(0, prefix.size(), prefix) != 0) continue;
+            const size_t slash = file.find('/', prefix.size());
+            if (slash != std::string::npos) names.insert(file.substr(prefix.size(), slash - prefix.size()));
+        }
+        out.assign(names.begin(), names.end());
+        return out;
+    }
     std::error_code ec;
     for (auto it = fs::directory_iterator(U8Path(dir), ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
         if (it->is_directory(ec)) out.push_back(ToU8(it->path().filename()));

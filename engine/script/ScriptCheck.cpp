@@ -218,6 +218,26 @@ std::string TypeOf(const Json& v) {
 
 }  // namespace
 
+bool CompileLuaBytecode(const std::string& source, const std::string& chunkName, std::string& bytecode, std::string* error, bool strip) {
+    lua_State* L = luaL_newstate();
+    if (!L) return false;
+    bytecode.clear();
+    bool ok = luaL_loadbufferx(L, source.data(), source.size(), chunkName.c_str(), "t") == LUA_OK;
+    if (!ok) {
+        const char* message = lua_tostring(L, -1);
+        if (error) *error = message ? message : "syntax error";
+    } else {
+        const auto writer = [](lua_State*, const void* data, size_t size, void* out) {
+            static_cast<std::string*>(out)->append(static_cast<const char*>(data), size);
+            return 0;
+        };
+        ok = lua_dump(L, writer, &bytecode, strip ? 1 : 0) == 0;
+        if (!ok && error) *error = "cannot write bytecode";
+    }
+    lua_close(L);
+    return ok;
+}
+
 std::vector<LuaDiagnostic> CheckLuaSource(const std::string& source, const std::string& chunkName, const std::set<std::string>& knownGlobals) {
     std::vector<LuaDiagnostic> out;
     lua_State* L = luaL_newstate();

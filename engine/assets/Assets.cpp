@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -474,7 +475,23 @@ bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& he
 namespace {
 
 bool LoadGltfModel(const std::string& path, Mesh& out, std::string& warnings, std::string* error) {
+    // Files come through core/FileSystem (a packaged game reads them out of its pak), also the
+    // .bin files a .gltf names.
     cgltf_options options{};
+    options.file.read = [](const cgltf_memory_options* memory, const cgltf_file_options*, const char* file, cgltf_size* size, void** bytes) {
+        std::vector<unsigned char> content;
+        if (!ReadBinaryFile(file, content)) return cgltf_result_file_not_found;
+        void* copy = memory->alloc_func ? memory->alloc_func(memory->user_data, content.size()) : std::malloc(content.empty() ? 1 : content.size());
+        if (!copy) return cgltf_result_out_of_memory;
+        if (!content.empty()) std::memcpy(copy, content.data(), content.size());
+        *size = content.size();
+        *bytes = copy;
+        return cgltf_result_success;
+    };
+    options.file.release = [](const cgltf_memory_options* memory, const cgltf_file_options*, void* bytes) {
+        if (memory->free_func) memory->free_func(memory->user_data, bytes);
+        else std::free(bytes);
+    };
     cgltf_data* data = nullptr;
     cgltf_result r = cgltf_parse_file(&options, path.c_str(), &data);
     if (r == cgltf_result_success) r = cgltf_load_buffers(&options, data, path.c_str());

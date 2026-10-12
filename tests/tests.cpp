@@ -27,6 +27,7 @@
 #include "assets/Assets.h"
 #include "audio/Wav.h"
 #include "core/FileSystem.h"
+#include "core/Pak.h"
 #include "core/Image.h"
 #include "core/Json.h"
 #include "core/Log.h"
@@ -58,6 +59,7 @@
 #include "scene/TileGrid.h"
 #include "scene/Vfx.h"
 #include "scene/VfxExpression.h"
+#include "script/ScriptCheck.h"
 #include "script/ScriptHost.h"
 #include "script/OfficialModules.h"
 #include "lua.h"
@@ -10521,29 +10523,192 @@ TEST(AnimatedSkinRenderers) {
     CHECK(std::count_if(gpu.color.begin(), gpu.color.end(), orange) > 30);
 }
 
-TEST(WebGamePak) {
-    // `oe package --web` data: the page unpacks game.pak into /game.
+TEST(ZlibPackAndUnpack) {
+    auto hex = [](const char* text) {
+        std::vector<uint8_t> out;
+        for (size_t i = 0; text[i] && text[i + 1]; i += 2) out.push_back(static_cast<uint8_t>(std::stoi(std::string(text + i, 2), nullptr, 16)));
+        return out;
+    };
+    // The text zlib's own compressor made the vectors below from (node: zlib.deflateSync).
+    std::string text;
+    for (int i = 0; i < 60; ++i) text += "The quick brown fox #" + std::to_string(i) + " jumps over the lazy dog; " + std::to_string(i * 7919 % 97) + "\n";
+    CHECK(text.size() == 3103);
+    const std::vector<uint8_t> plain(text.begin(), text.end());
+    std::vector<uint8_t> out;
+    // A dynamic-Huffman block (level 9) and a stored block (level 0).
+    const std::vector<uint8_t> dynamic = hex(
+        "78da7dd6e94d03311445e1ffa9c2120dc46fb1c7a28d34c03210d68140d8aaa7019f5bc0d11dc95fa27738aee5fdfc70f354ae4fdbf76bb9db7ecac5"
+        "be3c9e5fde3ecaf6b59ecae7712dcf577fbfe576bbbf2cfbdd6156542e9acd13e3c4fa3c714e96314f82938c79929c545869e2c3ea3ce99c449b278b"
+        "f83058199c7487a714afef0b34e2fd6946bc7f4b680400279942c0009a551048b0598501a31d8160019d552808e05905830a3b261874006a82418050"
+        "530e20110c1a0835c1c081a8090603889a60d080a80906463b82c102444d304820ea8241a5bf69c1a00351170c0288ba704033824107a12e18381075"
+        "c18066848206425d2830f825b85030406808050942432830da110a16101a424180d0100c2aed08061d848660e074b1a8cb0012c1a081d0100c1c88a6"
+        "603080680a06094453dd86b4a38e43209aea3a04a2a9ce43da110c3a104dc50088a670403382411bbb7fa15a0bf9");
+    CHECK(((dynamic[2] >> 1) & 3) == 2 && ZlibUnpack(dynamic.data(), dynamic.size(), plain.size(), out) && out == plain);
+    const std::vector<uint8_t> stored = hex("7801011f00e0ff73746f72656420626c6f636b207061796c6f61642030313233343536373839b42009f4");
+    const std::string storedText = "stored block payload 0123456789";
+    CHECK(ZlibUnpack(stored.data(), stored.size(), storedText.size(), out) && std::string(out.begin(), out.end()) == storedText);
+    // Our own compressor (fixed Huffman): text shrinks, and every kind of input comes back.
+    const std::vector<uint8_t> packed = ZlibPack(plain);
+    CHECK(packed.size() < plain.size() / 3 && ZlibUnpack(packed.data(), packed.size(), plain.size(), out) && out == plain);
+    std::vector<uint8_t> noise(70000), runs(300000, 7), empty;
+    uint32_t seed = 12345;
+    for (uint8_t& b : noise) { seed = seed * 1664525u + 1013904223u; b = static_cast<uint8_t>(seed >> 24); }
+    for (const std::vector<uint8_t>* input : {&noise, &runs, &empty}) {
+        const std::vector<uint8_t> z = ZlibPack(*input);
+        CHECK(ZlibUnpack(z.data(), z.size(), input->size(), out) && out == *input);
+    }
+    CHECK(ZlibPack(runs).size() < 3000);
+    // Damage and wrong sizes are refused, never read past the data.
+    CHECK(!ZlibUnpack(packed.data(), packed.size(), plain.size() - 1, out) && !ZlibUnpack(packed.data(), packed.size(), plain.size() + 1, out));
+    CHECK(!ZlibUnpack(packed.data(), packed.size() / 2, plain.size(), out) && !ZlibUnpack(packed.data(), 3, plain.size(), out));
+    for (size_t at : {size_t(0), size_t(1), packed.size() / 2, packed.size() - 1}) {
+        std::vector<uint8_t> broken = packed;
+        broken[at] ^= 0x10;
+        CHECK(!ZlibUnpack(broken.data(), broken.size(), plain.size(), out));
+    }
+    for (size_t at = 2; at < dynamic.size(); at += 7) {  // must not crash whatever the bytes say
+        std::vector<uint8_t> broken = dynamic;
+        broken[at] ^= 0xa5;
+        ZlibUnpack(broken.data(), broken.size(), plain.size(), out);
+    }
+}
+
+TEST(PakKeysAndStrippedBytecode) {
+    std::string dir = TestSourceDir() + "/tests/fixtures/Hello";
+    std::vector<std::string> files = GameFiles(dir);
+    const std::string out = AbsolutePath("build/test_pak_key");
+    RemoveAll(out);
+    CreateDirectories(out);
+    std::string err;
+    unsigned char keyA[kPakKeySize], keyB[kPakKeySize];
+    for (size_t i = 0; i < kPakKeySize; ++i) { keyA[i] = static_cast<unsigned char>(i * 7 + 1); keyB[i] = static_cast<unsigned char>(i * 5 + 9); }
+
+    // A pak built with a key opens only with that key; the engine seed and another key are refused.
+    const std::string pak = out + "/game.pak";
+    CHECK(WriteGamePak(dir, files, pak, &err, nullptr, keyA));
+    std::vector<unsigned char> original, got;
+    CHECK(ReadBinaryFile(dir + "/project.json", original));
+    PakReader keyed, wrongKey, seed;
+    CHECK(keyed.OpenFile(pak, &err, keyA) && keyed.Read("project.json", got) && got == original);
+    // The index deciphers to nonsense with the wrong secret: the pak looks damaged.
+    CHECK(!wrongKey.OpenFile(pak, &err, keyB) && !seed.OpenFile(pak, &err));
+    // The same files with the engine seed differ from the keyed pak byte for byte.
+    const std::string plainPak = out + "/plain.pak";
+    CHECK(WriteGamePak(dir, files, plainPak, &err));
+    std::vector<unsigned char> keyedBytes, plainBytes;
+    CHECK(ReadBinaryFile(pak, keyedBytes) && ReadBinaryFile(plainPak, plainBytes) && keyedBytes != plainBytes);
+
+    // The key slot: a player binary carries the mark and 32 zeros; embedding writes the key over them,
+    // and a zero slot means the engine seed.
+    std::vector<unsigned char> binary(4096, 0xcd);
+    const unsigned char mark[kPakKeyMarkSize] = {'O', 'E', 'P', 'A', 'K', 0xb1, 0x5c, 0x27, 0xe9, 0x40, 0x8d, 0x36, 0xca, 0x72, 0x1f, 0x94};
+    std::memcpy(binary.data() + 1000, mark, kPakKeyMarkSize);
+    std::memset(binary.data() + 1000 + kPakKeyMarkSize, 0, kPakKeySize);
+    CHECK(EmbeddedPakKey(binary.data() + 1000) == nullptr);  // still zero
+    std::memset(binary.data() + 1000 + kPakKeyMarkSize, kPakKeyUnset, kPakKeySize);
+    CHECK(EmbeddedPakKey(binary.data() + 1000) == nullptr);  // the unkeyed placeholder
+    CHECK(EmbedPakKey(binary, keyA));
+    const unsigned char* found = EmbeddedPakKey(binary.data() + 1000);
+    CHECK(found != nullptr && std::memcmp(found, keyA, kPakKeySize) == 0);
+    std::vector<unsigned char> noSlot(100, 0);
+    CHECK(!EmbedPakKey(noSlot, keyA));
+
+    // Stripped bytecode drops the file and line; a runtime error then has no location, but the chunk
+    // loads and runs. Kept bytecode names the file.
+    std::string stripped, kept;
+    CHECK(CompileLuaBytecode("local t = {}\nreturn function() return t.x.y end", "@scripts/bug.lua", kept, &err, false));
+    CHECK(CompileLuaBytecode("local t = {}\nreturn function() return t.x.y end", "@scripts/bug.lua", stripped, &err, true));
+    CHECK(stripped.size() < kept.size());
+    CHECK(kept.find("scripts/bug.lua") != std::string::npos && stripped.find("scripts/bug.lua") == std::string::npos);
+    RemoveAll(out);
+}
+
+TEST(GamePakMountAndBytecode) {
+    // oe package data: one enciphered archive that the players read in place.
     std::string dir = TestSourceDir() + "/tests/fixtures/Hello";
     std::vector<std::string> files = GameFiles(dir);
     CHECK(std::find(files.begin(), files.end(), "project.json") != files.end());
     CHECK(std::find(files.begin(), files.end(), "AGENTS.md") == files.end());
-    std::string pak = "build/test_web/game.pak";
+    const std::string out = AbsolutePath("build/test_pak"), pak = out + "/game.pak", root = out + "/game";
+    RemoveAll(out);
     std::string err;
-    CHECK(WriteGamePak(dir, files, pak, &err));
-    std::vector<unsigned char> bytes;
-    CHECK(ReadBinaryFile(pak, bytes) && bytes.size() > 12);
-    CHECK(std::string(bytes.begin(), bytes.begin() + 8) == "OEPAK001");
-    uint32_t n = bytes[8] | (bytes[9] << 8) | (bytes[10] << 16) | (static_cast<uint32_t>(bytes[11]) << 24);
-    Json index = Json::parse(std::string(bytes.begin() + 12, bytes.begin() + 12 + n), &err);
-    CHECK(err.empty() && index["files"].size() == files.size());
-    for (const Json& f : index["files"].items()) {
-        std::vector<unsigned char> original;
-        CHECK(ReadBinaryFile(dir + "/" + f["path"].asString(), original));
-        size_t at = 12 + n + static_cast<size_t>(f["offset"].asNumber());
-        CHECK(original.size() == static_cast<size_t>(f["size"].asNumber()));
-        CHECK(at + original.size() <= bytes.size() && std::equal(original.begin(), original.end(), bytes.begin() + static_cast<std::ptrdiff_t>(at)));
+    double dataBytes = 0;
+    CHECK(WriteGamePak(dir, files, pak, &err, &dataBytes) && dataBytes > 0);
+    std::vector<unsigned char> bytes, again;
+    CHECK(ReadBinaryFile(pak, bytes) && bytes.size() > 28);
+    CHECK(std::string(bytes.begin(), bytes.begin() + 8) == "OEPAK002");
+    CHECK(static_cast<double>(bytes.size()) < dataBytes * 0.9);  // scenes and scripts are packed; the sounds hardly shrink
+    // Nothing of the project is readable in the file: no paths, no scene text, no script source.
+    const std::string raw(bytes.begin(), bytes.end());
+    for (const char* text : {"project.json", "scenes/main", "\"entities\"", "onUpdate", "Transform"}) CHECK(raw.find(text) == std::string::npos);
+    // The same game packs to the same bytes.
+    CHECK(WriteGamePak(dir, files, out + "/again.pak", &err) && ReadBinaryFile(out + "/again.pak", again) && again == bytes);
+
+    PakReader reader;
+    CHECK(reader.OpenFile(pak, &err) && reader.Paths() == files);
+    std::vector<unsigned char> original, packed;
+    CHECK(ReadBinaryFile(dir + "/project.json", original) && reader.Read("project.json", packed) && packed == original);
+    CHECK(reader.Read("PROJECT.JSON", packed) && packed == original);  // as a Windows folder would answer
+    const PakEntry* scene = reader.Find("scenes/main.scene.json");
+    CHECK(scene && scene->stored < scene->size / 2);
+    CHECK(ReadBinaryFile(dir + "/scenes/main.scene.json", original) && reader.Read("scenes/main.scene.json", packed) && packed == original);
+    CHECK(ReadBinaryFile(dir + "/project.json", original));
+    CHECK(!reader.Read("missing.txt", packed, &err) && err.find("missing.txt") != std::string::npos);
+    // Scripts are bytecode under their own path; a script that does not compile ships as it is.
+    CHECK(reader.Read("scripts/coin.lua", packed) && packed.size() > 4 && packed[0] == 0x1b && packed[1] == 'L');
+    std::string bytecode;
+    CHECK(!CompileLuaBytecode("this is not lua", "@x.lua", bytecode, &err) && err.find("x.lua:1") != std::string::npos);
+
+    // A changed byte is noticed when its file is read; a broken header when the pak is opened.
+    std::vector<unsigned char> damaged = bytes;
+    damaged[damaged.size() / 2] ^= 0x40;
+    PakReader broken;
+    CHECK(broken.OpenMemory(damaged, &err));
+    bool refused = false;
+    for (const std::string& f : files) refused = refused || !broken.Read(f, packed, &err);
+    CHECK(refused && err.find("damaged") != std::string::npos);
+    damaged = bytes;
+    damaged[30] ^= 0x01;
+    CHECK(!broken.OpenMemory(damaged, &err));
+    CHECK(!broken.OpenMemory(std::vector<unsigned char>{'n', 'o', 'p', 'e'}, &err));
+
+    // Mounted, the files appear below a folder that is not on disk, and the game runs from there.
+    CHECK(!FileExists(root + "/project.json") && !IsDirectory(root));
+    CHECK(MountPakFile(root, pak, &err));
+    CHECK(IsDirectory(root) && IsDirectory(root + "/scenes") && !IsDirectory(root + "/nowhere") && FileExists(root + "/project.json"));
+    CHECK(!FileExists(root + "/missing.txt") && FileModifiedTime(root + "/project.json") != 0 && FileModifiedTime(root + "/missing.txt") == 0);
+    std::string text, originalText;
+    CHECK(ReadTextFile(root + "/project.json", text) && ReadTextFile(dir + "/project.json", originalText) && text == originalText);
+    CHECK(ReadTextFile(root + "/scenes/../project.json", text) && text == originalText);
+    std::vector<std::string> listed = ListFiles(root, "", true), expected;
+    for (const std::string& f : files) expected.push_back(JoinPath(root, f));
+    std::sort(expected.begin(), expected.end());
+    CHECK(listed == expected);
+    CHECK(ListFiles(root + "/scripts", ".lua", false).size() == 6 && ListFiles(root + "/scripts", ".json", false).empty());
+    CHECK(ListFiles(root, "", false).size() < listed.size() && ListDirectories(root) == ListDirectories(dir));
+    // Read-only, and a loose file put there is not seen.
+    CHECK(!WriteTextFile(root + "/project.json", "{}") && !WriteTextFile(root + "/new.txt", "x") && !FileExists(root + "/new.txt"));
+    {
+        Engine source, packaged;
+        CHECK(source.Open(dir, &err));
+        Call(source, "sim.step", R"J({"frames":90})J");
+        // Bytecode is refused unless the engine runs a packaged game.
+        Engine plain;
+        CHECK(plain.Open(root, &err));
+        Call(plain, "sim.step", R"J({"frames":2})J");
+        CHECK(Call(plain, "script.errors")["result"].size() > 0);
+        packaged.SetPackaged(true);
+        CHECK(packaged.Open(root, &err));
+        Call(packaged, "sim.step", R"J({"frames":90})J");
+        CHECK(Call(packaged, "script.errors")["result"].size() == 0);
+        // The same game: the same frame as from the project folder.
+        const char* shot = R"J({"width":160,"height":90})J";
+        CHECK(Call(packaged, "render.screenshot", shot)["result"]["hash"].asString() == Call(source, "render.screenshot", shot)["result"]["hash"].asString());
+        CHECK(Call(packaged, "scene.summary")["result"]["entities"].size() == Call(source, "scene.summary")["result"]["entities"].size());
     }
-    RemoveAll("build/test_web");
+    UnmountPaks();
+    CHECK(!FileExists(root + "/project.json"));
+    RemoveAll(out);
 }
 
 TEST(AndroidGamePakExtract) {
@@ -10557,9 +10722,12 @@ TEST(AndroidGamePakExtract) {
     CHECK(ExtractGamePak(pak, "build/test_android/game", &err));
     for (const std::string& f : files) {
         std::vector<unsigned char> a, b;
-        CHECK(ReadBinaryFile(dir + "/" + f, a) && ReadBinaryFile("build/test_android/game/" + f, b) && a == b);
+        CHECK(ReadBinaryFile(dir + "/" + f, a) && ReadBinaryFile("build/test_android/game/" + f, b));
+        const bool script = f.size() > 4 && f.compare(f.size() - 4, 4, ".lua") == 0;
+        CHECK(script ? (b.size() > 4 && b[0] == 0x1b) : a == b);  // scripts arrive as bytecode
     }
     Engine e;
+    e.SetPackaged(true);
     CHECK(e.Open("build/test_android/game", &err));
     // Paths that would leave the folder are refused.
     auto pakWith = [](const std::string& path) {
