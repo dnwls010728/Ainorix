@@ -398,6 +398,14 @@ void NativeEditor::Impl::ScenePanel() {
     Scene& scene = engine.GetScene();
     int w = static_cast<int>(avail.x), h = static_cast<int>(avail.y);
     float aspect = static_cast<float>(w) / static_cast<float>(h);
+    // First time a project's Scene view is shown without a saved camera: if the default viewpoint
+    // shows no geometry at all (a level built away from the origin), fit the scene so it never opens
+    // onto an empty void. Scenes whose content already sits in the default view keep it (a dark
+    // night scene is not empty, just unlit); a saved camera clears the flag before this runs.
+    if (autoFramePending) {
+        autoFramePending = false;
+        if (!scene.Entities().empty() && !DefaultViewShowsGeometry(aspect)) FrameScene();
+    }
     RenderView sceneCam;
     MakeSceneView(scene, aspect, sceneCam);
     RenderView view = MakeLookAtView(cam.Eye(), cam.target, cam.fov, aspect);
@@ -406,6 +414,7 @@ void NativeEditor::Impl::ScenePanel() {
     view.shaderTime = static_cast<float>(engine.SimTime());
     view.playing = engine.InPlaySession();
     view.drawGrid = showGrid && !cam.mode2D;
+    view.editorFill = (showEditorLight && !InPlaySession()) ? 0.32f : 0.0f;  // editing only; the Game view and play keep the real lighting
     view.highlight = Primary();
     // The game's UI over the world, laid out for this view's size, to be edited where it is seen.
     // While the game plays its scripts own the UI: the Game view shows it.
@@ -675,6 +684,8 @@ void NativeEditor::Impl::ScenePanel() {
         OverlayToggle(Tr("Colliders"), &showColliders, Tr("Collider wireframes: green solid, yellow trigger, cyan character"));
         ImGui::SameLine(0, 3);
         OverlayToggle(Tr("Icons"), &showIcons, Tr("Markers for cameras, lights and sounds"));
+        ImGui::SameLine(0, 3);
+        OverlayToggle(Tr("Fill Light"), &showEditorLight, Tr("Fill light for editing: brightens a scene lit by its gameplay scripts (a night level) so you can see it while the game is not running"));
         ImGui::SameLine(0, 3);
         bool mode2D = cam.mode2D;
         if (OverlayToggle("2D", &mode2D, Tr("Look along -Z (2D games); drag with right/middle mouse to pan"))) cam.Set2D(mode2D);

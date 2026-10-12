@@ -1336,6 +1336,12 @@ struct GpuRenderer::Impl {
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
         RenderLights lights = GatherRenderLights(scene);
+        if (view.editorFill > 0.0f) {  // editor fill: lift the ambient floor so a script-lit scene is visible to edit (matches the software renderer)
+            lights.ambient = Color(std::max(lights.ambient.r, view.editorFill), std::max(lights.ambient.g, view.editorFill),
+                                   std::max(lights.ambient.b, view.editorFill));
+            lights.groundAmbient = Color(std::max(lights.groundAmbient.r, view.editorFill), std::max(lights.groundAmbient.g, view.editorFill),
+                                         std::max(lights.groundAmbient.b, view.editorFill));
+        }
         const std::vector<DrawCall> draws = BuildDrawList(items, view.eye, &lights, view.playing);
         // Meshes that are gone (blend shape weights changed, assets reloaded) give their buffers back.
         for (auto* map : {&meshes, &flatMeshes}) {

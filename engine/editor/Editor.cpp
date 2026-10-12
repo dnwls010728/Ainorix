@@ -24,6 +24,8 @@
 #include "core/Log.h"
 #include "render/GpuDevice.h"
 #include "render/GpuRenderer.h"
+#include "render/RenderScene.h"
+#include "render/Renderer.h"
 
 namespace oe {
 
@@ -185,6 +187,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "Icons=%d", &i) == 1) m->showIcons = i != 0;
     else if (std::sscanf(line, "Bones=%d", &i) == 1) m->showBones = i != 0;
     else if (std::sscanf(line, "NavMesh=%d", &i) == 1) m->showNavMesh = i != 0;
+    else if (std::sscanf(line, "EditorLight=%d", &i) == 1) m->showEditorLight = i != 0;
     else if (std::sscanf(line, "SceneUI=%d", &i) == 1) m->showSceneUI = i != 0;
     else if (std::sscanf(line, "Snap=%d", &i) == 1) m->snap = i != 0;
     else if (std::sscanf(line, "SnapMove=%f", &f) == 1) m->snapMove = f;
@@ -217,6 +220,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
         // Legacy panel masks predate Network. Only NetworkPanel explicitly hides it.
     } else if (std::sscanf(line, "Camera=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
         m->cam.target = Vec3(v[0], v[1], v[2]);
+        m->autoFramePending = false;  // a saved view for this project wins over auto-framing
     } else if (std::sscanf(line, "CameraAngles=%f,%f,%f", &v[0], &v[1], &v[2]) == 3) {
         m->cam.yaw = v[0];
         m->cam.pitch = Clamp(v[1], -89.0f, 89.0f);
@@ -245,7 +249,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("[%s][Editor]\n", handler->TypeName);
     buf->appendf("UiScale=%.2f\nGrid=%d\nColliders=%d\nIcons=%d\nSceneUI=%d\nSnap=%d\n", m->uiScale, m->showGrid, m->showColliders, m->showIcons,
                  m->showSceneUI, m->snap);
-    buf->appendf("Bones=%d\nNavMesh=%d\n", m->showBones, m->showNavMesh);
+    buf->appendf("Bones=%d\nNavMesh=%d\nEditorLight=%d\n", m->showBones, m->showNavMesh, m->showEditorLight);
     buf->appendf("SnapMove=%.3f\nSnapAngle=%.3f\nSnapScale=%.3f\nGizmoLocal=%d\n", m->snapMove, m->snapAngle, m->snapScale, m->gizmoLocal);
     buf->appendf("NetworkPlayers=%d\nNetworkLatency=%d\nNetworkPanel=%d\n", m->networkPlayers, m->networkLatency, m->showNetwork);
     buf->appendf("HistoryPanel=%d\nThumbnails=%d\nTeamPanel=%d\nTeamChatPanel=%d\nAgentChatPanel=%d\n", m->showHistory, m->showThumbnails, m->showTeam,
@@ -689,21 +693,105 @@ void NativeEditor::Impl::DuplicateSelection() {
     Refresh(true);
 }
 
-void NativeEditor::Impl::FrameSelection() {
-    EntityId id = Primary();
-    if (id == kNullEntity || !engine.GetScene().Exists(id)) return;
-    Vec3 p = engine.GetScene().WorldMatrix(id).TransformPoint(Vec3(0, 0, 0));
-    Vec3 s = JsonVec3(selected["components"]["Transform"]["scale"], Vec3(1, 1, 1));
-    float radius = std::max(0.5f, std::max(std::fabs(s.x), std::max(std::fabs(s.y), std::fabs(s.z))));
-    if (const Tilemap* tm = engine.GetScene().Get<Tilemap>(id)) {
-        // The whole map (the entity origin is its top-left corner).
-        int w = 0, h = 0;
-        MapSize(*tm, w, h);
-        float ts = std::max(0.001f, tm->tileSize);
-        p = engine.GetScene().WorldMatrix(id).TransformPoint(Vec3(0.5f * static_cast<float>(w) * ts, -0.5f * static_cast<float>(h) * ts, 0));
-        radius = std::max(radius, 0.5f * static_cast<float>(std::max(w, h)) * ts * std::max(std::fabs(s.x), std::fabs(s.y)));
+// World box of the entities in `want` (every entity when it is empty), measured from the geometry
+// the renderer draws so flat terrain and tall models frame to their real size; entities with nothing
+// to draw (lights, empties, the camera) count as their world-space origin so selecting them still
+// frames somewhere sensible. False when `want` matched nothing in the scene.
+static bool EntityWorldBounds(Scene& scene, AssetManager& assets, const std::vector<EntityId>& want, Vec3& lo, Vec3& hi) {
+    const std::set<EntityId> wantSet(want.begin(), want.end());
+    bool any = false;
+    auto grow = [&](const Vec3& a, const Vec3& b) {
+        if (!any) { lo = a; hi = b; any = true; return; }
+        lo = Vec3(std::min(lo.x, a.x), std::min(lo.y, a.y), std::min(lo.z, a.z));
+        hi = Vec3(std::max(hi.x, b.x), std::max(hi.y, b.y), std::max(hi.z, b.z));
+    };
+    std::set<EntityId> drawn;
+    for (const RenderItem& item : GatherRenderItems(scene, &assets)) {
+        if (!wantSet.empty() && !wantSet.count(item.id)) continue;
+        Vec3 a, b;
+        ItemWorldBounds(item, 0.0f, a, b);
+        grow(a, b);
+        drawn.insert(item.id);
     }
-    cam.Frame(p, radius);
+    // Tilemaps are not render items here; frame them by their footprint. Also cover selected
+    // entities that have no drawable so framing them does not jump to the origin.
+    auto consider = [&](EntityId id) {
+        if (!scene.Exists(id)) return;
+        if (const Tilemap* tm = scene.Get<Tilemap>(id)) {
+            int w = 0, h = 0;
+            MapSize(*tm, w, h);
+            float ts = std::max(0.001f, tm->tileSize);
+            const Mat4 m = scene.WorldMatrix(id);
+            grow(m.TransformPoint(Vec3(0, -static_cast<float>(h) * ts, 0)), m.TransformPoint(Vec3(static_cast<float>(w) * ts, 0, 0)));
+            return;
+        }
+        if (drawn.count(id)) return;
+        const Vec3 p = scene.WorldMatrix(id).TransformPoint(Vec3(0, 0, 0));
+        grow(p - Vec3(0.5f, 0.5f, 0.5f), p + Vec3(0.5f, 0.5f, 0.5f));
+    };
+    if (wantSet.empty()) {
+        for (const auto& entry : scene.Entities()) consider(entry.first);
+    } else {
+        for (EntityId id : want) consider(id);
+    }
+    return any;
+}
+
+void NativeEditor::Impl::FrameSelection() {
+    if (selection.empty()) return;
+    Vec3 lo, hi;
+    if (!EntityWorldBounds(engine.GetScene(), engine.Assets(), selection, lo, hi)) return;
+    const Vec3 center = (lo + hi) * 0.5f;
+    cam.Frame(center, std::max(0.5f, Length(hi - lo) * 0.5f));
+}
+
+void NativeEditor::Impl::FrameScene() {
+    // Frame the clustered content, not a sky dome or distant mountain rings: keep the drawable
+    // centers close to the middle and drop the far few before measuring the box. Falls back to the
+    // full bounds when there are too few items to tell content from backdrop.
+    std::vector<std::pair<Vec3, Vec3>> boxes;  // per-item world lo/hi
+    std::vector<Vec3> centers;
+    for (const RenderItem& item : GatherRenderItems(engine.GetScene(), &engine.Assets())) {
+        Vec3 a, b;
+        ItemWorldBounds(item, 0.0f, a, b);
+        boxes.push_back({a, b});
+        centers.push_back((a + b) * 0.5f);
+    }
+    Vec3 lo, hi;
+    if (centers.size() < 6) {
+        if (!EntityWorldBounds(engine.GetScene(), engine.Assets(), {}, lo, hi)) return;
+    } else {
+        Vec3 mid;
+        for (const Vec3& c : centers) mid = mid + c;
+        mid = mid * (1.0f / static_cast<float>(centers.size()));
+        std::vector<float> dist;
+        for (const Vec3& c : centers) dist.push_back(Length(c - mid));
+        std::vector<float> sorted = dist;
+        std::sort(sorted.begin(), sorted.end());
+        // Keep everything within three times the 80th-percentile spread of the cluster.
+        const float keep = sorted[static_cast<size_t>(sorted.size() * 0.8f)] * 3.0f + 1.0f;
+        bool any = false;
+        for (size_t i = 0; i < boxes.size(); ++i) {
+            if (dist[i] > keep) continue;
+            if (!any) { lo = boxes[i].first; hi = boxes[i].second; any = true; continue; }
+            lo = Vec3(std::min(lo.x, boxes[i].first.x), std::min(lo.y, boxes[i].first.y), std::min(lo.z, boxes[i].first.z));
+            hi = Vec3(std::max(hi.x, boxes[i].second.x), std::max(hi.y, boxes[i].second.y), std::max(hi.z, boxes[i].second.z));
+        }
+        if (!any) return;
+    }
+    const Vec3 center = (lo + hi) * 0.5f;
+    cam.Frame(center, std::max(0.5f, Length(hi - lo) * 0.5f));
+}
+
+bool NativeEditor::Impl::DefaultViewShowsGeometry(float aspect) {
+    const RenderView view = MakeLookAtView(cam.Eye(), cam.target, cam.fov, aspect);
+    const Mat4 viewProj = cam.Projection(aspect) * view.view;
+    for (const RenderItem& item : GatherRenderItems(engine.GetScene(), &engine.Assets())) {
+        Vec3 lo, hi;
+        ItemWorldBounds(item, 0.0f, lo, hi);
+        if (BoxInFrustum(viewProj, lo, hi)) return true;
+    }
+    return false;
 }
 
 // editor.state: what the human sees, for agents attached to this editor. Panels go by their
@@ -1574,8 +1662,9 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
     ImGui::DockBuilderDockWindow("###Hierarchy", left);
     ImGui::DockBuilderDockWindow("###Team", left);
-    ImGui::DockBuilderDockWindow("###Tiles", right);
+    // Inspector first so it is the leftmost, selected tab and its name is never the one that clips.
     ImGui::DockBuilderDockWindow("###Inspector", right);
+    ImGui::DockBuilderDockWindow("###Tiles", right);
     ImGui::DockBuilderDockWindow("###Network", right);
     ImGui::DockBuilderDockWindow("###Scene", center);
     ImGui::DockBuilderDockWindow("###Game", center);
@@ -1971,6 +2060,7 @@ void NativeEditor::SetTileBrush(bool paint, char brush) {
 void NativeEditor::SetSceneView2D(bool on) { impl_->cam.Set2D(on); }
 void NativeEditor::SetSceneBones(bool on) { impl_->showBones = on; }
 void NativeEditor::SetSceneNavMesh(bool on) { impl_->showNavMesh = on; }
+void NativeEditor::SetSceneLight(bool on) { impl_->showEditorLight = on; }
 void NativeEditor::AttachToBone(EntityId model, const std::string& bone, EntityId existing) { impl_->AttachToBone(model, bone, existing); }
 void NativeEditor::AddIkGoal(EntityId model, const std::string& bone) { impl_->AddIkGoal(model, bone); }
 void NativeEditor::AddSpringBone(EntityId model, const std::string& bone) { impl_->AddSpringBone(model, bone); }

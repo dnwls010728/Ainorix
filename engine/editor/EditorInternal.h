@@ -303,8 +303,10 @@ struct NativeEditor::Impl {
 
     // ----- Scene view
     EditorCamera cam;
+    bool autoFramePending = true;  // frame the whole scene the first time it is shown, unless a saved camera loads
     bool showGrid = true, showColliders = false, showIcons = true;
     bool showNavMesh = false;  // the navigation mesh over the Scene view
+    bool showEditorLight = false;  // editor fill light so a script-lit (night) scene is visible while editing
     bool showSceneUI = true;  // the Scene view draws the game's UI over the world and edits it there (UIEdit)
     GizmoOp gizmoOp = GizmoOp::Translate;
     bool gizmoLocal = false;
@@ -580,6 +582,8 @@ struct NativeEditor::Impl {
     void PasteSelection();
     void BrowseFile(NativeEditor::FilePurpose purpose);
     void FrameSelection();
+    void FrameScene();  // fit the whole scene in the Scene view
+    bool DefaultViewShowsGeometry(float aspect);  // any drawable inside the current Scene-view frustum
     Json EditorState();                     // editor.state
     Json EditorSelect(const Json& args);    // editor.select {ids, frame}
     void CreatePreset(const char* key);

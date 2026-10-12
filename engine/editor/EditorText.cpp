@@ -277,6 +277,8 @@ const Entry kCatalog[] = {
     {"Bones", "본", "ボーン"},
     {"NavMesh", "내비메시", "ナビメッシュ"},
     {"Navigation mesh: where agents can walk, baked from the static colliders or meshes (NavMesh component)", "내비게이션 메시: 에이전트가 걸을 수 있는 영역, 정적 콜라이더나 메시에서 베이크됩니다 (NavMesh 컴포넌트)", "ナビゲーションメッシュ: エージェントが歩ける範囲。静的なコライダーやメッシュからベイクされます (NavMesh コンポーネント)"},
+    {"Fill Light", "채움 조명", "フィルライト"},
+    {"Fill light for editing: brightens a scene lit by its gameplay scripts (a night level) so you can see it while the game is not running", "편집용 채움 조명: 게임플레이 스크립트로 조명되는 씬(야간 레벨 등)을 게임이 실행 중이 아닐 때도 볼 수 있도록 밝힙니다", "編集用フィルライト: ゲームプレイスクリプトで照らされるシーン(夜のレベルなど)を、ゲームが実行中でなくても見えるように明るくします"},
     {"Search bones", "본 검색", "ボーンを検索"},
     {"Birth Expressions", "생성 시 수식", "誕生時の式"},
     {"Update Expressions", "갱신 수식", "更新の式"},

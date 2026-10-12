@@ -43,6 +43,11 @@ struct RenderView {
     // Graphs read it as the reserved uniform `playing`, for effects that would be in the way while
     // editing (a world that bends away from the camera).
     bool playing = false;
+    // Editor-only fill light (0 = off). A scene lit by its gameplay scripts (a night level, a
+    // day/night cycle) is near-black while it is edited because the scripts are not running; this
+    // raises the ambient floor so geometry stays visible to edit. It never affects the shipped game
+    // or the Game view, only the editor's Scene view when the user turns the Light overlay on.
+    float editorFill = 0.0f;
     // Editor overlays.
     bool drawGrid = false;
     EntityId highlight = kNullEntity;

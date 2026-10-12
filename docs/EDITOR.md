@@ -66,6 +66,10 @@ Inspector field labels wrap within their column and alternating rows separate ne
 
 Scene overlay toggles have opaque backgrounds and an underline when enabled. Hovered entity names, fly controls and play/pause notices use dark backing plates so bright scene geometry does not hide them.
 
+**Opening onto the content.** The first time a project's Scene view is shown without a saved camera, if the default viewpoint has no geometry in it at all (a level built away from the origin, a large offset terrain) the view fits the whole scene so it never opens onto an empty void. A scene whose content already sits in the default view keeps it; a saved camera in `editor.ini`, or any manual camera move, takes precedence. The scene-fitting ignores a sky dome or distant mountain rings so it frames the playable area, not the backdrop.
+
+**Fill Light.** The Scene view's **Fill Light** toggle (overlay bar; `oe editor --light` for a headless screenshot) raises the ambient floor of the Scene view only, so a scene lit by its gameplay scripts — a night level, a day/night cycle whose sun and ambient are set from Lua — is visible to edit while the game is not running. It is an editor aid: the Game view, a packaged game and the software/GPU screenshot of the *game* camera keep the real lighting. It does little for a look built mostly from surface shader graphs, which compute their own colour and need the running game's time and uniforms.
+
 **Asking about an object or a spot.** Right-click in the Scene view and choose **Ask the Team** or **Ask the Agent** (the CLI set in Settings > Agents), about the object under the pointer or about **this spot** (the point on its surface, or on the ground plane over empty space; "put a tree here"): a bubble opens next to the object or spot, follows it while the camera moves, and holds the conversation. The team bubble posts to the Team Chat naming the object; an agent bubble is a direct conversation with that CLI, kept per object and CLI. Details: [TEAM.md §7.4](TEAM.md#74-asking-about-an-object-scene-bubbles).
 
 The layout (docking), panel visibility, interface size and language, gizmo/snap settings and the scene camera are saved per project in `<project>/.oe/editor.ini` (a dot folder: not packaged by `oe package`). Compiled shader programs are cached beside it in `.oe/shader-cache/` (D3D11; see [RENDERING.md](RENDERING.md#shader-compiling-and-the-cache)): shader graph programs compile in the background while their materials draw through the interpreter, and the window stays hidden until the frame loop starts (dark background, no white window while the project loads). View > Reset Layout restores the default. The native window also restores its last normal position/size and maximized state from the same file. A first launch without saved placement starts maximized. Minimized windows reopen in their previous normal/maximized state; Windows clamps saved placement to an available monitor work area.
@@ -87,7 +91,7 @@ The Scene view has an X/Y/Z compass at the top-right (red/green/blue). Click a l
 | Scene / Hierarchy | Q / W / E / R | select / move / rotate / scale gizmo |
 | | X | gizmo local / world |
 | | Ctrl while dragging a gizmo | toggle snapping (toolbar: Snap, step sizes) |
-| | F, double-click | frame selection (a whole map for a Tilemap) |
+| | F, double-click | frame the selection: fits the whole selection to its drawn geometry (a model's real size, a Tilemap's whole map, several entities together) |
 | Scene, Paint Tiles on | Left / right drag, Shift+drag, Ctrl+click | paint / erase / fill a rectangle / pick a tile |
 | | F2, Del, Ctrl+D, Esc | rename, delete, duplicate, deselect |
 | Anywhere | Ctrl+S, Ctrl+Z, Ctrl+Y (Ctrl+Shift+Z), Ctrl+N | save, undo, redo, new scene |
@@ -203,6 +207,7 @@ oe editor <network-project> --players 3 --play --frames 100 --screenshot build/n
 oe editor <project> --screenshot build/editor.png --select Player    # inspector + gizmo on Player
 oe editor <project> --screenshot build/editor.png --2d --select Player  # 2D Scene view: XY grid + planar gizmo
 oe editor <project> --screenshot build/editor.png --navmesh          # Scene view with the NavMesh toggle on (docs/NAVIGATION.md)
+oe editor <project> --screenshot build/editor.png --light             # Scene view with the Fill Light toggle on (edit a script-lit night scene)
 oe editor <project> --screenshot build/editor.png --play --frames 60  # Game view after 1 s of play
 oe editor <project> --screenshot build/editor.png --select Start  # Scene view: the UI over the world, handles on the selected element
 oe editor <project> --screenshot build/editor.png --game --select Start  # stopped Game view: UI editing with a selection

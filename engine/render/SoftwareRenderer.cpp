@@ -508,6 +508,12 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     Lighting lighting;
     lighting.ambient = gathered.ambient;
     lighting.groundAmbient = gathered.groundAmbient;
+    if (view.editorFill > 0.0f) {  // editor fill: lift the ambient floor so a script-lit scene is visible to edit
+        lighting.ambient = Color(std::max(lighting.ambient.r, view.editorFill), std::max(lighting.ambient.g, view.editorFill),
+                                 std::max(lighting.ambient.b, view.editorFill));
+        lighting.groundAmbient = Color(std::max(lighting.groundAmbient.r, view.editorFill), std::max(lighting.groundAmbient.g, view.editorFill),
+                                       std::max(lighting.groundAmbient.b, view.editorFill));
+    }
     lighting.hemisphere = gathered.hemisphere;
     lighting.fog = post;
     lighting.dirs = gathered.dirs;

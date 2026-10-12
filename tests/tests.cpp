@@ -14688,7 +14688,7 @@ TEST(NativeEditorSceneCompass) {
         for (bool mode2D : {true, false}) {
             const auto viewRect = editor.SceneViewRect();
             float toggleX = viewRect[0] + 6;
-            for (const char* label : {"Grid", "Colliders", "Icons"})
+            for (const char* label : {"Grid", "Colliders", "Icons", "Fill Light"})
                 toggleX += ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2 + 3;
             WindowEvent toggleMove; toggleMove.type = WindowEvent::Type::MouseMove;
             toggleMove.x = toggleX + (ImGui::CalcTextSize("2D").x + ImGui::GetStyle().FramePadding.x * 2) * 0.5f;

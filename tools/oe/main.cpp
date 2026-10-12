@@ -204,7 +204,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --navmesh --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --2d --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -465,6 +465,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--2d")) editor.SetSceneView2D(true);
     if (a.Has("--navmesh")) editor.SetSceneNavMesh(true);
+    if (a.Has("--light")) editor.SetSceneLight(true);
     if (a.Has("--players")) {
         int players = a.GetInt("--players", 1);
         editor.SetNetworkPlayers(players);
