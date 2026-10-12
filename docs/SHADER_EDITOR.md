@@ -7,14 +7,23 @@ material assets. No platform shader source or new renderer is required.
 
 1. Open **View > Shader Graph**, then **New Shader**, or double-click a shader/material
    in Assets. **Edit Material** in a MeshRenderer inspector opens its material and graph.
-2. **Add Node** offers all 25 portable operations. Drag an output pin to an input pin;
-   right-click an input to disconnect it. Connect a node to the **Surface Output** card's
-   `color`, `emissive`, `normal`, or `offset` input. Cycles are rejected immediately.
-3. Click a node's header or body to edit its constant, uniform, or swizzle in **Node Properties**.
-   **Uniform Defaults** adds named scalar defaults; its context menu switches scalar/vector
-   values or removes a uniform. A uniform node chooses one of the declared names.
-4. Move cards by dragging their headers or bodies, pan with the middle mouse button, and zoom with the wheel.
-   **Arrange Nodes** lays out dependency levels; **Fit Graph** shows the whole canvas.
+2. **Add Node** opens a searchable list grouped by kind (Inputs, Values, Texture, Math, Vector) with a line on what
+   each of the operations does. Right-clicking or double-clicking the empty canvas opens the same list and puts the
+   node there. Drag an output pin to an input pin; right-click an input to disconnect it. Connect a node to the
+   **Surface Output** card's `Color`, `Emissive`, `Normal` or `Offset` input. Cycles are rejected immediately.
+3. Cards are colored by kind (inputs green, values amber, texture purple, math blue, vector teal, the output red) and
+   wires take the color of the node they leave. A card shows the operation's name, its number in the graph (`#12`),
+   named pins (`Value / Min / Max`, `A / B / Blend`) and what it holds: a number, a color swatch, a uniform's name, a
+   swizzle as letters. Hovering a card says what the operation does. Clicking one selects it: its wires are drawn
+   brighter and the others step back, and **Node Properties** edits its constant (number or color/vector, with a
+   color picker), uniform or swizzle (one choice per output channel). **Delete** removes the selected node.
+   **Uniform Defaults** adds named scalar defaults; its context menu switches scalar/vector values or removes a
+   uniform. A uniform node chooses one of the declared names.
+4. Move cards by dragging them, move the view by dragging the empty canvas (or with the middle mouse button), and
+   zoom with the wheel; the zoom is shown at the bottom right of the canvas, the mouse hints at the bottom left.
+   **Arrange Nodes** puts every node just left of what reads it, level with the pins it feeds, so inputs and
+   constants are not stacked in one column far from their use. **Fit Graph** shows the whole graph. A graph too
+   large to read when fitted opens at 70 % on the Surface Output instead.
    Node positions are workspace layout, not serialized into the portable graph file.
 5. Enter a `.shader.json` project path and **Save Shader** (Ctrl+S). The editor topologically
    sorts the nodes and remaps every argument/output, so connections may go in either
@@ -22,7 +31,10 @@ material assets. No platform shader source or new renderer is required.
    Engine validation also enforces the 48-node/8-uniform limits and vertex-stage restrictions.
    An invalid graph cannot replace the last valid file. Graph undo/redo is local to the
    workspace (buttons or Ctrl+Z/Ctrl+Y) and does not undo scene edits.
-6. Choose the `.mat.json` path in the next toolbar row. **Material** edits base color,
+6. The toolbar has the shader file and **Save Shader** in its first row (amber with a `*` while there are unsaved
+   changes), the material in the second, and the graph tools with the state of the graph in the third: a green
+   "No problems" with the node count, or the first line of what stops the graph from being saved (the whole text is
+   in the tooltip and at the top of the properties). Choose the `.mat.json` path in the second row. **Material** edits base color,
    roughness, metallic, unlit, opacity, alpha mode, base texture and per-material uniforms.
    **Create Material** saves the graph and creates a material referencing it. Opening an
    existing material uses **Save Material** and preserves fields not exposed by this UI.
@@ -37,7 +49,7 @@ or cancel. Hiding the panel retains its workspace. Asset writes use `shader.crea
 
 ## Preview and limits
 
-The live sphere swatch evaluates the CPU surface graph at time = 1, with a white texture,
+Properties are rows with the label on the left. The live sphere swatch (as large as the panel allows) evaluates the CPU surface graph at time = 1, with a white texture,
 the material base color and uniform overrides. It visualizes color/emission/alpha; it does
 not simulate lighting, textures, replaced normals, or vertex displacement. The saved
 material thumbnail below the properties uses the existing lit asset-preview renderer.
@@ -52,6 +64,10 @@ Headless inspection:
 ```bat
 oe editor games/RPG --shader materials/water.shader.json --screenshot build/shader.png --lang ko
 ```
+
+Automation finds the workspace's controls and cards through `NativeEditor::ShaderControlRect(name)` (`"add"`,
+`"arrange"`, `"save-material"`, `"node:<i>"`, `"out:<i>"`, `"in:<i>:<pin>"`, `"surface:color"`, `"palette:<op>"`, ...)
+instead of assuming where things are drawn.
 
 ## Status
 

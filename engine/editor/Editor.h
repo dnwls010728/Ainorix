@@ -80,6 +80,10 @@ public:
     void OpenShader(const std::string& path = {});
     // Current unsaved node document (document indices, before topological export).
     Json ShaderDocument() const;
+    // Bounds of the Shader Graph workspace's controls and nodes for automation: "new", "save", "add", "arrange",
+    // "fit", "undo", "redo", "save-material", "apply", "canvas", "node:<i>", "out:<i>", "in:<i>:<pin>", "surface",
+    // "surface:<color|emissive|normal|offset>" and, while the Add Node list is open, "palette:<op>".
+    std::array<float, 4> ShaderControlRect(const std::string& name) const;
     // Open a reusable effect in the shared document workspace; an empty path opens the Effects panel.
     void OpenEffect(const std::string& path = {});
     // Snapshot of the shared Effects document and bounds for event-driven widget automation.
@@ -88,6 +92,9 @@ public:
     void SetEffectsGraph(bool on);
     // Select the Birth/Update value-node canvas and channel, as its toolbar does.
     void SetEffectsValues(bool on, bool update = true, int channel = 7);
+    // The structure graph with the nodes of one value of the selected emitter on its canvas (as clicking the
+    // value's row in the emitter node does).
+    void SetEffectsGraphValue(bool update = true, int channel = 7);
     std::array<float, 4> EffectsControlRect(const std::string& name) const;
     // Screen bounds of an Inspector value widget, "RigidBody.mass" (axis toggles: "RigidBody.lockPositionX"); zero when not drawn.
     std::array<float, 4> InspectorControlRect(const std::string& name) const;

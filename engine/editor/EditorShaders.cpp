@@ -1,10 +1,12 @@
 #include "editor/EditorIcons.h"
 #include "editor/EditorInternal.h"
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include "editor/EditorShaderGraph.h"
 #include "editor/EditorNodeCanvas.h"
 #include "editor/EditorText.h"
+#include "imgui_internal.h"
 #include "app/Engine.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
@@ -17,7 +19,73 @@
 namespace oe {
 namespace {
 const char* kOutputs[] = {"color", "emissive", "normal", "offset"};
-const ImU32 kWire = IM_COL32(112, 202, 242, 255);
+
+// How a node card is laid out, in canvas units.
+const float kNodeWidth = 200, kPinRow = 24, kValueRow = 26;
+
+// What kind of thing a node is: its header color, the color of the wires that leave it and the
+// group it is listed under in the Add Node list.
+struct NodeKind {
+    const char* group;
+    ImU32 header, wire;
+};
+const NodeKind kInputKind{"Inputs", IM_COL32(52, 112, 84, 255), IM_COL32(120, 214, 160, 255)};
+const NodeKind kValueKind{"Values", IM_COL32(134, 100, 46, 255), IM_COL32(238, 196, 110, 255)};
+const NodeKind kTextureKind{"Texture", IM_COL32(104, 76, 142, 255), IM_COL32(196, 160, 240, 255)};
+const NodeKind kMathKind{"Math", IM_COL32(52, 86, 134, 255), IM_COL32(112, 202, 242, 255)};
+const NodeKind kVectorKind{"Vector", IM_COL32(40, 108, 116, 255), IM_COL32(110, 220, 224, 255)};
+const ImU32 kSurfaceHeader = IM_COL32(150, 84, 72, 255);
+
+struct NodeInfo {
+    const char* op;
+    const NodeKind* kind;
+    const char* pins[3];
+    const char* doc;  // English; shown translated
+};
+const NodeInfo kNodes[] = {
+    {"uv", &kInputKind, {}, "Texture coordinates of the surface (0..1 across the mesh)"},
+    {"position", &kInputKind, {}, "World position of the surface point"},
+    {"normal", &kInputKind, {}, "World direction the surface faces"},
+    {"time", &kInputKind, {}, "Seconds of game time: animates anything it feeds"},
+    {"baseColor", &kInputKind, {}, "The material's base color and opacity"},
+    {"particleAge", &kInputKind, {}, "Effect particles: age from 0 (born) to 1 (gone)"},
+    {"particleRandom", &kInputKind, {}, "Effect particles: a random number that stays with the particle"},
+    {"particleSpeed", &kInputKind, {}, "Effect particles: speed in the world"},
+    {"particleCustom0", &kInputKind, {}, "Effect particles: custom channel 0"},
+    {"particleCustom1", &kInputKind, {}, "Effect particles: custom channel 1"},
+    {"particleCustom2", &kInputKind, {}, "Effect particles: custom channel 2"},
+    {"particleCustom3", &kInputKind, {}, "Effect particles: custom channel 3"},
+    {"constant", &kValueKind, {}, "A fixed number or color"},
+    {"uniform", &kValueKind, {}, "A named value that materials and scripts can change"},
+    {"texture", &kTextureKind, {"UV"}, "Samples the material's base texture at the given coordinates"},
+    {"add", &kMathKind, {"A", "B"}, "A + B"},
+    {"subtract", &kMathKind, {"A", "B"}, "A - B"},
+    {"multiply", &kMathKind, {"A", "B"}, "A x B"},
+    {"divide", &kMathKind, {"A", "B"}, "A / B (0 where B is 0)"},
+    {"min", &kMathKind, {"A", "B"}, "The smaller of A and B"},
+    {"max", &kMathKind, {"A", "B"}, "The larger of A and B"},
+    {"sin", &kMathKind, {"In"}, "Sine wave of the input: swings between -1 and 1"},
+    {"cos", &kMathKind, {"In"}, "Cosine wave of the input: swings between -1 and 1"},
+    {"floor", &kMathKind, {"In"}, "Rounds down to a whole number"},
+    {"fract", &kMathKind, {"In"}, "The part after the decimal point: repeats 0..1"},
+    {"abs", &kMathKind, {"In"}, "Makes negative values positive"},
+    {"clamp", &kMathKind, {"Value", "Min", "Max"}, "Keeps Value between Min and Max"},
+    {"mix", &kMathKind, {"A", "B", "Blend"}, "Blends from A (Blend 0) to B (Blend 1)"},
+    {"step", &kMathKind, {"Edge", "Value"}, "0 where Value is below Edge, otherwise 1"},
+    {"dot", &kVectorKind, {"A", "B"}, "How much two directions agree: 1 same way, 0 at a right angle"},
+    {"normalize", &kVectorKind, {"In"}, "Scales a vector to length 1"},
+    {"swizzle", &kVectorKind, {"In"}, "Reorders or repeats the channels (x y z w) of the input"},
+};
+const NodeInfo* InfoOf(const std::string& op) {
+    for (const NodeInfo& info : kNodes) if (op == info.op) return &info;
+    return nullptr;
+}
+bool HasValueRow(const Json& node) { return node.has("value") || node.has("name"); }
+ImVec2 NodeSize(const Json& node) {
+    const float pins = static_cast<float>(node["args"].size());
+    return ImVec2(kNodeWidth, EditorNodeCanvas::kHeader + pins * kPinRow + (HasValueRow(node) ? kValueRow : 0) + (pins > 0 || HasValueRow(node) ? 10 : 6));
+}
+const ImVec2 kSurfaceSize(kNodeWidth, EditorNodeCanvas::kHeader + 4 * kPinRow + 10);
 
 std::string Sibling(const std::string& path, const std::string& suffix) {
     size_t dot = path.find_last_of('.');
@@ -29,13 +97,32 @@ Json NewGraph() {
     return Json::parse(R"({"format":"ownengine.shader","uniforms":{},"nodes":[{"op":"baseColor"}],"color":0})");
 }
 
+// A row of a properties table: the label on the left, the widget that follows fills the right column.
+void PropertyLabel(const char* label, const char* tooltip = nullptr) {
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    if (tooltip && *tooltip) ImGui::SetItemTooltip("%s", tooltip);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+}
+bool BeginProperties(const char* id) {
+    if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchProp)) return false;
+    ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthStretch, 0.42f);
+    ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch, 0.58f);
+    return true;
+}
+
+// A number or a four-vector, in the right column of a properties table.
 bool VectorField(const char* label, Json& value) {
-    ImGui::PushID(label); ImGui::TextUnformatted(label);
+    ImGui::PushID(label);
+    PropertyLabel(label);
     bool scalar = value.isNumber();
     float v[4];
     for (int i = 0; i < 4; ++i) v[i] = scalar ? value.asFloat() : value[i].asFloat();
-    bool changed = scalar ? ImGui::DragFloat("##value", v, 0.02f, -65504, 65504) :
-                            ImGui::DragFloat4("##value", v, 0.02f, -65504, 65504);
+    bool changed = scalar ? ImGui::DragFloat("##value", v, 0.02f, -65504, 65504, "%.3g") :
+                            ImGui::DragFloat4("##value", v, 0.02f, -65504, 65504, "%.3g");
     if (changed) value = scalar ? Json(v[0]) : Json(Json::Array{v[0], v[1], v[2], v[3]});
     ImGui::PopID(); return changed;
 }
@@ -126,34 +213,91 @@ void NativeEditor::Impl::OpenShader(const std::string& path, bool discard) {
     }
     shaderExistingMaterial = materialPath;
     shaderHistory = {graph}; shaderHistoryIndex = 0;
-    shaderSelected = 0; shaderLink = -1; shaderError.clear(); shaderPreviewKey.clear();
+    shaderSelected = -1; shaderLink = -1; shaderError.clear(); shaderPreviewKey.clear();
     ShaderArrange();
 }
 
 void NativeEditor::Impl::ShaderArrange() {
     const Json& document = shaderDocument;
-    shaderPositions.clear();
-    std::vector<int> depths(shaderDocument["nodes"].size(), 0);
-    std::map<int, int> rowsAtDepth;
-    int maxDepth = 0;
-    for (size_t pass = 0; pass < depths.size(); ++pass) {
+    const int count = static_cast<int>(document["nodes"].size());
+    shaderPositions.assign(static_cast<size_t>(count), ImVec2());
+    // How far a node is from the inputs (longest path): the Surface Output is one column past the deepest.
+    std::vector<int> depths(static_cast<size_t>(count), 0);
+    for (int pass = 0; pass < count; ++pass) {
         bool changed = false;
-        for (int i = 0; i < static_cast<int>(depths.size()); ++i) {
+        for (int i = 0; i < count; ++i) {
             for (const Json& input : document["nodes"][i]["args"].items()) {
-                int source = input.asInt(-1);
-                if (source < 0 || source >= static_cast<int>(depths.size())) continue;
-                int depth = depths[static_cast<size_t>(source)] + 1;
+                const int source = input.asInt(-1);
+                if (source < 0 || source >= count) continue;
+                const int depth = depths[static_cast<size_t>(source)] + 1;
                 if (depth > depths[static_cast<size_t>(i)]) { depths[static_cast<size_t>(i)] = depth; changed = true; }
             }
         }
         if (!changed) break;
     }
-    for (int i = 0; i < static_cast<int>(depths.size()); ++i) {
-        int depth = depths[static_cast<size_t>(i)]; maxDepth = std::max(depth, maxDepth);
-        shaderPositions.emplace_back(static_cast<float>(depth) * 230, static_cast<float>(rowsAtDepth[depth]++) * 150);
+    int surface = 0;
+    for (int depth : depths) surface = std::max(surface, depth + 1);
+    // Who reads each node, and at which pin (the Surface Output is consumer `count`).
+    struct Use { int node, pin; };
+    std::vector<std::vector<Use>> uses(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const Json& args = document["nodes"][i]["args"];
+        for (int pin = 0; pin < static_cast<int>(args.size()); ++pin) {
+            const int source = args[pin].asInt(-1);
+            if (source >= 0 && source < count) uses[static_cast<size_t>(source)].push_back({i, pin});
+        }
     }
-    shaderOutputPos = ImVec2(static_cast<float>(maxDepth + 1) * 230, 0);
-    shaderPan = ImVec2(24, 24); shaderZoom = 0.8f;
+    for (int pin = 0; pin < 4; ++pin) {
+        const int source = document[kOutputs[pin]].asInt(-1);
+        if (source >= 0 && source < count) uses[static_cast<size_t>(source)].push_back({count, pin});
+    }
+    // Columns: every node goes as far right as its consumers allow, so an input or a constant sits just left
+    // of what reads it instead of in one tall column at the far left with wires across the whole graph.
+    std::vector<int> order(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) order[static_cast<size_t>(i)] = i;
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return depths[static_cast<size_t>(a)] > depths[static_cast<size_t>(b)]; });
+    std::vector<int> column(static_cast<size_t>(count), 0);
+    for (int i : order) {
+        int latest = INT_MAX;
+        for (const Use& use : uses[static_cast<size_t>(i)]) latest = std::min(latest, (use.node == count ? surface : column[static_cast<size_t>(use.node)]) - 1);
+        column[static_cast<size_t>(i)] = latest == INT_MAX ? depths[static_cast<size_t>(i)] : latest;
+    }
+    const float columnGap = kNodeWidth + 80, rowGap = 20;
+    shaderOutputPos = ImVec2(static_cast<float>(surface) * columnGap, 0);
+    auto pinHeight = [&](const Use& use) {
+        const ImVec2 at = use.node == count ? shaderOutputPos : shaderPositions[static_cast<size_t>(use.node)];
+        return at.y + EditorNodeCanvas::kHeader + 5 + (static_cast<float>(use.pin) + 0.5f) * kPinRow;
+    };
+    // Right to left: a column is ordered by where its nodes are read, each node level with its consumers'
+    // pins, pushed down only where it would overlap the one above.
+    for (int c = surface - 1; c >= 0; --c) {
+        std::vector<int> nodes;
+        std::vector<float> wanted(static_cast<size_t>(count), 0);
+        float loose = 0;  // nodes nobody reads go under the others
+        for (int i = 0; i < count; ++i) {
+            if (column[static_cast<size_t>(i)] != c) continue;
+            nodes.push_back(i);
+            float sum = 0;
+            for (const Use& use : uses[static_cast<size_t>(i)]) sum += pinHeight(use);
+            wanted[static_cast<size_t>(i)] = uses[static_cast<size_t>(i)].empty() ? 1e6f + (loose += 1) : sum / static_cast<float>(uses[static_cast<size_t>(i)].size());
+        }
+        std::stable_sort(nodes.begin(), nodes.end(), [&](int a, int b) { return wanted[static_cast<size_t>(a)] < wanted[static_cast<size_t>(b)]; });
+        float y = -1e9f, shift = 0;
+        int placed = 0;
+        for (int i : nodes) {
+            const float height = NodeSize(document["nodes"][i]).y;
+            const bool read = !uses[static_cast<size_t>(i)].empty();
+            const float top = read ? wanted[static_cast<size_t>(i)] - EditorNodeCanvas::kHeader * 0.5f : y;
+            y = std::max(y, top);
+            if (y < -1e8f) y = 0;
+            shaderPositions[static_cast<size_t>(i)] = ImVec2(static_cast<float>(c) * columnGap, y);
+            if (read) { shift += top - y; ++placed; }
+            y += height + rowGap;
+        }
+        // Pushing down only would let a crowded column drift below its consumers: move it back up by the average.
+        if (placed) for (int i : nodes) shaderPositions[static_cast<size_t>(i)].y += shift / static_cast<float>(placed);
+    }
+    shaderFit = true; shaderFitReadable = true;
 }
 
 void NativeEditor::Impl::ShaderRecord() {
@@ -188,57 +332,145 @@ bool NativeEditor::Impl::SaveShaderMaterial() {
     return true;
 }
 
+void NativeEditor::Impl::ShaderRect(const std::string& name) {
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    shaderRects[name] = {a.x, a.y, b.x - a.x, b.y - a.y};
+}
+
+// The Add Node list: searchable, grouped by kind, with what each node does. The node appears where the
+// list was opened (under the mouse on the canvas, or in the middle of the view from the toolbar).
+void NativeEditor::Impl::ShaderPalette() {
+    if (shaderPaletteOpen) { ImGui::OpenPopup("##nodepalette"); shaderPaletteOpen = false; shaderPaletteFilter.clear(); }
+    ImGui::SetNextWindowSizeConstraints(ImVec2(ImGui::GetFontSize() * 20, 0), ImVec2(ImGui::GetFontSize() * 30, ImGui::GetFontSize() * 28));
+    if (!ImGui::BeginPopup("##nodepalette")) return;
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##nodesearch", WithIcon(kIconSearch, Tr("Search nodes")).c_str(), &shaderPaletteFilter);
+    const bool full = shaderDocument["nodes"].size() >= 48;
+    if (full) ImGui::TextColored(ImVec4(1, 0.7f, 0.4f, 1), "%s", Tr("A graph holds at most 48 nodes."));
+    auto matches = [&](const NodeInfo& info) {
+        if (shaderPaletteFilter.empty()) return true;
+        auto has = [&](const std::string& text) {
+            return std::search(text.begin(), text.end(), shaderPaletteFilter.begin(), shaderPaletteFilter.end(),
+                [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); }) != text.end();
+        };
+        return has(info.op) || has(HumanizeName(info.op)) || has(Tr(info.doc));
+    };
+    const NodeKind* group = nullptr;
+    for (const NodeInfo& info : kNodes) {
+        if (!matches(info)) continue;
+        if (info.kind != group) {
+            group = info.kind;
+            ImGui::Spacing();
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(group->wire), "%s", Tr(group->group));
+            ImGui::Separator();
+        }
+        const std::string label = HumanizeName(info.op);
+        const bool chosen = ImGui::Selectable(("  " + label + "##" + info.op).c_str(), false, full ? ImGuiSelectableFlags_Disabled : 0);
+        ShaderRect(std::string("palette:") + info.op);
+        ImGui::SameLine(ImGui::GetFontSize() * 9.5f);
+        ImGui::TextDisabled("%s", Tr(info.doc));
+        if (!chosen) continue;
+        const std::string op = info.op;
+        Json node = ObjectOf({{"op", op}});
+        const int arity = EditorShaderArity(op);
+        if (arity) { node["args"] = Json::MakeArray(); for (int i = 0; i < arity; ++i) node["args"].push(-1); }
+        if (op == "constant") node["value"] = Json(Json::Array{1, 1, 1, 1});
+        if (op == "swizzle") node["value"] = Json(Json::Array{0, 1, 2, 3});
+        if (op == "uniform") {
+            if (!shaderDocument["uniforms"].size()) shaderDocument["uniforms"]["parameter1"] = 1;
+            node["name"] = shaderDocument["uniforms"].members()[0].first;
+        }
+        shaderDocument["nodes"].push(node);
+        shaderPositions.push_back(shaderPalettePos);
+        shaderSelected = static_cast<int>(shaderPositions.size()) - 1; ShaderRecord();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void NativeEditor::Impl::ShaderCanvas() {
     EditorNodeCanvas canvas("##shadercanvas", shaderPan, shaderZoom);
+    shaderRects["canvas"] = {canvas.origin.x, canvas.origin.y, canvas.size.x, canvas.size.y};
+    const int count = static_cast<int>(shaderDocument["nodes"].size());
+    const Json& document = shaderDocument;
     if (shaderFit) {
-        ImVec2 low = shaderOutputPos, high = shaderOutputPos + ImVec2(190, 160);
-        for (ImVec2 p : shaderPositions) {
+        ImVec2 low = shaderOutputPos, high = shaderOutputPos + kSurfaceSize;
+        for (int n = 0; n < count; ++n) {
+            const ImVec2 p = shaderPositions[static_cast<size_t>(n)], size = NodeSize(document["nodes"][n]);
             low.x = std::min(low.x, p.x); low.y = std::min(low.y, p.y);
-            high.x = std::max(high.x, p.x + 190); high.y = std::max(high.y, p.y + 140);
+            high.x = std::max(high.x, p.x + size.x); high.y = std::max(high.y, p.y + size.y);
         }
-        canvas.Fit(low, high); shaderFit = false;
+        canvas.Fit(low, high);
+        // A large graph is not shrunk until its text is unreadable: it opens at a readable size on the Surface
+        // Output, where the result is, and the rest is a drag away (Fit Graph shows all of it).
+        if (shaderFitReadable && shaderZoom < 0.45f) {
+            shaderZoom = 0.7f;
+            shaderPan = ImVec2(canvas.size.x - 40 - (shaderOutputPos.x + kSurfaceSize.x) * shaderZoom,
+                               canvas.size.y * 0.5f - (shaderOutputPos.y + kSurfaceSize.y * 0.5f) * shaderZoom);
+        }
+        shaderFit = shaderFitReadable = false;
     }
     canvas.Navigate();
     ImDrawList* draw = canvas.draw; ImGuiIO& io = ImGui::GetIO();
     auto point = [&](ImVec2 p) { return canvas.Point(p); };
-    auto output = [&](int node) { return point(shaderPositions[static_cast<size_t>(node)] + ImVec2(190, 24)); };
+    auto output = [&](int node) { return point(shaderPositions[static_cast<size_t>(node)] + ImVec2(kNodeWidth, EditorNodeCanvas::kHeader * 0.5f)); };
     auto input = [&](int node, int pin) {
         ImVec2 pos = node < 0 ? shaderOutputPos : shaderPositions[static_cast<size_t>(node)];
-        return point(pos + ImVec2(0, 54 + static_cast<float>(pin) * 23));
+        return point(pos + ImVec2(0, EditorNodeCanvas::kHeader + kPinRow * 0.5f + 5 + static_cast<float>(pin) * kPinRow));
     };
-    auto wire = [&](ImVec2 from, ImVec2 to) {
-        canvas.Wire(from, to, kWire);
+    auto kindOf = [&](int node) {
+        const NodeInfo* info = InfoOf(document["nodes"][node]["op"].asString());
+        return info ? info->kind : &kMathKind;
     };
-    const int count = static_cast<int>(shaderDocument["nodes"].size());
-    const Json& document = shaderDocument;
+    // Wires of the selected node stand out; the others step back while one is selected.
+    auto wire = [&](int source, ImVec2 to, int target) {
+        const float emphasis = shaderSelected < 0 ? 1.0f : (source == shaderSelected || target == shaderSelected) ? 1.6f : 0.6f;
+        canvas.Wire(output(source), to, kindOf(source)->wire, emphasis);
+    };
     for (int n = 0; n < count; ++n) {
         const Json& args = document["nodes"][n]["args"];
         for (int pin = 0; pin < static_cast<int>(args.size()); ++pin) {
-            int source = args[pin].asInt(-1); if (source >= 0 && source < count) wire(output(source), input(n, pin));
+            int source = args[pin].asInt(-1); if (source >= 0 && source < count) wire(source, input(n, pin), n);
         }
     }
     for (int pin = 0; pin < 4; ++pin) {
         int source = document[kOutputs[pin]].asInt(-1);
-        if (source >= 0 && source < count) wire(output(source), input(-1, pin));
+        if (source >= 0 && source < count) wire(source, input(-1, pin), -2);
     }
-    if (shaderLink >= 0 && shaderLink < count) wire(output(shaderLink), io.MousePos);
-    ImGui::PushFont(nullptr, ImGui::GetFontSize() * shaderZoom);
+    if (shaderLink >= 0 && shaderLink < count) canvas.Wire(output(shaderLink), io.MousePos, IM_COL32(255, 213, 116, 255), 1.6f);
+    const float text = ImGui::GetFontSize() * shaderZoom;
+    const bool labels = text >= 7.0f;
+    ImGui::PushFont(nullptr, text);
+    bool overNode = false;
     for (int n = 0; n <= count; ++n) {
         bool surface = n == count;
         ImVec2& position = surface ? shaderOutputPos : shaderPositions[static_cast<size_t>(n)];
-        int pins = surface ? 4 : static_cast<int>(document["nodes"][n]["args"].size());
+        const Json& node = surface ? Json() : document["nodes"][n];
+        const std::string op = surface ? std::string() : node["op"].asString();
+        const NodeInfo* info = surface ? nullptr : InfoOf(op);
+        int pins = surface ? 4 : static_cast<int>(node["args"].size());
+        const ImVec2 size = surface ? kSurfaceSize : NodeSize(node);
         ImVec2 p = point(position);
-        std::string title = surface ? Tr("Surface Output") : std::to_string(n) + "  " + shaderDocument["nodes"][n]["op"].asString();
+        const std::string title = surface ? Tr("Surface Output") : HumanizeName(op);
+        const std::string badge = surface ? std::string() : "#" + std::to_string(n);
         ImGui::PushID(n);
-        canvas.Card(position, ImVec2(190, std::max(94.0f, 68 + static_cast<float>(pins) * 23)), title.c_str(),
-            surface ? IM_COL32(48, 91, 84, 255) : IM_COL32(52, 69, 93, 255), !surface && shaderSelected == n);
+        canvas.Card(position, size, title.c_str(), surface ? kSurfaceHeader : (info ? info->kind->header : kMathKind.header),
+                    !surface && shaderSelected == n, false, badge.c_str());
+        ShaderRect(surface ? "surface" : "node:" + std::to_string(n));
+        if (ImGui::IsItemHovered()) {
+            overNode = true;
+            if (info && shaderLink < 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) ImGui::SetItemTooltip("%s", Tr(info->doc));
+        }
         if (ImGui::IsItemClicked() && !surface) shaderSelected = n;
         for (int pin = 0; pin < pins; ++pin) {
             ImVec2 pinPos = input(surface ? -1 : n, pin);
-            const char* label = surface ? kOutputs[pin] : pin == 0 ? "A" : pin == 1 ? "B" : "C";
-            draw->AddText(pinPos + ImVec2(12, -7) * shaderZoom, IM_COL32(205, 213, 224, 255), label);
-            int source = surface ? document[kOutputs[pin]].asInt(-1) : document["nodes"][n]["args"][pin].asInt(-1);
+            const std::string label = surface ? HumanizeName(kOutputs[pin]) : (info && info->pins[pin]) ? std::string(info->pins[pin]) : std::string(1, static_cast<char>('A' + pin));
+            int source = surface ? document[kOutputs[pin]].asInt(-1) : node["args"][pin].asInt(-1);
+            if (labels) draw->AddText(pinPos + ImVec2(13 * shaderZoom, -text * 0.5f), source >= 0 ? IM_COL32(226, 232, 242, 255) : IM_COL32(150, 160, 178, 255), label.c_str());
             ImGui::PushID(pin); canvas.Pin("##input", pinPos, source >= 0);
+            ShaderRect(surface ? std::string("surface:") + kOutputs[pin] : "in:" + std::to_string(n) + ":" + std::to_string(pin));
+            if (ImGui::IsItemHovered()) overNode = true;
             // The source pin still owns the active ID if it is submitted after this target.
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && shaderLink >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 if (surface) { shaderDocument[kOutputs[pin]] = shaderLink; ShaderRecord(); }
@@ -255,129 +487,218 @@ void NativeEditor::Impl::ShaderCanvas() {
         }
         if (!surface) {
             ImVec2 pinPos = output(n); canvas.Pin("##output", pinPos, true);
+            ShaderRect("out:" + std::to_string(n));
+            if (ImGui::IsItemHovered()) overNode = true;
             if (ImGui::IsItemActivated()) shaderLink = n;
-            const Json& node = document["nodes"][n];
-            if (node.has("value") || node.has("name")) {
-                std::string value = node.has("name") ? node["name"].asString() : node["value"].dump();
-                if (value.size() > 24) value = value.substr(0, 21) + "...";
-                draw->AddText(p + ImVec2(10, 65) * shaderZoom, IM_COL32(229, 193, 140, 255), value.c_str());
+            if (HasValueRow(node) && labels) {
+                // What the node holds, readable without opening its properties: a number, a color, a name.
+                const ImVec2 row = p + ImVec2(10, EditorNodeCanvas::kHeader + static_cast<float>(pins) * kPinRow + 4) * shaderZoom;
+                const ImVec2 rowEnd = p + ImVec2(kNodeWidth - 10, EditorNodeCanvas::kHeader + static_cast<float>(pins) * kPinRow + 4 + kValueRow - 6) * shaderZoom;
+                draw->AddRectFilled(row, rowEnd, IM_COL32(22, 25, 31, 255), 4 * shaderZoom);
+                std::string value;
+                float indent = 8 * shaderZoom;
+                if (node.has("name")) value = node["name"].asString();
+                else if (op == "swizzle") { for (int i = 0; i < 4; ++i) value += "xyzw"[std::max(0, std::min(3, node["value"][i].asInt()))]; }
+                else if (node["value"].isNumber()) value = Format("%.3g", node["value"].asFloat());
+                else {
+                    const ImVec4 color(node["value"][0].asFloat(), node["value"][1].asFloat(), node["value"][2].asFloat(), 1);
+                    const float swatch = rowEnd.y - row.y - 6 * shaderZoom;
+                    draw->AddRectFilled(row + ImVec2(4, 3) * shaderZoom, row + ImVec2(4 * shaderZoom + swatch, 3 * shaderZoom + swatch),
+                                        ImGui::ColorConvertFloat4ToU32(ImVec4(Clamp(color.x, 0, 1), Clamp(color.y, 0, 1), Clamp(color.z, 0, 1), 1)), 3 * shaderZoom);
+                    indent += swatch + 4 * shaderZoom;
+                    value = Format("%.2g  %.2g  %.2g  %.2g", node["value"][0].asFloat(), node["value"][1].asFloat(), node["value"][2].asFloat(), node["value"][3].asFloat());
+                }
+                draw->PushClipRect(row, rowEnd, true);
+                draw->AddText(ImVec2(row.x + indent, (row.y + rowEnd.y - text) * 0.5f), IM_COL32(238, 204, 150, 255), value.c_str());
+                draw->PopClipRect();
             }
         }
         ImGui::PopID();
     }
     ImGui::PopFont();
+    canvas.Footer(Tr("Drag an output to an input to connect. Right-click an input to disconnect. Right-click or double-click the canvas to add a node. Drag the canvas to move, wheel to zoom."));
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Escape)) shaderLink = -1;
+    // The empty canvas: a click deselects, a right-click or double-click opens the Add Node list there.
+    const bool empty = ImGui::IsWindowHovered() && !overNode;
+    if (empty && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) shaderPressedEmpty = true;
+    if (shaderPressedEmpty && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        if (empty && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left, 3.0f)) shaderSelected = -1;
+        shaderPressedEmpty = false;
+    }
+    if (empty && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) {
+        shaderPalettePos = canvas.Position(io.MousePos); shaderPaletteOpen = true;
+    }
+    if (shaderPaletteAtMouse) {  // from the toolbar: the middle of what is in view
+        shaderPalettePos = canvas.Position(canvas.origin + canvas.size * 0.5f) - ImVec2(kNodeWidth * 0.5f, 40);
+        shaderPaletteAtMouse = false; shaderPaletteOpen = true;
+    }
+    ShaderPalette();
 }
 
 void NativeEditor::Impl::ShaderProperties() {
-    ImGui::PushItemWidth(-FLT_MIN);
     Json ordered;
     std::string validation;
     bool valid = OrderEditorShaderGraph(shaderDocument, ordered, &validation);
-    ImGui::TextColored(valid ? ImVec4(0.45f, 0.85f, 0.55f, 1) : ImVec4(1, 0.45f, 0.4f, 1), "%s", Tr(valid ? "No problems" : "Error"));
-    if (!valid) ImGui::TextWrapped("%s", validation.c_str());
     if (valid) {
         std::string key = ordered.dump() + shaderMaterial.dump();
         if (key != shaderPreviewKey) { shaderPreview = SurfacePreview(ordered, shaderMaterial, &validation); shaderPreviewKey = key; }
-        if (shaderPreview) ImGui::Image(ViewTexture(engine.Gpu()->ImageView(shaderPreview)), ImVec2(128, 128));
-        else if (!validation.empty()) ImGui::TextWrapped("%s", validation.c_str());
-        HelpTooltip(Tr("Surface preview: fixed time, white texture, no lighting or vertex displacement."));
+        if (shaderPreview) {
+            // As large as the panel allows, centered.
+            const float side = std::max(96.0f, std::min(220.0f, ImGui::GetContentRegionAvail().x));
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, (ImGui::GetContentRegionAvail().x - side) * 0.5f));
+            ImGui::Image(ViewTexture(engine.Gpu()->ImageView(shaderPreview)), ImVec2(side, side));
+            ImGui::SetItemTooltip("%s", Tr("Surface preview: fixed time, white texture, no lighting or vertex displacement."));
+        } else if (!validation.empty()) ImGui::TextWrapped("%s", validation.c_str());
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.5f, 0.42f, 1));
+        ImGui::TextWrapped("%s %s", kIconTriangleAlert, validation.c_str());
+        ImGui::PopStyleColor();
     }
     int count = static_cast<int>(shaderDocument["nodes"].size());
-    if (shaderSelected >= 0 && shaderSelected < count && ImGui::CollapsingHeader(Tr("Node Properties"), ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::PushID(shaderSelected);
-        Json& node = shaderDocument["nodes"][shaderSelected];
-        ImGui::Text("%d  %s", shaderSelected, node["op"].asString().c_str());
-        if (node["op"].asString() == "constant") {
-            bool scalar = node["value"].isNumber();
-            if (ImGui::Checkbox(Tr("Scalar"), &scalar)) {
-                float value = node["value"].isNumber() ? node["value"].asFloat() : node["value"][0].asFloat();
-                node["value"] = scalar ? Json(value) : Json(Json::Array{value, value, value, value}); ShaderRecord();
-            }
-            VectorField(Tr("Value"), node["value"]);
-            if (ImGui::IsItemDeactivatedAfterEdit()) ShaderRecord();
-        }
-        if (node["op"].asString() == "uniform") {
-            std::string name = node["name"].asString();
-            if (ImGui::BeginCombo(Tr("Uniform"), name.c_str())) {
-                for (const auto& uniform : shaderDocument["uniforms"].members()) {
-                    if (ImGui::Selectable(uniform.first.c_str(), name == uniform.first)) { node["name"] = uniform.first; ShaderRecord(); }
+    if (ImGui::CollapsingHeader(WithIcon(kIconSlidersHorizontal, Tr("Node Properties")).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (shaderSelected < 0 || shaderSelected >= count) {
+            ImGui::TextDisabled("%s", Tr("Click a node to edit it."));
+        } else {
+            ImGui::PushID(shaderSelected);
+            Json& node = shaderDocument["nodes"][shaderSelected];
+            const std::string op = node["op"].asString();
+            const NodeInfo* info = InfoOf(op);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(info ? info->kind->wire : kMathKind.wire), "%s", HumanizeName(op).c_str());
+            ImGui::SameLine(); ImGui::TextDisabled("#%d", shaderSelected);
+            if (info) { ImGui::PushTextWrapPos(0); ImGui::TextDisabled("%s", Tr(info->doc)); ImGui::PopTextWrapPos(); }
+            if (BeginProperties("##nodeprops")) {
+                if (op == "constant") {
+                    bool scalar = node["value"].isNumber();
+                    PropertyLabel(Tr("Kind"));
+                    if (ImGui::BeginCombo("##kind", Tr(scalar ? "Number" : "Color / Vector"))) {
+                        for (int choice = 0; choice < 2; ++choice) {
+                            if (!ImGui::Selectable(Tr(choice ? "Number" : "Color / Vector"), scalar == (choice == 1)) || scalar == (choice == 1)) continue;
+                            float value = node["value"].isNumber() ? node["value"].asFloat() : node["value"][0].asFloat();
+                            node["value"] = choice ? Json(value) : Json(Json::Array{value, value, value, value}); ShaderRecord();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    VectorField(Tr("Value"), node["value"]);
+                    if (ImGui::IsItemDeactivatedAfterEdit()) ShaderRecord();
+                    if (!node["value"].isNumber()) {
+                        // The same four numbers as a color, which is what most constants are.
+                        float color[4] = {node["value"][0].asFloat(), node["value"][1].asFloat(), node["value"][2].asFloat(), node["value"][3].asFloat()};
+                        PropertyLabel(Tr("Color"));
+                        if (ImGui::ColorEdit4("##color", color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+                            node["value"] = Json(Json::Array{color[0], color[1], color[2], color[3]});
+                        if (ImGui::IsItemDeactivatedAfterEdit()) ShaderRecord();
+                    }
                 }
+                if (op == "uniform") {
+                    std::string name = node["name"].asString();
+                    PropertyLabel(Tr("Uniform"));
+                    if (ImGui::BeginCombo("##uniform", name.c_str())) {
+                        for (const auto& uniform : shaderDocument["uniforms"].members()) {
+                            if (ImGui::Selectable(uniform.first.c_str(), name == uniform.first)) { node["name"] = uniform.first; ShaderRecord(); }
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+                if (op == "swizzle") {
+                    // One choice per output channel instead of four numbers.
+                    for (int channel = 0; channel < 4; ++channel) {
+                        ImGui::PushID(channel);
+                        const char* names[] = {"X / R", "Y / G", "Z / B", "W / A"};
+                        PropertyLabel(Format(Tr("Output %s"), names[channel]).c_str());
+                        int from = std::max(0, std::min(3, node["value"][channel].asInt()));
+                        if (ImGui::BeginCombo("##from", names[from])) {
+                            for (int i = 0; i < 4; ++i) if (ImGui::Selectable(names[i], from == i) && from != i) { node["value"][channel] = i; ShaderRecord(); }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::PopID();
+                    }
+                }
+                ImGui::EndTable();
+            }
+            if (ImGui::Button(WithIcon(kIconTrash2, Tr("Delete Node")).c_str())) {
+                RemoveEditorShaderNode(shaderDocument, shaderSelected);
+                shaderPositions.erase(shaderPositions.begin() + shaderSelected); shaderSelected = -1; shaderLink = -1; ShaderRecord();
+            }
+            ImGui::SetItemTooltip("%s", Tr("Delete key"));
+            ImGui::PopID();
+        }
+    }
+    if (ImGui::CollapsingHeader(WithIcon(kIconBraces, Format("%s (%d / 8)###uniforms", Tr("Uniform Defaults"), static_cast<int>(shaderDocument["uniforms"].size()))).c_str())) {
+        std::string remove;
+        if (BeginProperties("##uniformprops")) {
+            for (auto& uniform : shaderDocument["uniforms"].members()) {
+                ImGui::PushID(uniform.first.c_str());
+                VectorField(uniform.first.c_str(), uniform.second);
+                if (ImGui::IsItemDeactivatedAfterEdit()) ShaderRecord();
+                if (ImGui::BeginPopupContextItem()) {
+                    if (ImGui::MenuItem(Tr("Remove"))) remove = uniform.first;
+                    if (ImGui::MenuItem(Tr("Scalar"))) { Json scalar = uniform.second.isNumber() ? uniform.second : uniform.second[0]; uniform.second = scalar; ShaderRecord(); }
+                    if (ImGui::MenuItem(Tr("Vector"))) {
+                        if (uniform.second.isNumber()) { float v = uniform.second.asFloat(); uniform.second = Json(Json::Array{v, v, v, v}); ShaderRecord(); }
+                    }
+                    ImGui::EndPopup();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (shaderDocument["uniforms"].size()) ImGui::TextDisabled("%s", Tr("Right-click a value: number, vector or remove."));
+        if (!remove.empty()) { shaderDocument["uniforms"].erase(remove); shaderMaterial["shaderUniforms"].erase(remove); ShaderRecord(); }
+        const float add = ImGui::CalcTextSize(Tr("Add Uniform")).x + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemWidth(std::max(60.0f, ImGui::GetContentRegionAvail().x - add));
+        ImGui::InputTextWithHint("##uniformname", Tr("Uniform name"), &shaderUniformName);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(shaderDocument["uniforms"].size() >= 8 || shaderUniformName.empty() || shaderDocument["uniforms"].has(shaderUniformName));
+        if (ImGui::Button(Tr("Add Uniform"))) { shaderDocument["uniforms"][shaderUniformName] = 1; ShaderRecord(); }
+        ImGui::EndDisabled();
+    }
+    if (ImGui::CollapsingHeader(WithIcon(kIconPalette, Tr("Material")).c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (BeginProperties("##materialprops")) {
+            float color[3] = {1, 1, 1};
+            if (shaderMaterial["baseColor"].isArray()) for (int i = 0; i < 3; ++i) color[i] = shaderMaterial["baseColor"][i].asFloat(1);
+            PropertyLabel(Tr("Base Color"));
+            if (ImGui::ColorEdit3("##basecolor", color, ImGuiColorEditFlags_NoInputs)) shaderMaterial["baseColor"] = Json(Json::Array{color[0], color[1], color[2]});
+            float roughness = shaderMaterial["roughness"].asFloat(1), metallic = shaderMaterial["metallic"].asFloat();
+            PropertyLabel(Tr("Roughness"));
+            if (ImGui::SliderFloat("##roughness", &roughness, 0, 1, "%.2f")) shaderMaterial["roughness"] = roughness;
+            PropertyLabel(Tr("Metallic"));
+            if (ImGui::SliderFloat("##metallic", &metallic, 0, 1, "%.2f")) shaderMaterial["metallic"] = metallic;
+            bool unlit = shaderMaterial["unlit"].asBool();
+            PropertyLabel(Tr("Unlit"));
+            if (ImGui::Checkbox("##unlit", &unlit)) shaderMaterial["unlit"] = unlit;
+            float opacity = shaderMaterial["opacity"].asFloat(1);
+            PropertyLabel(Tr("Opacity"));
+            if (ImGui::SliderFloat("##opacity", &opacity, 0, 1, "%.2f")) shaderMaterial["opacity"] = opacity;
+            std::string alpha = shaderMaterial["alphaMode"].asString("opaque");
+            PropertyLabel(Tr("Alpha Mode"));
+            if (ImGui::BeginCombo("##alpha", alpha.c_str())) {
+                for (const char* mode : {"opaque", "mask", "blend"}) if (ImGui::Selectable(mode, alpha == mode)) shaderMaterial["alphaMode"] = mode;
                 ImGui::EndCombo();
             }
-        }
-        if (node["op"].asString() == "swizzle") {
-            int channels[4]; for (int i = 0; i < 4; ++i) channels[i] = node["value"][i].asInt();
-            if (ImGui::DragInt4(Tr("Channels"), channels, 0.05f, 0, 3)) node["value"] = Json(Json::Array{channels[0], channels[1], channels[2], channels[3]});
-            if (ImGui::IsItemDeactivatedAfterEdit()) ShaderRecord();
-        }
-        if (ImGui::Button(Tr("Delete Node"))) {
-            RemoveEditorShaderNode(shaderDocument, shaderSelected);
-            shaderPositions.erase(shaderPositions.begin() + shaderSelected); shaderSelected = -1; shaderLink = -1; ShaderRecord();
-        }
-        ImGui::PopID();
-    }
-    if (ImGui::CollapsingHeader(Tr("Uniform Defaults"))) {
-        std::string remove;
-        for (auto& uniform : shaderDocument["uniforms"].members()) {
-            ImGui::PushID(uniform.first.c_str());
-            VectorField(uniform.first.c_str(), uniform.second);
-            if (ImGui::IsItemDeactivatedAfterEdit()) ShaderRecord();
-            if (ImGui::BeginPopupContextItem()) {
-                if (ImGui::MenuItem(Tr("Remove"))) remove = uniform.first;
-                if (ImGui::MenuItem(Tr("Scalar"))) { Json scalar = uniform.second.isNumber() ? uniform.second : uniform.second[0]; uniform.second = scalar; ShaderRecord(); }
-                if (ImGui::MenuItem(Tr("Vector"))) {
-                    if (uniform.second.isNumber()) { float v = uniform.second.asFloat(); uniform.second = Json(Json::Array{v, v, v, v}); ShaderRecord(); }
-                }
-                ImGui::EndPopup();
+            std::string texture = shaderMaterial["baseTexture"].asString("");
+            PropertyLabel(Tr("Base Texture"));
+            const float pick = ImGui::GetFrameHeight();
+            ImGui::SetNextItemWidth(-(pick + ImGui::GetStyle().ItemInnerSpacing.x));
+            if (ImGui::InputText("##basetexture", &texture)) shaderMaterial["baseTexture"] = texture;
+            ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+            if (ImGui::Button("...##picktexture", ImVec2(pick, pick))) ImGui::OpenPopup("##shadertexture");
+            ImGui::SetItemTooltip("%s", Tr("Pick Texture"));
+            std::string picked;
+            if (AssetPicker("##shadertexture", "texture", texture, picked)) shaderMaterial["baseTexture"] = picked;
+            for (const auto& uniform : shaderDocument["uniforms"].members()) {
+                if (uniform.first == "cameraPosition" || uniform.first == "lightDirection" || uniform.first == "playing") continue;
+                Json value = shaderMaterial["shaderUniforms"].has(uniform.first) ? shaderMaterial["shaderUniforms"][uniform.first] : uniform.second;
+                if (VectorField(uniform.first.c_str(), value)) shaderMaterial["shaderUniforms"][uniform.first] = value;
             }
-            ImGui::PopID();
-        }
-        if (!remove.empty()) { shaderDocument["uniforms"].erase(remove); shaderMaterial["shaderUniforms"].erase(remove); ShaderRecord(); }
-        ImGui::InputText(Tr("Uniform name"), &shaderUniformName);
-        if (ImGui::Button(Tr("Add Uniform")) && shaderDocument["uniforms"].size() < 8 && !shaderUniformName.empty()) {
-            if (!shaderDocument["uniforms"].has(shaderUniformName)) { shaderDocument["uniforms"][shaderUniformName] = 1; ShaderRecord(); }
-        }
-    }
-    if (ImGui::CollapsingHeader(Tr("Material"), ImGuiTreeNodeFlags_DefaultOpen)) {
-        float color[3] = {1, 1, 1};
-        if (shaderMaterial["baseColor"].isArray()) for (int i = 0; i < 3; ++i) color[i] = shaderMaterial["baseColor"][i].asFloat(1);
-        ImGui::TextUnformatted(Tr("Base Color"));
-        if (ImGui::ColorEdit3("##basecolor", color)) shaderMaterial["baseColor"] = Json(Json::Array{color[0], color[1], color[2]});
-        float roughness = shaderMaterial["roughness"].asFloat(1), metallic = shaderMaterial["metallic"].asFloat();
-        ImGui::TextUnformatted(Tr("Roughness"));
-        if (ImGui::SliderFloat("##roughness", &roughness, 0, 1)) shaderMaterial["roughness"] = roughness;
-        ImGui::TextUnformatted(Tr("Metallic"));
-        if (ImGui::SliderFloat("##metallic", &metallic, 0, 1)) shaderMaterial["metallic"] = metallic;
-        bool unlit = shaderMaterial["unlit"].asBool();
-        if (ImGui::Checkbox(Tr("Unlit"), &unlit)) shaderMaterial["unlit"] = unlit;
-        float opacity = shaderMaterial["opacity"].asFloat(1);
-        ImGui::TextUnformatted(Tr("Opacity"));
-        if (ImGui::SliderFloat("##opacity", &opacity, 0, 1)) shaderMaterial["opacity"] = opacity;
-        std::string alpha = shaderMaterial["alphaMode"].asString("opaque");
-        ImGui::TextUnformatted(Tr("Alpha Mode"));
-        if (ImGui::BeginCombo("##alpha", alpha.c_str())) {
-            for (const char* mode : {"opaque", "mask", "blend"}) if (ImGui::Selectable(mode, alpha == mode)) shaderMaterial["alphaMode"] = mode;
-            ImGui::EndCombo();
-        }
-        std::string texture = shaderMaterial["baseTexture"].asString("");
-        ImGui::TextUnformatted(Tr("Base Texture"));
-        if (ImGui::InputText("##basetexture", &texture)) shaderMaterial["baseTexture"] = texture;
-        if (ImGui::Button(Tr("Pick Texture"))) ImGui::OpenPopup("##shadertexture");
-        std::string picked;
-        if (AssetPicker("##shadertexture", "texture", texture, picked)) shaderMaterial["baseTexture"] = picked;
-        for (const auto& uniform : shaderDocument["uniforms"].members()) {
-            if (uniform.first == "cameraPosition" || uniform.first == "lightDirection" || uniform.first == "playing") continue;
-            Json value = shaderMaterial["shaderUniforms"].has(uniform.first) ? shaderMaterial["shaderUniforms"][uniform.first] : uniform.second;
-            ImGui::PushID(uniform.first.c_str());
-            if (VectorField(uniform.first.c_str(), value)) shaderMaterial["shaderUniforms"][uniform.first] = value;
-            ImGui::PopID();
+            ImGui::EndTable();
         }
         if (!shaderExistingMaterial.empty()) {
-            if (auto preview = AssetThumbnail(shaderExistingMaterial)) ImGui::Image(ViewTexture(engine.Gpu()->ImageView(preview)), ImVec2(96, 96));
+            if (auto preview = AssetThumbnail(shaderExistingMaterial)) {
+                ImGui::Image(ViewTexture(engine.Gpu()->ImageView(preview)), ImVec2(96, 96));
+                ImGui::SetItemTooltip("%s", Tr("The saved material, lit"));
+            }
         }
     }
-    ImGui::PopItemWidth();
 }
 
 void NativeEditor::Impl::ShadersPanel() {
@@ -386,38 +707,56 @@ void NativeEditor::Impl::ShadersPanel() {
     // Keep unsaved documents visible; switching documents has an explicit save/discard prompt.
     if (!ImGui::Begin(WithIcon(kIconWorkflow, TrId("Shader Graph")).c_str(), &showShaders)) { ImGui::End(); return; }
     shaderEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if (ImGui::Button(Tr("New Shader"))) OpenShader("");
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("New Shader")).c_str())) OpenShader("");
+    ShaderRect("new");
     if (shaderDocument.isNull()) {
         ImGui::TextWrapped("%s", Tr("Double-click a shader or material in Assets, or create a new shader."));
         ImGui::End(); return;
     }
-    ImGui::SameLine(); ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - 170));
-    ImGui::InputText("##shaderpath", &shaderSavePath); HelpTooltip(Tr("Project path ending in .shader.json"));
+    const ImGuiStyle& style = ImGui::GetStyle();
+    auto buttonWidth = [&](const std::string& label) { return ImGui::CalcTextSize(label.c_str(), nullptr, true).x + style.FramePadding.x * 2; };
+    const bool dirty = shaderDocument != shaderSaved || shaderMaterial != shaderMaterialSaved;
+    const std::string saveLabel = WithIcon(kIconSave, Tr("Save Shader")) + (dirty ? " *" : "");
+    ImGui::SameLine(); ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - buttonWidth(saveLabel) - style.ItemSpacing.x));
+    ImGui::InputTextWithHint("##shaderpath", Tr("Project path ending in .shader.json"), &shaderSavePath);
+    ImGui::SetItemTooltip("%s", Tr("Project path ending in .shader.json"));
     ImGui::SameLine();
-    if (ImGui::Button(Tr("Save Shader")) || (shaderEditorFocused && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S))) SaveShader();
-    if (shaderDocument != shaderSaved || shaderMaterial != shaderMaterialSaved) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.8f, 0.35f, 1), "*"); }
-    if (ImGui::Button(Tr("Add Node"))) ImGui::OpenPopup("##nodepalette");
-    if (ImGui::BeginPopup("##nodepalette")) {
-        for (const std::string& op : EditorShaderOperations()) {
-            if (ImGui::MenuItem(op.c_str(), nullptr, false, shaderDocument["nodes"].size() < 48)) {
-                Json node = ObjectOf({{"op", op}});
-                int arity = EditorShaderArity(op);
-                if (arity) { node["args"] = Json::MakeArray(); for (int i = 0; i < arity; ++i) node["args"].push(-1); }
-                if (op == "constant") node["value"] = Json(Json::Array{1, 1, 1, 1});
-                if (op == "swizzle") node["value"] = Json(Json::Array{0, 1, 2, 3});
-                if (op == "uniform") {
-                    if (!shaderDocument["uniforms"].size()) shaderDocument["uniforms"]["parameter1"] = 1;
-                    node["name"] = shaderDocument["uniforms"].members()[0].first;
-                }
-                shaderDocument["nodes"].push(node);
-                shaderPositions.push_back(ImVec2(70 - shaderPan.x / shaderZoom, 80 - shaderPan.y / shaderZoom));
-                shaderSelected = static_cast<int>(shaderPositions.size()) - 1; ShaderRecord();
-            }
-        }
-        ImGui::EndPopup();
+    if (dirty) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.82f, 0.4f, 1));
+    const bool save = ImGui::Button(saveLabel.c_str());
+    if (dirty) ImGui::PopStyleColor();
+    ShaderRect("save");
+    ImGui::SetItemTooltip("%s", dirty ? Tr("Unsaved changes (Ctrl+S)") : "Ctrl+S");
+    if (save || (shaderEditorFocused && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S))) SaveShader();
+
+    Json ordered; std::string validation;
+    bool valid = OrderEditorShaderGraph(shaderDocument, ordered, &validation);
+    const std::string materialLabel = WithIcon(kIconPalette, Tr(shaderExistingMaterial == shaderMaterialPath ? "Save Material" : "Create Material"));
+    const std::string applyLabel = WithIcon(kIconCircleCheck, Tr("Apply to Selected Mesh"));
+    ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x - buttonWidth(materialLabel) - buttonWidth(applyLabel) - style.ItemSpacing.x * 2));
+    ImGui::InputTextWithHint("##materialpath", Tr("Material path"), &shaderMaterialPath);
+    ImGui::SetItemTooltip("%s", Tr("Material path"));
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!valid);
+    if (ImGui::Button(materialLabel.c_str())) SaveShaderMaterial();
+    ShaderRect("save-material");
+    ImGui::EndDisabled(); ImGui::SameLine();
+    bool mesh = selectedId != kNullEntity && selected["components"].has("MeshRenderer");
+    ImGui::BeginDisabled(!valid || !mesh);
+    if (ImGui::Button(applyLabel.c_str())) {
+        if (SaveShaderMaterial()) Call("component.set", ObjectOf({{"id", Json(selectedId)}, {"type", "MeshRenderer"},
+            {"values", ObjectOf({{"material", shaderExistingMaterial}, {"shaderUniforms", Json::MakeObject()}})}}));
     }
-    ImGui::SameLine(); if (ImGui::Button(Tr("Arrange Nodes"))) ShaderArrange();
-    ImGui::SameLine(); if (ImGui::Button(Tr("Fit Graph"))) shaderFit = true;
+    ShaderRect("apply");
+    ImGui::EndDisabled();
+    if (!mesh) ImGui::SetItemTooltip("%s", Tr("Select an entity with a MeshRenderer first"));
+
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("Add Node")).c_str())) shaderPaletteAtMouse = true;
+    ShaderRect("add");
+    ImGui::SetItemTooltip("%s", Tr("Also: right-click or double-click the canvas"));
+    ImGui::SameLine(); if (ImGui::Button(WithIcon(kIconLayoutGrid, Tr("Arrange Nodes")).c_str())) ShaderArrange();
+    ShaderRect("arrange");
+    ImGui::SameLine(); if (ImGui::Button(WithIcon(kIconSquareDashed, Tr("Fit Graph")).c_str())) shaderFit = true;
+    ShaderRect("fit");
     auto history = [&](bool redo) {
         if (redo ? shaderHistoryIndex + 1 < shaderHistory.size() : shaderHistoryIndex > 0) {
             shaderHistoryIndex = redo ? shaderHistoryIndex + 1 : shaderHistoryIndex - 1;
@@ -425,32 +764,39 @@ void NativeEditor::Impl::ShadersPanel() {
             if (shaderPositions.size() != shaderDocument["nodes"].size()) ShaderArrange();
         }
     };
+    ImGui::SameLine(); ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(); ImGui::BeginDisabled(shaderHistoryIndex == 0);
-    if (ImGui::Button(Tr("Undo"))) history(false); ImGui::EndDisabled();
+    if (ImGui::Button(Tr("Undo"))) history(false); ShaderRect("undo"); ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Ctrl+Z");
     ImGui::SameLine(); ImGui::BeginDisabled(shaderHistoryIndex + 1 == shaderHistory.size());
-    if (ImGui::Button(Tr("Redo"))) history(true); ImGui::EndDisabled();
+    if (ImGui::Button(Tr("Redo"))) history(true); ShaderRect("redo"); ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Ctrl+Y");
     if (shaderEditorFocused && !ImGui::GetIO().WantTextInput) {
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) history(false);
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) history(true);
+        const int count = static_cast<int>(shaderDocument["nodes"].size());
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete) && shaderSelected >= 0 && shaderSelected < count) {
+            RemoveEditorShaderNode(shaderDocument, shaderSelected);
+            shaderPositions.erase(shaderPositions.begin() + shaderSelected); shaderSelected = -1; shaderLink = -1; ShaderRecord();
+        }
     }
-    ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x - 340));
-    ImGui::InputTextWithHint("##materialpath", Tr("Material path"), &shaderMaterialPath);
-    HelpTooltip(Tr("Material path"));
-    ImGui::SameLine();
-    Json ordered; std::string validation;
-    bool valid = OrderEditorShaderGraph(shaderDocument, ordered, &validation);
-    ImGui::BeginDisabled(!valid);
-    if (ImGui::Button(Tr(shaderExistingMaterial == shaderMaterialPath ? "Save Material" : "Create Material"))) SaveShaderMaterial();
-    ImGui::EndDisabled(); ImGui::SameLine();
-    bool mesh = selectedId != kNullEntity && selected["components"].has("MeshRenderer");
-    ImGui::BeginDisabled(!valid || !mesh);
-    if (ImGui::Button(Tr("Apply to Selected Mesh"))) {
-        if (SaveShaderMaterial()) Call("component.set", ObjectOf({{"id", Json(selectedId)}, {"type", "MeshRenderer"},
-            {"values", ObjectOf({{"material", shaderExistingMaterial}, {"shaderUniforms", Json::MakeObject()}})}}));
+    // The state of the graph, always in view: what stops it from being saved, or how much room is left.
+    ImGui::SameLine(); ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical); ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    if (valid) {
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.55f, 1), "%s %s", kIconCircleCheck, Tr("No problems"));
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", Format(Tr("%d / 48 nodes"), static_cast<int>(shaderDocument["nodes"].size())).c_str());
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.5f, 0.42f, 1));
+        const std::string problem = std::string(kIconTriangleAlert) + " " + validation;
+        ImGui::PushTextWrapPos(0);  // one line; the whole text is in the tooltip and in the properties panel
+        ImGui::TextUnformatted(problem.c_str(), problem.c_str() + std::min<size_t>(problem.size(), problem.find('\n')));
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("%s", validation.c_str());
     }
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("%s", Tr("Drag output to input; right-click input to disconnect. Middle drag: pan; wheel: zoom."));
-    float properties = std::min(270.0f, ImGui::GetContentRegionAvail().x * 0.42f);
+    float properties = std::min(ImGui::GetFontSize() * 21.0f, ImGui::GetContentRegionAvail().x * 0.4f);
     ImGui::BeginChild("##graphleft", ImVec2(std::max(100.0f, ImGui::GetContentRegionAvail().x - properties - 8), 0));
     ShaderCanvas(); ImGui::EndChild(); ImGui::SameLine();
     ImGui::BeginChild("##graphproperties", ImVec2(0, 0), ImGuiChildFlags_Borders); ShaderProperties(); ImGui::EndChild();

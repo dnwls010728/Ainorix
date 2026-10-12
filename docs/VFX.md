@@ -326,13 +326,58 @@ future work. Effects also provides the structure graph described below.
 
 ## Effects structure graph
 
-Open a `.vfx.json` in Effects and enable **Structure Graph**. It shows Emitter, Trail, Material,
-Param and Output nodes, plus read-only Anchor reference nodes for unique named scene transforms.
-This is a view of the existing asset document, not a per-particle behaviour graph.
+The Effects panel has one toolbar row (new, open, save with a `*` while unsaved, undo/redo, Place in Scene, the
+file) and one row with the block being edited, Add Emitter / Add Trail and the three views **Fields**,
+**Structure Graph** and **Value Nodes** (pressing the lit one again returns to Fields). In Fields a row of chips
+chooses the group (Emission, Shape, Motion, ...), every field is a row with its label on the left (its description
+is the label's tooltip, a plug icon marks a field a parameter controls) and curves and expressions take the whole
+width under their label. The preview beside it has play/restart, a timeline, the particle budget as a bar that
+turns amber and red as it fills, a ground grid and a dark / mid / light background (dark smoke and bright sparks
+need different ones).
 
-- Add Emitter / Add Trail create document blocks. Target Field chooses the extra component input
-  shown on blocks; existing parameter targets remain visible. Add Parameter creates a typed default
-  and its first target on the selected block. Parameter definitions, names and target scales remain
+Open a `.vfx.json` in Effects and choose **Structure Graph**.
+
+The graph is where an effect is built, in the way of Unity's VFX Graph: an emitter is one tall node, a stack of
+the four stages of a particle's life, and its fields are edited in the node.
+
+| Context | What it holds (the engine's field groups) |
+|---|---|
+| **Spawn** (green) | Emission (rate, burst, budget), Timing (lifetime, loop, delay) |
+| **Initialize** (blue) | Shape, Appearance (sizes, colors, rotation), birth expressions |
+| **Update** (amber) | Motion, Curves, update expressions |
+| **Output** (purple) | Render (material, mesh, texture, blend, flipbook) |
+
+- A context's band folds it away. Under it each group has a line with how many of its fields are listed
+  (`3 / 6`); a group lists the fields the effect sets, those a parameter drives and the few nearly every effect
+  tunes, and clicking the line lists all of them (again: only those in use). Folded contexts and the positions of
+  the nodes are layout (`.oe/vfx-layout/`), never part of the asset.
+- A field is a row: a pin, its name and its value, edited in place through `vfx.set` (curves say how many keys
+  they have and are edited in the panel on the right). Zoomed far out the rows show the values as text.
+- Parameters are nodes at the left. Drag a parameter's output to a field's pin to make it drive the field;
+  right-click the pin to disconnect. Right-click a field for **Make Parameter** (a new parameter with the field's
+  value, already connected) and **Reset to Default**. An emitter's output dragged to another emitter's **Trigger**
+  makes that one burst where its particles die (`onDeath`). Material and anchor reference nodes connect to the
+  `material` and anchor fields. The **System** node holds the particle budget.
+- **Values as nodes, on the same canvas.** Initialize and Update end with the values an expression computes
+  (position, velocity, size, color, `custom0..3`, ...). Clicking one puts its value nodes on the canvas, wired
+  into that row; the panel on the right then has Add Value Node, Apply Nodes, Reset Nodes, the selected node's
+  settings and the expression's text. Dropping a node's output on the row's pin makes it the value. The asset
+  still stores only the expression text. Clicking the row again hides the nodes; right-click it to remove the
+  expression. (The separate **Value Nodes** view shows the same nodes alone.)
+- The preview and the fields of the chosen block stay at the right of the canvas.
+- A graph that would be too small to read when fitted opens at 80 % on its top instead; emitters are tall, so
+  fold the contexts not being worked on.
+
+`oe editor <project> --effects effects/x.vfx.json --effects-graph [--effects-values] --screenshot f.png` renders
+it headless (with `--effects-values` the update `size` value's nodes are on the canvas). Automation finds rows
+through `NativeEditor::EffectsControlRect`: `node:<id>`, `context:<id>:<Context>`, `module:<id>:<Group>`,
+`input:<id>:<field>`, `gfield:<id>:<field>`, `expression:<id>:<stage>:<channel>`, `value-node:<i>`,
+`value-out:<i>`.
+This is a view of the existing asset document: every node, row and wire is something the `.vfx.json` already
+says, and a per-particle value is still an expression.
+
+- Add Emitter / Add Trail create document blocks. **Parameter for <field>** (the field clicked in the graph)
+  creates a typed default and its first target. Parameter definitions, names and target scales remain
   editable in the inspector; existing scales are preserved when adding a wire.
 - Drag a Material output onto `material`; double-click the Material card to open its material and
   source graph in Shaders. Material Reference adds an existing project material to the palette.
@@ -347,10 +392,9 @@ This is a view of the existing asset document, not a per-particle behaviour grap
 - Right-click an input to disconnect. A trigger input removes all incoming death references;
   disconnecting a parameter's final target removes its definition, because assets forbid orphans.
   Undo restores the document and those references. Output edits the shared `maxParticles` budget.
-- Emitter / Trail modules expand in the node in their fixed order. Their fields, booleans, curves and
-  gradients reuse the field inspector controls. Drag the header to move a node; middle-drag pans;
-  the wheel zooms. Auto Arrange resets positions; Fit Graph frames every card. The normal field view
-  retains the full preview controls; the graph keeps a compact independent preview alongside it.
+- Drag the header to move a node; drag the empty canvas (or middle-drag) to move the view; the wheel zooms.
+  Auto Arrange resets positions; Fit Graph frames every card. The normal field view retains the full preview
+  controls; the graph keeps a compact independent preview alongside it.
 
 Every document edit uses `vfx.edit_replace` or `vfx.set`, sharing draft validation, attached-agent
 updates and document undo/redo/save. Node positions, pan/zoom and unused palette references are stored

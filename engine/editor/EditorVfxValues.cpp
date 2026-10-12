@@ -38,26 +38,11 @@ bool NativeEditor::Impl::EffectsValueApply(const Json& candidate,const std::stri
     for(size_t i=0;i<effectsValueGraph["nodes"].size();++i) effectsValueGraph["nodes"][i]["type"]=result["result"]["nodeTypes"][i];
     effectsValueSource=result["result"]["source"].asString();effectsValueError.clear();effectsError.clear();return true;
 }
-void NativeEditor::Impl::EffectsValues() {
-    if(effectsBlock>=static_cast<int>(effectsDocument["emitters"].size())) {
-        ImGui::TextWrapped("%s",Tr("Value nodes require a particle emitter."));return;
-    }
-    if(effectsLayoutPath!=effectsPath) EffectsGraphLayout(false);
+std::string NativeEditor::Impl::EffectsValueSync() {
+    // The expression that is shown (emitter, stage, channel) as a graph; made again when any of them or the
+    // expression's text changes.
     int& stage=effectsCurveKeys["expression:stage"];int& channel=effectsCurveKeys["expression:channel"];
-    ImGui::SetNextItemWidth(110);
-    if(ImGui::BeginCombo("##valuestage",Tr(stage?"Update":"Birth"))) {
-        for(int i=0;i<2;++i) if(ImGui::Selectable(Tr(i?"Update":"Birth"),stage==i)) stage=i;
-        ImGui::EndCombo();
-    }
-    EffectsRect("value-stage");ImGui::SameLine();ImGui::SetNextItemWidth(120);
-    if(ImGui::BeginCombo("##valuechannel",VfxChannelNames()[static_cast<size_t>(channel)])) {
-        for(size_t i=0;i<kVfxChannelCount;++i) {
-            if(ImGui::Selectable(VfxChannelNames()[i],channel==static_cast<int>(i))) channel=static_cast<int>(i);
-            EffectsRect(std::string("value-channel:")+VfxChannelNames()[i]);
-        }
-        ImGui::EndCombo();
-    }
-    EffectsRect("value-channel");
+    stage=std::clamp(stage,0,1);channel=std::clamp(channel,0,static_cast<int>(kVfxChannelCount)-1);
     const std::string block=effectsDocument["emitters"][effectsBlock]["name"].asString();
     const std::string prefix="value:"+block+":"+Stage(stage)+":"+VfxChannelNames()[static_cast<size_t>(channel)]+":";
     const std::string canonical=static_cast<const Json&>(effectsDocument)["emitters"][effectsBlock]["emitter"]["expressions"][Stage(stage)][VfxChannelNames()[static_cast<size_t>(channel)]].asString();
@@ -72,8 +57,11 @@ void NativeEditor::Impl::EffectsValues() {
         effectsValueError=Ok(result)?std::string():result["error"]["message"].asString();
         if(changedChannel && !effectsGraphPositions.count(prefix+"output")) effectsValueFit=true;
     }
+    return prefix;
+}
+void NativeEditor::Impl::EffectsValuePalette(const std::string& prefix,ImVec2 spawn) {
     ImGui::BeginDisabled(effectsValueGraph.isNull());
-    ImGui::SameLine();if(ImGui::Button(Tr("Add Value Node"))) ImGui::OpenPopup("##valuepalette");EffectsRect("value-add");
+    if(ImGui::Button(Tr("Add Value Node"))) ImGui::OpenPopup("##valuepalette");EffectsRect("value-add");
     if(ImGui::BeginPopup("##valuepalette")) {
         for(const Json& operation:effectsSchema["expressions"]["valueGraph"]["operations"].items()) {
             const std::string op=operation["op"].asString();
@@ -88,7 +76,7 @@ void NativeEditor::Impl::EffectsValues() {
                 if(op=="component") node["axis"]=0;
                 if(op=="vec3") node["type"]="vector";
                 effectsValueSelected=static_cast<int>(effectsValueGraph["nodes"].size());effectsValueGraph["nodes"].push(node);
-                effectsGraphPositions[prefix+std::to_string(effectsValueSelected)]=ImVec2(40,40);effectsLayoutDirty=true;
+                effectsGraphPositions[prefix+std::to_string(effectsValueSelected)]=spawn;effectsLayoutDirty=true;
             }
             EffectsRect("value-palette:"+op);
         }
@@ -97,39 +85,30 @@ void NativeEditor::Impl::EffectsValues() {
     ImGui::SameLine();if(ImGui::Button(Tr("Apply Nodes"))) EffectsValueApply(effectsValueGraph);EffectsRect("value-apply");
     ImGui::EndDisabled();
     ImGui::SameLine();if(ImGui::Button(Tr("Reset Nodes"))) {effectsValueKey.clear();effectsValueError.clear();}EffectsRect("value-reset");
-    if(ImGui::Button(Tr("Auto Arrange"))) {
-        for(auto it=effectsGraphPositions.begin();it!=effectsGraphPositions.end();) {
-            if(it->first.compare(0,prefix.size(),prefix)==0) it=effectsGraphPositions.erase(it);else ++it;
-        }
-        effectsValueFit=true;effectsLayoutDirty=true;
-    }
-    EffectsRect("value-arrange");ImGui::SameLine();if(ImGui::Button(Tr("Fit Graph"))) effectsValueFit=true;EffectsRect("value-fit");
-    ImGui::TextWrapped("%s",Tr("Connect values to channel output. Incomplete nodes stay pending. Assets store expression text only."));
-    if(canonical.empty()) ImGui::TextDisabled("%s",Tr("Channel uses authored values until nodes are applied."));
-    if(!effectsValueError.empty()) ImGui::TextColored(ImVec4(1,.55f,.45f,1),"%s",effectsValueError.c_str());
-    if(effectsValueGraph.isNull()) { ImGui::TextWrapped("%s",Tr("Keep this expression in text view; conversion was refused."));return; }
-    const float available=ImGui::GetContentRegionAvail().x;
-    const float inspector=std::min(300.0f,available*0.32f);
-    ImGui::BeginChild("##valuegrapharea",ImVec2(std::max(160.0f,available-inspector-8),0));
+}
+// `sink`: the pin of an emitter node the value ends in (the structure graph); without it the output is a card.
+void NativeEditor::Impl::EffectsValueCanvas(EditorNodeCanvas& canvas,float zoom,const std::string& prefix,ImVec2 origin,const ImVec2* sink) {
+    if(effectsValueGraph.isNull()) return;
+    const int channel=effectsCurveKeys["expression:channel"];
     {
         Json& nodes=effectsValueGraph["nodes"];const int count=static_cast<int>(nodes.size());
         std::vector<int> depths(static_cast<size_t>(count));
         // Compiler-produced graphs are topological; pending forward links are laid out conservatively.
         for(int i=0;i<count;++i) for(const Json& arg:nodes[i]["args"].items())
             if(arg.asInt()>=0 && arg.asInt()<i) depths[static_cast<size_t>(i)]=std::max(depths[static_cast<size_t>(i)],depths[static_cast<size_t>(arg.asInt())]+1);
-        std::map<int,float> depthRows;int maxDepth=0,leaf=0;
+        std::map<int,float> depthRows;int maxDepth=0,leaf=0;std::vector<ImVec2> placed;
         for(int i=0;i<count;++i) {
             const int depth=depths[static_cast<size_t>(i)];maxDepth=std::max(maxDepth,depth);
             float row=depthRows[depth],x=depth*220.0f;
             if(depth==0) {row=static_cast<float>(leaf%3)*150;x=-static_cast<float>(leaf/3)*220;++leaf;}
             else depthRows[depth]+=std::max(110.0f,68+nodes[i]["args"].size()*22.0f)+40;
-            if(!effectsGraphPositions.count(prefix+std::to_string(i))) effectsGraphPositions[prefix+std::to_string(i)]=ImVec2(x,row);
+            placed.push_back(ImVec2(x,row));
         }
+        const ImVec2 base=sink?origin-ImVec2((maxDepth+1)*220.0f,0):ImVec2(0,0);
+        for(int i=0;i<count;++i) if(!effectsGraphPositions.count(prefix+std::to_string(i)))
+            effectsGraphPositions[prefix+std::to_string(i)]=base+placed[static_cast<size_t>(i)];
         if(!effectsGraphPositions.count(prefix+"output")) effectsGraphPositions[prefix+"output"]=ImVec2((maxDepth+1)*220.0f,40);
-        EditorNodeCanvas canvas("##valuecanvas",effectsValuePan,effectsValueZoom);
-        const ImVec2 oldPan=effectsValuePan;const float oldZoom=effectsValueZoom;canvas.Navigate();
-        effectsLayoutDirty=effectsLayoutDirty || oldPan.x!=effectsValuePan.x || oldPan.y!=effectsValuePan.y || oldZoom!=effectsValueZoom;
-        if(effectsValueFit) {
+        if(effectsValueFit && !sink) {
             ImVec2 low(100000,100000),high(-100000,-100000);
             for(int i=0;i<=count;++i) {const auto p=effectsGraphPositions[prefix+(i==count?"output":std::to_string(i))];
                 const float cardHeight=i==count?110:std::max(110.0f,68+nodes[i]["args"].size()*22.0f);
@@ -143,27 +122,28 @@ void NativeEditor::Impl::EffectsValues() {
                 canvas.Wire(outputs[static_cast<size_t>(from)],canvas.Point(effectsGraphPositions[prefix+std::to_string(i)]+ImVec2(0,54+slot*22.0f)),IM_COL32(112,202,242,255));
         }
         const int output=effectsValueGraph["output"].asInt(-1);
-        if(output>=0 && output<count) canvas.Wire(outputs[static_cast<size_t>(output)],canvas.Point(effectsGraphPositions[prefix+"output"]+ImVec2(0,54)),IM_COL32(129,224,163,255));
+        if(output>=0 && output<count) canvas.Wire(outputs[static_cast<size_t>(output)],sink?*sink:canvas.Point(effectsGraphPositions[prefix+"output"]+ImVec2(0,54)),IM_COL32(129,224,163,255),sink?1.6f:1.0f);
         int target=-1,slot=-1;bool clear=false;
-        for(int i=0;i<=count;++i) {
+        ImGui::PushID("##valuenodes");
+        for(int i=0;i<(sink?count:count+1);++i) {
             ImGui::PushID(i);const std::string key=prefix+(i==count?"output":std::to_string(i));
             std::string title=i==count?std::string(Tr("Channel Output"))+": "+VfxChannelNames()[static_cast<size_t>(channel)]:nodes[i]["op"].asString();
-            const size_t arity=i==count?1:nodes[i]["args"].size();
+            const size_t arity=i==count?1:nodes[i]["args"].size();const std::string badge="#"+std::to_string(i);
             if(canvas.Card(effectsGraphPositions[key],ImVec2(190,std::max(110.0f,68+arity*22.0f)),title.c_str(),
-                i==count?IM_COL32(48,104,71,255):IM_COL32(49,70,108,255),effectsValueSelected==i,true)) effectsLayoutDirty=true;
+                i==count?IM_COL32(48,104,71,255):IM_COL32(49,70,108,255),effectsValueSelected==i,true,i==count?nullptr:badge.c_str())) effectsLayoutDirty=true;
             EffectsRect("value-node:"+std::to_string(i));
             if(ImGui::IsItemClicked()) effectsValueSelected=i;
             const ImVec2 p=canvas.Point(effectsGraphPositions[key]);
             const std::string detail=i==count?(channel<5?"vector":"scalar"):nodes[i]["op"].asString()=="constant"?nodes[i]["literal"].asString():
                 nodes[i].has("name")?nodes[i]["name"].asString():nodes[i]["type"].asString();
-            canvas.draw->AddText(ImGui::GetFont(),ImGui::GetFontSize()*effectsValueZoom,p+ImVec2(12,std::max(110.0f,68+arity*22.0f)-24)*effectsValueZoom,IM_COL32(216,222,233,255),detail.c_str());
+            canvas.draw->AddText(ImGui::GetFont(),ImGui::GetFontSize()*zoom,p+ImVec2(12,std::max(110.0f,68+arity*22.0f)-24)*zoom,IM_COL32(216,222,233,255),detail.c_str());
             if(i<count) {
                 canvas.Pin("##out",canvas.Point(effectsGraphPositions[key]+ImVec2(190,54)),true);EffectsRect("value-out:"+std::to_string(i));
                 if(ImGui::IsItemActivated()) effectsValueLink=i;
             }
             for(size_t a=0;a<arity;++a) {
                 const std::string label=i==count?"value":nodes[i]["op"].asString()=="curve"?(a==0?"time":std::string(a%2?"t":"v")+std::to_string((a-1)/2)):std::to_string(a);
-                canvas.draw->AddText(ImGui::GetFont(),ImGui::GetFontSize()*effectsValueZoom,p+ImVec2(12,47+a*22.0f)*effectsValueZoom,IM_COL32(182,197,213,255),label.c_str());
+                canvas.draw->AddText(ImGui::GetFont(),ImGui::GetFontSize()*zoom,p+ImVec2(12,47+a*22.0f)*zoom,IM_COL32(182,197,213,255),label.c_str());
                 const bool connected=i==count?output>=0:nodes[i]["args"][a].asInt(-1)>=0;
                 canvas.Pin(("##in"+std::to_string(a)).c_str(),canvas.Point(effectsGraphPositions[key]+ImVec2(0,54+a*22.0f)),connected);
                 EffectsRect("value-in:"+std::to_string(i)+":"+std::to_string(a));
@@ -172,8 +152,10 @@ void NativeEditor::Impl::EffectsValues() {
             }
             ImGui::PopID();
         }
+        ImGui::PopID();
         if(effectsValueLink>=0 && effectsValueLink<count && ImGui::IsMouseDown(ImGuiMouseButton_Left))
             canvas.Wire(outputs[static_cast<size_t>(effectsValueLink)],ImGui::GetIO().MousePos,IM_COL32(255,213,116,255));
+        if(!sink) canvas.Footer(Tr("Connect values to channel output. Incomplete nodes stay pending. Assets store expression text only."));
         if(target>=0) {
             Json candidate=effectsValueGraph;
             if(target==count) candidate["output"]=clear?-1:effectsValueLink;
@@ -182,7 +164,10 @@ void NativeEditor::Impl::EffectsValues() {
         }
         if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) effectsValueLink=-1;
     }
-    ImGui::EndChild();ImGui::SameLine();ImGui::BeginChild("##valueproperties",ImVec2(0,0),ImGuiChildFlags_Borders);
+}
+void NativeEditor::Impl::EffectsValueProperties(const std::string& prefix) {
+    const int stage=effectsCurveKeys["expression:stage"],channel=effectsCurveKeys["expression:channel"];
+    const std::string canonical=effectsValueSource;
     if(effectsValueSelected>=0 && effectsValueSelected<static_cast<int>(effectsValueGraph["nodes"].size())) {
         Json candidate=effectsValueGraph;Json& node=candidate["nodes"][effectsValueSelected];const std::string op=node["op"].asString();
         ImGui::TextUnformatted(op.c_str());bool changed=false;std::string merge;
@@ -249,6 +234,51 @@ void NativeEditor::Impl::EffectsValues() {
         EffectsReplace(document);
     }
     EffectsRect("value-source-apply");
+}
+void NativeEditor::Impl::EffectsValues() {
+    if(effectsBlock>=static_cast<int>(effectsDocument["emitters"].size())) {
+        ImGui::TextWrapped("%s",Tr("Value nodes require a particle emitter."));return;
+    }
+    if(effectsLayoutPath!=effectsPath) EffectsGraphLayout(false);
+    int& stage=effectsCurveKeys["expression:stage"];int& channel=effectsCurveKeys["expression:channel"];
+    ImGui::SetNextItemWidth(110);
+    if(ImGui::BeginCombo("##valuestage",Tr(stage?"Update":"Birth"))) {
+        for(int i=0;i<2;++i) if(ImGui::Selectable(Tr(i?"Update":"Birth"),stage==i)) stage=i;
+        ImGui::EndCombo();
+    }
+    EffectsRect("value-stage");ImGui::SameLine();ImGui::SetNextItemWidth(120);
+    if(ImGui::BeginCombo("##valuechannel",VfxChannelNames()[static_cast<size_t>(channel)])) {
+        for(size_t i=0;i<kVfxChannelCount;++i) {
+            if(ImGui::Selectable(VfxChannelNames()[i],channel==static_cast<int>(i))) channel=static_cast<int>(i);
+            EffectsRect(std::string("value-channel:")+VfxChannelNames()[i]);
+        }
+        ImGui::EndCombo();
+    }
+    EffectsRect("value-channel");
+    const std::string prefix=EffectsValueSync();
+    ImGui::SameLine();EffectsValuePalette(prefix,ImVec2(40,40));
+    const std::string canonical=effectsValueSource;
+    if(ImGui::Button(Tr("Auto Arrange"))) {
+        for(auto it=effectsGraphPositions.begin();it!=effectsGraphPositions.end();) {
+            if(it->first.compare(0,prefix.size(),prefix)==0) it=effectsGraphPositions.erase(it);else ++it;
+        }
+        effectsValueFit=true;effectsLayoutDirty=true;
+    }
+    EffectsRect("value-arrange");ImGui::SameLine();if(ImGui::Button(Tr("Fit Graph"))) effectsValueFit=true;EffectsRect("value-fit");
+    if(canonical.empty()) ImGui::TextDisabled("%s",Tr("Channel uses authored values until nodes are applied."));
+    if(!effectsValueError.empty()) ImGui::TextColored(ImVec4(1,.55f,.45f,1),"%s",effectsValueError.c_str());
+    if(effectsValueGraph.isNull()) { ImGui::TextWrapped("%s",Tr("Keep this expression in text view; conversion was refused."));return; }
+    const float available=ImGui::GetContentRegionAvail().x;
+    const float inspector=std::min(300.0f,available*0.32f);
+    ImGui::BeginChild("##valuegrapharea",ImVec2(std::max(160.0f,available-inspector-8),0));
+    {
+        EditorNodeCanvas canvas("##valuecanvas",effectsValuePan,effectsValueZoom);
+        const ImVec2 oldPan=effectsValuePan;const float oldZoom=effectsValueZoom;canvas.Navigate();
+        effectsLayoutDirty=effectsLayoutDirty || oldPan.x!=effectsValuePan.x || oldPan.y!=effectsValuePan.y || oldZoom!=effectsValueZoom;
+        EffectsValueCanvas(canvas,effectsValueZoom,prefix,ImVec2(0,0),nullptr);
+    }
+    ImGui::EndChild();ImGui::SameLine();ImGui::BeginChild("##valueproperties",ImVec2(0,0),ImGuiChildFlags_Borders);
+    EffectsValueProperties(prefix);
     ImGui::Separator();if(effectsScene) EffectsPreview(true);
     ImGui::EndChild();
     if(effectsGraphPositions.size()>4096) {effectsGraphPositions.clear();effectsValueFit=true;effectsLayoutDirty=true;}

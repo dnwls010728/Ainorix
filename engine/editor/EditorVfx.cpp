@@ -5,6 +5,7 @@
 #include <cmath>
 #include <sstream>
 #include <iomanip>
+#include "imgui_internal.h"
 #include "editor/EditorNodeCanvas.h"
 #include "editor/EditorVfxGraph.h"
 
@@ -26,6 +27,36 @@ void SameLineIfFits(const char* label, bool checkbox = false) {
     const float width = ImGui::CalcTextSize(label).x + (checkbox ? ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x :
         ImGui::GetStyle().FramePadding.x * 2);
     if (right - ImGui::GetItemRectMax().x >= width + ImGui::GetStyle().ItemSpacing.x) ImGui::SameLine();
+}
+
+// A field's label at the left of its row; the widget that follows fills the rest. The description of the
+// field is the label's tooltip. A label that does not fit is cut (the tooltip names it in full).
+void FieldLabel(const std::string& label, const std::string& doc, bool wide = false) {
+    const float column = wide ? 0 : std::max(ImGui::GetFontSize() * 7.0f, ImGui::GetContentRegionAvail().x * 0.4f);
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::AlignTextToFramePadding();
+    if (!wide) ImGui::PushClipRect(at, at + ImVec2(column - 6, ImGui::GetFrameHeight()), true);
+    ImGui::TextUnformatted(label.c_str());
+    if (!wide) ImGui::PopClipRect();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+        ImGui::TextUnformatted(label.c_str());
+        if (!doc.empty()) ImGui::TextDisabled("%s", doc.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+    if (wide) return;
+    ImGui::SameLine(column);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+}
+
+// A button that is lit while its choice is the current one.
+bool ChoiceButton(const char* label, bool active) {
+    if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+    const bool pressed = ImGui::Button(label);
+    if (active) ImGui::PopStyleColor();
+    return pressed;
 }
 
 bool ValueWidget(const Json& field, Json& value) {
@@ -50,7 +81,7 @@ bool ValueWidget(const Json& field, Json& value) {
             if (ParseParticleCurve(Json(Json::Array{Json(Json::Array{0, value})}), true, color, &error))
                 for (int axis = 0; axis < 3; ++axis) v[axis] = axis == 0 ? color.values[0].x : axis == 1 ? color.values[0].y : color.values[0].z;
         }
-        bool changed = type == "color" ? ImGui::ColorEdit3("##value", v) : ImGui::DragFloat3("##value", v, 0.02f);
+        bool changed = type == "color" ? ImGui::ColorEdit3("##value", v, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel) : ImGui::DragFloat3("##value", v, 0.02f, 0, 0, "%.3g");
         if (changed) { value = Json(Json::Array{v[0], v[1], v[2]}); return true; }
     } else if (field["options"].size()) {
         bool changed = false;
@@ -312,14 +343,24 @@ void NativeEditor::Impl::ResetEffectsPreview() {
 }
 
 void NativeEditor::Impl::EffectsPreview(bool compact) {
-    ImGui::TextUnformatted(Tr("Isolated Preview"));
-    if (ImGui::Button(Tr(effectsPlaying ? "Pause" : "Play"))) effectsPlaying = !effectsPlaying;
+    if (!compact) ImGui::SeparatorText(Tr("Isolated Preview"));
+    if (ImGui::Button(WithIcon(effectsPlaying ? kIconPause : kIconPlay, Tr(effectsPlaying ? "Pause" : "Play")).c_str())) effectsPlaying = !effectsPlaying;
     EffectsRect("play"); SameLineIfFits(Tr("Restart"));
-    if (ImGui::Button(Tr("Restart"))) ResetEffectsPreview(); EffectsRect("restart"); SameLineIfFits(Tr("Loop Preview"), true);
+    if (ImGui::Button(WithIcon(kIconRefreshCw, Tr("Restart")).c_str())) ResetEffectsPreview(); EffectsRect("restart"); SameLineIfFits(Tr("Loop Preview"), true);
     ImGui::Checkbox(Tr("Loop Preview"), &effectsLoop); EffectsRect("loop");
     if (!compact) {
         if (ImGui::Checkbox(Tr("Preview Motion"), &effectsMotion)) ResetEffectsPreview(); EffectsRect("motion");
-        ImGui::TextUnformatted(Tr("Timeline"));
+        ImGui::SetItemTooltip("%s", Tr("Moves the effect from side to side, which is what a trail needs to show"));
+        SameLineIfFits(Tr("Grid"), true);
+        ImGui::Checkbox(Tr("Grid"), &effectsGrid);
+        // Dark smoke on a black background and bright sparks on a white one are both invisible.
+        ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(Tr("Background"));
+        for (int choice = 0; choice < 3; ++choice) {
+            ImGui::SameLine();
+            ImGui::PushID(choice);
+            if (ChoiceButton(Tr(choice == 0 ? "Dark" : choice == 1 ? "Mid" : "Light"), effectsBackdrop == choice)) effectsBackdrop = choice;
+            ImGui::PopID();
+        }
     }
     ImGui::SetNextItemWidth(-FLT_MIN);
     int frame = effectsFrame;
@@ -360,10 +401,14 @@ void NativeEditor::Impl::EffectsPreview(bool compact) {
         size_t count = 0, points = 0;
         for (const auto& emitter : system.emitters) count += emitter.particles.size();
         for (const auto& trail : system.trails) points += trail.points.size();
-        ImGui::Text(Tr("Particles: %d / %d   Trail points: %d"), static_cast<int>(count), cap, static_cast<int>(points));
-        ImGui::ProgressBar(cap ? static_cast<float>(count) / cap : 0, ImVec2(-FLT_MIN, 5), "");
         ImGui::TextDisabled(Tr("Time: %.2f s"), effectsFrame * Engine::kFixedDt);
-        if (ImGui::Button(Tr("Fit Preview"))) {
+        ImGui::Text(Tr("Particles: %d / %d   Trail points: %d"), static_cast<int>(count), cap, static_cast<int>(points));
+        // How full the budget is: amber from three quarters, red when it is used up (particles are being dropped).
+        const float used = cap ? static_cast<float>(count) / static_cast<float>(cap) : 0;
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, used >= 0.999f ? ImVec4(0.95f, 0.4f, 0.35f, 1) : used > 0.75f ? ImVec4(0.95f, 0.72f, 0.3f, 1) : ImVec4(0.4f, 0.75f, 0.95f, 1));
+        ImGui::ProgressBar(used, ImVec2(-FLT_MIN, 6), "");
+        ImGui::PopStyleColor();
+        if (ImGui::Button(WithIcon(kIconSquareDashed, Tr("Fit Preview")).c_str())) {
             Vec3 low(1e30f, 1e30f, 1e30f), high(-1e30f, -1e30f, -1e30f); bool found = false;
             for (const RenderItem& item : GatherRenderItems(*effectsScene, &engine.Assets(), Mat4{})) for (int corner = 0; corner < 8; ++corner) {
                 const Vec3 p = item.world.TransformPoint(Vec3((corner & 1) ? item.boundsMax.x : item.boundsMin.x,
@@ -374,15 +419,18 @@ void NativeEditor::Impl::EffectsPreview(bool compact) {
             if (found) { effectsTarget = (low + high) * 0.5f; effectsZoom = Clamp(Length(high - low) * 1.75f, 0.5f, 30); }
         }
         EffectsRect("fit");
-        ImGui::TextUnformatted(Tr("Preview Distance"));
-        ImGui::SetNextItemWidth(-FLT_MIN); ImGui::SliderFloat("##distance", &effectsZoom, 0.5f, 30, "%.1f");
+        ImGui::SameLine(); ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::SliderFloat("##distance", &effectsZoom, 0.5f, 30, Tr("Distance %.1f m"));
+        ImGui::SetItemTooltip("%s", Tr("Preview Distance"));
     }
     const float previewWidth = compact ? std::max(64.0f, std::min(ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y - 4)) :
         std::max(120.0f, ImGui::GetContentRegionAvail().x);
-    const int pixels = std::max(128, std::min(384, static_cast<int>(previewWidth)));
+    const int pixels = std::max(128, std::min(512, static_cast<int>(previewWidth)));
     RenderTarget target; target.Resize(pixels, pixels);
     RenderView view = MakeLookAtView(effectsTarget + Vec3(0, 0, effectsZoom), effectsTarget, 45, 1);
-    view.drawUI = false; view.clearColor = Color(0.025f, 0.032f, 0.048f); view.shaderTime = effectsFrame / 60.0f;
+    view.drawUI = false; view.shaderTime = effectsFrame / 60.0f;
+    view.clearColor = effectsBackdrop == 0 ? Color(0.025f, 0.032f, 0.048f) : effectsBackdrop == 1 ? Color(0.22f, 0.24f, 0.28f) : Color(0.78f, 0.80f, 0.84f);
+    view.drawGrid = effectsGrid;
     engine.Renderer().Render(*effectsScene, view, target);
     auto image = std::make_shared<Texture>(); image->width = pixels; image->height = pixels; image->texels = std::move(target.color);
     effectsImage = image;
@@ -402,11 +450,12 @@ void NativeEditor::Impl::EffectsParameterValue(const std::string& name, float fi
 
 void NativeEditor::Impl::EffectsInspector() {
     Json document = effectsDocument;
-    ImGui::TextUnformatted(Tr("Parameters"));
+    ImGui::SeparatorText(WithIcon(kIconSlidersHorizontal, Tr("Parameters")).c_str());
+    if (document["params"].size() == 0) ImGui::TextDisabled("%s", Tr("No parameters. Scripts and scenes change an effect through its parameters."));
     for (const auto& parameter : document["params"].members()) {
-        ImGui::PushID(parameter.first.c_str()); ImGui::TextUnformatted(parameter.first.c_str());
+        ImGui::PushID(parameter.first.c_str());
+        FieldLabel(parameter.first, parameter.second["doc"].asString());
         EffectsParameterValue(parameter.first);
-        HelpTooltip(parameter.second["doc"].asString());
         ImGui::PopID();
     }
     if (ImGui::TreeNode(Tr("Parameter Definitions"))) {
@@ -421,7 +470,7 @@ void NativeEditor::Impl::EffectsInspector() {
         ImGui::TreePop();
     }
     int budget = document["budget"]["maxParticles"].asInt(10000);
-    ImGui::TextUnformatted(Tr("System Budget")); ImGui::SetNextItemWidth(-FLT_MIN);
+    FieldLabel(Tr("System Budget"), Tr("The most particles the whole effect may have alive at once"));
     const bool budgetChanged = ImGui::DragInt("##budget", &budget, 1, 0, 40000, "%d", ImGuiSliderFlags_AlwaysClamp);
     EffectsRect("budget"); const std::string budgetMerge = EffectsMerge("budget");
     if (budgetChanged) { document["budget"]["maxParticles"] = budget; EffectsReplace(document, budgetMerge); }
@@ -431,20 +480,60 @@ void NativeEditor::Impl::EffectsInspector() {
     const bool trail = effectsBlock >= emitterCount; const int index = trail ? effectsBlock - emitterCount : effectsBlock;
     const char* array = trail ? "trails" : "emitters";
     const std::string blockName = document[array][index]["name"].asString();
-    ImGui::SeparatorText(blockName.c_str());
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    const std::string moduleLabel = effectsSchema["modules"][effectsModule].asString();
-    const bool modulesOpen = ImGui::BeginCombo("##modules", Tr(moduleLabel.c_str()));
-    EffectsRect("module");
-    if (modulesOpen) {
-        for (size_t i = 0; i < effectsSchema["modules"].size(); ++i) {
-            const std::string module = effectsSchema["modules"][i].asString();
-            if (ImGui::Selectable(Tr(module.c_str()), effectsModule == static_cast<int>(i))) effectsModule = static_cast<int>(i);
-            EffectsRect("module:" + module);
-        }
-        ImGui::EndCombo();
+    ImGui::SeparatorText(WithIcon(kIconSparkles, blockName.c_str()).c_str());
+    // One chip per group of fields, all in view: no list to open to find out what there is.
+    const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+    for (size_t i = 0; i < effectsSchema["modules"].size(); ++i) {
+        const std::string module = effectsSchema["modules"][i].asString();
+        const char* label = Tr(module.c_str());
+        const float chip = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2;
+        if (i && right - ImGui::GetItemRectMax().x >= chip + ImGui::GetStyle().ItemSpacing.x) ImGui::SameLine();
+        ImGui::PushID(static_cast<int>(i));
+        if (ChoiceButton(label, effectsModule == static_cast<int>(i))) effectsModule = static_cast<int>(i);
+        ImGui::PopID();
+        EffectsRect("module:" + module);
+        if (effectsModule == static_cast<int>(i)) EffectsRect("module");
     }
+    ImGui::Spacing();
     EffectsBlockFields();
+}
+
+void NativeEditor::Impl::EffectsFieldValue(int block, const Json& field, const std::string& rect) {
+    const Json document = effectsDocument;
+    const int emitterCount = static_cast<int>(document["emitters"].size());
+    const bool trail = block >= emitterCount;
+    const int index = trail ? block - emitterCount : block;
+    const char* array = trail ? "trails" : "emitters", *key = trail ? "trail" : "emitter";
+    const std::string blockName = document[array][index]["name"].asString(), name = field["name"].asString();
+    const Json& values = document[array][index][key];
+    bool mapped = false;
+    for (const auto& parameter : document["params"].members()) for (const Json& target : parameter.second["targets"].items())
+        if (target["to"].asString() == blockName + "." + name) mapped = true;
+    Json value = values.has(name) ? values[name] : field["default"];
+    if (name == "expressions" || name.find("OverLife") != std::string::npos) {
+        // Too large for a row: say what is there and show it in the inspector when pressed.
+        int count = 0;
+        if (name == "expressions") for (const char* stage : {"birth", "update"}) count += static_cast<int>(value[stage].size());
+        else count = static_cast<int>(value.size());
+        const std::string label = count ? Format(name == "expressions" ? Tr("%d expressions") : Tr("%d keys"), count) : std::string(Tr("not set"));
+        if (ImGui::Button((label + "##open").c_str(), ImVec2(ImGui::CalcItemWidth(), 0))) {
+            effectsBlock = block;
+            for (size_t i = 0; i < effectsSchema["modules"].size(); ++i) if (effectsSchema["modules"][i] == field["module"]) effectsModule = static_cast<int>(i);
+        }
+        EffectsRect(rect);
+        ImGui::SetItemTooltip("%s", Tr("Edited in the panel on the right"));
+        return;
+    }
+    ImGui::BeginDisabled(mapped);
+    const bool changed = ValueWidget(field, value);
+    EffectsRect(rect);
+    const std::string merge = EffectsMerge("graph:" + blockName + "." + name);
+    ImGui::EndDisabled();
+    if (changed) {
+        Json patch = ObjectOf({{name.c_str(), value}});
+        Json result = Call("vfx.set", ObjectOf({{"path", effectsPath}, {key, blockName}, {"values", patch}, {"merge", merge}}));
+        if (Ok(result)) effectsError.clear(); else effectsError = result["error"]["message"].asString();
+    }
 }
 
 void NativeEditor::Impl::EffectsBlockFields() {
@@ -459,7 +548,7 @@ void NativeEditor::Impl::EffectsBlockFields() {
     for (const Json& module : effectsSchema["modules"].items()) {
         if (module != effectsSchema["modules"][effectsModule]) continue;
         ImGui::PushID(module.asString().c_str());
-        if (ImGui::CollapsingHeader(Tr(module.asString().c_str()), ImGuiTreeNodeFlags_DefaultOpen)) {
+        {
             for (const Json& field : component["fields"].items()) {
                 if (field["module"] != module) continue;
                 const std::string name = field["name"].asString();
@@ -473,11 +562,15 @@ void NativeEditor::Impl::EffectsBlockFields() {
                     {"positionOffset","Birth Offset"},{"rotation3D","Birth Rotation"},{"scale","Birth Scale"},{"pivot","Particle Pivot"},
                     {"positionOverLife","Position Curve"},{"velocityOverLife","Velocity Curve"},{"rotationOverLife","Rotation Curve"},{"scaleOverLife","Axis Scale Curve"}};
                 const auto label = labels.find(name);
-                ImGui::PushID(name.c_str()); ImGui::TextUnformatted(label == labels.end() ? name.c_str() : Tr(label->second));
-                if (mapped) { ImGui::SameLine(); ImGui::TextDisabled("%s", Tr("Controlled by parameter")); }
-                HelpTooltip(field["doc"].asString());
+                ImGui::PushID(name.c_str());
+                // Curves and expressions are as wide as the panel, under their label; everything else is one row.
+                const bool wide = name == "expressions" || name.find("OverLife") != std::string::npos;
+                std::string text = label == labels.end() ? HumanizeName(name) : std::string(Tr(label->second));
+                if (mapped) text = std::string(kIconPlug) + " " + text;
+                FieldLabel(text, (mapped ? std::string(Tr("Controlled by parameter")) + "\n" : std::string()) + field["doc"].asString(), wide);
                 Json value = values.has(name) ? values[name] : field["default"];
-                ImGui::SetNextItemWidth(-FLT_MIN); ImGui::BeginDisabled(mapped);
+                if (wide) ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::BeginDisabled(mapped);
                 bool changed = false;
                 if (name == "expressions") changed=ExpressionWidget(*this,blockName,value);
                 else if (name == "sizeOverLife" || name == "colorOverLife" || name == "opacityOverLife") {
@@ -538,7 +631,7 @@ void NativeEditor::Impl::EffectsPanel() {
     }
     if (!visible || !open) { ImGui::End(); return; }
     effectsEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if (ImGui::Button(Tr("New Effect"))) ImGui::OpenPopup("##newvfx"); EffectsRect("new");
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("New Effect")).c_str())) ImGui::OpenPopup("##newvfx"); EffectsRect("new");
     if (ImGui::BeginPopup("##newvfx")) {
         ImGui::InputText(Tr("Asset Path"), &effectsNewPath);
         const bool presetOpen = ImGui::BeginCombo(Tr("Preset"), effectsPreset.c_str(), ImGuiComboFlags_HeightLargest);
@@ -554,8 +647,8 @@ void NativeEditor::Impl::EffectsPanel() {
         if (ImGui::Button(Tr("Create"))) { OpenEffect(effectsNewPath, true); ImGui::CloseCurrentPopup(); } EffectsRect("new-create");
         ImGui::EndPopup();
     }
-    SameLineIfFits(Tr("Open Effect"));
-    if (ImGui::Button(Tr("Open Effect"))) ImGui::OpenPopup("##effectassets"); EffectsRect("open");
+    ImGui::SameLine();
+    if (ImGui::Button(WithIcon(kIconFolder, Tr("Open Effect")).c_str())) ImGui::OpenPopup("##effectassets"); EffectsRect("open");
     if (ImGui::BeginPopup("##effectassets")) {
         for (const Json& asset : assets.items()) if (asset["kind"].asString() == "vfx" && ImGui::Selectable(asset["path"].asString().c_str())) {
             OpenEffect(asset["path"].asString()); ImGui::CloseCurrentPopup();
@@ -565,62 +658,93 @@ void NativeEditor::Impl::EffectsPanel() {
     if (effectsDocument.isNull()) {
         ImGui::TextWrapped("%s", Tr("Open a VFX asset from Assets or create an effect from a preset.")); ImGui::End(); return;
     }
-    SameLineIfFits(Tr("Save Effect")); if (ImGui::Button(Tr("Save Effect"))) EffectsSave(); EffectsRect("save");
-    SameLineIfFits(Tr("Undo")); ImGui::BeginDisabled(effectsState["undo"].asInt() == 0);
+    const bool dirty = effectsState["dirty"].asBool();
+    ImGui::SameLine();
+    if (dirty) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.82f, 0.4f, 1));
+    const bool save = ImGui::Button((WithIcon(kIconSave, Tr("Save Effect")) + (dirty ? " *" : "")).c_str());
+    if (dirty) ImGui::PopStyleColor();
+    EffectsRect("save");
+    ImGui::SetItemTooltip("%s", dirty ? Tr("Unsaved changes (Ctrl+S)") : "Ctrl+S");
+    if (save) EffectsSave();
+    ImGui::SameLine(); ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(); ImGui::BeginDisabled(effectsState["undo"].asInt() == 0);
     if (ImGui::Button(Tr("Undo"))) Call("vfx.undo", Json()); EffectsRect("undo"); ImGui::EndDisabled();
-    SameLineIfFits(Tr("Redo")); ImGui::BeginDisabled(effectsState["redo"].asInt() == 0);
+    ImGui::SetItemTooltip("Ctrl+Z");
+    ImGui::SameLine(); ImGui::BeginDisabled(effectsState["redo"].asInt() == 0);
     if (ImGui::Button(Tr("Redo"))) Call("vfx.redo", Json()); EffectsRect("redo"); ImGui::EndDisabled();
-    SameLineIfFits(Tr("Place in Scene")); ImGui::BeginDisabled(effectsState["dirty"].asBool());
-    if (ImGui::Button(Tr("Place in Scene"))) {
+    ImGui::SetItemTooltip("Ctrl+Y");
+    ImGui::SameLine(); ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(); ImGui::BeginDisabled(dirty);
+    if (ImGui::Button(WithIcon(kIconMapPin, Tr("Place in Scene")).c_str())) {
         Json result = Call("vfx.spawn", ObjectOf({{"path", effectsPath}, {"position", Vec3Json(cam.target)}, {"autoDestroy", false}}));
         if (Ok(result)) { Refresh(true); SelectOnly(static_cast<EntityId>(result["result"]["id"].asInt())); }
     }
     EffectsRect("place"); ImGui::EndDisabled();
+    ImGui::SetItemTooltip("%s", Tr(dirty ? "Save the effect first" : "Adds an entity with this effect where the Scene view looks"));
     if (effectsEditorFocused && !ImGui::GetIO().WantTextInput) {
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S)) EffectsSave();
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) Call("vfx.undo", Json());
         if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) Call("vfx.redo", Json());
     }
-    ImGui::TextWrapped("%s%s", effectsPath.c_str(), effectsState["dirty"].asBool() ? " *" : "");
-    if (!effectsError.empty()) ImGui::TextColored(ImVec4(1, 0.55f, 0.45f, 1), "%s", effectsError.c_str());
+    // The file, at the right of the toolbar when there is room, otherwise on its own line.
+    if (ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x - ImGui::GetItemRectMax().x > ImGui::CalcTextSize(effectsPath.c_str()).x + 24) ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", effectsPath.c_str());
+    if (!effectsError.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.5f, 0.42f, 1));
+        ImGui::TextWrapped("%s %s", kIconTriangleAlert, effectsError.c_str());
+        ImGui::PopStyleColor();
+    }
     const int blockCount = static_cast<int>(effectsDocument["emitters"].size() + effectsDocument["trails"].size());
     effectsBlock = std::max(0, std::min(std::max(0, blockCount - 1), effectsBlock));
-    ImGui::TextUnformatted(Tr("Effect Block")); ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(Tr("Effect Block"));
+    ImGui::SetItemTooltip("%s", Tr("An effect is made of emitters (particles) and trails (ribbons); this is the one being edited"));
+    ImGui::SameLine(); ImGui::SetNextItemWidth(std::max(ImGui::GetFontSize() * 9.0f, std::min(ImGui::GetFontSize() * 16.0f, ImGui::GetContentRegionAvail().x * 0.3f)));
     if (ImGui::BeginCombo("##effectblock", effectsDocument["emitters"].size() + effectsDocument["trails"].size() ?
         (effectsBlock < static_cast<int>(effectsDocument["emitters"].size()) ? effectsDocument["emitters"][effectsBlock]["name"] :
             effectsDocument["trails"][effectsBlock - effectsDocument["emitters"].size()]["name"]).asString().c_str() : "")) {
         int index = 0;
         for (const char* list : {"emitters", "trails"}) for (const Json& block : effectsDocument[list].items()) {
-            if (ImGui::Selectable(block["name"].asString().c_str(), effectsBlock == index)) effectsBlock = index;
+            const std::string label = std::string(index < static_cast<int>(effectsDocument["emitters"].size()) ? kIconSparkles : kIconWorkflow) + "  " + block["name"].asString();
+            if (ImGui::Selectable(label.c_str(), effectsBlock == index)) effectsBlock = index;
             ++index;
         }
         ImGui::EndCombo();
     }
-    if (ImGui::Button(Tr("Add Emitter"))) {
+    ImGui::SameLine();
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("Add Emitter")).c_str())) {
         Json document = effectsDocument; Json block = ObjectOf({{"name", UniqueEditorVfxName(document, "emitter")}, {"emitter", Json::MakeObject()}});
         document["emitters"].push(block); EffectsReplace(document);
     }
     EffectsRect("add-emitter"); SameLineIfFits(Tr("Add Trail"));
-    if (ImGui::Button(Tr("Add Trail"))) {
+    if (ImGui::Button(WithIcon(kIconPlus, Tr("Add Trail")).c_str())) {
         Json document = effectsDocument; Json block = ObjectOf({{"name", UniqueEditorVfxName(document, "trail")}, {"trail", Json::MakeObject()}});
         document["trails"].push(block); EffectsReplace(document);
     }
     EffectsRect("add-trail");
+    // Three views of the same effect; pressing the lit one again goes back to the fields.
     SameLineIfFits(Tr("Structure Graph"));
-    if(ImGui::Checkbox(Tr("Structure Graph"), &effectsGraph) && effectsGraph) effectsValues = false;
+    ImGui::SameLine(); ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical); ImGui::SameLine();
+    if (ChoiceButton(WithIcon(kIconList, Tr("Fields")).c_str(), !effectsGraph && !effectsValues)) effectsGraph = effectsValues = false;
+    EffectsRect("fields-toggle");
+    ImGui::SameLine();
+    if (ChoiceButton(WithIcon(kIconWorkflow, Tr("Structure Graph")).c_str(), effectsGraph)) { effectsGraph = !effectsGraph; if (effectsGraph) effectsValues = false; }
     EffectsRect("graph-toggle");
-    SameLineIfFits(Tr("Value Nodes"));
-    if(ImGui::Checkbox(Tr("Value Nodes"), &effectsValues)) {
-        if(effectsValues) effectsGraph = false;
+    ImGui::SetItemTooltip("%s", Tr("Emitters, trails, parameters and what connects them, as nodes"));
+    ImGui::SameLine();
+    if (ChoiceButton(WithIcon(kIconBraces, Tr("Value Nodes")).c_str(), effectsValues)) {
+        effectsValues = !effectsValues;
+        if (effectsValues) effectsGraph = false;
         effectsValueFit = true;
     }
     EffectsRect("value-toggle");
+    ImGui::SetItemTooltip("%s", Tr("A particle value over its life, built from nodes instead of typed as an expression"));
     if(effectsValues) { EffectsValues(); ImGui::End(); return; }
     if (effectsGraph) {
         EffectsGraph(); ImGui::End(); return;
     }
     const float available = ImGui::GetContentRegionAvail().x;
-    const float previewWidth = std::min(310.0f, available * 0.42f);
+    const float previewWidth = std::min(ImGui::GetFontSize() * 26.0f, available * 0.45f);
     ImGui::BeginChild("##effectproperties", ImVec2(std::max(150.0f, available - previewWidth - 8), 0), ImGuiChildFlags_Borders);
     EffectsInspector(); ImGui::EndChild(); ImGui::SameLine();
     ImGui::BeginChild("##effectpreview", ImVec2(0, 0), ImGuiChildFlags_Borders);

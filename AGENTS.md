@@ -50,7 +50,9 @@ component; old `particles.*`/`self:burst` are removed); `Trail` stays a direct c
 birth inputs, vector motion curves, a pivot and `custom0..3` channels (shader ops `particleCustom0..3`,
 `particleAge/Random/Speed`, no uniform slots), typed Birth/Update `expressions` (`vfx.expression_eval`,
 `vfx.schema.expressions`), materials, static mesh particles, batching, ribbons and asset-only `onDeath` chains.
-Effects editor: View > Effects or double-click `.vfx.json`; fields, curves, Structure Graph and Value Nodes share one
+Effects editor: View > Effects or double-click `.vfx.json`; the Structure Graph shows an emitter as a node of Spawn /
+Initialize / Update / Output contexts with fields edited and wired in place and a value's nodes on the same canvas;
+fields, curves, Structure Graph and Value Nodes share one
 validated draft (`vfx.edit/edit_state/edit_replace/undo/redo/save/close`; `vfx.set` edits it while open); layouts
 stay in `.oe/vfx-layout/`. Screenshot flags: `--effects effects/x.vfx.json [--effects-graph|--effects-values]`.
 15 presets; the six expression presets (`vfx.presets {tag:"acceptance"}`) install their meshes/materials under

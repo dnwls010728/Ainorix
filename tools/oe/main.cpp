@@ -500,7 +500,8 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         }
         if (i == 2 && a.Has("--effects")) {
             editor.OpenEffect(a.Get("--effects")); editor.SetEffectsGraph(a.Has("--effects-graph"));
-            if(a.Has("--effects-values")) editor.SetEffectsValues(true,true,10);
+            if(a.Has("--effects-values") && a.Has("--effects-graph")) editor.SetEffectsGraphValue(true,5);
+            else if(a.Has("--effects-values")) editor.SetEffectsValues(true,true,10);
         }
         if (!editor.DrawToImage(rt)) return Fail("render_failed", "cannot read back the editor frame");
     }

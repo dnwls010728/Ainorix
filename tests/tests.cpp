@@ -12918,12 +12918,30 @@ TEST(NativeEditorEffectsGraph) {
         CHECK(editor.EffectsDocument()["params"]["intensity"]["targets"].size() == 2);
         CHECK(editor.EffectsDocument()["params"]["intensity"]["targets"][0]["scale"].asInt() == 12);
         click("undo"); CHECK(editor.EffectsDocument() == original);
+        // The emitter is taller than the canvas: fold the contexts above Output to bring its pins into view.
+        for (const char* context : {"Spawn", "Initialize", "Update"}) click(std::string("context:block:sparks:") + context);
+        CHECK(editor.EffectsControlRect("input:block:sparks:rate")[2] == 0);
+        CHECK(editor.EffectsDocument() == original);
         wire("output:param:intensity", "input:block:sparks:material");
         CHECK(editor.EffectsDocument() == original && !editor.LastNotice().empty());
         click("add-emitter"); CHECK(editor.EffectsDocument()["emitters"].size() == 2);
         click("undo"); CHECK(editor.EffectsDocument() == original);
-        click("module:block:sparks:Curves"); frames(3);
+        click("context:block:sparks:Update"); click("module:block:sparks:Curves"); frames(3);
         CHECK(WritePng(JoinPath(TestSourceDir(), "build/phase4b-node-workflow.png"), image.ToImage()));
+        // A value built from nodes on the same canvas: list the update values, choose one, and its nodes appear
+        // beside the emitter; dropping the last node on the value's pin writes the expression.
+        click("module:block:sparks:Curves"); click("module:block:sparks:Update Expressions");
+        CHECK(editor.EffectsControlRect("value-node:0")[2] == 0);
+        click("expression:block:sparks:update:size"); frames(3);
+        CHECK(editor.EffectsControlRect("value-node:0")[2] > 0 && editor.EffectsControlRect("value-add")[2] > 0);
+        CHECK(editor.EffectsDocument() == original);
+        wire("value-out:0", "input:block:sparks:update:size");
+        CHECK(editor.EffectsDocument()["emitters"][0]["emitter"]["expressions"]["update"]["size"].isString());
+        CHECK(WritePng(JoinPath(TestSourceDir(), "build/vfx-graph-values.png"), image.ToImage()));
+        click("undo"); CHECK(editor.EffectsDocument() == original);
+        click("expression:block:sparks:update:size"); frames(2);
+        CHECK(editor.EffectsControlRect("value-node:0")[2] == 0);
+        click("module:block:sparks:Update Expressions");
         unchanged = editor.EffectsDocument();
         moved = editor.EffectsControlRect("node:block:sparks");
         const auto canvas = editor.EffectsControlRect("graph-canvas"); moved[0] -= canvas[0]; moved[1] -= canvas[1];
@@ -13250,21 +13268,13 @@ TEST(NativeEditorShaderNodeDragging) {
         auto button = [&](bool down) {
             WindowEvent event; event.type = WindowEvent::Type::MouseButton; event.button = 0; event.down = down; frames({event});
         };
-        auto canvas = [&]() -> ImGuiWindow* {
-            for (ImGuiWindow* window : GImGui->Windows)
-                if (window->Active && std::strstr(window->Name, "##shadercanvas")) return window;
-            return nullptr;
+        // Where the editor drew the card (the first node, or the Surface Output).
+        auto card = [&](bool surface = false) {
+            const std::array<float, 4> rect = editor.ShaderControlRect(surface ? "surface" : "node:0");
+            CHECK(rect[2] > 0 && rect[3] > 0); return rect;
         };
-        // Read the rendered card, rather than exposing or directly mutating layout internals.
-        auto cardPosition = [&](bool surface = false) {
-            ImGuiWindow* window = canvas(); CHECK(window);
-            ImVec2 position(FLT_MAX, FLT_MAX);
-            ImU32 color = surface ? IM_COL32(48, 91, 84, 255) : IM_COL32(52, 69, 93, 255);
-            if (window) for (const ImDrawVert& vertex : window->DrawList->VtxBuffer) if (vertex.col == color) {
-                position.x = std::min(position.x, vertex.pos.x); position.y = std::min(position.y, vertex.pos.y);
-            }
-            CHECK(position.x != FLT_MAX); return position;
-        };
+        auto cardPosition = [&](bool surface = false) { const auto rect = card(surface); return ImVec2(rect[0], rect[1]); };
+        auto within = [&](float fx, float fy, bool surface = false) { const auto rect = card(surface); return ImVec2(rect[0] + rect[2] * fx, rect[1] + rect[3] * fy); };
         auto checkDrag = [&](ImVec2 start, bool surface = false) {
             ImVec2 before = cardPosition(surface);
             move(start); button(true);
@@ -13279,25 +13289,22 @@ TEST(NativeEditorShaderNodeDragging) {
             CHECK(std::fabs(released.x - after.x) < 0.1f && std::fabs(released.y - after.y) < 0.1f);
         };
         auto arrange = [&]() {
-            ImGuiWindow* window = ImGui::FindWindowByName("###Shader Graph"); CHECK(window);
-            if (!window) return;
-            float x = window->DC.CursorStartPos.x + ImGui::CalcTextSize("Add Node").x + ImGui::GetStyle().FramePadding.x * 2 +
-                      ImGui::GetStyle().ItemSpacing.x + ImGui::CalcTextSize("Arrange Nodes").x * 0.5f + ImGui::GetStyle().FramePadding.x;
-            move(ImVec2(x, window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() * 0.5f));
+            const std::array<float, 4> rect = editor.ShaderControlRect("arrange"); CHECK(rect[2] > 0);
+            move(ImVec2(rect[0] + rect[2] * 0.5f, rect[1] + rect[3] * 0.5f));
             button(true); button(false);
         };
         frames(); editor.OpenShader(); frames();
         Json original = editor.ShaderDocument();
-        ImVec2 position = cardPosition(); checkDrag(ImVec2(position.x + 60, position.y + 55));
+        checkDrag(within(0.3f, 0.75f));   // by the body
         arrange();
-        position = cardPosition(); checkDrag(ImVec2(position.x + 45, position.y + 12));
+        checkDrag(within(0.25f, 0.2f));   // by the header
         arrange();
         // Zoom around the card, then drag its body again: screen displacement must stay exact.
-        position = cardPosition(); move(ImVec2(position.x + 40, position.y + 50));
+        move(within(0.3f, 0.6f));
         WindowEvent wheel; wheel.type = WindowEvent::Type::MouseWheel; wheel.y = -3; frames({wheel});
-        position = cardPosition(); checkDrag(ImVec2(position.x + 30, position.y + 35));
+        checkDrag(within(0.3f, 0.6f));
         arrange();
-        position = cardPosition(true); checkDrag(ImVec2(position.x + 40, position.y + 50), true);
+        checkDrag(within(0.3f, 0.6f, true), true);
         CHECK(editor.ShaderDocument() == original);
         CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/shader-node-drag.png"), image.ToImage()));
     }
@@ -13334,12 +13341,12 @@ TEST(NativeEditorShaderGraphAndMaterialWorkflow) {
             for (ImGuiWindow* window : GImGui->Windows) if (window->Active && std::strstr(window->Name, name)) return window;
             return nullptr;
         };
+        auto control = [&](const std::string& name) {
+            const std::array<float, 4> rect = editor.ShaderControlRect(name); CHECK(rect[2] > 0 && rect[3] > 0);
+            return ImVec2(rect[0] + rect[2] * 0.5f, rect[1] + rect[3] * 0.5f);
+        };
         auto pin = [&](int node, bool output, int input = 0) {
-            ImGuiWindow* canvas = child("##shadercanvas"); CHECK(canvas);
-            ImVec2 position = node == 1 ? ImVec2(0, 150) : node == 2 ? ImVec2(230, 0) : ImVec2(0, 0);
-            ImVec2 origin = canvas ? canvas->DC.CursorStartPos : ImVec2();
-            return ImVec2(origin.x + 24 + (position.x + (output ? 190.0f : 0)) * 0.8f,
-                          origin.y + 24 + (position.y + (output ? 24.0f : 54.0f + input * 23.0f)) * 0.8f);
+            return control(output ? "out:" + std::to_string(node) : "in:" + std::to_string(node) + ":" + std::to_string(input));
         };
         frames(4); editor.OpenShader("materials/probe.shader.json"); editor.Select(target); frames(4);
         CHECK(editor.ShaderDocument()["nodes"].size() == 3);
@@ -13358,15 +13365,7 @@ TEST(NativeEditorShaderGraphAndMaterialWorkflow) {
         std::string after; CHECK(ReadTextFile(JoinPath(project, "materials/probe.shader.json"), after)); CHECK(after == saved);
         frames(3, CtrlChord(WindowKey::Z)); CHECK(editor.ShaderDocument()["nodes"][2]["args"][0].asInt() == 1);
         ImGuiWindow* window = ImGui::FindWindowByName("###Shader Graph"); CHECK(window);
-        auto materialAction = [&](bool apply, const char* materialPath = "materials/probe.mat.json") {
-            float width = std::max(100.0f, window->WorkRect.Max.x - window->DC.CursorStartPos.x - 340);
-            const char* saveLabel = FileExists(JoinPath(project, materialPath)) ? "Save Material" : "Create Material";
-            float saveWidth = ImGui::CalcTextSize(saveLabel).x + ImGui::GetStyle().FramePadding.x * 2;
-            float x = window->DC.CursorStartPos.x + width + ImGui::GetStyle().ItemSpacing.x;
-            if (apply) x += saveWidth + ImGui::GetStyle().ItemSpacing.x;
-            float buttonWidth = apply ? ImGui::CalcTextSize("Apply to Selected Mesh").x + ImGui::GetStyle().FramePadding.x * 2 : saveWidth;
-            click(ImVec2(x + buttonWidth * 0.5f, window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() * 2 + ImGui::GetFrameHeight() * 0.5f));
-        };
+        auto materialAction = [&](bool apply, const char* = nullptr) { click(control(apply ? "apply" : "save-material")); };
         materialAction(false); CHECK(FileExists(JoinPath(project, "materials/probe.mat.json")));
         materialAction(true); CHECK(engine.GetScene().Get<MeshRenderer>(target)->material == "materials/probe.mat.json");
         CHECK(engine.GetScene().Get<MeshRenderer>(target)->shaderUniforms.size() == 0);
@@ -13397,27 +13396,18 @@ TEST(NativeEditorShaderGraphAndMaterialWorkflow) {
                          prompt->InnerRect.Max.y - ImGui::GetStyle().WindowPadding.y - ImGui::GetFrameHeight() * 0.5f));
         }
         CHECK(editor.ShaderDocument()["nodes"].size() == 1);
-        click(ImVec2(window->DC.CursorStartPos.x + ImGui::CalcTextSize("Add Node").x * 0.5f + ImGui::GetStyle().FramePadding.x,
-                     window->DC.CursorStartPos.y + ImGui::GetFrameHeightWithSpacing() + ImGui::GetFrameHeight() * 0.5f));
+        click(control("add")); frames(3);
         CHECK(!GImGui->OpenPopupStack.empty());
-        if (!GImGui->OpenPopupStack.empty()) {
-            ImGuiWindow* palette = GImGui->OpenPopupStack.back().Window; CHECK(palette);
-            if (palette) click(ImVec2(palette->DC.CursorStartPos.x + 35, palette->DC.CursorStartPos.y + ImGui::GetTextLineHeightWithSpacing() * 0.5f));
-        }
+        if (!GImGui->OpenPopupStack.empty()) click(control("palette:constant"));
         CHECK(editor.ShaderDocument()["nodes"].size() == 2);
-        ImGuiWindow* canvas = child("##shadercanvas"); CHECK(canvas);
-        if (canvas) {
-            ImVec2 origin = canvas->DC.CursorStartPos;
-            mouse(ImVec2(origin.x + 24 + 230 * 0.8f, origin.y + 24 + 74 * 0.8f), 0, true);
-            mouse(ImVec2(origin.x + 24 + 230 * 0.8f, origin.y + 24 + 54 * 0.8f), 0, false);
-        }
+        frames(3);
+        mouse(pin(1, true), 0, true); mouse(control("surface:color"), 0, false);
         CHECK(editor.ShaderDocument()["color"].asInt() == 1);
         materialAction(false, "materials/new.mat.json"); CHECK(FileExists(JoinPath(project, "materials/new.mat.json")));
         CHECK(Call(engine, "shader.check", R"({"path":"materials/new.shader.json"})")["ok"].asBool());
         editor.OpenShader("materials/new.mat.json"); frames(3);
         CHECK(editor.ShaderDocument()["nodes"].size() == 2);
-        if (canvas) click(ImVec2(canvas->DC.CursorStartPos.x + 24 + 230 * 0.8f,
-                                canvas->DC.CursorStartPos.y + 24 + 54 * 0.8f), 1);
+        click(control("surface:color"), 1);
         Json beforeQuit = editor.ShaderDocument();
         WindowEvent close; close.type = WindowEvent::Type::Close; frames(3, {close});
         CHECK(!editor.QuitRequested()); prompt = child("###Save Shader Changes?"); CHECK(prompt);

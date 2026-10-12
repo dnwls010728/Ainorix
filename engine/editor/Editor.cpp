@@ -374,6 +374,19 @@ Json ObjectOf(std::initializer_list<std::pair<const char*, Json>> members) {
     return j;
 }
 
+std::string HumanizeName(const std::string& name) {
+    if (name == "uv") return "UV";
+    std::string out;
+    for (size_t i = 0; i < name.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(name[i]);
+        const unsigned char before = i ? static_cast<unsigned char>(name[i - 1]) : 0;
+        // A new word starts at a capital after a small letter and where letters and digits meet.
+        if (i && ((std::isupper(c) && std::islower(before)) || (std::isdigit(c) && std::isalpha(before)) || (std::isalpha(c) && std::isdigit(before)))) out += ' ';
+        out += i == 0 ? static_cast<char>(std::toupper(c)) : static_cast<char>(c);
+    }
+    return out;
+}
+
 void HelpTooltip(const std::string& text) {
     if (text.empty() || !ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled)) return;
     ImGui::BeginTooltip();
@@ -1995,6 +2008,10 @@ bool NativeEditor::GameViewFocused() const { return impl_->gameFocused; }
 void NativeEditor::OpenScript(const std::string& path) { impl_->OpenScript(path); }
 void NativeEditor::OpenShader(const std::string& path) { impl_->OpenShader(path); }
 Json NativeEditor::ShaderDocument() const { return impl_->shaderDocument; }
+std::array<float, 4> NativeEditor::ShaderControlRect(const std::string& name) const {
+    const auto found = impl_->shaderRects.find(name);
+    return found == impl_->shaderRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
 void NativeEditor::OpenEffect(const std::string& path) { impl_->OpenEffect(path); }
 void NativeEditor::SetEffectsGraph(bool on) { impl_->effectsGraph = on; if(on) impl_->effectsValues=false; }
 void NativeEditor::SetEffectsValues(bool on,bool update,int channel) {
@@ -2002,6 +2019,9 @@ void NativeEditor::SetEffectsValues(bool on,bool update,int channel) {
     if(on) impl_->effectsGraph=false;
     impl_->effectsCurveKeys["expression:stage"]=update?1:0;
     impl_->effectsCurveKeys["expression:channel"]=std::clamp(channel,0,10);
+}
+void NativeEditor::SetEffectsGraphValue(bool update,int channel) {
+    SetEffectsValues(false,update,channel);impl_->effectsGraph=true;impl_->effectsValueInGraph=true;
 }
 Json NativeEditor::EffectsDocument() const { return impl_->engine.VfxDocumentCall("state", Json())["document"]; }
 std::array<float, 4> NativeEditor::EffectsControlRect(const std::string& name) const {

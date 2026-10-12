@@ -210,6 +210,13 @@ struct NativeEditor::Impl {
     ImVec2 shaderPan{30, 30}, shaderOutputPos{260, 30};
     float shaderZoom = 1.0f;
     int shaderSelected = -1, shaderLink = -1;
+    std::map<std::string, std::array<float, 4>> shaderRects;  // automation: control and node bounds by name
+    std::string shaderPaletteFilter;
+    ImVec2 shaderPalettePos{0, 0};   // canvas position of the node the palette adds
+    bool shaderPaletteOpen = false, shaderPaletteAtMouse = false, shaderPressedEmpty = false;
+    bool shaderFitReadable = false;  // with shaderFit: not below a readable zoom (opening, arranging)
+    void ShaderRect(const std::string& name);
+    void ShaderPalette();
     std::vector<Json> shaderHistory;
     size_t shaderHistoryIndex = 0;
     bool shaderPendingOpen = false, shaderOpenPrompt = false, shaderPendingQuit = false;
@@ -230,6 +237,7 @@ struct NativeEditor::Impl {
     std::string effectsGraphField = "rate";
     std::map<std::string, ImVec2> effectsGraphPositions;
     std::map<std::string, int> effectsGraphModules;
+    std::map<std::string, int> effectsGraphFlags;  // "<node>|ctx:<n>" collapsed, "<node>|all:<module>" every field shown
     std::vector<std::string> effectsGraphMaterials, effectsGraphAnchors;
     ImVec2 effectsGraphPan{24, 24};
     float effectsGraphZoom = 0.8f;
@@ -242,8 +250,17 @@ struct NativeEditor::Impl {
     ImVec2 effectsValuePan{24,24};
     float effectsValueZoom = 0.8f;
     void EffectsValues();
+    // Parts of the value nodes shared with the structure graph, which draws them beside the emitter they feed.
+    bool effectsValueInGraph = false;
+    std::string EffectsValueSync();
+    void EffectsValuePalette(const std::string& prefix, ImVec2 spawn);
+    void EffectsValueCanvas(class EditorNodeCanvas& canvas, float zoom, const std::string& prefix, ImVec2 origin, const ImVec2* sink);
+    void EffectsValueProperties(const std::string& prefix);
     bool EffectsValueApply(const Json& candidate, const std::string& merge = {});
     void EffectsBlockFields();
+    // The value widget of one field of a block (index among emitters then trails), one line high, applied through
+    // vfx.set. Curves and expressions are a button that shows them in the inspector.
+    void EffectsFieldValue(int block, const Json& field, const std::string& rect);
     void EffectsParameterValue(const std::string& name, float fieldWidth = 0);
     void EffectsGraphLayout(bool save);
     bool showEffects = false, focusEffects = false, effectsEditorFocused = false;
@@ -277,6 +294,8 @@ struct NativeEditor::Impl {
     void EffectsReplace(const Json& document, const std::string& merge = {});
     std::string EffectsMerge(const std::string& control);
     void EffectsRect(const std::string& name);
+    int effectsBackdrop = 1;     // preview background: 0 dark, 1 mid, 2 light (dark smoke needs a light one)
+    bool effectsGrid = true;     // ground grid in the preview
     std::string addComponentFilter;
     std::map<std::string, int> dragSerial;  // inspector drag -> undo merge group
     float capturedWheel = 0;                // wheel notches turned while the game held the mouse
@@ -659,6 +678,8 @@ Json Vec3Json(const Vec3& v);
 Vec3 JsonVec3(const Json& j, Vec3 def = Vec3(0, 0, 0));
 Json ObjectOf(std::initializer_list<std::pair<const char*, Json>> members);
 void HelpTooltip(const std::string& text);
+// "startSize" -> "Start Size", "uv" -> "UV": schema names as labels where no translated label exists.
+std::string HumanizeName(const std::string& name);
 // Kind of asset a string field holds ("model", "texture", ...), "" for plain text.
 std::string AssetKindForField(const std::string& type, const std::string& field);
 
