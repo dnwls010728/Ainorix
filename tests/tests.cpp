@@ -11211,6 +11211,114 @@ TEST(PlanarReflectionMotionClippingAndParity) {
     CHECK(RemoveAll(project));
 }
 
+// A query between two steps (colliding particles, a script's raycast) syncs the physics worlds with
+// dt = 0. That must not cost a moved kinematic body its sweep: a platform still carries what is on it.
+TEST(KinematicCarrySurvivesQueriesBetweenSteps) {
+    for (bool planar : {false, true}) {
+        float carried[2] = {0, 0};
+        for (int particles = 0; particles < 2; ++particles) {
+            const std::string project = TempProject((std::string("kinematic_query_") + (planar ? "2d_" : "3d_") + (particles ? "on" : "off")).c_str());
+            Engine e; std::string error; CHECK(e.Open(project, &error));
+            CHECK(Call(e, "script.write", R"({"path":"scripts/mover.lua","source":"local M={}\nfunction M:onUpdate(dt) local p=self:position() self:setPosition(p.x+1.5*dt,p.y,p.z) end\nreturn M"})")["ok"].asBool());
+            CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+            const char* collider = planar ? "Collider2D" : "Collider"; const char* body = planar ? "RigidBody2D" : "RigidBody";
+            auto create = [&](const std::string& name, const std::string& position, const std::string& scale, const std::string& more) {
+                const std::string args = "{\"name\":\"" + name + "\",\"components\":{\"Transform\":{\"position\":" + position + ",\"scale\":" + scale + "},\"" + collider + "\":{\"friction\":1}" + more + "}}";
+                CHECK(Call(e, "entity.create", args.c_str())["ok"].asBool());
+            };
+            create("Ground", "[0,-0.5,0]", "[30,1,3]", "");
+            create("Platform", "[0,1,0]", "[3,0.3,3]", std::string(",\"") + body + "\":{\"type\":\"kinematic\"},\"Script\":{\"path\":\"scripts/mover.lua\"}");
+            create("Crate", "[0,1.7,0]", "[1,1,1]", std::string(",\"") + body + "\":{}");
+            if (particles) {
+                Json make = Json::parse(R"({"name":"Effect","components":{"Transform":{"position":[-8,3,0]},"EmitterSettings":{"rate":20,"lifetime":3,"speed":2,"spread":0,"direction":[0,-1,0],"space":"world","collision":"bounce"}}})");
+                make["components"]["EmitterSettings"]["dimensions"] = planar ? 2 : 3;
+                CHECK(EmitterCall(e, "entity.create", make)["ok"].asBool());
+            }
+            e.Step(120);
+            if (particles) {
+                auto* emitter = TestEmitter(e.GetScene(), e.GetScene().FindByName("Effect"));
+                CHECK(emitter && !emitter->particles.empty());
+            }
+            carried[particles] = e.GetScene().Get<Transform>(e.GetScene().FindByName("Crate"))->position.x;
+        }
+        std::printf("  %s: crate carried to x %.3f without, %.3f with colliding particles\n", planar ? "2D" : "3D", carried[0], carried[1]);
+        CHECK(carried[0] > 2.5f);
+        CHECK(std::fabs(carried[0] - carried[1]) < 1e-3f);
+    }
+}
+
+// A spot cone too wide for one map (its texels and bias grow with the tangent of the angle) takes
+// six faces like a point light and still casts a shadow.
+TEST(WideSpotLightShadows) {
+    const std::string project = TempProject("wide_spot_shadow");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0.03,0.03,0.03],"shadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},"MeshRenderer":{"mesh":"plane","color":[1,1,1],"castShadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Blocker","components":{"Transform":{"position":[0,1,0],"scale":[2,2,2]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.4,0.2]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Spot","components":{"Transform":{"position":[0,4,0],"rotation":[-90,0,0]},"SpotLight":{"intensity":4,"range":8,"color":[1,1,1],"innerAngle":25,"outerAngle":45}}})")["ok"].asBool());
+    const RenderView view = MakeLookAtView(Vec3(6, 5, 7), Vec3(), 50, 1.5f);
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    for (float outer : {45.0f, 61.0f, 80.0f, 88.0f}) {
+        auto light = [&](bool shadows) {
+            const std::string args = "{\"id\":\"Spot\",\"type\":\"SpotLight\",\"values\":{\"outerAngle\":" + std::to_string(outer) + ",\"shadows\":" + (shadows ? "true" : "false") + "}}";
+            CHECK(Call(e, "component.set", args.c_str())["ok"].asBool());
+        };
+        RenderTarget open, shadowed, gpu; for (auto* image : {&open, &shadowed, &gpu}) image->Resize(240, 160);
+        light(false);
+        e.Renderer().Render(e.GetScene(), view, open);
+        light(true);
+        const LocalShadowSet set = SelectLocalShadows(GatherRenderLights(e.GetScene(), &e.Assets()), view.proj * view.view, view.eye);
+        CHECK(set.lights.size() == 1 && !set.lights[0].point);
+        if (!set.lights.empty()) CHECK(set.lights[0].mapCount == (outer > kSpotShadowCubeAngle ? 6 : 1));
+        e.Renderer().Render(e.GetScene(), view, shadowed);
+        int darkened = 0;
+        for (size_t i = 0; i < open.color.size(); ++i)
+            darkened += open.ids[i] == ground && static_cast<int>(open.color[i] & 255) > static_cast<int>(shadowed.color[i] & 255) + 30;
+        std::printf("  spot outer %.0f: %d maps, %d shadowed ground pixels\n", outer, set.lights.empty() ? 0 : set.lights[0].mapCount, darkened);
+        CHECK(darkened > 40);
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double sum = 0;
+            for (size_t i = 0; i < gpu.color.size(); ++i) for (int shift : {0, 8, 16})
+                sum += std::abs(static_cast<int>((gpu.color[i] >> shift) & 255) - static_cast<int>((shadowed.color[i] >> shift) & 255));
+            const double mean = sum / (gpu.color.size() * 3);
+            std::printf("  spot outer %.0f software/GPU mean %.3f/255\n", outer, mean);
+            CHECK(mean < 2);
+        }
+    }
+}
+
+// A mirror reflects the Skybox background in both renderers (the reflected view's bent depth row
+// must not turn the sky rays around).
+TEST(PlanarReflectionShowsSky) {
+    const std::string project = TempProject("planar_sky");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Sky","components":{"Skybox":{"sky":[0,0,1],"horizon":[0,0,1],"ground":[1,0,0],"sun":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Mirror","components":{"Transform":{"scale":[8,1,8]},"MeshRenderer":{"mesh":"plane","unlit":true,"color":[0.1,0.1,0.1]},"PlanarReflection":{"resolution":256}}})")["ok"].asBool());
+    const EntityId mirror = e.GetScene().FindByName("Mirror");
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    for (bool ortho : {false, true}) {
+        RenderView view = MakeLookAtView(Vec3(0, 4, 9), Vec3(0, 0, 1), 50, 1.5f);
+        if (ortho) view.proj = Mat4::Orthographic(4, 1.5f, 0.1f, 100);
+        RenderTarget software, gpu; software.Resize(240, 160); gpu.Resize(240, 160);
+        e.Renderer().Render(e.GetScene(), view, software);
+        if (haveGpu) e.Gpu()->Render(e.GetScene(), view, gpu);
+        int surface = 0, sky = 0, skyGpu = 0;
+        auto blue = [](uint32_t c) { return ((c >> 16) & 255) > 150 && (c & 255) < 60; };
+        for (size_t i = 0; i < software.color.size(); ++i) if (software.ids[i] == mirror) {
+            ++surface; sky += blue(software.color[i]); skyGpu += haveGpu && blue(gpu.color[i]);
+        }
+        std::printf("  planar sky %s: %d mirror pixels, sky in %d (software), %d (GPU)\n", ortho ? "ortho" : "perspective", surface, sky, skyGpu);
+        CHECK(surface > 1000 && sky > surface * 9 / 10);
+        if (haveGpu) CHECK(skyGpu > surface * 9 / 10);
+    }
+}
+
 TEST(CameraScreenReflectionsAndFallback) {
     const std::string project = TempProject("camera_ssr");
     Engine e; std::string error; CHECK(e.Open(project, &error));

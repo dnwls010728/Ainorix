@@ -32,6 +32,9 @@ oe exec <project> component.set '{"id":"Spot","type":"SpotLight","values":{"shad
   points away. There is no hysteresis when the nearest lights change.
 - A point uses **six world-axis perspective faces**, +X/-X/+Y/-Y/+Z/-Z, at 90 degrees. A spot uses one
   perspective map at twice its normalized outer half-angle, along the same rotation-only direction as lighting.
+  A spot whose outer half-angle is above **60 degrees** (`kSpotShadowCubeAngle`) uses the six faces of a point
+  instead: one map stretched over such a cone has texels, and with them a bias, that grow with the tangent of
+  the angle until the shadow disappears. It then costs six maps of the twelve and draws casters like a point.
   Far plane is the light range; near plane is `max(0.001,min(0.1,range*0.01))`. The projection keeps far at least
   1.01 times near for degenerate direct callers. Point orientation is unaffected by entity rotation.
 - Face selection uses the largest absolute ray component, ties X then Y then Z. Normal offset is 1.5 world

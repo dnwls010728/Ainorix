@@ -767,7 +767,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     if (env.present && env.background) {
         // Background is the sky along each pixel's world ray (the skybox), not a flat clear color.
         // The ray (far point minus near point) is linear across the screen: four corners give all.
-        const Mat4 invVP = (view.proj * view.view).Inverse();
+        const Mat4 invVP = (SkyRayProjection(view) * view.view).Inverse();
         auto ray = [&](float nx, float ny) {
             const Vec4 a = invVP * Vec4(nx, ny, -1.0f, 1.0f), b = invVP * Vec4(nx, ny, 1.0f, 1.0f);
             return b.xyz() * (1.0f / b.w) - a.xyz() * (1.0f / a.w);

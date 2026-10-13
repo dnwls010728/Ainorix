@@ -5,7 +5,10 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (d428219). R9 adds
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (c059b98 + three fixes: a kinematic body
+moved by a script keeps its sweep when particles or a raycast query the world before the step, a planar
+reflection shows the Skybox background, spot lights wider than 60 degrees cast shadows through six faces).
+The build before it (d428219) added R9:
 PostProcess screen-space reflections (ssr, ssrDistance, ssrThickness), fixed 64-step rays with five
 hit refinements, material-aware reflected-ambient replacement and probe/sky fallback. All earlier
 runtime features remain included; see [POSTPROCESS.md](../../docs/POSTPROCESS.md).
@@ -14,7 +17,7 @@ Packaging still patches the game's key into the runtime for keyed OEPAK002 archi
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,112,839 | ab70b94077b6f5bca233f9298226cf7916f893fc1aacbe9dd197625fc7a38eda |
+| oe_player.wasm | 6,114,796 | b5ce15f4d6bce88cd24ac4c9622377225ec7b5f4573102e11796d0e90acc5233 |
 
 Windows Release: 361 tests pass; the final cleanup also passed 14 camera tests and GPU comparison.
 The 800x500 SSR demonstration's software/D3D11 mean RGB difference is 0.146/255, and SSR-off Showcase

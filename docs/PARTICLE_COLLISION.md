@@ -45,7 +45,8 @@ Every moving live colliding particle uses at most **one segment ray query and on
 1/60-second step**, from the previous evaluated world center to the new one. This catches high-speed
 crossings of thin geometry. Births are not integrated/queried until the next step, matching existing
 VFX timing. The physics worlds sync once for the batch without advancing physics or game time, after
-scripts and before the normal physics step. Fully disabled collision makes no physics queries.
+scripts and before the normal physics step; kinematic bodies a script moved this frame keep their sweep
+for that step (test `KinematicCarrySurvivesQueriesBetweenSteps`). Fully disabled collision makes no physics queries.
 
 3D emitters query Jolt static non-sensor bodies only. 2D emitters query Box2D static non-sensor shapes
 only (world XY); the backends do not mix. Explicit static rigid bodies, standalone colliders and static

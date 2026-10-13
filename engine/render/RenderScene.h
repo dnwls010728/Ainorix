@@ -274,6 +274,7 @@ struct RenderLights {
 };
 
 constexpr int kMaxLocalShadowLights = 2;   // Shared point/spot budget, independent of the sun.
+constexpr float kSpotShadowCubeAngle = 60;  // Spot cones with a wider outer half-angle use six faces.
 constexpr int kMaxLocalShadowMaps = 12;    // Two six-face point lights at most.
 constexpr int kLocalShadowTileSize = 512;  // Four-by-four atlas fits GLES3's 2048 texture minimum.
 constexpr int kLocalShadowAtlasSize = 2048;
@@ -283,10 +284,11 @@ constexpr int kLocalShadowConfigTexel = 72, kSpotShadowSlotTexel = 74;
 constexpr int kLocalShadowMatrixTexel = 82, kLocalShadowParamsTexel = 130;
 struct RenderLocalShadow {
     EntityId id = kNullEntity;  // Source id; point before spot when one entity has both.
-    bool point = false;        // Six cube faces for a point, one cone face for a spot.
+    bool point = false;        // The source is a PointLight (lightIndex is into points), else a SpotLight.
     size_t lightIndex = 0;     // Index in RenderLights.points/spots.
     Vec3 pos;                 // World position of the source.
-    int firstMap = 0, mapCount = 1;  // Contiguous tiles in LocalShadowSet.maps.
+    int firstMap = 0, mapCount = 1;  // Contiguous tiles in LocalShadowSet.maps: six cube faces (a point
+                                     // or a wide spot), or one face along a spot's cone.
 };
 struct LocalShadowMap {
     Mat4 viewProj;             // Perspective light view, shared by both renderers.

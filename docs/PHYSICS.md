@@ -19,7 +19,7 @@ Physics runs only while simulating. Each fixed step (1/60 s): **scripts `onUpdat
 
 A `Tilemap` with colliding tiles becomes one static body made of merged boxes (and prisms for slopes, see [2D.md](2D.md)).
 
-The template's `scripts/player_controller.lua` sets the `CharacterBody` velocity when the entity has one (otherwise it moves the Transform). Things moved by editing their Transform: statics are teleported, kinematics are moved smoothly, dynamics are teleported and keep their velocity.
+The template's `scripts/player_controller.lua` sets the `CharacterBody` velocity when the entity has one (otherwise it moves the Transform). Things moved by editing their Transform: statics are teleported, kinematics are moved smoothly, dynamics are teleported and keep their velocity. A query between two steps (a script's `physics.raycast`, particles colliding with the world) sees a moved kinematic body at its new Transform, and the next step still sweeps it there from where the last step left it, so a platform keeps pushing and carrying.
 
 Example — a crate the player can push, a ball that bounces:
 

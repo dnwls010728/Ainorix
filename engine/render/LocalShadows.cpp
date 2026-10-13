@@ -34,7 +34,10 @@ LocalShadowSet SelectLocalShadows(const RenderLights& lights, const Mat4& viewPr
         if (!BoxInFrustum(viewProj, pos - half, pos + half)) return;
         const float distance2 = Dot(pos - eye, pos - eye);
         if (!std::isfinite(distance2)) return;
-        candidates.push_back({{id, point, index, pos, 0, point ? 6 : 1}, range, distance2, outerCos, dir});
+        // A cone wider than kSpotShadowCubeAngle would stretch one map over too many degrees (its texels,
+        // and with them the bias, grow with the tangent): it takes six faces like a point light.
+        const bool cube = point || outerCos < std::cos(Radians(kSpotShadowCubeAngle));
+        candidates.push_back({{id, point, index, pos, 0, cube ? 6 : 1}, range, distance2, outerCos, dir});
     };
     for (size_t i = 0; i < std::min<size_t>(16, lights.points.size()); ++i) {
         const auto& light = lights.points[i];
@@ -57,11 +60,12 @@ LocalShadowSet SelectLocalShadows(const RenderLights& lights, const Mat4& viewPr
         light.firstMap = static_cast<int>(result.maps.size());
         const float nearPlane = std::max(0.001f, std::min(0.1f, candidate.range * 0.01f));
         const float farPlane = std::max(nearPlane * 1.01f, candidate.range);
-        const float halfAngle = light.point ? kPi * 0.25f : std::acos(Clamp(candidate.outerCos, -1.0f, 1.0f));
+        const bool cube = light.mapCount == 6;
+        const float halfAngle = cube ? kPi * 0.25f : std::acos(Clamp(candidate.outerCos, -1.0f, 1.0f));
         const Mat4 projection = Mat4::Perspective(halfAngle * 2, 1, nearPlane, farPlane);
         const float texelScale = 2 * std::tan(halfAngle) / static_cast<float>(kLocalShadowTileSize);
         for (int face = 0; face < light.mapCount; ++face) {
-            const Vec3 dir = light.point ? faceDirs[face] : candidate.dir;
+            const Vec3 dir = cube ? faceDirs[face] : candidate.dir;
             const Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
             const Mat4 view = Mat4::LookAt(light.pos, light.pos + dir, up);
             result.maps.push_back({projection * view, texelScale, nearPlane, farPlane});
@@ -74,11 +78,12 @@ LocalShadowSet SelectLocalShadows(const RenderLights& lights, const Mat4& viewPr
 LocalShadowSample PrepareLocalShadowSample(const LocalShadowSet& shadows, size_t slot, const Vec3& position, const Vec3& normal) {
     const auto& light = shadows.lights[slot];
     const Vec3 direction = position - light.pos;
-    int face = light.point ? PointShadowFace(direction) : 0;
+    const bool cube = light.mapCount == 6;
+    int face = cube ? PointShadowFace(direction) : 0;
     const auto& map = shadows.maps[static_cast<size_t>(light.firstMap + face)];
     const float depth = std::max(map.nearPlane, (map.viewProj * Vec4(position, 1)).w);
     const Vec3 displaced = position + normal * (map.texelScale * depth * 1.5f);
-    if (light.point) face = PointShadowFace(displaced - light.pos);
+    if (cube) face = PointShadowFace(displaced - light.pos);
     const float bias = map.nearPlane * map.farPlane / (map.farPlane - map.nearPlane) * map.texelScale * 0.5f / depth;
     return {light.firstMap + face, displaced, bias};
 }

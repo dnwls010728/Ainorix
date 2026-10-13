@@ -298,6 +298,10 @@ struct Physics2D::Impl {
         // RigidBody2D.lockPositionX/Y: a shapeless static body at the locked position, jointed to
         // this one (Box2D 3.1 has no axis locks). Destroying it removes the joint.
         b2BodyId anchor = b2_nullBodyId;
+        // A query between two steps (dt = 0) puts a moved kinematic body at its Transform; the next
+        // step still sweeps it from where the last step left it (see PhysicsWorld.cpp BodyRec).
+        bool sweepPending = false;
+        b2Transform sweepFrom = b2Transform_identity;
     };
     enum class JointType { Fixed, Hinge, Slider, Distance, Wheel };
     struct JointRec {
@@ -677,10 +681,16 @@ struct Physics2D::Impl {
             rec.seen = seen;
             if (rec.kind == Kind::Kinematic && dt > 0) {
                 // Reach the Transform pose at the end of this step (pushes dynamic bodies, carries characters).
+                if (rec.sweepPending) b2Body_SetTransform(rec.id, rec.sweepFrom.p, rec.sweepFrom.q);
+                rec.sweepPending = false;
                 b2Transform cur = b2Body_GetTransform(rec.id);
                 b2Body_SetLinearVelocity(rec.id, b2MulSV(1.0f / dt, b2Sub(pose.p, cur.p)));
                 b2Body_SetAngularVelocity(rec.id, b2RelativeAngle(pose.q, cur.q) / dt);
             } else if (moved) {
+                if (rec.kind == Kind::Kinematic && !rec.sweepPending) {
+                    rec.sweepPending = true;
+                    rec.sweepFrom = b2Body_GetTransform(rec.id);
+                }
                 b2Body_SetTransform(rec.id, pose.p, pose.q);
                 if (b2Body_IsValid(rec.anchor)) b2Body_SetTransform(rec.anchor, pose.p, b2Rot_identity);  // locks hold the new place
                 if (rec.kind != Kind::Static) b2Body_SetAwake(rec.id, true);

@@ -46,7 +46,7 @@ the reflection. Main-view depth and picking still refer to the surface, not refl
 
 Captures use RGBA8 scene color before camera post effects, and may clip bright HDR emission. The
 receiving view applies its effects once after reflection blending. Captures retain ordinary lights,
-shadows, sky and reflection probes, but exclude UI, grid, selection/debug overlays and further planar
+shadows, sky (the `Skybox` background too, test `PlanarReflectionShowsSky`) and reflection probes, but exclude UI, grid, selection/debug overlays and further planar
 captures. Probe baking does not include planar reflections. Other mirrors in the capture show their
 ordinary material, preventing recursion. This is a sharp color reflection: there is no roughness blur,
 Fresnel, refraction, water distortion, temporal cache, reflected picking or multiple-mirror recursion.

@@ -1888,7 +1888,7 @@ struct GpuRenderer::Impl {
                 // Skybox background: fill the frame with the sky before any geometry (depth test always/no write).
                 sg_apply_pipeline(skyPips[t.hdr ? 1 : 0][t.ssr ? 2 : (t.dofMrt ? 1 : 0)]);
                 oe_sky_params_t sp{};
-                Put(sp.inv_view_proj, (view.proj * view.view).Inverse());
+                Put(sp.inv_view_proj, (SkyRayProjection(view) * view.view).Inverse());
                 Put(sp.sky_c, env.sky.r, env.sky.g, env.sky.b, 0);
                 Put(sp.horizon_c, env.horizon.r, env.horizon.g, env.horizon.b, 0);
                 Put(sp.ground_c, env.ground.r, env.ground.g, env.ground.b, 0);

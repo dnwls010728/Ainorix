@@ -8,14 +8,16 @@ signing needs Java.
 
 - ABIs: arm64-v8a (phones/tablets), x86_64 (emulators).
 - Built on 2026-10-13 with Android NDK r28c (28.2.13676358), Release, API 26 and static libc++,
-  from main (d428219), including R9 screen-space reflections, material-aware ambient replacement,
+  from main (c059b98 + three fixes: kinematic bodies keep their sweep across queries between steps, planar
+  reflections show the Skybox background, spot lights wider than 60 degrees cast shadows through six faces),
+  including R9 screen-space reflections, material-aware ambient replacement,
   probe/sky fallback and all earlier runtime features. See [POSTPROCESS.md](../../docs/POSTPROCESS.md).
 - The engine uses GLES3 and AAudio. ELF load segments are aligned to 16 KB (llvm-readelf checked both ABIs).
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
-| arm64-v8a/liboe_player.so | 9,340,416 | 3a5199caa3e58673fc647069b0c9dbe900863a695113b7aab702a07c4a1ff672 |
-| x86_64/liboe_player.so | 9,993,416 | 4f6e57189369c38d7ba2382138d7056f40c55358b97061ed077b7e2b0c262d93 |
+| arm64-v8a/liboe_player.so | 9,340,912 | e2dc2e971398cadd90684d589ff4b5f46f024ab4dbb49afaeb622f02ffa9f9e5 |
+| x86_64/liboe_player.so | 9,994,104 | 9e5eb972f20f37ef2cb9597316bd96c36f7b753ce0ea94814e6114566bf15a5e |
 
 **Not run on a device.** R9 was checked with 361 Windows tests, D3D11 screenshots and headless
 browser WebGL2 (including SSR/SSAO/DOF/bloom transitions). The Android libraries were rebuilt and

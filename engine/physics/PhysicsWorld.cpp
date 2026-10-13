@@ -285,6 +285,12 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
         JPH::Quat lastRot;
         Vec3 lastVelocity;
         Vec3 lastAngular;
+        // A query between two steps (dt = 0) puts a moved kinematic body at its Transform so rays
+        // and particles meet it there. The next step still has to sweep it from where the last
+        // step left it, or it would arrive with no velocity and neither push nor carry anything.
+        bool sweepPending = false;
+        JPH::Vec3 sweepPos;
+        JPH::Quat sweepRot;
     };
     struct TriggerRec {
         JPH::RefConst<JPH::Shape> shape;
@@ -522,8 +528,14 @@ struct PhysicsWorld::Impl : public JPH::ContactListener {
             BodyRec& rec = it->second;
             bool moved = !SamePos(wx.pos, rec.lastPos) || !SameRot(wx.rot, rec.lastRot);
             if (rec.kind == Kind::Kinematic && dt > 0) {
+                if (rec.sweepPending) bi.SetPositionAndRotation(rec.id, rec.sweepPos, rec.sweepRot, JPH::EActivation::DontActivate);
+                rec.sweepPending = false;
                 bi.MoveKinematic(rec.id, wx.pos, wx.rot, dt);
             } else if (moved) {
+                if (rec.kind == Kind::Kinematic && !rec.sweepPending) {
+                    rec.sweepPending = true;
+                    bi.GetPositionAndRotation(rec.id, rec.sweepPos, rec.sweepRot);
+                }
                 bi.SetPositionAndRotation(rec.id, wx.pos, wx.rot, rec.kind == Kind::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
             }
             rec.lastPos = wx.pos;
