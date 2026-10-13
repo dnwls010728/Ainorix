@@ -5,7 +5,13 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (a5dbad4). Includes A2 isolated
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (48b1742). A2 preview now defaults
+to excluding only its target's stored BoneIK goals (ik:false); ik:true opts in. State exposes ik/ikGoals,
+and attachments follow the resulting preview pose. EngineAnimation.cpp and Pose.cpp are shared player
+code, so both web and Android players were rebuilt. The correction passed all 373 Windows tests,
+including goal scope, free/fixed foot motion and unchanged authored state/frame hashes. Chisa Walk
+0.20/0.60 s editor screenshots confirmed different leg poses; its project files remained untouched.
+Includes A2 isolated
 animation.preview/preview_state/preview_close and preview screenshots. The native Animation panel is
 a desktop authoring tool, not shipped player UI. Windows verification: 371 tests, with the final editor
 case also covering legacy layout migration/persistence; isolated preview software/D3D11 mean difference
@@ -22,7 +28,7 @@ Packaging still patches the game's key into the runtime for keyed OEPAK002 archi
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,193,528 | 330ee297af5538d4a8473c1fb7f2a3b53821f61608ce4f9bea58388230592b46 |
+| oe_player.wasm | 6,195,115 | 863d81d3a7843e7c25c53ad8b858ad7522744fc92f3c862a88359b82270fb88b |
 
 Windows Release: 368 tests pass, including four A1 event tests. The A1 800x500 software/D3D11 demo's
 mean RGB difference is 0.089/255. Headless Edge (WebGL2 on SwiftShader) ran both model and sprite
