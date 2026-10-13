@@ -20018,6 +20018,77 @@ return M)L"));
     CHECK(Call(e,"sim.load_state",R"({"slot":"controllers"})")["error"]["code"].asString()=="state_resource");
     RemoveAll(project);
 }
+TEST(AnimationControllerObservationAndRollback) {
+    Engine e;std::string error;const std::string project=TempProject("controller_observation");CHECK(e.Open(project,&error));
+    Call(e,"scene.new",R"({"empty":true})");ControllerTestSprite(e);
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump()));
+    CHECK(!Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"]["found"].asBool());CHECK(!e.Scripts().Status()["sessionActive"].asBool());
+    CHECK(WriteTextFile(project+"/scripts/observe.lua",R"L(local M={}
+function M:onStart() self.controller=require('oe.animator').new(self.id,'animations/hero.controller.json') self.tick=0 end
+function M:onUpdate(dt) self.tick=self.tick+1 self.controller:set('speed',self.tick%2==1 and 2 or 0) if self.tick%7==0 then self.controller:trigger('jump') end self.controller:update(dt) game.set('controller',self.controller:state()) end
+return M)L"));
+    CHECK(Call(e,"component.add",R"({"id":"Hero","type":"Script","values":{"path":"scripts/observe.lua"}})")["ok"].asBool());
+    CHECK(Call(e,"sim.record_state")["ok"].asBool());CHECK(Call(e,"sim.step",R"({"frames":10})")["ok"].asBool());
+    const Json observed=Call(e,"animation.controller_state",R"({"id":"Hero","definition":true})")["result"];
+    CHECK(observed["found"].asBool() && observed["state"].asString()=="Jump" && observed["definition"]==ControllerTestDefinition());
+    CHECK(observed["transitions"].size()>0 && observed["transitions"].items().back()["index"].asInt()==0);
+    CHECK(observed["transitions"].items().back()["conditions"][0]["actual"].asBool() && !observed["parameters"]["jump"].asBool());
+    const Json scene=e.GetScene().ToJson(),data=e.GameData();const auto revision=e.Revision(),frame=e.Frame();const size_t undo=e.UndoDepth();
+    const std::string hash=Call(e,"render.screenshot",R"({"width":64,"height":64})")["result"]["hash"].asString();
+    CHECK(Call(e,"sim.save_state",R"({"slot":"observe"})")["ok"].asBool());
+    for(int i=0;i<50;++i)CHECK(Call(e,"animation.controller_state",R"({"id":"Hero","definition":true})")["result"]==observed);
+    CHECK(e.GetScene().ToJson()==scene && e.GameData()==data && e.Revision()==revision && e.Frame()==frame && e.UndoDepth()==undo);
+    CHECK(Call(e,"render.screenshot",R"({"width":64,"height":64})")["result"]["hash"].asString()==hash);
+    CHECK(Call(e,"sim.step",R"({"frames":120})")["ok"].asBool());const Json future=e.GetScene().ToJson(),futureData=e.GameData();
+    const Json futureObservation=Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"];CHECK(futureObservation["transitions"].size()==16 && !futureObservation.has("definition"));
+    CHECK(Call(e,"sim.load_state",R"({"slot":"observe"})")["ok"].asBool());CHECK(Call(e,"animation.controller_state",R"({"id":"Hero","definition":true})")["result"]==observed);
+    CHECK(Call(e,"sim.step",R"({"frames":120})")["ok"].asBool());CHECK(e.GetScene().ToJson()==future && e.GameData()==futureData);
+    CHECK(Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"]==futureObservation && e.Scripts().Errors().empty());
+    Call(e,"sim.stop");CHECK(!Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"]["found"].asBool());RemoveAll(project);
+}
+TEST(AnimationControllerObservationLifecycleAndBounds) {
+    Engine e;std::string error;const std::string project=TempProject("controller_observation_lifecycle");CHECK(e.Open(project,&error));
+    Call(e,"scene.new",R"({"empty":true})");ControllerTestSprite(e);CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump()));
+    EpochEval(e,"controller=require('oe.animator').new(scene.find('Hero'),'animations/hero.controller.json')");
+    const Json before=Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"];
+    CHECK(EpochEval(e,"controller.definition.states.Walk.clip='missing'; controller:set('speed',2); local ok=pcall(controller.update,controller,0.1);controller.definition.states.Walk.clip='walk';return not ok").asBool());
+    const Json after=Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"];
+    CHECK(after["clock"]==before["clock"] && after["transitions"]==before["transitions"] && after["state"]==before["state"]);
+    EpochEval(e,"controller.parameters.speed=setmetatable({}, {__tostring=function() game.set('badObservation',true) return 'bad' end})");
+    CHECK(Call(e,"animation.controller_state",R"({"id":"Hero"})")["ok"].asBool()); // Plain tables are JSON; no tostring call.
+    EpochEval(e,"controller.parameters.speed=function() game.set('badObservation',true) end");
+    CHECK(Call(e,"animation.controller_state",R"({"id":"Hero"})")["error"]["code"].asString()=="invalid_controller_observation");CHECK(!e.GameData().has("badObservation"));
+    EpochEval(e,"controller:set('speed',2);controller:update(0);other=require('oe.animator').new(scene.find('Hero'),'animations/hero.controller.json')");
+    CHECK(Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"]["state"].asString()=="Idle");
+    EpochEval(e,"other=nil;collectgarbage('collect')");CHECK(!Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"]["found"].asBool());
+    EpochEval(e,"other=require('oe.animator').new(scene.find('Hero'),'animations/hero.controller.json')");e.Scripts().ResetInstances();
+    CHECK(!Call(e,"animation.controller_state",R"({"id":"Hero"})")["result"]["found"].asBool());
+    CHECK(!Call(e,"animation.controller_state",R"({"id":"Missing"})")["ok"].asBool());RemoveAll(project);
+}
+#if OE_NATIVE_EDITOR
+TEST(NativeEditorAnimationControllerLiveFlow) {
+    Engine e;std::string error;const std::string project=TempProject("controller_live_editor");CHECK(e.Open(project,&error));Call(e,"scene.new",R"({"empty":true})");ControllerTestSprite(e);
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump()));
+    CHECK(WriteTextFile(project+"/scripts/live.lua",R"L(local M={}
+function M:onStart() self.controller=require('oe.animator').new(self.id,'animations/hero.controller.json') end
+function M:onUpdate(dt) self.controller:set('speed',1):update(dt) end
+return M)L"));CHECK(Call(e,"component.add",R"({"id":"Hero","type":"Script","values":{"path":"scripts/live.lua"}})")["ok"].asBool());
+    if(!e.EnableGpu(nullptr,&error)){RemoveAll(project);return;}
+    NativeEditor::Options options;options.language="en";options.layoutFile="";NativeEditor editor(e,nullptr,options);CHECK(editor.Init(&error));editor.Select(e.GetScene().FindByName("Hero"));
+    CHECK(Call(e,"editor.animation",R"({"controller":"animations/hero.controller.json"})")["ok"].asBool());RenderTarget image;
+    auto draw=[&](int n=1){for(int i=0;i<n;++i){editor.Update({},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}};draw(4);
+    WindowEvent key;key.type=WindowEvent::Type::Key;key.key=WindowKey::P;key.ctrl=true;key.down=true;editor.Update({key},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));key.down=false;key.ctrl=false;editor.Update({key},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));
+    CHECK(e.Playing());CHECK(Call(e,"sim.step",R"({"frames":2})")["ok"].asBool());Call(e,"sim.pause");draw(4);
+    Json live=Call(e,"editor.state")["result"]["animationControllerLive"];CHECK(live["matching"].asBool() && live["state"].asString()=="Walk");
+    CHECK(editor.AnimationControlRect("controller-live-state:Walk")[2]>0 && editor.AnimationControlRect("controller-live-transition:1")[2]>0);
+    CHECK(WritePng("build/animation-ui/live_native_walk.png",image.ToImage(),true));
+    const Json scene=e.GetScene().ToJson();const auto revision=e.Revision();draw(10);CHECK(Call(e,"editor.state")["result"]["animationControllerLive"]==live && e.GetScene().ToJson()==scene && e.Revision()==revision);
+    Json args=Json::MakeObject(),different=ControllerTestDefinition();different["states"]["Walk"]["speed"]=2;args["values"]=different;
+    CHECK(e.Call("animation.controller_edit_replace",args)["ok"].asBool());draw(2);CHECK(!Call(e,"editor.state")["result"]["animationControllerLive"]["matching"].asBool());
+    CHECK(editor.AnimationControlRect("controller-live-state:Walk")[2]==0);Call(e,"animation.controller_undo");draw(2);CHECK(Call(e,"editor.state")["result"]["animationControllerLive"]["matching"].asBool());
+    Call(e,"sim.stop");draw(2);CHECK(!Call(e,"editor.state")["result"]["animationControllerLive"]["found"].asBool());RemoveAll(project);
+}
+#endif
 #if OE_NATIVE_EDITOR
 TEST(NativeEditorAnimationControllerGraphAuthoring) {
     Engine e; std::string error; const std::string project=TempProject("controller_editor"); CHECK(e.Open(project,&error));

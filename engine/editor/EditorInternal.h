@@ -176,7 +176,7 @@ struct NativeEditor::Impl {
     bool animationFrames = false;
     bool showAnimationController = false, focusAnimationController = false, animationControllerEditorFocused = false;
     bool animationControllerClosePrompt = false;
-    Json animationControllerDocument, animationControllerSaved;
+    Json animationControllerDocument, animationControllerSaved, animationControllerLive;
     std::vector<Json> animationControllerHistory;
     size_t animationControllerHistoryIndex = 0;
     std::string animationControllerMerge, animationControllerProject, animationControllerLink;

@@ -560,6 +560,15 @@ Read isolated preview state, clip list and event marks; never changes the author
 
 Close isolated animation preview and restore the authored pose in editor views.
 
+### `animation.controller_state`
+
+Read the latest live oe.animator owner: state, elapsed, parameters, clock and last 16 transitions (zero-based indices and captured condition values). Never runs Lua or starts a session.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Controller target entity. |
+| `definition` | boolean |  | Include the loaded controller definition for graph matching. |
+
 ### `animation.state`
 
 SpriteAnimation or Animator playback state; optional model-space joint matrices (column-major).

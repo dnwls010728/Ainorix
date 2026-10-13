@@ -599,6 +599,19 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json& a) { return e.AnimationPreviewCall("state", a); });
     Register(r, "animation.preview_close", "Close isolated animation preview and restore the authored pose in editor views.", Params(), false,
              [](Engine& e, const Json& a) { return e.AnimationPreviewCall("close", a); });
+    Register(r, "animation.controller_state", "Read the latest live oe.animator owner: state, elapsed, parameters, clock and last 16 transitions (zero-based indices and captured condition values). Never runs Lua or starts a session.",
+             Params().ReqWith("id", EntityRefSchema("Controller target entity.")).Opt("definition", "boolean", "Include the loaded controller definition for graph matching."),
+             false, [](Engine& e, const Json& a) {
+                 const EntityId id = RequireEntity(e,a);
+                 Json out=e.Scripts().AnimationControllerState(id,a["definition"].asBool());
+                 out["frame"]=e.Frame(); out["playing"]=e.Playing(); out["paused"]=e.InPlaySession() && (!e.Playing() || e.GamePaused());
+                 if (out["found"].asBool()) {
+                     Json args=Json::MakeObject(); args["id"]=id;
+                     const Json playback=e.Call("animation.state",args);
+                     if (playback["ok"].asBool()) out["playback"]=playback["result"];
+                 }
+                 return out;
+             });
     Register(r, "animation.state", "SpriteAnimation or Animator playback state; optional model-space joint matrices (column-major).",
              Params().ReqWith("id", EntityRefSchema("Entity with SpriteAnimation or Animator.")).Opt("pose", "boolean", "Include model jointMatrices."),
              false, [animatorState](Engine& e, const Json& a) { return animatorState(e, RequireEntity(e, a), a["pose"].asBool()); });

@@ -17,6 +17,14 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Live", "실행 중", "実行中"},
+    {"Runtime differs", "실행 정의 다름", "実行時の定義が異なる"},
+    {"Live display follows the selected entity and its loaded controller. Save does not reload a running controller.", "선택한 엔티티의 실행 중 컨트롤러를 표시합니다. 저장해도 실행 중인 정의는 다시 로드되지 않습니다.", "選択エンティティの実行中コントローラーを表示。保存しても実行中の定義は再読込されません。"},
+    {"State Time", "상태 시간", "状態時間"},
+    {"Current Parameters", "현재 매개변수", "現在のパラメーター"},
+    {"Recent Transitions", "최근 전환", "最近の遷移"},
+    {"Runtime definition differs from this graph. Restart play after saving to monitor it.", "실행 중 정의가 이 그래프와 다릅니다. 저장 후 플레이를 다시 시작하세요.", "実行中の定義がグラフと異なります。保存してプレイを再開してください。"},
+    {"No live controller for the selected entity.", "선택한 엔티티에 실행 중인 컨트롤러가 없습니다.", "選択エンティティに実行中のコントローラーはありません。"},
     {"Discard", "버리기", "破棄"},
     {"%d more", "외 %d개", "ほか%d件"},
     {"Controller draft: Ctrl+Z / Ctrl+Y undo or redo. Ctrl+S saves. Drag a state edge to create a transition.", "Ctrl+Z / Ctrl+Y로 실행 취소·다시 실행, Ctrl+S로 저장. 상태 가장자리를 끌어 전환 생성.", "Ctrl+Z / Ctrl+Yで元に戻す・やり直し、Ctrl+Sで保存。状態の端をドラッグして遷移を作成。"},

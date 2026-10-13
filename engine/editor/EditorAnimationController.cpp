@@ -120,6 +120,7 @@ Json NativeEditor::Impl::AnimationControllerCall(const std::string& op, const Js
     } else if (op == "close") {
         if (animationControllerDocument != animationControllerSaved && !args["discard"].asBool())
             throw ApiError("unsaved_controller", "controller has unsaved edits", "Save first, or pass discard:true.");
+        animationControllerLive = Json();
         showAnimationController = false;
         animationControllerEditorFocused = false;
         animationControllerDocument = animationControllerSaved = Json();
@@ -203,6 +204,7 @@ ImVec2 Edge(ImVec2 position, ImVec2 dimensions, ImVec2 towards) {
 }
 } // namespace
 void NativeEditor::Impl::AnimationControllerPanel() {
+    animationControllerLive = Json();
     if (focusAnimationController) {
         ImGui::SetNextWindowFocus();
         focusAnimationController = false;
@@ -280,6 +282,37 @@ void NativeEditor::Impl::AnimationControllerPanel() {
         ImGui::TextUnformatted("*");
     }
     Json data = animationControllerDocument;
+    if (InPlaySession() && Primary() != kNullEntity && engine.GetScene().Exists(Primary())) {
+        const Json response = Call("animation.controller_state", ObjectOf({{"id", Primary()}, {"definition", true}}), true);
+        if (Ok(response))
+            animationControllerLive = response["result"];
+    }
+    const bool found = animationControllerLive["found"].asBool();
+    const bool matching = found && animationControllerProject == engine.ProjectDir() &&
+                          engine.ResolvePath(animationControllerLive["path"].asString()) == engine.ResolvePath(animationController) &&
+                          animationControllerLive["definition"] == data;
+    animationControllerLive["matching"] = matching;
+    if (found) {
+        ImGui::SameLine();
+        ImGui::TextColored(matching ? ImVec4(0.47f, 0.84f, 0.63f, 1) : ImVec4(1, 0.83f, 0.37f, 1), "%s",
+                           Tr(matching ? "Live" : "Runtime differs"));
+        HelpTooltip(Tr("Live display follows the selected entity and its loaded controller. Save does not reload a running controller."));
+    }
+    const Json& live = animationControllerLive;
+    auto recent = [&](int index) -> const Json* {
+        if (!matching)
+            return nullptr;
+        for (auto it = live["transitions"].items().rbegin(); it != live["transitions"].items().rend(); ++it)
+            if ((*it)["index"].asInt() == index)
+                return &*it;
+        return nullptr;
+    };
+    auto conditionText = [](const Json& condition) {
+        std::string result = condition["parameter"].asString() + " = " + condition["actual"].dump();
+        if (condition["op"].asString() != "trigger")
+            result += " " + condition["op"].asString() + " " + condition["value"].dump();
+        return result;
+    };
     auto replace = [&](const std::string& merge = std::string()) {
         return Ok(Call("animation.controller_edit_replace", ObjectOf({{"values", data}, {"merge", merge}})));
     };
@@ -367,7 +400,8 @@ void NativeEditor::Impl::AnimationControllerPanel() {
         if (animationControllerFit) {
             ImVec2 low(0, -60), high(420, 40);
             for (const auto& p : positions) {
-                low.x=std::min(low.x,p.second.x-30); low.y=std::min(low.y,p.second.y-30);
+                low.x = std::min(low.x, p.second.x - 30);
+                low.y = std::min(low.y, p.second.y - 30);
                 high.x = std::max(high.x, p.second.x + card.x + 30);
                 high.y = std::max(high.y, p.second.y + card.y + 30);
             }
@@ -390,8 +424,20 @@ void NativeEditor::Impl::AnimationControllerPanel() {
                 return from * (u * u * u) + c1 * (3 * u * u * t) + c2 * (3 * u * t * t) + to * (t * t * t);
             };
             const bool chosen = index >= 0 && index == animationControllerTransition;
-            const ImU32 color = chosen ? IM_COL32(255, 213, 116, 255) : IM_COL32(112, 202, 242, 255);
-            canvas.draw->AddBezierCubic(from, c1, c2, to, color, chosen ? 3.5f : 1.7f);
+            const Json* observation = recent(index);
+            const float age = observation ? static_cast<float>(live["clock"].asNumber() - (*observation)["time"].asNumber()) : 10;
+            const bool flowing = observation && age >= 0 && age < 0.8f;
+            const ImU32 color = flowing  ? IM_COL32(120, 214, 160, 255)
+                                : chosen ? IM_COL32(255, 213, 116, 255)
+                                         : IM_COL32(112, 202, 242, 255);
+            if (flowing && chosen)
+                canvas.draw->AddBezierCubic(from, c1, c2, to, IM_COL32(255, 213, 116, 255), 6);
+            canvas.draw->AddBezierCubic(from, c1, c2, to, color, flowing ? 4.0f : chosen ? 3.5f : 1.7f);
+            if (flowing)
+                canvas.draw->AddCircleFilled(point(std::fmod(age * 2, 1.0f)), 4.5f, IM_COL32(245, 255, 249, 255));
+            std::string caption = label;
+            if (flowing && (*observation)["conditions"].size() > 0)
+                caption = conditionText((*observation)["conditions"][0]);
             ImVec2 direction = to - point(0.98f);
             const float length = std::sqrt(direction.x * direction.x + direction.y * direction.y);
             if (length > 0)
@@ -399,10 +445,10 @@ void NativeEditor::Impl::AnimationControllerPanel() {
             const ImVec2 normal(-direction.y, direction.x);
             canvas.draw->AddTriangleFilled(to, to - direction * 10 + normal * 5, to - direction * 10 - normal * 5, color);
             const float font = ImGui::GetFontSize() * std::max(0.6f, animationControllerZoom);
-            const ImVec2 labelSize = ImGui::GetFont()->CalcTextSizeA(font, 10000, 0, label.c_str());
+            const ImVec2 labelSize = ImGui::GetFont()->CalcTextSizeA(font, 10000, 0, caption.c_str());
             const ImVec2 middle = point(0.5f), at = middle - ImVec2(labelSize.x * 0.5f, labelSize.y + 3);
             canvas.draw->AddRectFilled(at - ImVec2(3, 2), at + labelSize + ImVec2(3, 2), IM_COL32(22, 25, 31, 255), 3);
-            canvas.draw->AddText(ImGui::GetFont(), font, at, color, label.c_str());
+            canvas.draw->AddText(ImGui::GetFont(), font, at, color, caption.c_str());
             if (index >= 0) {
                 bool hit = false;
                 ImVec2 prev = from;
@@ -413,7 +459,15 @@ void NativeEditor::Impl::AnimationControllerPanel() {
                 }
                 hit = hit || ImGui::IsMouseHoveringRect(at, at + labelSize);
                 wireHovered = wireHovered || hit;
+                if (hit && observation && ImGui::IsWindowHovered()) {
+                    ImGui::BeginTooltip();
+                    for (const Json& condition : (*observation)["conditions"].items())
+                        ImGui::TextUnformatted(conditionText(condition).c_str());
+                    ImGui::EndTooltip();
+                }
                 animationRects["controller-transition:" + std::to_string(index)] = {at.x, at.y, labelSize.x, labelSize.y};
+                if (flowing)
+                    animationRects["controller-live-transition:" + std::to_string(index)] = {at.x, at.y, labelSize.x, labelSize.y};
                 if (hit && ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
                     animationControllerTransition = index;
                     animationControllerState.clear();
@@ -452,8 +506,24 @@ void NativeEditor::Impl::AnimationControllerPanel() {
         for (const auto& name : states) {
             ImGui::PushID(name.c_str());
             ImVec2 position = positions[name], before = position;
-            canvas.Card(position, card, name.c_str(), IM_COL32(55, 95, 125, 255), animationControllerState == name);
+            const bool activeState = matching && live["state"].asString() == name;
+            canvas.Card(position, card, name.c_str(), activeState ? IM_COL32(52, 112, 84, 255) : IM_COL32(55, 95, 125, 255),
+                        animationControllerState == name);
+            if (activeState) {
+                const ImVec2 p = canvas.Point(position), end = canvas.Point(position + card);
+                canvas.draw->AddRect(p, end, IM_COL32(120, 214, 160, 255), 4, 2.5f);
+                const double duration = live["playback"]["duration"].asNumber(), playbackTime = live["playback"]["time"].asNumber();
+                const float fraction = duration > 0 ? static_cast<float>(std::clamp(playbackTime / duration, 0.0, 1.0)) : 0;
+                canvas.draw->AddRectFilled(ImVec2(p.x, end.y - 4), ImVec2(p.x + (end.x - p.x) * fraction, end.y),
+                                           IM_COL32(120, 214, 160, 255));
+                char seconds[48];
+                std::snprintf(seconds, sizeof(seconds), "%.2f / %.2f s", playbackTime, duration);
+                canvas.draw->AddText(ImGui::GetFont(), ImGui::GetFontSize() * animationControllerZoom * 0.75f,
+                                     canvas.Point(position + ImVec2(10, 59)), IM_COL32(185, 233, 207, 255), seconds);
+            }
             AnimationRect("controller-state:" + name);
+            if (activeState)
+                AnimationRect("controller-live-state:" + name);
             if (ImGui::IsItemClicked()) {
                 animationControllerState = name;
                 animationControllerTransition = -1;
@@ -539,6 +609,49 @@ void NativeEditor::Impl::AnimationControllerPanel() {
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("##controllerProperties", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    if (matching) {
+        const bool paused=live["paused"].asBool();
+        ImGui::TextColored(ImVec4(0.47f, 0.84f, 0.63f, 1), "%s: %s", Tr(paused ? "Paused" : "Live"),
+                           live["state"].asString().c_str());
+        Property(Tr("State Time"), [&]() {
+            ImGui::Text("%.3f s", live["elapsed"].asNumber());
+            return false;
+        });
+        ImGui::TextUnformatted(Tr("Current Parameters"));
+        for (const auto& parameter : live["parameters"].members())
+            Property(parameter.first.c_str(), [&]() {
+                ImGui::TextUnformatted(parameter.second.dump().c_str());
+                return false;
+            });
+        ImGui::Separator();
+        ImGui::TextUnformatted(Tr("Recent Transitions"));
+        const Json* detail = nullptr;
+        const auto& trace = live["transitions"].items();
+        for (size_t i = trace.size() > 4 ? trace.size() - 4 : 0; i < trace.size(); ++i) {
+            const Json& event = trace[i];
+            ImGui::PushID(static_cast<int>(i));
+            const std::string text = event["from"].asString() + " > " + event["to"].asString();
+            if (ImGui::Selectable(text.c_str(), animationControllerTransition == event["index"].asInt())) {
+                animationControllerTransition = event["index"].asInt();
+                animationControllerState.clear();
+            }
+            if (animationControllerTransition == event["index"].asInt())
+                detail = &event;
+            ImGui::PopID();
+        }
+        if (!detail && !trace.empty())
+            detail = &trace.back();
+        if (detail)
+            for (const Json& condition : (*detail)["conditions"].items())
+                ImGui::TextWrapped("%s", conditionText(condition).c_str());
+        ImGui::Separator();
+    } else if (found) {
+        ImGui::TextWrapped("%s", Tr("Runtime definition differs from this graph. Restart play after saving to monitor it."));
+        ImGui::Separator();
+    } else if (InPlaySession()) {
+        ImGui::TextWrapped("%s", Tr("No live controller for the selected entity."));
+        ImGui::Separator();
+    }
     if (!animationControllerState.empty()) {
         const std::string selectedName = animationControllerState;
         Json& state = data["states"][selectedName];

@@ -486,7 +486,8 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
-        if (i == 1 && (a.Has("--play") || a.Has("--game"))) editor.FocusGameView(true);  // as after pressing Play; --game: the stopped Game view (UI editing)
+        if (i == 1 && (a.Has("--game") || (a.Has("--play") && !a.Has("--animation-controller"))))
+            editor.FocusGameView(true);  // explicit controller shots keep the graph visible while playing
         if (i == 3 && a.Has("--players")) editor.FocusNetworkPanel();
         if (i == 3 && a.Has("--team")) editor.FocusTeamPanel();
         if (i == 3 && a.Has("--console")) editor.FocusConsole();

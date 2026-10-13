@@ -769,9 +769,37 @@ Attached-editor commands (CLI with `--connect`, HTTP or MCP):
 These commands are registered by the native editor and included in `oe api`; they require an
 attached editor session. No draft, history or selection is stored in the scene or runtime asset.
 `editor.state` reports animationControllerOpen, animationControllerDirty, animationController
-(path) and animationControllerState (selection). Live gameplay highlighting/current parameters
-are outside this UI change: the Lua `oe.animator` owners need an explicit query/ownership bridge
-before the editor can identify and inspect one reliably.
+(path) and animationControllerState (selection). Live observation is available when the selected entity uses this same loaded controller.
+Play from the visible controller window keeps the graph in front. The active card has a green
+border/header and a clip-time progress strip; its state elapsed time and read-only current
+parameters appear on the right. A transition stays green for 0.8 controller seconds and shows a
+moving dot and captured actual condition value. Hover the wire for all captured conditions.
+Recent Transitions shows the last four entries; selection highlights its graph transition.
+The condition details show the latest recorded occurrence of that selected transition. Trigger
+values are captured before consumption, so a fired jump can show true while its current value
+is false. Pause freezes the display and dots; stop clears it.
+
+`animation.controller_state {id, definition?}` reads the latest live `oe.animator` owner without
+starting a Lua session or executing Lua/project metamethods. It returns found/id, state/path,
+elapsed, parameters, clock, the last 16 transitions (zero-based index, actual from/to, time and
+condition values), frame/playing/paused and available animation playback state. definition:true
+adds the loaded asset definition. Observation does not change scene/revision/history or advance
+clocks, and native rollback restores both owner identity and transition observations.
+
+The registry holds weak values: owners are not kept alive by inspection. One controller per
+entity remains the contract; the most recently successfully constructed owner is observed,
+without fallback to older owners after collection. Scene changes clear registrations before ids
+can be reused. Existing Controller:state() results and controller file formats are unchanged.
+The graph checks both project-relative path and loaded definition against its draft; a difference
+disables highlighting and asks to restart play after saving. Even an authoring position edit can
+cause this conservative mismatch. File Save does not hot reload a running Lua definition.
+No controller evaluation runs in isolated animation preview.
+
+Example live capture (add --lang ko for Korean):
+
+```bat
+build\bin\oe.exe editor build\AnimationController --screenshot build\controller-live.png --select Fox --animation-controller animations/fox.controller.json --play --frames 186 --width 1600 --height 900
+```
 
 Screenshot example:
 
@@ -781,7 +809,7 @@ build\bin\oe.exe editor build\AnimationController --screenshot build\controller.
 
 ## Status
 
-A1 through A5 and the timeline/controller UI polish are implemented. All 387 Windows tests pass.
+A1 through A5 and the timeline/controller UI polish are implemented. All 390 Windows tests pass.
 Native input tests cover ruler dragging, focused transport keys, event insertion, graph selection,
 state dragging/renaming, parameter text entry, pin-to-card transition creation, wire selection,
 Delete, document undo/redo and Save. Draft validation, gesture merging, dirty-close protection,
@@ -791,10 +819,15 @@ before captures: ruler numbers and event names remain separate, two sprite event
 Idle/Walk/Run/Jump and condition summaries are readable, property labels are on the left and
 help paragraphs no longer occupy the workspace.
 
-This UI change touches only the editor library and CLI reference registration. Players do not
-link oe_editor, so the web/Android prebuilt runtimes need no rebuild for this change.
-Live controller state/parameter highlighting needs a Lua owner/query bridge and remains outside
-this UI scope. Large graphs require pan/zoom; many overlapping event labels can require scrolling.
+Live observation is verified by AnimationControllerObservationAndRollback,
+AnimationControllerObservationLifecycleAndBounds and NativeEditorAnimationControllerLiveFlow:
+read-only scene/revision/history/hash isolation, pre-consumption trigger values, bounded history,
+weak lifecycle, native rollback, actual Ctrl+P play input, paused stability and draft mismatch.
+Walk/Run/Jump graph captures in English/Korean were inspected at 1600x900. The shared ScriptHost
+bridge and embedded oe.animator changed, so web and both Android runtimes were rebuilt. A fresh
+packaged model/sheet/atlas demo ran through Walk/Run/Jump/Idle in Edge WebGL2 (SwiftShader), and
+both Android libraries retain 16 KB LOAD alignment. Android was not run on a device.
+Large graphs require pan/zoom; many overlapping event labels can require scrolling.
 Preview SpringBone simulation, ordinary stopped Scene IK, sprite crossfades, blend trees and
 automatic hot reload of running controller definitions retain the limitations documented above.
 Real OS-window manual interaction, Japanese layout and non-Windows editor execution were not

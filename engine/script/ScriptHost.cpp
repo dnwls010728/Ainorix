@@ -1,6 +1,7 @@
 #include "script/ScriptHost.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <exception>
 
@@ -68,6 +69,19 @@ void BudgetHook(lua_State* L, lua_Debug* info) {
     if (++Host(L).budgetTicks > kMaxHookTicks) {
         luaL_error(L, "script exceeded its instruction budget (%d instructions) - infinite loop?", kHookInterval * kMaxHookTicks);
     }
+}
+
+// Raw access keeps observation independent of project metamethods.
+void RawField(lua_State* L, int index, const char* name) {
+    index = lua_absindex(L, index); lua_pushstring(L, name); lua_rawget(L, index);
+}
+bool PushControllerOwners(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, kLoadedKey);
+    if (!lua_istable(L, -1)) return false;
+    RawField(L, -1, "embedded:oe.animator");
+    if (!lua_istable(L, -1)) return false;
+    RawField(L, -1, "_owners");
+    return lua_istable(L, -1);
 }
 
 // ----- JSON <-> Lua -----------------------------------------------------------
@@ -1905,6 +1919,13 @@ const std::set<std::string>& ScriptHost::SandboxGlobals(Engine& engine) {
 
 void ScriptHost::ResetInstances() {
     if (L_) {
+        const int top=lua_gettop(L_);
+        if (PushControllerOwners(L_)) {
+            // Scene changes may reuse ids before weak references have been collected.
+            lua_pushnil(L_);
+            while (lua_next(L_, -2)) { lua_pop(L_,1); lua_pushvalue(L_,-1); lua_pushnil(L_); lua_rawset(L_,-4); }
+        }
+        lua_settop(L_,top);
         for (auto& kv : instances_) {
             if (kv.second.ref >= 0) luaL_unref(L_, LUA_REGISTRYINDEX, kv.second.ref);
         }
@@ -2589,6 +2610,53 @@ Json ScriptHost::Status() const {
     out["errors"] = static_cast<uint64_t>(errors_.size());
     out["sessionActive"] = L_ != nullptr;
     return out;
+}
+
+namespace {
+void CheckObservation(lua_State* L,int index,int depth,size_t& remaining) {
+    if (remaining==0 || depth>12 || !lua_checkstack(L,4))
+        throw ApiError("invalid_controller_observation","controller observation exceeds its bounds");
+    --remaining; index=lua_absindex(L,index); const int type=lua_type(L,index);
+    if (type==LUA_TTABLE) {
+        lua_pushnil(L);
+        while (lua_next(L,index)) {
+            if (lua_type(L,-2)!=LUA_TSTRING && !lua_isinteger(L,-2))
+                throw ApiError("invalid_controller_observation","controller observation has an unsupported key");
+            CheckObservation(L,-1,depth+1,remaining); lua_pop(L,1);
+        }
+    } else if (type!=LUA_TNIL && type!=LUA_TBOOLEAN && type!=LUA_TNUMBER && type!=LUA_TSTRING) {
+        throw ApiError("invalid_controller_observation","controller observation must contain JSON values");
+    } else if (type==LUA_TNUMBER && !std::isfinite(lua_tonumber(L,index))) {
+        throw ApiError("invalid_controller_observation","controller observation has a nonfinite number");
+    } else if (type==LUA_TSTRING && lua_rawlen(L,index)>1024*1024) {
+        throw ApiError("invalid_controller_observation","controller observation string exceeds 1 MiB");
+    }
+}
+Json ObservationValue(lua_State* L) {
+    size_t remaining=65536; CheckObservation(L,-1,0,remaining);
+    return ToJson(L,-1);
+}
+} // namespace
+
+Json ScriptHost::AnimationControllerState(EntityId id, bool definition) const {
+    Json result=Json::MakeObject(); result["found"]=false; result["id"]=id;
+    if (!L_) return result;
+    struct Restore { lua_State* state; int top; ~Restore() { lua_settop(state,top); } } restore{L_,lua_gettop(L_)};
+    if (!PushControllerOwners(L_)) return result;
+    lua_rawgeti(L_,-1,static_cast<lua_Integer>(id));
+    if (!lua_istable(L_,-1)) return result;
+    const int owner=lua_gettop(L_);
+    result["found"]=true;
+    for (const auto& field : {std::pair<const char*,const char*>{"path","path"}, {"current","state"},
+            {"elapsed","elapsed"},{"parameters","parameters"},{"_clock","clock"},{"_trace","transitions"}}) {
+        RawField(L_,owner,field.first); result[field.second]=ObservationValue(L_); lua_pop(L_,1);
+    }
+    if (result["transitions"].size()==0) result["transitions"]=Json::MakeArray();
+    if (definition) {
+        RawField(L_,owner,"definition"); result["definition"]=ObservationValue(L_); lua_pop(L_,1);
+        if (result["definition"]["transitions"].size()==0) result["definition"]["transitions"]=Json::MakeArray();
+    }
+    return result;
 }
 
 struct ScriptHost::Snapshot {

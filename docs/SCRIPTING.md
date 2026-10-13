@@ -668,3 +668,11 @@ coin/rotation/bob/restart scripts keep their existing scene/self operations.
 coin score/count and verification. `tests/fixtures/Hello` is a generated copy of this template used by tests.
 Required-only helper caching and widget single-component visibility limits remain as
 documented above; no optional dialog/effect owner framework was added.
+
+## Observing animation controllers
+
+`animation.controller_state {id, definition?}` inspects the latest live `oe.animator` owner without
+executing Lua or starting a session. The module keeps a weak owner reference and at most 16 recent
+transitions with pre-consumption condition values. `Controller:state()` remains unchanged. One
+controller per entity is expected; state/trace clocks restore with native snapshots. See
+[ANIMATION.md](ANIMATION.md#animation-controllers-a5) for graph monitoring and lifecycle limits.

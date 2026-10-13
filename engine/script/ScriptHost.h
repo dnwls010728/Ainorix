@@ -103,6 +103,8 @@ public:
     // Restores observer errors independently of replayed Lua execution.
     void RestoreErrors(const std::vector<ScriptError>& errors) { errors_ = errors; }
     Json Status() const;
+    // Read the latest live oe.animator owner without creating a Lua session or running Lua code.
+    Json AnimationControllerState(EntityId id, bool definition = false) const;
 
     // ----- used by the Lua bindings --------------------------------------
     Engine& GetEngine() { return engine_; }

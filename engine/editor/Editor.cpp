@@ -653,7 +653,11 @@ void NativeEditor::Impl::TogglePlay() {
             if (!Ok(result)) return;
             if (networkLatency) Call("net.simulate", ObjectOf({{"latencyFrames", Json(networkLatency)}}));
         } else Call("sim.play", Json());
-        requestGameFocus = true;
+        const ImGuiWindow* graph=ImGui::FindWindowByName("###Animation Controller");
+        const bool observing=showAnimationController && graph && graph->WasActive && !graph->Collapsed &&
+            (!graph->DockIsActive || graph->DockTabIsVisible);
+        requestGameFocus = !observing;
+        if (observing) focusAnimationController=true;
     }
     Refresh(true);
 }
@@ -892,6 +896,7 @@ Json NativeEditor::Impl::EditorState() {
     out["selectedAsset"] = selectedAsset.empty() ? Json() : Json(selectedAsset);
     out["shader"] = showShaders && !shaderPath.empty() ? Json(shaderPath) : Json();
     out["effect"] = showEffects && !effectsPath.empty() ? Json(effectsPath) : Json();
+    out["animationControllerLive"] = animationControllerLive;
     out["animationControllerOpen"] = showAnimationController; out["animationControllerDirty"] = animationControllerDocument != animationControllerSaved;
     out["animationController"] = animationController; out["animationControllerState"] = animationControllerState;
     out["animationPanel"] = showAnimation; out["animationFrames"] = animationFrames;
