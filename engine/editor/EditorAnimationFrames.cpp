@@ -146,4 +146,30 @@ void NativeEditor::Impl::AnimationSpriteFrames(const Json& state) {
     if (ImGui::InputFloat("##frameSeconds", &duration, 0, 0, "%.3f", ImGuiInputTextFlags_EnterReturnsTrue)) edit(ObjectOf({{"operation", "duration"}, {"index", animationSequenceFrame}, {"duration", duration}})); AnimationRect("frame-duration");
     ImGui::EndChild();
 }
+void NativeEditor::Impl::AnimationFrameStrip(const Json& state, ImVec2 origin, ImVec2 size) {
+    const Json response = Call("animation.get_clip", ObjectOf({{"id", state["id"]}, {"clip", state["clip"]}}), true);
+    if (!Ok(response)) return;
+    const Json& info = response["result"];
+    if (info["image"]["texture"].asString().empty()) return;
+    auto texture = engine.Assets().GetTexture(info["image"]["texture"].asString());
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const double duration = state["duration"].asNumber();
+    if (!texture || !engine.Gpu() || duration <= 0) return;
+    const ImTextureID image = ViewTexture(engine.Gpu()->ImageView(texture));
+    const Json& starts = state["frameTimes"];
+    for (size_t i = 0; i < starts.size(); ++i) {
+        const float left = origin.x + 6 + static_cast<float>(starts[i].asNumber() / duration) * (size.x - 12);
+        const float right = origin.x + 6 + static_cast<float>((i + 1 < starts.size() ? starts[i+1].asNumber() : duration) / duration) * (size.x - 12);
+        draw->AddRect(ImVec2(left, origin.y), ImVec2(std::max(left+1,right),origin.y+size.y), ImGui::GetColorU32(ImGuiCol_Border));
+        if (right-left<10) continue;
+        const int source = info["values"]["frames"][i].asInt();
+        const Json rectResponse = Call("animation.get_clip", ObjectOf({{"id", state["id"]}, {"sourceOnly", true}, {"offset", source}, {"limit", 1}}), true);
+        if (!Ok(rectResponse) || rectResponse["result"]["frames"].size()==0) continue;
+        const Json& rect = rectResponse["result"]["frames"][0]["rect"];
+        const float x=rect[0].asFloat(), y=rect[1].asFloat(), w=rect[2].asFloat(), h=rect[3].asFloat();
+        const float factor=std::min((right-left-2)/std::max(1.0f,w),(size.y-2)/std::max(1.0f,h));
+        const ImVec2 start((left+right-w*factor)*0.5f,origin.y+1);
+        draw->AddImage(image,start,start+ImVec2(w*factor,h*factor),ImVec2((x+0.5f)/texture->width,(y+0.5f)/texture->height),ImVec2((x+w-0.5f)/texture->width,(y+h-0.5f)/texture->height));
+    }
+}
 }  // namespace oe

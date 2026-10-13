@@ -409,8 +409,12 @@ Open **View > Animation** and select a sprite with `SpriteAnimation`, or a model
 The panel docks beside Assets and remembers its visibility in `.oe/editor.ini`; existing layouts gain
 the tab without moving other windows. A model does not need an authored `Animator` to preview it.
 
-Choose a clip, Play/Pause Preview, Step Preview (1/60 s), Restart Preview, Loop Preview or a playback
-speed (negative reverses). Drag the time slider or an empty part of the timeline to seek and pause.
+Timeline / Sprite Frames tabs stay at the top beside the entity title and labeled clip selector.
+The compact icon transport provides Home (restart), Left/Right (one sprite frame or 1/60 s),
+Space (play/pause), loop and labeled Speed (negative reverses), with current/total time and frame.
+Shortcuts apply while the panel has focus. Click or drag the ruler to seek and pause; model ticks
+use readable seconds intervals and sprite ticks use frame indices. Sprite thumbnails have widths
+proportional to frame durations. The playhead value sits below the tick numbers.
 The Scene and stopped Game views show the sampled sprite frame/model pose, including bone attachments
 and the skeleton overlay. **Apply IK is off by default.** Only the preview target's eligible BoneIK goals
 (direct children with a Transform, exactly as Pose.cpp collects them) have their weight set to zero in the
@@ -424,14 +428,16 @@ Closing the panel or starting the game restores authored playback.
 Deleting the target or replacing the scene also closes it. Edits/undo and model hot reload refresh the
 preview; a missing/invalid clip closes it safely. A collapsed/background tab can keep playing while open.
 
-Event triangles show the A1 markers. Click a marker to select it, then drag it to move it; sprite markers
+Green event triangles and stacked names show the A1 markers; selection is gold. Click a marker to select it, then drag it to move it; sprite markers
 snap to sequence-frame indices, model markers use seconds. A drag preserves marker identity when it
 passes another marker, and one sprite drag is one undo group. Add Event inserts `event` at the preview
-cursor. The table edits names and frame/time positions with **Enter** and removes markers. These are
+cursor, or double-click empty ruler space to insert there. Click a table row to select and seek.
+The table edits names and Frame / Time (s) positions with **Enter** and has a trash icon per row. These are
 real authored changes, through `animation.set_events`, separate from pose preview. Inline sprite markers save
 with the scene and support normal undo. Linked sprites and models write their shared animation/sidecar file immediately
-and are not undoable; the panel states this next to Add Event. Invalid edits return the A1 validation hint.
-Use the panel scrollbar or enlarge the bottom dock when several event rows are below the fold.
+and are not undoable; the help icon explains this and preview isolation. Invalid edits return the A1 validation hint.
+The default bottom dock shows the transport, ruler and at least two ordinary event rows.
+Additional events or overlapping label lanes can require scrolling.
 
 Commands work without an editor for headless authoring/verification:
 
@@ -758,3 +764,9 @@ in the full suite (16.67 ms limit).
 Physical Android, Linux/EGL and real browser/mobile GPUs remain unverified. Sprite crossfades,
 blend trees, automatic controller hot reload and controller evaluation inside isolated previews
 remain outside A5; ordinary stopped Scene IK and preview SpringBone limits are described above.
+
+## Implementation status (work log)
+
+- [x] A: compact ruler/transport/events/frames; ruler drag, shortcuts and event insertion verified. All 386 tests pass. Final English/Korean screenshot comparison follows B.
+- [ ] B: separate controller workspace, graph interactions and document undo/save.
+- [ ] Full suite, English/Korean before/after review; editor-only runtime decision.

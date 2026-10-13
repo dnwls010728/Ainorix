@@ -20050,6 +20050,27 @@ TEST(NativeEditorAnimationControllerGraphAuthoring) {
     RemoveAll(project);
 }
 #endif
+#if OE_NATIVE_EDITOR
+TEST(NativeEditorAnimationRulerAndKeys) {
+    Engine e;std::string error;const std::string project=TempProject("animation_ruler_keys");CHECK(e.Open(project,&error));Call(e,"scene.new",R"({"empty":true})");
+    CHECK(Call(e,"entity.create",R"({"name":"Hero","components":{"Sprite":{},"SpriteAnimation":{"clip":"walk","clips":{"walk":{"frames":[0,1,2,3],"durations":[0.1,0.2,0.3,0.4],"events":[{"frame":0,"name":"start"},{"frame":2,"name":"heel"}]}}}}})")["ok"].asBool());
+    if(!e.EnableGpu(nullptr,&error)){RemoveAll(project);return;}
+    NativeEditor::Options options;options.language="en";options.layoutFile="";NativeEditor editor(e,nullptr,options);CHECK(editor.Init(&error));editor.Select(e.GetScene().FindByName("Hero"));editor.FocusAnimationPanel();RenderTarget image;
+    auto draw=[&](){editor.Update({},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));};for(int i=0;i<4;++i)draw();
+    auto mouse=[&](float x,float y,bool down){WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=x;move.y=y;WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=down;editor.Update({move,button},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));};
+    const auto scene=e.GetScene().ToJson();const auto revision=e.Revision();auto ruler=editor.AnimationControlRect("timeline");
+    mouse(ruler[0]+ruler[2]*0.2f,ruler[1]+20,true);draw();WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=ruler[0]+ruler[2]*0.7f;move.y=ruler[1]+20;editor.Update({move},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));mouse(move.x,move.y,false);draw();
+    CHECK(Call(e,"animation.preview_state")["result"]["time"].asFloat()>0.65f);
+    auto key=[&](WindowKey code){WindowEvent event;event.type=WindowEvent::Type::Key;event.key=code;event.down=true;editor.Update({event},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));event.down=false;editor.Update({event},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));};
+    key(WindowKey::Home);CHECK(Call(e,"animation.preview_state")["result"]["time"].asFloat()==0);key(WindowKey::Right);CHECK(std::fabs(Call(e,"animation.preview_state")["result"]["time"].asFloat()-0.1f)<1e-6f);key(WindowKey::Left);CHECK(Call(e,"animation.preview_state")["result"]["time"].asFloat()==0);
+    key(WindowKey::Space);CHECK(Call(e,"animation.preview_state")["result"]["playing"].asBool());key(WindowKey::Space);CHECK(!Call(e,"animation.preview_state")["result"]["playing"].asBool());
+    CHECK(e.GetScene().ToJson()==scene && e.Revision()==revision);
+    CHECK(editor.AnimationControlRect("name:1")[1]+editor.AnimationControlRect("name:1")[3]<880);
+    mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,true);mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,false);mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,true);mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,false);draw();
+    CHECK(Call(e,"animation.events",R"({"id":"Hero"})")["result"]["events"].size()==3);
+    RemoveAll(project);
+}
+#endif
 
 int main() {
     Log::SetEcho(false);

@@ -17,6 +17,15 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Speed", "속도", "速度"},
+    {"Frame", "프레임", "フレーム"},
+    {"Time (s)", "시간(초)", "時間 (秒)"},
+    {"IK off", "IK 꺼짐", "IK 無効"},
+    {"Restart (Home)", "처음으로 (Home)", "先頭へ (Home)"},
+    {"Previous frame (Left)", "이전 프레임 (←)", "前のフレーム (←)"},
+    {"Next frame (Right)", "다음 프레임 (→)", "次のフレーム (→)"},
+    {"Play / Pause (Space)", "재생 / 정지 (Space)", "再生 / 一時停止 (Space)"},
+    {"Loop", "반복", "ループ"},
     {"Fit Controller Graph", "컨트롤러 그래프 맞춤", "コントローラーグラフを全体表示"},
     {"State Name", "상태 이름", "ステート名"},
     {"Animation Controller", "애니메이션 컨트롤러", "アニメーションコントローラー"},

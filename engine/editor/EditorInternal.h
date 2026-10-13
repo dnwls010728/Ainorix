@@ -184,6 +184,7 @@ struct NativeEditor::Impl {
     int animationFramePage = 0, animationSequenceFrame = 0;
     std::string animationNewClip = "new_clip";
     void AnimationSpriteFrames(const Json& state);
+    void AnimationFrameStrip(const Json& state, ImVec2 origin, ImVec2 size);
     void AnimationPanel();
     void AnimationTick(double dt);
     void AnimationRect(const std::string& name);
