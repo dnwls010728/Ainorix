@@ -196,6 +196,83 @@ Rules for every item here:
 Later, in no fixed order: motion blur, chromatic aberration, temporal anti-aliasing; volumetric light and fog;
 refraction, water, caustics; clear coat.
 
+### T. 2D baseline — after R
+
+What a general 2D game expects and the engine does not have yet. What exists is in [2D.md](2D.md): grid sprite
+sheets, `SpriteAnimation` clips, sorting layers, `Tilemap` with tileset files, autotiles and collision shapes, Box2D
+physics, `Darkness2D` + `Light2D`, the tile brush. Most gaps are in the art pipeline (atlases, files from other
+tools), sorting and lighting. Start after the R list unless a game needs an item sooner; T1–T3 belong together and
+come first because nearly every 2D game's art passes through them and the editor tools (T16) build on them.
+
+Rules for every item here:
+
+- Both renderers draw the same picture; a scene that does not use the feature keeps its software frame hash, and
+  old scene, tileset and animation files still load.
+- Everything a hand can do in the editor is a command first (`Engine::Call`), so agents can author it and check
+  it with `oe render` / `asset.info`.
+- Animation and tile changes run on simulated time and in id order (deterministic, rollback-safe).
+- Importers for other tools' files are written here; no new third-party library without vendoring it.
+- Behaviour a Lua script can express is an official Lua module, not a component (see the list at the end).
+- The work log goes into [2D.md](2D.md) (a notes file beside it when it outgrows the doc); extend the
+  `tests/fixtures/Dungeon` fixture or add a small one, and leave a project under `build/` that shows the feature.
+
+Needed by nearly every 2D game:
+
+- [ ] **T1 — Sprite atlas.** Frames of different sizes in one image, described by a file (`x.atlas.json`): a
+  rectangle per frame, trimmed margins with the original size kept, a pivot per frame, frames addressed by name.
+  `Sprite.frame` accepts a name; the grid form (`columns`/`rows`) stays. `atlas.create`, `asset.info`. Read the
+  TexturePacker JSON layout too.
+- [ ] **T2 — Aseprite import.** `oe import` of an Aseprite sheet + JSON export (and, if it stays small, the
+  `.aseprite` file itself) writes the atlas and the `SpriteAnimation` clips from its tags, with each frame's duration.
+- [ ] **T3 — Animation events and per-frame time.** A clip frame may carry its own duration and an event name;
+  the script gets a callback when the frame is reached (footstep, hit window), once per pass, in a fixed order.
+  Depends on nothing but is designed with T1/T2 so imported tags and user data map onto it.
+- [ ] **T4 — Y sort.** A sorting option for top-down games: within a layer, what stands lower on the screen is
+  drawn in front (by the entity's pivot, with an offset). Done in the draw-list ordering of both renderers, not by
+  scripts writing `order` every frame. Tilemap cells of the same layer take part (a wall hides the feet behind it).
+- [ ] **T5 — Tilemap layers and tile attributes.** Several layers in one map (ground, decoration, foreground,
+  each with its sorting layer), flipped and rotated cells, animated tiles (water, torches), user data per tile rule
+  readable from Lua. The one-character-per-cell text form stays valid as a single layer.
+- [ ] **T6 — Tiled and LDtk import.** Read `.tmj`/`.tmx` and `.ldtk` levels into tilesets, layers and entities:
+  object layers become entities or markers a level script reads (spawn points, areas). Needs T5.
+- [ ] **T7 — 2D path finding.** This is P8 below (A* over tilemap cells); do it here, with layers from T5 in mind.
+- [ ] **T8 — Pixel-perfect drawing.** A camera option that renders at the art's resolution and scales by whole
+  numbers (letterboxed), and snaps the camera and sprites to the pixel grid so pixel art does not shimmer when it
+  moves. `window.renderScale` exists; the snapping and integer scale do not.
+
+Needed by some genres:
+
+- [ ] **T9 — 2D lighting.** `Light2D` today only cuts holes into `Darkness2D`. Colored and additive lights, lights
+  blocked by occluders (walls from `Collider2D` or tile collision casting shadows), normal-mapped sprites. Decide
+  the limits (lights and occluder edges per frame) so the software renderer stays the reference.
+- [ ] **T10 — Sprite draw modes.** Repeated (tiled) sprites, 9-slice in world space, fill amount (health bars,
+  radial cooldowns) and masks (draw only inside another sprite's shape). The UI has slicing and fill; sprites do not.
+- [ ] **T11 — Shapes and lines.** Filled polygons, thick lines and circles as scene content (spline terrain,
+  ropes, beams), not `debug.draw`. `Trail` covers moving ribbons only.
+- [ ] **T12 — 2D skeletal animation.** Cut-out characters: bones, weighted mesh deformation, slots, clips. Either
+  an importer for an open runtime format (Spine JSON needs its runtime licence checked; DragonBones is open) or the
+  engine's own small format reusing `Pose`. Large; start only with a game that needs it.
+- [ ] **T13 — 2D physics areas.** Effect regions on a trigger `Collider2D`: wind/force, buoyancy and drag (water),
+  local gravity. Also measure the cost of rebuilding tile collision when cells change during play (destructible
+  terrain) and rebuild only the changed part if it is too slow — not measured yet.
+- [ ] **T14 — Text in the world.** Damage numbers and speech bubbles placed in world coordinates with sorting
+  layers. Possible today by converting to screen coordinates for `UIText`; decide whether that is enough.
+
+Good to have:
+
+- [ ] **T15 — Large tilemaps.** Chunks: drawing and collision only for the part near the camera, loading parts of
+  a big world.
+- [ ] **T16 — Editor tools for 2D.** Sprite sheet slicer (writes the T1 atlas), animation clip window with preview
+  and event marks (T3), collision polygon editing on the sprite, a tile rule editor instead of hand-written JSON.
+  Each needs its command first.
+- [ ] **T17 — Sprite effect presets.** Outline, hit flash, dissolve, screen wipes as ready-made shader graphs
+  through `Sprite.material` / `PostProcess`. First check which of them today's graph nodes can already express —
+  not verified.
+
+Not engine components (official Lua modules or template scripts instead, because scripts can express them):
+camera helpers (dead zone, look-ahead, shake, zoom, room transitions — e.g. `oe.camera2d`) and parallax
+backgrounds (endless scrolling wants the repeated sprites of T10).
+
 ### P8. 2D navigation (grid path finding) — [ ]
 
 - The 3D navigation mesh exists ([NAVIGATION.md](NAVIGATION.md)); this is its 2D counterpart.
