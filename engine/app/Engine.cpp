@@ -1451,11 +1451,21 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
         }
         if ((journal_ || (sync_ && sync_->Active()) || (authority_ && authority_->Active())) && !inWorld_ && !replaying_ &&
             (name == "audio.play" || name == "audio.stop" || name == "game.load_scene" || name == "save.set" || name == "save.clear" || name == "save.flush" || name == "script.write" || name == "script.reload" ||
+             name == "animation.controller_create" || name == "animation.controller_set" || name == "animation.create" || name == "animation.set" || name == "animation.set_events" || name == "animation.retarget" ||
              name == "vfx.create" || name == "vfx.set" || name == "vfx.from_entity" || name == "vfx.play" || name == "vfx.stop" ||
              name == "vfx.burst" || name == "vfx.clear" || name == "vfx.set_param" || name == "vfx.edit" || name == "vfx.undo" ||
              name == "vfx.redo" || name == "vfx.save" || name == "vfx.close" || name == "vfx.edit_replace"))
             throw ApiError("state_recording", "external side effects are disabled while recording", "Use deterministic Lua gameplay or stop recording before edits.");
-        const bool record = cmd->mutates && !playSnapshot_;
+        // Marker edits on shared files have no scene state for undo to restore.
+        bool mutates = cmd->mutates;
+        if (name == "animation.set_events" || name == "animation.set_clip") {
+            const double value = args["id"].asNumber();
+            const EntityId id = args["id"].isString() ? scene_.FindByName(args["id"].asString()) :
+                (std::isfinite(value) && value >= 1 && value <= 4294967295.0 && std::floor(value) == value ? static_cast<EntityId>(value) : kNullEntity);
+            const SpriteAnimation* animation = scene_.Get<SpriteAnimation>(id);
+            mutates = animation && animation->asset.empty();
+        }
+        const bool record = mutates && !playSnapshot_;
         Json before = record ? scene_.ToJson() : Json();
         Json result = cmd->run(*this, args);
         // While editing nothing steps the systems: keep entities held by a bone on it after every edit (moved goal, sought clip).
@@ -1475,7 +1485,7 @@ Json Engine::Call(const std::string& name, const Json& rawArgs) {
             redo_.clear();
             dirty_ = true;
         }
-        if (cmd->mutates) Touch();
+        if (mutates) Touch();
         response["ok"] = true;
         response["result"] = std::move(result);
     } catch (const ApiError& e) {

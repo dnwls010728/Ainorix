@@ -19604,6 +19604,453 @@ TEST(NativeEditorAnimationPanel) {
 }
 #endif
 
+TEST(AnimationAssetsSpritesSharedAndIsolated) {
+    Engine e; std::string error;
+    const std::string project = TempProject("animation_assets_sprite");
+    CHECK(e.Open(project, &error)); Call(e,"scene.new",R"({"empty":true})");
+    const uint64_t revision = e.Revision(); const size_t undo = e.UndoDepth();
+    CHECK(Call(e,"animation.create",R"({"path":"animations/hero.anim.json","values":{"sheet":{"texture":"assets/hero.png","columns":4,"rows":1},"clips":{"walk":{"displayName":"Walking","frames":[0,1,2,3],"fps":4,"events":[{"frame":1,"name":"foot"}]},"idle":{"frames":[3],"fps":4}}}})")["ok"].asBool());
+    CHECK(e.Revision()==revision && e.UndoDepth()==undo);
+    CHECK(!Call(e,"animation.create",R"({"path":"animations/hero.anim.json","values":{}})")["ok"].asBool());
+    CHECK(Call(e,"asset.info",R"({"path":"animations/hero.anim.json"})")["result"]["kind"].asString()=="animation");
+    for (const char* name : {"A","B"}) {
+        Json args=Json::MakeObject(); args["name"]=name;
+        args["components"]["Sprite"]=Json::MakeObject();
+        args["components"]["SpriteAnimation"]=Json::parse(R"({"asset":"animations/hero.anim.json","clip":"walk","clips":{"ignored":{"frames":[99]}}})");
+        CHECK(e.Call("entity.create",args)["ok"].asBool());
+    }
+    CHECK(Call(e,"animation.play",R"({"id":"A","clip":"walk","loop":false})")["ok"].asBool());
+    CHECK(!Call(e,"animation.state",R"({"id":"A"})")["result"]["loop"].asBool());
+    CHECK(Call(e,"animation.state",R"({"id":"B"})")["result"]["loop"].asBool());
+    const uint64_t beforeRevision=e.Revision(); const size_t beforeUndo=e.UndoDepth();
+    const std::string beforeScene=e.GetScene().ToJson().dump();
+    Json state=Call(e,"animation.preview",R"({"id":"A","time":0.55})")["result"];
+    CHECK(state["displayName"].asString()=="Walking" && state["asset"].asString()=="animations/hero.anim.json");
+    CHECK(e.AnimationRenderScene().Get<Sprite>(e.GetScene().FindByName("A"))->frame==2);
+    CHECK(Call(e,"animation.set_events",R"({"id":"A","events":[{"frame":2,"name":"shared"}]})")["ok"].asBool());
+    CHECK(Call(e,"animation.events",R"({"id":"B"})")["result"]["events"][0]["name"].asString()=="shared");
+    CHECK(e.Revision()==beforeRevision && e.UndoDepth()==beforeUndo && e.GetScene().ToJson().dump()==beforeScene);
+    CHECK(Call(e,"animation.set",R"({"path":"animations/hero.anim.json","clip":"walk","values":{"fps":8}})")["ok"].asBool());
+    CHECK(Call(e,"animation.preview_state")["result"]["fps"].asInt()==8);
+    std::string saved; CHECK(ReadTextFile(project+"/animations/hero.anim.json",saved));
+    CHECK(!Call(e,"animation.set",R"({"path":"animations/hero.anim.json","clip":"walk","values":{"frames":[4]}})")["ok"].asBool());
+    std::string unchanged; CHECK(ReadTextFile(project+"/animations/hero.anim.json",unchanged) && saved==unchanged);
+    Json changed=Json::parse(saved); changed["clips"]["walk"]["fps"]=2;
+    CHECK(WriteTextFile(project+"/animations/hero.anim.json",changed.dump()));
+    std::filesystem::last_write_time(project+"/animations/hero.anim.json",std::filesystem::file_time_type::clock::now()+std::chrono::seconds(3));
+    const auto reload=e.Assets().PollChanges(); CHECK(std::find(reload.begin(),reload.end(),"animations/hero.anim.json")!=reload.end());
+    CHECK(Call(e,"animation.preview_state")["result"]["fps"].asInt()==2);
+    Call(e,"animation.preview_close");
+    CHECK(WriteTextFile(project+"/scripts/asset_events.lua","local M={} function M:onAnimationEvent(name,clip) game.set('marker',name) end return M"));
+    Call(e,"component.add",R"({"id":"B","type":"Script","values":{"path":"scripts/asset_events.lua"}})");
+    CHECK(Call(e,"animation.play",R"({"id":"B","clip":"walk","speed":60})")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+    CHECK(Call(e,"game.state")["result"]["data"]["marker"].asString()=="shared");
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("B"))->frame==2);
+    Call(e,"sim.stop");
+    CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(!Call(e,"animation.set",R"({"path":"animations/hero.anim.json","clip":"walk","values":{"fps":3}})")["ok"].asBool());
+    Call(e,"sim.stop");
+    CHECK(Call(e,"scene.save",R"({"path":"scenes/main.scene.json"})")["ok"].asBool());
+    Engine loaded; CHECK(loaded.Open(project,&error));
+    CHECK(Call(loaded,"animation.state",R"({"id":"B"})")["result"]["asset"].asString()=="animations/hero.anim.json");
+    // Cached failures reload after repair, deletion closes the isolated preview safely.
+    CHECK(Call(e,"animation.preview",R"({"id":"B"})")["ok"].asBool());
+    std::filesystem::remove(project+"/animations/hero.anim.json"); e.Assets().PollChanges();
+    CHECK(!Call(e,"animation.preview_state")["result"]["active"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool()); // broken shared files do not abort play
+    Call(e,"sim.stop");
+    CHECK(WriteTextFile(project+"/animations/hero.anim.json",changed.dump())); e.Assets().PollChanges();
+    CHECK(Call(e,"animation.preview",R"({"id":"B"})")["ok"].asBool());
+}
+
+TEST(AnimationAssetsAtlasSamplingAndValidation) {
+    Engine e; std::string error; const std::string project=TempProject("animation_assets_atlas");
+    CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    CreateDirectories(project+"/assets");
+    Image image; image.width=16; image.height=8; image.rgba.assign(16*8*4,255);
+    CHECK(WritePng(project+"/assets/atlas.png",image));
+    CHECK(Call(e,"animation.create",R"({"path":"atlas.anim.json","values":{"atlas":{"texture":"assets/atlas.png","frames":[[0,0,4,8],[8,2,8,4]]},"clips":{"run":{"frames":[1,0],"fps":2}}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Atlas","components":{"Sprite":{"pixelsPerUnit":4,"flipX":true},"SpriteAnimation":{"asset":"atlas.anim.json","clip":"run"}}})")["ok"].asBool());
+    const std::string authored=e.GetScene().ToJson().dump();
+    auto items=GatherRenderItems(e.GetScene(),&e.Assets()); CHECK(items.size()==1);
+    if (!items.empty()) {
+        CHECK(!items[0].error && std::fabs(items[0].uvOffset[0]-15.5f/16)<1e-6f);
+        CHECK(std::fabs(items[0].uvScale[0]+7.0f/16)<1e-6f);
+        CHECK(std::fabs(Length(items[0].world.TransformDir(Vec3(1,0,0)))-2)<1e-6f);
+    }
+    Call(e,"animation.preview",R"({"id":"Atlas","time":0.6})");
+    items=GatherRenderItems(e.AnimationRenderScene(),&e.Assets());
+    CHECK(items.size()==1 && std::fabs(items[0].uvScale[0]+3.0f/16)<1e-6f);
+    CHECK(e.GetScene().ToJson().dump()==authored);
+    for (const char* invalid : {R"({"fps":0})",R"({"loop":"yes"})",R"({"frames":[-1]})",R"({"events":[{"frame":2,"name":"x"}]})",R"({"displayName":""})",R"({"unknown":1})"}) {
+        Json args=Json::MakeObject();args["path"]="atlas.anim.json";args["clip"]="run";args["values"]=Json::parse(invalid);
+        CHECK(!e.Call("animation.set",args)["ok"].asBool());
+    }
+    CHECK(!Call(e,"animation.create",R"({"path":"bad.anim.json","values":{"sheet":{"texture":"x.png","columns":1,"rows":1},"atlas":{},"clips":{}}})")["ok"].asBool());
+    CHECK(!FileExists(project+"/bad.anim.json"));
+}
+
+TEST(AnimationAssetsModelMetadataAndSources) {
+    Engine e; std::string error; const std::string project=TempProject("animation_assets_model");
+    CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    std::string rig=kRigFbx; rig.replace(rig.find("%TEXTURE%"),9,"");
+    CHECK(WriteTextFile(project+"/assets/rig.fbx",rig));
+    std::string source=rig; source.replace(source.find("AnimStack::Wave"),std::strlen("AnimStack::Wave"),"AnimStack::External");
+    CHECK(WriteTextFile(project+"/assets/external.fbx",source));
+    CHECK(Call(e,"entity.create",R"({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/rig.fbx"},"Animator":{"clip":"Wave"}}})")["ok"].asBool());
+    const double duration=Call(e,"animation.state",R"({"id":"Rig"})")["result"]["duration"].asNumber(); CHECK(duration>0);
+    const double start=duration*0.25,end=duration*0.75;
+    Json create=Json::parse(R"({"path":"assets/rig.fbx.clips.json","values":{"clips":["external.fbx"],"metadata":{"Wave":{"displayName":"Wave label","events":[]},"External":{"displayName":"External label"}}}})");
+    create["values"]["metadata"]["Wave"]["loopRange"]=Json::MakeArray();
+    create["values"]["metadata"]["Wave"]["loopRange"].push(start); create["values"]["metadata"]["Wave"]["loopRange"].push(end);
+    CHECK(e.Call("animation.create",create)["ok"].asBool());
+    CHECK(Call(e,"asset.info",R"({"path":"assets/rig.fbx"})")["result"]["clips"].size()==2);
+    Json preview=Call(e,"animation.preview",R"({"id":"Rig"})")["result"];
+    CHECK(preview["displayName"].asString()=="Wave label" && std::fabs(preview["time"].asNumber()-start)<1e-6);
+    Call(e,"animation.preview",R"({"frames":60})");
+    preview=Call(e,"animation.preview_state")["result"];
+    CHECK(preview["time"].asNumber()>=start && preview["time"].asNumber()<=end);
+    const uint64_t revision=e.Revision(); const size_t undo=e.UndoDepth();
+    CHECK(Call(e,"animation.set_events",R"({"id":"Rig","events":[{"time":0,"name":"outside"}]})")["ok"].asBool());
+    CHECK(e.Revision()==revision && e.UndoDepth()==undo && !FileExists(project+"/assets/rig.fbx.events.json"));
+    CHECK(Call(e,"animation.get",R"({"path":"assets/rig.fbx.clips.json"})")["result"]["values"]["clips"].size()==1);
+    CHECK(WriteTextFile(project+"/assets/rig.fbx.events.json",R"({"clips":{"Wave":[{"time":0,"name":"legacy"}]}})"));
+    e.Assets().Clear(); CHECK(Call(e,"animation.events",R"({"id":"Rig"})")["result"]["events"][0]["name"].asString()=="outside");
+    Call(e,"animation.preview_close");
+    CHECK(WriteTextFile(project+"/scripts/range.lua","local M={} function M:onAnimationEvent(name,clip) game.set('event',name) end return M"));
+    Call(e,"component.add",R"({"id":"Rig","type":"Script","values":{"path":"scripts/range.lua"}})");
+    Json play=Json::parse(R"({"id":"Rig","clip":"Wave"})");play["speed"]=(end-start)*150;
+    CHECK(e.Call("animation.play",play)["ok"].asBool());
+    Call(e,"sim.step",R"({"frames":1})");
+    const double time=Call(e,"animation.state",R"({"id":"Rig"})")["result"]["time"].asNumber();
+    CHECK(std::fabs(time-(start+(end-start)*0.5))<1e-5);
+    CHECK(Call(e,"game.state")["result"]["data"]["event"].isNull());
+    Call(e,"sim.stop");
+    play["speed"]=-(end-start)*150; CHECK(e.Call("animation.play",play)["ok"].asBool());
+    Call(e,"sim.step",R"({"frames":1})");
+    CHECK(std::fabs(Call(e,"animation.state",R"({"id":"Rig"})")["result"]["time"].asNumber()-time)<1e-5); Call(e,"sim.stop");
+    CHECK(!Call(e,"animation.set",R"({"path":"assets/rig.fbx.clips.json","clip":"Wave","values":{"loopRange":[1,0]}})")["ok"].asBool());
+    CHECK(!Call(e,"animation.set",R"({"path":"assets/rig.fbx.clips.json","clip":"missing","values":{"displayName":"Bad"}})")["ok"].asBool());
+    // Reload external clip files as dependencies, not only the model's own timestamp.
+    auto mesh=e.Assets().GetMesh("assets/rig.fbx"); CHECK(mesh && mesh->clips.size()==2);
+    source.replace(source.find("AnimStack::External"),std::strlen("AnimStack::External"),"AnimStack::Changed");
+    CHECK(WriteTextFile(project+"/assets/external.fbx",source));
+    std::filesystem::last_write_time(project+"/assets/external.fbx",std::filesystem::file_time_type::clock::now()+std::chrono::seconds(3));
+    auto reload=e.Assets().PollChanges(); CHECK(std::find(reload.begin(),reload.end(),"assets/rig.fbx")!=reload.end());
+    CHECK(!e.Assets().GetMesh("assets/rig.fbx")); // stale External metadata rejected
+    CHECK(Call(e,"animation.set",R"({"path":"assets/rig.fbx.clips.json","values":{"metadata":{}}})")["ok"].asBool());
+    mesh=e.Assets().GetMesh("assets/rig.fbx"); CHECK(mesh && FindAnimationClip(*mesh,"Changed"));
+    std::filesystem::remove(project+"/assets/rig.fbx.clips.json"); e.Assets().PollChanges();
+    mesh=e.Assets().GetMesh("assets/rig.fbx"); CHECK(mesh && mesh->clips.size()==1 && mesh->clips[0].events[0].name=="legacy");
+}
+
+
+TEST(AnimationAssetsLoopRangeSeamsAndReplay) {
+    Engine e; std::string error; const std::string project=TempProject("animation_asset_loop_range");
+    CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    std::string rig=kRigFbx; rig.replace(rig.find("%TEXTURE%"),9,""); CHECK(WriteTextFile(project+"/assets/rig.fbx",rig));
+    CHECK(WriteTextFile(project+"/scripts/events.lua","local M={} function M:onAnimationEvent(name,clip) local a=game.get('events') or {} a[#a+1]=name game.set('events',a) end return M"));
+    CHECK(Call(e,"entity.create",R"({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/rig.fbx"},"Animator":{"clip":"Wave"},"Script":{"path":"scripts/events.lua"}}})")["ok"].asBool());
+    const double duration=Call(e,"animation.state",R"({"id":"Rig"})")["result"]["duration"].asNumber();
+    const double start=duration*0.1,end=duration*0.65,period=end-start; // decimal seams exercise float rounding
+    Json values=Json::MakeObject(); Json& metadata=values["metadata"]["Wave"];
+    metadata["loopRange"]=Json::MakeArray(); metadata["loopRange"].push(start); metadata["loopRange"].push(end);
+    metadata["events"]=Json::MakeArray();
+    auto marker=[&](double time,const char* name) { Json item=Json::MakeObject();item["time"]=time;item["name"]=name;metadata["events"].push(item); };
+    marker(0,"outside"); marker(start,"start"); marker((start+end)*0.5,"middle"); marker(end,"end"); marker(duration,"outsideEnd");
+    Json args=Json::MakeObject();args["path"]="assets/rig.fbx.clips.json";args["values"]=values;
+    CHECK(e.Call("animation.create",args)["ok"].asBool());
+    Json play=Json::parse(R"({"id":"Rig","clip":"Wave","loop":true})");play["speed"]=period*150;
+    CHECK(e.Call("animation.play",play)["ok"].asBool()); CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":1})")["ok"].asBool());
+    Json events=Call(e,"game.state")["result"]["data"]["events"];
+    CHECK(events.size()==8 && events[0].asString()=="start" && events[2].asString()=="end" && events[3].asString()=="start" && events[7].asString()=="middle");
+    CHECK(Call(e,"sim.save_state",R"({"slot":"range"})")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":2})")["ok"].asBool());
+    const std::string future=Call(e,"game.state")["result"]["data"]["events"].dump();
+    CHECK(Call(e,"sim.load_state",R"({"slot":"range"})")["ok"].asBool());
+    CHECK(Call(e,"sim.step",R"({"frames":2})")["ok"].asBool());
+    CHECK(Call(e,"game.state")["result"]["data"]["events"].dump()==future);
+    Call(e,"sim.stop");play["speed"]=-period*150;CHECK(e.Call("animation.play",play)["ok"].asBool());
+    Call(e,"sim.step",R"({"frames":1})");events=Call(e,"game.state")["result"]["data"]["events"];
+    CHECK(events.size()==8 && events[0].asString()=="end" && events[2].asString()=="start" && events[3].asString()=="end" && events[7].asString()=="middle");
+    Call(e,"sim.stop");play["loop"]=false;play["speed"]=duration*120;CHECK(e.Call("animation.play",play)["ok"].asBool());
+    CHECK(Call(e,"animation.state",R"({"id":"Rig"})")["result"]["time"].asNumber()==0);
+    Call(e,"sim.step",R"({"frames":2})");events=Call(e,"game.state")["result"]["data"]["events"];
+    CHECK(events.size()==6 && events[0].asString()=="outside" && events[4].asString()=="outsideEnd" && events[5].asString()=="finished");
+    CHECK(!Call(e,"animation.state",R"({"id":"Rig"})")["result"]["playing"].asBool());
+    Call(e,"sim.stop"); RemoveAll(project);
+}
+
+
+TEST(SpriteClipVariableTimingAndEvents) {
+    Engine e; std::string error; const std::string project=TempProject("sprite_clip_timing");
+    CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    CHECK(WriteTextFile(project+"/scripts/events.lua","local M={} function M:onAnimationEvent(name,clip) local a=game.get('events') or {} a[#a+1]=name game.set('events',a) end return M"));
+    Call(e,"entity.create",R"({"name":"Hero","components":{"Sprite":{"columns":3},"SpriteAnimation":{"clip":"walk","clips":{"walk":{"frames":[0,1,2],"fps":100,"loop":false,"durations":[0.1,0.2,0.3],"events":[{"frame":0,"name":"zero"},{"frame":1,"name":"one"},{"frame":2,"name":"two"}]} }},"Script":{"path":"scripts/events.lua"}}})");
+    const EntityId id=e.GetScene().FindByName("Hero");
+    Json events=Call(e,"animation.events",R"({"id":"Hero"})")["result"]["events"];
+    CHECK(events.size()==3 && events[1]["frame"].asInt()==1 && std::fabs(events[2]["time"].asNumber()-0.3)<1e-8);
+    Call(e,"animation.preview",R"({"id":"Hero","time":0.15})"); CHECK(e.AnimationRenderScene().Get<Sprite>(id)->frame==1);
+    Call(e,"animation.preview",R"({"time":0.31})"); CHECK(e.AnimationRenderScene().Get<Sprite>(id)->frame==2);
+    CHECK(e.GetScene().Get<Sprite>(id)->frame==0); Call(e,"animation.preview_close");
+    CHECK(Call(e,"sim.record_state")["ok"].asBool()); Call(e,"sim.step",R"({"frames":6})");
+    CHECK(e.GetScene().Get<Sprite>(id)->frame==1);
+    Call(e,"sim.save_state",R"({"slot":"timing"})"); Call(e,"sim.step",R"({"frames":12})");
+    CHECK(e.GetScene().Get<Sprite>(id)->frame==2 && !e.GetScene().Get<SpriteAnimation>(id)->finished);
+    const std::string future=Call(e,"game.state")["result"]["data"]["events"].dump();
+    Call(e,"sim.load_state",R"({"slot":"timing"})"); Call(e,"sim.step",R"({"frames":12})");
+    CHECK(Call(e,"game.state")["result"]["data"]["events"].dump()==future);
+    Call(e,"sim.step",R"({"frames":24})"); events=Call(e,"game.state")["result"]["data"]["events"];
+    CHECK(events.size()==4 && events[3].asString()=="finished" && e.GetScene().Get<SpriteAnimation>(id)->finished);
+    Call(e,"sim.stop"); CHECK(Call(e,"animation.play",R"({"id":"Hero","clip":"walk","speed":-60,"loop":false})")["ok"].asBool());
+    Call(e,"sim.step",R"({"frames":1})"); events=Call(e,"game.state")["result"]["data"]["events"];
+    CHECK(events.size()==4 && events[0].asString()=="two" && events[1].asString()=="one" && events[2].asString()=="zero" && events[3].asString()=="finished");
+    Call(e,"sim.stop"); CHECK(Call(e,"animation.play",R"({"id":"Hero","clip":"walk","speed":90,"loop":true})")["ok"].asBool());
+    Call(e,"sim.step",R"({"frames":1})"); events=Call(e,"game.state")["result"]["data"]["events"];
+    CHECK(events.size()==9 && events[0].asString()=="zero" && events[3].asString()=="zero" && events[6].asString()=="zero");
+    Call(e,"sim.stop"); RemoveAll(project);
+}
+
+TEST(SpriteClipAuthoringUndoAndMarkerAnchors) {
+    Engine e; std::string error; const std::string project=TempProject("sprite_clip_authoring");
+    CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    Call(e,"entity.create",R"({"name":"Hero","components":{"Sprite":{"columns":4},"SpriteAnimation":{}}})");
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","values":{"frames":[0,1,2],"fps":10,"durations":[0.1,0.2,0.3],"events":[{"frame":1,"name":"foot"}]}})")["ok"].asBool());
+    const auto revision=e.Revision(); const size_t undo=e.UndoDepth();
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"move","index":1,"to":2})")["ok"].asBool());
+    Json clip=Call(e,"animation.get_clip",R"({"id":"Hero","clip":"run"})")["result"]["values"];
+    CHECK(clip["frames"][2].asInt()==1 && clip["durations"][2].asNumber()==0.2 && clip["events"][0]["frame"].asInt()==2);
+    CHECK(std::fabs(Call(e,"animation.events",R"({"id":"Hero","clip":"run"})")["result"]["events"][0]["time"].asNumber()-0.4)<1e-8);
+    CHECK(e.Revision()==revision+1 && e.UndoDepth()==undo+1); Call(e,"history.undo");
+    CHECK(Call(e,"animation.get_clip",R"({"id":"Hero","clip":"run"})")["result"]["values"]["frames"][1].asInt()==1); Call(e,"history.redo");
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"insert","index":1,"frame":3,"duration":0.4})")["ok"].asBool());
+    clip=Call(e,"animation.get_clip",R"({"id":"Hero","clip":"run"})")["result"]["values"];
+    CHECK(clip["frames"].size()==4 && clip["events"][0]["frame"].asInt()==3);
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"remove","index":3})")["ok"].asBool());
+    CHECK(Call(e,"animation.events",R"({"id":"Hero","clip":"run"})")["result"]["events"].size()==0);
+    const std::string before=e.GetScene().ToJson().dump();
+    for (const char* values : {R"({"durations":[0.1]})",R"({"durations":[0,0.2,0.3]})",R"({"durations":[0.1,3601,0.3]})",R"({"durations":["x",0.2,0.3]})",R"({"frames":[]})"}) {
+        Json args=Json::MakeObject();args["id"]="Hero";args["clip"]="run";args["values"]=Json::parse(values);
+        CHECK(!e.Call("animation.set_clip",args)["ok"].asBool()); CHECK(e.GetScene().ToJson().dump()==before);
+    }
+    CHECK(!Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"move","index":999,"to":0})")["ok"].asBool());
+    CHECK(!Call(e,"animation.get_clip",R"({"id":"Hero","limit":1000000000000})")["ok"].asBool());
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"uniform"})")["ok"].asBool());
+    CHECK(!Call(e,"animation.get_clip",R"({"id":"Hero","clip":"run"})")["result"]["values"].has("durations"));
+    Call(e,"animation.play",R"({"id":"Hero","clip":"run"})");
+    Call(e,"component.set",R"({"id":"Hero","type":"SpriteAnimation","values":{"playing":false,"time":0.3}})");
+    Call(e,"sim.step",R"({"frames":1})");CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame==0);Call(e,"sim.stop");
+    CHECK(Call(e,"scene.save",R"({"path":"scenes/main.scene.json"})")["ok"].asBool());
+    Engine loaded;CHECK(loaded.Open(project,&error));CHECK(Call(loaded,"animation.get_clip",R"({"id":"Hero","clip":"run"})")["result"]["values"]["frames"].size()==3);
+    RemoveAll(project);
+}
+
+TEST(SpriteClipSharedAtlasTimingAndFileIsolation) {
+    Engine e;std::string error;const std::string project=TempProject("sprite_clip_shared");CHECK(e.Open(project,&error));Call(e,"scene.new",R"({"empty":true})");
+    CHECK(Call(e,"animation.create",R"({"path":"hero.anim.json","values":{"atlas":{"texture":"hero.png","frames":[[0,0,8,8],[8,0,8,8]]},"clips":{"run":{"frames":[0,1],"durations":[0.1,0.3]}}}})")["ok"].asBool());
+    Call(e,"entity.create",R"({"name":"Hero","components":{"Sprite":{},"SpriteAnimation":{"asset":"hero.anim.json","clip":"run"}}})");
+    const auto revision=e.Revision();const auto undo=e.UndoDepth();const auto authored=e.GetScene().ToJson().dump();
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"duration","index":0,"duration":0.2})")["ok"].asBool());
+    CHECK(e.Revision()==revision && e.UndoDepth()==undo && e.GetScene().ToJson().dump()==authored);
+    Json info=Call(e,"animation.get_clip",R"({"id":"Hero","offset":1,"limit":1,"sourceOnly":true})")["result"];
+    CHECK(info["frames"].size()==1 && info["frames"][0]["rect"][0].asInt()==8 && !info.has("values"));
+    std::string before;CHECK(ReadTextFile(project+"/hero.anim.json",before));
+    CHECK(!Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"append","frame":2})")["ok"].asBool());
+    std::string after;CHECK(ReadTextFile(project+"/hero.anim.json",after) && before==after);
+    Call(e,"animation.preview",R"({"id":"Hero","time":0.21})");CHECK(e.AnimationRenderScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame==1);
+    CHECK(Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","operation":"uniform"})")["ok"].asBool());
+    CHECK(!Call(e,"animation.get",R"({"path":"hero.anim.json"})")["result"]["values"]["clips"]["run"].has("durations"));
+    Call(e,"animation.preview_close");CHECK(Call(e,"sim.record_state")["ok"].asBool());
+    CHECK(!Call(e,"animation.set_clip",R"({"id":"Hero","clip":"run","values":{"loop":false}})")["ok"].asBool());Call(e,"sim.stop");RemoveAll(project);
+}
+
+#if OE_NATIVE_EDITOR
+TEST(NativeEditorSpriteClipFrameAuthoring) {
+    Engine e;std::string error;const std::string project=TempProject("sprite_clip_editor");CHECK(e.Open(project,&error));Call(e,"scene.new",R"({"empty":true})");
+    Call(e,"entity.create",R"({"name":"Hero","components":{"Sprite":{"columns":4},"SpriteAnimation":{"clip":"run","clips":{"run":{"frames":[0,1],"fps":10,"events":[{"frame":1,"name":"foot"}]}}}}})");
+    if (!e.EnableGpu(nullptr,&error)) { RemoveAll(project); return; }
+    NativeEditor::Options options;options.language="en";options.layoutFile="";NativeEditor editor(e,nullptr,options);CHECK(editor.Init(&error));editor.Select(e.GetScene().FindByName("Hero"));editor.FocusAnimationPanel();RenderTarget image;
+    auto draw=[&](int n) {for(int i=0;i<n;++i){editor.Update({},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}};draw(4);
+    auto click=[&](const std::string& control) {
+        auto rect=editor.AnimationControlRect(control);CHECK(rect[2]>0);WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=rect[0]+rect[2]*0.5f;move.y=rect[1]+rect[3]*0.5f;
+        WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;
+        editor.Update({move,button},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(1);button.down=false;editor.Update({button},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    };
+    click("frames-tab");CHECK(Call(e,"editor.state")["result"]["animationFrames"].asBool());
+    click("source:2");CHECK(Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"]["frames"].size()==3);
+    click("sequence:2");CHECK(e.AnimationRenderScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame==2);click("frame-left");CHECK(e.AnimationRenderScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame==2);Json clip=Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"];
+    CHECK(clip["frames"][1].asInt()==2 && clip["events"][0]["frame"].asInt()==2);click("frame-remove");
+    CHECK(Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"]["frames"].size()==2);
+    click("frame-duration");WindowEvent select;select.type=WindowEvent::Type::Key;select.key=WindowKey::A;select.ctrl=true;select.down=true;
+    editor.Update({select},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));select.down=false;select.ctrl=false;editor.Update({select},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));
+    std::vector<WindowEvent> text;for(char c:std::string("0.3")){WindowEvent event;event.type=WindowEvent::Type::Text;event.codepoint=static_cast<uint32_t>(c);text.push_back(event);}editor.Update(text,1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    WindowEvent enter;enter.type=WindowEvent::Type::Key;enter.key=WindowKey::Enter;enter.down=true;editor.Update({enter},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));enter.down=false;editor.Update({enter},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    clip=Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"];CHECK(clip["durations"].size()==2 && std::fabs(clip["durations"][1].asFloat()-0.3f)<1e-6f);
+    click("clip-loop");CHECK(!Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"]["loop"].asBool());
+    click("uniform");CHECK(!Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"].has("durations"));
+    auto drag=[&](const std::string& source,const std::string& target) {
+        auto from=editor.AnimationControlRect(source),to=editor.AnimationControlRect(target);CHECK(from[2]>0 && to[2]>0);
+        WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=from[0]+from[2]*0.5f;move.y=from[1]+from[3]*0.5f;
+        WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;
+        editor.Update({move,button},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+        move.x=to[0]+to[2]*0.5f;move.y=to[1]+to[3]*0.5f;editor.Update({move},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+        button.down=false;editor.Update({button},1800,1800,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    };
+    drag("source:3","sequence:0");clip=Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"];CHECK(clip["frames"].size()==3 && clip["frames"][0].asInt()==3 && clip["events"][0]["frame"].asInt()==2);
+    drag("sequence:0","sequence:2");clip=Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"];CHECK(clip["frames"][2].asInt()==3 && clip["events"][0]["frame"].asInt()==1);
+    drag("source:3","append-drop");clip=Call(e,"animation.get_clip",R"({"id":"Hero"})")["result"]["values"];CHECK(clip["frames"].size()==4 && e.AnimationRenderScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame==3);
+    click("new-clip");CHECK(Call(e,"animation.preview_state")["result"]["clip"].asString()=="new_clip");
+    CHECK(Call(e,"animation.get_clip",R"({"id":"Hero","clip":"new_clip"})")["result"]["values"]["fps"].asInt()==8);
+    RemoveAll(project);
+}
+#endif
+
+
+Json ControllerTestDefinition() {
+    return Json::parse(R"J({"entry":"Idle","parameters":{"speed":{"type":"number","default":0},"grounded":{"type":"boolean","default":true},"jump":{"type":"trigger","default":false}},
+      "states":{"Idle":{"clip":"idle","position":[40,60]},"Walk":{"clip":"walk","position":[320,60]},"Jump":{"clip":"jump","loop":false,"position":[600,60]}},
+      "transitions":[{"from":"*","to":"Jump","blend":0.15,"conditions":[{"parameter":"jump","op":"trigger"},{"parameter":"grounded","op":"==","value":true}]},
+        {"from":"Idle","to":"Walk","blend":0.2,"conditions":[{"parameter":"speed","op":">","value":0.1}]},
+        {"from":"Walk","to":"Idle","conditions":[{"parameter":"speed","op":"<=","value":0.1}]},
+        {"from":"Jump","to":"Idle","minTime":0.2,"conditions":[{"parameter":"grounded","op":"==","value":true}]}]})J");
+}
+void ControllerTestSprite(Engine& engine) {
+    CHECK(Call(engine,"entity.create",R"J({"name":"Hero","components":{"Sprite":{"columns":4},"SpriteAnimation":{"clip":"idle","clips":{
+      "idle":{"frames":[0],"fps":10},"walk":{"frames":[1,2],"fps":10},"jump":{"frames":[3],"fps":10,"loop":false}}}}})J")["ok"].asBool());
+}
+TEST(AnimationControllerAssetValidationAndIsolation) {
+    Engine e; std::string error; const std::string project=TempProject("controller_assets"); CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool()); ControllerTestSprite(e);
+    const Json scene=e.GetScene().ToJson(), history=Call(e,"history.list")["result"];
+    const auto revision=e.Revision(); const std::string hash=Call(e,"render.screenshot",R"({"width":64,"height":64})")["result"]["hash"].asString();
+    Json args=Json::MakeObject(); args["path"]="animations/hero.controller.json"; args["values"]=ControllerTestDefinition();
+    CHECK(e.Call("animation.controller_create",args)["ok"].asBool());
+    CHECK(e.Call("animation.controller_create",args)["error"]["code"].asString()=="already_exists");
+    CHECK(Call(e,"animation.controller_check",R"({"path":"animations/hero.controller.json","id":"Hero"})")["ok"].asBool());
+    CHECK(Call(e,"asset.info",R"({"path":"animations/hero.controller.json"})")["result"]["kind"].asString()=="controller");
+    std::string original; CHECK(ReadTextFile(project+"/animations/hero.controller.json",original));
+    std::vector<Json> invalid;
+    Json bad=ControllerTestDefinition(); bad["entry"]="Missing"; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["states"]["Idle"]["extra"]=true; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["states"]["Idle"]["loop"]=1; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["states"]["Idle"]["position"]=Json::parse("[0,100001]"); invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["parameters"]["speed"]["default"]="fast"; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["parameters"]["jump"]["default"]=true; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["transitions"][0]["blend"]=5.1; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["transitions"][0]["to"]="Missing"; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["transitions"][0]["conditions"]=Json::MakeArray(); invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["transitions"][0]["conditions"][0]["parameter"]="missing"; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["transitions"][0]["conditions"][0]["value"]=true; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); bad["transitions"][0]["conditions"][1]["op"]=">"; invalid.push_back(bad);
+    bad=ControllerTestDefinition(); for(int i=0;i<65;++i) bad["parameters"]["p"+std::to_string(i)]=Json::parse(R"({"type":"number","default":0})"); invalid.push_back(bad);
+    bad=ControllerTestDefinition(); for(int i=0;i<65;++i) bad["states"]["s"+std::to_string(i)]=Json::parse(R"({"clip":"idle"})"); invalid.push_back(bad);
+    bad=ControllerTestDefinition(); while(bad["transitions"].size()<257) bad["transitions"].push(bad["transitions"][0]); invalid.push_back(bad);
+    // The serialized file, including pretty whitespace, must fit the reader's budget.
+    bad=ControllerTestDefinition(); bad["parameters"]=Json::MakeObject();
+    const std::string longName(128,'p'); bad["parameters"][longName]=Json::parse(R"({"type":"number","default":0})");
+    Json largeConditions=Json::MakeArray();
+    for(int i=0;i<16;++i){Json condition=Json::MakeObject();condition["parameter"]=longName;condition["op"]="==";condition["value"]=1000000000;largeConditions.push(condition);}
+    Json largeTransition=Json::MakeObject();largeTransition["from"]="Idle";largeTransition["to"]="Walk";largeTransition["conditions"]=largeConditions;
+    const std::string longState(128,'s'), longTarget(128,'t');
+    bad["entry"]=longState; bad["states"]=Json::MakeObject();
+    Json largeState=Json::MakeObject();largeState["clip"]=std::string(128,'c');largeState["speed"]=10000;largeState["loop"]=true;
+    bad["states"][longState]=largeState;bad["states"][longTarget]=largeState;
+    for(int i=0;i<62;++i)bad["states"][std::string(126,'u')+std::to_string(i)]=largeState;
+    largeTransition["from"]=longState;largeTransition["to"]=longTarget;largeTransition["blend"]=5;largeTransition["minTime"]=3600;
+    bad["transitions"]=Json::MakeArray();for(int i=0;i<256;++i)bad["transitions"].push(largeTransition);
+    CHECK(bad.dump().size()<1024*1024 && bad.dump(2).size()>1024*1024);invalid.push_back(bad);
+    for(const Json& values:invalid) { args["values"]=values; CHECK(e.Call("animation.controller_set",args)["error"]["code"].asString()=="invalid_controller"); }
+    std::string after; CHECK(ReadTextFile(project+"/animations/hero.controller.json",after)); CHECK(after==original);
+    CHECK(e.GetScene().ToJson()==scene && e.Revision()==revision && Call(e,"history.list")["result"]==history);
+    CHECK(Call(e,"render.screenshot",R"({"width":64,"height":64})")["result"]["hash"].asString()==hash);
+    CHECK(Call(e,"sim.record_state")["ok"].asBool()); args["values"]=ControllerTestDefinition();
+    CHECK(e.Call("animation.controller_set",args)["error"]["code"].asString()=="state_recording");
+    CHECK(e.Call("animation.controller_create",args)["error"]["code"].asString()=="state_recording");
+    Call(e,"sim.stop"); RemoveAll(project);
+}
+TEST(AnimationControllerLuaTransitionsAndFailures) {
+    Engine e; std::string error; const std::string project=TempProject("controller_lua"); CHECK(e.Open(project,&error));
+    Call(e,"scene.new",R"({"empty":true})"); ControllerTestSprite(e);
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump()));
+    CHECK(EpochEval(e,"local a=require('oe.animator'); controller=a.new(scene.find('Hero'),'animations/hero.controller.json'); return a==require('oe/animator.lua') and controller:state().state=='Idle'").asBool());
+    CHECK(EpochEval(e,"controller:set('speed',2); return controller:update(0)=='Walk'").asBool());
+    const float clock=e.GetScene().Get<SpriteAnimation>(e.GetScene().FindByName("Hero"))->time;
+    CHECK(EpochEval(e,"controller:update(0.1); return controller:state().elapsed==0.1").asBool());
+    CHECK(e.GetScene().Get<SpriteAnimation>(e.GetScene().FindByName("Hero"))->time==clock); // no per-update restart
+    CHECK(EpochEval(e,"controller:set('grounded',false):trigger('jump'); controller:update(0); return controller:get('jump') and controller:state().state=='Walk'").asBool());
+    CHECK(EpochEval(e,"controller:set('grounded',true); return controller:update(0)=='Jump' and not controller:get('jump')").asBool());
+    CHECK(EpochEval(e,"return controller:update(0.1)=='Jump' and controller:update(0.1)=='Idle'").asBool());
+    CHECK(EpochEval(e,"controller:set('speed',0.1); return controller:update(0)=='Idle'").asBool());
+    CHECK(EpochEval(e,"local s=controller:state(); s.parameters.speed=7; return controller:get('speed')==0.1").asBool());
+    CHECK(EpochEval(e,"local ok=pcall(controller.set,controller,'grounded',1); local bad=pcall(controller.set,controller,'speed',0/0); local integer=pcall(controller.set,controller,'speed',math.mininteger); local trigger=pcall(controller.set,controller,'jump',true); local time=controller.elapsed; return not ok and not bad and not integer and not trigger and not pcall(controller.update,controller,-1) and controller.elapsed==time").asBool());
+    Json invalid=ControllerTestDefinition(); invalid["states"]["Jump"]["clip"]="missing";
+    CHECK(WriteTextFile(project+"/animations/bad.controller.json",invalid.dump()));
+    const Json scene=e.GetScene().ToJson();
+    CHECK(EpochEval(e,"return not pcall(require('oe.animator').new,scene.find('Hero'),'animations/bad.controller.json')").asBool());
+    CHECK(e.GetScene().ToJson()==scene);
+    CHECK(Call(e,"component.set",R"({"id":"Hero","type":"SpriteAnimation","values":{"clips":{"jump":{"frames":[]}}}})")["ok"].asBool());
+    CHECK(EpochEval(e,"controller:trigger('jump'); local current=controller.current; return not pcall(controller.update,controller,0) and controller:get('jump') and controller.current==current").asBool());
+    RemoveAll(project);
+}
+TEST(AnimationControllerModelBlendAndNativeReplay) {
+    Engine e; std::string error; const std::string project=TempProject("controller_replay"); CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    std::string model=kRigFbx; model.replace(model.find("%TEXTURE%"),9,""); CHECK(WriteTextFile(project+"/assets/rig.fbx",model));
+    std::string other=model; other.replace(other.find("AnimStack::Wave"),std::strlen("AnimStack::Wave"),"AnimStack::Other");
+    CHECK(WriteTextFile(project+"/assets/other.fbx",other)); CHECK(WriteTextFile(project+"/assets/rig.fbx.clips.json",R"({"clips":["other.fbx"]})"));
+    Json definition=ControllerTestDefinition(); definition["states"]["Idle"]["clip"]="Wave"; definition["states"]["Walk"]["clip"]="Other"; definition["states"]["Jump"]["clip"]="Wave";
+    CHECK(WriteTextFile(project+"/animations/model.controller.json",definition.dump()));
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump())); ControllerTestSprite(e);
+    CHECK(WriteTextFile(project+"/scripts/controller.lua",R"L(local M={}
+function M:onStart() self.controller=require('oe.animator').new(self.id,scene.name(self.id)=='Rig' and 'animations/model.controller.json' or 'animations/hero.controller.json') self.tick=0 end
+function M:onUpdate(dt) self.tick=self.tick+1 self.controller:set('speed',self.tick>1 and self.tick%40<20 and 1 or 0) if self.tick%13==0 then self.controller:trigger('jump') end self.controller:update(dt) game.set(scene.name(self.id),self.controller:state()) end
+return M)L"));
+    CHECK(Call(e,"component.add",R"({"id":"Hero","type":"Script","values":{"path":"scripts/controller.lua"}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/rig.fbx"},"Script":{"path":"scripts/controller.lua"}}})")["ok"].asBool());
+    CHECK(Call(e,"sim.record_state")["ok"].asBool()); CHECK(Call(e,"sim.step",R"({"frames":2})")["ok"].asBool());
+    const Animator* animator=e.GetScene().Get<Animator>(e.GetScene().FindByName("Rig")); CHECK(animator && animator->clip=="Other" && animator->from=="Wave" && animator->blend==0.2f);
+    CHECK(Call(e,"sim.save_state",R"({"slot":"controllers"})")["ok"].asBool()); CHECK(Call(e,"sim.step",R"({"frames":80})")["ok"].asBool());
+    const Json future=e.GetScene().ToJson(), data=e.GameData(); CHECK(e.Scripts().Errors().empty());
+    CHECK(Call(e,"sim.load_state",R"({"slot":"controllers"})")["ok"].asBool()); CHECK(Call(e,"sim.step",R"({"frames":80})")["ok"].asBool());
+    CHECK(e.GetScene().ToJson()==future && e.GameData()==data && e.Scripts().Errors().empty());
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump(2)));
+    CHECK(Call(e,"sim.load_state",R"({"slot":"controllers"})")["error"]["code"].asString()=="state_resource");
+    RemoveAll(project);
+}
+#if OE_NATIVE_EDITOR
+TEST(NativeEditorAnimationControllerGraphAuthoring) {
+    Engine e;std::string error;const std::string project=TempProject("controller_editor");CHECK(e.Open(project,&error));Call(e,"scene.new",R"({"empty":true})");ControllerTestSprite(e);
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump()));
+    if(!e.EnableGpu(nullptr,&error)){RemoveAll(project);return;}
+    NativeEditor::Options options;options.language="en";options.layoutFile="";NativeEditor editor(e,nullptr,options);CHECK(editor.Init(&error));editor.Select(e.GetScene().FindByName("Hero"));
+    CHECK(Call(e,"editor.animation",R"({"controller":"animations/hero.controller.json"})")["ok"].asBool()); RenderTarget image;
+    auto draw=[&](int n){for(int i=0;i<n;++i){editor.Update({},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}};draw(4);
+    auto click=[&](const std::string& control){auto rect=editor.AnimationControlRect(control);CHECK(rect[2]>0);WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=rect[0]+rect[2]*0.5f;move.y=rect[1]+rect[3]*0.5f;WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;editor.Update({move,button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(1);button.down=false;editor.Update({button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);};
+    const auto revision=e.Revision();const Json scene=e.GetScene().ToJson();
+    click("controller-state:Walk");CHECK(Call(e,"editor.state")["result"]["animationControllerState"].asString()=="Walk");
+    click("controller-preview");CHECK(Call(e,"animation.preview_state")["result"]["clip"].asString()=="walk");
+    click("controller-add-state");CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]["states"].size()==4);
+    click("controller-add-transition");CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]["transitions"].size()==5);
+    click("controller-parameter-name");
+    WindowEvent select;select.type=WindowEvent::Type::Key;select.key=WindowKey::A;select.ctrl=true;select.down=true;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));select.down=false;select.ctrl=false;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));
+    std::vector<WindowEvent> text;for(char c:std::string("air")){WindowEvent event;event.type=WindowEvent::Type::Text;event.codepoint=static_cast<uint32_t>(c);text.push_back(event);}editor.Update(text,1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    click("controller-add-parameter");CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]["parameters"].size()==4);
+    click("controller-state-name");select.down=true;select.ctrl=true;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));select.down=false;select.ctrl=false;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));
+    text.clear();for(char c:std::string("Air")){WindowEvent event;event.type=WindowEvent::Type::Text;event.codepoint=static_cast<uint32_t>(c);text.push_back(event);}editor.Update(text,1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    WindowEvent enter;enter.type=WindowEvent::Type::Key;enter.key=WindowKey::Enter;enter.down=true;editor.Update({enter},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));enter.down=false;editor.Update({enter},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    Json renamed=Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"];CHECK(renamed["states"].has("Air") && !renamed["states"].has("State") && renamed["transitions"][4]["from"].asString()=="Air");
+    auto rect=editor.AnimationControlRect("controller-state:Walk");WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=rect[0]+rect[2]*0.5f;move.y=rect[1]+rect[3]*0.5f;WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;editor.Update({move,button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(1);move.x+=60;move.y+=40;editor.Update({move},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));button.down=false;editor.Update({button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
+    Json values=Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"];CHECK(values["states"]["Walk"]["position"][0].asFloat()>320);
+    CHECK(e.Revision()==revision && e.GetScene().ToJson()==scene);
+    CHECK(Call(e,"animation.controller_check",R"({"path":"animations/hero.controller.json","id":"Hero"})")["ok"].asBool());
+    click("controller-back"); CHECK(Call(e,"editor.state")["result"]["animationController"].asString().empty());
+    click("controller-tab"); CHECK(Call(e,"editor.state")["result"]["animationController"].asString()=="animations/new.controller.json");
+    CHECK(!Call(e,"animation.preview_state")["result"]["active"].asBool());
+    RemoveAll(project);
+}
+#endif
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

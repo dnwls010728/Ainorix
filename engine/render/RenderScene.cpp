@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include "assets/Assets.h"
+#include "scene/SpriteClip.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
 #include "scene/Systems.h"
@@ -329,11 +330,30 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
     // 2D: sprites are unit quads scaled to the frame size; tilemaps one mesh each.
     const Mesh* quad = GetBuiltinMesh("quad");
     for (const auto& kv : scene.Pool<Sprite>()) {
-        const Sprite& sp = kv.second;
+        Sprite sp = kv.second;
+        Json atlasRect;
+        bool brokenAnimation = false;
+        if (assets) if (const SpriteAnimation* animation = scene.Get<SpriteAnimation>(kv.first)) if (!animation->asset.empty()) {
+            auto definition = assets->GetAnimation(animation->asset);
+            if (!definition) brokenAnimation = true;
+            else {
+                const Json& image = (*definition)[definition->has("sheet") ? "sheet" : "atlas"];
+                sp.texture = image["texture"].asString();
+                sp.columns = image["columns"].asInt(1); sp.rows = image["rows"].asInt(1);
+                const Json& clip = (*definition)["clips"][animation->clip];
+                if (clip["frames"].size() > 0 && std::isfinite(animation->time)) {
+                    SpriteClipTiming timing;
+                    if (ParseSpriteClipTiming(clip, timing, nullptr)) sp.frame = clip["frames"][timing.Index(animation->time)].asInt();
+                    else brokenAnimation = true;
+                }
+                if (definition->has("atlas")) atlasRect = image["frames"][sp.frame];
+            }
+        }
         if (!sp.visible) continue;
         RenderItem it;
         it.id = kv.first;
-        it.tint = sp.color;
+        it.tint = brokenAnimation ? Color(1, 0, 1) : sp.color;
+        it.error = brokenAnimation;
         it.unlit = !sp.lit;
         it.castShadows = sp.castShadows;
         it.doubleSided = sp.castShadows;  // the light may see either face
@@ -364,6 +384,13 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         }
         float u0, v0, du, dv;
         FrameRect(sp.frame, sp.columns, sp.rows, tex, u0, v0, du, dv);
+        if (atlasRect.isArray() && tex) {
+            const float x = atlasRect[0].asFloat(), y = atlasRect[1].asFloat();
+            const float width = atlasRect[2].asFloat(), height = atlasRect[3].asFloat();
+            if (x + width > tex->width || y + height > tex->height) { it.tint = Color(1, 0, 1); it.error = true; }
+            u0 = (x + 0.5f) / static_cast<float>(tex->width); v0 = (y + 0.5f) / static_cast<float>(tex->height);
+            du = (width - 1) / static_cast<float>(tex->width); dv = (height - 1) / static_cast<float>(tex->height);
+        }
         it.uvOffset[0] = sp.flipX ? u0 + du : u0;
         it.uvScale[0] = sp.flipX ? -du : du;
         it.uvOffset[1] = sp.flipY ? v0 + dv : v0;
@@ -371,6 +398,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         float ppu = std::max(0.001f, sp.pixelsPerUnit);
         float frameW = tex ? static_cast<float>(tex->width) / static_cast<float>(std::max(1, sp.columns)) : ppu;
         float frameH = tex ? static_cast<float>(tex->height) / static_cast<float>(std::max(1, sp.rows)) : ppu;
+        if (atlasRect.isArray()) { frameW = atlasRect[2].asFloat(); frameH = atlasRect[3].asFloat(); }
         float w = sp.width > 0 ? sp.width : frameW / ppu;
         float h = sp.height > 0 ? sp.height : frameH / ppu;
         // Pivot on the entity position; `layer` and `order` nudge toward the camera (+Z) so cut-out

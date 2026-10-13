@@ -750,6 +750,16 @@ int L_AnimationEvents(lua_State* L) {
     });
 }
 
+int L_AnimationController(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject(); args["path"] = luaL_checkstring(L, 1);
+        if (!lua_isnoneornil(L, 2)) args["id"] = CheckEntity(L, 2);
+        const Json result = Host(L).GetEngine().Call("animation.controller_get", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        PushJson(L, result["result"]["values"]); return 1;
+    });
+}
+
 int L_AnimationPlay(lua_State* L) {
     return Guard(L, [&] {
         EntityId id = CheckEntity(L, 1);
@@ -1786,7 +1796,7 @@ void ScriptHost::Open() {
                                    {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"children", L_SceneChildren}, {"child", L_SceneChild}, {"all", L_SceneAll},
                                    {"withTag", L_SceneWithTag}, {"epoch", L_SceneEpoch}, {nullptr, nullptr}};
     SetFuncs(L, "scene", sceneFuncs);
-    const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {"bone", L_AnimationBone}, {"events", L_AnimationEvents}, {nullptr, nullptr}};
+    const luaL_Reg animationFuncs[] = {{"controller", L_AnimationController}, {"play", L_AnimationPlay}, {"bone", L_AnimationBone}, {"events", L_AnimationEvents}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg vfxFuncs[] = {{"spawn", L_VfxSpawn}, {"play", L_VfxPlay}, {"stop", L_VfxStop},
         {"burst", L_VfxBurst}, {"clear", L_VfxClear}, {"set", L_VfxSet}, {"state", L_VfxState}, {nullptr, nullptr}};

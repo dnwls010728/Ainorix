@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cmath>
 #include "assets/Assets.h"
+#include "scene/SpriteClip.h"
+#include "assets/AnimationAsset.h"
 #include "render/Mesh.h"
 #include "scene/Pose.h"
 
@@ -9,11 +11,12 @@ namespace oe {
 namespace {
 
 struct PreviewClip {
-    std::string name;
-    double duration = 0, end = 0, fps = 0;
+    std::string name, displayName;
+    double duration = 0, end = 0, fps = 0, loopStart = 0, loopEnd = 0;
     bool loop = true;
     const Json* frames = nullptr;
     std::vector<AnimationMarker> events;
+    SpriteClipTiming timing;
 };
 
 std::vector<PreviewClip> PreviewClips(Engine& engine, EntityId id) {
@@ -21,19 +24,20 @@ std::vector<PreviewClip> PreviewClips(Engine& engine, EntityId id) {
     std::vector<PreviewClip> out;
     if (const SpriteAnimation* sprite = scene.Get<SpriteAnimation>(id)) {
         if (!scene.Get<Sprite>(id)) throw ApiError("missing_component", "entity has no Sprite", "Add Sprite before previewing its clips.");
-        for (const auto& item : sprite->clips.members()) {
+        for (const auto& item : SpriteAnimationClips(*sprite, engine.Assets()).members()) {
             const Json& clip = item.second;
             const Json& frames = clip["frames"];
             if (!clip.isObject() || !frames.isArray() || frames.size() == 0) continue;
-            const double fps = std::max(0.001f, clip["fps"].asFloat(8));
-            if (!std::isfinite(fps)) continue;
+            SpriteClipTiming timing; std::string timingError;
+            if (!ParseSpriteClipTiming(clip, timing, &timingError)) throw ApiError("invalid_animation", timingError);
+            const double fps = timing.fps;
             PreviewClip entry;
-            entry.name = item.first; entry.fps = fps; entry.frames = &frames;
-            entry.duration = static_cast<double>(frames.size()) / fps;
-            entry.end = static_cast<double>(frames.size() - 1) / fps;
-            entry.loop = clip["loop"].asBool(true);
+            entry.name = item.first; entry.displayName = clip["displayName"].asString(item.first); entry.fps = fps; entry.frames = &frames;
+            entry.timing = timing; entry.duration = timing.duration;
+            entry.end = timing.end;
+            entry.loop = SpriteAnimationLoop(*sprite, clip); entry.loopEnd = entry.duration;
             std::string error;
-            if (!ParseAnimationMarkers(clip["events"], entry.duration, fps, frames.size(), entry.events, &error))
+            if (!SpriteClipMarkers(clip["events"], timing, entry.events, &error))
                 throw ApiError("invalid_animation_events", error, "Fix markers with animation.set_events before previewing.");
             out.push_back(std::move(entry));
         }
@@ -45,6 +49,8 @@ std::vector<PreviewClip> PreviewClips(Engine& engine, EntityId id) {
         if (!mesh) throw ApiError("asset_error", error, "Check MeshRenderer.mesh and its event sidecar.");
         for (const AnimationClip& clip : mesh->clips) {
             PreviewClip entry; entry.name = clip.name; entry.duration = entry.end = clip.duration; entry.events = clip.events;
+            entry.displayName = clip.displayName.empty() ? clip.name : clip.displayName;
+            entry.loopStart = clip.loopStart; entry.loopEnd = clip.loopEnd < 0 ? clip.duration : clip.loopEnd;
             out.push_back(std::move(entry));
         }
     }
@@ -85,8 +91,9 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
         if (args.has("clip")) next.clip = args["clip"].asString();
         auto chosen = std::find_if(clips.begin(), clips.end(), [&](const PreviewClip& clip) { return clip.name == next.clip; });
         if (chosen == clips.end()) throw ApiError("animation_not_found", "unknown preview clip '" + next.clip + "'", "Use animation.preview_state to list clips, or pass a valid clip.");
-        if (changedEntity || (animationPreview_ && next.clip != animationPreview_->clip)) { next.time = 0; next.loop = chosen->loop; }
+        if (changedEntity || (animationPreview_ && next.clip != animationPreview_->clip)) { next.time = chosen->loopStart; next.loop = chosen->loop; }
         if (args.has("loop")) next.loop = args["loop"].asBool();
+        if (!next.loop && !args.has("time") && (changedEntity || (animationPreview_ && next.clip != animationPreview_->clip))) next.time = 0;
         if (args.has("ik")) next.ik = args["ik"].asBool();
         if (args.has("playing")) next.playing = args["playing"].asBool();
         if (args.has("speed")) next.speed = args["speed"].asFloat();
@@ -98,8 +105,10 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
             const double value = args["frames"].asNumber();
             if (!std::isfinite(value) || value < 0 || value > 3600 || std::floor(value) != value)
                 throw ApiError("invalid_argument", "preview frames must be an integer in 0..3600", "Use frames:1 for one fixed step (1/60 s), independent of playing.");
+            const double period = chosen->loopEnd - chosen->loopStart;
+            if (next.loop) next.time = std::max(chosen->loopStart, std::min(next.time, chosen->loopEnd));
             next.time += value * kFixedDt * next.speed;
-            if (next.loop && duration > 0) { next.time = std::fmod(next.time, duration); if (next.time < 0) next.time += duration; }
+            if (next.loop && period > 0) { next.time = std::fmod(next.time - chosen->loopStart, period); if (next.time < 0) next.time += period; next.time += chosen->loopStart; }
             else {
                 if (duration == 0 || next.time >= duration || next.time <= 0) next.playing = false;
                 next.time = std::max(0.0, std::min(next.time, duration));
@@ -119,6 +128,9 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
     auto chosen = std::find_if(clips.begin(), clips.end(), [&](const PreviewClip& clip) { return clip.name == preview.clip; });
     if (chosen == clips.end()) { animationPreview_.reset(); out["active"] = false; return out; }
     preview.time = std::max(0.0, std::min(preview.time, preview.loop ? chosen->duration : chosen->end));
+    out["displayName"] = chosen->displayName;
+    if (const SpriteAnimation* sprite = scene_.Get<SpriteAnimation>(preview.id)) out["asset"] = sprite->asset;
+    out["loopRange"] = Json::MakeArray(); out["loopRange"].push(chosen->loopStart); out["loopRange"].push(chosen->loopEnd);
     out["id"] = preview.id; out["clip"] = preview.clip; out["time"] = preview.time;
     out["playing"] = preview.playing; out["speed"] = preview.speed; out["loop"] = preview.loop;
     out["ik"] = preview.ik; out["ikGoals"] = 0;
@@ -128,17 +140,22 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
         out["ikGoals"] = count;
     }
     out["duration"] = preview.loop ? chosen->duration : chosen->end; out["fps"] = chosen->fps;
-    if (chosen->frames) out["frameCount"] = static_cast<uint64_t>(chosen->frames->size());
+    if (chosen->frames) {
+        out["frameCount"] = static_cast<uint64_t>(chosen->frames->size()); out["variableTiming"] = chosen->timing.variable;
+        out["frameTimes"] = Json::MakeArray(); out["frameDurations"] = Json::MakeArray();
+        for (double time : chosen->timing.starts) out["frameTimes"].push(time);
+        for (double duration : chosen->timing.durations) out["frameDurations"].push(duration);
+    }
     out["type"] = chosen->frames ? "SpriteAnimation" : "Animator";
     out["clips"] = Json::MakeArray();
     for (const PreviewClip& clip : clips) {
-        Json item = Json::MakeObject(); item["name"] = clip.name; item["duration"] = clip.duration;
+        Json item = Json::MakeObject(); item["name"] = clip.name; item["displayName"] = clip.displayName; item["duration"] = clip.duration;
         out["clips"].push(item);
     }
     out["events"] = Json::MakeArray();
     for (const AnimationMarker& marker : chosen->events) {
         Json item = Json::MakeObject(); item["time"] = marker.time; item["name"] = marker.name;
-        if (chosen->frames) item["frame"] = static_cast<int>(std::llround(marker.time * chosen->fps));
+        if (chosen->frames) item["frame"] = static_cast<int>(chosen->timing.Index(marker.time));
         out["events"].push(item);
     }
     return out;
@@ -151,9 +168,9 @@ Scene& Engine::AnimationRenderScene() {
     preview.scene = scene_;  // refresh edits/undo/hot reload without touching the authored scene
     if (SpriteAnimation* sprite = preview.scene.Get<SpriteAnimation>(preview.id)) {
         sprite->clip = sprite->current = preview.clip; sprite->time = static_cast<float>(preview.time); sprite->playing = false;
-        const Json& clip = sprite->clips[preview.clip];
-        const double fps = state["fps"].asNumber();
-        const size_t index = std::min(clip["frames"].size() - 1, static_cast<size_t>(std::floor(preview.time * fps + 1e-4)));
+        const Json& clip = SpriteAnimationClips(*sprite, *assets_)[preview.clip];
+        SpriteClipTiming timing; ParseSpriteClipTiming(clip, timing, nullptr);
+        const size_t index = timing.Index(preview.time);
         preview.scene.Get<Sprite>(preview.id)->frame = clip["frames"][index].asInt();
     } else {
         Animator& animator = preview.scene.Add<Animator>(preview.id);

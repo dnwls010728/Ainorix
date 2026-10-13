@@ -892,7 +892,8 @@ Json NativeEditor::Impl::EditorState() {
     out["selectedAsset"] = selectedAsset.empty() ? Json() : Json(selectedAsset);
     out["shader"] = showShaders && !shaderPath.empty() ? Json(shaderPath) : Json();
     out["effect"] = showEffects && !effectsPath.empty() ? Json(effectsPath) : Json();
-    out["animationPanel"] = showAnimation;
+    out["animationController"] = animationController; out["animationControllerState"] = animationControllerState;
+    out["animationPanel"] = showAnimation; out["animationFrames"] = animationFrames;
     out["animation"] = engine.AnimationPreviewCall("state", Json());
     return out;
 }
@@ -1914,6 +1915,8 @@ bool NativeEditor::Init(std::string* error) {
     m.engine.SetEditorHandler([&m](const std::string& op, const Json& args) {
         if (op == "select") return m.EditorSelect(args);
         if (op == "animation") {
+            if (args.has("frames")) { m.animationFrames = args["frames"].asBool(); m.animationController.clear(); }
+            if (args.has("controller")) { m.animationController = args["controller"].asString(); m.animationControllerTransition = -1; m.animationControllerState.clear(); m.animationControllerPan = ImVec2(20, 20); m.animationControllerZoom = 1; m.animationControllerFit = true; m.Call("animation.preview_close", Json()); }
             m.showAnimation = args["open"].asBool(true); m.focusAnimation = m.showAnimation;
             if (!m.showAnimation) m.Call("animation.preview_close", Json());
         }

@@ -132,9 +132,10 @@ bool NativeEditor::Impl::NamePicker(const char* popupId, EntityId id, bool bone,
         if (mesh->clips.empty()) ImGui::TextDisabled("%s", Tr("This model has no clips"));
         for (size_t i = 0; i < mesh->clips.size(); ++i) {
             const AnimationClip& clip = mesh->clips[i];
-            if (!ContainsNoCase(clip.name, namePickFilter)) continue;
+            if (!ContainsNoCase(clip.name, namePickFilter) && !ContainsNoCase(clip.displayName, namePickFilter)) continue;
             ImGui::PushID(static_cast<int>(i));
-            item(clip.name, Format("%s   %.2f s", clip.name.c_str(), static_cast<double>(clip.duration)), 0);
+            const std::string label = clip.displayName.empty() ? clip.name : clip.displayName + " (" + clip.name + ")";
+            item(clip.name, Format("%s   %.2f s", label.c_str(), static_cast<double>(clip.duration)), 0);
             ImGui::PopID();
         }
     }

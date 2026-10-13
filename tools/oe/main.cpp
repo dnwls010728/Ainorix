@@ -56,7 +56,7 @@ struct Args {
 
 // Flags that take a value; everything else starting with -- is a boolean switch.
 const char* kValueFlags[] = {"--out", "--width", "--height", "--frames", "--port", "--name", "--eye", "--target", "--fov", "--connect", "--size", "--to", "--renderer", "--screenshot", "--select", "--lang", "--script", "--shader", "--retarget", "--effects",
-                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--scenes", "--seed", "--api-port", "--players", "--agent", "--ask", "--agent-chat", "--settings", "--animation-time", "--animation-clip"};
+                            "--package", "--sdk", "--keystore", "--ks-pass", "--key-alias", "--key-pass", "--abi", "--version-code", "--version-name", "--orientation", "--save-dir", "--min-players", "--scenes", "--seed", "--api-port", "--players", "--agent", "--ask", "--agent-chat", "--settings", "--animation-time", "--animation-clip", "--animation-controller"};
 
 Args ParseArgs(int argc, char** argv, int start) {
     Args a;
@@ -204,7 +204,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --frame-selection --animation --animation-clip Clip --animation-time N --2d --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --frame-selection --animation [--animation-frames] --animation-controller animations/x.controller.json --animation-clip Clip --animation-time N --2d --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -513,8 +513,9 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
             if(a.Has("--effects-values") && a.Has("--effects-graph")) editor.SetEffectsGraphValue(true,5);
             else if(a.Has("--effects-values")) editor.SetEffectsValues(true,true,10);
         }
-        if (i == 1 && a.Has("--animation")) {
-            editor.FocusAnimationPanel();
+        if (i == 1 && a.Has("--animation-controller")) engine.Call("editor.animation", Json(Json::Object{{"controller", a.Get("--animation-controller")}}));
+        if (i == 1 && (a.Has("--animation") || a.Has("--animation-frames"))) {
+            engine.Call("editor.animation", Json(Json::Object{{"frames", a.Has("--animation-frames")}}));
             if (a.Has("--animation-time") || a.Has("--animation-clip")) {
                 Json args = Json::MakeObject(); args["id"] = editor.Selected();
                 if (a.Has("--animation-time")) args["time"] = std::stod(a.Get("--animation-time"));

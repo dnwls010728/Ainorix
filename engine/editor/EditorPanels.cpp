@@ -158,6 +158,8 @@ const char* KindLabel(const std::string& kind) {
     if (kind == "prefab") return Tr("Prefabs");
     if (kind == "script") return Tr("Scripts");
     if (kind == "model") return Tr("Models");
+    if (kind == "controller") return Tr("Animation Controller");
+    if (kind == "animation") return Tr("Animation");
     if (kind == "texture") return Tr("Textures");
     if (kind == "material") return Tr("Materials");
     if (kind == "shader") return Tr("Shaders");
@@ -846,7 +848,9 @@ void NativeEditor::Impl::InspectorPanel() {
                     ImGui::PushID(field.c_str());
                     if (type == "Script" && field == "params") ScriptParamsRows(id, kv.second);
                     else if (axisLock) AxisLockRow(id, type, group, properties, kv.second);
-                    else FieldEditor(id, type, field, f.second, kv.second[field]);
+                    else if (type == "SpriteAnimation" && field == "clips") {
+                        if (ImGui::Button(Tr("Edit Sprite Frames"))) Call("editor.animation", ObjectOf({{"frames", true}}));
+                    } else FieldEditor(id, type, field, f.second, kv.second[field]);
                     ImGui::PopID();
                 }
                 ImGui::EndTable();
@@ -975,10 +979,11 @@ void NativeEditor::Impl::AssetsPanel() {
                     else if (kind == "script") OpenScript(path);
                     else if (kind == "shader" || kind == "material") OpenShader(path);
                     else if (kind == "vfx") OpenEffect(path);
+                    else if (kind == "controller") Call("editor.animation", ObjectOf({{"controller", path}}));
                     else if (kind == "prefab") Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 }
             }
-            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material" || kind == "vfx") ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
+            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material" || kind == "vfx" || kind == "controller") ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
             HelpTooltip(hint ? path + "\n" + hint : path);
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload(kAssetPayload, path.data(), path.size());

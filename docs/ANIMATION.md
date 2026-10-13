@@ -318,7 +318,8 @@ only the destination clip does, even while its visual weight is small.
 
 ### Authoring and queries
 
-Model markers belong to `<model file>.events.json`, beside `<model file>.clips.json`. They refer to
+Legacy model markers belong to `<model file>.events.json`, beside `<model file>.clips.json`;
+A3 also supports markers in the clips sidecar metadata. They refer to
 the final clip names after external clips have been added; the model/clip source files remain untouched:
 
 ```json
@@ -427,8 +428,8 @@ Event triangles show the A1 markers. Click a marker to select it, then drag it t
 snap to sequence-frame indices, model markers use seconds. A drag preserves marker identity when it
 passes another marker, and one sprite drag is one undo group. Add Event inserts `event` at the preview
 cursor. The table edits names and frame/time positions with **Enter** and removes markers. These are
-real authored changes, through `animation.set_events`, separate from pose preview. Sprite markers save
-with the scene and support normal undo. Model markers write the shared `.events.json` sidecar immediately
+real authored changes, through `animation.set_events`, separate from pose preview. Inline sprite markers save
+with the scene and support normal undo. Linked sprites and models write their shared animation/sidecar file immediately
 and are not undoable; the panel states this next to Add Event. Invalid edits return the A1 validation hint.
 Use the panel scrollbar or enlarge the bottom dock when several event rows are below the fold.
 
@@ -470,7 +471,7 @@ Screenshot automation: `build\bin\oe.exe editor build\AnimationEvents --screensh
 `--animation-clip Walk` chooses the preview clip without editing the scene; `--frame-selection` fits
 the Scene camera to `--select` for close-up comparisons. These flags affect screenshots only.
 The same `build/AnimationEvents` demo contains Fox and Hero for model/sprite previews. A2 does not add
-a sprite-sheet clip editor, reusable clip assets or an animation controller; those are A3–A5.
+controller evaluation in the isolated preview. A3/A4 provide reusable clips/frame authoring; A5 provides Lua controllers and their graph below.
 
 Verified by `AnimationPreviewIsolationAndLifecycle`, `AnimationPreviewModelPoseAndMarkersWithoutAnimator`
 and `NativeEditorAnimationPanel`; the editor case drives play/pause/step/restart, scrubbing, marker dragging,
@@ -482,30 +483,278 @@ they remain fixed while stopped and can pin the feet. This is deliberately uncha
 preview with Apply IK off to inspect the unmodified clip. Preview does not reproduce script-driven foot
 placement or SpringBone dynamics from play.
 
+## Shared clip assets (A3)
+
+`SpriteAnimation.asset` names a reusable `.anim.json` file. Its clips take precedence over the
+legacy inline `clips` object; leaving `asset` empty preserves existing scenes. Instances in scenes
+and prefabs share the definition, while each keeps its own clip/time/speed/playing/finished state.
+Texture paths are relative to the project root, not the animation file.
+
+```json
+{
+  "sheet": {"texture": "assets/sprites/hero.png", "columns": 6, "rows": 2},
+  "clips": {
+    "walk": {
+      "displayName": "Walking",
+      "frames": [6, 7, 8, 9, 10, 11], "fps": 6, "loop": true,
+      "events": [{"frame": 0, "name": "leftFoot"}, {"frame": 3, "name": "rightFoot"}]
+    }
+  }
+}
+```
+
+Link it with `SpriteAnimation {asset:"animations/hero.anim.json", clip:"walk"}` plus a `Sprite`.
+The asset supplies the rendered texture/grid without rewriting authored Sprite fields. Tint,
+flip, pivot, material, sorting and size remain instance properties. A stopped scene samples the
+linked sprite at its authored time; isolated preview still changes only its scene copy.
+
+Instead of `sheet`, use exactly one `atlas` with a texture and pixel rectangles, indexed by clip frames:
+`{"atlas":{"texture":"assets/hero.png","frames":[[0,0,24,32],[24,0,20,32]]},"clips":{"walk":{"frames":[0,1],"fps":8}}}`.
+Rectangles are `[x,y,width,height]` from the image's top-left. Both renderers sample texel centers,
+honor flips and use each rectangle's dimensions for pixelsPerUnit sizing. Rotated/trimmed atlas
+entries, source-canvas offsets, per-frame pivots are not supported by A3; A4 adds per-frame duration below;
+T1 extended atlas support remains separate work. A rectangle outside the loaded image renders an error tint.
+
+Clip fps defaults to 8 (range 0.001..10000), loop to true, displayName to the stable clip key.
+Clip keys and labels contain 1..128 bytes. Definitions allow 1..256 clips, 1..65536 sequence frames
+per clip or atlas, and sheet columns/rows in 1..4096. Frames are integer indices in the sheet/atlas.
+Markers retain A1's sequence-index semantics and 256-marker limit. Unknown fields and invalid types,
+indices, fps or markers are rejected before writing. Missing images render the existing missing-image tint.
+`animation.play {loop:...}` sets a linked sprite's per-instance `loopOverride` (-1 = asset default,
+0 = once, 1 = repeat); it never rewrites the shared clip. Inline sprites retain their old loop edits.
+Changing the asset or clip restarts playback; editing an existing asset keeps the instance time.
+
+A model's existing `<model>.clips.json` source list can also carry `metadata` keyed by stable clip name:
+
+```json
+{
+  "clips": ["../anims/hero_clips.gltf"],
+  "metadata": {
+    "Walk": {
+      "displayName": "Walking",
+      "loopRange": [0.1, 0.7],
+      "events": [{"time": 0.1, "name": "leftFoot"}, {"time": 0.4, "name": "rightFoot"}]
+    }
+  }
+}
+```
+
+`clips` and `metadata` are optional. Source paths remain relative to the model. Metadata applies to
+embedded and external clips after matching external channels by bone name. Events use original clip
+seconds. `loopRange` must satisfy `0 <= start < end <= duration` and remain nonempty as float playback
+values. It changes only repeating playback: start/reverse restart use its start/end, all advances
+wrap within it, and only markers in the closed range repeat. End/start seam ordering remains A1's
+ordering in either direction. Decimal marker times at a range boundary use the same float seam in
+playback calculations; authored/query marker times stay unchanged. Non-looping playback still traverses the full original clip and emits
+`finished` once. Preview seeks can inspect the full clip; repeating advances use the configured range.
+Labels appear in preview and the model clip picker; commands and callbacks still use the stable key.
+`asset.info` model clips expose displayName, loopRange and events; `animation.state/preview_state`
+include the label/range. The preview state also identifies a linked sprite's asset.
+
+Legacy `<model>.events.json` remains supported. Explicit `metadata[clip].events`, including an empty
+array, overrides that clip's legacy markers. Other legacy entries still apply. `animation.set_events`
+writes the linked sprite asset, or a model's clips sidecar when it has a `metadata` field; models
+without that field keep writing the legacy events sidecar. Source lists and unrelated metadata survive.
+The panel labels shared writes as immediate and outside undo. Inline sprite events still use scene undo.
+
+- `animation.create {path, values, overwrite?:false}` validates and writes a complete definition;
+  existing files require overwrite. `.clips.json` needs its associated model and valid source files.
+- `animation.get {path}` returns `{path, values}` for a valid definition.
+- `animation.set {path, values, clip?}` merges fields at the root, or into one sprite clip/model
+  metadata entry. Nested objects and arrays replace their previous values. A root metadata replacement
+  can remove entries; replacing the entire definition uses create with overwrite.
+- File writes leave scene JSON, revision and undo unchanged. They are blocked during recorded or
+  network matches. The normal scene save does not duplicate shared definitions into entities.
+- `asset.info` recognizes both file types as kind `animation`; Assets groups them as Animation.
+  Cached `.anim.json`, model clips/events sidecars and external clip source files reload on timestamp
+  change, creation or deletion. External `.gltf` binary buffers are watched too. Textures keep their
+  existing independent reload. Malformed definitions cache an error and recover when repaired;
+  missing/invalid preview clips close the isolated preview safely.
+
+
+## Sprite clip authoring (A4)
+
+Select a Sprite + SpriteAnimation and open View > Animation. **Sprite Frames** switches from the
+preview timeline to the frame editor; **Preview Timeline** returns to playback/event editing.
+The Inspector's former `SpriteAnimation.clips` JSON box is now **Edit Sprite Frames**. An empty
+inline clip set opens the authoring view so a first clip can be created. Choose a unique key and
+**Create Sprite Clip**; existing keys are rejected rather than replaced. Clip selection remains
+preview-only; set the authored SpriteAnimation.clip or call animation.play to use it in play.
+
+Source Frames shows sheet cells or A3 rectangle-atlas entries at their aspect ratio. Click one to
+append it, or drag it onto a sequence frame to insert before that frame. Drop onto **Drop Frames
+Here** to append. Drag a sequence frame onto another to move it to that final index, or select it
+and use **Move Frame Left/Right**. **Remove Frame** retains at least one frame. Source/sequence
+pages contain 64 entries; sequence paging selects a frame in the next/previous page. Repeated
+source indices are allowed and retain their separate duration/event identity. Selecting a sequence
+frame seeks the isolated Scene/Game preview; append/reorder keeps the edited frame visible. Missing images use
+numbered buttons. For large sequences, use paging or the authoring API.
+
+**Frame Seconds** commits with Enter and enables explicit per-frame timing. **Loop Clip** changes
+its authored loop setting; **Loop Preview** remains the isolated playback switch. FPS is the fallback
+rate; **Use FPS Timing** removes explicit durations. Structural operations move each duration and
+event with its sequence frame. Inserting shifts event indices; removing drops markers on the removed
+frame and shifts those after it. A direct replacement of frames through values must also supply
+appropriate durations/events; the engine cannot infer identity from repeated source indices.
+
+```json
+"walk": {
+  "frames": [0, 1, 2], "fps": 8, "durations": [0.1, 0.2, 0.3], "loop": false,
+  "events": [{"frame": 1, "name": "foot"}]
+}
+```
+
+`durations` is optional, in seconds, and has exactly one numeric value per sequence frame. Values
+are finite and in 0.0001..3600, with total duration at most 3600 seconds. When present it overrides
+fps for playback, event positions, preview and both renderers. Frame starts are cumulative (0, 0.1,
+0.3 above); the non-looping last frame holds for its duration, then finished fires at the total (0.6).
+Without durations, legacy fps clips retain their start-of-last-frame non-looping endpoint. This
+preserves existing scenes. Forward/reverse crossings, multi-loop notifications and snapshot replay
+retain A1 contracts. Markers still store sequence indices, not source-sheet frame numbers.
+Preview reports variableTiming, frameTimes and effective frameDurations; scrubbing and marker
+add/drag use those positions. Springs and script-driven IK retain the A2 preview limits.
+
+- `animation.get_clip {id, clip?, offset?:0, limit?:64, sourceOnly?:false}` returns clip values,
+  asset, image metadata, texture dimensions, source frameCount and a bounded page of `{index, rect}`
+  pixel rectangles. limit is 1..128; sourceOnly omits clip values for lightweight atlas requests.
+  A missing inline key returns null values so a new clip can be authored.
+- `animation.set_clip {id, clip, values?, operation?, index?, to?, frame?, duration?, merge?}` creates
+  or patches named clips. values merges clip fields. Operations: create (requires a new key), append,
+  insert, move (to is the final index), remove, duration (edits one frame) and uniform (removes durations).
+  Failed validation leaves scene/files unchanged. Inline edits use normal undo/save and merge groups;
+  linked clips update their shared .anim.json immediately without scene revision/undo. Other shared
+  clips and sheet/atlas data remain intact. Recording/network-match guards also cover these edits.
+- `editor.animation {frames:true}` opens the frame view; false returns to preview. editor.state
+  includes animationFrames. Screenshot automation adds `--animation-frames` to `--animation`.
+
+The editor consumes A3 sheet/rectangle-atlas data. T1 extended atlases and T2 Aseprite import remain
+separate roadmap work; rotated/trimmed entries, source-canvas offsets and per-frame pivots are still
+unsupported. T2 can write the same durations arrays when it is implemented.
+
+
+## Animation controllers (A5)
+
+A controller is a project-relative `.controller.json` asset. `require("oe.animator")`
+loads the validated asset and evaluates its state machine in Lua; it calls `animation.play`
+only on entry or transition. The engine supplies asset validation/loading and playback, not
+state-machine evaluation. SpriteAnimation and MeshRenderer use the same format/module.
+
+`animation.controller_create {path, values, overwrite?}` creates a file;
+`animation.controller_get {path, id?}` reads it;
+`animation.controller_check {path, id?}` validates it; optional id verifies **every** state clip
+without adding Animator or changing playback. `animation.controller_set {path, values}` replaces
+the complete definition after validation. Writes are immediate shared file edits without scene
+revision/undo and are rejected during recording or active matches. Invalid writes preserve the file.
+`asset.info` reports kind `controller` and the validated values.
+
+```json
+{
+  "entry": "Idle",
+  "parameters": {
+    "speed": {"type": "number", "default": 0},
+    "grounded": {"type": "boolean", "default": true},
+    "jump": {"type": "trigger", "default": false}
+  },
+  "states": {
+    "Idle": {"clip": "idle", "position": [40, 80]},
+    "Walk": {"clip": "walk", "speed": 1, "loop": true, "position": [320, 80]},
+    "Jump": {"clip": "jump", "loop": false, "position": [320, 280]}
+  },
+  "transitions": [
+    {"from": "*", "to": "Jump", "blend": 0.15,
+     "conditions": [{"parameter": "jump", "op": "trigger"},
+                    {"parameter": "grounded", "op": "==", "value": true}]},
+    {"from": "Idle", "to": "Walk", "blend": 0.2,
+     "conditions": [{"parameter": "speed", "op": ">", "value": 0.1}]},
+    {"from": "Walk", "to": "Idle",
+     "conditions": [{"parameter": "speed", "op": "<=", "value": 0.1}]},
+    {"from": "Jump", "to": "Idle", "minTime": 0.5,
+     "conditions": [{"parameter": "grounded", "op": "==", "value": true}]}
+  ]
+}
+```
+
+```lua
+local Animator = require("oe.animator")
+local Player = {}
+function Player:onStart()
+    self.controller = Animator.new(self.id, "animations/player.controller.json")
+end
+function Player:onUpdate(dt)
+    self.controller:set("speed", math.abs(input.axis("moveX")))
+    self.controller:set("grounded", true) -- replace with the project's ground query
+    if input.pressed("jump") then self.controller:trigger("jump") end
+    self.controller:update(dt)
+end
+return Player
+```
+
+The module provides `new(id, path)`, `controller:set(name, value)`, `get(name)`,
+`trigger(name)`, `update(dt)`, and `state()`. State returns a copied parameter table,
+current state, elapsed seconds, id and path. Parameters are typed: finite numbers in
+[-1e9,1e9], booleans, and false-default triggers. Set/get reject unknown names; set rejects
+triggers (use trigger). Construction verifies all clips before starting the entry clip.
+Each owner has independent state; store it on the script instance for native rollback.
+
+Transitions run in authored array order, including wildcard origins, with AND conditions.
+The first match wins; at most one transition per update. Self transitions are skipped.
+Numeric operators: ==, !=, >, >=, <, <=; booleans: ==/!=; triggers: op trigger without value.
+Triggers stay pending until consumed by the winning transition; losing/blocked transitions
+consume nothing. minTime is elapsed state time in seconds, including this update's dt;
+it defaults to zero. Entry and every transition reset this clock and restart the destination
+clip. An unchanged state does not restart playback. Failed playback leaves state/trigger/clock
+unchanged. dt must be finite, nonnegative and <=3600; the accumulated clock saturates at 3600.
+Calling update once in onUpdate keeps it on fixed simulation time; calls elsewhere are the
+project's responsibility. Missing/deleted entities or clips produce Lua errors.
+
+A state speed defaults to 1 (range -10000..10000), loop to true. Each transition blend defaults
+to zero (0..5 seconds); `animation.play {blend}` forwards it to Animator.blend for a model.
+Sprites change immediately, without an image crossfade. Models use the existing outgoing-clip
+pose blend and emit events only from the incoming clip. No blend trees, completion/exit-time
+conditions or automatic event routing are added; scripts may translate onAnimationEvent into
+a trigger. minTime is wall time in fixed updates, not normalized clip progress.
+
+Definitions allow 1..64 states, <=64 parameters, <=256 transitions, 1..16 conditions each and
+at most 1 MiB JSON. Names/clip keys have 1..128 bytes; * is reserved as an origin wildcard,
+not a state name. Unknown fields/types/operators, missing references, invalid defaults and
+nonfinite/out-of-range values are rejected. State position is optional [x,y] in canvas units
+(each within +/-100000); it affects authoring layout only. Loaded controllers retain their
+validated definition for the owner lifetime. Restart/recreate owners to adopt file changes;
+there is no automatic hot reload of running controllers. Use one controller per entity; external
+animation.play calls can make playback diverge from the controller state.
+
+In View > Animation, choose **Animation Controller**, enter a path and **Create Controller**,
+or double-click an existing controller in Assets. `editor.animation {controller:path}` opens it;
+empty controller returns to the timeline. The shared Effects/Shader EditorNodeCanvas supplies
+state dragging, wheel zoom, middle/empty-canvas pan and Fit Controller Graph. The inspector
+creates/renames/removes states, changes clips/speed/loop/entry, creates typed parameters,
+changes defaults, and adds/removes/reorders transitions and AND conditions. Removing a state
+removes its incident transitions and chooses another entry if needed; removing a referenced
+parameter fails validation until its conditions are removed. File writes use the same commands.
+Preview State shows just the selected state's clip in the isolated preview; it does not evaluate
+the controller, scripts, physics or springs. Select the target sprite/model first.
+`editor.state.animationController` reports the path and `animationControllerState` the selected
+node, not live gameplay state. Screenshot example:
+
+```bat
+build\bin\oe.exe editor build\AnimationController --screenshot build\controller.png --animation-controller animations/hero.controller.json --select Hero --width 1800 --height 1400 --frames 5
+```
+
 ## Status
 
-A1 is implemented for models and sprites. All 368 Windows tests pass, including four API-driven timeline tests with
-native snapshot replay, marker validation, outgoing-blend silence and callback mutation/fault handling.
-The 800x500 demo's software/D3D11 mean RGB difference is 0.089/255; its editor Game view was checked.
-The old Showcase software hash remains `72ab07fb213fd42b`. Rebuilt web and both Android players
-include A1; headless Edge (WebGL2 on SwiftShader) ran the demo's model and sprite callbacks and HUD
-updates without script/WebGL errors. Both Android ELF binaries retain 16 KB LOAD alignment.
+A1 through A5 are implemented. All 385 Windows tests pass. The four A5 tests cover validated
+file edits without scene/revision/history/hash changes, malformed definitions and recording guards,
+typed parameters, ordered/wildcard/AND transitions, pending triggers, failure atomicity, model
+crossfades, shared sprite/model native rollback and changed-resource rejection. Native window
+input verifies graph selection, preview, state/transition creation, parameter text entry/addition,
+state dragging and switching back to the timeline. English/Korean/Japanese graph screenshots
+were inspected; the model/sheet/atlas demo visibly changes Idle/Walk/Run poses and frames.
+Its software/D3D11 mean RGB difference is 0.077/255; Showcase retains 72ab07fb213fd42b.
+Web and both Android players were rebuilt. Headless Edge WebGL2 (SwiftShader) ran the packaged
+controller demo through Walk, Run, Jump and Idle for all three entities without script/WebGL
+errors. Both Android ABIs retain 16 KB LOAD alignment. Windows snapshot budget: 6.25 ms worst
+in the full suite (16.67 ms limit).
 
-A2 is implemented. All 373 Windows tests pass; the final editor test also verifies legacy layout migration
-and visibility persistence. English/Korean/Japanese model/sprite panel screenshots were checked. The
-800x500 isolated model preview's software/D3D11 mean RGB difference is 0.083/255. The original Showcase
-hash remains unchanged. Rebuilt web/Android players contain the shared preview API; the native panel
-is a desktop tool, not a player UI. Headless Edge ran the refreshed player's model/sprite demo without
-script/WebGL errors. Android libraries were rebuilt for both ABIs and retain 16 KB LOAD alignment.
-
-The IK correction is covered by `AnimationPreviewIkIsOptInAndIsolated` and
-`NativeEditorAnimationPreviewIkControl`: free/fixed foot motion, attachment following, direct-child
-goal scope and unchanged authored weights/revision/undo/frame hash. Chisa Walk was inspected at 0.20 s
-and 0.60 s with `oe editor --screenshot`; the former has a wide stride, the latter crossed legs.
-All 99 Chisa project files retained their content hashes, with no added files. These screenshots live
-outside the project as `build/chisa-walk-ik-off-020.png` and `build/chisa-walk-ik-off-060.png`.
-`EngineAnimation.cpp` belongs to OwnEngine, which all players link, so web and both Android runtimes
-were rebuilt for this correction too; physical Android and Linux/EGL remain unverified.
-
-- [ ] Physical Android and Linux/EGL execution of animated models and A1 callbacks.
-- [ ] Real browser GPU/mobile rendering and performance (the browser check used SwiftShader).
+Physical Android, Linux/EGL and real browser/mobile GPUs remain unverified. Sprite crossfades,
+blend trees, automatic controller hot reload and controller evaluation inside isolated previews
+remain outside A5; ordinary stopped Scene IK and preview SpringBone limits are described above.

@@ -12,6 +12,9 @@
 #include "app/Vfx.h"
 #include "app/VfxExpressionGraph.h"
 #include "assets/Assets.h"
+#include "scene/SpriteClip.h"
+#include "assets/AnimationAsset.h"
+#include "assets/AnimationController.h"
 #include "audio/AudioSystem.h"
 #include "core/FileSystem.h"
 #include "core/Image.h"
@@ -358,6 +361,8 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    RegisterAnimationAssetCommands(r);
+    RegisterAnimationControllerCommands(r);
     Register(r, "vfx.edit", "Open an isolated Effects document shared by editor and attached agents; scene history is unchanged.",
              Params().Req("path", "string", "Project .vfx.json path.").Opt("new", "boolean", "Start an unsaved asset; path must not exist.")
                  .Opt("preset", "string", "Preset for a new document (default fire).").Opt("discard", "boolean", "Explicitly discard previous unsaved document."), false,
@@ -542,15 +547,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json& a) { return e.SnapshotCall("load", a); });
     auto animatorState = [](Engine& e, EntityId id, bool includePose) {
         if (const SpriteAnimation* sprite = e.GetScene().Get<SpriteAnimation>(id)) {
-            const Json& clip = sprite->clips[sprite->clip];
-            const bool valid = clip.isObject() && clip["frames"].isArray() && clip["frames"].size() > 0;
-            const double fps = std::max(0.001, clip["fps"].asNumber(8));
+            const Json& clip = SpriteAnimationClips(*sprite, e.Assets())[sprite->clip];
+            SpriteClipTiming timing; const bool valid = ParseSpriteClipTiming(clip, timing, nullptr);
             Json out = Json::MakeObject();
             out["id"] = id; out["type"] = "SpriteAnimation"; out["clip"] = sprite->clip;
             out["speed"] = sprite->speed; out["playing"] = sprite->playing && !sprite->finished;
-            out["loop"] = clip["loop"].asBool(true); out["time"] = sprite->time; out["finished"] = sprite->finished;
+            out["loop"] = SpriteAnimationLoop(*sprite, clip); out["asset"] = sprite->asset; out["time"] = sprite->time; out["finished"] = sprite->finished;
             out["validClip"] = valid;
-            out["duration"] = valid ? static_cast<double>(clip["frames"].size() - (clip["loop"].asBool(true) ? 0 : 1)) / fps : 0;
+            out["duration"] = valid ? (SpriteAnimationLoop(*sprite, clip) ? timing.duration : timing.end) : 0;
+            out["variableTiming"] = timing.variable;
             if (const Sprite* renderer = e.GetScene().Get<Sprite>(id)) out["frame"] = renderer->frame;
             return out;
         }
@@ -568,6 +573,10 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         const AnimationClip* clip = mesh ? FindAnimationClip(*mesh, animator->clip) : nullptr;
         out["validClip"] = clip != nullptr;
         out["duration"] = clip ? clip->duration : 0;
+        if (clip) {
+            out["displayName"] = clip->displayName.empty() ? clip->name : clip->displayName;
+            out["loopRange"] = Json::MakeArray(); out["loopRange"].push(clip->loopStart); out["loopRange"].push(clip->loopEnd < 0 ? clip->duration : clip->loopEnd);
+        }
         if (includePose) {
             out["jointMatrices"] = Json::MakeArray();
             if (mesh) for (const Mat4& matrix : JointPalette(*mesh, EvaluateEntityPose(e.GetScene(), id, *mesh))) {
@@ -597,22 +606,30 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params().ReqWith("id", EntityRefSchema("Entity with SpriteAnimation and Sprite, or MeshRenderer.")).Req("clip", "string", "Exact name in SpriteAnimation.clips or asset.info.")
                  .Opt("speed", "number", "Playback multiplier; negative = reverse. Keeps existing speed when omitted.")
                  .Opt("loop", "boolean", "Repeat the clip. Keeps existing loop setting when omitted.")
-                 .Opt("restart", "boolean", "Reset time (default true); false preserves time."),
+                 .Opt("restart", "boolean", "Reset time (default true); false preserves time.")
+                 .Opt("blend", "number", "Model crossfade seconds 0..5; sprites switch immediately."),
              true, [animatorState](Engine& e, const Json& a) {
                  EntityId id = RequireEntity(e, a);
+                 if (a.has("blend") && (!std::isfinite(a["blend"].asNumber()) || a["blend"].asNumber() < 0 || a["blend"].asNumber() > 5))
+                     throw ApiError("invalid_argument", "blend must be in 0..5 seconds");
                  if (const SpriteAnimation* existing = e.GetScene().Get<SpriteAnimation>(id)) {
                      if (!e.GetScene().Get<Sprite>(id)) throw ApiError("missing_component", "entity has no Sprite", "Add a Sprite component first.");
                      SpriteAnimation next = *existing;
                      const std::string name = a["clip"].asString();
-                     const Json& clip = next.clips[name];
+                     const Json& clip = SpriteAnimationClips(next, e.Assets())[name];
                      if (!clip.isObject() || !clip["frames"].isArray() || clip["frames"].size() == 0)
                          throw ApiError("animation_not_found", "sprite has no clip '" + name + "'", "Define SpriteAnimation.clips with a nonempty frames array.");
                      if (a.has("speed")) next.speed = a["speed"].asFloat();
                      if (!std::isfinite(next.speed)) throw ApiError("invalid_argument", "speed must be finite", "Use a finite playback multiplier.");
-                     if (a.has("loop")) next.clips[name]["loop"] = a["loop"].asBool();
-                     next.clip = next.current = name;
+                     if (a.has("loop")) {
+                         if (next.asset.empty()) next.clips[name]["loop"] = a["loop"].asBool();
+                         else next.loopOverride = a["loop"].asBool() ? 1 : 0;
+                     }
+                     next.clip = next.current = name; next.currentAsset = next.asset;
                      if (a["restart"].asBool(true)) {
-                         next.time = next.speed < 0 ? static_cast<float>(clip["frames"].size() - 1) / std::max(0.001f, clip["fps"].asFloat(8)) : 0;
+                         SpriteClipTiming timing; std::string error;
+                         if (!ParseSpriteClipTiming(clip, timing, &error)) throw ApiError("invalid_animation", error);
+                         next.time = next.speed < 0 ? static_cast<float>(timing.variable && SpriteAnimationLoop(next, clip) ? timing.duration : timing.end) : 0;
                          next.eventsStarted = false;
                      }
                      next.finished = false; next.playing = true;
@@ -629,10 +646,11 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  const Animator* existing = e.GetScene().Get<Animator>(id);
                  Animator next = existing ? *existing : Animator{};
                  next.clip = clip->name;
+                 if (a.has("blend")) next.blend = a["blend"].asFloat();
                  if (a.has("speed")) next.speed = a["speed"].asFloat();
                  if (!std::isfinite(next.speed)) throw ApiError("invalid_argument", "speed must be finite", "Use a finite playback multiplier.");
                  if (a.has("loop")) next.loop = a["loop"].asBool();
-                 if (a["restart"].asBool(true)) { next.time = next.speed < 0 ? clip->duration : 0; next.eventsStarted = false; }
+                 if (a["restart"].asBool(true)) { next.time = next.speed < 0 ? (next.loop && clip->loopEnd >= 0 ? clip->loopEnd : clip->duration) : (next.loop ? clip->loopStart : 0); next.eventsStarted = false; }
                  next.playing = true;
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
@@ -648,14 +666,17 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         std::string source;
         double duration = 0, fps = 0;
         size_t frames = 0;
+        SpriteClipTiming timing;
         if (sprite) {
-            const Json& clip = sprite->clips[name];
+            const Json& clip = SpriteAnimationClips(*sprite, e.Assets())[name];
             frames = clip["frames"].isArray() ? clip["frames"].size() : 0;
             fps = std::max(0.001, clip["fps"].asNumber(8));
             if (!frames || !std::isfinite(fps)) throw ApiError("animation_not_found", "invalid sprite clip '" + name + "'", "Define frames and finite fps in SpriteAnimation.clips.");
-            duration = static_cast<double>(frames - (clip["loop"].asBool(true) ? 0 : 1)) / fps;
+            std::string timingError;
+            if (!ParseSpriteClipTiming(clip, timing, &timingError)) throw ApiError("invalid_animation", timingError);
+            duration = SpriteAnimationLoop(*sprite, clip) ? timing.duration : timing.end;
             if (clip.has("events")) markers = clip["events"];
-            source = "SpriteAnimation.clips";
+            source = sprite->asset.empty() ? "SpriteAnimation.clips" : sprite->asset;
         } else {
             const MeshRenderer* renderer = e.GetScene().Get<MeshRenderer>(id);
             std::string error;
@@ -663,7 +684,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
             if (!mesh) throw ApiError("asset_error", error.empty() ? "entity has no model" : error, "Check MeshRenderer.mesh and its .events.json sidecar.");
             const AnimationClip* clip = FindAnimationClip(*mesh, name);
             if (!clip) throw ApiError("animation_not_found", "model has no clip '" + name + "'", "Use asset.info to list clips.");
-            duration = clip->duration; source = renderer->mesh + ".events.json";
+            duration = clip->duration; source = renderer->mesh + (clip->metadataSidecar ? ".clips.json" : ".events.json");
             for (const AnimationMarker& marker : clip->events) {
                 Json item = Json::MakeObject(); item["time"] = marker.time; item["name"] = marker.name; markers.push(item);
             }
@@ -671,10 +692,15 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         if (write) markers = a["events"];
         std::vector<AnimationMarker> parsed;
         std::string error;
-        if (!ParseAnimationMarkers(markers, duration, fps, frames, parsed, &error))
+        if (!(sprite ? SpriteClipMarkers(markers, timing, parsed, &error) : ParseAnimationMarkers(markers, duration, 0, 0, parsed, &error)))
             throw ApiError("invalid_animation_events", error, "Use [{frame: index, name: string}] for sprites or [{time: seconds, name: string}] for models; finished is reserved.");
         if (write) {
-            if (sprite) e.GetScene().Get<SpriteAnimation>(id)->clips[name]["events"] = markers;
+            if (sprite && sprite->asset.empty()) e.GetScene().Get<SpriteAnimation>(id)->clips[name]["events"] = markers;
+            else if (sprite) {
+                Json args = Json::MakeObject(); args["path"] = sprite->asset; args["clip"] = name; args["values"]["events"] = markers;
+                Json result = e.Call("animation.set", args);
+                if (!result["ok"].asBool()) throw ApiError(result["error"]["code"].asString(), result["error"]["message"].asString());
+            }
             else {
                 const std::string path = e.ResolvePath(source);
                 Json sidecar = Json::MakeObject(); std::string text;
@@ -682,7 +708,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                     if (!ReadTextFile(path, text)) throw ApiError("read_failed", "cannot read " + source);
                     sidecar = Json::parse(text);
                 }
-                sidecar["clips"][name] = markers;
+                if (source.size() >= 11 && source.substr(source.size() - 11) == ".clips.json") sidecar["metadata"][name]["events"] = markers;
+                else sidecar["clips"][name] = markers;
                 if (!WriteTextFile(path, sidecar.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + source);
                 e.Assets().Clear();
             }
@@ -691,7 +718,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         out["duration"] = duration; out["events"] = Json::MakeArray(); out["completion"] = "finished";
         for (const AnimationMarker& marker : parsed) {
             Json item = Json::MakeObject(); item["time"] = marker.time; item["name"] = marker.name;
-            if (sprite) item["frame"] = static_cast<int>(std::llround(marker.time * fps));
+            if (sprite) item["frame"] = static_cast<int>(timing.Index(marker.time));
             out["events"].push(item);
         }
         return out;
@@ -699,7 +726,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     Register(r, "animation.events", "List timeline markers for a sprite/model clip; non-looping completion calls onAnimationEvent(\"finished\", clip).",
              Params().ReqWith("id", EntityRefSchema("Animated entity.")).Opt("clip", "string", "Clip name; default current clip."), false,
              [animationEvents](Engine& e, const Json& a) { return animationEvents(e, a, false); });
-    Register(r, "animation.set_events", "Replace clip markers. Sprites store events in clips; models write <model>.events.json (shared by all instances; file writes are not undoable).",
+    Register(r, "animation.set_events", "Replace clip markers. Inline sprites store scene events; linked sprites write .anim.json; models write clips.json metadata when present, otherwise legacy events.json. Shared file writes are not undoable.",
              Params().ReqWith("id", EntityRefSchema("Animated entity.")).Opt("clip", "string", "Clip name; default current clip.")
                  .Req("events", "array", "At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers.")
                  .Opt("merge", "string", "Undo group key for a sprite marker drag; model file writes remain outside undo."), true,
@@ -2790,7 +2817,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return out;
              });
     Register(r, "editor.animation", "Open/focus or close the Animation panel in the attached native editor; no scene edit.",
-             Params().Opt("open", "boolean", "true opens/focuses (default); false closes the panel and its preview."), false,
+             Params().Opt("open", "boolean", "true opens/focuses (default); false closes the panel and its preview.").Opt("frames", "boolean", "Show sprite frame authoring instead of the preview timeline.").Opt("controller", "string", "Open a .controller.json graph; empty returns to clip preview."), false,
              [](Engine& e, const Json& a) {
                  if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("animation", a);
                  throw ApiError("editor_unavailable", "no native editor is attached", "Run oe editor and attach with --connect; animation.preview also works without an editor.");

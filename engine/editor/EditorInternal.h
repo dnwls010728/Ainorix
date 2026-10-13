@@ -173,6 +173,17 @@ struct NativeEditor::Impl {
     std::string animationEventName;
     std::map<std::string, std::string> animationNames;
     std::map<std::string, std::array<float, 4>> animationRects;
+    bool animationFrames = false;
+    bool animationControllerFit = true;
+    std::string animationControllerNewState = "State";
+    std::string animationController, animationControllerState, animationControllerParameterName = "grounded", animationControllerParameterType = "boolean";
+    int animationControllerTransition = -1;
+    ImVec2 animationControllerPan{20, 20};
+    float animationControllerZoom = 1;
+    void AnimationControllerPanel();
+    int animationFramePage = 0, animationSequenceFrame = 0;
+    std::string animationNewClip = "new_clip";
+    void AnimationSpriteFrames(const Json& state);
     void AnimationPanel();
     void AnimationTick(double dt);
     void AnimationRect(const std::string& name);

@@ -11,6 +11,8 @@
 
 #include "app/Engine.h"
 #include "assets/Fbx.h"
+#include "assets/AnimationAsset.h"
+#include "assets/AnimationController.h"
 #include "audio/Wav.h"
 #include "render/Material.h"
 #include "core/FileSystem.h"
@@ -565,12 +567,12 @@ namespace {
 // "<model file>.clips.json" next to a model: {"clips": ["../anims/walk.gltf", ...]} (paths relative to
 // the model). The clips of those files are added to the model, their channels matched by node name:
 // animations kept apart from the character (one file per character, or retargeted from another rig).
-void AddSidecarClips(const std::string& path, Mesh& out, std::string& warnings) {
+void AddSidecarClips(const std::string& path, Mesh& out, std::string& warnings, const Json* overrideData) {
     std::string text;
-    if (!FileExists(path + ".clips.json") || !ReadTextFile(path + ".clips.json", text)) return;
+    if (!overrideData && (!FileExists(path + ".clips.json") || !ReadTextFile(path + ".clips.json", text))) return;
     Json list;
     try {
-        list = Json::parse(text);
+        list = overrideData ? *overrideData : Json::parse(text);
     } catch (const std::exception& ex) {
         warnings += std::string("clips.json: ") + ex.what() + "; ";
         return;
@@ -609,25 +611,36 @@ void AddSidecarClips(const std::string& path, Mesh& out, std::string& warnings) 
 
 }  // namespace
 
-bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
+bool LoadModelFile(const std::string& path, Mesh& out, std::string* error, const Json* sidecar) {
     out = Mesh{};
     std::string warnings;
     const bool fbx = EndsWith(Lower(path), ".fbx");
     if (!(fbx ? LoadFbxModel(path, out, warnings, error) : LoadGltfModel(path, out, warnings, error))) return false;
-    AddSidecarClips(path, out, warnings);
+    AddSidecarClips(path, out, warnings, sidecar);
+    if (sidecar || FileExists(path + ".clips.json")) {
+        std::string text, message;
+        try {
+            if ((!sidecar && !ReadTextFile(path + ".clips.json", text)) || !ApplyAnimationMetadata(sidecar ? *sidecar : Json::parse(text), out, &message)) {
+                if (error) *error = "clips.json: " + message;
+                return false;
+            }
+        } catch (const std::exception& ex) { if (error) *error = "clips.json: " + std::string(ex.what()); return false; }
+    }
     if (FileExists(path + ".events.json")) {
         std::string text;
         if (!ReadTextFile(path + ".events.json", text)) { if (error) *error = "cannot read model event sidecar"; return false; }
         try {
-            const Json sidecar = Json::parse(text);
-            if (!sidecar.isObject() || !sidecar["clips"].isObject()) throw std::runtime_error("events.json needs a clips object");
-            for (const auto& member : sidecar.members())
+            const Json legacySidecar = Json::parse(text);
+            if (!legacySidecar.isObject() || !legacySidecar["clips"].isObject()) throw std::runtime_error("events.json needs a clips object");
+            for (const auto& member : legacySidecar.members())
                 if (member.first != "clips") throw std::runtime_error("unknown events.json field: " + member.first);
-            for (const auto& item : sidecar["clips"].members()) {
+            for (const auto& item : legacySidecar["clips"].members()) {
                 auto it = std::find_if(out.clips.begin(), out.clips.end(), [&](const AnimationClip& clip) { return clip.name == item.first; });
                 if (it == out.clips.end()) throw std::runtime_error("events.json: unknown clip " + item.first);
                 std::string message;
-                if (!ParseAnimationMarkers(item.second, it->duration, 0, 0, it->events, &message)) throw std::runtime_error(message);
+                std::vector<AnimationMarker> legacy;
+                if (!ParseAnimationMarkers(item.second, it->duration, 0, 0, legacy, &message)) throw std::runtime_error(message);
+                if (!it->sidecarEvents) it->events = std::move(legacy);
             }
         } catch (const std::exception& ex) { if (error) *error = "events.json: " + std::string(ex.what()); return false; }
     }
@@ -658,6 +671,8 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".mat.json")) return "material";
     if (EndsWith(p, ".shader.json")) return "shader";
     if (EndsWith(p, ".vfx.json")) return "vfx";
+    if (EndsWith(p, ".controller.json")) return "controller";
+    if (EndsWith(p, ".anim.json") || EndsWith(p, ".clips.json")) return "animation";
     if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
@@ -669,6 +684,26 @@ AssetManager::Entry<Mesh> AssetManager::LoadMesh(const std::string& path) {
         std::string full = engine_.ResolvePath(path);
         e.mtime = FileModifiedTime(full);
         e.eventsMtime = FileModifiedTime(full + ".events.json");
+        e.dependencies[full + ".clips.json"] = FileModifiedTime(full + ".clips.json");
+        std::string text;
+        if (ReadTextFile(full + ".clips.json", text)) {
+            std::string parseError; const Json sidecar = Json::parse(text, &parseError);
+            for (const Json& item : sidecar["clips"].items()) if (item.isString()) {
+                const std::string source = JoinPath(ParentPath(full), item.asString());
+                e.dependencies[source] = FileModifiedTime(source);
+                std::string gltfText;
+                if (EndsWith(Lower(source), ".gltf") && ReadTextFile(source, gltfText)) {
+                    const Json gltf = Json::parse(gltfText, &parseError);
+                    for (const Json& buffer : gltf["buffers"].items()) {
+                        const std::string uri = buffer["uri"].asString();
+                        if (!uri.empty() && uri.compare(0, 5, "data:") != 0) {
+                            const std::string dep = JoinPath(ParentPath(source), uri);
+                            e.dependencies[dep] = FileModifiedTime(dep);
+                        }
+                    }
+                }
+            }
+        }
         auto mesh = std::make_shared<Mesh>();
         if (!FileExists(full)) e.error = "model file not found: " + path;
         else if (KindOf(path) != "model") e.error = "'" + path + "' is not a built-in mesh (cube, sphere, plane, pyramid, quad) or a .glb/.gltf/.fbx model";
@@ -836,6 +871,30 @@ TilesetLookup AssetManager::Tilesets() {
     return [this](const std::string& path, std::string* error) { return GetTileset(path, error); };
 }
 
+AssetManager::Entry<Json> AssetManager::LoadAnimation(const std::string& path) {
+    Entry<Json> entry;
+    try {
+        const std::string full = engine_.ResolvePath(path);
+        entry.mtime = FileModifiedTime(full);
+        std::string text;
+        if (!EndsWith(Lower(path), ".anim.json")) entry.error = "sprite asset must end with .anim.json";
+        else if (!ReadTextFile(full, text)) entry.error = "animation asset not found: " + path;
+        else {
+            auto data = std::make_shared<Json>(Json::parse(text));
+            if (ValidateSpriteAnimationAsset(*data, &entry.error)) entry.asset = data;
+        }
+    } catch (const std::exception& ex) { entry.error = ex.what(); }
+    if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), entry.error.c_str());
+    return entry;
+}
+
+std::shared_ptr<const Json> AssetManager::GetAnimation(const std::string& path, std::string* error) {
+    auto found = animations_.find(path);
+    if (found == animations_.end()) found = animations_.emplace(path, LoadAnimation(path)).first;
+    if (error) *error = found->second.error;
+    return found->second.asset;
+}
+
 AssetManager::FontEntry AssetManager::LoadFont(const std::string& path) {
     FontEntry e;
     try {
@@ -894,10 +953,15 @@ std::vector<std::string> AssetManager::PollChanges() {
         }
     };
     for (auto& kv : meshes_) {
-        if (mtimeOf(kv.first) != kv.second.mtime || mtimeOf(kv.first + ".events.json") != kv.second.eventsMtime) {
+        bool dependencyChanged = false;
+        for (const auto& dep : kv.second.dependencies) dependencyChanged = dependencyChanged || FileModifiedTime(dep.first) != dep.second;
+        if (dependencyChanged || mtimeOf(kv.first) != kv.second.mtime || mtimeOf(kv.first + ".events.json") != kv.second.eventsMtime) {
             kv.second = LoadMesh(kv.first);
             changed.push_back(kv.first);
         }
+    }
+    for (auto& kv : animations_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) { kv.second = LoadAnimation(kv.first); changed.push_back(kv.first); }
     }
     for (auto& kv : textures_) {
         if (mtimeOf(kv.first) != kv.second.mtime) {
@@ -949,6 +1013,7 @@ std::vector<std::string> AssetManager::PollChanges() {
 }
 
 void AssetManager::Forget(const std::string& path) {
+    animations_.erase(path);
     vfx_.erase(path);
     if (KindOf(path) == "shader") {
         shaders_.erase(path);
@@ -963,6 +1028,7 @@ void AssetManager::Forget(const std::string& path) {
 }
 
 void AssetManager::Clear() {
+    animations_.clear();
     vfx_.clear();
     shaders_.clear();
     meshes_.clear();
@@ -993,6 +1059,19 @@ Json AssetManager::Info(const std::string& path) {
     } else {
         out["builtin"] = true;
     }
+    if (kind == "controller") out["values"] = ReadAnimationController(engine_, path);
+    if (kind == "animation") {
+        std::string text; ReadTextFile(engine_.ResolvePath(path), text);
+        if (EndsWith(Lower(path), ".anim.json")) {
+            std::string error; auto definition = GetAnimation(path, &error);
+            if (!definition) throw ApiError("invalid_animation", error);
+            out["values"] = *definition;
+        } else {
+            std::string error; auto mesh = GetMesh(path.substr(0, path.size() - 11), &error);
+            if (!mesh) throw ApiError("invalid_animation", error);
+            out["values"] = Json::parse(text);
+        }
+    }
     if (kind == "model") {
         std::string err;
         auto mesh = GetMesh(path, &err);
@@ -1013,6 +1092,12 @@ Json AssetManager::Info(const std::string& path) {
             Json value = Json::MakeObject();
             value["name"] = clip.name;
             value["duration"] = clip.duration;
+            value["displayName"] = clip.displayName.empty() ? clip.name : clip.displayName;
+            value["loopRange"] = Json::MakeArray(); value["loopRange"].push(clip.loopStart); value["loopRange"].push(clip.loopEnd < 0 ? clip.duration : clip.loopEnd);
+            value["events"] = Json::MakeArray();
+            for (const AnimationMarker& marker : clip.events) {
+                Json event = Json::MakeObject(); event["time"] = marker.time; event["name"] = marker.name; value["events"].push(event);
+            }
             value["channels"] = static_cast<uint64_t>(clip.channels.size());
             clips.push(std::move(value));
         }

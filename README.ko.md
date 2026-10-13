@@ -108,7 +108,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 평면 반사 | 평면 메시에서 움직이는 장면을 반사하는 거울·물 표면; 뷰당 한 반사면, 두 렌더러의 공통 클리핑 | [PLANAR_REFLECTION](docs/PLANAR_REFLECTION.md) |
 | 박스 데칼 | 얼룩·충격 흔적·바닥 표식을 투영; 순서대로 기본색 합성, 박스·법선 페이드, 뷰당 16개 | [DECALS](docs/DECALS.md) |
 | 입자 충돌 | VFX 입자가 정적 3D/2D 콜라이더에서 정지·반사·소멸; 고정 스텝 중심 구간 검사, 생성 시 반발·마찰 캡처, death chain | [PARTICLE_COLLISION](docs/PARTICLE_COLLISION.md) |
-| 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(드로당 관절 64개), `Animator`, Lua 재생; sprite·모델 공통 타임라인 이벤트와 `onAnimationEvent`, 작성·조회 명령; 격리 재생·스크럽·이벤트 편집을 제공하는 Animation 패널(IK 기본 제외) | [ANIMATION](docs/ANIMATION.md) |
+| 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(드로당 관절 64개), `Animator`, Lua 재생; sprite·모델 공통 타임라인 이벤트와 `onAnimationEvent`, 작성·조회 명령; 공식 `oe.animator` 스프라이트/모델 컨트롤러, 타입 매개변수·순서 있는 전이·모델 블렌드를 갖춘 `.controller.json` 상태 그래프 편집; 공유 `.anim.json` 시트·사각 atlas clips, 모델 sidecar 표시 이름·반복 구간, `animation.create/get/set`와 hot reload; 스프라이트 프레임 선택·재정렬·프레임별 시간·loop 편집; 격리 재생·스크럽·이벤트 편집을 제공하는 Animation 패널(IK 기본 제외) | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
 | VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |
 | 내비게이션 | 정적 콜라이더나 모델에서 베이크하는 내비게이션 메시(Recast/Detour): 경로, 최근접 지점, 보행 레이캐스트, Lua 에이전트 | [NAVIGATION](docs/NAVIGATION.md) |

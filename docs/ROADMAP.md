@@ -198,6 +198,27 @@ refraction, water, caustics; clear coat.
 
 ### A. Animation workflow — before T
 
+Animations play, but a person cannot manage them in the editor, in 2D or 3D. Today: `SpriteAnimation.clips` is a
+JSON text box in the Inspector (frame numbers counted by hand on the sheet); `Animator` is a clip name picker and
+number fields (`time`, `speed`, `loop`, `blend`); nothing plays while the scene is stopped; there is no
+timeline; neither component can call a script at a moment of a clip (scripts compare `time` / `frame` in
+`onUpdate` and miss it when a frame is skipped); which states a character has and how it moves between them
+exists only as `animation.play` calls in Lua; 2D clips live inside each entity, so every prefab and scene that
+uses the character carries its own copy. This list comes before T because it serves both 2D and 3D and is a gap
+users meet at once; A1 and A2 depend on nothing, A4 is designed together with T1/T2.
+
+Rules for every item here:
+
+- One design for 2D and 3D wherever the idea is the same (events, the panel, controllers): a script sees the same
+  callback and the same commands for a `SpriteAnimation` and an `Animator`.
+- A command first (`Engine::Call`), then the editor on top of it, so agents can author and check the same data
+  (`animation.state`, `oe editor --screenshot`).
+- Playback stays on simulated time and in entity id order; events are part of the deterministic step (rollback
+  replays them). A preview in the editor never changes the scene or its revision.
+- Old scenes keep working: `SpriteAnimation.clips` inside an entity and a model's own clips stay valid.
+- The work log goes into [ANIMATION.md](ANIMATION.md) (2D parts also noted in [2D.md](2D.md)); editor strings
+  through `Tr()` with ko/ja rows.
+
 - [x] **A1 — Animation events.** A clip can name events at moments of its timeline: a frame of a sprite clip, a
   time in seconds of a model clip. The entity's scripts get `onAnimationEvent(name, clip)`, and the end of a
   clip that does not loop is an event too (instead of polling `finished`). Decide and document: where a model
@@ -208,7 +229,6 @@ refraction, water, caustics; clear coat.
   Implemented: shared `onAnimationEvent(name, clip)`, `animation.events/set_events`, model `.events.json` sidecars and inline sprite markers.
   Windows tests, software/D3D11/editor demo and WebGL2 callbacks checked; web and both Android players rebuilt.
   Remaining: physical Android, Linux/EGL and real browser GPUs/mobile performance.
-
 - [x] **A2 — Animation panel.** View > Animation: the clips of the selected entity (2D or 3D), play / pause /
   step, a timeline with a scrubber, and the pose or frame shown in the Scene view while the game is stopped (the
   way the Effects panel previews). Event marks on the timeline are added, moved and named there (A1).
@@ -216,14 +236,38 @@ refraction, water, caustics; clear coat.
   373 Windows tests and final legacy-layout test passed; en/ko/ja screenshots checked, web/Android players rebuilt.
   Preview IK defaults off for the target model only (ik opt-in); Chisa Walk screenshots and authored-state isolation checked.
   Remaining: Linux/EGL editor and physical Android/real browser GPU runtime checks.
+- [x] **A3 — Clips as assets.** 2D: a clip set in its own file (`x.anim.json`: sheet or atlas, clips, frames,
+  events) that `SpriteAnimation` references, so prefabs and scenes share one definition. 3D:
+  `<model>.clips.json` also carries events, a loop range and display names. `animation.create/get/set`,
+  `asset.info`, hot reload.
+  Implemented: shared sheet/rectangle-atlas sprite definitions, model sidecar metadata and per-instance playback.
+  377 Windows tests passed; en/ko/ja editor screenshots, software/D3D11 parity and packaged WebGL2 callbacks checked.
+  Web and both Android players rebuilt; physical Android, Linux/EGL and real browser GPU checks remain open.
+- [x] **A4 — Sprite clip editor.** In the Animation panel for 2D: the sheet shown as its frames, click or drag
+  frames into a clip, reorder them, a duration per frame (per-frame time replaces one `fps` per clip where it is
+  set), loop on/off. Replaces the JSON text box. Reads the T1 atlas when that exists; the T2 Aseprite import fills
+  the same data (tags become clips, frame durations are kept).
+  Implemented: sheet/rectangle-atlas click/drag frame authoring, sequence reorder, durations and loop editing; inline undo/shared files.
+  381 Windows tests passed, including actual native UI input; localized screenshots and WebGL2 variable-duration callbacks checked.
+  Web and both Android players rebuilt. Remaining: T1/T2 extended atlases/import, physical Android, Linux/EGL and real browser GPUs.
+- [x] **A5 — Animation controller (state machine).** An asset with states (a clip each), transitions (a
+  condition on parameters, a blend time) and parameters (`speed`, `grounded`, a trigger); scripts set
+  parameters and no longer call `animation.play` for every change; the same controller drives a sprite or a
+  model. A graph view in the editor (the canvas of the Effects / Shader Graph editors). Start as an official Lua
+  module (`oe.animator`) that reads the asset and calls `animation.play`: a state machine is behaviour a script
+  can express (DESIGN.md §2). Move evaluation into the engine only when blend trees (several clips mixed by a
+  parameter inside the pose) are needed, which a script cannot do.
+  Implemented: validated .controller.json assets/API, official oe.animator, shared native state graph and typed transition authoring.
+  385 Windows tests passed, including native text/click/drag authoring and sprite/model rollback; localized graphs and packaged WebGL2 transitions checked.
+  Web and both Android players rebuilt. Remaining: sprite crossfade/blend trees, live controller reload, physical Android, Linux/EGL and real browser GPUs.
 
 ### T. 2D baseline — after R
 
 What a general 2D game expects and the engine does not have yet. What exists is in [2D.md](2D.md): grid sprite
 sheets, `SpriteAnimation` clips, sorting layers, `Tilemap` with tileset files, autotiles and collision shapes, Box2D
 physics, `Darkness2D` + `Light2D`, the tile brush. Most gaps are in the art pipeline (atlases, files from other
-tools), sorting and lighting. Start after the R list unless a game needs an item sooner; T1–T3 belong together and
-come first because nearly every 2D game's art passes through them and the editor tools (T16) build on them.
+tools), sorting and lighting. Start after the R and A lists unless a game needs an item sooner; T1 and T2 belong together and
+come first because nearly every 2D game's art passes through them and the editor tools (A4, T16) build on them.
 
 Rules for every item here:
 
@@ -245,9 +289,7 @@ Needed by nearly every 2D game:
   TexturePacker JSON layout too.
 - [ ] **T2 — Aseprite import.** `oe import` of an Aseprite sheet + JSON export (and, if it stays small, the
   `.aseprite` file itself) writes the atlas and the `SpriteAnimation` clips from its tags, with each frame's duration.
-- [ ] **T3 — Animation events and per-frame time.** A clip frame may carry its own duration and an event name;
-  the script gets a callback when the frame is reached (footstep, hit window), once per pass, in a fixed order.
-  Depends on nothing but is designed with T1/T2 so imported tags and user data map onto it.
+- **T3 — moved.** Animation events are A1 (shared by 2D and 3D); a duration per sprite frame is part of A4.
 - [ ] **T4 — Y sort.** A sorting option for top-down games: within a layer, what stands lower on the screen is
   drawn in front (by the entity's pivot, with an offset). Done in the draw-list ordering of both renderers, not by
   scripts writing `order` every frame. Tilemap cells of the same layer take part (a wall hides the feet behind it).
@@ -283,9 +325,9 @@ Good to have:
 
 - [ ] **T15 — Large tilemaps.** Chunks: drawing and collision only for the part near the camera, loading parts of
   a big world.
-- [ ] **T16 — Editor tools for 2D.** Sprite sheet slicer (writes the T1 atlas), animation clip window with preview
-  and event marks (T3), collision polygon editing on the sprite, a tile rule editor instead of hand-written JSON.
-  Each needs its command first.
+- [ ] **T16 — Editor tools for 2D.** Sprite sheet slicer (writes the T1 atlas), collision polygon editing on the
+  sprite, a tile rule editor instead of hand-written JSON. Each needs its command first. The animation clip
+  window is A2/A4.
 - [ ] **T17 — Sprite effect presets.** Outline, hit flash, dissolve, screen wipes as ready-made shader graphs
   through `Sprite.material` / `PostProcess`. First check which of them today's graph nodes can already express —
   not verified.

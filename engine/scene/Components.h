@@ -525,15 +525,21 @@ struct SpriteAnimation {
     static constexpr const char* kTypeName = "SpriteAnimation";
     static constexpr const char* kDoc = "Plays frame sequences on the entity's Sprite. clips = {\"run\": {\"frames\": [2,3,4,5], \"fps\": 10, \"loop\": true}}; set clip to switch (restarts it).";
     Json clips = Json::MakeObject();
+    std::string asset;  // shared clips; empty preserves the inline definition
+    int loopOverride = -1;  // -1 uses the asset clip, 0/1 overrides only this instance
     std::string clip;
     float speed = 1.0f;
     bool playing = true;
     float time = 0.0f;
     bool finished = false;
     std::string current;  // runtime: clip that `time` refers to (not reflected)
+    std::string currentAsset;  // changing the asset restarts even when the clip key is unchanged
     bool eventsStarted = false;
     static void Reflect(FieldList& f) {
-        f.Add("clips", &SpriteAnimation::clips, "Clip name -> {frames: [indices], fps: number, loop: bool (default true), events: [{frame: sequenceIndex, name: string}]}. animation.events lists/sets markers; onAnimationEvent(name, clip) receives crossings and finished.");
+        f.Add("asset", &SpriteAnimation::asset, "Shared .anim.json definition (sheet or rectangle atlas plus clips/events); takes precedence over inline clips. Empty keeps legacy scenes.");
+        auto& loop = f.Add("loopOverride", &SpriteAnimation::loopOverride, "Asset clip loop override: -1 = clip default, 0 = once, 1 = repeat. Inline clips use their own loop field.");
+        loop.hasRange = true; loop.min = -1; loop.max = 1;
+        f.Add("clips", &SpriteAnimation::clips, "Clip name -> {frames: [indices], fps: number, durations: optional seconds per sequence frame (overrides fps), loop: bool (default true), events: [{frame: sequenceIndex, name: string}]}. animation.events lists/sets markers; onAnimationEvent(name, clip) receives crossings and finished.");
         f.Add("clip", &SpriteAnimation::clip, "Clip being played. Changing it starts the new clip from its first frame.");
         f.Add("speed", &SpriteAnimation::speed, "Playback speed multiplier.");
         f.Add("playing", &SpriteAnimation::playing, "Pause/resume.");

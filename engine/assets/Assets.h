@@ -26,7 +26,8 @@ bool ImageDimensions(const unsigned char* data, size_t size, int& width, int& he
 // (converted from linear light like the 8-bit decode does), other formats give 0..1.
 bool DecodeImageFloat(const unsigned char* data, size_t size, std::vector<float>& rgb, int& width, int& height, std::string* error);
 // glTF 2.0 (.glb/.gltf) or FBX (.fbx, see assets/Fbx.h), chosen by the extension.
-bool LoadModelFile(const std::string& path, Mesh& out, std::string* error);
+// A supplied sidecar replaces clips.json during validation, without writing any files.
+bool LoadModelFile(const std::string& path, Mesh& out, std::string* error, const Json* sidecar = nullptr);
 
 // Loads models and textures referenced by the scene, caches them, and
 // reloads them when their files change (PollChanges). Failed loads are
@@ -51,6 +52,8 @@ public:
     std::shared_ptr<FontFace> GetFont(const std::string& path, std::string* error = nullptr);
     // Tileset file (*.tileset.json: image, grid, tile rules). nullptr + error on failure.
     std::shared_ptr<const Tileset> GetTileset(const std::string& path, std::string* error = nullptr);
+    // Reusable sprite animation (*.anim.json), strictly validated and hot reloaded.
+    std::shared_ptr<const Json> GetAnimation(const std::string& path, std::string* error = nullptr);
     // GetTileset as a TilesetLookup (for BuildTileRules, physics, overlays).
     TilesetLookup Tilesets();
 
@@ -93,6 +96,7 @@ private:
         std::string error;
         int64_t mtime = 0;
         int64_t eventsMtime = 0;  // model event sidecar, including creation/deletion
+        std::map<std::string, int64_t> dependencies;  // model clips sidecar and external sources
     };
     Entry<Mesh> LoadMesh(const std::string& path);
     Entry<Texture> LoadTexture(const std::string& path);
@@ -101,6 +105,7 @@ private:
     Entry<ShaderGraph> LoadShader(const std::string& path);
     Entry<Tileset> LoadTileset(const std::string& path);
     Entry<VfxAsset> LoadVfx(const std::string& path);
+    Entry<Json> LoadAnimation(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
         std::string error;
@@ -118,6 +123,7 @@ private:
     std::map<std::string, Entry<Material>> materials_;
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;
+    std::map<std::string, Entry<Json>> animations_;
     std::map<std::string, Entry<VfxAsset>> vfx_;
     std::map<std::string, FontEntry> fonts_;
 };

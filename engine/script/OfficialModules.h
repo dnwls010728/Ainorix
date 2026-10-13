@@ -32,5 +32,5 @@ ScriptSource ResolveScriptSource(Engine& engine, const std::string& path);
 std::string OfficialManifestDigest();
 // Pure canonicalization helper: sorts names, normalizes CRLF/CR, ignores source-path metadata.
 std::string OfficialManifestDigest(std::vector<OfficialModule> modules, int primitiveRevision);
-constexpr int kOfficialPrimitiveRevision = 1;
+constexpr int kOfficialPrimitiveRevision = 2;
 }  // namespace oe

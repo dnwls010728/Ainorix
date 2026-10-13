@@ -55,6 +55,9 @@ void NativeEditor::Impl::AnimationPanel() {
         return;
     }
     animationEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    if (!animationController.empty()) { AnimationControllerPanel(); ImGui::End(); return; }
+    if (ImGui::Button(Tr("Animation Controller"))) { Call("editor.animation", ObjectOf({{"controller", "animations/new.controller.json"}})); ImGui::End(); return; }
+    AnimationRect("controller-tab"); ImGui::SameLine();
     if (InPlaySession()) {
         ImGui::TextWrapped("%s", Tr("Stop the game to preview animations.")); ImGui::End(); return;
     }
@@ -66,15 +69,19 @@ void NativeEditor::Impl::AnimationPanel() {
     Json state = engine.AnimationPreviewCall("state", Json());
     if (!state["active"].asBool() || state["id"].asInt() != static_cast<int>(Primary())) {
         const Json response = Call("animation.preview", ObjectOf({{"id", Primary()}}), true);
+        if (!Ok(response) && row->Has("SpriteAnimation")) {
+            Json empty = ObjectOf({{"id", Primary()}, {"clip", "new_clip"}});
+            AnimationSpriteFrames(empty); ImGui::End(); return;
+        }
         if (!Ok(response)) { ImGui::TextWrapped("%s", response["error"]["message"].asString().c_str()); ImGui::End(); return; }
-        state = response["result"]; animationEvent = animationDragIndex = -1; animationAccumulator = 0; animationNames.clear();
+        state = response["result"]; animationFramePage = 0; animationSequenceFrame = 0; animationEvent = animationDragIndex = -1; animationAccumulator = 0; animationNames.clear();
     }
     ImGui::TextUnformatted(row->name.c_str()); ImGui::SameLine();
     ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x * 0.4f));
-    if (ImGui::BeginCombo("##animationClip", state["clip"].asString().c_str())) {
+    if (ImGui::BeginCombo("##animationClip", state["displayName"].asString(state["clip"].asString()).c_str())) {
         for (const Json& clip : state["clips"].items()) {
             const std::string name = clip["name"].asString();
-            if (ImGui::Selectable(name.c_str(), name == state["clip"].asString())) {
+            if (ImGui::Selectable((clip["displayName"].asString(name) + "##" + name).c_str(), name == state["clip"].asString())) {
                 const Json response = Call("animation.preview", ObjectOf({{"clip", name}, {"time", 0}, {"playing", false}}));
                 if (Ok(response)) state = response["result"];
                 animationEvent = animationDragIndex = -1; animationAccumulator = 0; animationNames.clear();
@@ -102,10 +109,16 @@ void NativeEditor::Impl::AnimationPanel() {
         if (ImGui::Checkbox(Tr("Apply IK"), &ik)) Call("animation.preview", ObjectOf({{"ik", ik}}));
         AnimationRect("ik");
     }
+    if (spriteClip) {
+        AnimationSameLine(Tr(animationFrames ? "Preview Timeline" : "Sprite Frames"));
+        if (ImGui::Button(Tr(animationFrames ? "Preview Timeline" : "Sprite Frames"))) animationFrames = !animationFrames;
+        AnimationRect("frames-tab");
+    }
     AnimationSameLine("                "); ImGui::SetNextItemWidth(75);
     float speed = state["speed"].asFloat();
     if (ImGui::DragFloat("##animationSpeed", &speed, 0.1f, -100, 100, "%.1fx")) Call("animation.preview", ObjectOf({{"speed", speed}}));
     HelpTooltip(Tr("Preview speed; negative plays backwards."));
+    if (spriteClip && animationFrames) { AnimationSpriteFrames(state); ImGui::End(); return; }
     // An explicit seek pauses preview; authored component fields and simulation never change.
     const float duration = state["duration"].asFloat(), current = state["time"].asFloat();
     float timeValue = current;
@@ -154,9 +167,13 @@ void NativeEditor::Impl::AnimationPanel() {
             if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                 Json& marker = animationDragEvents[static_cast<size_t>(animationDragIndex)];
                 if (spriteClip) {
-                    const int frame = std::max(0, static_cast<int>(std::llround(value * state["fps"].asNumber())));
+                    int frame = 0; double nearest = 1e100;
+                    for (size_t j = 0; j < state["frameTimes"].size(); ++j) {
+                        const double distance = std::fabs(value - state["frameTimes"][j].asNumber());
+                        if (distance < nearest) { nearest = distance; frame = static_cast<int>(j); }
+                    }
                     const int maxFrame = std::max(0, state["frameCount"].asInt() - 1);
-                    marker["frame"] = std::min(frame, maxFrame); marker["time"] = marker["frame"].asNumber() / state["fps"].asNumber();
+                    marker["frame"] = std::min(frame, maxFrame); marker["time"] = state["frameTimes"][marker["frame"].asInt()];
                 } else marker["time"] = value;
                 AnimationWriteEvents(state, animationDragEvents, "animation-marker:" + std::to_string(Primary()) + ":" +
                     state["clip"].asString() + ":" + std::to_string(dragSerial["animation-event"]));
@@ -171,13 +188,16 @@ void NativeEditor::Impl::AnimationPanel() {
         Json marker = Json::MakeObject(); marker["name"] = "event";
         if (state["type"].asString() == "SpriteAnimation") {
             const int maxFrame = std::max(0, state["frameCount"].asInt() - 1);
-            marker["frame"] = std::min(maxFrame, static_cast<int>(std::floor(current * state["fps"].asNumber() + 1e-4)));
+            int index = 0;
+            for (size_t j = 0; j < state["frameTimes"].size(); ++j) if (state["frameTimes"][j].asNumber() <= current + 1e-7) index = static_cast<int>(j);
+            marker["frame"] = std::min(maxFrame, index);
             marker["time"] = marker["frame"].asNumber() / state["fps"].asNumber();
         } else marker["time"] = current;
         events.push(marker); AnimationWriteEvents(state, events); animationEvent = -1;
     }
     AnimationRect("add-event"); ImGui::SameLine();
-    ImGui::TextDisabled("%s", Tr(spriteClip ? "Sprite events save with the scene." : "Model events write the shared sidecar immediately; no undo."));
+    const bool sharedSprite = spriteClip && !state["asset"].asString().empty();
+    ImGui::TextDisabled("%s", Tr(sharedSprite ? "Sprite events write the shared animation asset immediately; no undo." : spriteClip ? "Sprite events save with the scene." : "Model events write the shared sidecar immediately; no undo."));
     if (ImGui::BeginTable("##animationEvents", 3, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
                           ImVec2(0, std::max(70.0f, ImGui::GetContentRegionAvail().y)))) {
         ImGui::TableSetupColumn(Tr("Event name")); ImGui::TableSetupColumn(Tr("Event time")); ImGui::TableSetupColumn(Tr("Actions"));

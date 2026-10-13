@@ -7,6 +7,8 @@
 #include <cmath>
 
 #include "assets/Assets.h"
+#include "scene/SpriteClip.h"
+#include "assets/AnimationAsset.h"
 #include "core/Log.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
@@ -127,8 +129,11 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt, std::vector<A
                 a.fade = 0;
                 a.from.clear();
             } else if (from->duration > 0) {
-                a.fromTime = std::fmod(a.fromTime + dt * a.speed, from->duration);
-                if (a.fromTime < 0) a.fromTime += from->duration;
+                const float end = from->loopEnd < 0 ? from->duration : from->loopEnd;
+                const float period = end - from->loopStart;
+                a.fromTime = std::fmod(a.fromTime + dt * a.speed - from->loopStart, period);
+                if (a.fromTime < 0) a.fromTime += period;
+                a.fromTime += from->loopStart;
             }
         }
         if (!a.playing) { a.shownTime = a.time; continue; }
@@ -142,20 +147,36 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt, std::vector<A
             a.eventsStarted = true;
             a.time = 0; if (!a.loop) a.playing = false; continue;
         }
-        double next = static_cast<double>(a.time) + static_cast<double>(dt) * a.speed;
+        const double start = a.loop ? clip->loopStart : 0;
+        const double end = a.loop && clip->loopEnd >= 0 ? clip->loopEnd : clip->duration;
+        const double period = end - start;
+        const double previous = std::max(start, std::min(static_cast<double>(a.time), end));
+        double next = previous + static_cast<double>(dt) * a.speed;
         const double endpoint = std::max(0.0, std::min(next, static_cast<double>(clip->duration)));
         if (events) {
             const size_t begin = events->size();
-            CollectAnimationEvents(kv.first, a.clip, clip->events, a.time, a.loop ? next : endpoint,
-                                   clip->duration, a.loop, !a.eventsStarted, *events);
+            std::vector<AnimationMarker> markers;
+            for (const AnimationMarker& marker : clip->events) {
+                double time = marker.time;
+                if (a.loop && clip->loopEnd >= 0) {
+                    // Authored decimal seconds and Animator's float range must share exact seams.
+                    // Keep asset/query times intact; only the collected crossing uses playback precision.
+                    if (static_cast<float>(time) == static_cast<float>(start)) time = start;
+                    else if (static_cast<float>(time) == static_cast<float>(end)) time = end;
+                }
+                if (!a.loop || (time >= start && time <= end)) markers.push_back({time - start, marker.name});
+            }
+            CollectAnimationEvents(kv.first, a.clip, markers, previous - start, (a.loop ? next : endpoint) - start,
+                                   period, a.loop, !a.eventsStarted, *events);
             if (!a.loop && ((a.speed > 0 && next >= clip->duration) || (a.speed < 0 && next <= 0)))
-                events->push_back({kv.first, "finished", a.clip, std::fabs(endpoint - a.time)});
+                events->push_back({kv.first, "finished", a.clip, std::fabs(endpoint - previous)});
             for (size_t i = begin; i < events->size(); ++i) (*events)[i].offset /= std::fabs(a.speed);
         }
         a.eventsStarted = true;
         if (a.loop) {
-            next = std::fmod(next, static_cast<double>(clip->duration));
-            if (next < 0) next += clip->duration;
+            next = std::fmod(next - start, period);
+            if (next < 0) next += period;
+            next += start;
         } else {
             if ((a.speed > 0 && next >= clip->duration) || (a.speed < 0 && next <= 0)) a.playing = false;
             next = std::max(0.0, std::min(next, static_cast<double>(clip->duration)));
@@ -830,26 +851,35 @@ void UpdateLateSystems(Scene& scene, float dt, AssetManager* assets) {
     UpdateVfxTrails(scene, dt);
 }
 
-void UpdateSpriteAnimations(Scene& scene, float dt, std::vector<AnimationEvent>* events) {
+void UpdateSpriteAnimations(Scene& scene, AssetManager* assets, float dt, std::vector<AnimationEvent>* events) {
     for (auto& kv : scene.Pool<SpriteAnimation>()) {
         SpriteAnimation& a = kv.second;
         Sprite* sprite = scene.Get<Sprite>(kv.first);
-        if (a.clip != a.current) {  // switching clips restarts them
-            a.current = a.clip;
+        if (a.clip != a.current || a.asset != a.currentAsset) {  // switching clips/assets restarts them
+            a.current = a.clip; a.currentAsset = a.asset;
             a.time = 0.0f;
             a.finished = false;
             a.eventsStarted = false;
         }
-        const Json* clip = a.clips.isObject() ? a.clips.find(a.clip) : nullptr;
+        std::shared_ptr<const Json> definition;
+        const Json* clips = &a.clips;
+        if (!a.asset.empty()) {
+            if (!assets) continue;
+            definition = assets->GetAnimation(a.asset);
+            if (!definition) continue;  // cached error is logged once; rendering shows the error tint
+            clips = &(*definition)["clips"];
+        }
+        const Json* clip = clips->isObject() ? clips->find(a.clip) : nullptr;
         if (!sprite || !clip || !clip->isObject()) continue;
         const Json& c = *clip;
         const Json& frames = c["frames"];
         size_t count = frames.isArray() ? frames.size() : 0;
         if (count == 0) continue;
-        float fps = std::max(0.001f, c["fps"].asFloat(8.0f));
-        bool loop = c["loop"].asBool(true);
-        if (!std::isfinite(a.time) || !std::isfinite(a.speed) || !std::isfinite(fps)) continue;
-        const double duration = static_cast<double>(loop ? count : count - 1) / fps;
+        SpriteClipTiming timing; std::string timingError;
+        if (!ParseSpriteClipTiming(c, timing, &timingError)) throw ApiError("invalid_animation", timingError);
+        bool loop = SpriteAnimationLoop(a, c);
+        if (!std::isfinite(a.time) || !std::isfinite(a.speed)) continue;
+        const double duration = loop ? timing.duration : timing.end;
         if (a.playing && !a.finished && dt > 0 && a.speed != 0) {
             double next = static_cast<double>(a.time) + static_cast<double>(dt) * a.speed;
             const double endpoint = std::max(0.0, std::min(next, duration));
@@ -857,7 +887,7 @@ void UpdateSpriteAnimations(Scene& scene, float dt, std::vector<AnimationEvent>*
                 const size_t begin = events->size();
                 std::vector<AnimationMarker> markers;
                 std::string error;
-                if (!ParseAnimationMarkers(c["events"], duration, fps, count, markers, &error))
+                if (!SpriteClipMarkers(c["events"], timing, markers, &error))
                     throw ApiError("invalid_animation_events", error, "Fix SpriteAnimation.clips events or use animation.events.");
                 CollectAnimationEvents(kv.first, a.clip, markers, a.time, loop ? next : endpoint,
                                        duration, loop, !a.eventsStarted, *events);
@@ -870,7 +900,12 @@ void UpdateSpriteAnimations(Scene& scene, float dt, std::vector<AnimationEvent>*
             else { next = endpoint; if (duration == 0 || (a.speed > 0 && next >= duration) || (a.speed < 0 && next <= 0)) a.finished = true; }
             a.time = static_cast<float>(next);
         }
-        size_t index = static_cast<size_t>(std::max(0.0f, std::floor(a.time * fps + 1e-4f)));
+        size_t index = timing.Index(a.time);
+        if (loop && !timing.variable) {
+            // Preserve legacy modulo sampling for paused seeks, including the period endpoint.
+            const double frame = std::max(0.0, std::floor(static_cast<double>(a.time) * timing.fps + 1e-4));
+            index = static_cast<size_t>(std::fmod(frame, static_cast<double>(count)));
+        }
         if (loop) {
             index %= count;
         } else if (index >= count - 1) {
@@ -884,7 +919,7 @@ void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* asse
                    std::vector<AnimationEvent>* animationEvents) {
     if (assets) UpdateAnimators(scene, *assets, dt, animationEvents);
     UpdateVfxSystems(scene, assets, dt, physics);
-    UpdateSpriteAnimations(scene, dt, animationEvents);
+    UpdateSpriteAnimations(scene, assets, dt, animationEvents);
     input.pressedThisFrame.clear();
     input.text.clear();
     input.mouseDX = input.mouseDY = 0.0f;

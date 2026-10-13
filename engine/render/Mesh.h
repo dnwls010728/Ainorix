@@ -115,6 +115,10 @@ struct AnimationClip {
     float duration = 0;
     std::vector<AnimationChannel> channels;
     std::vector<AnimationMarker> events;  // from <model>.events.json; never embedded in the model
+    std::string displayName;  // optional label; name remains the stable playback key
+    float loopStart = 0, loopEnd = -1;  // seconds; negative end means full duration
+    bool metadataSidecar = false;  // events authored through the A3 sidecar instead of legacy events.json
+    bool sidecarEvents = false;  // clips.json events override the legacy events.json entry
 };
 
 struct Mesh {
