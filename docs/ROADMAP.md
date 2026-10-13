@@ -128,6 +128,7 @@ leave a new line for every check that could not be made. If the order has to cha
 | R1 Environment: `Skybox`, image-based lighting, `ReflectionProbe` | [ENVIRONMENT.md](ENVIRONMENT.md) | Android device |
 | R2 Spotlight: soft cone, both renderers, editor cone guide | [LIGHTING.md](LIGHTING.md) | Android device; Linux/EGL; existing minimum-capability vertex shader path |
 | R3 Cascaded directional shadows: stable slices, blended boundaries | [LIGHTING.md](LIGHTING.md) | Android device; Linux/EGL; existing minimum-capability vertex shader path |
+| R4 Point/spot shadows: nearest two lights, cube/cone maps | [LIGHTING.md](LIGHTING.md) | Android device; Linux/EGL; existing minimum-capability vertex shader path |
 
 Each feature doc lists its own open items under **Status**.
 
@@ -161,8 +162,11 @@ Rules for every item here:
   Implemented: `DirectionalLight.shadowCascades` (1..4) + `shadowDistance`; four 1024-square maps in a 2048-square atlas.
   Windows tests and WebGL2 demo checked; web and both Android runtimes rebuilt.
   Remaining: Android physical-device rendering; Linux/EGL rendering; existing minimum-capability vertex shader path.
-- [ ] **R4 — Point and spot light shadows.** `shadows` on those lights; a fixed budget of shadowed lights per
+- [x] **R4 — Point and spot light shadows.** `shadows` on those lights; a fixed budget of shadowed lights per
   frame, chosen like the probes (in view, nearest first).
+  Implemented: opt-in `shadows` on both components, nearest two local lights, 512-square cube/cone maps in a 2048-square atlas.
+  351 Windows tests and WebGL2 package checked; web and both Android runtimes rebuilt.
+  Remaining: Android physical-device rendering; Linux/EGL rendering; existing minimum-capability vertex shader path.
 - [ ] **R5 — Ambient occlusion (SSAO).** A `PostProcess` effect darkening the ambient term in creases and
   contacts, from the depth buffer, in both renderers.
 - [ ] **R6 — Planar reflection.** A mirror or water plane that shows what moves (characters), which probes

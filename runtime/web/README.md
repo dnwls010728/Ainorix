@@ -5,28 +5,28 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (35e3f58). R3 adds DirectionalLight.shadowCascades
-(1..4), stable camera slices, blended transitions and a 2048-square depth atlas. The R2 SpotLight
-component and light-data texture remain included.
-See [LIGHTING.md](../../docs/LIGHTING.md). All earlier player features remain included; earlier build
-history is preserved in Git. Packaging still patches the game's key into the runtime for keyed OEPAK002
-archives and stripped Lua bytecode.
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (b745881). R4 adds opt-in
+PointLight.shadows and SpotLight.shadows, deterministic two-light selection, perspective bias and
+512-square maps in a 2048-square local-shadow atlas. Light data is now 8x18 RGBA32F. R2 spotlights,
+R3 cascades and all earlier player features remain included; see [LIGHTING.md](../../docs/LIGHTING.md).
+Packaging still patches the game's key into the runtime for keyed OEPAK002 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 5,950,528 | f2f4931e40fc4914161c78981b4c490c3b6529a1555a158a534b1d5b95f96292 |
+| oe_player.wasm | 5,985,995 | c78bab58a35aaf045641d0800c3a03c76a3182f15f4afb96c1ca87fb5533a010 |
 
-Windows Release: 348 tests pass. Headless Edge (WebGL2 on SwiftShader) rendered the packaged four-cascade
-demo without shader/WebGL warnings; atlas orientation and near/far shadows matched Windows. R2 previously
-checked the spotlight demo and reflection-probe room (185 ms capture). The shader has 12 texture units
-and 203 fragment uniform vectors, plus twelve
-sampler uniforms, within the GLES3/WebGL2 fragment minimums. The pre-existing vertex skin/graph uniform
-budget is unchanged; execution on devices exposing only the vertex-stage minimum remains unverified.
+Windows Release: 351 tests pass, including all six point faces, two points using twelve tiles, spot
+occlusion, caster toggles and software/GPU comparisons. Headless Edge (WebGL2 on SwiftShader) compiled
+and linked the generated shaders and rendered the packaged point/spot example without shader/WebGL
+warnings. The fragment program has 203 vec4 uniform vectors and 13 sampler uniforms (216 conservatively),
+using 13 texture units, within GLES3/WebGL2 fragment minimums. Earlier R3/R2 browser checks are in Git history.
+The pre-existing vertex skin/graph uniform budget is unchanged; minimum-capability vertex-stage execution
+still needs device validation.
 
 Not verified on real browser GPUs or phones: frame rate, UIInput typing, sound output, touch, ads, and
-the newer animation/physics/networking paths beyond the earlier recorded browser checks. A browser can
-join binary WebSocket sessions but cannot host or use raw UDP/TCP (link.open returns nil).
+newer animation/physics/networking paths beyond the earlier recorded browser checks. A browser can join
+binary WebSocket sessions but cannot host or use raw UDP/TCP (link.open returns nil).
 
 ## Rebuild
 

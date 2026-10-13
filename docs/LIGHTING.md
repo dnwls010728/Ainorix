@@ -196,7 +196,8 @@ and shader materials. Unlit surfaces ignore all direct lights. Lights do not cre
 - R4 shadows are optional; without `shadows`, walls do not block a spot's direct light. See Point and spot shadows above.
 - GPU light data is a nearest-sampled **8x18 RGBA32F texture (2,304 bytes)** at binding 11. Rows 0..2 hold
   position/range, direction/outer cosine and color/inner cosine for eight spots. The remaining texels hold the
-  sky's nine irradiance coefficients and up to four probes' nine coefficients each, unchanged mathematically.
+  sky's nine irradiance coefficients and up to four probes' nine coefficients each, unchanged mathematically,
+  plus R4 selection, matrix and bias data.
   The immutable image is replaced only when values change, including between editor views.
 - After R4 the mesh fragment shader uses **13 of 16** texture units and **203 vec4 uniform slots**, plus thirteen sampler
   uniforms (even allowing one vector per sampler, 216 is below the GLES3/WebGL2 minimum of 224). No new vertex
@@ -230,20 +231,11 @@ Android arm64-v8a and x86_64 players build successfully with 16 KB ELF load alig
 
 ## Status
 
-R2 spotlights and R3 cascaded directional shadows are complete: both renderers, reflected editor fields/guides,
-API documentation, 348 Windows tests, and rebuilt web/Android runtimes. Headless Edge checked the packaged
-four-cascade example; earlier R2 checks covered spotlights and the reflection-probe room. R4 local-light
-shadows are delivered by the work log below.
+R2 spotlights, R3 cascaded directional shadows and R4 point/spot shadows are complete: both renderers,
+reflected editor fields/guides, API documentation, 351 Windows tests and rebuilt web/Android runtimes.
+Headless Edge checked the packaged point/spot example and shader compile/link; earlier R3/R2 checks covered
+cascades, spotlights and the reflection-probe room. R5 ambient occlusion is the next roadmap item.
 
 - [ ] Android physical-device rendering (build only here; package/install and verify on GLES3 hardware).
 - [ ] Linux/EGL rendering (requires a Linux environment).
-- [ ] Existing skin/vertex-graph shader execution on minimum-capability devices; R2/R3 leave that vertex budget unchanged.
-
-## Implementation status (work log)
-
-- [x] R4 M1: PointLight/SpotLight shadow flags, shared deterministic in-view/nearest light selection and
-  perspective maps; software/GPU local-shadow atlas, filtering and bias; behavior/parity/regression tests,
-  API/docs, example and editor screenshots.
-- [ ] R4 M2: rebuild web and both Android players, verify packaged local shadows in headless Edge,
-  refresh runtime hashes and complete the roadmap.
-- [ ] Android physical-device and Linux/EGL local-shadow rendering (unavailable here).
+- [ ] Existing skin/vertex-graph shader execution on minimum-capability devices; R2-R4 leave that vertex budget unchanged.
