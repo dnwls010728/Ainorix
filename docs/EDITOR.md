@@ -6,6 +6,9 @@ the same session as the person. Open items are listed under [Status](#status) at
 
 ## Overview
 
+The Camera Inspector exposes `PostProcess.ssr`, `ssrDistance` and `ssrThickness` for glossy screen-space
+reflections in the Game view. Scene cameras keep camera effects disabled; see [POSTPROCESS.md](POSTPROCESS.md).
+
 `oe editor <project>` opens the editor: Dear ImGui (docking) + ImGuizmo panels drawn with sokol_gfx in the engine process. The Scene and Game views are GpuRenderer textures, so nothing is streamed or encoded. It needs a window and a GPU backend (Windows today; a macOS/Linux desktop platform layer is enough, see [PLATFORMS.md](PLATFORMS.md)).
 
 ![Editor](images/native-editor.png)

@@ -312,7 +312,7 @@ vec4 light_data(int index) {
 
 // Projected color only: preserve receiver alpha, depth and normal maps. Mirrors ApplyDecals.
 vec3 decal_color(vec3 position, vec3 normal, vec3 base) {
-    if (color_range.w > 0.5) return base;
+    if (mod(color_range.w, 2.0) > 0.5) return base;
     int count = int(fog_range.w);
     for (int i = 0; i < 16; ++i) {
         if (i >= count) break;
@@ -338,7 +338,7 @@ vec3 decal_color(vec3 position, vec3 normal, vec3 base) {
 
 // Mirrors Lighting::AmbientVisibility. Transparent surfaces receive no SSAO.
 float ambient_visibility(vec3 position, vec3 normal) {
-    if (ssao_proj.w <= 0.0 || color_range.w > 0.5) return 1.0;
+    if (ssao_proj.w <= 0.0 || mod(color_range.w, 2.0) > 0.5) return 1.0;
     vec4 ssao_lens = light_data(148);
     float depth = max(0.01, dot(position - eye.xyz, view_axis.xyz));
     float scale = ssao_proj.z > 0.5 ? 1.0 : 1.0 / depth;
@@ -478,6 +478,8 @@ centroid in vec2 v_uv;
 layout(location=0) out vec4 frag_color;
 // View depth for depth of field when the pass has a second target (blended pipelines mask it off).
 layout(location=1) out vec4 frag_depth;
+layout(location=2) out vec4 frag_reflection_weight;
+layout(location=3) out vec4 frag_reflection_fallback;
 
 const float PI = 3.14159265;
 
@@ -597,7 +599,7 @@ void main() {
     if (alpha < flags.z) {
         discard;
     }
-    if (fog_range.w > 0.0 && color_range.w < 0.5) {
+    if (fog_range.w > 0.0 && mod(color_range.w, 2.0) < 0.5) {
         vec3 decalNormal = normalize(v_nrm);
         if (emissive.w > 0.5) {
             vec3 face = normalize(cross(dFdx(v_wpos),dFdy(v_wpos)));
@@ -607,6 +609,8 @@ void main() {
         base = decal_color(v_wpos,decalNormal,base);
     }
     vec3 color = base;
+    vec3 reflectionNormal = vec3(0.0), reflectionWeight = vec3(0.0), reflectionFallback = vec3(0.0);
+    float reflectionRoughness = 1.0;
     if (flags.x < 0.5) {
         vec3 ng = normalize(v_nrm);
         if (emissive.w > 0.5) {
@@ -727,6 +731,10 @@ void main() {
             remaining -= w;
         }
         color = (dBase * remaining + pd + sBase * remaining + ps) * ao;
+        if (mod(color_range.w, 2.0) < 0.5 && color_range.y == 0.0) {
+            reflectionNormal = n; reflectionRoughness = r;
+            reflectionWeight = fenv * ao; reflectionFallback = (sBase * remaining + ps) * ao;
+        }
         int dirs = int(counts.x);
         // The shadow lookup stays outside the light loop: a compare sample inside a loop with a
         // varying count makes the D3D compiler unroll it (X3570) and slows every compile.
@@ -794,10 +802,14 @@ void main() {
     vec3 outc = color + em + graphEmission;
     if (color_range.z > 0.5 && fog_color.w > 0.0) {  // FogAmount in PostProcess.h
         float f = fog_color.w * clamp((length(eye.xyz - v_wpos) - fog_range.x) / (fog_range.y - fog_range.x), 0.0, 1.0);
+        reflectionWeight *= 1.0 - f; reflectionFallback *= 1.0 - f;
         outc = color_range.z > 1.5 ? outc * (1.0 - f) : outc * (1.0 - f) + fog_color.rgb * f;
     }
     frag_color = vec4(clamp(outc, 0.0, color_range.x), clamp(alpha, 0.0, 1.0));
-    frag_depth = vec4(dot(v_wpos - eye.xyz, view_axis.xyz), 0.0, 0.0, 1.0);
+    frag_depth = color_range.w > 1.5 ? vec4(reflectionNormal, reflectionRoughness) :
+                 vec4(dot(v_wpos - eye.xyz, view_axis.xyz), 0.0, 0.0, 1.0);
+    frag_reflection_weight = vec4(reflectionWeight, clamp(alpha, 0.0, 1.0));
+    frag_reflection_fallback = vec4(reflectionFallback, clamp(alpha, 0.0, 1.0));
 }
 @end
 
@@ -1250,3 +1262,87 @@ void main() {
 @end
 
 @program sky sky_vs sky_fs
+
+// Screen-space reflected ambient: dedicated pass keeps mesh texture/uniform limits unchanged.
+@fs ssr_fs
+layout(binding=0) uniform ssr_params {
+    mat4 ssr_inverse;
+    mat4 ssr_view;
+    mat4 ssr_projection;
+    vec4 ssr_eye;     // xyz eye, w orthographic
+    vec4 ssr_lens;    // strength, distance, thickness
+};
+layout(binding=0) uniform texture2D ssr_scene_tex;
+layout(binding=1) uniform texture2D ssr_depth_tex;
+layout(binding=2) uniform texture2D ssr_normal_tex;
+layout(binding=3) uniform texture2D ssr_weight_tex;
+layout(binding=4) uniform texture2D ssr_fallback_tex;
+layout(binding=0) uniform sampler ssr_smp;
+out vec4 frag_color;
+
+float reflection_gap(float distance, vec3 origin, vec3 direction, ivec2 source, vec2 size, out vec2 uv) {
+    vec4 point = vec4(origin + direction * distance, 1.0);
+    vec4 clip = ssr_projection * ssr_view * point;
+    uv = clip.xy / clip.w * 0.5 + 0.5;
+#if !SOKOL_GLSL
+    uv.y = 1.0 - uv.y;
+#endif
+    if (clip.w <= 1e-6 || any(lessThanEqual(uv,vec2(0.0))) || any(greaterThanEqual(uv,vec2(1.0))) ||
+        clip.z < -clip.w || clip.z > clip.w) return 1e6;
+    ivec2 pixel = ivec2(uv * size);
+    float z = texelFetch(sampler2D(ssr_depth_tex,ssr_smp),pixel,0).r;
+    if (z >= 1.0 || all(equal(pixel,source))) return -1e6;
+    float ndc = z * 2.0 - 1.0;
+    float depth = ssr_eye.w > 0.5 ? (ssr_projection[3][2] - ndc) / ssr_projection[2][2] :
+                                  ssr_projection[3][2] / (ndc + ssr_projection[2][2]);
+    return -(ssr_view * point).z - depth;
+}
+
+void main() {
+    vec2 size = vec2(textureSize(sampler2D(ssr_scene_tex,ssr_smp),0));
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    vec4 source = texelFetch(sampler2D(ssr_scene_tex,ssr_smp),pixel,0);
+    frag_color = source;
+    vec4 surface = texelFetch(sampler2D(ssr_normal_tex,ssr_smp),pixel,0);
+    float depth = texelFetch(sampler2D(ssr_depth_tex,ssr_smp),pixel,0).r;
+    if (surface.w >= 0.6 || depth >= 1.0 || length(surface.xyz) < 0.5) return;
+    vec2 ndc = gl_FragCoord.xy * 2.0 / size - 1.0;
+#if !SOKOL_GLSL
+    ndc.y = -ndc.y;
+#endif
+    vec4 point = ssr_inverse * vec4(ndc,depth * 2.0 - 1.0,1.0);
+    vec3 position = point.xyz / point.w;
+    vec3 normal = normalize(surface.xyz);
+    vec3 incident = ssr_eye.w > 0.5 ? -vec3(ssr_view[0][2],ssr_view[1][2],ssr_view[2][2]) : normalize(position - ssr_eye.xyz);
+    vec3 direction = normalize(reflect(incident,normal));
+    vec3 origin = position + normal * (ssr_lens.z * 0.25 + 0.01);
+    float previous = 0.0, previousGap = -1e6;
+    for (int step = 1; step <= 64; ++step) {
+        float distance = ssr_lens.y * float(step) / 64.0;
+        vec2 uv;
+        float gap = reflection_gap(distance,origin,direction,pixel,size,uv);
+        if (gap == 1e6) return;
+        if (gap >= 0.0 && previousGap < 0.0) {
+            float lo = previous, hi = distance;
+            for (int refine = 0; refine < 5; ++refine) {
+                float mid = (lo + hi) * 0.5;
+                gap = reflection_gap(mid,origin,direction,pixel,size,uv);
+                if (gap == 1e6) return;
+                if (gap >= 0.0) hi = mid; else lo = mid;
+            }
+            gap = reflection_gap(hi,origin,direction,pixel,size,uv);
+            if (gap < 0.0 || gap > ssr_lens.z) return;
+            float edge = min(min(uv.x,uv.y),min(1.0-uv.x,1.0-uv.y));
+            float gloss = 1.0 - surface.w / 0.6;
+            float confidence = ssr_lens.x * gloss * gloss * clamp(edge / 0.05,0.0,1.0) * (1.0-hi/ssr_lens.y);
+            vec3 weight = texelFetch(sampler2D(ssr_weight_tex,ssr_smp),pixel,0).rgb;
+            vec3 fallback = texelFetch(sampler2D(ssr_fallback_tex,ssr_smp),pixel,0).rgb;
+            vec3 reflected = textureLod(sampler2D(ssr_scene_tex,ssr_smp),uv,0.0).rgb;
+            frag_color = vec4(clamp(source.rgb + (reflected * weight - fallback) * confidence,0.0,65504.0),source.a);
+            return;
+        }
+        previous = distance; previousGap = gap;
+    }
+}
+@end
+@program ssr fsq_vs ssr_fs

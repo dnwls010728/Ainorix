@@ -10,6 +10,9 @@ constexpr int kMaxDofRadius = 16;
 
 // Render callers may construct settings directly, bypassing reflection's range clamping.
 inline PostProcess NormalizePostProcess(PostProcess settings) {
+    settings.ssr = std::isfinite(settings.ssr) ? Clamp(settings.ssr, 0, 1) : 0;
+    settings.ssrDistance = std::isfinite(settings.ssrDistance) ? Clamp(settings.ssrDistance, 0.1f, 1000) : 30;
+    settings.ssrThickness = std::isfinite(settings.ssrThickness) ? Clamp(settings.ssrThickness, 0.001f, 10) : 0.2f;
     settings.ssao = std::isfinite(settings.ssao) ? Clamp(settings.ssao, 0, 1) : 0;
     settings.ssaoRadius = std::isfinite(settings.ssaoRadius) ? Clamp(settings.ssaoRadius, 0.01f, 10) : 1;
     settings.ssaoBias = std::isfinite(settings.ssaoBias) ? Clamp(settings.ssaoBias, 0, 1) : 0.02f;
@@ -35,7 +38,7 @@ inline PostProcess NormalizePostProcess(PostProcess settings) {
 
 // HDR is allocated only for effects that need unquantized scene lighting.
 inline bool UsesHdr(const PostProcess& settings) {
-    return settings.exposure != 1 || settings.toneMapping != "none" || settings.bloom > 0;
+    return settings.ssr > 0 || settings.exposure != 1 || settings.toneMapping != "none" || settings.bloom > 0;
 }
 
 // Extract radiance above the brightest-channel threshold without shifting hue.

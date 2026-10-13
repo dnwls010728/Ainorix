@@ -104,7 +104,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 영역 | 내용 | 문서 |
 |---|---|---|
 | 렌더링 | 하나의 씬을 그리는 두 렌더러: GPU(sokol_gfx: D3D11, WebGL2, GLES3, MSAA, 필터링된 그림자)와 결정적인 멀티스레드 소프트웨어 렌더러. glTF/FBX 모델, PBR 머티리얼, 투명, 점광원/스포트라이트/방향광, 캐스케이드·점광원·스포트라이트 그림자 | [RENDERING](docs/RENDERING.md) |
-| 포스트 프로세싱과 셰이더 | 노출과 Reinhard/ACES 톤 매핑, 블룸, 비네트, FXAA, 주변광 SSAO, 피사계 심도, 거리 안개, 컬러 그레이딩. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`), 스프라이트에도 적용 가능 | [POSTPROCESS](docs/POSTPROCESS.md) |
+| 포스트 프로세싱과 셰이더 | 노출과 Reinhard/ACES 톤 매핑, 블룸, 비네트, FXAA, 주변광 SSAO, probe/sky 폴백을 가진 광택 표면의 화면 공간 반사, 피사계 심도, 거리 안개, 컬러 그레이딩. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`), 스프라이트에도 적용 가능 | [POSTPROCESS](docs/POSTPROCESS.md) |
 | 평면 반사 | 평면 메시에서 움직이는 장면을 반사하는 거울·물 표면; 뷰당 한 반사면, 두 렌더러의 공통 클리핑 | [PLANAR_REFLECTION](docs/PLANAR_REFLECTION.md) |
 | 박스 데칼 | 얼룩·충격 흔적·바닥 표식을 투영; 순서대로 기본색 합성, 박스·법선 페이드, 뷰당 16개 | [DECALS](docs/DECALS.md) |
 | 입자 충돌 | VFX 입자가 정적 3D/2D 콜라이더에서 정지·반사·소멸; 고정 스텝 중심 구간 검사, 생성 시 반발·마찰 캡처, death chain | [PARTICLE_COLLISION](docs/PARTICLE_COLLISION.md) |

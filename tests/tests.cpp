@@ -11211,6 +11211,110 @@ TEST(PlanarReflectionMotionClippingAndParity) {
     CHECK(RemoveAll(project));
 }
 
+TEST(CameraScreenReflectionsAndFallback) {
+    const std::string project = TempProject("camera_ssr");
+    Engine e; std::string error; CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0.15,0.15,0.15],"shadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"({"path":"floor.mat.json","values":{"metallic":0.9,"roughness":0.08}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Floor","components":{"Transform":{"scale":[16,1,16]},"MeshRenderer":{"mesh":"plane","material":"floor.mat.json"}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Red","components":{"Transform":{"position":[-1.4,1,0],"scale":[1.6,2,1.6]},"MeshRenderer":{"unlit":true,"color":[1,0.05,0.02]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Blue","components":{"Transform":{"position":[1.4,0.8,-0.5],"scale":[1.4,1.6,1.4]},"MeshRenderer":{"unlit":true,"color":[0.02,0.1,1]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":8,"height":8,"color":[1,1,1],"opacity":1}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Camera","components":{"Camera":{},"PostProcess":{}}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Camera","type":"PostProcess","values":{"ssr":1,"ssrDistance":15,"ssrThickness":0.2}})")["ok"].asBool());
+    Scene restored; CHECK(restored.FromJson(e.GetScene().ToJson(), &error));
+    const PostProcess settings = *restored.Get<PostProcess>(restored.FindByName("Camera"));
+    CHECK(settings.ssr == 1 && settings.ssrDistance == 15 && settings.ssrThickness == 0.2f);
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    const EntityId floor = e.GetScene().FindByName("Floor");
+    RenderTarget off, on, again, gpu; for (auto* t : {&off,&on,&again,&gpu}) t->Resize(300,200);
+    for (bool orthographic : {false,true}) {
+        RenderView view = MakeLookAtView(Vec3(0,4,7),Vec3(0,0.5f,0),50,1.5f); view.drawUI = true;
+        if (orthographic) view.proj = Mat4::Orthographic(4.5f,1.5f,0.1f,100);
+        e.Renderer().Render(e.GetScene(),view,off);
+        view.postProcess = settings;
+        SetMaxRenderThreads(1); e.Renderer().Render(e.GetScene(),view,on);
+        SetMaxRenderThreads(4); e.Renderer().Render(e.GetScene(),view,again); SetMaxRenderThreads(16);
+        CHECK(on.Hash() == again.Hash() && on.depth == off.depth && on.ids == off.ids);
+        int reflected = 0, fallback = 0;
+        for (size_t i = 0; i < on.color.size(); ++i) {
+            if (on.ids[i] == floor) {
+                const int red = static_cast<int>(on.color[i] & 255), blue = static_cast<int>((on.color[i] >> 16) & 255);
+                reflected += (red > static_cast<int>(off.color[i] & 255) + 12 || blue > static_cast<int>((off.color[i] >> 16) & 255) + 12);
+                fallback += on.color[i] == off.color[i];
+            } else CHECK(on.color[i] == off.color[i]);
+        }
+        std::printf("  SSR %s: %d reflection pixels, %d fallback pixels\n",orthographic ? "ortho" : "perspective",reflected,fallback);
+        CHECK(reflected > 80 && fallback > 100);
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(),view,gpu);
+            double difference = 0;
+            for (size_t i = 0; i < on.color.size(); ++i) for (int shift : {0,8,16})
+                difference += std::abs(static_cast<int>((on.color[i] >> shift)&255) - static_cast<int>((gpu.color[i] >> shift)&255));
+            const double mean = difference / (on.color.size()*3);
+            std::printf("  SSR software/GPU mean %.3f/255\n",mean); CHECK(mean < 2);
+            view.postProcess.ssao = 0.5f; view.postProcess.dofRadius = 3; view.postProcess.dofFocus = 8;
+            view.postProcess.bloom = 0.2f; e.Gpu()->Render(e.GetScene(),view,gpu);
+            view.postProcess = PostProcess(); e.Gpu()->Render(e.GetScene(),view,gpu);
+            view.postProcess = settings; e.Gpu()->Render(e.GetScene(),view,gpu);
+        }
+    }
+    RenderView view = MakeLookAtView(Vec3(0,4,7),Vec3(0,0.5f,0),50,1.5f);
+    // Blended or fully masked objects are visible only in scene color, never reflection-ray depth.
+    for (const char* values : {R"({"unlit":true,"alphaMode":"mask","opacity":0})",R"({"unlit":true,"alphaMode":"blend","opacity":0.5})"}) {
+        const std::string args = std::string(R"({"path":"excluded.mat.json","overwrite":true,"values":)") + values + "}";
+        CHECK(Call(e,"material.create",args.c_str())["ok"].asBool());
+        for (const char* name : {"Red","Blue"}) {
+            Json set = Json::MakeObject(); set["id"] = name; set["type"] = "MeshRenderer";
+            set["values"] = Json::parse(R"({"material":"excluded.mat.json"})"); CHECK(e.Call("component.set",set)["ok"].asBool());
+        }
+        view.postProcess = settings; view.postProcess.ssr = 0; view.postProcess.exposure = 0.9f;
+        e.Renderer().Render(e.GetScene(),view,off);
+        view.postProcess.ssr = 1; e.Renderer().Render(e.GetScene(),view,on); CHECK(on.Hash() == off.Hash());
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(),view,on); view.postProcess.ssr = 0; e.Gpu()->Render(e.GetScene(),view,off);
+            CHECK(on.Hash() == off.Hash());
+        }
+    }
+    for (const char* name : {"Red","Blue"}) {
+        Json set = Json::MakeObject(); set["id"] = name; set["type"] = "MeshRenderer";
+        set["values"] = Json::parse(R"({"material":""})"); CHECK(e.Call("component.set",set)["ok"].asBool());
+    }
+    // Rough and unlit receivers have no SSR. Empty/deleted targets keep their fallback.
+    for (const char* values : {R"({"roughness":1})",R"({"unlit":true,"roughness":0.08})"}) {
+        const std::string args = std::string(R"({"path":"floor.mat.json","overwrite":true,"values":)") + values + "}";
+        CHECK(Call(e,"material.create",args.c_str())["ok"].asBool());
+        view.postProcess = PostProcess(); e.Renderer().Render(e.GetScene(),view,off);
+        view.postProcess = settings; e.Renderer().Render(e.GetScene(),view,on); CHECK(off.Hash() == on.Hash());
+    }
+    CHECK(Call(e,"material.create",R"({"path":"floor.mat.json","overwrite":true,"values":{"metallic":0.9,"roughness":0.08}})")["ok"].asBool());
+    for (const char* name : {"Red","Blue"}) {
+        Json args = Json::MakeObject(); args["id"] = name; args["type"] = "MeshRenderer";
+        args["values"] = Json::parse(R"({"visible":false})"); CHECK(e.Call("component.set",args)["ok"].asBool());
+    }
+    view.postProcess = PostProcess(); e.Renderer().Render(e.GetScene(),view,off);
+    view.postProcess = settings; e.Renderer().Render(e.GetScene(),view,on); CHECK(off.Hash() == on.Hash());
+    if (haveGpu) {
+        // Compare within the same HDR path; enabling SSR also changes the scene format from RGBA8 to float16.
+        view.postProcess.exposure = 0.9f; e.Gpu()->Render(e.GetScene(),view,on);
+        view.postProcess.ssr = 0; e.Gpu()->Render(e.GetScene(),view,off); CHECK(on.Hash() == off.Hash());
+    }
+    // A local probe keeps its captured surroundings when no ray finds screen geometry.
+    CHECK(Call(e,"entity.create",R"({"name":"Probe","components":{"Transform":{"position":[0,1,0]},"ReflectionProbe":{"size":[20,8,20],"resolution":32}}})")["ok"].asBool());
+    view.postProcess = settings; view.postProcess.exposure = 0.9f;
+    e.Renderer().Render(e.GetScene(),view,on); view.postProcess.ssr = 0; e.Renderer().Render(e.GetScene(),view,off);
+    CHECK(on.Hash() == off.Hash());
+    if (haveGpu) {
+        e.Gpu()->Render(e.GetScene(),view,off); view.postProcess.ssr = 1; e.Gpu()->Render(e.GetScene(),view,on);
+        CHECK(on.Hash() == off.Hash());
+    }
+    PostProcess invalid; invalid.ssr = std::numeric_limits<float>::quiet_NaN(); invalid.ssrDistance = -1; invalid.ssrThickness = 20;
+    const PostProcess normalized = NormalizePostProcess(invalid);
+    CHECK(normalized.ssr == 0 && normalized.ssrDistance == 0.1f && normalized.ssrThickness == 10);
+    CHECK(RemoveAll(project));
+}
+
 TEST(CameraSsaoContactsAndExclusions) {
     const std::string project = TempProject("camera_ssao");
     Engine e; std::string error;

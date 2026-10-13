@@ -1,7 +1,7 @@
 # Camera post-processing and shader materials
 
 `PostProcess` on the active camera applies screen-space effects (exposure and tone mapping, bloom, vignette, depth
-of field, FXAA) in both renderers, and `.shader.json` surface graphs give materials programmable color, emission,
+of field, SSR, FXAA) in both renderers, and `.shader.json` surface graphs give materials programmable color, emission,
 vertex offset and normals. Open items are listed under Status at the end.
 
 ## Initial contract
@@ -44,13 +44,13 @@ Zero exposure makes scene color black while leaving UI and selection visible.
 {"command":"component.set","args":{"id":"Camera","type":"PostProcess","values":{"exposure":0.25,"toneMapping":"reinhard"}}}
 ```
 
-An exposure other than 1, enabled tone mapping or nonzero bloom selects an HDR scene buffer:
+An exposure other than 1, enabled tone mapping, nonzero bloom or SSR selects an HDR scene buffer:
 float32 RGB in software and RGBA16F on the GPU. Lighting and emissive channels
 remain above 1 through opaque draws and alpha blending, bounded to the largest
 finite float16 value (65504) before blending. Exposure is applied after scene
 rendering, depth of field and bloom addition, followed by tone mapping, clamping
 to 0..1, vignette and then overlays. The full order is: optional SSAO depth prepass,
-scene (SSAO affects ambient lighting here), depth of field,
+scene (SSAO affects ambient lighting here), screen-space reflection, depth of field,
 bloom, exposure/tone mapping, vignette, FXAA, selection outline and UI.
 Only the final display image is quantized to RGBA8. With exposure 0.25, emissive
 RGB (8,4,2) becomes (2,1,0.5), or (2/3,1/2,1/3) with Reinhard enabled; clipping
@@ -69,6 +69,49 @@ devices report an error when HDR is requested; use software rendering or neutral
 settings. HDR disables MSAA if that format does not support multisampling.
 Switching effects or output size recreates the correct scene targets; output,
 UI and selection-mask formats remain RGBA8.
+
+## Screen-space reflections (SSR)
+
+On the active camera, enable `PostProcess.ssr` for glossy opaque floors and other smooth surfaces:
+
+```json
+{"command":"component.set","args":{"id":"Camera","type":"PostProcess","values":{"ssr":1,"ssrDistance":15,"ssrThickness":0.2}}}
+```
+
+`ssr` is strength (0..1, default 0), `ssrDistance` is maximum ray length in world meters
+(0.1..1000, default 30), and `ssrThickness` is view-depth hit tolerance in meters (0.001..10,
+default 0.2). Direct render settings normalize ranges and nonfinite values. Zero strength
+allocates no SSR framebuffers and preserves existing screenshots. Reflection-probe and planar
+captures disable camera effects, preventing recursive reflections.
+
+Both renderers retain each opaque pixel's final lighting normal, roughness, Fresnel/AO weight
+and reflected ambient fallback after material maps, shader graphs and decals. A fixed 64-step
+world-space reflected ray is projected into opaque/cut-out depth, with five bisections at the
+first crossing. Perspective and orthographic cameras are supported. Successful hits sample the
+original scene color; only reflected ambient is replaced, leaving direct lighting and emission
+intact. A missing or rejected hit keeps the existing local probe, sky or flat-ambient reflection.
+There is no reflected image history or recursive sampling of the SSR result.
+
+Reflection strength fades quadratically to zero at roughness 0.6, over the last 5% at screen
+edges, and toward the maximum ray length. This is a glossy reflection approximation, without a
+roughness blur or temporal filtering. It cannot show hidden, offscreen or transparent geometry;
+large steps can miss thin objects and depth discontinuities can leave gaps. Reduce ray length
+for small rooms; increasing thickness fills gaps but can admit false intersections. Unlit and
+transparent materials do not receive SSR. Alpha-mask holes write no depth; transparent foreground
+coverage attenuates the underlying correction. A selected planar receiver keeps its planar
+reflection instead of also receiving SSR. Fog attenuates the correction with the receiver.
+
+SSR runs before DOF, bloom, tone mapping, grading and FXAA; UI and selection are applied later.
+Software depth and picking IDs remain unchanged. GPU SSR uses the existing R32F opaque depth
+prepass and three RGBA16F scene attachments (normal/roughness, weight, fallback), then a separate
+fullscreen shader with five textures. The mesh shader gains no uniforms or texture bindings;
+it still fits the WebGL2/GLES3 minimum of 224 fragment uniform vectors including 16 samplers.
+Four simultaneous color attachments fit their minimum draw-buffer limit. Float color-buffer
+support is required; unsupported GPU formats report an error with the software-renderer fallback.
+With SSR and DOF together, DOF uses its separate depth pass instead of adding a fifth MRT.
+
+Demonstration: `oe editor build/SSR`, or `oe render build/SSR --renderer gpu --out build/r9.png`.
+The camera Inspector exposes the same three reflected fields; Lua uses `scene.set` as usual.
 
 ## Screen-space ambient occlusion (SSAO)
 
@@ -448,3 +491,10 @@ program and rendered the packaged demonstration without WebGL errors. Both Andro
 
 - [ ] SSAO rendering on an Android physical device, Linux/EGL and a real browser GPU.
 - [ ] Existing skin/vertex-graph execution on minimum-capability WebGL2/GLES3 devices.
+
+## R9 implementation status (work log)
+
+- [x] Camera SSR settings and matching deterministic software/GPU ray tracing, preserving probe/sky fallback.
+- [x] Regression tests, glossy-floor demonstration, CLI/editor screenshots and documentation.
+- [ ] Refreshed web/Android players, packaged WebGL2 verification and roadmap status.
+- [ ] Physical Android, Linux/EGL and real browser GPU execution (not available on this machine).

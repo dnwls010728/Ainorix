@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "render/Mesh.h"
 #include "render/PostProcess.h"
+#include "render/ScreenReflection.h"
 #include "render/PlanarReflection.h"
 #include "render/Fxaa.h"
 #include "render/RenderScene.h"
@@ -49,6 +50,10 @@ namespace {
 uint32_t Pack(const Color& c) {
     auto ch = [](float v) { return static_cast<uint32_t>(Clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
     return ch(c.r) | (ch(c.g) << 8) | (ch(c.b) << 16) | 0xFF000000u;
+}
+
+Color Unpack(uint32_t value) {
+    return Color((value & 255) / 255.0f, ((value >> 8) & 255) / 255.0f, ((value >> 16) & 255) / 255.0f);
 }
 
 uint32_t Blend(uint32_t dst, const Color& src, float a) {
@@ -212,7 +217,7 @@ struct Lighting {
     // diffuse surface lit head-on by a light of color c shows c (as before
     // PBR). Mirrors mesh_fs in shaders/Shaders.glsl. `ng` (geometric normal)
     // offsets the shadow lookup.
-    Color Shade(const Vec3& wpos, const Vec3& n, const Vec3& ng, const Color& base, float metallic, float roughness, float ao) const {
+    Color Shade(const Vec3& wpos, const Vec3& n, const Vec3& ng, const Color& base, float metallic, float roughness, float ao, ScreenReflectionPixel* reflection = nullptr) const {
 
         Vec3 v = Normalize(eye - wpos);
         float ndv = std::max(Dot(n, v), 1e-4f);
@@ -241,6 +246,13 @@ struct Lighting {
                 amb = groundAmbient * (1.0f - up) + ambient * up;
             }
             c = amb * (diffuse + fenv * (sky * (1.0f - 0.75f * r))) * ao;
+        }
+        if (reflection) {
+            Color amb = hemisphere ? groundAmbient * (1 - (n.y * 0.5f + 0.5f)) + ambient * (n.y * 0.5f + 0.5f) : ambient;
+            reflection->normal = n; reflection->roughness = r;
+            reflection->weight = fenv * ao;
+            reflection->fallback = env.present ? fenv * EnvSpecular(env, refl, r) * (env.reflections * ao) :
+                                   amb * fenv * (sky * (1 - 0.75f * r) * ao);
         }
         if (!probes.empty()) {
             // Reflection probes take over the ambient light where their boxes are: each one its share
@@ -271,7 +283,10 @@ struct Lighting {
                 ps = ps + fenv * ProbeSpecular(p, wpos, refl, r) * w;
                 remaining -= w;
             }
-            if (split) c = (dBase * remaining + pd + sBase * remaining + ps) * ao;
+            if (split) {
+                c = (dBase * remaining + pd + sBase * remaining + ps) * ao;
+                if (reflection) reflection->fallback = (sBase * remaining + ps) * ao;
+            }
         }
         auto add = [&](const Vec3& l, const Color& radiance) {
             float ndl = Dot(n, l);
@@ -366,8 +381,8 @@ struct Screen {
 // triangles in the same order, so the image is identical to a single thread.
 class Rasterizer {
 public:
-    Rasterizer(int width, int height, float* depth, uint32_t* color, EntityId* ids, int yMin = 0, int yMax = -1, Color* hdr = nullptr)
-        : w_(width), h_(height), yMin_(yMin), yMax_(yMax < 0 ? height : yMax), depth_(depth), color_(color), ids_(ids), hdr_(hdr) {}
+    Rasterizer(int width, int height, float* depth, uint32_t* color, EntityId* ids, int yMin = 0, int yMax = -1, Color* hdr = nullptr, ScreenReflectionPixel* reflections = nullptr)
+        : w_(width), h_(height), yMin_(yMin), yMax_(yMax < 0 ? height : yMax), depth_(depth), color_(color), ids_(ids), reflections_(reflections), hdr_(hdr) {}
 
     // Clips against the near plane, then rasterizes. `lighting` null = depth only.
     int Draw(const Vtx in[3], const RasterMaterial& mat, const Lighting* lighting, Cull cull) {
@@ -519,6 +534,8 @@ private:
                     if (backFace) normal = -normal;
                     base = ApplyDecals(lighting->decals,lighting->decalAtlas.get(),a.wpos*p0+b.wpos*p1+c.wpos*p2,normal,base);
                 }
+                ScreenReflectionPixel* reflection = reflections_ && !mat.blend ? &reflections_[idx] : nullptr;
+                if (reflection) *reflection = ScreenReflectionPixel();
                 Color out = base;
                 if (!m.unlit) {
                     Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
@@ -546,8 +563,9 @@ private:
                     }
                     if (m.occlusionTexture) ao = 1.0f + m.occlusionStrength * (m.occlusionTexture->Sample(u, v, m.pixelArt, nullptr).r - 1.0f);
                     if (!mat.blend) ao *= lighting->AmbientVisibility(x, y, wpos, ng);
-                    out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao);
+                    out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao, reflection);
                 }
+                if (reflection && mat.id == lighting->planar.id) *reflection = ScreenReflectionPixel();
                 out = lighting->PlanarColor(mat.id, a.wpos * p0 + b.wpos * p1 + c.wpos * p2, out);
                 Color em = m.emissive * m.emissiveIntensity;
                 if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr);
@@ -555,6 +573,10 @@ private:
                 if (m.fog && lighting->fog.fog > 0) {  // mesh_fs: additive surfaces fade, others mix toward fogColor
                     const Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
                     const float f = FogAmount(lighting->fog, Length(lighting->eye - wpos));
+                    if (reflection) {
+                        reflection->weight = reflection->weight * (1 - f);
+                        reflection->fallback = reflection->fallback * (1 - f);
+                    }
                     out = m.additive && mat.blend ? out * (1.0f - f) : out * (1.0f - f) + lighting->fog.fogColor * f;
                 }
                 if (mat.blend) {
@@ -563,6 +585,10 @@ private:
                         if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] + ClampHdr(out) * alpha);
                         else color_[idx] = BlendAdd(color_[idx], out, alpha);
                     } else {
+                        if (reflections_) {
+                            reflections_[idx].weight = reflections_[idx].weight * (1 - alpha);
+                            reflections_[idx].fallback = reflections_[idx].fallback * (1 - alpha);
+                        }
                         if (hdr_) hdr_[idx] = ClampHdr(hdr_[idx] * (1 - alpha) + ClampHdr(out) * alpha);
                         else color_[idx] = Blend(color_[idx], out, alpha);
                         if (alpha >= 0.5f && mat.pick) ids_[idx] = mat.id;
@@ -581,6 +607,7 @@ private:
     float* depth_;
     uint32_t* color_;
     EntityId* ids_;
+    ScreenReflectionPixel* reflections_;
     Color* hdr_;  // optional scene buffer; never used for depth-only shadow draws
 };
 
@@ -865,10 +892,12 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         clip[i].reserve(transformed[i].wpos.size());
         for (const Vec3& p : transformed[i].wpos) clip[i].push_back(viewProj * Vec4(p, 1.0f));
     }
+    std::vector<ScreenReflectionPixel> reflections;
+    if (!picture && post.ssr > 0) reflections.resize(target.color.size());
     int bandTriangles = 0;
     ParallelBands(target.height, [&](int band, int y0, int y1) {
       Rasterizer raster(target.width, target.height, target.depth.data(), target.color.data(), target.ids.data(), y0, y1,
-                        hdr.empty() ? nullptr : hdr.data());
+                        hdr.empty() ? nullptr : hdr.data(), reflections.empty() ? nullptr : reflections.data());
       int drawn = 0;
       for (const DrawCall& dc : draws) {
         const size_t i = dc.item;
@@ -916,6 +945,35 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     if (picture) {
         *view.sceneColor = std::move(hdr);
         return stats;
+    }
+
+    if (!reflections.empty()) {
+        const Mat4 inverse = viewProj.Inverse();
+        const std::vector<Color> sourceHdr = hdr;
+        const std::vector<uint32_t> sourceColor = target.color;
+        ParallelBands(target.height, [&](int, int y0, int y1) {
+            for (int y = y0; y < y1; ++y) for (int x = 0; x < target.width; ++x) {
+                const size_t i = static_cast<size_t>(y) * target.width + x;
+                const ScreenReflectionPixel& pixel = reflections[i];
+                if (pixel.roughness >= 0.6f || target.depth[i] >= 1) continue;
+                const Vec4 point = inverse * Vec4((x + 0.5f) * 2 / target.width - 1,
+                                                  1 - (y + 0.5f) * 2 / target.height, target.depth[i] * 2 - 1, 1);
+                const Vec3 position = point.xyz() * (1 / point.w);
+                const Vec3 incident = view.proj.at(3, 3) == 1 ? Vec3(-view.view.at(2, 0), -view.view.at(2, 1), -view.view.at(2, 2)) :
+                                      Normalize(position - view.eye);
+                const Vec3 direction = Normalize(incident - pixel.normal * (2 * Dot(incident, pixel.normal)));
+                int hx = 0, hy = 0;
+                const float smooth = 1 - pixel.roughness / 0.6f;
+                const float confidence = TraceScreenReflection(position + pixel.normal * (post.ssrThickness * 0.25f + 0.01f),
+                    direction, view.view, view.proj, post, target.depth, target.width, target.height, x, y, hx, hy) * post.ssr * smooth * smooth;
+                if (confidence <= 0) continue;
+                const size_t hit = static_cast<size_t>(hy) * target.width + hx;
+                const Color source = hdr.empty() ? Unpack(sourceColor[i]) : sourceHdr[i];
+                const Color reflected = hdr.empty() ? Unpack(sourceColor[hit]) : sourceHdr[hit];
+                const Color result = source + (reflected * pixel.weight + pixel.fallback * -1) * confidence;
+                if (hdr.empty()) target.color[i] = Pack(result); else hdr[i] = ClampHdr(result);
+            }
+        });
     }
 
     // ----- Overlays

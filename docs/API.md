@@ -1911,6 +1911,9 @@ Optional screen effects on the active Camera. Defaults preserve existing frames;
 | `bloomThreshold` | float | `1` | Highlight threshold in unexposed scene RGB (largest channel); extraction preserves hue. |
 | `bloomRadius` | int | `8` | Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional. |
 | `fxaa` | bool | `false` | Optional directional FXAA on display scene color before UI and selection outlines; disabled by default. |
+| `ssr` | float | `0` | Screen-space reflection strength (0..1) on opaque glossy surfaces. Missing rays keep probe/sky reflections. 0 disables it. |
+| `ssrDistance` | float | `30` | SSR maximum ray length in world meters (0.1..1000); 64 steps with five hit refinements. |
+| `ssrThickness` | float | `0.200000003` | SSR view-depth hit tolerance in world meters (0.001..10). Thin values reduce false reflections. |
 | `ssao` | float | `0` | Screen-space ambient occlusion strength (0..1). Darkens ambient light only; 0 disables the depth prepass. |
 | `ssaoRadius` | float | `1` | SSAO sampling radius in world meters (0.01..10), limited to 64 scene pixels per axis. |
 | `ssaoBias` | float | `0.0199999996` | SSAO self-occlusion bias in world meters (0..1). |

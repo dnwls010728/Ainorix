@@ -244,6 +244,12 @@ each interval; four 1024-square maps share a 2048-square GPU atlas. See [LIGHTIN
 
 ## Camera post-processing
 
+`PostProcess {ssr:1, ssrDistance:15, ssrThickness:0.2}` adds screen-space reflections to glossy
+opaque surfaces in both renderers, replacing only reflected ambient when a ray hits visible
+opaque geometry. Missing rays preserve probes/sky; transparent and unlit receivers are excluded.
+See [POSTPROCESS.md](POSTPROCESS.md#screen-space-reflections-ssr) for controls and limits.
+
+
 `PostProcess` on the active Camera provides optional screen effects. The first
 milestone implements `vignette` (strength 0..1), `vignetteRadius` and
 `vignetteSoftness` in both software and GPU renderers, before UI and selection

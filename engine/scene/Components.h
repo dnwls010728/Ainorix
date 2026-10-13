@@ -600,6 +600,9 @@ struct PostProcess {
     float bloomThreshold = 1.0f;   // threshold in unexposed scene RGB, using the largest channel
     int bloomRadius = 8;           // separable tent filter radius in scene pixels
     bool fxaa = false;             // directional edge smoothing after color effects, before overlays
+    float ssr = 0.0f;              // screen-space reflected ambient strength; zero allocates no SSR buffers
+    float ssrDistance = 30.0f;     // maximum reflection ray length in world meters
+    float ssrThickness = 0.2f;     // view-depth tolerance for a screen-space hit
     float ssao = 0.0f;             // ambient occlusion strength; zero skips the depth prepass and sampling
     float ssaoRadius = 1.0f;       // world-space sampling radius in meters
     float ssaoBias = 0.02f;        // world-space self-occlusion bias
@@ -631,6 +634,12 @@ struct PostProcess {
         FieldInfo& bloomRadiusField = f.Add("bloomRadius", &PostProcess::bloomRadius, "Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional.");
         bloomRadiusField.hasRange = true; bloomRadiusField.min = 1; bloomRadiusField.max = 32;
         f.Add("fxaa", &PostProcess::fxaa, "Optional directional FXAA on display scene color before UI and selection outlines; disabled by default.");
+        FieldInfo& ssrStrength = f.Add("ssr", &PostProcess::ssr, "Screen-space reflection strength (0..1) on opaque glossy surfaces. Missing rays keep probe/sky reflections. 0 disables it.");
+        ssrStrength.hasRange = true; ssrStrength.min = 0; ssrStrength.max = 1;
+        FieldInfo& ssrLength = f.Add("ssrDistance", &PostProcess::ssrDistance, "SSR maximum ray length in world meters (0.1..1000); 64 steps with five hit refinements.");
+        ssrLength.hasRange = true; ssrLength.min = 0.1f; ssrLength.max = 1000;
+        FieldInfo& ssrTolerance = f.Add("ssrThickness", &PostProcess::ssrThickness, "SSR view-depth hit tolerance in world meters (0.001..10). Thin values reduce false reflections.");
+        ssrTolerance.hasRange = true; ssrTolerance.min = 0.001f; ssrTolerance.max = 10;
         FieldInfo& ssaoStrength = f.Add("ssao", &PostProcess::ssao, "Screen-space ambient occlusion strength (0..1). Darkens ambient light only; 0 disables the depth prepass.");
         ssaoStrength.hasRange = true; ssaoStrength.min = 0; ssaoStrength.max = 1;
         FieldInfo& ssaoRadiusField = f.Add("ssaoRadius", &PostProcess::ssaoRadius, "SSAO sampling radius in world meters (0.01..10), limited to 64 scene pixels per axis.");
