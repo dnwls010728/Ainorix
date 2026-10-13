@@ -379,9 +379,8 @@ namespace {
 void ApplyGoals(const Scene& scene, EntityId id, const Mesh& mesh, std::vector<Mat4>& nodes) {
     std::vector<Mat4> rest;  // default pose, evaluated once when a goal asks for it
     for (const auto& kv : scene.Pool<BoneIK>()) {
-        const EntityRecord* record = scene.Record(kv.first);
+        if (!BoneIkAppliesTo(scene, id, kv.first)) continue;
         const Transform* transform = scene.Get<Transform>(kv.first);
-        if (!record || record->parent != id || !transform) continue;
         IkGoal goal;
         goal.node = FindModelNode(mesh, kv.second.bone);
         goal.chain = kv.second.chain;
@@ -399,6 +398,11 @@ void ApplyGoals(const Scene& scene, EntityId id, const Mesh& mesh, std::vector<M
 }
 
 }  // namespace
+
+bool BoneIkAppliesTo(const Scene& scene, EntityId model, EntityId goal) {
+    const EntityRecord* record = scene.Record(goal);
+    return record && record->parent == model && scene.Get<Transform>(goal) && scene.Get<BoneIK>(goal);
+}
 
 std::vector<Mat4> EvaluateEntityPose(const Scene& scene, EntityId id, const Mesh& mesh, bool ik) {
     const Animator* animator = scene.Get<Animator>(id);

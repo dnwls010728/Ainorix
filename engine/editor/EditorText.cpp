@@ -18,6 +18,8 @@ struct Entry {
 
 const Entry kCatalog[] = {
     {"Animation", "애니메이션", "アニメーション"},
+    {"Apply IK", "IK 적용", "IKを適用"},
+    {"IK is excluded from preview: gameplay scripts normally move its targets.", "플레이 스크립트가 목표를 움직이는 IK는 미리보기에서 제외합니다.", "通常はゲームスクリプトが目標を動かすため、プレビューではIKを除外します。"},
     {"Stop the game to preview animations.", "애니메이션 미리보기는 게임을 정지한 뒤 사용합니다.", "アニメーションのプレビューにはゲームを停止してください。"},
     {"Select a sprite or a model with animation clips.", "애니메이션 클립이 있는 스프라이트나 모델을 선택하세요.", "アニメーションクリップを持つスプライトかモデルを選択してください。"},
     {"Play Preview", "미리보기 재생", "プレビューを再生"},

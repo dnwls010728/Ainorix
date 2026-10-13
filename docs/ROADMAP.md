@@ -213,7 +213,8 @@ refraction, water, caustics; clear coat.
   step, a timeline with a scrubber, and the pose or frame shown in the Scene view while the game is stopped (the
   way the Effects panel previews). Event marks on the timeline are added, moved and named there (A1).
   Implemented: isolated animation.preview/preview_state/preview_close, editor.animation, stopped Scene/Game poses and event authoring.
-  371 Windows tests and final legacy-layout test passed; en/ko/ja screenshots checked, web/Android players rebuilt.
+  373 Windows tests and final legacy-layout test passed; en/ko/ja screenshots checked, web/Android players rebuilt.
+  Preview IK defaults off for the target model only (ik opt-in); Chisa Walk screenshots and authored-state isolation checked.
   Remaining: Linux/EGL editor and physical Android/real browser GPU runtime checks.
 
 ### T. 2D baseline — after R

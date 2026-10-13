@@ -298,6 +298,14 @@ Material graphs remain in Shaders. Usage and limits: [VFX.md](VFX.md#value-nodes
 
 ## Status
 
+Animation preview's **Apply IK** defaults off: the selected model's direct-child BoneIK goals with a
+Transform are disabled only in the preview copy. A one-line notice explains why script-driven targets
+are excluded. The checkbox opts back into the saved goals, without running their gameplay scripts.
+Bone attachments still follow the clip/preview pose; SpringBone is not simulated. Normal stopped-scene
+`Animator.time` edits still apply saved IK targets and can pin the feet; that behavior is unchanged.
+Use screenshot flags `--select Chisa --frame-selection --animation --animation-clip Walk --animation-time 0.2`
+to inspect a clip without modifying project files. See [ANIMATION.md](ANIMATION.md#animation-panel-and-isolated-preview-a2).
+
 - [ ] Exercise the native Windows file chooser interactively (tests use a window adapter for
       selected/cancelled/error/unavailable results).
 - [ ] Linux/EGL editor build and visual check; only Windows/D3D11 is verified.

@@ -96,6 +96,12 @@ void NativeEditor::Impl::AnimationPanel() {
     AnimationRect("restart"); AnimationSameLine(Tr("Loop Preview"), true);
     bool loop = state["loop"].asBool();
     if (ImGui::Checkbox(Tr("Loop Preview"), &loop)) Call("animation.preview", ObjectOf({{"loop", loop}}));
+    if (!spriteClip) {
+        AnimationSameLine(Tr("Apply IK"), true);
+        bool ik = state["ik"].asBool();
+        if (ImGui::Checkbox(Tr("Apply IK"), &ik)) Call("animation.preview", ObjectOf({{"ik", ik}}));
+        AnimationRect("ik");
+    }
     AnimationSameLine("                "); ImGui::SetNextItemWidth(75);
     float speed = state["speed"].asFloat();
     if (ImGui::DragFloat("##animationSpeed", &speed, 0.1f, -100, 100, "%.1fx")) Call("animation.preview", ObjectOf({{"speed", speed}}));
@@ -159,6 +165,8 @@ void NativeEditor::Impl::AnimationPanel() {
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) animationDragIndex = -1;
     ImGui::TextDisabled("%s", Tr("Preview changes no scene fields and runs no scripts or events."));
+    if (!state["ik"].asBool() && state["ikGoals"].asInt() > 0)
+        ImGui::TextWrapped("%s", Tr("IK is excluded from preview: gameplay scripts normally move its targets."));
     if (ImGui::Button(Tr("Add Event"))) {
         Json marker = Json::MakeObject(); marker["name"] = "event";
         if (state["type"].asString() == "SpriteAnimation") {

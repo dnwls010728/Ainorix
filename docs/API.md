@@ -453,6 +453,7 @@ Open/control an isolated stopped-scene animation preview; no scripts, physics, e
 | `playing` | boolean |  | Editor auto-advance flag. |
 | `speed` | number |  | Finite playback multiplier; negative reverses. |
 | `loop` | boolean |  | Repeat; defaults to the clip setting. |
+| `ik` | boolean |  | Apply the target model's stored BoneIK goals (default false); scripts do not move them during preview. |
 | `frames` | integer |  | Advance 0..3600 fixed 1/60 s steps, even when paused. |
 
 ### `animation.preview_state`

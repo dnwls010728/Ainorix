@@ -19424,7 +19424,95 @@ TEST(AnimationPreviewModelPoseAndMarkersWithoutAnimator) {
     CHECK(!Call(e, "animation.preview_state")["result"]["active"].asBool());
 }
 
+TEST(AnimationPreviewIkIsOptInAndIsolated) {
+    Engine e; std::string error;
+    const std::string project = TempProject("preview_ik");
+    CHECK(e.Open(project, &error)); Call(e, "scene.new", R"({"empty":true})");
+    // A constant-length two-bone leg rotates at the hip. Its foot can reach the same saved goal at both times.
+    const std::vector<float> values = {0,1, 0,0,0,1, 0,0,0.70710678f,0.70710678f};
+    std::vector<uint8_t> bytes(values.size()*sizeof(float)); std::memcpy(bytes.data(),values.data(),bytes.size());
+    Json model = Json::parse(R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],
+      "nodes":[{"name":"Hip","children":[1]},{"name":"Knee","translation":[0.3,-1,0],"children":[2]},
+      {"name":"Foot","translation":[-0.3,-1,0]}],"buffers":[{}],
+      "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":8},{"buffer":0,"byteOffset":8,"byteLength":32}],
+      "accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]},
+      {"bufferView":1,"componentType":5126,"count":2,"type":"VEC4"}],
+      "animations":[{"name":"Walk","samplers":[{"input":0,"output":1}],"channels":[{"sampler":0,"target":{"node":0,"path":"rotation"}}]}]})");
+    model["buffers"][0]["byteLength"] = static_cast<uint64_t>(bytes.size());
+    model["buffers"][0]["uri"] = "data:application/octet-stream;base64," + Base64Encode(bytes);
+    CreateDirectories(project+"/assets/models"); CHECK(WriteTextFile(project+"/assets/models/leg.gltf",model.dump()));
+    Call(e,"entity.create",R"({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/leg.gltf"},"Animator":{"clip":"Walk","playing":false}}})");
+    Call(e,"entity.create",R"({"name":"FootGoal","parent":"Rig","components":{"Transform":{"position":[0,-2,0]},"BoneIK":{"bone":"Foot","chain":2,"weight":1}}})");
+    Call(e,"entity.create",R"({"name":"FootAttachment","parent":"Rig","components":{"BoneAttachment":{"bone":"Foot"},"MeshRenderer":{"mesh":"cube"},"Transform":{"scale":[0.1,0.1,0.1]}}})");
+    Call(e,"entity.create",R"({"name":"OtherRig","components":{"Transform":{"position":[4,0,0]},"MeshRenderer":{"mesh":"assets/models/leg.gltf"}}})");
+    Call(e,"entity.create",R"({"name":"OtherGoal","parent":"OtherRig","components":{"BoneIK":{"bone":"Foot","weight":0.6}}})");
+    Call(e,"entity.create",R"({"name":"NestedGoal","parent":"FootGoal","components":{"BoneIK":{"bone":"Foot","weight":0.7}}})");
+    Call(e,"entity.create",R"({"name":"NoTransformGoal","parent":"Rig","components":{"BoneIK":{"bone":"Foot","weight":0.8}}})");
+    CHECK(Call(e,"component.remove",R"({"id":"NoTransformGoal","type":"Transform"})")["ok"].asBool());
+    Call(e,"entity.create",R"({"name":"Spring","parent":"Rig","components":{"SpringBone":{"bone":"Knee","endLength":0.2}}})");
+    const EntityId rig=e.GetScene().FindByName("Rig"), goal=e.GetScene().FindByName("FootGoal"), attachment=e.GetScene().FindByName("FootAttachment");
+    const auto mesh=e.Assets().GetMesh("assets/models/leg.gltf"); CHECK(mesh);
+    const int foot=FindModelNode(*mesh,"Foot"); CHECK(foot>=0);
+    const auto revision=e.Revision(), frame=e.Frame(); const size_t undo=e.UndoDepth();
+    const std::string authored=e.GetScene().ToJson().dump();
+    const std::string hash=Call(e,"render.screenshot",R"({"width":160,"height":120,"inline":false})")["result"]["hash"].asString();
+    auto position = [&](float time, bool ik) {
+        Json args=Json::MakeObject(); args["time"]=time; args["ik"]=ik;
+        CHECK(e.Call("animation.preview",args)["ok"].asBool());
+        Scene& scene=e.AnimationRenderScene();
+        const auto pose=EvaluateEntityPose(scene,rig,*mesh);
+        const Vec3 point=pose[static_cast<size_t>(foot)].TransformPoint(Vec3());
+        CHECK(Length(point-scene.Get<Transform>(attachment)->position)<1e-4f);
+        CHECK(scene.Get<BoneIK>(goal)->weight == (ik ? 1.0f : 0.0f));
+        CHECK(scene.Get<BoneIK>(scene.FindByName("OtherGoal"))->weight == 0.6f);
+        CHECK(scene.Get<BoneIK>(scene.FindByName("NestedGoal"))->weight == 0.7f);
+        CHECK(scene.Get<BoneIK>(scene.FindByName("NoTransformGoal"))->weight == 0.8f);
+        CHECK(scene.Get<SpringBone>(scene.FindByName("Spring"))->tails.empty());
+        return point;
+    };
+    const Json state=Call(e,"animation.preview",R"({"id":"Rig","clip":"Walk"})")["result"];
+    CHECK(!state["ik"].asBool(true) && state["ikGoals"].asInt()==1);
+    const Vec3 free0=position(0,false), free1=position(0.75f,false);
+    const Vec3 fixed0=position(0,true), fixed1=position(0.75f,true);
+    CHECK(Length(free1-free0)>1.0f && Length(fixed1-fixed0)<1e-3f);
+    CHECK(Call(e,"animation.preview_state")["result"]["ik"].asBool());
+    CHECK(e.GetScene().Get<BoneIK>(goal)->weight==1);
+    CHECK(e.Revision()==revision && e.Frame()==frame && e.UndoDepth()==undo && e.GetScene().ToJson().dump()==authored);
+    CHECK(Call(e,"render.screenshot",R"({"width":160,"height":120,"inline":false})")["result"]["hash"].asString()==hash);
+    Call(e,"animation.preview_close");
+    CHECK(Call(e,"render.screenshot",R"({"width":160,"height":120,"inline":false})")["result"]["hash"].asString()==hash);
+    RemoveAll(project);
+}
+
 #if OE_NATIVE_EDITOR
+TEST(NativeEditorAnimationPreviewIkControl) {
+    Engine e; std::string error;
+    const std::string project=TempProject("preview_ik_control");
+    CHECK(e.Open(project,&error)); Call(e,"scene.new",R"({"empty":true})");
+    std::string model=kRigFbx; model.replace(model.find("%TEXTURE%"),9,"");
+    CreateDirectories(project+"/assets/models"); CHECK(WriteTextFile(project+"/assets/models/rig.fbx",model));
+    Call(e,"entity.create",R"({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx"}}})");
+    Call(e,"entity.create",R"({"name":"Goal","parent":"Rig","components":{"Transform":{"position":[0,1,0]},"BoneIK":{"bone":"Tip","chain":1,"weight":1}}})");
+    if (!e.EnableGpu(nullptr,&error)) { RemoveAll(project); return; }
+    const auto revision=e.Revision(); const std::string authored=e.GetScene().ToJson().dump();
+    {
+        NativeEditor::Options options; options.language="en";
+        NativeEditor editor(e,nullptr,options); CHECK(editor.Init(&error));
+        editor.Select(e.GetScene().FindByName("Rig")); editor.FocusAnimationPanel(); RenderTarget image;
+        for(int i=0;i<4;++i) { editor.Update({},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image)); }
+        const Json state=Call(e,"animation.preview_state")["result"];
+        CHECK(!state["ik"].asBool(true) && state["ikGoals"].asInt()==1);
+        const auto rect=editor.AnimationControlRect("ik"); CHECK(rect[2]>0);
+        WindowEvent move; move.type=WindowEvent::Type::MouseMove; move.x=rect[0]+rect[2]*0.5f; move.y=rect[1]+rect[3]*0.5f;
+        WindowEvent button; button.type=WindowEvent::Type::MouseButton; button.button=0; button.down=true;
+        editor.Update({move,button},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        button.down=false; editor.Update({button},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        CHECK(Call(e,"animation.preview_state")["result"]["ik"].asBool());
+        CHECK(e.Revision()==revision && e.GetScene().ToJson().dump()==authored);
+    }
+    RemoveAll(project);
+}
+
 TEST(NativeEditorAnimationPanel) {
     Engine e; std::string error;
     const std::string project = TempProject("editor_animation");

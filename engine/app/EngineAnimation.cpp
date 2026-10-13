@@ -87,6 +87,7 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
         if (chosen == clips.end()) throw ApiError("animation_not_found", "unknown preview clip '" + next.clip + "'", "Use animation.preview_state to list clips, or pass a valid clip.");
         if (changedEntity || (animationPreview_ && next.clip != animationPreview_->clip)) { next.time = 0; next.loop = chosen->loop; }
         if (args.has("loop")) next.loop = args["loop"].asBool();
+        if (args.has("ik")) next.ik = args["ik"].asBool();
         if (args.has("playing")) next.playing = args["playing"].asBool();
         if (args.has("speed")) next.speed = args["speed"].asFloat();
         if (args.has("time")) next.time = args["time"].asNumber();
@@ -120,6 +121,12 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
     preview.time = std::max(0.0, std::min(preview.time, preview.loop ? chosen->duration : chosen->end));
     out["id"] = preview.id; out["clip"] = preview.clip; out["time"] = preview.time;
     out["playing"] = preview.playing; out["speed"] = preview.speed; out["loop"] = preview.loop;
+    out["ik"] = preview.ik; out["ikGoals"] = 0;
+    if (!chosen->frames) {
+        int count = 0;
+        for (const auto& goal : scene_.Pool<BoneIK>()) if (BoneIkAppliesTo(scene_, preview.id, goal.first)) ++count;
+        out["ikGoals"] = count;
+    }
     out["duration"] = preview.loop ? chosen->duration : chosen->end; out["fps"] = chosen->fps;
     if (chosen->frames) out["frameCount"] = static_cast<uint64_t>(chosen->frames->size());
     out["type"] = chosen->frames ? "SpriteAnimation" : "Animator";
@@ -152,6 +159,10 @@ Scene& Engine::AnimationRenderScene() {
         Animator& animator = preview.scene.Add<Animator>(preview.id);
         animator.clip = preview.clip; animator.time = static_cast<float>(preview.time); animator.playing = false;
         animator.from.clear(); animator.fade = 0; animator.shown = preview.clip;
+        if (!preview.ik) {
+            for (auto& goal : preview.scene.Pool<BoneIK>())
+                if (BoneIkAppliesTo(preview.scene, preview.id, goal.first)) goal.second.weight = 0;
+        }
     }
     UpdateBoneAttachments(preview.scene, *assets_);
     return preview.scene;

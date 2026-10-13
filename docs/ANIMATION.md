@@ -410,10 +410,16 @@ the tab without moving other windows. A model does not need an authored `Animato
 
 Choose a clip, Play/Pause Preview, Step Preview (1/60 s), Restart Preview, Loop Preview or a playback
 speed (negative reverses). Drag the time slider or an empty part of the timeline to seek and pause.
-The Scene and stopped Game views show the sampled sprite frame/model pose, including bone attachments,
-IK and the skeleton overlay. Other entities do not advance. No script, timer, physics, audio or animation
+The Scene and stopped Game views show the sampled sprite frame/model pose, including bone attachments
+and the skeleton overlay. **Apply IK is off by default.** Only the preview target's eligible BoneIK goals
+(direct children with a Transform, exactly as Pose.cpp collects them) have their weight set to zero in the
+copy. Other models' goals and nested goals keep their authored values. Enable Apply IK to use the stored
+targets; no gameplay script moves them during preview. When eligible goals exist and IK is off, the panel
+explains that gameplay scripts normally move these targets. Other entities do not advance. No script, timer, physics, audio or animation
 event callback runs. The preview never changes scene fields, revision, dirty state or scene undo and is
-never saved in a scene/prefab. Closing the panel or starting the game restores authored playback.
+never saved in a scene/prefab. BoneAttachment follows the resulting preview pose, including when IK is
+excluded. SpringBone is not simulated in preview; it has no dynamic response to the scrubbed clip.
+Closing the panel or starting the game restores authored playback.
 Deleting the target or replacing the scene also closes it. Edits/undo and model hot reload refresh the
 preview; a missing/invalid clip closes it safely. A collapsed/background tab can keep playing while open.
 
@@ -428,16 +434,20 @@ Use the panel scrollbar or enlarge the bottom dock when several event rows are b
 
 Commands work without an editor for headless authoring/verification:
 
-- `animation.preview {id?, clip?, time?, playing?, speed?, loop?, frames?}` opens/controls one isolated
+- `animation.preview {id?, clip?, time?, playing?, speed?, loop?, ik?, frames?}` opens/controls one isolated
   preview. `id` is required on first opening; later calls may omit it. The default clip is the authored
   current clip if valid, otherwise the first available clip. A new target/clip resets time to zero.
   `time` clamps to its timeline; `frames` advances 0..3600 fixed 1/60 s steps **even when paused**.
   The `playing` flag tells an open editor to auto-advance at 60 Hz (real-time catch-up capped to 0.25 s
-  per UI frame); standalone callers advance explicitly. `loop`/`speed` affect only preview. Sprite
-  non-looping endpoints retain A1's start-of-last-frame timing.
+  per UI frame); standalone callers advance explicitly. `loop`/`speed` affect only preview.
+  `ik` defaults to false on a new target and is retained across seeks/clip changes on the same target;
+  true opts the target model into its stored BoneIK goals. Authored weights, undo and revision never change.
+  Sprite non-looping endpoints retain A1's start-of-last-frame timing.
 - `animation.preview_state` returns active/id/type/clip/time/playing/speed/loop, duration, available
   `clips`, sorted `events`, and sprite `fps`/`frameCount`. Preview pose sampling clamps the last sprite
-  frame when seeking exactly to the loop-period endpoint. `animation.preview_close` discards the copy.
+  frame when seeking exactly to the loop-period endpoint. State also includes `ik` and `ikGoals` (the
+  eligible goal count for the target model; zero for sprites).
+  `animation.preview_close` discards the copy.
 - `render.screenshot {animationPreview:true, ...}` renders that copy with its camera/attachments in
   either renderer. The default screenshot still renders the authored scene.
 - `editor.animation {open?:true}` opens/focuses the panel in an attached editor; `open:false` closes
@@ -457,12 +467,20 @@ Commands work without an editor for headless authoring/verification:
 Screenshot automation: `build\bin\oe.exe editor build\AnimationEvents --screenshot build\animation.png
 --select Fox --animation --animation-time 0.35` (one command line). `--animation` opens the panel;
 `--animation-time` sets its initial seek time. `--lang ko` / `--lang ja` select localized labels.
+`--animation-clip Walk` chooses the preview clip without editing the scene; `--frame-selection` fits
+the Scene camera to `--select` for close-up comparisons. These flags affect screenshots only.
 The same `build/AnimationEvents` demo contains Fox and Hero for model/sprite previews. A2 does not add
 a sprite-sheet clip editor, reusable clip assets or an animation controller; those are A3–A5.
 
 Verified by `AnimationPreviewIsolationAndLifecycle`, `AnimationPreviewModelPoseAndMarkersWithoutAnimator`
 and `NativeEditorAnimationPanel`; the editor case drives play/pause/step/restart, scrubbing, marker dragging,
 name edits and removal through window events.
+
+**Known stopped-scene behavior outside preview:** editing an authored `Animator.time` in the normal
+Scene view still applies saved BoneIK targets. If gameplay normally updates those targets in scripts,
+they remain fixed while stopped and can pin the feet. This is deliberately unchanged; use Animation
+preview with Apply IK off to inspect the unmodified clip. Preview does not reproduce script-driven foot
+placement or SpringBone dynamics from play.
 
 ## Status
 
@@ -473,12 +491,21 @@ The old Showcase software hash remains `72ab07fb213fd42b`. Rebuilt web and both 
 include A1; headless Edge (WebGL2 on SwiftShader) ran the demo's model and sprite callbacks and HUD
 updates without script/WebGL errors. Both Android ELF binaries retain 16 KB LOAD alignment.
 
-A2 is implemented. All 371 Windows tests pass; the final editor test also verifies legacy layout migration
+A2 is implemented. All 373 Windows tests pass; the final editor test also verifies legacy layout migration
 and visibility persistence. English/Korean/Japanese model/sprite panel screenshots were checked. The
 800x500 isolated model preview's software/D3D11 mean RGB difference is 0.083/255. The original Showcase
 hash remains unchanged. Rebuilt web/Android players contain the shared preview API; the native panel
 is a desktop tool, not a player UI. Headless Edge ran the refreshed player's model/sprite demo without
 script/WebGL errors. Android libraries were rebuilt for both ABIs and retain 16 KB LOAD alignment.
+
+The IK correction is covered by `AnimationPreviewIkIsOptInAndIsolated` and
+`NativeEditorAnimationPreviewIkControl`: free/fixed foot motion, attachment following, direct-child
+goal scope and unchanged authored weights/revision/undo/frame hash. Chisa Walk was inspected at 0.20 s
+and 0.60 s with `oe editor --screenshot`; the former has a wide stride, the latter crossed legs.
+All 99 Chisa project files retained their content hashes, with no added files. These screenshots live
+outside the project as `build/chisa-walk-ik-off-020.png` and `build/chisa-walk-ik-off-060.png`.
+`EngineAnimation.cpp` belongs to OwnEngine, which all players link, so web and both Android runtimes
+were rebuilt for this correction too; physical Android and Linux/EGL remain unverified.
 
 - [ ] Physical Android and Linux/EGL execution of animated models and A1 callbacks.
 - [ ] Real browser GPU/mobile rendering and performance (the browser check used SwiftShader).

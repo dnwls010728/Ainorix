@@ -43,6 +43,8 @@ void SolveIk(const Mesh& mesh, std::vector<Mat4>& nodes, const IkGoal& goal, con
 // BoneAttachment use this, so they agree. `ik` false stops after the clip: the pose a script adds
 // its own goals to (foot placement reads where the clip puts a foot).
 std::vector<Mat4> EvaluateEntityPose(const Scene& scene, EntityId id, const Mesh& mesh, bool ik = true);
+// Pose goal collection: a BoneIK entity directly parented to the model, with a Transform.
+bool BoneIkAppliesTo(const Scene& scene, EntityId model, EntityId goal);
 
 // Advances every SpringBone by one step: the ends of its bones (world space) follow the model with
 // inertia. Deterministic; the state lives in the component and is copied with the scene.

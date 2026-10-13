@@ -12,6 +12,7 @@ struct AnimationPreview {
     double time = 0;
     float speed = 1;
     bool playing = false, loop = true;
+    bool ik = false;  // script-driven targets are frozen during isolated preview; opt in explicitly
     uint64_t epoch = 0;
 };
 

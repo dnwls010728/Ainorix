@@ -582,7 +582,9 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params().OptWith("id", EntityRefSchema("Animated entity; required when opening."))
                  .Opt("clip", "string", "Preview clip.").Opt("time", "number", "Seek in seconds; clamps to the preview timeline.")
                  .Opt("playing", "boolean", "Editor auto-advance flag.").Opt("speed", "number", "Finite playback multiplier; negative reverses.")
-                 .Opt("loop", "boolean", "Repeat; defaults to the clip setting.").Opt("frames", "integer", "Advance 0..3600 fixed 1/60 s steps, even when paused."), false,
+                 .Opt("loop", "boolean", "Repeat; defaults to the clip setting.")
+                 .Opt("ik", "boolean", "Apply the target model's stored BoneIK goals (default false); scripts do not move them during preview.")
+                 .Opt("frames", "integer", "Advance 0..3600 fixed 1/60 s steps, even when paused."), false,
              [](Engine& e, const Json& a) { return e.AnimationPreviewCall("preview", a); });
     Register(r, "animation.preview_state", "Read isolated preview state, clip list and event marks; never changes the authored scene.", Params(), false,
              [](Engine& e, const Json& a) { return e.AnimationPreviewCall("state", a); });
