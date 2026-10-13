@@ -284,3 +284,9 @@ Software: the main pass and the shadow pass are split into horizontal bands rend
 `games/RPG`: an HD-2D village with a generated voxel terrain (vertex colours, cloud-shadow graph), modelled houses, swaying grass and trees, a sky dome with clouds and stars, mountain backdrops, stylised water, particles and a day/night cycle driving the sun, hemisphere ambient, fog and colour grading; see [RPG.md](RPG.md).
 
 Free-camera overrides in `render.screenshot` and `render.pick` accept `projection: "orthographic"` with positive `orthoSize` (half the visible height in world units). Omitted projection remains perspective; free cameras use clip distances 0.05 and 1000. The editor uses this override for 2D picking, matching its orthographic Scene view.
+
+## Planar reflection surfaces
+
+A flat MeshRenderer with PlanarReflection captures moving scenery from a reflected camera each frame.
+Both renderers share receiver selection, projection and oblique clipping; one visible receiver per view,
+no recursive captures. See [PLANAR_REFLECTION.md](PLANAR_REFLECTION.md) for fields, limits and verification.

@@ -17,6 +17,7 @@
 #include "render/GraphSource.h"
 #include "render/RenderScene.h"
 #include "render/PostProcess.h"
+#include "render/PlanarReflection.h"
 #include "render/UI.h"
 #include "render/shaders/Shaders.glsl.h"
 #include "scene/Components.h"
@@ -371,17 +372,17 @@ MeshVertex BatchVertex(const Mesh& m, uint32_t i, const RenderItem& item, const 
 // Splits `order` (draw list indices, in drawing order) into single draws and batches; batch geometry
 // is appended to `out`. Only consecutive draws are joined, so the drawing order stays the same.
 std::vector<DrawPiece> PlanBatches(const std::vector<RenderItem>& items, const std::vector<DrawCall>& draws,
-                                   const std::vector<size_t>& order, DrawBatches& out) {
+                                   const std::vector<size_t>& order, DrawBatches& out, EntityId separate = kNullEntity) {
     std::vector<DrawPiece> pieces;
     for (size_t i = 0; i < order.size();) {
         const DrawCall& first = draws[order[i]];
         const RenderItem& head = items[first.item];
         size_t j = i + 1;
-        if (Batchable(head, head.mesh->submeshes[first.submesh])) {
+        if (head.id != separate && Batchable(head, head.mesh->submeshes[first.submesh])) {
             while (j < order.size() && j - i < kBatchDraws) {
                 const DrawCall& next = draws[order[j]];
                 const RenderItem& it = items[next.item];
-                if (!Batchable(it, it.mesh->submeshes[next.submesh]) || next.blend != first.blend ||
+                if (it.id == separate || !Batchable(it, it.mesh->submeshes[next.submesh]) || next.blend != first.blend ||
                     !SameBatchMaterial(next.material, first.material)) break;
                 ++j;
             }
@@ -677,7 +678,7 @@ struct GpuRenderer::Impl {
     sg_view spotTex{};
     float spotData[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
     StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
-    Targets offscreen, window;
+    Targets offscreen, window, planarTarget;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
 
     // Shader graphs compiled into their own mesh/surface programs (GraphSource.h); pipelines are made
@@ -1162,6 +1163,7 @@ struct GpuRenderer::Impl {
         textures.clear();
         uiTextures.clear();
         offscreen.Destroy();
+        planarTarget.Destroy();
         window.Destroy();
         for (auto& kv : panelTargets) kv.second.Destroy();
         panelTargets.clear();
@@ -1461,9 +1463,11 @@ struct GpuRenderer::Impl {
     }
 
     // Immutable replacements also permit several editor viewports with different scenes in one sokol frame.
-    sg_view SpotTextureFor(const RenderLights& lights, const std::vector<RenderProbe>& probes, const LocalShadowSet& shadows) {
-        if (lights.spots.empty() && !lights.env.map && probes.empty() && shadows.lights.empty()) return whiteTex;
+    sg_view SpotTextureFor(const RenderLights& lights, const std::vector<RenderProbe>& probes, const LocalShadowSet& shadows,
+                          const RenderPlanarReflection& planar) {
+        if (lights.spots.empty() && !lights.env.map && probes.empty() && shadows.lights.empty() && planar.id == kNullEntity) return whiteTex;
         float data[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
+        if (planar.id != kNullEntity) Put(data + kPlanarMatrixTexel * 4, planar.view.proj * planar.view.view);
         for (size_t i = 0; i < lights.spots.size(); ++i) {
             const RenderSpotLight& light = lights.spots[i];
             Put(data + i * 4, light.pos.x, light.pos.y, light.pos.z, light.range);
@@ -1509,6 +1513,14 @@ struct GpuRenderer::Impl {
         RenderStats stats;
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
+        items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return it.id == view.excludeEntity; }), items.end());
+        const RenderPlanarReflection planar = SelectPlanarReflection(scene, items, view);
+        if (planar.id != kNullEntity) {
+            PrepareTargets(planarTarget, planar.resolution, planar.resolution, true, planar.view);
+            Frame(scene, planar.view, planarTarget, planar.resolution, planar.resolution, nullptr);
+        } else if (!view.reflectionCapture) {
+            planarTarget.Destroy();
+        }
         RenderLights lights = GatherRenderLights(scene, assets);
         const LocalShadowSet localShadows = SelectLocalShadows(lights, view.proj * view.view, view.eye);
         if (!localShadows.maps.empty() && !localShadowAtlas.id) {
@@ -1605,7 +1617,7 @@ struct GpuRenderer::Impl {
         DrawBatches batching;
         const std::vector<DrawPiece> shadowPieces = PlanBatches(items, draws, shadowOrder, batching);
         const std::vector<DrawPiece> localShadowPieces = PlanBatches(items, draws, localShadowOrder, batching);
-        const std::vector<DrawPiece> scenePieces = PlanBatches(items, draws, sceneOrder, batching);
+        const std::vector<DrawPiece> scenePieces = PlanBatches(items, draws, sceneOrder, batching, planar.id);
         UploadBatches(batching);
         // The item, draw call and geometry of a piece: the draw's own, or its batch's.
         auto piece = [&](const DrawPiece& p, const DrawCall*& dc, const RenderItem*& it, MeshBinding& mesh) {
@@ -1863,7 +1875,7 @@ struct GpuRenderer::Impl {
             Put(lu.env_map, env.map ? 1.0f : 0.0f, env.map ? env.map->MaxLod() : 0.0f, env.yawCos, env.yawSin);
             // Reflection probes of this frame; the slots without one keep the white texture.
             const std::vector<RenderProbe> probes = ActiveProbes(scene, assets, lights, viewProj, view.eye);
-            const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows);
+            const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows, planar);
             sg_view probeTex[kMaxProbes];
             Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
             const PostProcess ambientPost = NormalizePostProcess(view.postProcess);
@@ -1926,7 +1938,7 @@ struct GpuRenderer::Impl {
                 Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
                 const float fogMode = !m.fog ? 0.0f : (dc.blend && m.additive ? 2.0f : 1.0f);
-                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, fogMode, dc.blend ? 1.0f : 0.0f);
+                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, it.id == planar.id ? planar.strength : 0, fogMode, dc.blend ? 1.0f : 0.0f);
                 PutGraph(mu, m, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
@@ -1945,6 +1957,8 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_spot_tex] = spotLightTex;
                 b.views[VIEW_oe_local_shadow_tex] = localShadowTex.id ? localShadowTex : shadowTex;
                 b.views[VIEW_oe_ssao_depth_tex] = t.ssao ? t.ssaoDepthTex : whiteTex;
+                b.views[VIEW_oe_planar_tex] = planar.id != kNullEntity ? planarTarget.sceneTex : whiteTex;
+                b.samplers[SMP_oe_planar_smp] = linearClamp;
                 b.samplers[SMP_oe_spot_smp] = nearestClamp;
                 b.samplers[SMP_oe_env_smp] = envSampler;
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;

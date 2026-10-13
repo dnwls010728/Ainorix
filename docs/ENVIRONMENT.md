@@ -20,6 +20,9 @@ oe exec <project> entity.create '{"name":"Room Probe","components":{"Transform":
 oe exec <project> probe.state '{"id":"Room Probe","out":"build/probe.png"}'   # look at its picture
 ```
 
+For a live mirror or water surface that reflects moving characters, use
+[PlanarReflection](PLANAR_REFLECTION.md). Probe captures stay nonrecursive and do not include planar reflections.
+
 ## Design
 
 Two kinds of sky, one component:

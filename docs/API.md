@@ -2510,6 +2510,19 @@ Local reflection: a picture of the surroundings taken from the entity's position
 | `nearPlane` | float | `0.100000001` | Nearest distance the picture shows, meters. |
 | `farPlane` | float | `200` | Farthest distance the picture shows, meters. |
 
+### PlanarReflection
+
+A live one-sided reflection on this entity's flat MeshRenderer. One visible surface per view; captures moving scenery without recursive mirrors.
+
+| field | type | default | description |
+|---|---|---|---|
+| `normal` | vec3 | `[0,1,0]` | Local-space plane normal; default +Y for the built-in plane. Zero/invalid normals disable capture. |
+| `offset` | vec3 | `[0,0,0]` | Local-space plane origin; should coincide with the flat mesh. Entity hierarchy and scale apply. |
+| `strength` | float | `1` | Blend from ordinary material lighting to live reflection (0..1). 0 skips capture. |
+| `resolution` | int | `256` | Square reflection capture resolution (64..1024). One surface per view, nearest origin then entity id. |
+| `clipBias` | float | `0.00999999978` | World-space clipping offset above the plane (0.001..0.1 meters). Excludes geometry behind the mirror. |
+| `enabled` | bool | `true` | Enable live planar capture; disable to use the ordinary material. |
+
 ### CameraFollow
 
 Moves this entity (usually the camera) to target + offset after physics each frame and aims it at the target.

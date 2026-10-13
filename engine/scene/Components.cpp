@@ -42,6 +42,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<PointLight>();
     TypeRegistry::Register<Skybox>();
     TypeRegistry::Register<ReflectionProbe>();
+    TypeRegistry::Register<PlanarReflection>();
     TypeRegistry::Register<CameraFollow>();
     TypeRegistry::Register<Sprite>();
     TypeRegistry::Register<SpriteAnimation>();

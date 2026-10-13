@@ -131,6 +131,8 @@ const Preset kPresets[] = {
     {"light", "Rendering", "Directional Light", "Directional Light", R"({"Transform":{"rotation":[-50,30,0]},"DirectionalLight":{}})"},
     {"sky", "Rendering", "Sky", "Sky", R"({"Skybox":{}})"},
     {"probe", "Rendering", "Reflection Probe", "Reflection Probe", R"({"Transform":{"position":[0,1.5,0]},"ReflectionProbe":{}})"},
+    {"planar", "Rendering", "Planar Reflection", "Planar Reflection",
+     R"({"Transform":{"scale":[4,1,4]},"MeshRenderer":{"mesh":"plane","castShadows":false},"PlanarReflection":{}})"},
     {"spotlight", "Rendering", "Spot Light", "Spot Light",
      R"({"Transform":{"position":[0,3,0],"rotation":[-90,0,0]},"SpotLight":{}})"},
     {"pointlight", "Rendering", "Point Light", "Point Light",

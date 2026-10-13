@@ -277,7 +277,8 @@ constexpr int kMaxLocalShadowLights = 2;   // Shared point/spot budget, independ
 constexpr int kMaxLocalShadowMaps = 12;    // Two six-face point lights at most.
 constexpr int kLocalShadowTileSize = 512;  // Four-by-four atlas fits GLES3's 2048 texture minimum.
 constexpr int kLocalShadowAtlasSize = 2048;
-constexpr int kLocalLightDataWidth = 8, kLocalLightDataHeight = 18;
+constexpr int kLocalLightDataWidth = 8, kLocalLightDataHeight = 19;
+constexpr int kPlanarMatrixTexel = 144;  // Four columns of the reflected view-projection matrix.
 constexpr int kLocalShadowConfigTexel = 72, kSpotShadowSlotTexel = 74;
 constexpr int kLocalShadowMatrixTexel = 82, kLocalShadowParamsTexel = 130;
 struct RenderLocalShadow {

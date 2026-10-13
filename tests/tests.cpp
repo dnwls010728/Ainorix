@@ -50,6 +50,7 @@
 #include "render/GpuRenderer.h"
 #include "render/GraphSource.h"
 #include "render/PostProcess.h"
+#include "render/PlanarReflection.h"
 #include "render/shaders/Shaders.glsl.h"
 #include "render/RenderScene.h"
 #include "render/ShaderGraph.h"
@@ -4954,10 +4955,11 @@ TEST(SpotLightRendering) {
     const sg_shader_desc* descriptor = oe_mesh_shader_desc(SG_BACKEND_GLES3);
     const size_t uniformVectors = (descriptor->uniform_blocks[UB_oe_mesh_lights].size +
                                    descriptor->uniform_blocks[UB_oe_mesh_material].size) / (4 * sizeof(float));
-    CHECK(uniformVectors + 14 <= 224);
+    CHECK(uniformVectors + 15 <= 224);
     static_assert(VIEW_oe_spot_tex < 16, "Spot texture must fit the GLES3 fragment texture-unit minimum");
     static_assert(VIEW_oe_local_shadow_tex < 16, "Local shadows must fit the GLES3 fragment texture-unit minimum");
     static_assert(VIEW_oe_ssao_depth_tex < 16, "SSAO must fit the GLES3 fragment texture-unit minimum");
+    static_assert(VIEW_oe_planar_tex < 16, "Planar reflection must fit the GLES3 fragment texture-unit minimum");
     const std::string project = TempProject("spot_rendering");
     Engine e; std::string error;
     CHECK(e.Open(project, &error));
@@ -10909,6 +10911,97 @@ TEST(SpriteCutoutShadows) {
         CHECK(level(-0.5f, -1) < gpuOpen - 60);
         CHECK(std::abs(level(0.5f, -1) - gpuOpen) <= 2);
     } else std::printf("  SKIP sprite shadow GPU check (%s)\n", err.c_str());
+}
+
+TEST(PlanarReflectionSelectionAndBounds) {
+    const std::string project = TempProject("planar_selection");
+    Engine e; std::string error; CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Parent","components":{"Transform":{"position":[0,0.5,0],"rotation":[0,25,0],"scale":[2,1,3]}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"First","parent":"Parent","components":{"MeshRenderer":{"mesh":"plane"},"PlanarReflection":{"normal":[0,4,0],"offset":[0,0.2,0],"resolution":4096,"strength":2}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Second","parent":"Parent","components":{"MeshRenderer":{"mesh":"plane"},"PlanarReflection":{"offset":[0,0.2,0]}}})")["ok"].asBool());
+    const EntityId first = e.GetScene().FindByName("First"), second = e.GetScene().FindByName("Second");
+    RenderView view = MakeLookAtView(Vec3(3,4,5),Vec3(),50,1.5f);
+    auto select = [&] { auto items=GatherRenderItems(e.GetScene(),&e.Assets(),view.view); std::reverse(items.begin(),items.end()); return SelectPlanarReflection(e.GetScene(),items,view); };
+    auto selected = select();
+    CHECK(selected.id==first && selected.resolution==1024 && selected.strength==1);
+    CHECK(Length(selected.position-Vec3(0,0.7f,0))<1e-5f && Length(selected.normal-Vec3(0,1,0))<1e-5f);
+    CHECK(SelectPlanarReflection(e.GetScene(),GatherRenderItems(e.GetScene(),&e.Assets(),view.view),selected.view).id==kNullEntity);
+    CHECK(Call(e,"component.set",R"({"id":"First","type":"PlanarReflection","values":{"normal":[0,0,0]}})")["ok"].asBool());
+    CHECK(select().id==second);
+    CHECK(Call(e,"component.set",R"({"id":"Second","type":"PlanarReflection","values":{"strength":0}})")["ok"].asBool());
+    CHECK(select().id==kNullEntity);
+    CHECK(Call(e,"history.undo","{}")["ok"].asBool());
+    view.eye=Vec3(0,-2,4); CHECK(select().id==kNullEntity);
+    view=MakeLookAtView(Vec3(3,4,5),Vec3(),50,1.5f);
+    CHECK(Call(e,"component.set",R"({"id":"Second","type":"Transform","values":{"position":[1000,0,0]}})")["ok"].asBool());
+    CHECK(select().id==kNullEntity);
+    CHECK(RemoveAll(project));
+}
+
+TEST(PlanarReflectionMotionClippingAndParity) {
+    const std::string project = TempProject("planar_reflection");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Mirror","components":{"Transform":{"scale":[8,1,8]},"MeshRenderer":{"mesh":"plane","unlit":true,"color":[0.1,0.1,0.1]},"PlanarReflection":{"resolution":256}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Moving","components":{"Transform":{"position":[-1,1,0]},"MeshRenderer":{"mesh":"cube","unlit":true,"color":[1,0,0]},"RigidBody":{"type":"kinematic"}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Behind","components":{"Transform":{"position":[1,-1,0]},"MeshRenderer":{"mesh":"cube","unlit":true,"color":[0,1,0]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"UI","components":{"UIPanel":{"x":0,"y":0,"width":8,"height":8,"color":[0,0,1],"opacity":1}}})")["ok"].asBool());
+    const EntityId mirror = e.GetScene().FindByName("Mirror");
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    RenderTarget reflected, changed, off, gpu; for (auto* t : {&reflected,&changed,&off,&gpu}) t->Resize(240,160);
+    for (bool vertical : {false,true}) {
+        if (vertical) {
+            CHECK(Call(e, "component.set", R"({"id":"Mirror","type":"Transform","values":{"rotation":[90,0,0],"scale":[8,1,5]}})")["ok"].asBool());
+            CHECK(Call(e, "component.set", R"({"id":"Moving","type":"Transform","values":{"position":[-1,0,2]}})")["ok"].asBool());
+            CHECK(Call(e, "component.set", R"({"id":"Behind","type":"Transform","values":{"position":[1,0,-2]}})")["ok"].asBool());
+        }
+        for (bool ortho : {false,true}) {
+            RenderView view = MakeLookAtView(vertical ? Vec3(3,2,7) : Vec3(5,4,6), Vec3(), 50,1.5f);
+            view.clearColor = Color(0.04f,0.04f,0.04f); view.drawUI = true;
+            if (ortho) view.proj = Mat4::Orthographic(4,1.5f,0.1f,100);
+            const auto selection = SelectPlanarReflection(e.GetScene(), GatherRenderItems(e.GetScene(),&e.Assets(),view.view),view);
+            CHECK(selection.id == mirror && selection.view.reflectionCapture && selection.view.excludeEntity == mirror);
+            CHECK(std::fabs(Dot(selection.normal,selection.view.eye-selection.position) + Dot(selection.normal,view.eye-selection.position)) < 1e-4f);
+            e.Renderer().Render(e.GetScene(),view,reflected);
+            int red = 0, green = 0;
+            for (size_t i = 0; i < reflected.color.size(); ++i) if (reflected.ids[i] == mirror) {
+                const uint32_t c = reflected.color[i];
+                red += (c&255) > 150 && ((c>>8)&255) < 20;
+                green += ((c>>8)&255) > 150 && (c&255) < 20;
+            }
+            std::printf("  planar %s %s: reflected red %d, behind-plane green %d\n",vertical?"vertical":"floor",ortho?"ortho":"perspective",red,green);
+            CHECK(red > 20 && green == 0);
+            if (haveGpu) {
+                e.Gpu()->Render(e.GetScene(),view,gpu);
+                double sum = 0;
+                for (size_t i=0;i<gpu.color.size();++i) for(int shift : {0,8,16})
+                    sum += std::abs(static_cast<int>((gpu.color[i]>>shift)&255)-static_cast<int>((reflected.color[i]>>shift)&255));
+                const double mean = sum/(gpu.color.size()*3);
+                std::printf("  planar software/GPU mean %.3f/255\n",mean); CHECK(mean < 2);
+            }
+            const uint64_t gpuBefore = gpu.Hash();
+            const char* move = vertical ? R"({"id":"Moving","type":"Transform","values":{"position":[2,0,2]}})" : R"({"id":"Moving","type":"Transform","values":{"position":[2,1,0]}})";
+            CHECK(Call(e,"component.set",move)["ok"].asBool());
+            e.Renderer().Render(e.GetScene(),view,changed);
+            int motion=0;
+            for(size_t i=0;i<changed.color.size();++i) motion += reflected.ids[i]==mirror && changed.ids[i]==mirror && reflected.color[i]!=changed.color[i];
+            CHECK(motion>40);
+            if (haveGpu) { e.Gpu()->Render(e.GetScene(),view,gpu); CHECK(gpu.Hash()!=gpuBefore); }
+            CHECK(Call(e,"history.undo","{}")["ok"].asBool());
+            SetMaxRenderThreads(1); e.Renderer().Render(e.GetScene(),view,changed); SetMaxRenderThreads(16);
+            CHECK(changed.Hash()==reflected.Hash());
+            CHECK(Call(e,"component.set",R"({"id":"Mirror","type":"PlanarReflection","values":{"enabled":false}})")["ok"].asBool());
+            e.Renderer().Render(e.GetScene(),view,off);
+            CHECK(off.Hash()!=reflected.Hash() && off.depth==reflected.depth && off.ids==reflected.ids);
+            CHECK(off.color[0]==reflected.color[0]);
+            CHECK(Call(e,"history.undo","{}")["ok"].asBool());
+        }
+    }
+    Scene restored; CHECK(restored.FromJson(e.GetScene().ToJson(),&error));
+    CHECK(restored.Get<PlanarReflection>(restored.FindByName("Mirror"))->resolution==256);
+    CHECK(RemoveAll(project));
 }
 
 TEST(CameraSsaoContactsAndExclusions) {

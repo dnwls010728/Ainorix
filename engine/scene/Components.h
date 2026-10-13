@@ -770,6 +770,28 @@ struct Skybox {
     }
 };
 
+struct PlanarReflection {
+    static constexpr const char* kTypeName = "PlanarReflection";
+    static constexpr const char* kDoc = "A live one-sided reflection on this entity's flat MeshRenderer. One visible surface per view; captures moving scenery without recursive mirrors.";
+    Vec3 normal{0,1,0};            // Plane normal in local space, transformed by the inverse-transpose.
+    Vec3 offset{0,0,0};            // Plane origin in local space (hierarchy/scale apply).
+    float strength = 1;            // Blend toward captured scene color; zero disables capture.
+    int resolution = 256;          // Square capture size in pixels, bounded 64..1024.
+    float clipBias = 0.01f;        // World meters above the plane excluded to avoid self-clipping artifacts.
+    bool enabled = true;
+    static void Reflect(FieldList& f) {
+        f.Add("normal", &PlanarReflection::normal, "Local-space plane normal; default +Y for the built-in plane. Zero/invalid normals disable capture.");
+        f.Add("offset", &PlanarReflection::offset, "Local-space plane origin; should coincide with the flat mesh. Entity hierarchy and scale apply.");
+        FieldInfo& strengthField = f.Add("strength", &PlanarReflection::strength, "Blend from ordinary material lighting to live reflection (0..1). 0 skips capture.");
+        strengthField.hasRange = true; strengthField.min = 0; strengthField.max = 1;
+        FieldInfo& resolutionField = f.Add("resolution", &PlanarReflection::resolution, "Square reflection capture resolution (64..1024). One surface per view, nearest origin then entity id.");
+        resolutionField.hasRange = true; resolutionField.min = 64; resolutionField.max = 1024;
+        FieldInfo& biasField = f.Add("clipBias", &PlanarReflection::clipBias, "World-space clipping offset above the plane (0.001..0.1 meters). Excludes geometry behind the mirror.");
+        biasField.hasRange = true; biasField.min = 0.001f; biasField.max = 0.1f;
+        f.Add("enabled", &PlanarReflection::enabled, "Enable live planar capture; disable to use the ordinary material.");
+    }
+};
+
 struct ReflectionProbe {
     static constexpr const char* kTypeName = "ReflectionProbe";
     static constexpr const char* kDoc = "Local reflection: a picture of the surroundings taken from the entity's position. Surfaces inside its box reflect (and are ambient-lit by) that picture instead of the sky, so a room reflects its own walls. Shows the scenery, not moving bodies; taken when the scene loads, play starts, the stopped scene is edited, or on probe.bake.";

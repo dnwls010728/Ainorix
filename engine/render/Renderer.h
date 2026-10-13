@@ -57,6 +57,8 @@ struct RenderView {
     // (see ProbeShows), lit without probes, and the lit colors before any post effect are written
     // here (width * height, values above 1 kept); the target's color is not meaningful.
     std::vector<Color>* sceneColor = nullptr;
+    bool reflectionCapture = false;  // Internal planar capture: prevents recursion, retains dynamic scenery.
+    EntityId excludeEntity = kNullEntity;  // Internal capture receiver excluded from all draw/shadow passes.
 };
 
 struct RenderStats {

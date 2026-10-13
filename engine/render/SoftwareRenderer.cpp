@@ -8,6 +8,7 @@
 #include "assets/Assets.h"
 #include "render/Mesh.h"
 #include "render/PostProcess.h"
+#include "render/PlanarReflection.h"
 #include "render/Fxaa.h"
 #include "render/RenderScene.h"
 #include "render/Renderer.h"
@@ -110,6 +111,19 @@ struct Lighting {
     Vec3 eye;
     LocalShadowSet localShadows;
     std::vector<ShadowMap> localMaps;
+    RenderPlanarReflection planar;
+    Texture planarTexture;
+    Mat4 planarViewProj;
+
+    Color PlanarColor(EntityId id, const Vec3& position, const Color& original) const {
+        if (id != planar.id || planarTexture.texels.empty()) return original;
+        const Vec4 projected = planarViewProj * Vec4(position, 1);
+        if (projected.w <= 1e-6f) return original;
+        const float u = projected.x / projected.w * 0.5f + 0.5f, v = 0.5f - projected.y / projected.w * 0.5f;
+        if (u < 0 || v < 0 || u > 1 || v > 1) return original;
+        const float edge = 0.5f / static_cast<float>(planarTexture.width);
+        return original * (1 - planar.strength) + planarTexture.Sample(Clamp(u,edge,1-edge), Clamp(v,edge,1-edge)) * planar.strength;
+    }
     std::vector<float> ssaoDepth;
     Mat4 ssaoInverse;
     Mat4 ssaoProjection;
@@ -527,6 +541,7 @@ private:
                     if (!mat.blend) ao *= lighting->AmbientVisibility(x, y, wpos, ng);
                     out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao);
                 }
+                out = lighting->PlanarColor(mat.id, a.wpos * p0 + b.wpos * p1 + c.wpos * p2, out);
                 Color em = m.emissive * m.emissiveIntensity;
                 if (m.emissiveTexture) em = em * m.emissiveTexture->Sample(u, v, m.pixelArt, nullptr);
                 out = out + em + shaderEmissive;
@@ -744,9 +759,19 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
     std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view);
+    items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return it.id == view.excludeEntity; }), items.end());
     if (picture)
         items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return !ProbeShows(scene, it.id); }), items.end());
     Lighting lighting;
+    lighting.planar = SelectPlanarReflection(scene, items, view);
+    if (lighting.planar.id != kNullEntity) {
+        RenderTarget reflected;
+        reflected.Resize(lighting.planar.resolution, lighting.planar.resolution);
+        Render(scene, lighting.planar.view, reflected);
+        lighting.planarTexture.width = reflected.width; lighting.planarTexture.height = reflected.height;
+        lighting.planarTexture.texels = std::move(reflected.color);
+        lighting.planarViewProj = lighting.planar.view.proj * lighting.planar.view.view;
+    }
     lighting.ambient = fillFloor(gathered.ambient);
     lighting.groundAmbient = fillFloor(gathered.groundAmbient);
     lighting.hemisphere = gathered.hemisphere;

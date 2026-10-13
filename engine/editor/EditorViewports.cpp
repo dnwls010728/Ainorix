@@ -509,6 +509,16 @@ void NativeEditor::Impl::ScenePanel() {
         for (const Vec3& axis : {Vec3(0.25f, 0, 0), Vec3(0, 0.25f, 0), Vec3(0, 0, 0.25f)})
             view.lines.push_back({lightCenter - axis, lightCenter + axis, color});
     }
+    if (const PlanarReflection* mirror = scene.Get<PlanarReflection>(lightId)) {
+        const Vec3 origin = lightWorld.TransformPoint(mirror->offset);
+        const Vec3 normal = Normalize(lightWorld.Inverse().Transposed().TransformDir(mirror->normal));
+        const Vec3 right = Normalize(Cross(normal, std::fabs(normal.y) > 0.95f ? Vec3(0,0,1) : Vec3(0,1,0)));
+        const Vec3 up = Cross(normal,right);
+        const Color color = mirror->enabled ? Color(0.45f,0.72f,1) : Color(0.45f,0.45f,0.45f);
+        const Vec3 corners[] = {origin-right-up,origin+right-up,origin+right+up,origin-right+up};
+        for (int i = 0; i < 4; ++i) view.lines.push_back({corners[i],corners[(i+1)%4],color});
+        view.lines.push_back({origin,origin+normal,color});
+    }
     if (const DirectionalLight* light = scene.Get<DirectionalLight>(lightId)) {
         // Infinite reach: draw parallel rays, never a misleading finite range box.
         const Vec3 direction = Normalize(lightWorld.TransformDir(Vec3(0, 0, -1)));

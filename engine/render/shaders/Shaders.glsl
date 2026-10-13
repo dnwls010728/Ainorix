@@ -298,11 +298,13 @@ layout(binding=7) uniform texture2D probe0_tex;  // reflection probe pictures, l
 layout(binding=8) uniform texture2D probe1_tex;
 layout(binding=9) uniform texture2D probe2_tex;
 layout(binding=10) uniform texture2D probe3_tex;
-// 8x18 RGBA32F: spots and sky/probe SH, local-light slots, twelve matrices and bias parameters.
+// 8x19 RGBA32F: spots and sky/probe SH, local-light slots/matrices/bias, planar matrix at 144.
 layout(binding=11) uniform texture2D spot_tex;
 layout(binding=3) uniform sampler spot_smp;
 layout(binding=12) uniform texture2D local_shadow_tex; // 4x4 atlas of 512-square perspective depth maps
 layout(binding=13) uniform texture2D ssao_depth_tex;
+layout(binding=14) uniform texture2D planar_tex;
+layout(binding=4) uniform sampler planar_smp;
 
 // Mirrors Lighting::AmbientVisibility. Transparent surfaces receive no SSAO.
 float ambient_visibility(vec3 position, vec3 normal) {
@@ -733,6 +735,19 @@ void main() {
             float fall = 1.0 - dist / position.w;
             float localLit = local_shadow_lit(int(light_data(74 + i).x), position.xyz, v_wpos, ng);
             color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * radiance.rgb * (fall * fall * cone) * localLit;
+        }
+    }
+    if (color_range.y > 0.0) {
+        mat4 planar_vp = mat4(light_data(144), light_data(145), light_data(146), light_data(147));
+        vec4 projected = planar_vp * vec4(v_wpos, 1.0);
+        if (projected.w > 1e-6) {
+            vec2 uv = projected.xy / projected.w * 0.5 + 0.5;
+#if !SOKOL_GLSL
+            uv.y = 1.0 - uv.y;
+#endif
+            if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) {
+                color = mix(color, textureLod(sampler2D(planar_tex, planar_smp), uv, 0.0).rgb, color_range.y);
+            }
         }
     }
     vec3 em = emissive.rgb;
