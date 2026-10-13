@@ -172,8 +172,11 @@ Rules for every item here:
   Implemented: `PostProcess.ssao/ssaoRadius/ssaoBias`, 32 fixed samples, ambient-only shading.
   352 Windows tests and WebGL2 package checked; web and both Android runtimes rebuilt.
   Remaining: Android physical-device rendering; Linux/EGL; real browser GPU and minimum-capability vertex path.
-- [ ] **R6 — Planar reflection.** A mirror or water plane that shows what moves (characters), which probes
+- [x] **R6 — Planar reflection.** A mirror or water plane that shows what moves (characters), which probes
   cannot: the scene drawn again from the mirrored camera, used by one flat surface.
+  Implemented: `PlanarReflection`, nearest visible surface per view, dynamic captures with shared oblique clipping.
+  354 Windows tests and WebGL2 animated package checked; web and both Android runtimes rebuilt.
+  Remaining: Android physical devices; Linux/EGL; real browser GPUs and existing minimum-device vertex path.
 - [ ] **R7 — Decals.** A box that projects a texture onto the surfaces inside it (bullet marks, stains, floor
   markings), with its own draw order and fade.
 - [ ] **R8 — Particles colliding with the world.** A VFX emitter option: particles stop, bounce or die on

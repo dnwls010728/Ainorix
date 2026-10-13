@@ -65,9 +65,20 @@ demonstrates a moving character over a reflective floor and a green object below
 not appear in its reflection. Open `build/bin/oe editor build/PlanarReflection` and press Play. Turn
 `enabled` off on Reflecting floor to compare, or reduce `strength` for a water-like blend.
 
-## Implementation status (work log)
+## Status
 
-- [x] Add reflected-camera selection, component controls and both renderer paths with plane clipping.
-- [x] Add editor creation/guides and verify motion, clipping, selection, determinism and renderer parity.
-- [x] Document limits, regenerate API reference and leave a demonstration under `build/PlanarReflection`.
-- [ ] Rebuild web/Android players and verify the WebGL2 demonstration.
+Implemented in both renderers with editor creation/Inspector controls and a plane guide. 354 Windows tests
+pass. PlanarReflectionSelectionAndBounds and PlanarReflectionMotionClippingAndParity verify selection,
+invalid settings, hierarchy/nonuniform scale, recursion exclusion, moving bodies, plane-side clipping,
+horizontal/vertical mirrors, perspective/orthographic views, serialization, thread-count determinism,
+and unchanged depth/IDs/UI. The demo's mean software/D3D11 RGB difference is 0.373/255 at frame zero
+and 0.388/255 after 90 simulation frames. Showcase retains hash 72ab07fb213fd42b without the component.
+CLI PNGs and an editor screenshot were visually checked.
+
+Web and both Android players were rebuilt. Headless Edge/SwiftShader compiled and linked the mesh
+program and displayed the packaged moving-character reflection without WebGL errors. Both Android
+ELF libraries retain 16KB LOAD alignment. One Android compiler frontend crash in unchanged VfxExpression.cpp
+was resolved by retrying with reduced build parallelism; no source workaround was needed.
+
+- [ ] Planar rendering on Android physical devices, Linux/EGL and real browser GPUs.
+- [ ] Existing skin/vertex-graph execution on minimum-capability WebGL2/GLES3 devices.

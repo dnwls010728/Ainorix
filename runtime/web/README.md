@@ -5,25 +5,26 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (975e58e). R5 adds opt-in
-PostProcess.ssao/ssaoRadius/ssaoBias, a depth prepass and 32 fixed samples that darken ambient light
-only. Direct light, emission, UI and transparent surfaces are unaffected. R2 spotlights, R3 cascades,
-R4 local shadows and all earlier player features remain included; see [POSTPROCESS.md](../../docs/POSTPROCESS.md).
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (27aba99). R6 adds
+PlanarReflection on flat MeshRenderer surfaces: one visible receiver per view, a reflected camera,
+shared oblique clipping and a current-scene capture that includes moving characters. Captures do not
+recurse or include UI. The light-data texture is now 8x19 RGBA32F. All earlier runtime features remain
+included; see [PLANAR_REFLECTION.md](../../docs/PLANAR_REFLECTION.md).
 Packaging still patches the game's key into the runtime for keyed OEPAK002 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,005,988 | 08254f7647705f76eb1297c24ebd522e022dee7dbbf953a0f5b726706baa5cfc |
+| oe_player.wasm | 6,022,336 | 55a9da1565522e94befbfdc45db3478e3e7a1b03310280afa43584747db72434 |
 
-Windows Release: 352 tests pass, including SSAO contacts, perspective/orthographic views, exclusions,
-determinism, effect combinations and software/GPU comparisons. Headless Edge (WebGL2 on SwiftShader)
-compiled and linked the generated mesh program and rendered the packaged SSAO demonstration without
-shader/WebGL warnings. The fragment program has 209 vec4 uniform vectors and 14 sampler uniforms
-(223 conservatively), using 14 texture units, within GLES3/WebGL2 fragment minimums. SSAO requires
-renderable R32F targets (float color-buffer support). Earlier browser checks are in Git history.
-The pre-existing vertex skin/graph uniform budget is unchanged; minimum-capability vertex-stage execution
-still needs device validation.
+Windows Release: 354 tests pass, including planar selection/bounds, transformed planes, motion,
+behind-plane clipping, horizontal/vertical and perspective/orthographic parity, and unchanged depth/IDs.
+The 800x500 demo's software/D3D11 mean RGB difference is 0.373/255 (0.388 after 90 simulation frames).
+Headless Edge (WebGL2 on SwiftShader) compiled and linked the generated mesh program and rendered
+the packaged animated demonstration without shader/WebGL errors. The fragment program uses 209 vec4
+uniform vectors and 15 samplers (224 conservatively), with 15 texture units, within GLES3/WebGL2 minimums.
+No new vertex-stage resources; the existing skin/vertex-graph minimum-device path remains unverified.
+Earlier browser checks are in Git history.
 
 Not verified on real browser GPUs or phones: frame rate, UIInput typing, sound output, touch, ads, and
 newer animation/physics/networking paths beyond the earlier recorded browser checks. A browser can join
