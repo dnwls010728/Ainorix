@@ -49,6 +49,7 @@
 #include "render/GpuDevice.h"
 #include "render/GpuRenderer.h"
 #include "render/GraphSource.h"
+#include "render/PostProcess.h"
 #include "render/shaders/Shaders.glsl.h"
 #include "render/RenderScene.h"
 #include "render/ShaderGraph.h"
@@ -7431,6 +7432,114 @@ TEST(GpuFrustumCulling) {
         error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
     std::printf("  culled frame software/GPU mean difference %.4f\n", error / static_cast<double>(sw.color.size() * 3));
     CHECK(error / static_cast<double>(sw.color.size() * 3) < 2.0);
+}
+
+TEST(CascadedShadowFitsAndStability) {
+    const Vec3 eye(0, 5, 10), target(0, 0, -10), dir = Normalize(Vec3(-0.4f, -1, -0.3f));
+    const Mat4 view = Mat4::LookAt(eye, target, Vec3(0, 1, 0));
+    const Mat4 projection = Mat4::Perspective(Radians(60), 1.5f, 0.1f, 500);
+    const Vec3 lo(-200, -1, -200), hi(200, 20, 200);
+    const ShadowCascadeSet legacy = FitShadowCascades(view, projection, 0, 1, lo, hi, dir, 2048);
+    CHECK(legacy.count == 1 && std::memcmp(legacy.fits[0].viewProj.m, FitShadow(lo, hi, dir, 2048).viewProj.m, sizeof(Mat4)) == 0);
+    const auto cascades = FitShadowCascades(view, projection, 80, 4, lo, hi, dir, 2048);
+    CHECK(cascades.count == 4 && cascades.splits[3] == 80);
+    CHECK(cascades.fits[0].texelWorld < cascades.fits[3].texelWorld / 3);
+    const Mat4 toWorld = (projection * view).Inverse();
+    for (int i = 0; i < 4; ++i) {
+        const size_t index = static_cast<size_t>(i);
+        const ShadowFit& fit = cascades.fits[index];
+        CHECK(fit.depthBias > 0 && fit.depthBias < 0.002f);
+        const float from = i == 0 ? 0.1f : cascades.blendStarts[index - 1];
+        const float to = cascades.splits[index];
+        CHECK(ShadowCascadeIndex(cascades, to - 0.001f) == i && ShadowCascadeIndex(cascades, to) == i + 1);
+        CHECK(ShadowCascadeBlend(cascades, i, cascades.blendStarts[index]) == 0);
+        CHECK(std::fabs(ShadowCascadeBlend(cascades, i, (cascades.blendStarts[index] + to) * 0.5f) - 0.5f) < 1e-5f);
+        CHECK(ShadowCascadeBlend(cascades, i, to) == 1);
+        for (int c = 0; c < 8; ++c) {
+            const float depth = c & 4 ? to : from;
+            const float z = -projection.at(2, 2) + projection.at(2, 3) / depth;
+            const Vec4 world = toWorld * Vec4(c & 1 ? 1.0f : -1.0f, c & 2 ? 1.0f : -1.0f, z, 1);
+            const Vec4 light = fit.viewProj * Vec4(world.xyz() / world.w, 1);
+            CHECK(std::fabs(light.x) <= 1.0001f && std::fabs(light.y) <= 1.0001f && std::fabs(light.z) <= 1.0001f);
+        }
+        const Vec4 origin = fit.viewProj * Vec4(0, 0, 0, 1);
+        CHECK(std::fabs(origin.x * 512 - std::round(origin.x * 512)) < 1e-3f);
+        CHECK(std::fabs(origin.y * 512 - std::round(origin.y * 512)) < 1e-3f);
+    }
+    // Sub-texel movement produces only integral shadow-texel shifts, with unchanged scale.
+    const Vec3 move = Normalize(Cross(dir, Vec3(0, 1, 0))) * (cascades.fits[0].texelWorld * 0.05f);
+    const auto moved = FitShadowCascades(Mat4::LookAt(eye + move, target + move, Vec3(0, 1, 0)), projection, 80, 4, lo, hi, dir, 2048);
+    for (int i = 0; i < 4; ++i) {
+        const size_t index = static_cast<size_t>(i);
+        CHECK(cascades.fits[index].texelWorld == moved.fits[index].texelWorld);
+        for (int row = 0; row < 2; ++row) {
+            const float shift = (moved.fits[index].viewProj.at(row, 3) - cascades.fits[index].viewProj.at(row, 3)) * 512;
+            CHECK(std::fabs(shift - std::round(shift)) < 1e-3f && std::fabs(shift) <= 1.01f);
+        }
+    }
+    const auto ortho = FitShadowCascades(view, Mat4::Orthographic(10, 1.5f, 0.1f, 100), 80, 4, lo, hi, dir, 2048);
+    const Vec3 turned = Mat4::RotationY(Radians(15)).TransformDir(target - eye);
+    const auto rotated = FitShadowCascades(Mat4::LookAt(eye, eye + turned, Vec3(0, 1, 0)), projection, 80, 4, lo, hi, dir, 2048);
+    for (int i = 0; i < 4; ++i)
+        CHECK(cascades.fits[static_cast<size_t>(i)].texelWorld == rotated.fits[static_cast<size_t>(i)].texelWorld);
+    CHECK(ortho.count == 4 && std::fabs(ortho.splits[0] - 20.075f) < 0.001f);
+    CHECK(FitShadowCascades(view, projection, 0, 99, lo, hi, dir, 2048).count == 4);
+    CHECK(FitShadowCascades(view, projection, 80, -1, lo, hi, dir, 2048).count == 1);
+}
+
+TEST(CascadedShadowRendering) {
+    const std::string project = TempProject("cascaded_shadows");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"Transform":{"rotation":[-55,35,0]},"DirectionalLight":{"ambient":[0.12,0.12,0.12],"shadowStrength":1,"shadowCascades":4,"shadowDistance":80}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Ground","components":{"Transform":{"scale":[300,1,300]},"MeshRenderer":{"mesh":"plane","color":[1,1,1]}}})")["ok"].asBool());
+    const float positions[] = {3, -6, -22, -48};
+    for (int i = 0; i < 4; ++i) {
+        const std::string arguments = std::string(R"({"name":"Box","components":{"Transform":{"position":[)") +
+            std::to_string(i % 2 == 0 ? -2 : 2) + "," + std::to_string(i == 3 ? 2 : 1) + "," + std::to_string(positions[i]) +
+            R"(],"scale":[2,)" + std::to_string(i == 3 ? 4 : 2) + R"(,2]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.25,0.15]}}})";
+        CHECK(Call(e, "entity.create", arguments.c_str())["ok"].asBool());
+    }
+    const Json saved = e.GetScene().ToJson();
+    Scene restored; CHECK(restored.FromJson(saved, &error)); CHECK(restored.ToJson() == saved);
+    RenderView view = MakeLookAtView(Vec3(0, 6, 10), Vec3(0, 0, -12), 60, 1.5f);
+    const int width = 480, height = 320;
+    RenderTarget shadowed, open, gpu; shadowed.Resize(width, height); open.Resize(width, height); gpu.Resize(width, height);
+    e.Renderer().Render(e.GetScene(), view, shadowed);
+    CHECK(Call(e, "component.set", R"({"id":"Sun","type":"DirectionalLight","values":{"shadows":false}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(), view, open);
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    int darker = 0;
+    int shadowPixels[4]{};
+    const auto light = GatherRenderLights(e.GetScene());
+    const auto fits = FitShadowCascades(view.view, view.proj, 80, 4, Vec3(-150, 0, -150), Vec3(150, 4, 150), light.dirs[0].dir, 1024);
+    for (size_t i = 0; i < open.color.size(); ++i) {
+        if (open.ids[i] != ground || static_cast<int>(open.color[i] & 255) <= static_cast<int>(shadowed.color[i] & 255) + 30) continue;
+        ++darker;
+        const float depth = DofViewDepth(open.depth[i], view.proj.at(2, 2), view.proj.at(2, 3), false);
+        const int cascade = ShadowCascadeIndex(fits, depth);
+        if (cascade < 4) ++shadowPixels[cascade];
+    }
+    CHECK(darker > 30);
+    std::printf("  shadowed ground pixels by cascade: %d %d %d %d\n", shadowPixels[0], shadowPixels[1], shadowPixels[2], shadowPixels[3]);
+    for (int pixels : shadowPixels) CHECK(pixels > 0);
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    for (int count : {2, 3, 4, 1, 4}) {  // includes switching between the legacy texture and atlas in one renderer
+        const std::string arguments = std::string(R"({"id":"Sun","type":"DirectionalLight","values":{"shadows":true,"shadowCascades":)") + std::to_string(count) + "}}";
+        CHECK(Call(e, "component.set", arguments.c_str())["ok"].asBool());
+        e.Renderer().Render(e.GetScene(), view, shadowed);
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double sum = 0;
+            for (size_t i = 0; i < gpu.color.size(); ++i) for (int shift : {0, 8, 16})
+                sum += std::abs(static_cast<int>((shadowed.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+            const double mean = sum / (static_cast<double>(gpu.color.size()) * 3);
+            std::printf("  cascades %d: software/GPU mean difference %.3f/255\n", count, mean);
+            CHECK(mean < 3.0);
+        }
+    }
+    CHECK(RemoveAll(project));
 }
 
 TEST(ShadowDistanceFitsTheView) {

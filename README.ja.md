@@ -106,7 +106,7 @@ Assets はグリッド/リスト表示、名前・パス検索、件数付きの
 
 | 分野 | 内容 | ドキュメント |
 |---|---|---|
-| レンダリング | 1 つのシーンを描く 2 つのレンダラー: GPU (sokol_gfx: D3D11、WebGL2、GLES3、MSAA、フィルター付き影) と決定的なマルチスレッドのソフトウェアレンダラー。glTF / FBX モデル、PBR マテリアル、透過、点光源、スポットライトと平行光源、影 | [RENDERING](docs/RENDERING.md) |
+| レンダリング | 1 つのシーンを描く 2 つのレンダラー: GPU (sokol_gfx: D3D11、WebGL2、GLES3、MSAA、フィルター付き影) と決定的なマルチスレッドのソフトウェアレンダラー。glTF / FBX モデル、PBR マテリアル、透過、点光源、スポットライトと平行光源、カスケードシャドウ | [RENDERING](docs/RENDERING.md) |
 | ポストプロセスとシェーダー | 露出と Reinhard/ACES トーンマッピング、ブルーム、ビネット、FXAA、被写界深度、距離フォグ、カラーグレーディング。色、発光、頂点オフセット、法線を出力できるサーフェスシェーダーグラフ (`.shader.json`)、スプライトにも適用可能 | [POSTPROCESS](docs/POSTPROCESS.md) |
 | アニメーション | 両レンダラーで動く glTF / FBX スケルタルアニメーション (64 ジョイントまで)、`Animator`、Lua からの再生 | [ANIMATION](docs/ANIMATION.md) |
 | パーティクル | 発生形状、寿命カーブ、フリップブック、乱流、速度方向への整列を持つ決定的なエミッター。`Trail` リボン | [PARTICLES](docs/PARTICLES.md) |

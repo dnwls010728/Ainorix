@@ -242,9 +242,14 @@ void SurfaceGraph(vec2 uv, vec3 normal, inout vec3 base, inout float alpha, out 
 
 layout(binding=2) uniform mesh_lights {
     mat4 shadow_vp;
+    mat4 cascade_vp[3];  // cascades 1..3; shadow_vp is cascade zero (also the legacy map)
+    vec4 cascade_splits; // far view depths
+    vec4 cascade_blend;  // blend starts, last 10% of each depth interval
+    vec4 cascade_texels; // normal bias scale in world units for each cascade
+    vec4 cascade_bias;   // normalized depth bias, half a world texel in each cascade
     vec4 ambient;
     vec4 counts;         // x: directional lights, y: point lights, z: shadows on, w: shadow strength
-    vec4 shadow_params;  // x: shadow texel size in world units, y: 1 / shadow map size, z: depth bias
+    vec4 shadow_params;  // x: shadow texel size in world units, y: 1 / map tile size, z: legacy depth bias, w: cascade count
     vec4 eye;            // camera position
     vec4 ambient_ground; // rgb: hemisphere ambient of downward faces, w: 1 = hemisphere ambient on
     vec4 fog_color;      // rgb: fog color, w: largest fog amount (0 = off)
@@ -331,7 +336,7 @@ layout(location=1) out vec4 frag_depth;
 const float PI = 3.14159265;
 
 // 1 = fully lit, 0 = fully shadowed (3x3 PCF with hardware compare).
-float shadow_lit(vec3 wpos, vec3 n) {
+float legacy_shadow_lit(vec3 wpos, vec3 n) {
     vec4 c = shadow_vp * vec4(wpos + n * (shadow_params.x * 1.5), 1.0);
     vec3 p = c.xyz / c.w;
     vec2 uv;
@@ -353,6 +358,56 @@ float shadow_lit(vec3 wpos, vec3 n) {
         }
     }
     return 1.0 - counts.w * (1.0 - lit / 9.0);
+}
+
+// Constant vector lanes keep sokol-shdc's flattened GL uniform blocks portable.
+float cascade_component(vec4 value, int index) {
+    if (index == 0) return value.x;
+    if (index == 1) return value.y;
+    if (index == 2) return value.z;
+    return value.w;
+}
+
+float cascade_map_lit(int index, vec3 wpos, vec3 n) {
+    mat4 vp = index == 0 ? shadow_vp : cascade_vp[index - 1];
+    vec4 c = vp * vec4(wpos + n * (cascade_component(cascade_texels, index) * 1.5), 1.0);
+    vec3 p = c.xyz / c.w;
+    vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    vec2 tile = vec2(float(index % 2), float(index / 2));
+#if SOKOL_GLSL
+    uv.y = 1.0 - uv.y;
+    tile.y = 1.0 - tile.y;  // viewport is top-left based, GL depth texture is bottom-up
+#endif
+    float z = p.z * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z > 1.0) return 1.0;
+    float lit = 0.0;
+    // Keep every PCF tap within its own tile, including hardware bilinear compare footprints.
+    vec2 edge = vec2(shadow_params.y * 0.5);
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            vec2 local = clamp(uv + vec2(float(dx), float(dy)) * shadow_params.y, edge, vec2(1.0) - edge);
+            lit += texture(sampler2DShadow(shadow_tex, shadow_smp),
+                           vec3((local + tile) * 0.5, z - cascade_component(cascade_bias, index)));
+        }
+    }
+    return 1.0 - counts.w * (1.0 - lit / 9.0);
+}
+
+float shadow_lit(vec3 wpos, vec3 n) {
+    int cascades = int(shadow_params.w);
+    if (cascades <= 1) return legacy_shadow_lit(wpos, n);
+    float depth = dot(wpos - eye.xyz, view_axis.xyz);
+    int index = cascades;
+    for (int i = 0; i < 4; i++) {
+        if (i >= cascades) break;
+        if (depth < cascade_component(cascade_splits, i)) { index = i; break; }
+    }
+    if (index == cascades) return 1.0;
+    float first = cascade_map_lit(index, wpos, n);
+    float blend = clamp((depth - cascade_component(cascade_blend, index)) / (cascade_component(cascade_splits, index) - cascade_component(cascade_blend, index)), 0.0, 1.0);
+    if (blend <= 0.0) return first;
+    float next = index + 1 < cascades ? cascade_map_lit(index + 1, wpos, n) : 1.0;
+    return mix(first, next, blend);
 }
 
 vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, float ndv, float gv) {

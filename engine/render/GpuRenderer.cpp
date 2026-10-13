@@ -660,6 +660,8 @@ struct GpuRenderer::Impl {
     bool envHalfFloat = false;  // RGBA16F textures can be filtered here (else environments are stored as RGBA8)
     sg_image white{}, shadowMap{};
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
+    sg_image cascadeAtlas{};  // Lazy 2048-square depth image; four 1024-square tiles, one texture slot.
+    sg_view cascadeAtt{}, cascadeTex{};
     sg_image spotImage{};  // Small immutable light-data image, replaced only when the light values change.
     sg_view spotTex{};
     float spotData[8 * 9 * 4]{};
@@ -1130,6 +1132,9 @@ struct GpuRenderer::Impl {
     }
 
     void Shutdown() {
+        if (cascadeTex.id) sg_destroy_view(cascadeTex);
+        if (cascadeAtt.id) sg_destroy_view(cascadeAtt);
+        if (cascadeAtlas.id) sg_destroy_image(cascadeAtlas);
         if (spotTex.id) sg_destroy_view(spotTex);
         if (spotImage.id) sg_destroy_image(spotImage);
         for (auto& kv : graphPrograms) kv.second.Destroy();
@@ -1516,6 +1521,7 @@ struct GpuRenderer::Impl {
         // ----- Shadow map: first directional light, fitted to casters + receivers
         bool shadows = false;
         ShadowFit fit;
+        ShadowCascadeSet cascades;
         if (lights.shadows && !items.empty()) {
             Vec3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
             bool anyCaster = false;
@@ -1533,9 +1539,15 @@ struct GpuRenderer::Impl {
             ExtendOffsetBounds(items, draws, lo, hi);
             if (anyCaster && lo.x <= hi.x) {
                 shadows = true;
-                fit = lights.shadowDistance > 0.0f
-                    ? FitShadowToView(view.view, view.proj, lights.shadowDistance, lo, hi, lights.dirs[0].dir, settings.shadowMapSize)
-                    : FitShadow(lo, hi, lights.dirs[0].dir, settings.shadowMapSize);
+                cascades = FitShadowCascades(view.view, view.proj, lights.shadowDistance, lights.shadowCascades,
+                                            lo, hi, lights.dirs[0].dir, settings.shadowMapSize);
+                fit = cascades.fits[0];
+                if (cascades.count > 1 && !cascadeAtlas.id) {
+                    cascadeAtlas = MakeAttachmentImage(kCascadeMapSize * 2, kCascadeMapSize * 2, kDepthFormat, 1,
+                                                       true, false, "oe-cascade-atlas");
+                    cascadeAtt = DepthView(cascadeAtlas);
+                    cascadeTex = TextureView(cascadeAtlas);
+                }
             }
         }
 
@@ -1544,7 +1556,10 @@ struct GpuRenderer::Impl {
         for (size_t k = 0; k < draws.size(); ++k) {
             const RenderItem& it = items[draws[k].item];
             // Transparent surfaces cast no shadow.
-            if (shadows && it.castShadows && !it.unlit && !draws[k].blend && BoxInFrustum(fit.viewProj, drawLo[k], drawHi[k], false))
+            bool inShadow = false;
+            if (shadows) for (int cascade = 0; cascade < cascades.count; ++cascade)
+                inShadow = inShadow || BoxInFrustum(cascades.fits[static_cast<size_t>(cascade)].viewProj, drawLo[k], drawHi[k], false);
+            if (shadows && it.castShadows && !it.unlit && !draws[k].blend && inShadow)
                 shadowOrder.push_back(k);
             if (inView[k]) sceneOrder.push_back(k);
         }
@@ -1571,38 +1586,47 @@ struct GpuRenderer::Impl {
             pass.action.depth.load_action = SG_LOADACTION_CLEAR;
             pass.action.depth.clear_value = 1.0f;
             pass.action.depth.store_action = SG_STOREACTION_STORE;
-            pass.attachments.depth_stencil = shadowAtt;
+            pass.attachments.depth_stencil = cascades.count > 1 ? cascadeAtt : shadowAtt;
             pass.label = "oe-shadow";
             sg_begin_pass(&pass);
-            int current = -1;
-            for (const DrawPiece& p : shadowPieces) {
-                const DrawCall* dcp;
-                const RenderItem* itp;
-                MeshBinding mesh;
-                piece(p, dcp, itp, mesh);
-                const DrawCall& dc = *dcp;
-                const RenderItem& it = *itp;
-                const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
-                if (cutout || Displaced(dc.material)) {
-                    Use(GraphPipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0], dc.material));
-                    ApplySurface(dc, it, mesh, fit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
+            for (int cascade = 0; cascade < cascades.count; ++cascade) {
+                const ShadowFit& cascadeFit = cascades.fits[static_cast<size_t>(cascade)];
+                if (cascades.count > 1) {
+                    sg_apply_viewport((cascade % 2) * kCascadeMapSize, (cascade / 2) * kCascadeMapSize,
+                                      kCascadeMapSize, kCascadeMapSize, true);
+                    sg_apply_scissor_rect((cascade % 2) * kCascadeMapSize, (cascade / 2) * kCascadeMapSize,
+                                          kCascadeMapSize, kCascadeMapSize, true);
+                }
+                int current = -1;
+                for (const DrawPiece& p : shadowPieces) {
+                    const DrawCall* dcp;
+                    const RenderItem* itp;
+                    MeshBinding mesh;
+                    piece(p, dcp, itp, mesh);
+                    const DrawCall& dc = *dcp;
+                    const RenderItem& it = *itp;
+                    const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+                    if (cutout || Displaced(dc.material)) {
+                        Use(GraphPipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0], dc.material));
+                        ApplySurface(dc, it, mesh, cascadeFit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
+                        Draw(mesh);
+                        current = -1;
+                        continue;
+                    }
+                    int want = dc.material.doubleSided ? 1 : 0;
+                    if (want != current) {
+                        Use(want ? shadowPipTwoSided : shadowPip);
+                        current = want;
+                    }
+                    oe_pos_vs_params_t u{};
+                    Put(u.mvp, cascadeFit.viewProj * it.world);
+                    sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                    ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
+                    sg_bindings b{};
+                    Bind(b, mesh);
+                    sg_apply_bindings(&b);
                     Draw(mesh);
-                    current = -1;
-                    continue;
                 }
-                int want = dc.material.doubleSided ? 1 : 0;
-                if (want != current) {
-                    Use(want ? shadowPipTwoSided : shadowPip);
-                    current = want;
-                }
-                oe_pos_vs_params_t u{};
-                Put(u.mvp, fit.viewProj * it.world);
-                sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
-                ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
-                sg_bindings b{};
-                Bind(b, mesh);
-                sg_apply_bindings(&b);
-                Draw(mesh);
             }
             sg_end_pass();
         }
@@ -1705,7 +1729,16 @@ struct GpuRenderer::Impl {
             int dirs = std::min(kMaxDirLights, static_cast<int>(lights.dirs.size()));
             int points = std::min(kMaxPointLights, static_cast<int>(lights.points.size()));
             Put(lu.counts, static_cast<float>(dirs), static_cast<float>(points), shadows ? 1.0f : 0.0f, lights.shadowStrength);
-            Put(lu.shadow_params, fit.texelWorld, 1.0f / static_cast<float>(settings.shadowMapSize), 0.002f, 0);
+            Put(lu.shadow_params, fit.texelWorld,
+                1.0f / static_cast<float>(cascades.count > 1 ? kCascadeMapSize : settings.shadowMapSize),
+                0.002f, static_cast<float>(cascades.count));
+            for (int i = 0; i < kMaxShadowCascades; ++i) {
+                if (i > 0) Put(lu.cascade_vp[i - 1], cascades.fits[static_cast<size_t>(i)].viewProj);
+                lu.cascade_splits[i] = cascades.splits[static_cast<size_t>(i)];
+                lu.cascade_blend[i] = cascades.blendStarts[static_cast<size_t>(i)];
+                lu.cascade_texels[i] = cascades.fits[static_cast<size_t>(i)].texelWorld;
+                lu.cascade_bias[i] = cascades.fits[static_cast<size_t>(i)].depthBias;
+            }
             Put(lu.eye, view.eye.x, view.eye.y, view.eye.z, 1);
             const PostProcess fog = NormalizePostProcess(view.postProcess);
             Put(lu.ambient_ground, lights.groundAmbient.r, lights.groundAmbient.g, lights.groundAmbient.b, lights.hemisphere ? 1.0f : 0.0f);
@@ -1794,7 +1827,7 @@ struct GpuRenderer::Impl {
                 sg_bindings b{};
                 Bind(b, mesh);
                 b.views[VIEW_oe_base_tex] = base.id ? base : whiteTex;
-                b.views[VIEW_oe_shadow_tex] = shadowTex;
+                b.views[VIEW_oe_shadow_tex] = cascades.count > 1 ? cascadeTex : shadowTex;
                 b.views[VIEW_oe_normal_tex] = normal.id ? normal : whiteTex;
                 b.views[VIEW_oe_mr_tex] = mr.id ? mr : whiteTex;
                 b.views[VIEW_oe_emissive_tex] = emissive.id ? emissive : whiteTex;

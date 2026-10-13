@@ -703,6 +703,7 @@ struct DirectionalLight {
     bool shadows = true;
     float shadowStrength = 0.75f;
     float shadowDistance = 0.0f;
+    int shadowCascades = 1;  // One preserves the legacy map; 2..4 split the camera's view by depth.
     static void Reflect(FieldList& f) {
         f.Add("color", &DirectionalLight::color, "Light color.");
         f.Add("intensity", &DirectionalLight::intensity, "Brightness multiplier.");
@@ -714,9 +715,14 @@ struct DirectionalLight {
         FieldInfo& s = f.Add("shadowStrength", &DirectionalLight::shadowStrength, "0 = no darkening, 1 = black shadows.");
         s.hasRange = true; s.min = 0.0f; s.max = 1.0f;
         FieldInfo& d = f.Add("shadowDistance", &DirectionalLight::shadowDistance,
-                             "0 = the shadow map covers the whole scene. > 0: only what the camera sees up to this distance "
+                             "0 = whole scene with one map; with cascades, camera far plane (at most 1000 meters). "
+                             "> 0: only what the camera sees up to this distance "
                              "(world units), so large scenes get sharper shadows and the shadow pass skips far casters.");
         d.hasRange = true; d.min = 0.0f; d.max = 100000.0f;
+        FieldInfo& c = f.Add("shadowCascades", &DirectionalLight::shadowCascades,
+                             "1 = legacy shadow map; 2..4 = stable cascades with blended boundaries. "
+                             "shadowDistance is the far reach (0 = camera far plane, at most 1000 meters).");
+        c.hasRange = true; c.min = 1.0f; c.max = 4.0f;
     }
 };
 

@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -266,6 +267,7 @@ struct RenderLights {
     bool shadows = false;  // the first directional light casts shadows
     float shadowStrength = 0.75f;
     float shadowDistance = 0.0f;  // > 0: the shadow map covers the camera's view up to this distance
+    int shadowCascades = 1;      // clamped 1..4; one retains the legacy fit and shading
 };
 
 // The camera view orients particle billboards; identity faces +Z for callers without a camera.
@@ -293,6 +295,7 @@ bool ProbeShows(const Scene& scene, EntityId id);
 struct ShadowFit {
     Mat4 viewProj;
     float texelWorld = 0.01f;  // world size of one shadow map texel (size = mapSize)
+    float depthBias = 0.002f;  // normalized depth bias; cascades scale it to half a world texel
 };
 ShadowFit FitShadow(const Vec3& lo, const Vec3& hi, const Vec3& lightDir, int mapSize);
 // DirectionalLight.shadowDistance > 0 (shadow distance as in other engines): fitted to the part of
@@ -302,5 +305,23 @@ ShadowFit FitShadow(const Vec3& lo, const Vec3& hi, const Vec3& lightDir, int ma
 // the camera moves. Falls back to FitShadow when the scene box is the smaller of the two.
 ShadowFit FitShadowToView(const Mat4& view, const Mat4& proj, float distance, const Vec3& lo, const Vec3& hi,
                           const Vec3& lightDir, int mapSize);
+
+constexpr int kMaxShadowCascades = 4;  // Four 1024-square tiles fit the GLES3 minimum 2048-square texture.
+constexpr int kCascadeMapSize = 1024;
+struct ShadowCascadeSet {
+    int count = 1;  // fallback to the legacy map if the camera projection is invalid
+    std::array<ShadowFit, kMaxShadowCascades> fits;
+    std::array<float, kMaxShadowCascades> splits{};      // far view depth of each cascade
+    std::array<float, kMaxShadowCascades> blendStarts{}; // last 10% of each interval blends to the next, or light
+};
+// Shared cascade policy: half logarithmic/half uniform perspective splits, uniform orthographic splits,
+// sphere-fitted frustum slices with 10% overlap, world-anchored texel snapping, full caster depth coverage.
+// count=1 invokes the legacy fit unchanged; multi-cascade tiles always use kCascadeMapSize.
+ShadowCascadeSet FitShadowCascades(const Mat4& view, const Mat4& proj, float distance, int count,
+                                  const Vec3& lo, const Vec3& hi, const Vec3& lightDir, int legacyMapSize);
+// Select by linear view depth. Returns count outside the far reach (fully lit).
+int ShadowCascadeIndex(const ShadowCascadeSet& cascades, float depth);
+// Weight of the next cascade (or fully lit past the last cascade), linear over the overlap.
+float ShadowCascadeBlend(const ShadowCascadeSet& cascades, int index, float depth);
 
 }  // namespace oe

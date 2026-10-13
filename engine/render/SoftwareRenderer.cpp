@@ -70,6 +70,7 @@ struct ShadowMap {
     Mat4 viewProj;
     float strength = 0.75f;
     float texelWorld = 0.01f;
+    float depthBias = 0.002f;
 
     // 1 = fully lit, 0 = fully shadowed (3x3 PCF).
     float Lit(const Vec3& wpos, const Vec3& normal) const {
@@ -82,7 +83,7 @@ struct ShadowMap {
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
                 int x = std::clamp(cx + dx, 0, size - 1), y = std::clamp(cy + dy, 0, size - 1);
-                lit += z - 0.002f <= depth[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)];
+                lit += z - depthBias <= depth[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)];
             }
         }
         float fraction = static_cast<float>(lit) / 9.0f;
@@ -101,7 +102,22 @@ struct Lighting {
     std::vector<RenderPointLight> points;
     std::vector<RenderSpotLight> spots;
     ShadowMap shadow;
+    ShadowCascadeSet cascades;
+    std::vector<ShadowMap> cascadeMaps;  // empty keeps the legacy shadow path byte-for-byte
+    Vec3 viewForward;
     Vec3 eye;
+
+    float SunLit(const Vec3& position, const Vec3& normal) const {
+        if (cascadeMaps.empty()) return shadow.Lit(position, normal);
+        const float depth = Dot(position - eye, viewForward);
+        const int index = ShadowCascadeIndex(cascades, depth);
+        if (index == cascades.count) return 1.0f;
+        const float first = cascadeMaps[static_cast<size_t>(index)].Lit(position, normal);
+        const float blend = ShadowCascadeBlend(cascades, index, depth);
+        if (blend <= 0) return first;
+        const float next = index + 1 < cascades.count ? cascadeMaps[static_cast<size_t>(index + 1)].Lit(position, normal) : 1.0f;
+        return Lerp(first, next, blend);
+    }
 
     // Metallic-roughness shading (GGX / Smith / Schlick) in the engine's
     // lighting convention: light colors already include pi, so a white
@@ -183,7 +199,7 @@ struct Lighting {
             c = c + (diffuse + F * spec) * radiance * ndl;
         };
         for (size_t i = 0; i < dirs.size(); ++i) {
-            float lit = i == 0 ? shadow.Lit(wpos, ng) : 1.0f;
+            float lit = i == 0 ? SunLit(wpos, ng) : 1.0f;
             if (lit > 0.0f) add(-dirs[i].dir, dirs[i].color * lit);
         }
         for (const RenderPointLight& p : points) {
@@ -602,6 +618,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     lighting.points = gathered.points;
     lighting.spots = gathered.spots;
     lighting.eye = view.eye;
+    lighting.viewForward = Vec3(-view.view.at(2, 0), -view.view.at(2, 1), -view.view.at(2, 2));
     const bool shadows = gathered.shadows;
     const float shadowStrength = gathered.shadowStrength;
 
@@ -630,63 +647,67 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         }
         ExtendOffsetBounds(items, draws, lo, hi);
         if (anyCaster && lo.x <= hi.x) {
-            ShadowMap& sm = lighting.shadow;
-            sm.enabled = true;
-            sm.strength = shadowStrength;
-            ShadowFit fit = gathered.shadowDistance > 0.0f
-                ? FitShadowToView(view.view, view.proj, gathered.shadowDistance, lo, hi, lighting.dirs[0].dir, sm.size)
-                : FitShadow(lo, hi, lighting.dirs[0].dir, sm.size);
-            sm.viewProj = fit.viewProj;
-            sm.texelWorld = fit.texelWorld;
-            sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
-            // Light-space vertices once, then rasterize depth in parallel bands.
-            std::vector<std::vector<Vec4>> lightClip(items.size());
-            for (size_t i = 0; i < items.size(); ++i) {
-                if (!items[i].castShadows || items[i].unlit) continue;
-                lightClip[i].reserve(transformed[i].wpos.size());
-                for (const Vec3& p : transformed[i].wpos) lightClip[i].push_back(sm.viewProj * Vec4(p, 1.0f));
-            }
-            ParallelBands(sm.size, [&](int, int y0, int y1) {
-                uint32_t dummyColor = 0;
-                EntityId dummyId = kNullEntity;
-                Rasterizer shadowRaster(sm.size, sm.size, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
-                RasterMaterial none;
-                for (const DrawCall& dc : draws) {
-                    if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
-                    const Mesh& m = *items[dc.item].mesh;
-                    const Submesh& sub = m.submeshes[dc.submesh];
-                    const RenderItem& item = items[dc.item];
-                    // Cut-outs (textured or graph alpha) shadow only where they are drawn.
-                    const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
-                    RasterMaterial material;
-                    material.m = &dc.material;
-                    material.flat = item.flat;
-                    material.shaderTime = view.shaderTime;
-                    material.uvOffset[0] = item.uvOffset[0];
-                    material.uvOffset[1] = item.uvOffset[1];
-                    material.uvScale[0] = item.uvScale[0];
-                    material.uvScale[1] = item.uvScale[1];
-                    for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
-                        Vtx v[3];
-                        for (int j = 0; j < 3; ++j) {
-                            const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
-                            v[j].clip = lightClip[dc.item][vertex];
-                            if (surfaceAlpha) {
-                                v[j].wpos = transformed[dc.item].wpos[vertex];
-                                v[j].nrm = transformed[dc.item].nrm[vertex];
-                                if (vertex * 2 + 1 < m.uvs.size()) {
-                                    v[j].u = m.uvs[vertex * 2];
-                                    v[j].v = m.uvs[vertex * 2 + 1];
+            lighting.cascades = FitShadowCascades(view.view, view.proj, gathered.shadowDistance, gathered.shadowCascades,
+                                                 lo, hi, lighting.dirs[0].dir, lighting.shadow.size);
+            if (lighting.cascades.count > 1) lighting.cascadeMaps.resize(static_cast<size_t>(lighting.cascades.count));
+            for (int cascade = 0; cascade < lighting.cascades.count; ++cascade) {
+                ShadowMap& sm = lighting.cascades.count == 1 ? lighting.shadow : lighting.cascadeMaps[static_cast<size_t>(cascade)];
+                sm.enabled = true;
+                sm.strength = shadowStrength;
+                const ShadowFit& fit = lighting.cascades.fits[static_cast<size_t>(cascade)];
+                sm.viewProj = fit.viewProj;
+                sm.texelWorld = fit.texelWorld;
+                sm.depthBias = fit.depthBias;
+                sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
+                // Light-space vertices once, then rasterize depth in parallel bands.
+                std::vector<std::vector<Vec4>> lightClip(items.size());
+                for (size_t i = 0; i < items.size(); ++i) {
+                    if (!items[i].castShadows || items[i].unlit) continue;
+                    lightClip[i].reserve(transformed[i].wpos.size());
+                    for (const Vec3& p : transformed[i].wpos) lightClip[i].push_back(sm.viewProj * Vec4(p, 1.0f));
+                }
+                ParallelBands(sm.size, [&](int, int y0, int y1) {
+                    uint32_t dummyColor = 0;
+                    EntityId dummyId = kNullEntity;
+                    Rasterizer shadowRaster(sm.size, sm.size, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
+                    RasterMaterial none;
+                    for (const DrawCall& dc : draws) {
+                        if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
+                        const Mesh& m = *items[dc.item].mesh;
+                        const Submesh& sub = m.submeshes[dc.submesh];
+                        const RenderItem& item = items[dc.item];
+                        // Cut-outs (textured or graph alpha) shadow only where they are drawn.
+                        const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+                        RasterMaterial material;
+                        material.m = &dc.material;
+                        material.flat = item.flat;
+                        material.shaderTime = view.shaderTime;
+                        material.uvOffset[0] = item.uvOffset[0];
+                        material.uvOffset[1] = item.uvOffset[1];
+                        material.uvScale[0] = item.uvScale[0];
+                        material.uvScale[1] = item.uvScale[1];
+                        for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
+                            Vtx v[3];
+                            for (int j = 0; j < 3; ++j) {
+                                const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
+                                v[j].clip = lightClip[dc.item][vertex];
+                                if (surfaceAlpha) {
+                                    v[j].wpos = transformed[dc.item].wpos[vertex];
+                                    v[j].nrm = transformed[dc.item].nrm[vertex];
+                                    if (vertex * 2 + 1 < m.uvs.size()) {
+                                        v[j].u = m.uvs[vertex * 2];
+                                        v[j].v = m.uvs[vertex * 2 + 1];
+                                    }
                                 }
                             }
+                            // Back faces into the shadow map: avoids self-shadowing acne on lit faces
+                            // (double-sided surfaces put both sides in).
+                            shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
+                                              dc.material.doubleSided ? Cull::None : Cull::Front);
                         }
-                        // Back faces into the shadow map: avoids self-shadowing acne on lit faces
-                        // (double-sided surfaces put both sides in).
-                        shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
-                                          dc.material.doubleSided ? Cull::None : Cull::Front);
                     }
-                }
-            });
+                });
+            }
         }
     }
 

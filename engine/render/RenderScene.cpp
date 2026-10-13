@@ -865,6 +865,7 @@ RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
             lights.shadows = kv.second.shadows;
             lights.shadowStrength = kv.second.shadowStrength;
             lights.shadowDistance = std::isfinite(kv.second.shadowDistance) ? std::max(0.0f, kv.second.shadowDistance) : 0.0f;
+            lights.shadowCascades = std::clamp(kv.second.shadowCascades, 1, kMaxShadowCascades);
         }
         lights.dirs.push_back(l);
     }
@@ -976,6 +977,84 @@ ShadowFit FitShadowToView(const Mat4& view, const Mat4& proj, float distance, co
     fit.viewProj = Mat4::Translation(Vec3(dx, dy, 0)) * fit.viewProj;
     fit.texelWorld = 2.0f * radius / static_cast<float>(mapSize);
     return fit;
+}
+
+ShadowCascadeSet FitShadowCascades(const Mat4& view, const Mat4& proj, float distance, int count,
+                                  const Vec3& lo, const Vec3& hi, const Vec3& dir, int legacyMapSize) {
+    ShadowCascadeSet result;
+    result.fits[0] = distance > 0 ? FitShadowToView(view, proj, distance, lo, hi, dir, legacyMapSize)
+                                : FitShadow(lo, hi, dir, legacyMapSize);
+    count = std::clamp(count, 1, kMaxShadowCascades);
+    if (count == 1) return result;
+    const bool ortho = proj.at(3, 3) == 1.0f;
+    const float p22 = proj.at(2, 2), p23 = proj.at(2, 3);
+    const float nearDepth = ortho ? (p23 + 1.0f) / p22 : p23 / (p22 - 1.0f);
+    const float cameraFar = ortho ? (p23 - 1.0f) / p22 : p23 / (p22 + 1.0f);
+    if (!std::isfinite(nearDepth) || !std::isfinite(cameraFar) || nearDepth <= 0 || cameraFar <= nearDepth) return result;
+    const float farDepth = std::min(cameraFar, distance > 0 && std::isfinite(distance)
+        ? Clamp(distance, nearDepth + 0.01f, 100000.0f) : 1000.0f);
+    if (farDepth <= nearDepth) return result;
+    result.count = count;
+    const Mat4 toWorld = (proj * view).Inverse();
+    const Vec3 up = std::fabs(dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+    // Rotation stays anchored to world axes, independent of camera position.
+    const Mat4 lightRotation = Mat4::LookAt(Vec3(), dir, up);
+    for (int i = 0; i < count; ++i) {
+        const float t = static_cast<float>(i + 1) / static_cast<float>(count);
+        const float uniform = Lerp(nearDepth, farDepth, t);
+        const float logarithmic = nearDepth * std::pow(farDepth / nearDepth, t);
+        result.splits[static_cast<size_t>(i)] = i == count - 1 ? farDepth : ortho ? uniform : (uniform + logarithmic) * 0.5f;
+        const float previous = i == 0 ? nearDepth : result.splits[static_cast<size_t>(i - 1)];
+        result.blendStarts[static_cast<size_t>(i)] = Lerp(previous, result.splits[static_cast<size_t>(i)], 0.9f);
+    }
+    for (int i = 0; i < count; ++i) {
+        const float from = i == 0 ? nearDepth : result.blendStarts[static_cast<size_t>(i - 1)];
+        const float to = result.splits[static_cast<size_t>(i)];
+        Vec3 corners[8], center;
+        for (int c = 0; c < 8; ++c) {
+            const float depth = c & 4 ? to : from;
+            const float z = ortho ? -p22 * depth + p23 : (-p22 * depth + p23) / depth;
+            const Vec4 world = toWorld * Vec4(c & 1 ? 1.0f : -1.0f, c & 2 ? 1.0f : -1.0f, z, 1);
+            corners[c] = world.xyz() / world.w;
+            center += corners[c] * 0.125f;
+        }
+        float radius = 0.5f;
+        for (const Vec3& corner : corners) radius = std::max(radius, Length(corner - center));
+        // Quantized sphere extent stays fixed as the camera rotates; add a texel guard for snapping/PCF.
+        radius = std::ceil(radius * 16.0f) / 16.0f;
+        radius *= static_cast<float>(kCascadeMapSize) / static_cast<float>(kCascadeMapSize - 4);
+        const float texel = 2.0f * radius / static_cast<float>(kCascadeMapSize);
+        const Vec3 lightCenter = lightRotation.TransformPoint(center);
+        const float snappedX = std::round(lightCenter.x / texel) * texel;
+        const float snappedY = std::round(lightCenter.y / texel) * texel;
+        float minZ = 1e30f, maxZ = -1e30f;
+        // All casters toward the light remain in range, even when outside the camera's slice.
+        for (int c = 0; c < 8; ++c) {
+            const Vec3 p = lightRotation.TransformPoint(Vec3(c & 1 ? hi.x : lo.x, c & 2 ? hi.y : lo.y, c & 4 ? hi.z : lo.z));
+            minZ = std::min(minZ, p.z); maxZ = std::max(maxZ, p.z);
+            const float receiverZ = lightRotation.TransformPoint(corners[c]).z;
+            minZ = std::min(minZ, receiverZ); maxZ = std::max(maxZ, receiverZ);
+        }
+        Mat4 projection;
+        projection.at(0, 0) = 1.0f / radius; projection.at(0, 3) = -snappedX / radius;
+        projection.at(1, 1) = 1.0f / radius; projection.at(1, 3) = -snappedY / radius;
+        minZ -= 1.0f; maxZ += 1.0f;
+        projection.at(2, 2) = -2.0f / (maxZ - minZ);
+        projection.at(2, 3) = (maxZ + minZ) / (maxZ - minZ);
+        result.fits[static_cast<size_t>(i)] = {projection * lightRotation, texel, texel * 0.5f / (maxZ - minZ)};
+    }
+    return result;
+}
+
+int ShadowCascadeIndex(const ShadowCascadeSet& cascades, float depth) {
+    for (int i = 0; i < cascades.count; ++i) if (depth < cascades.splits[static_cast<size_t>(i)]) return i;
+    return cascades.count;
+}
+
+float ShadowCascadeBlend(const ShadowCascadeSet& cascades, int index, float depth) {
+    if (index < 0 || index >= cascades.count) return 0;
+    const size_t i = static_cast<size_t>(index);
+    return Clamp((depth - cascades.blendStarts[i]) / (cascades.splits[i] - cascades.blendStarts[i]), 0.0f, 1.0f);
 }
 
 }  // namespace oe

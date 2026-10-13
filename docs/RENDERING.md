@@ -233,6 +233,10 @@ glTF models load their full materials: base color factor including alpha, base c
 
 ## Cameras
 
+Directional shadows optionally use `DirectionalLight.shadowCascades` (1 by default, 2..4 for cascades)
+and `shadowDistance` for the far reach. Cascade slices are texel-snapped and blend over the last 10% of
+each interval; four 1024-square maps share a 2048-square GPU atlas. See [LIGHTING.md](LIGHTING.md).
+
 - `Camera.projection`: `perspective` (`fov`) or `orthographic` (`orthoSize` = half the visible height in meters, for 2D/isometric views).
 - `CameraFollow {target, offset, lookOffset, smoothing, useBounds, boundsMin, boundsMax}`: after physics each frame the entity moves to target + offset and looks at target + lookOffset. `smoothing` is a catch-up rate per second (0 = snap). With `useBounds` the position is clamped to the box and the rotation is left alone (2D side-scrollers).
 
