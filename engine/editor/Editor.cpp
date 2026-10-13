@@ -213,6 +213,7 @@ void SettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const c
     else if (std::sscanf(line, "AssetGrid=%d", &i) == 1) m->assetGrid = i != 0;
     else if (std::sscanf(line, "ShaderPanel=%d", &i) == 1) m->showShaders = i != 0;
     else if (std::sscanf(line, "EffectsPanel=%d", &i) == 1) m->showEffects = i != 0;
+    else if (std::sscanf(line, "AnimationPanel=%d", &i) == 1) m->showAnimation = i != 0;
     else if (std::sscanf(line, "NetworkLatency=%d", &i) == 1) m->networkLatency = std::max(0, std::min(30, i));
     else if (std::sscanf(line, "FlySpeed=%f", &f) == 1) m->flySpeed = Clamp(f, 0.5f, 200.0f);
     else if (std::strncmp(line, "Language=", 9) == 0 && !m->forceLanguage) SetEditorLanguage(ParseEditorLanguage(line + 9));
@@ -265,6 +266,7 @@ void SettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuf
     buf->appendf("AssetGrid=%d\n", m->assetGrid);
     buf->appendf("ShaderPanel=%d\n", m->showShaders);
     buf->appendf("EffectsPanel=%d\n", m->showEffects);
+    buf->appendf("AnimationPanel=%d\n", m->showAnimation);
     WindowPlacement placement;
     if (m->window && m->window->GetPlacement(placement))
         buf->appendf("WindowPlacement=%d,%d,%d,%d,%d\n", placement.x, placement.y, placement.width, placement.height, placement.maximized ? 1 : 0);
@@ -890,6 +892,8 @@ Json NativeEditor::Impl::EditorState() {
     out["selectedAsset"] = selectedAsset.empty() ? Json() : Json(selectedAsset);
     out["shader"] = showShaders && !shaderPath.empty() ? Json(shaderPath) : Json();
     out["effect"] = showEffects && !effectsPath.empty() ? Json(effectsPath) : Json();
+    out["animationPanel"] = showAnimation;
+    out["animation"] = engine.AnimationPreviewCall("state", Json());
     return out;
 }
 
@@ -1397,6 +1401,7 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::MenuItem(Tr("Scripts"), nullptr, &showScripts);
         if (ImGui::MenuItem(Tr("Shader Graph"), nullptr, showShaders)) { showShaders = true; focusShaders = true; }
         if (ImGui::MenuItem(Tr("Effects"), nullptr, showEffects)) OpenEffect("");
+        if (ImGui::MenuItem(Tr("Animation"), nullptr, showAnimation)) Call("editor.animation", Json::MakeObject());
         ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
         if (ImGui::MenuItem(Tr("History"), nullptr, showHistory)) { showHistory = true; requestHistoryFocus = true; }
         ImGui::MenuItem(Tr("Asset Thumbnails"), nullptr, &showThumbnails);
@@ -1628,6 +1633,10 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     layoutBuilt = true;
     if (!empty && !resetLayout) {
         // Add the new tab to an old layout without resetting the person's other panels.
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Animation"))) {
+            ImGuiWindowSettings* assetsTab = ImGui::FindWindowSettingsByID(ImHashStr("###Assets"));
+            if (assetsTab && assetsTab->DockId) ImGui::DockBuilderDockWindow("###Animation", assetsTab->DockId);
+        }
         if (!ImGui::FindWindowSettingsByID(ImHashStr("###Effects"))) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Effects", scene->DockId);
@@ -1680,6 +1689,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Shader Graph", center);
     ImGui::DockBuilderDockWindow("###Effects", center);
     ImGui::DockBuilderDockWindow("###Assets", bottom);
+    ImGui::DockBuilderDockWindow("###Animation", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
     ImGui::DockBuilderDockWindow("###History", bottom);
     ImGui::DockBuilderDockWindow("###Team Chat", bottom);
@@ -1901,7 +1911,14 @@ bool NativeEditor::Init(std::string* error) {
     mergeCjk();  // Korean/Japanese in scripts and the code editor
 
     m.engine.SetRemoteCallObserver([&m](const std::string& name, const Json& args, const Json& result) { m.OnRemoteCall(name, args, result); });
-    m.engine.SetEditorHandler([&m](const std::string& op, const Json& args) { return op == "select" ? m.EditorSelect(args) : m.EditorState(); });
+    m.engine.SetEditorHandler([&m](const std::string& op, const Json& args) {
+        if (op == "select") return m.EditorSelect(args);
+        if (op == "animation") {
+            m.showAnimation = args["open"].asBool(true); m.focusAnimation = m.showAnimation;
+            if (!m.showAnimation) m.Call("animation.preview_close", Json());
+        }
+        return m.EditorState();
+    });
     m.componentTypes = m.Call("component.types", Json(), true)["result"];
     for (const Json& t : m.componentTypes.items()) m.typeByName[t["name"].asString("")] = &t;
     for (const Json& c : m.Call("api.list", Json(), true)["result"].items()) m.commandNames.push_back(c["name"].asString(""));
@@ -1954,6 +1971,9 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     ImGui::DockSpaceOverViewport(dockspace, ImGui::GetMainViewport());
 
     m.Shortcuts();
+    if (m.showAnimation) m.AnimationPanel();
+    else { m.animationEditorFocused = false; m.animationRects.clear(); }
+    m.AnimationTick(dt);
     if (m.showScene) m.ScenePanel();
     if (m.showGame) m.GamePanel();
     if (m.showHierarchy) m.HierarchyPanel();
@@ -2114,6 +2134,11 @@ std::array<float, 4> NativeEditor::ShaderControlRect(const std::string& name) co
     return found == impl_->shaderRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
 }
 void NativeEditor::OpenEffect(const std::string& path) { impl_->OpenEffect(path); }
+void NativeEditor::FocusAnimationPanel() { impl_->engine.Call("editor.animation", Json::MakeObject()); }
+std::array<float, 4> NativeEditor::AnimationControlRect(const std::string& name) const {
+    const auto found = impl_->animationRects.find(name);
+    return found == impl_->animationRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
+}
 void NativeEditor::SetEffectsGraph(bool on) { impl_->effectsGraph = on; if(on) impl_->effectsValues=false; }
 void NativeEditor::SetEffectsValues(bool on,bool update,int channel) {
     impl_->effectsValues=on;

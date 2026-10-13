@@ -17,6 +17,22 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Animation", "애니메이션", "アニメーション"},
+    {"Stop the game to preview animations.", "애니메이션 미리보기는 게임을 정지한 뒤 사용합니다.", "アニメーションのプレビューにはゲームを停止してください。"},
+    {"Select a sprite or a model with animation clips.", "애니메이션 클립이 있는 스프라이트나 모델을 선택하세요.", "アニメーションクリップを持つスプライトかモデルを選択してください。"},
+    {"Play Preview", "미리보기 재생", "プレビューを再生"},
+    {"Pause Preview", "미리보기 일시 정지", "プレビューを一時停止"},
+    {"Step Preview", "미리보기 한 프레임", "プレビューを1フレーム進める"},
+    {"Restart Preview", "미리보기 처음부터", "プレビューを最初から"},
+    {"Preview speed; negative plays backwards.", "미리보기 속도. 음수는 역재생입니다.", "プレビュー速度。負の値は逆再生です。"},
+    {"Preview changes no scene fields and runs no scripts or events.", "미리보기는 씬 필드를 변경하지 않으며 스크립트와 이벤트를 실행하지 않습니다.", "プレビューはシーンを変更せず、スクリプトやイベントを実行しません。"},
+    {"Add Event", "이벤트 추가", "イベントを追加"},
+    {"Event name", "이벤트 이름", "イベント名"},
+    {"Event time", "이벤트 시점", "イベント時点"},
+    {"Actions", "작업", "操作"},
+    {"Remove Event", "이벤트 삭제", "イベントを削除"},
+    {"Sprite events save with the scene.", "스프라이트 이벤트는 씬과 함께 저장됩니다.", "スプライトのイベントはシーンと一緒に保存します。"},
+    {"Model events write the shared sidecar immediately; no undo.", "모델 이벤트는 공유 sidecar에 즉시 기록되며 실행 취소할 수 없습니다.", "モデルのイベントは共有sidecarへ即時保存され、取り消せません。"},
     {"Ask the Agent", "에이전트에게 지시", "エージェントに依頼"},
     {"The agent chosen in Settings > Agents is not installed.", "설정 > 에이전트에서 고른 에이전트가 설치되어 있지 않습니다.", "設定 > エージェントで選んだエージェントがインストールされていません。"},
     {"Agent Settings", "에이전트 설정", "エージェント設定"},

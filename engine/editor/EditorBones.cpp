@@ -320,7 +320,7 @@ void NativeEditor::Impl::BonesOverlay(ImDrawList* dl) {
     EntityId model = kNullEntity;
     std::shared_ptr<const Mesh> mesh = BoneModel(selectedEntity, &model);
     if (!mesh) return;
-    Scene& scene = engine.GetScene();
+    Scene& scene = engine.AnimationRenderScene();
     const std::vector<Mat4> pose = EvaluateEntityPose(scene, model, *mesh);
     const Mat4 world = scene.WorldMatrix(model);
     const Mat4 viewProj = sceneProjMat * sceneViewMat;

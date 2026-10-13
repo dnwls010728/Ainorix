@@ -248,7 +248,8 @@ struct ViewRequest {
     bool customCamera = false;
 };
 
-ViewRequest ParseView(Engine& e, const Json& args) {
+ViewRequest ParseView(Engine& e, const Json& args, Scene* sceneOverride = nullptr) {
+    const Scene& scene = sceneOverride ? *sceneOverride : e.GetScene();
     ViewRequest r;
     r.width = std::clamp(args["width"].asInt(640), 16, 4096);
     r.height = std::clamp(args["height"].asInt(360), 16, 4096);
@@ -266,18 +267,18 @@ ViewRequest ParseView(Engine& e, const Json& args) {
             throw ApiError("invalid_argument", "camera.projection must be perspective or orthographic");
         }
         RenderView sceneView;
-        MakeSceneView(e.GetScene(), aspect, sceneView);
+        MakeSceneView(scene, aspect, sceneView);
         r.view.clearColor = sceneView.clearColor;
         r.customCamera = true;
     } else {
-        MakeSceneView(e.GetScene(), aspect, r.view);
+        MakeSceneView(scene, aspect, r.view);
     }
     r.view.drawGrid = args["grid"].asBool(false);
     r.view.shaderTime = static_cast<float>(e.SimTime());
     r.view.playing = e.InPlaySession();
     if (args["colliders"].asBool(false)) {
         TilesetLookup tilesets = e.Assets().Tilesets();
-        AppendColliderLines(e.GetScene(), r.view.lines, &tilesets);
+        AppendColliderLines(scene, r.view.lines, &tilesets);
     }
     if (args["navmesh"].asBool(false)) e.Nav().AppendLines(r.view.lines);
     e.AppendDebugLines(r.view.lines);
@@ -577,6 +578,16 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         }
         return out;
     };
+    Register(r, "animation.preview", "Open/control an isolated stopped-scene animation preview; no scripts, physics, events, scene edits or revision changes.",
+             Params().OptWith("id", EntityRefSchema("Animated entity; required when opening."))
+                 .Opt("clip", "string", "Preview clip.").Opt("time", "number", "Seek in seconds; clamps to the preview timeline.")
+                 .Opt("playing", "boolean", "Editor auto-advance flag.").Opt("speed", "number", "Finite playback multiplier; negative reverses.")
+                 .Opt("loop", "boolean", "Repeat; defaults to the clip setting.").Opt("frames", "integer", "Advance 0..3600 fixed 1/60 s steps, even when paused."), false,
+             [](Engine& e, const Json& a) { return e.AnimationPreviewCall("preview", a); });
+    Register(r, "animation.preview_state", "Read isolated preview state, clip list and event marks; never changes the authored scene.", Params(), false,
+             [](Engine& e, const Json& a) { return e.AnimationPreviewCall("state", a); });
+    Register(r, "animation.preview_close", "Close isolated animation preview and restore the authored pose in editor views.", Params(), false,
+             [](Engine& e, const Json& a) { return e.AnimationPreviewCall("close", a); });
     Register(r, "animation.state", "SpriteAnimation or Animator playback state; optional model-space joint matrices (column-major).",
              Params().ReqWith("id", EntityRefSchema("Entity with SpriteAnimation or Animator.")).Opt("pose", "boolean", "Include model jointMatrices."),
              false, [animatorState](Engine& e, const Json& a) { return animatorState(e, RequireEntity(e, a), a["pose"].asBool()); });
@@ -628,7 +639,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         const EntityId id = RequireEntity(e, a);
         const SpriteAnimation* sprite = e.GetScene().Get<SpriteAnimation>(id);
         const Animator* animator = e.GetScene().Get<Animator>(id);
-        if (!sprite && !animator) throw ApiError("missing_component", "entity has no animation component", "Add SpriteAnimation or Animator.");
+        if (!sprite && !animator && (!a.has("clip") || !e.GetScene().Get<MeshRenderer>(id)))
+            throw ApiError("missing_component", "entity has no animation component", "Add SpriteAnimation/Animator, or pass clip for a model with MeshRenderer.");
         const std::string name = a.has("clip") ? a["clip"].asString() : sprite ? sprite->clip : animator->clip;
         Json markers = Json::MakeArray();
         std::string source;
@@ -687,7 +699,8 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [animationEvents](Engine& e, const Json& a) { return animationEvents(e, a, false); });
     Register(r, "animation.set_events", "Replace clip markers. Sprites store events in clips; models write <model>.events.json (shared by all instances; file writes are not undoable).",
              Params().ReqWith("id", EntityRefSchema("Animated entity.")).Opt("clip", "string", "Clip name; default current clip.")
-                 .Req("events", "array", "At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers."), true,
+                 .Req("events", "array", "At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers.")
+                 .Opt("merge", "string", "Undo group key for a sprite marker drag; model file writes remain outside undo."), true,
              [animationEvents](Engine& e, const Json& a) { return animationEvents(e, a, true); });
     Register(r, "animation.retarget", "Move animation clips from one model's skeleton to another's (different bone names, proportions and rest pose, e.g. mocap for a T-pose rig onto a character in an A-pose) and write them as a clip file. With attach (default) the file is listed in '<target>.clips.json', which adds its clips to the target model: play them with Animator / animation.play like the model's own.",
              Params().Req("source", "string", "Model file with the clips, e.g. \"assets/anims/mocap.glb\".")
@@ -1508,9 +1521,11 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         rendererSchema["description"] = "software (default: deterministic, the hash is stable across machines) or gpu (what the game window "
                                         "and editor show: MSAA, filtered shadows, mipmaps; the hash depends on the GPU and driver).";
         p.OptWith("renderer", rendererSchema);
+        p.Opt("animationPreview", "boolean", "Render the isolated animation preview instead of the authored scene (default false).");
         Register(r, "render.screenshot", "Render a frame and return it as PNG (and/or save it). Look at it to verify visual changes.", p, false,
                  [](Engine& e, const Json& a) {
-                     ViewRequest vr = ParseView(e, a);
+                     Scene& scene = a["animationPreview"].asBool() ? e.AnimationRenderScene() : e.GetScene();
+                     ViewRequest vr = ParseView(e, a, &scene);
                      RenderTarget target;
                      target.Resize(vr.width, vr.height);
                      IRenderer* renderer = &e.Renderer();
@@ -1524,7 +1539,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      } else if (which != "software") {
                          throw ApiError("invalid_argument", "renderer must be software or gpu", "Omit it for the software renderer.");
                      }
-                     RenderStats stats = renderer->Render(e.GetScene(), vr.view, target);
+                     RenderStats stats = renderer->Render(scene, vr.view, target);
                      Image img = target.ToImage();
                      Json out = Json::MakeObject();
                      out["width"] = vr.width;
@@ -2771,6 +2786,13 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["open"] = false;
                  out["hint"] = "No editor shows this engine. The human runs `oe editor <project>`; agents attach with `oe mcp --connect 7777`.";
                  return out;
+             });
+    Register(r, "editor.animation", "Open/focus or close the Animation panel in the attached native editor; no scene edit.",
+             Params().Opt("open", "boolean", "true opens/focuses (default); false closes the panel and its preview."), false,
+             [](Engine& e, const Json& a) {
+                 if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("animation", a);
+                 throw ApiError("editor_unavailable", "no native editor is attached", "Run oe editor and attach with --connect; animation.preview also works without an editor.");
+                 return Json();
              });
     Register(r, "editor.select",
              "Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).",

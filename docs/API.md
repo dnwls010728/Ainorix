@@ -441,6 +441,28 @@ Restore native Lua, physics and audio state; refuses changed resources or an act
 
 ## animation
 
+### `animation.preview`
+
+Open/control an isolated stopped-scene animation preview; no scripts, physics, events, scene edits or revision changes.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string |  | Animated entity; required when opening. |
+| `clip` | string |  | Preview clip. |
+| `time` | number |  | Seek in seconds; clamps to the preview timeline. |
+| `playing` | boolean |  | Editor auto-advance flag. |
+| `speed` | number |  | Finite playback multiplier; negative reverses. |
+| `loop` | boolean |  | Repeat; defaults to the clip setting. |
+| `frames` | integer |  | Advance 0..3600 fixed 1/60 s steps, even when paused. |
+
+### `animation.preview_state`
+
+Read isolated preview state, clip list and event marks; never changes the authored scene.
+
+### `animation.preview_close`
+
+Close isolated animation preview and restore the authored pose in editor views.
+
 ### `animation.state`
 
 SpriteAnimation or Animator playback state; optional model-space joint matrices (column-major).
@@ -480,6 +502,7 @@ Replace clip markers. Sprites store events in clips; models write <model>.events
 | `id` | integer \| string | yes | Animated entity. |
 | `clip` | string |  | Clip name; default current clip. |
 | `events` | array | yes | At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers. |
+| `merge` | string |  | Undo group key for a sprite marker drag; model file writes remain outside undo. |
 
 ### `animation.retarget`
 
@@ -948,6 +971,7 @@ Render a frame and return it as PNG (and/or save it). Look at it to verify visua
 | `path` | string |  | Also write the PNG to this path (relative to the project). |
 | `inline` | boolean |  | Return the PNG as base64 in png_base64 (default true when no path is given). |
 | `renderer` | string |  | software (default: deterministic, the hash is stable across machines) or gpu (what the game window and editor show: MSAA, filtered shadows, mipmaps; the hash depends on the GPU and driver). |
+| `animationPreview` | boolean |  | Render the isolated animation preview instead of the authored scene (default false). |
 
 ### `render.pick`
 
@@ -1548,6 +1572,14 @@ Remove all debug lines.
 ### `editor.state`
 
 What the human sees in the open editor: selected entities, focused and visible panels, Scene view camera, the script tab and cursor/selection, the selected asset, open shader/effect, play state. {open:false} without an editor.
+
+### `editor.animation`
+
+Open/focus or close the Animation panel in the attached native editor; no scene edit.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `open` | boolean |  | true opens/focuses (default); false closes the panel and its preview. |
 
 ### `editor.select`
 

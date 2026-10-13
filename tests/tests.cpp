@@ -19355,6 +19355,167 @@ TEST(AnimationEventsCallbackMutationAndFaults) {
     CHECK(Call(e, "game.state")["result"]["data"]["calls"].asInt() == 2);
 }
 
+TEST(AnimationPreviewIsolationAndLifecycle) {
+    Engine e; std::string error;
+    const std::string project = TempProject("animation_preview");
+    CHECK(e.Open(project, &error)); Call(e, "scene.new", R"({"empty":true})");
+    Call(e, "entity.create", R"({"name":"Sprite","components":{"Sprite":{},"SpriteAnimation":{"clip":"walk","clips":{
+      "walk":{"frames":[6,7,8,9],"fps":4,"events":[{"frame":1,"name":"foot"}]},"once":{"frames":[4,5],"fps":10,"loop":false}}},
+      "RigidBody":{},"Collider":{},"Script":{"path":"scripts/preview.lua"}}})");
+    CHECK(WriteTextFile(project + "/scripts/preview.lua", "local M={} function M:onStart() error('preview must not run scripts') end return M"));
+    const std::string authored = e.GetScene().ToJson().dump();
+    const uint64_t revision = e.Revision(), frame = e.Frame(); const size_t undo = e.UndoDepth();
+    CHECK(!Call(e, "animation.preview_state")["result"]["active"].asBool());
+    Json preview = Call(e, "animation.preview", R"({"id":"Sprite","time":0.55})")["result"];
+    CHECK(preview["active"].asBool() && preview["clips"].size() == 2 && preview["events"].size() == 1);
+    const EntityId id = e.GetScene().FindByName("Sprite");
+    CHECK(e.AnimationRenderScene().Get<Sprite>(id)->frame == 8);
+    CHECK(e.GetScene().Get<Sprite>(id)->frame == 0);
+    Call(e, "animation.preview", R"({"playing":true,"speed":-1,"frames":60})");
+    CHECK(std::fabs(Call(e, "animation.preview_state")["result"]["time"].asFloat() - 0.55f) < 1e-6f);
+    Call(e, "animation.preview", R"({"clip":"once","time":0,"speed":1,"playing":false,"frames":1})");
+    CHECK(std::fabs(Call(e, "animation.preview_state")["result"]["time"].asFloat() - 1.0f/60) < 1e-6f);
+    Call(e, "animation.preview", R"({"playing":true,"frames":60})");
+    preview = Call(e, "animation.preview_state")["result"];
+    CHECK(!preview["playing"].asBool() && std::fabs(preview["time"].asFloat() - 0.1f) < 1e-6f);
+    CHECK(e.AnimationRenderScene().Get<Sprite>(id)->frame == 5);
+    CHECK(Call(e, "animation.preview", R"({"frames":3601})")["error"]["code"].asString() == "invalid_argument");
+    CHECK(!Call(e, "animation.preview", R"({"clip":"missing"})")["ok"].asBool());
+    CHECK(e.Revision() == revision && e.Frame() == frame && e.UndoDepth() == undo);
+    CHECK(e.GetScene().ToJson().dump() == authored && Call(e, "script.errors")["result"].size() == 0);
+    Call(e, "animation.preview_close");
+    CHECK(&e.AnimationRenderScene() == &e.GetScene());
+    // Edits update the isolated view, deletion/scene replacement and play end the preview.
+    Call(e, "animation.preview", R"({"id":"Sprite"})");
+    Call(e, "component.set", R"({"id":"Sprite","type":"Transform","values":{"position":[2,3,4]}})");
+    CHECK(e.AnimationRenderScene().Get<Transform>(id)->position.x == 2);
+    Call(e, "entity.delete", R"({"id":"Sprite"})");
+    CHECK(!Call(e, "animation.preview_state")["result"]["active"].asBool());
+    Call(e, "history.undo"); Call(e, "animation.preview", R"({"id":"Sprite"})");
+    Call(e, "sim.play");
+    CHECK(!Call(e, "animation.preview_state")["result"]["active"].asBool());
+    CHECK(Call(e, "animation.preview", R"({"id":"Sprite"})")["error"]["code"].asString() == "animation_preview_playing");
+    Call(e, "sim.stop");
+}
+
+TEST(AnimationPreviewModelPoseAndMarkersWithoutAnimator) {
+    Engine e; std::string error;
+    const std::string project = TempProject("animation_preview_model");
+    CHECK(e.Open(project, &error)); Call(e, "scene.new", R"({"empty":true})");
+    std::string model = kRigFbx; model.replace(model.find("%TEXTURE%"), 9, "");
+    CreateDirectories(project + "/assets/models"); CHECK(WriteTextFile(project + "/assets/models/rig.fbx", model));
+    Call(e, "entity.create", R"({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx"}}})");
+    Call(e, "entity.create", R"({"name":"Attachment","parent":"Rig","components":{"BoneAttachment":{"bone":"Tip"}}})");
+    const EntityId rig = e.GetScene().FindByName("Rig"), attachment = e.GetScene().FindByName("Attachment");
+    CHECK(Call(e, "animation.preview", R"({"id":"Rig","clip":"Wave","time":0.5})")["ok"].asBool());
+    const auto revision = e.Revision(); const std::string authored = e.GetScene().ToJson().dump();
+    Scene& preview = e.AnimationRenderScene();
+    CHECK(preview.Get<Animator>(rig) && preview.Get<Animator>(rig)->time == 0.5f && !e.GetScene().Get<Animator>(rig));
+    CHECK(Length(preview.Get<Transform>(attachment)->position - e.GetScene().Get<Transform>(attachment)->position) > 0.01f);
+    CHECK(e.GetScene().ToJson().dump() == authored && e.Revision() == revision);
+    const Json originalShot = Call(e, "render.screenshot", R"({"width":160,"height":120,"inline":false})")["result"];
+    const Json previewShot = Call(e, "render.screenshot", R"({"width":160,"height":120,"inline":false,"animationPreview":true})")["result"];
+    CHECK(originalShot["hash"].asString() != previewShot["hash"].asString());
+    CHECK(Call(e, "render.screenshot", R"({"width":160,"height":120,"inline":false})")["result"]["hash"].asString() == originalShot["hash"].asString());
+    CHECK(Call(e, "animation.set_events", R"({"id":"Rig","clip":"Wave","events":[{"time":0.25,"name":"modelEvent"}]})")["ok"].asBool());
+    CHECK(!e.GetScene().Get<Animator>(rig));
+    CHECK(Call(e, "animation.preview_state")["result"]["events"][0]["name"].asString() == "modelEvent");
+    Call(e, "scene.new", R"({"empty":true})");
+    CHECK(!Call(e, "animation.preview_state")["result"]["active"].asBool());
+}
+
+#if OE_NATIVE_EDITOR
+TEST(NativeEditorAnimationPanel) {
+    Engine e; std::string error;
+    const std::string project = TempProject("editor_animation");
+    CHECK(e.Open(project, &error)); Call(e, "scene.new", R"({"empty":true})");
+    Call(e, "entity.create", R"({"name":"Camera","components":{"Camera":{},"Transform":{"position":[0,0,5]}}})");
+    Call(e, "entity.create", R"({"name":"Sprite","components":{"Sprite":{},"SpriteAnimation":{"clip":"walk","clips":{
+      "walk":{"frames":[0,1,2,3],"fps":4,"events":[{"frame":1,"name":"foot"}]}}}}})");
+    if (!e.EnableGpu(nullptr, &error)) { RemoveAll(project); return; }
+    NativeEditor::Options options; options.language = "en"; options.layoutFile = project + "/.oe/editor.ini";
+    {
+    NativeEditor editor(e, nullptr, options); CHECK(editor.Init(&error));
+    editor.Select(e.GetScene().FindByName("Sprite")); RenderTarget image;
+    auto draw = [&](int frames) { for (int i = 0; i < frames; ++i) { editor.Update({}, 1600, 1000, 1, Engine::kFixedDt); CHECK(editor.DrawToImage(image)); } };
+    draw(3); editor.FocusAnimationPanel(); draw(3);
+    ImGuiWindow* panel = ImGui::FindWindowByName("###Animation"); CHECK(panel && panel->DockTabIsVisible);
+    const auto revision = e.Revision(); const std::string authored = e.GetScene().ToJson().dump();
+    auto click = [&](const std::string& control) {
+        const auto rect = editor.AnimationControlRect(control); CHECK(rect[2] > 0);
+        const int x = static_cast<int>(rect[0] + rect[2] * 0.5f), y = static_cast<int>(rect[1] + rect[3] * 0.5f);
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = static_cast<float>(x); move.y = static_cast<float>(y);
+        WindowEvent down; down.type = WindowEvent::Type::MouseButton; down.button = 0; down.down = true;
+        editor.Update({move,down}, 1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        down.down = false; editor.Update({down},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image)); draw(1);
+    };
+    click("step"); CHECK(Call(e, "animation.preview_state")["result"]["time"].asFloat() > 0.015f);
+    click("play"); draw(8); CHECK(Call(e, "animation.preview_state")["result"]["playing"].asBool());
+    click("play"); const float paused = Call(e, "animation.preview_state")["result"]["time"].asFloat();
+    draw(4); CHECK(Call(e, "animation.preview_state")["result"]["time"].asFloat() == paused);
+    click("restart"); CHECK(Call(e, "animation.preview_state")["result"]["time"].asFloat() == 0);
+    CHECK(e.Revision() == revision && e.GetScene().ToJson().dump() == authored);
+    // Timeline scrubbing and marker dragging are actual window events, not direct state changes.
+    auto drag = [&](const std::array<float,4>& from, float x, float y) {
+        WindowEvent move; move.type = WindowEvent::Type::MouseMove; move.x = from[0] + from[2]*0.5f; move.y = from[1] + from[3]*0.5f;
+        WindowEvent button = move; button.type = WindowEvent::Type::MouseButton; button.button = 0; button.down = true;
+        editor.Update({move,button},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        draw(1);
+        move.x=x; move.y=y; editor.Update({move},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+        draw(1);
+        button.down=false; editor.Update({button},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image)); draw(2);
+    };
+    auto timeline = editor.AnimationControlRect("timeline");
+    const std::array<float,4> scrub = {timeline[0] + timeline[2]*0.4f,timeline[1]+45,2,2};
+    drag(scrub,timeline[0]+timeline[2]*0.65f,timeline[1]+45);
+    CHECK(Call(e, "animation.preview_state")["result"]["time"].asFloat() > 0.6f);
+    CHECK(e.Revision() == revision && e.GetScene().ToJson().dump() == authored);
+    drag(editor.AnimationControlRect("marker:0"),timeline[0]+timeline[2]*0.75f,timeline[1]+27);
+    CHECK(Call(e,"animation.events",R"({"id":"Sprite"})")["result"]["events"][0]["frame"].asInt() == 3);
+    click("add-event"); CHECK(Call(e, "animation.events", R"({"id":"Sprite"})")["result"]["events"].size() == 2);
+    // Rename commits on Enter, preserving the marker's timeline position.
+    click("name:0");
+    WindowEvent key; key.type=WindowEvent::Type::Key; key.key=WindowKey::A; key.ctrl=true; key.down=true;
+    editor.Update({key},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+    key.down=false; key.ctrl=false; editor.Update({key},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+    std::vector<WindowEvent> text;
+    for (unsigned char c : std::string("renamed")) { WindowEvent event; event.type=WindowEvent::Type::Text; event.codepoint=c; text.push_back(event); }
+    editor.Update(text,1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+    key.key=WindowKey::Enter;key.ctrl=false;key.down=true;
+    editor.Update({key},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image));
+    key.down=false;editor.Update({key},1600,1000,1,Engine::kFixedDt); CHECK(editor.DrawToImage(image)); draw(2);
+    CHECK(Call(e,"animation.events",R"({"id":"Sprite"})")["result"]["events"][0]["name"].asString() == "renamed");
+    click("remove-event:0"); CHECK(Call(e, "animation.events", R"({"id":"Sprite"})")["result"]["events"].size() == 1);
+    CHECK(Call(e, "editor.state")["result"]["animationPanel"].asBool());
+    CHECK(WritePng(JoinPath(OE_SOURCE_DIR, "build/a2-editor-test.png"), image.ToImage()));
+    CHECK(Call(e,"editor.animation",R"({"open":false})")["ok"].asBool()); draw(2);
+    CHECK(!Call(e,"animation.preview_state")["result"]["active"].asBool());
+    }
+    std::string settings; CHECK(ReadTextFile(options.layoutFile, settings));
+    CHECK(settings.find("AnimationPanel=0") != std::string::npos);
+    // Simulate an older editor.ini: no animation preference/window. Preserve all other docks.
+    std::string legacy; bool skip = false; std::istringstream lines(settings);
+    for (std::string line; std::getline(lines, line);) {
+        if (!line.empty() && line[0] == '[') skip = line.compare(0,8,"[Window]") == 0 && line.find("###Animation") != std::string::npos;
+        if (skip || line.compare(0,15,"AnimationPanel=") == 0) continue;
+        legacy += line + "\n";
+    }
+    CHECK(WriteTextFile(options.layoutFile, legacy));
+    {
+        NativeEditor restored(e,nullptr,options); CHECK(restored.Init(&error));
+        restored.Select(e.GetScene().FindByName("Sprite"));
+        RenderTarget image;
+        for (int i=0;i<3;++i) { restored.Update({},1600,1000,1,Engine::kFixedDt); CHECK(restored.DrawToImage(image)); }
+        restored.FocusAnimationPanel();
+        for (int i=0;i<3;++i) { restored.Update({},1600,1000,1,Engine::kFixedDt); CHECK(restored.DrawToImage(image)); }
+        ImGuiWindow* panel=ImGui::FindWindowByName("###Animation");
+        ImGuiWindow* assets=ImGui::FindWindowByName("###Assets");
+        CHECK(panel && assets && panel->DockId == assets->DockId && panel->DockTabIsVisible);
+    }
+    CHECK(ReadTextFile(options.layoutFile,settings) && settings.find("AnimationPanel=1") != std::string::npos);
+}
+#endif
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

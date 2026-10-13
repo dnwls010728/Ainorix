@@ -319,6 +319,7 @@ void Engine::EnableAudioOutput() {
 }
 
 void Engine::ResetRuntime() {
+    animationPreview_.reset();
     networkButtonKeys_.clear();
     debugLines_.clear();
     links_.Clear();  // their ids lived in the Lua state that goes away

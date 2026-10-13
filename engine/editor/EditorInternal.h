@@ -166,6 +166,17 @@ struct NativeEditor::Impl {
     bool showHierarchy = true, showInspector = true, showScene = true, showGame = true;
     bool showConsole = true, showAssets = true, showScripts = true, showMetrics = false;
     bool showNetwork = true, requestNetworkFocus = false;
+    bool showAnimation = false, focusAnimation = false, animationEditorFocused = false;
+    double animationAccumulator = 0;
+    int animationEvent = -1, animationDragIndex = -1;
+    Json animationDragEvents;
+    std::string animationEventName;
+    std::map<std::string, std::string> animationNames;
+    std::map<std::string, std::array<float, 4>> animationRects;
+    void AnimationPanel();
+    void AnimationTick(double dt);
+    void AnimationRect(const std::string& name);
+    void AnimationWriteEvents(const Json& state, const Json& events, const std::string& merge = {});
     bool showHistory = true, requestHistoryFocus = false;
     bool showThumbnails = true;
     struct Thumbnail {

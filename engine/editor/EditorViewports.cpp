@@ -581,7 +581,7 @@ void NativeEditor::Impl::ScenePanel() {
         }
     }
     engine.AppendDebugLines(view.lines);
-    sg_view tex = engine.Gpu()->RenderToTexture(scene, view, w, h, kSceneSlot);
+    sg_view tex = engine.Gpu()->RenderToTexture(engine.AnimationRenderScene(), view, w, h, kSceneSlot);
     sceneViewMat = view.view;
     sceneProjMat = view.proj;
 
@@ -901,7 +901,7 @@ void NativeEditor::Impl::GamePanel() {
     // Scripts project with the view they are drawn into (name plates, UI that follows the world),
     // not the project's window size or wherever the mouse last was.
     GameEngine().SetViewSize(w, h);
-    Scene& scene = GameEngine().GetScene();
+    Scene& scene = session ? GameEngine().GetScene() : engine.AnimationRenderScene();
     GameEngine().BeginInterpolatedRender();  // smooth motion between fixed steps, like the game window
     RenderView view;
     bool hasCamera = MakeSceneView(scene, static_cast<float>(w) / static_cast<float>(h), view);

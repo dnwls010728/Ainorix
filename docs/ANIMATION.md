@@ -402,6 +402,68 @@ Verified by `AnimationEventsSpritesAndReplay`, `AnimationEventsModelsAndBlend`,
 The `build/AnimationEvents` project displays 2D and 3D footfall
 events in its HUD; run it with `build\bin\oe.exe editor build\AnimationEvents`, then Play.
 
+## Animation panel and isolated preview (A2)
+
+Open **View > Animation** and select a sprite with `SpriteAnimation`, or a model with animation clips.
+The panel docks beside Assets and remembers its visibility in `.oe/editor.ini`; existing layouts gain
+the tab without moving other windows. A model does not need an authored `Animator` to preview it.
+
+Choose a clip, Play/Pause Preview, Step Preview (1/60 s), Restart Preview, Loop Preview or a playback
+speed (negative reverses). Drag the time slider or an empty part of the timeline to seek and pause.
+The Scene and stopped Game views show the sampled sprite frame/model pose, including bone attachments,
+IK and the skeleton overlay. Other entities do not advance. No script, timer, physics, audio or animation
+event callback runs. The preview never changes scene fields, revision, dirty state or scene undo and is
+never saved in a scene/prefab. Closing the panel or starting the game restores authored playback.
+Deleting the target or replacing the scene also closes it. Edits/undo and model hot reload refresh the
+preview; a missing/invalid clip closes it safely. A collapsed/background tab can keep playing while open.
+
+Event triangles show the A1 markers. Click a marker to select it, then drag it to move it; sprite markers
+snap to sequence-frame indices, model markers use seconds. A drag preserves marker identity when it
+passes another marker, and one sprite drag is one undo group. Add Event inserts `event` at the preview
+cursor. The table edits names and frame/time positions with **Enter** and removes markers. These are
+real authored changes, through `animation.set_events`, separate from pose preview. Sprite markers save
+with the scene and support normal undo. Model markers write the shared `.events.json` sidecar immediately
+and are not undoable; the panel states this next to Add Event. Invalid edits return the A1 validation hint.
+Use the panel scrollbar or enlarge the bottom dock when several event rows are below the fold.
+
+Commands work without an editor for headless authoring/verification:
+
+- `animation.preview {id?, clip?, time?, playing?, speed?, loop?, frames?}` opens/controls one isolated
+  preview. `id` is required on first opening; later calls may omit it. The default clip is the authored
+  current clip if valid, otherwise the first available clip. A new target/clip resets time to zero.
+  `time` clamps to its timeline; `frames` advances 0..3600 fixed 1/60 s steps **even when paused**.
+  The `playing` flag tells an open editor to auto-advance at 60 Hz (real-time catch-up capped to 0.25 s
+  per UI frame); standalone callers advance explicitly. `loop`/`speed` affect only preview. Sprite
+  non-looping endpoints retain A1's start-of-last-frame timing.
+- `animation.preview_state` returns active/id/type/clip/time/playing/speed/loop, duration, available
+  `clips`, sorted `events`, and sprite `fps`/`frameCount`. Preview pose sampling clamps the last sprite
+  frame when seeking exactly to the loop-period endpoint. `animation.preview_close` discards the copy.
+- `render.screenshot {animationPreview:true, ...}` renders that copy with its camera/attachments in
+  either renderer. The default screenshot still renders the authored scene.
+- `editor.animation {open?:true}` opens/focuses the panel in an attached editor; `open:false` closes
+  it and preview. Without an editor it returns `editor_unavailable`; preview commands still work.
+  `editor.state` includes `animationPanel` and the full `animation` preview report. Use `editor.select`
+  before opening to point the panel at the desired entity.
+- Model `animation.events/set_events` accept an explicit `clip` on a MeshRenderer without an Animator.
+  `animation.set_events` accepts an optional sprite undo `merge` key for repeated drag edits.
+
+```json
+{"command":"animation.preview","args":{"id":"Fox","clip":"Walk","time":0.35}}
+{"command":"render.screenshot","args":{"animationPreview":true,"path":"preview.png"}}
+{"command":"animation.preview","args":{"frames":1}}
+{"command":"animation.preview_close","args":{}}
+```
+
+Screenshot automation: `build\bin\oe.exe editor build\AnimationEvents --screenshot build\animation.png
+--select Fox --animation --animation-time 0.35` (one command line). `--animation` opens the panel;
+`--animation-time` sets its initial seek time. `--lang ko` / `--lang ja` select localized labels.
+The same `build/AnimationEvents` demo contains Fox and Hero for model/sprite previews. A2 does not add
+a sprite-sheet clip editor, reusable clip assets or an animation controller; those are A3–A5.
+
+Verified by `AnimationPreviewIsolationAndLifecycle`, `AnimationPreviewModelPoseAndMarkersWithoutAnimator`
+and `NativeEditorAnimationPanel`; the editor case drives play/pause/step/restart, scrubbing, marker dragging,
+name edits and removal through window events.
+
 ## Status
 
 A1 is implemented for models and sprites. All 368 Windows tests pass, including four API-driven timeline tests with
@@ -411,5 +473,13 @@ The old Showcase software hash remains `72ab07fb213fd42b`. Rebuilt web and both 
 include A1; headless Edge (WebGL2 on SwiftShader) ran the demo's model and sprite callbacks and HUD
 updates without script/WebGL errors. Both Android ELF binaries retain 16 KB LOAD alignment.
 
+A2 is implemented. All 371 Windows tests pass; the final editor test also verifies legacy layout migration
+and visibility persistence. English/Korean/Japanese model/sprite panel screenshots were checked. The
+800x500 isolated model preview's software/D3D11 mean RGB difference is 0.083/255. The original Showcase
+hash remains unchanged. Rebuilt web/Android players contain the shared preview API; the native panel
+is a desktop tool, not a player UI. Headless Edge ran the refreshed player's model/sprite demo without
+script/WebGL errors. Android libraries were rebuilt for both ABIs and retain 16 KB LOAD alignment.
+
 - [ ] Physical Android and Linux/EGL execution of animated models and A1 callbacks.
 - [ ] Real browser GPU/mobile rendering and performance (the browser check used SwiftShader).
+

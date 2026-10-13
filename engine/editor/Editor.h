@@ -90,6 +90,10 @@ public:
     std::array<float, 4> ShaderControlRect(const std::string& name) const;
     // Open a reusable effect in the shared document workspace; an empty path opens the Effects panel.
     void OpenEffect(const std::string& path = {});
+    // Open/focus the Animation panel for the selected sprite/model.
+    void FocusAnimationPanel();
+    // Automation bounds: clip, play, step, restart, time, timeline, add-event and marker/name/event-time/remove-event:<index>.
+    std::array<float, 4> AnimationControlRect(const std::string& name) const;
     // Snapshot of the shared Effects document and bounds for event-driven widget automation.
     Json EffectsDocument() const;
     // Switch between the Effects structure graph and its field view.

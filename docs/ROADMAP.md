@@ -209,6 +209,13 @@ refraction, water, caustics; clear coat.
   Windows tests, software/D3D11/editor demo and WebGL2 callbacks checked; web and both Android players rebuilt.
   Remaining: physical Android, Linux/EGL and real browser GPUs/mobile performance.
 
+- [x] **A2 — Animation panel.** View > Animation: the clips of the selected entity (2D or 3D), play / pause /
+  step, a timeline with a scrubber, and the pose or frame shown in the Scene view while the game is stopped (the
+  way the Effects panel previews). Event marks on the timeline are added, moved and named there (A1).
+  Implemented: isolated animation.preview/preview_state/preview_close, editor.animation, stopped Scene/Game poses and event authoring.
+  371 Windows tests and final legacy-layout test passed; en/ko/ja screenshots checked, web/Android players rebuilt.
+  Remaining: Linux/EGL editor and physical Android/real browser GPU runtime checks.
+
 ### T. 2D baseline — after R
 
 What a general 2D game expects and the engine does not have yet. What exists is in [2D.md](2D.md): grid sprite
