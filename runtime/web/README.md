@@ -5,22 +5,23 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (b745881). R4 adds opt-in
-PointLight.shadows and SpotLight.shadows, deterministic two-light selection, perspective bias and
-512-square maps in a 2048-square local-shadow atlas. Light data is now 8x18 RGBA32F. R2 spotlights,
-R3 cascades and all earlier player features remain included; see [LIGHTING.md](../../docs/LIGHTING.md).
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (975e58e). R5 adds opt-in
+PostProcess.ssao/ssaoRadius/ssaoBias, a depth prepass and 32 fixed samples that darken ambient light
+only. Direct light, emission, UI and transparent surfaces are unaffected. R2 spotlights, R3 cascades,
+R4 local shadows and all earlier player features remain included; see [POSTPROCESS.md](../../docs/POSTPROCESS.md).
 Packaging still patches the game's key into the runtime for keyed OEPAK002 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 5,985,995 | c78bab58a35aaf045641d0800c3a03c76a3182f15f4afb96c1ca87fb5533a010 |
+| oe_player.wasm | 6,005,988 | 08254f7647705f76eb1297c24ebd522e022dee7dbbf953a0f5b726706baa5cfc |
 
-Windows Release: 351 tests pass, including all six point faces, two points using twelve tiles, spot
-occlusion, caster toggles and software/GPU comparisons. Headless Edge (WebGL2 on SwiftShader) compiled
-and linked the generated shaders and rendered the packaged point/spot example without shader/WebGL
-warnings. The fragment program has 203 vec4 uniform vectors and 13 sampler uniforms (216 conservatively),
-using 13 texture units, within GLES3/WebGL2 fragment minimums. Earlier R3/R2 browser checks are in Git history.
+Windows Release: 352 tests pass, including SSAO contacts, perspective/orthographic views, exclusions,
+determinism, effect combinations and software/GPU comparisons. Headless Edge (WebGL2 on SwiftShader)
+compiled and linked the generated mesh program and rendered the packaged SSAO demonstration without
+shader/WebGL warnings. The fragment program has 209 vec4 uniform vectors and 14 sampler uniforms
+(223 conservatively), using 14 texture units, within GLES3/WebGL2 fragment minimums. SSAO requires
+renderable R32F targets (float color-buffer support). Earlier browser checks are in Git history.
 The pre-existing vertex skin/graph uniform budget is unchanged; minimum-capability vertex-stage execution
 still needs device validation.
 

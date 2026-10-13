@@ -167,8 +167,11 @@ Rules for every item here:
   Implemented: opt-in `shadows` on both components, nearest two local lights, 512-square cube/cone maps in a 2048-square atlas.
   351 Windows tests and WebGL2 package checked; web and both Android runtimes rebuilt.
   Remaining: Android physical-device rendering; Linux/EGL rendering; existing minimum-capability vertex shader path.
-- [ ] **R5 — Ambient occlusion (SSAO).** A `PostProcess` effect darkening the ambient term in creases and
+- [x] **R5 — Ambient occlusion (SSAO).** A `PostProcess` effect darkening the ambient term in creases and
   contacts, from the depth buffer, in both renderers.
+  Implemented: `PostProcess.ssao/ssaoRadius/ssaoBias`, 32 fixed samples, ambient-only shading.
+  352 Windows tests and WebGL2 package checked; web and both Android runtimes rebuilt.
+  Remaining: Android physical-device rendering; Linux/EGL; real browser GPU and minimum-capability vertex path.
 - [ ] **R6 — Planar reflection.** A mirror or water plane that shows what moves (characters), which probes
   cannot: the scene drawn again from the mirrored camera, used by one flat surface.
 - [ ] **R7 — Decals.** A box that projects a texture onto the surfaces inside it (bullet marks, stains, floor

@@ -8,17 +8,18 @@ signing needs Java.
 
 - ABIs: arm64-v8a (phones/tablets), x86_64 (emulators).
 - Built on 2026-10-13 with Android NDK r28c (28.2.13676358), Release, API 26 and static libc++,
-  from main (b745881), including R4 point/spot shadows, two-light selection, twelve perspective maps
-  in a 2048-square atlas and the 8x18 light-data texture. All earlier runtime features remain included.
+  from main (975e58e), including R5 ambient-only SSAO with a depth prepass and 32 fixed samples,
+  PostProcess.ssao/ssaoRadius/ssaoBias, and all earlier runtime features. See [POSTPROCESS.md](../../docs/POSTPROCESS.md).
 - The engine uses GLES3 and AAudio. ELF load segments are aligned to 16 KB (llvm-readelf checked both ABIs).
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
-| arm64-v8a/liboe_player.so | 9,198,288 | db9f91a648f3cac661ef20cb66530ee8e2e11b830f3a30e668d6b833f808618c |
-| x86_64/liboe_player.so | 9,839,720 | cfe3eaa7f2c4ea9163c12e847690fe0a89d16ebed8840640ba4dbb4dcbd3e6fa |
+| arm64-v8a/liboe_player.so | 9,215,312 | 1441c17b7f17fee8725da15ec51968d7a5499f952f4c9e5783dd1e9e523a84fa |
+| x86_64/liboe_player.so | 9,857,640 | 01152e55503492e1a23604e45134e9a49f42b809a96386da29280590c9ccf76a |
 
-**Not run on a device.** R4 was checked on Windows D3D11 and browser WebGL2; the Android libraries were
-built and their ELF alignment verified. The existing skin/vertex-graph uniform path still needs validation
+**Not run on a device.** R5 was checked with 352 Windows tests, D3D11 screenshots and browser WebGL2;
+the Android libraries were built and their ELF alignment verified. SSAO needs renderable R32F targets.
+The existing skin/vertex-graph uniform path still needs validation
 on minimum-capability devices. Packaging validators were not re-run for this build. Earlier device and
 packaging checks, and remaining newer engine-feature checks, are recorded in
 [ANDROID.md](../../docs/ANDROID.md). Earlier runtime build history is preserved in Git.

@@ -429,7 +429,7 @@ packaged graph execution is verified.
 
 ## Status
 
-Implemented in both renderers: vignette, exposure with Reinhard/ACES tone mapping, bloom, depth of field,
+Implemented in both renderers: vignette, exposure with Reinhard/ACES tone mapping, bloom, ambient-only SSAO, depth of field,
 FXAA, distance fog, colour grading and surface shader graphs (colour, emission, normal and vertex offset
 outputs, `MeshRenderer.shaderUniforms`, reserved `cameraPosition`/`lightDirection`). The committed web and
 Android players include all of them.
@@ -437,10 +437,14 @@ Android players include all of them.
 - [ ] Execution on WebGL2, Android GLES3 and Linux/EGL of the newer shaders (depth of field, graph vertex
       stage, fog and grading); only D3D11 and the software renderer are verified.
 
-## Implementation status (R5 work log)
+R5 SSAO: 352 Windows tests pass. CameraSsaoContactsAndExclusions verifies ambient-only shading,
+perspective/orthographic contacts, unlit and transparent exclusions, fully masked occluders, unchanged
+depth/IDs, serialization, nonfinite settings, thread-count determinism and HDR/bloom/DOF target changes.
+The 800x500 demo's software/D3D11 mean RGB difference is 0.160/255. Showcase retains its prior hash
+72ab07fb213fd42b with SSAO off. CLI renders and the editor Inspector screenshot were visually checked.
+Web and both Android players were rebuilt; headless Edge/SwiftShader compiled and linked the mesh
+program and rendered the packaged demonstration without WebGL errors. Both Android ELF files retain
+16KB LOAD alignment.
 
-- [x] Add opt-in SSAO controls, matching depth sampling and ambient-only lighting in both renderers.
-- [x] Verify contacts, projection modes, exclusions, deterministic output and software/GPU agreement.
-- [x] Document limits, refresh API reference and leave a demonstration project under `build/SSAO`.
-- [ ] Rebuild web and Android players and verify the WebGL2 demonstration.
-
+- [ ] SSAO rendering on an Android physical device, Linux/EGL and a real browser GPU.
+- [ ] Existing skin/vertex-graph execution on minimum-capability WebGL2/GLES3 devices.
