@@ -5,10 +5,10 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (c059b98 + three fixes: a kinematic body
-moved by a script keeps its sweep when particles or a raycast query the world before the step, a planar
-reflection shows the Skybox background, spot lights wider than 60 degrees cast shadows through six faces).
-The build before it (d428219) added R9:
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (2f71c34). Includes A1 model/sprite
+timeline events, model event sidecars, animation.events/set_events and onAnimationEvent callbacks
+before physics, with loop/reverse/completion handling and native snapshot replay support.
+See [ANIMATION.md](../../docs/ANIMATION.md). All earlier runtime changes remain included, including R9:
 PostProcess screen-space reflections (ssr, ssrDistance, ssrThickness), fixed 64-step rays with five
 hit refinements, material-aware reflected-ambient replacement and probe/sky fallback. All earlier
 runtime features remain included; see [POSTPROCESS.md](../../docs/POSTPROCESS.md).
@@ -17,9 +17,12 @@ Packaging still patches the game's key into the runtime for keyed OEPAK002 archi
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,114,796 | b5ce15f4d6bce88cd24ac4c9622377225ec7b5f4573102e11796d0e90acc5233 |
+| oe_player.wasm | 6,166,210 | b166b25feaaf1d1543ee52b53b2b53fa4320619d0b2c8ea566a737fddb897bdc |
 
-Windows Release: 361 tests pass; the final cleanup also passed 14 camera tests and GPU comparison.
+Windows Release: 368 tests pass, including four A1 event tests. The A1 800x500 software/D3D11 demo's
+mean RGB difference is 0.089/255. Headless Edge (WebGL2 on SwiftShader) ran both model and sprite
+callbacks and HUD updates without script/WebGL errors; the packaged model sidecar loaded correctly.
+Earlier R9 verification:
 The 800x500 SSR demonstration's software/D3D11 mean RGB difference is 0.146/255, and SSR-off Showcase
 retains hash 72ab07fb213fd42b. Headless Edge (WebGL2 on SwiftShader) compiled/linked the mesh and SSR
 programs, displayed glossy reflections and switched SSR/SSAO/DOF/bloom targets without WebGL errors.
