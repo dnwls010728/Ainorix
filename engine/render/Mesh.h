@@ -7,6 +7,7 @@
 
 #include "core/Math.h"
 #include "render/ShaderGraph.h"
+#include "scene/AnimationEvents.h"
 
 namespace oe {
 
@@ -113,6 +114,7 @@ struct AnimationClip {
     std::string name;
     float duration = 0;
     std::vector<AnimationChannel> channels;
+    std::vector<AnimationMarker> events;  // from <model>.events.json; never embedded in the model
 };
 
 struct Mesh {

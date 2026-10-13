@@ -740,6 +740,16 @@ int L_DrawSphere(lua_State* L) {
 
 // ----- audio.* -------------------------------------------------------------------
 
+int L_AnimationEvents(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject(); args["id"] = CheckEntity(L, 1);
+        if (!lua_isnoneornil(L, 2)) args["clip"] = luaL_checkstring(L, 2);
+        Json result = Host(L).GetEngine().Call("animation.events", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        PushJson(L, result["result"]); return 1;
+    });
+}
+
 int L_AnimationPlay(lua_State* L) {
     return Guard(L, [&] {
         EntityId id = CheckEntity(L, 1);
@@ -1776,7 +1786,7 @@ void ScriptHost::Open() {
                                    {"exists", L_SceneExists}, {"name", L_SceneName},   {"parent", L_SceneParent}, {"children", L_SceneChildren}, {"child", L_SceneChild}, {"all", L_SceneAll},
                                    {"withTag", L_SceneWithTag}, {"epoch", L_SceneEpoch}, {nullptr, nullptr}};
     SetFuncs(L, "scene", sceneFuncs);
-    const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {"bone", L_AnimationBone}, {nullptr, nullptr}};
+    const luaL_Reg animationFuncs[] = {{"play", L_AnimationPlay}, {"bone", L_AnimationBone}, {"events", L_AnimationEvents}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
     const luaL_Reg vfxFuncs[] = {{"spawn", L_VfxSpawn}, {"play", L_VfxPlay}, {"stop", L_VfxStop},
         {"burst", L_VfxBurst}, {"clear", L_VfxClear}, {"set", L_VfxSet}, {"state", L_VfxState}, {nullptr, nullptr}};
@@ -2279,7 +2289,7 @@ std::vector<std::string> ScriptHost::ReloadAll() {
 }
 
 bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other, const bool* flag,
-                            const std::string* text) {
+                            const std::string* text, const std::string* secondText) {
     if (!engine_.PredictEntity(id)) return true;
     lua_State* L = State();
     int top = lua_gettop(L);
@@ -2294,6 +2304,7 @@ bool ScriptHost::CallMethod(EntityId id, Instance& inst, const char* name, float
     if (text) {
         lua_pushlstring(L, text->data(), text->size());
         nargs = 2;
+        if (secondText) { lua_pushlstring(L, secondText->data(), secondText->size()); nargs = 3; }
     } else if (flag) {
         lua_pushboolean(L, *flag);
         nargs = 2;
@@ -2328,6 +2339,19 @@ void ScriptHost::DispatchPhysicsEvents(const std::vector<PhysicsEvent>& events) 
             if (!engine_.GetScene().Exists(self)) continue;
             CallMethod(self, it->second, callback, 0, false, other);
         }
+    }
+}
+
+void ScriptHost::DispatchAnimationEvents(std::vector<AnimationEvent>& events) {
+    if (!L_) return;
+    std::stable_sort(events.begin(), events.end(), [](const AnimationEvent& a, const AnimationEvent& b) {
+        return a.id != b.id ? a.id < b.id : a.offset < b.offset;
+    });
+    for (const AnimationEvent& event : events) {
+        if (!engine_.GetScene().Exists(event.id)) continue;
+        auto it = instances_.find(event.id);
+        if (it == instances_.end() || it->second.faulted) continue;
+        CallMethod(event.id, it->second, "onAnimationEvent", 0, false, kNullEntity, nullptr, &event.name, &event.clip);
     }
 }
 

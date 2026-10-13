@@ -18,6 +18,7 @@ struct OfficialModule;
 class Engine;
 struct PhysicsEvent;
 struct SessionEvent;
+struct AnimationEvent;
 
 struct ScriptError {
     std::string script;  // project-relative path ("" for script.eval)
@@ -61,6 +62,8 @@ public:
     // Calls onCollisionEnter/Exit and onTriggerEnter/Exit(self, otherId) on
     // both entities of every event.
     void DispatchPhysicsEvents(const std::vector<PhysicsEvent>& events);
+    // Timeline callbacks after animation advances, before physics, in entity/crossing order.
+    void DispatchAnimationEvents(std::vector<AnimationEvent>& events);
     // Calls `method(self)` on the entity's script instance if it has one.
     void Notify(EntityId id, const char* method);
     // Same with a number argument: `method(self, value)`.
@@ -138,7 +141,7 @@ private:
     void DestroyInstance(EntityId id, Instance& inst, bool callOnDestroy);
     // The one extra argument is `text` or `flag` (boolean) when given, else dt (withDt), else `other`.
     bool CallMethod(EntityId id, Instance& inst, const char* name, float dt, bool withDt, EntityId other = kNullEntity, const bool* flag = nullptr,
-                    const std::string* text = nullptr);
+                    const std::string* text = nullptr, const std::string* secondText = nullptr);
 
     Engine& engine_;
     lua_State* L_ = nullptr;

@@ -26,6 +26,7 @@ function Spinner:onCollisionEnter(other) end
 function Spinner:onCollisionExit(other) end
 function Spinner:onTriggerEnter(other) end
 function Spinner:onTriggerExit(other) end
+function Spinner:onAnimationEvent(name, clip) end -- crossed timeline marker or "finished"; before physics
 function Spinner:onClick() end               -- UIButton on the same entity was clicked
 function Spinner:onToggle(on) end            -- UIButton {toggle} changed its `on` state
 function Spinner:onPointerEnter() end        -- pointer moved onto this UIButton / UISlider
@@ -70,7 +71,8 @@ end
 | Function | Description |
 |---|---|
 | `scene.get(id, type)` | Component as a table, or `nil`. Vec3 fields are `{x,y,z}`, colors `{r,g,b}` |
-| `animation.play(id, clip, options?)` | Play a glTF clip on MeshRenderer; add Animator if needed. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
+| `animation.play(id, clip, options?)` | Play a model clip on MeshRenderer (add Animator if needed) or an existing SpriteAnimation clip. options: speed, loop, restart (default true). Returns playback state; invalid clips raise a Lua error. Attached scripts can call `self:play(clip, options)`. See [ANIMATION.md](ANIMATION.md) |
+| `animation.events(id, clip?)` | Read sorted timeline markers for the current/named model or sprite clip. Scripts receive `onAnimationEvent(name, clip)` for every crossing, including reverse/loop boundaries; non-looping completion uses reserved name `finished`. |
 | `animation.bone(id, name, {ik = false}?)` | World-space `position` and `rotation` (Euler degrees) plus `modelPosition` (the `Transform.position` a child entity needs to stand on the bone), each `{x,y,z}`, of a model node in the pose that is drawn (clip + `BoneIK`), or `nil` for an unknown name. `ik = false` gives the clip's pose without the goals (foot placement). Hold entities on bones with `BoneAttachment` and move `BoneIK` goal entities with `scene.set(goal, "Transform", {position = ...})`. See [ANIMATION.md](ANIMATION.md) |
 | `vfx.spawn(path, options?)` | Create a linked .vfx.json effect; returns owner id. Options: name, parent, position, params, autoDestroy (default true). See [VFX.md](VFX.md). |
 | `vfx.play(id, {restart=true}?)`, `vfx.stop(id, {kill=false}?)` | Restart/resume emission or stop and drain; kill empties particles/trails. |

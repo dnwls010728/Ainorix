@@ -443,24 +443,43 @@ Restore native Lua, physics and audio state; refuses changed resources or an act
 
 ### `animation.state`
 
-Animator playback state and optional model-space joint matrices (column-major).
+SpriteAnimation or Animator playback state; optional model-space joint matrices (column-major).
 
 | arg | type | required | description |
 |---|---|---|---|
-| `id` | integer \| string | yes | Entity with an Animator. |
-| `pose` | boolean |  | Include evaluated jointMatrices. |
+| `id` | integer \| string | yes | Entity with SpriteAnimation or Animator. |
+| `pose` | boolean |  | Include model jointMatrices. |
 
 ### `animation.play` *(undoable edit)*
 
-Play a named model clip; add Animator if needed. Defaults to restarting at the beginning (end for reverse playback).
+Play a named sprite/model clip; add Animator for a model if needed. Restart defaults to the beginning (last frame/end for reverse).
 
 | arg | type | required | description |
 |---|---|---|---|
-| `id` | integer \| string | yes | Entity with a MeshRenderer. |
-| `clip` | string | yes | Exact clip name from asset.info. |
+| `id` | integer \| string | yes | Entity with SpriteAnimation and Sprite, or MeshRenderer. |
+| `clip` | string | yes | Exact name in SpriteAnimation.clips or asset.info. |
 | `speed` | number |  | Playback multiplier; negative = reverse. Keeps existing speed when omitted. |
 | `loop` | boolean |  | Repeat the clip. Keeps existing loop setting when omitted. |
 | `restart` | boolean |  | Reset time (default true); false preserves time. |
+
+### `animation.events`
+
+List timeline markers for a sprite/model clip; non-looping completion calls onAnimationEvent("finished", clip).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Animated entity. |
+| `clip` | string |  | Clip name; default current clip. |
+
+### `animation.set_events` *(undoable edit)*
+
+Replace clip markers. Sprites store events in clips; models write <model>.events.json (shared by all instances; file writes are not undoable).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Animated entity. |
+| `clip` | string |  | Clip name; default current clip. |
+| `events` | array | yes | At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers. |
 
 ### `animation.retarget`
 
@@ -2591,7 +2610,7 @@ Plays frame sequences on the entity's Sprite. clips = {"run": {"frames": [2,3,4,
 
 | field | type | default | description |
 |---|---|---|---|
-| `clips` | json | `{}` | Clip name -> {frames: [indices], fps: number, loop: bool (default true)}. |
+| `clips` | json | `{}` | Clip name -> {frames: [indices], fps: number, loop: bool (default true), events: [{frame: sequenceIndex, name: string}]}. animation.events lists/sets markers; onAnimationEvent(name, clip) receives crossings and finished. |
 | `clip` | string | `""` | Clip being played. Changing it starts the new clip from its first frame. |
 | `speed` | float | `1` | Playback speed multiplier. |
 | `playing` | bool | `true` | Pause/resume. |

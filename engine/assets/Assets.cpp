@@ -615,6 +615,22 @@ bool LoadModelFile(const std::string& path, Mesh& out, std::string* error) {
     const bool fbx = EndsWith(Lower(path), ".fbx");
     if (!(fbx ? LoadFbxModel(path, out, warnings, error) : LoadGltfModel(path, out, warnings, error))) return false;
     AddSidecarClips(path, out, warnings);
+    if (FileExists(path + ".events.json")) {
+        std::string text;
+        if (!ReadTextFile(path + ".events.json", text)) { if (error) *error = "cannot read model event sidecar"; return false; }
+        try {
+            const Json sidecar = Json::parse(text);
+            if (!sidecar.isObject() || !sidecar["clips"].isObject()) throw std::runtime_error("events.json needs a clips object");
+            for (const auto& member : sidecar.members())
+                if (member.first != "clips") throw std::runtime_error("unknown events.json field: " + member.first);
+            for (const auto& item : sidecar["clips"].members()) {
+                auto it = std::find_if(out.clips.begin(), out.clips.end(), [&](const AnimationClip& clip) { return clip.name == item.first; });
+                if (it == out.clips.end()) throw std::runtime_error("events.json: unknown clip " + item.first);
+                std::string message;
+                if (!ParseAnimationMarkers(item.second, it->duration, 0, 0, it->events, &message)) throw std::runtime_error(message);
+            }
+        } catch (const std::exception& ex) { if (error) *error = "events.json: " + std::string(ex.what()); return false; }
+    }
     if (out.indices.empty() && out.clips.empty()) {  // a file with clips only is an animation source
         if (error) *error = "model contains no triangle meshes";
         return false;
@@ -652,6 +668,7 @@ AssetManager::Entry<Mesh> AssetManager::LoadMesh(const std::string& path) {
     try {
         std::string full = engine_.ResolvePath(path);
         e.mtime = FileModifiedTime(full);
+        e.eventsMtime = FileModifiedTime(full + ".events.json");
         auto mesh = std::make_shared<Mesh>();
         if (!FileExists(full)) e.error = "model file not found: " + path;
         else if (KindOf(path) != "model") e.error = "'" + path + "' is not a built-in mesh (cube, sphere, plane, pyramid, quad) or a .glb/.gltf/.fbx model";
@@ -877,7 +894,7 @@ std::vector<std::string> AssetManager::PollChanges() {
         }
     };
     for (auto& kv : meshes_) {
-        if (mtimeOf(kv.first) != kv.second.mtime) {
+        if (mtimeOf(kv.first) != kv.second.mtime || mtimeOf(kv.first + ".events.json") != kv.second.eventsMtime) {
             kv.second = LoadMesh(kv.first);
             changed.push_back(kv.first);
         }

@@ -92,6 +92,7 @@ private:
         std::shared_ptr<const T> asset;
         std::string error;
         int64_t mtime = 0;
+        int64_t eventsMtime = 0;  // model event sidecar, including creation/deletion
     };
     Entry<Mesh> LoadMesh(const std::string& path);
     Entry<Texture> LoadTexture(const std::string& path);

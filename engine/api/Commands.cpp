@@ -540,6 +540,19 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              Params().Opt("slot", "string", "Previously saved slot."), false,
              [](Engine& e, const Json& a) { return e.SnapshotCall("load", a); });
     auto animatorState = [](Engine& e, EntityId id, bool includePose) {
+        if (const SpriteAnimation* sprite = e.GetScene().Get<SpriteAnimation>(id)) {
+            const Json& clip = sprite->clips[sprite->clip];
+            const bool valid = clip.isObject() && clip["frames"].isArray() && clip["frames"].size() > 0;
+            const double fps = std::max(0.001, clip["fps"].asNumber(8));
+            Json out = Json::MakeObject();
+            out["id"] = id; out["type"] = "SpriteAnimation"; out["clip"] = sprite->clip;
+            out["speed"] = sprite->speed; out["playing"] = sprite->playing && !sprite->finished;
+            out["loop"] = clip["loop"].asBool(true); out["time"] = sprite->time; out["finished"] = sprite->finished;
+            out["validClip"] = valid;
+            out["duration"] = valid ? static_cast<double>(clip["frames"].size() - (clip["loop"].asBool(true) ? 0 : 1)) / fps : 0;
+            if (const Sprite* renderer = e.GetScene().Get<Sprite>(id)) out["frame"] = renderer->frame;
+            return out;
+        }
         const Animator* animator = e.GetScene().Get<Animator>(id);
         if (!animator) throw ApiError("missing_component", "entity has no Animator", "Call animation.play or component.add with type Animator.");
         Json out = Json::MakeObject();
@@ -564,16 +577,35 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         }
         return out;
     };
-    Register(r, "animation.state", "Animator playback state and optional model-space joint matrices (column-major).",
-             Params().ReqWith("id", EntityRefSchema("Entity with an Animator.")).Opt("pose", "boolean", "Include evaluated jointMatrices."),
+    Register(r, "animation.state", "SpriteAnimation or Animator playback state; optional model-space joint matrices (column-major).",
+             Params().ReqWith("id", EntityRefSchema("Entity with SpriteAnimation or Animator.")).Opt("pose", "boolean", "Include model jointMatrices."),
              false, [animatorState](Engine& e, const Json& a) { return animatorState(e, RequireEntity(e, a), a["pose"].asBool()); });
-    Register(r, "animation.play", "Play a named model clip; add Animator if needed. Defaults to restarting at the beginning (end for reverse playback).",
-             Params().ReqWith("id", EntityRefSchema("Entity with a MeshRenderer.")).Req("clip", "string", "Exact clip name from asset.info.")
+    Register(r, "animation.play", "Play a named sprite/model clip; add Animator for a model if needed. Restart defaults to the beginning (last frame/end for reverse).",
+             Params().ReqWith("id", EntityRefSchema("Entity with SpriteAnimation and Sprite, or MeshRenderer.")).Req("clip", "string", "Exact name in SpriteAnimation.clips or asset.info.")
                  .Opt("speed", "number", "Playback multiplier; negative = reverse. Keeps existing speed when omitted.")
                  .Opt("loop", "boolean", "Repeat the clip. Keeps existing loop setting when omitted.")
                  .Opt("restart", "boolean", "Reset time (default true); false preserves time."),
              true, [animatorState](Engine& e, const Json& a) {
                  EntityId id = RequireEntity(e, a);
+                 if (const SpriteAnimation* existing = e.GetScene().Get<SpriteAnimation>(id)) {
+                     if (!e.GetScene().Get<Sprite>(id)) throw ApiError("missing_component", "entity has no Sprite", "Add a Sprite component first.");
+                     SpriteAnimation next = *existing;
+                     const std::string name = a["clip"].asString();
+                     const Json& clip = next.clips[name];
+                     if (!clip.isObject() || !clip["frames"].isArray() || clip["frames"].size() == 0)
+                         throw ApiError("animation_not_found", "sprite has no clip '" + name + "'", "Define SpriteAnimation.clips with a nonempty frames array.");
+                     if (a.has("speed")) next.speed = a["speed"].asFloat();
+                     if (!std::isfinite(next.speed)) throw ApiError("invalid_argument", "speed must be finite", "Use a finite playback multiplier.");
+                     if (a.has("loop")) next.clips[name]["loop"] = a["loop"].asBool();
+                     next.clip = next.current = name;
+                     if (a["restart"].asBool(true)) {
+                         next.time = next.speed < 0 ? static_cast<float>(clip["frames"].size() - 1) / std::max(0.001f, clip["fps"].asFloat(8)) : 0;
+                         next.eventsStarted = false;
+                     }
+                     next.finished = false; next.playing = true;
+                     e.GetScene().Add<SpriteAnimation>(id) = next;
+                     return animatorState(e, id, false);
+                 }
                  const MeshRenderer* renderer = e.GetScene().Get<MeshRenderer>(id);
                  if (!renderer) throw ApiError("missing_component", "entity has no MeshRenderer", "Add MeshRenderer with a glTF model first.");
                  std::string error;
@@ -587,11 +619,76 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  if (a.has("speed")) next.speed = a["speed"].asFloat();
                  if (!std::isfinite(next.speed)) throw ApiError("invalid_argument", "speed must be finite", "Use a finite playback multiplier.");
                  if (a.has("loop")) next.loop = a["loop"].asBool();
-                 if (a["restart"].asBool(true)) next.time = next.speed < 0 ? clip->duration : 0;
+                 if (a["restart"].asBool(true)) { next.time = next.speed < 0 ? clip->duration : 0; next.eventsStarted = false; }
                  next.playing = true;
                  e.GetScene().Add<Animator>(id) = next;
                  return animatorState(e, id, false);
              });
+    auto animationEvents = [](Engine& e, const Json& a, bool write) {
+        const EntityId id = RequireEntity(e, a);
+        const SpriteAnimation* sprite = e.GetScene().Get<SpriteAnimation>(id);
+        const Animator* animator = e.GetScene().Get<Animator>(id);
+        if (!sprite && !animator) throw ApiError("missing_component", "entity has no animation component", "Add SpriteAnimation or Animator.");
+        const std::string name = a.has("clip") ? a["clip"].asString() : sprite ? sprite->clip : animator->clip;
+        Json markers = Json::MakeArray();
+        std::string source;
+        double duration = 0, fps = 0;
+        size_t frames = 0;
+        if (sprite) {
+            const Json& clip = sprite->clips[name];
+            frames = clip["frames"].isArray() ? clip["frames"].size() : 0;
+            fps = std::max(0.001, clip["fps"].asNumber(8));
+            if (!frames || !std::isfinite(fps)) throw ApiError("animation_not_found", "invalid sprite clip '" + name + "'", "Define frames and finite fps in SpriteAnimation.clips.");
+            duration = static_cast<double>(frames - (clip["loop"].asBool(true) ? 0 : 1)) / fps;
+            if (clip.has("events")) markers = clip["events"];
+            source = "SpriteAnimation.clips";
+        } else {
+            const MeshRenderer* renderer = e.GetScene().Get<MeshRenderer>(id);
+            std::string error;
+            auto mesh = renderer ? e.Assets().GetMesh(renderer->mesh, &error) : nullptr;
+            if (!mesh) throw ApiError("asset_error", error.empty() ? "entity has no model" : error, "Check MeshRenderer.mesh and its .events.json sidecar.");
+            const AnimationClip* clip = FindAnimationClip(*mesh, name);
+            if (!clip) throw ApiError("animation_not_found", "model has no clip '" + name + "'", "Use asset.info to list clips.");
+            duration = clip->duration; source = renderer->mesh + ".events.json";
+            for (const AnimationMarker& marker : clip->events) {
+                Json item = Json::MakeObject(); item["time"] = marker.time; item["name"] = marker.name; markers.push(item);
+            }
+        }
+        if (write) markers = a["events"];
+        std::vector<AnimationMarker> parsed;
+        std::string error;
+        if (!ParseAnimationMarkers(markers, duration, fps, frames, parsed, &error))
+            throw ApiError("invalid_animation_events", error, "Use [{frame: index, name: string}] for sprites or [{time: seconds, name: string}] for models; finished is reserved.");
+        if (write) {
+            if (sprite) e.GetScene().Get<SpriteAnimation>(id)->clips[name]["events"] = markers;
+            else {
+                const std::string path = e.ResolvePath(source);
+                Json sidecar = Json::MakeObject(); std::string text;
+                if (FileExists(path)) {
+                    if (!ReadTextFile(path, text)) throw ApiError("read_failed", "cannot read " + source);
+                    sidecar = Json::parse(text);
+                }
+                sidecar["clips"][name] = markers;
+                if (!WriteTextFile(path, sidecar.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + source);
+                e.Assets().Clear();
+            }
+        }
+        Json out = Json::MakeObject(); out["id"] = id; out["clip"] = name; out["source"] = source;
+        out["duration"] = duration; out["events"] = Json::MakeArray(); out["completion"] = "finished";
+        for (const AnimationMarker& marker : parsed) {
+            Json item = Json::MakeObject(); item["time"] = marker.time; item["name"] = marker.name;
+            if (sprite) item["frame"] = static_cast<int>(std::llround(marker.time * fps));
+            out["events"].push(item);
+        }
+        return out;
+    };
+    Register(r, "animation.events", "List timeline markers for a sprite/model clip; non-looping completion calls onAnimationEvent(\"finished\", clip).",
+             Params().ReqWith("id", EntityRefSchema("Animated entity.")).Opt("clip", "string", "Clip name; default current clip."), false,
+             [animationEvents](Engine& e, const Json& a) { return animationEvents(e, a, false); });
+    Register(r, "animation.set_events", "Replace clip markers. Sprites store events in clips; models write <model>.events.json (shared by all instances; file writes are not undoable).",
+             Params().ReqWith("id", EntityRefSchema("Animated entity.")).Opt("clip", "string", "Clip name; default current clip.")
+                 .Req("events", "array", "At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers."), true,
+             [animationEvents](Engine& e, const Json& a) { return animationEvents(e, a, true); });
     Register(r, "animation.retarget", "Move animation clips from one model's skeleton to another's (different bone names, proportions and rest pose, e.g. mocap for a T-pose rig onto a character in an A-pose) and write them as a clip file. With attach (default) the file is listed in '<target>.clips.json', which adds its clips to the target model: play them with Animator / animation.play like the model's own.",
              Params().Req("source", "string", "Model file with the clips, e.g. \"assets/anims/mocap.glb\".")
                  .Req("target", "string", "Model file of the character that should play them.")

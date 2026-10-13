@@ -19145,6 +19145,216 @@ TEST(NavAgentWalksPath) {
     CHECK(std::fabs(rotation[1].asFloat() - 116.0f) < 6.0f);
 }
 
+TEST(AnimationEventsSpritesAndReplay) {
+    Engine e; std::string error;
+    const std::string project = TempProject("animation_events_2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    CHECK(WriteTextFile(project + "/scripts/events.lua", R"L(
+local Events = {}
+function Events:onAnimationEvent(name, clip)
+    local events = game.get('events') or {}
+    events[#events + 1] = scene.name(self.id) .. ':' .. name .. ':' .. clip
+    game.set('events', events)
+    self:set('RigidBody', {velocity = {3,0,0}})
+end
+return Events
+)L"));
+    Call(e, "entity.create", R"J({"name":"First","components":{"Sprite":{},"SpriteAnimation":{"clip":"run","clips":{
+      "run":{"frames":[0,1,2],"fps":10,"events":[{"frame":2,"name":"b"},{"frame":0,"name":"zero"},{"frame":1,"name":"a"}]}}},
+      "Script":{"path":"scripts/events.lua"},"RigidBody":{"gravityScale":0},"Collider":{}}})J");
+    Call(e, "entity.create", R"J({"name":"Second","components":{"Sprite":{},"SpriteAnimation":{"clip":"run","speed":36,"clips":{
+      "run":{"frames":[0,1,2],"fps":10,"events":[{"frame":0,"name":"zero"},{"frame":1,"name":"a"},{"frame":2,"name":"b"}]}}},
+      "Script":{"path":"scripts/events.lua"}}})J");
+    // Second has no rigid body; use a callback that checks the optional component.
+    CHECK(WriteTextFile(project + "/scripts/events.lua", R"L(
+local Events = {}
+function Events:onAnimationEvent(name, clip)
+    local events = game.get('events') or {}
+    events[#events + 1] = scene.name(self.id) .. ':' .. name .. ':' .. clip
+    game.set('events', events)
+    if self:get('RigidBody') then self:set('RigidBody', {velocity = {3,0,0}}) end
+end
+return Events
+)L"));
+    Json listed = Call(e, "animation.events", R"J({"id":"First"})J")["result"];
+    CHECK(listed["events"].size() == 3 && listed["events"][0]["name"].asString() == "zero");
+    CHECK(Call(e, "animation.set_events", R"J({"id":"First","events":[{"frame":3,"name":"outside"}]})J")["error"]["code"].asString() == "invalid_animation_events");
+    CHECK(!Call(e, "animation.set_events", R"J({"id":"First","events":[{"frame":0,"name":"finished"}]})J")["ok"].asBool());
+    CHECK(!Call(e, "animation.set_events", R"J({"id":"First","events":[{"frame":0.5,"name":"fraction"}]})J")["ok"].asBool());
+    Call(e, "sim.record_state");
+    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    CHECK(Call(e, "script.errors")["result"].size() == 0);
+    Json events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 8 && events[0].asString() == "First:zero:run");
+    CHECK(events[1].asString() == "Second:zero:run" && events[4].asString() == "Second:zero:run" && events[7].asString() == "Second:zero:run");
+    CHECK(PosOf(e, "First").x > 0.04f);  // the event changes physics velocity in this same step
+    Call(e, "sim.save_state", R"J({"slot":"events"})J");
+    Call(e, "sim.step", R"J({"frames":4})J");
+    const Json replay = Call(e, "game.state")["result"]["data"]["events"];
+    Call(e, "sim.load_state", R"J({"slot":"events"})J");
+    Call(e, "sim.step", R"J({"frames":4})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].dump() == replay.dump());
+    Call(e, "sim.stop");
+    Call(e, "entity.delete", R"J({"id":"Second"})J");
+    CHECK(Call(e, "animation.play", R"J({"id":"First","clip":"run","speed":-12,"loop":false})J")["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":1})J");
+    events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 4 && events[0].asString() == "First:b:run" && events[1].asString() == "First:a:run" &&
+          events[2].asString() == "First:zero:run" && events[3].asString() == "First:finished:run");
+    Call(e, "sim.step", R"J({"frames":3})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].size() == 4);
+    CHECK(Call(e, "animation.state", R"J({"id":"First"})J")["result"]["finished"].asBool());
+    // Pause and a direct seek do not synthesize traversed events.
+    Call(e, "animation.play", R"J({"id":"First","clip":"run","speed":1,"loop":true})J");
+    Call(e, "component.set", R"J({"id":"First","type":"SpriteAnimation","values":{"playing":false,"time":0.15}})J");
+    Call(e, "sim.step", R"J({"frames":2})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].size() == 4);
+    Call(e, "component.set", R"J({"id":"First","type":"SpriteAnimation","values":{"playing":true}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].size() == 4);
+    // Same-time authored order stays stable; a singleton non-looping clip completes once.
+    Call(e, "sim.stop");
+    Call(e, "component.set", R"J({"id":"First","type":"SpriteAnimation","values":{"clip":"single","clips":{
+      "single":{"frames":[2],"loop":false,"events":[{"frame":0,"name":"one"},{"frame":0,"name":"two"}]}}}})J");
+    Call(e, "sim.step", R"J({"frames":2})J");
+    events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 3 && events[0].asString() == "First:one:single" && events[1].asString() == "First:two:single" && events[2].asString() == "First:finished:single");
+}
+
+TEST(AnimationEventsModelsAndBlend) {
+    Engine e; std::string error;
+    const std::string project = TempProject("animation_events_3d");
+    CHECK(e.Open(project, &error)); Call(e, "scene.new", R"J({"empty":true})J");
+    std::string model = kRigFbx; model.replace(model.find("%TEXTURE%"), 9, "");
+    CreateDirectories(project + "/assets/models");
+    CHECK(WriteTextFile(project + "/assets/models/rig.fbx", model));
+    std::string other = model;
+    const size_t wave = other.find("AnimStack::Wave");
+    CHECK(wave != std::string::npos);
+    other.replace(wave, std::strlen("AnimStack::Wave"), "AnimStack::Other");
+    CHECK(WriteTextFile(project + "/assets/models/other.fbx", other));
+    CHECK(WriteTextFile(project + "/assets/models/rig.fbx.clips.json", R"J({"clips":["other.fbx"]})J"));
+    CHECK(WriteTextFile(project + "/scripts/events.lua", R"L(
+local Events = {}
+function Events:onAnimationEvent(name, clip)
+    local list = game.get('events') or {}
+    list[#list+1] = name .. ':' .. clip
+    game.set('events', list)
+end
+return Events
+)L"));
+    Call(e, "entity.create", R"J({"name":"Rig","components":{"MeshRenderer":{"mesh":"assets/models/rig.fbx"},
+      "Animator":{"clip":"Wave"},"Script":{"path":"scripts/events.lua"}}})J");
+    const double duration = Call(e, "animation.state", R"J({"id":"Rig"})J")["result"]["duration"].asNumber();
+    CHECK(duration > 0);
+    Json args = Json::MakeObject(); args["id"] = "Rig"; args["events"] = Json::MakeArray();
+    auto marker = [&](double time, const char* name) { Json item = Json::MakeObject(); item["time"] = time; item["name"] = name; args["events"].push(item); };
+    marker(0, "zero"); marker(duration * 0.5, "middle"); marker(duration, "end");
+    CHECK(e.Call("animation.set_events", args)["ok"].asBool());
+    CHECK(FileExists(project + "/assets/models/rig.fbx.events.json"));
+    CHECK(Call(e, "animation.events", R"J({"id":"Rig"})J")["result"]["events"].size() == 3);
+    e.Assets().Clear();
+    CHECK(Call(e, "animation.events", R"J({"id":"Rig"})J")["result"]["events"].size() == 3);
+    Json play = Json::MakeObject(); play["id"] = "Rig"; play["clip"] = "Wave"; play["speed"] = duration * 150;
+    CHECK(e.Call("animation.play", play)["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":1})J");
+    Json events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 8 && events[0].asString() == "zero:Wave" && events[2].asString() == "end:Wave" && events[3].asString() == "zero:Wave");
+    CHECK(events[6].asString() == "zero:Wave" && events[7].asString() == "middle:Wave");
+    Call(e, "sim.stop");
+    play["speed"] = -duration * 60; play["loop"] = false;
+    e.Call("animation.play", play); Call(e, "sim.step", R"J({"frames":1})J");
+    events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 4 && events[0].asString() == "end:Wave" && events[1].asString() == "middle:Wave" &&
+          events[2].asString() == "zero:Wave" && events[3].asString() == "finished:Wave");
+    // Outgoing blend bookkeeping must not generate its own markers.
+    Call(e, "sim.stop");
+    CHECK(Call(e, "animation.set_events", R"J({"id":"Rig","clip":"Other","events":[{"time":0,"name":"incoming"}]})J")["ok"].asBool());
+    Call(e, "component.set", R"J({"id":"Rig","type":"Animator","values":{"clip":"Wave","speed":1,"loop":true,"blend":1}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    play["clip"] = "Other"; play["speed"] = duration * 30; play["loop"] = true;
+    CHECK(e.Call("animation.play", play)["ok"].asBool());
+    Call(e, "sim.step", R"J({"frames":1})J");
+    events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 2 && events[1].asString() == "incoming:Other");
+    CHECK(e.GetScene().Get<Animator>(e.GetScene().FindByName("Rig"))->from == "Wave");
+    // Model runtime marker state and sidecar data participate in native replay too.
+    Call(e, "sim.stop");
+    Call(e, "sim.record_state");
+    Call(e, "sim.step", R"J({"frames":1})J"); Call(e, "sim.save_state");
+    Call(e, "sim.step", R"J({"frames":90})J");
+    const Json replay = Call(e, "game.state")["result"]["data"]["events"];
+    Call(e, "sim.load_state"); Call(e, "sim.step", R"J({"frames":90})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].dump() == replay.dump());
+    // Hot reload watches creation/change/deletion of the model event sidecar.
+    Call(e, "sim.stop");
+    CHECK(WriteTextFile(project + "/assets/models/rig.fbx.events.json", R"J({"clips":{"Wave":[{"time":0,"name":"reload"}]}})J"));
+    // Force a timestamp difference without waiting for filesystem clock precision.
+    std::filesystem::last_write_time(project + "/assets/models/rig.fbx.events.json", std::filesystem::file_time_type::clock::now() + std::chrono::seconds(3));
+    CHECK(!e.Assets().PollChanges().empty());
+    CHECK(Call(e, "animation.events", R"J({"id":"Rig","clip":"Wave"})J")["result"]["events"][0]["name"].asString() == "reload");
+    CHECK(WriteTextFile(project + "/assets/models/rig.fbx.events.json", R"J({"clips":{"Wave":[{"time":-1,"name":"bad"}]}})J"));
+    e.Assets().Clear();
+    CHECK(!Call(e, "animation.events", R"J({"id":"Rig","clip":"Wave"})J")["ok"].asBool());
+    std::filesystem::remove(project + "/assets/models/rig.fbx.events.json");
+    e.Assets().PollChanges();
+    CHECK(Call(e, "animation.events", R"J({"id":"Rig","clip":"Wave"})J")["result"]["events"].size() == 0);
+}
+
+TEST(AnimationEventsBoundariesAndLimits) {
+    Engine e; std::string error;
+    CHECK(e.Open(TempProject("animation_events_limits"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "entity.create", R"J({"name":"Sprite","components":{"Sprite":{},"SpriteAnimation":{"clip":"loop","speed":-48,
+      "clips":{"loop":{"frames":[0,1,2,3],"fps":4,"events":[{"frame":0,"name":"zero"},{"frame":2,"name":"middle"}]}}}}})J");
+    // Reverse loops include every crossing, and game.pause emits no events.
+    Call(e, "script.write", R"J({"path":"scripts/events.lua","source":"local M={} function M:onAnimationEvent(name, clip) local list=game.get('events') or {} list[#list+1]=name game.set('events',list) end return M"})J");
+    Call(e, "component.add", R"J({"id":"Sprite","type":"Script","values":{"path":"scripts/events.lua"}})J");
+    Call(e, "sim.step", R"J({"frames":1})J");
+    Json events = Call(e, "game.state")["result"]["data"]["events"];
+    CHECK(events.size() == 2 && events[0].asString() == "zero" && events[1].asString() == "middle");
+    Call(e, "game.pause", R"J({"paused":true})J"); Call(e, "sim.step", R"J({"frames":2})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].size() == 2);
+    Call(e, "game.pause", R"J({"paused":false})J");
+    // Bound check happens before changing this playback component's time.
+    Call(e, "component.set", R"J({"id":"Sprite","type":"SpriteAnimation","values":{"speed":1000000}})J");
+    const float before = e.GetScene().Get<SpriteAnimation>(e.GetScene().FindByName("Sprite"))->time;
+    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["error"]["code"].asString() == "animation_event_limit");
+    CHECK(e.GetScene().Get<SpriteAnimation>(e.GetScene().FindByName("Sprite"))->time == before);
+    Call(e, "sim.stop");
+    CHECK(Call(e, "animation.set_events", R"J({"id":"Sprite","events":[]})J")["ok"].asBool());
+    Call(e, "component.set", R"J({"id":"Sprite","type":"SpriteAnimation","values":{"speed":1000000}})J");
+    CHECK(Call(e, "sim.step", R"J({"frames":1})J")["ok"].asBool());
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].isNull());
+}
+
+TEST(AnimationEventsCallbackMutationAndFaults) {
+    Engine e; std::string error;
+    CHECK(e.Open(TempProject("animation_events_callbacks"), &error));
+    Call(e, "scene.new", R"J({"empty":true})J");
+    Call(e, "script.write", R"J({"path":"scripts/events.lua","source":"local M={} function M:onAnimationEvent(name,clip) game.set('calls',(game.get('calls') or 0)+1) game.set('clip',clip) local later=scene.find('Later') if later then scene.destroy(later) end self:set('SpriteAnimation',{clip='other'}) if name=='fail' then error('marker fault') end end return M"})J");
+    Call(e, "entity.create", R"J({"name":"First","components":{"Sprite":{},"Script":{"path":"scripts/events.lua"},"SpriteAnimation":{"clip":"run","speed":24,
+      "clips":{"run":{"frames":[0,1,2],"fps":10,"events":[{"frame":0,"name":"start"},{"frame":1,"name":"fail"},{"frame":2,"name":"after"}]},
+        "other":{"frames":[3],"fps":8}}}}})J");
+    Call(e, "entity.create", R"J({"name":"Later","components":{"Sprite":{},"Script":{"path":"scripts/events.lua"},"SpriteAnimation":{"clip":"run",
+      "clips":{"run":{"frames":[0],"events":[{"frame":0,"name":"later"}]}}}}})J");
+    const auto revision = e.Revision();
+    CHECK(Call(e, "animation.events", R"J({"id":"First"})J")["ok"].asBool() && e.Revision() == revision);
+    // Sprite marker authoring participates in ordinary scene undo.
+    CHECK(Call(e, "animation.set_events", R"J({"id":"Later","events":[]})J")["ok"].asBool());
+    CHECK(Call(e, "history.undo")["ok"].asBool());
+    CHECK(Call(e, "animation.events", R"J({"id":"Later"})J")["result"]["events"].size() == 1);
+    Call(e, "sim.step", R"J({"frames":1})J");
+    const Json data = Call(e, "game.state")["result"]["data"];
+    CHECK(data["calls"].asInt() == 2 && data["clip"].asString() == "run");  // queued events keep the old clip
+    CHECK(e.GetScene().FindByName("Later") == kNullEntity);
+    const Json faults = Call(e, "script.errors")["result"];
+    CHECK(faults.size() == 1 && faults[0]["message"].asString().find("marker fault") != std::string::npos);
+    Call(e, "sim.step", R"J({"frames":3})J");
+    CHECK(Call(e, "game.state")["result"]["data"]["calls"].asInt() == 2);
+}
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

@@ -82,6 +82,7 @@ struct Animator {
     // Runtime, not serialized: the clip that is shown and where it was, and the clip it fades from.
     std::string shown, from;
     float shownTime = 0.0f, fromTime = 0.0f, fade = 0.0f;
+    bool eventsStarted = false;  // native snapshots copy this; seeks do not traverse skipped markers
     static void Reflect(FieldList& f) {
         f.Add("clip", &Animator::clip, "Exact model clip name; empty = default pose. animation.play changes clips and restarts by default.");
         f.Add("speed", &Animator::speed, "Playback multiplier; negative plays backwards, zero holds the pose.");
@@ -530,8 +531,9 @@ struct SpriteAnimation {
     float time = 0.0f;
     bool finished = false;
     std::string current;  // runtime: clip that `time` refers to (not reflected)
+    bool eventsStarted = false;
     static void Reflect(FieldList& f) {
-        f.Add("clips", &SpriteAnimation::clips, "Clip name -> {frames: [indices], fps: number, loop: bool (default true)}.");
+        f.Add("clips", &SpriteAnimation::clips, "Clip name -> {frames: [indices], fps: number, loop: bool (default true), events: [{frame: sequenceIndex, name: string}]}. animation.events lists/sets markers; onAnimationEvent(name, clip) receives crossings and finished.");
         f.Add("clip", &SpriteAnimation::clip, "Clip being played. Changing it starts the new clip from its first frame.");
         f.Add("speed", &SpriteAnimation::speed, "Playback speed multiplier.");
         f.Add("playing", &SpriteAnimation::playing, "Pause/resume.");

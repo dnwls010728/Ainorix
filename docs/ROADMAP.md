@@ -196,6 +196,19 @@ Rules for every item here:
 Later, in no fixed order: motion blur, chromatic aberration, temporal anti-aliasing; volumetric light and fog;
 refraction, water, caustics; clear coat.
 
+### A. Animation workflow — before T
+
+- [x] **A1 — Animation events.** A clip can name events at moments of its timeline: a frame of a sprite clip, a
+  time in seconds of a model clip. The entity's scripts get `onAnimationEvent(name, clip)`, and the end of a
+  clip that does not loop is an event too (instead of polling `finished`). Decide and document: where a model
+  clip's events are stored (beside `<model>.clips.json`; a model file cannot hold them), the order (entity id,
+  then time; every event passed in one step fires, also across a loop boundary and when `speed` is negative),
+  what a clip that is fading out during `Animator.blend` does (suggested: it fires nothing), and the place in
+  the frame order (after the animation systems advance, before physics). `animation.events` lists them.
+  Implemented: shared `onAnimationEvent(name, clip)`, `animation.events/set_events`, model `.events.json` sidecars and inline sprite markers.
+  Windows tests, software/D3D11/editor demo and WebGL2 callbacks checked; web and both Android players rebuilt.
+  Remaining: physical Android, Linux/EGL and real browser GPUs/mobile performance.
+
 ### T. 2D baseline — after R
 
 What a general 2D game expects and the engine does not have yet. What exists is in [2D.md](2D.md): grid sprite

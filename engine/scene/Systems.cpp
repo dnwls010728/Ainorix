@@ -1,4 +1,5 @@
 #include "scene/Systems.h"
+#include "api/Commands.h"
 #include "scene/VfxExpression.h"
 
 #include <algorithm>
@@ -102,7 +103,7 @@ Vec4 SampleChannel(const AnimationChannel& c, float time) {
     return NormalizeQuaternion(a * (std::sin((1 - t)*angle) / denominator) + b * (std::sin(t*angle) / denominator));
 }
 
-void UpdateAnimators(Scene& scene, AssetManager& assets, float dt) {
+void UpdateAnimators(Scene& scene, AssetManager& assets, float dt, std::vector<AnimationEvent>* events) {
     for (auto& kv : scene.Pool<Animator>()) {
         Animator& a = kv.second;
         const MeshRenderer* renderer = scene.Get<MeshRenderer>(kv.first);
@@ -113,6 +114,7 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt) {
             a.fromTime = a.shownTime;
             a.fade = fade ? a.blend : 0.0f;
             a.shown = a.clip;
+            a.eventsStarted = false;
         }
         if (!renderer || !std::isfinite(a.time) || !std::isfinite(a.speed)) continue;
         if (!a.playing && !(a.fade > 0)) { a.shownTime = a.time; continue; }
@@ -131,8 +133,26 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt) {
         }
         if (!a.playing) { a.shownTime = a.time; continue; }
         if (!clip) continue;
-        if (clip->duration <= 0) { a.time = 0; if (!a.loop) a.playing = false; continue; }
+        if (dt <= 0 || a.speed == 0) continue;
+        if (clip->duration <= 0) {
+            if (events && !a.eventsStarted) {
+                CollectAnimationEvents(kv.first, a.clip, clip->events, 0, 0, 0, false, true, *events);
+                if (!a.loop) events->push_back({kv.first, "finished", a.clip, 0});
+            }
+            a.eventsStarted = true;
+            a.time = 0; if (!a.loop) a.playing = false; continue;
+        }
         double next = static_cast<double>(a.time) + static_cast<double>(dt) * a.speed;
+        const double endpoint = std::max(0.0, std::min(next, static_cast<double>(clip->duration)));
+        if (events) {
+            const size_t begin = events->size();
+            CollectAnimationEvents(kv.first, a.clip, clip->events, a.time, a.loop ? next : endpoint,
+                                   clip->duration, a.loop, !a.eventsStarted, *events);
+            if (!a.loop && ((a.speed > 0 && next >= clip->duration) || (a.speed < 0 && next <= 0)))
+                events->push_back({kv.first, "finished", a.clip, std::fabs(endpoint - a.time)});
+            for (size_t i = begin; i < events->size(); ++i) (*events)[i].offset /= std::fabs(a.speed);
+        }
+        a.eventsStarted = true;
         if (a.loop) {
             next = std::fmod(next, static_cast<double>(clip->duration));
             if (next < 0) next += clip->duration;
@@ -810,7 +830,7 @@ void UpdateLateSystems(Scene& scene, float dt, AssetManager* assets) {
     UpdateVfxTrails(scene, dt);
 }
 
-void UpdateSpriteAnimations(Scene& scene, float dt) {
+void UpdateSpriteAnimations(Scene& scene, float dt, std::vector<AnimationEvent>* events) {
     for (auto& kv : scene.Pool<SpriteAnimation>()) {
         SpriteAnimation& a = kv.second;
         Sprite* sprite = scene.Get<Sprite>(kv.first);
@@ -818,6 +838,7 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
             a.current = a.clip;
             a.time = 0.0f;
             a.finished = false;
+            a.eventsStarted = false;
         }
         const Json* clip = a.clips.isObject() ? a.clips.find(a.clip) : nullptr;
         if (!sprite || !clip || !clip->isObject()) continue;
@@ -827,22 +848,43 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
         if (count == 0) continue;
         float fps = std::max(0.001f, c["fps"].asFloat(8.0f));
         bool loop = c["loop"].asBool(true);
-        if (a.playing && !a.finished) a.time += dt * a.speed;
+        if (!std::isfinite(a.time) || !std::isfinite(a.speed) || !std::isfinite(fps)) continue;
+        const double duration = static_cast<double>(loop ? count : count - 1) / fps;
+        if (a.playing && !a.finished && dt > 0 && a.speed != 0) {
+            double next = static_cast<double>(a.time) + static_cast<double>(dt) * a.speed;
+            const double endpoint = std::max(0.0, std::min(next, duration));
+            if (events) {
+                const size_t begin = events->size();
+                std::vector<AnimationMarker> markers;
+                std::string error;
+                if (!ParseAnimationMarkers(c["events"], duration, fps, count, markers, &error))
+                    throw ApiError("invalid_animation_events", error, "Fix SpriteAnimation.clips events or use animation.events.");
+                CollectAnimationEvents(kv.first, a.clip, markers, a.time, loop ? next : endpoint,
+                                       duration, loop, !a.eventsStarted, *events);
+                if (!loop && (duration == 0 || (a.speed > 0 && next >= duration) || (a.speed < 0 && next <= 0)))
+                    events->push_back({kv.first, "finished", a.clip, std::fabs(endpoint - a.time)});
+                for (size_t i = begin; i < events->size(); ++i) (*events)[i].offset /= std::fabs(a.speed);
+            }
+            a.eventsStarted = true;
+            if (loop && duration > 0) { next = std::fmod(next, duration); if (next < 0) next += duration; }
+            else { next = endpoint; if (duration == 0 || (a.speed > 0 && next >= duration) || (a.speed < 0 && next <= 0)) a.finished = true; }
+            a.time = static_cast<float>(next);
+        }
         size_t index = static_cast<size_t>(std::max(0.0f, std::floor(a.time * fps + 1e-4f)));
         if (loop) {
             index %= count;
         } else if (index >= count - 1) {
             index = count - 1;
-            a.finished = true;
         }
         sprite->frame = frames[static_cast<int>(index)].asInt(0);
     }
 }
 
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets, PhysicsWorld* physics) {
-    if (assets) UpdateAnimators(scene, *assets, dt);
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets, PhysicsWorld* physics,
+                   std::vector<AnimationEvent>* animationEvents) {
+    if (assets) UpdateAnimators(scene, *assets, dt, animationEvents);
     UpdateVfxSystems(scene, assets, dt, physics);
-    UpdateSpriteAnimations(scene, dt);
+    UpdateSpriteAnimations(scene, dt, animationEvents);
     input.pressedThisFrame.clear();
     input.text.clear();
     input.mouseDX = input.mouseDY = 0.0f;

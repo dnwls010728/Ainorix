@@ -1,15 +1,11 @@
-# glTF skeletal animation
+# Animation playback and events
 
 Animation poses use fixed simulation time and the same model-space joint palette
 in the software and GPU renderers. Models remain immutable cached assets; each
 entity owns its playback state through a reflected Animator component.
 
-## Status
-
 Skinned and rigid glTF animation plays in both renderers, including GPU shadow and selection passes; the
 web and Android players include it.
-
-- [ ] Android device and Linux/EGL execution of animated models (not available so far).
 
 ## Model contract
 
@@ -311,3 +307,109 @@ Lua uses animation.play(id, clip, {speed=1, loop=true, restart=true}), or
 self:play(clip, options) in attached scripts. The returned table is playback
 state. Use scene.set(id, "Animator", {playing=false}) to pause and
 scene.set(id, "Animator", {time=0.5}) to seek; self:set works as usual.
+
+## Timeline events (A1)
+
+Both `Animator` and `SpriteAnimation` call the attached script's
+`onAnimationEvent(name, clip)` after built-in systems advance, before physics. A callback therefore sees
+the new animation time/frame and can change a body or spawn an effect in that step. Scripts that do not
+define the callback behave as before. The outgoing clip in an `Animator.blend` never emits events;
+only the destination clip does, even while its visual weight is small.
+
+### Authoring and queries
+
+Model markers belong to `<model file>.events.json`, beside `<model file>.clips.json`. They refer to
+the final clip names after external clips have been added; the model/clip source files remain untouched:
+
+```json
+{"clips": {"Walk": [{"time": 0, "name": "leftFoot"}, {"time": 0.35, "name": "rightFoot"}]}}
+```
+
+All instances of that model share these markers. The model cache watches sidecar creation, changes and
+deletion. An invalid sidecar produces an asset error with the validation reason; it is not silently skipped.
+Imported/retargeted clips use the target model's event sidecar, not the source model's markers.
+
+Sprite markers stay inside the existing inline clip definition. `frame` is a **zero-based index into
+the clip's frames array**, not a tile number in the sheet:
+
+```json
+"SpriteAnimation": {"clip": "walk", "clips": {
+  "walk": {"frames": [6, 7, 8, 9], "fps": 8, "events": [
+    {"frame": 0, "name": "leftFoot"}, {"frame": 2, "name": "rightFoot"}]}}}
+```
+
+- `animation.events {id, clip?}` lists sorted markers, their times in seconds and their source, plus
+  `completion: "finished"`. Sprite results also contain the sequence frame indices. Omitted `clip` uses
+  the component's current clip. Listing is read-only.
+- `animation.set_events {id, clip?, events}` replaces the markers; `[]` clears them. Sprite changes
+  use normal scene undo/save. Model changes write the shared sidecar immediately and **are not undoable**.
+  Set model markers before recording a simulation; resource hashes include the sidecar.
+- `animation.play` and `animation.state` support sprites as well as models. When both components exist,
+  commands address the sprite. Sprite playback requires a `SpriteAnimation` with a nonempty clip and a
+  `Sprite`; model playback retains the existing add-Animator behavior. `loop` overrides the sprite clip's
+  setting. Reverse sprite restart starts on the last sequence frame. `restart:false` keeps time.
+- Lua `animation.events(id, clip?)` reads the same report. `animation.play` and `self:play` use the same
+  command for either kind. Runtime marker authoring is unnecessary; gameplay callbacks are ordinary script methods:
+
+```lua
+function Hero:onAnimationEvent(name, clip)
+    if name == "rightFoot" then
+        -- Play a sound, spawn a VFX asset or activate an attack hit box here.
+    elseif name == "finished" then
+        self:play("idle")
+    end
+end
+```
+
+### Ordering, completion and bounds
+
+Markers are dispatched in entity id order, then in the order encountered during that step. All crossed
+markers fire, including several loops in one step. Reverse playback traverses times in descending order;
+markers at the same time retain their authored order in either direction. At a model loop seam,
+forward playback emits duration markers before zero markers, reverse playback zero before duration.
+The first advance includes markers exactly at the starting position, but not the other side of a seam.
+Subsequent intervals exclude their starting point and include their destination. If an entity has both
+playback components, events are merged by elapsed step time; ties put model events before sprite events.
+
+`finished` is a reserved event name, sent once when a non-looping clip reaches its endpoint, after any
+authored marker there. It also occurs on the first advance of a zero-duration non-looping clip. A model
+stops advancing (`playing:false`); a sprite holds its frame with `finished:true`. To preserve existing
+sprite timing, its non-looping endpoint is the **start of the last frame**, `(frameCount-1)/fps`;
+its loop period is `frameCount/fps`. A singleton non-looping sprite thus completes on its first advance.
+
+Pause, zero speed and `game.pause` emit nothing. Direct seeking changes the next interval's starting point
+and does not synthesize events from the skipped interval. Restart rearms start/completion events; resume
+does not duplicate them. A direct sprite clip change retains its existing restart-at-zero behavior;
+use `animation.play` to restart reverse playback at the last frame. Direct model clip changes preserve
+time, as before. Manually setting time while `playing:false` drives the pose without emitting events.
+
+The event list is captured before callbacks run. Changing clips in a callback takes effect on the next
+step; queued crossings keep their original clip/name. Destroyed entities are skipped. A callback error
+faults its script through the existing Lua error/budget mechanism and prevents later calls to that instance.
+Native snapshots copy playback's internal start state and Lua data, so rollback replays callbacks;
+external effects need the same replay discipline as other gameplay callbacks.
+
+Each clip accepts at most 256 markers. Names are 1..128 bytes and may not be `finished`; sprite indices
+must be integers within the sequence, model times finite and within `[0,duration]`. Unknown marker fields
+are rejected. A playback component crossing more than 4096 authored markers in one step returns
+`animation_event_limit` before changing that component's time. Such a failed step is not transactional:
+earlier scripts/components may already have advanced. Lower speed or marker count before resuming.
+There is no callback truncation; completion is an additional notification. Clips without markers add no
+loop-enumeration work. Old clips/scenes need no new fields.
+
+Verified by `AnimationEventsSpritesAndReplay`, `AnimationEventsModelsAndBlend`,
+`AnimationEventsBoundariesAndLimits` and `AnimationEventsCallbackMutationAndFaults`.
+The `build/AnimationEvents` project displays 2D and 3D footfall
+events in its HUD; run it with `build\bin\oe.exe editor build\AnimationEvents`, then Play.
+
+## Status
+
+A1 is implemented for models and sprites. All 368 Windows tests pass, including four API-driven timeline tests with
+native snapshot replay, marker validation, outgoing-blend silence and callback mutation/fault handling.
+The 800x500 demo's software/D3D11 mean RGB difference is 0.089/255; its editor Game view was checked.
+The old Showcase software hash remains `72ab07fb213fd42b`. Rebuilt web and both Android players
+include A1; headless Edge (WebGL2 on SwiftShader) ran the demo's model and sprite callbacks and HUD
+updates without script/WebGL errors. Both Android ELF binaries retain 16 KB LOAD alignment.
+
+- [ ] Physical Android and Linux/EGL execution of animated models and A1 callbacks.
+- [ ] Real browser GPU/mobile rendering and performance (the browser check used SwiftShader).

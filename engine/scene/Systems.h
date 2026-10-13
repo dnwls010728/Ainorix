@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "scene/Scene.h"
+#include "scene/AnimationEvents.h"
 
 namespace oe {
 
@@ -131,7 +132,8 @@ struct InputState {
 };
 
 // Advances all behavior components by dt seconds (before physics).
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr, PhysicsWorld* physics = nullptr);
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr, PhysicsWorld* physics = nullptr,
+                   std::vector<AnimationEvent>* animationEvents = nullptr);
 // Runs after physics: SpringBone and BoneAttachment (need `assets`), CameraFollow, Trail paths (so they follow physics bodies too).
 void UpdateLateSystems(Scene& scene, float dt, AssetManager* assets = nullptr);
 
