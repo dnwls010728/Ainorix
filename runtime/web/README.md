@@ -5,25 +5,25 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (27aba99). R6 adds
-PlanarReflection on flat MeshRenderer surfaces: one visible receiver per view, a reflected camera,
-shared oblique clipping and a current-scene capture that includes moving characters. Captures do not
-recurse or include UI. The light-data texture is now 8x19 RGBA32F. All earlier runtime features remain
-included; see [PLANAR_REFLECTION.md](../../docs/PLANAR_REFLECTION.md).
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (ebabcd7). R7 adds Decal:
+box-projected textures/tints with order, volume/normal fades and a cached 1024-square atlas for sixteen
+visible projectors. It changes opaque/cutout base color before lighting, preserving depth/picking and
+excluding transparent receivers. The light-data texture is 8x33 RGBA32F; SSAO lens settings move into
+that texture. All earlier runtime features remain included; see [DECALS.md](../../docs/DECALS.md).
 Packaging still patches the game's key into the runtime for keyed OEPAK002 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,022,336 | 55a9da1565522e94befbfdc45db3478e3e7a1b03310280afa43584747db72434 |
+| oe_player.wasm | 6,065,105 | 0a96ade4aeaec826bcf1abd9ca8bd29ce398cbfc16b5f1407d97eb0de04d2d67 |
 
-Windows Release: 354 tests pass, including planar selection/bounds, transformed planes, motion,
-behind-plane clipping, horizontal/vertical and perspective/orthographic parity, and unchanged depth/IDs.
-The 800x500 demo's software/D3D11 mean RGB difference is 0.373/255 (0.388 after 90 simulation frames).
-Headless Edge (WebGL2 on SwiftShader) compiled and linked the generated mesh program and rendered
-the packaged animated demonstration without shader/WebGL errors. The fragment program uses 209 vec4
-uniform vectors and 15 samplers (224 conservatively), with 15 texture units, within GLES3/WebGL2 minimums.
-No new vertex-stage resources; the existing skin/vertex-graph minimum-device path remains unverified.
+Windows Release: 357 tests pass, including decal order/fades, atlas caching, hierarchy/rotation,
+texture alpha, cutout holes, displaced shader graphs, lighting and effects, thread-count determinism,
+and unchanged depth/IDs/UI. The 800x500 demo's software/D3D11 mean RGB difference is 0.168/255.
+Headless Edge (WebGL2 on SwiftShader) compiled and linked the generated mesh program and displayed
+the packaged stains/impacts/markings demo without shader/WebGL errors. The mesh fragment program uses
+208 vec4 uniform vectors plus 16 sampler uniforms (224 conservatively), and all 16 minimum texture units.
+No additional vertex-stage resources; the existing skin/vertex-graph minimum-device path remains unverified.
 Earlier browser checks are in Git history.
 
 Not verified on real browser GPUs or phones: frame rate, UIInput typing, sound output, touch, ads, and

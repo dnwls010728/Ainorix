@@ -72,9 +72,19 @@ screen-space normal reconstruction or transparent receivers. Cost grows with vis
 fragments. `build/Decals` demonstrates floor stains, a marking and rotated wall impacts:
 `build/bin/oe editor build/Decals`. Select a decal to see its box; toggle enabled or animate opacity.
 
-## Implementation status (work log)
+## Status
 
-- [x] Add the component, shared projection/atlas cache and both renderer paths within GLES3 minimums.
-- [x] Add editor creation/box guides and verify projection, order, fade, exclusions and renderer parity.
-- [x] Document limits, regenerate API reference and leave a demonstration under `build/Decals`.
-- [ ] Rebuild web/Android players and verify the WebGL2 demonstration.
+Implemented in both renderers with editor creation, Inspector controls, icons and oriented box guides.
+357 Windows tests pass. DecalProjectionOrderFadeAndParity, DecalLitCutoutGraphAndEffects and
+DecalBoundsCoverageAndAtlasCache verify order, box/normal/texture-alpha fades, projection bounds,
+transforms, capacity, cache invalidation, lighting, cutouts, displaced graphs, perspective/orthographic
+parity, transparent exclusions, serialization and thread-count determinism. Depth, receiver IDs and
+UI stay unchanged. The demo's mean software/D3D11 RGB difference is 0.168/255 at 800x500; Showcase
+retains hash 72ab07fb213fd42b without decals. CLI images and an editor screenshot were visually checked.
+
+Web and both Android players were rebuilt. Headless Edge/SwiftShader compiled and linked the mesh
+program and displayed the packaged texture demo without WebGL errors. Both Android ELF libraries
+retain 16KB LOAD alignment.
+
+- [ ] Decal rendering on Android physical devices, Linux/EGL and real browser GPUs.
+- [ ] Existing skin/vertex-graph execution on minimum-capability WebGL2/GLES3 devices.
