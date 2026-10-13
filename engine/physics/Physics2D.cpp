@@ -1356,6 +1356,27 @@ bool CollectOverlap(b2ShapeId shape, void* context) {
 }
 }  // namespace
 
+bool Physics2D::RaycastStatic(const Vec3& origin,const Vec3& direction,float maxDistance,RaycastHit& out) const {
+    HeapScope scope(impl_->heap.get(),&impl_->logicalBytes);
+    const Vec3 dir = Normalize(direction);
+    const b2Vec2 translation{dir.x*maxDistance,dir.y*maxDistance};
+    if (b2LengthSquared(translation) < 1e-12f) return false;
+    struct Query { b2ShapeId shape{}; b2Vec2 normal{}; float fraction = 1; bool hit = false; } query;
+    auto collect = [](b2ShapeId shape,b2Vec2,b2Vec2 normal,float fraction,void* context) {
+        if (b2Shape_IsSensor(shape) || b2Body_GetType(b2Shape_GetBody(shape)) != b2_staticBody) return -1.0f;
+        Query& q = *static_cast<Query*>(context);
+        const EntityId id = EntityOfShape(shape);
+        if (!q.hit || fraction < q.fraction || (fraction == q.fraction && id < EntityOfShape(q.shape))) {
+            q.hit = true; q.shape = shape; q.normal = normal; q.fraction = fraction;
+        }
+        return q.fraction;
+    };
+    b2World_CastRay(impl_->world,b2Vec2{origin.x,origin.y},translation,b2QueryFilter{~0ull,kNormal|kOneWay|kCharacter},collect,&query);
+    if (!query.hit) return false;
+    out.hit = true; out.entity = EntityOfShape(query.shape); out.distance = query.fraction*maxDistance;
+    out.point = origin+dir*out.distance; out.normal = Vec3(query.normal.x,query.normal.y,0);
+    return true;
+}
 std::vector<EntityId> Physics2D::OverlapCircle(const Vec3& center, float radius) const {
     HeapScope scope(impl_->heap.get(), &impl_->logicalBytes);
     std::set<EntityId> ids;

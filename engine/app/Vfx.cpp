@@ -19,6 +19,7 @@
 namespace oe {
 namespace {
 std::string ModuleOf(const std::string& name) {
+    if (name == "collision" || name == "collisionBounce" || name == "collisionFriction") return "Motion";
     if (name == "expressions") return "Expressions";
     if (name.find("OverLife") != std::string::npos) return "Curves";
     if (name == "delay" || name == "duration" || name == "loop" || name == "playing" || name == "lifetime" || name == "lifetimeVariation") return "Timing";
@@ -64,6 +65,7 @@ Json VfxSchema() {
     out["channels"]["vectorCurve"] = "[[age,[x,y,z]],...] (signed finite values within -65504..65504; scale nonnegative)";
     out["channels"]["position"] = "positionOffset is an emitter-space birth offset; positionOverLife is added to integratedPosition without accumulating previous offsets. World particles use the captured birth emitter basis; local particles follow their owner.";
     out["channels"]["velocity"] = "velocityOverLife replaces velocity in emitter m/s before gravity, turbulence and drag each step. Empty curves preserve integrated velocity.";
+    out["channels"]["collision"] = "collision (none/stop/bounce/die), collisionBounce and collisionFriction are captured at birth. One center segment sweep per moving particle/step against static non-trigger 3D or 2D bodies. stop pins world position; die participates in onDeath chains. Isolated previews have no colliders.";
     out["channels"]["rotation"] = "rotation3D + rotationOverLife in XYZ degrees, composed inside legacy Z rotation/spin; billboard axes or captured mesh emitter axes";
     out["channels"]["scale"] = "scale * scaleOverLife per axis, then legacy scalar size and meshScale each once; empty scale curve multiplies by one";
     out["channels"]["pivot"] = "unscaled geometry point mapped to particle center before scale/rotation; cube base is [0,-0.5,0]";

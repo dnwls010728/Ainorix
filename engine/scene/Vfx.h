@@ -4,6 +4,7 @@
 
 namespace oe {
 class AssetManager;
+class PhysicsWorld;
 class Scene;
 struct VfxEmitterDefinition {
     std::string name;
@@ -35,7 +36,7 @@ bool RefreshVfx(VFXSystem& system, AssetManager& assets, std::string* error = nu
 Json EffectiveVfxParams(const VFXSystem& system);
 bool VfxPlaying(const VFXSystem& system);
 // Bounded system stepping and deferred completion cleanup (called by the built-in systems).
-void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt);
+void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt, PhysicsWorld* physics = nullptr);
 void UpdateVfxTrails(Scene& scene, float dt);
 // True after every block has completed, or stopped emission has drained.
 bool VfxFinished(const VFXSystem& system);

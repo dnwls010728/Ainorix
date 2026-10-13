@@ -436,6 +436,9 @@ void NativeEditor::Impl::EffectsPreview(bool compact) {
     effectsImage = image;
     ImGui::Image(ViewTexture(engine.Gpu()->ImageView(effectsImage)), ImVec2(previewWidth, previewWidth)); EffectsRect("preview");
     if (!compact) ImGui::TextWrapped("%s", Tr("Preview is independent of the game. Motion moves the root for trails; changes restart the preview."));
+    const auto& emitters = effectsScene->Get<VFXSystem>(effectsRoot)->emitters;
+    if (std::any_of(emitters.begin(),emitters.end(),[](const ParticleEmitter& emitter) { return emitter.collision != "none"; }))
+        ImGui::TextWrapped("%s",Tr("Particle collision uses game-scene colliders. This isolated preview has no colliders."));
 }
 
 void NativeEditor::Impl::EffectsParameterValue(const std::string& name, float fieldWidth) {

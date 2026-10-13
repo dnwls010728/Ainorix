@@ -10915,6 +10915,87 @@ TEST(SpriteCutoutShadows) {
     } else std::printf("  SKIP sprite shadow GPU check (%s)\n", err.c_str());
 }
 
+TEST(ParticleCollisionStaticQueriesAndResponses) {
+    for(bool planar : {false,true}) for(const char* mode : {"none","stop","bounce","die"}) {
+        const std::string project=TempProject((std::string("particle_collision_")+(planar?"2d_":"3d_")+mode).c_str());
+        Engine e; std::string error; CHECK(e.Open(project,&error)); CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+        CHECK(Call(e,"entity.create",R"({"name":"Floor3D","components":{"Transform":{"position":[0,-0.1,0]},"Collider":{"size":[10,0.2,10]}}})")["ok"].asBool());
+        CHECK(Call(e,"entity.create",R"({"name":"Floor2D","components":{"Transform":{"position":[0,-1.1,0]},"Collider2D":{"size":[10,0.2,0]}}})")["ok"].asBool());
+        CHECK(Call(e,"entity.create",R"({"name":"Sensor","components":{"Transform":{"position":[0,2,0]},"Collider":{"size":[10,0.1,10],"isTrigger":true},"Collider2D":{"size":[10,0.1,0],"isTrigger":true}}})")["ok"].asBool());
+        CHECK(Call(e,"entity.create",R"({"name":"Moving body","components":{"Transform":{"position":[0,1,0]},"Collider":{"size":[10,0.1,10]},"RigidBody":{"type":"kinematic"},"Collider2D":{"size":[10,0.1,0]},"RigidBody2D":{"type":"kinematic"}}})")["ok"].asBool());
+        Json make=Json::parse(R"({"name":"Effect","components":{"Transform":{"position":[0,3,0]},"EmitterSettings":{"rate":0,"burst":1,"loop":false,"lifetime":5,"speed":600,"spread":0,"direction":[0,-1,0],"gravity":[0,0,0],"space":"world","collisionBounce":0.5,"collisionFriction":0}}})");
+        make["components"]["EmitterSettings"]["collision"]=mode;
+        make["components"]["EmitterSettings"]["dimensions"]=planar?2:3;
+        CHECK(EmitterCall(e,"entity.create",make)["ok"].asBool());
+        e.RecordState(); e.Step(2);
+        auto* emitter=TestEmitter(e.GetScene(),e.GetScene().FindByName("Effect")); CHECK(emitter);
+        if(std::string(mode)=="die") CHECK(emitter->particles.empty());
+        else {
+            CHECK(emitter->particles.size()==1);
+            if(!emitter->particles.empty()) {
+                const Particle& p=emitter->particles[0];
+                if(std::string(mode)=="none") CHECK(p.position.y < -6);
+                else {
+                    CHECK(std::abs(p.position.y-(planar?-0.999f:0.001f))<0.003f);
+                    if(std::string(mode)=="stop") CHECK(p.collisionStopped && p.velocity==Vec3());
+                    else CHECK(std::abs(p.velocity.y-300)<0.1f);
+                }
+            }
+        }
+        e.Stop(); CHECK(RemoveAll(project));
+    }
+}
+
+TEST(ParticleCollisionLocalCaptureAndRestore) {
+    const std::string project=TempProject("particle_collision_restore"); Engine e; std::string error; CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Floor","components":{"Transform":{"position":[0,-0.1,0]},"Collider":{"size":[20,0.2,20]}}})")["ok"].asBool());
+    CHECK(EmitterCall(e,"entity.create",R"({"name":"Effect","components":{"Transform":{"position":[0,2,0],"scale":[2,3,1]},"EmitterSettings":{"rate":0,"burst":1,"loop":false,"lifetime":5,"speed":60,"spread":0,"direction":[1,-1,0],"gravity":[0,0,0],"space":"local","collision":"bounce","collisionBounce":0.75,"collisionFriction":0.5}}})")["ok"].asBool());
+    e.RecordState(); e.Step(1);
+    const auto checkpoint=e.SaveState(); e.Step(3);
+    const Json bounced=EmitterCall(e,"vfx.state",R"({"id":"Effect","particles":true})")["result"];
+    auto* emitter=TestEmitter(e.GetScene(),e.GetScene().FindByName("Effect")); CHECK(emitter && emitter->particles.size()==1);
+    if(emitter && !emitter->particles.empty()) CHECK(emitter->particles[0].velocity.y>0 && emitter->particles[0].velocity.x<30);
+    e.LoadState(*checkpoint); e.Step(3); CHECK(EmitterCall(e,"vfx.state",R"({"id":"Effect","particles":true})")["result"]==bounced);
+    e.Stop();
+    CHECK(EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"collision":"stop","direction":[0,-1,0],"speed":120}})")["ok"].asBool());
+    e.Step(2);
+    const EntityId id=e.GetScene().FindByName("Effect"); emitter=TestEmitter(e.GetScene(),id);
+    CHECK(emitter && emitter->particles.size()==1 && emitter->particles[0].collisionStopped);
+    const Vec3 anchor=emitter->particles[0].collisionAnchor;
+    CHECK(EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"collision":"die"}})")["ok"].asBool());
+    CHECK(Call(e,"component.set",R"({"id":"Effect","type":"Transform","values":{"position":[5,4,0]}})")["ok"].asBool());
+    e.Step(3); emitter=TestEmitter(e.GetScene(),id);
+    CHECK(emitter->particles.size()==1 && emitter->particles[0].collision==ParticleCollision::Stop);
+    const Vec3 actual=e.GetScene().WorldMatrix(id).TransformPoint(emitter->particles[0].position);
+    CHECK(Length(actual-anchor)<1e-4f);
+    e.Stop();
+    CHECK(!EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"collisionBounce":2}})")["ok"].asBool());
+    CHECK(!EmitterCall(e,"component.set",R"({"id":"Effect","type":"EmitterSettings","values":{"collision":"explode"}})")["ok"].asBool());
+    CHECK(RemoveAll(project));
+}
+
+TEST(ParticleCollisionMotionChannelsAndDeathChain) {
+    ParticleEmitter emitter; emitter.rate=0; emitter.burst=0; emitter.loop=false; emitter.speed=0; emitter.gravity=Vec3();
+    emitter.collision="stop"; emitter.positionOverLife=Json::parse(R"([[0,[0,1,0]],[1,[0,-1,0]]])");
+    emitter.lifetime=1; BurstEmitter(emitter,1,Mat4(),0,1);
+    int queries=0; ParticleCollisionQuery query=[&](const Vec3& from,const Vec3& to,bool) {
+        ++queries; if(from.y>=0 && to.y<0) return ParticleCollisionHit{true,Vec3(),Vec3(0,1,0)}; return ParticleCollisionHit();
+    };
+    for(int i=0;i<40;++i)StepEmitter(emitter,1,Mat4(),0,1.0f/60,nullptr,&query);
+    CHECK(queries>0 && emitter.particles.size()==1 && emitter.particles[0].collisionStopped && emitter.particles[0].position.y==0.001f);
+    const std::string project=TempProject("particle_collision_death"); Engine e; std::string error; CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Floor","components":{"Transform":{"position":[0,-0.1,0]},"Collider":{"size":[10,0.2,10]}}})")["ok"].asBool());
+    CHECK(Call(e,"vfx.create",R"({"path":"effects/death.vfx.json","vfx":{"format":"oe.vfx","version":1,"emitters":[{"name":"rain","emitter":{"rate":0,"burst":1,"loop":false,"lifetime":4,"speed":300,"spread":0,"direction":[0,-1,0],"gravity":[0,0,0],"space":"world","collision":"die","onDeath":"splash","deathCount":2}},{"name":"splash","emitter":{"rate":0,"burst":0,"loop":false,"lifetime":1,"speed":1,"gravity":[0,0,0]}}]}})")["ok"].asBool());
+    CHECK(Call(e,"vfx.spawn",R"({"path":"effects/death.vfx.json","position":[0,2,0],"autoDestroy":false})")["ok"].asBool());
+    e.RecordState(); e.Step(2);
+    const auto& system=e.GetScene().Pool<VFXSystem>().begin()->second;
+    CHECK(system.emitters[0].particles.empty() && system.emitters[1].particles.size()==2);
+    if(!system.emitters[1].particles.empty())CHECK(std::abs(system.emitters[1].particles[0].position.y-0.001f)<0.003f && system.emitters[1].particles[0].age==0);
+    e.Stop(); CHECK(RemoveAll(project));
+}
+
 TEST(DecalProjectionOrderFadeAndParity) {
     const std::string project = TempProject("decals_render");
     Engine e; std::string error; CHECK(e.Open(project,&error));

@@ -33,6 +33,13 @@ Json DescribeVfxEmitter(const ParticleEmitter& emitter, bool particles) {
             p["index"] = particle.index; p["count"] = particle.birthCount;
             p["random"] = particle.random;
             p["worldSpace"] = particle.worldSpace;
+            if (particle.collision != ParticleCollision::None) {
+                p["collision"] = particle.collision == ParticleCollision::Stop ? "stop" : particle.collision == ParticleCollision::Bounce ? "bounce" : "die";
+                p["collisionStopped"] = particle.collisionStopped;
+                p["collisionBounce"] = particle.collisionBounce;
+                p["collisionFriction"] = particle.collisionFriction;
+                p["collision2D"] = particle.collision2D;
+            }
             out["particles"].push(p);
         }
     }

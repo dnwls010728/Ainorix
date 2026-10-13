@@ -585,7 +585,7 @@ void Engine::SimulateWorld() {
         }
     } else if (network_ && !replaying_ && (!sync_ || !sync_->Active())) scripts_->DispatchNetwork(network_->DrainEvents(networkWorld_));
     std::vector<UIEvent> uiEvents = UpdateUI();
-    UpdateSystems(scene_, input_, dt, assets_.get());
+    UpdateSystems(scene_, input_, dt, assets_.get(), physics_.get());
     std::vector<PhysicsEvent> events;
     if (!paused) events = authority_ && authority_->Running() && !network_->IsHost() ? StepAuthorityPhysics(dt) : physics_->Step(scene_, dt);
     if (!paused) UpdateLateSystems(scene_, dt, assets_.get());

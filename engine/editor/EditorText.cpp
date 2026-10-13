@@ -104,6 +104,7 @@ const Entry kCatalog[] = {
     {"Time: %.2f s", "시간: %.2f초", "時間: %.2f 秒"},
     {"Preview Distance", "미리보기 거리", "プレビュー距離"},
     {"Preview is independent of the game. Motion moves the root for trails; changes restart the preview.", "게임과 독립된 미리보기입니다. 이동을 켜면 트레일이 표시됩니다. 설정을 바꾸면 다시 시작합니다.", "ゲームとは独立したプレビューです。移動を有効にするとトレイルを表示します。設定変更で再開します。"},
+    {"Particle collision uses game-scene colliders. This isolated preview has no colliders.", "입자 충돌은 게임 장면의 콜라이더를 사용합니다. 이 독립 미리보기에는 콜라이더가 없습니다.", "パーティクル衝突にはゲームシーンのコライダーを使用します。この独立プレビューにはコライダーがありません。"},
     {"Parameters", "파라미터", "パラメータ"},
     {"Parameter Definitions", "파라미터 정의", "パラメータ定義"},
     {"Enter applies definitions. Targets use block.field; numeric targets accept scale.", "Enter로 정의를 적용합니다. 대상은 block.field 형식이며 숫자에는 scale을 지정할 수 있습니다.", "Enterで定義を適用します。対象はblock.field形式で、数値にはscaleを指定できます。"},

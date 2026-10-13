@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -82,6 +83,9 @@ public:
     // Queries (also valid outside simulation: the world is synced first).
     // `ignore`: an entity the ray passes through (the character that casts it from inside its own capsule).
     RaycastHit Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance, EntityId ignore = kNullEntity);
+    // Sync once without stepping; returned query is valid during this fixed step. Excludes sensors/nonstatic bodies.
+    // planar=true queries Box2D only, false queries Jolt only. Not stored in snapshots.
+    std::function<RaycastHit(const Vec3&,const Vec3&,float,bool)> StaticParticleQueries(Scene& scene);
     std::vector<EntityId> OverlapSphere(Scene& scene, const Vec3& center, float radius);
     std::vector<ContactPair> Contacts() const;
     // Joints the worlds know after the last step or query, 3D then 2D, in entity id order.

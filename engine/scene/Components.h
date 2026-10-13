@@ -183,6 +183,7 @@ struct SpringCollider {
 };
 
 // Runtime particle values are snapshots of the emitter settings at birth.
+enum class ParticleCollision { None, Stop, Bounce, Die };
 struct Particle {
     Vec3 position, velocity, gravity;
     float age = 0, lifetime = 1;
@@ -207,6 +208,10 @@ struct Particle {
     float random = 0;  // stable birth hash, no extra random draws
     int depth = 0;     // bounded death-chain generation
     bool worldSpace = false;
+    ParticleCollision collision = ParticleCollision::None;
+    float collisionBounce = 0.5f, collisionFriction = 0;
+    Vec3 collisionPreviousWorld, collisionAnchor;
+    bool collisionStopped = false, collision2D = false;
 };
 
 struct ParticleEmitter {
@@ -219,6 +224,8 @@ struct ParticleEmitter {
     float spread = 30;
     float speedVariation = 0, lifetimeVariation = 0, sizeVariation = 0;
     float drag = 0;
+    std::string collision = "none";  // Point sweep against static colliders, captured at birth.
+    float collisionBounce = 0.5f, collisionFriction = 0;
     Vec3 direction{0, 1, 0};
     Vec3 gravity{0, -9.8f, 0};
     float startSize = 0.1f, endSize = 0;
@@ -287,6 +294,9 @@ struct ParticleEmitter {
         range(f.Add("lifetimeVariation", &ParticleEmitter::lifetimeVariation, "0..1: each particle lives between lifetime * (1 - variation) and lifetime."), 0, 1);
         range(f.Add("sizeVariation", &ParticleEmitter::sizeVariation, "0..1: each particle's start and end size are scaled between (1 - variation) and 1."), 0, 1);
         range(f.Add("drag", &ParticleEmitter::drag, "Velocity lost per second (0 = none, 4 = slows to a stop quickly), captured at birth."), 0, 60);
+        f.Add("collision", &ParticleEmitter::collision, "Particle center sweep against static non-trigger colliders: none, stop, bounce or die. Captured at birth; dimensions selects 3D or 2D physics.").options = {"none","stop","bounce","die"};
+        range(f.Add("collisionBounce", &ParticleEmitter::collisionBounce, "Normal velocity retained after a bounce (0..1), captured at birth."), 0, 1);
+        range(f.Add("collisionFriction", &ParticleEmitter::collisionFriction, "Tangential velocity lost on collision (0..1), captured at birth."), 0, 1);
         f.Add("direction", &ParticleEmitter::direction, "Emission direction; zero falls back to +Y. 2D uses XY only.");
         f.Add("gravity", &ParticleEmitter::gravity, "Acceleration in particle coordinates (world or local), captured at birth.");
         range(f.Add("startSize", &ParticleEmitter::startSize, "Billboard size in meters at birth."), 0, 10000);

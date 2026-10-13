@@ -122,3 +122,10 @@ Lua API: `physics.raycast(origin, dir, maxDist?)` → `{entity, point, normal, d
 - Collision layers exist in 2D only; no mesh colliders. Joints: no gears, pulleys or ragdoll (swing-twist) joints yet, 3D joints have no drive to a target angle or position, and a joint cannot hold a `CharacterBody`.
 - Characters ignore entity scale (their size is `radius`/`height` in meters).
 - 2D and 3D bodies live in separate worlds and never collide with each other.
+
+## Static VFX particle queries
+
+VFX emitter collision synchronizes once per fixed-step batch and sweeps particle centers against
+static non-sensor Jolt bodies or Box2D shapes (selected by the captured emitter dimension).
+Dynamic/kinematic bodies are excluded; queries do not advance physics. See
+[PARTICLE_COLLISION.md](PARTICLE_COLLISION.md) for modes, timing and point-query limitations.

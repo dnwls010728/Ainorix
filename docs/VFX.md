@@ -5,6 +5,11 @@ used by CLI, HTTP and MCP. No play session or editor window is needed. The simul
 contract remains in [PARTICLES.md](PARTICLES.md). The detailed contracts for motion channels, expressions,
 value nodes and the bundled presets are in the last sections of this file.
 
+
+Static particle collision: asset emitters support `collision: none|stop|bounce|die` with birth-captured
+`collisionBounce` and `collisionFriction`. Fixed-step center sweeps use static non-trigger 3D/2D bodies;
+isolated previews have no colliders. Full semantics and verification: [PARTICLE_COLLISION.md](PARTICLE_COLLISION.md).
+
 ## Portable acceptance presets
 
 Effects > New Effect and `vfx.edit {path,new:true,preset}` offer six complete expression presets:

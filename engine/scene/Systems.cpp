@@ -291,7 +291,8 @@ struct MotionCurves {
 };
 }
 
-void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths) {
+void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths,
+                 const ParticleCollisionQuery* collisionQuery) {
     VfxExpressionError expressionError;
     if (!PrepareVfxExpressions(emitter,&expressionError)) {
         if (!emitter.invalidSettingsReported) OE_LOG_WARN("particles", "entity %u: %s",owner,expressionError.message.c_str());
@@ -303,25 +304,63 @@ void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, ui
     const float turbulenceScale = Clamp(emitter.turbulenceScale, 0.001f, 1000);
     const uint32_t turbulenceSeed = static_cast<uint32_t>(emitter.seed) ^ (owner * 0x9e3779b9u) ^ seedMix;
     const MotionCurves curves(emitter);
+    Mat4 collisionInverse;
+    if (collisionQuery || std::any_of(emitter.particles.begin(),emitter.particles.end(),[](const Particle& p) { return p.collisionStopped; }))
+        collisionInverse = world.Inverse();
     for (Particle& particle : emitter.particles) {
         particle.age += dt;
         const VfxExpressionInputs expressionInput=ExpressionInputs(emitter,particle);
-        if (!curves.velocity.Empty()) particle.velocity = curves.Coordinates(particle, curves.velocity.Sample(Clamp(particle.age / particle.lifetime, 0, 1)));
-        if (emitter.expressionProgram && !emitter.expressionProgram->update[1].code.empty()) {
-            const Vec3 prescribed=EvaluateVfxExpression(emitter.expressionProgram->update[1],expressionInput);
-            particle.velocity=curves.Coordinates(particle,prescribed);
+        if (!particle.collisionStopped) {
+            if (!curves.velocity.Empty()) particle.velocity = curves.Coordinates(particle, curves.velocity.Sample(Clamp(particle.age / particle.lifetime, 0, 1)));
+            if (emitter.expressionProgram && !emitter.expressionProgram->update[1].code.empty()) {
+                const Vec3 prescribed=EvaluateVfxExpression(emitter.expressionProgram->update[1],expressionInput);
+                particle.velocity=curves.Coordinates(particle,prescribed);
+            }
+            particle.velocity += particle.gravity * dt;
+            if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
+                Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
+                if (emitter.dimensions == 2) push.z = 0;
+                particle.velocity += push;
+            }
+            if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
+            particle.integratedPosition += particle.velocity * dt;
         }
-        particle.velocity += particle.gravity * dt;
-        if (turbulence > 0 && std::isfinite(particle.position.x) && std::isfinite(particle.position.y) && std::isfinite(particle.position.z)) {
-            Vec3 push = TurbulenceAt(particle.position, turbulenceScale, turbulenceSeed) * (turbulence * dt);
-            if (emitter.dimensions == 2) push.z = 0;
-            particle.velocity += push;
-        }
-        if (particle.drag > 0) particle.velocity = particle.velocity * std::max(0.0f, 1.0f - particle.drag * dt);
-        particle.integratedPosition += particle.velocity * dt;
         if (particle.spin != 0) particle.rotation += particle.spin * dt;
         curves.Evaluate(particle);
         UpdateExpressionChannels(emitter,particle,expressionInput);
+        if (particle.collision != ParticleCollision::None) {
+            Vec3 position = particle.worldSpace ? particle.position : world.TransformPoint(particle.position);
+            bool constrained = particle.collisionStopped;
+            if (particle.collisionStopped) {
+                position = particle.collisionAnchor;
+                particle.velocity = Vec3();
+            } else if (collisionQuery && dt > 0 && particle.age < particle.lifetime) {
+                const ParticleCollisionHit hit = (*collisionQuery)(particle.collisionPreviousWorld,position,particle.collision2D);
+                if (hit.hit && Length(hit.normal) > 1e-6f) {
+                    constrained = true;
+                    const Vec3 incoming = (position-particle.collisionPreviousWorld)*(1/dt);
+                    Vec3 normal = Normalize(hit.normal);
+                    if (Dot(incoming,normal) > 0) normal = -normal;
+                    position = hit.point+normal*0.001f;  // Fixed world-space skin; one response per step, no penetration solver.
+                    if (particle.collision == ParticleCollision::Die) particle.age = particle.lifetime;
+                    else if (particle.collision == ParticleCollision::Stop) {
+                        particle.collisionStopped = true; particle.collisionAnchor = position; particle.velocity = Vec3();
+                    } else {
+                        const float along = Dot(incoming,normal);
+                        const Vec3 tangent = incoming-normal*along;
+                        const Vec3 bounced = tangent*(1-particle.collisionFriction)-normal*(along*particle.collisionBounce);
+                        particle.velocity = particle.worldSpace ? bounced : collisionInverse.TransformDir(bounced);
+                    }
+                }
+            }
+            if (constrained) {
+                const Vec3 corrected = particle.worldSpace ? position : collisionInverse.TransformPoint(position);
+                // Keep the motion channel's non-accumulating offset, but constrain the final evaluated position.
+                particle.integratedPosition += corrected-particle.position;
+                particle.position = corrected;
+            }
+            particle.collisionPreviousWorld = position;
+        }
     }
     if (deaths) for (const Particle& particle : emitter.particles)
         if (particle.age >= particle.lifetime) deaths->push_back(particle);
@@ -467,7 +506,9 @@ bool ParticleSettingsValid(const ParticleEmitter& emitter) {
         !std::isfinite(emitter.custom2) || !std::isfinite(emitter.custom3) ||
         std::abs(emitter.custom0) > 65504 || std::abs(emitter.custom1) > 65504 || std::abs(emitter.custom2) > 65504 || std::abs(emitter.custom3) > 65504) return false;
     ParticleCurve curve;
-    return std::isfinite(emitter.rate) && std::isfinite(emitter.lifetime) && std::isfinite(emitter.speed) &&
+    return (emitter.collision == "none" || emitter.collision == "stop" || emitter.collision == "bounce" || emitter.collision == "die") &&
+           std::isfinite(emitter.collisionBounce) && std::isfinite(emitter.collisionFriction) &&
+           std::isfinite(emitter.rate) && std::isfinite(emitter.lifetime) && std::isfinite(emitter.speed) &&
            std::isfinite(emitter.speedVariation) && std::isfinite(emitter.lifetimeVariation) && std::isfinite(emitter.sizeVariation) &&
            std::isfinite(emitter.drag) && std::isfinite(emitter.spread) && std::isfinite(emitter.startSize) && std::isfinite(emitter.endSize) &&
            std::isfinite(emitter.startOpacity) && std::isfinite(emitter.endOpacity) && finiteVector(emitter.direction) &&
@@ -590,6 +631,11 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
         particle.startSize *= sizeScale;
         particle.endSize *= sizeScale;
         particle.drag = Clamp(emitter->drag, 0, 60);
+        particle.collision = emitter->collision == "stop" ? ParticleCollision::Stop : emitter->collision == "bounce" ? ParticleCollision::Bounce :
+                             emitter->collision == "die" ? ParticleCollision::Die : ParticleCollision::None;
+        particle.collisionBounce = Clamp(emitter->collisionBounce,0,1);
+        particle.collisionFriction = Clamp(emitter->collisionFriction,0,1);
+        particle.collision2D = emitter->dimensions == 2;
         particle.startColor = emitter->startColor;
         particle.endColor = emitter->endColor;
         particle.startOpacity = emitter->startOpacity;
@@ -667,6 +713,8 @@ int BurstEmitter(ParticleEmitter& value, EntityId id, const Mat4& world, uint32_
             particle.velocity=curves.Coordinates(particle,EvaluateVfxExpression(emitter->expressionProgram->update[1],expressionInput));
         }
         UpdateExpressionChannels(*emitter,particle,expressionInput);
+        if (particle.collision != ParticleCollision::None)
+            particle.collisionPreviousWorld = particle.worldSpace ? particle.position : world.TransformPoint(particle.position);
         emitter->particles.push_back(particle);
     }
     emitter->emitted += static_cast<uint64_t>(count);
@@ -791,9 +839,9 @@ void UpdateSpriteAnimations(Scene& scene, float dt) {
     }
 }
 
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets) {
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets, PhysicsWorld* physics) {
     if (assets) UpdateAnimators(scene, *assets, dt);
-    UpdateVfxSystems(scene, assets, dt);
+    UpdateVfxSystems(scene, assets, dt, physics);
     UpdateSpriteAnimations(scene, dt);
     input.pressedThisFrame.clear();
     input.text.clear();

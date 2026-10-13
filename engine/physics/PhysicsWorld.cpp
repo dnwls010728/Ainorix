@@ -1118,6 +1118,35 @@ std::vector<PhysicsEvent> PhysicsWorld::Step(Scene& scene, float dt) {
     return events;
 }
 
+std::function<RaycastHit(const Vec3&,const Vec3&,float,bool)> PhysicsWorld::StaticParticleQueries(Scene& scene) {
+    if (!impl_) { EnsureJolt(); impl_ = std::make_unique<Impl>(snapshotsEnabled_); }
+    impl_->SyncIn(scene,0.0f,warnings_,&tilesets_);
+    Physics2D* world2D = World2D(scene);
+    if (world2D) world2D->Sync(scene,warnings_);
+    return [this,world2D](const Vec3& origin,const Vec3& direction,float distance,bool planar) {
+        RaycastHit out;
+        if (distance <= 0) return out;
+        const Vec3 dir = Normalize(direction);
+        if (Length(dir) < 0.5f) return out;
+        if (planar) {
+            if (world2D) world2D->RaycastStatic(origin,dir,distance,out);
+            return out;
+        }
+        class StaticFilter final : public JPH::BodyFilter {
+            bool ShouldCollideLocked(const JPH::Body& body) const override { return body.IsStatic() && !body.IsSensor(); }
+        } filter;
+        const JPH::RRayCast ray{J(origin),J(dir*distance)};
+        JPH::RayCastResult result;
+        if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray,result,{},{},filter)) return out;
+        out.hit = true; out.entity = impl_->EntityOf(result.mBodyID);
+        const JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
+        out.point = O(point); out.distance = result.mFraction*distance;
+        JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(),result.mBodyID);
+        if (lock.Succeeded()) out.normal = O(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2,point));
+        return out;
+    };
+}
+
 RaycastHit PhysicsWorld::Raycast(Scene& scene, const Vec3& origin, const Vec3& direction, float maxDistance, EntityId ignore) {
     RaycastHit out;
     if (!impl_) {

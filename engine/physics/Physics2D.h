@@ -49,6 +49,8 @@ public:
 
     // Queries in the XY plane. The ray is the 3D ray projected on XY (hits keep its z).
     bool Raycast(const Vec3& origin, const Vec3& direction, float maxDistance, RaycastHit& out) const;
+    // Static non-sensor shapes only; world must already be synced (particle query batch).
+    bool RaycastStatic(const Vec3& origin, const Vec3& direction, float maxDistance, RaycastHit& out) const;
     std::vector<EntityId> OverlapCircle(const Vec3& center, float radius) const;
     void AddImpulse(EntityId id, const Vec3& impulse);
     bool Has(EntityId id) const;

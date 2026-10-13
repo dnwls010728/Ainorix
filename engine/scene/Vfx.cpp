@@ -10,6 +10,7 @@
 #include "assets/Assets.h"
 #include "core/Log.h"
 #include "scene/Systems.h"
+#include "physics/PhysicsWorld.h"
 
 namespace oe {
 const ComponentType& VfxEmitterType() {
@@ -375,7 +376,8 @@ bool VfxFinished(const VFXSystem& system) {
     return true;
 }
 
-void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt) {
+void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt, PhysicsWorld* physics) {
+    ParticleCollisionQuery collisionQuery;
     for (auto& pair : scene.Pool<VFXSystem>()) {
         VFXSystem& system = pair.second;
         if (assets) RefreshVfx(system, *assets);
@@ -395,7 +397,19 @@ void UpdateVfxSystems(Scene& scene, AssetManager* assets, float dt) {
             emitter.maxParticles = std::min(originalCap, std::max(0, system.definition->maxParticles - static_cast<int>(otherCount)));
             emitter.playing = originalPlaying && VfxPlaying(system);
             emitter.expressionSystemTime=system.expressionTime;
-            StepEmitter(emitter, pair.first, root * system.definition->emitters[i].local, VfxSeedMix(i), dt, emitter.onDeath.empty() ? nullptr : &deaths[i]);
+            if (physics && dt > 0 && !collisionQuery && std::any_of(emitter.particles.begin(),emitter.particles.end(),[](const Particle& p) {
+                return p.collision != ParticleCollision::None && !p.collisionStopped && p.age < p.lifetime;
+            })) {
+                const auto query = physics->StaticParticleQueries(scene);
+                collisionQuery = [query](const Vec3& from,const Vec3& to,bool planar) {
+                    const Vec3 delta = to-from; const float length = Length(delta);
+                    if (!std::isfinite(length) || length <= 1e-6f) return ParticleCollisionHit();
+                    const RaycastHit hit = query(from,delta*(1/length),length,planar);
+                    return ParticleCollisionHit{hit.hit,hit.point,hit.normal};
+                };
+            }
+            StepEmitter(emitter, pair.first, root * system.definition->emitters[i].local, VfxSeedMix(i), dt,
+                        emitter.onDeath.empty() ? nullptr : &deaths[i],collisionQuery ? &collisionQuery : nullptr);
             emitter.maxParticles = originalCap; emitter.playing = originalPlaying;
         }
         // Queue death bursts only after all emitters stepped: targets never age a newborn

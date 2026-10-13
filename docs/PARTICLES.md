@@ -9,6 +9,11 @@ For presets, strict authoring validation, isolated contact sheets and numeric an
 see [VFX.md](VFX.md). `vfx.create/set` and Trail `component.add/set` reject bad ranges and curves before editing.
 Old ParticleEmitter scene entries are skipped with a replacement hint; runtime guards still reject invalid values.
 
+
+Static particle collision: asset emitters support `collision: none|stop|bounce|die` with birth-captured
+`collisionBounce` and `collisionFriction`. Fixed-step center sweeps use static non-trigger 3D/2D bodies;
+isolated previews have no colliders. Full semantics and verification: [PARTICLE_COLLISION.md](PARTICLE_COLLISION.md).
+
 ## VFX expressions
 
 `expressions` stores typed Birth/Update source text; present channels replace curves, while Update

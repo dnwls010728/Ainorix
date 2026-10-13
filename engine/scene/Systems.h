@@ -28,6 +28,9 @@ std::vector<Mat4> JointPalette(const Mesh& mesh, const std::vector<Mat4>& nodes)
 std::vector<Mat4> EvaluateAnimationPose(const Mesh& mesh, const AnimationClip* clip, float time);
 struct Particle;
 struct ParticleEmitter;
+class PhysicsWorld;
+struct ParticleCollisionHit { bool hit = false; Vec3 point, normal; };
+using ParticleCollisionQuery = std::function<ParticleCollisionHit(const Vec3& from, const Vec3& to, bool planar)>;
 // Rejects non-finite birth settings before they enter simulation/rendering.
 bool ParticleSettingsValid(const ParticleEmitter& emitter);
 
@@ -36,7 +39,8 @@ bool ParticleSettingsValid(const ParticleEmitter& emitter);
 // (effect entities can be destroyed). Looping emitters never finish.
 bool ParticlesFinished(const ParticleEmitter& emitter);
 // Shared fixed-step/birth implementation; seedMix zero preserves the plain component's exact stream.
-void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths = nullptr);
+void StepEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, float dt, std::vector<Particle>* deaths = nullptr,
+                 const ParticleCollisionQuery* collisionQuery = nullptr);
 int BurstEmitter(ParticleEmitter& emitter, EntityId owner, const Mat4& world, uint32_t seedMix, int count);
 
 // Keys of a ParticleEmitter sizeOverLife/colorOverLife/opacityOverLife field, ascending in
@@ -127,7 +131,7 @@ struct InputState {
 };
 
 // Advances all behavior components by dt seconds (before physics).
-void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr);
+void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets = nullptr, PhysicsWorld* physics = nullptr);
 // Runs after physics: SpringBone and BoneAttachment (need `assets`), CameraFollow, Trail paths (so they follow physics bodies too).
 void UpdateLateSystems(Scene& scene, float dt, AssetManager* assets = nullptr);
 
