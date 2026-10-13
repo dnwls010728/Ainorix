@@ -5,7 +5,12 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (2f71c34). Includes A1 model/sprite
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (a5dbad4). Includes A2 isolated
+animation.preview/preview_state/preview_close and preview screenshots. The native Animation panel is
+a desktop authoring tool, not shipped player UI. Windows verification: 371 tests, with the final editor
+case also covering legacy layout migration/persistence; isolated preview software/D3D11 mean difference
+0.083/255. The refreshed player ran the model/sprite demo in headless Edge WebGL2 without script errors.
+Includes A1 model/sprite
 timeline events, model event sidecars, animation.events/set_events and onAnimationEvent callbacks
 before physics, with loop/reverse/completion handling and native snapshot replay support.
 See [ANIMATION.md](../../docs/ANIMATION.md). All earlier runtime changes remain included, including R9:
@@ -17,7 +22,7 @@ Packaging still patches the game's key into the runtime for keyed OEPAK002 archi
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,166,210 | b166b25feaaf1d1543ee52b53b2b53fa4320619d0b2c8ea566a737fddb897bdc |
+| oe_player.wasm | 6,193,528 | 330ee297af5538d4a8473c1fb7f2a3b53821f61608ce4f9bea58388230592b46 |
 
 Windows Release: 368 tests pass, including four A1 event tests. The A1 800x500 software/D3D11 demo's
 mean RGB difference is 0.089/255. Headless Edge (WebGL2 on SwiftShader) ran both model and sprite

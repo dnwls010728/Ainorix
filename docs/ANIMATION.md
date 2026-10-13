@@ -482,4 +482,3 @@ script/WebGL errors. Android libraries were rebuilt for both ABIs and retain 16 
 
 - [ ] Physical Android and Linux/EGL execution of animated models and A1 callbacks.
 - [ ] Real browser GPU/mobile rendering and performance (the browser check used SwiftShader).
-
