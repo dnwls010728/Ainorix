@@ -67,9 +67,20 @@ contacts in a real project through `sim.step`, `vfx.state`, or `oe render --fram
 `build/ParticleCollision`: `build/bin/oe editor build/ParticleCollision`, then Play. The left/center/right
 emitters show stop/bounce/die over a static floor.
 
-## Implementation status (work log)
+## Status
 
-- [x] Add static-only batched ray queries and captured emitter controls/responses.
-- [x] Verify 3D/2D collision, sensor/dynamic exclusions, motion channels, death chains and native restoration.
-- [x] Document bounded behavior, refresh API/editor schemas and leave a demonstration under `build/ParticleCollision`.
-- [ ] Rebuild web/Android players and verify the WebGL2 demonstration.
+Implemented for asset emitters, through both static physics backends and the shared deterministic
+simulation. 360 Windows tests pass. ParticleCollisionStaticQueriesAndResponses,
+ParticleCollisionLocalCaptureAndRestore and ParticleCollisionMotionChannelsAndDeathChain verify
+3D/2D domain separation, sensor/kinematic exclusions, high-speed sweeps, stop/bounce/die, restitution/
+friction, local nonuniform transforms, pinned anchors under owner movement, captured hot-reload
+settings, invalid authoring values, native future replay, position curves and deferred death children.
+The 800x500 demo after 120 frames has mean software/D3D11 RGB difference 0.429/255; Showcase retains
+hash 72ab07fb213fd42b. CLI images and the Effects editor screenshot were visually checked.
+
+Web and both Android players were rebuilt. Headless Edge/SwiftShader displayed the packaged 3D
+stop/bounce/die example without WebGL errors. Both Android ELF libraries retain 16KB LOAD alignment.
+
+- [ ] Particle collision on Android physical devices and Linux/EGL.
+- [ ] Browser 2D particle collision, real browser GPUs and device frame-rate measurements.
+- [ ] Existing skin/vertex-graph execution on minimum-capability WebGL2/GLES3 devices.

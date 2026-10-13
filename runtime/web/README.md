@@ -5,26 +5,25 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (ebabcd7). R7 adds Decal:
-box-projected textures/tints with order, volume/normal fades and a cached 1024-square atlas for sixteen
-visible projectors. It changes opaque/cutout base color before lighting, preserving depth/picking and
-excluding transparent receivers. The light-data texture is 8x33 RGBA32F; SSAO lens settings move into
-that texture. All earlier runtime features remain included; see [DECALS.md](../../docs/DECALS.md).
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (258200c). R8 adds VFX emitter
+collision (none/stop/bounce/die), birth-captured bounce/friction and 2D/3D choice, static-only batched
+physics ray queries, world-pinned stops and contact death chains. Isolated previews do not have
+colliders. No renderer/shader resources were added. All earlier runtime features remain included;
+see [PARTICLE_COLLISION.md](../../docs/PARTICLE_COLLISION.md).
 Packaging still patches the game's key into the runtime for keyed OEPAK002 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,065,105 | 0a96ade4aeaec826bcf1abd9ca8bd29ce398cbfc16b5f1407d97eb0de04d2d67 |
+| oe_player.wasm | 6,077,553 | 2bfe8e8a4fb7119251c42c4c9eb4713f243bb6d862d7208687454005fb839120 |
 
-Windows Release: 357 tests pass, including decal order/fades, atlas caching, hierarchy/rotation,
-texture alpha, cutout holes, displaced shader graphs, lighting and effects, thread-count determinism,
-and unchanged depth/IDs/UI. The 800x500 demo's software/D3D11 mean RGB difference is 0.168/255.
-Headless Edge (WebGL2 on SwiftShader) compiled and linked the generated mesh program and displayed
-the packaged stains/impacts/markings demo without shader/WebGL errors. The mesh fragment program uses
-208 vec4 uniform vectors plus 16 sampler uniforms (224 conservatively), and all 16 minimum texture units.
-No additional vertex-stage resources; the existing skin/vertex-graph minimum-device path remains unverified.
-Earlier browser checks are in Git history.
+Windows Release: 360 tests pass, including 3D/2D static collision, sensor/kinematic exclusion,
+high-speed stop/bounce/die, nonuniform local motion, birth capture, native restore, motion channels,
+and deferred onDeath children. The 800x500, 120-frame demo's software/D3D11 mean RGB difference is
+0.429/255. Headless Edge (WebGL2 on SwiftShader) displayed the packaged 3D stop/bounce/die demonstration
+without WebGL errors. Browser 2D particle collision was not separately checked. The mesh fragment
+budget stays 208 vec4 vectors plus 16 sampler uniforms (224 conservatively), with 16 texture units.
+The existing skin/vertex-graph minimum-device path remains unverified. Earlier browser checks are in Git history.
 
 Not verified on real browser GPUs or phones: frame rate, UIInput typing, sound output, touch, ads, and
 newer animation/physics/networking paths beyond the earlier recorded browser checks. A browser can join

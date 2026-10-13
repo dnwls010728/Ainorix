@@ -182,8 +182,11 @@ Rules for every item here:
   Implemented: `Decal`, 16 visible oriented boxes, ordered base-color projection, alpha/edge/normal fades.
   357 Windows tests and WebGL2 texture package checked; web and both Android runtimes rebuilt.
   Remaining: Android physical devices; Linux/EGL; real browser GPUs and existing minimum-device vertex path.
-- [ ] **R8 — Particles colliding with the world.** A VFX emitter option: particles stop, bounce or die on
+- [x] **R8 — Particles colliding with the world.** A VFX emitter option: particles stop, bounce or die on
   static colliders (rain on the ground, sparks), deterministic.
+  Implemented: birth-captured stop/bounce/die and coefficients, one static-only center sweep per moving particle/step.
+  360 Windows tests and WebGL2 3D demo checked; web and both Android runtimes rebuilt.
+  Remaining: Android physical devices; Linux/EGL; browser 2D collision, real GPUs and existing minimum-device vertex path.
 - [ ] **R9 — Screen-space reflection.** A `PostProcess` effect for glossy floors; falls back to the probe or
   sky where the ray leaves the screen.
 
