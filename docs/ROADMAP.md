@@ -187,8 +187,11 @@ Rules for every item here:
   Implemented: birth-captured stop/bounce/die and coefficients, one static-only center sweep per moving particle/step.
   360 Windows tests and WebGL2 3D demo checked; web and both Android runtimes rebuilt.
   Remaining: Android physical devices; Linux/EGL; browser 2D collision, real GPUs and existing minimum-device vertex path.
-- [ ] **R9 — Screen-space reflection.** A `PostProcess` effect for glossy floors; falls back to the probe or
+- [x] **R9 — Screen-space reflection.** A `PostProcess` effect for glossy floors; falls back to the probe or
   sky where the ray leaves the screen.
+  Implemented: camera SSR controls, material-aware fixed-step tracing and probe/sky fallback in both renderers.
+  361 Windows tests and WebGL2 demo/effect transitions checked; web and both Android runtimes rebuilt.
+  Remaining: physical Android, Linux/EGL, real browser GPUs and existing minimum-device skin/vertex-graph execution.
 
 Later, in no fixed order: motion blur, chromatic aberration, temporal anti-aliasing; volumetric light and fog;
 refraction, water, caustics; clear coat.

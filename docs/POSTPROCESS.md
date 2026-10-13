@@ -472,7 +472,7 @@ packaged graph execution is verified.
 
 ## Status
 
-Implemented in both renderers: vignette, exposure with Reinhard/ACES tone mapping, bloom, ambient-only SSAO, depth of field,
+Implemented in both renderers: vignette, exposure with Reinhard/ACES tone mapping, bloom, ambient-only SSAO, screen-space reflections, depth of field,
 FXAA, distance fog, colour grading and surface shader graphs (colour, emission, normal and vertex offset
 outputs, `MeshRenderer.shaderUniforms`, reserved `cameraPosition`/`lightDirection`). The committed web and
 Android players include all of them.
@@ -492,9 +492,14 @@ program and rendered the packaged demonstration without WebGL errors. Both Andro
 - [ ] SSAO rendering on an Android physical device, Linux/EGL and a real browser GPU.
 - [ ] Existing skin/vertex-graph execution on minimum-capability WebGL2/GLES3 devices.
 
-## R9 implementation status (work log)
+R9 SSR: 361 Windows tests pass; after the final constructor-order and format-capability cleanup,
+14 camera tests and GpuRendererMatchesSoftware pass again. Perspective/orthographic hits, probe/missing-ray
+fallback, rough/unlit exclusion, masked/transparent depth exclusion, unchanged depth/IDs/UI, nonfinite
+settings and thread-count determinism are covered. The 800x500 software/D3D11 demonstration's mean RGB
+difference is 0.146/255. Showcase retains hash 72ab07fb213fd42b with SSR off. CLI and Inspector screenshots
+were visually checked. Web/Android players were rebuilt from d428219; headless Edge/SwiftShader compiled
+and linked the mesh/SSR programs and rendered the packaged demo, including SSR/SSAO/DOF/bloom target
+transitions without WebGL errors. Both Android ELF files retain 16KB LOAD alignment.
 
-- [x] Camera SSR settings and matching deterministic software/GPU ray tracing, preserving probe/sky fallback.
-- [x] Regression tests, glossy-floor demonstration, CLI/editor screenshots and documentation.
-- [ ] Refreshed web/Android players, packaged WebGL2 verification and roadmap status.
-- [ ] Physical Android, Linux/EGL and real browser GPU execution (not available on this machine).
+- [ ] SSR on a physical Android device, Linux/EGL and a real browser GPU, including performance.
+- [ ] Existing skinned/vertex-graph rendering on minimum-capability WebGL2/GLES3 devices.

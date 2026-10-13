@@ -5,25 +5,25 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (258200c). R8 adds VFX emitter
-collision (none/stop/bounce/die), birth-captured bounce/friction and 2D/3D choice, static-only batched
-physics ray queries, world-pinned stops and contact death chains. Isolated previews do not have
-colliders. No renderer/shader resources were added. All earlier runtime features remain included;
-see [PARTICLE_COLLISION.md](../../docs/PARTICLE_COLLISION.md).
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (d428219). R9 adds
+PostProcess screen-space reflections (ssr, ssrDistance, ssrThickness), fixed 64-step rays with five
+hit refinements, material-aware reflected-ambient replacement and probe/sky fallback. All earlier
+runtime features remain included; see [POSTPROCESS.md](../../docs/POSTPROCESS.md).
 Packaging still patches the game's key into the runtime for keyed OEPAK002 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
 | oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
-| oe_player.wasm | 6,077,553 | 2bfe8e8a4fb7119251c42c4c9eb4713f243bb6d862d7208687454005fb839120 |
+| oe_player.wasm | 6,112,839 | ab70b94077b6f5bca233f9298226cf7916f893fc1aacbe9dd197625fc7a38eda |
 
-Windows Release: 360 tests pass, including 3D/2D static collision, sensor/kinematic exclusion,
-high-speed stop/bounce/die, nonuniform local motion, birth capture, native restore, motion channels,
-and deferred onDeath children. The 800x500, 120-frame demo's software/D3D11 mean RGB difference is
-0.429/255. Headless Edge (WebGL2 on SwiftShader) displayed the packaged 3D stop/bounce/die demonstration
-without WebGL errors. Browser 2D particle collision was not separately checked. The mesh fragment
-budget stays 208 vec4 vectors plus 16 sampler uniforms (224 conservatively), with 16 texture units.
-The existing skin/vertex-graph minimum-device path remains unverified. Earlier browser checks are in Git history.
+Windows Release: 361 tests pass; the final cleanup also passed 14 camera tests and GPU comparison.
+The 800x500 SSR demonstration's software/D3D11 mean RGB difference is 0.146/255, and SSR-off Showcase
+retains hash 72ab07fb213fd42b. Headless Edge (WebGL2 on SwiftShader) compiled/linked the mesh and SSR
+programs, displayed glossy reflections and switched SSR/SSAO/DOF/bloom targets without WebGL errors.
+SSR uses four color attachments and a separate five-texture pass; the mesh budget remains 208 vec4
+vectors plus 16 sampler uniforms (224 conservatively), with 16 texture units. Float color-buffer
+support is required. Minimum-device skin/vertex-graph execution remains unverified. Earlier checks
+are preserved in Git history.
 
 Not verified on real browser GPUs or phones: frame rate, UIInput typing, sound output, touch, ads, and
 newer animation/physics/networking paths beyond the earlier recorded browser checks. A browser can join
