@@ -270,7 +270,6 @@ layout(binding=2) uniform mesh_lights {
     vec4 probe_opt[4];   // x: 1 = box projection, y: 1 = the picture replaces the diffuse ambient too
     mat4 ssao_inverse;   // OpenGL inverse view-projection, for depth reconstruction
     vec4 ssao_proj;      // xy: projection scale, z: orthographic, w: strength
-    vec4 ssao_lens;      // x: world radius, y: world bias, zw: target size
 };
 
 // Analytic sky color along a world direction. Mirrors SampleSky in RenderScene.h; keep identical.
@@ -298,17 +297,49 @@ layout(binding=7) uniform texture2D probe0_tex;  // reflection probe pictures, l
 layout(binding=8) uniform texture2D probe1_tex;
 layout(binding=9) uniform texture2D probe2_tex;
 layout(binding=10) uniform texture2D probe3_tex;
-// 8x19 RGBA32F: spots and sky/probe SH, local-light slots/matrices/bias, planar matrix at 144.
+// 8x33 RGBA32F: lights/probes, local shadows, planar matrix at 144, SSAO lens 148, decals 149/152.
 layout(binding=11) uniform texture2D spot_tex;
 layout(binding=3) uniform sampler spot_smp;
 layout(binding=12) uniform texture2D local_shadow_tex; // 4x4 atlas of 512-square perspective depth maps
 layout(binding=13) uniform texture2D ssao_depth_tex;
 layout(binding=14) uniform texture2D planar_tex;
 layout(binding=4) uniform sampler planar_smp;
+layout(binding=15) uniform texture2D decal_tex;
+
+vec4 light_data(int index) {
+    return texelFetch(sampler2D(spot_tex, spot_smp), ivec2(index % 8, index / 8), 0);
+}
+
+// Projected color only: preserve receiver alpha, depth and normal maps. Mirrors ApplyDecals.
+vec3 decal_color(vec3 position, vec3 normal, vec3 base) {
+    if (color_range.w > 0.5) return base;
+    int count = int(fog_range.w);
+    for (int i = 0; i < 16; ++i) {
+        if (i >= count) break;
+        int start = 152 + i*7;
+        mat4 to_box = mat4(light_data(start),light_data(start+1),light_data(start+2),light_data(start+3));
+        vec3 local = (to_box*vec4(position,1.0)).xyz;
+        float edge = 0.5 - max(abs(local.x),max(abs(local.y),abs(local.z)));
+        if (edge < 0.0) continue;
+        vec4 color = light_data(start+4);
+        vec4 params = light_data(start+5);
+        vec3 direction = light_data(start+6).xyz;
+        float fade = params.x > 0.0 ? clamp(edge/params.x,0.0,1.0) : 1.0;
+        float facing = clamp((dot(normal,direction)-params.y)/(1.0-params.y),0.0,1.0);
+        float alpha = color.a*fade*facing;
+        if (alpha <= 0.0) continue;
+        vec2 uv = vec2(local.x+0.5,0.5-local.z);
+        uv = (vec2(float(i%4),float(i/4))*256.0+1.0+uv*254.0)/1024.0;
+        vec4 texel = textureLod(sampler2D(decal_tex,planar_smp),uv,0.0);
+        base = mix(base,texel.rgb*color.rgb,alpha*texel.a);
+    }
+    return base;
+}
 
 // Mirrors Lighting::AmbientVisibility. Transparent surfaces receive no SSAO.
 float ambient_visibility(vec3 position, vec3 normal) {
     if (ssao_proj.w <= 0.0 || color_range.w > 0.5) return 1.0;
+    vec4 ssao_lens = light_data(148);
     float depth = max(0.01, dot(position - eye.xyz, view_axis.xyz));
     float scale = ssao_proj.z > 0.5 ? 1.0 : 1.0 / depth;
     vec2 radius = min(vec2(64.0), ssao_lens.x * abs(ssao_proj.xy) * scale * ssao_lens.zw * 0.5);
@@ -364,9 +395,6 @@ float ambient_visibility(vec3 position, vec3 normal) {
     return 1.0 - ssao_proj.w * clamp(occlusion * 0.125, 0.0, 1.0);
 }
 
-vec4 light_data(int index) {
-    return texelFetch(sampler2D(spot_tex, spot_smp), ivec2(index % 8, index / 8), 0);
-}
 mat4 local_shadow_matrix(int tile) {
     int start = 82 + tile * 4;
     return mat4(light_data(start), light_data(start + 1), light_data(start + 2), light_data(start + 3));
@@ -568,6 +596,15 @@ void main() {
     SurfaceGraph(uv,graphNormal,base,alpha,graphEmission,graphLightNormal);
     if (alpha < flags.z) {
         discard;
+    }
+    if (fog_range.w > 0.0 && color_range.w < 0.5) {
+        vec3 decalNormal = normalize(v_nrm);
+        if (emissive.w > 0.5) {
+            vec3 face = normalize(cross(dFdx(v_wpos),dFdy(v_wpos)));
+            decalNormal = dot(face,decalNormal) < 0.0 ? -face : face;
+        }
+        if (flags.w > 0.5 && !gl_FrontFacing) decalNormal = -decalNormal;
+        base = decal_color(v_wpos,decalNormal,base);
     }
     vec3 color = base;
     if (flags.x < 0.5) {

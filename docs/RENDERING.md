@@ -290,3 +290,9 @@ Free-camera overrides in `render.screenshot` and `render.pick` accept `projectio
 A flat MeshRenderer with PlanarReflection captures moving scenery from a reflected camera each frame.
 Both renderers share receiver selection, projection and oblique clipping; one visible receiver per view,
 no recursive captures. See [PLANAR_REFLECTION.md](PLANAR_REFLECTION.md) for fields, limits and verification.
+
+## Projected decals
+
+Decal boxes blend a texture/tint into opaque or alpha-mask surface base color before lighting,
+with deterministic order, volume/normal fades and a shared cached atlas in both renderers.
+Depth and receiver entity IDs stay unchanged; see [DECALS.md](DECALS.md) for fields and limits.

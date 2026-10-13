@@ -770,6 +770,32 @@ struct Skybox {
     }
 };
 
+struct Decal {
+    static constexpr const char* kTypeName = "Decal";
+    static constexpr const char* kDoc = "A texture/tint projected along local -Y onto opaque/cutout surfaces in this oriented box, before lighting. First sixteen visible projectors by order then id.";
+    std::string texture;           // Project texture; empty is a solid color.
+    Vec3 size{1,1,1};              // Full local box dimensions; hierarchy/scale also apply.
+    Color color{1,1,1};
+    float opacity = 1;             // Texture alpha multiplier; scripts can fade it on simulated time.
+    float edgeFade = 0.1f;         // Feather width as a fraction of each normalized box axis.
+    float normalThreshold = 0.2f;  // Reject surfaces facing away from local +Y.
+    int order = 0;                // Lower first, higher painted over; entity id breaks ties.
+    bool enabled = true;
+    static void Reflect(FieldList& f) {
+        f.Add("texture", &Decal::texture, "Projected texture with alpha; empty paints solid color. Resampled to a 254-square atlas tile.");
+        f.Add("size", &Decal::size, "Full local box dimensions (positive, at most 1000 per axis). Transform hierarchy and scale apply.");
+        f.Add("color", &Decal::color, "RGB tint of the projected texture (bounded 0..1).");
+        FieldInfo& opacityField = f.Add("opacity", &Decal::opacity, "Projected alpha multiplier (0..1). 0 skips this decal; scripts can animate it.");
+        opacityField.hasRange = true; opacityField.min = 0; opacityField.max = 1;
+        FieldInfo& fadeField = f.Add("edgeFade", &Decal::edgeFade, "Feather at all six box boundaries, as a fraction of the normalized box (0..0.5). 0 is a hard boundary.");
+        fadeField.hasRange = true; fadeField.min = 0; fadeField.max = 0.5f;
+        FieldInfo& thresholdField = f.Add("normalThreshold", &Decal::normalThreshold, "Surface normal dot local +Y below this rejects projection; above it fades toward full coverage (-1..0.99).");
+        thresholdField.hasRange = true; thresholdField.min = -1; thresholdField.max = 0.99f;
+        f.Add("order", &Decal::order, "Lower draws first, higher covers it. First sixteen visible enabled boxes by order then entity id.");
+        f.Add("enabled", &Decal::enabled, "Enable this box projector; disabled decals cost no atlas/sample work.");
+    }
+};
+
 struct PlanarReflection {
     static constexpr const char* kTypeName = "PlanarReflection";
     static constexpr const char* kDoc = "A live one-sided reflection on this entity's flat MeshRenderer. One visible surface per view; captures moving scenery without recursive mirrors.";

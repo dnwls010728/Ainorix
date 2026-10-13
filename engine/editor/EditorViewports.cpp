@@ -216,6 +216,7 @@ void NativeEditor::Impl::SceneOverlays(ImDrawList* dl) {
         else if (row.Has("SpotLight") && !row.Has("MeshRenderer")) letter = "S", col = IM_COL32(255, 190, 90, 230);
         else if (row.Has("PointLight") && !row.Has("MeshRenderer")) letter = "P", col = IM_COL32(255, 190, 90, 230);
         else if (row.Has("ReflectionProbe") && !row.Has("MeshRenderer")) letter = "R", col = IM_COL32(140, 190, 255, 230);
+        else if (row.Has("Decal") && !row.Has("MeshRenderer")) letter = "D", col = IM_COL32(220, 155, 110, 230);
         else if (row.Has("AudioSource") && !row.Has("MeshRenderer")) letter = "S", col = IM_COL32(140, 220, 255, 230);
         if (!letter || !scene.Exists(row.id)) continue;
         ImVec2 s;
@@ -508,6 +509,16 @@ void NativeEditor::Impl::ScenePanel() {
                 if (!(c & bit)) view.lines.push_back({corner(c), corner(c | bit), color});
         for (const Vec3& axis : {Vec3(0.25f, 0, 0), Vec3(0, 0.25f, 0), Vec3(0, 0, 0.25f)})
             view.lines.push_back({lightCenter - axis, lightCenter + axis, color});
+    }
+    if (const Decal* decal = scene.Get<Decal>(lightId)) {
+        const Vec3 size = decal->size;
+        auto corner = [&](int c) { return lightWorld.TransformPoint(Vec3(c&1 ? size.x*0.5f : -size.x*0.5f,
+                                                                       c&2 ? size.y*0.5f : -size.y*0.5f,
+                                                                       c&4 ? size.z*0.5f : -size.z*0.5f)); };
+        const Color color = decal->enabled ? Color(0.9f,0.65f,0.4f) : Color(0.45f,0.45f,0.45f);
+        for (int c = 0; c < 8; ++c) for (int bit : {1,2,4})
+            if (!(c&bit)) view.lines.push_back({corner(c),corner(c|bit),color});
+        view.lines.push_back({lightCenter,lightWorld.TransformPoint(Vec3(0,-size.y*0.5f,0)),color});
     }
     if (const PlanarReflection* mirror = scene.Get<PlanarReflection>(lightId)) {
         const Vec3 origin = lightWorld.TransformPoint(mirror->offset);

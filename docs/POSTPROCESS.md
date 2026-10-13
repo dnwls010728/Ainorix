@@ -101,7 +101,7 @@ provide the same fields through CLI, HTTP and MCP.
 The GPU uses an additional single-sample R32F depth-color target before lighting; unsupported devices
 report an error when SSAO is requested. WebGL2/GLES3 needs float color-buffer support, as for depth of
 field. SSAO coexists with MSAA, DOF, HDR, bloom and FXAA. Its depth texture uses binding 13: the mesh
-fragment program uses 15 of the GLES3 minimum 16 texture units with R6 planar reflections and 209 vec4 uniform vectors, or 224
+fragment program uses 16 of the GLES3 minimum 16 texture units with R6 planar reflections and R7 decals and 208 vec4 uniform vectors, or 224
 including a conservative vector per sampler, at the minimum 224. No vertex-stage resources were
 added. The existing skin/vertex-graph uniform requirements still need minimum-device verification.
 

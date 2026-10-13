@@ -51,6 +51,7 @@
 #include "render/GraphSource.h"
 #include "render/PostProcess.h"
 #include "render/PlanarReflection.h"
+#include "render/Decals.h"
 #include "render/shaders/Shaders.glsl.h"
 #include "render/RenderScene.h"
 #include "render/ShaderGraph.h"
@@ -4955,11 +4956,12 @@ TEST(SpotLightRendering) {
     const sg_shader_desc* descriptor = oe_mesh_shader_desc(SG_BACKEND_GLES3);
     const size_t uniformVectors = (descriptor->uniform_blocks[UB_oe_mesh_lights].size +
                                    descriptor->uniform_blocks[UB_oe_mesh_material].size) / (4 * sizeof(float));
-    CHECK(uniformVectors + 15 <= 224);
+    CHECK(uniformVectors + 16 <= 224);
     static_assert(VIEW_oe_spot_tex < 16, "Spot texture must fit the GLES3 fragment texture-unit minimum");
     static_assert(VIEW_oe_local_shadow_tex < 16, "Local shadows must fit the GLES3 fragment texture-unit minimum");
     static_assert(VIEW_oe_ssao_depth_tex < 16, "SSAO must fit the GLES3 fragment texture-unit minimum");
     static_assert(VIEW_oe_planar_tex < 16, "Planar reflection must fit the GLES3 fragment texture-unit minimum");
+    static_assert(VIEW_oe_decal_tex < 16, "Decals must fit the GLES3 fragment texture-unit minimum");
     const std::string project = TempProject("spot_rendering");
     Engine e; std::string error;
     CHECK(e.Open(project, &error));
@@ -10911,6 +10913,130 @@ TEST(SpriteCutoutShadows) {
         CHECK(level(-0.5f, -1) < gpuOpen - 60);
         CHECK(std::abs(level(0.5f, -1) - gpuOpen) <= 2);
     } else std::printf("  SKIP sprite shadow GPU check (%s)\n", err.c_str());
+}
+
+TEST(DecalProjectionOrderFadeAndParity) {
+    const std::string project = TempProject("decals_render");
+    Engine e; std::string error; CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Floor","components":{"Transform":{"scale":[8,1,8]},"MeshRenderer":{"mesh":"plane","color":[1,1,1],"unlit":true}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Red","components":{"Decal":{"size":[3,0.6,3],"color":[1,0,0],"edgeFade":0}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"UI","components":{"UIPanel":{"x":0,"y":0,"width":8,"height":8,"color":[0,1,0],"opacity":1}}})")["ok"].asBool());
+    const EntityId floor = e.GetScene().FindByName("Floor");
+    RenderView view = MakeLookAtView(Vec3(4,3,5),Vec3(),50,1.5f); view.drawUI = true;
+    RenderTarget painted, faded, off, gpu; for(auto* t : {&painted,&faded,&off,&gpu}) t->Resize(240,160);
+    const bool haveGpu = e.EnableGpu(nullptr,&error);
+    auto compare = [&](const RenderTarget& reference) {
+        if (!haveGpu) return;
+        e.Gpu()->Render(e.GetScene(),view,gpu);
+        double sum = 0;
+        for(size_t i=0;i<gpu.color.size();++i) for(int shift : {0,8,16})
+            sum += std::abs(static_cast<int>((gpu.color[i]>>shift)&255)-static_cast<int>((reference.color[i]>>shift)&255));
+        const double mean = sum/(gpu.color.size()*3); std::printf("  decal software/GPU mean %.3f/255\n",mean); CHECK(mean<2);
+    };
+    e.Renderer().Render(e.GetScene(),view,painted); compare(painted);
+    int red = 0;
+    for(size_t i=0;i<painted.color.size();++i) red += painted.ids[i]==floor && (painted.color[i]&255)>200 && ((painted.color[i]>>8)&255)<10;
+    CHECK(red>300);
+    CHECK(Call(e,"component.set",R"({"id":"Red","type":"Decal","values":{"enabled":false}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,off);
+    CHECK(off.Hash()!=painted.Hash() && off.depth==painted.depth && off.ids==painted.ids && off.color[0]==painted.color[0]);
+    CHECK(Call(e,"history.undo","{}")["ok"].asBool());
+    CHECK(Call(e,"component.set",R"({"id":"Red","type":"Decal","values":{"edgeFade":0.3,"opacity":0.5}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,faded); compare(faded);
+    int feathered = 0;
+    for(size_t i=0;i<faded.color.size();++i) feathered += faded.ids[i]==floor && ((faded.color[i]>>8)&255)>127 && ((faded.color[i]>>8)&255)<250;
+    CHECK(feathered>100);
+    CHECK(Call(e,"history.undo","{}")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Blue","components":{"Decal":{"size":[1.5,0.6,1.5],"color":[0,0,1],"edgeFade":0,"order":10}}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,painted); compare(painted);
+    auto blues = [&] { int count=0; for(size_t i=0;i<painted.color.size();++i) count += painted.ids[i]==floor && ((painted.color[i]>>16)&255)>200 && (painted.color[i]&255)<10; return count; };
+    CHECK(blues()>100);
+    CHECK(Call(e,"component.set",R"({"id":"Red","type":"Decal","values":{"order":20}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,painted); CHECK(blues()==0); compare(painted);
+    CHECK(Call(e,"component.set",R"({"id":"Blue","type":"Decal","values":{"enabled":false}})")["ok"].asBool());
+    Image image; image.width=image.height=2; image.rgba={255,0,0,255,255,0,0,0,255,0,0,255,255,0,0,0};
+    CHECK(WritePng(project+"/stamp.png",image,true));
+    CHECK(Call(e,"component.set",R"({"id":"Red","type":"Decal","values":{"texture":"stamp.png","color":[1,1,1]}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,painted); compare(painted);
+    SetMaxRenderThreads(1); e.Renderer().Render(e.GetScene(),view,faded); SetMaxRenderThreads(16);
+    CHECK(painted.Hash()==faded.Hash());
+    // A wall receiver and a rotated projector exercise full 3D local-box coordinates.
+    CHECK(Call(e,"component.set",R"({"id":"Floor","type":"Transform","values":{"rotation":[90,0,0]}})")["ok"].asBool());
+    CHECK(Call(e,"component.set",R"({"id":"Red","type":"Transform","values":{"rotation":[90,0,0]}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,painted); compare(painted);
+    view.proj=Mat4::Orthographic(4,1.5f,0.1f,100);
+    e.Renderer().Render(e.GetScene(),view,painted); compare(painted);
+    // Blended surfaces are excluded even though they pass through the box.
+    CHECK(Call(e,"component.set",R"({"id":"Floor","type":"MeshRenderer","values":{"opacity":0.4}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,painted);
+    CHECK(Call(e,"component.set",R"({"id":"Red","type":"Decal","values":{"enabled":false}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,off); CHECK(off.Hash()==painted.Hash());
+    compare(off);
+    Scene restored; CHECK(restored.FromJson(e.GetScene().ToJson(),&error));
+    CHECK(restored.Get<Decal>(restored.FindByName("Red"))->texture=="stamp.png");
+    CHECK(RemoveAll(project));
+}
+
+TEST(DecalLitCutoutGraphAndEffects) {
+    const std::string project = TempProject("decals_cutout");
+    Engine e; std::string error; CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    Image image; image.width=2; image.height=1; image.rgba={255,255,255,255,255,255,255,0};
+    CHECK(WritePng(project+"/half.png",image,true));
+    CHECK(Call(e,"shader.create",R"({"path":"surface.shader.json","graph":{"nodes":[{"op":"baseColor"},{"op":"constant","value":[0.3,0,0,0]}],"color":0,"offset":1}})")["ok"].asBool());
+    CHECK(Call(e,"material.create",R"({"path":"cutout.mat.json","values":{"baseTexture":"half.png","alphaMode":"mask","shader":"surface.shader.json"}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0.5,0.5,0.5],"shadows":false}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Receiver","components":{"Transform":{"rotation":[90,0,0],"scale":[4,1,4]},"MeshRenderer":{"mesh":"plane","material":"cutout.mat.json"}}})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Mark","components":{"Transform":{"rotation":[90,0,0]},"Decal":{"size":[8,1,8],"color":[1,0,0],"edgeFade":0,"enabled":false}}})")["ok"].asBool());
+    RenderView view=MakeLookAtView(Vec3(0,0,10),Vec3(),50,1.5f); view.proj=Mat4::Orthographic(3,1.5f,0.1f,100);
+    RenderTarget off,on,gpu; for(auto* t:{&off,&on,&gpu})t->Resize(180,120);
+    e.Renderer().Render(e.GetScene(),view,off);
+    CHECK(Call(e,"component.set",R"({"id":"Mark","type":"Decal","values":{"enabled":true}})")["ok"].asBool());
+    e.Renderer().Render(e.GetScene(),view,on);
+    CHECK(off.depth==on.depth && off.ids==on.ids);
+    const EntityId receiver=e.GetScene().FindByName("Receiver"); int painted=0,holes=0;
+    for(size_t i=0;i<on.color.size();++i) {
+        if(on.ids[i]==receiver) { const uint32_t c=on.color[i]; painted+=(c&255)>100 && (c&255)<200 && ((c>>8)&255)<10; }
+        else { CHECK(on.color[i]==off.color[i]); ++holes; }
+    }
+    std::printf("  lit decal: %d painted pixels, %d background/hole pixels\n",painted,holes);
+    CHECK(painted>500 && holes>500);
+    const bool haveGpu=e.EnableGpu(nullptr,&error);
+    if(haveGpu) for(bool effects:{false,true}) {
+        if(effects) { view.postProcess.ssao=0.8f; view.postProcess.dofRadius=3; view.postProcess.dofFocus=10; view.postProcess.bloom=0.2f; view.postProcess.exposure=0.8f; }
+        e.Renderer().Render(e.GetScene(),view,on); e.Gpu()->Render(e.GetScene(),view,gpu);
+        double sum=0;
+        for(size_t i=0;i<on.color.size();++i)for(int shift:{0,8,16})sum+=std::abs(static_cast<int>((on.color[i]>>shift)&255)-static_cast<int>((gpu.color[i]>>shift)&255));
+        const double mean=sum/(on.color.size()*3); std::printf("  lit/cutout/displaced decal %s mean %.3f/255\n",effects?"effects":"plain",mean); CHECK(mean<2);
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(DecalBoundsCoverageAndAtlasCache) {
+    const std::string project = TempProject("decals_contract");
+    Engine e; std::string error; CHECK(e.Open(project,&error));
+    CHECK(Call(e,"scene.new",R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e,"entity.create",R"({"name":"Parent","components":{"Transform":{"position":[0,1,0],"rotation":[0,30,0],"scale":[2,1,3]}}})")["ok"].asBool());
+    for(int i=0;i<18;++i) {
+        const std::string args=std::string(R"({"name":"Decal","parent":"Parent","components":{"Decal":{"order":)")+std::to_string(17-i)+R"(,"size":[2,1,2]}}})";
+        CHECK(Call(e,"entity.create",args.c_str())["ok"].asBool());
+    }
+    RenderView view=MakeLookAtView(Vec3(5,4,6),Vec3(),50,1.5f);
+    auto decals=GatherDecals(e.GetScene(),&e.Assets(),view);
+    CHECK(decals.size()==16 && decals.front().order==0 && decals.back().order==15);
+    const Vec3 center(0,1,0); float u=0,v=0;
+    CHECK(DecalCoverage(decals[0],center,Vec3(0,1,0),u,v)==1 && u==0.5f && v==0.5f);
+    CHECK(DecalCoverage(decals[0],center,Vec3(0,-1,0),u,v)==0);
+    CHECK(DecalCoverage(decals[0],center+Vec3(100,0,0),Vec3(0,1,0),u,v)==0);
+    DecalAtlas atlas; const auto first=atlas.Prepare(decals);
+    CHECK(first && atlas.Prepare(decals)==first);
+    auto texture=std::make_shared<Texture>(); texture->width=texture->height=1; texture->texels={0xFF0000FF};
+    decals[0].texture=texture; const auto red=atlas.Prepare(decals); CHECK(red!=first);
+    texture->texels[0]=0xFFFF0000; ++texture->version;
+    CHECK(atlas.Prepare(decals)!=red);
+    CHECK(!atlas.Prepare({}));
+    CHECK(RemoveAll(project));
 }
 
 TEST(PlanarReflectionSelectionAndBounds) {

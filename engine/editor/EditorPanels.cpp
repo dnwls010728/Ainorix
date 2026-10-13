@@ -42,6 +42,7 @@ EntityIcon EntityKindIcon(const EntityRow& r) {
     if (r.Has("Skybox")) return {kIconSun, ImVec4(0.55f, 0.75f, 1.0f, 1)};
     if (r.Has("ReflectionProbe")) return {kIconBox, ImVec4(0.55f, 0.75f, 1.0f, 1)};
     if (r.Has("PlanarReflection")) return {kIconGrid3x3, ImVec4(0.55f, 0.75f, 1.0f, 1)};
+    if (r.Has("Decal")) return {kIconGrid3x3, ImVec4(0.8f, 0.55f, 0.4f, 1)};
     if (r.Has("CharacterBody") || r.Has("CharacterBody2D")) return {kIconPersonStanding, ImVec4(0.52f, 0.86f, 0.82f, 1)};
     if (r.Has("RigidBody") || r.Has("RigidBody2D")) return {kIconAtom, ImVec4(0.58f, 0.86f, 0.58f, 1)};
     if (r.Has("Tilemap")) return {kIconGrid3x3, ImVec4(0.78f, 0.66f, 1.0f, 1)};

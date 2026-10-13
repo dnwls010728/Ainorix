@@ -18,6 +18,7 @@
 #include "render/RenderScene.h"
 #include "render/PostProcess.h"
 #include "render/PlanarReflection.h"
+#include "render/Decals.h"
 #include "render/UI.h"
 #include "render/shaders/Shaders.glsl.h"
 #include "scene/Components.h"
@@ -679,6 +680,7 @@ struct GpuRenderer::Impl {
     float spotData[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
     StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
     Targets offscreen, window, planarTarget;
+    DecalAtlas decalAtlas;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
 
     // Shader graphs compiled into their own mesh/surface programs (GraphSource.h); pipelines are made
@@ -1464,10 +1466,21 @@ struct GpuRenderer::Impl {
 
     // Immutable replacements also permit several editor viewports with different scenes in one sokol frame.
     sg_view SpotTextureFor(const RenderLights& lights, const std::vector<RenderProbe>& probes, const LocalShadowSet& shadows,
-                          const RenderPlanarReflection& planar) {
-        if (lights.spots.empty() && !lights.env.map && probes.empty() && shadows.lights.empty() && planar.id == kNullEntity) return whiteTex;
+                          const RenderPlanarReflection& planar, const std::vector<RenderDecal>& decals, const RenderView& view, int width, int height) {
+        const PostProcess post = NormalizePostProcess(view.postProcess);
+        if (lights.spots.empty() && !lights.env.map && probes.empty() && shadows.lights.empty() && planar.id == kNullEntity && decals.empty() && post.ssao == 0) return whiteTex;
         float data[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
         if (planar.id != kNullEntity) Put(data + kPlanarMatrixTexel * 4, planar.view.proj * planar.view.view);
+        Put(data + 148*4,post.ssaoRadius,post.ssaoBias,static_cast<float>(width),static_cast<float>(height));
+        Put(data + 149*4,static_cast<float>(decals.size()),0,0,0);
+        for (size_t i = 0; i < decals.size(); ++i) {
+            const RenderDecal& decal = decals[i];
+            const size_t start = static_cast<size_t>(kDecalDataStart) + i*kDecalDataStride;
+            Put(data + start*4,decal.worldToBox);
+            Put(data + (start+4)*4,decal.color.r,decal.color.g,decal.color.b,decal.opacity);
+            Put(data + (start+5)*4,decal.edgeFade,decal.normalThreshold,0,0);
+            Put(data + (start+6)*4,decal.normal.x,decal.normal.y,decal.normal.z,0);
+        }
         for (size_t i = 0; i < lights.spots.size(); ++i) {
             const RenderSpotLight& light = lights.spots[i];
             Put(data + i * 4, light.pos.x, light.pos.y, light.pos.z, light.range);
@@ -1521,6 +1534,8 @@ struct GpuRenderer::Impl {
         } else if (!view.reflectionCapture) {
             planarTarget.Destroy();
         }
+        const std::vector<RenderDecal> decals = GatherDecals(scene,assets,view);
+        const std::shared_ptr<const Texture> decalPicture = decalAtlas.Prepare(decals);
         RenderLights lights = GatherRenderLights(scene, assets);
         const LocalShadowSet localShadows = SelectLocalShadows(lights, view.proj * view.view, view.eye);
         if (!localShadows.maps.empty() && !localShadowAtlas.id) {
@@ -1855,7 +1870,7 @@ struct GpuRenderer::Impl {
             const PostProcess fog = NormalizePostProcess(view.postProcess);
             Put(lu.ambient_ground, lights.groundAmbient.r, lights.groundAmbient.g, lights.groundAmbient.b, lights.hemisphere ? 1.0f : 0.0f);
             Put(lu.fog_color, fog.fogColor.r, fog.fogColor.g, fog.fogColor.b, fog.fog);
-            Put(lu.fog_range, fog.fogStart, fog.fogEnd, static_cast<float>(lights.spots.size()), 0);
+            Put(lu.fog_range, fog.fogStart, fog.fogEnd, static_cast<float>(lights.spots.size()), static_cast<float>(decals.size()));
             // Camera forward: minus the third row of the view matrix.
             Put(lu.view_axis, -view.view.at(2, 0), -view.view.at(2, 1), -view.view.at(2, 2), 0);
             for (int i = 0; i < dirs; ++i) {
@@ -1875,13 +1890,13 @@ struct GpuRenderer::Impl {
             Put(lu.env_map, env.map ? 1.0f : 0.0f, env.map ? env.map->MaxLod() : 0.0f, env.yawCos, env.yawSin);
             // Reflection probes of this frame; the slots without one keep the white texture.
             const std::vector<RenderProbe> probes = ActiveProbes(scene, assets, lights, viewProj, view.eye);
-            const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows, planar);
+            const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows, planar, decals, view, t.width, t.height);
+            const sg_view decalTexture = TextureFor(decalPicture);
             sg_view probeTex[kMaxProbes];
             Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
             const PostProcess ambientPost = NormalizePostProcess(view.postProcess);
             Put(lu.ssao_inverse, viewProj.Inverse());
             Put(lu.ssao_proj, view.proj.at(0, 0), view.proj.at(1, 1), view.proj.at(3, 3) == 1 ? 1.0f : 0.0f, ambientPost.ssao);
-            Put(lu.ssao_lens, ambientPost.ssaoRadius, ambientPost.ssaoBias, static_cast<float>(t.width), static_cast<float>(t.height));
             for (int i = 0; i < kMaxProbes; ++i) {
                 probeTex[i] = whiteTex;
                 if (static_cast<size_t>(i) >= probes.size()) continue;
@@ -1958,6 +1973,7 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_local_shadow_tex] = localShadowTex.id ? localShadowTex : shadowTex;
                 b.views[VIEW_oe_ssao_depth_tex] = t.ssao ? t.ssaoDepthTex : whiteTex;
                 b.views[VIEW_oe_planar_tex] = planar.id != kNullEntity ? planarTarget.sceneTex : whiteTex;
+                b.views[VIEW_oe_decal_tex] = decalTexture.id ? decalTexture : whiteTex;
                 b.samplers[SMP_oe_planar_smp] = linearClamp;
                 b.samplers[SMP_oe_spot_smp] = nearestClamp;
                 b.samplers[SMP_oe_env_smp] = envSampler;

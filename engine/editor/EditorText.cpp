@@ -791,6 +791,7 @@ const Entry kCatalog[] = {
     {"Sky", "하늘", "空"},
     {"Reflection Probe", "리플렉션 프로브", "リフレクションプローブ"},
     {"Planar Reflection", "평면 반사", "平面反射"},
+    {"Decal", "데칼", "デカール"},
     {"Physics Crate", "물리 상자", "物理ボックス"},
     {"Physics Ball", "물리 공", "物理ボール"},
     {"Static Wall", "고정 벽", "静的な壁"},

@@ -114,6 +114,8 @@ struct Lighting {
     RenderPlanarReflection planar;
     Texture planarTexture;
     Mat4 planarViewProj;
+    std::vector<RenderDecal> decals;
+    std::shared_ptr<const Texture> decalAtlas;
 
     Color PlanarColor(EntityId id, const Vec3& position, const Color& original) const {
         if (id != planar.id || planarTexture.texels.empty()) return original;
@@ -512,6 +514,11 @@ private:
                     continue;
                 }
                 if (!mat.blend) depth_[idx] = z;
+                if (!mat.blend && !lighting->decals.empty()) {
+                    Vec3 normal = mat.flat ? faceN : Normalize(a.nrm*p0 + b.nrm*p1 + c.nrm*p2);
+                    if (backFace) normal = -normal;
+                    base = ApplyDecals(lighting->decals,lighting->decalAtlas.get(),a.wpos*p0+b.wpos*p1+c.wpos*p2,normal,base);
+                }
                 Color out = base;
                 if (!m.unlit) {
                     Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
@@ -772,6 +779,8 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
         lighting.planarTexture.texels = std::move(reflected.color);
         lighting.planarViewProj = lighting.planar.view.proj * lighting.planar.view.view;
     }
+    lighting.decals = GatherDecals(scene,assets_,view);
+    lighting.decalAtlas = decalAtlas_.Prepare(lighting.decals);
     lighting.ambient = fillFloor(gathered.ambient);
     lighting.groundAmbient = fillFloor(gathered.groundAmbient);
     lighting.hemisphere = gathered.hemisphere;

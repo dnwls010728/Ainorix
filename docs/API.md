@@ -2523,6 +2523,21 @@ A live one-sided reflection on this entity's flat MeshRenderer. One visible surf
 | `clipBias` | float | `0.00999999978` | World-space clipping offset above the plane (0.001..0.1 meters). Excludes geometry behind the mirror. |
 | `enabled` | bool | `true` | Enable live planar capture; disable to use the ordinary material. |
 
+### Decal
+
+A texture/tint projected along local -Y onto opaque/cutout surfaces in this oriented box, before lighting. First sixteen visible projectors by order then id.
+
+| field | type | default | description |
+|---|---|---|---|
+| `texture` | string | `""` | Projected texture with alpha; empty paints solid color. Resampled to a 254-square atlas tile. |
+| `size` | vec3 | `[1,1,1]` | Full local box dimensions (positive, at most 1000 per axis). Transform hierarchy and scale apply. |
+| `color` | color | `[1,1,1]` | RGB tint of the projected texture (bounded 0..1). |
+| `opacity` | float | `1` | Projected alpha multiplier (0..1). 0 skips this decal; scripts can animate it. |
+| `edgeFade` | float | `0.100000001` | Feather at all six box boundaries, as a fraction of the normalized box (0..0.5). 0 is a hard boundary. |
+| `normalThreshold` | float | `0.200000003` | Surface normal dot local +Y below this rejects projection; above it fades toward full coverage (-1..0.99). |
+| `order` | int | `0` | Lower draws first, higher covers it. First sixteen visible enabled boxes by order then entity id. |
+| `enabled` | bool | `true` | Enable this box projector; disabled decals cost no atlas/sample work. |
+
 ### CameraFollow
 
 Moves this entity (usually the camera) to target + offset after physics each frame and aims it at the target.

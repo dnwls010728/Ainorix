@@ -133,6 +133,8 @@ const Preset kPresets[] = {
     {"probe", "Rendering", "Reflection Probe", "Reflection Probe", R"({"Transform":{"position":[0,1.5,0]},"ReflectionProbe":{}})"},
     {"planar", "Rendering", "Planar Reflection", "Planar Reflection",
      R"({"Transform":{"scale":[4,1,4]},"MeshRenderer":{"mesh":"plane","castShadows":false},"PlanarReflection":{}})"},
+    {"decal", "Rendering", "Decal", "Decal",
+     R"({"Transform":{"position":[0,0.05,0]},"Decal":{"size":[2,0.3,2],"color":[0.7,0.12,0.08]}})"},
     {"spotlight", "Rendering", "Spot Light", "Spot Light",
      R"({"Transform":{"position":[0,3,0],"rotation":[-90,0,0]},"SpotLight":{}})"},
     {"pointlight", "Rendering", "Point Light", "Point Light",

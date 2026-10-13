@@ -52,10 +52,10 @@ ordinary material, preventing recursion. This is a sharp color reflection: there
 Fresnel, refraction, water distortion, temporal cache, reflected picking or multiple-mirror recursion.
 It costs an additional full scene render; use a lower resolution or disable it on slower devices.
 
-GPU reflection targets follow the normal RGBA8/MSAA path. The light-data texture expands to **8x19
+GPU reflection targets follow the normal RGBA8/MSAA path. The light-data texture expands to **8x33
 RGBA32F** to carry the reflected view-projection matrix; the reflection image uses binding 14.
-There are **209 fragment vec4 uniform vectors plus 15 sampler uniforms** (224 with a conservative
-vector per sampler, the GLES3/WebGL2 minimum) and **15 of 16** texture units. No new vertex-stage
+With R7 decals there are **208 fragment vec4 uniform vectors plus 16 sampler uniforms** (224 with a conservative
+vector per sampler, the GLES3/WebGL2 minimum) and **16 of 16** texture units. No new vertex-stage
 resources. Additional future features must move data out of uniforms or reuse bindings. The existing
 skin/vertex-graph minimum-device budget remains unverified. No float render-target extension is
 required specifically for planar captures; HDR/SSAO/DOF in the receiving view retain their requirements.

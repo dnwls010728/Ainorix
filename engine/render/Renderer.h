@@ -7,6 +7,7 @@
 #include "core/Math.h"
 #include "scene/Scene.h"
 #include "scene/Components.h"
+#include "render/Decals.h"
 
 namespace oe {
 
@@ -90,6 +91,7 @@ public:
 
 private:
     AssetManager* assets_;
+    DecalAtlas decalAtlas_;
 };
 
 // Upper bound for the software renderer's worker threads (default 16). The
