@@ -10,6 +10,9 @@ constexpr int kMaxDofRadius = 16;
 
 // Render callers may construct settings directly, bypassing reflection's range clamping.
 inline PostProcess NormalizePostProcess(PostProcess settings) {
+    settings.ssao = std::isfinite(settings.ssao) ? Clamp(settings.ssao, 0, 1) : 0;
+    settings.ssaoRadius = std::isfinite(settings.ssaoRadius) ? Clamp(settings.ssaoRadius, 0.01f, 10) : 1;
+    settings.ssaoBias = std::isfinite(settings.ssaoBias) ? Clamp(settings.ssaoBias, 0, 1) : 0.02f;
     settings.exposure = std::isfinite(settings.exposure) ? Clamp(settings.exposure, 0, 32) : 1;
     if (settings.toneMapping != "reinhard" && settings.toneMapping != "aces") settings.toneMapping = "none";
     settings.bloom = std::isfinite(settings.bloom) ? Clamp(settings.bloom, 0, 4) : 0;

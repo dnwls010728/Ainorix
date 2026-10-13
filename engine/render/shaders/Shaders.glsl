@@ -268,6 +268,9 @@ layout(binding=2) uniform mesh_lights {
     vec4 probe_hi[4];    // xyz: box max, w: last (most blurred) level of its picture
     vec4 probe_pos[4];   // xyz: where the picture was taken, w: intensity
     vec4 probe_opt[4];   // x: 1 = box projection, y: 1 = the picture replaces the diffuse ambient too
+    mat4 ssao_inverse;   // OpenGL inverse view-projection, for depth reconstruction
+    vec4 ssao_proj;      // xy: projection scale, z: orthographic, w: strength
+    vec4 ssao_lens;      // x: world radius, y: world bias, zw: target size
 };
 
 // Analytic sky color along a world direction. Mirrors SampleSky in RenderScene.h; keep identical.
@@ -299,6 +302,65 @@ layout(binding=10) uniform texture2D probe3_tex;
 layout(binding=11) uniform texture2D spot_tex;
 layout(binding=3) uniform sampler spot_smp;
 layout(binding=12) uniform texture2D local_shadow_tex; // 4x4 atlas of 512-square perspective depth maps
+layout(binding=13) uniform texture2D ssao_depth_tex;
+
+// Mirrors Lighting::AmbientVisibility. Transparent surfaces receive no SSAO.
+float ambient_visibility(vec3 position, vec3 normal) {
+    if (ssao_proj.w <= 0.0 || color_range.w > 0.5) return 1.0;
+    float depth = max(0.01, dot(position - eye.xyz, view_axis.xyz));
+    float scale = ssao_proj.z > 0.5 ? 1.0 : 1.0 / depth;
+    vec2 radius = min(vec2(64.0), ssao_lens.x * abs(ssao_proj.xy) * scale * ssao_lens.zw * 0.5);
+    const vec2 offsets[32] = vec2[32](
+        vec2(0.112500000,0.000000000),
+        vec2(-0.143680541,0.131623145),
+        vec2(0.021992610,-0.250594444),
+        vec2(0.181100015,0.236212901),
+        vec2(-0.332340801,-0.058786408),
+        vec2(0.314822219,-0.200264126),
+        vec2(-0.105301871,0.391717712),
+        vec2(-0.200822088,-0.386670711),
+        vec2(0.435703604,0.159118257),
+        vec2(-0.453276998,0.187106155),
+        vec2(0.218509465,-0.466942035),
+        vec2(0.161472937,0.514801166),
+        vec2(-0.486681305,-0.282041764),
+        vec2(0.570932571,-0.125517924),
+        vec2(-0.348431261,0.495607614),
+        vec2(-0.080495689,-0.621179679),
+        vec2(0.494164581,0.416482432),
+        vec2(-0.664990624,0.027499450),
+        vec2(0.485059613,-0.482699101),
+        vec2(-0.032452367,0.701812364),
+        vec2(-0.461535779,-0.553074113),
+        vec2(0.731123634,0.098371651),
+        vec2(-0.619479576,0.431017754),
+        vec2(0.169277452,-0.752455244),
+        vec2(0.391529939,0.683271949),
+        vec2(-0.765403569,-0.244184615),
+        vec2(0.743492161,-0.343512236),
+        vec2(-0.322099382,0.769640006),
+        vec2(-0.287466601,-0.799230382),
+        vec2(0.764917772,0.402019343),
+        vec2(-0.849631182,0.223960053),
+        vec2(0.482936227,-0.751076794));
+    float occlusion = 0.0;
+    for (int i = 0; i < 32; ++i) {
+        vec2 pixel = floor(gl_FragCoord.xy + offsets[i] * radius);
+        if (any(lessThan(pixel, vec2(0.0))) || any(greaterThanEqual(pixel, ssao_lens.zw))) continue;
+        float z = texelFetch(sampler2D(ssao_depth_tex, spot_smp), ivec2(pixel), 0).r;
+        if (z >= 1.0) continue;
+        vec2 ndc = (pixel + 0.5) * 2.0 / ssao_lens.zw - 1.0;
+#if !SOKOL_GLSL
+        ndc.y = -ndc.y;
+#endif
+        vec4 point = ssao_inverse * vec4(ndc, z * 2.0 - 1.0, 1.0);
+        vec3 delta = point.xyz / point.w - position;
+        float distance = length(delta);
+        if (distance <= 1e-5 || distance >= ssao_lens.x) continue;
+        occlusion += max(0.0, (dot(normal, delta) - ssao_lens.y) / distance) * (1.0 - distance / ssao_lens.x);
+    }
+    return 1.0 - ssao_proj.w * clamp(occlusion * 0.125, 0.0, 1.0);
+}
 
 vec4 light_data(int index) {
     return texelFetch(sampler2D(spot_tex, spot_smp), ivec2(index % 8, index / 8), 0);
@@ -539,6 +601,7 @@ void main() {
         if (maps.w > 0.5) {
             ao = 1.0 + pbr.w * (texture(sampler2D(occlusion_tex, base_smp), uv).r - 1.0);
         }
+        ao *= ambient_visibility(v_wpos, ng);
         vec3 v = normalize(eye.xyz - v_wpos);
         float ndv = max(dot(n, v), 1e-4);
         vec3 diffuse = base * (1.0 - metallic);

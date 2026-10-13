@@ -491,6 +491,9 @@ struct Targets {
     bool bloom = false;
     bool fxaa = false;
     bool dof = false;
+    bool ssao = false;
+    sg_image ssaoDepth{};
+    sg_view ssaoDepthAtt{}, ssaoDepthTex{};
     // Depth of field: scene depth as a color, then the two blur passes in the scene format. With `dofMrt`
     // the scene pass writes view depth into a second (multisampled, resolved) RGBA16F target; otherwise
     // a separate single-sample pass draws the scene again for its depth buffer values.
@@ -504,12 +507,12 @@ struct Targets {
     sg_view sceneMsaaAtt{}, sceneDepthAtt{}, sceneColorAtt{}, sceneTex{}, maskAtt{}, maskDepthAtt{}, maskTex{}, outputAtt{}, outputTex{};
     sg_view bloomHorizontalAtt{}, bloomHorizontalTex{}, bloomVerticalAtt{}, bloomVerticalTex{};
 
-    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_) const {
+    bool Matches(int w, int h, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_, bool ssao_) const {
         return width == w && height == h && withOutput == output_ && hdr == hdr_ && bloom == bloom_ && fxaa == fxaa_ && dof == dof_ &&
-               dofMrt == (dof_ && dofMrt_);
+               dofMrt == (dof_ && dofMrt_) && ssao == ssao_;
     }
 
-    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_) {
+    void Create(int w, int h, int samples, bool output_, bool hdr_, bool bloom_, bool fxaa_, bool dof_, bool dofMrt_, bool ssao_) {
         Destroy();
         width = w;
         height = h;
@@ -519,6 +522,12 @@ struct Targets {
         bloom = bloom_;
         fxaa = fxaa_;
         dof = dof_;
+        ssao = ssao_;
+        if (ssao) {
+            ssaoDepth = MakeAttachmentImage(w, h, kDofDepthFormat, 1, false, false, "oe-ssao-depth");
+            ssaoDepthAtt = ColorView(ssaoDepth);
+            ssaoDepthTex = TextureView(ssaoDepth);
+        }
         dofMrt = dof_ && dofMrt_;
         if (fxaa) {
             fxaaColor = MakeAttachmentImage(w, h, kColorFormat, 1, false, false, "oe-fxaa-source");
@@ -585,11 +594,11 @@ struct Targets {
         if (width == 0) return;
         for (sg_view v : {sceneMsaaAtt, sceneDepthAtt, sceneColorAtt, sceneTex, maskAtt, maskDepthAtt, maskTex, outputAtt, outputTex,
                           bloomHorizontalAtt, bloomHorizontalTex, bloomVerticalAtt, bloomVerticalTex, fxaaAtt, fxaaTex,
-                          dofDepthAtt, dofDepthMsaaAtt, dofDepthResolveAtt, dofDepthTex, dofHorizontalAtt, dofHorizontalTex, dofVerticalAtt, dofVerticalTex}) {
+                          dofDepthAtt, dofDepthMsaaAtt, dofDepthResolveAtt, dofDepthTex, dofHorizontalAtt, dofHorizontalTex, dofVerticalAtt, dofVerticalTex, ssaoDepthAtt, ssaoDepthTex}) {
             if (v.id) sg_destroy_view(v);
         }
         for (sg_image i : {sceneMsaa, sceneDepth, sceneColor, maskColor, maskDepth, output, bloomHorizontal, bloomVertical, fxaaColor,
-                           dofDepth, dofDepthMsaa, dofHorizontal, dofVertical}) {
+                           dofDepth, dofDepthMsaa, dofHorizontal, dofVertical, ssaoDepth}) {
             if (i.id) sg_destroy_image(i);
         }
         *this = Targets();
@@ -1169,11 +1178,11 @@ struct GpuRenderer::Impl {
             throw std::runtime_error("GPU HDR effects require filterable, blendable RGBA16F render targets; use the software renderer on this device.");
         }
         const bool dof = post.dofRadius > 0;
-        if (dof && !dofSupported) {
-            throw std::runtime_error("GPU depth of field requires renderable R32F targets; use the software renderer on this device.");
+        if ((dof || post.ssao > 0) && !dofSupported) {
+            throw std::runtime_error("GPU depth of field and SSAO require renderable R32F targets; use the software renderer on this device.");
         }
-        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa, dof, dofMrtSupported))
-            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa, dof, dofMrtSupported);
+        if (!t.Matches(w, h, output, hdr, bloom, post.fxaa, dof, dofMrtSupported, post.ssao > 0))
+            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa, dof, dofMrtSupported, post.ssao > 0);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -1721,6 +1730,43 @@ struct GpuRenderer::Impl {
         for (const DebugLine& l : view.lines) line(l.a, l.b, l.color, 1.0f);
         bool haveLines = lines.Write(lineVerts.data(), lineVerts.size() * sizeof(ColorVertex));
 
+        // Shared opaque/cutout depth prepass. SSAO needs it before ambient lighting.
+        auto drawDepth = [&](sg_view attachment) {
+            sg_pass pass{};
+            pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
+            pass.action.colors[0].clear_value = {1, 0, 0, 1};
+            pass.action.depth.load_action = SG_LOADACTION_CLEAR;
+            pass.action.depth.clear_value = 1.0f;
+            pass.attachments.colors[0] = attachment;
+            pass.attachments.depth_stencil = t.maskDepthAtt;
+            pass.label = "oe-scene-depth-prepass";
+            sg_begin_pass(&pass);
+            for (const DrawCall& dc : draws) {
+                if (dc.blend || !inView[static_cast<size_t>(&dc - draws.data())]) continue;
+                const RenderItem& it = items[dc.item];
+                const Submesh& sub = it.mesh->submeshes[dc.submesh];
+                const int twoSided = dc.material.doubleSided ? 1 : 0;
+                const bool cutout = dc.material.alphaMode == AlphaMode::Mask;
+                if (cutout || Displaced(dc.material)) {
+                    Use(GraphPipeline(surfaceDepthPip[twoSided], dc.material));
+                    ApplySurface(dc, it, Binding(*gpuMeshes[dc.item], sub), viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
+                } else {
+                    Use(sceneDepthPip[twoSided]);
+                    oe_pos_vs_params_t u{};
+                    Put(u.mvp, viewProj * it.world);
+                    sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                    ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
+                    sg_bindings b{};
+                    b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
+                    b.index_buffer = gpuMeshes[dc.item]->ibuf;
+                    sg_apply_bindings(&b);
+                }
+                sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
+            }
+            sg_end_pass();
+        };
+        if (t.ssao) drawDepth(t.ssaoDepthAtt);
+
         // ----- Scene pass (MSAA, resolved into t.sceneColor)
         {
             sg_pass pass{};
@@ -1820,6 +1866,10 @@ struct GpuRenderer::Impl {
             const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows);
             sg_view probeTex[kMaxProbes];
             Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
+            const PostProcess ambientPost = NormalizePostProcess(view.postProcess);
+            Put(lu.ssao_inverse, viewProj.Inverse());
+            Put(lu.ssao_proj, view.proj.at(0, 0), view.proj.at(1, 1), view.proj.at(3, 3) == 1 ? 1.0f : 0.0f, ambientPost.ssao);
+            Put(lu.ssao_lens, ambientPost.ssaoRadius, ambientPost.ssaoBias, static_cast<float>(t.width), static_cast<float>(t.height));
             for (int i = 0; i < kMaxProbes; ++i) {
                 probeTex[i] = whiteTex;
                 if (static_cast<size_t>(i) >= probes.size()) continue;
@@ -1876,7 +1926,7 @@ struct GpuRenderer::Impl {
                 Put(mu.emissive, em.r, em.g, em.b, it.flat ? 1.0f : 0.0f);
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
                 const float fogMode = !m.fog ? 0.0f : (dc.blend && m.additive ? 2.0f : 1.0f);
-                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, fogMode, 0);
+                Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, 0, fogMode, dc.blend ? 1.0f : 0.0f);
                 PutGraph(mu, m, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
@@ -1894,6 +1944,7 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_probe3_tex] = probeTex[3];
                 b.views[VIEW_oe_spot_tex] = spotLightTex;
                 b.views[VIEW_oe_local_shadow_tex] = localShadowTex.id ? localShadowTex : shadowTex;
+                b.views[VIEW_oe_ssao_depth_tex] = t.ssao ? t.ssaoDepthTex : whiteTex;
                 b.samplers[SMP_oe_spot_smp] = nearestClamp;
                 b.samplers[SMP_oe_env_smp] = envSampler;
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;
@@ -1921,40 +1972,7 @@ struct GpuRenderer::Impl {
         const PostProcess post = NormalizePostProcess(view.postProcess);
         if (t.dof) {
             // Without the scene pass's view-depth target: draw opaque and cut-out surfaces again for their depth.
-            if (!t.dofMrt) {
-                sg_pass pass{};
-                pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
-                pass.action.colors[0].clear_value = {1, 0, 0, 1};
-                pass.action.depth.load_action = SG_LOADACTION_CLEAR;
-                pass.action.depth.clear_value = 1.0f;
-                pass.attachments.colors[0] = t.dofDepthAtt;
-                pass.attachments.depth_stencil = t.maskDepthAtt;
-                pass.label = "oe-dof-depth";
-                sg_begin_pass(&pass);
-                for (const DrawCall& dc : draws) {
-                    if (dc.blend || !inView[static_cast<size_t>(&dc - draws.data())]) continue;
-                    const RenderItem& it = items[dc.item];
-                    const Submesh& sub = it.mesh->submeshes[dc.submesh];
-                    const int twoSided = dc.material.doubleSided ? 1 : 0;
-                    const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
-                    if (cutout || Displaced(dc.material)) {
-                        Use(GraphPipeline(surfaceDepthPip[twoSided], dc.material));
-                        ApplySurface(dc, it, Binding(*gpuMeshes[dc.item], sub), viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f, true);
-                    } else {
-                        Use(sceneDepthPip[twoSided]);
-                        oe_pos_vs_params_t u{};
-                        Put(u.mvp, viewProj * it.world);
-                        sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
-                        ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
-                        sg_bindings b{};
-                        b.vertex_buffers[0] = gpuMeshes[dc.item]->vbuf;
-                        b.index_buffer = gpuMeshes[dc.item]->ibuf;
-                        sg_apply_bindings(&b);
-                    }
-                    sg_draw(static_cast<int>(sub.firstIndex), static_cast<int>(sub.indexCount), 1);
-                }
-                sg_end_pass();
-            }
+            if (!t.dofMrt) drawDepth(t.dofDepthAtt);
             for (int stage = 0; stage < 2; ++stage) {
                 sg_pass blur{};
                 blur.action.colors[0].load_action = SG_LOADACTION_DONTCARE;

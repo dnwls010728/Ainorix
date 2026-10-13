@@ -104,7 +104,7 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 영역 | 내용 | 문서 |
 |---|---|---|
 | 렌더링 | 하나의 씬을 그리는 두 렌더러: GPU(sokol_gfx: D3D11, WebGL2, GLES3, MSAA, 필터링된 그림자)와 결정적인 멀티스레드 소프트웨어 렌더러. glTF/FBX 모델, PBR 머티리얼, 투명, 점광원/스포트라이트/방향광, 캐스케이드·점광원·스포트라이트 그림자 | [RENDERING](docs/RENDERING.md) |
-| 포스트 프로세싱과 셰이더 | 노출과 Reinhard/ACES 톤 매핑, 블룸, 비네트, FXAA, 피사계 심도, 거리 안개, 컬러 그레이딩. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`), 스프라이트에도 적용 가능 | [POSTPROCESS](docs/POSTPROCESS.md) |
+| 포스트 프로세싱과 셰이더 | 노출과 Reinhard/ACES 톤 매핑, 블룸, 비네트, FXAA, 주변광 SSAO, 피사계 심도, 거리 안개, 컬러 그레이딩. 색, 발광, 정점 오프셋, 노멀 출력을 가진 표면 셰이더 그래프(`.shader.json`), 스프라이트에도 적용 가능 | [POSTPROCESS](docs/POSTPROCESS.md) |
 | 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(관절 64개까지), `Animator`, Lua 재생 | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
 | VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |

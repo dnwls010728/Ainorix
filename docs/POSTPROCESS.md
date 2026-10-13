@@ -49,7 +49,8 @@ float32 RGB in software and RGBA16F on the GPU. Lighting and emissive channels
 remain above 1 through opaque draws and alpha blending, bounded to the largest
 finite float16 value (65504) before blending. Exposure is applied after scene
 rendering, depth of field and bloom addition, followed by tone mapping, clamping
-to 0..1, vignette and then overlays. The full order is: scene, depth of field,
+to 0..1, vignette and then overlays. The full order is: optional SSAO depth prepass,
+scene (SSAO affects ambient lighting here), depth of field,
 bloom, exposure/tone mapping, vignette, FXAA, selection outline and UI.
 Only the final display image is quantized to RGBA8. With exposure 0.25, emissive
 RGB (8,4,2) becomes (2,1,0.5), or (2/3,1/2,1/3) with Reinhard enabled; clipping
@@ -68,6 +69,47 @@ devices report an error when HDR is requested; use software rendering or neutral
 settings. HDR disables MSAA if that format does not support multisampling.
 Switching effects or output size recreates the correct scene targets; output,
 UI and selection-mask formats remain RGBA8.
+
+## Screen-space ambient occlusion (SSAO)
+
+Add `PostProcess` to the active camera and set `ssao` to enable contact and crease shading:
+
+```json
+{"ssao": 0.8, "ssaoRadius": 1.0, "ssaoBias": 0.02}
+```
+
+`ssao` is strength (0..1, default 0), `ssaoRadius` is the sampling radius in world meters
+(0.01..10, default 1), and `ssaoBias` is the self-occlusion bias in meters (0..1, default 0.02).
+Nonfinite inputs fall back to those defaults. Zero strength skips the depth prepass and all samples;
+old scenes retain their software hashes. Reflection-probe captures do not include camera SSAO.
+
+Both renderers first capture opaque and alpha-mask geometry, including skins and shader vertex
+displacement. They reconstruct neighboring world positions from depth and use the surface's geometric
+normal with 32 fixed spiral samples. Perspective and orthographic cameras use the same world radius;
+the projected radius is limited to 64 scene pixels per axis. The distance falloff and bias reject
+distant geometry and coplanar self-occlusion. Samples outside the screen or on the background contribute
+no occlusion. No random seed, temporal history or renderer-specific sample pattern is involved.
+
+SSAO multiplies only the ambient lighting, including sky/probe diffuse and reflected ambient. It
+combines with material occlusion textures. Directional, point and spot direct lighting, emission, fog,
+unlit surfaces, blended/additive surfaces, background, UI and selection outlines keep their usual
+behavior. Unlit opaque objects can occlude their neighbors; transparent objects neither occlude nor
+receive SSAO. Depth and entity IDs remain unchanged. The editor's free Scene camera keeps effects off;
+the Game view uses the active camera settings. Generic Inspector controls and component reflection
+provide the same fields through CLI, HTTP and MCP.
+
+The GPU uses an additional single-sample R32F depth-color target before lighting; unsupported devices
+report an error when SSAO is requested. WebGL2/GLES3 needs float color-buffer support, as for depth of
+field. SSAO coexists with MSAA, DOF, HDR, bloom and FXAA. Its depth texture uses binding 13: the mesh
+fragment program uses 14 of the GLES3 minimum 16 texture units and 209 vec4 uniform vectors, or 223
+including a conservative vector per sampler, below the minimum 224. No vertex-stage resources were
+added. The existing skin/vertex-graph uniform requirements still need minimum-device verification.
+
+This is a bounded screen-space approximation: offscreen and hidden occluders are absent, silhouettes
+can show sampling bands, large radii lose detail at the 64-pixel cap, and single-sample depth can differ
+slightly from MSAA edges. Reduce radius/strength or increase bias for a cleaner result. It does not
+replace shadow maps or baked/global illumination. A demonstration is left at `build/SSAO`:
+`build/bin/oe editor build/SSAO`; set Camera's `ssao` to zero to compare.
 
 ## Bloom
 
@@ -127,7 +169,7 @@ pixel's coc)` instead. A blurred background therefore does not bleed over a shar
 surface in front of it, while a blurred foreground spreads over what is behind it.
 The result is the weighted average.
 
-Order: scene, depth of field, bloom, exposure/tone mapping, vignette, FXAA,
+Order: optional SSAO depth prepass, scene, depth of field, bloom, exposure/tone mapping, vignette, FXAA,
 then selection outline and UI (UI is never blurred). The effect works on the
 RGBA8 scene buffer or the HDR buffer, whichever the other settings select; it
 does not select HDR by itself. Depth and entity IDs (picking) are unchanged, and
@@ -394,4 +436,11 @@ Android players include all of them.
 
 - [ ] Execution on WebGL2, Android GLES3 and Linux/EGL of the newer shaders (depth of field, graph vertex
       stage, fog and grading); only D3D11 and the software renderer are verified.
+
+## Implementation status (R5 work log)
+
+- [x] Add opt-in SSAO controls, matching depth sampling and ambient-only lighting in both renderers.
+- [x] Verify contacts, projection modes, exclusions, deterministic output and software/GPU agreement.
+- [x] Document limits, refresh API reference and leave a demonstration project under `build/SSAO`.
+- [ ] Rebuild web and Android players and verify the WebGL2 demonstration.
 

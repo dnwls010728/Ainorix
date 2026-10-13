@@ -110,6 +110,67 @@ struct Lighting {
     Vec3 eye;
     LocalShadowSet localShadows;
     std::vector<ShadowMap> localMaps;
+    std::vector<float> ssaoDepth;
+    Mat4 ssaoInverse;
+    Mat4 ssaoProjection;
+    int ssaoWidth = 0, ssaoHeight = 0;
+
+    // Thirty-two fixed hemisphere samples: no random noise or history. Mirrors mesh_fs.
+    float AmbientVisibility(int x, int y, const Vec3& position, const Vec3& normal) const {
+        if (ssaoDepth.empty()) return 1;
+        const float viewDepth = std::max(0.01f, Dot(position - eye, viewForward));
+        const float scale = ssaoProjection.at(3, 3) == 1 ? 1 : 1 / viewDepth;
+        const float rx = std::min(64.0f, fog.ssaoRadius * std::fabs(ssaoProjection.at(0, 0)) * scale * ssaoWidth * 0.5f);
+        const float ry = std::min(64.0f, fog.ssaoRadius * std::fabs(ssaoProjection.at(1, 1)) * scale * ssaoHeight * 0.5f);
+        const float offsets[32][2] = {
+            {0.112500000f,0.000000000f},
+            {-0.143680541f,0.131623145f},
+            {0.021992610f,-0.250594444f},
+            {0.181100015f,0.236212901f},
+            {-0.332340801f,-0.058786408f},
+            {0.314822219f,-0.200264126f},
+            {-0.105301871f,0.391717712f},
+            {-0.200822088f,-0.386670711f},
+            {0.435703604f,0.159118257f},
+            {-0.453276998f,0.187106155f},
+            {0.218509465f,-0.466942035f},
+            {0.161472937f,0.514801166f},
+            {-0.486681305f,-0.282041764f},
+            {0.570932571f,-0.125517924f},
+            {-0.348431261f,0.495607614f},
+            {-0.080495689f,-0.621179679f},
+            {0.494164581f,0.416482432f},
+            {-0.664990624f,0.027499450f},
+            {0.485059613f,-0.482699101f},
+            {-0.032452367f,0.701812364f},
+            {-0.461535779f,-0.553074113f},
+            {0.731123634f,0.098371651f},
+            {-0.619479576f,0.431017754f},
+            {0.169277452f,-0.752455244f},
+            {0.391529939f,0.683271949f},
+            {-0.765403569f,-0.244184615f},
+            {0.743492161f,-0.343512236f},
+            {-0.322099382f,0.769640006f},
+            {-0.287466601f,-0.799230382f},
+            {0.764917772f,0.402019343f},
+            {-0.849631182f,0.223960053f},
+            {0.482936227f,-0.751076794f}};
+        float occlusion = 0;
+        for (int i = 0; i < 32; ++i) {
+            const int sx = static_cast<int>(std::floor(x + 0.5f + offsets[i][0] * rx));
+            const int sy = static_cast<int>(std::floor(y + 0.5f + offsets[i][1] * ry));
+            if (sx < 0 || sy < 0 || sx >= ssaoWidth || sy >= ssaoHeight) continue;
+            const float depth = ssaoDepth[static_cast<size_t>(sy) * ssaoWidth + sx];
+            if (depth >= 1) continue;
+            const Vec4 point = ssaoInverse * Vec4((sx + 0.5f) * 2 / ssaoWidth - 1,
+                                                  1 - (sy + 0.5f) * 2 / ssaoHeight, depth * 2 - 1, 1);
+            const Vec3 delta = point.xyz() * (1 / point.w) - position;
+            const float distance = Length(delta);
+            if (distance <= 1e-5f || distance >= fog.ssaoRadius) continue;
+            occlusion += std::max(0.0f, (Dot(normal, delta) - fog.ssaoBias) / distance) * (1 - distance / fog.ssaoRadius);
+        }
+        return 1 - fog.ssao * Clamp(occlusion * 0.125f, 0, 1);
+    }
 
     float LocalLit(bool point, size_t lightIndex, const Vec3& position, const Vec3& normal) const {
         const int slot = LocalShadowSlot(localShadows, point, lightIndex);
@@ -463,6 +524,7 @@ private:
                         metallic *= mr.b;
                     }
                     if (m.occlusionTexture) ao = 1.0f + m.occlusionStrength * (m.occlusionTexture->Sample(u, v, m.pixelArt, nullptr).r - 1.0f);
+                    if (!mat.blend) ao *= lighting->AmbientVisibility(x, y, wpos, ng);
                     out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao);
                 }
                 Color em = m.emissive * m.emissiveIntensity;
@@ -573,18 +635,20 @@ Transformed TransformItem(const RenderItem& item) {
 }
 
 void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, const std::vector<Transformed>& transformed,
-                       const std::vector<DrawCall>& draws, float shaderTime) {
+                       const std::vector<DrawCall>& draws, float shaderTime, int cameraWidth = 0, int cameraHeight = 0) {
+    const bool camera = cameraWidth > 0;
+    const int width = camera ? cameraWidth : sm.size, height = camera ? cameraHeight : sm.size;
     // Light-space vertices once, then rasterize depth in parallel bands.
     std::vector<std::vector<Vec4>> lightClip(items.size());
     for (size_t i = 0; i < items.size(); ++i) {
-        if (!items[i].castShadows || items[i].unlit) continue;
+        if (!camera && (!items[i].castShadows || items[i].unlit)) continue;
         lightClip[i].reserve(transformed[i].wpos.size());
         for (const Vec3& p : transformed[i].wpos) lightClip[i].push_back(sm.viewProj * Vec4(p, 1.0f));
     }
-    ParallelBands(sm.size, [&](int, int y0, int y1) {
+    ParallelBands(height, [&](int, int y0, int y1) {
         uint32_t dummyColor = 0;
         EntityId dummyId = kNullEntity;
-        Rasterizer shadowRaster(sm.size, sm.size, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
+        Rasterizer shadowRaster(width, height, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
         RasterMaterial none;
         for (const DrawCall& dc : draws) {
             if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
@@ -592,11 +656,12 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
             const Submesh& sub = m.submeshes[dc.submesh];
             const RenderItem& item = items[dc.item];
             // Cut-outs (textured or graph alpha) shadow only where they are drawn.
-            const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+            const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (camera || dc.material.shader || dc.material.baseTexture);
             RasterMaterial material;
             material.m = &dc.material;
             material.flat = item.flat;
             material.shaderTime = shaderTime;
+            if (camera) { material.particleInput = item.particleInput; material.particleCustom = item.particleCustom; }
             material.uvOffset[0] = item.uvOffset[0];
             material.uvOffset[1] = item.uvOffset[1];
             material.uvScale[0] = item.uvScale[0];
@@ -607,6 +672,11 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
                     const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
                     v[j].clip = lightClip[dc.item][vertex];
                     if (surfaceAlpha) {
+                        if (camera) {
+                            if (vertex < m.colors.size()) v[j].color = m.colors[vertex];
+                            if (vertex < m.particleData.size()) v[j].particle = m.particleData[vertex];
+                            if (vertex < m.particleCustom.size()) v[j].custom = m.particleCustom[vertex];
+                        }
                         v[j].wpos = transformed[dc.item].wpos[vertex];
                         v[j].nrm = transformed[dc.item].nrm[vertex];
                         if (vertex * 2 + 1 < m.uvs.size()) {
@@ -618,7 +688,7 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
                 // Back faces into the shadow map: avoids self-shadowing acne on lit faces
                 // (double-sided surfaces put both sides in).
                 shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
-                                  dc.material.doubleSided ? Cull::None : Cull::Front);
+                                  dc.material.doubleSided ? Cull::None : camera ? Cull::Back : Cull::Front);
             }
         }
     });
@@ -746,6 +816,16 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
 
     // ----- Main pass
     const Mat4 viewProj = view.proj * view.view;
+    if (!picture && post.ssao > 0) {
+        ShadowMap depth;
+        depth.viewProj = viewProj;
+        depth.depth.assign(target.depth.size(), 1);
+        RenderShadowDepth(depth, items, transformed, draws, view.shaderTime, target.width, target.height);
+        lighting.ssaoDepth = std::move(depth.depth);
+        lighting.ssaoInverse = viewProj.Inverse();
+        lighting.ssaoProjection = view.proj;
+        lighting.ssaoWidth = target.width; lighting.ssaoHeight = target.height;
+    }
     std::vector<std::vector<Vec4>> clip(items.size());
     for (size_t i = 0; i < items.size(); ++i) {
         clip[i].reserve(transformed[i].wpos.size());

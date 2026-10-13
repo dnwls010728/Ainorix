@@ -590,6 +590,9 @@ struct PostProcess {
     float bloomThreshold = 1.0f;   // threshold in unexposed scene RGB, using the largest channel
     int bloomRadius = 8;           // separable tent filter radius in scene pixels
     bool fxaa = false;             // directional edge smoothing after color effects, before overlays
+    float ssao = 0.0f;             // ambient occlusion strength; zero skips the depth prepass and sampling
+    float ssaoRadius = 1.0f;       // world-space sampling radius in meters
+    float ssaoBias = 0.02f;        // world-space self-occlusion bias
     float vignette = 0.0f;          // edge darkening strength; zero disables the effect
     float vignetteRadius = 0.75f;   // normalized distance from screen center
     float vignetteSoftness = 0.5f;  // smooth transition width
@@ -618,6 +621,12 @@ struct PostProcess {
         FieldInfo& bloomRadiusField = f.Add("bloomRadius", &PostProcess::bloomRadius, "Separable tent filter radius in scene pixels, 1..32. Full-resolution bloom is optional.");
         bloomRadiusField.hasRange = true; bloomRadiusField.min = 1; bloomRadiusField.max = 32;
         f.Add("fxaa", &PostProcess::fxaa, "Optional directional FXAA on display scene color before UI and selection outlines; disabled by default.");
+        FieldInfo& ssaoStrength = f.Add("ssao", &PostProcess::ssao, "Screen-space ambient occlusion strength (0..1). Darkens ambient light only; 0 disables the depth prepass.");
+        ssaoStrength.hasRange = true; ssaoStrength.min = 0; ssaoStrength.max = 1;
+        FieldInfo& ssaoRadiusField = f.Add("ssaoRadius", &PostProcess::ssaoRadius, "SSAO sampling radius in world meters (0.01..10), limited to 64 scene pixels per axis.");
+        ssaoRadiusField.hasRange = true; ssaoRadiusField.min = 0.01f; ssaoRadiusField.max = 10;
+        FieldInfo& ssaoBiasField = f.Add("ssaoBias", &PostProcess::ssaoBias, "SSAO self-occlusion bias in world meters (0..1).");
+        ssaoBiasField.hasRange = true; ssaoBiasField.min = 0; ssaoBiasField.max = 1;
         FieldInfo& strength = f.Add("vignette", &PostProcess::vignette, "Edge darkening strength: 0 disables, 1 is fully dark outside the transition.");
         strength.hasRange = true; strength.min = 0; strength.max = 1;
         FieldInfo& radius = f.Add("vignetteRadius", &PostProcess::vignetteRadius, "Normalized radius: center 0, edge midpoint 1, corner sqrt(2).");

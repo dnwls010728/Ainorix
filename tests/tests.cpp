@@ -4954,9 +4954,10 @@ TEST(SpotLightRendering) {
     const sg_shader_desc* descriptor = oe_mesh_shader_desc(SG_BACKEND_GLES3);
     const size_t uniformVectors = (descriptor->uniform_blocks[UB_oe_mesh_lights].size +
                                    descriptor->uniform_blocks[UB_oe_mesh_material].size) / (4 * sizeof(float));
-    CHECK(uniformVectors + 13 <= 224);
+    CHECK(uniformVectors + 14 <= 224);
     static_assert(VIEW_oe_spot_tex < 16, "Spot texture must fit the GLES3 fragment texture-unit minimum");
     static_assert(VIEW_oe_local_shadow_tex < 16, "Local shadows must fit the GLES3 fragment texture-unit minimum");
+    static_assert(VIEW_oe_ssao_depth_tex < 16, "SSAO must fit the GLES3 fragment texture-unit minimum");
     const std::string project = TempProject("spot_rendering");
     Engine e; std::string error;
     CHECK(e.Open(project, &error));
@@ -10908,6 +10909,98 @@ TEST(SpriteCutoutShadows) {
         CHECK(level(-0.5f, -1) < gpuOpen - 60);
         CHECK(std::abs(level(0.5f, -1) - gpuOpen) <= 2);
     } else std::printf("  SKIP sprite shadow GPU check (%s)\n", err.c_str());
+}
+
+TEST(CameraSsaoContactsAndExclusions) {
+    const std::string project = TempProject("camera_ssao");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0.5,0.5,0.5],"shadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},"MeshRenderer":{"mesh":"plane","color":[0.6,0.6,0.6]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Block","components":{"Transform":{"position":[0,1,0],"scale":[2,2,2]},"MeshRenderer":{"mesh":"cube","color":[0.6,0.6,0.6],"castShadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Unlit","components":{"Transform":{"position":[3,0.5,0]},"MeshRenderer":{"unlit":true,"color":[0.4,0.2,0.1]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"UI","components":{"UIPanel":{"anchor":"top-left","x":0,"y":0,"width":8,"height":8,"color":[1,1,1],"opacity":1}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Camera","components":{"Camera":{},"PostProcess":{}}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Camera","type":"PostProcess","values":{"ssao":1,"ssaoRadius":1.5,"ssaoBias":0.02}})")["ok"].asBool());
+    Scene restored;
+    CHECK(restored.FromJson(e.GetScene().ToJson(), &error));
+    CHECK(restored.Get<PostProcess>(restored.FindByName("Camera"))->ssaoRadius == 1.5f);
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    const EntityId ground = e.GetScene().FindByName("Ground"), unlit = e.GetScene().FindByName("Unlit");
+    RenderTarget off, on, again, gpu; for (auto* t : {&off, &on, &again, &gpu}) t->Resize(240, 160);
+    for (bool orthographic : {false, true}) {
+        RenderView view = MakeLookAtView(Vec3(6,5,7), Vec3(), 50, 1.5f);
+        view.drawUI = true;
+        if (orthographic) view.proj = Mat4::Orthographic(5,1.5f,0.1f,100);
+        e.Renderer().Render(e.GetScene(), view, off);
+        view.postProcess = *restored.Get<PostProcess>(restored.FindByName("Camera"));
+        SetMaxRenderThreads(1); e.Renderer().Render(e.GetScene(), view, on);
+        SetMaxRenderThreads(4); e.Renderer().Render(e.GetScene(), view, again);
+        SetMaxRenderThreads(16);
+        CHECK(on.Hash() == again.Hash() && on.Hash() != off.Hash());
+        CHECK(on.depth == off.depth && on.ids == off.ids);
+        int contacts = 0, unchanged = 0;
+        for (size_t i = 0; i < on.color.size(); ++i) {
+            if (on.ids[i] == ground) {
+                contacts += static_cast<int>(off.color[i] & 255) > static_cast<int>(on.color[i] & 255) + 4;
+                unchanged += on.color[i] == off.color[i];
+            }
+            if (on.ids[i] == unlit) CHECK(on.color[i] == off.color[i]);
+        }
+        std::printf("  SSAO %s: %d contact pixels, %d unchanged ground pixels\n", orthographic ? "ortho" : "perspective", contacts, unchanged);
+        CHECK(contacts > 30 && unchanged > 100);
+        CHECK(on.color[0] == off.color[0]);
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double difference = 0;
+            for (size_t i = 0; i < on.color.size(); ++i) for (int shift : {0,8,16})
+                difference += std::abs(static_cast<int>((on.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+            const double mean = difference / (on.color.size() * 3);
+            std::printf("  SSAO software/GPU mean %.3f/255\n", mean);
+            CHECK(mean < 2);
+            view.postProcess.dofRadius = 3; view.postProcess.dofFocus = 10;
+            view.postProcess.bloom = 0.2f; view.postProcess.exposure = 0.8f;
+            e.Gpu()->Render(e.GetScene(), view, gpu);  // target recreation and DOF MRT coexistence
+            CHECK((gpu.color[0] & 0xFFFFFF) == (on.color[0] & 0xFFFFFF));
+        }
+    }
+    // With no ambient, SSAO must leave direct light and emission unchanged.
+    CHECK(Call(e, "component.set", R"({"id":"Sun","type":"DirectionalLight","values":{"intensity":0.4,"ambient":[0,0,0]}})")["ok"].asBool());
+    CHECK(Call(e, "material.create", R"({"path":"emission.mat.json","values":{"emissive":[0.2,0.1,0.05]}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Block","type":"MeshRenderer","values":{"material":"emission.mat.json"}})")["ok"].asBool());
+    RenderView view = MakeLookAtView(Vec3(6,5,7), Vec3(), 50, 1.5f);
+    e.Renderer().Render(e.GetScene(), view, off);
+    view.postProcess.ssao = 1; view.postProcess.ssaoRadius = 1.5f;
+    e.Renderer().Render(e.GetScene(), view, on);
+    CHECK(on.Hash() == off.Hash());
+    if (haveGpu) {
+        e.Gpu()->Render(e.GetScene(), view, on);
+        view.postProcess.ssao = 0; e.Gpu()->Render(e.GetScene(), view, off);
+        CHECK(on.Hash() == off.Hash());
+    }
+    CHECK(Call(e, "component.set", R"({"id":"Sun","type":"DirectionalLight","values":{"intensity":0,"ambient":[0.5,0.5,0.5]}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Unlit","type":"MeshRenderer","values":{"visible":false}})")["ok"].asBool());
+    // Neither a fully cut-out object nor a blended object belongs in the SSAO depth buffer.
+    for (const char* material : {R"({"alphaMode":"mask","opacity":0,"alphaCutoff":0.5})",
+                                 R"({"alphaMode":"blend","opacity":0.4})"}) {
+        const std::string args = std::string(R"({"path":"excluded.mat.json","overwrite":true,"values":)") + material + "}";
+        CHECK(Call(e, "material.create", args.c_str())["ok"].asBool());
+        CHECK(Call(e, "component.set", R"({"id":"Block","type":"MeshRenderer","values":{"material":"excluded.mat.json"}})")["ok"].asBool());
+        view.postProcess.ssao = 0; e.Renderer().Render(e.GetScene(), view, off);
+        view.postProcess.ssao = 1; e.Renderer().Render(e.GetScene(), view, on);
+        CHECK(on.Hash() == off.Hash());
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(), view, on);
+            view.postProcess.ssao = 0; e.Gpu()->Render(e.GetScene(), view, off);
+            CHECK(on.Hash() == off.Hash());
+        }
+    }
+    PostProcess invalid;
+    invalid.ssao = std::numeric_limits<float>::quiet_NaN(); invalid.ssaoRadius = -1; invalid.ssaoBias = 2;
+    const PostProcess normalized = NormalizePostProcess(invalid);
+    CHECK(normalized.ssao == 0 && normalized.ssaoRadius == 0.01f && normalized.ssaoBias == 1);
+    CHECK(RemoveAll(project));
 }
 
 TEST(CameraDepthOfField) {

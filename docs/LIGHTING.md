@@ -53,8 +53,8 @@ oe exec <project> component.set '{"id":"Spot","type":"SpotLight","values":{"shad
 - Matrices and selection/bias data extend the existing light-data texture to **8x18 RGBA32F (2,304 bytes)**.
   Slots 72..73 describe selected lights, 74..81 map spot slots, 82..129 hold twelve matrices, 130..141 hold
   projection/bias parameters. Point shadow slots use the previously unused `point_color.w` uniform lane.
-  The fragment shader has **203 vec4 uniform vectors and 13 sampler uniforms** (216 with a vector per sampler,
-  below the GLES3/WebGL2 minimum of 224), using **13 of 16** texture units. No additional vertex-stage resources.
+  With SSAO, the fragment shader has **209 vec4 uniform vectors and 14 sampler uniforms** (223 with a vector per sampler,
+  below the GLES3/WebGL2 minimum of 224), using **14 of 16** texture units. No additional vertex-stage resources.
 - Wide cones and distant receivers have larger world texels and coarser shadows. Geometry closer than the
   near plane is omitted; large world coordinates and very large ranges still limit floating-point precision.
   No transparent transmission, contact-hardening filter, or cached/temporal shadow updates.
@@ -123,8 +123,8 @@ oe exec <project> component.set '{"id":"Sun","type":"DirectionalLight","values":
 - Software depth storage is up to 16 MiB; a 32-bit GPU atlas is 16 MiB. Four cascades can draw a caster four
   times; the GPU batches the union of visible-to-any-cascade casters, leaving per-tile clipping to the GPU.
   More maps trade additional shadow work for better near-camera detail; there is no per-frame update cache.
-- The mesh fragment program uses **203 vec4 uniform vectors plus thirteen sampler uniforms**, within the
-  GLES3/WebGL2 minimum of 224 even allowing a vector per sampler, and **13 of 16** texture units. Vertex-stage
+- The mesh fragment program uses **209 vec4 uniform vectors plus fourteen sampler uniforms**, within the
+  GLES3/WebGL2 minimum of 224 even allowing a vector per sampler, and **14 of 16** texture units. Vertex-stage
   resource use is unchanged; the pre-existing skin/vertex-graph path still needs minimum-capability device checks.
 - Very large/far slices have wider world texels and softer/coarser shadows. Scene bounds stretched far along
   the light direction can still reduce depth precision. No temporal filtering or per-cascade caster partitioning.
@@ -199,8 +199,8 @@ and shader materials. Unlit surfaces ignore all direct lights. Lights do not cre
   sky's nine irradiance coefficients and up to four probes' nine coefficients each, unchanged mathematically,
   plus R4 selection, matrix and bias data.
   The immutable image is replaced only when values change, including between editor views.
-- After R4 the mesh fragment shader uses **13 of 16** texture units and **203 vec4 uniform slots**, plus thirteen sampler
-  uniforms (even allowing one vector per sampler, 216 is below the GLES3/WebGL2 minimum of 224). No new vertex
+- With R5 SSAO the mesh fragment shader uses **14 of 16** texture units and **209 vec4 uniform slots**, plus fourteen sampler
+  uniforms (with SSAO and allowing one vector per sampler, 223 is below the GLES3/WebGL2 minimum of 224). No new vertex
   attributes or vertex-stage uniforms. The existing skin/vertex-graph uniform budget is unchanged by R2;
   minimum-capability vertex-stage devices still need independent validation.
 
