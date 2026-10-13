@@ -295,9 +295,63 @@ layout(binding=7) uniform texture2D probe0_tex;  // reflection probe pictures, l
 layout(binding=8) uniform texture2D probe1_tex;
 layout(binding=9) uniform texture2D probe2_tex;
 layout(binding=10) uniform texture2D probe3_tex;
-// 8x9 RGBA32F: 24 spot texels, nine sky SH terms, 36 probe SH terms; no filtering.
+// 8x18 RGBA32F: spots and sky/probe SH, local-light slots, twelve matrices and bias parameters.
 layout(binding=11) uniform texture2D spot_tex;
 layout(binding=3) uniform sampler spot_smp;
+layout(binding=12) uniform texture2D local_shadow_tex; // 4x4 atlas of 512-square perspective depth maps
+
+vec4 light_data(int index) {
+    return texelFetch(sampler2D(spot_tex, spot_smp), ivec2(index % 8, index / 8), 0);
+}
+mat4 local_shadow_matrix(int tile) {
+    int start = 82 + tile * 4;
+    return mat4(light_data(start), light_data(start + 1), light_data(start + 2), light_data(start + 3));
+}
+int point_shadow_face(vec3 d) {
+    vec3 a = abs(d);
+    if (a.x >= a.y && a.x >= a.z) return d.x >= 0.0 ? 0 : 1;
+    if (a.y >= a.z) return d.y >= 0.0 ? 2 : 3;
+    return d.z >= 0.0 ? 4 : 5;
+}
+float local_shadow_lit(int encodedSlot, vec3 lightPosition, vec3 wpos, vec3 normal) {
+    if (encodedSlot <= 0) return 1.0;
+    vec4 config = light_data(72 + encodedSlot - 1); // x: first map, y: six faces (point) or one (spot)
+    int first = int(config.x);
+    bool point = config.y > 1.5;
+    int face = point ? point_shadow_face(wpos - lightPosition) : 0;
+    int tile = first + face;
+    vec4 params = light_data(130 + tile); // x: world texel/depth, y/z: near/far plane
+    mat4 vp = local_shadow_matrix(tile);
+    float depth = max(params.y, (vp * vec4(wpos, 1.0)).w);
+    vec3 position = wpos + normal * (params.x * depth * 1.5);
+    if (point) {
+        face = point_shadow_face(position - lightPosition);
+        tile = first + face;
+        vp = local_shadow_matrix(tile);
+    }
+    float bias = params.y * params.z / (params.z - params.y) * params.x * 0.5 / depth;
+    vec4 clip = vp * vec4(position, 1.0);
+    if (clip.w <= 0.0) return 1.0;
+    vec3 p = clip.xyz / clip.w;
+    vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    vec2 cell = vec2(float(tile % 4), float(tile / 4));
+#if SOKOL_GLSL
+    uv.y = 1.0 - uv.y;
+    cell.y = 3.0 - cell.y;
+#endif
+    float z = p.z * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z > 1.0) return 1.0;
+    float lit = 0.0;
+    vec2 edge = vec2(0.5 / 512.0);
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            vec2 local = clamp(uv + vec2(float(dx), float(dy)) / 512.0, edge, vec2(1.0) - edge);
+            // Explicit level zero removes derivative-dependent sampling from the varying light loops.
+            lit += textureLod(sampler2DShadow(local_shadow_tex, shadow_smp), vec3((local + cell) * 0.25, z - bias), 0.0);
+        }
+    }
+    return lit / 9.0;
+}
 
 // RGB coefficients use one texel each, preserving the reference irradiance math.
 vec3 env_coefficient(int i) {
@@ -596,7 +650,8 @@ void main() {
                 continue;
             }
             float fall = 1.0 - dist / range;
-            color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * point_color[i].rgb * (fall * fall);
+            float localLit = local_shadow_lit(int(point_color[i].w), point_pos[i].xyz, v_wpos, ng);
+            color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * point_color[i].rgb * (fall * fall) * localLit;
         }
         int spots = int(fog_range.z);
         for (int i = 0; i < 8; i++) {
@@ -613,7 +668,8 @@ void main() {
             float cone = t * t * (3.0 - 2.0 * t);
             if (cone <= 0.0) continue;
             float fall = 1.0 - dist / position.w;
-            color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * radiance.rgb * (fall * fall * cone);
+            float localLit = local_shadow_lit(int(light_data(74 + i).x), position.xyz, v_wpos, ng);
+            color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * radiance.rgb * (fall * fall * cone) * localLit;
         }
     }
     vec3 em = emissive.rgb;

@@ -2472,6 +2472,7 @@ Light bulb at the entity position, fading to zero at `range`.
 | `color` | color | `[1,0.850000024,0.600000024]` | Light color. |
 | `intensity` | float | `1.5` | Brightness at the center. |
 | `range` | float | `6` | Distance in meters where the light reaches zero. |
+| `shadows` | bool | `false` | Cast six-face shadows if selected: at most two local lights per view, in view and nearest first. |
 
 ### Skybox
 
@@ -2667,7 +2668,7 @@ How this entity and its children take part in the navigation mesh.
 
 ### SpotLight
 
-Cone light along local -Z (parent rotations included), with a soft edge; no shadows.
+Cone light along local -Z (parent rotations included), with a soft edge and optional budgeted shadows.
 
 | field | type | default | description |
 |---|---|---|---|
@@ -2676,6 +2677,7 @@ Cone light along local -Z (parent rotations included), with a soft edge; no shad
 | `range` | float | `6` | Radial distance in meters where the light reaches zero; minimum 0.01. |
 | `innerAngle` | float | `20` | Full-strength cone half-angle in degrees; clamped to 0..outerAngle. |
 | `outerAngle` | float | `30` | Cone half-angle in degrees; clamped to 0.1..89. Equal angles give a hard edge. |
+| `shadows` | bool | `false` | Cast shadows if selected: at most two local lights per view, in view and nearest first. |
 
 ### Data
 

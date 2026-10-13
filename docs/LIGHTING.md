@@ -2,10 +2,87 @@
 
 `PointLight` lights every direction from an entity's position. R2 adds `SpotLight`, a cone
 aimed along the entity's local -Z axis, with color, intensity, range and a soft angular edge.
-Both renderers use the same attenuation. Spot shadows are reserved for R4.
+Both renderers use the same attenuation. R4 adds optional point and spot light shadows.
 
 R3 adds cascaded directional shadows: the camera's view is split by depth so a large outdoor scene has
 sharp nearby shadows, with stable texel snapping and blended transitions between maps.
+
+## Point and spot shadows
+
+Set `PointLight.shadows` or `SpotLight.shadows` to `true` (default **false**). The Inspector exposes a Shadows
+checkbox on each light; the same reflected field is available through commands, scene files and Lua component
+access. Existing scenes keep their previous lighting and software frame hashes. Shadows affect that light's
+direct contribution only, leaving ambient, environment, other lights and emissive surfaces unchanged.
+
+```bash
+oe exec <project> component.set '{"id":"Lamp","type":"PointLight","values":{"shadows":true}}' --save
+oe exec <project> component.set '{"id":"Spot","type":"SpotLight","values":{"shadows":true}}' --save
+```
+
+### Selection and projection
+
+- At most **two local shadow lights per view**, shared between points and spots, independent of the sun.
+  Candidates have positive radiance and a finite position/range, with their conservative world-axis range
+  box intersecting the camera frustum. They are sorted by squared distance from source to eye, then entity id;
+  point precedes spot if one entity has both. Disabled/zero-intensity lights do not consume the budget.
+  Selection is recomputed per view/frame, including editor views and reflection-probe capture views.
+- Only render-visible light slots compete: the first 16 points and first eight spots in entity-id order.
+  The software renderer retains its earlier unlimited unshadowed point-light behavior. Shadow-enabled lights
+  outside the budget remain lit without shadows; a conservative spot range box may qualify even when its cone
+  points away. There is no hysteresis when the nearest lights change.
+- A point uses **six world-axis perspective faces**, +X/-X/+Y/-Y/+Z/-Z, at 90 degrees. A spot uses one
+  perspective map at twice its normalized outer half-angle, along the same rotation-only direction as lighting.
+  Far plane is the light range; near plane is `max(0.001,min(0.1,range*0.01))`. The projection keeps far at least
+  1.01 times near for degenerate direct callers. Point orientation is unaffected by entity rotation.
+- Face selection uses the largest absolute ray component, ties X then Y then Z. Normal offset is 1.5 world
+  texels at the receiver's perspective view depth. Point face selection is repeated after the normal offset,
+  retaining receivers that cross a cube-face seam. Depth bias is half a world texel projected to normalized
+  perspective depth. The same matrices, face choice and bias are used by software and GPU.
+- Both renderers keep 3x3 PCF and opaque/cutout/displaced/skinned casters. Blended transparent or unlit meshes
+  do not cast shadows. `MeshRenderer.castShadows` and sprite caster flags still apply. There is no per-light
+  strength control: a fully occluded selected local light contributes zero direct light.
+
+### Local-shadow budgets and limits
+
+- **512x512 texels per map**, at most **12 maps** (two points). GPU uses a lazy **2048x2048 depth atlas**,
+  four tiles per row, in one extra texture slot (binding 12). PCF taps clamp to each tile's texel centers;
+  point PCF does not filter across cube faces, so small face-edge differences can remain.
+- Software depth storage is up to **12 MiB**. A 32-bit GPU atlas is **16 MiB**, in addition to the sun/cascade
+  maps. A point can draw each caster six times; two points can draw it twelve times. The GPU batches the union
+  of local-map casters and clips geometry per tile. Maps are rebuilt every frame; no static shadow cache.
+- Matrices and selection/bias data extend the existing light-data texture to **8x18 RGBA32F (2,304 bytes)**.
+  Slots 72..73 describe selected lights, 74..81 map spot slots, 82..129 hold twelve matrices, 130..141 hold
+  projection/bias parameters. Point shadow slots use the previously unused `point_color.w` uniform lane.
+  The fragment shader has **203 vec4 uniform vectors and 13 sampler uniforms** (216 with a vector per sampler,
+  below the GLES3/WebGL2 minimum of 224), using **13 of 16** texture units. No additional vertex-stage resources.
+- Wide cones and distant receivers have larger world texels and coarser shadows. Geometry closer than the
+  near plane is omitted; large world coordinates and very large ranges still limit floating-point precision.
+  No transparent transmission, contact-hardening filter, or cached/temporal shadow updates.
+
+### Local-shadow verification and example
+
+The local example is `build/LocalShadows`: a warm shadowed point, a cool shadowed spot, a box and a sphere.
+
+```bash
+build/bin/oe editor build/LocalShadows
+build/bin/oe render build/LocalShadows --out build/r4-software.png
+build/bin/oe render build/LocalShadows --renderer gpu --out build/r4-gpu.png
+build/bin/oe editor build/LocalShadows --screenshot build/r4-editor.png --select "Cool Spot"
+```
+
+`LocalShadowSelectionAndProjection` checks command fields/undo/serialization, opt-in defaults, offscreen and
+inactive exclusion, nearest/id ordering, camera-dependent selection, all six projections and normal-offset
+face-seam selection. `LocalShadowRendering` verifies point/spot occlusion, caster toggles, renderer parity,
+and two point lights using twelve tiles with reversed selection/pool ordering. `PointShadowSixFaces` checks
+actual receiver shadows and GPU parity for all six cube directions.
+
+Point/spot mean RGB differences are **0.320/0.288 per channel out of 255**, and two points **0.261/255**.
+All six faces produce more than 2,500 shadowed receiver pixels in the test scene.
+Windows Release: **351 tests, zero failed checks**. Headless Edge on SwiftShader rendered the packaged
+point/spot example without shader/WebGL warnings. Both Android ABIs build with 16 KB ELF load alignment;
+not run on a device. The 640x360 example's mean
+RGB difference is **0.084/255** (maximum 124 at raster/shadow edges). The Showcase software frame hash remains
+`72ab07fb213fd42b`.
 
 ## Cascaded directional shadows
 
@@ -46,8 +123,8 @@ oe exec <project> component.set '{"id":"Sun","type":"DirectionalLight","values":
 - Software depth storage is up to 16 MiB; a 32-bit GPU atlas is 16 MiB. Four cascades can draw a caster four
   times; the GPU batches the union of visible-to-any-cascade casters, leaving per-tile clipping to the GPU.
   More maps trade additional shadow work for better near-camera detail; there is no per-frame update cache.
-- The mesh fragment program uses **203 vec4 uniform vectors plus twelve sampler uniforms**, within the
-  GLES3/WebGL2 minimum of 224 even allowing a vector per sampler, and **12 of 16** texture units. Vertex-stage
+- The mesh fragment program uses **203 vec4 uniform vectors plus thirteen sampler uniforms**, within the
+  GLES3/WebGL2 minimum of 224 even allowing a vector per sampler, and **13 of 16** texture units. Vertex-stage
   resource use is unchanged; the pre-existing skin/vertex-graph path still needs minimum-capability device checks.
 - Very large/far slices have wider world texels and softer/coarser shadows. Scene bounds stretched far along
   the light direction can still reduce depth precision. No temporal filtering or per-cascade caster partitioning.
@@ -92,6 +169,7 @@ oe exec <project> component.set '{"id":"Spot","type":"SpotLight","values":{"oute
 | `range` | `6` | Radial distance in world meters; at least `0.01` |
 | `innerAngle` | `20` | Cone half-angle in degrees; clamped to `0..outerAngle` |
 | `outerAngle` | `30` | Cone half-angle in degrees; clamped to `0.1..89` |
+| `shadows` | `false` | Enable shadows when selected within the shared two-local-light budget |
 
 Normalization affects rendering and the guide, leaving the stored values intact. Non-finite brightness/color
 render as zero; non-finite range/angles use defaults. Angles are measured from the axis: an outer angle of 30
@@ -115,14 +193,13 @@ and shader materials. Unlit surfaces ignore all direct lights. Lights do not cre
   out-of-view spots still occupy a slot; there is no distance/view selection yet. Every view and probe capture
   uses this order. The software renderer retains its existing point-light behavior; the GPU still allows
   16 point lights and four directional lights.
-- No spot shadows or occlusion: walls do not block these lights. R4 will add shadow selection using the source
-  entity id, world position, direction, range and cone cosines already carried by `RenderSpotLight`.
-- GPU light data is a nearest-sampled **8x9 RGBA32F texture (1,152 bytes)** at binding 11. Rows 0..2 hold
+- R4 shadows are optional; without `shadows`, walls do not block a spot's direct light. See Point and spot shadows above.
+- GPU light data is a nearest-sampled **8x18 RGBA32F texture (2,304 bytes)** at binding 11. Rows 0..2 hold
   position/range, direction/outer cosine and color/inner cosine for eight spots. The remaining texels hold the
   sky's nine irradiance coefficients and up to four probes' nine coefficients each, unchanged mathematically.
   The immutable image is replaced only when values change, including between editor views.
-- After R3 the mesh fragment shader uses **12 of 16** texture units and **203 vec4 uniform slots**, plus twelve sampler
-  uniforms (even allowing one vector per sampler, 215 is below the GLES3/WebGL2 minimum of 224). No new vertex
+- After R4 the mesh fragment shader uses **13 of 16** texture units and **203 vec4 uniform slots**, plus thirteen sampler
+  uniforms (even allowing one vector per sampler, 216 is below the GLES3/WebGL2 minimum of 224). No new vertex
   attributes or vertex-stage uniforms. The existing skin/vertex-graph uniform budget is unchanged by R2;
   minimum-capability vertex-stage devices still need independent validation.
 
@@ -156,8 +233,17 @@ Android arm64-v8a and x86_64 players build successfully with 16 KB ELF load alig
 R2 spotlights and R3 cascaded directional shadows are complete: both renderers, reflected editor fields/guides,
 API documentation, 348 Windows tests, and rebuilt web/Android runtimes. Headless Edge checked the packaged
 four-cascade example; earlier R2 checks covered spotlights and the reflection-probe room. R4 local-light
-shadows remain the next roadmap item.
+shadows are delivered by the work log below.
 
 - [ ] Android physical-device rendering (build only here; package/install and verify on GLES3 hardware).
 - [ ] Linux/EGL rendering (requires a Linux environment).
 - [ ] Existing skin/vertex-graph shader execution on minimum-capability devices; R2/R3 leave that vertex budget unchanged.
+
+## Implementation status (work log)
+
+- [x] R4 M1: PointLight/SpotLight shadow flags, shared deterministic in-view/nearest light selection and
+  perspective maps; software/GPU local-shadow atlas, filtering and bias; behavior/parity/regression tests,
+  API/docs, example and editor screenshots.
+- [ ] R4 M2: rebuild web and both Android players, verify packaged local shadows in headless Edge,
+  refresh runtime hashes and complete the roadmap.
+- [ ] Android physical-device and Linux/EGL local-shadow rendering (unavailable here).

@@ -662,9 +662,11 @@ struct GpuRenderer::Impl {
     sg_view whiteTex{}, shadowAtt{}, shadowTex{};
     sg_image cascadeAtlas{};  // Lazy 2048-square depth image; four 1024-square tiles, one texture slot.
     sg_view cascadeAtt{}, cascadeTex{};
+    sg_image localShadowAtlas{};  // Two local lights, up to twelve perspective maps in 512-square tiles.
+    sg_view localShadowAtt{}, localShadowTex{};
     sg_image spotImage{};  // Small immutable light-data image, replaced only when the light values change.
     sg_view spotTex{};
-    float spotData[8 * 9 * 4]{};
+    float spotData[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
     StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
     Targets offscreen, window;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
@@ -1132,6 +1134,9 @@ struct GpuRenderer::Impl {
     }
 
     void Shutdown() {
+        if (localShadowTex.id) sg_destroy_view(localShadowTex);
+        if (localShadowAtt.id) sg_destroy_view(localShadowAtt);
+        if (localShadowAtlas.id) sg_destroy_image(localShadowAtlas);
         if (cascadeTex.id) sg_destroy_view(cascadeTex);
         if (cascadeAtt.id) sg_destroy_view(cascadeAtt);
         if (cascadeAtlas.id) sg_destroy_image(cascadeAtlas);
@@ -1447,9 +1452,9 @@ struct GpuRenderer::Impl {
     }
 
     // Immutable replacements also permit several editor viewports with different scenes in one sokol frame.
-    sg_view SpotTextureFor(const RenderLights& lights, const std::vector<RenderProbe>& probes) {
-        if (lights.spots.empty() && !lights.env.map && probes.empty()) return whiteTex;
-        float data[8 * 9 * 4]{};
+    sg_view SpotTextureFor(const RenderLights& lights, const std::vector<RenderProbe>& probes, const LocalShadowSet& shadows) {
+        if (lights.spots.empty() && !lights.env.map && probes.empty() && shadows.lights.empty()) return whiteTex;
+        float data[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
         for (size_t i = 0; i < lights.spots.size(); ++i) {
             const RenderSpotLight& light = lights.spots[i];
             Put(data + i * 4, light.pos.x, light.pos.y, light.pos.z, light.range);
@@ -1464,11 +1469,23 @@ struct GpuRenderer::Impl {
             const Vec3& term = probes[i].sh[k];
             Put(data + (33 + i * 9 + k) * 4, term.x, term.y, term.z, 0);
         }
+        for (size_t i = 0; i < shadows.lights.size(); ++i) {
+            const auto& light = shadows.lights[i];
+            Put(data + (kLocalShadowConfigTexel + i) * 4, static_cast<float>(light.firstMap),
+                static_cast<float>(light.mapCount), 0, 0);
+        }
+        for (size_t i = 0; i < lights.spots.size(); ++i)
+            data[(kSpotShadowSlotTexel + i) * 4] = static_cast<float>(LocalShadowSlot(shadows, false, i) + 1);
+        for (size_t i = 0; i < shadows.maps.size(); ++i) {
+            const auto& map = shadows.maps[i];
+            Put(data + (kLocalShadowMatrixTexel + i * 4) * 4, map.viewProj);
+            Put(data + (kLocalShadowParamsTexel + i) * 4, map.texelScale, map.nearPlane, map.farPlane, 0);
+        }
         if (spotTex.id && std::memcmp(data, spotData, sizeof(data)) == 0) return spotTex;
         if (spotTex.id) sg_destroy_view(spotTex);
         if (spotImage.id) sg_destroy_image(spotImage);
         sg_image_desc desc{};
-        desc.width = 8; desc.height = 9;
+        desc.width = kLocalLightDataWidth; desc.height = kLocalLightDataHeight;
         desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
         desc.data.mip_levels[0] = {data, sizeof(data)};
         desc.label = "oe-spot-lights";
@@ -1484,6 +1501,13 @@ struct GpuRenderer::Impl {
         Evict();
         std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
         RenderLights lights = GatherRenderLights(scene, assets);
+        const LocalShadowSet localShadows = SelectLocalShadows(lights, view.proj * view.view, view.eye);
+        if (!localShadows.maps.empty() && !localShadowAtlas.id) {
+            localShadowAtlas = MakeAttachmentImage(kLocalShadowAtlasSize, kLocalShadowAtlasSize, kDepthFormat, 1,
+                                                 true, false, "oe-local-shadow-atlas");
+            localShadowAtt = DepthView(localShadowAtlas);
+            localShadowTex = TextureView(localShadowAtlas);
+        }
         if (view.editorFill > 0.0f) {  // editor fill: lift the ambient floor so a script-lit scene is visible to edit (matches the software renderer)
             lights.ambient = Color(std::max(lights.ambient.r, view.editorFill), std::max(lights.ambient.g, view.editorFill),
                                    std::max(lights.ambient.b, view.editorFill));
@@ -1552,7 +1576,7 @@ struct GpuRenderer::Impl {
         }
 
         // ----- What each pass draws: culled draws in draw-list order, runs of small meshes batched
-        std::vector<size_t> shadowOrder, sceneOrder;
+        std::vector<size_t> shadowOrder, localShadowOrder, sceneOrder;
         for (size_t k = 0; k < draws.size(); ++k) {
             const RenderItem& it = items[draws[k].item];
             // Transparent surfaces cast no shadow.
@@ -1561,10 +1585,17 @@ struct GpuRenderer::Impl {
                 inShadow = inShadow || BoxInFrustum(cascades.fits[static_cast<size_t>(cascade)].viewProj, drawLo[k], drawHi[k], false);
             if (shadows && it.castShadows && !it.unlit && !draws[k].blend && inShadow)
                 shadowOrder.push_back(k);
+            if (it.castShadows && !it.unlit && !draws[k].blend) {
+                bool inLocalShadow = false;
+                for (const auto& map : localShadows.maps)
+                    inLocalShadow = inLocalShadow || BoxInFrustum(map.viewProj, drawLo[k], drawHi[k]);
+                if (inLocalShadow) localShadowOrder.push_back(k);
+            }
             if (inView[k]) sceneOrder.push_back(k);
         }
         DrawBatches batching;
         const std::vector<DrawPiece> shadowPieces = PlanBatches(items, draws, shadowOrder, batching);
+        const std::vector<DrawPiece> localShadowPieces = PlanBatches(items, draws, localShadowOrder, batching);
         const std::vector<DrawPiece> scenePieces = PlanBatches(items, draws, sceneOrder, batching);
         UploadBatches(batching);
         // The item, draw call and geometry of a piece: the draw's own, or its batch's.
@@ -1578,6 +1609,39 @@ struct GpuRenderer::Impl {
                 dc = &draws[p.draw];
                 it = &items[dc->item];
                 mesh = Binding(*gpuMeshes[dc->item], it->mesh->submeshes[dc->submesh]);
+            }
+        };
+
+        auto drawShadows = [&](const std::vector<DrawPiece>& pieces, const Mat4& shadowViewProj) {
+            int current = -1;
+            for (const DrawPiece& p : pieces) {
+                const DrawCall* dcp;
+                const RenderItem* itp;
+                MeshBinding mesh;
+                piece(p, dcp, itp, mesh);
+                const DrawCall& dc = *dcp;
+                const RenderItem& it = *itp;
+                const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+                if (cutout || Displaced(dc.material)) {
+                    Use(GraphPipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0], dc.material));
+                    ApplySurface(dc, it, mesh, shadowViewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
+                    Draw(mesh);
+                    current = -1;
+                    continue;
+                }
+                int want = dc.material.doubleSided ? 1 : 0;
+                if (want != current) {
+                    Use(want ? shadowPipTwoSided : shadowPip);
+                    current = want;
+                }
+                oe_pos_vs_params_t u{};
+                Put(u.mvp, shadowViewProj * it.world);
+                sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
+                ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
+                sg_bindings b{};
+                Bind(b, mesh);
+                sg_apply_bindings(&b);
+                Draw(mesh);
             }
         };
 
@@ -1597,36 +1661,26 @@ struct GpuRenderer::Impl {
                     sg_apply_scissor_rect((cascade % 2) * kCascadeMapSize, (cascade / 2) * kCascadeMapSize,
                                           kCascadeMapSize, kCascadeMapSize, true);
                 }
-                int current = -1;
-                for (const DrawPiece& p : shadowPieces) {
-                    const DrawCall* dcp;
-                    const RenderItem* itp;
-                    MeshBinding mesh;
-                    piece(p, dcp, itp, mesh);
-                    const DrawCall& dc = *dcp;
-                    const RenderItem& it = *itp;
-                    const bool cutout = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
-                    if (cutout || Displaced(dc.material)) {
-                        Use(GraphPipeline(surfaceShadow[dc.material.doubleSided ? 1 : 0], dc.material));
-                        ApplySurface(dc, it, mesh, cascadeFit.viewProj, view.shaderTime, cutout ? dc.material.alphaCutoff : 0.0f);
-                        Draw(mesh);
-                        current = -1;
-                        continue;
-                    }
-                    int want = dc.material.doubleSided ? 1 : 0;
-                    if (want != current) {
-                        Use(want ? shadowPipTwoSided : shadowPip);
-                        current = want;
-                    }
-                    oe_pos_vs_params_t u{};
-                    Put(u.mvp, cascadeFit.viewProj * it.world);
-                    sg_apply_uniforms(UB_oe_pos_vs_params, SG_RANGE(u));
-                    ApplySkin(UB_oe_pos_vs_skin, it, static_cast<int>(dc.submesh));
-                    sg_bindings b{};
-                    Bind(b, mesh);
-                    sg_apply_bindings(&b);
-                    Draw(mesh);
-                }
+                drawShadows(shadowPieces, cascadeFit.viewProj);
+            }
+            sg_end_pass();
+        }
+
+        if (!localShadows.maps.empty()) {
+            sg_pass pass{};
+            pass.action.depth.load_action = SG_LOADACTION_CLEAR;
+            pass.action.depth.clear_value = 1;
+            pass.action.depth.store_action = SG_STOREACTION_STORE;
+            pass.attachments.depth_stencil = localShadowAtt;
+            pass.label = "oe-local-shadows";
+            sg_begin_pass(&pass);
+            for (size_t i = 0; i < localShadows.maps.size(); ++i) {
+                const int tile = static_cast<int>(i);
+                sg_apply_viewport((tile % 4) * kLocalShadowTileSize, (tile / 4) * kLocalShadowTileSize,
+                                  kLocalShadowTileSize, kLocalShadowTileSize, true);
+                sg_apply_scissor_rect((tile % 4) * kLocalShadowTileSize, (tile / 4) * kLocalShadowTileSize,
+                                      kLocalShadowTileSize, kLocalShadowTileSize, true);
+                drawShadows(localShadowPieces, localShadows.maps[i].viewProj);
             }
             sg_end_pass();
         }
@@ -1754,7 +1808,8 @@ struct GpuRenderer::Impl {
             for (int i = 0; i < points; ++i) {
                 const RenderPointLight& l = lights.points[static_cast<size_t>(i)];
                 Put(lu.point_pos[i], l.pos.x, l.pos.y, l.pos.z, l.range);
-                Put(lu.point_color[i], l.color.r, l.color.g, l.color.b, 0);
+                Put(lu.point_color[i], l.color.r, l.color.g, l.color.b,
+                    static_cast<float>(LocalShadowSlot(localShadows, true, static_cast<size_t>(i)) + 1));
             }
             Put(lu.env_sky, env.sky.r, env.sky.g, env.sky.b, env.present ? 1.0f : 0.0f);
             Put(lu.env_horizon, env.horizon.r, env.horizon.g, env.horizon.b, env.reflections);
@@ -1762,7 +1817,7 @@ struct GpuRenderer::Impl {
             Put(lu.env_map, env.map ? 1.0f : 0.0f, env.map ? env.map->MaxLod() : 0.0f, env.yawCos, env.yawSin);
             // Reflection probes of this frame; the slots without one keep the white texture.
             const std::vector<RenderProbe> probes = ActiveProbes(scene, assets, lights, viewProj, view.eye);
-            const sg_view spotLightTex = SpotTextureFor(lights, probes);
+            const sg_view spotLightTex = SpotTextureFor(lights, probes, localShadows);
             sg_view probeTex[kMaxProbes];
             Put(lu.probe_count, static_cast<float>(probes.size()), 0, 0, 0);
             for (int i = 0; i < kMaxProbes; ++i) {
@@ -1838,6 +1893,7 @@ struct GpuRenderer::Impl {
                 b.views[VIEW_oe_probe2_tex] = probeTex[2];
                 b.views[VIEW_oe_probe3_tex] = probeTex[3];
                 b.views[VIEW_oe_spot_tex] = spotLightTex;
+                b.views[VIEW_oe_local_shadow_tex] = localShadowTex.id ? localShadowTex : shadowTex;
                 b.samplers[SMP_oe_spot_smp] = nearestClamp;
                 b.samplers[SMP_oe_env_smp] = envSampler;
                 b.samplers[SMP_oe_base_smp] = m.pixelArt ? pixelArt : linearRepeat;

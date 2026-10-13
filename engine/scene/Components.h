@@ -791,18 +791,20 @@ struct ReflectionProbe {
 
 struct SpotLight {
     static constexpr const char* kTypeName = "SpotLight";
-    static constexpr const char* kDoc = "Cone light along local -Z (parent rotations included), with a soft edge; no shadows.";
+    static constexpr const char* kDoc = "Cone light along local -Z (parent rotations included), with a soft edge and optional budgeted shadows.";
     Color color{1.0f, 0.85f, 0.6f};  // Light color.
     float intensity = 1.5f;        // Brightness on the cone axis at the source.
     float range = 6.0f;            // Radial reach in world meters, unaffected by scale.
     float innerAngle = 20.0f;      // Half-angle in degrees, full strength inside.
     float outerAngle = 30.0f;      // Half-angle in degrees, zero strength outside.
+    bool shadows = false;         // Opt in to the shared two-local-light shadow budget.
     static void Reflect(FieldList& f) {
         f.Add("color", &SpotLight::color, "Light color.");
         f.Add("intensity", &SpotLight::intensity, "Brightness on the axis; negative values render as zero.");
         f.Add("range", &SpotLight::range, "Radial distance in meters where the light reaches zero; minimum 0.01.");
         f.Add("innerAngle", &SpotLight::innerAngle, "Full-strength cone half-angle in degrees; clamped to 0..outerAngle.");
         f.Add("outerAngle", &SpotLight::outerAngle, "Cone half-angle in degrees; clamped to 0.1..89. Equal angles give a hard edge.");
+        f.Add("shadows", &SpotLight::shadows, "Cast shadows if selected: at most two local lights per view, in view and nearest first.");
     }
 };
 
@@ -812,10 +814,12 @@ struct PointLight {
     Color color{1.0f, 0.85f, 0.6f};
     float intensity = 1.5f;
     float range = 6.0f;
+    bool shadows = false;  // Opt in to the shared two-local-light shadow budget (six cube faces).
     static void Reflect(FieldList& f) {
         f.Add("color", &PointLight::color, "Light color.");
         f.Add("intensity", &PointLight::intensity, "Brightness at the center.");
         f.Add("range", &PointLight::range, "Distance in meters where the light reaches zero.");
+        f.Add("shadows", &PointLight::shadows, "Cast six-face shadows if selected: at most two local lights per view, in view and nearest first.");
     }
 };
 

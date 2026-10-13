@@ -849,6 +849,7 @@ RenderSpotLight MakeRenderSpotLight(const Scene& scene, EntityId id) {
     const float inner = Clamp(finite(light->innerAngle, 20.0f), 0.0f, outer);
     result.innerCos = std::cos(Radians(inner));
     result.outerCos = std::cos(Radians(outer));
+    result.shadows = light->shadows;
     return result;
 }
 
@@ -874,7 +875,8 @@ RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets) {
         lights.ambient = Color(0.25f, 0.25f, 0.28f);
     }
     for (const auto& kv : scene.Pool<PointLight>()) {
-        lights.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity, std::max(0.01f, kv.second.range)});
+        lights.points.push_back({scene.WorldMatrix(kv.first).TransformPoint(Vec3(0, 0, 0)), kv.second.color * kv.second.intensity,
+                                 std::max(0.01f, kv.second.range), kv.first, kv.second.shadows});
     }
     for (const auto& kv : scene.Pool<SpotLight>()) {
         if (lights.spots.size() == static_cast<size_t>(kMaxSpotLights)) break;

@@ -218,10 +218,12 @@ glTF models load their full materials: base color factor including alpha, base c
 ## Lights and shadows
 
 - `DirectionalLight`: color, intensity, ambient, `shadows`, `shadowStrength`, `shadowDistance`. The first directional light casts shadows: an orthographic shadow map fitted to the scene (software 1024², GPU 2048² with hardware comparison filtering), 3×3 PCF, back faces rendered to avoid acne. `shadowDistance` > 0 fits the map to what the camera sees up to that distance instead (a sphere around that part of the view frustum, moved in whole texels so shadows do not shimmer; its depth range reaches back over the scene so casters between the sun and the view still cast; the GPU shadow pass skips casters outside it). Large scenes get sharper shadows; a scene smaller than that part keeps the whole-scene fit. Surfaces beyond the distance are unshadowed.
-- `PointLight`: color, intensity, `range` (quadratic falloff to zero at the range).
+- `PointLight`: color, intensity, `range` (quadratic falloff to zero at the range), optional `shadows` (six faces).
 - `SpotLight`: color, intensity, radial `range`, `innerAngle` and `outerAngle` (half-angles in degrees),
-  aimed along rotated local -Z. Smoothstep soft edge; eight per frame in both renderers, no spot shadows yet.
+  aimed along rotated local -Z. Smoothstep soft edge; eight per frame, optional `shadows` (one cone map).
   See [LIGHTING.md](LIGHTING.md).
+- Local shadows: two in-view/nearest point or spot lights per view, 512-square maps in a 2048-square atlas;
+  same face selection, perspective bias and 3x3 PCF in both renderers. Shadow flags default to false.
 - Lighting is per pixel with a physically based model (glTF metallic-roughness): GGX normal distribution, Smith-Schlick geometry, Schlick Fresnel; F0 is 0.04 for dielectrics and the base color for metals, and the diffuse part is `baseColor * (1 - metallic)`. Both renderers use the same math (`Lighting::Shade` in `SoftwareRenderer.cpp`, `mesh_fs` in `Shaders.glsl`).
 - Light colors include the factor pi and lighting happens on non-linear (display) colors, clamped, with no tone mapping or HDR yet, so a white diffuse surface lit head-on still shows exactly the light color.
 - Hemisphere ambient: with `DirectionalLight.hemisphere` the ambient light is `groundAmbient` for faces pointing down, `ambient` for faces pointing up, blended by `normal.y * 0.5 + 0.5` (outdoor scenes: blue sky above, warm bounce below). Off by default (one flat ambient color).

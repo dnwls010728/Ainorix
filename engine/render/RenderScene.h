@@ -110,6 +110,8 @@ struct RenderPointLight {
     Vec3 pos;
     Color color;
     float range;
+    EntityId id = kNullEntity;  // Source for deterministic shadow-budget selection.
+    bool shadows = false;     // Opt in to local shadows.
 };
 
 // Independent of the point-light budget; first eight entity ids, identical in both renderers.
@@ -122,6 +124,7 @@ struct RenderSpotLight {
     float range = 6.0f;       // Radial distance, world meters.
     float innerCos = 1.0f;    // Cosine of the inner half-angle.
     float outerCos = 1.0f;    // Cosine of the outer half-angle.
+    bool shadows = false;    // Opt in to local shadows.
 };
 
 // Shared normalization and rotation contract for renderer light gathering and editor cone guides.
@@ -269,6 +272,44 @@ struct RenderLights {
     float shadowDistance = 0.0f;  // > 0: the shadow map covers the camera's view up to this distance
     int shadowCascades = 1;      // clamped 1..4; one retains the legacy fit and shading
 };
+
+constexpr int kMaxLocalShadowLights = 2;   // Shared point/spot budget, independent of the sun.
+constexpr int kMaxLocalShadowMaps = 12;    // Two six-face point lights at most.
+constexpr int kLocalShadowTileSize = 512;  // Four-by-four atlas fits GLES3's 2048 texture minimum.
+constexpr int kLocalShadowAtlasSize = 2048;
+constexpr int kLocalLightDataWidth = 8, kLocalLightDataHeight = 18;
+constexpr int kLocalShadowConfigTexel = 72, kSpotShadowSlotTexel = 74;
+constexpr int kLocalShadowMatrixTexel = 82, kLocalShadowParamsTexel = 130;
+struct RenderLocalShadow {
+    EntityId id = kNullEntity;  // Source id; point before spot when one entity has both.
+    bool point = false;        // Six cube faces for a point, one cone face for a spot.
+    size_t lightIndex = 0;     // Index in RenderLights.points/spots.
+    Vec3 pos;                 // World position of the source.
+    int firstMap = 0, mapCount = 1;  // Contiguous tiles in LocalShadowSet.maps.
+};
+struct LocalShadowMap {
+    Mat4 viewProj;             // Perspective light view, shared by both renderers.
+    float texelScale = 0;      // World texel size at depth d = texelScale*d.
+    float nearPlane = 0.01f, farPlane = 6;  // Shared projection planes for depth bias.
+};
+struct LocalShadowSet {
+    std::vector<RenderLocalShadow> lights;  // At most kMaxLocalShadowLights, nearest then id.
+    std::vector<LocalShadowMap> maps;       // At most kMaxLocalShadowMaps, in tile order.
+};
+// Render-visible point lights (first 16) and spots (first eight), with shadows, positive radiance,
+// a finite range/position and a conservative range box intersecting the view; nearest, id, kind.
+LocalShadowSet SelectLocalShadows(const RenderLights& lights, const Mat4& viewProj, const Vec3& eye);
+// 0-based selected shadow-light slot, or -1 when that light is not shadowed in this view.
+int LocalShadowSlot(const LocalShadowSet& shadows, bool point, size_t lightIndex);
+// World-axis cube face: +X,-X,+Y,-Y,+Z,-Z. Ties choose X, then Y, then Z.
+int PointShadowFace(const Vec3& direction);
+struct LocalShadowSample {
+    int mapIndex = 0;   // Selected tile, after applying normal offset (prevents face-seam gaps).
+    Vec3 position;     // Receiver displaced by 1.5 world texels along its geometric normal.
+    float depthBias = 0;  // Half a world texel converted to normalized perspective depth.
+};
+// Mirrors local_shadow_lit in Shaders.glsl: cube-face selection, perspective normal offset and bias.
+LocalShadowSample PrepareLocalShadowSample(const LocalShadowSet& shadows, size_t slot, const Vec3& position, const Vec3& normal);
 
 // The camera view orients particle billboards; identity faces +Z for callers without a camera.
 std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView = Mat4{});

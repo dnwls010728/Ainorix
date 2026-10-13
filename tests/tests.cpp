@@ -4954,8 +4954,9 @@ TEST(SpotLightRendering) {
     const sg_shader_desc* descriptor = oe_mesh_shader_desc(SG_BACKEND_GLES3);
     const size_t uniformVectors = (descriptor->uniform_blocks[UB_oe_mesh_lights].size +
                                    descriptor->uniform_blocks[UB_oe_mesh_material].size) / (4 * sizeof(float));
-    CHECK(uniformVectors + 12 <= 224);
+    CHECK(uniformVectors + 13 <= 224);
     static_assert(VIEW_oe_spot_tex < 16, "Spot texture must fit the GLES3 fragment texture-unit minimum");
+    static_assert(VIEW_oe_local_shadow_tex < 16, "Local shadows must fit the GLES3 fragment texture-unit minimum");
     const std::string project = TempProject("spot_rendering");
     Engine e; std::string error;
     CHECK(e.Open(project, &error));
@@ -7432,6 +7433,174 @@ TEST(GpuFrustumCulling) {
         error += std::abs(static_cast<int>((sw.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
     std::printf("  culled frame software/GPU mean difference %.4f\n", error / static_cast<double>(sw.color.size() * 3));
     CHECK(error / static_cast<double>(sw.color.size() * 3) < 2.0);
+}
+
+TEST(LocalShadowSelectionAndProjection) {
+    const std::string project = TempProject("local_shadow_selection");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Tie point","components":{"Transform":{"position":[0,1,2]},"PointLight":{"range":8,"shadows":true}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Tie spot","components":{"Transform":{"position":[0,-1,2]},"SpotLight":{"range":8,"shadows":true}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Far point","components":{"Transform":{"position":[2,2,-8]},"PointLight":{"shadows":true}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Offscreen","components":{"Transform":{"position":[100,0,0]},"PointLight":{"range":1,"shadows":true}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Off","components":{"Transform":{"position":[0,0,9]},"PointLight":{"intensity":0,"shadows":true}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Legacy","components":{"Transform":{"position":[0,0,8]},"PointLight":{},"SpotLight":{}}})")["ok"].asBool());
+    const EntityId point = e.GetScene().FindByName("Tie point"), spot = e.GetScene().FindByName("Tie spot");
+    const EntityId legacy = e.GetScene().FindByName("Legacy");
+    CHECK(!e.GetScene().Get<PointLight>(legacy)->shadows && !e.GetScene().Get<SpotLight>(legacy)->shadows);
+    const Json saved = e.GetScene().ToJson();
+    Scene restored; CHECK(restored.FromJson(saved, &error)); CHECK(restored.ToJson() == saved);
+    RenderView view = MakeLookAtView(Vec3(0, 0, 10), Vec3(), 60, 1.5f);
+    const auto lights = GatherRenderLights(e.GetScene());
+    auto shadows = SelectLocalShadows(lights, view.proj * view.view, view.eye);
+    CHECK(shadows.lights.size() == 2 && shadows.maps.size() == 7);
+    CHECK(shadows.lights[0].id == point && shadows.lights[1].id == spot);
+    CHECK(LocalShadowSlot(shadows, true, 0) == 0 && LocalShadowSlot(shadows, false, 0) == 1);
+    const Vec3 directions[] = {Vec3(1, 0, 0), Vec3(-1, 0, 0), Vec3(0, 1, 0), Vec3(0, -1, 0), Vec3(0, 0, 1), Vec3(0, 0, -1)};
+    for (int face = 0; face < 6; ++face) {
+        const auto sample = PrepareLocalShadowSample(shadows, 0, shadows.lights[0].pos + directions[face] * 3, Vec3());
+        CHECK(sample.mapIndex == face && sample.depthBias > 0);
+        const Vec4 clip = shadows.maps[static_cast<size_t>(face)].viewProj * Vec4(sample.position, 1);
+        CHECK(std::fabs(clip.x) < 1e-5f && std::fabs(clip.y) < 1e-5f && clip.z / clip.w > -1 && clip.z / clip.w < 1);
+    }
+    CHECK(PointShadowFace(Vec3(1, 1, 1)) == 0 && PointShadowFace(Vec3(-1, 1, 1)) == 1);
+    CHECK(PointShadowFace(Vec3(0, 1, 1)) == 2 && PointShadowFace(Vec3(0, -1, 1)) == 3);
+    // Normal displacement can cross a cube seam: select the new face, retaining the receiver in the map.
+    const auto seam = PrepareLocalShadowSample(shadows, 0, shadows.lights[0].pos + Vec3(2, 2, 0), Vec3(0, 1, 0));
+    CHECK(seam.mapIndex == 2);
+    const Vec4 seamClip = shadows.maps[2].viewProj * Vec4(seam.position, 1);
+    CHECK(std::fabs(seamClip.x / seamClip.w) <= 1 && std::fabs(seamClip.y / seamClip.w) <= 1);
+    view = MakeLookAtView(Vec3(0, 0, -10), Vec3(), 60, 1.5f);
+    shadows = SelectLocalShadows(lights, view.proj * view.view, view.eye);
+    CHECK(shadows.lights[0].id == e.GetScene().FindByName("Far point") && shadows.lights[1].id == point);
+    CHECK(shadows.maps.size() == 12);
+    CHECK(Call(e, "component.set", R"({"id":"Tie point","type":"PointLight","values":{"shadows":false}})")["ok"].asBool());
+    CHECK(Call(e, "history.undo", "{}")["ok"].asBool() && e.GetScene().Get<PointLight>(point)->shadows);
+    CHECK(RemoveAll(project));
+}
+
+TEST(LocalShadowRendering) {
+    const std::string project = TempProject("local_shadow_rendering");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0.03,0.03,0.03],"shadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Ground","components":{"Transform":{"scale":[12,1,12]},"MeshRenderer":{"mesh":"plane","color":[1,1,1],"castShadows":false}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Blocker","components":{"Transform":{"position":[0,1,0],"scale":[2,2,2]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.4,0.2]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Point","components":{"Transform":{"position":[0,4,0]},"PointLight":{"intensity":0,"range":8,"color":[1,1,1]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Spot","components":{"Transform":{"position":[0,4,0],"rotation":[-90,0,0]},"SpotLight":{"intensity":0,"range":8,"color":[1,1,1],"innerAngle":25,"outerAngle":45}}})")["ok"].asBool());
+    const RenderView view = MakeLookAtView(Vec3(6, 5, 7), Vec3(), 50, 1.5f);
+    const EntityId ground = e.GetScene().FindByName("Ground");
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    for (bool point : {true, false}) {
+        const char* name = point ? "Point" : "Spot", *type = point ? "PointLight" : "SpotLight";
+        auto light = [&](const char* values) {
+            const std::string args = std::string("{\"id\":\"") + name + "\",\"type\":\"" + type + "\",\"values\":" + values + "}";
+            CHECK(Call(e, "component.set", args.c_str())["ok"].asBool());
+        };
+        light(R"({"intensity":4,"shadows":false})");
+        RenderTarget open, shadowed, gpu; for (auto* image : {&open, &shadowed, &gpu}) image->Resize(240, 160);
+        e.Renderer().Render(e.GetScene(), view, open);
+        light(R"({"shadows":true})");
+        e.Renderer().Render(e.GetScene(), view, shadowed);
+        int darkened = 0;
+        for (size_t i = 0; i < open.color.size(); ++i)
+            darkened += open.ids[i] == ground && static_cast<int>(open.color[i] & 255) > static_cast<int>(shadowed.color[i] & 255) + 30;
+        std::printf("  %s: %d shadowed ground pixels\n", type, darkened);
+        CHECK(darkened > 40);
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double difference = 0;
+            for (size_t i = 0; i < gpu.color.size(); ++i) for (int shift : {0, 8, 16})
+                difference += std::abs(static_cast<int>((shadowed.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+            const double mean = difference / (static_cast<double>(gpu.color.size()) * 3);
+            std::printf("  %s: software/GPU mean difference %.3f/255\n", type, mean);
+            CHECK(mean < 2);
+        }
+        CHECK(Call(e, "component.set", R"({"id":"Blocker","type":"MeshRenderer","values":{"castShadows":false}})")["ok"].asBool());
+        e.Renderer().Render(e.GetScene(), view, shadowed);
+        CHECK(shadowed.color == open.color);
+        CHECK(Call(e, "component.set", R"({"id":"Blocker","type":"MeshRenderer","values":{"castShadows":true}})")["ok"].asBool());
+        light(R"({"intensity":0})");
+    }
+    // Two point lights exercise all twelve atlas tiles and reversed distance-vs-pool ordering.
+    CHECK(Call(e, "component.set", R"({"id":"Point","type":"Transform","values":{"position":[-2.5,4,0]}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Point","type":"PointLight","values":{"intensity":4,"color":[1,0,0],"shadows":false}})")["ok"].asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Blocker","type":"Transform","values":{"position":[-2.5,1,0]}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Second point","components":{"Transform":{"position":[2.5,4,0]},"PointLight":{"intensity":4,"range":8,"color":[0,0,1]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Second blocker","components":{"Transform":{"position":[2.5,1,0],"scale":[2,2,2]},"MeshRenderer":{"mesh":"cube","color":[0.7,0.4,0.2]}}})")["ok"].asBool());
+    RenderTarget open, shadowed, gpu; for (auto* image : {&open, &shadowed, &gpu}) image->Resize(240, 160);
+    e.Renderer().Render(e.GetScene(), view, open);
+    for (const char* name : {"Point", "Second point"}) {
+        const std::string args = std::string(R"({"type":"PointLight","values":{"shadows":true},"id":")") + name + "\"}";
+        CHECK(Call(e, "component.set", args.c_str())["ok"].asBool());
+    }
+    e.Renderer().Render(e.GetScene(), view, shadowed);
+    int channelShadows[2]{};
+    for (size_t i = 0; i < open.color.size(); ++i) {
+        if (open.ids[i] != ground) continue;
+        for (int channel = 0; channel < 2; ++channel) {
+            const int shift = channel * 16;
+            channelShadows[channel] += static_cast<int>((open.color[i] >> shift) & 255) >
+                static_cast<int>((shadowed.color[i] >> shift) & 255) + 30;
+        }
+    }
+    CHECK(channelShadows[0] > 40 && channelShadows[1] > 40);
+    if (haveGpu) {
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        double sum = 0;
+        for (size_t i = 0; i < gpu.color.size(); ++i) for (int shift : {0, 8, 16})
+            sum += std::abs(static_cast<int>((shadowed.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+        const double mean = sum / (static_cast<double>(gpu.color.size()) * 3);
+        std::printf("  two point lights: software/GPU mean difference %.3f/255\n", mean);
+        CHECK(mean < 2);
+    }
+    CHECK(RemoveAll(project));
+}
+
+TEST(PointShadowSixFaces) {
+    const std::string project = TempProject("point_shadow_faces");
+    Engine e; std::string error;
+    CHECK(e.Open(project, &error));
+    const bool haveGpu = e.EnableGpu(nullptr, &error);
+    auto vectorJson = [](Vec3 v) { return "[" + std::to_string(v.x) + "," + std::to_string(v.y) + "," + std::to_string(v.z) + "]"; };
+    const Vec3 directions[] = {Vec3(1, 0, 0), Vec3(-1, 0, 0), Vec3(0, 1, 0), Vec3(0, -1, 0), Vec3(0, 0, 1), Vec3(0, 0, -1)};
+    for (int face = 0; face < 6; ++face) {
+        CHECK(Call(e, "scene.new", R"({"empty":true})")["ok"].asBool());
+        CHECK(Call(e, "entity.create", R"({"name":"Sun","components":{"DirectionalLight":{"intensity":0,"ambient":[0.02,0.02,0.02],"shadows":false}}})")["ok"].asBool());
+        CHECK(Call(e, "entity.create", R"({"name":"Point","components":{"PointLight":{"color":[1,1,1],"intensity":6,"range":9,"shadows":false}}})")["ok"].asBool());
+        const Vec3 dir = directions[face], up = std::fabs(dir.y) > 0.95f ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
+        const Vec3 right = Normalize(Cross(dir, up));
+        const Vec3 scale = face < 2 ? Vec3(0.1f, 6, 6) : face < 4 ? Vec3(6, 0.1f, 6) : Vec3(6, 6, 0.1f);
+        const std::string receiver = std::string(R"({"name":"Receiver","components":{"Transform":{"position":)") + vectorJson(dir * 4) +
+            R"(,"scale":)" + vectorJson(scale) + R"(},"MeshRenderer":{"mesh":"cube","color":[1,1,1],"castShadows":false}}})";
+        CHECK(Call(e, "entity.create", receiver.c_str())["ok"].asBool());
+        const std::string blocker = std::string(R"({"name":"Blocker","components":{"Transform":{"position":)") + vectorJson(dir * 2 + right * 0.5f) +
+            R"(,"scale":[0.8,0.8,0.8]},"MeshRenderer":{"mesh":"cube","color":[0.5,0.5,0.5]}}})";
+        CHECK(Call(e, "entity.create", blocker.c_str())["ok"].asBool());
+        RenderView view = MakeLookAtView(right * 0.8f + up * 0.4f, dir * 4, 55, 1);
+        // MakeLookAtView's generic up vector is singular for vertical faces only when eye is exactly on-axis;
+        // these off-axis views also exercise perspective lookup away from face centers.
+        RenderTarget open, shadowed, gpu; for (auto* image : {&open, &shadowed, &gpu}) image->Resize(128, 128);
+        e.Renderer().Render(e.GetScene(), view, open);
+        CHECK(Call(e, "component.set", R"({"id":"Point","type":"PointLight","values":{"shadows":true}})")["ok"].asBool());
+        e.Renderer().Render(e.GetScene(), view, shadowed);
+        const EntityId id = e.GetScene().FindByName("Receiver");
+        int darkened = 0;
+        for (size_t i = 0; i < open.color.size(); ++i)
+            darkened += open.ids[i] == id && static_cast<int>(open.color[i] & 255) > static_cast<int>(shadowed.color[i] & 255) + 30;
+        std::printf("  point cube face %d: %d shadowed receiver pixels\n", face, darkened);
+        CHECK(darkened > 20);
+        if (haveGpu) {
+            e.Gpu()->Render(e.GetScene(), view, gpu);
+            double sum = 0;
+            for (size_t i = 0; i < gpu.color.size(); ++i) for (int shift : {0, 8, 16})
+                sum += std::abs(static_cast<int>((shadowed.color[i] >> shift) & 255) - static_cast<int>((gpu.color[i] >> shift) & 255));
+            CHECK(sum / (static_cast<double>(gpu.color.size()) * 3) < 3);
+        }
+    }
+    CHECK(RemoveAll(project));
 }
 
 TEST(CascadedShadowFitsAndStability) {

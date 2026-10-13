@@ -74,6 +74,10 @@ Scene overlay toggles have opaque backgrounds and an underline when enabled. Hov
 Shadow Distance. Set 2..4 maps and a positive distance for outdoor levels; 1 retains the previous map.
 Both Scene and Game views use their own camera to fit and blend the cascades. See [LIGHTING.md](LIGHTING.md).
 
+**Local light shadows.** PointLight and SpotLight expose a Shadows checkbox, off by default. At most two
+local lights cast shadows in each view, selected in view and nearest first; editor and Game cameras can
+therefore select different lights. Their existing sphere/cone guides show the unchanged light range.
+
 **Fill Light.** The Scene view's **Fill Light** toggle (overlay bar; `oe editor --light` for a headless screenshot) raises the ambient floor of the Scene view only, so a scene lit by its gameplay scripts — a night level, a day/night cycle whose sun and ambient are set from Lua — is visible to edit while the game is not running. It is an editor aid: the Game view, a packaged game and the software/GPU screenshot of the *game* camera keep the real lighting. It does little for a look built mostly from surface shader graphs, which compute their own colour and need the running game's time and uniforms.
 
 **Asking about an object or a spot.** Right-click in the Scene view and choose **Ask the Team** or **Ask the Agent** (the CLI set in Settings > Agents), about the object under the pointer or about **this spot** (the point on its surface, or on the ground plane over empty space; "put a tree here"): a bubble opens next to the object or spot, follows it while the camera moves, and holds the conversation. The team bubble posts to the Team Chat naming the object; an agent bubble is a direct conversation with that CLI, kept per object and CLI. Details: [TEAM.md §7.4](TEAM.md#74-asking-about-an-object-scene-bubbles).

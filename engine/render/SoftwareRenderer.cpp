@@ -73,9 +73,11 @@ struct ShadowMap {
     float depthBias = 0.002f;
 
     // 1 = fully lit, 0 = fully shadowed (3x3 PCF).
-    float Lit(const Vec3& wpos, const Vec3& normal) const {
+    float Lit(const Vec3& wpos, const Vec3& normal, bool displaced = false, float bias = -1.0f) const {
         if (!enabled) return 1.0f;
-        Vec4 c = viewProj * Vec4(wpos + normal * (texelWorld * 1.5f), 1.0f);
+        Vec4 c = viewProj * Vec4(displaced ? wpos : wpos + normal * (texelWorld * 1.5f), 1.0f);
+        if (c.w <= 0) return 1.0f;
+        c = c * (1.0f / c.w);
         float u = c.x * 0.5f + 0.5f, v = 0.5f - c.y * 0.5f, z = c.z * 0.5f + 0.5f;
         if (u < 0 || u > 1 || v < 0 || v > 1 || z > 1) return 1.0f;
         int cx = static_cast<int>(u * static_cast<float>(size)), cy = static_cast<int>(v * static_cast<float>(size));
@@ -83,7 +85,7 @@ struct ShadowMap {
         for (int dy = -1; dy <= 1; ++dy) {
             for (int dx = -1; dx <= 1; ++dx) {
                 int x = std::clamp(cx + dx, 0, size - 1), y = std::clamp(cy + dy, 0, size - 1);
-                lit += z - depthBias <= depth[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)];
+                lit += z - (bias >= 0 ? bias : depthBias) <= depth[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)];
             }
         }
         float fraction = static_cast<float>(lit) / 9.0f;
@@ -106,6 +108,15 @@ struct Lighting {
     std::vector<ShadowMap> cascadeMaps;  // empty keeps the legacy shadow path byte-for-byte
     Vec3 viewForward;
     Vec3 eye;
+    LocalShadowSet localShadows;
+    std::vector<ShadowMap> localMaps;
+
+    float LocalLit(bool point, size_t lightIndex, const Vec3& position, const Vec3& normal) const {
+        const int slot = LocalShadowSlot(localShadows, point, lightIndex);
+        if (slot < 0) return 1.0f;
+        const LocalShadowSample sample = PrepareLocalShadowSample(localShadows, static_cast<size_t>(slot), position, normal);
+        return localMaps[static_cast<size_t>(sample.mapIndex)].Lit(sample.position, normal, true, sample.depthBias);
+    }
 
     float SunLit(const Vec3& position, const Vec3& normal) const {
         if (cascadeMaps.empty()) return shadow.Lit(position, normal);
@@ -202,21 +213,27 @@ struct Lighting {
             float lit = i == 0 ? SunLit(wpos, ng) : 1.0f;
             if (lit > 0.0f) add(-dirs[i].dir, dirs[i].color * lit);
         }
-        for (const RenderPointLight& p : points) {
+        for (size_t i = 0; i < points.size(); ++i) {
+            const RenderPointLight& p = points[i];
             Vec3 d = p.pos - wpos;
             float dist = Length(d);
             if (dist >= p.range || dist < 1e-5f) continue;
             float fall = 1.0f - dist / p.range;
-            add(d / dist, p.color * (fall * fall));
+            Color radiance = p.color * (fall * fall);
+            if (p.shadows) radiance = radiance * LocalLit(true, i, wpos, ng);
+            add(d / dist, radiance);
         }
-        for (const RenderSpotLight& spot : spots) {
+        for (size_t i = 0; i < spots.size(); ++i) {
+            const RenderSpotLight& spot = spots[i];
             const Vec3 d = spot.pos - wpos;
             const float dist = Length(d);
             if (dist >= spot.range || dist < 1e-5f) continue;
             const float cone = SpotConeWeight(spot, -d / dist);
             if (cone <= 0.0f) continue;
             const float fall = 1.0f - dist / spot.range;
-            add(d / dist, spot.color * (fall * fall * cone));
+            Color radiance = spot.color * (fall * fall * cone);
+            if (spot.shadows) radiance = radiance * LocalLit(false, i, wpos, ng);
+            add(d / dist, radiance);
         }
         return c;
     }
@@ -555,6 +572,58 @@ Transformed TransformItem(const RenderItem& item) {
     return t;
 }
 
+void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, const std::vector<Transformed>& transformed,
+                       const std::vector<DrawCall>& draws, float shaderTime) {
+    // Light-space vertices once, then rasterize depth in parallel bands.
+    std::vector<std::vector<Vec4>> lightClip(items.size());
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (!items[i].castShadows || items[i].unlit) continue;
+        lightClip[i].reserve(transformed[i].wpos.size());
+        for (const Vec3& p : transformed[i].wpos) lightClip[i].push_back(sm.viewProj * Vec4(p, 1.0f));
+    }
+    ParallelBands(sm.size, [&](int, int y0, int y1) {
+        uint32_t dummyColor = 0;
+        EntityId dummyId = kNullEntity;
+        Rasterizer shadowRaster(sm.size, sm.size, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
+        RasterMaterial none;
+        for (const DrawCall& dc : draws) {
+            if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
+            const Mesh& m = *items[dc.item].mesh;
+            const Submesh& sub = m.submeshes[dc.submesh];
+            const RenderItem& item = items[dc.item];
+            // Cut-outs (textured or graph alpha) shadow only where they are drawn.
+            const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
+            RasterMaterial material;
+            material.m = &dc.material;
+            material.flat = item.flat;
+            material.shaderTime = shaderTime;
+            material.uvOffset[0] = item.uvOffset[0];
+            material.uvOffset[1] = item.uvOffset[1];
+            material.uvScale[0] = item.uvScale[0];
+            material.uvScale[1] = item.uvScale[1];
+            for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
+                Vtx v[3];
+                for (int j = 0; j < 3; ++j) {
+                    const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
+                    v[j].clip = lightClip[dc.item][vertex];
+                    if (surfaceAlpha) {
+                        v[j].wpos = transformed[dc.item].wpos[vertex];
+                        v[j].nrm = transformed[dc.item].nrm[vertex];
+                        if (vertex * 2 + 1 < m.uvs.size()) {
+                            v[j].u = m.uvs[vertex * 2];
+                            v[j].v = m.uvs[vertex * 2 + 1];
+                        }
+                    }
+                }
+                // Back faces into the shadow map: avoids self-shadowing acne on lit faces
+                // (double-sided surfaces put both sides in).
+                shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
+                                  dc.material.doubleSided ? Cull::None : Cull::Front);
+            }
+        }
+    });
+}
+
 }  // namespace
 
 void SetMaxRenderThreads(int threads) { g_maxRenderThreads = threads; }
@@ -659,56 +728,20 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
                 sm.texelWorld = fit.texelWorld;
                 sm.depthBias = fit.depthBias;
                 sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
-                // Light-space vertices once, then rasterize depth in parallel bands.
-                std::vector<std::vector<Vec4>> lightClip(items.size());
-                for (size_t i = 0; i < items.size(); ++i) {
-                    if (!items[i].castShadows || items[i].unlit) continue;
-                    lightClip[i].reserve(transformed[i].wpos.size());
-                    for (const Vec3& p : transformed[i].wpos) lightClip[i].push_back(sm.viewProj * Vec4(p, 1.0f));
-                }
-                ParallelBands(sm.size, [&](int, int y0, int y1) {
-                    uint32_t dummyColor = 0;
-                    EntityId dummyId = kNullEntity;
-                    Rasterizer shadowRaster(sm.size, sm.size, sm.depth.data(), &dummyColor, &dummyId, y0, y1);
-                    RasterMaterial none;
-                    for (const DrawCall& dc : draws) {
-                        if (dc.blend || lightClip[dc.item].empty()) continue;  // transparent surfaces cast no shadow
-                        const Mesh& m = *items[dc.item].mesh;
-                        const Submesh& sub = m.submeshes[dc.submesh];
-                        const RenderItem& item = items[dc.item];
-                        // Cut-outs (textured or graph alpha) shadow only where they are drawn.
-                        const bool surfaceAlpha = dc.material.alphaMode == AlphaMode::Mask && (dc.material.shader || dc.material.baseTexture);
-                        RasterMaterial material;
-                        material.m = &dc.material;
-                        material.flat = item.flat;
-                        material.shaderTime = view.shaderTime;
-                        material.uvOffset[0] = item.uvOffset[0];
-                        material.uvOffset[1] = item.uvOffset[1];
-                        material.uvScale[0] = item.uvScale[0];
-                        material.uvScale[1] = item.uvScale[1];
-                        for (uint32_t k = sub.firstIndex; k + 2 < sub.firstIndex + sub.indexCount; k += 3) {
-                            Vtx v[3];
-                            for (int j = 0; j < 3; ++j) {
-                                const uint32_t vertex = m.indices[k + static_cast<uint32_t>(j)];
-                                v[j].clip = lightClip[dc.item][vertex];
-                                if (surfaceAlpha) {
-                                    v[j].wpos = transformed[dc.item].wpos[vertex];
-                                    v[j].nrm = transformed[dc.item].nrm[vertex];
-                                    if (vertex * 2 + 1 < m.uvs.size()) {
-                                        v[j].u = m.uvs[vertex * 2];
-                                        v[j].v = m.uvs[vertex * 2 + 1];
-                                    }
-                                }
-                            }
-                            // Back faces into the shadow map: avoids self-shadowing acne on lit faces
-                            // (double-sided surfaces put both sides in).
-                            shadowRaster.Draw(v, surfaceAlpha ? material : none, nullptr,
-                                              dc.material.doubleSided ? Cull::None : Cull::Front);
-                        }
-                    }
-                });
+                RenderShadowDepth(sm, items, transformed, draws, view.shaderTime);
             }
         }
+    }
+
+    // Local shadows use the same depth rasterization, including cutouts and graph displacement.
+    lighting.localShadows = SelectLocalShadows(gathered, view.proj * view.view, view.eye);
+    lighting.localMaps.resize(lighting.localShadows.maps.size());
+    for (size_t i = 0; i < lighting.localMaps.size(); ++i) {
+        ShadowMap& sm = lighting.localMaps[i];
+        sm.enabled = true; sm.size = kLocalShadowTileSize; sm.strength = 1;
+        sm.viewProj = lighting.localShadows.maps[i].viewProj;
+        sm.depth.assign(static_cast<size_t>(sm.size) * static_cast<size_t>(sm.size), 1.0f);
+        RenderShadowDepth(sm, items, transformed, draws, view.shaderTime);
     }
 
     // ----- Main pass
