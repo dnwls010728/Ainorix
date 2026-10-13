@@ -8,17 +8,18 @@ signing needs Java.
 
 - ABIs: arm64-v8a (phones/tablets), x86_64 (emulators).
 - Built on 2026-10-13 with Android NDK r28c (28.2.13676358), Release, API 26 and static libc++,
-  from main (d24d743), including R2 SpotLight, soft cone lighting and the shared light-data texture.
+  from main (35e3f58), including R3 DirectionalLight.shadowCascades, stable slices, blended transitions
+  and a 2048-square depth atlas; R2 SpotLight and the shared light-data texture remain included.
   The engine uses GLES3 and AAudio; all earlier runtime features remain included.
 - ELF load segments are aligned to 16 KB (llvm-readelf checked both ABIs).
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
-| arm64-v8a/liboe_player.so | 9,147,440 | 1d69fd1c29a7427da6f4699f910db84bc4a1798321aee6a67fda67600ad044e5 |
-| x86_64/liboe_player.so | 9,779,144 | 84fb57629727770d182b12e2e46efeb28011fdb1f11f839c94632b73490daedc |
+| arm64-v8a/liboe_player.so | 9,168,768 | 6c96aaa9c16851a9c2e57e3234185f0bc6f110135b1dc45dab01d8ec037de1ed |
+| x86_64/liboe_player.so | 9,805,144 | d9ad7c92dbe82c93eeeb8eb1c17b44807f1d34ca0f2190b428ce297e1418edc2 |
 
-**Not run on a device.** R2 was checked on Windows D3D11 and browser WebGL2, including the 8x9
-RGBA32F light-data texture. The existing skin/vertex-graph uniform path still needs validation on
+**Not run on a device.** R3 was checked on Windows D3D11 and browser WebGL2, including the four-tile
+depth atlas and cascade blending. The existing skin/vertex-graph uniform path still needs validation on
 minimum-capability devices. Packaging validators were not re-run for this build. Earlier device and
 packaging checks, and remaining newer engine-feature checks, are recorded in
 [ANDROID.md](../../docs/ANDROID.md). Earlier runtime build history is preserved in Git.

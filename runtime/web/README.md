@@ -5,20 +5,22 @@
 
 ## Current build
 
-Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (d24d743). R2 adds the SpotLight
-component, soft cone attenuation and an 8x9 RGBA32F light-data texture shared with sky/probe irradiance.
+Built on 2026-10-13 with Emscripten 6.0.10, Release, from main (35e3f58). R3 adds DirectionalLight.shadowCascades
+(1..4), stable camera slices, blended transitions and a 2048-square depth atlas. The R2 SpotLight
+component and light-data texture remain included.
 See [LIGHTING.md](../../docs/LIGHTING.md). All earlier player features remain included; earlier build
 history is preserved in Git. Packaging still patches the game's key into the runtime for keyed OEPAK002
 archives and stripped Lua bytecode.
 
 | Artifact | Bytes | SHA256 |
 |---|---:|---|
-| oe_player.js | 127,633 | 3ad966f135787b1393f8806f79de30cfcadcfb414ddfc06bc7b4126edd91e8e6 |
-| oe_player.wasm | 5,929,528 | 36e713fc3dcef9caa7d1e8ffe40f5698caec71f8abc65384e76b82cf4378f001 |
+| oe_player.js | 127,633 | 01cab76470319e28cb0ab53673bf1628a9256d96a4bd2704f3153de0186b9a88 |
+| oe_player.wasm | 5,950,528 | f2f4931e40fc4914161c78981b4c490c3b6529a1555a158a534b1d5b95f96292 |
 
-Windows Release: 346 tests pass. Headless Edge (WebGL2 on SwiftShader) rendered the packaged spotlight
-demo and the existing reflection-probe room without shader/WebGL warnings. The room's probe captured
-128-pixel faces in 185 ms. The shader has 12 texture units and 187 fragment uniform vectors, plus twelve
+Windows Release: 348 tests pass. Headless Edge (WebGL2 on SwiftShader) rendered the packaged four-cascade
+demo without shader/WebGL warnings; atlas orientation and near/far shadows matched Windows. R2 previously
+checked the spotlight demo and reflection-probe room (185 ms capture). The shader has 12 texture units
+and 203 fragment uniform vectors, plus twelve
 sampler uniforms, within the GLES3/WebGL2 fragment minimums. The pre-existing vertex skin/graph uniform
 budget is unchanged; execution on devices exposing only the vertex-stage minimum remains unverified.
 

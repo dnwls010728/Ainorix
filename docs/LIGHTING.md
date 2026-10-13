@@ -147,23 +147,17 @@ The Showcase software frame hash before and after R2 is `72ab07fb213fd42b`. The 
 RGB channel difference of approximately **0.031/255** between software and D3D11; the maximum (126) is at
 rasterized edges, where GPU MSAA differs. Direct spotlight parity tests have mean differences below 0.05/255.
 
-Windows Release validation: **346 tests, zero failed checks**. Headless Edge on SwiftShader rendered the
+R2 validation: Windows Release **346 tests, zero failed checks**. Headless Edge on SwiftShader rendered the
 spotlight demo and the existing probe room without shader/WebGL warnings; the probe capture took 185 ms.
 Android arm64-v8a and x86_64 players build successfully with 16 KB ELF load alignment; no device run.
 
 ## Status
 
-R2 is complete: component, both renderers, editor guides, documentation, 346 Windows tests, and rebuilt
-web/Android runtimes. The packaged demo and reflection-probe room were checked in headless Edge.
-R3 cascaded shadows and R4 local-light shadows remain separate roadmap items.
+R2 spotlights and R3 cascaded directional shadows are complete: both renderers, reflected editor fields/guides,
+API documentation, 348 Windows tests, and rebuilt web/Android runtimes. Headless Edge checked the packaged
+four-cascade example; earlier R2 checks covered spotlights and the reflection-probe room. R4 local-light
+shadows remain the next roadmap item.
 
 - [ ] Android physical-device rendering (build only here; package/install and verify on GLES3 hardware).
 - [ ] Linux/EGL rendering (requires a Linux environment).
-- [ ] Existing skin/vertex-graph shader execution on minimum-capability devices; R2 leaves that vertex budget unchanged.
-
-## Implementation status (work log)
-
-- [x] R3 M1: shared stable cascade fits/splits, DirectionalLight schema, software/GPU shadows and blending;
-  regression, stabilization and renderer-parity tests; API/docs, demo and editor screenshots.
-- [ ] R3 M2: rebuild web and both Android players; verify packaged cascades in headless Edge; complete roadmap.
-- [ ] R3 Android physical-device and Linux/EGL rendering (platforms unavailable here).
+- [ ] Existing skin/vertex-graph shader execution on minimum-capability devices; R2/R3 leave that vertex budget unchanged.
