@@ -17,6 +17,14 @@ struct Entry {
 };
 
 const Entry kCatalog[] = {
+    {"Discard", "버리기", "破棄"},
+    {"%d more", "외 %d개", "ほか%d件"},
+    {"Controller draft: Ctrl+Z / Ctrl+Y undo or redo. Ctrl+S saves. Drag a state edge to create a transition.", "Ctrl+Z / Ctrl+Y로 실행 취소·다시 실행, Ctrl+S로 저장. 상태 가장자리를 끌어 전환 생성.", "Ctrl+Z / Ctrl+Yで元に戻す・やり直し、Ctrl+Sで保存。状態の端をドラッグして遷移を作成。"},
+    {"Add a parameter before creating a transition.", "전환 생성 전에 매개변수를 추가하세요.", "遷移を作成する前にパラメーターを追加してください。"},
+    {"Set Entry State", "진입 상태로 지정", "開始状態に設定"},
+    {"Any State", "모든 상태", "任意の状態"},
+    {"Parameter Name", "매개변수 이름", "パラメーター名"},
+    {"Save Controller Changes?", "컨트롤러 변경을 저장할까요?", "コントローラーの変更を保存しますか？"},
     {"Speed", "속도", "速度"},
     {"Frame", "프레임", "フレーム"},
     {"Time (s)", "시간(초)", "時間 (秒)"},

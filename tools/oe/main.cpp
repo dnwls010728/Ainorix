@@ -620,6 +620,9 @@ int CmdMcp(const Args& a) {
 int CmdApi(const Args& a) {
     Engine engine;
     RegisterTeamCommands(engine.Commands());  // tool commands are part of the reference
+#if OE_NATIVE_EDITOR
+    RegisterAnimationEditorCommands(engine.Commands());
+#endif
     Json list = engine.Call("api.list", Json())["result"];
     if (!a.Has("--markdown")) {
         PrintJson(list);

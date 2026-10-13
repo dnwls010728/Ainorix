@@ -20020,34 +20020,68 @@ return M)L"));
 }
 #if OE_NATIVE_EDITOR
 TEST(NativeEditorAnimationControllerGraphAuthoring) {
-    Engine e;std::string error;const std::string project=TempProject("controller_editor");CHECK(e.Open(project,&error));Call(e,"scene.new",R"({"empty":true})");ControllerTestSprite(e);
-    CHECK(WriteTextFile(project+"/animations/hero.controller.json",ControllerTestDefinition().dump()));
+    Engine e; std::string error; const std::string project=TempProject("controller_editor"); CHECK(e.Open(project,&error));
+    Call(e,"scene.new",R"({"empty":true})"); ControllerTestSprite(e);
+    const Json original=ControllerTestDefinition(); CHECK(WriteTextFile(project+"/animations/hero.controller.json",original.dump()));
     if(!e.EnableGpu(nullptr,&error)){RemoveAll(project);return;}
-    NativeEditor::Options options;options.language="en";options.layoutFile="";NativeEditor editor(e,nullptr,options);CHECK(editor.Init(&error));editor.Select(e.GetScene().FindByName("Hero"));
+    NativeEditor::Options options; options.language="en"; options.layoutFile="";
+    NativeEditor editor(e,nullptr,options); CHECK(editor.Init(&error)); editor.Select(e.GetScene().FindByName("Hero"));
     CHECK(Call(e,"editor.animation",R"({"controller":"animations/hero.controller.json"})")["ok"].asBool()); RenderTarget image;
-    auto draw=[&](int n){for(int i=0;i<n;++i){editor.Update({},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}};draw(4);
-    auto click=[&](const std::string& control){auto rect=editor.AnimationControlRect(control);CHECK(rect[2]>0);WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=rect[0]+rect[2]*0.5f;move.y=rect[1]+rect[3]*0.5f;WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;editor.Update({move,button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(1);button.down=false;editor.Update({button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);};
-    const auto revision=e.Revision();const Json scene=e.GetScene().ToJson();
-    click("controller-state:Walk");CHECK(Call(e,"editor.state")["result"]["animationControllerState"].asString()=="Walk");
-    click("controller-preview");CHECK(Call(e,"animation.preview_state")["result"]["clip"].asString()=="walk");
-    click("controller-add-state");CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]["states"].size()==4);
-    click("controller-add-transition");CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]["transitions"].size()==5);
-    click("controller-parameter-name");
-    WindowEvent select;select.type=WindowEvent::Type::Key;select.key=WindowKey::A;select.ctrl=true;select.down=true;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));select.down=false;select.ctrl=false;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));
-    std::vector<WindowEvent> text;for(char c:std::string("air")){WindowEvent event;event.type=WindowEvent::Type::Text;event.codepoint=static_cast<uint32_t>(c);text.push_back(event);}editor.Update(text,1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
-    click("controller-add-parameter");CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]["parameters"].size()==4);
-    click("controller-state-name");select.down=true;select.ctrl=true;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));select.down=false;select.ctrl=false;editor.Update({select},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));
-    text.clear();for(char c:std::string("Air")){WindowEvent event;event.type=WindowEvent::Type::Text;event.codepoint=static_cast<uint32_t>(c);text.push_back(event);}editor.Update(text,1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
-    WindowEvent enter;enter.type=WindowEvent::Type::Key;enter.key=WindowKey::Enter;enter.down=true;editor.Update({enter},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));enter.down=false;editor.Update({enter},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
-    Json renamed=Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"];CHECK(renamed["states"].has("Air") && !renamed["states"].has("State") && renamed["transitions"][4]["from"].asString()=="Air");
-    auto rect=editor.AnimationControlRect("controller-state:Walk");WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=rect[0]+rect[2]*0.5f;move.y=rect[1]+rect[3]*0.5f;WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=true;editor.Update({move,button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(1);move.x+=60;move.y+=40;editor.Update({move},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));button.down=false;editor.Update({button},1800,2400,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw(2);
-    Json values=Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"];CHECK(values["states"]["Walk"]["position"][0].asFloat()>320);
+    auto draw=[&](int n=1){for(int i=0;i<n;++i){editor.Update({},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));}}; draw(4);
+    auto mouse=[&](float x,float y,bool down){WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=x;move.y=y;WindowEvent button;button.type=WindowEvent::Type::MouseButton;button.button=0;button.down=down;editor.Update({move,button},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));};
+    auto click=[&](const std::string& control){auto r=editor.AnimationControlRect(control);CHECK(r[2]>0);mouse(r[0]+r[2]*0.5f,r[1]+r[3]*0.5f,true);draw();mouse(r[0]+r[2]*0.5f,r[1]+r[3]*0.5f,false);draw(2);};
+    auto key=[&](WindowKey code,bool ctrl=false){WindowEvent event;event.type=WindowEvent::Type::Key;event.key=code;event.ctrl=ctrl;event.down=true;editor.Update({event},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));event.down=false;event.ctrl=false;editor.Update({event},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));draw();};
+    auto draft=[&](){return Call(e,"animation.controller_edit_state")["result"]["values"];};
+    const auto revision=e.Revision(); const Json scene=e.GetScene().ToJson();
+    CHECK(Call(e,"editor.state")["result"]["animationControllerOpen"].asBool());
+    click("controller-state:Walk"); CHECK(Call(e,"editor.state")["result"]["animationControllerState"].asString()=="Walk");
+    click("controller-preview"); CHECK(Call(e,"animation.preview_state")["result"]["clip"].asString()=="walk");
+    auto pin=editor.AnimationControlRect("controller-pin:Walk"),target=editor.AnimationControlRect("controller-state:Jump");
+    mouse(pin[0]+pin[2]*0.5f,pin[1]+pin[3]*0.5f,true);draw();
+    WindowEvent move;move.type=WindowEvent::Type::MouseMove;move.x=target[0]+target[2]*0.5f;move.y=target[1]+target[3]*0.5f;
+    editor.Update({move},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));mouse(move.x,move.y,false);draw(2);
+    CHECK(draft()["transitions"].size()==5); if(draft()["transitions"].size()!=5){RemoveAll(project);return;} CHECK(draft()["transitions"][4]["from"].asString()=="Walk"); CHECK(draft()["transitions"][4]["to"].asString()=="Jump");
+    CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]==original);
+    key(WindowKey::Z,true); CHECK(draft()["transitions"].size()==4);key(WindowKey::Y,true);CHECK(draft()["transitions"].size()==5);
+    click("controller-transition:4");key(WindowKey::Delete);CHECK(draft()["transitions"].size()==4);key(WindowKey::Z,true);CHECK(draft()["transitions"].size()==5);
+    click("controller-state:Walk");
+    auto card=editor.AnimationControlRect("controller-state:Walk");mouse(card[0]+20,card[1]+10,true);draw();
+    move.x=card[0]+60;move.y=card[1]+30;editor.Update({move},1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));mouse(move.x,move.y,false);draw(2);
+    CHECK(draft()["states"]["Walk"]["position"][0].asFloat()>320);key(WindowKey::Z,true);
+    click("controller-state:Walk");click("controller-add-state");CHECK(draft()["states"].size()==4);
+    auto text=[&](const std::string& control,const std::string& value){click(control);key(WindowKey::A,true);std::vector<WindowEvent> events;for(char c:value){WindowEvent event;event.type=WindowEvent::Type::Text;event.codepoint=static_cast<uint32_t>(c);events.push_back(event);}editor.Update(events,1600,900,1,Engine::kFixedDt);CHECK(editor.DrawToImage(image));key(WindowKey::Enter);draw(2);};
+    text("controller-state-name","Air");CHECK(draft()["states"].has("Air")&&!draft()["states"].has("State"));
+    auto canvas=editor.AnimationControlRect("controller-canvas");mouse(canvas[0]+10,canvas[1]+10,true);mouse(canvas[0]+10,canvas[1]+10,false);draw(2);
+    text("controller-parameter-name","air");click("controller-add-parameter");CHECK(draft()["parameters"].has("air"));
+    key(WindowKey::S,true);CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]==draft());
     CHECK(e.Revision()==revision && e.GetScene().ToJson()==scene);
     CHECK(Call(e,"animation.controller_check",R"({"path":"animations/hero.controller.json","id":"Hero"})")["ok"].asBool());
-    click("controller-back"); CHECK(Call(e,"editor.state")["result"]["animationController"].asString().empty());
-    click("controller-tab"); CHECK(Call(e,"editor.state")["result"]["animationController"].asString()=="animations/new.controller.json");
-    CHECK(!Call(e,"animation.preview_state")["result"]["active"].asBool());
+    click("controller-back");CHECK(!Call(e,"editor.state")["result"]["animationControllerOpen"].asBool());
+    click("controller-tab");CHECK(Call(e,"editor.state")["result"]["animationControllerOpen"].asBool());
     RemoveAll(project);
+}
+TEST(NativeEditorAnimationControllerDraftGuards) {
+    Engine e;std::string error;const std::string project=TempProject("controller_draft");CHECK(e.Open(project,&error));
+    const Json original=ControllerTestDefinition(); CHECK(WriteTextFile(project+"/animations/hero.controller.json",original.dump()));
+    if(!e.EnableGpu(nullptr,&error)){RemoveAll(project);return;}
+    NativeEditor::Options options;options.layoutFile="";NativeEditor editor(e,nullptr,options);CHECK(editor.Init(&error));
+    CHECK(Call(e,"animation.controller_edit",R"({"path":"animations/hero.controller.json"})")["ok"].asBool());
+    const auto revision=e.Revision();const Json scene=e.GetScene().ToJson();const size_t undo=e.UndoDepth();
+    auto ObjectOf=[](std::initializer_list<std::pair<std::string,Json>> fields){Json result=Json::MakeObject();for(const auto& field:fields)result[field.first]=field.second;return result;};
+    Json changed=original;changed["states"]["Walk"]["speed"]=2;
+    CHECK(e.Call("animation.controller_edit_replace",ObjectOf({{"values",changed},{"merge","speed"}}))["ok"].asBool());
+    changed["states"]["Walk"]["speed"]=3;CHECK(e.Call("animation.controller_edit_replace",ObjectOf({{"values",changed},{"merge","speed"}}))["ok"].asBool());
+    CHECK(Call(e,"animation.controller_undo")["result"]["values"]==original);CHECK(Call(e,"animation.controller_redo")["result"]["values"]==changed);
+    Json invalid=changed;invalid["entry"]="Missing";CHECK(!e.Call("animation.controller_edit_replace",ObjectOf({{"values",invalid}}))["ok"].asBool());
+    CHECK(Call(e,"animation.controller_edit_state")["result"]["values"]==changed);
+    CHECK(Call(e,"animation.controller_close")["error"]["code"].asString()=="unsaved_controller");
+    CHECK(Call(e,"animation.controller_edit",R"({"path":"animations/other.controller.json"})")["error"]["code"].asString()=="unsaved_controller");
+    Json external=original;external["entry"]="Walk";CHECK(WriteTextFile(project+"/animations/hero.controller.json",external.dump()));
+    CHECK(Call(e,"animation.controller_save")["error"]["code"].asString()=="controller_conflict");
+    CHECK(WriteTextFile(project+"/animations/hero.controller.json",original.dump()));CHECK(Call(e,"animation.controller_save")["ok"].asBool());
+    CHECK(!Call(e,"animation.controller_edit_state")["result"]["dirty"].asBool());
+    CHECK(e.Revision()==revision && e.GetScene().ToJson()==scene && e.UndoDepth()==undo);
+    CHECK(Call(e,"animation.controller_close")["ok"].asBool());RemoveAll(project);
 }
 #endif
 #if OE_NATIVE_EDITOR
@@ -20068,6 +20102,8 @@ TEST(NativeEditorAnimationRulerAndKeys) {
     CHECK(editor.AnimationControlRect("name:1")[1]+editor.AnimationControlRect("name:1")[3]<880);
     mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,true);mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,false);mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,true);mouse(ruler[0]+ruler[2]*0.8f,ruler[1]+12,false);draw();
     CHECK(Call(e,"animation.events",R"({"id":"Hero"})")["result"]["events"].size()==3);
+    CHECK(Call(e,"entity.create",R"({"name":"Other"})")["ok"].asBool());
+    editor.Select(e.GetScene().FindByName("Other"));draw();CHECK(!Call(e,"animation.preview_state")["result"]["active"].asBool());
     RemoveAll(project);
 }
 #endif

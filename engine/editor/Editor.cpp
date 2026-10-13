@@ -833,7 +833,7 @@ Json NativeEditor::Impl::EditorState() {
 
     // Panels: the one with keyboard focus and those on screen (docked tabs in front, not collapsed).
     static const char* const kPanels[] = {"Hierarchy", "Team", "Tiles", "Inspector", "Network", "Scene", "Game", "Scripts",
-                                          "Shader Graph", "Effects", "Assets", "Console", "History", "Team Chat", "Agent Chat"};
+                                          "Shader Graph", "Effects", "Animation", "Animation Controller", "Assets", "Console", "History", "Team Chat", "Agent Chat"};
     Json visible = Json::MakeArray();
     std::string focused;
     const ImGuiWindow* nav = ImGui::GetCurrentContext() ? ImGui::GetCurrentContext()->NavWindow : nullptr;
@@ -892,6 +892,7 @@ Json NativeEditor::Impl::EditorState() {
     out["selectedAsset"] = selectedAsset.empty() ? Json() : Json(selectedAsset);
     out["shader"] = showShaders && !shaderPath.empty() ? Json(shaderPath) : Json();
     out["effect"] = showEffects && !effectsPath.empty() ? Json(effectsPath) : Json();
+    out["animationControllerOpen"] = showAnimationController; out["animationControllerDirty"] = animationControllerDocument != animationControllerSaved;
     out["animationController"] = animationController; out["animationControllerState"] = animationControllerState;
     out["animationPanel"] = showAnimation; out["animationFrames"] = animationFrames;
     out["animation"] = engine.AnimationPreviewCall("state", Json());
@@ -1282,7 +1283,7 @@ void NativeEditor::Impl::Shortcuts() {
     const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global)) TogglePlay();
     if (gameFocused && InPlaySession()) return;  // keys belong to the game
-    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused) return;  // document editors own save/undo shortcuts
+    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused || animationControllerEditorFocused) return;  // document editors own save/undo shortcuts
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global)) Save();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global)) Undo();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global)) Redo();
@@ -1402,6 +1403,9 @@ void NativeEditor::Impl::MainMenu() {
         ImGui::MenuItem(Tr("Scripts"), nullptr, &showScripts);
         if (ImGui::MenuItem(Tr("Shader Graph"), nullptr, showShaders)) { showShaders = true; focusShaders = true; }
         if (ImGui::MenuItem(Tr("Effects"), nullptr, showEffects)) OpenEffect("");
+        if (ImGui::MenuItem(Tr("Animation Controller"), nullptr, showAnimationController)) {
+            showAnimationController = true; focusAnimationController = true;
+        }
         if (ImGui::MenuItem(Tr("Animation"), nullptr, showAnimation)) Call("editor.animation", Json::MakeObject());
         ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
         if (ImGui::MenuItem(Tr("History"), nullptr, showHistory)) { showHistory = true; requestHistoryFocus = true; }
@@ -1638,6 +1642,10 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
             ImGuiWindowSettings* assetsTab = ImGui::FindWindowSettingsByID(ImHashStr("###Assets"));
             if (assetsTab && assetsTab->DockId) ImGui::DockBuilderDockWindow("###Animation", assetsTab->DockId);
         }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Animation Controller"))) {
+            ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
+            if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Animation Controller", scene->DockId);
+        }
         if (!ImGui::FindWindowSettingsByID(ImHashStr("###Effects"))) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Effects", scene->DockId);
@@ -1689,6 +1697,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Scripts", center);
     ImGui::DockBuilderDockWindow("###Shader Graph", center);
     ImGui::DockBuilderDockWindow("###Effects", center);
+    ImGui::DockBuilderDockWindow("###Animation Controller", center);
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Animation", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
@@ -1699,7 +1708,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     if (ImGuiDockNode* b = ImGui::DockBuilderGetNode(bottom)) b->SelectedTabId = ImHashStr("###Assets");  // as before the chat tab existed
     if (ImGuiDockNode* r = ImGui::DockBuilderGetNode(right)) r->SelectedTabId = ImHashStr("###Inspector");  // Tiles waits behind it
     if (ImGuiDockNode* l = ImGui::DockBuilderGetNode(left)) l->SelectedTabId = ImHashStr("###Hierarchy");  // Team waits behind it
-    focusSceneTab = 2;  // once the windows are docked (they appear this frame)
+    focusSceneTab = showAnimationController ? 0 : 2;  // once the windows are docked (they appear this frame)
 }
 
 void NativeEditor::Impl::Modals() {
@@ -1912,11 +1921,27 @@ bool NativeEditor::Init(std::string* error) {
     mergeCjk();  // Korean/Japanese in scripts and the code editor
 
     m.engine.SetRemoteCallObserver([&m](const std::string& name, const Json& args, const Json& result) { m.OnRemoteCall(name, args, result); });
+    RegisterAnimationEditorCommands(m.engine.Commands());
     m.engine.SetEditorHandler([&m](const std::string& op, const Json& args) {
+        if (op.rfind("controller_", 0) == 0) return m.AnimationControllerCall(op.substr(11), args);
         if (op == "select") return m.EditorSelect(args);
         if (op == "animation") {
-            if (args.has("frames")) { m.animationFrames = args["frames"].asBool(); m.animationController.clear(); }
-            if (args.has("controller")) { m.animationController = args["controller"].asString(); m.animationControllerTransition = -1; m.animationControllerState.clear(); m.animationControllerPan = ImVec2(20, 20); m.animationControllerZoom = 1; m.animationControllerFit = true; m.Call("animation.preview_close", Json()); }
+            if (args.has("frames")) m.animationFrames = args["frames"].asBool();
+            if (args.has("controller")) {
+                const std::string path = args["controller"].asString();
+                if (path.empty()) {
+                    m.AnimationControllerCall("close", Json());
+                    m.showAnimation=true; m.focusAnimation=true;
+                }
+                else if (FileExists(m.engine.ResolvePath(path))) m.AnimationControllerCall("edit", ObjectOf({{"path",path}}));
+                else {
+                    if (m.animationControllerDocument != m.animationControllerSaved)
+                        throw ApiError("unsaved_controller", "controller has unsaved edits", "Save or discard the current draft first.");
+                    m.AnimationControllerCall("close", Json()); m.animationController=path; m.animationControllerPathInput=path;
+                    m.showAnimationController=true; m.focusAnimationController=true;
+                }
+                return m.EditorState();
+            }
             m.showAnimation = args["open"].asBool(true); m.focusAnimation = m.showAnimation;
             if (!m.showAnimation) m.Call("animation.preview_close", Json());
         }
@@ -1976,6 +2001,8 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     m.Shortcuts();
     if (m.showAnimation) m.AnimationPanel();
     else { m.animationEditorFocused = false; m.animationRects.clear(); }
+    if (m.showAnimationController) m.AnimationControllerPanel();
+    else m.animationControllerEditorFocused = false;
     m.AnimationTick(dt);
     if (m.showScene) m.ScenePanel();
     if (m.showGame) m.GamePanel();

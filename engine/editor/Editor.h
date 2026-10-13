@@ -13,6 +13,9 @@
 namespace oe {
 
 class Engine;
+class CommandRegistry;
+// Register editor document commands; available through an attached native editor.
+void RegisterAnimationEditorCommands(CommandRegistry& registry);
 
 // Native editor: Dear ImGui (docking) panels drawn with sokol_gfx in the
 // engine process. The Scene and Game views are GpuRenderer textures, so

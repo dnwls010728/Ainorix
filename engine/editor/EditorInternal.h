@@ -174,8 +174,16 @@ struct NativeEditor::Impl {
     std::map<std::string, std::string> animationNames;
     std::map<std::string, std::array<float, 4>> animationRects;
     bool animationFrames = false;
+    bool showAnimationController = false, focusAnimationController = false, animationControllerEditorFocused = false;
+    bool animationControllerClosePrompt = false;
+    Json animationControllerDocument, animationControllerSaved;
+    std::vector<Json> animationControllerHistory;
+    size_t animationControllerHistoryIndex = 0;
+    std::string animationControllerMerge, animationControllerProject, animationControllerLink;
+    ImVec2 animationControllerNewAt{40,280};
+    Json AnimationControllerCall(const std::string& op, const Json& args);
     bool animationControllerFit = true;
-    std::string animationControllerNewState = "State";
+    std::string animationControllerPathInput = "animations/new.controller.json";
     std::string animationController, animationControllerState, animationControllerParameterName = "grounded", animationControllerParameterType = "boolean";
     int animationControllerTransition = -1;
     ImVec2 animationControllerPan{20, 20};

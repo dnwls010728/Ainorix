@@ -729,44 +729,73 @@ validated definition for the owner lifetime. Restart/recreate owners to adopt fi
 there is no automatic hot reload of running controllers. Use one controller per entity; external
 animation.play calls can make playback diverge from the controller state.
 
-In View > Animation, choose **Animation Controller**, enter a path and **Create Controller**,
-or double-click an existing controller in Assets. `editor.animation {controller:path}` opens it;
-empty controller returns to the timeline. The shared Effects/Shader EditorNodeCanvas supplies
-state dragging, wheel zoom, middle/empty-canvas pan and Fit Controller Graph. The inspector
-creates/renames/removes states, changes clips/speed/loop/entry, creates typed parameters,
-changes defaults, and adds/removes/reorders transitions and AND conditions. Removing a state
-removes its incident transitions and chooses another entry if needed; removing a referenced
-parameter fails validation until its conditions are removed. File writes use the same commands.
-Preview State shows just the selected state's clip in the isolated preview; it does not evaluate
-the controller, scripts, physics or springs. Select the target sprite/model first.
-`editor.state.animationController` reports the path and `animationControllerState` the selected
-node, not live gameplay state. Screenshot example:
+Open **View > Animation Controller**, use the launcher beside the timeline help icon, or double-click
+a controller in Assets. The controller has its own central dock tab beside Scene, Shader Graph and
+Effects; the Animation panel contains Timeline / Sprite Frames only. `editor.animation {controller:path}`
+and `--animation-controller path` open this window. A missing file path offers Create Controller.
+
+The left canvas holds readable state cards (name, clip and loop icon), a separate Entry arrow and
+Any State node. Automatic fitting never reduces zoom below 60%; larger graphs remain pannable.
+Transitions show their first condition and the number of additional conditions, with separated
+reciprocal curves and arrowheads on card edges. Click a curve or label to select its transition.
+Drag an output handle at a card edge onto another card to create a transition. Right-click empty
+canvas space to add a state; card and transition menus remove them, and cards can become Entry.
+Delete removes the selected state/transition. Removing a state removes its incident transitions
+and chooses another entry if needed. Wheel zoom, middle/empty-canvas pan and Fit use the shared
+Effects/Shader canvas.
+
+The fixed-width right properties show parameters when nothing is selected, state fields for a
+selected state, or from/to, ordered AND conditions, blend and minimum state time for a transition.
+Labels are on the left and values on the right. Removing a referenced parameter fails validation
+until its conditions are removed. Preview State samples only that state's clip on the selected
+sprite/model; it does not evaluate the controller, scripts, physics or springs.
+
+Like Shader Graph and Effects, the editor owns a validated document draft. **Save / Ctrl+S** writes
+it; **Undo / Ctrl+Z** and **Redo / Ctrl+Y** affect only that document. A star marks unsaved changes;
+closing a dirty window asks to save/discard/cancel. At most 64 undo steps are retained; a card drag
+is one step. Failed validation leaves the previous draft intact. Save rejects external file
+changes, project changes, and the normal controller command's recording/match restrictions.
+The portable controller format and direct `animation.controller_create/get/set/check` behavior
+are unchanged; direct set still writes immediately and has no scene undo.
+
+Attached-editor commands (CLI with `--connect`, HTTP or MCP):
+
+- `animation.controller_edit {path, discard?}`: open or focus; discard:true also reloads the file.
+- `animation.controller_edit_state {}`: open/path/values/dirty/canUndo/canRedo.
+- `animation.controller_edit_replace {values, merge?}`: validate and replace the complete draft;
+  a shared nonempty merge key coalesces consecutive updates from one continuous gesture.
+- `animation.controller_undo/redo/save {}` and `animation.controller_close {discard?}`.
+
+These commands are registered by the native editor and included in `oe api`; they require an
+attached editor session. No draft, history or selection is stored in the scene or runtime asset.
+`editor.state` reports animationControllerOpen, animationControllerDirty, animationController
+(path) and animationControllerState (selection). Live gameplay highlighting/current parameters
+are outside this UI change: the Lua `oe.animator` owners need an explicit query/ownership bridge
+before the editor can identify and inspect one reliably.
+
+Screenshot example:
 
 ```bat
-build\bin\oe.exe editor build\AnimationController --screenshot build\controller.png --animation-controller animations/hero.controller.json --select Hero --width 1800 --height 1400 --frames 5
+build\bin\oe.exe editor build\AnimationController --screenshot build\controller.png --animation-controller animations/fox.controller.json --select Fox --width 1600 --height 900 --frames 12
 ```
 
 ## Status
 
-A1 through A5 are implemented. All 385 Windows tests pass. The four A5 tests cover validated
-file edits without scene/revision/history/hash changes, malformed definitions and recording guards,
-typed parameters, ordered/wildcard/AND transitions, pending triggers, failure atomicity, model
-crossfades, shared sprite/model native rollback and changed-resource rejection. Native window
-input verifies graph selection, preview, state/transition creation, parameter text entry/addition,
-state dragging and switching back to the timeline. English/Korean/Japanese graph screenshots
-were inspected; the model/sheet/atlas demo visibly changes Idle/Walk/Run poses and frames.
-Its software/D3D11 mean RGB difference is 0.077/255; Showcase retains 72ab07fb213fd42b.
-Web and both Android players were rebuilt. Headless Edge WebGL2 (SwiftShader) ran the packaged
-controller demo through Walk, Run, Jump and Idle for all three entities without script/WebGL
-errors. Both Android ABIs retain 16 KB LOAD alignment. Windows snapshot budget: 6.25 ms worst
-in the full suite (16.67 ms limit).
+A1 through A5 and the timeline/controller UI polish are implemented. All 387 Windows tests pass.
+Native input tests cover ruler dragging, focused transport keys, event insertion, graph selection,
+state dragging/renaming, parameter text entry, pin-to-card transition creation, wire selection,
+Delete, document undo/redo and Save. Draft validation, gesture merging, dirty-close protection,
+external file conflicts and scene/revision/history isolation are covered separately.
+English and Korean model/sprite/controller screenshots were inspected at 1600x900 beside their
+before captures: ruler numbers and event names remain separate, two sprite event rows fit,
+Idle/Walk/Run/Jump and condition summaries are readable, property labels are on the left and
+help paragraphs no longer occupy the workspace.
 
-Physical Android, Linux/EGL and real browser/mobile GPUs remain unverified. Sprite crossfades,
-blend trees, automatic controller hot reload and controller evaluation inside isolated previews
-remain outside A5; ordinary stopped Scene IK and preview SpringBone limits are described above.
-
-## Implementation status (work log)
-
-- [x] A: compact ruler/transport/events/frames; ruler drag, shortcuts and event insertion verified. All 386 tests pass. Final English/Korean screenshot comparison follows B.
-- [ ] B: separate controller workspace, graph interactions and document undo/save.
-- [ ] Full suite, English/Korean before/after review; editor-only runtime decision.
+This UI change touches only the editor library and CLI reference registration. Players do not
+link oe_editor, so the web/Android prebuilt runtimes need no rebuild for this change.
+Live controller state/parameter highlighting needs a Lua owner/query bridge and remains outside
+this UI scope. Large graphs require pan/zoom; many overlapping event labels can require scrolling.
+Preview SpringBone simulation, ordinary stopped Scene IK, sprite crossfades, blend trees and
+automatic hot reload of running controller definitions retain the limitations documented above.
+Real OS-window manual interaction, Japanese layout and non-Windows editor execution were not
+verified in this UI pass; Korean/Japanese catalog coverage and Windows headless D3D11 were checked.

@@ -1938,6 +1938,50 @@ Persisted per-agent and per-day token/cost totals. Dates are UTC. Costs are per-
 
 Stop every turn, empty the chat log and task records, and forget the agents' stored conversations. Profiles are kept.
 
+## animation
+
+### `animation.controller_edit`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project .controller.json to open. |
+| `discard` | boolean |  | Discard a modified draft before opening another. |
+
+### `animation.controller_edit_state`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+### `animation.controller_edit_replace`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `values` | object | yes | Complete validated controller draft. |
+| `merge` | string |  | Coalesce one continuous gesture into one undo entry. |
+
+### `animation.controller_undo`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+### `animation.controller_redo`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+### `animation.controller_save`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+### `animation.controller_close`
+
+Native controller document: validated draft, local undo/redo and explicit save; requires an attached editor.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `discard` | boolean |  | Discard unsaved edits; otherwise closing a dirty draft fails. |
+
 ## Component types
 
 ### Transform

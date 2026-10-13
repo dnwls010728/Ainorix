@@ -47,10 +47,10 @@ void NativeEditor::Impl::AnimationPanel() {
         return;
     }
     animationEditorFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if (!animationController.empty()) { AnimationControllerPanel(); ImGui::End(); return; }
     if (InPlaySession()) { ImGui::TextWrapped("%s", Tr("Stop the game to preview animations.")); ImGui::End(); return; }
     const EntityRow* row = Row(Primary());
     if (!row || (!row->Has("SpriteAnimation") && !row->Has("MeshRenderer"))) {
+        Call("animation.preview_close", Json());
         ImGui::TextWrapped("%s", Tr("Select a sprite or a model with animation clips.")); ImGui::End(); return;
     }
     Json state = engine.AnimationPreviewCall("state", Json());
@@ -81,10 +81,15 @@ void NativeEditor::Impl::AnimationPanel() {
         else marker["time"]=value;
         events.push(marker); AnimationWriteEvents(state,events);
     };
-    auto mode = [&](const char* label, bool selected, const char* id) {
-        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-        const bool pressed = ImGui::SmallButton(label); AnimationRect(id);
-        if (selected) ImGui::PopStyleColor(); return pressed;
+    auto mode = [&](const char* label, bool chosen, const char* id) {
+        const ImVec2 dimensions = ImGui::CalcTextSize(label) + ImVec2(12, 0);
+        const bool pressed = ImGui::InvisibleButton(id, dimensions); AnimationRect(id);
+        const ImVec2 start = ImGui::GetItemRectMin();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(start, start + dimensions, ImGui::GetColorU32(chosen ? ImGuiCol_ButtonActive :
+            ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Button), 3);
+        draw->AddText(start + ImVec2(6, 0), ImGui::GetColorU32(ImGuiCol_Text), label);
+        return pressed;
     };
     if (mode(Tr("Timeline"), !animationFrames, "timeline-tab")) animationFrames = false;
     if (sprite) { ImGui::SameLine(); if (mode(Tr("Sprite Frames"), animationFrames, "frames-tab")) animationFrames = true; }
@@ -110,7 +115,7 @@ void NativeEditor::Impl::AnimationPanel() {
         ImGui::TextUnformatted(Tr(linked ? "Sprite events write the shared animation asset immediately; no undo." : sprite ? "Sprite events save with the scene." : "Model events write the shared sidecar immediately; no undo."));
         ImGui::PopTextWrapPos(); ImGui::EndTooltip();
     }
-    // Kept until the controller workspace is separated in milestone B.
+    // Opens the separate controller workspace.
     ImGui::SameLine(); if (ImGui::SmallButton(kIconWorkflow)) Call("editor.animation", ObjectOf({{"controller", "animations/new.controller.json"}}));
     AnimationRect("controller-tab"); HelpTooltip(Tr("Animation Controller"));
     ImGui::SameLine(); if(ImGui::SmallButton(WithIcon(kIconPlus,Tr("Add Event")).c_str())) addEvent(current); AnimationRect("add-event");
@@ -220,6 +225,7 @@ void NativeEditor::Impl::AnimationPanel() {
     }
     if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) animationDragIndex=-1;
     if(sprite) { const ImVec2 strip=ImGui::GetCursorScreenPos(); ImGui::Dummy(ImVec2(size.x,18)); AnimationFrameStrip(state,strip,ImVec2(size.x,22)); }
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 1));
     if(ImGui::BeginTable("##animationEvents",3,ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY,ImVec2(0,std::max(60.0f,ImGui::GetContentRegionAvail().y)))) {
         ImGui::TableSetupColumn(Tr("Event name")); ImGui::TableSetupColumn(Tr(sprite ? "Frame" : "Time (s)"),ImGuiTableColumnFlags_WidthFixed,110);
         ImGui::TableSetupColumn("##actions",ImGuiTableColumnFlags_WidthFixed,28); ImGui::TableHeadersRow();
@@ -241,6 +247,7 @@ void NativeEditor::Impl::AnimationPanel() {
         }
         ImGui::EndTable();
     }
+    ImGui::PopStyleVar();
     ImGui::End();
 }
 }  // namespace oe
