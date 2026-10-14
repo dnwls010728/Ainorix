@@ -20129,6 +20129,10 @@ TEST(NativeEditorAnimationControllerGraphAuthoring) {
     text("controller-state-name","Air");CHECK(draft()["states"].has("Air")&&!draft()["states"].has("State"));
     auto canvas=editor.AnimationControlRect("controller-canvas");mouse(canvas[0]+10,canvas[1]+10,true);mouse(canvas[0]+10,canvas[1]+10,false);draw(2);
     text("controller-parameter-name","air");click("controller-add-parameter");CHECK(draft()["parameters"].has("air"));
+    // Arrange: columns from the entry along the transitions (Idle, Walk, then Jump through the new Walk > Jump);
+    // Air, which nothing reaches, two columns after the last.
+    click("controller-arrange");CHECK(draft()["states"]["Idle"]["position"][0].asInt()==40&&draft()["states"]["Walk"]["position"][0].asInt()==380&&draft()["states"]["Jump"]["position"][0].asInt()==720&&draft()["states"]["Air"]["position"][0].asInt()==1400);
+    CHECK(editor.AnimationControlRect("controller-issues")[2]>0);  // Air: no transition leads there
     key(WindowKey::S,true);CHECK(Call(e,"animation.controller_get",R"({"path":"animations/hero.controller.json"})")["result"]["values"]==draft());
     CHECK(e.Revision()==revision && e.GetScene().ToJson()==scene);
     CHECK(Call(e,"animation.controller_check",R"({"path":"animations/hero.controller.json","id":"Hero"})")["ok"].asBool());

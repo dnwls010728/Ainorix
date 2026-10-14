@@ -175,8 +175,10 @@ struct NativeEditor::Impl {
     std::map<std::string, std::string> animationNames;
     std::map<std::string, std::array<float, 4>> animationRects;
     bool animationFrames = false;
+    float animationSheetHeight = 0;  // height the dope sheet took last frame (its scroll area grows to it)
     bool showAnimationController = false, focusAnimationController = false, animationControllerEditorFocused = false;
     bool animationControllerClosePrompt = false;
+    bool animationControllerAddStateClicked = false, animationControllerArrangeClicked = false;  // the toolbar button, acted on once the draft is read
     Json animationControllerDocument, animationControllerSaved, animationControllerLive;
     std::vector<Json> animationControllerHistory;
     size_t animationControllerHistoryIndex = 0;
@@ -193,18 +195,20 @@ struct NativeEditor::Impl {
     int animationFramePage = 0, animationSequenceFrame = 0;
     std::string animationNewClip = "new_clip";
     void AnimationSpriteFrames(const Json& state);
-    void AnimationFrameStrip(const Json& state, ImVec2 origin, ImVec2 size);
+    // The clip's frames as pictures in their time cells; `current` (sequence index) is outlined.
+    void AnimationFrameStrip(const Json& state, ImVec2 origin, ImVec2 size, float x0, float scale, int current);
     void AnimationPanel();
     void AnimationTick(double dt);
     void AnimationRect(const std::string& name);
     void AnimationWriteEvents(const Json& state, const Json& events, const std::string& merge = {});
     // Property tracks (EditorAnimationTracks.cpp): one lane per keyframed field under the ruler. `x0` is the
-    // screen x of time 0, `scale` pixels per second, `gutter` the width of the lane label column.
+    // screen x of time 0, `scale` pixels per second, `gutter` the width of the lane label column. Returns the
+    // bottom of the last lane (the playhead is drawn down to it), before the selected key's editor.
     int animationTrack = -1, animationKey = -1;  // selected track and key
     bool animationKeyDragging = false;
     Json animationKeyDragTracks;                 // the tracks as they were when the key drag began
     std::string animationPropertyFilter;
-    void AnimationTracks(const Json& state, float x0, float scale, float gutter);
+    float AnimationTracks(const Json& state, float x0, float scale, float gutter);
     void AnimationAddPropertyPopup(const Json& state, const Json& tracks);
     void AnimationKeyEditor(const Json& state, Json tracks);
     bool AnimationWriteTracks(const Json& state, const Json& tracks, const std::string& merge = {});

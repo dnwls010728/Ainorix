@@ -41,19 +41,18 @@ bool NativeEditor::Impl::AnimationWriteTracks(const Json& state, const Json& tra
     return Ok(Call("animation.set_tracks", args));
 }
 
-void NativeEditor::Impl::AnimationTracks(const Json& state, float x0, float scale, float gutter) {
+float NativeEditor::Impl::AnimationTracks(const Json& state, float x0, float scale, float gutter) {
     const Json tracks = state["tracks"].isArray() ? state["tracks"] : Json::MakeArray();
     const double duration = state["duration"].asNumber(), current = state["time"].asNumber();
     const bool sprite = state["type"].asString() == "SpriteAnimation";
-    const float laneHeight = ImGui::GetFrameHeight();
+    const float laneHeight = ImGui::GetFrameHeight() + 4;
     const float laneWidth = std::max(40.0f, ImGui::GetContentRegionAvail().x - gutter);
     if (animationTrack >= static_cast<int>(tracks.size())) animationTrack = animationKey = -1;
     if (animationTrack >= 0 && animationKey >= static_cast<int>(tracks[animationTrack]["keys"].size())) animationKey = -1;
 
-    // The Add Property button sits in the panel's toolbar beside Add Event; without tracks nothing takes room here.
-    AnimationAddPropertyPopup(state, tracks);
-    if (tracks.size() == 0) return;
-    ImGui::Dummy(ImVec2(0, 2));
+    // The Add Property popup belongs to the panel's toolbar (AnimationPanel); without tracks nothing takes room here.
+    if (tracks.size() == 0) return 0;
+    float bottom = 0;
     auto timeAt = [&](float x) {
         double t = Clamp((x - x0) / std::max(1e-3f, scale), 0, static_cast<float>(duration));
         if (sprite) {  // sprite keys sit on frame starts
@@ -83,11 +82,12 @@ void NativeEditor::Impl::AnimationTracks(const Json& state, float x0, float scal
             ImGui::InvisibleButton("##label", ImVec2(gutter - keyButton - 6, laneHeight));
             if (ImGui::IsItemClicked()) animationTrack = static_cast<int>(i), animationKey = -1;
             AnimationRect("track-label:" + std::to_string(i));
-            const std::string label = TrackLabel(track);
+            const std::string label = WithIcon(kIconSlidersHorizontal, TrackLabel(track));
             HelpTooltip(label + "\n" + track["interpolation"].asString("linear"));
+            draw->AddRectFilled(row, row + ImVec2(gutter - keyButton - 6, laneHeight), trackSelected ? IM_COL32(92, 148, 255, 40) : IM_COL32(255, 255, 255, 8), 3);
             draw->PushClipRect(row, row + ImVec2(gutter - keyButton - 6, laneHeight), true);
-            draw->AddText(row + ImVec2(4, (laneHeight - ImGui::GetFontSize()) * 0.5f),
-                          ImGui::GetColorU32(trackSelected ? ImGuiCol_Text : ImGuiCol_TextDisabled), label.c_str());
+            draw->AddText(row + ImVec2(6, (laneHeight - ImGui::GetFontSize()) * 0.5f),
+                          trackSelected ? ImGui::GetColorU32(ImGuiCol_Text) : IM_COL32(200, 204, 214, 255), label.c_str());
             draw->PopClipRect();
             if (ImGui::BeginPopupContextItem("##trackMenu")) {
                 const char* const modes[3][2] = {{"linear", "Linear"}, {"smooth", "Smooth"}, {"step", "Step"}};  // value, menu label
@@ -148,8 +148,7 @@ void NativeEditor::Impl::AnimationTracks(const Json& state, float x0, float scal
             animationRects["key:" + std::to_string(i) + ":" + std::to_string(k)] = {x - 7, mid - 7, 14, 14};
             if (hovered && std::fabs(mouse.x - x) < 7 && std::fabs(mouse.y - mid) < 9) hit = static_cast<int>(k);
         }
-        const float head = x0 + static_cast<float>(current) * scale;
-        draw->AddLine(ImVec2(head, lane.y), ImVec2(head, lane.y + laneHeight), ImGui::GetColorU32(ImGuiCol_SliderGrabActive), 2);
+        bottom = lane.y + laneHeight;  // the panel draws the playhead through every lane
         if (hit >= 0) {
             const Json& key = keys[static_cast<size_t>(hit)];
             ImGui::SetTooltip("%.3f s\n%s", key["time"].asNumber(), key["value"].dump().c_str());
@@ -206,6 +205,7 @@ void NativeEditor::Impl::AnimationTracks(const Json& state, float x0, float scal
         const Json latest = engine.AnimationPreviewCall("state", Json());
         AnimationKeyEditor(latest, latest["tracks"]);
     }
+    return bottom;
 }
 
 void NativeEditor::Impl::AnimationKeyEditor(const Json& state, Json tracks) {

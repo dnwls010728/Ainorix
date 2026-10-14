@@ -154,32 +154,47 @@ void NativeEditor::Impl::AnimationSpriteFrames(const Json& state) {
     if (ImGui::InputFloat("##frameSeconds", &duration, 0, 0, "%.3f", ImGuiInputTextFlags_EnterReturnsTrue)) edit(ObjectOf({{"operation", "duration"}, {"index", animationSequenceFrame}, {"duration", duration}})); AnimationRect("frame-duration");
     ImGui::EndChild();
 }
-void NativeEditor::Impl::AnimationFrameStrip(const Json& state, ImVec2 origin, ImVec2 size) {
+void NativeEditor::Impl::AnimationFrameStrip(const Json& state, ImVec2 origin, ImVec2 size, float x0, float scale, int current) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(origin, origin + size, ImGui::GetColorU32(ImGuiCol_FrameBg), 3);
     const Json response = Call("animation.get_clip", ObjectOf({{"id", state["id"]}, {"clip", state["clip"]}}), true);
     if (!Ok(response)) return;
     const Json& info = response["result"];
-    if (info["image"]["texture"].asString().empty()) return;
-    auto texture = engine.Assets().GetTexture(info["image"]["texture"].asString());
-    ImDrawList* draw = ImGui::GetWindowDrawList();
     const double duration = state["duration"].asNumber();
-    if (!texture || !engine.Gpu() || duration <= 0) return;
-    const ImTextureID image = ViewTexture(engine.Gpu()->ImageView(texture));
+    if (duration <= 0) return;
+    auto texture = info["image"]["texture"].asString().empty() ? nullptr : engine.Assets().GetTexture(info["image"]["texture"].asString());
+    const ImTextureID image = texture && engine.Gpu() ? ViewTexture(engine.Gpu()->ImageView(texture)) : ImTextureID();
     const Json& starts = state["frameTimes"];
+    const Json& frames = info["values"]["frames"];
+    draw->PushClipRect(origin, origin + size, true);
     for (size_t i = 0; i < starts.size(); ++i) {
-        const float left = origin.x + 6 + static_cast<float>(starts[i].asNumber() / duration) * (size.x - 12);
-        const float right = origin.x + 6 + static_cast<float>((i + 1 < starts.size() ? starts[i+1].asNumber() : duration) / duration) * (size.x - 12);
-        draw->AddRect(ImVec2(left, origin.y), ImVec2(std::max(left+1,right),origin.y+size.y), ImGui::GetColorU32(ImGuiCol_Border));
-        if (right-left<10) continue;
-        const Json source = info["values"]["frames"][i];
-        const Json rectResponse =
-            Call("animation.get_clip",
-                 ObjectOf({{"id", state["id"]}, {"sourceOnly", true}, {source.isString() ? "frame" : "offset", source}, {"limit", 1}}), true);
-        if (!Ok(rectResponse) || rectResponse["result"]["frames"].size()==0) continue;
-        const Json& rect = rectResponse["result"]["frames"][0]["rect"];
-        const float x=rect[0].asFloat(), y=rect[1].asFloat(), w=rect[2].asFloat(), h=rect[3].asFloat();
-        const float factor=std::min((right-left-2)/std::max(1.0f,w),(size.y-2)/std::max(1.0f,h));
-        const ImVec2 start((left+right-w*factor)*0.5f,origin.y+1);
-        draw->AddImage(image,start,start+ImVec2(w*factor,h*factor),ImVec2((x+0.5f)/texture->width,(y+0.5f)/texture->height),ImVec2((x+w-0.5f)/texture->width,(y+h-0.5f)/texture->height));
+        // One cell per sequence frame, as wide as the frame lasts.
+        const float left = x0 + static_cast<float>(starts[i].asNumber()) * scale;
+        const float right = x0 + static_cast<float>(i + 1 < starts.size() ? starts[i + 1].asNumber() : duration) * scale;
+        const ImVec2 a(left + 1, origin.y + 2), b(std::max(left + 2, right - 1), origin.y + size.y - 2);
+        const bool on = static_cast<int>(i) == current;
+        draw->AddRectFilled(a, b, on ? IM_COL32(92, 148, 255, 60) : (i % 2 ? IM_COL32(255, 255, 255, 10) : IM_COL32(255, 255, 255, 18)), 3);
+        if (texture && b.x - a.x >= 10 && i < frames.size()) {
+            const Json& source = frames[i];
+            const Json rectResponse =
+                Call("animation.get_clip", ObjectOf({{"id", state["id"]}, {"sourceOnly", true}, {source.isString() ? "frame" : "offset", source}, {"limit", 1}}), true);
+            if (Ok(rectResponse) && rectResponse["result"]["frames"].size() > 0) {
+                const Json& rect = rectResponse["result"]["frames"][0]["rect"];
+                const float x = rect[0].asFloat(), y = rect[1].asFloat(), w = rect[2].asFloat(), h = rect[3].asFloat();
+                const float factor = std::min((b.x - a.x - 4) / std::max(1.0f, w), (b.y - a.y - 4) / std::max(1.0f, h));
+                const ImVec2 start((a.x + b.x - w * factor) * 0.5f, (a.y + b.y - h * factor) * 0.5f);
+                draw->AddImage(image, start, start + ImVec2(w * factor, h * factor), ImVec2((x + 0.5f) / texture->width, (y + 0.5f) / texture->height),
+                               ImVec2((x + w - 0.5f) / texture->width, (y + h - 0.5f) / texture->height));
+            }
+        }
+        draw->AddRect(a, b, on ? IM_COL32(92, 148, 255, 255) : IM_COL32(255, 255, 255, 36), 3, on ? 2.0f : 1.0f);
+        // The sequence number where it fits, so clips and events can be matched to the cells.
+        const std::string number = std::to_string(i);
+        const float textWidth = ImGui::CalcTextSize(number.c_str()).x * 0.8f;
+        if (b.x - a.x > textWidth + 6)
+            draw->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 0.8f, ImVec2(a.x + 3, b.y - ImGui::GetFontSize() * 0.8f - 1),
+                          on ? IM_COL32(255, 255, 255, 230) : IM_COL32(255, 255, 255, 120), number.c_str());
     }
+    draw->PopClipRect();
 }
 }  // namespace oe
