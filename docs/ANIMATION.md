@@ -637,6 +637,49 @@ The editor consumes A3 sheet/rectangle-atlas data. T1 extended atlases and T2 As
 separate roadmap work; rotated/trimmed entries, source-canvas offsets and per-frame pivots are still
 unsupported. T2 can write the same durations arrays when it is implemented.
 
+## Property tracks
+
+A clip can also keyframe component fields - a sprite's bob and squash, a color flash on a hit frame, a
+weapon child swinging, a model's material color - next to its frames or bones. The tracks live in the
+clip: inline `SpriteAnimation.clips.<clip>.tracks`, the clip of a shared `.anim.json`, or
+`<model>.clips.json` `metadata.<clip>.tracks` for model clips.
+
+```json
+"tracks": [
+  {"component": "Transform", "field": "scale", "interpolation": "smooth",
+   "keys": [{"time": 0, "value": [1, 1, 1]}, {"time": 0.12, "value": [1.1, 0.9, 1]}, {"time": 0.25, "value": [1, 1, 1]}]},
+  {"target": "Sword", "component": "Transform", "field": "rotation",
+   "keys": [{"time": 0, "value": [0, 0, 0]}, {"time": 0.2, "value": [0, 0, -90]}]},
+  {"component": "Sprite", "field": "color", "interpolation": "step",
+   "keys": [{"time": 0, "value": [1, 1, 1]}, {"time": 0.2, "value": [1, 0.4, 0.4]}]}]
+```
+
+- `target`: `""` (or absent) is the animated entity; otherwise a path of child names (`"Arm/Hand"`; the
+  lowest id wins when two children share a name). `component`/`field`: any field `component.types`
+  lists except JSON and entity fields; `SpriteAnimation` and `Animator` cannot be targets. At most 64
+  tracks per clip and 512 keys per track; one track per property.
+- `keys`: `{time, value}` in clip seconds (0..3600), in time order; `value` has the field's type.
+  Before the first key the first value holds, after the last the last one.
+- `interpolation`: `linear` (default), `smooth` (eased in and out between keys) or `step`. Numbers,
+  vectors and colors blend per component (rotations as Euler degrees); int, bool, string and frame
+  fields always step.
+- Applied in the fixed step right after the clip's frame or pose is chosen (systems, before physics),
+  every step while the clip is the component's current clip - also when paused, so the fields hold the
+  clip's values. A track overrides what a script wrote to the same field earlier in the step. Sprite
+  clips use the sprite clip time, models `Animator.time` (fades use the target clip's tracks).
+- `animation.set_tracks {id, clip?, tracks, merge?}` replaces a clip's tracks (validated; `[]` removes
+  them): inline sprite clips with scene undo, shared files written immediately without undo.
+  `animation.set_clip {values: {tracks}}` and `animation.set {clip, values: {tracks}}` accept them too.
+  `animation.preview_state` returns the previewed clip's `tracks`, and the isolated preview shows them.
+- Editor: the Animation panel's timeline has a lane per track under the ruler (a label column names
+  events, frames and each property). **Add Property** lists the fields of the entity and its children
+  and makes a track keyed at the playhead with the current value; **+** on a lane keys the playhead,
+  double-click on a lane adds a key, drag moves one (sprite keys snap to frame starts, model keys to
+  1/60 s), right-click removes one; the selected key's time and value are edited under the lanes, and
+  a lane's right-click menu sets the interpolation or removes the property.
+  The selected-key editor reads the accepted track data after a property or key is inserted and
+  discards selections removed by undo or clip/entity changes. Vector objects and hex color keys
+  accepted by the command API are decoded through component reflection for the value controls.
 
 ## Animation controllers (A5)
 

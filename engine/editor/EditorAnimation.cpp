@@ -61,6 +61,7 @@ void NativeEditor::Impl::AnimationPanel() {
         }
         if (!Ok(response)) { ImGui::TextWrapped("%s", response["error"]["message"].asString().c_str()); ImGui::End(); return; }
         state = response["result"]; animationEvent = animationDragIndex = -1; animationNames.clear();
+        animationTrack = animationKey = -1; animationKeyDragging = false;
     }
     const bool sprite = state["type"].asString() == "SpriteAnimation";
     const float duration = state["duration"].asFloat(), current = state["time"].asFloat();
@@ -101,6 +102,7 @@ void NativeEditor::Impl::AnimationPanel() {
             if (ImGui::Selectable((clip["displayName"].asString(name) + "##" + name).c_str(), name == state["clip"].asString())) {
                 Call("animation.preview", ObjectOf({{"clip", name}, {"time", 0}, {"playing", false}}));
                 animationEvent = animationDragIndex = -1; animationNames.clear();
+                animationTrack = animationKey = -1; animationKeyDragging = false;
             }
         }
         ImGui::EndCombo();
@@ -119,6 +121,11 @@ void NativeEditor::Impl::AnimationPanel() {
     ImGui::SameLine(); if (ImGui::SmallButton(kIconWorkflow)) Call("editor.animation", ObjectOf({{"controller", "animations/new.controller.json"}}));
     AnimationRect("controller-tab"); HelpTooltip(Tr("Animation Controller"));
     ImGui::SameLine(); if(ImGui::SmallButton(WithIcon(kIconPlus,Tr("Add Event")).c_str())) addEvent(current); AnimationRect("add-event");
+    if (!(sprite && animationFrames)) {  // the timeline's lanes show the properties
+        ImGui::SameLine(); if (ImGui::SmallButton(WithIcon(kIconPlus, Tr("Add Property")).c_str())) ImGui::OpenPopup("##addProperty");
+        AnimationRect("add-property");
+        HelpTooltip(Tr("Keyframe a field of this entity or one of its children (position, rotation, scale, color, opacity, ...)."));
+    }
     auto icon = [&](const char* glyph, const char* id, const char* tooltip, bool active = false, bool mirror = false) {
         ImGui::PushID(id); if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
         ImDrawList* list = ImGui::GetWindowDrawList(); const int first = list->VtxBuffer.Size;
@@ -150,7 +157,11 @@ void NativeEditor::Impl::AnimationPanel() {
     }
     if (sprite && animationFrames) { AnimationSpriteFrames(state); ImGui::End(); return; }
     std::vector<int> eventLanes; std::vector<float> labelEnds;
-    const float available = std::max(80.0f, ImGui::GetContentRegionAvail().x);
+    // A label column on the left names each lane (events, frames, property tracks), as in a dope sheet; the
+    // lanes share the ruler's time scale. Narrow panels drop the column.
+    const float fullWidth = std::max(80.0f, ImGui::GetContentRegionAvail().x);
+    const float gutter = fullWidth > 360 ? std::min(ImGui::GetFontSize() * 10.0f, fullWidth * 0.28f) : 0.0f;
+    const float available = fullWidth - gutter;
     for (const Json& event : events.items()) {
         const float x = duration > 0 ? 6 + event["time"].asFloat() * (available-12)/duration : 6;
         const float textWidth = ImGui::CalcTextSize(event["name"].asString().c_str()).x * 0.72f;
@@ -159,7 +170,12 @@ void NativeEditor::Impl::AnimationPanel() {
         if(lane==labelEnds.size()) labelEnds.push_back(-10000);
         labelEnds[lane]=labelX+textWidth; eventLanes.push_back(static_cast<int>(lane));
     }
-    const ImVec2 origin = ImGui::GetCursorScreenPos(), size(available, 50 + std::max(0,static_cast<int>(labelEnds.size())-1)*15.0f);
+    const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+    const ImVec2 origin = rowStart + ImVec2(gutter, 0), size(available, 50 + std::max(0,static_cast<int>(labelEnds.size())-1)*15.0f);
+    if (gutter > 0) {
+        ImGui::GetWindowDrawList()->AddText(rowStart + ImVec2(4, 32), ImGui::GetColorU32(ImGuiCol_TextDisabled), Tr("Events"));
+        ImGui::SetCursorScreenPos(origin);
+    }
     ImGui::InvisibleButton("##animationTimeline", size); AnimationRect("timeline"); AnimationRect("time");
     const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -224,7 +240,12 @@ void NativeEditor::Impl::AnimationPanel() {
         } else if(animationDragIndex<0) seek(value);
     }
     if(ImGui::IsMouseReleased(ImGuiMouseButton_Left)) animationDragIndex=-1;
-    if(sprite) { const ImVec2 strip=ImGui::GetCursorScreenPos(); ImGui::Dummy(ImVec2(size.x,18)); AnimationFrameStrip(state,strip,ImVec2(size.x,22)); }
+    if(sprite) {
+        const ImVec2 strip=ImGui::GetCursorScreenPos(); ImGui::Dummy(ImVec2(size.x+gutter,18));
+        if (gutter > 0) ImGui::GetWindowDrawList()->AddText(strip + ImVec2(4, 2), ImGui::GetColorU32(ImGuiCol_TextDisabled), Tr("Frames"));
+        AnimationFrameStrip(state,strip+ImVec2(gutter,0),ImVec2(size.x,22));
+    }
+    AnimationTracks(state, origin.x + 6, scale, gutter);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 1));
     if(ImGui::BeginTable("##animationEvents",3,ImGuiTableFlags_RowBg|ImGuiTableFlags_ScrollY,ImVec2(0,std::max(60.0f,ImGui::GetContentRegionAvail().y)))) {
         ImGui::TableSetupColumn(Tr("Event name")); ImGui::TableSetupColumn(Tr(sprite ? "Frame" : "Time (s)"),ImGuiTableColumnFlags_WidthFixed,110);

@@ -95,8 +95,11 @@ public:
     void OpenEffect(const std::string& path = {});
     // Open/focus the Animation panel for the selected sprite/model.
     void FocusAnimationPanel();
-    // Bounds of 2D tool controls: slice, collision-canvas/point:<i>, rule-frame/collision/save, layer.
+    // Bounds of 2D tool controls: rule-frame/collision/save, layer, open-sprite-editor.
     std::array<float, 4> TwoDimensionalControlRect(const std::string& name) const;
+    // Sprite Editor controls: tab:<0|1>, slice-mode:<i>, slice, slice-grid, slice-canvas, fit, frame:<i>,
+    // collision-target:<0|1>, collision-fit/fit-all/create/clear/remove, collision-canvas, collision-point:<i>.
+    std::array<float, 4> SpriteEditorControlRect(const std::string& name) const;
     // Automation bounds: clip, play, step, restart, time, timeline, add-event and marker/name/event-time/remove-event:<index>.
     std::array<float, 4> AnimationControlRect(const std::string& name) const;
     // Snapshot of the shared Effects document and bounds for event-driven widget automation.
@@ -109,7 +112,8 @@ public:
     // value's row in the emitter node does).
     void SetEffectsGraphValue(bool update = true, int channel = 7);
     std::array<float, 4> EffectsControlRect(const std::string& name) const;
-    // Screen bounds of an Inspector value widget, "RigidBody.mass" (axis toggles: "RigidBody.lockPositionX"); zero when not drawn.
+    // Screen bounds of an Inspector value widget, "RigidBody.mass" (axis toggles: "RigidBody.lockPositionX"), a field section
+    // header ("Sprite#Lighting") or a component's shortcut button ("Sprite#edit"); zero when not drawn.
     std::array<float, 4> InspectorControlRect(const std::string& name) const;
     // Ask bubbles (Scene view): open one for an entity (backend: agent CLI id, empty = the team),
     // the entity the right-click menu is open for (none: 0), the open bubbles and a control's

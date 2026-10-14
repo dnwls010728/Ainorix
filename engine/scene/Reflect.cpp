@@ -263,9 +263,21 @@ Json ComponentSchema(const ComponentType& type) {
             for (const std::string& o : f.options) e.push(o);
             p["enum"] = e;
         }
+        if (!f.group.empty()) p["x-oe-group"] = f.group;
+        if (!f.showIf.empty()) p["x-oe-showIf"] = f.showIf;
         props[f.name] = p;
     }
     schema["properties"] = props;
+    if (!type.groups.empty()) {
+        Json groups = Json::MakeArray();
+        for (const FieldGroup& g : type.groups) {
+            Json item = Json::MakeObject();
+            item["name"] = g.name;
+            if (g.collapsed) item["collapsed"] = true;
+            groups.push(item);
+        }
+        schema["x-oe-groups"] = groups;
+    }
     schema["additionalProperties"] = false;
     return schema;
 }

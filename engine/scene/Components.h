@@ -549,6 +549,23 @@ struct Sprite {
               "Cast a shadow shaped by the image (texels below alphaCutoff cast none). Needs lit: true and a cut-out sprite "
               "(alphaCutoff > 0); the sprite is then drawn from both sides.");
         f.Add("visible", &Sprite::visible, "Whether the sprite is drawn.");
+        // Inspector sections (file order above stays as it was, so saved scenes do not change).
+        f.Group("Image", {"texture", "atlas", "frame", "columns", "rows", "color", "opacity", "flipX", "flipY", "visible"});
+        f.Group("Size and Pivot", {"pixelsPerUnit", "width", "height", "pivotX", "pivotY"});
+        f.Group("Sorting", {"layer", "order", "ySort", "ySortOffset"});
+        f.Group("Draw Mode", {"drawMode", "slice", "fill", "fillMode"}, true);
+        f.Group("Rendering", {"material", "pixelArt", "alphaCutoff", "blend"}, true);
+        f.Group("Lighting", {"lit", "emission", "castShadows", "light2D", "ambient2D", "normalTexture"}, true);
+        f.Group("Mask", {"mask", "maskOnly"}, true);
+        f.ShowIf("columns", "!atlas");
+        f.ShowIf("rows", "!atlas");
+        f.ShowIf("slice", "drawMode=sliced");
+        f.ShowIf("ySortOffset", "ySort");
+        f.ShowIf("emission", "lit");
+        f.ShowIf("castShadows", "lit");
+        f.ShowIf("ambient2D", "light2D");
+        f.ShowIf("normalTexture", "light2D");
+        f.ShowIf("maskOnly", "mask");
     }
 };
 
@@ -576,6 +593,8 @@ struct SpriteAnimation {
         f.Add("playing", &SpriteAnimation::playing, "Pause/resume.");
         f.Add("time", &SpriteAnimation::time, "Runtime: seconds into the current clip.");
         f.Add("finished", &SpriteAnimation::finished, "Runtime: true once a non-looping clip reached its last frame.");
+        f.Group("Runtime", {"time", "finished"}, true);
+        f.ShowIf("loopOverride", "asset");
     }
 };
 
@@ -1206,6 +1225,7 @@ struct Collider2D {
     Vec3 center{0, 0, 0};
     float angle = 0.0f;
     Json points = Json::MakeArray();
+    Json framePoints = Json::MakeObject();
     bool loop = false;
     bool isTrigger = false;
     bool oneWay = false;
@@ -1223,6 +1243,10 @@ struct Collider2D {
         f.Add("center", &Collider2D::center, "Offset of the shape from the entity origin (x, y).");
         f.Add("angle", &Collider2D::angle, "Box/capsule rotation around the shape center in degrees (added to the entity rotation).");
         f.Add("points", &Collider2D::points, "Polygon/edge points [[x, y], ...] in local units. Polygon: outline in any winding (concave is triangulated). Edge: a line strip, two-sided.");
+        f.Add("framePoints", &Collider2D::framePoints,
+              "Polygon: an outline per sprite frame, {\"<frame>\": [[x, y], ...]} in the units of points. While the entity's Sprite shows "
+              "a frame listed here (its index as text, e.g. \"3\", or its atlas frame name) the shape uses that outline, otherwise "
+              "points; the body keeps its velocity when the outline changes (attack hitboxes, crouching).");
         f.Add("loop", &Collider2D::loop, "Edge: close the strip into a loop (smooth one-sided outline, solid inside: good for terrain).");
         f.Add("isTrigger", &Collider2D::isTrigger, "Sensor: reports onTriggerEnter/onTriggerExit for moving bodies and characters instead of colliding.");
         f.Add("oneWay", &Collider2D::oneWay, "One-way platform: solid only from above (bodies and characters pass through from below and the sides).");
@@ -1235,6 +1259,19 @@ struct Collider2D {
         FieldInfo& l = f.Add("layer", &Collider2D::layer, "Collision layer 0-15.");
         l.hasRange = true; l.min = 0; l.max = 15;
         f.Add("ignoreLayers", &Collider2D::ignoreLayers, "Layers this shape does not collide with, e.g. [2, 3]. Two shapes collide unless either ignores the other's layer.");
+        f.Group("Surface", {"isTrigger", "oneWay", "friction", "bounciness", "density"});
+        f.Group("Layers", {"layer", "ignoreLayers"}, true);
+        f.ShowIf("size", "shape=box");
+        f.ShowIf("rounding", "shape=box");
+        f.ShowIf("radius", "shape=circle|capsule");
+        f.ShowIf("height", "shape=capsule");
+        f.ShowIf("angle", "shape=box|capsule");
+        f.ShowIf("points", "shape=polygon|edge");
+        f.ShowIf("framePoints", "shape=polygon");
+        f.ShowIf("loop", "shape=edge");
+        f.ShowIf("oneWay", "!isTrigger");
+        f.ShowIf("friction", "!isTrigger");
+        f.ShowIf("bounciness", "!isTrigger");
     }
 };
 
@@ -2015,5 +2052,11 @@ struct NetPlayer {
 };
 
 void RegisterBuiltinComponents();
+
+// The key a frame is listed under in Collider2D.framePoints: an atlas frame name, else the index as text.
+std::string SpriteFrameKey(const SpriteFrame& frame);
+// The outline a polygon Collider2D uses now: framePoints of the frame `sprite` shows (null sprite =
+// none), else points.
+const Json& Collider2DActivePoints(const Collider2D& collider, const Sprite* sprite);
 
 }  // namespace oe

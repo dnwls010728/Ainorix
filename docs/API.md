@@ -63,23 +63,28 @@ Validate and replace a tile rule in the selected map's legend (scene undo).
 
 ### `sprite.collision` *(undoable edit)*
 
-Set sprite collision polygon points in local world units (scene undo).
+Set the sprite's Collider2D polygon in local world units (scene undo): its points, or with `frame` the outline used while that frame shows (Collider2D.framePoints).
 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | Sprite. |
-| `points` | array | yes | 3..64 [x,y] points. |
+| `points` | array |  | 3..64 [x,y] points (required unless clear). |
+| `frame` | integer \| string |  | Frame index or atlas frame name: write framePoints[frame] instead of points. |
+| `clear` | boolean |  | With frame: remove that frame's outline, so the frame uses points again. |
 | `merge` | string |  | Undo group for point dragging. |
 
 ### `sprite.outline` *(undoable edit)*
 
-Fit a convex Collider2D polygon around the opaque pixels of the sprite's current frame (scene undo). Returns the points.
+Fit a convex Collider2D polygon around the opaque pixels of the sprite's current frame (scene undo). Returns the points. `frame` / `frames` / `allFrames` fit those frames instead and store each one in Collider2D.framePoints.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `id` | integer \| string | yes | Sprite entity. |
 | `alphaCutoff` | number |  | Pixels with at least this alpha count as solid (default 0.5). |
 | `maxPoints` | integer |  | Corners kept, 3..8 (default 8: the most a Box2D polygon takes). |
+| `frame` | integer \| string |  | One frame (index or atlas frame name) to fit into framePoints. |
+| `frames` | array |  | Several frames to fit into framePoints. |
+| `allFrames` | boolean |  | Fit every frame of the sheet or atlas (at most 1024) into framePoints. |
 | `merge` | string |  | Undo group key. |
 
 ## atlas
@@ -100,8 +105,11 @@ Write a named sprite atlas, normalize TexturePacker JSON, or slice a grid; no sc
 | `auto` | boolean |  | Instead of a grid, find each sprite of `texture` by the transparent space around it (top to bottom, left to right). |
 | `gap` | integer |  | auto: parts closer than this many pixels are one sprite (default 2). |
 | `pivot` | array |  | [x, y] pivot of every frame, 0..1 like Sprite.pivotX/Y ((0.5, 0) = bottom center). |
+| `offset` | array |  | Grid: [x, y] pixels before the first cell (sheet margin). |
+| `spacing` | array |  | Grid: [x, y] pixels between cells (gutters). |
 | `prefix` | string |  | Frame name prefix (default frame_). |
 | `overwrite` | boolean |  | Replace existing file. |
+| `dryRun` | boolean |  | Return the frames that would be written without writing the file (slicing previews). |
 
 ## animation
 
@@ -126,7 +134,7 @@ Create/patch a sprite clip or edit its sequence; frame operations preserve event
 |---|---|---|---|
 | `id` | integer \| string | yes | Sprite entity. |
 | `clip` | string | yes | Stable clip key. |
-| `values` | object |  | Clip fields to patch: frames, durations, fps, loop, displayName, events. |
+| `values` | object |  | Clip fields to patch: frames, durations, fps, loop, displayName, events, tracks (keyframed component fields, see animation.set_tracks). |
 | `operation` | string |  | create|append|insert|move|remove|duration|uniform (remove explicit durations). |
 | `index` | integer |  | Sequence index. |
 | `to` | integer |  | Final sequence index for move. |
@@ -712,6 +720,17 @@ Replace clip markers. Inline sprites store scene events; linked sprites write .a
 | `clip` | string |  | Clip name; default current clip. |
 | `events` | array | yes | At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers. |
 | `merge` | string |  | Undo group key for a sprite marker drag; model file writes remain outside undo. |
+
+### `animation.set_tracks` *(undoable edit)*
+
+Replace a clip's property tracks: keyframed component fields (position, rotation, scale, color, opacity, ...) of the animated entity or its children, applied while the clip plays. Inline sprite clips use scene undo; linked sprites write .anim.json, models write <model>.clips.json metadata (shared file writes are not undoable). Read them with animation.preview_state.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Animated entity (SpriteAnimation, or MeshRenderer model with clips). |
+| `clip` | string |  | Clip name; default the current clip. |
+| `tracks` | array | yes | At most 64 {target: "" or child path, component, field, interpolation: linear|smooth|step, keys: [{time, value}]}; [] removes them. |
+| `merge` | string |  | Undo group key for a key drag (inline sprite clips). |
 
 ### `animation.retarget`
 
@@ -1795,6 +1814,17 @@ Open/focus or close the Animation panel in the attached native editor; no scene 
 | `frames` | boolean |  | Show sprite frame authoring instead of the preview timeline. |
 | `controller` | string |  | Open a .controller.json graph; empty returns to clip preview. |
 
+### `editor.sprite`
+
+Open/focus or close the Sprite Editor of the attached native editor for the selected sprite: Slice Sheet (how the sheet is cut into frames) or Collision (Collider2D outline per frame); no scene edit.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `open` | boolean |  | true opens/focuses (default); false closes it. |
+| `tab` | string |  | slice or collision. |
+| `frame` | integer \| string |  | Collision: the frame to edit (index or atlas frame name). |
+| `editDefault` | boolean |  | Collision: edit the default outline (Collider2D.points) instead of the frame's own. |
+
 ### `editor.select`
 
 Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).
@@ -2375,6 +2405,7 @@ Physics character for players/NPCs: set velocity (x/z to walk, y to jump) and th
 | `center` | vec3 | `[0,0,0]` | Offset of the shape from the entity origin (x, y). |
 | `angle` | float | `0` | Box/capsule rotation around the shape center in degrees (added to the entity rotation). |
 | `points` | json | `[]` | Polygon/edge points [[x, y], ...] in local units. Polygon: outline in any winding (concave is triangulated). Edge: a line strip, two-sided. |
+| `framePoints` | json | `{}` | Polygon: an outline per sprite frame, {"<frame>": [[x, y], ...]} in the units of points. While the entity's Sprite shows a frame listed here (its index as text, e.g. "3", or its atlas frame name) the shape uses that outline, otherwise points; the body keeps its velocity when the outline changes (attack hitboxes, crouching). |
 | `loop` | bool | `false` | Edge: close the strip into a loop (smooth one-sided outline, solid inside: good for terrain). |
 | `isTrigger` | bool | `false` | Sensor: reports onTriggerEnter/onTriggerExit for moving bodies and characters instead of colliding. |
 | `oneWay` | bool | `false` | One-way platform: solid only from above (bodies and characters pass through from below and the sides). |

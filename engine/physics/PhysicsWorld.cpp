@@ -1413,8 +1413,9 @@ void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, cons
             else capsule2(m, center, r, half, c.angle, col);
         } else if (c.shape == "polygon" || c.shape == "edge") {
             std::vector<Vec3> pts;
-            if (c.points.isArray()) {
-                for (const Json& p : c.points.items()) {
+            const Json& outline = Collider2DActivePoints(c, scene.Get<Sprite>(kv.first));
+            if (outline.isArray()) {
+                for (const Json& p : outline.items()) {
                     if (p.isArray() && p.size() >= 2) pts.push_back(Vec3((p[0].asFloat() + c.center.x) * scale.x, (p[1].asFloat() + c.center.y) * scale.y, 0));
                 }
             }

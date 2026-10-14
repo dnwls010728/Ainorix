@@ -8,6 +8,7 @@
 #include "scene/SpriteClip.h"
 #include "core/FileSystem.h"
 #include "scene/Components.h"
+#include "scene/PropertyTracks.h"
 
 namespace oe {
 namespace {
@@ -88,7 +89,7 @@ bool ValidateSpriteAnimationAsset(const Json& data, std::string* error) {
         for (const auto& item : data["clips"].members()) {
             if (item.first.empty() || item.first.size() > 128) throw std::runtime_error("clip name needs 1..128 bytes");
             const Json& clip = item.second;
-            Fields(clip, {"frames", "fps", "loop", "events", "displayName", "durations"});
+            Fields(clip, {"frames", "fps", "loop", "events", "displayName", "durations", "tracks"});
             if (!clip["frames"].isArray() || clip["frames"].size() == 0 || clip["frames"].size() > 65536) throw std::runtime_error("clip frames needs 1..65536 indices");
             for (const Json& index : clip["frames"].items()) {
                 if (named && index.isString() && !index.asString().empty() && index.asString().size() <= 128) continue;
@@ -101,6 +102,7 @@ bool ValidateSpriteAnimationAsset(const Json& data, std::string* error) {
             std::vector<AnimationMarker> markers; std::string message;
             SpriteClipTiming timing;
             if (!ParseSpriteClipTiming(clip, timing, &message) || !SpriteClipMarkers(clip["events"], timing, markers, &message)) throw std::runtime_error(message);
+            if (clip.has("tracks") && !ValidatePropertyTracks(clip["tracks"], &message)) throw std::runtime_error(message);
         }
         return true;
     } catch (const std::exception& ex) { if (error) *error = ex.what(); return false; }
@@ -118,7 +120,7 @@ bool ApplyAnimationMetadata(const Json& data, Mesh& mesh, std::string* error) {
         for (const auto& item : data["metadata"].members()) {
             auto found = std::find_if(mesh.clips.begin(), mesh.clips.end(), [&](const AnimationClip& clip) { return clip.name == item.first; });
             if (found == mesh.clips.end()) throw std::runtime_error("metadata: unknown clip " + item.first);
-            Fields(item.second, {"displayName", "loopRange", "events"});
+            Fields(item.second, {"displayName", "loopRange", "events", "tracks"});
             if (item.second.has("displayName")) { Name(item.second["displayName"]); found->displayName = item.second["displayName"].asString(); }
             if (item.second.has("loopRange")) {
                 const Json& range = item.second["loopRange"];
@@ -132,6 +134,11 @@ bool ApplyAnimationMetadata(const Json& data, Mesh& mesh, std::string* error) {
                 std::string message;
                 if (!ParseAnimationMarkers(item.second["events"], found->duration, 0, 0, found->events, &message)) throw std::runtime_error(message);
                 found->sidecarEvents = true;
+            }
+            if (item.second.has("tracks")) {
+                std::string message;
+                if (!ValidatePropertyTracks(item.second["tracks"], &message)) throw std::runtime_error(item.first + ": " + message);
+                found->tracks = item.second["tracks"];
             }
         }
         return true;

@@ -20557,6 +20557,415 @@ TEST(TwoDimensionalToolsLayersAndTileLight) {
     RemoveAll(project);
 }
 
+TEST(SpriteFrameCollisionOutlines) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("frame_outlines");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    // A 16x8 sheet of two 8x8 cells: a 6x6 blob in cell 0, a 2x2 blob in cell 1.
+    Image sheet;
+    sheet.width = 16;
+    sheet.height = 8;
+    sheet.rgba.assign(16 * 8 * 4, 0);
+    auto opaque = [&](int x, int y) { sheet.rgba[(static_cast<size_t>(y) * 16 + static_cast<size_t>(x)) * 4 + 3] = 255; };
+    for (int y = 1; y < 7; ++y)
+        for (int x = 1; x < 7; ++x) opaque(x, y);
+    for (int y = 3; y < 5; ++y)
+        for (int x = 11; x < 13; ++x) opaque(x, y);
+    CHECK(WritePng(project + "/sheet.png", sheet, true));
+
+    // Slicing previews (dryRun) write nothing; offset and spacing skip a margin and gutters.
+    Json dry = Call(e, "atlas.create", R"({"path":"cut.atlas.json","texture":"sheet.png","cellWidth":4,"cellHeight":4,"offset":[1,1],"spacing":[1,1],"dryRun":true})");
+    CHECK(dry["ok"].asBool() && dry["result"]["dryRun"].asBool() && !FileExists(project + "/cut.atlas.json"));
+    CHECK(dry["result"]["values"]["frames"].size() == 3 && dry["result"]["values"]["frames"][1]["rect"] == Json(Json::Array{6, 1, 4, 4}));
+    const Json uneven = Call(e, "atlas.create", R"({"path":"cut.atlas.json","texture":"sheet.png","cellWidth":5,"cellHeight":5,"dryRun":true})");
+    CHECK(!uneven["ok"].asBool() && !uneven["error"]["hint"].asString().empty());
+
+    // sprite.outline allFrames: an outline per frame in Collider2D.framePoints; points get the first so other frames collide.
+    CHECK(Call(e, "entity.create", R"({"name":"Hero","components":{"Sprite":{"texture":"sheet.png","columns":2,"pixelsPerUnit":8}}})")["ok"].asBool());
+    const EntityId hero = e.GetScene().FindByName("Hero");
+    const Json fitted = Call(e, "sprite.outline", R"({"id":"Hero","allFrames":true})");
+    CHECK(fitted["ok"].asBool());
+    const Collider2D* c = e.GetScene().Get<Collider2D>(hero);
+    CHECK(c && c->shape == "polygon" && c->framePoints.has("0") && c->framePoints.has("1") && c->points == c->framePoints["0"]);
+    float width1 = 0;
+    for (const Json& p : c->framePoints["1"].items()) width1 = std::max(width1, std::fabs(p[0].asFloat()));
+    CHECK(std::fabs(width1 - 0.125f) < 0.01f);  // the 2 px blob of frame 1 (8 px per unit), around the center
+    CHECK(e.GetScene().Get<Sprite>(hero)->frame == 0);  // the sprite shows its own frame again
+    // Outlines are written rounded to 1/1000 unit in doubles: readable, stable scene files.
+    CHECK(c->framePoints["0"][0][0].dump().size() <= 7);
+    Call(e, "history.undo");
+    CHECK(!e.GetScene().Get<Collider2D>(hero));
+
+    // sprite.collision frame / clear, and the outline the collider uses per frame.
+    CHECK(Call(e, "sprite.collision", R"({"id":"Hero","points":[[-0.5,-0.5],[0.5,-0.5],[0.5,0.5],[-0.5,0.5]]})")["ok"].asBool());
+    CHECK(Call(e, "sprite.collision", R"({"id":"Hero","frame":1,"points":[[-3,-0.5],[3,-0.5],[3,0.5],[-3,0.5]]})")["ok"].asBool());
+    c = e.GetScene().Get<Collider2D>(hero);
+    CHECK(c->framePoints.size() == 1 && c->points.size() == 4 && c->points[1][0].asFloat() == 0.5f);
+    CHECK(&Collider2DActivePoints(*c, e.GetScene().Get<Sprite>(hero)) == &c->points);
+    CHECK(!Call(e, "sprite.collision", R"({"id":"Hero","frame":-1,"points":[[0,0],[1,0],[0,1]]})")["ok"].asBool());
+    CHECK(!Call(e, "sprite.collision", R"({"id":"Hero","clear":true})")["ok"].asBool());
+
+    // Physics follows the frame: a ray at x = 2 misses the small outline and hits frame 1's wide one.
+    auto hits = [&]() { return Call(e, "physics.raycast", R"({"origin":[2,5,0],"direction":[0,-1,0]})")["result"]["hit"].asBool(); };
+    CHECK(!hits());
+    Call(e, "component.set", R"({"id":"Hero","type":"Sprite","values":{"frame":1}})");
+    CHECK(hits());
+    float occluderX = 0;
+    for (const auto& edge : GatherOccluders2D(e.GetScene(), &e.Assets()).edges) occluderX = std::max(occluderX, edge.a.x);
+    CHECK(occluderX > 2.5f);  // 2D light shadows use the frame's outline too
+    // A moving body keeps its velocity when its outline changes.
+    Call(e, "component.add", R"({"id":"Hero","type":"RigidBody2D"})");
+    Call(e, "component.set", R"({"id":"Hero","type":"RigidBody2D","values":{"gravityScale":0,"velocity":[2,0,0]}})");
+    Call(e, "sim.play");
+    Call(e, "sim.step", R"({"frames":5})");
+    Call(e, "component.set", R"({"id":"Hero","type":"Sprite","values":{"frame":0}})");
+    Call(e, "sim.step", R"({"frames":5})");
+    CHECK(std::fabs(e.GetScene().Get<RigidBody2D>(hero)->velocity.x - 2.0f) < 0.05f);
+    Call(e, "sim.stop");
+    CHECK(Call(e, "sprite.collision", R"({"id":"Hero","frame":"1","clear":true})")["ok"].asBool());
+    CHECK(e.GetScene().Get<Collider2D>(hero)->framePoints.size() == 0);
+
+    // Inspector sections and conditions travel with the schema (component.types).
+    Json types = Call(e, "component.types")["result"];
+    for (const Json& t : types.items()) {
+        if (t["name"].asString() == "Sprite") {
+            CHECK(t["schema"]["x-oe-groups"].size() >= 5 && t["schema"]["properties"]["texture"]["x-oe-group"].asString() == "Image");
+            CHECK(t["schema"]["properties"]["slice"]["x-oe-showIf"].asString() == "drawMode=sliced");
+        }
+        if (t["name"].asString() == "Collider2D") CHECK(t["schema"]["properties"]["radius"]["x-oe-showIf"].asString() == "shape=circle|capsule");
+    }
+    RemoveAll(project);
+}
+
+TEST(AnimationPropertyTracks) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("property_tracks");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    // A one-second clip (two frames at 2 fps) that raises the hero, tints it at 0.5 s and grows its child hat.
+    CHECK(Call(e, "entity.create", R"({"name":"Hero","components":{"Sprite":{"columns":2},"SpriteAnimation":{"clip":"bob","clips":{"bob":{"frames":[0,1],"fps":2}}}}})")["ok"].asBool());
+    const EntityId hero = e.GetScene().FindByName("Hero");
+    CHECK(Call(e, "entity.create", R"({"name":"Hat","parent":"Hero","components":{"Transform":{}}})")["ok"].asBool());
+    const EntityId hat = e.GetScene().FindByName("Hat");
+    const char* tracks = R"({"id":"Hero","tracks":[
+        {"component":"Transform","field":"position","keys":[{"time":0,"value":[0,0,0]},{"time":1,"value":[0,2,0]}]},
+        {"component":"Sprite","field":"color","interpolation":"step","keys":[{"time":0,"value":[1,1,1]},{"time":0.5,"value":[1,0,0]}]},
+        {"target":"Hat","component":"Transform","field":"scale","interpolation":"smooth","keys":[{"time":0,"value":[1,1,1]},{"time":1,"value":[3,3,3]}]}]})";
+    const size_t undo = e.UndoDepth();
+    CHECK(Call(e, "animation.set_tracks", tracks)["ok"].asBool());
+    CHECK(e.UndoDepth() == undo + 1 && e.GetScene().Get<SpriteAnimation>(hero)->clips["bob"]["tracks"].size() == 3);
+
+    // Bad tracks are refused with the reason.
+    for (const char* bad : {R"({"id":"Hero","tracks":[{"component":"Transform","field":"nope","keys":[{"time":0,"value":1}]}]})",
+                            R"({"id":"Hero","tracks":[{"component":"SpriteAnimation","field":"speed","keys":[{"time":0,"value":1}]}]})",
+                            R"({"id":"Hero","tracks":[{"component":"Transform","field":"position","keys":[{"time":0,"value":"up"}]}]})",
+                            R"({"id":"Hero","tracks":[{"component":"Transform","field":"position","keys":[{"time":1,"value":[0,0,0]},{"time":0,"value":[0,0,0]}]}]})",
+                            R"({"id":"Hero","tracks":[{"component":"Transform","field":"position","interpolation":"cubic","keys":[{"time":0,"value":[0,0,0]}]}]})"}) {
+        const Json r = e.Call("animation.set_tracks", Json::parse(bad));
+        CHECK(!r["ok"].asBool() && r["error"]["code"].asString() == "invalid_tracks");
+    }
+
+    // Preview shows the tracks at the preview time without touching the authored scene.
+    CHECK(Call(e, "animation.preview", R"({"id":"Hero","time":0.25})")["ok"].asBool());
+    CHECK(Call(e, "animation.preview_state")["result"]["tracks"].size() == 3);
+    const Scene& shown = e.AnimationRenderScene();
+    CHECK(std::fabs(shown.Get<Transform>(hero)->position.y - 0.5f) < 1e-4f && shown.Get<Sprite>(hero)->color.g == 1.0f);
+    CHECK(std::fabs(shown.Get<Transform>(hat)->scale.x - (1 + 2 * 0.15625f)) < 1e-4f);  // smoothstep(0.25) = 0.15625
+    CHECK(e.GetScene().Get<Transform>(hero)->position.y == 0.0f);
+    Call(e, "animation.preview_close");
+
+    // Playback applies them every step; step tracks hold until their next key.
+    Call(e, "sim.play");
+    Call(e, "sim.step", R"({"frames":36})");  // 0.6 s
+    CHECK(std::fabs(e.GetScene().Get<Transform>(hero)->position.y - 1.2f) < 0.02f);
+    CHECK(e.GetScene().Get<Sprite>(hero)->color.g == 0.0f && e.GetScene().Get<Transform>(hat)->scale.x > 2.0f);
+    Call(e, "sim.stop");
+    CHECK(e.GetScene().Get<Transform>(hero)->position.y == 0.0f);
+    Call(e, "history.undo");
+    CHECK(!e.GetScene().Get<SpriteAnimation>(hero)->clips["bob"].has("tracks"));
+
+    // Shared sprite clips keep tracks in the .anim.json; model clips in <model>.clips.json metadata.
+    CHECK(Call(e, "animation.create", R"({"path":"hero.anim.json","values":{"sheet":{"texture":"hero.png","columns":2,"rows":1},"clips":{"run":{"frames":[0,1]}}}})")["ok"].asBool());
+    Call(e, "entity.create", R"({"name":"Runner","components":{"Sprite":{},"SpriteAnimation":{"asset":"hero.anim.json","clip":"run"}}})");
+    CHECK(Call(e, "animation.set_tracks", R"({"id":"Runner","tracks":[{"component":"Sprite","field":"opacity","keys":[{"time":0,"value":0.5}]}]})")["ok"].asBool());
+    CHECK(Call(e, "animation.get", R"({"path":"hero.anim.json"})")["result"]["values"]["clips"]["run"]["tracks"].size() == 1);
+    CHECK(CopyFileTo(TestSourceDir() + "/tests/fixtures/Showcase/assets/models/fox.glb", JoinPath(e.ProjectDir(), "assets/fox.glb")));
+    const Json info = Call(e, "asset.info", R"({"path":"assets/fox.glb"})")["result"];
+    const std::string clipName = info["clips"][0]["name"].asString();
+    CHECK(!clipName.empty());
+    Call(e, "entity.create", R"({"name":"Fox","components":{"MeshRenderer":{"mesh":"assets/fox.glb"}}})");
+    Json args = Json::parse(R"({"id":"Fox","tracks":[{"component":"MeshRenderer","field":"color","keys":[{"time":0,"value":[0,0,1]}]}]})");
+    args["clip"] = clipName;
+    CHECK(e.Call("animation.set_tracks", args)["ok"].asBool());
+    std::string sidecar;
+    CHECK(ReadTextFile(project + "/assets/fox.glb.clips.json", sidecar) && sidecar.find("\"tracks\"") != std::string::npos);
+    Json play = Json::MakeObject();
+    play["id"] = "Fox";
+    play["clip"] = clipName;
+    CHECK(e.Call("animation.play", play)["ok"].asBool());
+    Call(e, "sim.play");
+    Call(e, "sim.step", R"({"frames":2})");
+    CHECK(e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Fox"))->color.b == 1.0f &&
+          e.GetScene().Get<MeshRenderer>(e.GetScene().FindByName("Fox"))->color.r == 0.0f);
+    Call(e, "sim.stop");
+    RemoveAll(project);
+}
+
+#if OE_NATIVE_EDITOR
+TEST(NativeEditorAnimationPropertyTracks) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("property_tracks_editor");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Call(e, "entity.create", R"({"name":"Hero","components":{"Sprite":{"columns":4},"SpriteAnimation":{"clip":"run","clips":{"run":{"frames":[0,1,2,3],"fps":4}}}}})");
+    CHECK(Call(e, "animation.set_tracks", R"({"id":"Hero","tracks":[{"component":"Transform","field":"position","keys":[{"time":0,"value":[0,0,0]},{"time":0.5,"value":[0,1,0]}]}]})")["ok"].asBool());
+    if (!e.EnableGpu(nullptr, &error)) {
+        RemoveAll(project);
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    options.layoutFile = "";
+    NativeEditor editor(e, nullptr, options);
+    CHECK(editor.Init(&error));
+    editor.Select(e.GetScene().FindByName("Hero"));
+    editor.FocusAnimationPanel();
+    RenderTarget image;
+    auto draw = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            editor.Update({}, 1800, 1400, 1, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+    };
+    auto send = [&](float x, float y, int button, int phase) {  // phase 0 move, 1 down, 2 up
+        WindowEvent move;
+        move.type = WindowEvent::Type::MouseMove;
+        move.x = x, move.y = y;
+        std::vector<WindowEvent> events{move};
+        if (phase > 0) {
+            WindowEvent press;
+            press.type = WindowEvent::Type::MouseButton;
+            press.button = button;
+            press.down = phase == 1;
+            events.push_back(press);
+        }
+        editor.Update(events, 1800, 1400, 1, Engine::kFixedDt);
+        CHECK(editor.DrawToImage(image));
+        draw(1);
+    };
+    auto tracks = [&]() { return Call(e, "animation.preview_state")["result"]["tracks"]; };
+    draw(4);
+    // The playhead's add-key button keys the property where the playhead is (0.25 s, halfway: y = 0.5).
+    CHECK(Call(e, "animation.preview", R"({"time":0.25})")["ok"].asBool());
+    draw(2);
+    auto r = editor.AnimationControlRect("track-key:0");
+    CHECK(r[2] > 0);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 0);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 1);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 2);
+    Json keys = tracks()[0]["keys"];
+    CHECK(keys.size() == 3 && std::fabs(keys[1]["time"].asNumber() - 0.25) < 1e-6 && std::fabs(keys[1]["value"][1].asNumber() - 0.5) < 1e-6);
+    // Dragging the new key moves it in time (one undo step), within its neighbours.
+    const size_t undo = e.UndoDepth();
+    r = editor.AnimationControlRect("key:0:1");
+    CHECK(r[2] > 0);
+    const auto lane = editor.AnimationControlRect("track:0");
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 0);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 1);
+    for (int i = 1; i <= 4; ++i) send(r[0] + r[2] / 2 - lane[2] * 0.05f * static_cast<float>(i), r[1] + r[3] / 2, 0, 0);
+    send(r[0] + r[2] / 2 - lane[2] * 0.2f, r[1] + r[3] / 2, 0, 2);
+    keys = tracks()[0]["keys"];
+    CHECK(keys[1]["time"].asNumber() < 0.25 && keys[1]["time"].asNumber() >= 0);
+    CHECK(e.UndoDepth() == undo + 1);
+    // Right-click removes a key.
+    r = editor.AnimationControlRect("key:0:1");
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 1, 0);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 1, 1);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 1, 2);
+    CHECK(tracks()[0]["keys"].size() == 2);
+    // Appending selects an index that did not exist in the frame's original snapshot.
+    CHECK(Call(e, "animation.preview", R"({"time":0.75})")["ok"].asBool());
+    draw(2);
+    r = editor.AnimationControlRect("track-key:0");
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 0);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 1);
+    send(r[0] + r[2] / 2, r[1] + r[3] / 2, 0, 2);
+    CHECK(tracks()[0]["keys"].size() == 3);
+    CHECK(editor.AnimationControlRect("key-value")[2] > 0);
+    r = editor.AnimationControlRect("key-value");
+    const float valueX = r[0] + r[2] / 6, valueY = r[1] + r[3] / 2;
+    send(valueX, valueY, 0, 0);
+    send(valueX, valueY, 0, 1);
+    send(valueX + 20, valueY, 0, 0);
+    send(valueX + 40, valueY, 0, 0);
+    send(valueX + 40, valueY, 0, 2);
+    keys = tracks()[0]["keys"];
+    CHECK(keys.size() == 3 && keys[2]["value"][0].asNumber() != 0 && keys[0]["value"][0].asNumber() == 0);
+    auto click = [&](const std::array<float, 4>& rect) {
+        CHECK(rect[2] > 0);
+        const float x = rect[0] + rect[2] / 2, y = rect[1] + rect[3] / 2;
+        send(x, y, 0, 0);
+        send(x, y, 0, 1);
+        send(x, y, 0, 2);
+    };
+    click(editor.AnimationControlRect("key-remove"));
+    keys = tracks()[0]["keys"];
+    CHECK(keys.size() == 2 && keys[1]["time"].asNumber() == 0.5);
+    // Adding another property must not index the old, shorter track array.
+    const std::string property = "property:" + std::to_string(e.GetScene().FindByName("Hero")) + ":Transform.rotation";
+    click(editor.AnimationControlRect("add-property"));
+    click(editor.AnimationControlRect(property));
+    CHECK(tracks().size() == 2 && tracks()[1]["field"].asString() == "rotation");
+    CHECK(editor.AnimationControlRect("key-value")[2] > 0);
+    CHECK(WritePng("build/animation-property-edit.png", image.ToImage(), true));
+    // Undo removes the selected property, and the next frame must discard that selection.
+    CHECK(Call(e, "history.undo")["ok"].asBool());
+    draw(2);
+    CHECK(tracks().size() == 1 && editor.AnimationControlRect("key-value")[2] == 0);
+    CHECK(Call(e, "animation.set_tracks", R"({"id":"Hero","tracks":[]})")["ok"].asBool());
+    draw(2);
+    click(editor.AnimationControlRect("add-property"));
+    click(editor.AnimationControlRect(property));
+    CHECK(tracks().size() == 1 && editor.AnimationControlRect("key-value")[2] > 0);
+    // API-valid hex colors and object vectors are not JSON arrays; the widget must decode them.
+    CHECK(Call(e, "animation.set_tracks", R"({"id":"Hero","tracks":[{"component":"Sprite","field":"color","keys":[{"time":0,"value":"#ff8040"}]}]})")["ok"].asBool());
+    draw(2);
+    click(editor.AnimationControlRect("key:0:0"));
+    CHECK(editor.AnimationControlRect("key-value")[2] > 0);
+    CHECK(tracks()[0]["keys"][0]["value"].asString() == "#ff8040");
+    CHECK(Call(e, "animation.set_tracks", R"({"id":"Hero","tracks":[{"component":"Transform","field":"position","keys":[{"time":0,"value":{"x":1,"y":2,"z":3}}]}]})")["ok"].asBool());
+    draw(2);
+    CHECK(editor.AnimationControlRect("key-value")[2] > 0);
+    CHECK(tracks()[0]["keys"][0]["value"]["y"].asNumber() == 2);
+    RemoveAll(project);
+}
+
+TEST(NativeEditorSpriteEditorAndInspectorSections) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("sprite_editor");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Image sheet;
+    sheet.width = 16;
+    sheet.height = 8;
+    sheet.rgba.assign(16 * 8 * 4, 0);
+    for (int y = 1; y < 7; ++y)
+        for (int x = 1; x < 15; ++x)
+            if (x != 7 && x != 8) sheet.rgba[(static_cast<size_t>(y) * 16 + static_cast<size_t>(x)) * 4 + 3] = 255;
+    CHECK(WritePng(project + "/sheet.png", sheet, true));
+    Call(e, "entity.create", R"({"name":"Hero","components":{"Sprite":{"texture":"sheet.png","columns":2,"pixelsPerUnit":8}}})");
+    const EntityId hero = e.GetScene().FindByName("Hero");
+    if (!e.EnableGpu(nullptr, &error)) {
+        RemoveAll(project);
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    options.layoutFile = "";
+    NativeEditor editor(e, nullptr, options);
+    CHECK(editor.Init(&error));
+    editor.Select(hero);
+    RenderTarget image;
+    auto draw = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            editor.Update({}, 1800, 1200, 1, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+    };
+    auto mouse = [&](float x, float y, bool down) {
+        WindowEvent move;
+        move.type = WindowEvent::Type::MouseMove;
+        move.x = x, move.y = y;
+        WindowEvent button;
+        button.type = WindowEvent::Type::MouseButton;
+        button.button = 0;
+        button.down = down;
+        editor.Update({move, button}, 1800, 1200, 1, Engine::kFixedDt);
+        CHECK(editor.DrawToImage(image));
+    };
+    auto hover = [&](float x, float y) {  // canvases let buttons overlap them: they take a press only after a hovered frame
+        WindowEvent move;
+        move.type = WindowEvent::Type::MouseMove;
+        move.x = x, move.y = y;
+        editor.Update({move}, 1800, 1200, 1, Engine::kFixedDt);
+        CHECK(editor.DrawToImage(image));
+        draw(1);
+    };
+    auto clickRect = [&](const std::array<float, 4>& r) {
+        CHECK(r[2] > 0);
+        hover(r[0] + r[2] * 0.5f, r[1] + r[3] * 0.5f);
+        mouse(r[0] + r[2] * 0.5f, r[1] + r[3] * 0.5f, true);
+        draw(1);
+        mouse(r[0] + r[2] * 0.5f, r[1] + r[3] * 0.5f, false);
+        draw(2);
+    };
+    auto drag = [&](const std::array<float, 4>& r, float dx, float dy) {
+        CHECK(r[2] > 0);
+        const float x = r[0] + r[2] * 0.5f, y = r[1] + r[3] * 0.5f;
+        hover(x, y);
+        mouse(x, y, true);
+        draw(1);
+        for (int i = 1; i <= 4; ++i) {
+            WindowEvent move;
+            move.type = WindowEvent::Type::MouseMove;
+            move.x = x + dx * static_cast<float>(i) / 4, move.y = y + dy * static_cast<float>(i) / 4;
+            editor.Update({move}, 1800, 1200, 1, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+        mouse(x + dx, y + dy, false);
+        draw(2);
+    };
+    draw(4);
+
+    // Inspector: the Sprite's sections; a closed section hides its fields, showIf hides fields that do not apply.
+    CHECK(editor.InspectorControlRect("Sprite#Lighting")[2] > 0 && editor.InspectorControlRect("Sprite.texture")[2] > 0);
+    CHECK(editor.InspectorControlRect("Sprite.lit")[2] == 0);
+    clickRect(editor.InspectorControlRect("Sprite#Lighting"));
+    CHECK(editor.InspectorControlRect("Sprite.lit")[2] > 0 && editor.InspectorControlRect("Sprite.emission")[2] == 0);
+    Call(e, "component.set", R"({"id":"Hero","type":"Sprite","values":{"lit":true}})");
+    draw(2);
+    CHECK(editor.InspectorControlRect("Sprite.emission")[2] > 0);
+    CHECK(editor.InspectorControlRect("Sprite.columns")[2] > 0);  // shown while the sprite has no atlas
+
+    // Collision: fit every frame, pick frame 1, move its own outline's point; the default outline stays.
+    CHECK(Call(e, "editor.sprite", R"({"tab":"collision"})")["ok"].asBool());
+    draw(3);
+    clickRect(editor.SpriteEditorControlRect("collision-fit-all"));
+    const Collider2D* c = e.GetScene().Get<Collider2D>(hero);
+    CHECK(c && c->framePoints.has("0") && c->framePoints.has("1"));
+    clickRect(editor.SpriteEditorControlRect("frame:1"));
+    CHECK(e.GetScene().Get<Sprite>(hero)->frame == 1 && Call(e, "editor.state")["result"]["spriteEditor"]["frame"].asString() == "1");
+    const Json defaultBefore = c->points, frameBefore = c->framePoints["1"];
+    const size_t undoBefore = e.UndoDepth();
+    drag(editor.SpriteEditorControlRect("collision-point:0"), 40, 0);
+    c = e.GetScene().Get<Collider2D>(hero);
+    CHECK(c->framePoints["1"] != frameBefore && c->points == defaultBefore);
+    CHECK(e.UndoDepth() == undoBefore + 1);  // one drag, one undo step
+    clickRect(editor.SpriteEditorControlRect("collision-clear"));
+    CHECK(!e.GetScene().Get<Collider2D>(hero)->framePoints.has("1"));
+    clickRect(editor.SpriteEditorControlRect("collision-target:1"));
+    CHECK(Call(e, "editor.state")["result"]["spriteEditor"]["editDefault"].asBool());
+    drag(editor.SpriteEditorControlRect("collision-point:0"), 0, -30);
+    CHECK(e.GetScene().Get<Collider2D>(hero)->points != defaultBefore);
+
+    // Slice: cut the sheet by cell count (4 x 4 cells of 4 x 2 px) and apply: an atlas the sprite then uses.
+    clickRect(editor.SpriteEditorControlRect("tab:0"));
+    clickRect(editor.SpriteEditorControlRect("slice-mode:1"));
+    CHECK(editor.SpriteEditorControlRect("slice-canvas")[2] > 100);
+    clickRect(editor.SpriteEditorControlRect("slice"));
+    CHECK(FileExists(project + "/sprites/sheet.atlas.json"));
+    CHECK(e.GetScene().Get<Sprite>(hero)->atlas == "sprites/sheet.atlas.json");
+    draw(2);
+    CHECK(editor.InspectorControlRect("Sprite.columns")[2] == 0);  // an atlas replaces the grid fields
+    RemoveAll(project);
+}
+#endif
+
 int main() {
     Log::SetEcho(false);
     std::setvbuf(stdout, nullptr, _IONBF, 0);

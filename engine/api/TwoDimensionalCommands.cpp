@@ -101,6 +101,74 @@ std::vector<Vec3> Simplify(std::vector<Vec3> p, size_t count) {
     return p;
 }
 
+// Schema of a frame argument: a sheet index or an atlas frame name.
+Json FrameParam(const char* doc) {
+    Json p = Json::MakeObject();
+    p["type"] = Json::Array{"integer", "string"};
+    p["description"] = doc;
+    return p;
+}
+
+// Collider2D.framePoints key of a frame argument: an index (number or digits) or an atlas frame name.
+std::string FrameKey(const Json& frame) {
+    if (frame.isNumber()) {
+        const double n = frame.asNumber();
+        if (!std::isfinite(n) || n < 0 || std::floor(n) != n || n > 65535) throw ApiError("invalid_argument", "frame index must be an integer in 0..65535");
+        return std::to_string(static_cast<int>(n));
+    }
+    const std::string name = frame.asString();
+    if (!frame.isString() || name.empty() || name.size() > 128) throw ApiError("invalid_argument", "frame must be an index or an atlas frame name (1..128 bytes)");
+    return name;
+}
+
+// Convex outline (counter-clockwise, at most maxPoints corners) of the opaque pixels of the frame the
+// sprite shows now, as [x, y] points in the entity's local units.
+Json OutlineFrame(Engine& e, EntityId id, float cutoff, size_t maxPoints) {
+    const RenderItem* item = nullptr;
+    const std::vector<RenderItem> items = GatherRenderItems(e.GetScene(), &e.Assets());
+    for (const RenderItem& it : items)
+        if (it.id == id) item = &it;
+    if (!item || !item->textureOverride || item->textureOverride->width <= 0)
+        throw ApiError("invalid_sprite", "the sprite has no drawn image to outline", "Give it a texture or an atlas frame first.");
+    const Texture& tex = *item->textureOverride;
+    // The frame's pixel rectangle from the item's uv rect (flips have a negative scale).
+    const float uA = item->uvOffset[0], uB = item->uvOffset[0] + item->uvScale[0];
+    const float vA = item->uvOffset[1], vB = item->uvOffset[1] + item->uvScale[1];
+    const int x0 = static_cast<int>(std::floor(std::min(uA, uB) * static_cast<float>(tex.width) + 0.05f));
+    const int x1 = static_cast<int>(std::ceil(std::max(uA, uB) * static_cast<float>(tex.width) - 0.05f));
+    const int y0 = static_cast<int>(std::floor(std::min(vA, vB) * static_cast<float>(tex.height) + 0.05f));
+    const int y1 = static_cast<int>(std::ceil(std::max(vA, vB) * static_cast<float>(tex.height) - 0.05f));
+    std::vector<std::pair<int, int>> corners;
+    for (int y = std::max(0, y0); y < std::min(tex.height, y1); ++y)
+        for (int x = std::max(0, x0); x < std::min(tex.width, x1); ++x) {
+            const float alpha = static_cast<float>(tex.texels[static_cast<size_t>(y) * static_cast<size_t>(tex.width) + static_cast<size_t>(x)] >> 24) / 255.0f;
+            if (alpha < cutoff) continue;
+            corners.insert(corners.end(), {{x, y}, {x + 1, y}, {x, y + 1}, {x + 1, y + 1}});
+        }
+    const auto hull = Hull(corners);
+    if (hull.size() < 3) throw ApiError("invalid_sprite", "the frame has no opaque area to outline", "Lower alphaCutoff.");
+    // Frame pixels -> the item's unit quad (flips included) -> world -> the entity's local space.
+    const Mat4 toLocal = e.GetScene().WorldMatrix(id).Inverse() * item->world;
+    const float fw = static_cast<float>(std::max(1, x1 - x0)), fh = static_cast<float>(std::max(1, y1 - y0));
+    std::vector<Vec3> points;
+    for (const auto& corner : hull) {
+        const float u = (static_cast<float>(corner.first - x0)) / fw, v = (static_cast<float>(corner.second - y0)) / fh;
+        const float qx = item->uvScale[0] < 0 ? 0.5f - u : u - 0.5f;
+        const float qy = item->uvScale[1] < 0 ? v - 0.5f : 0.5f - v;
+        points.push_back(toLocal.TransformPoint(Vec3(qx, qy, 0)));
+    }
+    // Flips mirror the outline: keep it counter-clockwise.
+    float area = 0;
+    for (size_t i = 0; i < points.size(); ++i)
+        area += points[i].x * points[(i + 1) % points.size()].y - points[(i + 1) % points.size()].x * points[i].y;
+    if (area < 0) std::reverse(points.begin(), points.end());
+    points = Simplify(points, maxPoints);
+    Json out = Json::MakeArray();
+    // Rounded to 1/1000 unit: stable, readable scene files.
+    for (const Vec3& p : points) out.push(Json::Array{std::round(static_cast<double>(p.x) * 1000) / 1000, std::round(static_cast<double>(p.y) * 1000) / 1000});
+    return out;
+}
+
 }  // namespace
 void RegisterTwoDimensionalCommands(CommandRegistry& r) {
     r.Add({"tilemap.layer_get", "Read tilemap layers and the legacy map.", Params().Req("id", "entity", "Tilemap."), false,
@@ -230,90 +298,123 @@ void RegisterTwoDimensionalCommands(CommandRegistry& r) {
                tm.legend[key] = a["values"];
                return a["values"];
            }});
-    r.Add({"sprite.collision", "Set sprite collision polygon points in local world units (scene undo).",
+    r.Add({"sprite.collision",
+           "Set the sprite's Collider2D polygon in local world units (scene undo): its points, or with `frame` the outline used while "
+           "that frame shows (Collider2D.framePoints).",
            Params()
                .Req("id", "entity", "Sprite.")
-               .Req("points", "array", "3..64 [x,y] points.")
+               .Opt("points", "array", "3..64 [x,y] points (required unless clear).")
+               .OptWith("frame", FrameParam("Frame index or atlas frame name: write framePoints[frame] instead of points."))
+               .Opt("clear", "boolean", "With frame: remove that frame's outline, so the frame uses points again.")
                .Opt("merge", "string", "Undo group for point dragging."),
            true, [](Engine& e, const Json& a) {
                const EntityId id = Target(e, a);
                if (!e.GetScene().Get<Sprite>(id)) throw ApiError("component_missing", "entity needs Sprite");
+               const bool perFrame = a.has("frame");
+               const std::string key = perFrame ? FrameKey(a["frame"]) : std::string();
+               Collider2D* existing = e.GetScene().Get<Collider2D>(id);
+               if (a["clear"].asBool()) {
+                   if (!perFrame) throw ApiError("invalid_argument", "clear needs a frame", "Pass frame: the frame whose outline to remove.");
+                   Json values = Json::MakeObject();
+                   values["framePoints"] = existing ? existing->framePoints : Json::MakeObject();
+                   values["framePoints"].erase(key);
+                   if (existing) existing->framePoints = values["framePoints"];
+                   return values;
+               }
                const Json& points = a["points"];
-               if (points.size() < 3 || points.size() > 64) throw ApiError("invalid_polygon", "polygon needs 3..64 points");
+               if (!points.isArray() || points.size() < 3 || points.size() > 64) throw ApiError("invalid_polygon", "polygon needs 3..64 points");
                for (const Json& p : points.items())
                    if (!p.isArray() || p.size() != 2 || !p[0].isNumber() || !p[1].isNumber() || !std::isfinite(p[0].asNumber()) ||
                        !std::isfinite(p[1].asNumber()))
                        throw ApiError("invalid_polygon", "points must be finite [x,y] pairs");
                Json values = Json::MakeObject();
                values["shape"] = "polygon";
-               values["points"] = points;
+               if (perFrame) {
+                   if (existing && existing->framePoints.size() >= 1024 && !existing->framePoints.has(key))
+                       throw ApiError("invalid_polygon", "at most 1024 frame outlines");
+                   values["framePoints"] = existing ? existing->framePoints : Json::MakeObject();
+                   values["framePoints"][key] = points;
+                   // A new polygon collider gets the frame's outline as its default too, so other frames collide.
+                   if (!existing || existing->shape != "polygon" || existing->points.size() < 3) values["points"] = points;
+               } else {
+                   values["points"] = points;
+               }
                std::string error;
                if (!ApplyComponentJson(*TypeRegistry::Find("Collider2D"), &e.GetScene().Add<Collider2D>(id), values, &error))
                    throw ApiError("invalid_polygon", error);
                return values;
            }});
     r.Add({"sprite.outline",
-           "Fit a convex Collider2D polygon around the opaque pixels of the sprite's current frame (scene undo). Returns the points.",
+           "Fit a convex Collider2D polygon around the opaque pixels of the sprite's current frame (scene undo). Returns the points. "
+           "`frame` / `frames` / `allFrames` fit those frames instead and store each one in Collider2D.framePoints.",
            Params()
                .Req("id", "entity", "Sprite entity.")
                .Opt("alphaCutoff", "number", "Pixels with at least this alpha count as solid (default 0.5).")
                .Opt("maxPoints", "integer", "Corners kept, 3..8 (default 8: the most a Box2D polygon takes).")
+               .OptWith("frame", FrameParam("One frame (index or atlas frame name) to fit into framePoints."))
+               .Opt("frames", "array", "Several frames to fit into framePoints.")
+               .Opt("allFrames", "boolean", "Fit every frame of the sheet or atlas (at most 1024) into framePoints.")
                .Opt("merge", "string", "Undo group key."),
            true, [](Engine& e, const Json& a) {
                const EntityId id = Target(e, a);
-               if (!e.GetScene().Get<Sprite>(id)) throw ApiError("component_missing", "entity needs Sprite");
-               const RenderItem* item = nullptr;
-               const std::vector<RenderItem> items = GatherRenderItems(e.GetScene(), &e.Assets());
-               for (const RenderItem& it : items)
-                   if (it.id == id) item = &it;
-               if (!item || !item->textureOverride || item->textureOverride->width <= 0)
-                   throw ApiError("invalid_sprite", "the sprite has no drawn image to outline", "Give it a texture or an atlas frame first.");
-               const Texture& tex = *item->textureOverride;
-               // The frame's pixel rectangle from the item's uv rect (flips have a negative scale).
-               const float uA = item->uvOffset[0], uB = item->uvOffset[0] + item->uvScale[0];
-               const float vA = item->uvOffset[1], vB = item->uvOffset[1] + item->uvScale[1];
-               const int x0 = static_cast<int>(std::floor(std::min(uA, uB) * static_cast<float>(tex.width) + 0.05f));
-               const int x1 = static_cast<int>(std::ceil(std::max(uA, uB) * static_cast<float>(tex.width) - 0.05f));
-               const int y0 = static_cast<int>(std::floor(std::min(vA, vB) * static_cast<float>(tex.height) + 0.05f));
-               const int y1 = static_cast<int>(std::ceil(std::max(vA, vB) * static_cast<float>(tex.height) - 0.05f));
-               const float cutoff = static_cast<float>(a["alphaCutoff"].asNumber(0.5));
-               std::vector<std::pair<int, int>> corners;
-               for (int y = std::max(0, y0); y < std::min(tex.height, y1); ++y)
-                   for (int x = std::max(0, x0); x < std::min(tex.width, x1); ++x) {
-                       const float alpha = static_cast<float>(tex.texels[static_cast<size_t>(y) * static_cast<size_t>(tex.width) + static_cast<size_t>(x)] >> 24) / 255.0f;
-                       if (alpha < cutoff) continue;
-                       corners.insert(corners.end(), {{x, y}, {x + 1, y}, {x, y + 1}, {x + 1, y + 1}});
-                   }
-               const auto hull = Hull(corners);
-               if (hull.size() < 3) throw ApiError("invalid_sprite", "the frame has no opaque area to outline", "Lower alphaCutoff.");
-               // Frame pixels -> the item's unit quad (flips included) -> world -> the entity's local space.
-               const Mat4 toLocal = e.GetScene().WorldMatrix(id).Inverse() * item->world;
-               const float fw = static_cast<float>(std::max(1, x1 - x0)), fh = static_cast<float>(std::max(1, y1 - y0));
-               std::vector<Vec3> points;
-               for (const auto& corner : hull) {
-                   const float u = (static_cast<float>(corner.first - x0)) / fw, v = (static_cast<float>(corner.second - y0)) / fh;
-                   const float qx = item->uvScale[0] < 0 ? 0.5f - u : u - 0.5f;
-                   const float qy = item->uvScale[1] < 0 ? v - 0.5f : 0.5f - v;
-                   points.push_back(toLocal.TransformPoint(Vec3(qx, qy, 0)));
-               }
-               // Flips mirror the outline: keep it counter-clockwise.
-               float area = 0;
-               for (size_t i = 0; i < points.size(); ++i)
-                   area += points[i].x * points[(i + 1) % points.size()].y - points[(i + 1) % points.size()].x * points[i].y;
-               if (area < 0) std::reverse(points.begin(), points.end());
+               Sprite* sprite = e.GetScene().Get<Sprite>(id);
+               if (!sprite) throw ApiError("component_missing", "entity needs Sprite");
                const double maxPoints = a["maxPoints"].asNumber(8);
                if (std::floor(maxPoints) != maxPoints || maxPoints < 3 || maxPoints > 8) throw ApiError("invalid_argument", "maxPoints must be 3..8");
-               points = Simplify(points, static_cast<size_t>(maxPoints));
+               const float cutoff = static_cast<float>(a["alphaCutoff"].asNumber(0.5));
+               std::vector<Json> frames;
+               if (a.has("frame")) frames.push_back(a["frame"]);
+               for (const Json& f : a["frames"].items()) frames.push_back(f);
+               if (a["allFrames"].asBool()) {
+                   if (!sprite->atlas.empty()) {
+                       auto atlas = e.Assets().GetAtlas(sprite->atlas);
+                       if (!atlas) throw ApiError("invalid_sprite", "cannot read the sprite's atlas " + sprite->atlas);
+                       for (const Json& f : (*atlas)["frames"].items()) frames.push_back(f["name"]);
+                   } else {
+                       for (int i = 0; i < std::max(1, sprite->columns) * std::max(1, sprite->rows); ++i) frames.push_back(Json(i));
+                   }
+               }
+               if (frames.size() > 1024) throw ApiError("invalid_argument", "at most 1024 frames per call");
+               if (frames.empty()) {
+                   Json values = Json::MakeObject();
+                   values["shape"] = "polygon";
+                   values["points"] = OutlineFrame(e, id, cutoff, static_cast<size_t>(maxPoints));
+                   std::string error;
+                   if (!ApplyComponentJson(*TypeRegistry::Find("Collider2D"), &e.GetScene().Add<Collider2D>(id), values, &error))
+                       throw ApiError("invalid_polygon", error);
+                   return values;
+               }
+               // Each frame is shown in turn to fit it, then the sprite's own frame comes back.
+               const SpriteFrame shown = sprite->frame;
+               Json framePoints = e.GetScene().Get<Collider2D>(id) ? e.GetScene().Get<Collider2D>(id)->framePoints : Json::MakeObject();
+               if (!framePoints.isObject()) framePoints = Json::MakeObject();
+               Json skipped = Json::MakeArray();
+               std::vector<std::string> keys;
+               for (const Json& frame : frames) keys.push_back(FrameKey(frame));  // all checked before the sprite changes
+               for (const std::string& key : keys) {
+                   const bool index = key.find_first_not_of("0123456789") == std::string::npos;
+                   e.GetScene().Get<Sprite>(id)->frame = index ? Json(std::stoi(key)) : Json(key);
+                   try {
+                       framePoints[key] = OutlineFrame(e, id, cutoff, static_cast<size_t>(maxPoints));
+                   } catch (const ApiError&) {
+                       skipped.push(key);  // an empty frame has nothing to outline
+                   }
+               }
+               e.GetScene().Get<Sprite>(id)->frame = shown;
+               if (framePoints.size() > 1024) throw ApiError("invalid_polygon", "at most 1024 frame outlines");
                Json values = Json::MakeObject();
                values["shape"] = "polygon";
-               values["points"] = Json::MakeArray();
-               for (const Vec3& p : points) {
-                   // Rounded to 1/1000 unit: stable, readable scene files.
-                   values["points"].push(Json::Array{std::round(p.x * 1000) / 1000, std::round(p.y * 1000) / 1000});
-               }
+               values["framePoints"] = framePoints;
+               const Collider2D* existing = e.GetScene().Get<Collider2D>(id);
+               if (!existing || existing->shape != "polygon" || existing->points.size() < 3)
+                   for (const auto& m : framePoints.members()) {
+                       values["points"] = m.second;  // the first fitted outline: frames without one still collide
+                       break;
+                   }
                std::string error;
                if (!ApplyComponentJson(*TypeRegistry::Find("Collider2D"), &e.GetScene().Add<Collider2D>(id), values, &error))
                    throw ApiError("invalid_polygon", error);
+               if (skipped.size() > 0) values["skipped"] = skipped;
                return values;
            }});
 }

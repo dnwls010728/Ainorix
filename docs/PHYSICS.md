@@ -83,6 +83,7 @@ For 2D games use the 2D components: shapes are exact in the plane (no Z depth), 
 | Component | Purpose |
 |---|---|
 | `Collider2D` | `shape`: `box` (`size` x/y, `rounding` for rounded corners), `circle` (`radius`), `capsule` (`radius`, `height`, vertical), `polygon` (`points` [[x,y], ...]: any simple outline — concave ones are split into convex pieces), `edge` (`points`: a two-sided line strip; `loop: true` closes it into a smooth one-sided outline, solid inside). `center`, `angle` offset it. `friction`, `bounciness`, `density` (relative, when a body has several shapes). Static without a RigidBody2D. |
+| `Collider2D.framePoints` | Polygon outline per sprite frame, `{"<frame>": [[x,y], ...]}` (sheet index as text or atlas frame name): while the entity's `Sprite` shows a listed frame the shape is that outline, other frames use `points`. A new outline replaces the shapes on the same body (velocity, joints and trigger state stay). Fit them with `sprite.outline {allFrames: true}` or draw them in the Sprite Editor ([2D.md](2D.md#sprite-editor)). |
 | `Collider2D` + `isTrigger` | Sensor: `onTriggerEnter/Exit` for dynamic/kinematic bodies and characters (not static colliders). With a RigidBody2D the sensor moves with the body. |
 | `Collider2D` + `oneWay` | Platform that is solid only from above: bodies and characters pass through from below and the sides. |
 | `Collider2D.layer` / `ignoreLayers` | Collision layers 0-15. Two shapes collide unless either ignores the other's layer. Rays and overlaps see every layer. |

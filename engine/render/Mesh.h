@@ -132,6 +132,7 @@ struct AnimationClip {
     float loopStart = 0, loopEnd = -1;  // seconds; negative end means full duration
     bool metadataSidecar = false;  // events authored through the A3 sidecar instead of legacy events.json
     bool sidecarEvents = false;  // clips.json events override the legacy events.json entry
+    Json tracks = Json::MakeArray();  // clips.json property tracks (scene/PropertyTracks.h), applied while the clip plays
 };
 
 struct Mesh {

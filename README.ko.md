@@ -108,12 +108,12 @@ Assets는 격자/목록 전환, 이름·경로 검색, 개수가 표시되는 �
 | 평면 반사 | 평면 메시에서 움직이는 장면을 반사하는 거울·물 표면; 뷰당 한 반사면, 두 렌더러의 공통 클리핑 | [PLANAR_REFLECTION](docs/PLANAR_REFLECTION.md) |
 | 박스 데칼 | 얼룩·충격 흔적·바닥 표식을 투영; 순서대로 기본색 합성, 박스·법선 페이드, 뷰당 16개 | [DECALS](docs/DECALS.md) |
 | 입자 충돌 | VFX 입자가 정적 3D/2D 콜라이더에서 정지·반사·소멸; 고정 스텝 중심 구간 검사, 생성 시 반발·마찰 캡처, death chain | [PARTICLE_COLLISION](docs/PARTICLE_COLLISION.md) |
-| 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(드로당 관절 64개), `Animator`, Lua 재생; sprite·모델 공통 타임라인 이벤트와 `onAnimationEvent`, 작성·조회 명령; 공식 `oe.animator` 스프라이트/모델 컨트롤러, 타입 매개변수·순서 있는 전이·모델 블렌드를 갖춘 별도 `.controller.json` 상태 그래프 창과 자체 실행 취소·다시 실행·저장과 실행 중 상태·전환·매개변수 표시; 공유 `.anim.json` 시트·사각 atlas clips, 모델 sidecar 표시 이름·반복 구간, `animation.create/get/set`와 hot reload; 스프라이트 프레임 선택·재정렬·프레임별 시간·loop 편집; 격리 재생·눈금자 스크럽·키보드 조작·이름 표시 이벤트 편집을 제공하는 Animation 패널(IK 기본 제외) | [ANIMATION](docs/ANIMATION.md) |
+| 애니메이션 | 두 렌더러에서 동작하는 glTF/FBX 스켈레탈 애니메이션(드로당 관절 64개), `Animator`, Lua 재생; sprite·모델 공통 타임라인 이벤트와 `onAnimationEvent`, 작성·조회 명령; 공식 `oe.animator` 스프라이트/모델 컨트롤러, 타입 매개변수·순서 있는 전이·모델 블렌드를 갖춘 별도 `.controller.json` 상태 그래프 창과 자체 실행 취소·다시 실행·저장과 실행 중 상태·전환·매개변수 표시; 공유 `.anim.json` 시트·사각 atlas clips, 모델 sidecar 표시 이름·반복 구간, `animation.create/get/set`와 hot reload; 스프라이트 프레임 선택·재정렬·프레임별 시간·loop 편집; 격리 재생·눈금자 스크럽·키보드 조작·이름 표시 이벤트 편집·속성 키프레임 트랙(엔티티와 자식의 위치·회전·크기·색 등)을 제공하는 Animation 패널(IK 기본 제외) | [ANIMATION](docs/ANIMATION.md) |
 | 파티클 | 생성 모양, 수명 곡선, 플립북, 난류, 속도 정렬을 가진 결정적 이미터. `Trail` 리본 | [PARTICLES](docs/PARTICLES.md) |
 | VFX 제작 | 재사용 `.vfx.json` 에셋과 VFXSystem, 이름 기반 파라미터, Lua 제어, hot reload, 전체 입자 예산. 모듈별 필드·곡선·그라디언트·독립 재생·문서 undo와 참조 노드 그래프를 지원하는 Effects 패널. 검기와 6종 표현식 이펙트 포함 15개 프리셋, 파티클 재질·메시 배칭·두 앵커 리본·깊이 제한 하위 이미터과 검사·미리보기·분석용 `vfx.*` 명령 축별 이동·회전·크기 곡선, 바닥 피벗, 재질용 custom 채널 4개로 얼음 기둥 성장 등을 VFX 안에서 제어. | [VFX](docs/VFX.md) |
 | 내비게이션 | 정적 콜라이더나 모델에서 베이크하는 내비게이션 메시(Recast/Detour): 경로, 최근접 지점, 보행 레이캐스트, Lua 에이전트 | [NAVIGATION](docs/NAVIGATION.md) |
 | 물리 | Jolt 3D와 Box2D 2D: 강체, 트리거, 캐릭터 컨트롤러, 일방통행 플랫폼, 충돌 레이어, 레이캐스트. 결정적 | [PHYSICS](docs/PHYSICS.md) |
-| 2D | 스프라이트와 시트 애니메이션, 타일셋 파일을 쓰는 텍스트 타일맵, 오토타일과 타일별 충돌, 2D 조명, 3D 세계 속 HD-2D 스프라이트 | [2D](docs/2D.md) |
+| 2D | 스프라이트와 시트 애니메이션, 타일셋 파일을 쓰는 텍스트 타일맵, 오토타일과 타일별 충돌, 스프라이트 에디터(미리보기가 있는 시트 분할, 프레임별 충돌 외곽선), 2D 조명, 3D 세계 속 HD-2D 스프라이트 | [2D](docs/2D.md) |
 | UI | 텍스트(TrueType, 리치 텍스트, 자동 축소), 패널, 버튼(토글, 라디오 그룹, 아이콘), 이미지, 슬라이더, 텍스트 입력, 드롭다운, 화면 조이스틱, 레이아웃, 스크롤 뷰, 등장 모션, 키보드/게임패드 포커스. 모든 요소에 색 대신 9-slice 이미지 사용 가능 | [UI](docs/UI.md) |
 | 게임플레이 | 프리팹, 씬 전환과 게임 데이터, 메시지와 타이머, 일시정지, 날짜, 오디오(결정적 48 kHz 믹서, 효과음 생성), 광고와 결제용 호스트 브리지 | [GAMEPLAY](docs/GAMEPLAY.md) |
 | 스크립팅 | 플레이 세션마다 샌드박스된 Lua 5.4, 핫 리로드, 파일과 줄 번호가 있는 오류, 정적 검사, 트윈 | [SCRIPTING](docs/SCRIPTING.md) |

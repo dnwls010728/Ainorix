@@ -58,4 +58,14 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<Data>();  // last: the earlier pools keep their order
 }
 
+std::string SpriteFrameKey(const SpriteFrame& frame) { return frame.name.empty() ? std::to_string(frame.index) : frame.name; }
+
+const Json& Collider2DActivePoints(const Collider2D& collider, const Sprite* sprite) {
+    if (!sprite || collider.shape != "polygon" || !collider.framePoints.isObject() || collider.framePoints.size() == 0) return collider.points;
+    const std::string key = SpriteFrameKey(sprite->frame);
+    if (!collider.framePoints.has(key)) return collider.points;
+    const Json& outline = collider.framePoints[key];
+    return outline.isArray() && outline.size() >= 3 ? outline : collider.points;
+}
+
 }  // namespace oe

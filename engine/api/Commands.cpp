@@ -32,6 +32,7 @@
 #include "scene/Pose.h"
 #include "scene/Retarget.h"
 #include "scene/Prefab.h"
+#include "scene/PropertyTracks.h"
 #include "scene/Clipboard.h"
 #include "nav/Navigation.h"
 #include "physics/PhysicsWorld.h"
@@ -747,6 +748,68 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  .Req("events", "array", "At most 256 {frame: sequenceIndex, name} for sprites or {time: seconds, name} for models. Empty clears markers.")
                  .Opt("merge", "string", "Undo group key for a sprite marker drag; model file writes remain outside undo."), true,
              [animationEvents](Engine& e, const Json& a) { return animationEvents(e, a, true); });
+    Register(r, "animation.set_tracks",
+             "Replace a clip's property tracks: keyframed component fields (position, rotation, scale, color, opacity, ...) of the animated "
+             "entity or its children, applied while the clip plays. Inline sprite clips use scene undo; linked sprites write .anim.json, "
+             "models write <model>.clips.json metadata (shared file writes are not undoable). Read them with animation.preview_state.",
+             Params().ReqWith("id", EntityRefSchema("Animated entity (SpriteAnimation, or MeshRenderer model with clips)."))
+                 .Opt("clip", "string", "Clip name; default the current clip.")
+                 .Req("tracks", "array",
+                      "At most 64 {target: \"\" or child path, component, field, interpolation: linear|smooth|step, keys: [{time, value}]}; "
+                      "[] removes them.")
+                 .Opt("merge", "string", "Undo group key for a key drag (inline sprite clips)."),
+             true, [](Engine& e, const Json& a) {
+                 const EntityId id = RequireEntity(e, a);
+                 std::string error;
+                 if (!ValidatePropertyTracks(a["tracks"], &error))
+                     throw ApiError("invalid_tracks", error, "Use [{target, component, field, keys: [{time, value}]}]; component.types lists the fields.");
+                 Json out = Json::MakeObject();
+                 out["id"] = id;
+                 out["tracks"] = a["tracks"];
+                 if (const SpriteAnimation* sprite = e.GetScene().Get<SpriteAnimation>(id)) {
+                     const std::string name = a.has("clip") ? a["clip"].asString() : sprite->clip;
+                     if (!SpriteAnimationClips(*sprite, e.Assets())[name].isObject())
+                         throw ApiError("animation_not_found", "sprite has no clip '" + name + "'", "Create it with animation.set_clip first.");
+                     out["clip"] = name;
+                     if (sprite->asset.empty()) {
+                         Json& clip = e.GetScene().Get<SpriteAnimation>(id)->clips[name];
+                         if (a["tracks"].size() == 0) clip.erase("tracks");
+                         else clip["tracks"] = a["tracks"];
+                         out["source"] = "SpriteAnimation.clips";
+                         return out;
+                     }
+                     Json args = Json::MakeObject();
+                     args["path"] = sprite->asset;
+                     args["clip"] = name;
+                     args["values"]["tracks"] = a["tracks"];
+                     const Json result = e.Call("animation.set", args);
+                     if (!result["ok"].asBool()) throw ApiError(result["error"]["code"].asString(), result["error"]["message"].asString());
+                     out["source"] = sprite->asset;
+                     return out;
+                 }
+                 const MeshRenderer* renderer = e.GetScene().Get<MeshRenderer>(id);
+                 auto mesh = renderer ? e.Assets().GetMesh(renderer->mesh, &error) : nullptr;
+                 if (!mesh) throw ApiError("missing_component", "entity has no SpriteAnimation or model", "Select a sprite with SpriteAnimation or a MeshRenderer model.");
+                 const Animator* animator = e.GetScene().Get<Animator>(id);
+                 const std::string name = a.has("clip") ? a["clip"].asString() : animator ? animator->clip : std::string();
+                 if (!FindAnimationClip(*mesh, name))
+                     throw ApiError("animation_not_found", "model has no clip '" + name + "'", "Pass clip; asset.info lists the model's clips.");
+                 const std::string source = renderer->mesh + ".clips.json", path = e.ResolvePath(source);
+                 Json sidecar = Json::MakeObject();
+                 std::string text;
+                 if (FileExists(path)) {
+                     if (!ReadTextFile(path, text)) throw ApiError("read_failed", "cannot read " + source);
+                     sidecar = Json::parse(text);
+                 }
+                 if (a["tracks"].size() == 0) sidecar["metadata"][name].erase("tracks");
+                 else sidecar["metadata"][name]["tracks"] = a["tracks"];
+                 if (sidecar["metadata"][name].size() == 0) sidecar["metadata"].erase(name);
+                 if (!WriteTextFile(path, sidecar.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + source);
+                 e.Assets().Clear();
+                 out["clip"] = name;
+                 out["source"] = source;
+                 return out;
+             });
     Register(r, "animation.retarget", "Move animation clips from one model's skeleton to another's (different bone names, proportions and rest pose, e.g. mocap for a T-pose rig onto a character in an A-pose) and write them as a clip file. With attach (default) the file is listed in '<target>.clips.json', which adds its clips to the target model: play them with Animator / animation.play like the model's own.",
              Params().Req("source", "string", "Model file with the clips, e.g. \"assets/anims/mocap.glb\".")
                  .Req("target", "string", "Model file of the character that should play them.")
@@ -2869,6 +2932,20 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
              [](Engine& e, const Json& a) {
                  if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("animation", a);
                  throw ApiError("editor_unavailable", "no native editor is attached", "Run oe editor and attach with --connect; animation.preview also works without an editor.");
+                 return Json();
+             });
+    Register(r, "editor.sprite",
+             "Open/focus or close the Sprite Editor of the attached native editor for the selected sprite: Slice Sheet (how the sheet "
+             "is cut into frames) or Collision (Collider2D outline per frame); no scene edit.",
+             Params()
+                 .Opt("open", "boolean", "true opens/focuses (default); false closes it.")
+                 .Opt("tab", "string", "slice or collision.")
+                 .OptWith("frame", Json::parse(R"({"type":["integer","string"],"description":"Collision: the frame to edit (index or atlas frame name)."})"))
+                 .Opt("editDefault", "boolean", "Collision: edit the default outline (Collider2D.points) instead of the frame's own."),
+             false, [](Engine& e, const Json& a) {
+                 if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("sprite", a);
+                 throw ApiError("editor_unavailable", "no native editor is attached",
+                                "Run oe editor and attach with --connect; atlas.create, sprite.collision and sprite.outline work without an editor.");
                  return Json();
              });
     Register(r, "editor.select",

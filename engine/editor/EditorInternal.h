@@ -22,6 +22,7 @@
 namespace oe {
 
 struct Texture;
+struct Sprite;
 
 struct EntityRow {
     EntityId id = kNullEntity;
@@ -197,6 +198,16 @@ struct NativeEditor::Impl {
     void AnimationTick(double dt);
     void AnimationRect(const std::string& name);
     void AnimationWriteEvents(const Json& state, const Json& events, const std::string& merge = {});
+    // Property tracks (EditorAnimationTracks.cpp): one lane per keyframed field under the ruler. `x0` is the
+    // screen x of time 0, `scale` pixels per second, `gutter` the width of the lane label column.
+    int animationTrack = -1, animationKey = -1;  // selected track and key
+    bool animationKeyDragging = false;
+    Json animationKeyDragTracks;                 // the tracks as they were when the key drag began
+    std::string animationPropertyFilter;
+    void AnimationTracks(const Json& state, float x0, float scale, float gutter);
+    void AnimationAddPropertyPopup(const Json& state, const Json& tracks);
+    void AnimationKeyEditor(const Json& state, Json tracks);
+    bool AnimationWriteTracks(const Json& state, const Json& tracks, const std::string& merge = {});
     bool showHistory = true, requestHistoryFocus = false;
     bool showThumbnails = true;
     struct Thumbnail {
@@ -531,7 +542,6 @@ struct NativeEditor::Impl {
     std::string tileDataKey;
     std::map<std::string, std::array<float, 4>> twoDimensionalRects;
     void TwoDimensionalRect(const std::string& name);
-    void SpriteToolsPanel();
     void TileRuleTools();
     void TileLayerTools();  // layer picker, add / rename / move / remove, visible, collision
     std::string tileLayerName;
@@ -553,6 +563,37 @@ struct NativeEditor::Impl {
     void PaintCells(const std::vector<std::pair<int, int>>& cells, char c);
     void TileSceneInput(ImDrawList* dl, bool clickedLeft, bool clickedRight);
     void TilesPanel();
+
+    // ----- Sprite Editor (EditorSprite.cpp): Slice Sheet and per-frame Collision of the selected Sprite
+    bool showSpriteEditor = false, focusSpriteEditor = false;
+    int spriteEditorTab = 0;                 // 0 = Slice Sheet, 1 = Collision
+    EntityId spriteEditorEntity = kNullEntity;  // the sprite the view was fitted for
+    bool spriteFit = true;                   // keep the picture fitted to the view (until the person zooms or pans)
+    float spriteZoom = 1;                    // Slice: screen pixels per texel; Collision: per local unit
+    ImVec2 spritePan{0, 0};                  // screen offset of the picture (Slice) or the entity origin (Collision)
+    std::string spriteFrameKey;              // the frame the Collision tab edits (Collider2D.framePoints key)
+    int sliceMode = 0;                       // 0 cell size, 1 cell count, 2 find sprites
+    int sliceColumns = 4, sliceRows = 4, sliceGap = 2, slicePivot = 0;
+    int sliceOffset[2] = {0, 0}, sliceSpacing[2] = {0, 0};
+    bool sliceOverwrite = false;
+    bool sliceEdited = false;                // settings changed since the last apply: the canvas shows the preview
+    Json slicePreview;                       // atlas.create {dryRun} for the current settings
+    std::string slicePreviewKey;
+    bool collisionEditDefault = false;       // edit Collider2D.points instead of the frame's own outline
+    bool collisionOnion = true;
+    std::map<std::string, std::array<float, 4>> spriteRects;  // automation: control bounds by name
+    struct SpriteSheetFrame {
+        std::string key;  // framePoints key: atlas frame name or sheet index
+        float x = 0, y = 0, w = 0, h = 0;  // pixels in the sheet
+    };
+    // The frames the sprite's atlas or grid cuts its sheet into; `sheet` gets the image path.
+    std::vector<SpriteSheetFrame> SpriteSheetFrames(const Sprite& sprite, std::string* sheet);
+    void SpriteRect(const std::string& name);
+    void SpriteEditorPanel();
+    void SpriteSliceTab(const Sprite& sprite);
+    void SpriteCollisionTab(const Sprite& sprite);
+    void SpriteCanvasInput(ImVec2 origin, bool hovered, bool active);
+    void SpriteZoomBadge(ImVec2 origin, ImVec2 size, float scale);  // scale: zoom units -> screen pixels per image pixel
 
     // ----- Game view
     int gameAspect = 0;  // 0 free, 1 16:9, 2 16:10, 3 4:3

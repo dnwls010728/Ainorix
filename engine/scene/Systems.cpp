@@ -12,6 +12,7 @@
 #include "core/Log.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
+#include "scene/PropertyTracks.h"
 #include "scene/Vfx.h"
 
 namespace oe {
@@ -183,6 +184,13 @@ void UpdateAnimators(Scene& scene, AssetManager& assets, float dt, std::vector<A
         }
         a.time = static_cast<float>(next);
         a.shownTime = a.time;
+    }
+    // Property tracks of the clip each model shows, at its time (also paused: the fields hold the clip's values).
+    for (auto& kv : scene.Pool<Animator>()) {
+        const MeshRenderer* renderer = scene.Get<MeshRenderer>(kv.first);
+        std::shared_ptr<const Mesh> mesh = renderer ? assets.GetMesh(renderer->mesh) : nullptr;
+        const AnimationClip* clip = mesh ? FindAnimationClip(*mesh, kv.second.clip) : nullptr;
+        if (clip && clip->tracks.size() > 0 && std::isfinite(kv.second.time)) ApplyPropertyTracks(scene, kv.first, clip->tracks, kv.second.time);
     }
 }
 
@@ -912,6 +920,7 @@ void UpdateSpriteAnimations(Scene& scene, AssetManager* assets, float dt, std::v
             index = count - 1;
         }
         sprite->frame = frames[static_cast<int>(index)];
+        if (c.has("tracks")) ApplyPropertyTracks(scene, kv.first, c["tracks"], a.time);
     }
 }
 

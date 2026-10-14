@@ -8,6 +8,7 @@
 #include "assets/AnimationAsset.h"
 #include "scene/Components.h"
 #include "scene/SpriteClip.h"
+#include "scene/PropertyTracks.h"
 
 namespace oe {
 namespace {
@@ -131,7 +132,7 @@ void RegisterSpriteClipCommands(CommandRegistry& registry) {
         }});
     registry.Add({"animation.set_clip", "Create/patch a sprite clip or edit its sequence; frame operations preserve event anchors. Inline undo; shared asset writes have no scene undo.",
         Params().Req("id", "entity", "Sprite entity.").Req("clip", "string", "Stable clip key.")
-            .Opt("values", "object", "Clip fields to patch: frames, durations, fps, loop, displayName, events.")
+            .Opt("values", "object", "Clip fields to patch: frames, durations, fps, loop, displayName, events, tracks (keyframed component fields, see animation.set_tracks).")
             .Opt("operation", "string", "create|append|insert|move|remove|duration|uniform (remove explicit durations).")
             .Opt("index", "integer", "Sequence index.").Opt("to", "integer", "Final sequence index for move.")
             .Opt("frame", "integer", "Source frame for append/insert.").Opt("duration", "number", "Frame seconds.")
@@ -146,10 +147,11 @@ void RegisterSpriteClipCommands(CommandRegistry& registry) {
             for (const auto& item : args["values"].members()) clip[item.first] = item.second;
             if (args.has("operation") && args["operation"].asString() != "create") EditSequence(clip, args);
             for (const auto& item : clip.members())
-                if (item.first != "frames" && item.first != "durations" && item.first != "fps" && item.first != "loop" && item.first != "displayName" && item.first != "events")
+                if (item.first != "frames" && item.first != "durations" && item.first != "fps" && item.first != "loop" && item.first != "displayName" && item.first != "events" && item.first != "tracks")
                     throw ApiError("invalid_animation", "unknown sprite clip field: " + item.first);
             SpriteClipTiming timing; std::vector<AnimationMarker> markers; std::string error;
             if (!ParseSpriteClipTiming(clip, timing, &error) || !SpriteClipMarkers(clip["events"], timing, markers, &error)) throw ApiError("invalid_animation", error);
+            if (clip.has("tracks") && !ValidatePropertyTracks(clip["tracks"], &error)) throw ApiError("invalid_animation", error);
             for (const Json& frame : clip["frames"].items()) {
                 if (frame.isString() && !frame.asString().empty() && frame.asString().size() <= 128) continue;
                 if (!frame.isNumber() || frame.asNumber() < 0 || frame.asNumber() > 16777215 || std::floor(frame.asNumber()) != frame.asNumber()) throw ApiError("invalid_animation", "frames need nonnegative integer indices or atlas names");

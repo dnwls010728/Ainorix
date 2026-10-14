@@ -191,7 +191,11 @@ void NativeEditor::Impl::TilesPanel() {
     twoDimensionalRects.clear();
     const EntityRow* row = Row(Primary());
     if (row && row->Has("Sprite")) {
-        SpriteToolsPanel();
+        // Sheets and outlines are edited in the Sprite Editor, which has the room to show them.
+        ImGui::TextWrapped("%s", Tr("Slice the sprite's sheet and edit the collision outline of each frame in the Sprite Editor."));
+        if (ImGui::Button(WithIcon(kIconImage, Tr("Open Sprite Editor")).c_str(), ImVec2(-FLT_MIN, 0)))
+            Call("editor.sprite", Json::MakeObject());
+        TwoDimensionalRect("open-sprite-editor");
         ImGui::End();
         return;
     }

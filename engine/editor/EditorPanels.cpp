@@ -114,6 +114,75 @@ bool SectionHeader(const char* name, const EntityIcon& icon) {
     return open;
 }
 
+// FieldInfo::showIf against a component's values (missing values read as their defaults).
+bool ShowIfHolds(const std::string& conditions, const Json& values, const Json& defaults) {
+    size_t start = 0;
+    while (start <= conditions.size()) {
+        size_t end = conditions.find(',', start);
+        if (end == std::string::npos) end = conditions.size();
+        std::string condition = conditions.substr(start, end - start);
+        start = end + 1;
+        if (condition.empty()) continue;
+        const bool negate = condition[0] == '!' && condition.find('=') == std::string::npos;
+        if (negate) condition.erase(0, 1);
+        const size_t eq = condition.find('=');
+        const bool notEqual = eq != std::string::npos && eq > 0 && condition[eq - 1] == '!';
+        const std::string field = eq == std::string::npos ? condition : condition.substr(0, notEqual ? eq - 1 : eq);
+        const Json& value = values.has(field) ? values[field] : defaults[field];
+        bool holds;
+        if (eq == std::string::npos) {
+            holds = value.isBool() ? value.asBool() : value.isString() ? !value.asString().empty() : value.isNumber() ? value.asNumber() != 0 : value.size() > 0;
+            if (negate) holds = !holds;
+        } else {
+            const std::string text = value.isString() ? value.asString() : value.dump();
+            holds = false;
+            const std::string options = condition.substr(eq + 1);
+            for (size_t at = 0; at <= options.size();) {
+                size_t bar = options.find('|', at);
+                if (bar == std::string::npos) bar = options.size();
+                if (options.compare(at, bar - at, text) == 0 && bar - at == text.size()) holds = true;
+                at = bar + 1;
+            }
+            if (notEqual) holds = !holds;
+        }
+        if (!holds) return false;
+    }
+    return true;
+}
+
+// The header row of a field section inside the inspector's two-column table; returns whether it is
+// open. A closed section names how many of its fields differ from their defaults, so edits stay visible.
+bool FieldGroupRow(const char* label, bool defaultOpen, int changed) {
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    const ImGuiID openId = ImGui::GetID("##groupOpen");
+    bool open = storage->GetBool(openId, defaultOpen);
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    const float h = ImGui::GetFrameHeight() - 2.0f, font = ImGui::GetFontSize();
+    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(255, 255, 255, 14));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(255, 255, 255, 22));
+    if (ImGui::Selectable("##group", false, ImGuiSelectableFlags_SpanAllColumns, ImVec2(0, h)))
+        storage->SetBool(openId, open = !open);
+    ImGui::PopStyleColor(3);
+    const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float y = a.y + (h - font) * 0.5f;
+    // A hairline over the row separates sections without a heavy bar.
+    draw->AddLine(ImVec2(a.x, a.y - 1.0f), ImVec2(b.x, a.y - 1.0f), IM_COL32(255, 255, 255, 18));
+    draw->AddText(ImVec2(a.x + 2.0f, y), ImGui::GetColorU32(ImGuiCol_TextDisabled), open ? kIconChevronDown : kIconChevronRight);
+    draw->AddText(ImVec2(a.x + font + 6.0f, y), IM_COL32(200, 205, 214, 255), label);
+    if (!open && changed > 0) {
+        const std::string badge = std::to_string(changed);
+        const float w = ImGui::CalcTextSize(badge.c_str()).x + 10.0f;
+        const ImVec2 p(b.x - w - 4.0f, a.y + 2.0f);
+        draw->AddRectFilled(p, ImVec2(p.x + w, b.y - 2.0f), IM_COL32(92, 148, 255, 70), (b.y - a.y) * 0.5f);
+        draw->AddText(ImVec2(p.x + 5.0f, y), IM_COL32(220, 230, 255, 255), badge.c_str());
+    }
+    if (!open && changed > 0) HelpTooltip(Format(Tr("%d fields differ from their defaults"), changed));
+    return open;
+}
+
 // A borderless square icon button (a section's remove button): dim until hovered.
 bool GhostIconButton(const char* id, const char* icon, float side, ImU32 hoverColor) {
     const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -825,14 +894,18 @@ void NativeEditor::Impl::InspectorPanel() {
             if (type == "Script") editIcon = kIconFileCode, editLabel = "Edit Script", editPath = kv.second["path"].asString("");
             if (type == "VFXSystem") editIcon = kIconSparkles, editLabel = "Edit Effect", editPath = kv.second["asset"].asString("");
             if (type == "MeshRenderer") editIcon = kIconPalette, editLabel = "Edit Material", editPath = kv.second["material"].asString("");
+            if (type == "Sprite") editIcon = kIconImage, editLabel = "Slice Sheet", editPath = "slice";
+            if (type == "Collider2D" && comps.has("Sprite")) editIcon = kIconSquareDashed, editLabel = "Edit Outline per Frame", editPath = "collision";
             if (editLabel && !editPath.empty()) {
                 ImGui::Dummy(ImVec2(0, 1));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
                 if (ImGui::Button(WithIcon(editIcon, Tr(editLabel)).c_str(), ImVec2(-FLT_MIN, 0))) {
                     if (type == "Script") OpenScript(editPath);
                     else if (type == "VFXSystem") OpenEffect(editPath);
+                    else if (type == "Sprite" || type == "Collider2D") Call("editor.sprite", ObjectOf({{"tab", editPath}}));
                     else OpenShader(editPath);
                 }
+                inspectorRects[type + "#edit"] = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().x, ImGui::GetItemRectSize().y};
                 ImGui::PopStyleColor();
             }
             ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 3.0f));
@@ -842,25 +915,70 @@ void NativeEditor::Impl::InspectorPanel() {
                 ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.34f);
                 ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.66f);
                 const Json& properties = (*typeInfo)["schema"]["properties"];
+                const Json& defaults = (*typeInfo)["defaults"];
+                // Ungrouped fields first, then each section (x-oe-groups) under its own header row; fields
+                // whose showIf does not hold for the current values are left out.
+                using Member = std::pair<std::string, Json>;
+                std::vector<std::pair<std::string, std::vector<const Member*>>> sections(1);
+                for (const Json& g : (*typeInfo)["schema"]["x-oe-groups"].items()) sections.push_back({g["name"].asString(), {}});
                 for (const auto& f : properties.members()) {
-                    // lockPositionX/Y/Z, lockRotationX/Y/Z: one row of axis toggles, drawn at the group's first field.
-                    const std::string& field = f.first;
-                    const bool axisLock = field.size() > 5 && field.compare(0, 4, "lock") == 0 &&
-                                          std::strchr("XYZ", field.back()) && f.second["x-oe-type"].asString("") == "bool";
-                    const std::string group = axisLock ? field.substr(0, field.size() - 1) : std::string();
-                    if (axisLock) {
-                        std::string first;
-                        for (const char* axis : {"X", "Y", "Z"})
-                            if (first.empty() && properties.has(group + axis)) first = group + axis;
-                        if (field != first) continue;
+                    const std::string group = f.second["x-oe-group"].asString("");
+                    size_t at = 0;
+                    for (size_t i = 1; i < sections.size(); ++i)
+                        if (sections[i].first == group) at = i;
+                    sections[at].second.push_back(&f);
+                }
+                std::vector<const Member*> ordered;
+                for (size_t s = 0; s < sections.size(); ++s) {
+                    if (s > 0) {
+                        int changed = 0;
+                        for (const auto* f : sections[s].second)
+                            if (kv.second.has(f->first) && kv.second[f->first] != defaults[f->first]) ++changed;
+                        const Json& info = (*typeInfo)["schema"]["x-oe-groups"][s - 1];
+                        ImGui::PushID(sections[s].first.c_str());
+                        const bool groupOpen = FieldGroupRow(Tr(sections[s].first.c_str()), !info["collapsed"].asBool(false), changed);
+                        ImGui::PopID();
+                        inspectorRects[type + "#" + sections[s].first] = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                                                                         ImGui::GetItemRectSize().x, ImGui::GetItemRectSize().y};
+                        if (!groupOpen) continue;
                     }
-                    ImGui::PushID(field.c_str());
-                    if (type == "Script" && field == "params") ScriptParamsRows(id, kv.second);
-                    else if (axisLock) AxisLockRow(id, type, group, properties, kv.second);
-                    else if (type == "SpriteAnimation" && field == "clips") {
-                        if (ImGui::Button(Tr("Edit Sprite Frames"))) Call("editor.animation", ObjectOf({{"frames", true}}));
-                    } else FieldEditor(id, type, field, f.second, kv.second[field]);
-                    ImGui::PopID();
+                    ordered.clear();
+                    for (const auto* f : sections[s].second)
+                        if (ShowIfHolds(f->second["x-oe-showIf"].asString(""), kv.second, defaults)) ordered.push_back(f);
+                    for (const auto* fp : ordered) {
+                        const auto& f = *fp;
+                        // lockPositionX/Y/Z, lockRotationX/Y/Z: one row of axis toggles, drawn at the group's first field.
+                        const std::string& field = f.first;
+                        const bool axisLock = field.size() > 5 && field.compare(0, 4, "lock") == 0 &&
+                                              std::strchr("XYZ", field.back()) && f.second["x-oe-type"].asString("") == "bool";
+                        const std::string group = axisLock ? field.substr(0, field.size() - 1) : std::string();
+                        if (axisLock) {
+                            std::string first;
+                            for (const char* axis : {"X", "Y", "Z"})
+                                if (first.empty() && properties.has(group + axis)) first = group + axis;
+                            if (field != first) continue;
+                        }
+                        ImGui::PushID(field.c_str());
+                        if (type == "Script" && field == "params") ScriptParamsRows(id, kv.second);
+                        else if (axisLock) AxisLockRow(id, type, group, properties, kv.second);
+                        else if (type == "SpriteAnimation" && field == "clips") {
+                            if (ImGui::Button(Tr("Edit Sprite Frames"))) Call("editor.animation", ObjectOf({{"frames", true}}));
+                        } else if (type == "Collider2D" && field == "framePoints" && comps.has("Sprite")) {
+                            // Outlines per frame are pictures, not text: a count here, editing in the Sprite Editor.
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::TextDisabled("%s", Humanize(field).c_str());
+                            HelpTooltip(f.second["description"].asString(""));
+                            ImGui::TableSetColumnIndex(1);
+                            const int count = static_cast<int>(kv.second[field].size());
+                            if (ImGui::Button(count ? Format(Tr("%d frames: Edit"), count).c_str() : Tr("None: Edit"), ImVec2(-FLT_MIN, 0)))
+                                Call("editor.sprite", ObjectOf({{"tab", "collision"}}));
+                            inspectorRects[type + "." + field] = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().x,
+                                                                  ImGui::GetItemRectSize().y};
+                        } else FieldEditor(id, type, field, f.second, kv.second[field]);
+                        ImGui::PopID();
+                    }
                 }
                 ImGui::EndTable();
             }

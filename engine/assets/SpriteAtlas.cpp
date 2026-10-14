@@ -32,14 +32,20 @@ bool Opaque(const Texture& image, int x, int y) {
     return (image.texels[static_cast<size_t>(y) * static_cast<size_t>(image.width) + static_cast<size_t>(x)] >> 24) != 0;
 }
 
-std::vector<SliceRect> GridCells(const Texture& image, int cw, int ch, bool trim) {
-    if (image.width % cw || image.height % ch) throw ApiError("invalid_atlas", "the cell size must divide the image size");
-    const int cols = image.width / cw, rows = image.height / ch;
+// Cells of cw x ch pixels from (ox, oy), `sx`/`sy` pixels apart (sheets drawn with a margin and gutters).
+// Without a margin or gutters the cells must tile the image exactly; with them, cells that do not fit are left out.
+std::vector<SliceRect> GridCells(const Texture& image, int cw, int ch, bool trim, int ox = 0, int oy = 0, int sx = 0, int sy = 0) {
+    const bool spaced = ox || oy || sx || sy;
+    if (!spaced && (image.width % cw || image.height % ch))
+        throw ApiError("invalid_atlas", "the cell size must divide the image size",
+                       "Pick a cell size that divides " + std::to_string(image.width) + "x" + std::to_string(image.height) + ", or set offset/spacing.");
+    const int cols = image.width >= ox + cw ? (image.width - ox + sx) / (cw + sx) : 0;
+    const int rows = image.height >= oy + ch ? (image.height - oy + sy) / (ch + sy) : 0;
     if (cols * rows > 65536) throw ApiError("invalid_atlas", "too many frames (65536 at most)");
     std::vector<SliceRect> out;
     for (int row = 0; row < rows; ++row) {
         for (int col = 0; col < cols; ++col) {
-            SliceRect s{col * cw, row * ch, cw, ch};
+            SliceRect s{ox + col * (cw + sx), oy + row * (ch + sy), cw, ch};
             s.index = row * cols + col;
             if (trim) {
                 int x0 = cw, y0 = ch, x1 = -1, y1 = -1;
@@ -217,12 +223,16 @@ void RegisterAtlasCommands(CommandRegistry& registry) {
                       .Opt("auto", "boolean", "Instead of a grid, find each sprite of `texture` by the transparent space around it (top to bottom, left to right).")
                       .Opt("gap", "integer", "auto: parts closer than this many pixels are one sprite (default 2).")
                       .Opt("pivot", "array", "[x, y] pivot of every frame, 0..1 like Sprite.pivotX/Y ((0.5, 0) = bottom center).")
+                      .Opt("offset", "array", "Grid: [x, y] pixels before the first cell (sheet margin).")
+                      .Opt("spacing", "array", "Grid: [x, y] pixels between cells (gutters).")
                       .Opt("prefix", "string", "Frame name prefix (default frame_).")
-                      .Opt("overwrite", "boolean", "Replace existing file."),
+                      .Opt("overwrite", "boolean", "Replace existing file.")
+                      .Opt("dryRun", "boolean", "Return the frames that would be written without writing the file (slicing previews)."),
                   false, [](Engine& e, const Json& args) {
                       const std::string path = args["path"].asString(), full = e.ResolvePath(path);
                       if (AssetManager::KindOf(path) != "atlas") throw ApiError("invalid_path", "atlas path must end with .atlas.json");
-                      if (FileExists(full) && !args["overwrite"].asBool())
+                      const bool dryRun = args["dryRun"].asBool();
+                      if (!dryRun && FileExists(full) && !args["overwrite"].asBool())
                           throw ApiError("already_exists", "atlas exists", "Pass overwrite:true to replace it.");
                       Json input = args["values"];
                       if (args.has("source")) {
@@ -241,9 +251,19 @@ void RegisterAtlasCommands(CommandRegistry& registry) {
                           input = Json::MakeObject();
                           input["texture"] = texture;
                           input["frames"] = Json::MakeArray();
+                          auto pair = [&](const char* name, int& x, int& y) {
+                              const Json& v = args[name];
+                              if (v.isNull()) return;
+                              if (!v.isArray() || v.size() != 2) throw ApiError("invalid_argument", std::string(name) + " needs [x, y] pixels");
+                              x = Pixel(v[0]);
+                              y = Pixel(v[1]);
+                          };
+                          int ox = 0, oy = 0, sx = 0, sy = 0;
+                          pair("offset", ox, oy);
+                          pair("spacing", sx, sy);
                           const std::vector<SliceRect> rects =
                               args["auto"].asBool() ? FindSprites(*image, args.has("gap") ? Pixel(args["gap"]) : 2)
-                                                    : GridCells(*image, Pixel(args["cellWidth"], 1), Pixel(args["cellHeight"], 1), args["trim"].asBool());
+                                                    : GridCells(*image, Pixel(args["cellWidth"], 1), Pixel(args["cellHeight"], 1), args["trim"].asBool(), ox, oy, sx, sy);
                           if (rects.empty()) throw ApiError("invalid_atlas", "the image has no opaque pixels to slice");
                           for (size_t i = 0; i < rects.size(); ++i) {
                               const SliceRect& s = rects[i];
@@ -268,6 +288,14 @@ void RegisterAtlasCommands(CommandRegistry& registry) {
                           if (f["rect"][0].asInt() + f["rect"][2].asInt() > texture->width ||
                               f["rect"][1].asInt() + f["rect"][3].asInt() > texture->height)
                               throw ApiError("invalid_atlas", "frame outside texture");
+                      if (dryRun) {
+                          Json out = Json::MakeObject();
+                          out["path"] = path;
+                          out["values"] = data;
+                          out["exists"] = FileExists(full);
+                          out["dryRun"] = true;
+                          return out;
+                      }
                       CreateDirectories(ParentPath(full));
                       if (!WriteTextFile(full, data.dump(2) + "\n")) throw ApiError("write_failed", "cannot write atlas");
                       e.Assets().Forget(path);

@@ -900,6 +900,8 @@ Json NativeEditor::Impl::EditorState() {
     out["animationControllerOpen"] = showAnimationController; out["animationControllerDirty"] = animationControllerDocument != animationControllerSaved;
     out["animationController"] = animationController; out["animationControllerState"] = animationControllerState;
     out["animationPanel"] = showAnimation; out["animationFrames"] = animationFrames;
+    out["spriteEditor"] = ObjectOf({{"open", showSpriteEditor}, {"tab", spriteEditorTab == 0 ? "slice" : "collision"}, {"frame", spriteFrameKey},
+                                    {"editDefault", collisionEditDefault}});
     out["animation"] = engine.AnimationPreviewCall("state", Json());
     return out;
 }
@@ -1413,6 +1415,7 @@ void NativeEditor::Impl::MainMenu() {
         }
         if (ImGui::MenuItem(Tr("Animation"), nullptr, showAnimation)) Call("editor.animation", Json::MakeObject());
         ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
+        if (ImGui::MenuItem(Tr("Sprite Editor"), nullptr, showSpriteEditor)) Call("editor.sprite", Json::MakeObject());
         if (ImGui::MenuItem(Tr("History"), nullptr, showHistory)) { showHistory = true; requestHistoryFocus = true; }
         ImGui::MenuItem(Tr("Asset Thumbnails"), nullptr, &showThumbnails);
         ImGui::Separator();
@@ -1655,6 +1658,10 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Effects", scene->DockId);
         }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Sprite Editor"))) {
+            ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
+            if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Sprite Editor", scene->DockId);
+        }
         if (!ImGui::FindWindowSettingsByID(ImHashStr("###Shader Graph"))) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Shader Graph", scene->DockId);
@@ -1703,6 +1710,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Shader Graph", center);
     ImGui::DockBuilderDockWindow("###Effects", center);
     ImGui::DockBuilderDockWindow("###Animation Controller", center);
+    ImGui::DockBuilderDockWindow("###Sprite Editor", center);
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Animation", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
@@ -1950,6 +1958,19 @@ bool NativeEditor::Init(std::string* error) {
             m.showAnimation = args["open"].asBool(true); m.focusAnimation = m.showAnimation;
             if (!m.showAnimation) m.Call("animation.preview_close", Json());
         }
+        if (op == "sprite") {
+            m.showSpriteEditor = m.focusSpriteEditor = args["open"].asBool(true);
+            const std::string tab = args["tab"].asString();
+            if (!tab.empty() && tab != "slice" && tab != "collision")
+                throw ApiError("invalid_argument", "tab must be slice or collision");
+            if (!tab.empty() && (tab == "collision") != (m.spriteEditorTab == 1)) m.spriteEditorTab = tab == "collision" ? 1 : 0, m.spriteFit = true;
+            if (args.has("frame")) {
+                m.spriteFrameKey = args["frame"].isString() ? args["frame"].asString() : std::to_string(args["frame"].asInt());
+                m.spriteEditorEntity = m.Primary();  // the window keeps this frame instead of the sprite's own
+                m.spriteFit = true;
+            }
+            if (args.has("editDefault")) m.collisionEditDefault = args["editDefault"].asBool();
+        }
         return m.EditorState();
     });
     m.componentTypes = m.Call("component.types", Json(), true)["result"];
@@ -2021,6 +2042,8 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showEffects) m.EffectsPanel();
     else m.effectsEditorFocused = false;
     if (m.showTiles) m.TilesPanel();
+    if (m.showSpriteEditor) m.SpriteEditorPanel();
+    else m.spriteRects.clear();
     if (m.showNetwork) m.NetworkPanel();
     if (m.showHistory) m.HistoryPanel();
     if (m.teamAvailable && m.showTeam) m.TeamPanel();
@@ -2172,6 +2195,10 @@ void NativeEditor::OpenEffect(const std::string& path) { impl_->OpenEffect(path)
 std::array<float, 4> NativeEditor::TwoDimensionalControlRect(const std::string& name) const {
     auto found = impl_->twoDimensionalRects.find(name);
     return found == impl_->twoDimensionalRects.end() ? std::array<float, 4>{} : found->second;
+}
+std::array<float, 4> NativeEditor::SpriteEditorControlRect(const std::string& name) const {
+    auto found = impl_->spriteRects.find(name);
+    return found == impl_->spriteRects.end() ? std::array<float, 4>{} : found->second;
 }
 void NativeEditor::FocusAnimationPanel() { impl_->engine.Call("editor.animation", Json::MakeObject()); }
 std::array<float, 4> NativeEditor::AnimationControlRect(const std::string& name) const {

@@ -6,6 +6,7 @@
 #include "assets/AnimationAsset.h"
 #include "render/Mesh.h"
 #include "scene/Pose.h"
+#include "scene/PropertyTracks.h"
 
 namespace oe {
 namespace {
@@ -17,6 +18,7 @@ struct PreviewClip {
     const Json* frames = nullptr;
     std::vector<AnimationMarker> events;
     SpriteClipTiming timing;
+    Json tracks;  // the clip's property tracks
 };
 
 std::vector<PreviewClip> PreviewClips(Engine& engine, EntityId id) {
@@ -36,6 +38,7 @@ std::vector<PreviewClip> PreviewClips(Engine& engine, EntityId id) {
             entry.timing = timing; entry.duration = timing.duration;
             entry.end = timing.end;
             entry.loop = SpriteAnimationLoop(*sprite, clip); entry.loopEnd = entry.duration;
+            entry.tracks = clip["tracks"];
             std::string error;
             if (!SpriteClipMarkers(clip["events"], timing, entry.events, &error))
                 throw ApiError("invalid_animation_events", error, "Fix markers with animation.set_events before previewing.");
@@ -51,6 +54,7 @@ std::vector<PreviewClip> PreviewClips(Engine& engine, EntityId id) {
             PreviewClip entry; entry.name = clip.name; entry.duration = entry.end = clip.duration; entry.events = clip.events;
             entry.displayName = clip.displayName.empty() ? clip.name : clip.displayName;
             entry.loopStart = clip.loopStart; entry.loopEnd = clip.loopEnd < 0 ? clip.duration : clip.loopEnd;
+            entry.tracks = clip.tracks;
             out.push_back(std::move(entry));
         }
     }
@@ -152,6 +156,7 @@ Json Engine::AnimationPreviewCall(const std::string& operation, const Json& args
         Json item = Json::MakeObject(); item["name"] = clip.name; item["displayName"] = clip.displayName; item["duration"] = clip.duration;
         out["clips"].push(item);
     }
+    out["tracks"] = chosen->tracks.isArray() ? chosen->tracks : Json::MakeArray();
     out["events"] = Json::MakeArray();
     for (const AnimationMarker& marker : chosen->events) {
         Json item = Json::MakeObject(); item["time"] = marker.time; item["name"] = marker.name;
@@ -172,6 +177,7 @@ Scene& Engine::AnimationRenderScene() {
         SpriteClipTiming timing; ParseSpriteClipTiming(clip, timing, nullptr);
         const size_t index = timing.Index(preview.time);
         preview.scene.Get<Sprite>(preview.id)->frame = clip["frames"][index];
+        if (clip.has("tracks")) ApplyPropertyTracks(preview.scene, preview.id, clip["tracks"], preview.time);
     } else {
         Animator& animator = preview.scene.Add<Animator>(preview.id);
         animator.clip = preview.clip; animator.time = static_cast<float>(preview.time); animator.playing = false;
@@ -180,6 +186,10 @@ Scene& Engine::AnimationRenderScene() {
             for (auto& goal : preview.scene.Pool<BoneIK>())
                 if (BoneIkAppliesTo(preview.scene, preview.id, goal.first)) goal.second.weight = 0;
         }
+        const MeshRenderer* renderer = preview.scene.Get<MeshRenderer>(preview.id);
+        std::shared_ptr<const Mesh> mesh = renderer ? assets_->GetMesh(renderer->mesh) : nullptr;
+        if (const AnimationClip* clip = mesh ? FindAnimationClip(*mesh, preview.clip) : nullptr)
+            ApplyPropertyTracks(preview.scene, preview.id, clip->tracks, preview.time);
     }
     UpdateBoneAttachments(preview.scene, *assets_);
     return preview.scene;

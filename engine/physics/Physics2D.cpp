@@ -287,6 +287,9 @@ struct Physics2D::Impl {
     struct BodyRec {
         b2BodyId id = b2_nullBodyId;
         std::string key;
+        // Collider2D.framePoints: the sprite frame whose outline the shapes were made from ("" = points).
+        // A new frame swaps the shapes on the same body (velocity and joints stay).
+        std::string shapeFrame;
         Kind kind = Kind::Static;
         b2Vec2 lastPos{0, 0};
         b2Rot lastRot = b2Rot_identity;
@@ -351,6 +354,22 @@ struct Physics2D::Impl {
         rec.triggers.clear();
     }
 
+    // RigidBody2D.mass over the shapes' distribution (their density only weighs them against each other).
+    static void ApplyMass(BodyRec& rec, const RigidBody2D& rb) {
+        b2Body_ApplyMassFromShapes(rec.id);
+        b2MassData md = b2Body_GetMassData(rec.id);
+        const float mass = std::max(0.001f, rb.mass);
+        if (md.mass > 1e-9f) {
+            const float k = mass / md.mass;
+            md.mass = mass;
+            md.rotationalInertia *= k;
+        } else {
+            md.mass = mass;
+            md.rotationalInertia = 0.1f * mass;
+        }
+        b2Body_SetMassData(rec.id, md);
+    }
+
     // Holds the body origin on its current x (lockPositionX), y (lockPositionY) or both, while it
     // still rotates freely: a wheel joint (point on a line) for one axis, a revolute joint for both.
     void LockAxes(BodyRec& rec, const RigidBody2D& rb) {
@@ -389,11 +408,13 @@ struct Physics2D::Impl {
         return def;
     }
 
-    // Local points of a Collider2D polygon/edge (center applied, scaled).
-    static std::vector<TilePoint> ColliderPoints(const Collider2D& c, const Pose2& pose) {
+    // Local points of a Collider2D polygon/edge (center applied, scaled); `outline` replaces c.points
+    // (Collider2DActivePoints).
+    static std::vector<TilePoint> ColliderPoints(const Collider2D& c, const Pose2& pose, const Json* outline = nullptr) {
         std::vector<TilePoint> pts;
-        if (!c.points.isArray()) return pts;
-        for (const Json& p : c.points.items()) {
+        const Json& points = outline ? *outline : c.points;
+        if (!points.isArray()) return pts;
+        for (const Json& p : points.items()) {
             if (!p.isArray() || p.size() < 2) continue;
             pts.push_back({(p[0].asFloat() + c.center.x) * pose.sx, (p[1].asFloat() + c.center.y) * pose.sy});
         }
@@ -411,7 +432,8 @@ struct Physics2D::Impl {
     }
 
     // Returns false (with a warning) when the collider has no usable shape.
-    bool AddColliderShapes(b2BodyId body, EntityId id, const Collider2D& c, const Pose2& pose, std::vector<b2ShapeId>& made, std::vector<std::string>& warnings) {
+    bool AddColliderShapes(b2BodyId body, EntityId id, const Collider2D& c, const Pose2& pose, std::vector<b2ShapeId>& made, std::vector<std::string>& warnings,
+                           const Json* outline = nullptr) {
         b2ShapeDef def = ShapeDef(c);
         const float sx = std::fabs(pose.sx), sy = std::fabs(pose.sy);
         const bool mirrored = (pose.sx < 0) != (pose.sy < 0);
@@ -433,7 +455,7 @@ struct Physics2D::Impl {
                 made.push_back(b2CreateCapsuleShape(body, &def, &cap));
             }
         } else if (c.shape == "polygon") {
-            std::vector<TilePoint> pts = ColliderPoints(c, pose);
+            std::vector<TilePoint> pts = ColliderPoints(c, pose, outline);
             std::vector<std::vector<TilePoint>> pieces = ConvexPieces(pts);
             if (pieces.empty()) {
                 Warn(warnings, who + "Collider2D polygon needs at least 3 points [[x,y],...] enclosing an area");
@@ -617,11 +639,26 @@ struct Physics2D::Impl {
             const RigidBody2D* rb = scene.Get<RigidBody2D>(id);
             Pose2 pose = PoseOf(scene, id);
             std::string key = ColliderKey(scene, id, pose);
+            const Json& outline = Collider2DActivePoints(c, scene.Get<Sprite>(id));
+            const std::string shapeFrame = &outline == &c.points ? std::string() : SpriteFrameKey(scene.Get<Sprite>(id)->frame);
             auto it = bodies.find(id);
             if (it != bodies.end() && it->second.key != key) {
                 DestroyBody(it->second);
                 bodies.erase(it);
                 it = bodies.end();
+            }
+            if (it != bodies.end() && it->second.shapeFrame != shapeFrame) {
+                // The sprite shows another frame with its own outline: new shapes, same body.
+                BodyRec& rec = it->second;
+                std::vector<b2ShapeId> old(static_cast<size_t>(b2Body_GetShapeCount(rec.id)));
+                if (!old.empty()) b2Body_GetShapes(rec.id, old.data(), static_cast<int>(old.size()));
+                for (b2ShapeId s : old) b2DestroyShape(s, false);
+                std::vector<b2ShapeId> made;
+                AddColliderShapes(rec.id, id, c, pose, made, warnings, &outline);
+                rec.triggers = c.isTrigger ? made : std::vector<b2ShapeId>();
+                if (rec.kind == Kind::Dynamic && rb) ApplyMass(rec, *rb);
+                if (rec.kind != Kind::Static) b2Body_SetAwake(rec.id, true);
+                rec.shapeFrame = shapeFrame;
             }
             if (it == bodies.end()) {
                 BodyRec rec;
@@ -642,27 +679,17 @@ struct Physics2D::Impl {
                 }
                 rec.id = b2CreateBody(world, &bd);
                 std::vector<b2ShapeId> made;
-                if (!AddColliderShapes(rec.id, id, c, pose, made, warnings)) {
+                if (!AddColliderShapes(rec.id, id, c, pose, made, warnings, &outline)) {
                     b2DestroyBody(rec.id);
                     continue;
                 }
                 if (c.isTrigger) rec.triggers = made;
                 if (rec.kind == Kind::Dynamic) {
-                    b2Body_ApplyMassFromShapes(rec.id);
-                    b2MassData md = b2Body_GetMassData(rec.id);
-                    float mass = std::max(0.001f, rb->mass);
-                    if (md.mass > 1e-9f) {
-                        float k = mass / md.mass;
-                        md.mass = mass;
-                        md.rotationalInertia *= k;
-                    } else {
-                        md.mass = mass;
-                        md.rotationalInertia = 0.1f * mass;
-                    }
-                    b2Body_SetMassData(rec.id, md);
+                    ApplyMass(rec, *rb);
                     LockAxes(rec, *rb);
                 }
                 rec.key = key;
+                rec.shapeFrame = shapeFrame;
                 rec.lastPos = pose.p;
                 rec.lastRot = pose.q;
                 rec.seen = SeenOf(scene, id);

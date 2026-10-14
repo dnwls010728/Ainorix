@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -53,6 +54,17 @@ struct FieldInfo {
     // Json fields: a flat object only, name (1..64 bytes) -> finite number, string (<= 256 bytes) or boolean,
     // at most 64 names (Data.values).
     bool flatValues = false;
+    // Presentation only (the inspector, component.types): the named section the field is listed in
+    // (empty = the component's first rows) and when it applies. showIf is comma-separated conditions
+    // that must all hold: "field" (true / non-empty / non-zero), "!field", "field=a|b", "field!=a|b".
+    std::string group;
+    std::string showIf;
+};
+
+// A named section of a component's fields in the inspector, in declaration order.
+struct FieldGroup {
+    std::string name;
+    bool collapsed = false;  // starts closed (fields most components leave at their defaults)
 };
 
 class FieldList {
@@ -68,7 +80,20 @@ public:
         fields.push_back(info);
         return fields.back();
     }
+    // Lists `names` (already added) under the section `name`; sections show in the order declared.
+    void Group(const char* name, std::initializer_list<const char*> names, bool collapsed = false) {
+        groups.push_back({name, collapsed});
+        for (const char* field : names)
+            for (FieldInfo& f : fields)
+                if (f.name == field) f.group = name;
+    }
+    // Shows `field` only while `condition` holds (FieldInfo::showIf).
+    void ShowIf(const char* field, const char* condition) {
+        for (FieldInfo& f : fields)
+            if (f.name == field) f.showIf = condition;
+    }
     std::vector<FieldInfo> fields;
+    std::vector<FieldGroup> groups;
 
 private:
     static FieldType Deduce(const float*) { return FieldType::Float; }
@@ -120,6 +145,7 @@ struct ComponentType {
     std::string name;
     std::string doc;
     std::vector<FieldInfo> fields;
+    std::vector<FieldGroup> groups;
     std::function<std::unique_ptr<IComponentPool>()> makePool;
     // Renames fields of older files and calls in place (T::Upgrade); true when it changed something.
     bool (*upgrade)(Json& values) = nullptr;
@@ -150,6 +176,7 @@ public:
         FieldList list;
         T::Reflect(list);
         type.fields = std::move(list.fields);
+        type.groups = std::move(list.groups);
         type.makePool = [] { return std::make_unique<ComponentPool<T>>(); };
         if constexpr (HasUpgrade<T>::value) type.upgrade = &T::Upgrade;
         type.index = static_cast<int>(Types().size());
