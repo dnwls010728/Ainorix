@@ -207,7 +207,12 @@ bool ApplyComponentJson(const ComponentType& type, void* c, const Json& values, 
     }
     if (type.name == "Tilemap" && !ValidateTilemapData(values, error)) return false;
     Json upgraded;
-    const Json& fields = type.upgrade && type.upgrade(upgraded = values) ? upgraded : values;
+    bool changed = type.upgrade && type.upgrade(upgraded = values);
+    if (type.upgradeFrom) {
+        if (!changed) upgraded = values;
+        changed = type.upgradeFrom(upgraded, c) || changed;
+    }
+    const Json& fields = changed ? upgraded : values;
     for (const auto& kv : fields.members()) {
         const FieldInfo* f = type.FindField(kv.first);
         if (!f) {

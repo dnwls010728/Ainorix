@@ -366,13 +366,12 @@ void RegisterTwoDimensionalCommands(CommandRegistry& r) {
                if (a.has("frame")) frames.push_back(a["frame"]);
                for (const Json& f : a["frames"].items()) frames.push_back(f);
                if (a["allFrames"].asBool()) {
-                   if (!sprite->atlas.empty()) {
-                       auto atlas = e.Assets().GetAtlas(sprite->atlas);
-                       if (!atlas) throw ApiError("invalid_sprite", "cannot read the sprite's atlas " + sprite->atlas);
-                       for (const Json& f : (*atlas)["frames"].items()) frames.push_back(f["name"]);
-                   } else {
-                       for (int i = 0; i < std::max(1, sprite->columns) * std::max(1, sprite->rows); ++i) frames.push_back(Json(i));
-                   }
+                   std::string error;
+                   auto def = e.Assets().GetSprite(sprite->asset, &error);
+                   if (!def) throw ApiError("invalid_sprite", "cannot read the sprite's image " + sprite->asset + ": " + error);
+                   const Json& list = (*def)["frames"];
+                   const bool grid = (*def)["grid"].isArray();  // grid cells are keyed by index
+                   for (size_t i = 0; i < list.size(); ++i) frames.push_back(grid ? Json(static_cast<int>(i)) : list[i]["name"]);
                }
                if (frames.size() > 1024) throw ApiError("invalid_argument", "at most 1024 frames per call");
                if (frames.empty()) {

@@ -408,16 +408,17 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
     const std::shared_ptr<const Light2DMap> light2DMap = GetLight2DMap(scene, assets);
     for (const auto& kv : scene.Pool<Sprite>()) {
         Sprite sp = kv.second;
-        Json atlasRect;
-        Json namedFrame;
+        Json atlasRect;   // the frame's rectangle in the image (atlas frames, rectangles listed in an .anim.json)
+        Json namedFrame;  // an atlas frame: original size, trim and pivot
         bool brokenAnimation = false;
+        // What it draws: Sprite.asset, or the image of its shared animation with the Sprite.asset settings.
+        std::string source = sp.asset;
         if (assets) if (const SpriteAnimation* animation = scene.Get<SpriteAnimation>(kv.first)) if (!animation->asset.empty()) {
             auto definition = assets->GetAnimation(animation->asset);
             if (!definition) brokenAnimation = true;
             else {
-                const Json& image = (*definition)[definition->has("sheet") ? "sheet" : "atlas"];
-                sp.texture = image["texture"].asString();
-                sp.columns = image["columns"].asInt(1); sp.rows = image["rows"].asInt(1);
+                const SpriteAssets lookup = assets->SpriteLookup();
+                source = SpriteAssetOf(scene, kv.first, &lookup);
                 const Json& clip = (*definition)["clips"][animation->clip];
                 if (clip["frames"].size() > 0 && std::isfinite(animation->time)) {
                     SpriteClipTiming timing;
@@ -426,9 +427,13 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                     else
                         brokenAnimation = true;
                 }
-                if (image.has("path"))
-                    sp.atlas = image["path"].asString();
-                else if (definition->has("atlas")) {
+                const Json& image = (*definition)["atlas"];
+                if (image.isObject() && !image.has("path")) {  // rectangles listed in the definition
+                    SpriteSource settings;
+                    ParseSpriteSource(sp.asset, settings);
+                    settings.path = image["texture"].asString();
+                    settings.columns = settings.rows = 1;
+                    source = FormatSpriteSource(settings);
                     const int index = sp.frame;
                     if (index >= 0 && static_cast<size_t>(index) < image["frames"].size())
                         atlasRect = image["frames"][index];
@@ -436,15 +441,34 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 }
             }
         }
-        if (assets && !sp.atlas.empty()) {
-            const auto atlas = assets->GetAtlas(sp.atlas);
-            const Json* frame = atlas ? FindAtlasFrame(*atlas, sp.frame.ToJson()) : nullptr;
-            if (!frame)
+        // The image and what every copy shares: frames, pixels per unit, filtering, pivots.
+        std::string texture, normalTexture;
+        int columns = 1, rows = 1;
+        float pixelsPerUnit = 16, pivotX = 0.5f, pivotY = 0.5f;
+        bool pixelArt = true;
+        if (assets && !source.empty()) {
+            const auto def = assets->GetSprite(source);
+            if (!def) {
                 brokenAnimation = true;
-            else {
-                sp.texture = (*atlas)["texture"].asString();
-                namedFrame = *frame;
-                atlasRect = (*frame)["rect"];
+            } else {
+                texture = (*def)["texture"].asString();
+                normalTexture = (*def)["normalTexture"].asString();
+                pixelsPerUnit = (*def)["pixelsPerUnit"].asFloat(16);
+                pixelArt = (*def)["pixelArt"].asBool(true);
+                pivotX = (*def)["pivot"][0].asFloat(0.5f);
+                pivotY = (*def)["pivot"][1].asFloat(0.5f);
+                if ((*def)["grid"].isArray()) {  // a grid cuts it exactly as sheets always were (fractional cells, wrapping index)
+                    columns = (*def)["grid"][0].asInt(1);
+                    rows = (*def)["grid"][1].asInt(1);
+                } else if (atlasRect.isNull() && (*def)["frames"].size() > 0) {
+                    const Json* frame = FindAtlasFrame(*def, sp.frame.ToJson());
+                    if (!frame)
+                        brokenAnimation = true;
+                    else {
+                        namedFrame = *frame;
+                        atlasRect = (*frame)["rect"];
+                    }
+                }
             }
         }
         if (!sp.visible) continue;
@@ -455,7 +479,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.unlit = !sp.lit;
         it.castShadows = sp.castShadows;
         it.doubleSided = sp.castShadows;  // the light may see either face
-        it.pointSample = sp.pixelArt;
+        it.pointSample = pixelArt;
         it.alphaCutoff = std::max(0.0f, sp.alphaCutoff);
         it.blend = sp.alphaCutoff <= 0.0f;  // no cutoff: soft edges, alpha blended
         it.opacity = sp.opacity;
@@ -467,7 +491,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         if (sp.ySort) it.blend = true;
         it.additive = sp.blend == "add";
         it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
-        if (!sp.texture.empty() && assets) it.textureOverride = assets->GetTexture(sp.texture);
+        if (!texture.empty() && assets) it.textureOverride = assets->GetTexture(texture);
         if (!sp.material.empty() && assets) {
             it.materialOverride = assets->GetMaterial(sp.material);
             if (!it.materialOverride) {  // broken material file: magenta, like a missing mesh
@@ -477,21 +501,21 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             }
         }
         const Texture* tex = it.textureOverride.get();
-        if (!sp.texture.empty() && !tex) {
+        if (!texture.empty() && !tex) {
             it.tint = Color(1, 0, 1);  // missing image: magenta, like missing meshes
             it.error = true;
             it.alphaCutoff = 0;
             it.blend = false;
         }
         float u0, v0, du, dv;
-        FrameRect(sp.frame, sp.columns, sp.rows, tex, u0, v0, du, dv);
+        FrameRect(sp.frame, columns, rows, tex, u0, v0, du, dv);
         if (atlasRect.isArray() && tex) {
             const float x = atlasRect[0].asFloat(), y = atlasRect[1].asFloat();
             const float width = atlasRect[2].asFloat(), height = atlasRect[3].asFloat();
             if (x + width > tex->width || y + height > tex->height) { it.tint = Color(1, 0, 1); it.error = true; }
             // Filtered sprites stop half a texel inside so they do not blend in the neighbouring frame;
             // point-sampled ones keep the frame's scale (texel centres at pixel centres), only a hair inside.
-            const float inset = sp.pixelArt ? 0.01f : 0.5f;
+            const float inset = pixelArt ? 0.01f : 0.5f;
             u0 = (x + inset) / static_cast<float>(tex->width); v0 = (y + inset) / static_cast<float>(tex->height);
             du = (width - 2 * inset) / static_cast<float>(tex->width); dv = (height - 2 * inset) / static_cast<float>(tex->height);
         }
@@ -499,13 +523,13 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.uvScale[0] = sp.flipX ? -du : du;
         it.uvOffset[1] = sp.flipY ? v0 + dv : v0;
         it.uvScale[1] = sp.flipY ? -dv : dv;
-        float ppu = std::max(0.001f, sp.pixelsPerUnit);
-        float frameW = tex ? static_cast<float>(tex->width) / static_cast<float>(std::max(1, sp.columns)) : ppu;
-        float frameH = tex ? static_cast<float>(tex->height) / static_cast<float>(std::max(1, sp.rows)) : ppu;
+        float ppu = std::max(0.001f, pixelsPerUnit);
+        float frameW = tex ? static_cast<float>(tex->width) / static_cast<float>(std::max(1, columns)) : ppu;
+        float frameH = tex ? static_cast<float>(tex->height) / static_cast<float>(std::max(1, rows)) : ppu;
         if (atlasRect.isArray()) { frameW = atlasRect[2].asFloat(); frameH = atlasRect[3].asFloat(); }
         float w = sp.width > 0 ? sp.width : frameW / ppu;
         float h = sp.height > 0 ? sp.height : frameH / ppu;
-        float centerX = (0.5f - sp.pivotX) * w, centerY = (0.5f - sp.pivotY) * h;
+        float centerX = (0.5f - pivotX) * w, centerY = (0.5f - pivotY) * h;
         if (namedFrame.isObject()) {
             const float originalW = namedFrame["size"][0].asFloat(), originalH = namedFrame["size"][1].asFloat();
             const bool rotated = namedFrame["rotated"].asBool();
@@ -547,7 +571,7 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             it.light2DOn = true;
             it.light2D = light2DMap;
             it.ambient2D = sp.ambient2D;
-            if (!sp.normalTexture.empty() && assets) it.normal2D = assets->GetTexture(sp.normalTexture);
+            if (!normalTexture.empty() && assets) it.normal2D = assets->GetTexture(normalTexture);
             it.flip2D[0] = sp.flipX ? -1.0f : 1.0f;
             it.flip2D[1] = sp.flipY ? -1.0f : 1.0f;
         }

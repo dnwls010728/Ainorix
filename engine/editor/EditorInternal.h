@@ -535,19 +535,12 @@ struct NativeEditor::Impl {
     bool tilePaint = false;        // Scene view clicks paint the selected Tilemap
     bool requestTilesFocus = false;
     int tileLayer = -1;
-    int sliceWidth = 16, sliceHeight = 16;
-    std::string slicePath = "sprites/sheet.atlas.json";
-    int collisionPoint = -1;
-    int collisionSerial = 0;
     std::string tileDataKey;
     std::map<std::string, std::array<float, 4>> twoDimensionalRects;
     void TwoDimensionalRect(const std::string& name);
     void TileRuleTools();
     void TileLayerTools();  // layer picker, add / rename / move / remove, visible, collision
     std::string tileLayerName;
-    bool sliceTrim = false;
-    float outlineCutoff = 0.5f;
-    bool collisionSnap = true;
     char tileBrush = '#';
     Json tileInfo;                 // tilemap.info of the selected tilemap
     EntityId tileInfoId = kNullEntity;
@@ -564,36 +557,58 @@ struct NativeEditor::Impl {
     void TileSceneInput(ImDrawList* dl, bool clickedLeft, bool clickedRight);
     void TilesPanel();
 
-    // ----- Sprite Editor (EditorSprite.cpp): Slice Sheet and per-frame Collision of the selected Sprite
+    // ----- Sprite Editor (EditorSprite.cpp): one sprite asset (*.sprite.json) - how its image is cut into frames
+    // (Slice), the asset's settings and each frame's pivot (Frames), each frame's collision outline (Collision).
+    // Every change is a sprite.* command that writes the file; the window keeps its own undo of the file.
     bool showSpriteEditor = false, focusSpriteEditor = false;
-    int spriteEditorTab = 0;                 // 0 = Slice Sheet, 1 = Collision
-    EntityId spriteEditorEntity = kNullEntity;  // the sprite the view was fitted for
+    bool spriteEditorFocused = false;        // the window owns Ctrl+Z / Ctrl+Y while focused
+    int spriteEditorTab = 1;                 // 0 = Slice, 1 = Frames, 2 = Collision
+    std::string spritePath;                  // the asset being edited ("" = the start page)
+    std::string spriteNewTexture, spriteNewPath;  // start page: the image a new asset is made from, and its file
+    bool spriteConvertAll = true;            // start page: convert the other sprites drawing the same image too
+    Json spriteRaw, spriteResolved;          // sprite.get: as written / with defaults filled in
+    std::string spriteError;                 // why spritePath could not be read
+    int spriteImageSize[2] = {0, 0};
+    int64_t spriteLoadedTime = 0;            // file time read (an outside edit reloads)
+    EntityId spriteFollowed = kNullEntity;   // the selection the window last followed
+    int spriteFrame = 0;                     // selected frame
+    std::vector<Json> spriteUndo, spriteRedo;  // earlier / undone versions of the file
+    int spriteMergeSerial = -1;              // the drag whose first edit made the last undo step
+    int spriteDragSerial = 0;
     bool spriteFit = true;                   // keep the picture fitted to the view (until the person zooms or pans)
-    float spriteZoom = 1;                    // Slice: screen pixels per texel; Collision: per local unit
-    ImVec2 spritePan{0, 0};                  // screen offset of the picture (Slice) or the entity origin (Collision)
-    std::string spriteFrameKey;              // the frame the Collision tab edits (Collider2D.framePoints key)
-    int sliceMode = 0;                       // 0 cell size, 1 cell count, 2 find sprites
-    int sliceColumns = 4, sliceRows = 4, sliceGap = 2, slicePivot = 0;
+    float spriteZoom = 1;                    // screen pixels per image pixel
+    ImVec2 spritePan{0, 0};                  // screen offset of the sheet (Slice) or of the frame's canvas corner
+    int sliceMode = 1;                       // 0 cell size, 1 cell count, 2 auto
+    int sliceWidth = 16, sliceHeight = 16, sliceColumns = 1, sliceRows = 1, sliceGap = 2;
     int sliceOffset[2] = {0, 0}, sliceSpacing[2] = {0, 0};
-    bool sliceOverwrite = false;
+    bool sliceTrim = false;
     bool sliceEdited = false;                // settings changed since the last apply: the canvas shows the preview
-    Json slicePreview;                       // atlas.create {dryRun} for the current settings
+    Json slicePreview;                       // sprite.slice {dryRun} for the current settings
     std::string slicePreviewKey;
-    bool collisionEditDefault = false;       // edit Collider2D.points instead of the frame's own outline
-    bool collisionOnion = true;
+    float outlineCutoff = 0.5f, outlineDetail = 1.0f;
+    bool outlineConvex = false;
+    int collisionPoint = -1;
+    bool collisionSnap = true, collisionOnion = true;
+    bool pivotDrag = false;
     std::map<std::string, std::array<float, 4>> spriteRects;  // automation: control bounds by name
-    struct SpriteSheetFrame {
-        std::string key;  // framePoints key: atlas frame name or sheet index
-        float x = 0, y = 0, w = 0, h = 0;  // pixels in the sheet
-    };
-    // The frames the sprite's atlas or grid cuts its sheet into; `sheet` gets the image path.
-    std::vector<SpriteSheetFrame> SpriteSheetFrames(const Sprite& sprite, std::string* sheet);
     void SpriteRect(const std::string& name);
     void SpriteEditorPanel();
-    void SpriteSliceTab(const Sprite& sprite);
-    void SpriteCollisionTab(const Sprite& sprite);
+    void SpriteOpen(const std::string& path);  // show this asset (reads it again when it is already shown)
+    bool SpriteLoad();
+    // Runs a sprite.* command on the shown asset (path filled in) and reads it again. `merge` >= 0: edits
+    // with the same value (one drag) share one undo step.
+    bool SpriteEdit(const std::string& command, Json args, int merge = -1);
+    void SpriteHistory(bool redo);
+    int SpriteFrameIndex(const Json& frame) const;  // index of a frame argument (number or name), -1 when absent
+    void SpriteStartPage();
+    void SpriteSliceTab(float side);
+    void SpriteFramesTab(float side);
+    void SpriteCollisionTab(float side);
+    void SpriteFrameStrip(float height);
     void SpriteCanvasInput(ImVec2 origin, bool hovered, bool active);
-    void SpriteZoomBadge(ImVec2 origin, ImVec2 size, float scale);  // scale: zoom units -> screen pixels per image pixel
+    void SpriteZoomBadge(ImVec2 origin, ImVec2 size);
+    // Inspector row of Sprite.frame for a sprite with an asset: the frame's picture and name, a grid to pick one.
+    void SpriteFrameRow(EntityId id, const Json& values, const Json& schema);
 
     // ----- Game view
     int gameAspect = 0;  // 0 free, 1 16:9, 2 16:10, 3 4:3

@@ -230,6 +230,7 @@ const char* KindLabel(const std::string& kind) {
     if (kind == "controller") return Tr("Animation Controller");
     if (kind == "animation") return Tr("Animation");
     if (kind == "texture") return Tr("Textures");
+    if (kind == "sprite") return Tr("Sprites");
     if (kind == "material") return Tr("Materials");
     if (kind == "shader") return Tr("Shaders");
     if (kind == "vfx") return Tr("Effects");
@@ -245,6 +246,7 @@ ImVec4 KindColor(const std::string& kind) {
     if (kind == "script") return ImVec4(0.95f, 0.85f, 0.45f, 1);
     if (kind == "model") return ImVec4(0.8f, 0.65f, 1.0f, 1);
     if (kind == "texture") return ImVec4(0.95f, 0.6f, 0.8f, 1);
+    if (kind == "sprite") return ImVec4(0.92f, 0.62f, 0.80f, 1);
     if (kind == "material") return ImVec4(1.0f, 0.62f, 0.35f, 1);
     if (kind == "audio") return ImVec4(0.55f, 0.9f, 0.55f, 1);
     return ImVec4(0.7f, 0.72f, 0.76f, 1);
@@ -894,8 +896,9 @@ void NativeEditor::Impl::InspectorPanel() {
             if (type == "Script") editIcon = kIconFileCode, editLabel = "Edit Script", editPath = kv.second["path"].asString("");
             if (type == "VFXSystem") editIcon = kIconSparkles, editLabel = "Edit Effect", editPath = kv.second["asset"].asString("");
             if (type == "MeshRenderer") editIcon = kIconPalette, editLabel = "Edit Material", editPath = kv.second["material"].asString("");
-            if (type == "Sprite") editIcon = kIconImage, editLabel = "Slice Sheet", editPath = "slice";
-            if (type == "Collider2D" && comps.has("Sprite")) editIcon = kIconSquareDashed, editLabel = "Edit Outline per Frame", editPath = "collision";
+            if (type == "Sprite") editIcon = kIconImage, editLabel = "Open Sprite Editor", editPath = "frames";
+            if (type == "Collider2D" && comps.has("Sprite") && kv.second["shape"].asString() == "sprite")
+                editIcon = kIconSquareDashed, editLabel = "Edit Collision per Frame", editPath = "collision";
             if (editLabel && !editPath.empty()) {
                 ImGui::Dummy(ImVec2(0, 1));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1, 1, 1, 0.06f));
@@ -964,7 +967,7 @@ void NativeEditor::Impl::InspectorPanel() {
                         else if (type == "SpriteAnimation" && field == "clips") {
                             if (ImGui::Button(Tr("Edit Sprite Frames"))) Call("editor.animation", ObjectOf({{"frames", true}}));
                         } else if (type == "Collider2D" && field == "framePoints" && comps.has("Sprite")) {
-                            // Outlines per frame are pictures, not text: a count here, editing in the Sprite Editor.
+                            // Old per-entity outlines: a count, and the way to move them into the sprite asset.
                             ImGui::TableNextRow();
                             ImGui::TableSetColumnIndex(0);
                             ImGui::AlignTextToFramePadding();
@@ -972,10 +975,12 @@ void NativeEditor::Impl::InspectorPanel() {
                             HelpTooltip(f.second["description"].asString(""));
                             ImGui::TableSetColumnIndex(1);
                             const int count = static_cast<int>(kv.second[field].size());
-                            if (ImGui::Button(count ? Format(Tr("%d frames: Edit"), count).c_str() : Tr("None: Edit"), ImVec2(-FLT_MIN, 0)))
-                                Call("editor.sprite", ObjectOf({{"tab", "collision"}}));
+                            ImGui::TextDisabled(Tr("%d frames"), count);
+                            HelpTooltip(Tr("Outlines kept on this entity. The Sprite Editor's Make Sprite Asset moves them into a sprite asset (Collider2D shape sprite), where every copy shares them."));
                             inspectorRects[type + "." + field] = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().x,
                                                                   ImGui::GetItemRectSize().y};
+                        } else if (type == "Sprite" && field == "frame" && !kv.second["asset"].asString().empty()) {
+                            SpriteFrameRow(id, kv.second, f.second);
                         } else FieldEditor(id, type, field, f.second, kv.second[field]);
                         ImGui::PopID();
                     }
@@ -1016,7 +1021,7 @@ void NativeEditor::Impl::AssetsPanel() {
         std::string p = a["path"].asString("");
         byKind[a["kind"].asString("other")].push_back(p);
     }
-    const char* order[] = {"scene", "prefab", "script", "model", "texture", "material", "audio", "font"};
+    const char* order[] = {"scene", "prefab", "script", "model", "texture", "sprite", "material", "audio", "font"};
     std::vector<std::string> kinds(std::begin(order), std::end(order));
     for (const auto& kv : byKind) {
         if (std::find(kinds.begin(), kinds.end(), kv.first) == kinds.end()) kinds.push_back(kv.first);
@@ -1107,10 +1112,12 @@ void NativeEditor::Impl::AssetsPanel() {
                     else if (kind == "shader" || kind == "material") OpenShader(path);
                     else if (kind == "vfx") OpenEffect(path);
                     else if (kind == "controller") Call("editor.animation", ObjectOf({{"controller", path}}));
+                    else if (kind == "sprite") Call("editor.sprite", ObjectOf({{"path", path}}));
+                    else if (kind == "texture") Call("editor.sprite", ObjectOf({{"texture", path}, {"tab", "slice"}}));
                     else if (kind == "prefab") Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 }
             }
-            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material" || kind == "vfx" || kind == "controller") ? Tr("Double-click to edit") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
+            const char* hint = kind == "scene" ? Tr("Double-click to open") : (kind == "script" || kind == "shader" || kind == "material" || kind == "vfx" || kind == "controller" || kind == "sprite") ? Tr("Double-click to edit") : kind == "texture" ? Tr("Double-click to make a sprite asset") : kind == "prefab" ? Tr("Double-click to instantiate") : nullptr;
             HelpTooltip(hint ? path + "\n" + hint : path);
             if (ImGui::BeginDragDropSource()) {
                 ImGui::SetDragDropPayload(kAssetPayload, path.data(), path.size());
@@ -1122,6 +1129,8 @@ void NativeEditor::Impl::AssetsPanel() {
                 if (kind == "scene" && ImGui::MenuItem(Tr("Open"))) RequestAction({PendingAction::Kind::LoadScene, path});
                 if (kind == "script" && ImGui::MenuItem(Tr("Edit"))) OpenScript(path);
                 if (kind == "vfx" && ImGui::MenuItem(Tr("Edit Effect"))) OpenEffect(path);
+                if (kind == "sprite" && ImGui::MenuItem(Tr("Open Sprite Editor"))) Call("editor.sprite", ObjectOf({{"path", path}}));
+                if (kind == "texture" && ImGui::MenuItem(Tr("Make Sprite Asset..."))) Call("editor.sprite", ObjectOf({{"texture", path}, {"tab", "slice"}}));
                 if ((kind == "shader" || kind == "material") && ImGui::MenuItem(Tr("Edit Graph"))) OpenShader(path);
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Instantiate"))) Call("prefab.instantiate", ObjectOf({{"path", Json(path)}}));
                 if (kind == "prefab" && ImGui::MenuItem(Tr("Edit Prefab"), nullptr, false, !InPlaySession()))
@@ -1156,7 +1165,7 @@ void NativeEditor::Impl::AssetsPanel() {
                     const char* symbol = kind == "script" ? kIconFileCode : kind == "audio" ? kIconMusic : kind == "font" ? kIconType :
                                          kind == "vfx" ? kIconSparkles : kind == "shader" ? kIconWorkflow : kind == "material" ? kIconPalette :
                                          kind == "prefab" ? kIconPackage : kind == "scene" ? kIconFileJson : kind == "model" ? kIconBox :
-                                         kind == "texture" ? kIconImage : kIconFile;
+                                         (kind == "texture" || kind == "sprite") ? kIconImage : kIconFile;
                     const float iconSize = std::min(side * 0.5f, ImGui::GetFontSize() * 2.0f);
                     const ImVec2 size = ImGui::GetFont()->CalcTextSizeA(iconSize, FLT_MAX, 0.0f, symbol);
                     draw->AddText(ImGui::GetFont(), iconSize, ImVec2(preview.x + (side - size.x) * 0.5f, preview.y + (side - size.y) * 0.5f),

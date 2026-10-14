@@ -62,6 +62,7 @@
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
+#include "scene/SpriteAsset.h"
 #include "scene/TileGrid.h"
 #include "scene/Vfx.h"
 #include "scene/VfxExpression.h"
@@ -20631,11 +20632,127 @@ TEST(SpriteFrameCollisionOutlines) {
     Json types = Call(e, "component.types")["result"];
     for (const Json& t : types.items()) {
         if (t["name"].asString() == "Sprite") {
-            CHECK(t["schema"]["x-oe-groups"].size() >= 5 && t["schema"]["properties"]["texture"]["x-oe-group"].asString() == "Image");
+            CHECK(t["schema"]["x-oe-groups"].size() >= 5 && t["schema"]["properties"]["asset"]["x-oe-group"].asString() == "Image" && !t["schema"]["properties"].has("texture"));
             CHECK(t["schema"]["properties"]["slice"]["x-oe-showIf"].asString() == "drawMode=sliced");
         }
         if (t["name"].asString() == "Collider2D") CHECK(t["schema"]["properties"]["radius"]["x-oe-showIf"].asString() == "shape=circle|capsule");
     }
+    RemoveAll(project);
+}
+
+TEST(SpriteAssetFiles) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("sprite_assets");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    // A 16x8 sheet of two 8x8 cells: a 6x6 blob in cell 0, a 2x2 blob in cell 1.
+    Image sheet;
+    sheet.width = 16;
+    sheet.height = 8;
+    sheet.rgba.assign(16 * 8 * 4, 0);
+    auto opaque = [&](int x, int y) { sheet.rgba[(static_cast<size_t>(y) * 16 + static_cast<size_t>(x)) * 4 + 3] = 255; };
+    for (int y = 1; y < 7; ++y)
+        for (int x = 1; x < 7; ++x) opaque(x, y);
+    for (int y = 3; y < 5; ++y)
+        for (int x = 11; x < 13; ++x) opaque(x, y);
+    CHECK(WritePng(project + "/sheet.png", sheet, true));
+
+    // sprite.create cuts the image; names come from the file; dryRun writes nothing; paths and fields are checked.
+    const char* create = R"({"path":"hero.sprite.json","texture":"sheet.png","slicing":{"mode":"cellCount","columns":2},"pixelsPerUnit":8,"pivot":[0.5,0]})";
+    Json args = Json::parse(create);
+    args["dryRun"] = true;
+    CHECK(e.Call("sprite.create", args)["ok"].asBool() && !FileExists(project + "/hero.sprite.json"));
+    Json made = Call(e, "sprite.create", create);
+    CHECK(made["ok"].asBool() && made["result"]["frames"].asInt() == 2 && made["result"]["values"]["frames"][1]["name"].asString() == "hero_1");
+    CHECK(made["result"]["resolved"]["frames"][1]["pivot"] == Json(Json::Array{0.5, 0}));  // the default pivot filled in
+    CHECK(!Call(e, "sprite.create", create)["ok"].asBool());  // exists
+    CHECK(Call(e, "sprite.create", R"({"path":"hero.png","texture":"sheet.png"})")["error"]["code"].asString() == "invalid_path");
+    CHECK(Call(e, "sprite.set", R"({"path":"hero.sprite.json","values":{"bogus":1}})")["error"]["code"].asString() == "invalid_sprite");
+    CHECK(Call(e, "sprite.set", R"({"path":"hero.sprite.json","frame":0,"values":{"collision":[[0,0],[1,1]]}})")["error"]["code"].asString() == "invalid_sprite");
+    CHECK(Call(e, "asset.info", R"({"path":"hero.sprite.json"})")["result"]["kind"].asString() == "sprite");
+
+    // Collision traced from the pixels, in frame pixels: frame 1's blob is 2 px square at (3, 3).
+    const Json fit = Call(e, "sprite.fit_collision", R"({"path":"hero.sprite.json"})");
+    CHECK(fit["ok"].asBool() && fit["result"]["outlines"].size() == 2);
+    float lo = 99, hi = -99;
+    for (const Json& p : fit["result"]["outlines"]["hero_1"].items()) lo = std::min(lo, p[0].asFloat()), hi = std::max(hi, p[0].asFloat());
+    CHECK(lo == 3 && hi == 5);
+    // A concave L traced with corners only; convex wraps it.
+    std::vector<uint32_t> texels(64, 0);
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+            if (x < 3 || y > 4) texels[static_cast<size_t>(y) * 8 + static_cast<size_t>(x)] = 0xff000000u;
+    CHECK(TraceSpriteOutline(texels.data(), 8, 8, 0, 0, 8, 8, 0.5f, 0, false).size() == 6);
+    CHECK(TraceSpriteOutline(texels.data(), 8, 8, 0, 0, 8, 8, 0.5f, 0, true).size() == 5);
+
+    // Sprite.asset draws the asset's frames; Collider2D shape sprite collides with the shown frame's outline.
+    CHECK(Call(e, "entity.create", R"({"name":"Hero","components":{"Sprite":{"asset":"hero.sprite.json"},"Collider2D":{"shape":"sprite"}}})")["ok"].asBool());
+    const EntityId hero = e.GetScene().FindByName("Hero");
+    auto hits = [&](float x) {
+        Json ray = Json::parse(R"({"origin":[0,5,0],"direction":[0,-1,0]})");
+        ray["origin"][0] = x;
+        return e.Call("physics.raycast", ray)["result"]["hit"].asBool();
+    };
+    CHECK(hits(0.3f) && !hits(0.5f));  // frame 0: blob x 1..7 px around the 4 px pivot = -0.375..0.375
+    Call(e, "component.set", R"({"id":"Hero","type":"Sprite","values":{"frame":"hero_1"}})");
+    CHECK(!hits(0.3f) && hits(0.1f));  // frame 1: the small blob
+    const SpriteAssets lookup = e.Assets().SpriteLookup();
+    CHECK(Collider2DOutline(e.GetScene(), hero, *e.GetScene().Get<Collider2D>(hero), &lookup).size() >= 4);
+    // A pivot on the left edge and flipX: the outline mirrors to the left of the entity.
+    CHECK(Call(e, "sprite.set", R"({"path":"hero.sprite.json","values":{"pivot":[0,0]}})")["ok"].asBool());
+    Call(e, "component.set", R"({"id":"Hero","type":"Sprite","values":{"flipX":true}})");
+    float maxX = -99;
+    const Json mirrored = Collider2DOutline(e.GetScene(), hero, *e.GetScene().Get<Collider2D>(hero), &lookup);
+    for (const Json& p : mirrored.items()) maxX = std::max(maxX, p[0].asFloat());
+    CHECK(maxX < 0);
+    float occluderX = 99;  // 2D light shadows use the outline too
+    for (const auto& edge : GatherOccluders2D(e.GetScene(), &e.Assets()).edges) occluderX = std::min(occluderX, edge.a.x);
+    CHECK(occluderX < -0.3f);
+    // A sprite without an asset: shape sprite collides with nothing and says why.
+    Call(e, "entity.create", R"({"name":"Bare","components":{"Sprite":{},"Collider2D":{"shape":"sprite"}}})");
+    Json noOutline;
+    std::string why;
+    CHECK(!SpriteColliderOutline(e.GetScene(), e.GetScene().FindByName("Bare"), &lookup, noOutline, nullptr, &why) && why.find("asset") != std::string::npos);
+    // An image named directly (a grid, its settings after "?"): frames without outlines collide as their rectangles.
+    Call(e, "entity.create", R"({"name":"Direct","components":{"Sprite":{"asset":"sheet.png?columns=2&ppu=8"},"Collider2D":{"shape":"sprite"}}})");
+    CHECK(SpriteColliderOutline(e.GetScene(), e.GetScene().FindByName("Direct"), &lookup, noOutline, nullptr, &why) && noOutline.size() == 4 &&
+          noOutline[1][0].asFloat() == 0.5f);  // 8 px cell, 8 px per unit, centered
+    std::string bad;
+    CHECK(!e.Assets().GetSprite("sheet.png?columns=two", &bad) && bad.find("columns") != std::string::npos);  // drawn magenta, says why
+    // Older fields (files, calls, Lua) become that form, merged with the settings the sprite has.
+    Call(e, "component.set", R"({"id":"Direct","type":"Sprite","values":{"pivotY":0,"pixelArt":false}})");
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Direct"))->asset == "sheet.png?columns=2&ppu=8&pivot=0.5,0&pixelArt=0");
+    Call(e, "component.set", R"({"id":"Direct","type":"Sprite","values":{"texture":"other.png","pixelsPerUnit":16}})");
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Direct"))->asset == "other.png?columns=2&pivot=0.5,0&pixelArt=0");
+
+    // sprite.slice again: the same cells keep their names, pivots and collision.
+    const Json resliced = Call(e, "sprite.slice", R"({"path":"hero.sprite.json","slicing":{"mode":"cellSize","cellWidth":8,"cellHeight":8}})");
+    CHECK(resliced["ok"].asBool() && resliced["result"]["kept"].size() == 2 && resliced["result"]["values"]["frames"][1].has("collision"));
+
+    // A shared .anim.json can name the sprite asset as its atlas.
+    CHECK(Call(e, "animation.create", R"({"path":"hero.anim.json","values":{"atlas":{"path":"hero.sprite.json"},"clips":{"run":{"frames":[0,1],"fps":2}}}})")["ok"].asBool());
+    Call(e, "entity.create", R"({"name":"Runner","components":{"Sprite":{},"SpriteAnimation":{"asset":"hero.anim.json","clip":"run"}}})");
+    CHECK(SpriteAssetOf(e.GetScene(), e.GetScene().FindByName("Runner"), &lookup) == "hero.sprite.json");
+
+    // sprite.convert: a sprite's own settings into an asset, drawn exactly the same; its polygon collider follows.
+    Call(e, "scene.new", R"({"empty":true})");
+    Call(e, "entity.create", R"({"name":"Old","components":{"Sprite":{"texture":"sheet.png","columns":2,"pixelsPerUnit":8,"pivotY":0.25,"frame":1}}})");
+    Call(e, "entity.create", R"({"name":"Twin","components":{"Transform":{"position":[2,0,0]},"Sprite":{"texture":"sheet.png","columns":2,"pixelsPerUnit":8,"pivotY":0.25}}})");
+    Call(e, "entity.create", R"({"name":"Other","components":{"Transform":{"position":[-2,0,0]},"Sprite":{"texture":"sheet.png","columns":2,"pixelsPerUnit":8}}})");
+    CHECK(Call(e, "sprite.collision", R"({"id":"Old","points":[[-0.5,-0.25],[0.5,-0.25],[0.5,0.75],[-0.5,0.75]]})")["ok"].asBool());
+    const char* shot = R"J({"width":64,"height":48,"inline":false,"camera":{"eye":[1,0,10],"target":[1,0,0]}})J";
+    const std::string before = Call(e, "render.screenshot", shot)["result"]["hash"].asString();
+    const Json converted = Call(e, "sprite.convert", R"({"id":"Old","path":"sprites/old.sprite.json","all":true})");
+    CHECK(converted["ok"].asBool() && converted["result"]["entities"].size() == 2 && converted["result"]["collider"].asBool());
+    CHECK(Call(e, "render.screenshot", shot)["result"]["hash"].asString() == before);
+    const Collider2D* c = e.GetScene().Get<Collider2D>(e.GetScene().FindByName("Old"));
+    CHECK(c && c->shape == "sprite");
+    // The square of local units became frame pixels: x -0.5 at 8 px per unit left of the 4 px pivot, y -0.25 below the pivot at 6 px.
+    CHECK(converted["result"]["values"]["frames"][1]["collision"][0] == Json(Json::Array{0, 8}));
+    Call(e, "history.undo");
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Old"))->asset == "sheet.png?columns=2&ppu=8&pivot=0.5,0.25" &&
+          e.GetScene().Get<Collider2D>(e.GetScene().FindByName("Old"))->shape == "polygon");
     RemoveAll(project);
 }
 
@@ -20850,6 +20967,7 @@ TEST(NativeEditorSpriteEditorAndInspectorSections) {
     const std::string project = TempProject("sprite_editor");
     CHECK(e.Open(project, &error));
     Call(e, "scene.new", R"({"empty":true})");
+    // Two 8x8 cells, each with a 6 px wide blob.
     Image sheet;
     sheet.width = 16;
     sheet.height = 8;
@@ -20920,48 +21038,63 @@ TEST(NativeEditorSpriteEditorAndInspectorSections) {
         mouse(x + dx, y + dy, false);
         draw(2);
     };
+    auto state = [&]() { return Call(e, "editor.state")["result"]["spriteEditor"]; };
+    auto asset = [&]() { return Call(e, "sprite.get", R"({"path":"sprites/sheet.sprite.json"})")["result"]["values"]; };
     draw(4);
 
     // Inspector: the Sprite's sections; a closed section hides its fields, showIf hides fields that do not apply.
-    CHECK(editor.InspectorControlRect("Sprite#Lighting")[2] > 0 && editor.InspectorControlRect("Sprite.texture")[2] > 0);
+    CHECK(editor.InspectorControlRect("Sprite#Lighting")[2] > 0 && editor.InspectorControlRect("Sprite.asset")[2] > 0);
     CHECK(editor.InspectorControlRect("Sprite.lit")[2] == 0);
     clickRect(editor.InspectorControlRect("Sprite#Lighting"));
     CHECK(editor.InspectorControlRect("Sprite.lit")[2] > 0 && editor.InspectorControlRect("Sprite.emission")[2] == 0);
     Call(e, "component.set", R"({"id":"Hero","type":"Sprite","values":{"lit":true}})");
     draw(2);
     CHECK(editor.InspectorControlRect("Sprite.emission")[2] > 0);
-    CHECK(editor.InspectorControlRect("Sprite.columns")[2] > 0);  // shown while the sprite has no atlas
 
-    // Collision: fit every frame, pick frame 1, move its own outline's point; the default outline stays.
-    CHECK(Call(e, "editor.sprite", R"({"tab":"collision"})")["ok"].asBool());
-    draw(3);
-    clickRect(editor.SpriteEditorControlRect("collision-fit-all"));
-    const Collider2D* c = e.GetScene().Get<Collider2D>(hero);
-    CHECK(c && c->framePoints.has("0") && c->framePoints.has("1"));
-    clickRect(editor.SpriteEditorControlRect("frame:1"));
-    CHECK(e.GetScene().Get<Sprite>(hero)->frame == 1 && Call(e, "editor.state")["result"]["spriteEditor"]["frame"].asString() == "1");
-    const Json defaultBefore = c->points, frameBefore = c->framePoints["1"];
-    const size_t undoBefore = e.UndoDepth();
-    drag(editor.SpriteEditorControlRect("collision-point:0"), 40, 0);
-    c = e.GetScene().Get<Collider2D>(hero);
-    CHECK(c->framePoints["1"] != frameBefore && c->points == defaultBefore);
-    CHECK(e.UndoDepth() == undoBefore + 1);  // one drag, one undo step
-    clickRect(editor.SpriteEditorControlRect("collision-clear"));
-    CHECK(!e.GetScene().Get<Collider2D>(hero)->framePoints.has("1"));
-    clickRect(editor.SpriteEditorControlRect("collision-target:1"));
-    CHECK(Call(e, "editor.state")["result"]["spriteEditor"]["editDefault"].asBool());
-    drag(editor.SpriteEditorControlRect("collision-point:0"), 0, -30);
-    CHECK(e.GetScene().Get<Collider2D>(hero)->points != defaultBefore);
-
-    // Slice: cut the sheet by cell count (4 x 4 cells of 4 x 2 px) and apply: an atlas the sprite then uses.
-    clickRect(editor.SpriteEditorControlRect("tab:0"));
-    clickRect(editor.SpriteEditorControlRect("slice-mode:1"));
-    CHECK(editor.SpriteEditorControlRect("slice-canvas")[2] > 100);
-    clickRect(editor.SpriteEditorControlRect("slice"));
-    CHECK(FileExists(project + "/sprites/sheet.atlas.json"));
-    CHECK(e.GetScene().Get<Sprite>(hero)->atlas == "sprites/sheet.atlas.json");
+    // A sprite without an asset opens the start page; Make Sprite Asset moves its settings into one.
+    clickRect(editor.InspectorControlRect("Sprite#edit"));
+    CHECK(state()["open"].asBool() && state()["path"].asString().empty());
+    clickRect(editor.SpriteEditorControlRect("convert"));
+    CHECK(FileExists(project + "/sprites/sheet.sprite.json") && e.GetScene().Get<Sprite>(hero)->asset == "sprites/sheet.sprite.json");
+    CHECK(state()["path"].asString() == "sprites/sheet.sprite.json" && state()["tab"].asString() == "frames");
     draw(2);
-    CHECK(editor.InspectorControlRect("Sprite.columns")[2] == 0);  // an atlas replaces the grid fields
+    CHECK(editor.InspectorControlRect("Sprite.frame")[2] > 0 && editor.InspectorControlRect("Sprite.texture")[2] == 0);
+
+    // Inspector frame picker: the frames as pictures.
+    clickRect(editor.InspectorControlRect("Sprite.frame"));
+    clickRect(editor.InspectorControlRect("Sprite.frame:1"));
+    CHECK(e.GetScene().Get<Sprite>(hero)->frame == 1);
+
+    // Frames: the bottom-center spot of the default pivot.
+    clickRect(editor.SpriteEditorControlRect("default-pivot:7"));
+    CHECK(asset()["pivot"] == Json(Json::Array{0.5, 0.0}));
+
+    // Collision: fit every frame, pick frame 1 and drag a point (one undo step of the window), undo it.
+    clickRect(editor.SpriteEditorControlRect("tab:2"));
+    clickRect(editor.SpriteEditorControlRect("collision-fit-all"));
+    CHECK(asset()["frames"][0].has("collision") && asset()["frames"][1].has("collision"));
+    clickRect(editor.SpriteEditorControlRect("frame:1"));
+    CHECK(state()["frame"].asInt() == 1);
+    const Json fitted = asset()["frames"][1]["collision"];
+    const uint64_t undo = static_cast<uint64_t>(state()["undo"].asInt());
+    const size_t sceneUndo = e.UndoDepth();
+    drag(editor.SpriteEditorControlRect("collision-point:0"), 60, 0);
+    CHECK(asset()["frames"][1]["collision"] != fitted && asset()["frames"][0].has("collision"));
+    CHECK(static_cast<uint64_t>(state()["undo"].asInt()) == undo + 1 && e.UndoDepth() == sceneUndo);  // the asset's undo, not the scene's
+    clickRect(editor.SpriteEditorControlRect("undo"));
+    CHECK(asset()["frames"][1]["collision"] == fitted && state()["redo"].asInt() == 1);
+    clickRect(editor.SpriteEditorControlRect("collision-clear"));
+    CHECK(!asset()["frames"][1].has("collision"));
+
+    // Slice: auto finds the two blobs; frames keeping their names keep their collision.
+    clickRect(editor.SpriteEditorControlRect("tab:0"));
+    CHECK(editor.SpriteEditorControlRect("slice-canvas")[2] > 100);
+    clickRect(editor.SpriteEditorControlRect("slice-mode:2"));
+    clickRect(editor.SpriteEditorControlRect("slice"));
+    const Json sliced = asset();
+    CHECK(sliced["slicing"]["mode"].asString() == "auto" && sliced["frames"].size() == 2 && sliced["frames"][0]["rect"] == Json(Json::Array{1, 1, 6, 6}));
+    CHECK(sliced["frames"][0].has("collision"));
+    CHECK(WritePng("build/sprite-editor.png", image.ToImage(), true));
     RemoveAll(project);
 }
 #endif

@@ -204,7 +204,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --frame-selection --animation [--animation-frames] --animation-controller animations/x.controller.json --animation-clip Clip --animation-time N --2d --tiles --sprite-editor slice|collision[:frame] --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --frame-selection --animation [--animation-frames] --animation-controller animations/x.controller.json --animation-clip Clip --animation-time N --2d --tiles --sprite-editor [x.sprite.json:]slice|frames|collision[:frame] --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -287,7 +287,8 @@ int CmdRender(const Args& a) {
     view.playing = engine.InPlaySession();
     if (a.Has("--colliders")) {
         TilesetLookup tilesets = engine.Assets().Tilesets();
-        AppendColliderLines(engine.GetScene(), view.lines, &tilesets);
+        const SpriteAssets sprites = engine.Assets().SpriteLookup();
+        AppendColliderLines(engine.GetScene(), view.lines, &tilesets, &sprites);
     }
     IRenderer* renderer = &engine.Renderer();
     if (a.Get("--renderer", "software") != "software") {
@@ -482,7 +483,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--tiles") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") || a.Has("--retarget") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") || a.Has("--animation") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--tiles") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") || a.Has("--retarget") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") || a.Has("--animation") || a.Has("--sprite-editor") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
@@ -515,11 +516,16 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
             if(a.Has("--effects-values") && a.Has("--effects-graph")) editor.SetEffectsGraphValue(true,5);
             else if(a.Has("--effects-values")) editor.SetEffectsValues(true,true,10);
         }
-        if (i == 1 && a.Has("--sprite-editor")) {  // slice | collision[:frame]
-            const std::string spec = a.Get("--sprite-editor");
-            const size_t colon = spec.find(':');
+        if (i == 1 && a.Has("--sprite-editor")) {  // [sprites/x.sprite.json:]slice | frames | collision[:frame]
+            std::string spec = a.Get("--sprite-editor");
             Json args = Json::MakeObject();
-            args["tab"] = spec.substr(0, colon).empty() ? std::string("slice") : spec.substr(0, colon);
+            const size_t asset = spec.find(".sprite.json");
+            if (asset != std::string::npos) {
+                args["path"] = spec.substr(0, asset + 12);
+                spec = spec.substr(std::min(spec.size(), asset + 13));
+            }
+            const size_t colon = spec.find(':');
+            args["tab"] = spec.substr(0, colon).empty() ? std::string("frames") : spec.substr(0, colon);
             if (colon != std::string::npos) args["frame"] = spec.substr(colon + 1);
             const Json result = engine.Call("editor.sprite", args);
             if (!result["ok"].asBool()) return Fail(result["error"]["code"].asString(), result["error"]["message"].asString());

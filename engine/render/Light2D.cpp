@@ -96,8 +96,10 @@ Occluders2D GatherOccluders2D(const Scene& scene, AssetManager* assets) {
         if (c && !c->isTrigger && !scene.Get<RigidBody2D>(id) && !scene.Get<CharacterBody2D>(id)) {
             const Mat4 world = scene.WorldMatrix(id) * Mat4::Translation(c->center) * Mat4::RotationZ(Radians(c->angle));
             std::vector<Vec3> p;
-            if (c->shape == "polygon" || c->shape == "edge") {
-                for (const Json& v : Collider2DActivePoints(*c, scene.Get<Sprite>(id)).items())
+            if (c->shape == "polygon" || c->shape == "edge" || c->shape == "sprite") {
+                const SpriteAssets sprites = assets ? assets->SpriteLookup() : SpriteAssets();
+                const Json outline = Collider2DOutline(scene, id, *c, &sprites);  // kept alive for the loop
+                for (const Json& v : outline.items())
                     if (v.isArray() && v.size() == 2) p.push_back(Vec3(v[0].asFloat(), v[1].asFloat(), 0));
             } else if (c->shape == "circle" || c->shape == "capsule") {
                 const float extension = c->shape == "capsule" ? std::max(0.0f, c->height / 2 - c->radius) : 0.0f;

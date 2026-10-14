@@ -283,7 +283,8 @@ ViewRequest ParseView(Engine& e, const Json& args, Scene* sceneOverride = nullpt
     r.view.playing = e.InPlaySession();
     if (args["colliders"].asBool(false)) {
         TilesetLookup tilesets = e.Assets().Tilesets();
-        AppendColliderLines(scene, r.view.lines, &tilesets);
+        const SpriteAssets sprites = e.Assets().SpriteLookup();
+        AppendColliderLines(scene, r.view.lines, &tilesets, &sprites);
     }
     if (args["navmesh"].asBool(false)) e.Nav().AppendLines(r.view.lines);
     e.AppendDebugLines(r.view.lines);
@@ -2935,17 +2936,19 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  return Json();
              });
     Register(r, "editor.sprite",
-             "Open/focus or close the Sprite Editor of the attached native editor for the selected sprite: Slice Sheet (how the sheet "
-             "is cut into frames) or Collision (Collider2D outline per frame); no scene edit.",
+             "Open/focus or close the Sprite Editor of the attached native editor on a sprite asset (*.sprite.json): Slice (how its "
+             "image is cut into frames), Frames (pixels per unit, filtering, each frame's name and pivot) or Collision (each frame's "
+             "outline for Collider2D shape sprite). Without path it shows the selected sprite's asset; no scene edit.",
              Params()
                  .Opt("open", "boolean", "true opens/focuses (default); false closes it.")
-                 .Opt("tab", "string", "slice or collision.")
-                 .OptWith("frame", Json::parse(R"({"type":["integer","string"],"description":"Collision: the frame to edit (index or atlas frame name)."})"))
-                 .Opt("editDefault", "boolean", "Collision: edit the default outline (Collider2D.points) instead of the frame's own."),
+                 .Opt("tab", "string", "slice, frames or collision.")
+                 .Opt("path", "string", "Sprite asset to show (default: the selected sprite's).")
+                 .Opt("texture", "string", "Show the page that makes a new sprite asset from this image.")
+                 .OptWith("frame", Json::parse(R"({"type":["integer","string"],"description":"The frame to select (index or name)."})")),
              false, [](Engine& e, const Json& a) {
                  if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("sprite", a);
                  throw ApiError("editor_unavailable", "no native editor is attached",
-                                "Run oe editor and attach with --connect; atlas.create, sprite.collision and sprite.outline work without an editor.");
+                                "Run oe editor and attach with --connect; sprite.create/set/slice/fit_collision work without an editor.");
                  return Json();
              });
     Register(r, "editor.select",

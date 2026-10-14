@@ -900,8 +900,18 @@ Json NativeEditor::Impl::EditorState() {
     out["animationControllerOpen"] = showAnimationController; out["animationControllerDirty"] = animationControllerDocument != animationControllerSaved;
     out["animationController"] = animationController; out["animationControllerState"] = animationControllerState;
     out["animationPanel"] = showAnimation; out["animationFrames"] = animationFrames;
-    out["spriteEditor"] = ObjectOf({{"open", showSpriteEditor}, {"tab", spriteEditorTab == 0 ? "slice" : "collision"}, {"frame", spriteFrameKey},
-                                    {"editDefault", collisionEditDefault}});
+    {
+        const Json& frames = static_cast<const Json&>(spriteResolved)["frames"];
+        static const Json none;
+        const Json& frame = frames.isArray() && spriteFrame >= 0 && static_cast<size_t>(spriteFrame) < frames.size() ? frames[spriteFrame] : none;
+        out["spriteEditor"] = ObjectOf({{"open", showSpriteEditor},
+                                        {"tab", spriteEditorTab == 0 ? "slice" : spriteEditorTab == 1 ? "frames" : "collision"},
+                                        {"path", spritePath},
+                                        {"frame", spriteFrame},
+                                        {"frameName", frame["name"].asString()},
+                                        {"undo", static_cast<uint64_t>(spriteUndo.size())},
+                                        {"redo", static_cast<uint64_t>(spriteRedo.size())}});
+    }
     out["animation"] = engine.AnimationPreviewCall("state", Json());
     return out;
 }
@@ -1290,7 +1300,8 @@ void NativeEditor::Impl::Shortcuts() {
     const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global)) TogglePlay();
     if (gameFocused && InPlaySession()) return;  // keys belong to the game
-    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused || animationControllerEditorFocused) return;  // document editors own save/undo shortcuts
+    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused || animationControllerEditorFocused || (showSpriteEditor && spriteEditorFocused))
+        return;  // document editors own save/undo shortcuts
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global)) Save();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global)) Undo();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global)) Redo();
@@ -1961,15 +1972,34 @@ bool NativeEditor::Init(std::string* error) {
         if (op == "sprite") {
             m.showSpriteEditor = m.focusSpriteEditor = args["open"].asBool(true);
             const std::string tab = args["tab"].asString();
-            if (!tab.empty() && tab != "slice" && tab != "collision")
-                throw ApiError("invalid_argument", "tab must be slice or collision");
-            if (!tab.empty() && (tab == "collision") != (m.spriteEditorTab == 1)) m.spriteEditorTab = tab == "collision" ? 1 : 0, m.spriteFit = true;
-            if (args.has("frame")) {
-                m.spriteFrameKey = args["frame"].isString() ? args["frame"].asString() : std::to_string(args["frame"].asInt());
-                m.spriteEditorEntity = m.Primary();  // the window keeps this frame instead of the sprite's own
-                m.spriteFit = true;
+            if (!tab.empty() && tab != "slice" && tab != "frames" && tab != "collision")
+                throw ApiError("invalid_argument", "tab must be slice, frames or collision");
+            const int tabIndex = tab == "slice" ? 0 : tab == "frames" ? 1 : 2;
+            if (!tab.empty() && tabIndex != m.spriteEditorTab) m.spriteEditorTab = tabIndex, m.spriteFit = true;
+            // The asset: the one named, else the selected sprite's, else the one already shown.
+            std::string path = args["path"].asString();
+            if (!path.empty() && !IsSpriteAssetPath(path)) throw ApiError("invalid_path", "path must be a .sprite.json sprite asset");
+            const SpriteAssets lookup = m.engine.Assets().SpriteLookup();
+            if (path.empty()) path = SpriteAssetOf(m.engine.GetScene(), m.Primary(), &lookup);
+            if (!IsSpriteAssetPath(path)) path.clear();  // an image named directly: the start page makes it an asset
+            if (args.has("texture")) {  // the start page, making an asset from this image
+                path.clear();
+                m.spriteNewTexture = args["texture"].asString();
             }
-            if (args.has("editDefault")) m.collisionEditDefault = args["editDefault"].asBool();
+            // A selected sprite without an asset gets the start page (make one from its settings).
+            if (!path.empty() || args.has("texture") || m.engine.GetScene().Get<Sprite>(m.Primary())) m.SpriteOpen(path);
+            m.spriteFollowed = m.Primary();
+            if (const Sprite* sp = m.engine.GetScene().Get<Sprite>(m.Primary()); sp && !args.has("frame") && !args["path"].isString()) {
+                const int index = m.SpriteFrameIndex(sp->frame.ToJson());
+                if (index >= 0) m.spriteFrame = index;
+            }
+            if (args.has("frame")) {
+                const int index = m.SpriteFrameIndex(args["frame"]);
+                if (index < 0) throw ApiError("not_found", "the sprite asset has no such frame", "editor.state spriteEditor.path; sprite.get lists frames.");
+                m.spriteFrame = index;
+                m.spriteFit = true;
+                m.collisionPoint = -1;
+            }
         }
         return m.EditorState();
     });

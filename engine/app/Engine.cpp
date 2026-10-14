@@ -45,6 +45,7 @@ Engine::Engine() : assets_(std::make_unique<AssetManager>(*this)), renderer_(std
     scripts_ = std::make_unique<ScriptHost>(*this);
     physics_ = std::make_unique<PhysicsWorld>();
     physics_->SetTilesets(assets_->Tilesets());
+    physics_->SetSpriteAssets(assets_->SpriteLookup());
     nav_ = std::make_unique<Navigation>();
     audio_ = std::make_unique<AudioSystem>(*this);
     RegisterBuiltinCommands(commands_);

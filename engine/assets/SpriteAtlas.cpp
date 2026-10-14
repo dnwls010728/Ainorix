@@ -34,13 +34,18 @@ bool Opaque(const Texture& image, int x, int y) {
 
 // Cells of cw x ch pixels from (ox, oy), `sx`/`sy` pixels apart (sheets drawn with a margin and gutters).
 // Without a margin or gutters the cells must tile the image exactly; with them, cells that do not fit are left out.
-std::vector<SliceRect> GridCells(const Texture& image, int cw, int ch, bool trim, int ox = 0, int oy = 0, int sx = 0, int sy = 0) {
+// `exact` false (sprite assets) leaves out what is left over at the right and bottom; maxCols/maxRows (> 0)
+// stop the grid there.
+std::vector<SliceRect> GridCells(const Texture& image, int cw, int ch, bool trim, int ox = 0, int oy = 0, int sx = 0, int sy = 0, bool exact = true,
+                                 int maxCols = 0, int maxRows = 0) {
     const bool spaced = ox || oy || sx || sy;
-    if (!spaced && (image.width % cw || image.height % ch))
+    if (exact && !spaced && (image.width % cw || image.height % ch))
         throw ApiError("invalid_atlas", "the cell size must divide the image size",
                        "Pick a cell size that divides " + std::to_string(image.width) + "x" + std::to_string(image.height) + ", or set offset/spacing.");
-    const int cols = image.width >= ox + cw ? (image.width - ox + sx) / (cw + sx) : 0;
-    const int rows = image.height >= oy + ch ? (image.height - oy + sy) / (ch + sy) : 0;
+    int cols = image.width >= ox + cw ? (image.width - ox + sx) / (cw + sx) : 0;
+    int rows = image.height >= oy + ch ? (image.height - oy + sy) / (ch + sy) : 0;
+    if (maxCols > 0) cols = std::min(cols, maxCols);
+    if (maxRows > 0) rows = std::min(rows, maxRows);
     if (cols * rows > 65536) throw ApiError("invalid_atlas", "too many frames (65536 at most)");
     std::vector<SliceRect> out;
     for (int row = 0; row < rows; ++row) {
@@ -189,6 +194,119 @@ bool NormalizeSpriteAtlas(const Json& input, Json& output, std::string* error) {
         return false;
     }
 }
+bool NormalizeSpriteAsset(const Json& input, Json& output, std::string* error) {
+    try {
+        if (!input.isObject()) throw std::runtime_error("sprite asset must be an object");
+        for (const auto& field : input.members()) {
+            static const char* const kFields[] = {"texture", "normalTexture", "pixelsPerUnit", "pixelArt", "pivot", "slicing", "frames"};
+            if (std::find_if(std::begin(kFields), std::end(kFields), [&](const char* name) { return field.first == name; }) == std::end(kFields))
+                throw std::runtime_error("unknown sprite asset field: " + field.first);
+        }
+        const double ppu = input["pixelsPerUnit"].asNumber(16);
+        if ((input.has("pixelsPerUnit") && !input["pixelsPerUnit"].isNumber()) || !std::isfinite(ppu) || ppu < 0.001 || ppu > 100000)
+            throw std::runtime_error("pixelsPerUnit must be a number in 0.001..100000");
+        if (input.has("pixelArt") && !input["pixelArt"].isBool()) throw std::runtime_error("pixelArt must be true or false");
+        if (input.has("normalTexture") && !input["normalTexture"].isString()) throw std::runtime_error("normalTexture must be an image path");
+        if (input.has("slicing") && !input["slicing"].isObject()) throw std::runtime_error("slicing must be an object");
+        auto pivotOf = [](const Json& v) {
+            if (!v.isArray() || v.size() != 2) throw std::runtime_error("pivot needs [x, y] in 0..1 (0, 0 = bottom left)");
+            for (const Json& n : v.items())
+                if (!n.isNumber() || !std::isfinite(n.asNumber()) || n.asNumber() < 0 || n.asNumber() > 1)
+                    throw std::runtime_error("pivot needs [x, y] in 0..1 (0, 0 = bottom left)");
+            return v;
+        };
+        const Json pivot = input.has("pivot") ? pivotOf(input["pivot"]) : Json(Json::Array{0.5, 0.5});
+        const Json& frames = input["frames"];
+        if (!frames.isArray() || frames.size() == 0 || frames.size() > 65536) throw std::runtime_error("frames needs 1..65536 frames");
+        Json atlas = Json::MakeObject();
+        atlas["texture"] = input["texture"];
+        atlas["frames"] = Json::MakeArray();
+        for (const Json& frame : frames.items()) {
+            if (!frame.isObject()) throw std::runtime_error("each frame must be an object {name, rect, ...}");
+            for (const auto& field : frame.members()) {
+                static const char* const kFrameFields[] = {"name", "rect", "size", "trim", "pivot", "rotated", "collision"};
+                if (std::find_if(std::begin(kFrameFields), std::end(kFrameFields), [&](const char* name) { return field.first == name; }) ==
+                    std::end(kFrameFields))
+                    throw std::runtime_error("unknown sprite frame field: " + field.first);
+            }
+            Json f = frame;
+            f.erase("collision");
+            f["pivot"] = frame.has("pivot") ? pivotOf(frame["pivot"]) : pivot;
+            atlas["frames"].push(f);
+        }
+        if (!NormalizeSpriteAtlas(atlas, output, error)) return false;
+        output["pixelsPerUnit"] = ppu;
+        output["pixelArt"] = input["pixelArt"].asBool(true);
+        output["pivot"] = pivot;
+        if (!input["normalTexture"].asString().empty()) output["normalTexture"] = input["normalTexture"];
+        if (input.has("slicing")) output["slicing"] = input["slicing"];
+        for (size_t i = 0; i < frames.size(); ++i) {
+            const Json& collision = frames[i]["collision"];
+            if (collision.isNull()) continue;
+            const std::string who = "frame " + frames[i]["name"].asString() + ": ";
+            if (!collision.isArray() || collision.size() < 3 || collision.size() > 256)
+                throw std::runtime_error(who + "collision needs 3..256 points [[x, y], ...] in frame pixels");
+            for (const Json& p : collision.items())
+                if (!p.isArray() || p.size() != 2 || !p[0].isNumber() || !p[1].isNumber() || !std::isfinite(p[0].asNumber()) ||
+                    !std::isfinite(p[1].asNumber()) || std::fabs(p[0].asNumber()) > 65536 || std::fabs(p[1].asNumber()) > 65536)
+                    throw std::runtime_error(who + "collision points are [x, y] pixel numbers");
+            output["frames"][i]["collision"] = collision;
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+    }
+}
+
+Json SliceSpriteImage(const Texture& image, const Json& slicing, const std::string& prefix) {
+    const std::string mode = slicing["mode"].asString("cellCount");
+    auto pair = [&](const char* name, int& x, int& y) {
+        const Json& v = slicing[name];
+        if (v.isNull()) return;
+        if (!v.isArray() || v.size() != 2) throw ApiError("invalid_argument", std::string("slicing.") + name + " needs [x, y] pixels");
+        x = Pixel(v[0]);
+        y = Pixel(v[1]);
+    };
+    int ox = 0, oy = 0, sx = 0, sy = 0;
+    pair("offset", ox, oy);
+    pair("spacing", sx, sy);
+    std::vector<SliceRect> rects;
+    if (mode == "auto") {
+        rects = FindSprites(image, slicing.has("gap") ? Pixel(slicing["gap"]) : 2);
+    } else if (mode == "cellSize" || mode == "cellCount") {
+        int cw = 0, ch = 0, cols = 0, rows = 0;
+        if (mode == "cellSize") {
+            cw = Pixel(slicing["cellWidth"], 1);
+            ch = Pixel(slicing["cellHeight"], 1);
+        } else {
+            cols = std::min(4096, Pixel(slicing["columns"].isNull() ? Json(1) : slicing["columns"], 1));
+            rows = std::min(4096, Pixel(slicing["rows"].isNull() ? Json(1) : slicing["rows"], 1));
+            cw = (image.width - ox - sx * (cols - 1)) / cols;
+            ch = (image.height - oy - sy * (rows - 1)) / rows;
+            if (cw < 1 || ch < 1)
+                throw ApiError("invalid_argument", "too many columns or rows for a " + std::to_string(image.width) + "x" + std::to_string(image.height) + " image");
+        }
+        rects = GridCells(image, cw, ch, slicing["trim"].asBool(), ox, oy, sx, sy, false, cols, rows);
+    } else {
+        throw ApiError("invalid_argument", "unknown slicing mode '" + mode + "'", "Use cellSize, cellCount or auto.");
+    }
+    if (rects.empty()) throw ApiError("invalid_atlas", "the slicing settings give no frames", "Check the cell size, offset and spacing against the image.");
+    Json frames = Json::MakeArray();
+    for (size_t i = 0; i < rects.size(); ++i) {
+        const SliceRect& s = rects[i];
+        Json f = Json::MakeObject();
+        f["name"] = prefix + std::to_string(s.index >= 0 ? s.index : static_cast<int>(i));
+        f["rect"] = Json::Array{s.x, s.y, s.w, s.h};
+        if (s.canvasW > 0) {
+            f["size"] = Json::Array{s.canvasW, s.canvasH};
+            f["trim"] = Json::Array{s.trimX, s.trimY};
+        }
+        frames.push(f);
+    }
+    return frames;
+}
+
 const Json* FindAtlasFrame(const Json& atlas, const Json& frame) {
     const Json& frames = atlas["frames"];
     if (frame.isString()) {
@@ -211,6 +329,7 @@ const Json* FindAtlasFrame(const Json& atlas, const Json& frame) {
     return nullptr;
 }
 void RegisterAtlasCommands(CommandRegistry& registry) {
+    RegisterSpriteAssetCommands(registry);
     registry.Add({"atlas.create", "Write a named sprite atlas, normalize TexturePacker JSON, or slice a grid; no scene undo.",
                   Params()
                       .Req("path", "string", "Output .atlas.json.")

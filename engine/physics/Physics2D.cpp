@@ -454,11 +454,12 @@ struct Physics2D::Impl {
                 b2Capsule cap{b2Sub(center, axis), b2Add(center, axis), r};
                 made.push_back(b2CreateCapsuleShape(body, &def, &cap));
             }
-        } else if (c.shape == "polygon") {
+        } else if (c.shape == "polygon" || c.shape == "sprite") {
             std::vector<TilePoint> pts = ColliderPoints(c, pose, outline);
             std::vector<std::vector<TilePoint>> pieces = ConvexPieces(pts);
             if (pieces.empty()) {
-                Warn(warnings, who + "Collider2D polygon needs at least 3 points [[x,y],...] enclosing an area");
+                Warn(warnings, who + (c.shape == "sprite" ? "the sprite frame's collision outline encloses no area"
+                                                          : "Collider2D polygon needs at least 3 points [[x,y],...] enclosing an area"));
                 return false;
             }
             for (const auto& piece : pieces) {
@@ -579,7 +580,7 @@ struct Physics2D::Impl {
         return j.dump();
     }
 
-    void Sync(Scene& scene, float dt, std::vector<std::string>& warnings, const TilesetLookup* tilesets) {
+    void Sync(Scene& scene, float dt, std::vector<std::string>& warnings, const TilesetLookup* tilesets, const SpriteAssets* sprites) {
         // Characters: a kinematic capsule body so other bodies, triggers and
         // rays see them; the mover (UpdateCharacters) drives it.
         std::set<EntityId> seenChars;
@@ -639,9 +640,20 @@ struct Physics2D::Impl {
             const RigidBody2D* rb = scene.Get<RigidBody2D>(id);
             Pose2 pose = PoseOf(scene, id);
             std::string key = ColliderKey(scene, id, pose);
-            const Json& outline = Collider2DActivePoints(c, scene.Get<Sprite>(id));
-            const std::string shapeFrame = &outline == &c.points ? std::string() : SpriteFrameKey(scene.Get<Sprite>(id)->frame);
+            std::string shapeFrame;
+            const Json outline = Collider2DOutline(scene, id, c, sprites, &shapeFrame);
             auto it = bodies.find(id);
+            if (c.shape == "sprite" && outline.size() < 3) {  // no asset or frame: say why, collide with nothing
+                std::string reason = "the sprite frame's collision outline encloses no area";
+                Json unused;
+                SpriteColliderOutline(scene, id, sprites, unused, nullptr, &reason);
+                Warn(warnings, "entity " + std::to_string(id) + ": " + reason);
+                if (it != bodies.end()) {
+                    DestroyBody(it->second);
+                    bodies.erase(it);
+                }
+                continue;
+            }
             if (it != bodies.end() && it->second.key != key) {
                 DestroyBody(it->second);
                 bodies.erase(it);
@@ -1356,11 +1368,11 @@ Physics2D::~Physics2D() = default;
 
 bool Physics2D::Wanted(const Scene& scene) { return !scene.Pool<Collider2D>().empty() || !scene.Pool<CharacterBody2D>().empty(); }
 
-void Physics2D::Sync(Scene& scene, std::vector<std::string>& warnings) { HeapScope scope(impl_->heap.get(), &impl_->logicalBytes); impl_->Sync(scene, 0.0f, warnings, tilesets_); }
+void Physics2D::Sync(Scene& scene, std::vector<std::string>& warnings) { HeapScope scope(impl_->heap.get(), &impl_->logicalBytes); impl_->Sync(scene, 0.0f, warnings, tilesets_, sprites_); }
 
 void Physics2D::Step(Scene& scene, float dt, std::vector<std::string>& warnings) {
     HeapScope scope(impl_->heap.get(), &impl_->logicalBytes);
-    impl_->Sync(scene, dt, warnings, tilesets_);
+    impl_->Sync(scene, dt, warnings, tilesets_, sprites_);
     impl_->UpdateCharacters(scene, dt);
     b2World_Step(impl_->world, dt, 4);
     impl_->SyncOut(scene);

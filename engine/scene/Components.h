@@ -455,12 +455,10 @@ struct VFXSystem {
 
 struct Sprite {
     static constexpr const char* kTypeName = "Sprite";
-    static constexpr const char* kDoc = "Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at the entity. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.";
-    std::string texture;
+    static constexpr const char* kDoc = "Draws a frame of an image on a quad facing +Z, placed at the entity. The image and what every copy shares (frames, pixels per unit, pivots, filtering, collision outlines) come from asset: a sprite asset (*.sprite.json, edited in the Sprite Editor) or an image path. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.";
     std::string material;
     Color color{1, 1, 1};
     SpriteFrame frame = 0;
-    std::string atlas;
     std::string drawMode = "simple";
     float slice = 0;
     float fill = 1;
@@ -469,17 +467,10 @@ struct Sprite {
     bool maskOnly = false;
     bool light2D = false;
     Color ambient2D{0.15f, 0.15f, 0.15f};
-    std::string normalTexture;
-    int columns = 1;
-    int rows = 1;
-    float pixelsPerUnit = 16.0f;
     float width = 0.0f;
     float height = 0.0f;
-    float pivotX = 0.5f;
-    float pivotY = 0.5f;
     bool flipX = false;
     bool flipY = false;
-    bool pixelArt = true;
     float alphaCutoff = 0.5f;
     float opacity = 1.0f;
     bool lit = false;
@@ -491,8 +482,13 @@ struct Sprite {
     float ySortOffset = 0;
     bool castShadows = false;
     bool visible = true;
+    std::string asset;
+    // Older files and calls name the image settings one by one (texture, atlas, columns, rows, pixelsPerUnit, pivotX,
+    // pivotY, pixelArt, normalTexture): they become `asset` in its image form ("hero.png?columns=6"), merged with the
+    // settings the sprite already has (Components.cpp).
+    static bool UpgradeFrom(Json& values, const Sprite& current);
     static void Reflect(FieldList& f) {
-        f.Add("drawMode", &Sprite::drawMode, "simple, tiled (repeat at pixelsPerUnit), or sliced (9-slice).").options = {"simple", "tiled", "sliced"};
+        f.Add("drawMode", &Sprite::drawMode, "simple, tiled (repeat at the asset's pixels per unit), or sliced (9-slice).").options = {"simple", "tiled", "sliced"};
         auto& slice = f.Add("slice", &Sprite::slice, "9-slice border in source-frame pixels; corners retain source world size.");
         slice.hasRange = true;
         slice.min = 0;
@@ -507,27 +503,24 @@ struct Sprite {
         f.Add("maskOnly", &Sprite::maskOnly, "Provide a sprite mask without drawing the source sprite.");
         f.Add("light2D", &Sprite::light2D, "Lit by Light2D in mode color/add (the scene's 2D light map, sampled per pixel) instead of scene lights.");
         f.Add("ambient2D", &Sprite::ambient2D, "Light a light2D sprite gets everywhere (where no Light2D reaches).");
-        f.Add("normalTexture", &Sprite::normalTexture, "Optional tangent-space RGB normal image matching the sprite sheet/atlas (+Y up).");
         f.Add("ySort", &Sprite::ySort, "Sort by screen-space pivot Y within the layer, lower pivots in front.");
         f.Add("ySortOffset", &Sprite::ySortOffset, "Offset added to the sort pivot in camera-up world units.");
-        f.Add("texture", &Sprite::texture, "Image file (.png with transparency). A sprite sheet is a grid of equally sized frames.");
+        f.Add("asset", &Sprite::asset,
+              "What the sprite draws. A sprite asset (*.sprite.json, sprite.create / the Sprite Editor): its image, frames, pixels per "
+              "unit, filtering, each frame's pivot and collision outline, shared by every sprite naming it. Or an image directly: "
+              "\"coin.png\" (whole image, 16 px per unit, centered, pixel art), with settings after it: "
+              "\"hero.png?columns=6&rows=1&ppu=16&pivot=0.5,0&pixelArt=0&normal=hero_n.png\" (a grid of frames), or an atlas "
+              "\"hero.atlas.json?ppu=32\". Empty = a plain 1 x 1 quad.");
         f.Add("material", &Sprite::material,
               "Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. "
-              "`texture` stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. "
+              "The asset's image stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. "
               "Empty = the default sprite material.");
         f.Add("color", &Sprite::color, "Tint multiplied with the image.");
-        f.Add("frame", &Sprite::frame, "Sheet/atlas index or atlas frame name (SpriteAnimation sets it).");
-        f.Add("atlas", &Sprite::atlas, "Optional .atlas.json with named rectangles, trimming and per-frame pivots; overrides texture/grid.");
-        f.Add("columns", &Sprite::columns, "Frames per row in the sheet.");
-        f.Add("rows", &Sprite::rows, "Rows of frames in the sheet.");
-        f.Add("pixelsPerUnit", &Sprite::pixelsPerUnit, "Image pixels per world unit; sets the size when width/height are 0 (16 = a 16 px frame is 1 unit).");
-        f.Add("width", &Sprite::width, "Width in world units (0 = frame pixels / pixelsPerUnit). Transform.scale multiplies it.");
+        f.Add("frame", &Sprite::frame, "Frame index or frame name in the asset (SpriteAnimation sets it).");
+        f.Add("width", &Sprite::width, "Width in world units (0 = frame pixels / the asset's pixels per unit). Transform.scale multiplies it.");
         f.Add("height", &Sprite::height, "Height in world units (0 = from pixels).");
-        f.Add("pivotX", &Sprite::pivotX, "Point of the sprite placed at the entity position: 0 = left edge, 0.5 = center, 1 = right edge.");
-        f.Add("pivotY", &Sprite::pivotY, "0 = bottom edge (feet), 0.5 = center, 1 = top edge.");
         f.Add("flipX", &Sprite::flipX, "Mirror horizontally (face left).");
         f.Add("flipY", &Sprite::flipY, "Mirror vertically.");
-        f.Add("pixelArt", &Sprite::pixelArt, "Sharp nearest-neighbour pixels instead of smooth filtering.");
         f.Add("alphaCutoff", &Sprite::alphaCutoff, "Pixels with alpha below this are not drawn. 0 = soft edges: the image's alpha is blended (smoke, glows, UI-like art).");
         FieldInfo& op = f.Add("opacity", &Sprite::opacity, "Below 1 the sprite is drawn see-through (alpha blended).");
         op.hasRange = true;
@@ -550,21 +543,18 @@ struct Sprite {
               "(alphaCutoff > 0); the sprite is then drawn from both sides.");
         f.Add("visible", &Sprite::visible, "Whether the sprite is drawn.");
         // Inspector sections (file order above stays as it was, so saved scenes do not change).
-        f.Group("Image", {"texture", "atlas", "frame", "columns", "rows", "color", "opacity", "flipX", "flipY", "visible"});
-        f.Group("Size and Pivot", {"pixelsPerUnit", "width", "height", "pivotX", "pivotY"});
+        f.Group("Image", {"asset", "frame", "color", "opacity", "flipX", "flipY", "visible"});
+        f.Group("Size", {"width", "height"}, true);
         f.Group("Sorting", {"layer", "order", "ySort", "ySortOffset"});
         f.Group("Draw Mode", {"drawMode", "slice", "fill", "fillMode"}, true);
-        f.Group("Rendering", {"material", "pixelArt", "alphaCutoff", "blend"}, true);
-        f.Group("Lighting", {"lit", "emission", "castShadows", "light2D", "ambient2D", "normalTexture"}, true);
+        f.Group("Rendering", {"material", "alphaCutoff", "blend"}, true);
+        f.Group("Lighting", {"lit", "emission", "castShadows", "light2D", "ambient2D"}, true);
         f.Group("Mask", {"mask", "maskOnly"}, true);
-        f.ShowIf("columns", "!atlas");
-        f.ShowIf("rows", "!atlas");
         f.ShowIf("slice", "drawMode=sliced");
         f.ShowIf("ySortOffset", "ySort");
         f.ShowIf("emission", "lit");
         f.ShowIf("castShadows", "lit");
         f.ShowIf("ambient2D", "light2D");
-        f.ShowIf("normalTexture", "light2D");
         f.ShowIf("maskOnly", "mask");
     }
 };
@@ -1216,7 +1206,7 @@ struct CharacterBody {
 
 struct Collider2D {
     static constexpr const char* kTypeName = "Collider2D";
-    static constexpr const char* kDoc = "2D collision shape in the XY plane (Box2D). Alone it is static (walls, ground); add RigidBody2D to make it move. Shapes: box (optionally rounded), circle, capsule, polygon (any simple outline, concave is split), edge (line strip; loop closes it). isTrigger makes a sensor volume; oneWay makes a platform you can pass from below.";
+    static constexpr const char* kDoc = "2D collision shape in the XY plane (Box2D). Alone it is static (walls, ground); add RigidBody2D to make it move. Shapes: box (optionally rounded), circle, capsule, polygon (any simple outline, concave is split), edge (line strip; loop closes it), sprite (the outline of the shown frame from the Sprite's sprite asset). isTrigger makes a sensor volume; oneWay makes a platform you can pass from below.";
     std::string shape = "box";
     Vec3 size{1, 1, 0};
     float radius = 0.5f;
@@ -1235,7 +1225,10 @@ struct Collider2D {
     int layer = 0;
     Json ignoreLayers = Json::MakeArray();
     static void Reflect(FieldList& f) {
-        f.Add("shape", &Collider2D::shape, "Shape type.").options = {"box", "circle", "capsule", "polygon", "edge"};
+        f.Add("shape", &Collider2D::shape,
+              "Shape type. sprite = the collision outline of the frame the entity's Sprite shows, from its sprite asset (Sprite.asset; "
+              "drawn in the Sprite Editor or fitted with sprite.fit_collision; a frame without one uses its opaque rectangle); it "
+              "follows the frame, Sprite.width/height and flips.").options = {"box", "circle", "capsule", "polygon", "edge", "sprite"};
         f.Add("size", &Collider2D::size, "Box: width and height in local units (x, y; z is ignored), multiplied by Transform.scale.");
         f.Add("radius", &Collider2D::radius, "Circle/capsule radius in local units.");
         f.Add("height", &Collider2D::height, "Capsule: total height along local Y, including the rounded ends.");
@@ -1267,7 +1260,7 @@ struct Collider2D {
         f.ShowIf("height", "shape=capsule");
         f.ShowIf("angle", "shape=box|capsule");
         f.ShowIf("points", "shape=polygon|edge");
-        f.ShowIf("framePoints", "shape=polygon");
+        f.ShowIf("framePoints", "shape=polygon,framePoints");
         f.ShowIf("loop", "shape=edge");
         f.ShowIf("oneWay", "!isTrigger");
         f.ShowIf("friction", "!isTrigger");

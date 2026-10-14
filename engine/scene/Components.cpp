@@ -1,5 +1,9 @@
 #include "scene/Components.h"
 
+#include <algorithm>
+
+#include "scene/SpriteAsset.h"
+
 namespace oe {
 
 void RegisterBuiltinComponents() {
@@ -56,6 +60,32 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<NavModifier>();
     TypeRegistry::Register<SpotLight>();
     TypeRegistry::Register<Data>();  // last: the earlier pools keep their order
+}
+
+bool Sprite::UpgradeFrom(Json& values, const Sprite& current) {
+    static const char* const kOld[] = {"texture", "atlas", "columns", "rows", "pixelsPerUnit", "pivotX", "pivotY", "pixelArt", "normalTexture"};
+    bool any = false;
+    for (const char* key : kOld) any = any || values.has(key);
+    if (!any) return false;
+    // Start from the settings the sprite has (or the asset given with them); the old fields change them.
+    SpriteSource s;
+    ParseSpriteSource(values.has("asset") ? values["asset"].asString() : current.asset, s);
+    const bool isAtlas = s.path.size() >= 11 && s.path.compare(s.path.size() - 11, 11, ".atlas.json") == 0;
+    std::string texture = isAtlas ? std::string() : s.path, atlas = isAtlas ? s.path : std::string();
+    if (values.has("texture")) texture = values["texture"].asString();
+    if (values.has("atlas")) atlas = values["atlas"].asString();
+    if (values.has("columns")) s.columns = std::max(1, std::min(4096, values["columns"].asInt(1)));
+    if (values.has("rows")) s.rows = std::max(1, std::min(4096, values["rows"].asInt(1)));
+    if (values.has("pixelsPerUnit")) s.ppu = values["pixelsPerUnit"].asNumber(16);
+    if (values.has("pivotX")) s.pivotX = values["pivotX"].asNumber(0.5);
+    if (values.has("pivotY")) s.pivotY = values["pivotY"].asNumber(0.5);
+    if (values.has("pixelArt")) s.pixelArt = values["pixelArt"].asBool(true);
+    if (values.has("normalTexture")) s.normal = values["normalTexture"].asString();
+    s.path = atlas.empty() ? texture : atlas;  // an atlas always took precedence over the texture and its grid
+    if (!atlas.empty()) s.columns = s.rows = 1;
+    for (const char* key : kOld) values.erase(key);
+    values["asset"] = FormatSpriteSource(s);
+    return true;
 }
 
 std::string SpriteFrameKey(const SpriteFrame& frame) { return frame.name.empty() ? std::to_string(frame.index) : frame.name; }

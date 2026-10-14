@@ -149,6 +149,8 @@ struct ComponentType {
     std::function<std::unique_ptr<IComponentPool>()> makePool;
     // Renames fields of older files and calls in place (T::Upgrade); true when it changed something.
     bool (*upgrade)(Json& values) = nullptr;
+    // Like upgrade, given the component the values are applied to (T::UpgradeFrom: partial updates of older fields).
+    bool (*upgradeFrom)(Json& values, const void* current) = nullptr;
 
     const FieldInfo* FindField(const std::string& fieldName) const;
 };
@@ -164,6 +166,10 @@ template <class T, class = void>
 struct HasUpgrade : std::false_type {};
 template <class T>
 struct HasUpgrade<T, std::void_t<decltype(&T::Upgrade)>> : std::true_type {};
+template <class T, class = void>
+struct HasUpgradeFrom : std::false_type {};
+template <class T>
+struct HasUpgradeFrom<T, std::void_t<decltype(&T::UpgradeFrom)>> : std::true_type {};
 
 class TypeRegistry {
 public:
@@ -179,6 +185,8 @@ public:
         type.groups = std::move(list.groups);
         type.makePool = [] { return std::make_unique<ComponentPool<T>>(); };
         if constexpr (HasUpgrade<T>::value) type.upgrade = &T::Upgrade;
+        if constexpr (HasUpgradeFrom<T>::value)
+            type.upgradeFrom = [](Json& values, const void* current) { return T::UpgradeFrom(values, *static_cast<const T*>(current)); };
         type.index = static_cast<int>(Types().size());
         ComponentTypeIndex<T>::value = type.index;
         Types().push_back(std::move(type));

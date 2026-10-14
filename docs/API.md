@@ -87,6 +87,77 @@ Fit a convex Collider2D polygon around the opaque pixels of the sprite's current
 | `allFrames` | boolean |  | Fit every frame of the sheet or atlas (at most 1024) into framePoints. |
 | `merge` | string |  | Undo group key. |
 
+### `sprite.create`
+
+Make a sprite asset (*.sprite.json) from an image: cut into frames by `slicing` (default: the whole image is one frame), with pixels per unit, filtering and the default pivot every Sprite naming it (Sprite.asset) shares. Or write `values` as given. File write, no scene undo.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Output .sprite.json. |
+| `texture` | string |  | Image to cut. |
+| `slicing` | object |  | {mode: cellSize (cellWidth, cellHeight) | cellCount (columns, rows) | auto (gap: parts closer than this many pixels are one sprite), offset: [x, y] margin, spacing: [x, y] gutters, trim: cut cells to their opaque pixels}. |
+| `pixelsPerUnit` | number |  | Image pixels per world unit (default 16). |
+| `pixelArt` | boolean |  | Sharp nearest-neighbour pixels (default true). |
+| `pivot` | array |  | [x, y] 0..1 point of each frame at the entity position (default [0.5, 0.5]; [0.5, 0] = feet). |
+| `prefix` | string |  | Frame name prefix (default: the file name and _). |
+| `values` | object |  | Complete definition instead of texture/slicing. |
+| `overwrite` | boolean |  | Replace an existing file. |
+| `dryRun` | boolean |  | Return what would be written without writing it. |
+
+### `sprite.get`
+
+Read a sprite asset: `values` as written, `resolved` with defaults filled in (every frame's pivot), the image size.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | .sprite.json. |
+
+### `sprite.set`
+
+Change a sprite asset: merge `values` into it (pixelsPerUnit, pixelArt, pivot, normalTexture, texture, frames), or with `frame` into that frame (name, pivot, collision in frame pixels). A null value removes the field (a frame's pivot or collision goes back to the default). Validated before writing; no scene undo.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | .sprite.json. |
+| `values` | object | yes | Fields to merge; null removes one. |
+| `frame` | integer \| string |  | Frame index or name to change instead of the asset. |
+
+### `sprite.slice`
+
+Cut a sprite asset's image into frames again with new `slicing` settings. Frames that keep their name (the same cell) keep their pivot and collision. `dryRun` previews the frames. No scene undo.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | .sprite.json. |
+| `slicing` | object | yes | As sprite.create. |
+| `prefix` | string |  | Frame name prefix (default: the one the frames have, else the file name and _). |
+| `dryRun` | boolean |  | Return the frames without writing. |
+
+### `sprite.fit_collision`
+
+Trace collision outlines around the opaque pixels of sprite asset frames (the largest part of each frame) and store them in the asset; Collider2D shape sprite then collides with them. No frame arguments = every frame. No scene undo.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | .sprite.json. |
+| `frame` | integer \| string |  | One frame (index or name). |
+| `frames` | array |  | Several frames. |
+| `alphaCutoff` | number |  | Pixels with at least this alpha are solid (default 0.5). |
+| `detail` | number |  | How far in pixels the outline may stray from the pixel edges to need fewer corners (default 1; 0 = every step). |
+| `convex` | boolean |  | The convex hull instead of the traced outline (smoother sliding, fewer pieces). |
+| `dryRun` | boolean |  | Return the outlines without writing. |
+
+### `sprite.convert` *(undoable edit)*
+
+Move a sprite's image settings (Sprite.asset as an image or atlas with settings, e.g. "hero.png?columns=6&pivot=0.5,0") into a new sprite asset and point Sprite.asset at it. A polygon Collider2D becomes shape sprite with its outlines (framePoints, else points) stored per frame. `all` also points every other Sprite drawing the same image the same way at the asset. Scene undo (the file stays).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Sprite entity. |
+| `path` | string | yes | New .sprite.json. |
+| `all` | boolean |  | Also convert the other sprites with the same image settings. |
+| `overwrite` | boolean |  | Replace an existing file. |
+
 ## atlas
 
 ### `atlas.create`
@@ -1816,14 +1887,15 @@ Open/focus or close the Animation panel in the attached native editor; no scene 
 
 ### `editor.sprite`
 
-Open/focus or close the Sprite Editor of the attached native editor for the selected sprite: Slice Sheet (how the sheet is cut into frames) or Collision (Collider2D outline per frame); no scene edit.
+Open/focus or close the Sprite Editor of the attached native editor on a sprite asset (*.sprite.json): Slice (how its image is cut into frames), Frames (pixels per unit, filtering, each frame's name and pivot) or Collision (each frame's outline for Collider2D shape sprite). Without path it shows the selected sprite's asset; no scene edit.
 
 | arg | type | required | description |
 |---|---|---|---|
 | `open` | boolean |  | true opens/focuses (default); false closes it. |
-| `tab` | string |  | slice or collision. |
-| `frame` | integer \| string |  | Collision: the frame to edit (index or atlas frame name). |
-| `editDefault` | boolean |  | Collision: edit the default outline (Collider2D.points) instead of the frame's own. |
+| `tab` | string |  | slice, frames or collision. |
+| `path` | string |  | Sprite asset to show (default: the selected sprite's). |
+| `texture` | string |  | Show the page that makes a new sprite asset from this image. |
+| `frame` | integer \| string |  | The frame to select (index or name). |
 
 ### `editor.select`
 
@@ -2393,11 +2465,11 @@ Physics character for players/NPCs: set velocity (x/z to walk, y to jump) and th
 
 ### Collider2D
 
-2D collision shape in the XY plane (Box2D). Alone it is static (walls, ground); add RigidBody2D to make it move. Shapes: box (optionally rounded), circle, capsule, polygon (any simple outline, concave is split), edge (line strip; loop closes it). isTrigger makes a sensor volume; oneWay makes a platform you can pass from below.
+2D collision shape in the XY plane (Box2D). Alone it is static (walls, ground); add RigidBody2D to make it move. Shapes: box (optionally rounded), circle, capsule, polygon (any simple outline, concave is split), edge (line strip; loop closes it), sprite (the outline of the shown frame from the Sprite's sprite asset). isTrigger makes a sensor volume; oneWay makes a platform you can pass from below.
 
 | field | type | default | description |
 |---|---|---|---|
-| `shape` | string | `"box"` | Shape type. |
+| `shape` | string | `"box"` | Shape type. sprite = the collision outline of the frame the entity's Sprite shows, from its sprite asset (Sprite.asset; drawn in the Sprite Editor or fitted with sprite.fit_collision; a frame without one uses its opaque rectangle); it follows the frame, Sprite.width/height and flips. |
 | `size` | vec3 | `[1,1,0]` | Box: width and height in local units (x, y; z is ignored), multiplied by Transform.scale. |
 | `radius` | float | `0.5` | Circle/capsule radius in local units. |
 | `height` | float | `1` | Capsule: total height along local Y, including the rounded ends. |
@@ -2906,11 +2978,11 @@ Moves this entity (usually the camera) to target + offset after physics each fra
 
 ### Sprite
 
-Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at the entity. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.
+Draws a frame of an image on a quad facing +Z, placed at the entity. The image and what every copy shares (frames, pixels per unit, pivots, filtering, collision outlines) come from asset: a sprite asset (*.sprite.json, edited in the Sprite Editor) or an image path. Transparent pixels are cut out. For 2D games use an orthographic Camera looking down -Z.
 
 | field | type | default | description |
 |---|---|---|---|
-| `drawMode` | string | `"simple"` | simple, tiled (repeat at pixelsPerUnit), or sliced (9-slice). |
+| `drawMode` | string | `"simple"` | simple, tiled (repeat at the asset's pixels per unit), or sliced (9-slice). |
 | `slice` | float | `0` | 9-slice border in source-frame pixels; corners retain source world size. |
 | `fill` | float | `1` | Visible fraction, 0..1. |
 | `fillMode` | string | `"horizontal"` | horizontal from left, vertical from bottom, radial clockwise from top. |
@@ -2918,24 +2990,16 @@ Draws an image (or one frame of a sprite sheet) on a quad facing +Z, placed at t
 | `maskOnly` | bool | `false` | Provide a sprite mask without drawing the source sprite. |
 | `light2D` | bool | `false` | Lit by Light2D in mode color/add (the scene's 2D light map, sampled per pixel) instead of scene lights. |
 | `ambient2D` | color | `[0.150000006,0.150000006,0.150000006]` | Light a light2D sprite gets everywhere (where no Light2D reaches). |
-| `normalTexture` | string | `""` | Optional tangent-space RGB normal image matching the sprite sheet/atlas (+Y up). |
 | `ySort` | bool | `false` | Sort by screen-space pivot Y within the layer, lower pivots in front. |
 | `ySortOffset` | float | `0` | Offset added to the sort pivot in camera-up world units. |
-| `texture` | string | `""` | Image file (.png with transparency). A sprite sheet is a grid of equally sized frames. |
-| `material` | string | `""` | Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. `texture` stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. Empty = the default sprite material. |
+| `asset` | string | `""` | What the sprite draws. A sprite asset (*.sprite.json, sprite.create / the Sprite Editor): its image, frames, pixels per unit, filtering, each frame's pivot and collision outline, shared by every sprite naming it. Or an image directly: "coin.png" (whole image, 16 px per unit, centered, pixel art), with settings after it: "hero.png?columns=6&rows=1&ppu=16&pivot=0.5,0&pixelArt=0&normal=hero_n.png" (a grid of frames), or an atlas "hero.atlas.json?ppu=32". Empty = a plain 1 x 1 quad. |
+| `material` | string | `""` | Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. The asset's image stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. Empty = the default sprite material. |
 | `color` | color | `[1,1,1]` | Tint multiplied with the image. |
-| `frame` | frame | `0` | Sheet/atlas index or atlas frame name (SpriteAnimation sets it). |
-| `atlas` | string | `""` | Optional .atlas.json with named rectangles, trimming and per-frame pivots; overrides texture/grid. |
-| `columns` | int | `1` | Frames per row in the sheet. |
-| `rows` | int | `1` | Rows of frames in the sheet. |
-| `pixelsPerUnit` | float | `16` | Image pixels per world unit; sets the size when width/height are 0 (16 = a 16 px frame is 1 unit). |
-| `width` | float | `0` | Width in world units (0 = frame pixels / pixelsPerUnit). Transform.scale multiplies it. |
+| `frame` | frame | `0` | Frame index or frame name in the asset (SpriteAnimation sets it). |
+| `width` | float | `0` | Width in world units (0 = frame pixels / the asset's pixels per unit). Transform.scale multiplies it. |
 | `height` | float | `0` | Height in world units (0 = from pixels). |
-| `pivotX` | float | `0.5` | Point of the sprite placed at the entity position: 0 = left edge, 0.5 = center, 1 = right edge. |
-| `pivotY` | float | `0.5` | 0 = bottom edge (feet), 0.5 = center, 1 = top edge. |
 | `flipX` | bool | `false` | Mirror horizontally (face left). |
 | `flipY` | bool | `false` | Mirror vertically. |
-| `pixelArt` | bool | `true` | Sharp nearest-neighbour pixels instead of smooth filtering. |
 | `alphaCutoff` | float | `0.5` | Pixels with alpha below this are not drawn. 0 = soft edges: the image's alpha is blended (smoke, glows, UI-like art). |
 | `opacity` | float | `1` | Below 1 the sprite is drawn see-through (alpha blended). |
 | `lit` | bool | `false` | Apply scene lighting (default: full brightness, like classic 2D). |

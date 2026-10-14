@@ -20,8 +20,8 @@ EntityId Target(Engine& engine, const Json& args) {
         throw ApiError("missing_component", "sprite clip editing needs Sprite and SpriteAnimation", "Select an animated sprite.");
     return id;
 }
-struct SpriteSource { Json image; const Json* rects = nullptr; };
-SpriteSource ImageDefinition(Engine& engine, EntityId id) {
+struct ClipImage { Json image; const Json* rects = nullptr; };
+ClipImage ImageDefinition(Engine& engine, EntityId id) {
     const SpriteAnimation& animation = *engine.GetScene().Get<SpriteAnimation>(id);
     if (!animation.asset.empty()) {
         auto asset = engine.Assets().GetAnimation(animation.asset);
@@ -30,20 +30,22 @@ SpriteSource ImageDefinition(Engine& engine, EntityId id) {
         if (image.has("path")) {
             auto atlas = engine.Assets().GetAtlas(image["path"].asString());
             if (!atlas) throw ApiError("invalid_atlas", "cannot read sprite atlas");
-            SpriteSource source; source.image["texture"] = (*atlas)["texture"]; source.image["atlas"] = true; source.rects = &(*atlas)["frames"]; return source;
+            ClipImage source; source.image["texture"] = (*atlas)["texture"]; source.image["atlas"] = true; source.rects = &(*atlas)["frames"]; return source;
         }
-        SpriteSource source; source.image["texture"] = image["texture"]; source.image["columns"] = image["columns"]; source.image["rows"] = image["rows"];
+        ClipImage source; source.image["texture"] = image["texture"]; source.image["columns"] = image["columns"]; source.image["rows"] = image["rows"];
         source.image["atlas"] = asset->has("atlas"); if (asset->has("atlas")) source.rects = &image["frames"]; return source;
     }
     const Sprite& sprite = *engine.GetScene().Get<Sprite>(id);
-    if (!sprite.atlas.empty()) {
-        auto atlas = engine.Assets().GetAtlas(sprite.atlas);
-        if (!atlas) throw ApiError("invalid_atlas", "cannot read sprite atlas");
-        SpriteSource source; source.image["texture"] = (*atlas)["texture"]; source.image["atlas"] = true; source.rects = &(*atlas)["frames"]; return source;
+    Json image = Json::MakeObject(); image["texture"] = ""; image["columns"] = 1; image["rows"] = 1;
+    if (sprite.asset.empty()) return {image, nullptr};
+    std::string error;
+    auto def = engine.Assets().GetSprite(sprite.asset, &error);
+    if (!def) throw ApiError("invalid_sprite", error, "Fix Sprite.asset.");
+    if ((*def)["grid"].isArray()) {  // an image cut into a grid
+        image["texture"] = (*def)["texture"]; image["columns"] = (*def)["grid"][0]; image["rows"] = (*def)["grid"][1];
+        return {image, nullptr};
     }
-    Json image = Json::MakeObject(); image["texture"] = sprite.texture;
-    image["columns"] = std::max(1, std::min(4096, sprite.columns)); image["rows"] = std::max(1, std::min(4096, sprite.rows));
-    return {image, nullptr};
+    ClipImage source; source.image["texture"] = (*def)["texture"]; source.image["atlas"] = true; source.rects = &(*def)["frames"]; return source;
 }
 int Index(const Json& args, const char* field, size_t size, bool insertion = false) {
     const double value = args[field].asNumber(-1);
@@ -99,7 +101,7 @@ void RegisterSpriteClipCommands(CommandRegistry& registry) {
             .Opt("offset", "integer", "First source frame (default 0).").Opt("limit", "integer", "Page size 1..128 (default 64).").Opt("frame", "string", "Resolve a named atlas frame instead of offset.").Opt("sourceOnly", "boolean", "Omit clip values for lightweight frame queries."), false,
         [](Engine& engine, const Json& args) {
             const EntityId id = Target(engine, args); const SpriteAnimation& animation = *engine.GetScene().Get<SpriteAnimation>(id);
-            const std::string name = args["clip"].asString(animation.clip); const SpriteSource source = ImageDefinition(engine, id); const Json& image = source.image;
+            const std::string name = args["clip"].asString(animation.clip); const ClipImage source = ImageDefinition(engine, id); const Json& image = source.image;
             const auto texture = image["texture"].asString().empty() ? nullptr : engine.Assets().GetTexture(image["texture"].asString());
             const int count = source.rects ? static_cast<int>(source.rects->size()) : image["columns"].asInt() * image["rows"].asInt();
             const double requested = args["limit"].asNumber(64);

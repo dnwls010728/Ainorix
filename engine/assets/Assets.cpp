@@ -675,6 +675,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".controller.json")) return "controller";
     if (EndsWith(p, ".anim.json") || EndsWith(p, ".clips.json")) return "animation";
     if (EndsWith(p, ".atlas.json")) return "atlas";
+    if (EndsWith(p, ".sprite.json")) return "sprite";
     if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
@@ -873,6 +874,78 @@ TilesetLookup AssetManager::Tilesets() {
     return [this](const std::string& path, std::string* error) { return GetTileset(path, error); };
 }
 
+std::shared_ptr<const Json> AssetManager::GetSprite(const std::string& path, std::string* error) {
+    if (KindOf(path) == "sprite") return GetAtlas(path, error);
+    auto found = generatedSprites_.find(path);
+    if (found == generatedSprites_.end()) found = generatedSprites_.emplace(path, LoadGeneratedSprite(path)).first;
+    if (error) *error = found->second.error;
+    return found->second.asset;
+}
+
+// An image or atlas named directly in Sprite.asset, as the sprite asset it stands for.
+AssetManager::Entry<Json> AssetManager::LoadGeneratedSprite(const std::string& source) {
+    Entry<Json> entry;
+    try {
+        SpriteSource s;
+        if (!ParseSpriteSource(source, s, &entry.error)) {
+            if (entry.error.empty()) entry.error = "not a sprite source: " + source;
+            return entry;
+        }
+        Json def = Json::MakeObject();
+        def["texture"] = "";
+        def["pixelsPerUnit"] = s.ppu;
+        def["pixelArt"] = s.pixelArt;
+        def["pivot"] = Json::Array{s.pivotX, s.pivotY};
+        if (!s.normal.empty()) def["normalTexture"] = s.normal;
+        def["frames"] = Json::MakeArray();
+        if (s.path.empty() && (s.columns > 1 || s.rows > 1)) def["grid"] = Json::Array{s.columns, s.rows};  // frames counted, no image yet
+        if (!s.path.empty()) {
+            const std::string kind = KindOf(s.path);
+            entry.mtime = FileModifiedTime(engine_.ResolvePath(s.path));
+            if (kind == "atlas") {
+                const auto atlas = GetAtlas(s.path, &entry.error);
+                if (!atlas) return entry;
+                def["texture"] = (*atlas)["texture"];
+                def["frames"] = (*atlas)["frames"];  // each with its own pivot
+            } else if (kind == "texture") {
+                const auto image = GetTexture(s.path, &entry.error);
+                if (!image) return entry;
+                if (static_cast<long long>(s.columns) * s.rows > 65536) throw std::runtime_error("at most 65536 frames");
+                def["texture"] = s.path;
+                def["grid"] = Json::Array{s.columns, s.rows};
+                // Cells as the grid always cut them (fractions rounded down to whole pixels for the frame list).
+                for (int i = 0; i < s.columns * s.rows; ++i) {
+                    const int c = i % s.columns, r = i / s.columns;
+                    const int x0 = c * image->width / s.columns, x1 = (c + 1) * image->width / s.columns;
+                    const int y0 = r * image->height / s.rows, y1 = (r + 1) * image->height / s.rows;
+                    Json f = Json::MakeObject();
+                    f["name"] = std::to_string(i);
+                    f["rect"] = Json::Array{x0, y0, std::max(1, x1 - x0), std::max(1, y1 - y0)};
+                    f["size"] = Json::Array{std::max(1, x1 - x0), std::max(1, y1 - y0)};
+                    f["trim"] = Json::Array{0, 0};
+                    f["pivot"] = def["pivot"];
+                    def["frames"].push(f);
+                }
+            } else {
+                entry.error = "Sprite.asset must be a .sprite.json, an image or an .atlas.json: " + s.path;
+                return entry;
+            }
+        }
+        entry.asset = std::make_shared<Json>(def);
+    } catch (const std::exception& ex) {
+        entry.error = ex.what();
+    }
+    if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", source.c_str(), entry.error.c_str());
+    return entry;
+}
+
+SpriteAssets AssetManager::SpriteLookup() {
+    SpriteAssets lookup;
+    lookup.sprite = [this](const std::string& path) { return GetSprite(path); };
+    lookup.animation = [this](const std::string& path) { return GetAnimation(path); };
+    return lookup;
+}
+
 AssetManager::Entry<Json> AssetManager::LoadAnimation(const std::string& path) {
     Entry<Json> entry;
     try {
@@ -903,14 +976,16 @@ AssetManager::Entry<Json> AssetManager::LoadAtlas(const std::string& path) {
         const std::string full = engine_.ResolvePath(path);
         entry.mtime = FileModifiedTime(full);
         std::string text;
-        if (!EndsWith(Lower(path), ".atlas.json"))
-            entry.error = "atlas must end with .atlas.json";
+        const bool sprite = EndsWith(Lower(path), ".sprite.json");
+        if (!EndsWith(Lower(path), ".atlas.json") && !sprite)
+            entry.error = "atlas must end with .atlas.json (or be a .sprite.json sprite asset)";
         else if (!ReadTextFile(full, text))
-            entry.error = "atlas not found: " + path;
+            entry.error = std::string(sprite ? "sprite asset" : "atlas") + " not found: " + path;
         else {
             auto data = std::make_shared<Json>(Json::parse(text));
             Json normalized;
-            if (NormalizeSpriteAtlas(*data, normalized, &entry.error)) entry.asset = std::make_shared<Json>(normalized);
+            if (sprite ? NormalizeSpriteAsset(*data, normalized, &entry.error) : NormalizeSpriteAtlas(*data, normalized, &entry.error))
+                entry.asset = std::make_shared<Json>(normalized);
         }
     } catch (const std::exception& ex) {
         entry.error = ex.what();
@@ -997,6 +1072,16 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
+    // Image forms follow their image or atlas (and atlases reloaded above).
+    for (auto& kv : generatedSprites_) {
+        SpriteSource s;
+        ParseSpriteSource(kv.first, s);
+        const bool atlasChanged = std::find(changed.begin(), changed.end(), s.path) != changed.end();
+        if (!s.path.empty() && (atlasChanged || mtimeOf(s.path) != kv.second.mtime)) {
+            kv.second = LoadGeneratedSprite(kv.first);
+            changed.push_back(kv.first);
+        }
+    }
     for (auto& kv : animations_) {
         if (mtimeOf(kv.first) != kv.second.mtime) { kv.second = LoadAnimation(kv.first); changed.push_back(kv.first); }
     }
@@ -1052,6 +1137,7 @@ std::vector<std::string> AssetManager::PollChanges() {
 void AssetManager::Forget(const std::string& path) {
     animations_.erase(path);
     atlases_.erase(path);
+    generatedSprites_.clear();  // they read images and atlases
     vfx_.erase(path);
     if (KindOf(path) == "shader") {
         shaders_.erase(path);
@@ -1068,6 +1154,7 @@ void AssetManager::Forget(const std::string& path) {
 void AssetManager::Clear() {
     animations_.clear();
     atlases_.clear();
+    generatedSprites_.clear();
     vfx_.clear();
     shaders_.clear();
     meshes_.clear();
@@ -1099,7 +1186,7 @@ Json AssetManager::Info(const std::string& path) {
         out["builtin"] = true;
     }
     if (kind == "controller") out["values"] = ReadAnimationController(engine_, path);
-    if (kind == "atlas") {
+    if (kind == "atlas" || kind == "sprite") {
         std::string error;
         const auto atlas = GetAtlas(path, &error);
         if (!atlas) throw ApiError("invalid_atlas", error);

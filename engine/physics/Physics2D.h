@@ -8,6 +8,7 @@
 #include "core/Json.h"
 #include "core/Math.h"
 #include "scene/Reflect.h"
+#include "scene/SpriteAsset.h"
 #include "scene/TileGrid.h"
 
 namespace oe {
@@ -42,6 +43,8 @@ public:
     void Step(Scene& scene, float dt, std::vector<std::string>& warnings);
     void Sync(Scene& scene, std::vector<std::string>& warnings);
     void SetTilesets(const TilesetLookup* lookup) { tilesets_ = lookup; }
+    // Sprite assets for Collider2D shape "sprite".
+    void SetSpriteAssets(const SpriteAssets* assets) { sprites_ = assets; }
 
     // Touching pairs after the last step (collisions ordered, triggers (trigger, other)).
     std::set<EntityPair> Collisions() const;
@@ -63,6 +66,7 @@ private:
     struct Impl;
     std::shared_ptr<Impl> impl_;
     const TilesetLookup* tilesets_ = nullptr;
+    const SpriteAssets* sprites_ = nullptr;
 };
 
 // Convex pieces of a simple polygon (ear clipping, counter-clockwise output).

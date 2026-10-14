@@ -1076,10 +1076,13 @@ void PhysicsWorld::RebuildSolvers() { impl_.reset(); world2d_.reset(); }
 
 void PhysicsWorld::SetTilesets(TilesetLookup lookup) { tilesets_ = std::move(lookup); }
 
+void PhysicsWorld::SetSpriteAssets(SpriteAssets assets) { sprites_ = std::move(assets); }
+
 Physics2D* PhysicsWorld::World2D(Scene& scene) {
     if (!world2d_ && Physics2D::Wanted(scene)) {
         world2d_ = std::make_unique<Physics2D>(snapshotsEnabled_);
         world2d_->SetTilesets(&tilesets_);
+        world2d_->SetSpriteAssets(&sprites_);
     }
     return world2d_.get();
 }
@@ -1311,7 +1314,7 @@ void AddCapsule(std::vector<DebugLine>& lines, const Mat4& m, Vec3 c, float r, f
 }
 }  // namespace
 
-void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, const TilesetLookup* tilesets) {
+void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, const TilesetLookup* tilesets, const SpriteAssets* sprites) {
     const Color solid(0.2f, 0.95f, 0.35f), trigger(1.0f, 0.85f, 0.2f), character(0.3f, 0.85f, 1.0f), oneWay(1.0f, 0.55f, 0.15f);
     for (const auto& kv : scene.Pool<CharacterBody>()) {
         Vec3 scale;
@@ -1411,9 +1414,9 @@ void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, cons
             float half = 0.5f * c.height * scale.y - r;
             if (half <= 0.001f) circle2(m, center, r, col);
             else capsule2(m, center, r, half, c.angle, col);
-        } else if (c.shape == "polygon" || c.shape == "edge") {
+        } else if (c.shape == "polygon" || c.shape == "edge" || c.shape == "sprite") {
             std::vector<Vec3> pts;
-            const Json& outline = Collider2DActivePoints(c, scene.Get<Sprite>(kv.first));
+            const Json outline = Collider2DOutline(scene, kv.first, c, sprites);
             if (outline.isArray()) {
                 for (const Json& p : outline.items()) {
                     if (p.isArray() && p.size() >= 2) pts.push_back(Vec3((p[0].asFloat() + c.center.x) * scale.x, (p[1].asFloat() + c.center.y) * scale.y, 0));
@@ -1530,7 +1533,7 @@ void PhysicsWorld::LoadState(const Snapshot& s) {
     }
     if (s.box2d) {
         if (!world2d_) world2d_ = std::make_unique<Physics2D>(true);
-        world2d_->LoadState(*s.box2d); world2d_->SetTilesets(&tilesets_);
+        world2d_->LoadState(*s.box2d); world2d_->SetTilesets(&tilesets_); world2d_->SetSpriteAssets(&sprites_);
     } else world2d_.reset();
     prevCollisions_ = s.collisions; prevTriggers_ = s.triggerPairs; warnings_ = s.warnings;
 }

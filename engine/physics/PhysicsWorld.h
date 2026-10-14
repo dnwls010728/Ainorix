@@ -9,6 +9,7 @@
 #include "core/Math.h"
 #include "render/Renderer.h"
 #include "scene/Reflect.h"
+#include "scene/SpriteAsset.h"
 #include "scene/TileGrid.h"
 
 namespace oe {
@@ -97,6 +98,7 @@ public:
 
     // Resolves Tilemap.tileset files (*.tileset.json) for tile collision.
     void SetTilesets(TilesetLookup lookup);
+    void SetSpriteAssets(SpriteAssets assets);
 
 private:
     Physics2D* World2D(Scene& scene);  // created on demand, nullptr without 2D bodies
@@ -105,6 +107,7 @@ private:
     std::unique_ptr<Impl> impl_;
     std::unique_ptr<Physics2D> world2d_;
     TilesetLookup tilesets_;
+    SpriteAssets sprites_;
     std::set<std::pair<EntityId, EntityId>> prevCollisions_, prevTriggers_;
     std::vector<std::string> warnings_;
 };
@@ -112,6 +115,7 @@ private:
 // Wireframes of every collider/character, 3D and 2D (green solid, yellow
 // trigger, cyan character, orange one-way). Computed from components, so it
 // works without simulating. `tilesets` resolves Tilemap tileset files.
-void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, const TilesetLookup* tilesets = nullptr);
+void AppendColliderLines(const Scene& scene, std::vector<DebugLine>& lines, const TilesetLookup* tilesets = nullptr,
+                         const SpriteAssets* sprites = nullptr);
 
 }  // namespace oe

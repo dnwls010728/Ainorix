@@ -9,6 +9,7 @@
 #include "render/Environment.h"
 #include "render/Font.h"
 #include "render/Mesh.h"
+#include "scene/SpriteAsset.h"
 #include "scene/TileGrid.h"
 
 namespace oe {
@@ -54,10 +55,17 @@ public:
     std::shared_ptr<const Tileset> GetTileset(const std::string& path, std::string* error = nullptr);
     // Reusable sprite animation (*.anim.json), strictly validated and hot reloaded.
     std::shared_ptr<const Json> GetAnimation(const std::string& path, std::string* error = nullptr);
-    // Named .atlas.json or TexturePacker frames, normalized and hot reloaded.
+    // Named .atlas.json or TexturePacker frames, normalized and hot reloaded. A sprite asset
+    // (*.sprite.json) loads here too: an atlas with pixelsPerUnit, pixelArt, pivot and frame collision.
     std::shared_ptr<const Json> GetAtlas(const std::string& path, std::string* error = nullptr);
+    // What Sprite.asset names, as a normalized sprite asset: a *.sprite.json file (NormalizeSpriteAsset), or an image or
+    // atlas with settings (SpriteSource: "hero.png?columns=6", made from the image; "grid": [columns, rows] marks a
+    // grid, "" = no image and no frames). Null + error otherwise.
+    std::shared_ptr<const Json> GetSprite(const std::string& path, std::string* error = nullptr);
     // GetTileset as a TilesetLookup (for BuildTileRules, physics, overlays).
     TilesetLookup Tilesets();
+    // GetSprite / GetAnimation for physics and overlays (Collider2D shape "sprite").
+    SpriteAssets SpriteLookup();
 
     // Reflection probe pictures by probe entity (taken and read by ActiveProbes / CaptureProbe in
     // RenderScene.h). InvalidateProbes drops them, so each is taken again when it is next drawn:
@@ -108,6 +116,7 @@ private:
     Entry<Tileset> LoadTileset(const std::string& path);
     Entry<VfxAsset> LoadVfx(const std::string& path);
     Entry<Json> LoadAtlas(const std::string& path);
+    Entry<Json> LoadGeneratedSprite(const std::string& source);
     Entry<Json> LoadAnimation(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
@@ -128,6 +137,7 @@ private:
     std::map<std::string, Entry<Tileset>> tilesets_;
     std::map<std::string, Entry<Json>> animations_;
     std::map<std::string, Entry<Json>> atlases_;
+    std::map<std::string, Entry<Json>> generatedSprites_;  // Sprite.asset image forms ("hero.png?columns=6")
     std::map<std::string, Entry<VfxAsset>> vfx_;
     std::map<std::string, FontEntry> fonts_;
 };

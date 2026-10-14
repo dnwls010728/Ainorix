@@ -342,16 +342,30 @@ void NativeEditor::Impl::SceneDrop(const std::string& path, float x, float y) {
     } else if (EndsWith(path, ".scene.json")) {
         RequestAction({PendingAction::Kind::LoadScene, path});
         return;
+    } else if (EndsWith(path, ".sprite.json")) {
+        // A sprite asset: onto a sprite it replaces its image, elsewhere a new sprite showing its first frame.
+        EntityId id = target();
+        const EntityRow* row = Row(id);
+        if (row && row->Has("Sprite")) {
+            Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json("Sprite")}, {"values", ObjectOf({{"asset", Json(path)}, {"frame", 0}})}}));
+            SelectOnly(id);
+        } else {
+            std::string name = Stem(path);
+            name = name.substr(0, name.find('.'));
+            r = Call("entity.create", ObjectOf({{"name", Json(UniqueName(name))},
+                                                {"components", ObjectOf({{"Transform", ObjectOf({{"position", Vec3Json(hit)}})},
+                                                                         {"Sprite", ObjectOf({{"asset", Json(path)}})}})}}));
+        }
     } else if (EndsWith(path, ".png") || EndsWith(path, ".jpg") || EndsWith(path, ".jpeg") || EndsWith(path, ".bmp") || EndsWith(path, ".tga")) {
         EntityId id = target();
         const EntityRow* row = Row(id);
         if (row && (row->Has("MeshRenderer") || row->Has("Sprite"))) {
-            Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json(row->Has("Sprite") ? "Sprite" : "MeshRenderer")}, {"values", ObjectOf({{"texture", Json(path)}})}}));
+            Call("component.set", ObjectOf({{"id", Json(id)}, {"type", Json(row->Has("Sprite") ? "Sprite" : "MeshRenderer")}, {"values", ObjectOf({{row->Has("Sprite") ? "asset" : "texture", Json(path)}})}}));
             SelectOnly(id);
         } else {
             r = Call("entity.create", ObjectOf({{"name", Json(UniqueName(Stem(path)))},
                                                 {"components", ObjectOf({{"Transform", ObjectOf({{"position", Vec3Json(hit)}})},
-                                                                         {"Sprite", ObjectOf({{"texture", Json(path)}})}})}}));
+                                                                         {"Sprite", ObjectOf({{"asset", Json(path)}})}})}}));
         }
     } else if (EndsWith(path, ".mat.json")) {
         EntityId id = target();
@@ -464,7 +478,8 @@ void NativeEditor::Impl::ScenePanel() {
     }
     if (showColliders) {
         TilesetLookup tilesets = engine.Assets().Tilesets();
-        AppendColliderLines(scene, view.lines, &tilesets);
+        const SpriteAssets sprites = engine.Assets().SpriteLookup();
+        AppendColliderLines(scene, view.lines, &tilesets, &sprites);
     }
     if (showNavMesh) engine.Nav().AppendLines(view.lines);  // baked again when an edit changed the ground
     // Light ranges are in world units, independent of Transform.scale, as in GatherLights.
