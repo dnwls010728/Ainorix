@@ -11,6 +11,65 @@
 
 namespace oe {
 
+bool ValidateTilemapData(const Json& values, std::string* error) {
+    auto fail = [&](const std::string& message) {
+        if (error) *error = message;
+        return false;
+    };
+    auto mapValid = [&](const Json& map) {
+        if (!map.isArray() || map.size() > 4096) return false;
+        size_t cells = 0;
+        for (const Json& row : map.items()) {
+            const size_t count = row.isString() ? row.asString().size() : row.size();
+            cells += count;
+            if ((!row.isString() && !row.isArray()) || count > 4096 || cells > 1048576) return false;
+            if (row.isArray())
+                for (const Json& cell : row.items()) {
+                    const Json& tile = cell.isObject() ? cell["tile"] : cell;
+                    if (!tile.isString() || tile.asString().size() != 1) return false;
+                    if (cell.isObject())
+                        for (const auto& field : cell.members()) {
+                            if (field.first == "tile") continue;
+                            if (field.first == "flipX" || field.first == "flipY") {
+                                if (!field.second.isBool()) return false;
+                            } else if (field.first == "rotation") {
+                                const double n = field.second.asNumber(-1);
+                                if (!field.second.isNumber() || (n != 0 && n != 90 && n != 180 && n != 270)) return false;
+                            } else
+                                return false;
+                        }
+                }
+        }
+        return true;
+    };
+    if (values.has("map") && !mapValid(values["map"]))
+        return fail("Tilemap.map needs string rows or transformed cell rows; max 4096 per axis and 1048576 cells");
+    if (values.has("layers")) {
+        const Json& layers = values["layers"];
+        if (!layers.isArray() || layers.size() > 64) return fail("Tilemap.layers needs up to 64 layers");
+        for (const Json& layer : layers.items()) {
+            if (!layer.isObject() || !mapValid(layer["map"])) return fail("each layer needs a valid map");
+            for (const auto& field : layer.members()) {
+                const auto& key = field.first;
+                const auto& v = field.second;
+                if (key == "map") continue;
+                if (key == "name") {
+                    if (!v.isString() || v.asString().size() > 128) return fail("layer name must be up to 128 bytes");
+                } else if (key == "visible" || key == "collision" || key == "ySort") {
+                    if (!v.isBool()) return fail("layer flags must be boolean");
+                } else if (key == "layer" || key == "order") {
+                    if (!v.isNumber() || !std::isfinite(v.asNumber()) || std::floor(v.asNumber()) != v.asNumber() || std::abs(v.asNumber()) > 1000000)
+                        return fail("layer/order must be bounded integers");
+                } else if (key == "ySortOffset") {
+                    if (!v.isNumber() || !std::isfinite(v.asNumber())) return fail("sort offset must be finite");
+                } else
+                    return fail("unknown layer field: " + key);
+            }
+        }
+    }
+    return true;
+}
+
 // ----- Rules -------------------------------------------------------------------
 
 bool IsTilesetFile(const std::string& path) {
@@ -117,8 +176,32 @@ bool ParseTileRule(const Json& v, TileDef& out, std::string* error) {
     }
     for (const auto& kv : v.members()) {
         const std::string& k = kv.first;
-        if (k != "frame" && k != "variants" && k != "autotile" && k != "frames" && k != "connects" && k != "edges" && k != "collision") {
-            if (error) *error = "unknown tile rule key \"" + k + "\" (frame, variants, autotile, frames, connects, edges, collision)";
+        if (k != "frame" && k != "variants" && k != "autotile" && k != "frames" && k != "connects" && k != "edges" && k != "collision" &&
+            k != "data" && k != "animation" && k != "shadow") {
+            if (error) *error = "unknown tile rule key \"" + k + "\" (frame, variants, autotile, frames, connects, edges, collision, animation, data, shadow)";
+            return false;
+        }
+    }
+    if (v.has("shadow")) {
+        if (!v["shadow"].isBool()) {
+            if (error) *error = "shadow must be true or false";
+            return false;
+        }
+        out.shadow = v["shadow"].asBool();
+    }
+    if (v.has("data")) {
+        if (!v["data"].isObject() || v["data"].dump().size() > 16384) {
+            if (error) *error = "tile data must be an object up to 16 KiB";
+            return false;
+        }
+        out.data = v["data"];
+    }
+    if (v.has("animation")) {
+        const Json& a = v["animation"];
+        if (!ParseFrameList(a["frames"], out.animation, error, "animation") || out.animation.empty() || out.animation.size() > 256) return false;
+        out.fps = a["fps"].asFloat(8);
+        if (!std::isfinite(out.fps) || out.fps <= 0 || out.fps > 240) {
+            if (error) *error = "tile fps must be in (0,240]";
             return false;
         }
     }
@@ -286,7 +369,16 @@ const std::vector<int>& BlobMasks() { return Blob().masks; }
 void MapSize(const Tilemap& tm, int& width, int& height) {
     width = 0;
     height = tm.map.isArray() ? static_cast<int>(tm.map.size()) : 0;
-    for (int r = 0; r < height; ++r) width = std::max(width, static_cast<int>(tm.map[r].asString("").size()));
+    for (int r = 0; r < height; ++r) width = std::max(width, static_cast<int>(tm.map[r].isString() ? tm.map[r].asString().size() : tm.map[r].size()));
+    for (const Json& layer : tm.layers.items()) {
+        Tilemap part = tm;
+        part.layers = Json::MakeArray();
+        part.map = layer["map"];
+        int w = 0, h = 0;
+        MapSize(part, w, h);
+        width = std::max(width, w);
+        height = std::max(height, h);
+    }
 }
 
 TileFrames ResolveFrames(const Tilemap& tm, const TileRules& rules) {
@@ -294,9 +386,8 @@ TileFrames ResolveFrames(const Tilemap& tm, const TileRules& rules) {
     MapSize(tm, out.width, out.height);
     out.frames.assign(static_cast<size_t>(out.width) * static_cast<size_t>(out.height), -1);
     for (int row = 0; row < out.height; ++row) {
-        const std::string& line = tm.map[row].asString();
-        for (int col = 0; col < static_cast<int>(line.size()); ++col) {
-            char c = line[static_cast<size_t>(col)];
+        for (int col = 0; col < out.width; ++col) {
+            char c = TileAt(tm, col, row);
             auto it = rules.tiles.find(c);
             if (it == rules.tiles.end()) continue;
             const TileDef& def = it->second;
@@ -330,14 +421,27 @@ TileFrames ResolveFrames(const Tilemap& tm, const TileRules& rules) {
 
 char TileAt(const Tilemap& tm, int col, int row) {
     if (!tm.map.isArray() || row < 0 || col < 0 || row >= static_cast<int>(tm.map.size())) return '\0';
-    const std::string& line = tm.map[row].asString();
-    return col < static_cast<int>(line.size()) ? line[static_cast<size_t>(col)] : '\0';
+    const Json& line = tm.map[row];
+    if (line.isArray()) {
+        if (static_cast<size_t>(col) >= line.size()) return '\0';
+        const Json& cell = line[col];
+        const std::string tile = cell.isString() ? cell.asString() : cell["tile"].asString();
+        return tile.empty() ? '\0' : tile[0];
+    }
+    const std::string& text = line.asString();
+    return col < static_cast<int>(text.size()) ? text[static_cast<size_t>(col)] : '\0';
 }
 
 bool SetTile(Tilemap& tm, int col, int row, char c) {
     if (row < 0 || col < 0 || row > 4096 || col > 4096) return false;
     if (!tm.map.isArray()) tm.map = Json::MakeArray();
     while (static_cast<int>(tm.map.size()) <= row) tm.map.push(std::string());
+    if (tm.map[row].isArray()) {
+        Json& line = tm.map[row];
+        while (line.size() <= static_cast<size_t>(col)) line.push(" ");
+        line[col] = std::string(1, c);
+        return true;
+    }
     std::string line = tm.map[row].asString("");
     if (static_cast<int>(line.size()) <= col) line.resize(static_cast<size_t>(col) + 1, ' ');
     line[static_cast<size_t>(col)] = c;
@@ -353,8 +457,18 @@ const TileDef* RuleAt(const Tilemap& tm, const TileRules& rules, int col, int ro
 }
 
 TileCollision CollisionAt(const Tilemap& tm, const TileRules& rules, int col, int row) {
-    const TileDef* d = RuleAt(tm, rules, col, row);
-    return d ? d->collision : TileCollision::None;
+    TileCollision result = TileCollision::None;
+    if (const TileDef* d = RuleAt(tm, rules, col, row)) result = d->collision;
+    for (const Json& layer : tm.layers.items())
+        if (layer["collision"].asBool(true)) {
+            Tilemap part = tm;
+            part.layers = Json::MakeArray();
+            part.map = layer["map"];
+            const auto value = CollisionAt(part, rules, col, row);
+            if (value == TileCollision::Solid) return value;
+            if (result == TileCollision::None) result = value;
+        }
+    return result;
 }
 
 // ----- Collision geometry ------------------------------------------------------------
@@ -479,6 +593,14 @@ std::vector<TileRect> OneWayRuns(const Tilemap& tm, const TileRules& rules) {
 
 std::vector<TileShape> ShapedCells(const Tilemap& tm, const TileRules& rules) {
     std::vector<TileShape> out;
+    for (const Json& layer : tm.layers.items())
+        if (layer["collision"].asBool(true)) {
+            Tilemap part = tm;
+            part.layers = Json::MakeArray();
+            part.map = layer["map"];
+            const auto shapes = ShapedCells(part, rules);
+            out.insert(out.end(), shapes.begin(), shapes.end());
+        }
     int width = 0, height = 0;
     MapSize(tm, width, height);
     for (int row = 0; row < height; ++row) {
@@ -486,7 +608,22 @@ std::vector<TileShape> ShapedCells(const Tilemap& tm, const TileRules& rules) {
             const TileDef* d = RuleAt(tm, rules, col, row);
             if (!d || d->collision != TileCollision::Shape) continue;
             TileShape s{col, row, {}};
-            for (const TilePoint& p : d->shape) s.points.push_back({static_cast<float>(col) + p.x, -static_cast<float>(row + 1) + p.y});
+            if (static_cast<size_t>(row) >= tm.map.size()) continue;
+            const Json& line = tm.map[row];
+            const Json cell = line.isArray() && static_cast<size_t>(col) < line.size() ? line[col] : Json();
+            for (const TilePoint& p : d->shape) {
+                float x = p.x, y = p.y;
+                if (cell["flipX"].asBool()) x = 1 - x;
+                if (cell["flipY"].asBool()) y = 1 - y;
+                const int turns = ((cell["rotation"].asInt() / 90) % 4 + 4) % 4;
+                for (int turn = 0; turn < turns; ++turn) {
+                    const float old = x;
+                    x = y;
+                    y = 1 - old;
+                }
+                s.points.push_back({static_cast<float>(col) + x, -static_cast<float>(row + 1) + y});
+            }
+            if (cell["flipX"].asBool() != cell["flipY"].asBool()) std::reverse(s.points.begin(), s.points.end());
             out.push_back(std::move(s));
         }
     }

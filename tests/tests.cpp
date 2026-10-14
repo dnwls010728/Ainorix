@@ -25,6 +25,9 @@
 #include "app/CoordinateQueries.h"
 #include "app/Project.h"
 #include "assets/Assets.h"
+#include "assets/SpriteAtlas.h"
+#include "render/Light2D.h"
+#include "render/SpriteShape.h"
 #include "audio/Wav.h"
 #include "core/FileSystem.h"
 #include "core/Pak.h"
@@ -19675,13 +19678,14 @@ TEST(AnimationAssetsAtlasSamplingAndValidation) {
     const std::string authored=e.GetScene().ToJson().dump();
     auto items=GatherRenderItems(e.GetScene(),&e.Assets()); CHECK(items.size()==1);
     if (!items.empty()) {
-        CHECK(!items[0].error && std::fabs(items[0].uvOffset[0]-15.5f/16)<1e-6f);
-        CHECK(std::fabs(items[0].uvScale[0]+7.0f/16)<1e-6f);
+        // Point-sampled (pixelArt) atlas frames keep their texel scale, a hair inside the rectangle.
+        CHECK(!items[0].error && std::fabs(items[0].uvOffset[0]-15.99f/16)<1e-6f);
+        CHECK(std::fabs(items[0].uvScale[0]+7.98f/16)<1e-6f);
         CHECK(std::fabs(Length(items[0].world.TransformDir(Vec3(1,0,0)))-2)<1e-6f);
     }
     Call(e,"animation.preview",R"({"id":"Atlas","time":0.6})");
     items=GatherRenderItems(e.AnimationRenderScene(),&e.Assets());
-    CHECK(items.size()==1 && std::fabs(items[0].uvScale[0]+3.0f/16)<1e-6f);
+    CHECK(items.size()==1 && std::fabs(items[0].uvScale[0]+3.98f/16)<1e-6f);
     CHECK(e.GetScene().ToJson().dump()==authored);
     for (const char* invalid : {R"({"fps":0})",R"({"loop":"yes"})",R"({"frames":[-1]})",R"({"events":[{"frame":2,"name":"x"}]})",R"({"displayName":""})",R"({"unknown":1})"}) {
         Json args=Json::MakeObject();args["path"]="atlas.anim.json";args["clip"]="run";args["values"]=Json::parse(invalid);
@@ -20178,6 +20182,380 @@ TEST(NativeEditorAnimationRulerAndKeys) {
     RemoveAll(project);
 }
 #endif
+
+TEST(TwoDimensionalAtlasAndNamedAnimation) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("atlas2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Image sheet;
+    sheet.width = 16;
+    sheet.height = 8;
+    sheet.rgba.assign(16 * 8 * 4, 255);
+    CHECK(WritePng(project + "/sheet.png", sheet, true));
+    const auto revision = e.Revision();
+    CHECK(
+        Call(
+            e, "atlas.create",
+            R"({"path":"hero.atlas.json","values":{"texture":"sheet.png","frames":[{"name":"idle","rect":[0,0,4,8],"size":[8,12],"trim":[2,3],"pivot":[0.5,0]},{"name":"walk","rect":[8,0,8,8]}]}})")
+            ["ok"]
+                .asBool());
+    CHECK(e.Revision() == revision);
+    CHECK(Call(e, "asset.info", R"({"path":"hero.atlas.json"})")["result"]["frames"].asInt() == 2);
+    CHECK(
+        Call(
+            e, "entity.create",
+            R"({"name":"Hero","components":{"Sprite":{"atlas":"hero.atlas.json","frame":"idle","pixelsPerUnit":4},"SpriteAnimation":{"clip":"walk","clips":{"walk":{"frames":["idle","walk"],"fps":2}}}}})")
+            ["ok"]
+                .asBool());
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+    CHECK(items.size() == 1);
+    CHECK(std::abs(items[0].world.TransformPoint(Vec3()).y - 1.25f) < 0.001f);
+    CHECK(std::abs(Length(items[0].world.TransformDir(Vec3(1, 0, 0))) - 1) < 0.001f);
+    CHECK(Call(e, "animation.get_clip", R"({"id":"Hero"})")["result"]["frames"][0]["name"].asString() == "idle");
+    Call(e, "animation.preview", R"({"id":"Hero","time":0.51})");
+    CHECK(e.AnimationRenderScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame.name == "walk");
+    Call(e, "animation.preview_close");
+    CHECK(Call(e, "atlas.create", R"({"path":"grid.atlas.json","texture":"sheet.png","cellWidth":4,"cellHeight":4})")["result"]["values"]["frames"]
+              .size() == 8);
+    CHECK(!Call(e, "atlas.create", R"({"path":"bad.atlas.json","values":{"texture":"sheet.png","frames":[{"name":"x","rect":[15,0,4,8]}]}})")["ok"]
+               .asBool());
+    Json normalized;
+    CHECK(NormalizeSpriteAtlas(
+        Json::parse(
+            R"({"meta":{"image":"sheet.png"},"frames":{"rotated":{"frame":{"x":0,"y":0,"w":4,"h":8},"rotated":true,"sourceSize":{"w":10,"h":6},"spriteSourceSize":{"x":1,"y":1,"w":8,"h":4},"pivot":{"x":0.5,"y":1}}}})"),
+        normalized, &error));
+    CHECK(normalized["frames"][0]["size"][0].asInt() == 10);
+    CHECK(normalized["frames"][0]["pivot"][1].asInt() == 0);
+    CHECK(Call(e, "animation.create",
+               R"({"path":"hero.anim.json","values":{"atlas":{"path":"hero.atlas.json"},"clips":{"walk":{"frames":["idle","walk"],"fps":2}}}})")["ok"]
+              .asBool());
+    CHECK(Call(e, "component.set", R"({"id":"Hero","type":"SpriteAnimation","values":{"asset":"hero.anim.json"}})")["ok"].asBool());
+    Call(e, "sim.play");
+    Call(e, "sim.step", R"({"frames":40})");
+    CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Hero"))->frame.name == "walk");
+    Call(e, "sim.stop");
+    RemoveAll(project);
+}
+TEST(TwoDimensionalTileLayersTransformsAndData) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("tile_layers2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    CHECK(
+        Call(
+            e, "entity.create",
+            R"({"name":"Map","components":{"Tilemap":{"map":[".."],"columns":2,"legend":{".":0,"#":{"frame":0,"collision":"solid","data":{"cost":3}},"/":{"frame":1,"collision":"slope-up"}}}}})")
+            ["ok"]
+                .asBool());
+    CHECK(
+        Call(e, "tilemap.layer_set", R"({"id":"Map","layer":0,"values":{"name":"Walls","map":[" #"," /"],"layer":2,"ySort":true}})")["ok"].asBool());
+    CHECK(Call(e, "tilemap.cell_set", R"({"id":"Map","layer":0,"col":1,"row":1,"values":{"tile":"/","flipX":true,"rotation":90}})")["ok"].asBool());
+    CHECK(Call(e, "tilemap.cell_get", R"({"id":"Map","layer":0,"col":1,"row":0})")["result"]["data"]["cost"].asInt() == 3);
+    const Tilemap& tm = *e.GetScene().Get<Tilemap>(e.GetScene().FindByName("Map"));
+    const TileRules rules = BuildTileRules(tm, nullptr);
+    int w = 0, h = 0;
+    MapSize(tm, w, h);
+    CHECK(w == 2 && h == 2);
+    CHECK(CollisionAt(tm, rules, 1, 0) == TileCollision::Solid);
+    CHECK(ShapedCells(tm, rules).size() == 1);
+    const auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+    CHECK(items.size() == 3);
+    CHECK(items[1].sortLayer == 2 && items[1].ySort);
+    CHECK(!Call(e, "tilemap.cell_set", R"({"id":"Map","layer":0,"col":0,"row":0,"values":{"tile":"#","rotation":45}})")["ok"].asBool());
+    CHECK(Call(e, "tilemap.rule_set", R"({"id":"Map","char":".","values":{"frame":0,"animation":{"frames":[0,1],"fps":2}}})")["ok"].asBool());
+    const auto before = GatherRenderItems(e.GetScene(), &e.Assets(), Mat4{}, 0), after = GatherRenderItems(e.GetScene(), &e.Assets(), Mat4{}, 0.6f);
+    CHECK(before[0].mesh->uvs != after[0].mesh->uvs);
+    Call(e, "sim.play");
+    CHECK(Call(e, "script.eval", R"J({"code":"assert(tilemap.data(scene.find('Map'),1,0,0).cost == 3)"})J")["ok"].asBool());
+    Call(e, "sim.stop");
+    RemoveAll(project);
+}
+TEST(TwoDimensionalYSortAndPixelPresentation) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("pixel_sort2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Call(
+        e, "entity.create",
+        R"({"name":"Camera","components":{"Transform":{"position":[0.03,0.03,10]},"Camera":{"projection":"orthographic","orthoSize":2,"pixelPerfect":true,"pixelWidth":32,"pixelHeight":32}}})");
+    Call(e, "entity.create",
+         R"({"name":"Upper","components":{"Transform":{"position":[0,0.2,0]},"Sprite":{"width":2,"height":2,"color":"#ff0000","ySort":true}}})");
+    Call(e, "entity.create",
+         R"({"name":"Lower","components":{"Transform":{"position":[0,-0.2,0]},"Sprite":{"width":2,"height":2,"color":"#00ff00","ySort":true}}})");
+    const auto snapshot = e.GetScene().ToJson();
+    const auto revision = e.Revision();
+    RenderView view;
+    CHECK(MakeSceneView(e.GetScene(), 2, view));
+    CHECK(view.eye.x == 0 && view.eye.y == 0);
+    const auto items = GatherRenderItems(e.GetScene(), &e.Assets(), view.view);
+    const auto draws = BuildDrawList(items, view.eye);
+    CHECK(items[draws.back().item].id == e.GetScene().FindByName("Lower"));
+    RenderTarget image;
+    image.Resize(100, 80);
+    SoftwareRenderer renderer(&e.Assets());
+    renderer.Render(e.GetScene(), view, image);
+    CHECK(image.color[0] == 0xff000000u);
+    CHECK((image.color[40 * 100 + 50] & 0xffffffu) == 0x00ff00u);
+    for (int y = 8; y < 72; y += 2)
+        for (int x = 18; x < 82; x += 2) CHECK(image.color[y * 100 + x] == image.color[(y + 1) * 100 + x + 1]);
+    CHECK(e.GetScene().ToJson() == snapshot && e.Revision() == revision);
+    // Screen coordinates follow the letterboxed art frame (64x64 at 18,8 in a 100x80 view).
+    const Json screen = Call(e, "camera.worldToScreen", R"({"camera":"Camera","position":{"x":0,"y":0,"z":0},"view":{"width":100,"height":80}})");
+    CHECK(std::abs(screen["result"]["x"].asFloat() - 50) < 0.01f && std::abs(screen["result"]["y"].asFloat() - 40) < 0.01f);
+    const Json ray = Call(e, "camera.screenToPlane",
+                          R"({"camera":"Camera","screen":{"x":82,"y":40},"plane":{"point":{"x":0,"y":0,"z":0},"normal":{"x":0,"y":0,"z":1}},"view":{"width":100,"height":80}})");
+    CHECK(std::abs(ray["result"]["point"]["x"].asFloat() - 2) < 0.01f);
+    // A sorted sprite in the layer of an unsorted one: unsorted items stay behind, whatever their order.
+    Call(e, "entity.create", R"({"name":"Back","components":{"Sprite":{"width":2,"height":2,"order":5,"alphaCutoff":0}}})");
+    const auto mixed = BuildDrawList(GatherRenderItems(e.GetScene(), &e.Assets(), view.view), view.eye);
+    CHECK(mixed.size() == 3 && mixed[0].item == 2 && mixed[2].item == 1);
+    CHECK(WritePng("build/2d-tools/pixel-software.png", image.ToImage()));
+    if (e.EnableGpu(nullptr, &error)) {
+        RenderTarget gpu;
+        gpu.Resize(100, 80);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        CHECK((gpu.color[40 * 100 + 50] & 0xffffffu) == 0x00ff00u);
+        CHECK(gpu.color[0] == 0xff000000u);
+        CHECK(WritePng("build/2d-tools/pixel-gpu.png", gpu.ToImage()));
+    }
+    RemoveAll(project);
+}
+// Pixel-perfect sampling: an odd-sized atlas frame (13 x 11, a magenta frame beside it) and a sheet frame
+// moved by fractions of an art pixel always show every texel once, never the neighbour frame, in both
+// renderers (the GPU art frame is single-sampled; atlas uvs keep texel centres on pixel centres).
+TEST(TwoDimensionalPixelPerfectSampling) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("pixel_sampling2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Image sheet;
+    sheet.width = 26;
+    sheet.height = 11;
+    sheet.rgba.assign(26 * 11 * 4, 255);
+    for (int y = 0; y < 11; ++y)
+        for (int x = 0; x < 26; ++x) {
+            uint8_t* p = &sheet.rgba[static_cast<size_t>(y * 26 + x) * 4];
+            if (x >= 13) { p[1] = 0; continue; }  // magenta: frame "b"
+            p[0] = static_cast<uint8_t>(20 + x * 17);
+            p[1] = static_cast<uint8_t>(20 + y * 20);
+            p[2] = (x + y) % 2 ? 200 : 60;
+        }
+    CHECK(WritePng(project + "/sheet.png", sheet, true));
+    CHECK(WriteTextFile(project + "/sheet.atlas.json",
+                        R"({"texture":"sheet.png","frames":[{"name":"a","rect":[0,0,13,11]},{"name":"b","rect":[13,0,13,11]}]})"));
+    Call(e, "entity.create",
+         R"({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","orthoSize":1.5,"pixelPerfect":true,"pixelWidth":64,"pixelHeight":48,"clearColor":[0,0,0]}}})");
+    Call(e, "entity.create", R"({"name":"A","components":{"Sprite":{"atlas":"sheet.atlas.json","frame":"a","pixelsPerUnit":16,"pixelArt":true}}})");
+    Call(e, "entity.create", R"({"name":"G","components":{"Sprite":{"texture":"sheet.png","columns":2,"frame":0,"pixelsPerUnit":16,"pixelArt":true}}})");
+    const bool gpu = e.EnableGpu(nullptr, &error);
+    // The lit pixels of one half of the image: exactly the 13 x 11 frame, its texels in order.
+    auto exact = [](const RenderTarget& image, int x0, int x1) {
+        int minX = 99, minY = 99, maxX = -1, maxY = -1, lit = 0;
+        for (int y = 0; y < image.height; ++y)
+            for (int x = x0; x < x1; ++x) {
+                const uint32_t c = image.color[static_cast<size_t>(y * image.width + x)] & 0xffffffu;
+                if ((c & 255) > 240 && ((c >> 8) & 255) < 20 && (c >> 16) > 240) return false;  // the magenta frame
+                if (!c) continue;
+                ++lit;
+                minX = std::min(minX, x), maxX = std::max(maxX, x), minY = std::min(minY, y), maxY = std::max(maxY, y);
+            }
+        if (lit != 13 * 11 || maxX - minX != 12 || maxY - minY != 10) return false;
+        for (int y = 0; y < 11; ++y)
+            for (int x = 0; x < 13; ++x) {
+                const uint32_t c = image.color[static_cast<size_t>((minY + y) * image.width + minX + x)];
+                if (std::abs(static_cast<int>(c & 255) - (20 + x * 17)) > 2 || std::abs(static_cast<int>((c >> 8) & 255) - (20 + y * 20)) > 2)
+                    return false;
+            }
+        return true;
+    };
+    for (int k = 0; k < 12; ++k) {
+        const float x = 0.3f + static_cast<float>(k) * 0.0137f, y = -0.4f + static_cast<float>(k) * 0.0093f;
+        auto place = [&](const char* name, float px, float py) {
+            const std::string args = std::string(R"({"id":")") + name + R"(","type":"Transform","values":{"position":[)" + std::to_string(px) + "," +
+                                     std::to_string(py) + ",0]}}";
+            CHECK(Call(e, "component.set", args.c_str())["ok"].asBool());
+        };
+        place("A", x, y);
+        place("G", -1 - x * 0.7f, 0.6f + y * 0.5f);
+        RenderView view;
+        CHECK(MakeSceneView(e.GetScene(), 64.0f / 48.0f, view));
+        RenderTarget software;
+        software.Resize(64, 48);
+        SoftwareRenderer(&e.Assets()).Render(e.GetScene(), view, software);
+        CHECK(exact(software, 24, 64) && exact(software, 0, 24));
+        if (!gpu) continue;
+        RenderTarget image;
+        image.Resize(64, 48);
+        e.Gpu()->Render(e.GetScene(), view, image);
+        CHECK(exact(image, 24, 64) && exact(image, 0, 24));
+        int differ = 0;
+        for (size_t i = 0; i < image.color.size(); ++i)
+            for (int shift = 0; shift < 24; shift += 8)
+                if (std::abs(static_cast<int>((image.color[i] >> shift) & 255) - static_cast<int>((software.color[i] >> shift) & 255)) > 2) {
+                    ++differ;
+                    break;
+                }
+        CHECK(differ == 0);
+    }
+    RemoveAll(project);
+}
+TEST(TwoDimensionalSurfacesLightsAndMasks) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("surfaces2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Image sheet;
+    sheet.width = 4;
+    sheet.height = 4;
+    sheet.rgba.assign(4 * 4 * 4, 255);
+    for (size_t i = 0; i < sheet.rgba.size(); i += 4) sheet.rgba[i + 1] = sheet.rgba[i + 2] = 0;
+    CHECK(WritePng(project + "/red.png", sheet, true));
+    // 4 world units over 64 pixels: world (x, y) is pixel (32 + 16 x, 32 - 16 y).
+    Call(e, "entity.create", R"({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","orthoSize":2,"clearColor":[0,0,0]}}})");
+    auto render = [&](bool gpu = false) {
+        RenderView view;
+        CHECK(MakeSceneView(e.GetScene(), 1, view));
+        RenderTarget image;
+        image.Resize(64, 64);
+        if (gpu) e.Gpu()->Render(e.GetScene(), view, image);
+        else SoftwareRenderer(&e.Assets()).Render(e.GetScene(), view, image);
+        return image;
+    };
+    auto red = [](const RenderTarget& image, float x, float y) {
+        return static_cast<int>(image.color[static_cast<size_t>(32 - y * 16) * 64 + static_cast<size_t>(32 + x * 16)] & 255);
+    };
+    // Tiled: eight repeats of the 0.25-unit frame across 2 units, half of them cut by fill.
+    Call(e, "entity.create", R"({"name":"Image","components":{"Sprite":{"texture":"red.png","width":2,"height":2,"drawMode":"tiled","fill":0.5}}})");
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+    CHECK(items.size() == 1 && items[0].mesh->indices.size() == 32 * 6);
+    for (const Vec3& p : items[0].mesh->positions) CHECK(p.x <= 1e-5f);
+    RenderTarget image = render();
+    CHECK(red(image, -0.5f, 0.5f) == 255 && red(image, 0.5f, 0.5f) == 0);
+    // Sliced with a radial fill of three quarters: the top-left quarter is empty.
+    Call(e, "component.set", R"({"id":"Image","type":"Sprite","values":{"drawMode":"sliced","slice":1,"fill":0.75,"fillMode":"radial"}})");
+    image = render();
+    CHECK(red(image, 0.5f, 0.5f) == 255 && red(image, 0.5f, -0.5f) == 255 && red(image, -0.5f, -0.5f) == 255 && red(image, -0.5f, 0.5f) == 0);
+    Call(e, "component.set", R"({"id":"Image","type":"Sprite","values":{"fill":0}})");
+    CHECK(GatherRenderItems(e.GetScene(), &e.Assets()).empty());
+    // Mask: only the part inside the 1x1 mask rectangle is drawn, the mask itself is not.
+    Call(e, "entity.create", R"({"name":"Mask","components":{"Sprite":{"width":1,"height":1,"maskOnly":true}}})");
+    Json args = Json::parse(R"({"id":"Image","type":"Sprite","values":{"drawMode":"simple","fill":1}})");
+    args["values"]["mask"] = e.GetScene().FindByName("Mask");
+    CHECK(e.Call("component.set", args)["ok"].asBool());
+    image = render();
+    CHECK(GatherRenderItems(e.GetScene(), &e.Assets()).size() == 1);
+    CHECK(red(image, 0.2f, 0.2f) == 255 && red(image, 0.75f, 0.75f) == 0);
+    // Colored light through the light map; a static wall casts a shadow, a moving body does not.
+    Call(e, "component.set", R"({"id":"Image","type":"Sprite","values":{"mask":0,"light2D":true,"ambient2D":[0,0,0]}})");
+    Call(e, "entity.create",
+         R"({"name":"Light","components":{"Transform":{"position":[-1.5,0,0]},"Light2D":{"mode":"color","color":"#ffffff","radius":5,"inner":0.9,"height":3,"shadows":true}}})");
+    image = render();
+    CHECK(red(image, 0.6f, 0.0f) > 100);
+    Call(e, "entity.create", R"({"name":"Wall","components":{"Transform":{"position":[-1.2,0,0]},"Collider2D":{"size":[0.1,0.4,0]}}})");
+    const Occluders2D occluders = GatherOccluders2D(e.GetScene(), &e.Assets());
+    CHECK(occluders.edges.size() == 4 && occluders.shapes.size() == 1);
+    CHECK(Occluded2D(occluders, Vec3(-1.5f, 0, 0), Vec3(0.6f, 0, 0)) && !Occluded2D(occluders, Vec3(-1.5f, 0, 0), Vec3(-0.5f, 0.9f, 0)));
+    CHECK(!Occluded2D(occluders, Vec3(-1.5f, 0, 0), Vec3(-1.2f, 0, 0)));  // inside the wall: lit from its near side
+    // Softness: a light 0.6 wide sees past the 0.4-high wall partly (penumbra), never where nothing blocks it.
+    CHECK(Visibility2D(occluders, Vec3(-1.5f, 0, 0), 0, Vec3(0.6f, 0, 0)) == 0.0f);
+    const float penumbra = Visibility2D(occluders, Vec3(-1.5f, 0, 0), 0.3f, Vec3(0.6f, 0, 0));
+    CHECK(penumbra > 0.1f && penumbra < 0.9f);
+    CHECK(Visibility2D(occluders, Vec3(-1.5f, 0, 0), 0.3f, Vec3(-2.5f, 0.5f, 0)) == 1.0f);
+    image = render();
+    CHECK(red(image, 0.6f, 0.0f) < 5 && red(image, -0.5f, 0.9f) > 100);
+    if (e.EnableGpu(nullptr, &error)) {
+        const RenderTarget gpu = render(true);
+        CHECK(std::abs(red(gpu, 0.6f, 0.0f) - red(image, 0.6f, 0.0f)) < 8 && std::abs(red(gpu, -0.5f, 0.9f) - red(image, -0.5f, 0.9f)) < 8);
+    }
+    Call(e, "component.add", R"({"id":"Wall","type":"RigidBody2D"})");
+    image = render();
+    CHECK(red(image, 0.6f, 0.0f) > 100);
+    CHECK(Call(e, "sprite.collision", R"({"id":"Image","points":[[-1,-1],[1,-1],[0,1]]})")["ok"].asBool());
+    Call(e, "history.undo");
+    CHECK(!e.GetScene().Get<Collider2D>(e.GetScene().FindByName("Image")));
+    RemoveAll(project);
+}
+
+TEST(TwoDimensionalToolsLayersAndTileLight) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("tools2d");
+    CHECK(e.Open(project, &error));
+    auto Quad = [](int a, int b, int c, int d) { return Json(Json::Array{a, b, c, d}); };
+    auto Pair = [](int a, int b) { return Json(Json::Array{a, b}); };
+    Call(e, "scene.new", R"({"empty":true})");
+    // A 16x8 sheet: an opaque 3x5 blob at (1,1) with a 1-pixel arm at (5,2), a 2x2 blob at (10,4).
+    Image sheet;
+    sheet.width = 16;
+    sheet.height = 8;
+    sheet.rgba.assign(16 * 8 * 4, 0);
+    auto opaque = [&](int x, int y) { sheet.rgba[(static_cast<size_t>(y) * 16 + static_cast<size_t>(x)) * 4 + 3] = 255; };
+    for (int y = 1; y < 6; ++y)
+        for (int x = 1; x < 4; ++x) opaque(x, y);
+    opaque(5, 2);
+    for (int y = 4; y < 6; ++y)
+        for (int x = 10; x < 12; ++x) opaque(x, y);
+    CHECK(WritePng(project + "/sheet.png", sheet, true));
+    // Found sprites: the arm two pixels away joins the first blob; rows from the top, left to right.
+    Json found = Call(e, "atlas.create", R"({"path":"found.atlas.json","texture":"sheet.png","auto":true,"pivot":[0.5,0]})")["result"]["values"]["frames"];
+    CHECK(found.size() == 2);
+    CHECK(found[0]["rect"] == Quad(1, 1, 5, 5) && found[1]["rect"] == Quad(10, 4, 2, 2));
+    CHECK(found[0]["pivot"][1].asNumber() == 0);
+    CHECK(Call(e, "atlas.create", R"({"path":"tight.atlas.json","texture":"sheet.png","auto":true,"gap":0})")["result"]["values"]["frames"].size() == 3);
+    // Trimmed grid cells keep their cell as the original size; the empty cell is skipped.
+    Json trimmed = Call(e, "atlas.create", R"({"path":"grid.atlas.json","texture":"sheet.png","cellWidth":8,"cellHeight":8,"trim":true})")["result"]["values"]["frames"];
+    CHECK(trimmed.size() == 2 && trimmed[0]["name"].asString() == "frame_0" && trimmed[1]["name"].asString() == "frame_1");
+    CHECK(trimmed[0]["rect"] == Quad(1, 1, 5, 5) && trimmed[0]["size"] == Pair(8, 8) && trimmed[0]["trim"] == Pair(1, 1));
+    CHECK(trimmed[1]["rect"] == Quad(10, 4, 2, 2) && trimmed[1]["trim"] == Pair(2, 4));
+
+    // sprite.outline: a convex polygon around the opaque pixels of the current frame (one undo step).
+    CHECK(Call(e, "entity.create", R"({"name":"Blob","components":{"Sprite":{"atlas":"grid.atlas.json","frame":"frame_0","pixelsPerUnit":8}}})")["ok"].asBool());
+    const Json outline = Call(e, "sprite.outline", R"({"id":"Blob"})");
+    CHECK(outline["ok"].asBool());
+    const Json& points = outline["result"]["points"];
+    CHECK(points.size() >= 3 && points.size() <= 8);
+    // The frame (5x5 px of an 8x8 canvas, trim 1,1, centered pivot) spans x -0.375..0.25, y -0.25..0.375.
+    float minX = 9, maxX = -9, minY = 9, maxY = -9;
+    for (const Json& p : points.items()) {
+        minX = std::min(minX, p[0].asFloat()), maxX = std::max(maxX, p[0].asFloat());
+        minY = std::min(minY, p[1].asFloat()), maxY = std::max(maxY, p[1].asFloat());
+    }
+    CHECK(std::abs(minX + 0.375f) < 0.01f && std::abs(maxX - 0.25f) < 0.01f && std::abs(minY + 0.25f) < 0.01f && std::abs(maxY - 0.375f) < 0.01f);
+    CHECK(e.GetScene().Get<Collider2D>(e.GetScene().FindByName("Blob"))->shape == "polygon");
+    Call(e, "history.undo");
+    CHECK(!e.GetScene().Get<Collider2D>(e.GetScene().FindByName("Blob")));
+
+    // Layers: move, and Lua get/set/fill by layer name or index.
+    CHECK(Call(e, "entity.create", R"({"name":"Map","components":{"Tilemap":{"map":["..",".."],"legend":{".":0,"#":{"frame":0,"collision":"solid"},"~":{"frame":0,"collision":"solid","shadow":false}},"layers":[{"name":"A","map":["#"]},{"name":"B","map":[" #"]}]}}})")["ok"].asBool());
+    CHECK(Call(e, "tilemap.layer_set", R"({"id":"Map","layer":1,"moveTo":0})")["ok"].asBool());
+    const Tilemap* tm = e.GetScene().Get<Tilemap>(e.GetScene().FindByName("Map"));
+    CHECK(tm->layers[0]["name"].asString() == "B" && tm->layers[1]["name"].asString() == "A");
+    CHECK(!Call(e, "tilemap.layer_set", R"({"id":"Map","layer":-1,"moveTo":0})")["ok"].asBool());
+    Call(e, "sim.play");
+    const Json lua = Call(e, "script.eval", R"J({"code":"local m = scene.find('Map'); tilemap.set(m, 0, 1, '#', 'A'); tilemap.fill(m, 0, 0, 2, 1, '~', 0); return tilemap.get(m, 0, 1, 'A') .. tilemap.get(m, 1, 0, 'B') .. tilemap.get(m, 0, 0) .. tostring(tilemap.get(m, 0, 1, 1))"})J");
+    CHECK(lua["ok"].asBool() && lua["result"]["value"].asString() == "#~.#");
+    CHECK(!Call(e, "script.eval", R"J({"code":"tilemap.get(scene.find('Map'), 0, 0, 'Nope')"})J")["ok"].asBool());
+    Call(e, "sim.stop");
+
+    // Tile light: a light2D map is shaded by the light map; a shadow:false tile lets light through.
+    Call(e, "component.set", R"({"id":"Map","type":"Tilemap","values":{"layers":[],"map":["~~~~"],"light2D":true,"ambient2D":[0,0,0]}})");
+    Call(e, "entity.create", R"({"name":"Light","components":{"Transform":{"position":[2,2,0]},"Light2D":{"mode":"color","radius":6,"shadows":true}}})");
+    auto items = GatherRenderItems(e.GetScene(), &e.Assets());
+    bool lit = false;
+    for (const auto& item : items) lit = lit || (item.light2DOn && item.light2D);
+    CHECK(lit);
+    CHECK(GatherOccluders2D(e.GetScene(), &e.Assets()).edges.empty());
+    Call(e, "component.set", R"({"id":"Map","type":"Tilemap","values":{"map":["####"]}})");
+    CHECK(!GatherOccluders2D(e.GetScene(), &e.Assets()).edges.empty());
+    CHECK(!Call(e, "tilemap.rule_set", R"({"id":"Map","char":"x","values":{"frame":0,"shadow":"no"}})")["ok"].asBool());
+    RemoveAll(project);
+}
 
 int main() {
     Log::SetEcho(false);

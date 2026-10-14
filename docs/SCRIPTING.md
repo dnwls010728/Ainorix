@@ -103,7 +103,8 @@ end
 | `nav.nearest(point, range?)` / `nav.raycast(from, to)` | Closest point of the mesh or `nil`; `{point, normal, distance}` where an edge of the mesh stops a straight walk, `nil` when the way is clear |
 | `nav.bake()` | Bake the mesh again after the level changed during play; true when there is one |
 | `require("oe.nav").agent(id, options)` | Official module: an agent with `moveTo(point)`, `update(dt)`, `stop()`, `remaining()` that walks an entity along a path (through its `CharacterBody` when it has one) |
-| `tilemap.get(id, col, row)` / `tilemap.set(id, col, row, ch)` / `tilemap.fill(id, col, row, w, h, ch)` | Read/change Tilemap cells (row 0 = top); changes update graphics, autotiles and collision |
+| `tilemap.get(id, col, row[, layer])` / `tilemap.set(id, col, row, ch[, layer])` / `tilemap.fill(id, col, row, w, h, ch[, layer])` | Read/change Tilemap cells (row 0 = top); changes update graphics, autotiles and collision. `layer`: a `Tilemap.layers` name, or its index (-1 or none = the base map) |
+| `tilemap.data(id, col, row[, layer])` | The `data` table of the cell's tile rule (empty table when it has none) |
 | `tilemap.solid(id, col, row)` / `tilemap.collision(id, col, row)` / `tilemap.size(id)` | Cell collides? / `"none"`, `"solid"`, `"oneway"`, `"shape"` / width, height in cells |
 | `tilemap.cellAt(id, {x,y,z})` / `tilemap.cellCenter(id, col, row)` | World point → `col, row`; cell → world position (see [2D.md](2D.md)) |
 | `scene.instantiate(path, {position, name, parent})` | Spawn a prefab, returns the root id |

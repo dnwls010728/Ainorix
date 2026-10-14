@@ -44,7 +44,8 @@ void ValidateDefinition(Engine& engine, const std::string& path, const Json& dat
     if (AssetManager::KindOf(path) != "animation") throw ApiError("invalid_path", "animation asset must end with .anim.json or .clips.json");
     if (SpritePath(path)) {
         if (!ValidateSpriteAnimationAsset(data, &error)) throw ApiError("invalid_animation", error);
-        engine.ResolvePath((data.has("sheet") ? data["sheet"] : data["atlas"])["texture"].asString());
+        const Json& image = data.has("sheet") ? data["sheet"] : data["atlas"];
+        engine.ResolvePath(image[image.has("path") ? "path" : "texture"].asString());
     } else {
         const std::string model = path.substr(0, path.size() - 11);
         if (AssetManager::KindOf(model) != "model") throw ApiError("invalid_path", "clips.json must be beside a .glb/.gltf/.fbx model");
@@ -65,11 +66,16 @@ bool ValidateSpriteAnimationAsset(const Json& data, std::string* error) {
         Fields(data, {"sheet", "atlas", "clips"});
         if (data.has("sheet") == data.has("atlas")) throw std::runtime_error("use exactly one of sheet or atlas");
         const Json& image = data.has("sheet") ? data["sheet"] : data["atlas"];
-        Fields(image, data.has("sheet") ? std::initializer_list<const char*>{"texture", "columns", "rows"} : std::initializer_list<const char*>{"texture", "frames"});
-        if (!image["texture"].isString() || image["texture"].asString().empty()) throw std::runtime_error("texture needs a project-relative image path");
+        const bool named = !data.has("sheet") && image.has("path");
+        Fields(image, named               ? std::initializer_list<const char*>{"path"}
+                      : data.has("sheet") ? std::initializer_list<const char*>{"texture", "columns", "rows"}
+                                          : std::initializer_list<const char*>{"texture", "frames"});
+        if (named && (!image["path"].isString() || image["path"].asString().empty())) throw std::runtime_error("atlas path is required");
+        if (!named && (!image["texture"].isString() || image["texture"].asString().empty()))
+            throw std::runtime_error("texture needs a project-relative image path");
         int count = 0;
         if (data.has("sheet")) count = Integer(image["columns"], 1, 4096) * Integer(image["rows"], 1, 4096);
-        else {
+        else if (!named) {
             if (!image["frames"].isArray() || image["frames"].size() == 0 || image["frames"].size() > 65536) throw std::runtime_error("atlas frames needs 1..65536 [x,y,width,height] rectangles");
             for (const Json& rect : image["frames"].items()) {
                 if (!rect.isArray() || rect.size() != 4) throw std::runtime_error("atlas rectangle needs [x,y,width,height]");
@@ -84,7 +90,10 @@ bool ValidateSpriteAnimationAsset(const Json& data, std::string* error) {
             const Json& clip = item.second;
             Fields(clip, {"frames", "fps", "loop", "events", "displayName", "durations"});
             if (!clip["frames"].isArray() || clip["frames"].size() == 0 || clip["frames"].size() > 65536) throw std::runtime_error("clip frames needs 1..65536 indices");
-            for (const Json& index : clip["frames"].items()) Integer(index, 0, count - 1);
+            for (const Json& index : clip["frames"].items()) {
+                if (named && index.isString() && !index.asString().empty() && index.asString().size() <= 128) continue;
+                Integer(index, 0, named ? 65535 : count - 1);
+            }
             const double fps = clip["fps"].asNumber(8);
             if ((clip.has("fps") && !clip["fps"].isNumber()) || !std::isfinite(fps) || fps < 0.001 || fps > 10000) throw std::runtime_error("fps must be in [0.001,10000]");
             if (clip.has("loop") && !clip["loop"].isBool()) throw std::runtime_error("loop must be boolean");

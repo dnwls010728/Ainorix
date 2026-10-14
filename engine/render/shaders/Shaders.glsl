@@ -67,6 +67,16 @@ layout(binding=0) uniform mesh_vs_params {
     mat4 normal_mat;
     vec4 item_custom; // custom attributes on shared meshes
     vec4 item_particle; // shared-mesh particle inputs; batched inputs are in particle0
+    // Sprite/Tilemap 2D extras (render/Light2D.h, render/SpriteShape.h). They live in the vertex
+    // stage because the fragment uniforms are at the WebGL2 minimum; all are affine in the world
+    // position, so the interpolated varyings are exact.
+    vec4 sprite_mask_x;  // Sprite.mask: world -> mask quad x (-0.5..0.5)
+    vec4 sprite_mask_y;  // world -> mask quad y
+    vec4 sprite_mask_uv; // mask frame uv rect: xy offset, zw scale
+    vec4 sprite_light;   // light map: world x/y of its bottom-left corner, 1 / texel width, 1 / texel height
+    vec4 sprite_state;   // x: light2D (0 off, 1 no light map, 2 light map), y: mask (0 off, 1 not found, 2 no image, 3 image), z: mask cutoff
+    vec4 sprite_ambient; // rgb: ambient2D
+    vec4 sprite_flip;    // xy: flips of a light2D sprite's normal map (+1 / -1)
 };
 
 // Skin joints (4 KB): uploaded for skinned meshes only, left over (unused) for the others.
@@ -102,6 +112,9 @@ out vec3 v_wpos;
 out vec3 v_nrm;
 out vec4 v_tan;
 centroid out vec2 v_uv;
+out vec4 v_sprite_mask;    // xy: mask quad position, zw: mask uv
+out vec4 v_sprite_light;   // xy: light map position in texels, z: light2D state, w: mask state + cutoff / 2
+out vec4 v_sprite_ambient;
 
 @include_block graph_ops
 
@@ -162,6 +175,14 @@ void main() {
     v_color = color0;
     v_particle = particle0 + item_particle;
     v_custom = custom0 + item_custom;
+    vec4 p = vec4(wp.xyz, 1.0);
+    vec2 maskLocal = vec2(dot(sprite_mask_x, p), dot(sprite_mask_y, p));
+    v_sprite_mask = vec4(maskLocal, vec2(maskLocal.x + 0.5, 0.5 - maskLocal.y) * sprite_mask_uv.zw + sprite_mask_uv.xy);
+    v_sprite_light = vec4((wp.x - sprite_light.x) * sprite_light.z, (wp.y - sprite_light.y) * sprite_light.w, sprite_state.x,
+                          sprite_state.y + sprite_state.z * 0.5);
+    v_sprite_ambient = sprite_ambient;
+    // A flipped light2D sprite's normal map: mirror the tangent frame with the picture.
+    if (sprite_state.x > 0.5) v_tan = vec4(v_tan.xyz * sprite_flip.x, v_tan.w * sprite_flip.x * sprite_flip.y);
     gl_Position = view_proj * wp;
 }
 @end
@@ -474,6 +495,9 @@ in vec3 v_wpos;
 in vec3 v_nrm;
 in vec4 v_tan;
 centroid in vec2 v_uv;
+in vec4 v_sprite_mask;
+in vec4 v_sprite_light;
+in vec4 v_sprite_ambient;
 
 layout(location=0) out vec4 frag_color;
 // View depth for depth of field when the pass has a second target (blended pipelines mask it off).
@@ -578,6 +602,45 @@ vec3 brdf(vec3 n, vec3 v, vec3 l, vec3 diffuse, vec3 f0, float a2, float k, floa
 @include_block graph_ops
 @include_block surface_graph
 
+// 2D light map of light2D surfaces (render/Light2D.h): bound to occlusion_tex, rows [0, rows) the
+// colored light, [rows, 2 rows) the additive light. Mirrors ShadeLight2D in Light2D.cpp.
+vec4 light2d_fetch(int x, int y) { return texelFetch(sampler2D(occlusion_tex, spot_smp), ivec2(x, y), 0); }
+vec3 light2d_color(vec3 base, vec3 n, bool mapped) {
+    if (v_sprite_light.z < 1.5) return base * v_sprite_ambient.rgb;
+    ivec2 size = textureSize(sampler2D(occlusion_tex, spot_smp), 0);
+    int cols = size.x;
+    int rows = size.y / 2;
+    float gx = clamp(v_sprite_light.x - 0.5, 0.0, float(cols - 1));
+    float gy = clamp(v_sprite_light.y - 0.5, 0.0, float(rows - 1));
+    int ix = min(int(gx), max(cols - 2, 0));
+    int iy = min(int(gy), max(rows - 2, 0));
+    float fx = cols > 1 ? gx - float(ix) : 0.0;
+    float fy = rows > 1 ? gy - float(iy) : 0.0;
+    int jx = min(ix + 1, cols - 1);
+    int jy = min(iy + 1, rows - 1);
+    vec4 c = mix(mix(light2d_fetch(ix, iy), light2d_fetch(jx, iy), fx), mix(light2d_fetch(ix, jy), light2d_fetch(jx, jy), fx), fy);
+    vec4 a = mix(mix(light2d_fetch(ix, iy + rows), light2d_fetch(jx, iy + rows), fx),
+                 mix(light2d_fetch(ix, jy + rows), light2d_fetch(jx, jy + rows), fx), fy);
+    float dx = c.w * 2.0 - 1.0;
+    float dy = a.w * 2.0 - 1.0;
+    vec3 dir = vec3(dx, dy, sqrt(max(0.0, 1.0 - dx * dx - dy * dy)));
+    float factor = mapped ? clamp(dot(n, dir) / max(dir.z, 0.05), 0.0, 4.0) : 1.0;
+    return base * (v_sprite_ambient.rgb + c.rgb * 2.0 * factor) + a.rgb * 2.0 * factor;
+}
+
+// Sprite.mask: 1 on the opaque texels of the mask frame (nearest), 0 elsewhere. Mirrors
+// SpriteMaskAlpha in SpriteShape.cpp.
+float mask2d_alpha() {
+    float state = floor(v_sprite_light.w + 0.01);
+    float cutoff = (v_sprite_light.w - state) * 2.0;
+    if (state < 1.5) return 0.0;
+    if (abs(v_sprite_mask.x) > 0.5 || abs(v_sprite_mask.y) > 0.5) return 0.0;
+    if (state < 2.5) return 1.0;
+    ivec2 size = textureSize(sampler2D(mr_tex, spot_smp), 0);
+    ivec2 texel = clamp(ivec2(floor(fract(v_sprite_mask.zw) * vec2(size))), ivec2(0), size - 1);
+    return texelFetch(sampler2D(mr_tex, spot_smp), texel, 0).a >= cutoff - 0.001 ? 1.0 : 0.0;
+}
+
 void main() {
     vec2 uv = (v_uv * uv_rect.zw + uv_rect.xy) * uv_tiling.xy + uv_tiling.zw;
     vec3 base = base_color.rgb * v_color.rgb;
@@ -596,6 +659,7 @@ void main() {
     vec3 graphEmission;
     vec3 graphLightNormal;
     SurfaceGraph(uv,graphNormal,base,alpha,graphEmission,graphLightNormal);
+    if (v_sprite_light.w > 0.5) alpha *= mask2d_alpha();
     if (alpha < flags.z) {
         discard;
     }
@@ -781,6 +845,22 @@ void main() {
             float localLit = local_shadow_lit(int(light_data(74 + i).x), position.xyz, v_wpos, ng);
             color += brdf(n, v, d / dist, diffuse, f0, a2, k, ndv, gv) * radiance.rgb * (fall * fall * cone) * localLit;
         }
+    } else if (v_sprite_light.z > 0.5) {
+        vec3 ng = normalize(v_nrm);
+        if (flags.w > 0.5 && !gl_FrontFacing) ng = -ng;
+        vec3 n = ng;
+        bool mapped = false;
+        if (maps.x > 0.5) {
+            vec3 t = v_tan.xyz - ng * dot(ng, v_tan.xyz);
+            if (length(t) > 1e-6) {
+                t = normalize(t);
+                vec3 b = cross(ng, t) * (v_tan.w < 0.0 ? -1.0 : 1.0);
+                vec3 nt = texture(sampler2D(normal_tex, base_smp), uv).rgb * 2.0 - 1.0;
+                n = normalize(t * nt.x + b * nt.y + ng * nt.z);
+                mapped = true;
+            }
+        }
+        color = light2d_color(base, n, mapped);
     }
     if (color_range.y > 0.0) {
         mat4 planar_vp = mat4(light_data(144), light_data(145), light_data(146), light_data(147));
@@ -884,6 +964,9 @@ in vec3 v_wpos;
 in vec3 v_nrm;
 in vec4 v_tan;
 in vec2 v_uv;
+in vec4 v_sprite_mask;  // unused here; declared to match mesh_vs
+in vec4 v_sprite_light;
+in vec4 v_sprite_ambient;
 out vec4 frag_color;
 @include_block graph_ops
 @include_block surface_graph
@@ -1096,7 +1179,7 @@ vec3 FxaaColor(vec2 uv) {
 }
 
 void main() {
-    vec2 uv = gl_FragCoord.xy / target.xy;
+    vec2 uv = (gl_FragCoord.xy - target.zw) / target.xy;
     vec3 c = post_stage.y > 0.5 ? FxaaColor(uv) : DisplayColor(uv);
     if (outline_color.a > 0.0) {
         ivec2 size = textureSize(sampler2D(mask_tex, mask_smp), 0);

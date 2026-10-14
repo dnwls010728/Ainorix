@@ -1,4 +1,6 @@
 #include "render/RenderScene.h"
+#include "render/Light2D.h"
+#include "render/SpriteShape.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,6 +8,7 @@
 #include <mutex>
 
 #include "assets/Assets.h"
+#include "assets/SpriteAtlas.h"
 #include "scene/SpriteClip.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
@@ -37,6 +40,12 @@ void FrameRect(int index, int columns, int rows, const Texture* tex, float& u0, 
     }
 }
 
+// The move along the camera's right/up axes that puts `point` on a whole art pixel (pixel-perfect cameras).
+Vec3 PixelSnap(const Vec3& point, const Vec3& right, const Vec3& up, float step) {
+    const float x = Dot(point, right), y = Dot(point, up);
+    return right * (std::floor(x / step + 0.5f) * step - x) + up * (std::floor(y / step + 0.5f) * step - y);
+}
+
 // Tilemap meshes are rebuilt only when the map, legend or tileset change.
 std::mutex g_tileMeshMutex;
 std::map<std::string, std::shared_ptr<const Mesh>> g_tileMeshes;
@@ -61,7 +70,21 @@ std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const TileRules& rule
             uint32_t base = static_cast<uint32_t>(mesh->positions.size());
             mesh->positions.insert(mesh->positions.end(), {Vec3(x0, y0, 0), Vec3(x1, y0, 0), Vec3(x1, y1, 0), Vec3(x0, y1, 0)});
             mesh->normals.insert(mesh->normals.end(), 4, Vec3(0, 0, 1));
-            mesh->uvs.insert(mesh->uvs.end(), {u0, v0 + dv, u0 + du, v0 + dv, u0 + du, v0, u0, v0});
+            const Json& line = tm.map[row];
+            const Json cell = line.isArray() && static_cast<size_t>(col) < line.size() ? line[col] : Json();
+            for (const auto& uv : {std::pair<float, float>{0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}}) {
+                float u = uv.first, v = uv.second;
+                if (cell["flipX"].asBool()) u = 1 - u;
+                if (cell["flipY"].asBool()) v = 1 - v;
+                const int turns = ((cell["rotation"].asInt() / 90) % 4 + 4) % 4;
+                for (int turn = 0; turn < turns; ++turn) {
+                    const float old = u;
+                    u = v;
+                    v = 1 - old;
+                }
+                mesh->uvs.push_back(u0 + u * du);
+                mesh->uvs.push_back(v0 + v * dv);
+            }
             mesh->indices.insert(mesh->indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
         }
     }
@@ -73,6 +96,37 @@ std::shared_ptr<const Mesh> TilemapMesh(const Tilemap& tm, const TileRules& rule
     if (g_tileMeshes.size() > 64) g_tileMeshes.clear();
     g_tileMeshes[key] = mesh;
     return mesh;
+}
+
+// The cells of a tilemap mesh as one mesh each (Y-sorted layers), built once per tilemap mesh.
+struct TileCells {
+    std::shared_ptr<const Mesh> source;  // keeps the address used as the key alive
+    std::vector<std::shared_ptr<const Mesh>> cells;
+};
+std::mutex g_tileCellMutex;
+std::map<const Mesh*, TileCells> g_tileCells;
+
+std::vector<std::shared_ptr<const Mesh>> TileCellMeshes(const std::shared_ptr<const Mesh>& source) {
+    std::lock_guard<std::mutex> lock(g_tileCellMutex);
+    auto found = g_tileCells.find(source.get());
+    if (found != g_tileCells.end()) return found->second.cells;
+    if (g_tileCells.size() >= 64) g_tileCells.clear();
+    TileCells& entry = g_tileCells[source.get()];
+    entry.source = source;
+    for (size_t vertex = 0; vertex + 3 < source->positions.size(); vertex += 4) {
+        auto mesh = std::make_shared<Mesh>();
+        mesh->positions.assign(source->positions.begin() + vertex, source->positions.begin() + vertex + 4);
+        mesh->normals.assign(4, Vec3(0, 0, 1));
+        mesh->uvs.assign(source->uvs.begin() + vertex * 2, source->uvs.begin() + (vertex + 4) * 2);
+        mesh->indices = {0, 1, 2, 0, 2, 3};
+        Submesh sub;
+        sub.indexCount = 6;
+        mesh->submeshes = {sub};
+        mesh->ComputeBounds();
+        mesh->ComputeTangents();
+        entry.cells.push_back(mesh);
+    }
+    return entry.cells;
 }
 
 // Trail ribbons sample one small texture: the color and opacity fade from the entity (u = 0) to
@@ -177,6 +231,24 @@ Material RenderItem::SubmeshMaterial(const Submesh& sub) const {
     if (blend || additive || m.opacity < 1.0f) m.alphaMode = AlphaMode::Blend;
     if (additive) m.additive = true;
     if (!m.baseTexture && !m.shader && m.alphaMode == AlphaMode::Mask) m.alphaMode = AlphaMode::Opaque;
+    if (light2DOn) {
+        m.unlit = true;
+        m.light2DOn = true;
+        m.light2D = light2D;
+        m.ambient2D = ambient2D;
+        m.normalTexture = normal2D;
+        m.flip2D[0] = flip2D[0];
+        m.flip2D[1] = flip2D[1];
+    }
+    if (mask2DOn) {
+        m.mask2DOn = true;
+        m.mask2DFound = mask2DFound;
+        m.mask2DX = mask2DX;
+        m.mask2DY = mask2DY;
+        m.mask2DUv = mask2DUv;
+        m.mask2DTexture = mask2DTexture;
+        m.mask2DCutoff = mask2DCutoff;
+    }
     return m;
 }
 
@@ -232,6 +304,10 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
         const RenderItem& ia = items[blended[a].item];
         const RenderItem& ib = items[blended[b].item];
         if (ia.sortLayer != ib.sortLayer) return ia.sortLayer < ib.sortLayer;
+        // Y-sorted items: higher on the screen is drawn first. Unsorted items of the layer count as
+        // infinitely high (behind all sorted ones), which keeps the comparison a strict weak order.
+        const float ya = ia.ySort ? ia.sortY : INFINITY, yb = ib.ySort ? ib.sortY : INFINITY;
+        if (ya != yb) return ya > yb;
         if (ia.sortOrder != ib.sortOrder) return ia.sortOrder < ib.sortOrder;
         if (distance[a] != distance[b]) return distance[a] > distance[b];
         return items[blended[a].item].id < items[blended[b].item].id;
@@ -240,7 +316,7 @@ std::vector<DrawCall> BuildDrawList(const std::vector<RenderItem>& items, const 
     return opaque;
 }
 
-std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView) {
+std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView, float time, float pixelStep) {
     std::vector<RenderItem> items;
     for (const auto& kv : scene.Pool<MeshRenderer>()) {
         const MeshRenderer& mr = kv.second;
@@ -329,9 +405,11 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
 
     // 2D: sprites are unit quads scaled to the frame size; tilemaps one mesh each.
     const Mesh* quad = GetBuiltinMesh("quad");
+    const std::shared_ptr<const Light2DMap> light2DMap = GetLight2DMap(scene, assets);
     for (const auto& kv : scene.Pool<Sprite>()) {
         Sprite sp = kv.second;
         Json atlasRect;
+        Json namedFrame;
         bool brokenAnimation = false;
         if (assets) if (const SpriteAnimation* animation = scene.Get<SpriteAnimation>(kv.first)) if (!animation->asset.empty()) {
             auto definition = assets->GetAnimation(animation->asset);
@@ -343,10 +421,30 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 const Json& clip = (*definition)["clips"][animation->clip];
                 if (clip["frames"].size() > 0 && std::isfinite(animation->time)) {
                     SpriteClipTiming timing;
-                    if (ParseSpriteClipTiming(clip, timing, nullptr)) sp.frame = clip["frames"][timing.Index(animation->time)].asInt();
+                    if (ParseSpriteClipTiming(clip, timing, nullptr))
+                        sp.frame = clip["frames"][timing.Index(animation->time)];
+                    else
+                        brokenAnimation = true;
+                }
+                if (image.has("path"))
+                    sp.atlas = image["path"].asString();
+                else if (definition->has("atlas")) {
+                    const int index = sp.frame;
+                    if (index >= 0 && static_cast<size_t>(index) < image["frames"].size())
+                        atlasRect = image["frames"][index];
                     else brokenAnimation = true;
                 }
-                if (definition->has("atlas")) atlasRect = image["frames"][sp.frame];
+            }
+        }
+        if (assets && !sp.atlas.empty()) {
+            const auto atlas = assets->GetAtlas(sp.atlas);
+            const Json* frame = atlas ? FindAtlasFrame(*atlas, sp.frame.ToJson()) : nullptr;
+            if (!frame)
+                brokenAnimation = true;
+            else {
+                sp.texture = (*atlas)["texture"].asString();
+                namedFrame = *frame;
+                atlasRect = (*frame)["rect"];
             }
         }
         if (!sp.visible) continue;
@@ -364,6 +462,9 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         it.emission = sp.lit ? std::max(0.0f, sp.emission) : 0.0f;
         it.sortLayer = sp.layer;
         it.sortOrder = sp.order;
+        it.ySort = sp.ySort;
+        it.sortY = cameraView.TransformPoint(scene.WorldMatrix(kv.first).TransformPoint(Vec3())).y + sp.ySortOffset;
+        if (sp.ySort) it.blend = true;
         it.additive = sp.blend == "add";
         it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
         if (!sp.texture.empty() && assets) it.textureOverride = assets->GetTexture(sp.texture);
@@ -388,8 +489,11 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
             const float x = atlasRect[0].asFloat(), y = atlasRect[1].asFloat();
             const float width = atlasRect[2].asFloat(), height = atlasRect[3].asFloat();
             if (x + width > tex->width || y + height > tex->height) { it.tint = Color(1, 0, 1); it.error = true; }
-            u0 = (x + 0.5f) / static_cast<float>(tex->width); v0 = (y + 0.5f) / static_cast<float>(tex->height);
-            du = (width - 1) / static_cast<float>(tex->width); dv = (height - 1) / static_cast<float>(tex->height);
+            // Filtered sprites stop half a texel inside so they do not blend in the neighbouring frame;
+            // point-sampled ones keep the frame's scale (texel centres at pixel centres), only a hair inside.
+            const float inset = sp.pixelArt ? 0.01f : 0.5f;
+            u0 = (x + inset) / static_cast<float>(tex->width); v0 = (y + inset) / static_cast<float>(tex->height);
+            du = (width - 2 * inset) / static_cast<float>(tex->width); dv = (height - 2 * inset) / static_cast<float>(tex->height);
         }
         it.uvOffset[0] = sp.flipX ? u0 + du : u0;
         it.uvScale[0] = sp.flipX ? -du : du;
@@ -401,34 +505,131 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         if (atlasRect.isArray()) { frameW = atlasRect[2].asFloat(); frameH = atlasRect[3].asFloat(); }
         float w = sp.width > 0 ? sp.width : frameW / ppu;
         float h = sp.height > 0 ? sp.height : frameH / ppu;
+        float centerX = (0.5f - sp.pivotX) * w, centerY = (0.5f - sp.pivotY) * h;
+        if (namedFrame.isObject()) {
+            const float originalW = namedFrame["size"][0].asFloat(), originalH = namedFrame["size"][1].asFloat();
+            const bool rotated = namedFrame["rotated"].asBool();
+            const float trimmedW = rotated ? frameH : frameW, trimmedH = rotated ? frameW : frameH;
+            const float sx = sp.width > 0 ? sp.width / originalW : 1 / ppu;
+            const float sy = sp.height > 0 ? sp.height / originalH : 1 / ppu;
+            centerX = (namedFrame["trim"][0].asFloat() + trimmedW / 2 - namedFrame["pivot"][0].asFloat() * originalW) * sx;
+            centerY = (originalH * (1 - namedFrame["pivot"][1].asFloat()) - namedFrame["trim"][1].asFloat() - trimmedH / 2) * sy;
+            if (sp.flipX) centerX = -centerX;
+            if (sp.flipY) centerY = -centerY;
+            w = trimmedW * sx;
+            h = trimmedH * sy;
+            if (rotated) {  // the mesh's uvs undo the rotation and the flips (SpriteShapeMesh)
+                it.uvOffset[0] = u0;
+                it.uvOffset[1] = v0;
+                it.uvScale[0] = du;
+                it.uvScale[1] = dv;
+            }
+        }
+        // Draw modes and fill are geometry; a plain sprite keeps the shared quad.
+        SpriteShape shape;
+        shape.drawMode = sp.drawMode;
+        shape.slice = sp.slice;
+        shape.fill = std::isfinite(sp.fill) ? Clamp(sp.fill, 0, 1) : 1.0f;
+        shape.fillMode = sp.fillMode;
+        shape.frameW = std::max(1.0f, namedFrame.isObject() && namedFrame["rotated"].asBool() ? frameH : frameW);
+        shape.frameH = std::max(1.0f, namedFrame.isObject() && namedFrame["rotated"].asBool() ? frameW : frameH);
+        shape.width = w;
+        shape.height = h;
+        shape.pixelsPerUnit = ppu;
+        shape.rotated = namedFrame.isObject() && namedFrame["rotated"].asBool();
+        shape.flipX = sp.flipX;
+        shape.flipY = sp.flipY;
+        if (auto mesh = SpriteShapeMesh(shape)) {
+            if (mesh->indices.empty()) continue;  // fill 0: nothing to draw
+            it.mesh = mesh;
+        }
+        if (sp.light2D) {
+            it.light2DOn = true;
+            it.light2D = light2DMap;
+            it.ambient2D = sp.ambient2D;
+            if (!sp.normalTexture.empty() && assets) it.normal2D = assets->GetTexture(sp.normalTexture);
+            it.flip2D[0] = sp.flipX ? -1.0f : 1.0f;
+            it.flip2D[1] = sp.flipY ? -1.0f : 1.0f;
+        }
         // Pivot on the entity position; `layer` and `order` nudge toward the camera (+Z) so cut-out
         // sprites, which write depth, agree with the sort order of blended ones.
         const float nudge = static_cast<float>(sp.layer) * 0.01f + static_cast<float>(sp.order) * 0.001f;
-        Mat4 local = Mat4::Translation(Vec3((0.5f - sp.pivotX) * w, (0.5f - sp.pivotY) * h, nudge)) *
-                     Mat4::Scale(Vec3(w, h, 1.0f));
+        Mat4 local = Mat4::Translation(Vec3(centerX, centerY, nudge)) * Mat4::Scale(Vec3(w, h, 1.0f));
         it.world = scene.WorldMatrix(kv.first) * local;
+        // Pixel-perfect: the picture's corner on a whole art pixel (snapping the pivot would leave an
+        // odd-sized frame half a pixel off, sampling texel edges: doubled or missing rows).
+        if (pixelStep > 0) it.world = Mat4::Translation(PixelSnap(it.world.TransformPoint(Vec3(-0.5f, -0.5f, 0)), right, up, pixelStep)) * it.world;
         it.normalMatrix = it.world.Inverse().Transposed();
         items.push_back(std::move(it));
     }
     for (const auto& kv : scene.Pool<Tilemap>()) {
-        const Tilemap& tm = kv.second;
-        if (!tm.visible) continue;
-        RenderItem it;
-        it.id = kv.first;
-        it.tint = tm.color;
-        it.unlit = !tm.lit;
-        it.castShadows = false;
-        it.pointSample = tm.pixelArt;
-        it.alphaCutoff = 0.5f;
-        TilesetLookup lookup = assets ? assets->Tilesets() : TilesetLookup();
-        TileRules rules = BuildTileRules(tm, &lookup);
-        if (!rules.image.empty() && assets) it.textureOverride = assets->GetTexture(rules.image);
-        it.mesh = TilemapMesh(tm, rules, it.textureOverride.get());
-        if (it.mesh->indices.empty()) continue;
-        it.world = scene.WorldMatrix(kv.first);
-        it.normalMatrix = it.world.Inverse().Transposed();
-        items.push_back(std::move(it));
+        const Tilemap& source = kv.second;
+        if (!source.visible) continue;
+        std::vector<Tilemap> layers;
+        Tilemap base = source;
+        base.layers = Json::MakeArray();
+        layers.push_back(base);
+        for (const Json& layer : source.layers.items()) {
+            Tilemap part = base;
+            part.map = layer["map"];
+            part.layer = layer["layer"].asInt(source.layer);
+            part.order = layer["order"].asInt(source.order);
+            part.ySort = layer["ySort"].asBool(source.ySort);
+            part.ySortOffset = layer["ySortOffset"].asFloat(source.ySortOffset);
+            part.visible = layer["visible"].asBool(true);
+            layers.push_back(part);
+        }
+        for (const Tilemap& tm : layers) {
+            if (!tm.visible) continue;
+            RenderItem it;
+            it.id = kv.first;
+            it.tint = tm.color;
+            it.unlit = !tm.lit;
+            it.castShadows = false;
+            it.pointSample = tm.pixelArt;
+            it.alphaCutoff = 0.5f;
+            it.sortLayer = tm.layer;
+            it.sortOrder = tm.order;
+            it.ySort = tm.ySort;
+            it.blend = tm.ySort;
+            if (tm.light2D) {
+                it.light2DOn = true;
+                it.light2D = light2DMap;
+                it.ambient2D = tm.ambient2D;
+            }
+            TilesetLookup lookup = assets ? assets->Tilesets() : TilesetLookup();
+            TileRules rules = BuildTileRules(tm, &lookup);
+            for (auto& rule : rules.tiles)
+                if (!rule.second.animation.empty()) {
+                    const auto& animation = rule.second.animation;
+                    const size_t index = static_cast<size_t>(std::floor(std::max(0.0f, time) * rule.second.fps)) % animation.size();
+                    rule.second.frame = animation[index];
+                    rule.second.variants.clear();
+                    rule.second.autotile = AutoTile::None;
+                    rules.key += "|" + std::to_string(rule.first) + ":" + std::to_string(index);
+                }
+            if (!rules.image.empty() && assets) it.textureOverride = assets->GetTexture(rules.image);
+            it.mesh = TilemapMesh(tm, rules, it.textureOverride.get());
+            if (it.mesh->indices.empty()) continue;
+            it.world = scene.WorldMatrix(kv.first) *
+                       Mat4::Translation(Vec3(0, 0, static_cast<float>(tm.layer) * 0.01f + static_cast<float>(tm.order) * 0.001f));
+            if (pixelStep > 0) it.world = Mat4::Translation(PixelSnap(it.world.TransformPoint(Vec3()), right, up, pixelStep)) * it.world;
+            it.normalMatrix = it.world.Inverse().Transposed();
+            if (!tm.ySort) {
+                items.push_back(std::move(it));
+                continue;
+            }
+            // A sorted layer draws each cell on its own, sorted by its bottom edge.
+            for (const auto& cellMesh : TileCellMeshes(it.mesh)) {
+                RenderItem cell = it;
+                cell.mesh = cellMesh;
+                const Vec3 pivot = (cellMesh->positions[0] + cellMesh->positions[1]) * 0.5f;
+                cell.sortY = cameraView.TransformPoint(cell.world.TransformPoint(pivot)).y + tm.ySortOffset;
+                items.push_back(std::move(cell));
+            }
+        }
     }
+    ApplySpriteMasks(scene, items);
     // Darkness2D: one camera-facing quad at the near plane, textured with a light map built here
     // so both renderers show the same thing. Each light multiplies the darkness that is left.
     for (const auto& kv : scene.Pool<Darkness2D>()) {
@@ -443,12 +644,21 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
         const Mat4 camWorld = scene.WorldMatrix(kv.first);
         const Mat4 toCamera = camWorld.Inverse();
         const float texel = viewH / static_cast<float>(rows);
+        bool shadows = false;
+        for (const auto& lv : scene.Pool<Light2D>()) shadows = shadows || (lv.second.enabled && lv.second.shadows && lv.second.mode == "darkness");
+        const Occluders2D occluders = shadows ? GatherOccluders2D(scene, assets) : Occluders2D();
+        size_t lightCount = 0;
         for (const auto& lv : scene.Pool<Light2D>()) {
             const Light2D& light = lv.second;
             if (!light.enabled || !(light.radius > 0.0f) || !(light.strength > 0.0f)) continue;
+            if (light.mode != "darkness") continue;
+            if (light.shadows && lightCount++ >= 8) continue;
             const Vec3 p = toCamera.TransformPoint(scene.WorldMatrix(lv.first).TransformPoint(Vec3()));
             if (!std::isfinite(p.x) || !std::isfinite(p.y)) continue;
             const float inner = Clamp(light.inner, 0.0f, 0.99f), strength = Clamp(light.strength, 0.0f, 1.0f);
+            const float softness = Clamp(light.softness, 0.0f, 10.0f);
+            const Vec3 source = scene.WorldMatrix(lv.first).TransformPoint(Vec3());
+            const std::vector<int> near = light.shadows ? OccluderEdgesNear(occluders, source, light.radius + softness) : std::vector<int>();
             // texel (c, r) is centred at x = (c + 0.5) * texel - viewW / 2, y = viewH / 2 - (r + 0.5) * texel
             const int c0 = std::max(0, static_cast<int>(std::floor((p.x - light.radius + viewW * 0.5f) / texel)));
             const int c1 = std::min(cols - 1, static_cast<int>(std::ceil((p.x + light.radius + viewW * 0.5f) / texel)));
@@ -460,8 +670,13 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                     const float dx = (static_cast<float>(c) + 0.5f) * texel - viewW * 0.5f - p.x;
                     const float t = std::sqrt(dx * dx + dy * dy) / light.radius;
                     if (t >= 1.0f) continue;
+                    float visible = 1.0f;
+                    if (light.shadows) {
+                        visible = Visibility2D(occluders, source, softness, camWorld.TransformPoint(Vec3(dx + p.x, dy + p.y, p.z)), &near);
+                        if (visible <= 0.0f) continue;
+                    }
                     const float x = t <= inner ? 0.0f : (t - inner) / (1.0f - inner);
-                    left[static_cast<size_t>(r) * static_cast<size_t>(cols) + static_cast<size_t>(c)] *= 1.0f - strength * (1.0f - x * x * x);
+                    left[static_cast<size_t>(r) * static_cast<size_t>(cols) + static_cast<size_t>(c)] *= 1.0f - strength * visible * (1.0f - x * x * x);
                 }
             }
         }

@@ -11,6 +11,8 @@
 
 namespace oe {
 
+struct Light2DMap;
+
 // RGBA8 image (0xAABBGGRR texels, rows top to bottom).
 struct Texture {
     int width = 0;
@@ -54,6 +56,17 @@ struct Material {
     std::string shaderPath;                                  // project-relative surface graph asset
     std::shared_ptr<const ShaderGraph> shader;                // null retains the standard material
     std::array<Vec4, ShaderGraph::kMaxUniforms> shaderUniforms{};  // validated graph defaults/overrides
+    // Sprite/Tilemap light2D (unlit surfaces only): shaded by this 2D light map with ambient2D;
+    // normalTexture is then the sprite's normal map and flip2D undoes the sprite's flips.
+    std::shared_ptr<const Light2DMap> light2D;
+    bool light2DOn = false;
+    Color ambient2D;
+    float flip2D[2] = {1, 1};
+    // Sprite.mask: alpha 0 outside the opaque texels (nearest) of the mask frame; found = false hides all.
+    bool mask2DOn = false, mask2DFound = false;
+    Vec4 mask2DX, mask2DY, mask2DUv;
+    std::shared_ptr<const Texture> mask2DTexture;
+    float mask2DCutoff = 0.5f;
 
     bool Blended() const { return alphaMode == AlphaMode::Blend; }
 };

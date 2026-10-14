@@ -522,6 +522,22 @@ struct NativeEditor::Impl {
     // ----- Tile painting (EditorTiles.cpp): Tiles panel + brush in the Scene view
     bool showTiles = true;
     bool tilePaint = false;        // Scene view clicks paint the selected Tilemap
+    bool requestTilesFocus = false;
+    int tileLayer = -1;
+    int sliceWidth = 16, sliceHeight = 16;
+    std::string slicePath = "sprites/sheet.atlas.json";
+    int collisionPoint = -1;
+    int collisionSerial = 0;
+    std::string tileDataKey;
+    std::map<std::string, std::array<float, 4>> twoDimensionalRects;
+    void TwoDimensionalRect(const std::string& name);
+    void SpriteToolsPanel();
+    void TileRuleTools();
+    void TileLayerTools();  // layer picker, add / rename / move / remove, visible, collision
+    std::string tileLayerName;
+    bool sliceTrim = false;
+    float outlineCutoff = 0.5f;
+    bool collisionSnap = true;
     char tileBrush = '#';
     Json tileInfo;                 // tilemap.info of the selected tilemap
     EntityId tileInfoId = kNullEntity;

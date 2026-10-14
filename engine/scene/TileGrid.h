@@ -17,6 +17,9 @@ class Scene;
 // and the Lua `tilemap` API. Cells are (column, row) with row 0 at the top;
 // the entity origin is the top-left corner of cell (0, 0).
 
+// Validate map rows, transformed cells and layer settings at all component entry points.
+bool ValidateTilemapData(const Json& values, std::string* error);
+
 // ----- Tile rules ------------------------------------------------------------
 // What each map character draws and how it collides. Rules come from a
 // tileset file (Tilemap.tileset = "x.tileset.json", its "tiles" object) and
@@ -41,7 +44,11 @@ struct TilePoint {
 };
 
 struct TileDef {
-    int frame = -1;  // -1 = draws nothing
+    int frame = -1;  // -1 draws nothing
+    Json data = Json::MakeObject();
+    std::vector<int> animation;
+    float fps = 8;  // animation frames per second
+    bool shadow = true;  // solid/shaped/one-way collision blocks Light2D shadows (false: water, glass)
     std::vector<int> variants;
     AutoTile autotile = AutoTile::None;
     std::vector<int> autoFrames;  // 16 (sides) or 47 (blob) frames, one per neighbour pattern

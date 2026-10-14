@@ -514,6 +514,15 @@ bool NativeEditor::Impl::FieldEditor(EntityId id, const std::string& type, const
         else changed = ImGui::DragFloat(label.c_str(), &v, 0.02f, 0, 0, "%.3g");
         dragMerge();
         if (changed) newValue = Json(v);
+    } else if (oeType == "frame") {
+        char text[160];
+        std::snprintf(text, sizeof(text), "%s", (value.isString() ? value.asString() : value.dump()).c_str());
+        if (ImGui::InputText(label.c_str(), text, sizeof(text), ImGuiInputTextFlags_EnterReturnsTrue)) {
+            const std::string name(text);
+            const bool number = !name.empty() && name.find_first_not_of("0123456789") == std::string::npos;
+            newValue = number ? Json(std::atoi(text)) : Json(name);
+            changed = true;
+        }
     } else if (oeType == "int") {
         int v = value.asInt(0);
         bool ranged = schema.has("minimum") && schema.has("maximum");

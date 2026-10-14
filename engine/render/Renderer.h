@@ -38,6 +38,9 @@ struct RenderView {
     Vec3 eye;
     Color clearColor{0.12f, 0.14f, 0.18f};
     EntityId cameraEntity = kNullEntity;
+    int pixelWidth = 0, pixelHeight = 0;  // zero disables art-resolution presentation
+    float pixelStep = 0;                  // camera-up/right world units per art pixel, rendering only
+
     PostProcess postProcess;  // selected camera's effects; defaults leave scene color unchanged
     float shaderTime = 0;     // fixed simulation seconds supplied by the engine/tools
     // The game is being played (Engine::InPlaySession: running or paused), not its scene edited.
@@ -98,6 +101,8 @@ private:
 // output is identical for any value; tests use it to prove that.
 void SetMaxRenderThreads(int threads);
 
+// Integer nearest presentation, centered black bars; undersized outputs crop at scale one.
+void PresentPixelFrame(const RenderTarget& source, RenderTarget& target);
 // Builds the same render matrices for an explicit camera; false if it lacks Camera.
 bool MakeCameraView(const Scene& scene, EntityId camera, float aspect, RenderView& out);
 

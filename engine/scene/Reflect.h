@@ -20,7 +20,26 @@ constexpr EntityId kNullEntity = 0;
 // are all generated from this single description.
 // ---------------------------------------------------------------------------
 
-enum class FieldType { Float, Int, Bool, String, Vec3, Color, Entity, Json };
+// Numeric sheet index or a named atlas frame. Numeric C++ users remain source compatible.
+struct SpriteFrame {
+    int index = 0;
+    std::string name;
+    SpriteFrame(int value = 0) : index(value) {}
+    operator int() const { return index; }
+    Json ToJson() const { return name.empty() ? Json(index) : Json(name); }
+    SpriteFrame& operator=(int value) {
+        index = value;
+        name.clear();
+        return *this;
+    }
+    SpriteFrame& operator=(const Json& value) {
+        index = value.asInt();
+        name = value.asString();
+        return *this;
+    }
+};
+
+enum class FieldType { Float, Int, Bool, String, Vec3, Color, Entity, Json, Frame };
 const char* ToString(FieldType type);
 
 struct FieldInfo {
@@ -60,6 +79,7 @@ private:
     static FieldType Deduce(const Color*) { return FieldType::Color; }
     static FieldType Deduce(const EntityId*) { return FieldType::Entity; }
     static FieldType Deduce(const oe::Json*) { return FieldType::Json; }
+    static FieldType Deduce(const SpriteFrame*) { return FieldType::Frame; }
 };
 
 // Type-erased storage for one component type. std::map keeps iteration in

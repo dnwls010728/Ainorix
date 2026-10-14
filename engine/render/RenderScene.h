@@ -7,6 +7,7 @@
 
 #include "core/Math.h"
 #include "render/Environment.h"
+#include "render/Light2D.h"
 #include "render/Mesh.h"
 #include "scene/Scene.h"
 
@@ -39,6 +40,8 @@ struct RenderItem {
     bool additive = false; // blended additively (Sprite/ParticleEmitter blend: "add"); implies blend
     // 2D draw order of transparent items: layer, then order, before distance to the eye (Sprite.layer/order).
     int sortLayer = 0, sortOrder = 0;
+    bool ySort = false;
+    float sortY = 0;
     bool unlit = false;
     bool flat = false;
     bool castShadows = true;
@@ -52,6 +55,18 @@ struct RenderItem {
     float uvScale[2] = {1, 1};
     float alphaCutoff = 0.0f;
     bool pointSample = false;
+    // Sprite/Tilemap light2D: shaded by the scene's 2D light map (render/Light2D.h) with this
+    // ambient; normal2D is the sprite's normal map, flip2D undoes its flips (-1 = flipped).
+    std::shared_ptr<const Light2DMap> light2D;
+    bool light2DOn = false;
+    Color ambient2D;
+    std::shared_ptr<const Texture> normal2D;
+    float flip2D[2] = {1, 1};
+    // Sprite.mask (render/SpriteShape.h): world -> mask quad x/y rows, the mask frame's uv rect, its image and cutoff.
+    bool mask2DOn = false, mask2DFound = false;
+    Vec4 mask2DX, mask2DY, mask2DUv;
+    std::shared_ptr<const Texture> mask2DTexture;
+    float mask2DCutoff = 0.5f;
 
     // Material of a submesh with this item's overrides applied (tint, texture,
     // opacity, unlit, sprite cutoff and sampling).
@@ -315,7 +330,8 @@ struct LocalShadowSample {
 LocalShadowSample PrepareLocalShadowSample(const LocalShadowSet& shadows, size_t slot, const Vec3& position, const Vec3& normal);
 
 // The camera view orients particle billboards; identity faces +Z for callers without a camera.
-std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView = Mat4{});
+std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* assets, const Mat4& cameraView = Mat4{}, float time = 0,
+                                          float pixelStep = 0);
 // `assets` (optional) loads the image of a textured Skybox; without it the Skybox keeps its colors.
 RenderLights GatherRenderLights(const Scene& scene, AssetManager* assets = nullptr);
 

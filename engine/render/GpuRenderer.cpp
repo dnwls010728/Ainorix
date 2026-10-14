@@ -330,6 +330,24 @@ struct DrawBatches {
     std::vector<uint32_t> indices;
 };
 
+// Sprite/Tilemap 2D extras of mesh_vs (light map position, mask, ambient, normal map flips).
+void PutSprite2D(oe_mesh_vs_params_t& vu, const Material& m, bool lightMap, bool maskImage) {
+    if (m.light2DOn) {
+        if (lightMap && m.light2D)
+            Put(vu.sprite_light, m.light2D->x0, m.light2D->y0, 1.0f / m.light2D->cellW, 1.0f / m.light2D->cellH);
+        Put(vu.sprite_ambient, m.ambient2D.r, m.ambient2D.g, m.ambient2D.b, 0);
+        Put(vu.sprite_flip, m.flip2D[0], m.flip2D[1], 0, 0);
+    }
+    if (m.mask2DOn) {
+        Put(vu.sprite_mask_x, m.mask2DX.x, m.mask2DX.y, m.mask2DX.z, m.mask2DX.w);
+        Put(vu.sprite_mask_y, m.mask2DY.x, m.mask2DY.y, m.mask2DY.z, m.mask2DY.w);
+        Put(vu.sprite_mask_uv, m.mask2DUv.x, m.mask2DUv.y, m.mask2DUv.z, m.mask2DUv.w);
+    }
+    const float light = m.light2DOn ? (lightMap && m.light2D ? 2.0f : 1.0f) : 0.0f;
+    const float mask = !m.mask2DOn ? 0.0f : !m.mask2DFound ? 1.0f : maskImage ? 3.0f : 2.0f;
+    Put(vu.sprite_state, light, mask, Clamp(m.mask2DCutoff, 0.0f, 1.0f), 0);
+}
+
 bool SameBatchMaterial(const Material& a, const Material& b) {
     return a.baseTexture == b.baseTexture && a.metallic == b.metallic && a.roughness == b.roughness &&
            a.metallicRoughnessTexture == b.metallicRoughnessTexture && a.normalTexture == b.normalTexture &&
@@ -337,7 +355,9 @@ bool SameBatchMaterial(const Material& a, const Material& b) {
            a.emissive == b.emissive && a.emissiveIntensity == b.emissiveIntensity && a.emissiveTexture == b.emissiveTexture &&
            a.alphaMode == b.alphaMode && a.alphaCutoff == b.alphaCutoff && a.doubleSided == b.doubleSided && a.additive == b.additive &&
            a.unlit == b.unlit && a.pixelArt == b.pixelArt && a.fog == b.fog && a.tiling[0] == b.tiling[0] && a.tiling[1] == b.tiling[1] &&
-           a.offset[0] == b.offset[0] && a.offset[1] == b.offset[1] && a.shader == b.shader &&
+           a.offset[0] == b.offset[0] && a.offset[1] == b.offset[1] && a.shader == b.shader && a.light2DOn == b.light2DOn &&
+           a.light2D == b.light2D && a.ambient2D == b.ambient2D && a.flip2D[0] == b.flip2D[0] && a.flip2D[1] == b.flip2D[1] &&
+           !a.mask2DOn && !b.mask2DOn &&
            std::memcmp(a.shaderUniforms.data(), b.shaderUniforms.data(), sizeof(a.shaderUniforms)) == 0;
 }
 
@@ -672,12 +692,13 @@ struct GpuRenderer::Impl {
     AssetManager* assets;
     Settings settings;
 
-    // Scene pass: [0 plain, 1 DOF view-depth, 2 SSR surface MRT][0 opaque, 1 alpha blend, 2 additive][double sided]
-    sg_pipeline meshPips[3][3][2]{};
-    sg_pipeline hdrMeshPips[3][3][2]{};
-    sg_pipeline skyPips[2][3]{};  // [hdr][mrt]: fullscreen skybox background drawn first in the scene pass
+    // Scene pass: [0 settings.msaa, 1 single-sampled (pixel-perfect art frames)]
+    // [0 plain, 1 DOF view-depth, 2 SSR surface MRT][0 opaque, 1 alpha blend, 2 additive][double sided]
+    sg_pipeline meshPips[2][3][3][2]{};
+    sg_pipeline hdrMeshPips[2][3][3][2]{};
+    sg_pipeline skyPips[2][2][3]{};  // [single][hdr][mrt]: fullscreen skybox background drawn first in the scene pass
     sg_shader skyShd{};
-    sg_pipeline linePips[3]{}, hdrLinePips[3]{};
+    sg_pipeline linePips[2][3]{}, hdrLinePips[2][3]{};
     sg_pipeline bloomPip{};
     sg_shader bloomShd{};
     int hdrSamples = 1;
@@ -705,7 +726,7 @@ struct GpuRenderer::Impl {
     sg_view spotTex{};
     float spotData[kLocalLightDataWidth * kLocalLightDataHeight * 4]{};
     StreamBuffer lines, ui, batchVertices, batchIndices{sg_buffer{}, 0, true};
-    Targets offscreen, window, planarTarget;
+    Targets offscreen, window, planarTarget, pixelSource;
     DecalAtlas decalAtlas;
     std::unordered_map<int, Targets> panelTargets;  // RenderToTexture slots (editor panels)
 
@@ -805,11 +826,18 @@ struct GpuRenderer::Impl {
                 }
             }
         };
-        // Opaque/cut-out surfaces write depth; transparent ones blend and only test it.
+        // Opaque/cut-out surfaces write depth; transparent ones blend and only test it. Pixel-perfect
+        // frames draw single-sampled (single = 1): a cut edge inside an art pixel must not blend.
+        for (int single = 0; single < 2; ++single)
         for (int mrt = 0; mrt < 3; ++mrt)
         for (int blend = 0; blend < 3; ++blend) {
             for (int twoSided = 0; twoSided < 2; ++twoSided) {
                 if ((mrt == 1 && !dofMrtSupported) || (mrt == 2 && !hdrSupported)) continue;
+                if (single && msaa == 1) {
+                    meshPips[1][mrt][blend][twoSided] = meshPips[0][mrt][blend][twoSided];
+                    hdrMeshPips[1][mrt][blend][twoSided] = hdrMeshPips[0][mrt][blend][twoSided];
+                    continue;
+                }
                 sg_pipeline_desc d{};
                 d.shader = meshShd;
                 d.layout.buffers[0].stride = sizeof(MeshVertex);
@@ -835,7 +863,7 @@ struct GpuRenderer::Impl {
                 }
                 d.cull_mode = twoSided ? SG_CULLMODE_NONE : SG_CULLMODE_BACK;
                 d.face_winding = SG_FACEWINDING_CCW;
-                d.sample_count = msaa;
+                d.sample_count = single ? 1 : msaa;
                 viewDepthTarget(d, mrt, blend == 0);
                 if (mrt == 2 && blend == 1) {
                     // A transparent foreground attenuates the underlying SSR correction, without becoming a receiver.
@@ -844,23 +872,28 @@ struct GpuRenderer::Impl {
                     }
                 }
                 d.label = blend ? "oe-mesh-blend" : "oe-mesh";
-                if (mrt != 2) meshPips[mrt][blend][twoSided] = GraphCapablePipeline(d);
+                if (mrt != 2) meshPips[single][mrt][blend][twoSided] = GraphCapablePipeline(d);
                 if (hdrSupported) {
                     d.colors[0].pixel_format = kHdrFormat;
-                    d.sample_count = hdrSamples;
+                    d.sample_count = single ? 1 : hdrSamples;
                     d.label = blend ? "oe-hdr-mesh-blend" : "oe-hdr-mesh";
-                    hdrMeshPips[mrt][blend][twoSided] = GraphCapablePipeline(d);
+                    hdrMeshPips[single][mrt][blend][twoSided] = GraphCapablePipeline(d);
                 }
             }
         }
         // Skybox background: a fullscreen triangle (no vertex buffer) drawn first in the scene pass,
         // depth test always/no write so every later surface draws over it. One variant per scene
         // color format (RGBA8 / HDR) and per depth-of-field MRT state.
+        for (int single = 0; single < 2; ++single)
         for (int hdr = 0; hdr < 2; ++hdr) {
             if (hdr && !hdrSupported) continue;
             for (int mrt = 0; mrt < 3; ++mrt) {
                 if (mrt == 2 && !hdr) continue;
                 if ((mrt == 1 && !dofMrtSupported) || (mrt == 2 && !hdrSupported)) continue;
+                if (single && msaa == 1) {
+                    skyPips[1][hdr][mrt] = skyPips[0][hdr][mrt];
+                    continue;
+                }
                 sg_pipeline_desc d{};
                 d.shader = skyShd;
                 d.depth.pixel_format = kDepthFormat;
@@ -868,10 +901,10 @@ struct GpuRenderer::Impl {
                 d.depth.write_enabled = false;
                 d.cull_mode = SG_CULLMODE_NONE;
                 d.colors[0].pixel_format = hdr ? kHdrFormat : kColorFormat;
-                d.sample_count = hdr ? hdrSamples : msaa;
+                d.sample_count = single ? 1 : (hdr ? hdrSamples : msaa);
                 viewDepthTarget(d, mrt, false);  // leave the depth-of-field target at its cleared far value
                 d.label = "oe-sky";
-                skyPips[hdr][mrt] = sg_make_pipeline(&d);
+                skyPips[single][hdr][mrt] = sg_make_pipeline(&d);
             }
         }
 
@@ -985,8 +1018,14 @@ struct GpuRenderer::Impl {
                 dofPip[hdr] = sg_make_pipeline(&d);
             }
         }
+        for (int single = 0; single < 2; ++single)
         for (int mrt = 0; mrt < 3; ++mrt) {
             if ((mrt == 1 && !dofMrtSupported) || (mrt == 2 && !hdrSupported)) continue;
+            if (single && msaa == 1) {
+                linePips[1][mrt] = linePips[0][mrt];
+                hdrLinePips[1][mrt] = hdrLinePips[0][mrt];
+                continue;
+            }
             sg_pipeline_desc d{};
             d.shader = lineShd;
             d.layout.buffers[0].stride = sizeof(ColorVertex);
@@ -996,15 +1035,15 @@ struct GpuRenderer::Impl {
             d.depth.pixel_format = kDepthFormat;
             d.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
             alphaBlend(d.colors[0]);
-            d.sample_count = msaa;
+            d.sample_count = single ? 1 : msaa;
             viewDepthTarget(d, mrt, false);
             d.label = "oe-lines";
-            if (mrt != 2) linePips[mrt] = sg_make_pipeline(&d);
+            if (mrt != 2) linePips[single][mrt] = sg_make_pipeline(&d);
             if (hdrSupported) {
                 d.colors[0].pixel_format = kHdrFormat;
-                d.sample_count = hdrSamples;
+                d.sample_count = single ? 1 : hdrSamples;
                 d.label = "oe-hdr-lines";
-                hdrLinePips[mrt] = sg_make_pipeline(&d);
+                hdrLinePips[single][mrt] = sg_make_pipeline(&d);
             }
         }
         {
@@ -1214,6 +1253,7 @@ struct GpuRenderer::Impl {
         offscreen.Destroy();
         planarTarget.Destroy();
         window.Destroy();
+        pixelSource.Destroy();
         for (auto& kv : panelTargets) kv.second.Destroy();
         panelTargets.clear();
         lines.Destroy();
@@ -1222,7 +1262,8 @@ struct GpuRenderer::Impl {
         batchIndices.Destroy();
     }
 
-    void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view) {
+    // single: one sample per pixel whatever settings.msaa says (pixel-perfect art frames).
+    void PrepareTargets(Targets& t, int w, int h, bool output, const RenderView& view, bool single = false) {
         const PostProcess post = NormalizePostProcess(view.postProcess);
         const bool hdr = UsesHdr(post), bloom = post.bloom > 0;
         if (hdr && !hdrSupported) {
@@ -1233,7 +1274,7 @@ struct GpuRenderer::Impl {
             throw std::runtime_error("GPU depth of field, SSAO and SSR require renderable R32F targets; use the software renderer on this device.");
         }
         if (!t.Matches(w, h, output, hdr, bloom, post.fxaa, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0))
-            t.Create(w, h, hdr ? hdrSamples : settings.msaa, output, hdr, bloom, post.fxaa, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0);
+            t.Create(w, h, single ? 1 : (hdr ? hdrSamples : settings.msaa), output, hdr, bloom, post.fxaa, dof, dofMrtSupported && post.ssr == 0, post.ssao > 0 || post.ssr > 0, post.ssr > 0);
     }
 
     // ----- Resource caches --------------------------------------------------------
@@ -1572,7 +1613,7 @@ struct GpuRenderer::Impl {
         auto start = std::chrono::steady_clock::now();
         RenderStats stats;
         Evict();
-        std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view);
+        std::vector<RenderItem> items = GatherRenderItems(scene, assets, view.view, view.shaderTime, view.pixelStep);
         items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return it.id == view.excludeEntity; }), items.end());
         const RenderPlanarReflection planar = SelectPlanarReflection(scene, items, view);
         if (planar.id != kNullEntity) {
@@ -1886,7 +1927,7 @@ struct GpuRenderer::Impl {
             const sg_view envTex = EnvironmentFor(env.map);  // the white texture without an image
             if (env.present && env.background) {
                 // Skybox background: fill the frame with the sky before any geometry (depth test always/no write).
-                sg_apply_pipeline(skyPips[t.hdr ? 1 : 0][t.ssr ? 2 : (t.dofMrt ? 1 : 0)]);
+                sg_apply_pipeline(skyPips[t.msaa > 1 ? 0 : 1][t.hdr ? 1 : 0][t.ssr ? 2 : (t.dofMrt ? 1 : 0)]);
                 oe_sky_params_t sp{};
                 Put(sp.inv_view_proj, (SkyRayProjection(view) * view.view).Inverse());
                 Put(sp.sky_c, env.sky.r, env.sky.g, env.sky.b, 0);
@@ -1973,8 +2014,8 @@ struct GpuRenderer::Impl {
                 const RenderItem& it = *itp;
                 const Material& m = dc.material;
                 const int blendMode = dc.blend ? (m.additive ? 2 : 1) : 0;
-                const int mrt = t.ssr ? 2 : (t.dofMrt ? 1 : 0);
-                sg_pipeline pip = GraphPipeline(t.hdr ? hdrMeshPips[mrt][blendMode][m.doubleSided ? 1 : 0] : meshPips[mrt][blendMode][m.doubleSided ? 1 : 0], m);
+                const int mrt = t.ssr ? 2 : (t.dofMrt ? 1 : 0), single = t.msaa > 1 ? 0 : 1;
+                sg_pipeline pip = GraphPipeline(t.hdr ? hdrMeshPips[single][mrt][blendMode][m.doubleSided ? 1 : 0] : meshPips[single][mrt][blendMode][m.doubleSided ? 1 : 0], m);
                 if (pip.id != current.id) {
                     Use(pip);
                     sg_apply_uniforms(UB_oe_mesh_lights, SG_RANGE(lu));
@@ -1986,16 +2027,19 @@ struct GpuRenderer::Impl {
                 Put(vu.normal_mat, it.normalMatrix);
                 Put(vu.item_custom, it.particleCustom.x, it.particleCustom.y, it.particleCustom.z, it.particleCustom.w);
                 Put(vu.item_particle, it.particleInput.x, it.particleInput.y, it.particleInput.z, it.particleInput.w);
+                sg_view base = TextureFor(m.baseTexture);
+                sg_view normal = m.unlit && !m.light2DOn ? sg_view{} : TextureFor(m.normalTexture);
+                // A sprite mask takes the metallic-roughness slot (sprites have no such map; mesh_fs mask2d_alpha).
+                sg_view mr = m.mask2DOn ? TextureFor(m.mask2DTexture) : m.unlit ? sg_view{} : TextureFor(m.metallicRoughnessTexture);
+                sg_view emissive = TextureFor(m.emissiveTexture);
+                // light2D surfaces are unlit: their light map takes the occlusion slot (mesh_fs light2d_color).
+                sg_view occlusion = m.light2DOn ? (m.light2D ? TextureFor(m.light2D->texture) : sg_view{}) : m.unlit ? sg_view{} : TextureFor(m.occlusionTexture);
+                PutSprite2D(vu, m, occlusion.id != 0, mr.id != 0);
                 sg_apply_uniforms(UB_oe_mesh_vs_params, SG_RANGE(vu));
                 ApplySkin(UB_oe_mesh_vs_skin, it, static_cast<int>(dc.submesh));
                 oe_mesh_vs_graph_t vg{};
                 PutVertexGraph(vg, m, it, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_vs_graph, SG_RANGE(vg));
-                sg_view base = TextureFor(m.baseTexture);
-                sg_view normal = m.unlit ? sg_view{} : TextureFor(m.normalTexture);
-                sg_view mr = m.unlit ? sg_view{} : TextureFor(m.metallicRoughnessTexture);
-                sg_view emissive = TextureFor(m.emissiveTexture);
-                sg_view occlusion = m.unlit ? sg_view{} : TextureFor(m.occlusionTexture);
                 Color em = m.emissive * m.emissiveIntensity;
                 oe_mesh_material_t mu{};
                 Put(mu.base_color, m.baseColor.r, m.baseColor.g, m.baseColor.b, m.opacity);
@@ -2008,6 +2052,8 @@ struct GpuRenderer::Impl {
                 Put(mu.maps, normal.id ? 1.0f : 0.0f, mr.id ? 1.0f : 0.0f, emissive.id ? 1.0f : 0.0f, occlusion.id ? 1.0f : 0.0f);
                 const float fogMode = !m.fog ? 0.0f : (dc.blend && m.additive ? 2.0f : 1.0f);
                 Put(mu.color_range, t.hdr ? 65504.0f : 1.0f, it.id == planar.id ? planar.strength : 0, fogMode, (dc.blend ? 1.0f : 0.0f) + (t.ssr ? 2.0f : 0.0f));
+                if (m.light2DOn) Put(mu.maps, normal.id ? 1.0f : 0.0f, 0, emissive.id ? 1.0f : 0.0f, 0);
+                if (m.mask2DOn) mu.maps[1] = 0;
                 PutGraph(mu, m, view.shaderTime);
                 sg_apply_uniforms(UB_oe_mesh_material, SG_RANGE(mu));
                 sg_bindings b{};
@@ -2039,7 +2085,7 @@ struct GpuRenderer::Impl {
             }
 
             if (haveLines) {
-                Use(t.hdr ? hdrLinePips[t.ssr ? 2 : (t.dofMrt ? 1 : 0)] : linePips[t.ssr ? 2 : (t.dofMrt ? 1 : 0)]);
+                Use(t.hdr ? hdrLinePips[t.msaa > 1 ? 0 : 1][t.ssr ? 2 : (t.dofMrt ? 1 : 0)] : linePips[t.msaa > 1 ? 0 : 1][t.ssr ? 2 : (t.dofMrt ? 1 : 0)]);
                 oe_line_params_t u{};
                 Put(u.view_proj, viewProj);
                 sg_apply_uniforms(UB_oe_line_params, SG_RANGE(u));
@@ -2299,6 +2345,79 @@ struct GpuRenderer::Impl {
         stats.milliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         return stats;
     }
+    RenderStats PixelFrame(const Scene& scene, const RenderView& view, Targets& output, int outW, int outH, const sg_swapchain* swapchain) {
+        RenderView low = view;
+        low.pixelWidth = low.pixelHeight = 0;
+        low.drawUI = false;
+        PrepareTargets(pixelSource, view.pixelWidth, view.pixelHeight, true, low, true);
+        RenderStats stats = Frame(scene, low, pixelSource, view.pixelWidth, view.pixelHeight, nullptr);
+        sg_pass pass{};
+        pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
+        pass.action.colors[0].clear_value = {0, 0, 0, 1};
+        if (swapchain)
+            pass.swapchain = *swapchain;
+        else
+            pass.attachments.colors[0] = output.outputAtt;
+        sg_begin_pass(&pass);
+        Use(compositePip);
+        const int scale = std::max(1, std::min(outW / view.pixelWidth, outH / view.pixelHeight));
+        const int width = view.pixelWidth * scale, height = view.pixelHeight * scale;
+        sg_apply_viewport((outW - width) / 2, (outH - height) / 2, width, height, true);
+        oe_composite_params_t cu{};
+        Put(cu.target, static_cast<float>(width), static_cast<float>(height), static_cast<float>((outW - width) / 2),
+            static_cast<float>((outH - height) / 2));
+        Put(cu.tone_mapping, 1, 0, 0, 0);
+        Put(cu.grade_params, 1, 1, 0, 0);
+        Put(cu.post_stage, 1, 0, 0, 0);
+        sg_apply_uniforms(UB_oe_composite_params, SG_RANGE(cu));
+        sg_bindings b{};
+        b.views[VIEW_oe_scene_tex] = pixelSource.outputTex;
+        b.views[VIEW_oe_mask_tex] = whiteTex;
+        b.views[VIEW_oe_bloom_tex] = whiteTex;
+        b.samplers[SMP_oe_scene_smp] = nearestClamp;
+        b.samplers[SMP_oe_mask_smp] = nearestClamp;
+        b.samplers[SMP_oe_bloom_smp] = nearestClamp;
+        sg_apply_bindings(&b);
+        sg_draw(0, 3, 1);
+        if (view.drawUI) {
+            sg_apply_viewport(0, 0, outW, outH, true);
+            Use(uiPip);
+            oe_ui_params_t params{};
+            Put(params.screen, 2.0f / static_cast<float>(outW), 2.0f / static_cast<float>(outH), 0, 0);
+            sg_apply_uniforms(UB_oe_ui_params, SG_RANGE(params));
+            for (const UIQuad& q : BuildUIQuads(scene, outW, outH, assets)) {
+                const float tw = q.texture ? static_cast<float>(q.texture->width) : 1.0f,
+                            th = q.texture ? static_cast<float>(q.texture->height) : 1.0f;
+                UIVertex base{};
+                Put(base.color, q.color.r, q.color.g, q.color.b, q.alpha);
+                Put(base.border, q.borderColor.r, q.borderColor.g, q.borderColor.b, q.borderAlpha);
+                Put(base.rect, q.shape[0], q.shape[1], q.shape[2], q.shape[3]);
+                Put(base.params, q.radius, q.border, q.texture ? 1.0f : 0.0f, q.shaped ? 1.0f : 0.0f);
+                const float x0 = static_cast<float>(q.x0), y0 = static_cast<float>(q.y0), x1 = static_cast<float>(q.x1),
+                            y1 = static_cast<float>(q.y1);
+                const float corners[6][4] = {{x0, y0, q.s0 / tw, q.t0 / th}, {x1, y0, q.s1 / tw, q.t0 / th}, {x1, y1, q.s1 / tw, q.t1 / th},
+                                             {x0, y0, q.s0 / tw, q.t0 / th}, {x1, y1, q.s1 / tw, q.t1 / th}, {x0, y1, q.s0 / tw, q.t1 / th}};
+                UIVertex vertices[6];
+                for (int i = 0; i < 6; ++i) {
+                    vertices[i] = base;
+                    vertices[i].pos[0] = corners[i][0];
+                    vertices[i].pos[1] = corners[i][1];
+                    vertices[i].uv[0] = corners[i][2];
+                    vertices[i].uv[1] = corners[i][3];
+                }
+                if (!ui.Write(vertices, sizeof(vertices))) continue;
+                sg_bindings ub{};
+                ub.vertex_buffers[0] = ui.buf;
+                ub.views[VIEW_oe_ui_tex] = UITextureFor(q.texture);
+                ub.samplers[SMP_oe_ui_smp] = q.nearest ? nearestClamp : linearClamp;
+                sg_apply_bindings(&ub);
+                sg_draw(0, 6, 1);
+            }
+        }
+        sg_end_pass();
+        sg_commit();
+        return stats;
+    }
 };
 
 GpuRenderer::GpuRenderer(GpuDevice& device, AssetManager* assets, const Settings& settings) : device_(device) {
@@ -2332,7 +2451,7 @@ RenderStats GpuRenderer::Render(const Scene& scene, const RenderView& view, Rend
     if (target.color.size() != static_cast<size_t>(w) * static_cast<size_t>(h)) target.Resize(w, h);
     Targets& t = impl_->offscreen;
     impl_->PrepareTargets(t, w, h, true, view);
-    RenderStats stats = impl_->Frame(scene, view, t, w, h, nullptr);
+    RenderStats stats = view.pixelWidth > 0 ? impl_->PixelFrame(scene, view, t, w, h, nullptr) : impl_->Frame(scene, view, t, w, h, nullptr);
     if (!device_.ReadPixels(t.output, w, h, target.color.data())) OE_LOG_ERROR("gpu", "reading back the frame failed");
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
@@ -2357,10 +2476,11 @@ void GpuRenderer::Preload(const std::vector<std::shared_ptr<const Material>>& ma
         // Every way the scene pass can draw it: a particle or a sprite blends a material that is opaque
         // on a mesh, and the targets depend on the camera's effects.
         for (auto* pipelines : {&impl_->meshPips, &impl_->hdrMeshPips})
-            for (auto& byBlend : *pipelines)
-                for (auto& bySide : byBlend)
-                    for (sg_pipeline standard : bySide)
-                        if (standard.id) impl_->GraphPipeline(standard, *material);
+            for (auto& bySamples : *pipelines)
+                for (auto& byBlend : bySamples)
+                    for (auto& bySide : byBlend)
+                        for (sg_pipeline standard : bySide)
+                            if (standard.id) impl_->GraphPipeline(standard, *material);
     }
 }
 
@@ -2368,7 +2488,7 @@ sg_view GpuRenderer::RenderToTexture(const Scene& scene, const RenderView& view,
     int w = std::max(1, width), h = std::max(1, height);
     Targets& t = impl_->panelTargets[slot];
     impl_->PrepareTargets(t, w, h, true, view);
-    RenderStats s = impl_->Frame(scene, view, t, w, h, nullptr);
+    RenderStats s = view.pixelWidth > 0 ? impl_->PixelFrame(scene, view, t, w, h, nullptr) : impl_->Frame(scene, view, t, w, h, nullptr);
     // The caller draws this image later in its own frame (editor panels): start the GPU on it now.
     device_.Flush();
     if (stats) *stats = s;
@@ -2397,7 +2517,8 @@ bool GpuRenderer::RenderToWindow(const Scene& scene, const RenderView& view, flo
     int h = std::max(1, static_cast<int>(std::lround(static_cast<float>(sc.height) * scale)));
     Targets& t = impl_->window;
     impl_->PrepareTargets(t, w, h, false, view);
-    RenderStats s = impl_->Frame(scene, view, t, sc.width, sc.height, &sc);
+    RenderStats s =
+        view.pixelWidth > 0 ? impl_->PixelFrame(scene, view, t, sc.width, sc.height, &sc) : impl_->Frame(scene, view, t, sc.width, sc.height, &sc);
     device_.Present();
     if (stats) *stats = s;
     return true;

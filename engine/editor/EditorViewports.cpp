@@ -408,7 +408,15 @@ void NativeEditor::Impl::ScenePanel() {
     // night scene is not empty, just unlit); a saved camera clears the flag before this runs.
     if (autoFramePending) {
         autoFramePending = false;
-        if (!scene.Entities().empty() && !DefaultViewShowsGeometry(aspect)) FrameScene();
+        // A pixel-perfect (2D) game camera: open in the 2D view, fitted to the scene.
+        bool pixelGame = false;
+        for (const auto& kv : scene.Pool<Camera>()) pixelGame = pixelGame || (kv.second.active && kv.second.pixelPerfect && kv.second.projection == "orthographic");
+        if (pixelGame) {
+            cam.Set2D(true);
+            FrameScene();
+        } else if (!scene.Entities().empty() && !DefaultViewShowsGeometry(aspect)) {
+            FrameScene();
+        }
     }
     RenderView sceneCam;
     MakeSceneView(scene, aspect, sceneCam);

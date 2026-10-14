@@ -459,7 +459,17 @@ struct Sprite {
     std::string texture;
     std::string material;
     Color color{1, 1, 1};
-    int frame = 0;
+    SpriteFrame frame = 0;
+    std::string atlas;
+    std::string drawMode = "simple";
+    float slice = 0;
+    float fill = 1;
+    std::string fillMode = "horizontal";
+    EntityId mask = kNullEntity;
+    bool maskOnly = false;
+    bool light2D = false;
+    Color ambient2D{0.15f, 0.15f, 0.15f};
+    std::string normalTexture;
     int columns = 1;
     int rows = 1;
     float pixelsPerUnit = 16.0f;
@@ -477,16 +487,37 @@ struct Sprite {
     std::string blend = "alpha";
     int layer = 0;
     int order = 0;
+    bool ySort = false;
+    float ySortOffset = 0;
     bool castShadows = false;
     bool visible = true;
     static void Reflect(FieldList& f) {
+        f.Add("drawMode", &Sprite::drawMode, "simple, tiled (repeat at pixelsPerUnit), or sliced (9-slice).").options = {"simple", "tiled", "sliced"};
+        auto& slice = f.Add("slice", &Sprite::slice, "9-slice border in source-frame pixels; corners retain source world size.");
+        slice.hasRange = true;
+        slice.min = 0;
+        slice.max = 4096;
+        auto& fill = f.Add("fill", &Sprite::fill, "Visible fraction, 0..1.");
+        fill.hasRange = true;
+        fill.min = 0;
+        fill.max = 1;
+        f.Add("fillMode", &Sprite::fillMode, "horizontal from left, vertical from bottom, radial clockwise from top.").options = {
+            "horizontal", "vertical", "radial"};
+        f.Add("mask", &Sprite::mask, "Another sprite entity: clip to its sampled alpha in world space; zero disables. Mask chains are not followed.");
+        f.Add("maskOnly", &Sprite::maskOnly, "Provide a sprite mask without drawing the source sprite.");
+        f.Add("light2D", &Sprite::light2D, "Lit by Light2D in mode color/add (the scene's 2D light map, sampled per pixel) instead of scene lights.");
+        f.Add("ambient2D", &Sprite::ambient2D, "Light a light2D sprite gets everywhere (where no Light2D reaches).");
+        f.Add("normalTexture", &Sprite::normalTexture, "Optional tangent-space RGB normal image matching the sprite sheet/atlas (+Y up).");
+        f.Add("ySort", &Sprite::ySort, "Sort by screen-space pivot Y within the layer, lower pivots in front.");
+        f.Add("ySortOffset", &Sprite::ySortOffset, "Offset added to the sort pivot in camera-up world units.");
         f.Add("texture", &Sprite::texture, "Image file (.png with transparency). A sprite sheet is a grid of equally sized frames.");
         f.Add("material", &Sprite::material,
               "Optional material file (*.mat.json) for the sprite's quad, e.g. a shader graph whose `offset` sways it or `fog: false`. "
               "`texture` stays its base image (graph uv includes the frame); the sprite's own cutoff, blend, lit, tint and emission still apply. "
               "Empty = the default sprite material.");
         f.Add("color", &Sprite::color, "Tint multiplied with the image.");
-        f.Add("frame", &Sprite::frame, "Frame index in the sheet, row by row from the top-left (SpriteAnimation sets it).");
+        f.Add("frame", &Sprite::frame, "Sheet/atlas index or atlas frame name (SpriteAnimation sets it).");
+        f.Add("atlas", &Sprite::atlas, "Optional .atlas.json with named rectangles, trimming and per-frame pivots; overrides texture/grid.");
         f.Add("columns", &Sprite::columns, "Frames per row in the sheet.");
         f.Add("rows", &Sprite::rows, "Rows of frames in the sheet.");
         f.Add("pixelsPerUnit", &Sprite::pixelsPerUnit, "Image pixels per world unit; sets the size when width/height are 0 (16 = a 16 px frame is 1 unit).");
@@ -556,13 +587,26 @@ struct Tilemap {
     int rows = 1;
     float tileSize = 1.0f;
     Json map = Json::MakeArray();
+    Json layers = Json::MakeArray();
+    int layer = 0, order = 0;
+    bool ySort = false;
+    float ySortOffset = 0;
     Json legend = Json::MakeObject();
     std::string solid;
     Color color{1, 1, 1};
     bool pixelArt = true;
     bool lit = false;
+    bool light2D = false;
+    Color ambient2D{0.15f, 0.15f, 0.15f};
     bool visible = true;
     static void Reflect(FieldList& f) {
+        f.Add("layers", &Tilemap::layers,
+              "Additional map layers [{name,map,layer,order,ySort,ySortOffset,visible,collision}]; same tileset. Cells may be strings or "
+              "{tile,flipX,flipY,rotation:0|90|180|270}.");
+        f.Add("layer", &Tilemap::layer, "Sorting layer of the legacy map.");
+        f.Add("order", &Tilemap::order, "Sorting order of the legacy map.");
+        f.Add("ySort", &Tilemap::ySort, "Sort each tile by its bottom-center pivot against sprites.");
+        f.Add("ySortOffset", &Tilemap::ySortOffset, "Camera-up offset added to each cell sort pivot.");
         f.Add("tileset", &Tilemap::tileset, "Tileset: an image (grid of equally sized tiles, see columns/rows) or a *.tileset.json file (image, grid and tile rules shared by maps).");
         f.Add("columns", &Tilemap::columns, "Tiles per row in the tileset image (ignored with a .tileset.json).");
         f.Add("rows", &Tilemap::rows, "Rows of tiles in the tileset image (ignored with a .tileset.json).");
@@ -573,6 +617,8 @@ struct Tilemap {
         f.Add("color", &Tilemap::color, "Tint.");
         f.Add("pixelArt", &Tilemap::pixelArt, "Sharp nearest-neighbour pixels.");
         f.Add("lit", &Tilemap::lit, "Apply scene lighting.");
+        f.Add("light2D", &Tilemap::light2D, "Lit by Light2D in mode color/add (the 2D light map) instead of scene lights.");
+        f.Add("ambient2D", &Tilemap::ambient2D, "Light the light2D tiles get everywhere (where no Light2D reaches).");
         f.Add("visible", &Tilemap::visible, "Whether the tiles are drawn (they still collide).");
     }
 };
@@ -587,7 +633,20 @@ struct Camera {
     float farPlane = 500.0f;
     Color clearColor{0.12f, 0.14f, 0.18f};
     bool active = true;
+    bool pixelPerfect = false;
+    int pixelWidth = 320, pixelHeight = 180;
     static void Reflect(FieldList& f) {
+        f.Add("pixelPerfect", &Camera::pixelPerfect,
+              "Orthographic: render at pixelWidth/pixelHeight, snap camera/sprites and integer-upscale with black letterboxing. UI retains output "
+              "resolution and normal pointer coordinates.");
+        auto& pw = f.Add("pixelWidth", &Camera::pixelWidth, "Art resolution width (16..2048).");
+        pw.hasRange = true;
+        pw.min = 16;
+        pw.max = 2048;
+        auto& ph = f.Add("pixelHeight", &Camera::pixelHeight, "Art resolution height (16..2048).");
+        ph.hasRange = true;
+        ph.min = 16;
+        ph.max = 2048;
         f.Add("projection", &Camera::projection, "perspective or orthographic (no perspective shrink; good for 2D/isometric).").options = {"perspective", "orthographic"};
         f.Add("orthoSize", &Camera::orthoSize, "Orthographic: half of the visible height in meters.");
         FieldInfo& fov = f.Add("fov", &Camera::fov, "Perspective: vertical field of view in degrees.");
@@ -690,12 +749,36 @@ struct PostProcess {
 
 struct Light2D {
     static constexpr const char* kTypeName = "Light2D";
-    static constexpr const char* kDoc = "2D light: a soft round hole in the active camera's Darkness2D, centred on the entity. Without a Darkness2D it does nothing.";
+    static constexpr const char* kDoc =
+        "2D light centred on the entity. mode darkness: a soft round hole in the active camera's Darkness2D (nothing without one); "
+        "color/add: lights sprites with light2D: true.";
+    std::string mode = "darkness";
+    Color color{1, 1, 1};
+    float intensity = 1, height = 1;
+    bool shadows = false;
+    float softness = 0;
     float radius = 5.0f;
     float inner = 0.25f;
     float strength = 1.0f;
     bool enabled = true;
     static void Reflect(FieldList& f) {
+        f.Add("mode", &Light2D::mode, "darkness = a hole in Darkness2D; color = lights light2D sprites and tilemaps; add = adds a colored glow to them.").options = {
+            "darkness", "color", "add"};
+        f.Add("color", &Light2D::color, "Light color.");
+        auto& intensity = f.Add("intensity", &Light2D::intensity, "Colored light intensity.");
+        intensity.hasRange = true;
+        intensity.min = 0;
+        intensity.max = 16;
+        auto& height = f.Add("height", &Light2D::height, "Height above the XY plane for sprite normal lighting.");
+        height.hasRange = true;
+        height.min = 0.01f;
+        height.max = 100;
+        f.Add("shadows", &Light2D::shadows, "Walls cast shadows: static non-trigger Collider2D shapes (no RigidBody2D/CharacterBody2D) and solid/shaped/one-way tiles.");
+        auto& soft = f.Add("softness", &Light2D::softness,
+                           "Shadows: world size of the light (its half width). 0 = hard edges; larger = wider soft edges (penumbra).");
+        soft.hasRange = true;
+        soft.min = 0;
+        soft.max = 10;
         f.Add("radius", &Light2D::radius, "World units where the light ends (Transform.scale does not change it).");
         FieldInfo& in = f.Add("inner", &Light2D::inner, "Fraction of the radius that is fully lit before the falloff starts.");
         in.hasRange = true; in.min = 0.0f; in.max = 0.99f;

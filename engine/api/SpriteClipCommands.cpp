@@ -4,6 +4,7 @@
 #include <numeric>
 #include "app/Engine.h"
 #include "assets/Assets.h"
+#include "assets/SpriteAtlas.h"
 #include "assets/AnimationAsset.h"
 #include "scene/Components.h"
 #include "scene/SpriteClip.h"
@@ -25,10 +26,20 @@ SpriteSource ImageDefinition(Engine& engine, EntityId id) {
         auto asset = engine.Assets().GetAnimation(animation.asset);
         if (!asset) throw ApiError("invalid_animation", "cannot read shared sprite definition", "Repair it with animation.set.");
         const Json& image = (*asset)[asset->has("atlas") ? "atlas" : "sheet"];
+        if (image.has("path")) {
+            auto atlas = engine.Assets().GetAtlas(image["path"].asString());
+            if (!atlas) throw ApiError("invalid_atlas", "cannot read sprite atlas");
+            SpriteSource source; source.image["texture"] = (*atlas)["texture"]; source.image["atlas"] = true; source.rects = &(*atlas)["frames"]; return source;
+        }
         SpriteSource source; source.image["texture"] = image["texture"]; source.image["columns"] = image["columns"]; source.image["rows"] = image["rows"];
         source.image["atlas"] = asset->has("atlas"); if (asset->has("atlas")) source.rects = &image["frames"]; return source;
     }
     const Sprite& sprite = *engine.GetScene().Get<Sprite>(id);
+    if (!sprite.atlas.empty()) {
+        auto atlas = engine.Assets().GetAtlas(sprite.atlas);
+        if (!atlas) throw ApiError("invalid_atlas", "cannot read sprite atlas");
+        SpriteSource source; source.image["texture"] = (*atlas)["texture"]; source.image["atlas"] = true; source.rects = &(*atlas)["frames"]; return source;
+    }
     Json image = Json::MakeObject(); image["texture"] = sprite.texture;
     image["columns"] = std::max(1, std::min(4096, sprite.columns)); image["rows"] = std::max(1, std::min(4096, sprite.rows));
     return {image, nullptr};
@@ -84,7 +95,7 @@ void EditSequence(Json& clip, const Json& args) {
 void RegisterSpriteClipCommands(CommandRegistry& registry) {
     registry.Add({"animation.get_clip", "Read sprite clip fields and a bounded sheet/atlas frame page for visual authoring.",
         Params().Req("id", "entity", "Sprite entity.").Opt("clip", "string", "Clip key; default authored clip.")
-            .Opt("offset", "integer", "First source frame (default 0).").Opt("limit", "integer", "Page size 1..128 (default 64).").Opt("sourceOnly", "boolean", "Omit clip values for lightweight frame queries."), false,
+            .Opt("offset", "integer", "First source frame (default 0).").Opt("limit", "integer", "Page size 1..128 (default 64).").Opt("frame", "string", "Resolve a named atlas frame instead of offset.").Opt("sourceOnly", "boolean", "Omit clip values for lightweight frame queries."), false,
         [](Engine& engine, const Json& args) {
             const EntityId id = Target(engine, args); const SpriteAnimation& animation = *engine.GetScene().Get<SpriteAnimation>(id);
             const std::string name = args["clip"].asString(animation.clip); const SpriteSource source = ImageDefinition(engine, id); const Json& image = source.image;
@@ -92,7 +103,11 @@ void RegisterSpriteClipCommands(CommandRegistry& registry) {
             const int count = source.rects ? static_cast<int>(source.rects->size()) : image["columns"].asInt() * image["rows"].asInt();
             const double requested = args["limit"].asNumber(64);
             if (requested < 1 || requested > 128) throw ApiError("invalid_argument", "page limit must be in 1..128");
-            const int limit = static_cast<int>(requested), offset = args.has("offset") ? Index(args, "offset", static_cast<size_t>(count)) : 0;
+            const int limit = static_cast<int>(requested);int offset = args.has("offset") ? Index(args, "offset", static_cast<size_t>(count)) : 0;
+            if(args.has("frame")) {
+                bool found=false;if(source.rects)for(size_t i=0;i<source.rects->size();++i)if((*source.rects)[i]["name"]==args["frame"]){offset=static_cast<int>(i);found=true;break;}
+                if(!found)throw ApiError("invalid_frame","atlas frame name does not exist");
+            }
             if (offset >= count) throw ApiError("invalid_argument", "invalid source frame page");
             Json out = Json::MakeObject(); out["id"] = id; out["clip"] = name; out["asset"] = animation.asset;
             if (!args["sourceOnly"].asBool()) out["values"] = SpriteAnimationClips(animation, engine.Assets())[name]; out["image"] = image;
@@ -100,7 +115,11 @@ void RegisterSpriteClipCommands(CommandRegistry& registry) {
             out["frameCount"] = count; out["offset"] = offset; out["frames"] = Json::MakeArray();
             for (int index = offset; index < std::min(count, offset + limit); ++index) {
                 Json frame = Json::MakeObject(); frame["index"] = index;
-                if (source.rects) frame["rect"] = (*source.rects)[index];
+                if (source.rects) {
+                    const Json& sourceFrame = (*source.rects)[index];
+                    frame["rect"] = sourceFrame.isObject() ? sourceFrame["rect"] : sourceFrame;
+                    if (sourceFrame.isObject()) frame["name"] = sourceFrame["name"];
+                }
                 else {
                     const double width = texture ? static_cast<double>(texture->width) / image["columns"].asInt() : 1;
                     const double height = texture ? static_cast<double>(texture->height) / image["rows"].asInt() : 1;
@@ -131,8 +150,10 @@ void RegisterSpriteClipCommands(CommandRegistry& registry) {
                     throw ApiError("invalid_animation", "unknown sprite clip field: " + item.first);
             SpriteClipTiming timing; std::vector<AnimationMarker> markers; std::string error;
             if (!ParseSpriteClipTiming(clip, timing, &error) || !SpriteClipMarkers(clip["events"], timing, markers, &error)) throw ApiError("invalid_animation", error);
-            for (const Json& frame : clip["frames"].items())
-                if (!frame.isNumber() || frame.asNumber() < 0 || frame.asNumber() > 16777215 || std::floor(frame.asNumber()) != frame.asNumber()) throw ApiError("invalid_animation", "frames need nonnegative integer indices");
+            for (const Json& frame : clip["frames"].items()) {
+                if (frame.isString() && !frame.asString().empty() && frame.asString().size() <= 128) continue;
+                if (!frame.isNumber() || frame.asNumber() < 0 || frame.asNumber() > 16777215 || std::floor(frame.asNumber()) != frame.asNumber()) throw ApiError("invalid_animation", "frames need nonnegative integer indices or atlas names");
+            }
             if (clip.has("displayName") && (!clip["displayName"].isString() || clip["displayName"].asString().empty() || clip["displayName"].asString().size() > 128)) throw ApiError("invalid_animation", "displayName needs 1..128 bytes");
             if (clip.has("loop") && !clip["loop"].isBool()) throw ApiError("invalid_animation", "loop must be boolean");
             if (clip.has("fps") && (!clip["fps"].isNumber() || !std::isfinite(clip["fps"].asNumber()) || clip["fps"].asNumber() < 0.001 || clip["fps"].asNumber() > 10000)) throw ApiError("invalid_animation", "fps must be in 0.001..10000");

@@ -722,7 +722,7 @@ struct Physics2D::Impl {
             Pose2 pose = PoseOf(scene, id);
             char buf[96];
             std::snprintf(buf, sizeof(buf), "|%.4f|%.4f,%.4f", kv.second.tileSize, pose.sx, pose.sy);
-            std::string key = "tilemap|" + kv.second.map.dump() + "|" + rules.key + buf;
+            std::string key = "tilemap|" + (kv.second.map.dump() + kv.second.layers.dump()) + "|" + rules.key + buf;
             auto it = bodies.find(id);
             if (it != bodies.end() && it->second.key != key) {
                 DestroyBody(it->second);

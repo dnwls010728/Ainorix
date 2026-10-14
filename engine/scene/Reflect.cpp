@@ -1,4 +1,5 @@
 #include "scene/Reflect.h"
+#include "scene/TileGrid.h"
 
 #include <cmath>
 
@@ -14,6 +15,8 @@ const char* ToString(FieldType type) {
         case FieldType::Color: return "color";
         case FieldType::Entity: return "entity";
         case FieldType::Json: return "json";
+        case FieldType::Frame:
+            return "frame";
     }
     return "float";
 }
@@ -92,6 +95,8 @@ Json FieldToJson(const FieldInfo& field, const void* c) {
         case FieldType::String: return Json(At<std::string>(c, field.offset));
         case FieldType::Entity: return Json(At<EntityId>(c, field.offset));
         case FieldType::Json: return At<Json>(c, field.offset);
+        case FieldType::Frame:
+            return At<SpriteFrame>(c, field.offset).ToJson();
         case FieldType::Vec3: {
             const Vec3& v = At<Vec3>(c, field.offset);
             return Json(Json::Array{v.x, v.y, v.z});
@@ -110,6 +115,13 @@ bool FieldFromJson(const FieldInfo& field, void* c, const Json& v, std::string* 
         return false;
     };
     switch (field.type) {
+        case FieldType::Frame:
+            if (!(v.isString() && !v.asString().empty() && v.asString().size() <= 128) &&
+                !(v.isNumber() && std::isfinite(v.asNumber()) && v.asNumber() >= 0 && v.asNumber() <= 16777215 &&
+                  std::floor(v.asNumber()) == v.asNumber()))
+                return typeError("a nonnegative frame index or name (1..128 bytes)");
+            At<SpriteFrame>(c, field.offset) = v;
+            return true;
         case FieldType::Float: {
             if (!v.isNumber()) return typeError("a number");
             float f = v.asFloat();
@@ -193,6 +205,7 @@ bool ApplyComponentJson(const ComponentType& type, void* c, const Json& values, 
         if (error) *error = "component '" + type.name + "' values must be an object, got " + values.typeName();
         return false;
     }
+    if (type.name == "Tilemap" && !ValidateTilemapData(values, error)) return false;
     Json upgraded;
     const Json& fields = type.upgrade && type.upgrade(upgraded = values) ? upgraded : values;
     for (const auto& kv : fields.members()) {
@@ -218,6 +231,9 @@ Json ComponentSchema(const ComponentType& type) {
         p["description"] = f.doc;
         p["x-oe-type"] = ToString(f.type);
         switch (f.type) {
+            case FieldType::Frame:
+                p["type"] = Json::Array{"integer", "string"};
+                break;
             case FieldType::Float: p["type"] = "number"; break;
             case FieldType::Int:
             case FieldType::Entity: p["type"] = "integer"; break;

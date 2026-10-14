@@ -171,7 +171,7 @@ Scene& Engine::AnimationRenderScene() {
         const Json& clip = SpriteAnimationClips(*sprite, *assets_)[preview.clip];
         SpriteClipTiming timing; ParseSpriteClipTiming(clip, timing, nullptr);
         const size_t index = timing.Index(preview.time);
-        preview.scene.Get<Sprite>(preview.id)->frame = clip["frames"][index].asInt();
+        preview.scene.Get<Sprite>(preview.id)->frame = clip["frames"][index];
     } else {
         Animator& animator = preview.scene.Add<Animator>(preview.id);
         animator.clip = preview.clip; animator.time = static_cast<float>(preview.time); animator.playing = false;

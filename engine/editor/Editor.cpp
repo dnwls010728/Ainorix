@@ -2169,6 +2169,10 @@ std::array<float, 4> NativeEditor::ShaderControlRect(const std::string& name) co
     return found == impl_->shaderRects.end() ? std::array<float, 4>{0, 0, 0, 0} : found->second;
 }
 void NativeEditor::OpenEffect(const std::string& path) { impl_->OpenEffect(path); }
+std::array<float, 4> NativeEditor::TwoDimensionalControlRect(const std::string& name) const {
+    auto found = impl_->twoDimensionalRects.find(name);
+    return found == impl_->twoDimensionalRects.end() ? std::array<float, 4>{} : found->second;
+}
 void NativeEditor::FocusAnimationPanel() { impl_->engine.Call("editor.animation", Json::MakeObject()); }
 std::array<float, 4> NativeEditor::AnimationControlRect(const std::string& name) const {
     const auto found = impl_->animationRects.find(name);
@@ -2198,6 +2202,9 @@ void NativeEditor::OpenAskSpot(const Vec3& point, EntityId surface, const std::s
     impl_->OpenAskSpot(point, Vec3(0, 1, 0), surface, backend);
 }
 Vec3 NativeEditor::AskMenuPoint() const { return impl_->askMenuPoint; }
+void NativeEditor::FocusTiles() {
+    impl_->showTiles = impl_->requestTilesFocus = true;
+}
 void NativeEditor::FocusAgentChat() { impl_->showAgentChat = impl_->requestAgentChatFocus = impl_->agentChatFocusInput = true; }
 std::array<float, 4> NativeEditor::AgentChatInputRect() const { return impl_->agentChatInputRect; }
 int NativeEditor::AskBubbleCount() const { return static_cast<int>(impl_->askBubbles.size()); }

@@ -95,6 +95,8 @@ public:
     void OpenEffect(const std::string& path = {});
     // Open/focus the Animation panel for the selected sprite/model.
     void FocusAnimationPanel();
+    // Bounds of 2D tool controls: slice, collision-canvas/point:<i>, rule-frame/collision/save, layer.
+    std::array<float, 4> TwoDimensionalControlRect(const std::string& name) const;
     // Automation bounds: clip, play, step, restart, time, timeline, add-event and marker/name/event-time/remove-event:<index>.
     std::array<float, 4> AnimationControlRect(const std::string& name) const;
     // Snapshot of the shared Effects document and bounds for event-driven widget automation.
@@ -120,6 +122,8 @@ public:
     int AskBubbleCount() const;
     // The Agent Chat panel in front (it talks to the agent of Settings > Agents), and its input's bounds.
     void FocusAgentChat();
+    // Show and focus the Tiles panel (tile brush, map layers, tile rules; Sprite Tools for a sprite).
+    void FocusTiles();
     std::array<float, 4> AgentChatInputRect() const;
     std::array<float, 4> AskControlRect(int index, const std::string& name) const;
     // Files waiting to go with the next message of the Agent Chat panel / of the bubble at `index`.

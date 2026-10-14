@@ -204,7 +204,7 @@ int CmdHelp() {
                  "  run [path] [--port P]             Play the game in a native window (optionally serve the API)\n"
                  "  editor [path] [--port 7777] [--lang en|ko|ja]\n"
                  "                                    Editor window; agents attach to its API on the port\n"
-                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --frame-selection --animation [--animation-frames] --animation-controller animations/x.controller.json --animation-clip Clip --animation-time N --2d --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
+                 "  editor [path] --screenshot f.png [--width W --height H --frames N --select Name --frame-selection --animation [--animation-frames] --animation-controller animations/x.controller.json --animation-clip Clip --animation-time N --2d --tiles --navmesh --light --play --game --players N --script scripts/x.lua --shader materials/x.shader.json --effects effects/x.vfx.json --effects-graph --effects-values --team --chat --agent-chat --settings agents --console --ask Name[:cli] --agent new|id --lang ko]\n"
                  "                                    Headless: render the native editor UI to a PNG\n"
                  "  render [path] --out f.png [--width W --height H --frames N --eye x,y,z --target x,y,z --grid --colliders]\n"
                  "                                    Headless render to PNG (after simulating N frames)\n"
@@ -253,7 +253,7 @@ int CmdNew(const Args& a) {
     Json out = Json::MakeObject();
     out["ok"] = true;
     out["project"] = AbsolutePath(dir);
-    if (!a.Has("--no-team")) {  // docs/TEAM.md §3.3: a new project starts with the default agent team
+    if (!a.Has("--no-team")) {  // docs/TEAM.md 짠3.3: a new project starts with the default agent team
         std::string teamError;
         if (SeedDefaultTeam(dir, &teamError)) out["team"] = "default";
         else OE_LOG_WARN("project", "default team not created: %s", teamError.c_str());
@@ -482,7 +482,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
     }
     if (a.Has("--play")) engine.Call("sim.play", Json());
     int w = a.GetInt("--width", 1600), h = a.GetInt("--height", 900);
-    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") || a.Has("--retarget") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") || a.Has("--animation") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
+    int frames = std::max(a.Has("--agent") || a.Has("--team") || a.Has("--chat") || a.Has("--console") || a.Has("--tiles") || a.Has("--ask") || a.Has("--agent-chat") || a.Has("--settings") || a.Has("--retarget") ? 8 : a.Has("--script") || a.Has("--shader") || a.Has("--effects") || a.Has("--players") || a.Has("--game") || a.Has("--animation") ? 5 : 2, a.GetInt("--frames", 3));  // the dock layout settles on the second frame
     RenderTarget rt;
     for (int i = 0; i < frames; ++i) {
         editor.Update({}, w, h, 1.0f, Engine::kFixedDt);
@@ -502,6 +502,7 @@ int CmdEditorScreenshot(Engine& engine, const Args& a) {
         }
         if (i == 0 && (a.Has("--agent-chat") || a.Has("--settings"))) engine.Call("team.backends", Json());  // detect the CLIs first (the editor polls in the background)
         if (i == 3 && a.Has("--agent-chat")) editor.FocusAgentChat();
+        if (i == 3 && a.Has("--tiles")) editor.FocusTiles();
         if (i == 3 && a.Has("--settings")) editor.OpenSettings(a.Get("--settings"));
         if (i == 2 && a.Has("--ask")) {  // an Ask bubble on an entity: Name (the team) or Name:cli (claude, codex, ...)
             const std::string spec = a.Get("--ask");

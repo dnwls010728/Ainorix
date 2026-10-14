@@ -1,4 +1,5 @@
 #include "api/Commands.h"
+#include "assets/SpriteAtlas.h"
 
 #include <algorithm>
 #include <cctype>
@@ -361,6 +362,8 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 // ---------------------------------------------------------------------------
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
+    RegisterTwoDimensionalCommands(r);
+    RegisterAtlasCommands(r);
     RegisterAnimationAssetCommands(r);
     RegisterAnimationControllerCommands(r);
     Register(r, "vfx.edit", "Open an isolated Effects document shared by editor and attached agents; scene history is unchanged.",
@@ -556,7 +559,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
             out["validClip"] = valid;
             out["duration"] = valid ? (SpriteAnimationLoop(*sprite, clip) ? timing.duration : timing.end) : 0;
             out["variableTiming"] = timing.variable;
-            if (const Sprite* renderer = e.GetScene().Get<Sprite>(id)) out["frame"] = renderer->frame;
+            if (const Sprite* renderer = e.GetScene().Get<Sprite>(id)) out["frame"] = renderer->frame.ToJson();
             return out;
         }
         const Animator* animator = e.GetScene().Get<Animator>(id);
@@ -2228,6 +2231,22 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
         if (!tm) throw ApiError("component_missing", "entity " + std::to_string(id) + " has no Tilemap", "Add one with component.add {type: \"Tilemap\"}.");
         return *tm;
     };
+    auto selectLayer = [](const Tilemap& source, const Json& a) {
+        Tilemap tm = source;
+        tm.layers = Json::MakeArray();
+        const double n = a["layer"].asNumber(-1);
+        if (!std::isfinite(n) || std::floor(n) != n || n < -1 || n >= static_cast<double>(source.layers.size()))
+            throw ApiError("invalid_layer", "layer is outside the map");
+        if (n >= 0) tm.map = source.layers[static_cast<int>(n)]["map"];
+        return tm;
+    };
+    auto storeLayer = [](Tilemap& source, const Tilemap& tm, const Json& a) {
+        const int layer = a["layer"].asInt(-1);
+        if (layer < 0)
+            source.map = tm.map;
+        else
+            source.layers[layer]["map"] = tm.map;
+    };
     auto tileChar = [](const Json& a) {
         std::string c = a["char"].asString();
         if (c.size() != 1) throw ApiError("invalid_argument", "char must be exactly one ASCII character", "Use \" \" to erase.");
@@ -2236,8 +2255,12 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
     Register(r, "tilemap.info",
              "A tilemap's size and tile rules: every character with its frame (for autotiles the fully connected one), autotile mode, variants "
              "and collision; the tileset image and grid. Use it to pick characters for tilemap.paint.",
-             Params().ReqWith("id", EntityRefSchema("Tilemap entity id or name.")), false, [requireTilemap](Engine& e, const Json& a) {
-                 Tilemap& tm = requireTilemap(e, a);
+             Params()
+                 .ReqWith("id", EntityRefSchema("Tilemap entity id or name."))
+                 .Opt("layer", "integer", "Additional layer index; -1 is the legacy map (default)."),
+             false, [requireTilemap, selectLayer](Engine& e, const Json& a) {
+                 Tilemap& source = requireTilemap(e, a);
+                 Tilemap tm = selectLayer(source, a);
                  TilesetLookup lookup = e.Assets().Tilesets();
                  TileRules rules = BuildTileRules(tm, &lookup);
                  int w = 0, h = 0;
@@ -2255,9 +2278,12 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      Json t = Json::MakeObject();
                      t["char"] = std::string(1, kv.first);
                      int frame = d.frame;
-                     if (d.autotile == AutoTile::Sides && d.autoFrames.size() == 16) frame = d.autoFrames[15];
-                     else if (d.autotile == AutoTile::Blob && d.autoFrames.size() == static_cast<size_t>(kBlobTileCount)) frame = d.autoFrames[static_cast<size_t>(BlobIndex(255))];
-                     else if (!d.variants.empty()) frame = d.variants[0];
+                     if (d.autotile == AutoTile::Sides && d.autoFrames.size() == 16)
+                         frame = d.autoFrames[15];
+                     else if (d.autotile == AutoTile::Blob && d.autoFrames.size() == static_cast<size_t>(kBlobTileCount))
+                         frame = d.autoFrames[static_cast<size_t>(BlobIndex(255))];
+                     else if (!d.variants.empty())
+                         frame = d.variants[0];
                      t["frame"] = frame;
                      if (d.autotile != AutoTile::None) t["autotile"] = d.autotile == AutoTile::Sides ? "sides" : "blob";
                      if (!d.variants.empty()) t["variants"] = static_cast<uint64_t>(d.variants.size());
@@ -2270,14 +2296,17 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                  out["hint"] = "Paint with tilemap.paint {id, char, cells: [[col, row], ...]} or tilemap.fill; \" \" erases. Row 0 is the top row.";
                  return out;
              });
-    Register(r, "tilemap.paint", "Set tiles at cells (col, row from the top-left; the map grows as needed). Autotiles pick their frames from the new neighbours.",
+    Register(r, "tilemap.paint",
+             "Set tiles at cells (col, row from the top-left; the map grows as needed). Autotiles pick their frames from the new neighbours.",
              Params()
                  .ReqWith("id", EntityRefSchema("Tilemap entity id or name."))
+                 .Opt("layer", "integer", "Additional layer index; -1 is the legacy map (default).")
                  .Req("char", "string", "Tile character (see tilemap.info); \" \" erases.")
                  .Req("cells", "array", "Cells [[col, row], ...].")
                  .Opt("merge", "string", "Undo group key: consecutive paints with the same key become one undo step (editor brush strokes)."),
-             true, [requireTilemap, tileChar](Engine& e, const Json& a) {
-                 Tilemap& tm = requireTilemap(e, a);
+             true, [requireTilemap, tileChar, selectLayer, storeLayer](Engine& e, const Json& a) {
+                 Tilemap& source = requireTilemap(e, a);
+                 Tilemap tm = selectLayer(source, a);
                  char c = tileChar(a);
                  int changed = 0;
                  for (const Json& cell : a["cells"].items()) {
@@ -2285,27 +2314,32 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      int col = cell[0].asInt(-1), row = cell[1].asInt(-1);
                      if (TileAt(tm, col, row) == c) continue;
                      if (c == ' ' && TileAt(tm, col, row) == '\0') continue;
-                     if (!SetTile(tm, col, row, c)) throw ApiError("invalid_argument", "cell [" + std::to_string(col) + ", " + std::to_string(row) + "] is outside 0..4096");
+                     if (!SetTile(tm, col, row, c))
+                         throw ApiError("invalid_argument", "cell [" + std::to_string(col) + ", " + std::to_string(row) + "] is outside 0..4096");
                      ++changed;
                  }
                  Json out = Json::MakeObject();
+                 storeLayer(source, tm, a);
                  out["changed"] = changed;
                  return out;
              });
     Register(r, "tilemap.fill", "Fill a rectangle of cells with one tile character (\" \" erases).",
              Params()
                  .ReqWith("id", EntityRefSchema("Tilemap entity id or name."))
+                 .Opt("layer", "integer", "Additional layer index; -1 is the legacy map (default).")
                  .Req("char", "string", "Tile character.")
                  .Req("col", "integer", "Left column.")
                  .Req("row", "integer", "Top row.")
                  .Req("width", "integer", "Columns.")
                  .Req("height", "integer", "Rows.")
                  .Opt("merge", "string", "Undo group key."),
-             true, [requireTilemap, tileChar](Engine& e, const Json& a) {
-                 Tilemap& tm = requireTilemap(e, a);
+             true, [requireTilemap, tileChar, selectLayer, storeLayer](Engine& e, const Json& a) {
+                 Tilemap& source = requireTilemap(e, a);
+                 Tilemap tm = selectLayer(source, a);
                  char c = tileChar(a);
                  int col = a["col"].asInt(), row = a["row"].asInt(), w = a["width"].asInt(), h = a["height"].asInt();
-                 if (w <= 0 || h <= 0 || col < 0 || row < 0 || col + w > 4096 || row + h > 4096) throw ApiError("invalid_argument", "rectangle must be inside 0..4096 with a positive size");
+                 if (w <= 0 || h <= 0 || col < 0 || row < 0 || col + w > 4096 || row + h > 4096)
+                     throw ApiError("invalid_argument", "rectangle must be inside 0..4096 with a positive size");
                  int changed = 0;
                  for (int rr = row; rr < row + h; ++rr) {
                      for (int cc = col; cc < col + w; ++cc) {
@@ -2315,6 +2349,7 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                      }
                  }
                  Json out = Json::MakeObject();
+                 storeLayer(source, tm, a);
                  out["changed"] = changed;
                  return out;
              });

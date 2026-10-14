@@ -1,4 +1,5 @@
 #include "assets/Assets.h"
+#include "assets/SpriteAtlas.h"
 
 #include <algorithm>
 #include <cctype>
@@ -673,6 +674,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".vfx.json")) return "vfx";
     if (EndsWith(p, ".controller.json")) return "controller";
     if (EndsWith(p, ".anim.json") || EndsWith(p, ".clips.json")) return "animation";
+    if (EndsWith(p, ".atlas.json")) return "atlas";
     if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
@@ -895,6 +897,35 @@ std::shared_ptr<const Json> AssetManager::GetAnimation(const std::string& path, 
     return found->second.asset;
 }
 
+AssetManager::Entry<Json> AssetManager::LoadAtlas(const std::string& path) {
+    Entry<Json> entry;
+    try {
+        const std::string full = engine_.ResolvePath(path);
+        entry.mtime = FileModifiedTime(full);
+        std::string text;
+        if (!EndsWith(Lower(path), ".atlas.json"))
+            entry.error = "atlas must end with .atlas.json";
+        else if (!ReadTextFile(full, text))
+            entry.error = "atlas not found: " + path;
+        else {
+            auto data = std::make_shared<Json>(Json::parse(text));
+            Json normalized;
+            if (NormalizeSpriteAtlas(*data, normalized, &entry.error)) entry.asset = std::make_shared<Json>(normalized);
+        }
+    } catch (const std::exception& ex) {
+        entry.error = ex.what();
+    }
+    if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), entry.error.c_str());
+    return entry;
+}
+
+std::shared_ptr<const Json> AssetManager::GetAtlas(const std::string& path, std::string* error) {
+    auto found = atlases_.find(path);
+    if (found == atlases_.end()) found = atlases_.emplace(path, LoadAtlas(path)).first;
+    if (error) *error = found->second.error;
+    return found->second.asset;
+}
+
 AssetManager::FontEntry AssetManager::LoadFont(const std::string& path) {
     FontEntry e;
     try {
@@ -960,6 +991,12 @@ std::vector<std::string> AssetManager::PollChanges() {
             changed.push_back(kv.first);
         }
     }
+    for (auto& kv : atlases_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) {
+            kv.second = LoadAtlas(kv.first);
+            changed.push_back(kv.first);
+        }
+    }
     for (auto& kv : animations_) {
         if (mtimeOf(kv.first) != kv.second.mtime) { kv.second = LoadAnimation(kv.first); changed.push_back(kv.first); }
     }
@@ -1014,6 +1051,7 @@ std::vector<std::string> AssetManager::PollChanges() {
 
 void AssetManager::Forget(const std::string& path) {
     animations_.erase(path);
+    atlases_.erase(path);
     vfx_.erase(path);
     if (KindOf(path) == "shader") {
         shaders_.erase(path);
@@ -1029,6 +1067,7 @@ void AssetManager::Forget(const std::string& path) {
 
 void AssetManager::Clear() {
     animations_.clear();
+    atlases_.clear();
     vfx_.clear();
     shaders_.clear();
     meshes_.clear();
@@ -1060,6 +1099,13 @@ Json AssetManager::Info(const std::string& path) {
         out["builtin"] = true;
     }
     if (kind == "controller") out["values"] = ReadAnimationController(engine_, path);
+    if (kind == "atlas") {
+        std::string error;
+        const auto atlas = GetAtlas(path, &error);
+        if (!atlas) throw ApiError("invalid_atlas", error);
+        out["values"] = *atlas;
+        out["frames"] = static_cast<uint64_t>((*atlas)["frames"].size());
+    }
     if (kind == "animation") {
         std::string text; ReadTextFile(engine_.ResolvePath(path), text);
         if (EndsWith(Lower(path), ".anim.json")) {

@@ -12,6 +12,7 @@
 #include "render/PlanarReflection.h"
 #include "render/Fxaa.h"
 #include "render/RenderScene.h"
+#include "render/SpriteShape.h"
 #include "render/Renderer.h"
 #include "render/UI.h"
 #include "scene/Components.h"
@@ -523,6 +524,7 @@ private:
                     shaderEmissive = Color(surface.emissive.x, surface.emissive.y, surface.emissive.z);
                     shaderNormal = surface.normal;
                 }
+                if (m.mask2DOn) alpha *= SpriteMaskAlpha(m, a.wpos * p0 + b.wpos * p1 + c.wpos * p2);
                 if (m.alphaMode == AlphaMode::Mask && alpha < m.alphaCutoff) continue;  // cut out: no depth, color or id
                 if (!lighting) {
                     depth_[idx] = z;
@@ -564,6 +566,25 @@ private:
                     if (m.occlusionTexture) ao = 1.0f + m.occlusionStrength * (m.occlusionTexture->Sample(u, v, m.pixelArt, nullptr).r - 1.0f);
                     if (!mat.blend) ao *= lighting->AmbientVisibility(x, y, wpos, ng);
                     out = lighting->Shade(wpos, n, ng, base, metallic, roughness, ao, reflection);
+                } else if (m.light2DOn) {  // mesh_fs: the light2D branch
+                    const Vec3 wpos = a.wpos * p0 + b.wpos * p1 + c.wpos * p2;
+                    Vec3 ng = Normalize(a.nrm * p0 + b.nrm * p1 + c.nrm * p2);
+                    if (backFace) ng = -ng;
+                    Vec3 n = ng;
+                    bool mapped = false;
+                    if (m.normalTexture) {
+                        const Vec4 t4 = a.tan * p0 + b.tan * p1 + c.tan * p2;
+                        Vec3 t = Vec3(t4.x, t4.y, t4.z);
+                        t = t - ng * Dot(ng, t);
+                        if (Length(t) > 1e-6f) {
+                            t = Normalize(t);
+                            const Vec3 bt = Cross(ng, t) * (t4.w < 0.0f ? -1.0f : 1.0f);
+                            const Color nt = m.normalTexture->Sample(u, v, m.pixelArt, nullptr);
+                            n = Normalize(t * ((nt.r * 2 - 1) * m.flip2D[0]) + bt * ((nt.g * 2 - 1) * m.flip2D[1]) + ng * (nt.b * 2 - 1));
+                            mapped = true;
+                        }
+                    }
+                    out = ShadeLight2D(m.light2D.get(), wpos, n, mapped, base, m.ambient2D);
                 }
                 if (reflection && mat.id == lighting->planar.id) *reflection = ScreenReflectionPixel();
                 out = lighting->PlanarColor(mat.id, a.wpos * p0 + b.wpos * p1 + c.wpos * p2, out);
@@ -748,6 +769,17 @@ void RenderShadowDepth(ShadowMap& sm, const std::vector<RenderItem>& items, cons
 void SetMaxRenderThreads(int threads) { g_maxRenderThreads = threads; }
 
 RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view, RenderTarget& target) {
+    if (view.pixelWidth > 0 && view.pixelHeight > 0) {
+        RenderTarget art;
+        art.Resize(view.pixelWidth, view.pixelHeight);
+        RenderView low = view;
+        low.pixelWidth = low.pixelHeight = 0;
+        low.drawUI = false;
+        const RenderStats stats = Render(scene, low, art);
+        PresentPixelFrame(art, target);
+        if (view.drawUI) DrawUI(scene, target, assets_);
+        return stats;
+    }
     auto start = std::chrono::steady_clock::now();
     RenderStats stats;
     const PostProcess post = NormalizePostProcess(view.postProcess);
@@ -792,7 +824,7 @@ RenderStats SoftwareRenderer::Render(const Scene& scene, const RenderView& view,
     std::fill(target.depth.begin(), target.depth.end(), 1.0f);
     std::fill(target.ids.begin(), target.ids.end(), kNullEntity);
 
-    std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view);
+    std::vector<RenderItem> items = GatherRenderItems(scene, assets_, view.view, view.shaderTime, view.pixelStep);
     items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return it.id == view.excludeEntity; }), items.end());
     if (picture)
         items.erase(std::remove_if(items.begin(), items.end(), [&](const RenderItem& it) { return !ProbeShows(scene, it.id); }), items.end());
@@ -1124,6 +1156,19 @@ bool MakeCameraView(const Scene& scene, EntityId id, float aspect, RenderView& o
     const Camera& cam = *camera;
     Mat4 world = scene.WorldMatrix(id);
     Vec3 eye = world.TransformPoint(Vec3(0, 0, 0));
+    out.pixelWidth = out.pixelHeight = 0;
+    out.pixelStep = 0;
+    if (cam.pixelPerfect && cam.projection == "orthographic") {
+        out.pixelWidth = std::clamp(cam.pixelWidth, 16, 2048);
+        out.pixelHeight = std::clamp(cam.pixelHeight, 16, 2048);
+        out.pixelStep = 2 * std::max(0.01f, cam.orthoSize) / static_cast<float>(out.pixelHeight);
+        const Vec3 right = Normalize(world.TransformDir(Vec3(1, 0, 0))), upAxis = Normalize(world.TransformDir(Vec3(0, 1, 0)));
+        // Pixel edges on whole multiples of the step: an odd art width/height centres the camera on a pixel.
+        const float step = out.pixelStep, x = Dot(eye, right), y = Dot(eye, upAxis);
+        const float ox = (out.pixelWidth % 2) * 0.5f * step, oy = (out.pixelHeight % 2) * 0.5f * step;
+        eye += right * (std::floor((x - ox) / step + 0.5f) * step + ox - x) + upAxis * (std::floor((y - oy) / step + 0.5f) * step + oy - y);
+        aspect = static_cast<float>(out.pixelWidth) / static_cast<float>(out.pixelHeight);
+    }
     Vec3 fwd = Normalize(world.TransformDir(Vec3(0, 0, -1)));
     Vec3 up = Normalize(world.TransformDir(Vec3(0, 1, 0)));
     out.view = Mat4::LookAt(eye, eye + fwd, up);

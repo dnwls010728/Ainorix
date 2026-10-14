@@ -104,10 +104,18 @@ void NativeEditor::Impl::AnimationSpriteFrames(const Json& state) {
     const size_t begin = static_cast<size_t>(animationSequenceFrame / 64 * 64);
     for (size_t i = begin; i < std::min(begin + 64, clip["frames"].size()); ++i) {
         ImGui::PushID(static_cast<int>(i)); if (i != begin) ImGui::SameLine();
-        const int source = clip["frames"][i].asInt(); Json rect;
+        const Json sourceValue = clip["frames"][i];
+        const int source = sourceValue.asInt();
+        Json rect;
         if (info["image"]["atlas"].asBool()) {
             // A bounded query avoids storing every atlas rectangle in editor state.
-            const Json page = Call("animation.get_clip", ObjectOf({{"id", Primary()}, {"clip", state["clip"]}, {"offset", source}, {"limit", 1}, {"sourceOnly", true}}), true);
+            const Json page = Call("animation.get_clip",
+                                   ObjectOf({{"id", Primary()},
+                                             {"clip", state["clip"]},
+                                             {sourceValue.isString() ? "frame" : "offset", sourceValue},
+                                             {"limit", 1},
+                                             {"sourceOnly", true}}),
+                                   true);
             rect = page["result"]["frames"][0]["rect"];
         } else {
             const int cols = info["image"]["columns"].asInt(1), gridRows = info["image"]["rows"].asInt(1);
@@ -162,8 +170,10 @@ void NativeEditor::Impl::AnimationFrameStrip(const Json& state, ImVec2 origin, I
         const float right = origin.x + 6 + static_cast<float>((i + 1 < starts.size() ? starts[i+1].asNumber() : duration) / duration) * (size.x - 12);
         draw->AddRect(ImVec2(left, origin.y), ImVec2(std::max(left+1,right),origin.y+size.y), ImGui::GetColorU32(ImGuiCol_Border));
         if (right-left<10) continue;
-        const int source = info["values"]["frames"][i].asInt();
-        const Json rectResponse = Call("animation.get_clip", ObjectOf({{"id", state["id"]}, {"sourceOnly", true}, {"offset", source}, {"limit", 1}}), true);
+        const Json source = info["values"]["frames"][i];
+        const Json rectResponse =
+            Call("animation.get_clip",
+                 ObjectOf({{"id", state["id"]}, {"sourceOnly", true}, {source.isString() ? "frame" : "offset", source}, {"limit", 1}}), true);
         if (!Ok(rectResponse) || rectResponse["result"]["frames"].size()==0) continue;
         const Json& rect = rectResponse["result"]["frames"][0]["rect"];
         const float x=rect[0].asFloat(), y=rect[1].asFloat(), w=rect[2].asFloat(), h=rect[3].asFloat();

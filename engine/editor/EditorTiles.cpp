@@ -15,6 +15,7 @@
 #include "core/Log.h"
 #include "render/GpuRenderer.h"
 #include "scene/Components.h"
+#include "scene/TileGrid.h"
 
 namespace oe {
 
@@ -52,7 +53,7 @@ const Json& NativeEditor::Impl::TileInfo() {
         const EntityRow* row = Row(id);
         tileInfo = Json();
         if (row && row->Has("Tilemap")) {
-            Json r = Call("tilemap.info", ObjectOf({{"id", Json(id)}}), true);
+            Json r = Call("tilemap.info", ObjectOf({{"id", Json(id)}, {"layer", tileLayer}}), true);
             if (Ok(r)) tileInfo = r["result"];
         }
     }
@@ -83,7 +84,10 @@ void NativeEditor::Impl::PaintCells(const std::vector<std::pair<int, int>>& cell
         list.push(Json(Json::Array{cell.first, cell.second}));
     }
     if (list.size() == 0) return;
-    Call("tilemap.paint", ObjectOf({{"id", Json(Primary())}, {"char", Json(std::string(1, c))}, {"cells", list},
+    Call("tilemap.paint", ObjectOf({{"id", Json(Primary())},
+                                    {"layer", tileLayer},
+                                    {"char", Json(std::string(1, c))},
+                                    {"cells", list},
                                     {"merge", Json("tiles:" + std::to_string(tileSerial))}}));
 }
 
@@ -96,11 +100,12 @@ void NativeEditor::Impl::TileSceneInput(ImDrawList* dl, bool clickedLeft, bool c
 
     // Start a stroke: left paints (Shift: rectangle, Ctrl: pick the tile under the cursor), right erases.
     if (tileHover && clickedLeft && io.KeyCtrl) {
-        const Json& map = selected["components"]["Tilemap"]["map"];
-        if (row >= 0 && col >= 0 && row < static_cast<int>(map.size())) {
-            const std::string& line = map[row].asString();
-            if (col < static_cast<int>(line.size())) tileBrush = line[static_cast<size_t>(col)];
-        }
+        const Json& component = selected["components"]["Tilemap"];
+        const bool extra = tileLayer >= 0 && static_cast<size_t>(tileLayer) < component["layers"].size();
+        Tilemap layer;
+        layer.map = extra ? component["layers"][tileLayer]["map"] : component["map"];
+        // TileAt reads both string rows and rows of transformed cells.
+        if (const char c = TileAt(layer, col, row)) tileBrush = c;
     } else if (tileHover && (clickedLeft || clickedRight)) {
         ++tileSerial;
         strokeCol = col;
@@ -126,22 +131,15 @@ void NativeEditor::Impl::TileSceneInput(ImDrawList* dl, bool clickedLeft, bool c
         int c0 = std::max(0, std::min(strokeCol, hoverCol)), r0 = std::max(0, std::min(strokeRow, hoverRow));
         int c1 = std::max(strokeCol, hoverCol), r1 = std::max(strokeRow, hoverRow);
         if (c1 >= 0 && r1 >= 0) {
-            Call("tilemap.fill", ObjectOf({{"id", Json(Primary())}, {"char", Json(std::string(1, tileBrush))}, {"col", Json(c0)}, {"row", Json(r0)},
+            Call("tilemap.fill", ObjectOf({{"id", Json(Primary())}, {"layer", tileLayer}, {"char", Json(std::string(1, tileBrush))}, {"col", Json(c0)}, {"row", Json(r0)},
                                            {"width", Json(c1 - c0 + 1)}, {"height", Json(r1 - r0 + 1)}, {"merge", Json("tiles:" + std::to_string(tileSerial))}}));
         }
     }
 
-    // Outline of the cell (or rectangle) the brush covers.
-    if (!tileHover && tileStroke != TileStroke::Rect) return;
     Scene& scene = engine.GetScene();
     const Tilemap* tm = scene.Get<Tilemap>(Primary());
     if (!tm) return;
     float ts = std::max(0.001f, tm->tileSize);
-    int c0 = hoverCol, r0 = hoverRow, c1 = hoverCol, r1 = hoverRow;
-    if (tileStroke == TileStroke::Rect) {
-        c0 = std::min(strokeCol, hoverCol), c1 = std::max(strokeCol, hoverCol);
-        r0 = std::min(strokeRow, hoverRow), r1 = std::max(strokeRow, hoverRow);
-    }
     Mat4 vp = sceneProjMat * sceneViewMat;
     Mat4 world = scene.WorldMatrix(Primary());
     auto corner = [&](int c, int r) {
@@ -149,6 +147,28 @@ void NativeEditor::Impl::TileSceneInput(ImDrawList* dl, bool clickedLeft, bool c
         float w = std::max(1e-4f, p.w);
         return ImVec2(sceneImagePos.x + (p.x / w * 0.5f + 0.5f) * sceneImageSize.x, sceneImagePos.y + (0.5f - p.y / w * 0.5f) * sceneImageSize.y);
     };
+    // A map with several layers: outline the cells of the one being painted.
+    if (!tm->layers.isNull() && tm->layers.size() > 0) {
+        Tilemap layer;
+        layer.map = tileLayer >= 0 && static_cast<size_t>(tileLayer) < tm->layers.size() ? tm->layers[tileLayer]["map"] : tm->map;
+        int width = 0, height = 0, drawn = 0;
+        MapSize(layer, width, height);
+        for (int r = 0; r < height && drawn < 4096; ++r)
+            for (int c = 0; c < width && drawn < 4096; ++c) {
+                const char tile = TileAt(layer, c, r);
+                if (tile == '\0' || tile == ' ') continue;
+                dl->AddQuad(corner(c, r), corner(c + 1, r), corner(c + 1, r + 1), corner(c, r + 1), IM_COL32(120, 200, 255, 90), 1.0f);
+                ++drawn;
+            }
+    }
+
+    // Outline of the cell (or rectangle) the brush covers.
+    if (!tileHover && tileStroke != TileStroke::Rect) return;
+    int c0 = hoverCol, r0 = hoverRow, c1 = hoverCol, r1 = hoverRow;
+    if (tileStroke == TileStroke::Rect) {
+        c0 = std::min(strokeCol, hoverCol), c1 = std::max(strokeCol, hoverCol);
+        r0 = std::min(strokeRow, hoverRow), r1 = std::max(strokeRow, hoverRow);
+    }
     ImVec2 q[4] = {corner(c0, r0), corner(c1 + 1, r0), corner(c1 + 1, r1 + 1), corner(c0, r1 + 1)};
     bool erase = tileStroke == TileStroke::Erase || (tileStroke == TileStroke::None && io.MouseDown[ImGuiMouseButton_Right]);
     ImU32 col32 = (c0 < 0 || r0 < 0) ? IM_COL32(255, 80, 80, 220) : erase ? IM_COL32(255, 140, 60, 230) : IM_COL32(255, 220, 90, 230);
@@ -160,16 +180,27 @@ void NativeEditor::Impl::TileSceneInput(ImDrawList* dl, bool clickedLeft, bool c
 }
 
 void NativeEditor::Impl::TilesPanel() {
+    if (requestTilesFocus) {
+        ImGui::SetNextWindowFocus();
+        requestTilesFocus = false;
+    }
     if (!ImGui::Begin(WithIcon(kIconGrid3x3, TrId("Tiles")).c_str(), &showTiles)) {
         ImGui::End();
         return;
     }
+    twoDimensionalRects.clear();
     const EntityRow* row = Row(Primary());
+    if (row && row->Has("Sprite")) {
+        SpriteToolsPanel();
+        ImGui::End();
+        return;
+    }
     if (!row || !row->Has("Tilemap")) {
         ImGui::TextDisabled("%s", Tr("Select an entity with a Tilemap to paint tiles."));
         ImGui::End();
         return;
     }
+    TileLayerTools();
     ImGui::Checkbox(Tr("Paint in the Scene view"), &tilePaint);
     HelpTooltip(Tr("Left drag: paint   Right drag: erase   Shift+drag: rectangle   Ctrl+click: pick a tile   Middle drag: pan"));
     const Json& info = TileInfo();
@@ -228,6 +259,7 @@ void NativeEditor::Impl::TilesPanel() {
     tileButton(' ', -1, Tr("Erase (empty cell)"));
     ImGui::Spacing();
     ImGui::TextDisabled("%s", Format(Tr("Brush: '%c'"), tileBrush).c_str());
+    TileRuleTools();
     ImGui::End();
 }
 

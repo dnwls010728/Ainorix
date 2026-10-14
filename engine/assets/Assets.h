@@ -54,6 +54,8 @@ public:
     std::shared_ptr<const Tileset> GetTileset(const std::string& path, std::string* error = nullptr);
     // Reusable sprite animation (*.anim.json), strictly validated and hot reloaded.
     std::shared_ptr<const Json> GetAnimation(const std::string& path, std::string* error = nullptr);
+    // Named .atlas.json or TexturePacker frames, normalized and hot reloaded.
+    std::shared_ptr<const Json> GetAtlas(const std::string& path, std::string* error = nullptr);
     // GetTileset as a TilesetLookup (for BuildTileRules, physics, overlays).
     TilesetLookup Tilesets();
 
@@ -105,6 +107,7 @@ private:
     Entry<ShaderGraph> LoadShader(const std::string& path);
     Entry<Tileset> LoadTileset(const std::string& path);
     Entry<VfxAsset> LoadVfx(const std::string& path);
+    Entry<Json> LoadAtlas(const std::string& path);
     Entry<Json> LoadAnimation(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
@@ -124,6 +127,7 @@ private:
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;
     std::map<std::string, Entry<Json>> animations_;
+    std::map<std::string, Entry<Json>> atlases_;
     std::map<std::string, Entry<VfxAsset>> vfx_;
     std::map<std::string, FontEntry> fonts_;
 };

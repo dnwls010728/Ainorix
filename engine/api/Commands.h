@@ -57,6 +57,8 @@ private:
 // Checks required properties, primitive types and unknown properties.
 void ValidateArgs(const Command& command, const Json& args);
 
+// Layer/cell authoring, tile rules and sprite collision tools.
+void RegisterTwoDimensionalCommands(CommandRegistry& registry);
 void RegisterBuiltinCommands(CommandRegistry& registry);
 
 }  // namespace oe

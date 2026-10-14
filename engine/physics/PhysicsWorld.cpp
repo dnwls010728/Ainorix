@@ -259,7 +259,7 @@ JPH::RefConst<JPH::Shape> TilemapShape(const Tilemap& tm, const TileRules& rules
 std::string TilemapKey(const Tilemap& tm, const TileRules& rules, JPH::Vec3 scale) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "|%.4f|%.4f,%.4f,%.4f", tm.tileSize, scale.GetX(), scale.GetY(), scale.GetZ());
-    return "tilemap|" + tm.map.dump() + "|" + rules.key + buf;
+    return "tilemap|" + (tm.map.dump() + tm.layers.dump()) + "|" + rules.key + buf;
 }
 
 std::string CharacterKey(const CharacterBody& c) {

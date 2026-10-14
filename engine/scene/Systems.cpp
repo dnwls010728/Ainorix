@@ -911,7 +911,7 @@ void UpdateSpriteAnimations(Scene& scene, AssetManager* assets, float dt, std::v
         } else if (index >= count - 1) {
             index = count - 1;
         }
-        sprite->frame = frames[static_cast<int>(index)].asInt(0);
+        sprite->frame = frames[static_cast<int>(index)];
     }
 }
 

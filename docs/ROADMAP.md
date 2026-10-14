@@ -283,33 +283,33 @@ Rules for every item here:
 
 Needed by nearly every 2D game:
 
-- [ ] **T1 — Sprite atlas.** Frames of different sizes in one image, described by a file (`x.atlas.json`): a
+- [x] **T1 — Sprite atlas.** Frames of different sizes in one image, described by a file (`x.atlas.json`): a
   rectangle per frame, trimmed margins with the original size kept, a pivot per frame, frames addressed by name.
   `Sprite.frame` accepts a name; the grid form (`columns`/`rows`) stays. `atlas.create`, `asset.info`. Read the
-  TexturePacker JSON layout too.
+  TexturePacker JSON layout too. Done: `Sprite.atlas` + named frames, trim/original size/pivot, TexturePacker hash/array (rotated frames), `atlas.create` (values, source, grid slice), named clip frames inline and in `.anim.json`.
 - [ ] **T2 — Aseprite import.** `oe import` of an Aseprite sheet + JSON export (and, if it stays small, the
   `.aseprite` file itself) writes the atlas and the `SpriteAnimation` clips from its tags, with each frame's duration.
 - **T3 — moved.** Animation events are A1 (shared by 2D and 3D); a duration per sprite frame is part of A4.
-- [ ] **T4 — Y sort.** A sorting option for top-down games: within a layer, what stands lower on the screen is
+- [x] **T4 — Y sort.** A sorting option for top-down games: within a layer, what stands lower on the screen is
   drawn in front (by the entity's pivot, with an offset). Done in the draw-list ordering of both renderers, not by
-  scripts writing `order` every frame. Tilemap cells of the same layer take part (a wall hides the feet behind it).
-- [ ] **T5 — Tilemap layers and tile attributes.** Several layers in one map (ground, decoration, foreground,
+  scripts writing `order` every frame. Tilemap cells of the same layer take part (a wall hides the feet behind it). Done: `Sprite.ySort/ySortOffset`, tile layers sorted per cell; unsorted items of a layer stay behind.
+- [x] **T5 — Tilemap layers and tile attributes.** Several layers in one map (ground, decoration, foreground,
   each with its sorting layer), flipped and rotated cells, animated tiles (water, torches), user data per tile rule
-  readable from Lua. The one-character-per-cell text form stays valid as a single layer.
+  readable from Lua. The one-character-per-cell text form stays valid as a single layer. Done: `Tilemap.layers`, flip/rotate cells, rule `animation` and `data`, `tilemap.layer_*/cell_*/rule_set`, Lua `tilemap.data`.
 - [ ] **T6 — Tiled and LDtk import.** Read `.tmj`/`.tmx` and `.ldtk` levels into tilesets, layers and entities:
   object layers become entities or markers a level script reads (spawn points, areas). Needs T5.
 - [ ] **T7 — 2D path finding.** This is P8 below (A* over tilemap cells); do it here, with layers from T5 in mind.
-- [ ] **T8 — Pixel-perfect drawing.** A camera option that renders at the art's resolution and scales by whole
+- [x] **T8 — Pixel-perfect drawing.** A camera option that renders at the art's resolution and scales by whole
   numbers (letterboxed), and snaps the camera and sprites to the pixel grid so pixel art does not shimmer when it
-  moves. `window.renderScale` exists; the snapping and integer scale do not.
+  moves. `window.renderScale` exists; the snapping and integer scale do not. Done: `Camera.pixelPerfect/pixelWidth/pixelHeight` in both renderers, coordinate queries follow the letterbox.
 
 Needed by some genres:
 
-- [ ] **T9 — 2D lighting.** `Light2D` today only cuts holes into `Darkness2D`. Colored and additive lights, lights
+- [x] **T9 — 2D lighting.** `Light2D` today only cuts holes into `Darkness2D`. Colored and additive lights, lights
   blocked by occluders (walls from `Collider2D` or tile collision casting shadows), normal-mapped sprites. Decide
-  the limits (lights and occluder edges per frame) so the software renderer stays the reference.
-- [ ] **T10 — Sprite draw modes.** Repeated (tiled) sprites, 9-slice in world space, fill amount (health bars,
-  radial cooldowns) and masks (draw only inside another sprite's shape). The UI has slicing and fill; sprites do not.
+  the limits (lights and occluder edges per frame) so the software renderer stays the reference. Done: `Light2D.mode color|add` through a cached world-space light map sampled per pixel by both renderers, `shadows` (static Collider2D + tile edges, tile rule `shadow: false`), `light2D/ambient2D` on sprites and tilemaps, `Sprite.normalTexture`. Soft shadows not done.
+- [x] **T10 — Sprite draw modes.** Repeated (tiled) sprites, 9-slice in world space, fill amount (health bars,
+  radial cooldowns) and masks (draw only inside another sprite's shape). The UI has slicing and fill; sprites do not. Done: `drawMode tiled|sliced` and `fill/fillMode` (horizontal, vertical, radial) as cached meshes, `mask/maskOnly` as a per-pixel test.
 - [ ] **T11 — Shapes and lines.** Filled polygons, thick lines and circles as scene content (spline terrain,
   ropes, beams), not `debug.draw`. `Trail` covers moving ribbons only.
 - [ ] **T12 — 2D skeletal animation.** Cut-out characters: bones, weighted mesh deformation, slots, clips. Either
@@ -325,9 +325,9 @@ Good to have:
 
 - [ ] **T15 — Large tilemaps.** Chunks: drawing and collision only for the part near the camera, loading parts of
   a big world.
-- [ ] **T16 — Editor tools for 2D.** Sprite sheet slicer (writes the T1 atlas), collision polygon editing on the
+- [x] **T16 — Editor tools for 2D.** Sprite sheet slicer (writes the T1 atlas), collision polygon editing on the
   sprite, a tile rule editor instead of hand-written JSON. Each needs its command first. The animation clip
-  window is A2/A4.
+  window is A2/A4. Done: Tiles panel map layers (add/rename/reorder/remove) + tile rule editor, Sprite Tools sheet slicer (grid with trim, Find Sprites) and collision polygon (`sprite.collision`, `sprite.outline`); screenshot `--tiles`.
 - [ ] **T17 — Sprite effect presets.** Outline, hit flash, dissolve, screen wipes as ready-made shader graphs
   through `Sprite.material` / `PostProcess`. First check which of them today's graph nodes can already express —
   not verified.

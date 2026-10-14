@@ -920,21 +920,57 @@ Tilemap& CheckTilemap(lua_State* L, EntityId id) {
     return *tm;
 }
 
-// tilemap.get(id, col, row) -> character or nil outside the map
+// Optional layer argument of the tilemap functions: a layer name, or an index as in
+// tilemap.layer_set (-1 = the base map, 0 = the first entry of Tilemap.layers). -1 when absent.
+int LayerArg(lua_State* L, const Tilemap& tm, int arg) {
+    if (lua_isnoneornil(L, arg)) return -1;
+    if (lua_type(L, arg) == LUA_TSTRING) {
+        const std::string name = lua_tostring(L, arg);
+        for (size_t i = 0; i < tm.layers.size(); ++i)
+            if (tm.layers[i]["name"].asString() == name) return static_cast<int>(i);
+        return luaL_error(L, "tilemap has no layer named '%s'", name.c_str());
+    }
+    const lua_Integer index = luaL_checkinteger(L, arg);
+    if (index < -1 || index >= static_cast<lua_Integer>(tm.layers.size()))
+        return luaL_error(L, "tilemap layer %d does not exist (-1 = base map, 0..%d)", static_cast<int>(index), static_cast<int>(tm.layers.size()) - 1);
+    return static_cast<int>(index);
+}
+
+// Edits one layer's rows through the TileGrid helpers (which read and write Tilemap.map).
+struct LayerView {
+    Tilemap& tm;
+    int layer;
+    Tilemap part;
+    LayerView(Tilemap& source, int index) : tm(source), layer(index) {
+        if (layer >= 0) part.map = source.layers[layer]["map"];
+    }
+    Tilemap& Map() { return layer < 0 ? tm : part; }
+    void Store() {
+        if (layer >= 0) tm.layers[layer]["map"] = part.map;
+    }
+};
+
+// tilemap.get(id, col, row[, layer]) -> character or nil outside the map
 int L_TilemapGet(lua_State* L) {
     EntityId id = CheckEntity(L, 1);
-    char c = TileAt(CheckTilemap(L, id), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)));
+    Tilemap& tm = CheckTilemap(L, id);
+    LayerView view(tm, LayerArg(L, tm, 4));
+    char c = TileAt(view.Map(), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)));
     if (c == '\0') lua_pushnil(L);
     else lua_pushlstring(L, &c, 1);
     return 1;
 }
 
-// tilemap.set(id, col, row, char) - change one tile (graphics and collision follow)
+// tilemap.set(id, col, row, char[, layer]) - change one tile (graphics and collision follow)
 int L_TilemapSet(lua_State* L) {
     EntityId id = CheckEntity(L, 1);
     size_t len = 0;
     const char* s = luaL_checklstring(L, 4, &len);
-    lua_pushboolean(L, SetTile(CheckTilemap(L, id), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)), len ? s[0] : ' '));
+    Tilemap& tm = CheckTilemap(L, id);
+    LayerView view(tm, LayerArg(L, tm, 5));
+    const bool ok = SetTile(view.Map(), static_cast<int>(luaL_checkinteger(L, 2)), static_cast<int>(luaL_checkinteger(L, 3)), len ? s[0] : ' ');
+    view.Store();
+    lua_pushboolean(L, ok);
     return 1;
 }
 
@@ -975,6 +1011,21 @@ int L_TilemapSolid(lua_State* L) {
     });
 }
 
+// tilemap.data(id, col, row[, layer]) -> the tile rule's data table (empty when it has none)
+int L_TilemapData(lua_State* L) {
+    return Guard(L, [&] {
+        Engine& e = Host(L).GetEngine();
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        args["col"] = static_cast<int>(luaL_checkinteger(L, 2));
+        args["row"] = static_cast<int>(luaL_checkinteger(L, 3));
+        args["layer"] = LayerArg(L, CheckTilemap(L, args["id"].asInt()), 4);
+        const Json result = e.Call("tilemap.cell_get", args);
+        if (!result["ok"].asBool()) throw ApiError(result["error"]["code"].asString(), result["error"]["message"].asString());
+        PushJson(L, result["result"]["data"]);
+        return 1;
+    });
+}
 // tilemap.collision(id, col, row) -> "none" | "solid" | "oneway" | "shape"
 int L_TilemapCollision(lua_State* L) {
     return Guard(L, [&] {
@@ -986,7 +1037,7 @@ int L_TilemapCollision(lua_State* L) {
     });
 }
 
-// tilemap.fill(id, col, row, width, height, char) - fill a rectangle of cells
+// tilemap.fill(id, col, row, width, height, char[, layer]) - fill a rectangle of cells
 int L_TilemapFill(lua_State* L) {
     EntityId id = CheckEntity(L, 1);
     Tilemap& tm = CheckTilemap(L, id);
@@ -994,10 +1045,12 @@ int L_TilemapFill(lua_State* L) {
     int w = static_cast<int>(luaL_checkinteger(L, 4)), h = static_cast<int>(luaL_checkinteger(L, 5));
     size_t len = 0;
     const char* s = luaL_checklstring(L, 6, &len);
+    LayerView view(tm, LayerArg(L, tm, 7));
     bool ok = w > 0 && h > 0 && w * h <= 1 << 20;
     for (int r = row; ok && r < row + h; ++r) {
-        for (int c = col; c < col + w; ++c) ok = SetTile(tm, c, r, len ? s[0] : ' ') && ok;
+        for (int c = col; c < col + w; ++c) ok = SetTile(view.Map(), c, r, len ? s[0] : ' ') && ok;
     }
+    view.Store();
     lua_pushboolean(L, ok);
     return 1;
 }
@@ -1851,9 +1904,11 @@ void ScriptHost::Open() {
     SetFuncs(L, "physics", physicsFuncs);
     const luaL_Reg navFuncs[] = {{"path", L_NavPath}, {"nearest", L_NavNearest}, {"raycast", L_NavRaycast}, {"bake", L_NavBake}, {nullptr, nullptr}};
     SetFuncs(L, "nav", navFuncs);
-    const luaL_Reg tilemapFuncs[] = {{"get", L_TilemapGet}, {"set", L_TilemapSet}, {"cellAt", L_TilemapCellAt},
-                                     {"cellCenter", L_TilemapCellCenter}, {"solid", L_TilemapSolid}, {"collision", L_TilemapCollision},
-                                     {"fill", L_TilemapFill}, {"size", L_TilemapSize}, {nullptr, nullptr}};
+    const luaL_Reg tilemapFuncs[] = {{"get", L_TilemapGet},       {"set", L_TilemapSet},
+                                     {"cellAt", L_TilemapCellAt}, {"cellCenter", L_TilemapCellCenter},
+                                     {"solid", L_TilemapSolid},   {"collision", L_TilemapCollision},
+                                     {"data", L_TilemapData},     {"fill", L_TilemapFill},
+                                     {"size", L_TilemapSize},     {nullptr, nullptr}};
     SetFuncs(L, "tilemap", tilemapFuncs);
     const luaL_Reg logFuncs[] = {{"info", L_Log<LogLevel::Info>}, {"warn", L_Log<LogLevel::Warn>}, {"error", L_Log<LogLevel::Error>}, {nullptr, nullptr}};
     SetFuncs(L, "log", logFuncs);

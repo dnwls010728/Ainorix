@@ -1,5 +1,6 @@
 #include "app/CoordinateQueries.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -109,6 +110,16 @@ Json QueryCoordinates(Engine& engine, const std::string& operation, const Json& 
     if (Length(forward) <= 1e-6f || Length(up) <= 1e-6f || Length(Cross(forward, up)) <= 1e-6f) Invalid("degenerate camera world transform");
     RenderView view; MakeCameraView(scene, id, static_cast<float>(width) / static_cast<float>(height), view);
     const Mat4 matrix = view.proj * view.view;
+    // The picture's rectangle on the screen: the whole screen, or the integer-scaled, centered art
+    // frame of a pixel-perfect camera (PresentPixelFrame).
+    float left = 0, top = 0, viewW = static_cast<float>(width), viewH = static_cast<float>(height);
+    if (view.pixelWidth > 0 && view.pixelHeight > 0) {
+        const int scale = std::max(1, std::min(width / view.pixelWidth, height / view.pixelHeight));
+        viewW = static_cast<float>(view.pixelWidth * scale);
+        viewH = static_cast<float>(view.pixelHeight * scale);
+        left = static_cast<float>((width - view.pixelWidth * scale) / 2);
+        top = static_cast<float>((height - view.pixelHeight * scale) / 2);
+    }
     if (operation == "camera.worldToScreen") {
         Vec3 position = Point(a["position"], true);
         Vec4 clip = matrix * Vec4(position, 1);
@@ -118,8 +129,8 @@ Json QueryCoordinates(Engine& engine, const std::string& operation, const Json& 
         bool inside = false;
         if (std::fabs(clip.w) > 1e-6f) {
             Vec3 ndc = Divide(clip);
-            result["x"] = (ndc.x + 1) * 0.5f * static_cast<float>(width);
-            result["y"] = (1 - ndc.y) * 0.5f * static_cast<float>(height);
+            result["x"] = left + (ndc.x + 1) * 0.5f * viewW;
+            result["y"] = top + (1 - ndc.y) * 0.5f * viewH;
             result["ndcDepth"] = ndc.z;
             inside = ndc.x >= -1 && ndc.x <= 1 && ndc.y >= -1 && ndc.y <= 1 && ndc.z >= -1 && ndc.z <= 1;
         }
@@ -131,7 +142,7 @@ Json QueryCoordinates(Engine& engine, const std::string& operation, const Json& 
     Mat4 inverse = matrix.Inverse(), identity = matrix * inverse;
     for (int row = 0; row < 4; ++row) for (int col = 0; col < 4; ++col)
         if (!std::isfinite(identity.at(row, col)) || std::fabs(identity.at(row, col) - (row == col ? 1.0f : 0.0f)) > 0.01f) Invalid("degenerate camera projection");
-    float x = screen.x * 2 / static_cast<float>(width) - 1, y = 1 - screen.y * 2 / static_cast<float>(height);
+    float x = (screen.x - left) * 2 / viewW - 1, y = 1 - (screen.y - top) * 2 / viewH;
     Vec3 origin = Divide(inverse * Vec4(x, y, -1, 1)), far = Divide(inverse * Vec4(x, y, 1, 1));
     Vec3 direction = Normalize(far - origin);
     if (Length(direction) < 0.5f) Invalid("degenerate screen ray");
