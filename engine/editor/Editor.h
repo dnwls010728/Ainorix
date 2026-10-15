@@ -100,6 +100,10 @@ public:
     // Sprite Editor controls: tab:<0|1>, slice-mode:<i>, slice, slice-grid, slice-canvas, fit, frame:<i>,
     // collision-target:<0|1>, collision-fit/fit-all/create/clear/remove, collision-canvas, collision-point:<i>.
     std::array<float, 4> SpriteEditorControlRect(const std::string& name) const;
+    // Skeleton Editor controls: asset, tab:<0|1|2>, undo, redo, check, canvas, bone:<i>, field:<x|y|rotation|...>,
+    // slot-up:<i>, slot-down:<i>, slot, paint:<0|1>, clip, recipe, play, time, delete-key; on the canvas joint:<bone>,
+    // tip:<bone> and (Weights) vertex:<i>.
+    std::array<float, 4> SkeletonEditorControlRect(const std::string& name) const;
     // Automation bounds: clip, play, step, restart, time, timeline, add-event and marker/name/event-time/remove-event:<index>.
     std::array<float, 4> AnimationControlRect(const std::string& name) const;
     // Snapshot of the shared Effects document and bounds for event-driven widget automation.

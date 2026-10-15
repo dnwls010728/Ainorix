@@ -2953,6 +2953,24 @@ void RegisterBuiltinCommands(CommandRegistry& r) {
                                 "Run oe editor and attach with --connect; sprite.create/set/slice/fit_collision work without an editor.");
                  return Json();
              });
+    Register(r, "editor.skeleton2d",
+             "Open/focus or close the Skeleton Editor of the attached native editor on a 2D skeleton (*.skel2d.json): Rig (bones, draw "
+             "order), Weights (paint mesh weights) or Animate (a clip's timeline; turning a bone keys it). Without path it shows the "
+             "selected entity's Skeleton2D asset; no scene edit.",
+             Params()
+                 .Opt("open", "boolean", "true opens/focuses (default); false closes it.")
+                 .Opt("tab", "string", "rig, weights or animate.")
+                 .Opt("path", "string", "Skeleton to show (default: the selected entity's).")
+                 .Opt("bone", "string", "Bone to select.")
+                 .Opt("slot", "string", "Weights: the mesh slot to paint.")
+                 .Opt("clip", "string", "Animate: the clip to show.")
+                 .Opt("time", "number", "Animate: seconds into the clip."),
+             false, [](Engine& e, const Json& a) {
+                 if (const Engine::EditorHandler& editor = e.GetEditorHandler()) return editor("skeleton2d", a);
+                 throw ApiError("editor_unavailable", "no native editor is attached",
+                                "Run oe editor and attach with --connect; the skeleton2d.* commands work without an editor.");
+                 return Json();
+             });
     Register(r, "editor.select",
              "Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).",
              Params().Req("ids", "array", "Entity ids or unique names; [] clears the selection.")

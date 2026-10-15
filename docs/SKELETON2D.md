@@ -429,5 +429,14 @@ unchecked line.
   `skeleton2d.analyze`, walk `plantedSpeed` -1.17 -> springs on the ponytail and satchel -> walking and running in
   `games/Adventurer2D` (test `Adventurer2DGame`). Not done: a run of the Rigger agent itself through the team (the
   run above was done by hand, following the guide's steps).
-- [ ] **M8 — Editor.** Skeleton window: bones, attachments, weights painting, clip timeline, all through the commands.
+- [x] **M8 — Editor.** Skeleton Editor window (`engine/editor/EditorSkeleton.cpp`; View > Skeleton Editor, a tab beside
+  the Scene view that follows the selection and reloads the file when an agent changes it). **Rig**: bone tree, bone
+  fields, drag a joint to move it or a bone to turn it, slot draw order. **Weights**: pick a mesh slot and a bone, the
+  vertices coloured by weight, brush add/remove (the other bones share the rest, at most four per vertex). **Animate**:
+  clip, play/scrub, dragging a bone keys its rotation at the current time (relative to setup), the bone's keys, delete
+  key, a recipe button (`skeleton2d.motion`) and **Check** (`skeleton2d.analyze`) with its problem list. Every edit is a
+  `skeleton2d.*` command; the window keeps its own undo of the file (Ctrl+Z / Ctrl+Y while focused, one step per drag).
+  `editor.skeleton2d {open, tab, path, bone, slot, clip, time}`, `editor.state.skeletonEditor`, screenshot flag
+  `--skeleton-editor [x.skel2d.json:]rig|weights[:slot]|animate[:clip]`; test `NativeEditorSkeletonEditor`. Not done:
+  editing attachments (images, mesh vertices) in the window; it uses `skeleton2d.build` / `skeleton2d.set` for those.
 - [ ] Optional: DragonBones JSON import (MIT). Spine JSON import only after its licence terms are checked.

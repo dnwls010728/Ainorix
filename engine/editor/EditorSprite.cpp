@@ -49,6 +49,8 @@ constexpr ImU32 kPivot = IM_COL32(255, 92, 92, 255);
 const ImVec4 kMuted(0.66f, 0.67f, 0.70f, 1.0f);
 const ImVec4 kError(0.96f, 0.45f, 0.40f, 1.0f);
 
+}  // namespace
+
 // Light/dark squares behind images: transparent pixels show as the pattern, not as the panel color.
 void Checkerboard(ImDrawList* draw, ImVec2 a, ImVec2 b, float cell) {
     draw->AddRectFilled(a, b, IM_COL32(58, 60, 66, 255));
@@ -67,8 +69,8 @@ void Checkerboard(ImDrawList* draw, ImVec2 a, ImVec2 b, float cell) {
 
 // A two-or-more-way choice drawn as joined buttons; returns the index clicked, else -1. Each button's
 // bounds go to rects["<name>:<index>"] (automation).
-int Segmented(const char* id, const std::vector<const char*>& labels, int current, std::map<std::string, std::array<float, 4>>* rects = nullptr,
-              const char* name = nullptr, float width = 0) {
+int Segmented(const char* id, const std::vector<const char*>& labels, int current, std::map<std::string, std::array<float, 4>>* rects,
+              const char* name, float width) {
     int clicked = -1;
     ImGui::PushID(id);
     const float each = width > 0 ? (width - static_cast<float>(labels.size() - 1)) / static_cast<float>(labels.size()) : 0.0f;
@@ -89,6 +91,8 @@ int Segmented(const char* id, const std::vector<const char*>& labels, int curren
     ImGui::PopID();
     return clicked;
 }
+
+namespace {
 
 // A label column of fixed width followed by its control on the same line.
 void Label(const char* text, float width) {

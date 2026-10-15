@@ -21912,6 +21912,128 @@ TEST(NativeEditorSpriteEditorAndInspectorSections) {
     CHECK(WritePng("build/sprite-editor.png", image.ToImage(), true));
     RemoveAll(project);
 }
+TEST(NativeEditorSkeletonEditor) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton_editor");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    Image picture;
+    picture.width = 40;
+    picture.height = 10;
+    picture.rgba.assign(40 * 10 * 4, 255);
+    CHECK(WritePng(project + "/arm.png", picture, true));
+    // An arm of two bones whose mesh bends at the elbow, a second slot to reorder, and a clip.
+    CHECK(Call(e, "skeleton2d.create", R"({"path":"arm.skel2d.json","values":{"pixelsPerUnit":20,
+      "bones":[{"name":"root"},{"name":"upper","parent":"root","length":1},{"name":"fore","parent":"upper","x":1,"length":1}],
+      "slots":[{"name":"arm","bone":"upper","attachment":"arm"},{"name":"glove","bone":"fore","attachment":"glove"}],
+      "skins":{"default":{"arm":{"arm":{"image":"arm.png","pivot":[0,0.5],"vertices":[0,0,20,0,40,0,0,10,20,10,40,10],
+        "triangles":[0,3,4,0,4,1,1,4,5,1,5,2],"weights":[[["upper",1]],[["upper",1]],[["fore",1]],[["upper",1]],[["upper",1]],[["fore",1]]]}},
+        "glove":{"glove":{"image":"arm.png","pivot":[0,0.5],"x":1,"width":0.5,"height":0.5}}}},
+      "clips":{"swing":{"duration":1,"bones":{"upper":{"rotate":[[0,0],[1,30]]}}}}}})")["ok"].asBool());
+    Call(e, "entity.create", R"({"name":"Arm","components":{"Transform":{},"Skeleton2D":{"asset":"arm.skel2d.json"}}})");
+    if (!e.EnableGpu(nullptr, &error)) {
+        RemoveAll(project);
+        return;
+    }
+    NativeEditor::Options options;
+    options.language = "en";
+    options.layoutFile = "";
+    NativeEditor editor(e, nullptr, options);
+    CHECK(editor.Init(&error));
+    RenderTarget image;
+    auto draw = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            editor.Update({}, 1800, 1200, 1, Engine::kFixedDt);
+            CHECK(editor.DrawToImage(image));
+        }
+    };
+    auto send = [&](std::vector<WindowEvent> events) {
+        editor.Update(events, 1800, 1200, 1, Engine::kFixedDt);
+        CHECK(editor.DrawToImage(image));
+    };
+    auto move = [&](float x, float y) {
+        WindowEvent m;
+        m.type = WindowEvent::Type::MouseMove;
+        m.x = x, m.y = y;
+        return m;
+    };
+    auto button = [&](bool down) {
+        WindowEvent b;
+        b.type = WindowEvent::Type::MouseButton;
+        b.button = 0;
+        b.down = down;
+        return b;
+    };
+    auto center = [&](const char* name) {
+        const auto r = editor.SkeletonEditorControlRect(name);
+        CHECK(r[2] > 0);
+        return std::make_pair(r[0] + r[2] * 0.5f, r[1] + r[3] * 0.5f);
+    };
+    auto drag = [&](std::pair<float, float> from, std::pair<float, float> to) {
+        send({move(from.first, from.second)});
+        draw(1);
+        send({button(true)});
+        for (int i = 1; i <= 6; ++i) send({move(from.first + (to.first - from.first) * static_cast<float>(i) / 6, from.second + (to.second - from.second) * static_cast<float>(i) / 6)});
+        send({button(false)});
+        draw(2);
+    };
+    auto click = [&](const char* name) {
+        const auto c = center(name);
+        send({move(c.first, c.second)});
+        draw(1);
+        send({button(true)});
+        draw(1);
+        send({button(false)});
+        draw(2);
+    };
+    auto asset = [&]() { return e.ReadProjectJson("arm.skel2d.json"); };
+    auto state = [&]() { return Call(e, "editor.state")["result"]["skeletonEditor"]; };
+
+    // Opened on the selected entity's skeleton (Rig).
+    editor.Select(e.GetScene().FindByName("Arm"));
+    CHECK(Call(e, "editor.skeleton2d", R"({"tab":"rig"})")["ok"].asBool());
+    draw(10);  // the dock layout settles over the first frames
+    CHECK(state()["open"].asBool() && state()["path"].asString() == "arm.skel2d.json" && state()["tab"].asString() == "rig");
+    CHECK(Call(e, "editor.skeleton2d", R"({"tab":"spin"})")["error"]["code"].asString() == "invalid_argument");
+    CHECK(Call(e, "editor.skeleton2d", R"({"bone":"elbow"})")["error"]["code"].asString() == "not_found");
+
+    // Rig: dragging the forearm's line turns its setup rotation; undo puts it back; one drag is one undo step.
+    const auto joint = center("joint:2"), tip = center("tip:2");
+    const std::pair<float, float> mid((joint.first + tip.first) * 0.5f, (joint.second + tip.second) * 0.5f);
+    drag(mid, std::make_pair(joint.first, joint.second - (tip.first - joint.first) * 0.5f));  // up: counter-clockwise
+    const float turned = asset()["bones"][2]["rotation"].asFloat();
+    CHECK(turned > 30 && turned < 120 && state()["bone"].asInt() == 2 && state()["undo"].asInt() == 1);
+    click("undo");
+    CHECK(asset()["bones"][2]["rotation"].asFloat(0) == 0 && state()["redo"].asInt() == 1);
+    // Draw order: moving the arm down puts the glove behind it.
+    click("slot-down:0");
+    CHECK(asset()["slots"][0]["name"].asString() == "glove");
+
+    // Weights: painting the forearm over the arm's middle column makes those vertices follow it.
+    CHECK(Call(e, "editor.skeleton2d", R"({"tab":"weights","slot":"arm","bone":"fore"})")["ok"].asBool());
+    draw(3);
+    const auto vertex = center("vertex:1");  // the middle top vertex, all on the upper arm so far
+    for (int pass = 0; pass < 3; ++pass) drag(vertex, std::make_pair(vertex.first + 1, vertex.second + 1));
+    Json weights = asset()["skins"]["default"]["arm"]["arm"]["weights"][1];
+    float fore = 0;
+    for (const Json& pair : weights.items()) if (pair[0].asString() == "fore") fore = pair[1].asFloat();
+    CHECK(fore > 0.05f && asset()["skins"]["default"]["arm"]["arm"]["weights"][0][0][0].asString() == "upper");
+
+    // Animate: turning the upper arm at 0.5 s keys its rotation there (relative to the setup pose).
+    CHECK(Call(e, "editor.skeleton2d", R"({"tab":"animate","clip":"swing","time":0.5,"bone":"upper"})")["ok"].asBool());
+    draw(3);
+    const auto uj = center("joint:1"), ut = center("tip:1");
+    drag(std::make_pair((uj.first + ut.first) * 0.5f, (uj.second + ut.second) * 0.5f), std::make_pair(uj.first, uj.second + (ut.first - uj.first) * 0.5f));
+    const Json rotate = asset()["clips"]["swing"]["bones"]["upper"]["rotate"];
+    CHECK(rotate.size() == 3 && std::fabs(rotate[1][0].asFloat() - 0.5f) < 1e-3f && rotate[1][1].asFloat() < -20);
+    // The key can be removed again.
+    click("delete-key");
+    CHECK(asset()["clips"]["swing"]["bones"]["upper"]["rotate"].size() == 2);
+    CHECK(WritePng("build/skeleton-editor.png", image.ToImage(), true));
+    RemoveAll(project);
+}
+
 #endif
 
 int main() {

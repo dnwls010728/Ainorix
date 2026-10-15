@@ -912,6 +912,15 @@ Json NativeEditor::Impl::EditorState() {
                                         {"undo", static_cast<uint64_t>(spriteUndo.size())},
                                         {"redo", static_cast<uint64_t>(spriteRedo.size())}});
     }
+    out["skeletonEditor"] = ObjectOf({{"open", showSkeletonEditor},
+                                      {"tab", skeletonTab == 0 ? "rig" : skeletonTab == 1 ? "weights" : "animate"},
+                                      {"path", skeletonPath},
+                                      {"bone", skeletonBone},
+                                      {"slot", skeletonSlot},
+                                      {"clip", skeletonClip},
+                                      {"time", skeletonTime},
+                                      {"undo", static_cast<uint64_t>(skeletonUndo.size())},
+                                      {"redo", static_cast<uint64_t>(skeletonRedo.size())}});
     out["animation"] = engine.AnimationPreviewCall("state", Json());
     return out;
 }
@@ -1300,7 +1309,8 @@ void NativeEditor::Impl::Shortcuts() {
     const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global)) TogglePlay();
     if (gameFocused && InPlaySession()) return;  // keys belong to the game
-    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused || animationControllerEditorFocused || (showSpriteEditor && spriteEditorFocused))
+    if (scriptEditorFocused || shaderEditorFocused || effectsEditorFocused || animationControllerEditorFocused || (showSpriteEditor && spriteEditorFocused) ||
+        (showSkeletonEditor && skeletonEditorFocused))
         return;  // document editors own save/undo shortcuts
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global)) Save();
     if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global)) Undo();
@@ -1427,6 +1437,7 @@ void NativeEditor::Impl::MainMenu() {
         if (ImGui::MenuItem(Tr("Animation"), nullptr, showAnimation)) Call("editor.animation", Json::MakeObject());
         ImGui::MenuItem(Tr("Tiles"), nullptr, &showTiles);
         if (ImGui::MenuItem(Tr("Sprite Editor"), nullptr, showSpriteEditor)) Call("editor.sprite", Json::MakeObject());
+        if (ImGui::MenuItem(Tr("Skeleton Editor"), nullptr, showSkeletonEditor)) Call("editor.skeleton2d", Json::MakeObject());
         if (ImGui::MenuItem(Tr("History"), nullptr, showHistory)) { showHistory = true; requestHistoryFocus = true; }
         ImGui::MenuItem(Tr("Asset Thumbnails"), nullptr, &showThumbnails);
         ImGui::Separator();
@@ -1673,6 +1684,10 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Sprite Editor", scene->DockId);
         }
+        if (!ImGui::FindWindowSettingsByID(ImHashStr("###Skeleton Editor"))) {
+            ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
+            if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Skeleton Editor", scene->DockId);
+        }
         if (!ImGui::FindWindowSettingsByID(ImHashStr("###Shader Graph"))) {
             ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("###Scene"));
             if (scene && scene->DockId) ImGui::DockBuilderDockWindow("###Shader Graph", scene->DockId);
@@ -1722,6 +1737,7 @@ void NativeEditor::Impl::DockLayout(ImGuiID dockspace) {
     ImGui::DockBuilderDockWindow("###Effects", center);
     ImGui::DockBuilderDockWindow("###Animation Controller", center);
     ImGui::DockBuilderDockWindow("###Sprite Editor", center);
+    ImGui::DockBuilderDockWindow("###Skeleton Editor", center);
     ImGui::DockBuilderDockWindow("###Assets", bottom);
     ImGui::DockBuilderDockWindow("###Animation", bottom);
     ImGui::DockBuilderDockWindow("###Console", bottom);
@@ -1969,6 +1985,41 @@ bool NativeEditor::Init(std::string* error) {
             m.showAnimation = args["open"].asBool(true); m.focusAnimation = m.showAnimation;
             if (!m.showAnimation) m.Call("animation.preview_close", Json());
         }
+        if (op == "skeleton2d") {
+            m.showSkeletonEditor = m.focusSkeletonEditor = args["open"].asBool(true);
+            const std::string tab = args["tab"].asString();
+            if (!tab.empty() && tab != "rig" && tab != "weights" && tab != "animate") throw ApiError("invalid_argument", "tab must be rig, weights or animate");
+            if (!tab.empty()) m.skeletonTab = tab == "rig" ? 0 : tab == "weights" ? 1 : 2;
+            // The asset: the one named, else the selected entity's Skeleton2D's, else the one already shown.
+            std::string path = args["path"].asString();
+            if (path.empty())
+                if (const Skeleton2D* sk = m.engine.GetScene().Get<Skeleton2D>(m.Primary())) path = sk->asset;
+            if (!path.empty()) {
+                if (AssetManager::KindOf(path) != "skeleton2d") throw ApiError("invalid_path", "path must be a .skel2d.json skeleton");
+                m.SkeletonOpen(path);
+            }
+            m.skeletonFollowed = m.Primary();
+            auto boneIndex = [&](const Json& v) {
+                const Json& bones = m.skeletonRaw["bones"];
+                for (size_t i = 0; i < bones.size(); ++i)
+                    if (bones[static_cast<int>(i)]["name"].asString() == v.asString()) return static_cast<int>(i);
+                throw ApiError("not_found", "the skeleton has no bone '" + v.asString() + "'", "skeleton2d.get lists the bones.");
+            };
+            if (args.has("bone")) m.skeletonBone = boneIndex(args["bone"]);
+            if (args.has("slot")) {
+                const Json& slots = m.skeletonRaw["slots"];
+                m.skeletonSlot = -1;
+                for (size_t i = 0; i < slots.size(); ++i)
+                    if (slots[static_cast<int>(i)]["name"].asString() == args["slot"].asString()) m.skeletonSlot = static_cast<int>(i);
+                if (m.skeletonSlot < 0) throw ApiError("not_found", "the skeleton has no slot '" + args["slot"].asString() + "'");
+            }
+            if (args.has("clip")) {
+                if (!m.skeletonRaw["clips"].has(args["clip"].asString())) throw ApiError("not_found", "the skeleton has no clip '" + args["clip"].asString() + "'");
+                m.skeletonClip = args["clip"].asString();
+            }
+            if (args.has("time")) m.skeletonTime = std::max(0.0f, args["time"].asFloat());
+            return m.EditorState();
+        }
         if (op == "sprite") {
             m.showSpriteEditor = m.focusSpriteEditor = args["open"].asBool(true);
             const std::string tab = args["tab"].asString();
@@ -2074,6 +2125,8 @@ void NativeEditor::Update(const std::vector<WindowEvent>& events, int width, int
     if (m.showTiles) m.TilesPanel();
     if (m.showSpriteEditor) m.SpriteEditorPanel();
     else m.spriteRects.clear();
+    if (m.showSkeletonEditor) m.SkeletonEditorPanel();
+    else m.skeletonRects.clear();
     if (m.showNetwork) m.NetworkPanel();
     if (m.showHistory) m.HistoryPanel();
     if (m.teamAvailable && m.showTeam) m.TeamPanel();

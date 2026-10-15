@@ -2107,6 +2107,20 @@ Open/focus or close the Sprite Editor of the attached native editor on a sprite 
 | `texture` | string |  | Show the page that makes a new sprite asset from this image. |
 | `frame` | integer \| string |  | The frame to select (index or name). |
 
+### `editor.skeleton2d`
+
+Open/focus or close the Skeleton Editor of the attached native editor on a 2D skeleton (*.skel2d.json): Rig (bones, draw order), Weights (paint mesh weights) or Animate (a clip's timeline; turning a bone keys it). Without path it shows the selected entity's Skeleton2D asset; no scene edit.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `open` | boolean |  | true opens/focuses (default); false closes it. |
+| `tab` | string |  | rig, weights or animate. |
+| `path` | string |  | Skeleton to show (default: the selected entity's). |
+| `bone` | string |  | Bone to select. |
+| `slot` | string |  | Weights: the mesh slot to paint. |
+| `clip` | string |  | Animate: the clip to show. |
+| `time` | number |  | Animate: seconds into the clip. |
+
 ### `editor.select`
 
 Select entities in the open editor (Hierarchy, Inspector, gizmo) to point the human at them; frame:true also moves the Scene view to the first one. Not an edit (no undo entry).

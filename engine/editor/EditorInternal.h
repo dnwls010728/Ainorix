@@ -614,6 +614,42 @@ struct NativeEditor::Impl {
     // Inspector row of Sprite.frame for a sprite with an asset: the frame's picture and name, a grid to pick one.
     void SpriteFrameRow(EntityId id, const Json& values, const Json& schema);
 
+    // ----- Skeleton Editor (EditorSkeleton.cpp): one 2D skeleton (*.skel2d.json) - its bones and draw order (Rig), its
+    // meshes' weights (Weights) and its clips' keys (Animate). Every change is a skeleton2d.* command that writes the
+    // file; the window keeps its own undo of the file, like the Sprite Editor.
+    bool showSkeletonEditor = false, focusSkeletonEditor = false;
+    int skeletonFocusFrames = 0;              // frames left asking for focus (docking can take the tab away again)
+    bool skeletonEditorFocused = false;       // the window owns Ctrl+Z / Ctrl+Y while focused
+    int skeletonTab = 0;                      // 0 = Rig, 1 = Weights, 2 = Animate
+    std::string skeletonPath, skeletonError;  // the asset shown, why it could not be read
+    Json skeletonRaw;                         // the file as written
+    int64_t skeletonLoadedTime = 0;           // file time read (an outside edit reloads)
+    EntityId skeletonFollowed = kNullEntity;  // the selection the window last followed
+    std::vector<Json> skeletonUndo, skeletonRedo;
+    int skeletonMergeSerial = -1, skeletonDragSerial = 0;
+    int skeletonBone = -1, skeletonSlot = -1; // selected bone, selected slot (Weights)
+    std::string skeletonClip;                 // Animate: the clip shown
+    float skeletonTime = 0;
+    bool skeletonPlaying = false;
+    bool skeletonFit = true;                  // keep the figure fitted to the view (until the person zooms or pans)
+    float skeletonZoom = 100;                 // screen pixels per world unit
+    ImVec2 skeletonCenter{0, 1};              // world point at the middle of the canvas
+    float skeletonBrush = 24, skeletonStrength = 0.5f;  // Weights: brush radius (screen pixels) and how much a pass adds
+    bool skeletonSubtract = false;
+    int skeletonDrag = 0;                     // 0 none, 1 turn a bone, 2 move a joint, 3 paint, 4 pan
+    float skeletonDragAngle = 0;              // turn: the bone's angle when the drag began and the pointer's
+    float skeletonDragPointer = 0;
+    Json skeletonProblems;                    // skeleton2d.analyze of the shown clip (or stress poses)
+    std::map<std::string, std::array<float, 4>> skeletonRects;  // automation: control bounds by name
+    void SkeletonRect(const std::string& name);
+    void SkeletonEditorPanel();
+    void SkeletonOpen(const std::string& path);
+    bool SkeletonLoad();
+    // Writes the shown asset with these top-level fields replaced (or, with `clip`, that clip's) and reads it again.
+    // `merge` >= 0: edits with the same value (one drag) share one undo step.
+    bool SkeletonSet(const Json& values, const std::string& clip = std::string(), int merge = -1);
+    void SkeletonHistory(bool redo);
+
     // ----- Game view
     int gameAspect = 0;  // 0 free, 1 16:9, 2 16:10, 3 4:3
     bool gameFocused = false;
@@ -790,6 +826,12 @@ Json Vec3Json(const Vec3& v);
 Vec3 JsonVec3(const Json& j, Vec3 def = Vec3(0, 0, 0));
 Json ObjectOf(std::initializer_list<std::pair<const char*, Json>> members);
 void HelpTooltip(const std::string& text);
+// Light/dark squares behind images, `cell` pixels wide (asset windows: EditorSprite.cpp).
+void Checkerboard(ImDrawList* draw, ImVec2 a, ImVec2 b, float cell);
+// A two-or-more-way choice drawn as joined buttons; returns the index clicked, else -1. Each button's bounds go to
+// rects["<name>:<index>"] (automation).
+int Segmented(const char* id, const std::vector<const char*>& labels, int current, std::map<std::string, std::array<float, 4>>* rects = nullptr,
+              const char* name = nullptr, float width = 0);
 // "startSize" -> "Start Size", "uv" -> "UV": schema names as labels where no translated label exists.
 std::string HumanizeName(const std::string& name);
 // Kind of asset a string field holds ("model", "texture", ...), "" for plain text.
