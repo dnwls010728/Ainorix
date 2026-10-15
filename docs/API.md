@@ -127,6 +127,23 @@ Validate a 2D skeleton (a file or values) without writing: the first error with 
 | `path` | string |  | *.skel2d.json to check. |
 | `values` | object |  | An asset to check instead of a file. |
 
+### `skeleton2d.overlay`
+
+Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. Returns where each bone is in the picture. Writes a PNG to read.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string |  | *.skel2d.json to draw (or id). |
+| `id` | integer \| string |  | Entity whose Skeleton2D (asset, skin, clip, time) is drawn. |
+| `clip` | string |  | Clip to pose (default: the entity's, or the setup pose). |
+| `time` | number |  | Seconds into the clip. |
+| `skin` | string |  | Skin to show. |
+| `weights` | string |  | Bone whose weights tint the vertices: blue 0 .. red 1. |
+| `mesh` | boolean |  | Draw mesh edges and vertices (default true). |
+| `labels` | boolean |  | Name the bones (default true). |
+| `size` | integer |  | Longer side of the picture, 128..2048 (default 768). |
+| `out` | string |  | PNG path in the project (default .oe/vision/skeleton.png). |
+
 ### `skeleton2d.state`
 
 Playback state of an entity's Skeleton2D and where its bones are now (world position and rotation).
@@ -135,6 +152,36 @@ Playback state of an entity's Skeleton2D and where its bones are now (world posi
 |---|---|---|---|
 | `id` | integer \| string | yes | Entity id or unique name with Skeleton2D. |
 | `bones` | boolean |  | Include every bone (default true). |
+
+## image
+
+### `image.grid`
+
+Draw a zoomed coordinate grid over (part of) an image so an agent can read pixel positions exactly; marks show where it thinks points are. Writes a PNG to read.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | Project image (png/jpg/...). |
+| `rect` | array |  | [x, y, w, h] in image pixels (default: the whole image). |
+| `step` | integer |  | Grid spacing in image pixels (default: about 30 lines across). Every fifth line is yellow and labeled. |
+| `scale` | integer |  | Zoom: output pixels per image pixel, 1..32 (default: up to about 1024 pixels wide). |
+| `marks` | array |  | Points to draw: [[x, y, "label"], ...] in image pixels (check a guess). |
+| `out` | string |  | PNG path in the project (default .oe/vision/grid.png). |
+
+## vision
+
+### `vision.calibrate`
+
+Check that you read image coordinates accurately before rigging: without answers, draws labeled dots at secret positions; with answers {A:[x,y],...}, scores them (pixel error, pass/fail).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `seed` | integer |  | Layout seed (default 1); the same seed draws the same dots. |
+| `count` | integer |  | Number of dots, 3..12 (default 6). |
+| `size` | integer |  | Image size in pixels, 128..1024 (default 384). |
+| `answers` | object |  | Your readings: {"A": [x, y], ...}, the centre of each dot in image pixels (x right, y down). |
+| `tolerance` | number |  | Largest error that passes, in pixels (default 3). |
+| `out` | string |  | PNG path in the project (default .oe/vision/calibrate.png). |
 
 ## sprite
 

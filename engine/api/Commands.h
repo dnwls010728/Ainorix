@@ -9,6 +9,7 @@
 namespace oe {
 
 class Engine;
+struct Image;
 
 // Error returned to API callers. `code` is a stable machine-readable string,
 // `hint` tells the caller (often an AI agent) how to fix the request.
@@ -61,6 +62,10 @@ void ValidateArgs(const Command& command, const Json& args);
 void RegisterTwoDimensionalCommands(CommandRegistry& registry);
 // skeleton2d.create/get/set/check/state (api/Skeleton2DCommands.cpp).
 void RegisterSkeleton2DCommands(CommandRegistry& registry);
+// image.grid and vision.calibrate (api/VisionCommands.cpp).
+void RegisterVisionCommands(CommandRegistry& registry);
+// Writes a picture made for an agent to args.out (a .png in the project, default `fallback`); returns the path.
+std::string WriteToolImage(Engine& engine, const Json& args, const std::string& fallback, const Image& image);
 void RegisterBuiltinCommands(CommandRegistry& registry);
 
 }  // namespace oe

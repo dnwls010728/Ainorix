@@ -2,12 +2,17 @@
 // component. File writes are outside scene undo, like the other asset commands. docs/SKELETON2D.md.
 #include "api/Commands.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
 
 #include "app/Engine.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
+#include "render/ImageDraw.h"
+#include "render/Renderer.h"
+#include "render/Skeleton2DMesh.h"
 #include "scene/Components.h"
 #include "scene/Skeleton2D.h"
 
@@ -217,6 +222,171 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                }
                out["stats"] = Stats(*def);
                out["warnings"] = Warnings(engine, *def);
+               return out;
+           }});
+    r.Add({"skeleton2d.overlay",
+           "Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. "
+           "Returns where each bone is in the picture. Writes a PNG to read.",
+           Params()
+               .Opt("path", "string", "*.skel2d.json to draw (or id).")
+               .Opt("id", "entity", "Entity whose Skeleton2D (asset, skin, clip, time) is drawn.")
+               .Opt("clip", "string", "Clip to pose (default: the entity's, or the setup pose).")
+               .Opt("time", "number", "Seconds into the clip.")
+               .Opt("skin", "string", "Skin to show.")
+               .Opt("weights", "string", "Bone whose weights tint the vertices: blue 0 .. red 1.")
+               .Opt("mesh", "boolean", "Draw mesh edges and vertices (default true).")
+               .Opt("labels", "boolean", "Name the bones (default true).")
+               .Opt("size", "integer", "Longer side of the picture, 128..2048 (default 768).")
+               .Opt("out", "string", "PNG path in the project (default .oe/vision/skeleton.png)."),
+           false, [](Engine& engine, const Json& args) {
+               Skeleton2D component;
+               if (args.has("id")) {
+                   const Skeleton2D* source = engine.GetScene().Get<Skeleton2D>(Target(engine, args));
+                   if (!source) throw ApiError("component_missing", "entity has no Skeleton2D");
+                   component = *source;
+               } else if (args.has("path")) {
+                   CheckPath(args["path"].asString());
+                   component.asset = args["path"].asString();
+               } else {
+                   throw ApiError("invalid_args", "pass path or id");
+               }
+               if (args.has("clip")) component.clip = args["clip"].asString(), component.time = 0;
+               if (args.has("time")) component.time = args["time"].asFloat();
+               if (args.has("skin")) component.skin = args["skin"].asString();
+               // Started from scratch: the clip at the time, no fade, not flipped, fully visible.
+               component.current.clear();
+               component.from.clear();
+               component.flipX = component.flipY = false;
+               component.opacity = 1;
+               component.visible = true;
+               std::string error;
+               const auto def = component.asset.empty() ? nullptr : engine.Assets().GetSkeleton2D(component.asset, &error);
+               if (!def) throw ApiError("invalid_skeleton", component.asset.empty() ? std::string("the entity's Skeleton2D has no asset") : error, kFormatHint);
+               if (!component.clip.empty() && !def->FindClip(component.clip))
+                   throw ApiError("not_found", "no clip '" + component.clip + "'", "skeleton2d.get lists the clips.");
+               const int weightBone = args.has("weights") ? def->BoneIndex(args["weights"].asString()) : -1;
+               if (args.has("weights") && weightBone < 0) throw ApiError("not_found", "no bone '" + args["weights"].asString() + "'");
+               const Skeleton2DPose pose = Skeleton2DComponentPose(*def, component);
+               const Skeleton2DDrawable drawable = BuildSkeleton2DDrawable(def, component.skin, pose, &engine.Assets());
+
+               // Where everything is now: skinned vertices, bone origins and tips.
+               std::vector<Vec3> vertices;
+               if (drawable.mesh)
+                   for (size_t v = 0; v < drawable.mesh->positions.size(); ++v) {
+                       const SkinVertex& skin = drawable.mesh->skin[v];
+                       Vec3 p;
+                       for (size_t k = 0; k < 4; ++k)
+                           if (skin.weights[k] > 0) p = p + drawable.palette[skin.joints[k]].TransformPoint(drawable.mesh->positions[v]) * skin.weights[k];
+                       vertices.push_back(p);
+                   }
+               std::vector<Vec3> origins, tips;
+               for (size_t b = 0; b < def->bones.size(); ++b) {
+                   origins.push_back(pose.world[b].TransformPoint(Vec3()));
+                   tips.push_back(pose.world[b].TransformPoint(Vec3(def->bones[b].length, 0, 0)));
+               }
+               float lo[2] = {1e30f, 1e30f}, hi[2] = {-1e30f, -1e30f};
+               for (const auto* list : {&vertices, &origins, &tips})
+                   for (const Vec3& p : *list) {
+                       lo[0] = std::min(lo[0], p.x), lo[1] = std::min(lo[1], p.y);
+                       hi[0] = std::max(hi[0], p.x), hi[1] = std::max(hi[1], p.y);
+                   }
+               float spanX = std::max(0.5f, hi[0] - lo[0]) * 1.15f, spanY = std::max(0.5f, hi[1] - lo[1]) * 1.15f;
+               const float cx = (lo[0] + hi[0]) * 0.5f, cy = (lo[1] + hi[1]) * 0.5f;
+               const int size = std::clamp(args["size"].asInt(768), 128, 2048);
+               const int width = spanX >= spanY ? size : std::max(64, static_cast<int>(static_cast<float>(size) * spanX / spanY));
+               const int height = spanX >= spanY ? std::max(64, static_cast<int>(static_cast<float>(size) * spanY / spanX)) : size;
+               spanX = spanY * static_cast<float>(width) / static_cast<float>(height);  // square pixels
+
+               Scene preview;
+               const EntityId entity = preview.Create("Skeleton");
+               preview.Add<Transform>(entity);
+               preview.Add<Skeleton2D>(entity) = component;
+               RenderView view;
+               view.eye = Vec3(cx, cy, 50);
+               view.view = Mat4::LookAt(view.eye, Vec3(cx, cy, 0), Vec3(0, 1, 0));
+               view.proj = Mat4::Orthographic(spanY * 0.5f, static_cast<float>(width) / static_cast<float>(height), 0.1f, 100);
+               view.clearColor = Color(0.16f, 0.17f, 0.21f);
+               view.drawUI = false;
+               RenderTarget target;
+               target.Resize(width, height);
+               engine.Renderer().Render(preview, view, target);
+               Image image = target.ToImage();
+               const float pixels = static_cast<float>(height) / spanY;
+               const float left = cx - spanX * 0.5f, top = cy + spanY * 0.5f;
+               auto px = [&](const Vec3& p) { return std::make_pair((p.x - left) * pixels, (top - p.y) * pixels); };
+
+               if (drawable.mesh && args["mesh"].asBool(true)) {
+                   const Mesh& m = *drawable.mesh;
+                   for (size_t i = 0; i + 2 < m.indices.size(); i += 3)
+                       for (size_t e = 0; e < 3; ++e) {
+                           const auto a = px(vertices[m.indices[i + e]]), b = px(vertices[m.indices[i + (e + 1) % 3]]);
+                           DrawLine(image, a.first, a.second, b.first, b.second, {255, 255, 255, 90});
+                       }
+                   for (size_t v = 0; v < vertices.size(); ++v) {
+                       const auto p = px(vertices[v]);
+                       if (weightBone < 0) {
+                           DrawCircle(image, p.first, p.second, 1.5f, {255, 255, 255, 200}, true);
+                           continue;
+                       }
+                       float w = 0;
+                       for (size_t k = 0; k < 4; ++k)
+                           if (m.skin[v].joints[k] == weightBone) w += m.skin[v].weights[k];
+                       DrawCircle(image, p.first, p.second, 3.5f, {static_cast<uint8_t>(255 * w), 40, static_cast<uint8_t>(255 * (1 - w)), 255}, true);
+                   }
+               }
+               const bool labels = args["labels"].asBool(true);
+               // Names go beside their joint where they do not cover an earlier name.
+               std::vector<std::array<int, 4>> placed;
+               auto label = [&](float x, float y, const std::string& text, Rgba8 color) {
+                   const int w = TextWidth(text) + 2, h = TextHeight() + 2;
+                   const int ox = static_cast<int>(x), oy = static_cast<int>(y);
+                   const int tries[][2] = {{6, -10}, {6, 4}, {-w - 6, -10}, {-w - 6, 4}, {6, -20}, {-w - 6, -20}, {6, 14}, {-w - 6, 14}};
+                   std::array<int, 4> at{ox + tries[0][0], oy + tries[0][1], w, h};
+                   for (const auto& t : tries) {
+                       const std::array<int, 4> r{ox + t[0], oy + t[1], w, h};
+                       bool free = true;
+                       for (const auto& p : placed) free = free && (r[0] >= p[0] + p[2] || p[0] >= r[0] + r[2] || r[1] >= p[1] + p[3] || p[1] >= r[1] + r[3]);
+                       if (free) {
+                           at = r;
+                           break;
+                       }
+                   }
+                   at[0] = std::clamp(at[0], 0, std::max(0, image.width - w));
+                   at[1] = std::clamp(at[1], 0, std::max(0, image.height - h));
+                   placed.push_back(at);
+                   DrawText(image, at[0] + 1, at[1] + 1, text, color);
+               };
+               Json bones = Json::MakeArray();
+               for (size_t b = 0; b < def->bones.size(); ++b) {
+                   const auto o = px(origins[b]), t = px(tips[b]);
+                   const int parent = def->bones[b].parent;
+                   if (parent >= 0) {
+                       const auto p = px(origins[static_cast<size_t>(parent)]);
+                       DrawLine(image, p.first, p.second, o.first, o.second, {200, 200, 200, 110});
+                   }
+                   const Rgba8 color = static_cast<int>(b) == weightBone ? Rgba8{255, 80, 80, 255} : Rgba8{255, 215, 0, 255};
+                   if (def->bones[b].length > 0) DrawLine(image, o.first, o.second, t.first, t.second, color, 3);
+                   DrawCircle(image, o.first, o.second, 4, {0, 0, 0, 255}, true);
+                   DrawCircle(image, o.first, o.second, 3, color, true);
+                   if (labels) label(o.first, o.second, def->bones[b].name, color);
+                   Json bone = Json::MakeObject();
+                   bone["name"] = def->bones[b].name;
+                   bone["pixel"] = Json(Json::Array{std::round(o.first), std::round(o.second)});
+                   bone["world"] = Json(Json::Array{origins[b].x, origins[b].y});
+                   bones.push(bone);
+               }
+               Json out = Json::MakeObject();
+               out["out"] = WriteToolImage(engine, args, ".oe/vision/skeleton.png", image);
+               out["width"] = width;
+               out["height"] = height;
+               out["pixelsPerUnit"] = pixels;
+               out["vertices"] = static_cast<int>(vertices.size());
+               out["bones"] = bones;
+               if (!drawable.missing.empty()) {
+                   Json missing = Json::MakeArray();
+                   for (const std::string& m : drawable.missing) missing.push(m);
+                   out["missingImages"] = missing;
+               }
                return out;
            }});
     r.Add({"skeleton2d.state", "Playback state of an entity's Skeleton2D and where its bones are now (world position and rotation).",

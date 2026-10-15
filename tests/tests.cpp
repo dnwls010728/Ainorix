@@ -20904,6 +20904,89 @@ return Rig
     RemoveAll(project);
 }
 
+TEST(Skeleton2DAgentVision) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton2d_vision");
+    CHECK(e.Open(project, &error));
+    Image picture;
+    picture.width = 40;
+    picture.height = 20;
+    picture.rgba.assign(40 * 20 * 4, 0);
+    for (size_t i = 0; i < 40 * 10 * 4; ++i) picture.rgba[i] = 255;  // top half opaque white, bottom half transparent
+    CHECK(WritePng(project + "/picture.png", picture, true));
+
+    // image.grid: zoomed (40 px wide -> 25x), labeled margins, marks; the reply says how to read it back.
+    Json grid = Call(e, "image.grid", R"({"path":"picture.png","marks":[[10,5,"guess"]]})");
+    CHECK(grid["ok"].asBool() && grid["result"]["scale"].asInt() == 25 && grid["result"]["step"].asInt() == 2);
+    const int left = grid["result"]["origin"][0].asInt(), top = grid["result"]["origin"][1].asInt();
+    CHECK(grid["result"]["width"].asInt() == left + 40 * 25 + 6 && grid["result"]["height"].asInt() == top + 20 * 25 + 6);
+    CHECK(FileExists(project + "/.oe/vision/grid.png"));
+    grid = Call(e, "image.grid", R"({"path":"picture.png","rect":[30,10,20,20],"scale":4,"out":"shots/zoom.png"})");
+    CHECK(grid["result"]["rect"] == Json(Json::Array{30, 10, 10, 10}) && FileExists(project + "/shots/zoom.png"));
+    CHECK(Call(e, "image.grid", R"({"path":"picture.png","rect":[50,0,4,4]})")["error"]["code"].asString() == "invalid_args");
+    CHECK(Call(e, "image.grid", R"({"path":"picture.png","marks":[[1]]})")["error"]["code"].asString() == "invalid_args");
+    CHECK(Call(e, "image.grid", R"({"path":"missing.png"})")["error"]["code"].asString() == "not_found");
+    CHECK(Call(e, "image.grid", R"({"path":"picture.png","out":"grid.jpg"})")["error"]["code"].asString() == "invalid_path");
+
+    // vision.calibrate: the same seed draws the same picture; dot centres found in the pixels pass, wrong ones fail.
+    Json made = Call(e, "vision.calibrate", R"({"seed":3,"count":4,"size":200})");
+    CHECK(made["ok"].asBool() && made["result"]["labels"].size() == 4 && !made["result"].has("errors"));
+    std::vector<unsigned char> first, second;
+    CHECK(ReadBinaryFile(project + "/.oe/vision/calibrate.png", first));
+    Call(e, "vision.calibrate", R"({"seed":3,"count":4,"size":200,"out":"again.png"})");
+    CHECK(ReadBinaryFile(project + "/again.png", second) && first == second);
+    const auto texture = e.Assets().GetTexture("again.png");
+    CHECK(texture != nullptr);
+    if (!texture) return;
+    // A dot is the only place of its colour with a full 3x3 block (labels are thin strokes): average those.
+    const uint32_t colors[] = {0xFF1E1EDCu, 0xFFE67814u, 0xFF3CA014u, 0xFFC82896u};  // 0xAABBGGRR of the first four dot colours
+    Json answers = Json::MakeObject();
+    for (int i = 0; i < 4; ++i) {
+        double sx = 0, sy = 0, n = 0;
+        for (int y = 1; y + 1 < texture->height; ++y)
+            for (int x = 1; x + 1 < texture->width; ++x) {
+                bool block = true;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx)
+                        block = block && texture->texels[static_cast<size_t>((y + dy) * texture->width + x + dx)] == colors[i];
+                if (block) sx += x + 0.5, sy += y + 0.5, n += 1;
+            }
+        CHECK(n > 0);
+        answers[std::string(1, static_cast<char>('A' + i))] = Json(Json::Array{n > 0 ? sx / n : 0, n > 0 ? sy / n : 0});
+    }
+    Json args = Json::parse(R"({"seed":3,"count":4,"size":200})");
+    args["answers"] = answers;
+    Json score = e.Call("vision.calibrate", args);
+    CHECK(score["result"]["passed"].asBool() && score["result"]["max"].asNumber() < 0.6);
+    answers["B"][0] = answers["B"][0].asNumber() + 6;
+    args["answers"] = answers;
+    score = e.Call("vision.calibrate", args);
+    CHECK(!score["result"]["passed"].asBool() && score["result"]["errors"]["B"].asNumber() > 5 && !score["result"]["hint"].asString().empty());
+    answers.erase("C");
+    args["answers"] = answers;
+    CHECK(e.Call("vision.calibrate", args)["result"]["missing"].asInt() == 1);
+
+    // skeleton2d.overlay: the rig over its picture; bones come back with picture coordinates.
+    CHECK(Call(e, "skeleton2d.create", R"({"path":"arm.skel2d.json","values":{"pixelsPerUnit":20,
+      "bones":[{"name":"root"},{"name":"arm","parent":"root","length":1},{"name":"hand","parent":"arm","x":1}],
+      "slots":[{"name":"arm","bone":"arm","attachment":"arm"}],
+      "skins":{"default":{"arm":{"arm":{"image":"picture.png","pivot":[0,0.5],"vertices":[0,0,20,0,40,0,0,20,20,20,40,20],
+        "triangles":[0,3,4,0,4,1,1,4,5,1,5,2],"weights":[[["arm",1]],[["arm",0.5],["hand",0.5]],[["hand",1]],[["arm",1]],[["arm",0.5],["hand",0.5]],[["hand",1]]]}}}},
+      "clips":{"bend":{"bones":{"hand":{"rotate":[[0,0],[1,90]]}}}}}})")["ok"].asBool());
+    Json overlay = Call(e, "skeleton2d.overlay", R"({"path":"arm.skel2d.json","clip":"bend","time":1,"weights":"hand","size":300})");
+    CHECK(overlay["ok"].asBool() && overlay["result"]["vertices"].asInt() == 6 && overlay["result"]["bones"].size() == 3);
+    CHECK(FileExists(project + "/.oe/vision/skeleton.png"));
+    // The hand bends up: its joint is right of the root at the same height in the picture.
+    const Json& bones = overlay["result"]["bones"];
+    CHECK(bones[2]["pixel"][0].asNumber() > bones[0]["pixel"][0].asNumber() + 100 && std::fabs(bones[2]["pixel"][1].asNumber() - bones[0]["pixel"][1].asNumber()) < 2);
+    CHECK(std::fabs(bones[2]["world"][0].asNumber() - 1) < 1e-4);
+    CHECK(Call(e, "skeleton2d.overlay", R"({"path":"arm.skel2d.json","weights":"elbow"})")["error"]["code"].asString() == "not_found");
+    CHECK(Call(e, "skeleton2d.overlay", R"({"path":"arm.skel2d.json","clip":"walk"})")["error"]["code"].asString() == "not_found");
+    CHECK(Call(e, "skeleton2d.overlay", R"({})")["error"]["code"].asString() == "invalid_args");
+    RemoveAll(project);
+}
+
 TEST(AnimationPropertyTracks) {
     Engine e;
     std::string error;

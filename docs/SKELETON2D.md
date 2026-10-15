@@ -127,6 +127,31 @@ slot or clip ever shows, clips without duration. File writes are not part of sce
   slot `color` `[t, color, alpha?]` fades. `duration` defaults to the last key; `loop` defaults to true. `events`
   `{time, name}` reach `onAnimationEvent`. Rotations interpolate as numbers (350 -> 10 turns back through 180).
 
+## Reading coordinates (agent eyes)
+
+Rigging from a picture needs pixel positions (where the elbow is, where the hair starts). A model looking at a
+whole picture guesses them to within a few percent; these commands make the reading exact and checkable. Each
+writes a PNG (default under `.oe/vision/`, never packaged) for the agent to read and returns how to map it back.
+
+- `vision.calibrate {seed?, count?, size?}` draws labeled dots at secret positions. Read their centres and send
+  them back with the same seed, count and size: `vision.calibrate {seed, answers: {"A": [x, y], ...}}` returns the
+  error of each, `mean`, `max` and `passed` (every dot within `tolerance`, default 3 px). An agent runs this once
+  before it rigs; if it cannot pass, it tells the user that its automatic rig may be off.
+- `image.grid {path, rect?, step?, scale?, marks?, out?}` zooms into `rect` of an image (nearest neighbour, 1..32x,
+  about 1024 px wide by default) and draws grid lines every `step` image pixels (every fifth yellow and labeled,
+  the others labeled too when there is room), transparent pixels over a checkerboard. Labels are image pixel
+  coordinates (x right, y down) of the line at the left/top edge of that pixel. `marks: [[x, y, "label"], ...]` draws
+  crosshairs where the agent thinks points are, so a guess is checked in one more look. The reply gives `rect`,
+  `scale` and `origin` (where the image starts in the picture).
+- `skeleton2d.overlay {path | id, clip?, time?, skin?, weights?, mesh?, labels?, size?, out?}` renders the skeleton
+  (setup pose, or a clip at a time; looping clips wrap the time) and draws the rig over it: bones as yellow lines
+  along their length with named joints, the parent links, mesh edges and vertices, and with `weights: "bone"` that
+  bone's weight per vertex from blue (0) to red (1). The reply lists every bone's `pixel` position in the picture
+  and `world` position, and `missingImages`.
+
+A bone points along its local +X: `length` is drawn that way and a child placed at `x: length` sits at its tip. An
+upright torso bone therefore has `rotation: 90`, a hanging leg `rotation: -90`.
+
 ## Rendering
 
 A skeleton is drawn as one skinned mesh through the same path as skinned 3D models: the attachments of the current
@@ -151,9 +176,12 @@ unchecked line.
   D3D11 frames alike. Not in M1: `light2D`, `ySort`, masks and pixel-perfect bone snapping for skeletons, per-vertex
   (free-form) deform keys, IK; an animated slot color makes a new mesh each frame (fine for fades, not for hundreds
   of characters). The web and Android runtimes are not rebuilt yet.
-- [ ] **M2 — Agent eyes.** `image.grid {path, rect, step, out}` (zoomed coordinate grid over an image region),
-  `vision.calibrate` (marks at known pixels; the agent's answers are scored before it rigs), `skeleton2d.overlay`
-  (bones, slots, mesh edges and weights drawn over the setup pose or a clip frame).
+- [x] **M2 — Agent eyes.** `render/ImageDraw.{h,cpp}` (lines, circles, rectangles, pixel-font text with outline on an
+  `Image`), `api/VisionCommands.cpp` (`image.grid` with marks, `vision.calibrate` with deterministic layouts and
+  scoring, `WriteToolImage`), `skeleton2d.overlay` (render + bones, links, mesh, weight heat map, non-overlapping
+  labels). Test `Skeleton2DAgentVision` (grid size and errors, calibration determinism, dot centres found in the
+  pixels pass and moved ones fail, overlay bone positions). Checked by doing it: calibration seed 7 read through
+  `image.grid` zooms and marks, all six dots at 0 px error; overlays of the test humanoid read correctly.
 - [ ] **M3 — Build from a draft.** A semantic draft (`*.skel2d-draft.json`: body regions as polygons/ellipses and
   joints as points, from templates `humanoid-front`, `humanoid-side`, `quadruped`) and `skeleton2d.build`: cut part
   images out of one illustration (or take separate part images), outline them from alpha, triangulate, weight
