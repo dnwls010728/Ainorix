@@ -21,6 +21,11 @@
 #include "scene/Skeleton2D.h"
 
 namespace oe {
+
+// docs/SKELETON2D_AGENT.md, embedded by CMakeLists.txt (generated/EmbeddedGuides.cpp).
+extern const unsigned char kSkeleton2DAgentGuide[];
+extern const size_t kSkeleton2DAgentGuideSize;
+
 namespace {
 
 constexpr const char* kFormatHint = "Fix the field the message names; the format is in docs/SKELETON2D.md (\"Asset format\"). skeleton2d.check reports every problem.";
@@ -228,6 +233,23 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                out["warnings"] = Warnings(engine, *def);
                return out;
            }});
+    r.Add({"skeleton2d.guide",
+           "The steps an agent follows to turn a character picture into an animated Skeleton2D, each with its check (Markdown). Read it "
+           "before rigging.",
+           Params().Opt("step", "integer", "Only this step (0..7) instead of the whole guide."), false, [](Engine&, const Json& args) {
+               const std::string text(reinterpret_cast<const char*>(kSkeleton2DAgentGuide), kSkeleton2DAgentGuideSize);
+               Json out = Json::MakeObject();
+               if (!args.has("step")) {
+                   out["guide"] = text;
+                   return out;
+               }
+               const std::string heading = "\n## " + std::to_string(args["step"].asInt()) + ".";
+               const size_t start = text.find(heading);
+               if (start == std::string::npos) throw ApiError("not_found", "no such step", "Steps are 0..7.");
+               const size_t end = text.find("\n## ", start + heading.size());
+               out["guide"] = text.substr(start + 1, end == std::string::npos ? std::string::npos : end - start - 1);
+               return out;
+           }});
     r.Add({"skeleton2d.draft_template",
            "A starting rig draft for a kind of character: joints (with where each goes), bones and parts in draw order. With an image, "
            "joints and regions are first guesses from its opaque bounds and body proportions, to correct with image.grid.",
@@ -304,8 +326,8 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                .Req("recipe", "string", "idle | walk | run | jump | attack | hit | death.")
                .Opt("name", "string", "Clip name (default: the recipe's). An existing clip of that name is replaced.")
                .Opt("view", "string", "front or side (default: side when the rig has thigh_front).")
-               .Opt("params", "object", "Numbers: duration, strength (0..3, scales every move); walk/run: stride, knee, arm, bob, lean; idle: breath; "
-                                         "jump: lift (0 when physics moves the body); attack: hand (l/r or front/back).")
+               .Opt("params", "object", "Numbers: duration, strength (0..3, scales every move); walk/run: stride, knee, arm, elbow, bob, lean; idle: breath; "
+                                         "jump: lift (0 when physics moves the body), crouch (how far the body sinks, of the figure: 0.06); attack: hand (l/r or front/back).")
                .Opt("bones", "object", "Role -> bone name for rigs named otherwise: {\"hip\": \"pelvis\", \"thigh_l\": \"leg_l\"}.")
                .Opt("dryRun", "boolean", "Return the clip without writing it."),
            false, [](Engine& engine, const Json& args) { return Skeleton2DMotion(engine, args); }});
@@ -331,6 +353,7 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                .Opt("description", "string", "attachment: what the new picture shows.")
                .Opt("reach", "number", "fill: how far from the part's own pixels to repaint, in pixels (default 15% of the part).")
                .Opt("grow", "integer", "Grow the part's canvas by this many pixels on every side first (room to paint beyond its cut).")
+               .Opt("redraw", "boolean", "fill: ask for the whole part drawn again on its own instead of only the hidden area (for a part mostly hidden behind others, like a far leg).")
                .Opt("skin", "string", "Skin to use.")
                .Opt("outDir", "string", "Folder for the requests (default .oe/variants/<skeleton name>)."),
            false, [](Engine& engine, const Json& args) { return Skeleton2DVariantRequests(engine, args); }});

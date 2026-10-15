@@ -121,6 +121,11 @@ struct Part {
     // Results.
     int x0 = 0, y0 = 0, w = 0, h = 0;  // the cut, in illustration pixels
     Image cut;
+    // A repaint kept from before (skeleton2d.variant_import): `cut` is then the repainted picture (its canvas maybe
+    // grown), `plain` the cut written beside it.
+    bool filled = false;
+    Image plain;
+    std::string plainPath;
     int pixels = 0;
     std::string path;
     Json vertices = Json::MakeArray(), triangles = Json::MakeArray(), weights = Json::MakeArray();
@@ -409,6 +414,47 @@ Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, 
         }
     }
 
+    // Repaints imported for a part (skeleton2d.variant_import) stay when the part is cut exactly as before: the part
+    // then keeps its repainted picture (on a canvas grown evenly on every side) and is meshed over it.
+    int keptFills = 0;
+    {
+        const std::string fullOut = engine.ResolvePath(out);
+        std::string text, parseError;
+        const Json old = ReadTextFile(fullOut, text) ? Json::parse(text, &parseError) : Json();
+        const std::string dir = !partsDirArg.empty() ? partsDirArg : out.substr(0, out.size() - std::string(".skel2d.json").size()) + "-parts";
+        for (Part& part : parts) {
+            if (part.w == 0 || part.kind == Part::Picture || !parseError.empty()) continue;
+            const Json* skins = old.find("skins");
+            const Json* skin = skins ? skins->find("default") : nullptr;
+            const Json* slot = skin ? skin->find(part.name) : nullptr;
+            const Json* before = slot ? slot->find(part.name) : nullptr;
+            if (!before || !(*before)["filled"].asBool()) continue;
+            const std::string plainPath = dir + "/" + part.name + ".png", filledPath = (*before)["image"].asString();
+            engine.Assets().Forget(plainPath);
+            engine.Assets().Forget(filledPath);
+            const auto plain = engine.Assets().GetTexture(plainPath), filledPicture = engine.Assets().GetTexture(filledPath);
+            if (!plain || !filledPicture || plain->width != part.w || plain->height != part.h) continue;
+            bool same = true;
+            for (size_t i = 0; same && i < plain->texels.size(); ++i) {
+                const uint8_t* p = &part.cut.rgba[i * 4];
+                same = plain->texels[i] == (static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24);
+            }
+            const int grow = (filledPicture->width - part.w) / 2;
+            if (!same || grow < 0 || filledPicture->width - part.w != 2 * grow || filledPicture->height - part.h != 2 * grow) continue;
+            part.plain = part.cut;
+            part.plainPath = plainPath;
+            part.cut.width = filledPicture->width;
+            part.cut.height = filledPicture->height;
+            part.cut.rgba.resize(filledPicture->texels.size() * 4);
+            for (size_t i = 0; i < filledPicture->texels.size(); ++i)
+                for (int c = 0; c < 4; ++c) part.cut.rgba[i * 4 + static_cast<size_t>(c)] = static_cast<uint8_t>((filledPicture->texels[i] >> (8 * c)) & 255);
+            part.x0 -= grow, part.y0 -= grow, part.w = filledPicture->width, part.h = filledPicture->height;
+            part.path = filledPath;
+            part.filled = true;
+            ++keptFills;
+        }
+    }
+
     // Meshes and weights: each vertex leans on the part's bones by distance to them (closer = more).
     for (Part& part : parts) {
         if (part.w == 0 || !part.mesh) continue;
@@ -479,12 +525,13 @@ Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, 
         slot["bone"] = bone.name;
         slot["attachment"] = part.name;
         slots.push(slot);
-        if (part.kind != Part::Picture) part.path = partsDir + "/" + part.name + ".png";
+        if (part.kind != Part::Picture && !part.filled) part.path = partsDir + "/" + part.name + ".png";
         // The cut's top-left corner, in the bone's space; the image stays upright in the setup pose.
         const P2 rel = world({static_cast<float>(part.x0), static_cast<float>(part.y0)}) - world(bone.from);
         const float c = std::cos(-bone.angle), s = std::sin(-bone.angle);
         Json a = Json::MakeObject();
         a["image"] = part.path;
+        if (part.filled) a["filled"] = true;
         a["pivot"] = Json(Json::Array{0, 1});
         a["x"] = Round4(c * rel.x - s * rel.y);
         a["y"] = Round4(s * rel.x + c * rel.y);
@@ -503,19 +550,21 @@ Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, 
     Json skins = Json::MakeObject();
     skins["default"] = skin;
     skeleton["skins"] = skins;
-    // Clips of the skeleton being rebuilt stay.
+    // Clips, springs and IK of the skeleton being rebuilt stay (repaints were kept above).
     const std::string full = engine.ResolvePath(out);
     std::string previous;
     if (ReadTextFile(full, previous)) {
         std::string parseError;
         const Json old = Json::parse(previous, &parseError);
-        if (parseError.empty() && old["clips"].isObject() && old["clips"].size() > 0) skeleton["clips"] = old["clips"];
+        if (parseError.empty())
+            for (const char* kept : {"springs", "ik", "clips"})  // what was added to the asset after the build
+                if (old[kept].size() > 0) skeleton[kept] = old[kept];
     }
     std::string error;
     if (!ParseSkeleton2D(skeleton, &error)) {
-        if (skeleton.has("clips")) {
-            throw ApiError("invalid_skeleton", "the rebuilt skeleton does not fit the clips of " + out + ": " + error,
-                           "A bone or slot the clips key is gone. Keep its name in the draft, or remove the clip with skeleton2d.set {path, clip, remove: true}.");
+        if (skeleton.has("clips") || skeleton.has("springs") || skeleton.has("ik")) {
+            throw ApiError("invalid_skeleton", "the rebuilt skeleton does not fit the clips, springs or ik of " + out + ": " + error,
+                           "A bone or slot they name is gone. Keep its name in the draft, or remove what names it (skeleton2d.set {path, clip, remove: true} for a clip).");
         }
         throw ApiError("invalid_skeleton", error, kDraftHint);
     }
@@ -617,10 +666,11 @@ Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, 
     if (!dryRun) {
         for (const Part& part : parts) {
             if (part.w == 0 || part.kind == Part::Picture) continue;
-            const std::string partFull = engine.ResolvePath(part.path);
+            const std::string& file = part.filled ? part.plainPath : part.path;
+            const std::string partFull = engine.ResolvePath(file);
             CreateDirectories(ParentPath(partFull));
-            if (!WritePng(partFull, part.cut, true)) throw ApiError("write_failed", "cannot write " + part.path);
-            engine.Assets().Forget(part.path);
+            if (!WritePng(partFull, part.filled ? part.plain : part.cut, true)) throw ApiError("write_failed", "cannot write " + file);
+            engine.Assets().Forget(file);
         }
         CreateDirectories(ParentPath(full));
         if (!WriteTextFile(full, skeleton.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + out);
@@ -639,6 +689,7 @@ Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, 
         p["image"] = part.path;
         p["rect"] = Json(Json::Array{part.x0, part.y0, part.w, part.h});
         p["pixels"] = part.pixels;
+        if (part.filled) p["filled"] = true;
         if (part.mesh) {
             p["vertices"] = static_cast<int>(part.vertices.size() / 2);
             p["triangles"] = static_cast<int>(part.triangles.size() / 3);
@@ -656,6 +707,7 @@ Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, 
         result["draftImage"] = overlayPath;
     }
     if (skeleton.has("clips")) result["keptClips"] = static_cast<int>(skeleton["clips"].size());
+    if (keptFills) result["keptFills"] = keptFills;
     result["warnings"] = warnings;
     result["next"] = dryRun ? "Look at draftImage; fix the draft, then build without dryRun."
                             : "Check the rig with skeleton2d.overlay {path: out} and the draft picture, then add clips (skeleton2d.set {path, clip, values}).";
@@ -857,9 +909,22 @@ Json Skeleton2DDraftTemplate(Engine& engine, const std::string& kind, const std:
     // halfWidth measures across a line: across a short vertical one is the horizontal run (no wider than the shoulders).
     const float waistHalf = std::min((right - left) * 0.5f + pad, halfWidth({hip.x, (chest.y + hip.y) * 0.5f - 1}, {hip.x, (chest.y + hip.y) * 0.5f + 1}, 0.09f * h));
     const float midY = (chest.y + hip.y) * 0.5f;
-    parts.push(part("torso", poly({{left - pad, topY}, {right + pad, topY}, {right + pad, shoulderY}, {hip.x + waistHalf, midY}, {hip.x + hipHalf, bottomY},
-                                   {hip.x - hipHalf, bottomY}, {hip.x - waistHalf, midY}, {left - pad, shoulderY}}),
-                    {"hip", "chest"}));
+    if (isFront) {
+        parts.push(part("torso", poly({{left - pad, topY}, {right + pad, topY}, {right + pad, shoulderY}, {hip.x + waistHalf, midY}, {hip.x + hipHalf, bottomY},
+                                       {hip.x - hipHalf, bottomY}, {hip.x - waistHalf, midY}, {left - pad, shoulderY}}),
+                        {"hip", "chest"}));
+    } else {
+        // Seen from the side the shoulders are one point: the body is as deep as the picture is wide across it, measured
+        // at the chest, the waist and the hips, each band centred on what it measured.
+        auto depth = [&](float y, float fallback) {
+            const Across a = across({chest.x, y - 1}, {chest.x, y + 1}, fallback);
+            return std::make_pair(chest.x + a.shift.x, std::min(a.half, 0.16f * h));
+        };
+        const auto upper = depth(chest.y, 0.08f * h), mid = depth(midY, 0.08f * h), low = depth(hip.y, 0.08f * h);
+        parts.push(part("torso", poly({{upper.first - upper.second, topY}, {upper.first + upper.second, topY}, {mid.first + mid.second, midY},
+                                       {low.first + low.second, bottomY}, {low.first - low.second, bottomY}, {mid.first - mid.second, midY}}),
+                        {"hip", "chest"}));
+    }
     // The head: an ellipse from the neck to the top of the head, as wide as the face is across its middle.
     const P2 top = at["head_top"], middle = (neck + top) * 0.5f;
     const float ry = std::fabs(neck.y - top.y) * 0.5f * 1.08f + 4;

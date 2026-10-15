@@ -127,6 +127,14 @@ Validate a 2D skeleton (a file or values) without writing: the first error with 
 | `path` | string |  | *.skel2d.json to check. |
 | `values` | object |  | An asset to check instead of a file. |
 
+### `skeleton2d.guide`
+
+The steps an agent follows to turn a character picture into an animated Skeleton2D, each with its check (Markdown). Read it before rigging.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `step` | integer |  | Only this step (0..7) instead of the whole guide. |
+
 ### `skeleton2d.draft_template`
 
 A starting rig draft for a kind of character: joints (with where each goes), bones and parts in draw order. With an image, joints and regions are first guesses from its opaque bounds and body proportions, to correct with image.grid.
@@ -179,7 +187,7 @@ Write a clip from a recipe: idle, walk, run, jump, attack, hit, death, for a hum
 | `recipe` | string | yes | idle | walk | run | jump | attack | hit | death. |
 | `name` | string |  | Clip name (default: the recipe's). An existing clip of that name is replaced. |
 | `view` | string |  | front or side (default: side when the rig has thigh_front). |
-| `params` | object |  | Numbers: duration, strength (0..3, scales every move); walk/run: stride, knee, arm, bob, lean; idle: breath; jump: lift (0 when physics moves the body); attack: hand (l/r or front/back). |
+| `params` | object |  | Numbers: duration, strength (0..3, scales every move); walk/run: stride, knee, arm, elbow, bob, lean; idle: breath; jump: lift (0 when physics moves the body), crouch (how far the body sinks, of the figure: 0.06); attack: hand (l/r or front/back). |
 | `bones` | object |  | Role -> bone name for rigs named otherwise: {"hip": "pelvis", "thigh_l": "leg_l"}. |
 | `dryRun` | boolean |  | Return the clip without writing it. |
 
@@ -216,6 +224,7 @@ Write image-generator requests for pictures a skeleton is missing: fill (the are
 | `description` | string |  | attachment: what the new picture shows. |
 | `reach` | number |  | fill: how far from the part's own pixels to repaint, in pixels (default 15% of the part). |
 | `grow` | integer |  | Grow the part's canvas by this many pixels on every side first (room to paint beyond its cut). |
+| `redraw` | boolean |  | fill: ask for the whole part drawn again on its own instead of only the hidden area (for a part mostly hidden behind others, like a far leg). |
 | `skin` | string |  | Skin to use. |
 | `outDir` | string |  | Folder for the requests (default .oe/variants/<skeleton name>). |
 

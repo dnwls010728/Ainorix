@@ -197,7 +197,7 @@ each other's changes.
 
 ### 3.3 The default team of a new project
 
-`oe new <dir>` writes `.oe/team/team.json` with five agents (`engine/team/TeamDefaults.cpp`,
+`oe new <dir>` writes `.oe/team/team.json` with six agents (`engine/team/TeamDefaults.cpp`,
 `SeedDefaultTeam`; `--no-team` skips it; a project that already has agents is never touched).
 An existing project without agents (made before teams, or with `--no-team`) gets the same team
 from `team.add_defaults` or the **Add the default team** button of the empty Team panel:
@@ -207,7 +207,8 @@ from `team.add_defaults` or the **Add the default team** button of the empty Tea
 | Lead (the lead) | Claude, `sonnet` | gets messages without a mention; small changes itself, larger ones through `team_delegate` with checkable acceptance lines |
 | Core | Claude, `opus` | hard gameplay code, rules, balance; reached by delegation or by name |
 | Content | Claude, `sonnet` | scenes, prefabs, UI, texts |
-| Art | Codex, default model | images and sound |
+| Art | Codex, default model | images and sound; generates the rigger's repaint requests |
+| Rigger | Claude, `sonnet` | 2D skeletal characters: follows `skeleton2d.guide` (picture -> draft -> build -> clips -> checks), lists the pictures it needs for Art |
 | QA | Claude, `sonnet` | play-tests through the editor, edits nothing |
 
 All have access `edit` (no escalation), `maxHops` stays 0, and `rotateAboveInputTokens` is 150000 so

@@ -119,6 +119,7 @@ Json Skeleton2DVariantRequests(Engine& engine, const Json& args) {
     if (kind != "fill" && kind != "attachment") throw ApiError("invalid_args", "kind must be fill or attachment");
     const std::string skin = args["skin"].asString("");
     const int grow = std::clamp(args["grow"].asInt(0), 0, 512);
+    const bool redraw = kind == "fill" && args["redraw"].asBool();
     const std::string outDir = args["outDir"].asString(".oe/variants/" + Stem(Stem(path)));
 
     Skeleton2DPose setupPose = Skeleton2DSetupPose(def);
@@ -186,6 +187,8 @@ Json Skeleton2DVariantRequests(Engine& engine, const Json& args) {
             // A little wider, so the repaint blends into what stays.
             const std::vector<float> near = Distance(edit, w, h);
             for (size_t k = 0; k < edit.size(); ++k) edit[k] = near[k] <= 2.0f;
+            // redraw: the whole part is drawn again on its own (a part mostly hidden, where a partial repaint cannot line up).
+            if (redraw) std::fill(edit.begin(), edit.end(), 1);
         }
         int editCount = 0, opaqueCount = 0;
         for (size_t k = 0; k < edit.size(); ++k) editCount += edit[k], opaqueCount += source.rgba[k * 4 + 3] > 127;
@@ -195,9 +198,16 @@ Json Skeleton2DVariantRequests(Engine& engine, const Json& args) {
         int most = 0;
         for (const auto& c : coverers) if (c.second > most) most = c.second, coverer = def.slots[static_cast<size_t>(c.first)].name;
         // Every part that hid a good share of it, for the prompt: the "arm_r", "arm_l" and "head" parts.
+        // Redrawing a whole part: parts hanging below it (a foot under a leg) are the same limb, not things in front to leave
+        // out (a partial fill names every part that hid the area).
+        auto below = [&](int slotIndex) {
+            for (int b = def.slots[static_cast<size_t>(slotIndex)].bone; b >= 0; b = def.bones[static_cast<size_t>(b)].parent)
+                if (b == slot.bone) return true;
+            return false;
+        };
         std::vector<std::string> fronts;
         for (const auto& c : coverers)
-            if (c.second * 10 >= most) fronts.push_back("\"" + def.slots[static_cast<size_t>(c.first)].name + "\"");
+            if (c.second * 10 >= most && !(redraw && below(c.first))) fronts.push_back("\"" + def.slots[static_cast<size_t>(c.first)].name + "\"");
         std::string behind = fronts.empty() ? std::string("another part") : "the " + fronts[0];
         for (size_t k = 1; k < fronts.size(); ++k) behind += (k + 1 == fronts.size() ? " and " : ", ") + fronts[k];
         if (!fronts.empty()) behind += fronts.size() > 1 ? " parts" : " part";
@@ -207,7 +217,7 @@ Json Skeleton2DVariantRequests(Engine& engine, const Json& args) {
                 uint8_t* m = At(mask, x, y);
                 m[0] = m[1] = m[2] = 255;
                 m[3] = edit[static_cast<size_t>(y * w + x)] ? 0 : 255;
-                if (edit[static_cast<size_t>(y * w + x)] && kind == "fill") {
+                if (edit[static_cast<size_t>(y * w + x)] && kind == "fill" && !redraw) {
                     uint8_t* p = At(marked, x, y);
                     p[0] = kMagenta.r, p[1] = kMagenta.g, p[2] = kMagenta.b, p[3] = 255;
                 }
@@ -227,14 +237,21 @@ Json Skeleton2DVariantRequests(Engine& engine, const Json& args) {
                 for (int x = 0; x < w; ++x) std::copy(At(image, x, y), At(image, x, y) + 4, At(padded, x + padX, y + padY));
             return padded;
         };
-        const std::string name = kind == "fill" ? "fill" : args["name"].asString();
+        const std::string name = kind == "fill" ? (redraw ? "redraw" : "fill") : args["name"].asString();
         const std::string folder = outDir + "/" + slot.name + "-" + name;
         WriteImage(engine, folder + "/source.png", pad(source, false));
         WriteImage(engine, folder + "/mask.png", pad(mask, true));
         WriteImage(engine, folder + "/edit.png", pad(marked, false));
         const std::string size = std::to_string(pw) + " x " + std::to_string(ph);
         std::string prompt;
-        if (kind == "fill") {
+        if (redraw) {
+            prompt = "Image 1 is one cut-out part, \"" + slot.name + "\", of a 2D game character drawn for skeletal animation; image 2 is the whole "
+                     "character. Much of it was hidden behind " + behind + " in the original drawing, so image 1 shows pieces of those parts "
+                     "and cut edges. Redraw image 1 as \"" + slot.name + "\" alone, complete, as it would look if nothing were in front of it, "
+                     "in exactly the same position, pose and scale on the canvas (its visible pixels mark where it is): the same art style, "
+                     "colours, shading and outline. None of " + behind + " may appear. Output one image of exactly " + size +
+                     " pixels, transparent background, no text, no frame.";
+        } else         if (kind == "fill") {
             prompt = "Image 1 is one cut-out part, \"" + slot.name + "\", of a 2D game character drawn for skeletal animation; image 2 is the whole "
                      "character. The magenta area of image 1 was hidden behind " + behind + " in the original drawing. Repaint only the magenta "
                      "area so that \"" + slot.name + "\" continues there naturally, as if " + behind + " were not in front of it: the same art "
@@ -258,6 +275,7 @@ Json Skeleton2DVariantRequests(Engine& engine, const Json& args) {
         request["image"] = a.image;
         request["rect"] = Json(Json::Array{rx, ry, rw, rh});
         request["grow"] = grow;
+        if (redraw) request["redraw"] = true;
         request["crop"] = Json(Json::Array{padX, padY, w, h});  // the part's canvas inside the padded pictures
         request["source"] = folder + "/source.png";
         request["mask"] = folder + "/mask.png";
@@ -343,24 +361,54 @@ Json Skeleton2DVariantImport(Engine& engine, const Json& args) {
     const bool fill = kind == "fill";
     const int maxShift = fill ? std::clamp(args["maxShift"].asInt(8), 0, 32) : 0;
     auto keep = [&](int x, int y) { return At(mask, x, y)[3] > 127 && At(source, x, y)[3] > 127; };
+    // Generators redraw a picture a little moved and often a little larger or smaller: a source pixel is looked up at
+    // the result's centre + (pixel - centre) * scale + shift. Scales first (coarse sampling), then shifts at the best scale.
+    const float centerX = static_cast<float>(w) * 0.5f, centerY = static_cast<float>(h) * 0.5f;
+    float bestScale = 1;
     int bestX = 0, bestY = 0;
+    auto mapped = [&](int x, int y, float scale, int dx, int dy, int& rx, int& ry) {
+        rx = static_cast<int>(std::lround(centerX + (static_cast<float>(x) - centerX) * scale)) + dx;
+        ry = static_cast<int>(std::lround(centerY + (static_cast<float>(y) - centerY) * scale)) + dy;
+        return rx >= 0 && ry >= 0 && rx < w && ry < h;
+    };
+    auto score = [&](float scale, int dx, int dy, int stride) {
+        double sum = 0;
+        int n = 0;
+        for (int y = 0; y < h; y += stride)
+            for (int x = 0; x < w; x += stride) {
+                int rx, ry;
+                if (!keep(x, y) || !mapped(x, y, scale, dx, dy, rx, ry)) continue;
+                const uint8_t *s = At(source, x, y), *r = At(result, rx, ry);
+                sum += std::abs(s[0] - r[0]) + std::abs(s[1] - r[1]) + std::abs(s[2] - r[2]);
+                ++n;
+            }
+        // A tiny cost per pixel of shift and per step of scale: in flat areas every fit is as good, and then none is right.
+        return n > 0 ? sum / n + 0.05 * (std::abs(dx) + std::abs(dy)) + 20.0 * std::fabs(scale - 1) : 1e30;
+    };
     double best = 1e30;
-    for (int dy = -maxShift; dy <= maxShift; ++dy)
-        for (int dx = -maxShift; dx <= maxShift; ++dx) {
-            double sum = 0;
-            int n = 0;
-            for (int y = 0; y < h; y += 2)
-                for (int x = 0; x < w; x += 2) {
-                    if (!keep(x, y) || x + dx < 0 || y + dy < 0 || x + dx >= w || y + dy >= h) continue;
-                    const uint8_t *s = At(source, x, y), *r = At(result, x + dx, y + dy);
-                    sum += std::abs(s[0] - r[0]) + std::abs(s[1] - r[1]) + std::abs(s[2] - r[2]);
-                    ++n;
+    if (fill)
+        for (int step = -4; step <= 4; ++step) {
+            const float scale = 1 + 0.02f * static_cast<float>(step);
+            for (int dy = -maxShift; dy <= maxShift; dy += 2)
+                for (int dx = -maxShift; dx <= maxShift; dx += 2) {
+                    const double s = score(scale, dx, dy, 4);
+                    if (s < best) best = s, bestScale = scale, bestX = dx, bestY = dy;
                 }
-            // A tiny cost per pixel of shift: in flat areas every shift fits, and then none is right.
-            const double score = n > 0 ? sum / n + 0.05 * (std::abs(dx) + std::abs(dy)) : 1e30;
-            if (score < best) best = score, bestX = dx, bestY = dy;
         }
-    auto shifted = [&](int x, int y) { return At(result, std::clamp(x + bestX, 0, w - 1), std::clamp(y + bestY, 0, h - 1)); };
+    // Every shift near the best one, at the best scale, more finely.
+    const int coarseX = bestX, coarseY = bestY;
+    best = 1e30;
+    for (int dy = coarseY - 2; dy <= coarseY + 2; ++dy)
+        for (int dx = coarseX - 2; dx <= coarseX + 2; ++dx) {
+            if (std::abs(dx) > maxShift || std::abs(dy) > maxShift) continue;
+            const double s = score(bestScale, dx, dy, 2);
+            if (s < best) best = s, bestX = dx, bestY = dy;
+        }
+    auto shifted = [&](int x, int y) {
+        int rx, ry;
+        mapped(x, y, bestScale, bestX, bestY, rx, ry);
+        return At(result, std::clamp(rx, 0, w - 1), std::clamp(ry, 0, h - 1));
+    };
     double sums[2][3] = {{0, 0, 0}, {0, 0, 0}};
     int kept = 0;
     for (int y = 0; y < h; ++y)
@@ -435,7 +483,10 @@ Json Skeleton2DVariantImport(Engine& engine, const Json& args) {
     if (!attachment) throw ApiError("not_found", "the skeleton no longer has attachment '" + attachmentName + "' in slot '" + slotName + "'");
     Json updated = *attachment;
     const std::string folder = Folder(request["image"].asString());
-    const std::string imagePath = fill ? folder + Stem(request["image"].asString()) + "-filled.png" : folder + slotName + "-" + request["name"].asString() + ".png";
+    // A picture filled before is replaced under its own name (no -filled-filled).
+    std::string stem = Stem(request["image"].asString());
+    if (stem.size() > 7 && stem.compare(stem.size() - 7, 7, "-filled") == 0) stem.resize(stem.size() - 7);
+    const std::string imagePath = fill ? folder + stem + "-filled.png" : folder + slotName + "-" + request["name"].asString() + ".png";
     WriteImage(engine, imagePath, out);
     updated["image"] = imagePath;
     if (fill) updated["filled"] = true;
@@ -519,6 +570,7 @@ Json Skeleton2DVariantImport(Engine& engine, const Json& args) {
     response["slot"] = slotName;
     response["attachment"] = newName;
     response["shift"] = Json(Json::Array{bestX, bestY});
+    response["scale"] = std::round(bestScale * 100) / 100;
     response["tint"] = Json(Json::Array{std::round(gain[0] * 100) / 100, std::round(gain[1] * 100) / 100, std::round(gain[2] * 100) / 100});
     if (fill) response["difference"] = std::round(residual * 1000) / 1000;
     response["keyedBackground"] = keyed;

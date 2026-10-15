@@ -1,0 +1,551 @@
+{
+  "image": "art/courier.png",
+  "height": 2,
+  "joints": {
+    "head_top": [
+      545,
+      60
+    ],
+    "neck": [
+      525,
+      320
+    ],
+    "chest": [
+      555,
+      477
+    ],
+    "hip": [
+      555,
+      790
+    ],
+    "shoulder_front": [
+      505,
+      457
+    ],
+    "elbow_front": [
+      495,
+      627
+    ],
+    "wrist_front": [
+      530,
+      827
+    ],
+    "hand_tip_front": [
+      545,
+      887
+    ],
+    "shoulder_back": [
+      530,
+      460
+    ],
+    "elbow_back": [
+      525,
+      630
+    ],
+    "wrist_back": [
+      540,
+      820
+    ],
+    "hand_tip_back": [
+      550,
+      880
+    ],
+    "hip_front": [
+      515,
+      805
+    ],
+    "knee_front": [
+      470,
+      1107
+    ],
+    "ankle_front": [
+      455,
+      1377
+    ],
+    "toe_front": [
+      580,
+      1457
+    ],
+    "hip_back": [
+      585,
+      805
+    ],
+    "knee_back": [
+      570,
+      1107
+    ],
+    "ankle_back": [
+      585,
+      1337
+    ],
+    "toe_back": [
+      740,
+      1417
+    ],
+    "tail_root": [
+      440,
+      120
+    ],
+    "tail_tip": [
+      300,
+      400
+    ],
+    "bag_root": [
+      470,
+      615
+    ],
+    "bag_tip": [
+      420,
+      800
+    ]
+  },
+  "bones": [
+    {
+      "name": "hip",
+      "from": "hip",
+      "to": "chest"
+    },
+    {
+      "name": "chest",
+      "parent": "hip",
+      "from": "chest",
+      "to": "neck"
+    },
+    {
+      "name": "head",
+      "parent": "chest",
+      "from": "neck",
+      "to": "head_top"
+    },
+    {
+      "name": "upper_arm_back",
+      "parent": "chest",
+      "from": "shoulder_back",
+      "to": "elbow_back"
+    },
+    {
+      "name": "forearm_back",
+      "parent": "upper_arm_back",
+      "from": "elbow_back",
+      "to": "wrist_back"
+    },
+    {
+      "name": "hand_back",
+      "parent": "forearm_back",
+      "from": "wrist_back",
+      "to": "hand_tip_back"
+    },
+    {
+      "name": "thigh_back",
+      "parent": "hip",
+      "from": "hip_back",
+      "to": "knee_back"
+    },
+    {
+      "name": "shin_back",
+      "parent": "thigh_back",
+      "from": "knee_back",
+      "to": "ankle_back"
+    },
+    {
+      "name": "foot_back",
+      "parent": "shin_back",
+      "from": "ankle_back",
+      "to": "toe_back"
+    },
+    {
+      "name": "upper_arm_front",
+      "parent": "chest",
+      "from": "shoulder_front",
+      "to": "elbow_front"
+    },
+    {
+      "name": "forearm_front",
+      "parent": "upper_arm_front",
+      "from": "elbow_front",
+      "to": "wrist_front"
+    },
+    {
+      "name": "hand_front",
+      "parent": "forearm_front",
+      "from": "wrist_front",
+      "to": "hand_tip_front"
+    },
+    {
+      "name": "thigh_front",
+      "parent": "hip",
+      "from": "hip_front",
+      "to": "knee_front"
+    },
+    {
+      "name": "shin_front",
+      "parent": "thigh_front",
+      "from": "knee_front",
+      "to": "ankle_front"
+    },
+    {
+      "name": "foot_front",
+      "parent": "shin_front",
+      "from": "ankle_front",
+      "to": "toe_front"
+    },
+    {
+      "name": "ponytail",
+      "parent": "head",
+      "from": "tail_root",
+      "to": "tail_tip"
+    },
+    {
+      "name": "satchel",
+      "parent": "chest",
+      "from": "bag_root",
+      "to": "bag_tip"
+    }
+  ],
+  "parts": [
+    {
+      "name": "ponytail",
+      "polygon": [
+        [
+          350,
+          25
+        ],
+        [
+          470,
+          25
+        ],
+        [
+          480,
+          135
+        ],
+        [
+          430,
+          210
+        ],
+        [
+          405,
+          335
+        ],
+        [
+          335,
+          450
+        ],
+        [
+          230,
+          415
+        ],
+        [
+          205,
+          300
+        ],
+        [
+          215,
+          180
+        ],
+        [
+          265,
+          45
+        ]
+      ],
+      "bone": "ponytail"
+    },
+    {
+      "name": "leg_back",
+      "polygon": [
+        [
+          456,
+          749
+        ],
+        [
+          457,
+          1112
+        ],
+        [
+          496,
+          1403
+        ],
+        [
+          675,
+          1379
+        ],
+        [
+          638,
+          1101
+        ],
+        [
+          637,
+          749
+        ]
+      ],
+      "bones": [
+        "thigh_back",
+        "shin_back"
+      ]
+    },
+    {
+      "name": "foot_back",
+      "polygon": [
+        [
+          532,
+          1381
+        ],
+        [
+          735,
+          1486
+        ],
+        [
+          776,
+          1406
+        ],
+        [
+          573,
+          1301
+        ]
+      ],
+      "bone": "foot_back"
+    },
+    {
+      "name": "leg_front",
+      "polygon": [
+        [
+          468,
+          790
+        ],
+        [
+          565,
+          790
+        ],
+        [
+          560,
+          900
+        ],
+        [
+          545,
+          1000
+        ],
+        [
+          532,
+          1100
+        ],
+        [
+          515,
+          1180
+        ],
+        [
+          515,
+          1300
+        ],
+        [
+          540,
+          1395
+        ],
+        [
+          388,
+          1395
+        ],
+        [
+          390,
+          1290
+        ],
+        [
+          395,
+          1190
+        ],
+        [
+          410,
+          1100
+        ],
+        [
+          430,
+          1000
+        ],
+        [
+          455,
+          900
+        ]
+      ],
+      "bones": [
+        "thigh_front",
+        "shin_front"
+      ]
+    },
+    {
+      "name": "foot_front",
+      "polygon": [
+        [
+          385,
+          1424
+        ],
+        [
+          567,
+          1540
+        ],
+        [
+          627,
+          1446
+        ],
+        [
+          446,
+          1329
+        ]
+      ],
+      "bone": "foot_front"
+    },
+    {
+      "name": "torso",
+      "polygon": [
+        [
+          416,
+          320
+        ],
+        [
+          667,
+          320
+        ],
+        [
+          678,
+          634
+        ],
+        [
+          701,
+          848
+        ],
+        [
+          348,
+          848
+        ],
+        [
+          369,
+          634
+        ]
+      ],
+      "bones": [
+        "hip",
+        "chest"
+      ]
+    },
+    {
+      "name": "satchel",
+      "polygon": [
+        [
+          345,
+          605
+        ],
+        [
+          500,
+          595
+        ],
+        [
+          505,
+          820
+        ],
+        [
+          345,
+          820
+        ]
+      ],
+      "bone": "satchel"
+    },
+    {
+      "name": "head",
+      "ellipse": [
+        535,
+        190,
+        154,
+        144
+      ],
+      "bone": "head"
+    },
+    {
+      "name": "arm_front",
+      "polygon": [
+        [
+          440,
+          450
+        ],
+        [
+          555,
+          450
+        ],
+        [
+          560,
+          520
+        ],
+        [
+          515,
+          560
+        ],
+        [
+          515,
+          700
+        ],
+        [
+          545,
+          790
+        ],
+        [
+          548,
+          830
+        ],
+        [
+          510,
+          835
+        ],
+        [
+          480,
+          760
+        ],
+        [
+          468,
+          640
+        ],
+        [
+          462,
+          540
+        ],
+        [
+          440,
+          520
+        ]
+      ],
+      "bones": [
+        "upper_arm_front",
+        "forearm_front"
+      ]
+    },
+    {
+      "name": "hand_front",
+      "polygon": [
+        [
+          505,
+          790
+        ],
+        [
+          555,
+          795
+        ],
+        [
+          575,
+          850
+        ],
+        [
+          565,
+          905
+        ],
+        [
+          535,
+          905
+        ],
+        [
+          515,
+          860
+        ],
+        [
+          500,
+          820
+        ]
+      ],
+      "bone": "hand_front"
+    }
+  ]
+}

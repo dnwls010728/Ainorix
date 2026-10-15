@@ -12515,13 +12515,13 @@ TEST(DefaultTeamForNewProject) {
     TeamStore store;
     CHECK(store.Open(project, &error));
     const auto& agents = store.Agents();
-    CHECK(agents.size() == 5);
-    CHECK(agents[0].id == "lead" && agents[1].id == "core" && agents[2].id == "content" && agents[3].id == "art" && agents[4].id == "qa");
+    CHECK(agents.size() == 6);
+    CHECK(agents[0].id == "lead" && agents[1].id == "core" && agents[2].id == "content" && agents[3].id == "art" && agents[4].id == "rigger" && agents[5].id == "qa");
     CHECK(store.Settings().lead == "lead" && store.Settings().maxHops == 0 && !store.Settings().inheritUserTools);
     CHECK(store.Settings().rotateAboveInputTokens == 150000);
     CHECK(agents[0].backend == "claude" && agents[0].model == "sonnet");
     CHECK(agents[1].backend == "claude" && agents[1].model == "opus");
-    CHECK(agents[2].model == "sonnet" && agents[4].model == "sonnet");
+    CHECK(agents[2].model == "sonnet" && agents[4].model == "sonnet" && agents[5].model == "sonnet");
     CHECK(agents[3].backend == "codex" && agents[3].model.empty());
     for (const AgentProfile& a : agents) {
         CHECK(a.access == "edit" && a.canCall.empty());  // no escalation; the lead may call everyone by rule
@@ -12530,7 +12530,7 @@ TEST(DefaultTeamForNewProject) {
     }
     CHECK(agents[0].instructions.find("team_delegate") != std::string::npos);
     CHECK(agents[2].instructions.find("team_report") != std::string::npos);
-    CHECK(agents[4].instructions.find("never edit") != std::string::npos);
+    CHECK(agents[5].instructions.find("never edit") != std::string::npos && agents[4].instructions.find("skeleton2d.guide") != std::string::npos);
 
     // An existing team is never touched, and neither is a file that cannot be read.
     std::string before;
@@ -13486,8 +13486,8 @@ TEST(TeamAddDefaults) {
     CHECK(e.Open(project, &error));
     std::shared_ptr<TeamHandle> team = RegisterTeamCommands(e.Commands(), BuiltinBackends());
     const Json added = Call(e, "team.add_defaults");
-    CHECK(added["ok"].asBool() && added["result"]["agents"].size() == 5 && added["result"]["lead"].asString() == "lead");
-    CHECK(Call(e, "team.list")["result"]["agents"].size() == 5);
+    CHECK(added["ok"].asBool() && added["result"]["agents"].size() == 6 && added["result"]["lead"].asString() == "lead");
+    CHECK(Call(e, "team.list")["result"]["agents"].size() == 6);
     CHECK(Call(e, "team.add_defaults")["error"]["code"].asString() == "team_not_empty");
     team.reset();
     RemoveAll(project);
@@ -21081,8 +21081,35 @@ TEST(Skeleton2DBuildFromDraft) {
     renamed["parts"][1]["bones"][1] = "lower";
     args["values"] = renamed;
     Json refused = e.Call("skeleton2d.build", args);
-    CHECK(refused["error"]["code"].asString() == "invalid_skeleton" && refused["error"]["hint"].asString().find("remove the clip") != std::string::npos);
+    CHECK(refused["error"]["code"].asString() == "invalid_skeleton" && refused["error"]["hint"].asString().find("remove what names it") != std::string::npos);
     CHECK(e.Assets().GetSkeleton2D("chars/figure.skel2d.json")->FindClip("wave") != nullptr);
+
+    // A repaint (variant_import marks it filled, on a canvas grown evenly) survives a rebuild while its part is cut the
+    // same, with springs added after the build; a part cut differently goes back to its plain cut.
+    {
+        Image grown;
+        grown.width = 24 + 4;  // the body's cut (20 x 80 px of red and 2 px around) grown by 2 on every side
+        grown.height = 84 + 4;
+        grown.rgba.assign(static_cast<size_t>(grown.width * grown.height * 4), 255);
+        CHECK(WritePng(project + "/chars/figure-parts/body-filled.png", grown, true));
+        Json data = e.ReadProjectJson("chars/figure.skel2d.json");
+        data["skins"]["default"]["body"]["body"]["image"] = "chars/figure-parts/body-filled.png";
+        data["skins"]["default"]["body"]["body"]["filled"] = true;
+        data["springs"] = Json::parse(R"([{"bone":"fore"}])");
+        CHECK(WriteTextFile(project + "/chars/figure.skel2d.json", data.dump(2)));
+        args["values"] = Json::parse(draft);
+        Json kept = e.Call("skeleton2d.build", args);
+        CHECK(kept["ok"].asBool() && kept["result"]["keptFills"].asInt() == 1 && kept["result"]["parts"][0]["filled"].asBool());
+        auto rebuilt = e.Assets().GetSkeleton2D("chars/figure.skel2d.json");
+        const Skeleton2DAttachment* body = rebuilt ? rebuilt->FindAttachment("", 0, "body") : nullptr;
+        CHECK(body && body->filled && body->image == "chars/figure-parts/body-filled.png" && rebuilt->springs.size() == 1);
+        Json moved = Json::parse(draft);
+        moved["parts"][0]["rect"] = Json::parse("[38,38,22,60]");
+        args["values"] = moved;
+        Json recut = e.Call("skeleton2d.build", args);
+        CHECK(recut["ok"].asBool() && !recut["result"].has("keptFills"));
+        CHECK(e.Assets().GetSkeleton2D("chars/figure.skel2d.json")->FindAttachment("", 0, "body")->image == "chars/figure-parts/body.png");
+    }
 
     // Draft mistakes name their place.
     Json bad = Json::parse(draft);
@@ -21349,6 +21376,28 @@ TEST(Skeleton2DVariants) {
     const auto grownPicture = e.Assets().GetTexture("body-filled.png");
     CHECK(grownPicture && grownPicture->width == 28 && grownPicture->height == 88);
     CHECK(pixel(-0.25f, 1.0f) == 0x0000FF && pixel(0.6f, 3.6f) != 0xC80000);  // in place; the grown margin above the arm stays empty
+
+    // redraw: the whole part asked for again (no magenta: its own pixels show where it is), the whole answer taken.
+    Json redraw = Call(e, "skeleton2d.variant_requests", R"({"path":"figure.skel2d.json","slots":["body"],"redraw":true})");
+    CHECK(redraw["ok"].asBool() && redraw["result"]["requests"][0]["request"].asString().find("body-redraw") != std::string::npos);
+    const Json redrawRequest = e.ReadProjectJson(".oe/variants/figure/body-redraw/request.json");
+    CHECK(redrawRequest["redraw"].asBool() && redrawRequest["prompt"].asString().find("Redraw image 1") != std::string::npos);
+    const auto redrawEdit = e.Assets().GetTexture(".oe/variants/figure/body-redraw/edit.png");
+    CHECK(redrawEdit != nullptr);
+    if (redrawEdit) {
+        bool magenta = false;
+        for (uint32_t c : redrawEdit->texels) magenta = magenta || (c & 0xFFFFFF) == 0xFF00FF;
+        CHECK(!magenta);
+        Image image;
+        image.width = redrawEdit->width;
+        image.height = redrawEdit->height;
+        image.rgba.clear();
+        for (uint32_t c : redrawEdit->texels) image.rgba.insert(image.rgba.end(), {0, 160, 0, static_cast<uint8_t>((c >> 24) ? 255 : 0)});
+        CHECK(WritePng(project + "/.oe/variants/figure/body-redraw/result.png", image, true));
+    }
+    Json redrawn = Call(e, "skeleton2d.variant_import", R"({"request":".oe/variants/figure/body-redraw/request.json"})");
+    CHECK(redrawn["ok"].asBool() && redrawn["result"]["image"].asString() == "body-filled.png");  // one -filled, not two
+    CHECK(pixel(-0.25f, 1.0f) == 0x00A000);
     RemoveAll(project);
 }
 
@@ -21505,6 +21554,19 @@ TEST(Adventurer2DGame) {
     key("K", true);
     step(90);
     CHECK(state()["clip"].asString() == "death" && state()["finished"].asBool());
+    // The courier (side view, built from the second generated picture) walks back and forth by herself; Shift makes her
+    // run; her ponytail swings.
+    Json courier = Call(e, "skeleton2d.state", R"({"id":"Courier","bones":false})")["result"];
+    CHECK(courier["clip"].asString() == "walk" && std::fabs(courier["springs"]["ponytail"].asFloat()) > 0.5f);
+    const float before = PosOf(e, "Courier").x;
+    step(30);
+    CHECK(PosOf(e, "Courier").x != before);
+    key("Shift", true);
+    step(10);
+    CHECK(Call(e, "skeleton2d.state", R"({"id":"Courier","bones":false})")["result"]["clip"].asString() == "run");
+    key("Shift", false);
+    Json courierCheck = Call(e, "skeleton2d.analyze", R"({"path":"chars/courier.skel2d.json","clip":"walk","render":false})")["result"];
+    CHECK(courierCheck["passed"].asBool() && courierCheck["ground"]["plantedSpeed"].asNumber() < -0.9);
     CHECK(Call(e, "script.errors")["result"].size() == 0);
     Call(e, "sim.stop");
 }

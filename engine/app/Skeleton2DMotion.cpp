@@ -45,7 +45,8 @@ public:
         return (-axis.y * dx + axis.x * dy) >= 0 ? 1.0f : -1.0f;
     }
     // Rotation keys [t, degrees] times the direction sign; times and values in step.
-    void Rotate(const std::string& role, float dx, float dy, const std::vector<float>& times, const std::vector<float>& degrees) {
+    void Rotate(const std::string& role, float dx, float dy, const std::vector<float>& times, const std::vector<float>& degrees,
+                const char* curve = "smooth") {
         const std::string bone = Bone(role);
         if (bone.empty()) return;
         const float sign = Toward(bone, dx, dy);
@@ -54,13 +55,13 @@ public:
             Json k = Json::MakeArray();
             k.push(Round3(times[i]));
             k.push(Round3(degrees[i] * sign));
-            if (i + 1 < times.size()) k.push("smooth");
+            if (i + 1 < times.size()) k.push(curve);
             keys.push(k);
         }
         clip_["bones"][bone]["rotate"] = keys;
     }
     // Rotation keys already signed (a turn that cancels another bone's).
-    void RotateSigned(const std::string& role, const std::vector<float>& times, const std::vector<float>& degrees) {
+    void RotateSigned(const std::string& role, const std::vector<float>& times, const std::vector<float>& degrees, const char* curve = "smooth") {
         const std::string bone = Bone(role);
         if (bone.empty()) return;
         Json keys = Json::MakeArray();
@@ -68,7 +69,7 @@ public:
             Json k = Json::MakeArray();
             k.push(Round3(times[i]));
             k.push(Round3(degrees[i]));
-            if (i + 1 < times.size()) k.push("smooth");
+            if (i + 1 < times.size()) k.push(curve);
             keys.push(k);
         }
         clip_["bones"][bone]["rotate"] = keys;
@@ -151,6 +152,7 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
     const float defaults[] = {2.4f, 1.0f, 0.65f, 1.0f, 0.6f, 0.4f, 1.2f};
     const float T = Param(params, "duration", defaults[std::find(std::begin(kRecipes), std::end(kRecipes), recipe) - std::begin(kRecipes)], 0.05f, 60);
     bool loop = true;
+    std::vector<float> groundTimes, groundLift;  // side walks and runs: keys where the hip puts the lowest foot on the ground
     // Directions: forward is +x (side views face right); outward is away from the body's middle (front views:
     // the character's left limbs are on the right of the picture).
     auto outward = [&](const std::string& suffix) { return suffix == "_l" ? 1.0f : -1.0f; };
@@ -169,13 +171,14 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
         const float arm = Param(params, "arm", run ? 32.0f : 16.0f, 0, 120) * strength;
         const float b = Param(params, "bob", run ? 0.025f : 0.012f, 0, 0.2f) * H * strength;
         const float lean = Param(params, "lean", run ? 10.0f : 3.0f, -45, 45);
+        const float elbow = Param(params, "elbow", run ? 70.0f : 12.0f, -150, 150) * strength;  // forearms bent forward
         if (side) {
-            // Contact at 0 (front leg ahead) and T/2 (back leg ahead); the body is lowest at the contacts.
-            // A leg swung by the stride reaches less far down: the body drops by that much at the contacts so the feet stay
-            // on the ground (legs straight in the setup pose).
-            const float leg = w.Length("thigh" + near) + w.Length("shin" + near);
-            const float drop = run ? 0.0f : leg * (1 - std::cos(Radians(stride)));  // a run has a flight phase instead
-            w.Move("hip", {0, T * 0.25f, T * 0.5f, T * 0.75f, T}, {0, 0, 0, 0, 0}, {-b - drop, b * 0.5f, -b - drop, b * 0.5f, -b - drop});
+            // Contact at 0 (front leg ahead) and T/2 (back leg ahead). The hip is keyed once the legs are: at each key the
+            // body sits so the lowest foot is on the ground, and rises by the bob between the contacts (a run more, for
+            // its flight).
+            groundTimes = {0, T * 0.25f, T * 0.5f, T * 0.75f, T};
+            groundLift = {0, b * 0.5f, 0, b * 0.5f, 0};
+            if (run) groundLift = {0, b, 0, b, 0};
             // Four key poses per leg - contact (ahead), passing (under the body, straight), contact (behind), swing (passing
             // forward with the knee bent so the foot clears the ground) - the far leg half a cycle later. Each foot turns
             // back by its thigh and shin, so it stays flat.
@@ -185,17 +188,18 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
                 const std::vector<float> thigh = first ? std::vector<float>{stride, 0, -stride, knee * 0.5f, stride}
                                                        : std::vector<float>{-stride, knee * 0.5f, stride, 0, -stride};
                 const std::vector<float> shin = first ? std::vector<float>{0, 0, 0, knee, 0} : std::vector<float>{0, knee, 0, 0, 0};
-                w.Rotate("thigh" + s, 1, 0, times, thigh);
-                w.Rotate("shin" + s, -1, 0, times, shin);  // the knee bends backward: the foot goes back
+                // Linear: the foot on the ground moves at an even speed (eased keys would stop it at every key).
+                w.Rotate("thigh" + s, 1, 0, times, thigh, "linear");
+                w.Rotate("shin" + s, -1, 0, times, shin, "linear");  // the knee bends backward: the foot goes back
                 const std::string thighBone = w.Bone("thigh" + s), shinBone = w.Bone("shin" + s);
                 if (thighBone.empty() || shinBone.empty()) continue;
                 std::vector<float> foot;
                 for (size_t k = 0; k < times.size(); ++k) foot.push_back(-(w.Toward(thighBone, 1, 0) * thigh[k] + w.Toward(shinBone, -1, 0) * shin[k]));
-                w.RotateSigned("foot" + s, times, foot);
+                w.RotateSigned("foot" + s, times, foot, "linear");
             }
             w.Rotate("upper_arm" + near, 1, 0, {0, T * 0.5f, T}, {-arm, arm, -arm});
             w.Rotate("upper_arm" + far, 1, 0, {0, T * 0.5f, T}, {arm, -arm, arm});
-            for (const std::string& s : {near, far}) w.Rotate("forearm" + s, 1, 0, {0, T}, {run ? 70.0f * strength : 12.0f * strength, run ? 70.0f * strength : 12.0f * strength});
+            for (const std::string& s : {near, far}) w.Rotate("forearm" + s, 1, 0, {0, T}, {elbow, elbow});
             w.Rotate("chest", 1, 0, {0, T * 0.5f, T}, {-lean, -lean * 0.8f, -lean});
             w.Event(0, "step");
             w.Event(T * 0.5f, "step");
@@ -215,7 +219,7 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
         }
     } else if (recipe == "jump") {
         loop = false;
-        const float crouch = 0.06f * H * strength, lift = Param(params, "lift", 0.25f, 0, 2) * H;
+        const float crouch = Param(params, "crouch", 0.06f, 0, 0.5f) * H * strength, lift = Param(params, "lift", 0.25f, 0, 2) * H;
         const std::vector<float> t = {0, 0.2f * T, 0.35f * T, 0.6f * T, 0.85f * T, T};
         w.Move("hip", t, {0, 0, 0, 0, 0, 0}, {0, -crouch, lift * 0.45f, lift, -crouch * 0.8f, 0});
         for (const std::string& s : {near, far}) {
@@ -251,16 +255,17 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
     } else {  // death
         loop = false;
         const std::vector<float> t = {0, 0.25f * T, 0.7f * T, T};
-        const float drop = 0.3f * H;
-        w.Move("hip", t, {0, -0.02f * H, -0.05f * H, -0.06f * H}, {0, -0.02f * H, -drop, -drop});
-        w.Rotate("hip", -1, 0, t, {0, 10, 70, 80});
-        w.Rotate("chest", -1, 0, t, {0, 10, 15, 15});
-        w.Rotate("head", -1, 0, t, {0, 15, 20, 25});
+        const float k = strength;  // every turn and the fall scale with it
+        const float drop = 0.3f * H * k;
+        w.Move("hip", t, {0, -0.02f * H * k, -0.05f * H * k, -0.06f * H * k}, {0, -0.02f * H * k, -drop, -drop});
+        w.Rotate("hip", -1, 0, t, {0, 10 * k, 70 * k, 80 * k});
+        w.Rotate("chest", -1, 0, t, {0, 10 * k, 15 * k, 15 * k});
+        w.Rotate("head", -1, 0, t, {0, 15 * k, 20 * k, 25 * k});
         for (const std::string& s : {near, far}) {
             const float out = side ? 1.0f : outward(s);
-            w.Rotate("thigh" + s, out, 0, t, {0, 10, 60, 70});
-            w.Rotate("shin" + s, -out, 0, t, {0, 20, 70, 80});
-            w.Rotate("upper_arm" + s, side ? -1.0f : out, 0, t, {0, 30, 60, 70});
+            w.Rotate("thigh" + s, out, 0, t, {0, 10 * k, 60 * k, 70 * k});
+            w.Rotate("shin" + s, -out, 0, t, {0, 20 * k, 70 * k, 80 * k});
+            w.Rotate("upper_arm" + s, side ? -1.0f : out, 0, t, {0, 30 * k, 60 * k, 70 * k});
         }
         w.Event(T, "dead");
     }
@@ -270,6 +275,43 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
                                            "Map the recipe's roles to your bone names with bones: {hip: \"pelvis\", thigh_l: \"leg_upper_l\", ...}.");
     clip["duration"] = Round3(T);
     if (!loop) clip["loop"] = false;
+    const std::string full = engine.ResolvePath(path);
+    std::string text, parseError;
+    if (!ReadTextFile(full, text)) throw ApiError("not_found", "cannot read " + path);
+    Json data = Json::parse(text, &parseError);
+    if (!parseError.empty()) throw ApiError("invalid_skeleton", parseError);
+    if (!data["clips"].isObject()) data["clips"] = Json::MakeObject();
+    // Feet on the ground: pose the legs as keyed, find how far the lowest foot is from the ground of the setup pose, and
+    // move the hip by that at each key (legs drawn slanted swing up or down unevenly, so no formula fits every rig).
+    const std::string hipBone = w.Bone("hip");
+    std::vector<int> feet;
+    for (const std::string& s : {near, far}) {
+        const std::string foot = w.Bone("foot" + s), shin = w.Bone("shin" + s);
+        if (!foot.empty()) feet.push_back(def->BoneIndex(foot));
+        else if (!shin.empty()) feet.push_back(def->BoneIndex(shin));
+    }
+    if (!groundTimes.empty() && !hipBone.empty() && !feet.empty()) {
+        Json probe = data;
+        probe["clips"] = Json::MakeObject();
+        probe["clips"]["probe"] = clip;
+        std::string probeError;
+        const auto posed = ParseSkeleton2D(probe, &probeError);
+        if (!posed) throw ApiError("invalid_skeleton", probeError);
+        auto lowest = [&](const Skeleton2DPose& pose) {
+            float low = 1e30f;
+            for (int f : feet)
+                for (float x : {0.0f, posed->bones[static_cast<size_t>(f)].length}) low = std::min(low, pose.world[static_cast<size_t>(f)].TransformPoint(Vec3(x, 0, 0)).y);
+            return low;
+        };
+        const float line = lowest(Skeleton2DSample(*posed, nullptr, 0));
+        std::vector<float> ys, xs;
+        for (size_t k = 0; k < groundTimes.size(); ++k) {
+            ys.push_back(line - lowest(Skeleton2DSample(*posed, posed->FindClip("probe"), std::min(groundTimes[k], T - 1e-4f))) + groundLift[k]);
+            xs.push_back(0);
+        }
+        ys.back() = ys.front();  // a loop ends where it starts
+        w.Move("hip", groundTimes, xs, ys);
+    }
     const std::string name = args["name"].asString(recipe);
     Json result = Json::MakeObject();
     result["clip"] = name;
@@ -288,12 +330,6 @@ Json Skeleton2DMotion(Engine& engine, const Json& args) {
         return result;
     }
     // Into the asset, like skeleton2d.set {clip}: replaces a clip of that name.
-    const std::string full = engine.ResolvePath(path);
-    std::string text, parseError;
-    if (!ReadTextFile(full, text)) throw ApiError("not_found", "cannot read " + path);
-    Json data = Json::parse(text, &parseError);
-    if (!parseError.empty()) throw ApiError("invalid_skeleton", parseError);
-    if (!data["clips"].isObject()) data["clips"] = Json::MakeObject();
     data["clips"][name] = clip;
     if (!ParseSkeleton2D(data, &error)) throw ApiError("invalid_skeleton", error);
     if (!WriteTextFile(full, data.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + path);

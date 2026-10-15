@@ -23,7 +23,8 @@ int Skeleton2DGridMesh(const Image& image, int cell, int alphaThreshold, int max
 // reports coverage (opaque pixels no part took, pixels two parts share) with a picture of the draft.
 //
 // `out` is the *.skel2d.json to write; part images go to `partsDir` (default "<out without .skel2d.json>-parts/").
-// Clips of an existing `out` are kept (rebuilding after moving a joint keeps the animation). `dryRun` writes only
+// Clips, springs and IK of an existing `out` are kept (rebuilding after moving a joint keeps the animation), and so are
+// imported repaints of parts cut exactly as before. `dryRun` writes only
 // the draft picture. Throws ApiError with a hint for caller mistakes.
 Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, const std::string& partsDir, bool dryRun,
                      const std::string& overlayOut);

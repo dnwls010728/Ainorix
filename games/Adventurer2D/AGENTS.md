@@ -19,8 +19,25 @@ and press Play: Left/Right walk, Space jumps, J attacks, H is hit, W (held) wave
 Rebuilding from the draft cuts the parts again and drops the torso fill: import it again afterwards
 (`.oe/variants/` is not kept in the repository, so repeat step 4).
 
+## The courier (side view)
+
+`art/courier.png`, made the same way by following `skeleton2d.guide` (the M7 run of docs/SKELETON2D.md):
+
+1. `skeleton2d.draft_template {kind: "humanoid-side", image}` left 18.2% uncovered; joints read with two
+   `image.grid` looks -> `art/courier-joints.json`, passed back as `joints`.
+2. Draft edits the template cannot know (`tools/courier_draft.mjs`, to apply again after a template run): the far
+   arm's parts dropped (it is hidden behind the body), `ponytail` and `satchel` parts on bones of their own, the near
+   leg, arm and hand traced along their outlines (bands around overlapping limbs carry what is behind them). 0.8%.
+3. `skeleton2d.build`, then repaints: torso and satchel (`variant_requests` + Codex, the torso on a second, stricter
+   prompt), the near leg under the hand, and the far leg redrawn whole (`redraw: true`) - it was mostly hidden.
+4. Clips from `skeleton2d.motion` (run with `knee` 55, `arm` 22, `elbow` 35; death with `strength` 0.65); every clip
+   passes `skeleton2d.analyze`; walk `ground.plantedSpeed` -1.17, run -2.93 -> `scripts/courier.lua` moves her at
+   those speeds times her scale (0.85).
+5. Springs on `ponytail` and `satchel`.
+
 ## Files
 
 - `chars/hero.skel2d.json` — the skeleton (bones, slots, meshes with weights, clips, the scarf spring).
 - `scripts/hero.lua` — keys to clips; one-shot clips play to their end (`skeleton2d.state(id).finished`).
+- `chars/courier.skel2d.json`, `scripts/courier.lua` — the courier and her patrol (Shift: run).
 - `scenes/main.scene.json` — camera, ground, the character, help text.

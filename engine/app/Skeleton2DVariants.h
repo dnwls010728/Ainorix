@@ -17,7 +17,7 @@ class Engine;
 // prompt.txt and request.json.
 Json Skeleton2DVariantRequests(Engine& engine, const Json& args);
 
-// Takes a generated picture for a request: matches it to the source (size and aspect, a shift of up to `maxShift`
+// Takes a generated picture for a request: matches it to the source (size and aspect, a scale of 0.92..1.08, a shift of up to `maxShift`
 // pixels, a tint), refuses it when the area that had to stay changed more than `tolerance`, keeps only the masked area
 // (keying out an opaque background), writes it as a new image beside the part's picture and points the skeleton at it
 // - a fill replaces the attachment's picture, an attachment variant is added to the slot. Meshes are regridded over

@@ -126,15 +126,42 @@ std::vector<Posed> MakePoses(const Skeleton2DDef& def, const Json& args) {
     return poses;
 }
 
-float Coverage(const View& view, const Frame& frame, float wx, float wy, float radius) {
-    const float cx = (wx - view.left) * view.scale, cy = (view.top - wy) * view.scale;
+// How much of the disk around a joint the parts on its own chain fill (pieces whose slot hangs on an ancestor or a
+// descendant of `bone`): another part that happens to lie over the joint (an arm over a satchel strap) neither fills a
+// gap nor opens one when it moves away. Drawn into a small view around the disk only.
+float JointCoverage(const Skeleton2DDef& def, const View& view, const Shown& shown, int bone, float wx, float wy, float radius) {
+    auto onChain = [&](int other) {
+        for (int b = other; b >= 0; b = def.bones[static_cast<size_t>(b)].parent)
+            if (b == bone) return true;  // below the joint
+        for (int b = bone; b >= 0; b = def.bones[static_cast<size_t>(b)].parent)
+            if (b == other) return true;  // above it
+        return false;
+    };
+    Shown related;
+    for (size_t i = 0; i < shown.pieces.size(); ++i) {
+        const Skeleton2DPiece& piece = shown.pieces[i];
+        bool keep = onChain(def.slots[static_cast<size_t>(piece.slot)].bone);
+        for (const SkinVertex& skin : piece.skin)
+            for (size_t k = 0; k < 4 && !keep; ++k) keep = skin.weights[k] > 0 && onChain(skin.joints[k]);
+        if (!keep) continue;
+        related.pieces.push_back(piece);
+        related.posed.push_back(shown.posed[i]);
+    }
+    const int size = static_cast<int>(std::ceil(radius)) * 2 + 1;
+    View disk;
+    disk.scale = view.scale;
+    disk.width = disk.height = size;
+    disk.left = wx - static_cast<float>(size) * 0.5f / view.scale;
+    disk.top = wy + static_cast<float>(size) * 0.5f / view.scale;
+    const Frame frame = Draw(disk, related);
+    const float c = static_cast<float>(size) * 0.5f;
     int inside = 0, opaque = 0;
-    for (int y = static_cast<int>(cy - radius); y <= static_cast<int>(cy + radius); ++y)
-        for (int x = static_cast<int>(cx - radius); x <= static_cast<int>(cx + radius); ++x) {
-            const float dx = static_cast<float>(x) + 0.5f - cx, dy = static_cast<float>(y) + 0.5f - cy;
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x) {
+            const float dx = static_cast<float>(x) + 0.5f - c, dy = static_cast<float>(y) + 0.5f - c;
             if (dx * dx + dy * dy > radius * radius) continue;
             ++inside;
-            if (x >= 0 && y >= 0 && x < view.width && y < view.height && frame.piece[static_cast<size_t>(y * view.width + x)] >= 0) ++opaque;
+            if (frame.piece[static_cast<size_t>(y * size + x)] >= 0) ++opaque;
         }
     return inside ? static_cast<float>(opaque) / static_cast<float>(inside) : 0;
 }
@@ -212,10 +239,21 @@ Json AnalyzeSkeleton2D(Engine& engine, const Json& args) {
 
     // Joints: where each bone turns, and how filled the figure is around it in the setup pose.
     const float radius = std::max(3.0f, 0.02f * static_cast<float>(view.height));
+    // Only joints something is drawn on can open: a bone with a slot or weights, or with such a bone below it.
+    std::vector<bool> carries(def.bones.size(), false);
+    for (const Skeleton2DSlot& slot : def.slots) carries[static_cast<size_t>(slot.bone)] = true;
+    for (const auto& skin : def.skins)
+        for (const auto& slot : skin.second)
+            for (const auto& entry : slot.second)
+                for (const auto& list : entry.second.weights)
+                    for (const auto& influence : list) carries[static_cast<size_t>(influence.first)] = true;
+    for (size_t b = def.bones.size(); b-- > 1;)
+        if (carries[b] && def.bones[b].parent >= 0) carries[static_cast<size_t>(def.bones[b].parent)] = true;
     std::vector<float> setupCoverage(def.bones.size(), 0);
     for (size_t b = 1; b < def.bones.size(); ++b) {
+        if (!carries[b]) continue;  // coverage 0: never reported
         const Vec3 o = setupPose.world[b].TransformPoint(Vec3());
-        setupCoverage[b] = Coverage(view, setupFrame, o.x, o.y, radius);
+        setupCoverage[b] = JointCoverage(def, view, setup, static_cast<int>(b), o.x, o.y, radius);
     }
 
     struct Worst {
@@ -252,7 +290,7 @@ Json AnalyzeSkeleton2D(Engine& engine, const Json& args) {
         for (size_t b = 1; b < def.bones.size(); ++b) {
             if (setupCoverage[b] < 0.9f) continue;
             const Vec3 o = poses[p].pose.world[b].TransformPoint(Vec3());
-            const float drop = setupCoverage[b] - Coverage(view, frame, o.x, o.y, radius);
+            const float drop = setupCoverage[b] - JointCoverage(def, view, s, static_cast<int>(b), o.x, o.y, radius);
             if (drop > gaps[b].value) gaps[b] = {drop, poses[p].label, static_cast<int>(p)};
             if (drop > 0.15f) poseScore[p] += drop;
         }
@@ -380,7 +418,7 @@ Json AnalyzeSkeleton2D(Engine& engine, const Json& args) {
             }
             // How fast a planted foot (within 2% of the figure of the ground) moves along the ground: walking in place, the
             // entity must move at minus that speed for the feet not to slide.
-            double travel = 0, time = 0;
+            std::vector<double> speeds;  // of the planted foot along the ground, per sample step
             for (size_t p = 1; p < poses.size(); ++p) {
                 if (poses[p].clip != poses[p - 1].clip || poses[p].time <= poses[p - 1].time) continue;
                 // The foot carrying the body: the lowest one at the start of the step.
@@ -389,14 +427,20 @@ Json AnalyzeSkeleton2D(Engine& engine, const Json& args) {
                     if (lowest(poses[p - 1].pose, f) < lowest(poses[p - 1].pose, planted)) planted = f;
                 for (int f : {planted}) {
                     const float a = lowest(poses[p - 1].pose, f), b = lowest(poses[p].pose, f);
-                    if (std::fabs(a - line) > 0.02f * figure || std::fabs(b - line) > 0.02f * figure) continue;
-                    travel += poses[p].pose.world[static_cast<size_t>(f)].TransformPoint(Vec3()).x - poses[p - 1].pose.world[static_cast<size_t>(f)].TransformPoint(Vec3()).x;
-                    time += poses[p].time - poses[p - 1].time;
+                    // On the ground and staying there (a foot coming down at the end of a swing is not carrying the body yet).
+                    if (std::fabs(a - line) > 0.02f * figure || std::fabs(b - line) > 0.02f * figure || std::fabs(b - a) > 0.01f * figure) continue;
+                    const double dx = poses[p].pose.world[static_cast<size_t>(f)].TransformPoint(Vec3()).x - poses[p - 1].pose.world[static_cast<size_t>(f)].TransformPoint(Vec3()).x;
+                    speeds.push_back(dx / (poses[p].time - poses[p - 1].time));
                 }
             }
             ground = Json::MakeObject();
             ground["line"] = line;
-            if (time > 0) ground["plantedSpeed"] = std::round(travel / time * 1000) / 1000;
+            if (!speeds.empty()) {
+                // The median: robust to the odd step where the feet swap.
+                std::sort(speeds.begin(), speeds.end());
+                ground["plantedSpeed"] = std::round(speeds[speeds.size() / 2] * 1000) / 1000;
+                ground["plantedSamples"] = static_cast<int>(speeds.size());
+            }
             if (sink > 0.02f * figure) {
                 Json p = Problem("ground", sink > 0.04f * figure ? "high" : "low", "feet",
                                  "a foot goes " + Number(100 * sink / figure) + "% of the figure below the ground of the setup pose at \"" + sinkPose + "\"",

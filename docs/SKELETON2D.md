@@ -158,9 +158,9 @@ slot or clip ever shows, clips without duration. File writes are not part of sce
 | recipe | Loop | What moves | params (defaults) |
 |---|---|---|---|
 | `idle` | yes | breathing: hip bob, chest, head, arms | `duration` 2.4, `breath` 0.006 (of the figure) |
-| `walk` | yes | side: contact / passing / contact / swing per leg, the far leg half a cycle later, feet kept flat, body lowered at the contacts so the feet stay on the ground, arms opposite; front: knees lift in turn, body bobs and sways | `duration` 1, `stride` 24, `knee` 40, `arm` 16, `bob` 0.012, `lean` 3 |
-| `run` | yes | like the side walk, bigger, with a flight phase, bent arms, a lean | `duration` 0.65, `stride` 38, `knee` 80, `arm` 32, `bob` 0.025, `lean` 10 |
-| `jump` | no | crouch, takeoff, tuck, land; events `takeoff`, `land` | `duration` 1, `lift` 0.25 (0 when physics moves the body) |
+| `walk` | yes | side: contact / passing / contact / swing per leg, the far leg half a cycle later, feet kept flat, body lowered at the contacts so the feet stay on the ground, arms opposite; front: knees lift in turn, body bobs and sways | `duration` 1, `stride` 24, `knee` 40, `arm` 16, `elbow` 12, `bob` 0.012, `lean` 3 |
+| `run` | yes | like the side walk, bigger, with a flight phase, bent arms, a lean | `duration` 0.65, `stride` 38, `knee` 80, `arm` 32, `elbow` 70, `bob` 0.025, `lean` 10 |
+| `jump` | no | crouch, takeoff, tuck, land; events `takeoff`, `land` | `duration` 1, `lift` 0.25 (0 when physics moves the body), `crouch` 0.06 |
 | `attack` | no | wind-up, strike, hold, recover with one arm, the body turning into it; event `hit` | `duration` 0.6, `hand` (l/r, front/back) |
 | `hit` | no | thrown back and recovering | `duration` 0.4 |
 | `death` | no | collapses backward; event `dead` | `duration` 1.2 |
@@ -177,9 +177,12 @@ returns it without writing.
 With a clip, `skeleton2d.analyze` also checks the feet (`feet`, default `foot_l/r` or `foot_front/back`) against
 the ground line of the setup pose - a foot more than 2% of the figure below it is a `ground` problem, as is no foot
 touching it in any pose (unless the clip has a `takeoff` event) - and reports `ground.plantedSpeed`: how fast the
-foot carrying the body moves along the ground. A walk cycle played in place needs the entity to move at minus that
-speed (world units per second) for the feet not to slide; the side `walk` recipe at the defaults on a 2-unit leg
-gives -3.26.
+foot carrying the body moves along the ground (the median over the samples where the lowest foot is on the line and
+stays there; `plantedSamples` says how many). A walk cycle played in place needs the entity to move at minus that
+speed (world units per second, times its scale) for the feet not to slide; the side `walk` on the generated courier
+gives -1.17. The side walk and run key the legs linearly (an eased key would stop the planted foot at every key) and
+key the hip by sampling the legs: at each key the lowest foot sits on the ground line, plus the bob - legs drawn
+slanted would otherwise sink or float.
 
 ## Reading coordinates (agent eyes)
 
@@ -281,7 +284,7 @@ knows for every pixel which slot shows it and from which texel of its image, so 
 | kind | What it means | Typical fix |
 |---|---|---|
 | `revealed` | Picture that was under another part in the setup pose shows (`hiddenUnder` names it): cut edges, or a copy of the covering part (shared pixels cut into both) | Repaint the area (`masks: true` writes each slot's revealed texels as a white mask at its image's size, under `.oe/vision/revealed/`), or make the parts overlap less |
-| `gap` | The figure opens around a joint: the disk around it is less filled than in the setup pose (`drop`) | Grow both regions past the joint, or weight one part to both bones |
+| `gap` | The figure opens around a joint: the disk around it is less filled than in the setup pose (`drop`) by the parts on that joint's own chain (ancestors and descendants; another part lying over the joint does not count) | Grow both regions past the joint, or weight one part to both bones |
 | `flipped` | Mesh triangles fold over | Spread the weights near the joint, smaller `cell`, or bend less |
 | `stretched` | Triangles stretch beyond 1.6x (2x high) or squash below 0.5x (0.4x high) (`ratio`) | Spread the move over more of the part |
 | `seam` | A looping clip ends in another pose than it starts (`bone`) | Key the end like time 0, or `loop: false` |
@@ -300,12 +303,15 @@ pixels (or nothing) under the arm, and they show when the arm lifts (`revealed` 
 generator can paint what was hidden. The engine does not call one: it writes requests an agent hands to one and
 checks what comes back. **Sending the pictures to a generator shares them with that service; ask the user first.**
 
-`skeleton2d.variant_requests {path, kind?, slots?, reach?, grow?, outDir?}`
+`skeleton2d.variant_requests {path, kind?, slots?, reach?, grow?, redraw?, outDir?}`
 
 - `kind: "fill"` (default): for every part (or `slots`), the area of its picture that lay under a part drawn after
   it in the setup pose, within `reach` pixels of the part's own pixels (default 15% of the part), widened by two
   pixels. `grow` first enlarges the part's canvas by that many pixels on every side, for parts cut too tightly to
   continue under their neighbour.
+- `redraw: true` (fill): the whole part drawn again on its own instead of only the hidden area - for a part that was
+  mostly hidden (a side view's far leg behind the near one), where a patchwork of kept and repainted pixels cannot
+  line up. Its prompt forbids the parts that hid it but not the parts hanging below it (its foot).
 - `kind: "attachment"` with `slot`, `name` and `description`: a new picture for the slot (a fist, closed eyes),
   the whole canvas editable.
 
@@ -324,8 +330,8 @@ the prompt on stdin; the picture lands in `~/.codex/generated_images/<session>/`
 `skeleton2d.variant_import {request, result?, maxShift?, tolerance?}` checks the answer before it touches anything:
 
 - it must have the shape of the request's pictures (any size: it is scaled);
-- the area that had to stay is matched against the source over shifts of up to `maxShift` pixels (default 8,
-  the smallest shift wins in flat areas) and a per-channel tint (0.75..1.33, channels too dark to measure stay at
+- the area that had to stay is matched against the source over scales of 0.92..1.08 and shifts of up to
+  `maxShift` pixels (default 8; the smallest change wins in flat areas) and a per-channel tint (0.75..1.33, channels too dark to measure stay at
   1); if it still differs by more than `tolerance` (default 0.08 of full scale) the answer is refused - generators
   often redraw the whole picture, and a slightly different redraw passes while a different picture does not;
 - a fill with magenta left in more than a twentieth of the area is refused;
@@ -335,7 +341,9 @@ It then keeps only the masked area of the answer, writes a new picture beside th
 `<slot>-<name>.png`; the originals stay), regrids a mesh part over it (the old cell size, each vertex weighted like
 the nearest old vertices) and updates the asset: a fill replaces the attachment's picture and marks it
 `filled: true` (the analysis no longer reports it as revealed), an attachment variant is added to the slot. A
-rebuild with `skeleton2d.build` cuts the parts again from the illustration: import the fills again afterwards.
+rebuild with `skeleton2d.build` keeps a fill when its part is cut exactly as before (the repainted picture is meshed
+again and weighted to the new bones); a part cut differently needs its request again. A picture filled again keeps
+its `-filled` name.
 
 On the test adventurer the torso request (both arms and the head had hidden parts of it) came back from Codex
 redrawn as a whole, slightly larger; the import found a (-2, -4) shift, accepted it at 5.7% difference and kept
@@ -408,7 +416,18 @@ unchecked line.
   leg mesh squashing at the deep crouch (0.44x), a scarf spring swings 48 degrees at the takeoff and settles.
   Not done: a Lua call to move IK targets or springs at run time (scripts key them through clips only); recipes for
   four-legged rigs; front-view walks are steps in place (a front view cannot show legs swinging forward).
-- [ ] **M7 — Agent guide.** `docs/SKELETON2D_AGENT.md` (the step-by-step workflow with a check per step), a
-  "Rigger" profile in the default team, and one full run from a generated illustration to an animated character.
+- [x] **M7 — Agent guide.** `docs/SKELETON2D_AGENT.md`, embedded by CMake (`generated/EmbeddedGuides.cpp`) and
+  returned by `skeleton2d.guide {step?}` in any project; a "Rigger" in the default team (`TeamDefaults.cpp`; the lead
+  routes 2D characters to it, art generates its repaint requests). One full run on a Codex-generated side-view courier
+  (`games/Adventurer2D/art/courier.png`), which changed the engine where it fell short: template torso measured in
+  side views; build keeps springs, IK and repaints of parts cut as before; `redraw` requests for mostly hidden parts
+  (and prompts that do not forbid a part's own foot); import matches scale as well as shift; joint gaps counted on the
+  joint's own chain; ground-keyed hips and linear legs in side walks and runs; `plantedSpeed` as a median; `elbow` and
+  `crouch` params; death scaled by `strength`. The run took: template (18.2% uncovered) -> joints from two grid looks
+  -> draft edits (far arm dropped, ponytail and satchel parts, traced near leg, arm and hand) -> 0.8% -> four repaints
+  (three accepted at once or on a second, stricter prompt, the far leg redrawn whole) -> seven clips, all passing
+  `skeleton2d.analyze`, walk `plantedSpeed` -1.17 -> springs on the ponytail and satchel -> walking and running in
+  `games/Adventurer2D` (test `Adventurer2DGame`). Not done: a run of the Rigger agent itself through the team (the
+  run above was done by hand, following the guide's steps).
 - [ ] **M8 — Editor.** Skeleton window: bones, attachments, weights painting, clip timeline, all through the commands.
 - [ ] Optional: DragonBones JSON import (MIT). Spine JSON import only after its licence terms are checked.
