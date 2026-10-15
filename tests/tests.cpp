@@ -22004,6 +22004,8 @@ TEST(NativeEditorSkeletonEditor) {
     drag(mid, std::make_pair(joint.first, joint.second - (tip.first - joint.first) * 0.5f));  // up: counter-clockwise
     const float turned = asset()["bones"][2]["rotation"].asFloat();
     CHECK(turned > 30 && turned < 120 && state()["bone"].asInt() == 2 && state()["undo"].asInt() == 1);
+    // Showing the bone's fields does not add empty ones to the file.
+    for (const auto& [key, value] : asset()["bones"][2].members()) CHECK(!value.isNull());
     click("undo");
     CHECK(asset()["bones"][2]["rotation"].asFloat(0) == 0 && state()["redo"].asInt() == 1);
     // Draw order: moving the arm down puts the glove behind it.
@@ -22030,6 +22032,15 @@ TEST(NativeEditorSkeletonEditor) {
     // The key can be removed again.
     click("delete-key");
     CHECK(asset()["clips"]["swing"]["bones"]["upper"]["rotate"].size() == 2);
+    // The timeline: a row per keyed bone; "Key rotation" keys the pose shown; the next-key button jumps to the last key.
+    CHECK(Call(e, "editor.skeleton2d", R"({"time":0.25})")["ok"].asBool());
+    draw(2);
+    CHECK(editor.SkeletonEditorControlRect("row:1")[2] > 0);
+    click("add-key");
+    const Json keyed = asset()["clips"]["swing"]["bones"]["upper"]["rotate"];
+    CHECK(keyed.size() == 3 && std::fabs(keyed[1][0].asFloat() - 0.25f) < 1e-3f && std::fabs(keyed[1][1].asFloat() - 7.5f) < 0.1f);
+    click("next-key");
+    CHECK(std::fabs(state()["time"].asFloat() - 1) < 1e-3f);
     CHECK(WritePng("build/skeleton-editor.png", image.ToImage(), true));
     RemoveAll(project);
 }

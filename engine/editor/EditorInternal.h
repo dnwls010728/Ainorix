@@ -640,6 +640,12 @@ struct NativeEditor::Impl {
     float skeletonDragAngle = 0;              // turn: the bone's angle when the drag began and the pointer's
     float skeletonDragPointer = 0;
     Json skeletonProblems;                    // skeleton2d.analyze of the shown clip (or stress poses)
+int skeletonHover = -1;                   // bone under the pointer (canvas or list), drawn highlighted
+bool skeletonShowImages = true, skeletonShowBones = true, skeletonShowMesh = false, skeletonShowNames = false;
+char skeletonFilter[64] = {};             // bone list filter
+int skeletonRecipe = 1;                   // Animate: recipe picked last
+float skeletonSideWidth = 0;              // side column width (0 = not sized yet)
+bool skeletonScrubbing = false;           // Animate: dragging the playhead
     std::map<std::string, std::array<float, 4>> skeletonRects;  // automation: control bounds by name
     void SkeletonRect(const std::string& name);
     void SkeletonEditorPanel();

@@ -439,4 +439,10 @@ unchecked line.
   `editor.skeleton2d {open, tab, path, bone, slot, clip, time}`, `editor.state.skeletonEditor`, screenshot flag
   `--skeleton-editor [x.skel2d.json:]rig|weights[:slot]|animate[:clip]`; test `NativeEditorSkeletonEditor`. Not done:
   editing attachments (images, mesh vertices) in the window; it uses `skeleton2d.build` / `skeleton2d.set` for those.
+- [x] **M8.1 — Editor readability.** Tapered bones with hover/selection highlight and name plates, view toggles
+  (pictures, bones, mesh, names, fit), a hint line and zoom on the canvas; bone tree with a filter; a property table
+  for the selected bone; draw order rows showing each slot's bone; Weights: auto-picked mesh, a filled heat map with a
+  legend, vertex counts per bone, brush size keys; Animate: a dope-sheet timeline (ruler, a row per keyed bone, colored
+  rotate/translate/scale keys, playhead, previous/next key), **Key rotation** (K), a recipe menu. Fixed: reading bone
+  fields through Json's non-const `[]` wrote `null` fields into the file.
 - [ ] Optional: DragonBones JSON import (MIT). Spine JSON import only after its licence terms are checked.
