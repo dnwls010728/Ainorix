@@ -165,8 +165,23 @@ Find what goes wrong when a skeleton moves: picture that was hidden under anothe
 | `times` | array |  | Exact clip times in seconds instead of samples. |
 | `angle` | number |  | Stress poses: degrees each joint is bent both ways (default 45). |
 | `masks` | boolean |  | Also write each slot's revealed texels as a mask PNG (white = revealed) for repainting. |
+| `feet` | array |  | Clips: the bones whose lowest points stand on the ground (default foot_l/r, foot_front/back). |
 | `render` | boolean |  | Write the picture of the setup and worst poses (default true). |
 | `out` | string |  | PNG for that picture (default .oe/vision/analyze.png). |
+
+### `skeleton2d.motion`
+
+Write a clip from a recipe: idle, walk, run, jump, attack, hit, death, for a humanoid seen from the front or the side (facing right). Bones are found by role (the draft template's names, or bones: {role: name}); directions come from the rig's setup pose.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | *.skel2d.json. |
+| `recipe` | string | yes | idle | walk | run | jump | attack | hit | death. |
+| `name` | string |  | Clip name (default: the recipe's). An existing clip of that name is replaced. |
+| `view` | string |  | front or side (default: side when the rig has thigh_front). |
+| `params` | object |  | Numbers: duration, strength (0..3, scales every move); walk/run: stride, knee, arm, bob, lean; idle: breath; jump: lift (0 when physics moves the body); attack: hand (l/r or front/back). |
+| `bones` | object |  | Role -> bone name for rigs named otherwise: {"hip": "pelvis", "thigh_l": "leg_l"}. |
+| `dryRun` | boolean |  | Return the clip without writing it. |
 
 ### `skeleton2d.poses`
 

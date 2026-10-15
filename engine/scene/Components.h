@@ -612,6 +612,11 @@ struct Skeleton2D {
     std::string current, currentAsset, from;
     float fromTime = 0, mixed = 0;
     bool eventsStarted = false;
+    // Runtime springs (Skeleton2DDef::springs, same order): swing angle (degrees) and its speed, and where each
+    // spring bone's origin was the last two steps (its acceleration throws the swing).
+    std::vector<float> springAngle, springSpeed;
+    std::vector<Vec3> springLast, springBefore;
+    int springSteps = 0;
     static void Reflect(FieldList& f) {
         f.Add("asset", &Skeleton2D::asset, "Skeleton asset (*.skel2d.json): bones, slots, attachments, skins and clips.");
         f.Add("skin", &Skeleton2D::skin, "Skin whose attachments replace the default skin's (outfits). Empty = default.");

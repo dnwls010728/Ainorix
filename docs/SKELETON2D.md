@@ -128,6 +128,56 @@ slot or clip ever shows, clips without duration. File writes are not part of sce
   slot `color` `[t, color, alpha?]` fades. `duration` defaults to the last key; `loop` defaults to true. `events`
   `{time, name}` reach `onAnimationEvent`. Rotations interpolate as numbers (350 -> 10 turns back through 180).
 
+### Springs and IK
+
+```json
+"springs": [{"bone": "scarf", "stiffness": 40, "damping": 4, "inertia": 1.2, "gravity": 2, "limit": 50}],
+"ik": [{"name": "leg_l", "bones": ["thigh_l", "shin_l"], "target": "foot_goal_l", "bend": "negative", "mix": 1}]
+```
+
+- **springs** give a bone secondary motion (hair, a scarf, a tail, ears): while the game runs, the Skeleton2D
+  component swings it away from its clip angle as a damped spring - thrown by the acceleration of the bone's origin
+  (the parent's motion and the entity's own movement; `inertia` scales it, 0 = none), pulled by `gravity` at its
+  tip, back toward the clip by `stiffness` (1/s²), slowed by `damping` (1/s), never more than `limit` degrees.
+  Deterministic (fixed steps); a mirrored (flipX) skeleton swings the mirrored way. `skeleton2d.state` reports each
+  spring's current swing. The root cannot have one.
+- **ik** turns one bone, or a parent and its child (thigh + shin, upper arm + forearm), after the clip so the end
+  reaches the origin of the `target` bone: a bone of its own (under the root or the hip, never under the chain) that
+  clips key like any other - a planted foot, a hand on a ledge. The end of a chain is the last bone's tip
+  (`length`). `bend` picks the side the joint folds to (positive = counter-clockwise), `mix` blends from the clip's
+  pose. Out of reach, the chain points straight at the target. IK is part of every pose (drawing, overlay,
+  analysis).
+
+## Motion recipes
+
+`skeleton2d.motion {path, recipe, name?, view?, params?, bones?, dryRun?}` writes a clip from a recipe:
+
+| recipe | Loop | What moves | params (defaults) |
+|---|---|---|---|
+| `idle` | yes | breathing: hip bob, chest, head, arms | `duration` 2.4, `breath` 0.006 (of the figure) |
+| `walk` | yes | side: contact / passing / contact / swing per leg, the far leg half a cycle later, feet kept flat, body lowered at the contacts so the feet stay on the ground, arms opposite; front: knees lift in turn, body bobs and sways | `duration` 1, `stride` 24, `knee` 40, `arm` 16, `bob` 0.012, `lean` 3 |
+| `run` | yes | like the side walk, bigger, with a flight phase, bent arms, a lean | `duration` 0.65, `stride` 38, `knee` 80, `arm` 32, `bob` 0.025, `lean` 10 |
+| `jump` | no | crouch, takeoff, tuck, land; events `takeoff`, `land` | `duration` 1, `lift` 0.25 (0 when physics moves the body) |
+| `attack` | no | wind-up, strike, hold, recover with one arm, the body turning into it; event `hit` | `duration` 0.6, `hand` (l/r, front/back) |
+| `hit` | no | thrown back and recovering | `duration` 0.4 |
+| `death` | no | collapses backward; event `dead` | `duration` 1.2 |
+
+Every recipe takes `strength` (0..3, scales every move). Bones are found by **role** - the names
+`skeleton2d.draft_template` gives (hip, chest, head, upper_arm/forearm/hand, thigh/shin/foot with `_l`/`_r` in a
+front view or `_front`/`_back` in a side view) - and `bones: {"hip": "pelvis", ...}` maps them for other rigs;
+roles the rig lacks are skipped and listed in `missingRoles`. The view is `side` when the rig has `thigh_front`
+(else `front`), or `view`. Directions are read from the rig: which sign of rotation moves a bone's tip forward
+(+x: side views face right), outward (away from the body's middle) or up comes from its setup pose, so a recipe
+fits rigs whose bones point any way. The result is an ordinary clip (`skeleton2d.set` tunes its keys). `dryRun`
+returns it without writing.
+
+With a clip, `skeleton2d.analyze` also checks the feet (`feet`, default `foot_l/r` or `foot_front/back`) against
+the ground line of the setup pose - a foot more than 2% of the figure below it is a `ground` problem, as is no foot
+touching it in any pose (unless the clip has a `takeoff` event) - and reports `ground.plantedSpeed`: how fast the
+foot carrying the body moves along the ground. A walk cycle played in place needs the entity to move at minus that
+speed (world units per second) for the feet not to slide; the side `walk` recipe at the defaults on a 2-unit leg
+gives -3.26.
+
 ## Reading coordinates (agent eyes)
 
 Rigging from a picture needs pixel positions (where the elbow is, where the hair starts). A model looking at a
@@ -345,8 +395,16 @@ unchecked line.
   magenta and square answers; a moved, doubled answer accepted; a keyed attachment variant; a grown canvas keeping its
   place). Run with Codex on the test adventurer's torso (see "Repainting parts"). Not done: the other five requests of
   that rig were not sent; a rebuild drops imported fills (re-import them).
-- [ ] **M6 — Motion.** `skeleton2d.motion {recipe}` writes clips from parameters (idle breathing, walk, run, jump,
-  attack, hit, death) onto the bones the draft named; `SpringBone2D`-style secondary motion and two-bone IK for feet.
+- [x] **M6 — Motion.** `app/Skeleton2DMotion.cpp` (`skeleton2d.motion`: seven recipes, roles, directions from the
+  setup pose, side walk with four key poses per leg, flat feet and contact drop), asset `springs` (stepped in
+  `Systems.cpp` `StepSkeleton2DSprings`, swing in `Skeleton2DComponentPose`, reported by `skeleton2d.state`) and
+  `ik` (`Skeleton2DSolveIk` inside `Skeleton2DSample`), the analysis' `ground` check and `plantedSpeed`. Test
+  `Skeleton2DMotionSpringsIk` (walk directions and knee, feet on the ground, planted speed, dry run, one-shot jump,
+  errors; a tail spring thrown and settling, the same in a second engine; IK reach, bend sides, out of reach, mix,
+  refused constraints). On the generated (front-view) adventurer: idle and walk pass the analysis, jump reports the
+  leg mesh squashing at the deep crouch (0.44x), a scarf spring swings 48 degrees at the takeoff and settles.
+  Not done: a Lua call to move IK targets or springs at run time (scripts key them through clips only); recipes for
+  four-legged rigs; front-view walks are steps in place (a front view cannot show legs swinging forward).
 - [ ] **M7 — Agent guide.** `docs/SKELETON2D_AGENT.md` (the step-by-step workflow with a check per step), a
   "Rigger" profile in the default team, and one full run from a generated illustration to an animated character.
 - [ ] **M8 — Editor.** Skeleton window: bones, attachments, weights painting, clip timeline, all through the commands.

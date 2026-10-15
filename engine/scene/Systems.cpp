@@ -925,6 +925,52 @@ void UpdateSpriteAnimations(Scene& scene, AssetManager* assets, float dt, std::v
     }
 }
 
+// Skeleton2D springs: each spring bone's swing is a damped spring on its angle, thrown by the acceleration of its
+// origin (where its parent carries it, the entity's own movement included) and pulled by gravity at its tip.
+void StepSkeleton2DSprings(Scene& scene, EntityId id, Skeleton2D& s, const Skeleton2DDef& def, float dt) {
+    const size_t n = def.springs.size();
+    if (s.springAngle.size() != n) {
+        s.springAngle.assign(n, 0);
+        s.springSpeed.assign(n, 0);
+        s.springLast.assign(n, Vec3());
+        s.springBefore.assign(n, Vec3());
+        s.springSteps = 0;
+    }
+    const Skeleton2DPose pose = Skeleton2DComponentPose(def, s);
+    const Mat4 root = scene.WorldMatrix(id) * Mat4::Scale(Vec3(s.flipX ? -1.0f : 1.0f, s.flipY ? -1.0f : 1.0f, 1.0f));
+    const bool mirrored = s.flipX != s.flipY;  // a mirrored skeleton turns the other way in the world
+    for (size_t i = 0; i < n; ++i) {
+        const Skeleton2DSpring& spring = def.springs[i];
+        const size_t bone = static_cast<size_t>(spring.bone);
+        const Mat4 world = root * pose.world[bone];
+        const Vec3 origin = world.TransformPoint(Vec3());
+        Vec3 acceleration;
+        if (s.springSteps >= 2) acceleration = (origin - s.springLast[i] * 2.0f + s.springBefore[i]) * (1.0f / (dt * dt));
+        s.springBefore[i] = s.springSteps >= 1 ? s.springLast[i] : origin;
+        s.springLast[i] = origin;
+        const Vec3 along = world.TransformDir(Vec3(1, 0, 0));
+        const float scale = Length(along);
+        if (scale < 1e-6f) continue;
+        const Vec3 axis = along * (1 / scale);
+        const float lever = std::max(0.05f, def.bones[bone].length * scale);
+        const Vec3 across(-axis.y, axis.x, 0);  // the way a counter-clockwise turn moves the tip
+        float push = Dot(acceleration * -spring.inertia + Vec3(0, -spring.gravity, 0), across) / lever;
+        if (mirrored) push = -push;
+        float angle = Radians(s.springAngle[i]), speed = Radians(s.springSpeed[i]);
+        speed += (push - spring.stiffness * angle - spring.damping * speed) * dt;
+        angle += speed * dt;
+        const float limit = Radians(spring.limit);
+        if (std::fabs(angle) > limit) {
+            angle = angle > 0 ? limit : -limit;
+            speed = 0;
+        }
+        if (!std::isfinite(angle) || !std::isfinite(speed)) angle = speed = 0;
+        s.springAngle[i] = Degrees(angle);
+        s.springSpeed[i] = Degrees(speed);
+    }
+    s.springSteps = std::min(2, s.springSteps + 1);
+}
+
 // Skeleton2D: clip time, the crossfade from the previous clip and the clip's events.
 void UpdateSkeletons2D(Scene& scene, AssetManager& assets, float dt, std::vector<AnimationEvent>* events) {
     for (auto& kv : scene.Pool<Skeleton2D>()) {
@@ -944,34 +990,38 @@ void UpdateSkeletons2D(Scene& scene, AssetManager& assets, float dt, std::vector
         if (s.asset.empty()) continue;
         const auto def = assets.GetSkeleton2D(s.asset);
         if (!def) continue;  // the cached error is logged once; rendering shows the error tint
+        if (dt <= 0) continue;
         const Skeleton2DClip* clip = def->FindClip(s.clip);
-        if (!clip || !s.playing || dt <= 0 || !std::isfinite(s.time) || !std::isfinite(s.speed)) continue;
-        if (!s.from.empty()) {
-            s.mixed += dt;
-            s.fromTime += dt * s.speed;
-            if (s.mixed >= s.mix || !def->FindClip(s.from)) s.from.clear();
+        if (clip && s.playing && std::isfinite(s.time) && std::isfinite(s.speed)) {
+            if (!s.from.empty()) {
+                s.mixed += dt;
+                s.fromTime += dt * s.speed;
+                if (s.mixed >= s.mix || !def->FindClip(s.from)) s.from.clear();
+            }
+            if (!s.finished && s.speed != 0) {
+                const double duration = clip->duration;
+                double next = static_cast<double>(s.time) + static_cast<double>(dt) * s.speed;
+                const double endpoint = std::max(0.0, std::min(next, duration));
+                const bool ends = !clip->loop && (duration == 0 || (s.speed > 0 && next >= duration) || (s.speed < 0 && next <= 0));
+                if (events) {
+                    const size_t begin = events->size();
+                    CollectAnimationEvents(kv.first, s.clip, clip->events, s.time, clip->loop ? next : endpoint, duration, clip->loop,
+                                           !s.eventsStarted, *events);
+                    if (ends) events->push_back({kv.first, "finished", s.clip, std::fabs(endpoint - s.time)});
+                    for (size_t i = begin; i < events->size(); ++i) (*events)[i].offset /= std::fabs(s.speed);
+                }
+                s.eventsStarted = true;
+                if (clip->loop && duration > 0) {
+                    next = std::fmod(next, duration);
+                    if (next < 0) next += duration;
+                } else {
+                    next = endpoint;
+                    s.finished = ends;
+                }
+                s.time = static_cast<float>(next);
+            }
         }
-        if (s.finished || s.speed == 0) continue;
-        const double duration = clip->duration;
-        double next = static_cast<double>(s.time) + static_cast<double>(dt) * s.speed;
-        const double endpoint = std::max(0.0, std::min(next, duration));
-        const bool ends = !clip->loop && (duration == 0 || (s.speed > 0 && next >= duration) || (s.speed < 0 && next <= 0));
-        if (events) {
-            const size_t begin = events->size();
-            CollectAnimationEvents(kv.first, s.clip, clip->events, s.time, clip->loop ? next : endpoint, duration, clip->loop,
-                                   !s.eventsStarted, *events);
-            if (ends) events->push_back({kv.first, "finished", s.clip, std::fabs(endpoint - s.time)});
-            for (size_t i = begin; i < events->size(); ++i) (*events)[i].offset /= std::fabs(s.speed);
-        }
-        s.eventsStarted = true;
-        if (clip->loop && duration > 0) {
-            next = std::fmod(next, duration);
-            if (next < 0) next += duration;
-        } else {
-            next = endpoint;
-            s.finished = ends;
-        }
-        s.time = static_cast<float>(next);
+        if (!def->springs.empty()) StepSkeleton2DSprings(scene, kv.first, s, *def, dt);
     }
 }
 

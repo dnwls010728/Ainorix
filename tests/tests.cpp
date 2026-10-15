@@ -21352,6 +21352,115 @@ TEST(Skeleton2DVariants) {
     RemoveAll(project);
 }
 
+TEST(Skeleton2DMotionSpringsIk) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton2d_motion");
+    CHECK(e.Open(project, &error));
+    Image square;
+    square.width = square.height = 10;
+    square.rgba.assign(10 * 10 * 4, 200);
+    CHECK(WritePng(project + "/px.png", square, true));
+    // A side view (facing right) at 10 px per unit: the hip 2 up, legs of two 1-unit bones straight down, a chest up, a tail back.
+    CHECK(Call(e, "skeleton2d.create", R"({"path":"side.skel2d.json","values":{"pixelsPerUnit":10,
+      "bones":[{"name":"root"},{"name":"hip","parent":"root","y":2},{"name":"chest","parent":"hip","rotation":90,"length":1},
+               {"name":"thigh_front","parent":"hip","rotation":-90,"length":1},{"name":"shin_front","parent":"thigh_front","x":1,"length":1},
+               {"name":"foot_front","parent":"shin_front","x":1,"rotation":90,"length":0.3},
+               {"name":"thigh_back","parent":"hip","rotation":-90,"length":1},{"name":"shin_back","parent":"thigh_back","x":1,"length":1},
+               {"name":"foot_back","parent":"shin_back","x":1,"rotation":90,"length":0.3},{"name":"tail","parent":"hip","rotation":180,"length":1}],
+      "slots":[{"name":"leg_back","bone":"thigh_back","attachment":"px"},{"name":"torso","bone":"chest","attachment":"px"},
+               {"name":"leg_front","bone":"thigh_front","attachment":"px"},{"name":"tail","bone":"tail","attachment":"px"}],
+      "skins":{"default":{"leg_back":{"px":{"image":"px.png","pivot":[0,0.5]}},"torso":{"px":{"image":"px.png","pivot":[0,0.5]}},
+                          "leg_front":{"px":{"image":"px.png","pivot":[0,0.5]}},"tail":{"px":{"image":"px.png","pivot":[0,0.5]}}}},
+      "springs":[{"bone":"tail","stiffness":30,"damping":3,"inertia":1,"limit":40}]}})")["ok"].asBool());
+
+    // Walk: found by role and turned by direction. At 0 the front thigh points forward (+x), at half time back; the
+    // front knee bends (the shin turns clockwise, its foot going back) while that leg swings forward.
+    Json walk = Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"walk"})");
+    CHECK(walk["ok"].asBool() && walk["result"]["view"].asString() == "side" && walk["result"]["duration"].asNumber() == 1);
+    CHECK(walk["result"]["missingRoles"].dump().find("upper_arm_front") != std::string::npos);
+    auto def = e.Assets().GetSkeleton2D("side.skel2d.json");
+    CHECK(def && def->FindClip("walk"));
+    if (!def || !def->FindClip("walk")) return;
+    const int thigh = def->BoneIndex("thigh_front"), shin = def->BoneIndex("shin_front");
+    auto tipX = [&](const Skeleton2DPose& pose, int bone) { return pose.world[static_cast<size_t>(bone)].TransformPoint(Vec3(1, 0, 0)).x; };
+    CHECK(tipX(Skeleton2DSample(*def, def->FindClip("walk"), 0), thigh) > 0.3f && tipX(Skeleton2DSample(*def, def->FindClip("walk"), 0.5f), thigh) < -0.3f);
+    CHECK(Skeleton2DSample(*def, def->FindClip("walk"), 0.72f).bones[static_cast<size_t>(shin)].rotation < -20);
+    // The body drops at the contacts so the feet stay on the ground; a planted foot moves back (the entity has to move forward).
+    Json walked = Call(e, "skeleton2d.analyze", R"({"path":"side.skel2d.json","clip":"walk","samples":16,"render":false})");
+    CHECK(walked["result"]["ground"]["plantedSpeed"].asNumber() < 0);
+    CHECK(walked["result"]["problems"].dump().find("\"ground\"") == std::string::npos);
+    // A dry run returns the clip and writes nothing; jumps are one-shot with takeoff and landing events.
+    Json dry = Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"run","name":"dash","params":{"stride":30},"dryRun":true})");
+    CHECK(dry["result"]["values"]["bones"].has("thigh_front") && !e.Assets().GetSkeleton2D("side.skel2d.json")->FindClip("dash"));
+    CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"jump"})")["result"]["loop"].asBool() == false);
+    def = e.Assets().GetSkeleton2D("side.skel2d.json");
+    CHECK(def && def->FindClip("jump") && def->FindClip("jump")->events.size() == 2 && def->FindClip("walk"));
+    CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"moonwalk"})")["error"]["code"].asString() == "invalid_args");
+    CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"walk","params":{"stride":500}})")["error"]["code"].asString() == "invalid_args");
+    CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"idle","bones":{"hip":"pelvis","chest":"ribs","head":"x","upper_arm_front":"y","upper_arm_back":"z"}})")["error"]["code"].asString() == "not_found");
+
+    // Springs: the tail swings when the body is thrown and settles; the same steps give the same swing.
+    auto swing = [&](Engine& engine) {
+        Call(engine, "scene.new", R"({"empty":true})");
+        Call(engine, "entity.create", R"({"name":"Cat","components":{"Transform":{},"Skeleton2D":{"asset":"side.skel2d.json"}}})");
+        Call(engine, "sim.play");
+        Call(engine, "sim.step", R"({"frames":3})");
+        Call(engine, "component.set", R"({"id":"Cat","type":"Transform","values":{"position":[0,0.5,0]}})");
+        Call(engine, "sim.step", R"({"frames":4})");
+        const float thrown = Call(engine, "skeleton2d.state", R"({"id":"Cat","bones":false})")["result"]["springs"]["tail"].asFloat();
+        Call(engine, "sim.step", R"({"frames":400})");
+        const float settled = Call(engine, "skeleton2d.state", R"({"id":"Cat","bones":false})")["result"]["springs"]["tail"].asFloat();
+        Call(engine, "sim.stop");
+        return std::make_pair(thrown, settled);
+    };
+    const auto first = swing(e);
+    CHECK(std::fabs(first.first) > 5 && std::fabs(first.first) <= 40.001f && std::fabs(first.second) < 0.5f);
+    Engine other;
+    CHECK(other.Open(project, &error));
+    CHECK(swing(other).first == first.first);
+
+    // IK: a two-bone arm reaches its target; the bend picks the side of the elbow; out of reach it points straight at it.
+    auto armWith = [&](const std::string& target, const std::string& bend, float mix) {
+        Json values = Json::parse(R"({"slots":[],"bones":[{"name":"root"},{"name":"upper","parent":"root","length":1},{"name":"fore","parent":"upper","x":1,"length":1},
+                                    {"name":"goal","parent":"root"}],"ik":[{"name":"arm","bones":["upper","fore"],"target":"goal"}]})");
+        values["bones"][3]["x"] = Json::parse(target)[0];
+        values["bones"][3]["y"] = Json::parse(target)[1];
+        values["ik"][0]["bend"] = bend;
+        values["ik"][0]["mix"] = mix;
+        std::string why;
+        auto parsed = ParseSkeleton2D(values, &why);
+        CHECK(parsed != nullptr);
+        return parsed;
+    };
+    for (const char* bend : {"positive", "negative"}) {
+        auto arm = armWith("[1.2, 1.0]", bend, 1);
+        if (!arm) continue;
+        const Skeleton2DPose pose = Skeleton2DSample(*arm, nullptr, 0);
+        const Vec3 tip = pose.world[2].TransformPoint(Vec3(1, 0, 0)), elbow = pose.world[2].TransformPoint(Vec3());
+        CHECK(std::fabs(tip.x - 1.2f) < 1e-3f && std::fabs(tip.y - 1.0f) < 1e-3f);
+        // Positive bends the forearm counter-clockwise from the upper arm: the elbow lies right of (below) the line to the goal.
+        const float side = 1.2f * elbow.y - 1.0f * elbow.x;
+        CHECK(std::string(bend) == "positive" ? side < -0.1f : side > 0.1f);
+    }
+    if (auto far = armWith("[5, 0]", "positive", 1)) {
+        const Vec3 tip = Skeleton2DSample(*far, nullptr, 0).world[2].TransformPoint(Vec3(1, 0, 0));
+        CHECK(std::fabs(tip.x - 2) < 1e-2f && std::fabs(tip.y) < 1e-2f);
+    }
+    if (auto half = armWith("[0, 2]", "positive", 0.5f)) {
+        const Vec3 tip = Skeleton2DSample(*half, nullptr, 0).world[2].TransformPoint(Vec3(1, 0, 0));
+        CHECK(tip.x > 0.2f && tip.x < 1.9f && tip.y > 0.2f);  // between the clip (straight along x) and the goal (straight up)
+    }
+    // Constraints that cannot work are refused with their place named.
+    std::string why;
+    CHECK(!ParseSkeleton2D(Json::parse(R"({"slots":[],"bones":[{"name":"root"},{"name":"a","parent":"root"},{"name":"b","parent":"a"}],
+                                           "ik":[{"name":"x","bones":["a","b"],"target":"b"}]})"), &why) && why.find("ik[0].target") != std::string::npos);
+    CHECK(!ParseSkeleton2D(Json::parse(R"({"slots":[],"bones":[{"name":"root"},{"name":"a","parent":"root"},{"name":"b","parent":"root"}],
+                                           "ik":[{"name":"x","bones":["a","b"],"target":"root"}]})"), &why) && why.find("child of the first") != std::string::npos);
+    CHECK(!ParseSkeleton2D(Json::parse(R"({"slots":[],"bones":[{"name":"root"}],"springs":[{"bone":"root"}]})"), &why) && why.find("springs[0].bone") != std::string::npos);
+    RemoveAll(project);
+}
+
 TEST(AnimationPropertyTracks) {
     Engine e;
     std::string error;

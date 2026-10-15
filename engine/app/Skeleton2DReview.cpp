@@ -341,6 +341,80 @@ Json AnalyzeSkeleton2D(Engine& engine, const Json& args) {
         p["pose"] = pose;
         found.emplace_back(stretched ? most : 1 / std::max(0.01f, least), p);
     }
+    // Feet against the ground line of the setup pose (clips only: stress poses bend legs on purpose).
+    Json ground;
+    if (args.has("clip")) {
+        std::vector<int> feet;
+        if (args["feet"].isArray()) {
+            for (const Json& f : args["feet"].items()) {
+                const int b = def.BoneIndex(f.asString());
+                if (b <= 0) throw ApiError("not_found", "no bone '" + f.asString() + "' for feet");
+                feet.push_back(b);
+            }
+        } else {
+            for (const char* name : {"foot_l", "foot_r", "foot_front", "foot_back"})
+                if (def.BoneIndex(name) > 0) feet.push_back(def.BoneIndex(name));
+        }
+        auto lowest = [&](const Skeleton2DPose& pose, int foot) {
+            const Mat4& m = pose.world[static_cast<size_t>(foot)];
+            return std::min(m.TransformPoint(Vec3()).y, m.TransformPoint(Vec3(def.bones[static_cast<size_t>(foot)].length, 0, 0)).y);
+        };
+        if (!feet.empty()) {
+            // The figure's height: its bones from feet to head in the setup pose (parts may not cover them all).
+            float top = -1e30f, bottom = 1e30f;
+            for (size_t b = 0; b < def.bones.size(); ++b)
+                for (float x : {0.0f, def.bones[b].length}) {
+                    const float y = setupPose.world[b].TransformPoint(Vec3(x, 0, 0)).y;
+                    top = std::max(top, y), bottom = std::min(bottom, y);
+                }
+            const float figure = std::max(1e-3f, top - bottom);
+            float line = 1e30f;
+            for (int f : feet) line = std::min(line, lowest(setupPose, f));
+            float sink = 0, rise = 1e30f;
+            std::string sinkPose;
+            for (size_t p = 0; p < poses.size(); ++p) {
+                float low = 1e30f;
+                for (int f : feet) low = std::min(low, lowest(poses[p].pose, f));
+                if (line - low > sink) sink = line - low, sinkPose = poses[p].label;
+                rise = std::min(rise, low - line);
+            }
+            // How fast a planted foot (within 2% of the figure of the ground) moves along the ground: walking in place, the
+            // entity must move at minus that speed for the feet not to slide.
+            double travel = 0, time = 0;
+            for (size_t p = 1; p < poses.size(); ++p) {
+                if (poses[p].clip != poses[p - 1].clip || poses[p].time <= poses[p - 1].time) continue;
+                // The foot carrying the body: the lowest one at the start of the step.
+                int planted = feet[0];
+                for (int f : feet)
+                    if (lowest(poses[p - 1].pose, f) < lowest(poses[p - 1].pose, planted)) planted = f;
+                for (int f : {planted}) {
+                    const float a = lowest(poses[p - 1].pose, f), b = lowest(poses[p].pose, f);
+                    if (std::fabs(a - line) > 0.02f * figure || std::fabs(b - line) > 0.02f * figure) continue;
+                    travel += poses[p].pose.world[static_cast<size_t>(f)].TransformPoint(Vec3()).x - poses[p - 1].pose.world[static_cast<size_t>(f)].TransformPoint(Vec3()).x;
+                    time += poses[p].time - poses[p - 1].time;
+                }
+            }
+            ground = Json::MakeObject();
+            ground["line"] = line;
+            if (time > 0) ground["plantedSpeed"] = std::round(travel / time * 1000) / 1000;
+            if (sink > 0.02f * figure) {
+                Json p = Problem("ground", sink > 0.04f * figure ? "high" : "low", "feet",
+                                 "a foot goes " + Number(100 * sink / figure) + "% of the figure below the ground of the setup pose at \"" + sinkPose + "\"",
+                                 "Raise the hip at that time (translate y) or bend the knee less, so the lowest foot stays on the ground line.");
+                p["pose"] = sinkPose;
+                found.emplace_back(sink / figure * 10, p);
+            }
+            bool airborne = false;
+            for (const Skeleton2DClip& c : def.clips)
+                if (c.name == args["clip"].asString())
+                    for (const AnimationMarker& m : c.events) airborne = airborne || m.name == "takeoff";
+            if (!airborne && rise > 0.03f * figure && rise < 1e29f) {
+                Json p = Problem("ground", "low", "feet", "no foot touches the ground in any pose (the lowest is " + Number(100 * rise / figure) + "% of the figure above it)",
+                                 "Lower the hip (translate y) so a foot reaches the ground line, or add a takeoff event if the clip is a jump.");
+                found.emplace_back(rise / figure * 5, p);
+            }
+        }
+    }
     // A looping clip should end where it starts.
     if (args.has("clip") && args["clip"].asString() != "*")
         if (const Skeleton2DClip* clip = def.FindClip(args["clip"].asString()))
@@ -382,6 +456,7 @@ Json AnalyzeSkeleton2D(Engine& engine, const Json& args) {
     frame["pixelsPerUnit"] = view.scale;
     frame["figurePixels"] = figurePixels;
     result["frame"] = frame;
+    if (!ground.isNull()) result["ground"] = ground;
 
     // Masks of the revealed texels, one per attachment, at the size of its image.
     if (args["masks"].asBool()) {

@@ -365,7 +365,7 @@ const Skeleton2DAttachment* Skeleton2DDef::FindAttachment(const std::string& ski
 std::shared_ptr<const Skeleton2DDef> ParseSkeleton2D(const Json& data, std::string* error) {
     auto def = std::make_shared<Skeleton2DDef>();
     try {
-        OnlyFields(data, "skeleton", {"pixelsPerUnit", "pixelArt", "bones", "slots", "skins", "clips"});
+        OnlyFields(data, "skeleton", {"pixelsPerUnit", "pixelArt", "bones", "slots", "skins", "springs", "ik", "clips"});
         def->pixelsPerUnit = Number(data["pixelsPerUnit"], "pixelsPerUnit", 100, 0.01f, 100000);
         def->pixelArt = data["pixelArt"].asBool(false);
         const Json& bones = data["bones"];
@@ -439,6 +439,57 @@ std::shared_ptr<const Skeleton2DDef> ParseSkeleton2D(const Json& data, std::stri
             bool found = false;
             for (const auto& skin : def->skins) found = found || def->FindAttachment(skin.first, static_cast<int>(i), name);
             if (!found) Fail("slots[" + std::to_string(i) + "].attachment", "no skin has attachment '" + name + "' in slot '" + def->slots[i].name + "'");
+        }
+        if (data.has("springs")) {
+            const Json& list = data["springs"];
+            if (!list.isArray() || list.size() > Skeleton2DDef::kMaxBones) Fail("springs", "must list {bone, stiffness, damping, inertia, gravity, limit}");
+            for (size_t i = 0; i < list.size(); ++i) {
+                const std::string at = "springs[" + std::to_string(i) + "]";
+                const Json& s = list[static_cast<int>(i)];
+                OnlyFields(s, at, {"bone", "stiffness", "damping", "inertia", "gravity", "limit"});
+                Skeleton2DSpring spring;
+                spring.bone = def->BoneIndex(Name(s["bone"], at + ".bone"));
+                if (spring.bone <= 0) Fail(at + ".bone", "must be a bone other than the root");
+                for (const Skeleton2DSpring& other : def->springs)
+                    if (other.bone == spring.bone) Fail(at + ".bone", "already has a spring");
+                spring.stiffness = Number(s["stiffness"], at + ".stiffness", 60, 0, 10000);
+                spring.damping = Number(s["damping"], at + ".damping", 6, 0, 1000);
+                spring.inertia = Number(s["inertia"], at + ".inertia", 1, 0, 100);
+                spring.gravity = Number(s["gravity"], at + ".gravity", 0, -1000, 1000);
+                spring.limit = Number(s["limit"], at + ".limit", 60, 0, 180);
+                def->springs.push_back(spring);
+            }
+            std::sort(def->springs.begin(), def->springs.end(), [](const auto& a, const auto& b) { return a.bone < b.bone; });
+        }
+        if (data.has("ik")) {
+            const Json& list = data["ik"];
+            if (!list.isArray() || list.size() > Skeleton2DDef::kMaxBones) Fail("ik", "must list {name, bones, target, bend, mix}");
+            for (size_t i = 0; i < list.size(); ++i) {
+                const std::string at = "ik[" + std::to_string(i) + "]";
+                const Json& c = list[static_cast<int>(i)];
+                OnlyFields(c, at, {"name", "bones", "target", "bend", "mix"});
+                Skeleton2DIk ik;
+                ik.name = Name(c["name"], at + ".name");
+                const Json& chain = c["bones"];
+                if (!chain.isArray() || chain.size() < 1 || chain.size() > 2) Fail(at + ".bones", "must be one bone, or a parent and its child");
+                for (const Json& b : chain.items()) {
+                    const int index = b.isString() ? def->BoneIndex(b.asString()) : -1;
+                    if (index <= 0) Fail(at + ".bones", "unknown bone " + b.dump() + " (the root cannot be solved)");
+                    ik.bones.push_back(index);
+                }
+                if (ik.bones.size() == 2 && def->bones[static_cast<size_t>(ik.bones[1])].parent != ik.bones[0])
+                    Fail(at + ".bones", "the second bone must be a child of the first");
+                ik.target = def->BoneIndex(Name(c["target"], at + ".target"));
+                if (ik.target < 0) Fail(at + ".target", "unknown bone '" + c["target"].asString() + "'");
+                // The target must not move with the chain, or solving would chase itself.
+                for (int b = ik.target; b >= 0; b = def->bones[static_cast<size_t>(b)].parent)
+                    if (b == ik.bones[0]) Fail(at + ".target", "must not be the chain or below it (give it the root or the hip as parent)");
+                const std::string bend = c["bend"].asString("positive");
+                if (bend != "positive" && bend != "negative") Fail(at + ".bend", "must be positive or negative");
+                ik.bendPositive = bend == "positive";
+                ik.mix = Number(c["mix"], at + ".mix", 1, 0, 1);
+                def->ik.push_back(ik);
+            }
         }
         if (data.has("clips")) {
             if (!data["clips"].isObject()) Fail("clips", "must map clip names to clips");
@@ -516,6 +567,7 @@ Skeleton2DPose Skeleton2DSample(const Skeleton2DDef& def, const Skeleton2DClip* 
             if (time >= key->time) pose.drawOrder = key->order;
     }
     Skeleton2DWorld(def, pose);
+    Skeleton2DSolveIk(def, pose);
     return pose;
 }
 
@@ -524,7 +576,58 @@ Skeleton2DPose Skeleton2DComponentPose(const Skeleton2DDef& def, const Skeleton2
     const float weight = from && component.mix > 0 ? Clamp(component.mixed / component.mix, 0, 1) : 1;
     // `time` belongs to the clip that played last; a clip set since then starts on the next step.
     const bool started = !component.current.empty() && component.currentAsset == component.asset;
-    return Skeleton2DSample(def, def.FindClip(started ? component.current : component.clip), component.time, from, component.fromTime, weight);
+    Skeleton2DPose pose = Skeleton2DSample(def, def.FindClip(started ? component.current : component.clip), component.time, from, component.fromTime, weight);
+    // Springs swing on top of the clip (and the IK).
+    bool swung = false;
+    for (size_t s = 0; s < def.springs.size() && s < component.springAngle.size(); ++s)
+        if (component.springAngle[s] != 0) {
+            pose.bones[static_cast<size_t>(def.springs[s].bone)].rotation += component.springAngle[s];
+            swung = true;
+        }
+    if (swung) Skeleton2DWorld(def, pose);
+    return pose;
+}
+
+float Skeleton2DWorldAngle(const Mat4& world) { return Degrees(std::atan2(world.at(1, 0), world.at(0, 0))); }
+
+void Skeleton2DSolveIk(const Skeleton2DDef& def, Skeleton2DPose& pose) {
+    for (const Skeleton2DIk& ik : def.ik) {
+        if (ik.mix <= 0) continue;
+        const size_t a = static_cast<size_t>(ik.bones[0]);
+        const Vec3 target = pose.world[static_cast<size_t>(ik.target)].TransformPoint(Vec3());
+        const Vec3 pa = pose.world[a].TransformPoint(Vec3());
+        const int parentA = def.bones[a].parent;
+        const float parentAngle = parentA >= 0 ? Skeleton2DWorldAngle(pose.world[static_cast<size_t>(parentA)]) : 0;
+        auto setLocal = [&](size_t bone, float worldAngle, float parentWorld) {
+            // Blend from the clip's angle by the shorter way round.
+            float& local = pose.bones[bone].rotation;
+            float delta = worldAngle - parentWorld - local;
+            delta = std::fmod(delta + 540.0f, 360.0f) - 180.0f;
+            local += delta * ik.mix;
+        };
+        if (ik.bones.size() == 1) {
+            setLocal(a, Degrees(std::atan2(target.y - pa.y, target.x - pa.x)), parentAngle);
+            Skeleton2DWorld(def, pose);
+            continue;
+        }
+        const size_t b = static_cast<size_t>(ik.bones[1]);
+        const Vec3 pb = pose.world[b].TransformPoint(Vec3());
+        const Vec3 tip = pose.world[b].TransformPoint(Vec3(std::max(1e-3f, def.bones[b].length), 0, 0));
+        const float l1 = Length(pb - pa), l2 = Length(tip - pb);
+        if (l1 < 1e-5f || l2 < 1e-5f) continue;
+        // Law of cosines: the angle at the chain's root between the target line and the first bone.
+        const float d = Clamp(Length(target - pa), std::fabs(l1 - l2) + 1e-4f, l1 + l2 - 1e-4f);
+        const float cosine = Clamp((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1, 1);
+        const float base = std::atan2(target.y - pa.y, target.x - pa.x);
+        const float toB = base + (ik.bendPositive ? -1.0f : 1.0f) * std::acos(cosine);
+        // The first bone's own axis is off the line to its child by this much.
+        const float offset = std::atan2(pb.y - pa.y, pb.x - pa.x) - Radians(Skeleton2DWorldAngle(pose.world[a]));
+        setLocal(a, Degrees(toB - offset), parentAngle);
+        Skeleton2DWorld(def, pose);
+        const Vec3 nb = pose.world[b].TransformPoint(Vec3());
+        setLocal(b, Degrees(std::atan2(target.y - nb.y, target.x - nb.x)), Skeleton2DWorldAngle(pose.world[a]));
+        Skeleton2DWorld(def, pose);
+    }
 }
 
 void Skeleton2DWorld(const Skeleton2DDef& def, Skeleton2DPose& pose) {

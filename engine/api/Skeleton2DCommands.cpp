@@ -9,6 +9,7 @@
 
 #include "app/Engine.h"
 #include "app/Skeleton2DBuild.h"
+#include "app/Skeleton2DMotion.h"
 #include "app/Skeleton2DReview.h"
 #include "app/Skeleton2DVariants.h"
 #include "assets/Assets.h"
@@ -291,9 +292,23 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
            "triangles fold (flipped) or stretch, a loop does not close (seam). Problems come with hints; writes a picture of the worst poses.",
            poseParams(Params())
                .Opt("masks", "boolean", "Also write each slot's revealed texels as a mask PNG (white = revealed) for repainting.")
+               .OptWith("feet", Json::parse(R"({"type":"array","description":"Clips: the bones whose lowest points stand on the ground (default foot_l/r, foot_front/back)."})"))
                .Opt("render", "boolean", "Write the picture of the setup and worst poses (default true).")
                .Opt("out", "string", "PNG for that picture (default .oe/vision/analyze.png)."),
            false, [](Engine& engine, const Json& args) { return AnalyzeSkeleton2D(engine, args); }});
+    r.Add({"skeleton2d.motion",
+           "Write a clip from a recipe: idle, walk, run, jump, attack, hit, death, for a humanoid seen from the front or the side (facing right). "
+           "Bones are found by role (the draft template's names, or bones: {role: name}); directions come from the rig's setup pose.",
+           Params()
+               .Req("path", "string", "*.skel2d.json.")
+               .Req("recipe", "string", "idle | walk | run | jump | attack | hit | death.")
+               .Opt("name", "string", "Clip name (default: the recipe's). An existing clip of that name is replaced.")
+               .Opt("view", "string", "front or side (default: side when the rig has thigh_front).")
+               .Opt("params", "object", "Numbers: duration, strength (0..3, scales every move); walk/run: stride, knee, arm, bob, lean; idle: breath; "
+                                         "jump: lift (0 when physics moves the body); attack: hand (l/r or front/back).")
+               .Opt("bones", "object", "Role -> bone name for rigs named otherwise: {\"hip\": \"pelvis\", \"thigh_l\": \"leg_l\"}.")
+               .Opt("dryRun", "boolean", "Return the clip without writing it."),
+           false, [](Engine& engine, const Json& args) { return Skeleton2DMotion(engine, args); }});
     r.Add({"skeleton2d.poses",
            "A contact sheet of a skeleton's poses (a clip sampled, or stress poses), each labeled; focus zooms every pose around one joint.",
            poseParams(Params())
@@ -528,6 +543,13 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                Json slots = Json::MakeObject();
                for (size_t i = 0; i < def->slots.size(); ++i) slots[def->slots[i].name] = pose.attachments[i];
                out["attachments"] = slots;
+               if (!def->springs.empty()) {
+                   // How far each spring bone swings away from the clip now, degrees.
+                   Json springs = Json::MakeObject();
+                   for (size_t i = 0; i < def->springs.size(); ++i)
+                       springs[def->bones[static_cast<size_t>(def->springs[i].bone)].name] = i < sk->springAngle.size() ? sk->springAngle[i] : 0.0f;
+                   out["springs"] = springs;
+               }
                if (args["bones"].asBool(true)) {
                    const Mat4 root = engine.GetScene().WorldMatrix(id) *
                                      Mat4::Scale(Vec3(sk->flipX ? -1.0f : 1.0f, sk->flipY ? -1.0f : 1.0f, 1.0f));

@@ -75,6 +75,27 @@ struct Skeleton2DClip {
     std::vector<AnimationMarker> events;
 };
 
+// Secondary motion: a bone that lags behind and swings when what carries it moves (hair, a scarf, a tail), as a
+// damped spring on its rotation. Stepped by the Skeleton2D component while the game runs (Systems.cpp).
+struct Skeleton2DSpring {
+    int bone = 0;
+    float stiffness = 60;  // pull back toward the clip's angle (1/s^2)
+    float damping = 6;     // how fast the swing dies (1/s)
+    float inertia = 1;     // how much the bone's motion throws it (0 = only gravity)
+    float gravity = 0;     // world units/s^2 pulling the tip down
+    float limit = 60;      // largest swing away from the clip's angle, degrees
+};
+
+// Inverse kinematics: one bone or a two-bone chain (thigh + shin) turned so its end reaches the origin of the
+// `target` bone (which clips key like any other bone). The end of a chain is the last bone's tip (its length).
+struct Skeleton2DIk {
+    std::string name;
+    std::vector<int> bones;  // one, or parent then child
+    int target = 0;
+    bool bendPositive = true;  // which way a two-bone chain bends (positive = counter-clockwise at the joint)
+    float mix = 1;             // 0 = the clip's pose, 1 = fully solved
+};
+
 struct Skeleton2DDef {
     static constexpr size_t kMaxBones = 256;
     static constexpr size_t kMaxSlots = 256;
@@ -89,6 +110,8 @@ struct Skeleton2DDef {
     // skin -> slot index -> attachment name -> attachment. "default" always exists.
     std::map<std::string, std::map<int, std::map<std::string, Skeleton2DAttachment>>> skins;
     std::vector<Skeleton2DClip> clips;
+    std::vector<Skeleton2DSpring> springs;  // in bone order
+    std::vector<Skeleton2DIk> ik;           // solved in this order after the clip
 
     int BoneIndex(const std::string& name) const;
     int SlotIndex(const std::string& name) const;
@@ -119,6 +142,10 @@ struct Skeleton2D;
 Skeleton2DPose Skeleton2DComponentPose(const Skeleton2DDef& def, const Skeleton2D& component);
 // Bone matrices in skeleton space from the local values (parents first).
 void Skeleton2DWorld(const Skeleton2DDef& def, Skeleton2DPose& pose);
+// Turns the bones of the IK constraints toward their targets (after the clip; Skeleton2DSample calls it).
+void Skeleton2DSolveIk(const Skeleton2DDef& def, Skeleton2DPose& pose);
+// The direction of a bone's +X axis in a world matrix, degrees.
+float Skeleton2DWorldAngle(const Mat4& world);
 // Matrix of one bone's setup or posed local transform.
 Mat4 Skeleton2DLocalMatrix(float x, float y, float rotation, float scaleX, float scaleY);
 // Clip time after `dt` (loops wrap); clamps a non-looping clip at its end.
