@@ -213,6 +213,32 @@ The loop an agent runs: `vision.calibrate` -> `skeleton2d.draft_template {image}
 `draftImage` -> add or grow parts until the magenta is gone -> `skeleton2d.build` -> `skeleton2d.overlay` in the
 setup pose and in a test clip.
 
+## Reviewing a rig
+
+A rig that looks right in its setup pose can still fall apart when it moves. Two commands look at it in motion. Both
+take `path` or `id` and a set of poses: a `clip` sampled at `samples` (default 8) evenly spaced times or at exact
+`times`, every clip with `clip: "*"`, or - without a clip - **stress poses** that bend each joint that moves
+something by +-`angle` degrees (default 45), one joint at a time. The poses are drawn by a small rasterizer that
+knows for every pixel which slot shows it and from which texel of its image, so the measurements need no GPU.
+
+`skeleton2d.analyze` returns `problems`, the most serious first, each with `kind`, `severity` (`high` fails
+`passed`), `subject`, a `message`, the worst `pose` and a `hint`:
+
+| kind | What it means | Typical fix |
+|---|---|---|
+| `revealed` | Picture that was under another part in the setup pose shows (`hiddenUnder` names it): cut edges, or a copy of the covering part (shared pixels cut into both) | Repaint the area (`masks: true` writes each slot's revealed texels as a white mask at its image's size, under `.oe/vision/revealed/`), or make the parts overlap less |
+| `gap` | The figure opens around a joint: the disk around it is less filled than in the setup pose (`drop`) | Grow both regions past the joint, or weight one part to both bones |
+| `flipped` | Mesh triangles fold over | Spread the weights near the joint, smaller `cell`, or bend less |
+| `stretched` | Triangles stretch beyond 1.6x (2x high) or squash below 0.5x (0.4x high) (`ratio`) | Spread the move over more of the part |
+| `seam` | A looping clip ends in another pose than it starts (`bone`) | Key the end like time 0, or `loop: false` |
+
+It also writes `image` (default `.oe/vision/analyze.png`): the setup pose and the three worst poses side by side,
+revealed picture tinted magenta, opened joints circled red. On the 1024 x 1536 test adventurer the stress analysis
+(32 poses) takes about 0.4 s.
+
+`skeleton2d.poses {..., columns?, cell?, focus?, zoom?, out?}` draws the poses as a labeled contact sheet; `focus:
+"bone"` centres every cell on that joint, zoomed (`zoom`, default 3), to compare a shoulder or a knee across a clip.
+
 ## Rendering
 
 A skeleton is drawn as one skinned mesh through the same path as skinned 3D models: the attachments of the current
@@ -254,9 +280,13 @@ unchecked line.
   built rig (20 bones with the root, 11 parts, meshes of 45..90 vertices) bends cleanly at elbows, knees and waist. Seen there for
   M4/M5: the torso shows its cut edge at the armpit when the arm lifts (the hidden area behind the arm was never
   drawn). Not done: a `quadruped` template.
-- [ ] **M4 — Review.** `skeleton2d.poses {out, poses|clip, times}` (contact sheet + zoomed crops) and
-  `skeleton2d.analyze` (flipped and stretched triangles, gaps between parts at joints, holes: pixels inside the
-  rest silhouette that become transparent when a joint bends, loop seams, foot sliding of planted bones) with hints.
+- [x] **M4 — Review.** `app/Skeleton2DReview.cpp`: pose sets (clip samples, all clips, stress poses), a slot/texel
+  rasterizer, `skeleton2d.analyze` (revealed with masks, gap, flipped, stretched, seam; worst-pose picture) and
+  `skeleton2d.poses` (contact sheet, joint focus). `render/Skeleton2DMesh` now shares the attachment geometry
+  (`Skeleton2DPieceGeometry`, `Skeleton2DPieces`, `Skeleton2DPalette`, `Skeleton2DSkinPoint`). Test `Skeleton2DReview`
+  (revealed area and its mask, an opened hip, a folded mesh, a loop seam, a still clip passing, contact sheets). On
+  the test adventurer it reports the torso's armpit edges, the legs' tops under the tunic hem and the scarf under the
+  arm as revealed - the problems seen by eye in M3. Not done: foot sliding (needs planted bones; with M6 motion).
 - [ ] **M5 — Generated fills.** `skeleton2d.variant_requests` (mask + prompt files for hidden areas the analysis found
   and for extra attachments: closed eyes, hand poses), `skeleton2d.variant_import` (rejects changes outside the mask,
   corrects small shifts/tints, registers attachments). Sending a picture to an image generator needs the user's consent.

@@ -35,48 +35,17 @@ std::shared_ptr<const Mesh> BuildMesh(const Skeleton2DDef& def, const std::vecto
         joint.inverseBind = setup.world[b].Inverse();
         mesh->joints.push_back(joint);
     }
-    const float ppu = std::max(0.01f, def.pixelsPerUnit);
     for (size_t d = 0; d < shown.size(); ++d) {
         const Shown& s = shown[d];
-        const Skeleton2DAttachment& a = *s.attachment;
         const Skeleton2DSlot& slot = def.slots[static_cast<size_t>(s.slot)];
-        const float texW = s.texture ? static_cast<float>(s.texture->width) : 64.0f;
-        const float texH = s.texture ? static_cast<float>(s.texture->height) : 64.0f;
-        const float rx = a.hasRect ? a.rect[0] : 0, ry = a.hasRect ? a.rect[1] : 0;
-        const float rw = a.hasRect ? a.rect[2] : texW, rh = a.hasRect ? a.rect[3] : texH;
-        const float sx = (a.width > 0 ? a.width : rw / ppu) / rw, sy = (a.height > 0 ? a.height : rh / ppu) / rh;
-        // Rectangle pixels (y down) -> attachment space (pivot at 0, +Y up) -> the slot bone's setup space.
-        const Mat4 place = setup.world[static_cast<size_t>(slot.bone)] * Skeleton2DLocalMatrix(a.x, a.y, a.rotation, a.scaleX, a.scaleY);
-        std::vector<float> pixels = a.vertices;
-        std::vector<uint32_t> triangles = a.triangles;
-        if (!a.IsMesh()) {
-            pixels = {0, rh, rw, rh, rw, 0, 0, 0};  // bottom-left, bottom-right, top-right, top-left
-            triangles = {0, 1, 2, 0, 2, 3};
-        }
+        const Skeleton2DPiece piece = Skeleton2DPieceGeometry(def, s.slot, *s.attachment, s.texture.get(), setup, static_cast<float>(d) * kSkeleton2DSlotStep);
         const uint32_t base = static_cast<uint32_t>(mesh->positions.size());
-        const float z = static_cast<float>(d) * kSkeleton2DSlotStep;
-        for (size_t v = 0; v < pixels.size() / 2; ++v) {
-            const float px = pixels[v * 2], py = pixels[v * 2 + 1];
-            const Vec3 local((px - a.pivot[0] * rw) * sx, ((rh - py) - a.pivot[1] * rh) * sy, 0);
-            Vec3 p = place.TransformPoint(local);
-            p.z = z;
-            mesh->positions.push_back(p);
-            mesh->normals.push_back(Vec3(0, 0, 1));
-            mesh->uvs.push_back((rx + px) / texW);
-            mesh->uvs.push_back((ry + py) / texH);
-            mesh->colors.push_back(s.color);
-            SkinVertex skin;
-            if (v < a.weights.size()) {
-                for (size_t k = 0; k < a.weights[v].size() && k < 4; ++k) {
-                    skin.joints[k] = static_cast<uint16_t>(a.weights[v][k].first);
-                    skin.weights[k] = a.weights[v][k].second;
-                }
-            } else {
-                skin.joints[0] = static_cast<uint16_t>(slot.bone);
-                skin.weights[0] = 1;
-            }
-            mesh->skin.push_back(skin);
-        }
+        mesh->positions.insert(mesh->positions.end(), piece.positions.begin(), piece.positions.end());
+        mesh->uvs.insert(mesh->uvs.end(), piece.uvs.begin(), piece.uvs.end());
+        mesh->skin.insert(mesh->skin.end(), piece.skin.begin(), piece.skin.end());
+        mesh->normals.insert(mesh->normals.end(), piece.positions.size(), Vec3(0, 0, 1));
+        mesh->colors.insert(mesh->colors.end(), piece.positions.size(), s.color);
+        const std::vector<uint32_t>& triangles = piece.triangles;
         // One submesh per run of slots with the same image and blend.
         const bool additive = slot.additive;
         const bool sameAsLast = d > 0 && !mesh->submeshes.empty() && shown[d - 1].texture == s.texture &&
@@ -108,6 +77,85 @@ std::shared_ptr<const Mesh> BuildMesh(const Skeleton2DDef& def, const std::vecto
 }
 
 }  // namespace
+
+Skeleton2DPiece Skeleton2DPieceGeometry(const Skeleton2DDef& def, int slotIndex, const Skeleton2DAttachment& a, const Texture* texture,
+                                        const Skeleton2DPose& setup, float z) {
+    Skeleton2DPiece piece;
+    piece.slot = slotIndex;
+    piece.attachment = &a;
+    const Skeleton2DSlot& slot = def.slots[static_cast<size_t>(slotIndex)];
+    const float ppu = std::max(0.01f, def.pixelsPerUnit);
+    const float texW = texture ? static_cast<float>(texture->width) : 64.0f;
+    const float texH = texture ? static_cast<float>(texture->height) : 64.0f;
+    const float rx = a.hasRect ? a.rect[0] : 0, ry = a.hasRect ? a.rect[1] : 0;
+    const float rw = a.hasRect ? a.rect[2] : texW, rh = a.hasRect ? a.rect[3] : texH;
+    const float sx = (a.width > 0 ? a.width : rw / ppu) / rw, sy = (a.height > 0 ? a.height : rh / ppu) / rh;
+    // Rectangle pixels (y down) -> attachment space (pivot at 0, +Y up) -> the slot bone's setup space.
+    const Mat4 place = setup.world[static_cast<size_t>(slot.bone)] * Skeleton2DLocalMatrix(a.x, a.y, a.rotation, a.scaleX, a.scaleY);
+    std::vector<float> pixels = a.vertices;
+    piece.triangles = a.triangles;
+    if (!a.IsMesh()) {
+        pixels = {0, rh, rw, rh, rw, 0, 0, 0};  // bottom-left, bottom-right, top-right, top-left
+        piece.triangles = {0, 1, 2, 0, 2, 3};
+    }
+    for (size_t v = 0; v < pixels.size() / 2; ++v) {
+        const float px = pixels[v * 2], py = pixels[v * 2 + 1];
+        const Vec3 local((px - a.pivot[0] * rw) * sx, ((rh - py) - a.pivot[1] * rh) * sy, 0);
+        Vec3 p = place.TransformPoint(local);
+        p.z = z;
+        piece.positions.push_back(p);
+        piece.uvs.push_back((rx + px) / texW);
+        piece.uvs.push_back((ry + py) / texH);
+        SkinVertex skin;
+        if (v < a.weights.size()) {
+            for (size_t k = 0; k < a.weights[v].size() && k < 4; ++k) {
+                skin.joints[k] = static_cast<uint16_t>(a.weights[v][k].first);
+                skin.weights[k] = a.weights[v][k].second;
+            }
+        } else {
+            skin.joints[0] = static_cast<uint16_t>(slot.bone);
+            skin.weights[0] = 1;
+        }
+        piece.skin.push_back(skin);
+    }
+    return piece;
+}
+
+std::vector<Skeleton2DPiece> Skeleton2DPieces(const Skeleton2DDef& def, const std::string& skin, const Skeleton2DPose& pose, AssetManager* assets) {
+    Skeleton2DPose setup = Skeleton2DSetupPose(def);
+    Skeleton2DWorld(def, setup);
+    std::vector<Skeleton2DPiece> pieces;
+    for (int slot : pose.drawOrder) {
+        const size_t s = static_cast<size_t>(slot);
+        if (s >= pose.attachments.size() || pose.attachments[s].empty()) continue;
+        const Skeleton2DAttachment* attachment = def.FindAttachment(skin, slot, pose.attachments[s]);
+        if (!attachment) continue;
+        std::shared_ptr<const Texture> texture = assets ? assets->GetTexture(attachment->image) : nullptr;
+        Skeleton2DPiece piece = Skeleton2DPieceGeometry(def, slot, *attachment, texture.get(), setup, 0);
+        piece.texture = texture;
+        pieces.push_back(std::move(piece));
+    }
+    return pieces;
+}
+
+std::vector<Mat4> Skeleton2DPalette(const Skeleton2DDef& def, const Skeleton2DPose& pose) {
+    Skeleton2DPose setup = Skeleton2DSetupPose(def);
+    Skeleton2DWorld(def, setup);
+    std::vector<Mat4> palette;
+    for (size_t b = 0; b < def.bones.size() && b < pose.world.size(); ++b) palette.push_back(pose.world[b] * setup.world[b].Inverse());
+    return palette;
+}
+
+Vec3 Skeleton2DSkinPoint(const std::vector<Mat4>& palette, const SkinVertex& skin, const Vec3& setup) {
+    Vec3 p;
+    float total = 0;
+    for (size_t k = 0; k < 4; ++k)
+        if (skin.weights[k] > 0 && skin.joints[k] < palette.size()) {
+            p = p + palette[skin.joints[k]].TransformPoint(setup) * skin.weights[k];
+            total += skin.weights[k];
+        }
+    return total > 0 ? p * (1 / total) : setup;
+}
 
 Skeleton2DDrawable BuildSkeleton2DDrawable(const std::shared_ptr<const Skeleton2DDef>& asset, const std::string& skin, const Skeleton2DPose& pose,
                                            AssetManager* assets) {

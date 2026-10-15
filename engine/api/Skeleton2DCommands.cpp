@@ -9,6 +9,7 @@
 
 #include "app/Engine.h"
 #include "app/Skeleton2DBuild.h"
+#include "app/Skeleton2DReview.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
 #include "render/ImageDraw.h"
@@ -275,6 +276,32 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                return BuildSkeleton2D(engine, draft, args["out"].asString(), args["partsDir"].asString(""), args["dryRun"].asBool(),
                                       args["draftImage"].asString(""));
            }});
+    auto poseParams = [](Params p) {
+        return p.Opt("path", "string", "*.skel2d.json (or id).")
+            .Opt("id", "entity", "Entity whose Skeleton2D asset and skin to use.")
+            .Opt("skin", "string", "Skin to show.")
+            .Opt("clip", "string", "Clip to sample, or \"*\" for every clip. Without a clip: stress poses bending each joint by +-angle.")
+            .Opt("samples", "integer", "Evenly spaced times per clip (default 8).")
+            .OptWith("times", Json::parse(R"({"type":"array","description":"Exact clip times in seconds instead of samples."})"))
+            .Opt("angle", "number", "Stress poses: degrees each joint is bent both ways (default 45).");
+    };
+    r.Add({"skeleton2d.analyze",
+           "Find what goes wrong when a skeleton moves: picture that was hidden under another part shows (revealed), joints open (gap), "
+           "triangles fold (flipped) or stretch, a loop does not close (seam). Problems come with hints; writes a picture of the worst poses.",
+           poseParams(Params())
+               .Opt("masks", "boolean", "Also write each slot's revealed texels as a mask PNG (white = revealed) for repainting.")
+               .Opt("render", "boolean", "Write the picture of the setup and worst poses (default true).")
+               .Opt("out", "string", "PNG for that picture (default .oe/vision/analyze.png)."),
+           false, [](Engine& engine, const Json& args) { return AnalyzeSkeleton2D(engine, args); }});
+    r.Add({"skeleton2d.poses",
+           "A contact sheet of a skeleton's poses (a clip sampled, or stress poses), each labeled; focus zooms every pose around one joint.",
+           poseParams(Params())
+               .Opt("focus", "string", "Bone whose joint every cell is centred on.")
+               .Opt("zoom", "number", "With focus: magnification, 1..16 (default 3).")
+               .Opt("columns", "integer", "Cells per row (default up to 4).")
+               .Opt("cell", "integer", "Cell size in pixels, 64..1024 (default 256).")
+               .Opt("out", "string", "PNG path (default .oe/vision/poses.png)."),
+           false, [](Engine& engine, const Json& args) { return Skeleton2DContactSheet(engine, args); }});
     r.Add({"skeleton2d.overlay",
            "Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. "
            "Returns where each bone is in the picture. Writes a PNG to read.",

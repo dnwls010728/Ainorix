@@ -21111,6 +21111,91 @@ TEST(Skeleton2DBuildFromDraft) {
     RemoveAll(project);
 }
 
+TEST(Skeleton2DReview) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton2d_review");
+    CHECK(e.Open(project, &error));
+    auto solid = [&](const char* name, int w, int h, uint8_t r, uint8_t g, uint8_t b) {
+        Image image;
+        image.width = w;
+        image.height = h;
+        image.rgba.clear();
+        for (int i = 0; i < w * h; ++i) image.rgba.insert(image.rgba.end(), {r, g, b, 255});
+        CHECK(WritePng(project + "/" + name, image, true));
+    };
+    solid("body.png", 20, 80, 255, 0, 0);
+    solid("arm.png", 40, 10, 0, 255, 0);
+    solid("leg.png", 20, 60, 0, 0, 255);
+    // 20 px per unit. The body (1 x 4) stands on the leg (1 x 3) that meets it edge to edge at the hip; the arm lies over
+    // the body's right half from its shoulder at the centre line.
+    CHECK(Call(e, "skeleton2d.create", R"({"path":"figure.skel2d.json","values":{"pixelsPerUnit":20,
+      "bones":[{"name":"root"},{"name":"hip","parent":"root","y":3},{"name":"leg","parent":"hip","rotation":-90,"length":3},
+               {"name":"shoulder","parent":"hip","y":3,"length":2}],
+      "slots":[{"name":"leg","bone":"leg","attachment":"leg"},{"name":"body","bone":"hip","attachment":"body"},{"name":"arm","bone":"shoulder","attachment":"arm"}],
+      "skins":{"default":{"leg":{"leg":{"image":"leg.png","pivot":[0.5,1],"rotation":90}},
+                          "body":{"body":{"image":"body.png","pivot":[0.5,0]}},
+                          "arm":{"arm":{"image":"arm.png","pivot":[0,0.5]}}}},
+      "clips":{"swing":{"duration":1,"bones":{"shoulder":{"rotate":[[0,0],[1,60]]}}}}}})")["ok"].asBool());
+
+    // Stress poses: lifting the arm shows body picture that was under it; bending the leg 90 degrees opens the hip.
+    Json analysis = Call(e, "skeleton2d.analyze", R"({"path":"figure.skel2d.json","angle":90,"masks":true})");
+    CHECK(analysis["ok"].asBool() && analysis["result"]["poses"].asInt() == 6 && !analysis["result"]["passed"].asBool());
+    const Json& problems = analysis["result"]["problems"];
+    auto find = [&](const std::string& kind, const std::string& subject) -> const Json* {
+        for (const Json& p : problems.items())
+            if (p["kind"].asString() == kind && p["subject"].asString() == subject) return &p;
+        return nullptr;
+    };
+    const Json* revealed = find("revealed", "body");
+    CHECK(revealed && (*revealed)["hiddenUnder"].asString() == "arm" && (*revealed)["pixels"].asInt() > 50 && !(*revealed)["hint"].asString().empty());
+    const Json* gap = find("gap", "leg");
+    CHECK(gap && (*gap)["drop"].asNumber() > 0.15);
+    CHECK(!find("revealed", "arm") && FileExists(project + "/.oe/vision/analyze.png"));
+    // The mask covers the part of the body the arm hid (its right half, rows 15..24 from the top), nothing of the left half.
+    CHECK(analysis["result"]["masks"].size() >= 1);
+    const auto mask = e.Assets().GetTexture(".oe/vision/revealed/body-body.png");
+    CHECK(mask && mask->width == 20 && mask->height == 80);
+    if (mask) {
+        int right = 0, left = 0;
+        for (int y = 15; y < 25; ++y)
+            for (int x = 0; x < 20; ++x)
+                if (mask->texels[static_cast<size_t>(y * 20 + x)] >> 24) ++(x >= 10 ? right : left);
+        CHECK(right > 20 && left == 0);
+    }
+    // A clip that does not move has nothing to report.
+    CHECK(Call(e, "skeleton2d.set", R"({"path":"figure.skel2d.json","clip":"still","values":{"bones":{"shoulder":{"rotate":[[0,0],[1,0]]}}}})")["ok"].asBool());
+    Json gentle = Call(e, "skeleton2d.analyze", R"({"path":"figure.skel2d.json","clip":"still","render":false})");
+    CHECK(gentle["result"]["passed"].asBool() && gentle["result"]["problems"].size() == 0 && !gentle["result"].has("image"));
+    // The clip loops but ends 60 degrees away from its start: a seam.
+    Json seam = Call(e, "skeleton2d.analyze", R"({"path":"figure.skel2d.json","clip":"swing","render":false})");
+    bool hasSeam = false;
+    for (const Json& p : seam["result"]["problems"].items()) hasSeam = hasSeam || (p["kind"].asString() == "seam" && p["bone"].asString() == "shoulder");
+    CHECK(hasSeam);
+
+    // A mesh folded back on itself: the forearm turned 170 degrees over a vertex column shared by both bones.
+    CHECK(Call(e, "skeleton2d.create", R"({"path":"bend.skel2d.json","values":{"pixelsPerUnit":20,
+      "bones":[{"name":"root"},{"name":"upper","parent":"root","length":1},{"name":"fore","parent":"upper","x":1,"length":1}],
+      "slots":[{"name":"arm","bone":"upper","attachment":"arm"}],
+      "skins":{"default":{"arm":{"arm":{"image":"arm.png","pivot":[0,0.5],"vertices":[0,0,20,0,30,0,40,0,0,10,20,10,30,10,40,10],
+        "triangles":[0,4,5,0,5,1,1,5,6,1,6,2,2,6,7,2,7,3],
+        "weights":[[["upper",1]],[["upper",0.5],["fore",0.5]],[["fore",1]],[["fore",1]],[["upper",1]],[["upper",0.5],["fore",0.5]],[["fore",1]],[["fore",1]]]}}}},
+      "clips":{"fold":{"loop":false,"duration":1,"bones":{"fore":{"rotate":[[0,0],[1,170]]}}}}}})")["ok"].asBool());
+    Json fold = Call(e, "skeleton2d.analyze", R"({"path":"bend.skel2d.json","clip":"fold","times":[1],"render":false})");
+    bool flipped = false;
+    for (const Json& p : fold["result"]["problems"].items()) flipped = flipped || p["kind"].asString() == "flipped";
+    CHECK(flipped && !fold["result"]["passed"].asBool());
+
+    // The contact sheet: one labeled cell per pose, zoomed on a joint on request.
+    Json sheet = Call(e, "skeleton2d.poses", R"({"path":"figure.skel2d.json","clip":"swing","samples":6,"columns":3,"cell":96})");
+    CHECK(sheet["ok"].asBool() && sheet["result"]["frames"].size() == 6 && sheet["result"]["width"].asInt() == 3 * 100 + 4);
+    CHECK(sheet["result"]["frames"][5]["time"].asNumber() > 0.8 && FileExists(project + "/.oe/vision/poses.png"));
+    CHECK(Call(e, "skeleton2d.poses", R"({"path":"figure.skel2d.json","focus":"elbow"})")["error"]["code"].asString() == "not_found");
+    CHECK(Call(e, "skeleton2d.poses", R"({"path":"figure.skel2d.json","clip":"walk"})")["error"]["code"].asString() == "not_found");
+    CHECK(Call(e, "skeleton2d.poses", R"({"path":"figure.skel2d.json","focus":"shoulder","out":"shots/focus.png"})")["result"]["frames"].size() == 6);
+    RemoveAll(project);
+}
+
 TEST(AnimationPropertyTracks) {
     Engine e;
     std::string error;

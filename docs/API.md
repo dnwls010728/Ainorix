@@ -151,6 +151,42 @@ Build a skeleton asset from a rig draft: cut each part out of the illustration, 
 | `dryRun` | boolean |  | Only check and draw the draft picture; write nothing else. |
 | `draftImage` | string |  | PNG for the draft picture (default .oe/vision/draft.png). |
 
+### `skeleton2d.analyze`
+
+Find what goes wrong when a skeleton moves: picture that was hidden under another part shows (revealed), joints open (gap), triangles fold (flipped) or stretch, a loop does not close (seam). Problems come with hints; writes a picture of the worst poses.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string |  | *.skel2d.json (or id). |
+| `id` | integer \| string |  | Entity whose Skeleton2D asset and skin to use. |
+| `skin` | string |  | Skin to show. |
+| `clip` | string |  | Clip to sample, or "*" for every clip. Without a clip: stress poses bending each joint by +-angle. |
+| `samples` | integer |  | Evenly spaced times per clip (default 8). |
+| `times` | array |  | Exact clip times in seconds instead of samples. |
+| `angle` | number |  | Stress poses: degrees each joint is bent both ways (default 45). |
+| `masks` | boolean |  | Also write each slot's revealed texels as a mask PNG (white = revealed) for repainting. |
+| `render` | boolean |  | Write the picture of the setup and worst poses (default true). |
+| `out` | string |  | PNG for that picture (default .oe/vision/analyze.png). |
+
+### `skeleton2d.poses`
+
+A contact sheet of a skeleton's poses (a clip sampled, or stress poses), each labeled; focus zooms every pose around one joint.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string |  | *.skel2d.json (or id). |
+| `id` | integer \| string |  | Entity whose Skeleton2D asset and skin to use. |
+| `skin` | string |  | Skin to show. |
+| `clip` | string |  | Clip to sample, or "*" for every clip. Without a clip: stress poses bending each joint by +-angle. |
+| `samples` | integer |  | Evenly spaced times per clip (default 8). |
+| `times` | array |  | Exact clip times in seconds instead of samples. |
+| `angle` | number |  | Stress poses: degrees each joint is bent both ways (default 45). |
+| `focus` | string |  | Bone whose joint every cell is centred on. |
+| `zoom` | number |  | With focus: magnification, 1..16 (default 3). |
+| `columns` | integer |  | Cells per row (default up to 4). |
+| `cell` | integer |  | Cell size in pixels, 64..1024 (default 256). |
+| `out` | string |  | PNG path (default .oe/vision/poses.png). |
+
 ### `skeleton2d.overlay`
 
 Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. Returns where each bone is in the picture. Writes a PNG to read.
