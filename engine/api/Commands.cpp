@@ -365,6 +365,7 @@ void Register(CommandRegistry& r, const char* name, const char* summary, Json pa
 
 void RegisterBuiltinCommands(CommandRegistry& r) {
     RegisterTwoDimensionalCommands(r);
+    RegisterSkeleton2DCommands(r);
     RegisterAtlasCommands(r);
     RegisterAnimationAssetCommands(r);
     RegisterAnimationControllerCommands(r);

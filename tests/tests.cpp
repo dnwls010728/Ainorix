@@ -62,6 +62,7 @@
 #include "physics/Physics2D.h"
 #include "scene/Components.h"
 #include "scene/Pose.h"
+#include "scene/Skeleton2D.h"
 #include "scene/SpriteAsset.h"
 #include "scene/TileGrid.h"
 #include "scene/Vfx.h"
@@ -20757,6 +20758,149 @@ TEST(SpriteAssetFiles) {
     Call(e, "history.undo");
     CHECK(e.GetScene().Get<Sprite>(e.GetScene().FindByName("Old"))->asset == "sheet.png?columns=2&ppu=8&pivot=0.5,0.25" &&
           e.GetScene().Get<Collider2D>(e.GetScene().FindByName("Old"))->shape == "polygon");
+    RemoveAll(project);
+}
+
+TEST(Skeleton2DRuntime) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton2d");
+    CHECK(e.Open(project, &error));
+    Call(e, "scene.new", R"({"empty":true})");
+    auto solid = [&](const char* name, uint8_t r, uint8_t g, uint8_t b) {
+        Image image;
+        image.width = image.height = 8;
+        image.rgba.clear();
+        for (int i = 0; i < 64; ++i) image.rgba.insert(image.rgba.end(), {r, g, b, 255});
+        CHECK(WritePng(project + "/" + name, image, true));
+    };
+    solid("body.png", 0, 0, 255);
+    solid("arm.png", 255, 0, 0);
+    solid("alt.png", 0, 255, 0);
+
+    // Problems name their place and come back with a hint; nothing is written.
+    Json bad = Call(e, "skeleton2d.create", R"({"path":"bad.skel2d.json","values":{"bones":[{"name":"root"}],"slots":[{"name":"s","bone":"nope"}]}})");
+    CHECK(bad["error"]["code"].asString() == "invalid_skeleton" && bad["error"]["message"].asString().find("slots[0].bone") != std::string::npos);
+    CHECK(!bad["error"]["hint"].asString().empty() && !FileExists(project + "/bad.skel2d.json"));
+    Json typo = Call(e, "skeleton2d.check", R"({"values":{"bones":[{"name":"root","rotaton":5}]}})");
+    CHECK(!typo["result"]["valid"].asBool() && typo["result"]["error"].asString().find("unknown field 'rotaton'") != std::string::npos);
+    CHECK(Call(e, "skeleton2d.create", R"({"path":"bad.json","values":{}})")["error"]["code"].asString() == "invalid_path");
+    CHECK(!Call(e, "skeleton2d.check", R"({"values":{"bones":[{"name":"root"}],"clips":{"c":{"bones":{"root":{"rotate":[[1,0],[0.5,1]]}}}}}})")["result"]["valid"].asBool());
+
+    // A root with an arm whose mesh bends at the elbow (forearm), a body image beside it: 8 px = 1 unit.
+    const char* asset = R"({"path":"rig.skel2d.json","values":{
+      "pixelsPerUnit": 8,
+      "bones": [{"name":"root"}, {"name":"arm","parent":"root","length":1}, {"name":"forearm","parent":"arm","x":1,"length":1}, {"name":"spare","parent":"root"}],
+      "slots": [{"name":"body","bone":"root","attachment":"body"}, {"name":"arm","bone":"arm","attachment":"arm"}],
+      "skins": {"default": {
+        "body": {"body": {"image":"body.png","pivot":[0.5,0.5],"x":-2}, "unused": {"image":"body.png"}},
+        "arm": {"arm": {"image":"arm.png","pivot":[0,0.5],"width":2,"height":0.5,
+                        "vertices":[0,0, 4,0, 8,0, 0,8, 4,8, 8,8], "triangles":[0,3,4, 0,4,1, 1,4,5, 1,5,2],
+                        "weights":[[["arm",1]], [["arm",0.5],["forearm",0.5]], [["forearm",1]], [["arm",1]], [["arm",0.5],["forearm",0.5]], [["forearm",1]]]},
+                "alt": {"image":"alt.png","pivot":[0,0.5],"width":2,"height":0.5}}}},
+      "clips": {
+        "swing": {"duration":1, "bones":{"arm":{"rotate":[[0,0],[1,90]]}, "forearm":{"rotate":[[0,0,"step"],[0.5,90]]}},
+                  "slots":{"arm":{"attachment":[[0.5,"alt"]]}}, "events":[{"time":0.5,"name":"mid"}]},
+        "rest": {"loop":false, "duration":0.5}}}})";
+    Json made = Call(e, "skeleton2d.create", asset);
+    CHECK(made["ok"].asBool() && made["result"]["stats"]["bones"].asInt() == 4 && made["result"]["stats"]["meshes"].asInt() == 1);
+    const std::string warnings = made["result"]["warnings"].dump();
+    CHECK(warnings.find("'spare' moves nothing") != std::string::npos && warnings.find("skins.default.body.unused") != std::string::npos);
+    CHECK(!Call(e, "skeleton2d.create", asset)["ok"].asBool());  // exists
+    CHECK(Call(e, "asset.info", R"({"path":"rig.skel2d.json"})")["result"]["kind"].asString() == "skeleton2d");
+
+    // Sampling: keys add to the setup pose; linear 0..90 is 22.5 at a quarter, the step key holds 0 until 0.5.
+    const auto def = e.Assets().GetSkeleton2D("rig.skel2d.json");
+    CHECK(def != nullptr);
+    if (!def) return;
+    Skeleton2DPose pose = Skeleton2DSample(*def, def->FindClip("swing"), 0.25f);
+    CHECK(std::fabs(pose.bones[1].rotation - 22.5f) < 1e-4f && pose.bones[2].rotation == 0 && pose.attachments[1] == "arm");
+    pose = Skeleton2DSample(*def, def->FindClip("swing"), 0.5f);
+    const Vec3 elbow = pose.world[2].TransformPoint(Vec3());
+    CHECK(std::fabs(elbow.x - 0.7071f) < 1e-3f && std::fabs(elbow.y - 0.7071f) < 1e-3f && pose.attachments[1] == "alt");
+    pose = Skeleton2DSample(*def, def->FindClip("swing"), 1.25f);  // loops
+    CHECK(std::fabs(pose.bones[1].rotation - 22.5f) < 1e-3f);
+
+    // The entity plays the clip; its events reach onAnimationEvent; the state reports bones in world space.
+    CHECK(WriteTextFile(project + "/scripts/rig.lua", R"L(
+local Rig = {}
+function Rig:onAnimationEvent(name, clip)
+    local events = game.get('events') or {}
+    events[#events + 1] = name .. ':' .. clip
+    game.set('events', events)
+end
+return Rig
+)L"));
+    CHECK(Call(e, "entity.create", R"({"name":"Camera","components":{"Transform":{"position":[0,0,10]},"Camera":{"projection":"orthographic","orthoSize":3,"clearColor":[0,0,0]}}})")["ok"].asBool());
+    CHECK(Call(e, "entity.create", R"({"name":"Rig","components":{"Transform":{"position":[1,0,0]},"Skeleton2D":{"asset":"rig.skel2d.json","clip":"swing"},"Script":{"path":"scripts/rig.lua"}}})")["ok"].asBool());
+    RenderView view;
+    CHECK(MakeSceneView(e.GetScene(), 1.0f, view));
+    auto count = [](const RenderTarget& t, uint32_t rgb) {
+        int n = 0;
+        for (uint32_t c : t.color) n += (c & 0xFFFFFF) == rgb;
+        return n;
+    };
+    RenderTarget before;
+    before.Resize(96, 96);
+    e.Renderer().Render(e.GetScene(), view, before);
+    CHECK(count(before, 0x0000FF) > 50 && count(before, 0xFF0000) > 20);  // the red arm (mesh, 0xAABBGGRR) and the blue body
+    Call(e, "sim.play");
+    CHECK(Call(e, "sim.step", R"({"frames":31})")["ok"].asBool());
+    CHECK(Call(e, "script.errors")["result"].size() == 0);
+    CHECK(Call(e, "game.state")["result"]["data"]["events"].dump() == R"(["mid:swing"])");
+    Json state = Call(e, "skeleton2d.state", R"({"id":"Rig"})")["result"];
+    CHECK(state["clip"].asString() == "swing" && state["attachments"]["arm"].asString() == "alt" && state["bones"].size() == 4);
+    CHECK(std::fabs(state["bones"][2]["position"][0].asFloat() - (1 + std::cos(Radians(46.5f)))) < 0.01f);
+    RenderTarget during;
+    during.Resize(96, 96);
+    e.Renderer().Render(e.GetScene(), view, during);
+    CHECK(count(during, 0x00FF00) > 20 && count(during, 0x0000FF) == 0);  // the slot switched to the green image
+    RenderTarget again;
+    again.Resize(96, 96);
+    e.Renderer().Render(e.GetScene(), view, again);
+    CHECK(again.Hash() == during.Hash());  // the cached mesh draws the same frame
+
+    // Both renderers skin the same mesh.
+    std::string gpuError;
+    if (e.EnableGpu(nullptr, &gpuError)) {
+        RenderTarget gpu;
+        gpu.Resize(96, 96);
+        e.Gpu()->Render(e.GetScene(), view, gpu);
+        auto near = [](const RenderTarget& t, int channel) {
+            int n = 0;
+            for (uint32_t c : t.color) n += ((c >> (8 * channel)) & 0xFF) > 200 && (c & 0xFFFFFF & ~(0xFFu << (8 * channel))) == 0;
+            return n;
+        };
+        std::printf("  green: software %d gpu %d\n", near(during, 1), near(gpu, 1));
+        CHECK(std::abs(near(gpu, 1) - near(during, 1)) < 40 && near(gpu, 2) > 20);
+    } else {
+        std::printf("  SKIP GPU comparison (%s)\n", gpuError.c_str());
+    }
+
+    // Lua: skeleton2d.play switches clips with a fade, skeleton2d.bone reads a bone, skeleton2d.state the playback.
+    Json eval = Json::parse(R"({"code":"skeleton2d.play(scene.find('Rig'), 'rest', {mix = 0.2}); return skeleton2d.bone(scene.find('Rig'), 'forearm').rotation"})");
+    Json rotation = e.Call("script.eval", eval);
+    CHECK(rotation["ok"].asBool() && std::fabs(rotation["result"]["value"].asFloat() - 136.5f) < 0.5f);
+    CHECK(Call(e, "sim.step", R"({"frames":3})")["ok"].asBool());
+    state = Call(e, "skeleton2d.state", R"({"id":"Rig","bones":false})")["result"];
+    CHECK(state["clip"].asString() == "rest" && state["fadingFrom"].asString() == "swing" && state["fade"].asFloat() > 0.2f && state["fade"].asFloat() < 0.3f);
+    CHECK(Call(e, "sim.step", R"({"frames":60})")["ok"].asBool());
+    state = Call(e, "skeleton2d.state", R"({"id":"Rig"})")["result"];
+    CHECK(!state.has("fadingFrom") && state["finished"].asBool() && std::fabs(state["bones"][1]["rotation"].asFloat()) < 1e-3f);
+    eval["code"] = "return skeleton2d.bone(scene.find('Rig'), 'nope') == nil and skeleton2d.state(scene.find('Rig')).finished";
+    CHECK(e.Call("script.eval", eval)["result"]["value"].asBool());
+    Call(e, "sim.stop");
+
+    // An unknown clip shows the setup pose and says so.
+    Call(e, "component.set", R"({"id":"Rig","type":"Skeleton2D","values":{"clip":"walk"}})");
+    state = Call(e, "skeleton2d.state", R"({"id":"Rig","bones":false})")["result"];
+    CHECK(state["warning"].asString().find("does not exist") != std::string::npos && state["clips"].size() == 2);
+
+    // skeleton2d.set patches one clip, removes it, and refuses a broken result.
+    CHECK(Call(e, "skeleton2d.set", R"({"path":"rig.skel2d.json","clip":"wave","values":{"duration":2}})")["result"]["stats"]["clips"].has("wave"));
+    CHECK(!Call(e, "skeleton2d.set", R"({"path":"rig.skel2d.json","clip":"wave","values":{"bones":{"ghost":{}}}})")["ok"].asBool());
+    CHECK(!Call(e, "skeleton2d.set", R"({"path":"rig.skel2d.json","clip":"wave","remove":true})")["result"]["stats"]["clips"].has("wave"));
+    CHECK(Call(e, "skeleton2d.get", R"({"path":"rig.skel2d.json"})")["result"]["values"]["bones"].size() == 4);
     RemoveAll(project);
 }
 

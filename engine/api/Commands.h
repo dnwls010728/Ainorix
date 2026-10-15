@@ -59,6 +59,8 @@ void ValidateArgs(const Command& command, const Json& args);
 
 // Layer/cell authoring, tile rules and sprite collision tools.
 void RegisterTwoDimensionalCommands(CommandRegistry& registry);
+// skeleton2d.create/get/set/check/state (api/Skeleton2DCommands.cpp).
+void RegisterSkeleton2DCommands(CommandRegistry& registry);
 void RegisterBuiltinCommands(CommandRegistry& registry);
 
 }  // namespace oe

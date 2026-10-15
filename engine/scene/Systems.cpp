@@ -13,6 +13,7 @@
 #include "scene/Components.h"
 #include "scene/Pose.h"
 #include "scene/PropertyTracks.h"
+#include "scene/Skeleton2D.h"
 #include "scene/Vfx.h"
 
 namespace oe {
@@ -924,11 +925,62 @@ void UpdateSpriteAnimations(Scene& scene, AssetManager* assets, float dt, std::v
     }
 }
 
+// Skeleton2D: clip time, the crossfade from the previous clip and the clip's events.
+void UpdateSkeletons2D(Scene& scene, AssetManager& assets, float dt, std::vector<AnimationEvent>* events) {
+    for (auto& kv : scene.Pool<Skeleton2D>()) {
+        Skeleton2D& s = kv.second;
+        if (s.clip != s.current || s.asset != s.currentAsset) {
+            // A new clip of the same skeleton fades in from where the old one was; a new asset cuts.
+            const bool fade = s.asset == s.currentAsset && !s.current.empty() && !s.clip.empty() && s.mix > 0;
+            s.from = fade ? s.current : std::string();
+            s.fromTime = s.time;
+            s.mixed = 0;
+            s.current = s.clip;
+            s.currentAsset = s.asset;
+            s.time = 0;
+            s.finished = false;
+            s.eventsStarted = false;
+        }
+        if (s.asset.empty()) continue;
+        const auto def = assets.GetSkeleton2D(s.asset);
+        if (!def) continue;  // the cached error is logged once; rendering shows the error tint
+        const Skeleton2DClip* clip = def->FindClip(s.clip);
+        if (!clip || !s.playing || dt <= 0 || !std::isfinite(s.time) || !std::isfinite(s.speed)) continue;
+        if (!s.from.empty()) {
+            s.mixed += dt;
+            s.fromTime += dt * s.speed;
+            if (s.mixed >= s.mix || !def->FindClip(s.from)) s.from.clear();
+        }
+        if (s.finished || s.speed == 0) continue;
+        const double duration = clip->duration;
+        double next = static_cast<double>(s.time) + static_cast<double>(dt) * s.speed;
+        const double endpoint = std::max(0.0, std::min(next, duration));
+        const bool ends = !clip->loop && (duration == 0 || (s.speed > 0 && next >= duration) || (s.speed < 0 && next <= 0));
+        if (events) {
+            const size_t begin = events->size();
+            CollectAnimationEvents(kv.first, s.clip, clip->events, s.time, clip->loop ? next : endpoint, duration, clip->loop,
+                                   !s.eventsStarted, *events);
+            if (ends) events->push_back({kv.first, "finished", s.clip, std::fabs(endpoint - s.time)});
+            for (size_t i = begin; i < events->size(); ++i) (*events)[i].offset /= std::fabs(s.speed);
+        }
+        s.eventsStarted = true;
+        if (clip->loop && duration > 0) {
+            next = std::fmod(next, duration);
+            if (next < 0) next += duration;
+        } else {
+            next = endpoint;
+            s.finished = ends;
+        }
+        s.time = static_cast<float>(next);
+    }
+}
+
 void UpdateSystems(Scene& scene, InputState& input, float dt, AssetManager* assets, PhysicsWorld* physics,
                    std::vector<AnimationEvent>* animationEvents) {
     if (assets) UpdateAnimators(scene, *assets, dt, animationEvents);
     UpdateVfxSystems(scene, assets, dt, physics);
     UpdateSpriteAnimations(scene, assets, dt, animationEvents);
+    if (assets) UpdateSkeletons2D(scene, *assets, dt, animationEvents);
     input.pressedThisFrame.clear();
     input.text.clear();
     input.mouseDX = input.mouseDY = 0.0f;

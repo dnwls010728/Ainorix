@@ -15,6 +15,7 @@
 #include "nav/Navigation.h"
 #include "physics/PhysicsWorld.h"
 #include "scene/Components.h"
+#include "scene/Skeleton2D.h"
 #include "scene/TileGrid.h"
 #include "script/OfficialModules.h"
 
@@ -814,6 +815,67 @@ int L_AnimationBone(lua_State* L) {
         lua_setfield(L, -2, "rotation");
         PushVec3(L, vec3(bone["modelPosition"]));
         lua_setfield(L, -2, "modelPosition");
+        return 1;
+    });
+}
+
+// skeleton2d.play(id, clip, {mix, speed, restart}?): switches the entity's Skeleton2D clip (fading over mix seconds).
+// The same clip keeps playing unless restart is true.
+int L_Skeleton2DPlay(lua_State* L) {
+    return Guard(L, [&] {
+        const EntityId id = CheckEntity(L, 1);
+        const std::string clip = luaL_checkstring(L, 2);
+        Skeleton2D* sk = SceneOf(L).Get<Skeleton2D>(id);
+        if (!sk) return luaL_error(L, "entity %d has no Skeleton2D", static_cast<int>(id));
+        if (lua_istable(L, 3)) {
+            const Json options = ToJson(L, 3);
+            if (options["mix"].isNumber()) sk->mix = Clamp(options["mix"].asFloat(), 0, 5);
+            if (options["speed"].isNumber()) sk->speed = options["speed"].asFloat(1);
+            if (options["restart"].asBool() && sk->clip == clip) {
+                sk->time = 0;
+                sk->finished = false;
+                sk->eventsStarted = false;
+            }
+        }
+        sk->clip = clip;
+        sk->playing = true;
+        return 0;
+    });
+}
+
+// skeleton2d.state(id) -> {asset, clip, time, duration, playing, finished, attachments, ...} (command skeleton2d.state without bones).
+int L_Skeleton2DState(lua_State* L) {
+    return Guard(L, [&] {
+        Json args = Json::MakeObject();
+        args["id"] = CheckEntity(L, 1);
+        args["bones"] = false;
+        const Json result = Host(L).GetEngine().Call("skeleton2d.state", args);
+        if (!result["ok"].asBool()) return luaL_error(L, "%s", result["error"]["message"].asString().c_str());
+        PushJson(L, result["result"]);
+        return 1;
+    });
+}
+
+// skeleton2d.bone(id, name) -> {position = {x,y,z}, rotation = degrees} in world space now, nil for an unknown bone.
+int L_Skeleton2DBone(lua_State* L) {
+    return Guard(L, [&] {
+        const EntityId id = CheckEntity(L, 1);
+        const std::string name = luaL_checkstring(L, 2);
+        Engine& engine = Host(L).GetEngine();
+        const Skeleton2D* sk = engine.GetScene().Get<Skeleton2D>(id);
+        if (!sk) return luaL_error(L, "entity %d has no Skeleton2D", static_cast<int>(id));
+        const auto def = sk->asset.empty() ? nullptr : engine.Assets().GetSkeleton2D(sk->asset);
+        const int bone = def ? def->BoneIndex(name) : -1;
+        if (bone < 0) { lua_pushnil(L); return 1; }
+        const Skeleton2DPose pose = Skeleton2DComponentPose(*def, *sk);
+        const Mat4 world = engine.GetScene().WorldMatrix(id) * Mat4::Scale(Vec3(sk->flipX ? -1.0f : 1.0f, sk->flipY ? -1.0f : 1.0f, 1.0f)) *
+                           pose.world[static_cast<size_t>(bone)];
+        const Vec3 axis = world.TransformDir(Vec3(1, 0, 0));
+        lua_createtable(L, 0, 2);
+        PushVec3(L, world.TransformPoint(Vec3()));
+        lua_setfield(L, -2, "position");
+        lua_pushnumber(L, Degrees(std::atan2(axis.y, axis.x)));
+        lua_setfield(L, -2, "rotation");
         return 1;
     });
 }
@@ -1865,6 +1927,8 @@ void ScriptHost::Open() {
     SetFuncs(L, "scene", sceneFuncs);
     const luaL_Reg animationFuncs[] = {{"controller", L_AnimationController}, {"play", L_AnimationPlay}, {"bone", L_AnimationBone}, {"events", L_AnimationEvents}, {nullptr, nullptr}};
     SetFuncs(L, "animation", animationFuncs);
+    const luaL_Reg skeleton2DFuncs[] = {{"play", L_Skeleton2DPlay}, {"state", L_Skeleton2DState}, {"bone", L_Skeleton2DBone}, {nullptr, nullptr}};
+    SetFuncs(L, "skeleton2d", skeleton2DFuncs);
     const luaL_Reg vfxFuncs[] = {{"spawn", L_VfxSpawn}, {"play", L_VfxPlay}, {"stop", L_VfxStop},
         {"burst", L_VfxBurst}, {"clear", L_VfxClear}, {"set", L_VfxSet}, {"state", L_VfxState}, {nullptr, nullptr}};
     SetFuncs(L, "vfx", vfxFuncs);
@@ -2312,7 +2376,7 @@ std::vector<std::string> ScriptHost::PollHotReload(const std::string& changedPat
     reloading_ = true; reloadViolation_ = false; reloadBlocked_ = reloadProtected_;
     // Block engine functions even when a module captured an unguarded binding earlier.
     const int top = lua_gettop(L_);
-    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "vfx", "trail", "physics", "nav", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
+    for (const char* global : {"scene", "input", "time", "game", "save", "host", "net", "link", "audio", "animation", "skeleton2d", "vfx", "trail", "physics", "nav", "tilemap", "log", "camera", "ui", "timer", "tween", "coroutine"}) {
         lua_getglobal(L_, global);
         if (lua_istable(L_, -1)) { lua_pushnil(L_); while (lua_next(L_, -2)) { if (lua_isfunction(L_, -1)) reloadBlocked_.insert(lua_topointer(L_, -1)); lua_pop(L_, 1); } }
         lua_pop(L_, 1);

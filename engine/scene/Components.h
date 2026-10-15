@@ -588,6 +588,62 @@ struct SpriteAnimation {
     }
 };
 
+struct Skeleton2D {
+    static constexpr const char* kTypeName = "Skeleton2D";
+    static constexpr const char* kDoc = "Draws a cut-out 2D character from a skeleton asset (*.skel2d.json, docs/SKELETON2D.md): part images on bones, rigid or bending as weighted meshes, and plays its clips. The entity's Transform places the root bone; layer/order sort it among sprites.";
+    std::string asset;
+    std::string skin;
+    std::string clip;
+    float speed = 1.0f;
+    bool playing = true;
+    float mix = 0.1f;
+    float time = 0.0f;
+    bool finished = false;
+    Color color{1, 1, 1};
+    float opacity = 1.0f;
+    bool flipX = false;
+    bool flipY = false;
+    float alphaCutoff = 0.0f;
+    int layer = 0;
+    int order = 0;
+    bool lit = false;
+    bool visible = true;
+    // Runtime (not reflected): the clip `time` refers to, the clip it is fading from and how far the fade is.
+    std::string current, currentAsset, from;
+    float fromTime = 0, mixed = 0;
+    bool eventsStarted = false;
+    static void Reflect(FieldList& f) {
+        f.Add("asset", &Skeleton2D::asset, "Skeleton asset (*.skel2d.json): bones, slots, attachments, skins and clips.");
+        f.Add("skin", &Skeleton2D::skin, "Skin whose attachments replace the default skin's (outfits). Empty = default.");
+        f.Add("clip", &Skeleton2D::clip, "Clip being played; empty = the setup pose. Changing it starts the new clip from 0 and fades over `mix` seconds.");
+        f.Add("speed", &Skeleton2D::speed, "Playback speed multiplier.");
+        f.Add("playing", &Skeleton2D::playing, "Pause/resume.");
+        auto& mix = f.Add("mix", &Skeleton2D::mix, "Seconds the bones fade from the previous clip when `clip` changes (0 = cut).");
+        mix.hasRange = true;
+        mix.min = 0;
+        mix.max = 5;
+        f.Add("time", &Skeleton2D::time, "Runtime: seconds into the current clip.");
+        f.Add("finished", &Skeleton2D::finished, "Runtime: true once a non-looping clip reached its end.");
+        f.Add("color", &Skeleton2D::color, "Tint multiplied with every part.");
+        auto& op = f.Add("opacity", &Skeleton2D::opacity, "Below 1 the character is drawn see-through.");
+        op.hasRange = true;
+        op.min = 0;
+        op.max = 1;
+        f.Add("flipX", &Skeleton2D::flipX, "Mirror horizontally around the root (face left).");
+        f.Add("flipY", &Skeleton2D::flipY, "Mirror vertically.");
+        f.Add("alphaCutoff", &Skeleton2D::alphaCutoff,
+              "0 = soft edges, parts alpha blended in slot order (painted art). Above 0, pixels with less alpha are cut out and the parts write depth (pixel art).");
+        f.Add("layer", &Skeleton2D::layer, "2D sorting layer, as Sprite.layer.");
+        f.Add("order", &Skeleton2D::order, "Sorting inside the layer, as Sprite.order.");
+        f.Add("lit", &Skeleton2D::lit, "Apply scene lighting (default: full brightness).");
+        f.Add("visible", &Skeleton2D::visible, "Whether it is drawn.");
+        f.Group("Animation", {"asset", "skin", "clip", "speed", "playing", "mix"});
+        f.Group("Look", {"color", "opacity", "flipX", "flipY", "visible"});
+        f.Group("Rendering", {"alphaCutoff", "layer", "order", "lit"}, true);
+        f.Group("Runtime", {"time", "finished"}, true);
+    }
+};
+
 struct Tilemap {
     static constexpr const char* kTypeName = "Tilemap";
     static constexpr const char* kDoc = "Grid of tiles written as text rows (map): each character is a tile defined by a tileset file or the legend (fixed frame, random variants or autotile that picks frames from the neighbours). The entity position is the top-left corner; rows go down (-Y), columns right (+X). Tiles can be solid, one-way or shaped (slopes) for 2D and 3D physics.";

@@ -1,6 +1,7 @@
 #include "render/RenderScene.h"
 #include "render/Light2D.h"
 #include "render/SpriteShape.h"
+#include "render/Skeleton2DMesh.h"
 
 #include <algorithm>
 #include <cmath>
@@ -652,6 +653,46 @@ std::vector<RenderItem> GatherRenderItems(const Scene& scene, AssetManager* asse
                 items.push_back(std::move(cell));
             }
         }
+    }
+    // Skeleton2D: one skinned mesh of the shown attachments; only the bone palette changes per frame.
+    for (const auto& kv : scene.Pool<Skeleton2D>()) {
+        const Skeleton2D& sk = kv.second;
+        if (!sk.visible) continue;
+        RenderItem it;
+        it.id = kv.first;
+        it.tint = sk.color;
+        it.unlit = !sk.lit;
+        it.castShadows = false;
+        it.doubleSided = true;  // flips mirror the triangles
+        it.alphaCutoff = std::max(0.0f, sk.alphaCutoff);
+        it.blend = sk.alphaCutoff <= 0.0f;  // no cutoff: soft edges, alpha blended in slot order
+        it.opacity = sk.opacity;
+        it.sortLayer = sk.layer;
+        it.sortOrder = sk.order;
+        std::shared_ptr<const Skeleton2DDef> def = assets && !sk.asset.empty() ? assets->GetSkeleton2D(sk.asset) : nullptr;
+        Skeleton2DDrawable drawable;
+        if (def) {
+            it.pointSample = def->pixelArt;
+            drawable = BuildSkeleton2DDrawable(def, sk.skin, Skeleton2DComponentPose(*def, sk), assets);
+            if (!drawable.mesh) continue;  // no slot shows an attachment
+            it.mesh = drawable.mesh;
+            it.joints = std::move(drawable.palette);
+            if (!drawable.missing.empty()) it.error = true;
+        } else {
+            // Missing or broken asset: a magenta square at the root, like a broken sprite.
+            it.mesh = std::shared_ptr<const Mesh>(std::shared_ptr<const Mesh>(), quad);
+            it.tint = Color(1, 0, 1);
+            it.unlit = true;
+            it.error = true;
+            it.blend = false;
+            it.alphaCutoff = 0;
+        }
+        const float nudge = static_cast<float>(sk.layer) * 0.01f + static_cast<float>(sk.order) * 0.001f;
+        it.world = scene.WorldMatrix(kv.first) * Mat4::Translation(Vec3(0, 0, nudge)) *
+                   Mat4::Scale(Vec3(sk.flipX ? -1.0f : 1.0f, sk.flipY ? -1.0f : 1.0f, 1.0f));
+        if (pixelStep > 0) it.world = Mat4::Translation(PixelSnap(it.world.TransformPoint(Vec3()), right, up, pixelStep)) * it.world;
+        it.normalMatrix = it.world.Inverse().Transposed();
+        items.push_back(std::move(it));
     }
     ApplySpriteMasks(scene, items);
     // Darkness2D: one camera-facing quad at the near plane, textured with a light map built here

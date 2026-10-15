@@ -17,6 +17,7 @@ namespace oe {
 class Engine;
 class Scene;
 struct VfxAsset;
+struct Skeleton2DDef;
 
 // Decoders (stb_image / cgltf / ufbx). External files of a model resolve beside it.
 bool DecodeImage(const unsigned char* data, size_t size, Texture& out, std::string* error);
@@ -55,6 +56,8 @@ public:
     std::shared_ptr<const Tileset> GetTileset(const std::string& path, std::string* error = nullptr);
     // Reusable sprite animation (*.anim.json), strictly validated and hot reloaded.
     std::shared_ptr<const Json> GetAnimation(const std::string& path, std::string* error = nullptr);
+    // 2D skeleton (*.skel2d.json, docs/SKELETON2D.md), validated by ParseSkeleton2D and hot reloaded.
+    std::shared_ptr<const Skeleton2DDef> GetSkeleton2D(const std::string& path, std::string* error = nullptr);
     // Named .atlas.json or TexturePacker frames, normalized and hot reloaded. A sprite asset
     // (*.sprite.json) loads here too: an atlas with pixelsPerUnit, pixelArt, pivot and frame collision.
     std::shared_ptr<const Json> GetAtlas(const std::string& path, std::string* error = nullptr);
@@ -118,6 +121,7 @@ private:
     Entry<Json> LoadAtlas(const std::string& path);
     Entry<Json> LoadGeneratedSprite(const std::string& source);
     Entry<Json> LoadAnimation(const std::string& path);
+    Entry<Skeleton2DDef> LoadSkeleton2D(const std::string& path);
     struct FontEntry {
         std::shared_ptr<FontFace> asset;
         std::string error;
@@ -136,6 +140,7 @@ private:
     std::map<std::string, Entry<ShaderGraph>> shaders_;
     std::map<std::string, Entry<Tileset>> tilesets_;
     std::map<std::string, Entry<Json>> animations_;
+    std::map<std::string, Entry<Skeleton2DDef>> skeletons2D_;
     std::map<std::string, Entry<Json>> atlases_;
     std::map<std::string, Entry<Json>> generatedSprites_;  // Sprite.asset image forms ("hero.png?columns=6")
     std::map<std::string, Entry<VfxAsset>> vfx_;

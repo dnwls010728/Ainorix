@@ -314,7 +314,7 @@ Needed by some genres:
   ropes, beams), not `debug.draw`. `Trail` covers moving ribbons only.
 - [ ] **T12 — 2D skeletal animation.** Cut-out characters: bones, weighted mesh deformation, slots, clips. Either
   an importer for an open runtime format (Spine JSON needs its runtime licence checked; DragonBones is open) or the
-  engine's own small format reusing `Pose`. Large; start only with a game that needs it.
+  engine's own small format reusing `Pose`. Large; start only with a game that needs it. In progress as `Skeleton2D` with an agent-driven pipeline: [SKELETON2D.md](SKELETON2D.md) (M1 runtime done).
 - [ ] **T13 — 2D physics areas.** Effect regions on a trigger `Collider2D`: wind/force, buoyancy and drag (water),
   local gravity. Also measure the cost of rebuilding tile collision when cells change during play (destructible
   terrain) and rebuild only the changed part if it is too slow — not measured yet.

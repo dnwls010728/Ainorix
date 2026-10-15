@@ -59,6 +59,7 @@ void RegisterBuiltinComponents() {
     TypeRegistry::Register<NavMesh>();
     TypeRegistry::Register<NavModifier>();
     TypeRegistry::Register<SpotLight>();
+    TypeRegistry::Register<Skeleton2D>();
     TypeRegistry::Register<Data>();  // last: the earlier pools keep their order
 }
 

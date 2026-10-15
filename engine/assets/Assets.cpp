@@ -19,6 +19,7 @@
 #include "core/FileSystem.h"
 #include "core/Log.h"
 #include "scene/Systems.h"
+#include "scene/Skeleton2D.h"
 #include "scene/Vfx.h"
 
 #if defined(_MSC_VER)
@@ -676,6 +677,7 @@ std::string AssetManager::KindOf(const std::string& path) {
     if (EndsWith(p, ".anim.json") || EndsWith(p, ".clips.json")) return "animation";
     if (EndsWith(p, ".atlas.json")) return "atlas";
     if (EndsWith(p, ".sprite.json")) return "sprite";
+    if (EndsWith(p, ".skel2d.json")) return "skeleton2d";
     if (EndsWith(p, ".tileset.json")) return "tileset";
     if (EndsWith(p, ".scene.json")) return "scene";
     return "other";
@@ -970,6 +972,31 @@ std::shared_ptr<const Json> AssetManager::GetAnimation(const std::string& path, 
     return found->second.asset;
 }
 
+AssetManager::Entry<Skeleton2DDef> AssetManager::LoadSkeleton2D(const std::string& path) {
+    Entry<Skeleton2DDef> entry;
+    try {
+        const std::string full = engine_.ResolvePath(path);
+        entry.mtime = FileModifiedTime(full);
+        std::string text, parseError;
+        if (!EndsWith(Lower(path), ".skel2d.json")) entry.error = "skeleton asset must end with .skel2d.json";
+        else if (!ReadTextFile(full, text)) entry.error = "skeleton asset not found: " + path;
+        else {
+            const Json data = Json::parse(text, &parseError);
+            if (!parseError.empty()) entry.error = "invalid JSON: " + parseError;
+            else entry.asset = ParseSkeleton2D(data, &entry.error);
+        }
+    } catch (const std::exception& ex) { entry.error = ex.what(); }
+    if (!entry.error.empty()) OE_LOG_WARN("assets", "%s: %s", path.c_str(), entry.error.c_str());
+    return entry;
+}
+
+std::shared_ptr<const Skeleton2DDef> AssetManager::GetSkeleton2D(const std::string& path, std::string* error) {
+    auto found = skeletons2D_.find(path);
+    if (found == skeletons2D_.end()) found = skeletons2D_.emplace(path, LoadSkeleton2D(path)).first;
+    if (error) *error = found->second.error;
+    return found->second.asset;
+}
+
 AssetManager::Entry<Json> AssetManager::LoadAtlas(const std::string& path) {
     Entry<Json> entry;
     try {
@@ -1085,6 +1112,9 @@ std::vector<std::string> AssetManager::PollChanges() {
     for (auto& kv : animations_) {
         if (mtimeOf(kv.first) != kv.second.mtime) { kv.second = LoadAnimation(kv.first); changed.push_back(kv.first); }
     }
+    for (auto& kv : skeletons2D_) {
+        if (mtimeOf(kv.first) != kv.second.mtime) { kv.second = LoadSkeleton2D(kv.first); changed.push_back(kv.first); }
+    }
     for (auto& kv : textures_) {
         if (mtimeOf(kv.first) != kv.second.mtime) {
             kv.second = LoadTexture(kv.first);
@@ -1136,6 +1166,7 @@ std::vector<std::string> AssetManager::PollChanges() {
 
 void AssetManager::Forget(const std::string& path) {
     animations_.erase(path);
+    skeletons2D_.erase(path);
     atlases_.erase(path);
     generatedSprites_.clear();  // they read images and atlases
     vfx_.erase(path);
@@ -1153,6 +1184,7 @@ void AssetManager::Forget(const std::string& path) {
 
 void AssetManager::Clear() {
     animations_.clear();
+    skeletons2D_.clear();
     atlases_.clear();
     generatedSprites_.clear();
     vfx_.clear();

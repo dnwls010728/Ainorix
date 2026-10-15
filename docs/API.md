@@ -87,6 +87,57 @@ Fit a convex Collider2D polygon around the opaque pixels of the sprite's current
 | `allFrames` | boolean |  | Fit every frame of the sheet or atlas (at most 1024) into framePoints. |
 | `merge` | string |  | Undo group key. |
 
+## skeleton2d
+
+### `skeleton2d.get`
+
+Read a 2D skeleton asset with its counts (bones, slots, attachments, clips).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | *.skel2d.json. |
+
+### `skeleton2d.create`
+
+Create a 2D skeleton asset (bones, slots, skins, clips); validated before writing; no scene undo.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | *.skel2d.json. |
+| `values` | object | yes | The whole asset. |
+| `overwrite` | boolean |  | Replace an existing file. |
+
+### `skeleton2d.set`
+
+Patch a 2D skeleton asset: top-level fields, or one clip with `clip`; arrays and objects given replace; validated before writing.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | *.skel2d.json. |
+| `values` | object | yes | Fields to replace. |
+| `clip` | string |  | Patch this clip's fields instead (created when new). |
+| `remove` | boolean |  | With clip: delete that clip. |
+
+### `skeleton2d.check`
+
+Validate a 2D skeleton (a file or values) without writing: the first error with its place, counts and warnings with hints.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string |  | *.skel2d.json to check. |
+| `values` | object |  | An asset to check instead of a file. |
+
+### `skeleton2d.state`
+
+Playback state of an entity's Skeleton2D and where its bones are now (world position and rotation).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `id` | integer \| string | yes | Entity id or unique name with Skeleton2D. |
+| `bones` | boolean |  | Include every bone (default true). |
+
+## sprite
+
 ### `sprite.create`
 
 Make a sprite asset (*.sprite.json) from an image: cut into frames by `slicing` (default: the whole image is one frame), with pixels per unit, filtering and the default pivot every Sprite naming it (Sprite.asset) shares. Or write `values` as given. File write, no scene undo.
@@ -3146,6 +3197,30 @@ Cone light along local -Z (parent rotations included), with a soft edge and opti
 | `innerAngle` | float | `20` | Full-strength cone half-angle in degrees; clamped to 0..outerAngle. |
 | `outerAngle` | float | `30` | Cone half-angle in degrees; clamped to 0.1..89. Equal angles give a hard edge. |
 | `shadows` | bool | `false` | Cast shadows if selected: at most two local lights per view, in view and nearest first. |
+
+### Skeleton2D
+
+Draws a cut-out 2D character from a skeleton asset (*.skel2d.json, docs/SKELETON2D.md): part images on bones, rigid or bending as weighted meshes, and plays its clips. The entity's Transform places the root bone; layer/order sort it among sprites.
+
+| field | type | default | description |
+|---|---|---|---|
+| `asset` | string | `""` | Skeleton asset (*.skel2d.json): bones, slots, attachments, skins and clips. |
+| `skin` | string | `""` | Skin whose attachments replace the default skin's (outfits). Empty = default. |
+| `clip` | string | `""` | Clip being played; empty = the setup pose. Changing it starts the new clip from 0 and fades over `mix` seconds. |
+| `speed` | float | `1` | Playback speed multiplier. |
+| `playing` | bool | `true` | Pause/resume. |
+| `mix` | float | `0.100000001` | Seconds the bones fade from the previous clip when `clip` changes (0 = cut). |
+| `time` | float | `0` | Runtime: seconds into the current clip. |
+| `finished` | bool | `false` | Runtime: true once a non-looping clip reached its end. |
+| `color` | color | `[1,1,1]` | Tint multiplied with every part. |
+| `opacity` | float | `1` | Below 1 the character is drawn see-through. |
+| `flipX` | bool | `false` | Mirror horizontally around the root (face left). |
+| `flipY` | bool | `false` | Mirror vertically. |
+| `alphaCutoff` | float | `0` | 0 = soft edges, parts alpha blended in slot order (painted art). Above 0, pixels with less alpha are cut out and the parts write depth (pixel art). |
+| `layer` | int | `0` | 2D sorting layer, as Sprite.layer. |
+| `order` | int | `0` | Sorting inside the layer, as Sprite.order. |
+| `lit` | bool | `false` | Apply scene lighting (default: full brightness). |
+| `visible` | bool | `true` | Whether it is drawn. |
 
 ### Data
 
