@@ -152,6 +152,67 @@ writes a PNG (default under `.oe/vision/`, never packaged) for the agent to read
 A bone points along its local +X: `length` is drawn that way and a child placed at `x: length` sits at its tip. An
 upright torso bone therefore has `rotation: 90`, a hanging leg `rotation: -90`.
 
+## Building from a picture
+
+A character starts as one illustration: the whole figure on a transparent background, in a pose that keeps its
+limbs apart (front view: arms held a little away from the body, legs apart; side view: facing right). Image
+generators make these well (`docs/RPG.md` shows the Codex image generation setup; ask for "transparent background,
+A-pose, clear gap between arms and torso, no ground shadow"). The agent then writes a **draft** and the engine
+builds the skeleton from it.
+
+```json
+{
+  "image": "art/hero.png",
+  "height": 2,
+  "joints": {"hip": [502, 790], "chest": [502, 460], "neck": [502, 270], "elbow_l": [720, 575], "...": [0, 0]},
+  "bones": [
+    {"name": "hip", "from": "hip", "to": "chest"},
+    {"name": "chest", "parent": "hip", "from": "chest", "to": "neck"},
+    {"name": "upper_arm_l", "parent": "chest", "from": "shoulder_l", "to": "elbow_l"}
+  ],
+  "parts": [
+    {"name": "torso", "polygon": [[340, 270], [670, 270], [690, 820], [320, 820]], "bones": ["hip", "chest"]},
+    {"name": "head", "ellipse": [502, 155, 120, 125], "bone": "head"},
+    {"name": "arm_l", "polygon": [[...]], "bones": ["upper_arm_l", "forearm_l"], "cell": 24},
+    {"name": "hat", "image": "art/hat.png", "at": [430, 0], "bone": "head"}
+  ]
+}
+```
+
+- `joints` are image pixels (x right, y down). `bones` run `from` -> `to` (joint names or `[x, y]`); a root bone at
+  the `origin` (default: the bottom centre of the opaque pixels, or a `root` joint) is added, and `parent` defaults
+  to it. Clips turn a bone around its `from`.
+- `parts` are listed back to front. Each takes the opaque pixels of the illustration inside its `polygon`,
+  `ellipse` `[cx, cy, rx, ry]` or `rect` `[x, y, w, h]` (neighbours should overlap a little at the joints so bending
+  opens no gap), or brings its own `image` placed with its top-left at `at`. `bone` makes it rigid; `bones` (1..8)
+  makes it a grid mesh (`cell` pixels, default about a tenth of the part) whose vertices are weighted by their
+  distance to those bones, so it bends at the joints between them.
+- `height` (world units of the figure, default 2) or `pixelsPerUnit` sets the scale; `alphaThreshold` (default 8)
+  what counts as opaque; `pixelArt` is copied to the asset.
+
+`skeleton2d.draft_template {kind: humanoid-front|humanoid-side, image, joints?, out?}` writes a complete draft for
+the usual figure: 20 joints with a note on where each goes, 18 bones (hip, chest, head, and per side upper arm,
+forearm, hand, thigh, shin, foot; `_l`/`_r` are the character's left and right, `_front`/`_back` in a side view)
+and 10 parts in draw order. With `image` the joints are first guesses from the figure's bounds; the agent corrects
+them with `image.grid` and passes them back as `joints`, and the template fits the regions to them: limb thickness is
+measured across each bone in the picture's opaque pixels (the second-thinnest of five runs, so a limb touching the
+body does not measure the body) and the band is moved onto the middle of the limb. Things the template does not
+know (a scarf, a tail, a weapon) are parts the agent adds.
+
+`skeleton2d.build {draft | values, out, partsDir?, dryRun?, draftImage?}` cuts each part into
+`<out>-parts/<name>.png`, writes `out` so the setup pose is exactly the illustration (images stay upright, bones at
+their joints) and returns per part its rectangle, pixels, vertices and bones; `coverage` (opaque pixels no part
+took, pixels two parts share); warnings with hints (a part that takes nothing, joints and bones nothing uses, bones
+without a direction, more than 1% of the figure uncovered); and `draftImage`, a picture of the draft over the
+illustration with regions, bones and joints, and magenta where no part took the pixels. `dryRun` only checks and
+draws. Rebuilding keeps the clips of `out`; if they key a bone or slot that is gone the build is refused (the hint
+says how to fix it) and the file stays as it was. With `values` and `draft` the draft is also saved there.
+
+The loop an agent runs: `vision.calibrate` -> `skeleton2d.draft_template {image}` -> correct joints with
+`image.grid {marks}` -> `skeleton2d.draft_template {image, joints}` -> `skeleton2d.build {dryRun}` and read
+`draftImage` -> add or grow parts until the magenta is gone -> `skeleton2d.build` -> `skeleton2d.overlay` in the
+setup pose and in a test clip.
+
 ## Rendering
 
 A skeleton is drawn as one skinned mesh through the same path as skinned 3D models: the attachments of the current
@@ -182,10 +243,17 @@ unchecked line.
   labels). Test `Skeleton2DAgentVision` (grid size and errors, calibration determinism, dot centres found in the
   pixels pass and moved ones fail, overlay bone positions). Checked by doing it: calibration seed 7 read through
   `image.grid` zooms and marks, all six dots at 0 px error; overlays of the test humanoid read correctly.
-- [ ] **M3 — Build from a draft.** A semantic draft (`*.skel2d-draft.json`: body regions as polygons/ellipses and
-  joints as points, from templates `humanoid-front`, `humanoid-side`, `quadruped`) and `skeleton2d.build`: cut part
-  images out of one illustration (or take separate part images), outline them from alpha, triangulate, weight
-  automatically by distance to bone segments, write the asset. `skeleton2d.draft_template {kind}`.
+- [x] **M3 — Build from a draft.** `app/Skeleton2DBuild.cpp`: draft parsing (strict, places in messages), part cutting
+  (polygon / ellipse / rect regions of one illustration, or separate images), grid meshes inside the opaque pixels,
+  distance weights (inverse fourth power, at most four bones, below 2% dropped), bone and attachment placement so the
+  setup pose is the illustration, coverage, the draft picture, clip keeping on rebuild; templates `humanoid-front` and
+  `humanoid-side` with joints guessed from the bounds and regions fitted to given joints by measured limb widths.
+  Commands `skeleton2d.draft_template`, `skeleton2d.build`. Test `Skeleton2DBuildFromDraft`. Run end to end on a
+  Codex-generated 1024 x 1536 adventurer (`build/sk2d/art/hero.png`, local): template guesses left 23.8% of the figure
+  uncovered; joints corrected through two `image.grid` looks brought it to 2.9%, one added `scarf` part to 0.6%; the
+  built rig (20 bones with the root, 11 parts, meshes of 45..90 vertices) bends cleanly at elbows, knees and waist. Seen there for
+  M4/M5: the torso shows its cut edge at the armpit when the arm lifts (the hidden area behind the arm was never
+  drawn). Not done: a `quadruped` template.
 - [ ] **M4 — Review.** `skeleton2d.poses {out, poses|clip, times}` (contact sheet + zoomed crops) and
   `skeleton2d.analyze` (flipped and stretched triangles, gaps between parts at joints, holes: pixels inside the
   rest silhouette that become transparent when a joint bends, loop seams, foot sliding of planted bones) with hints.

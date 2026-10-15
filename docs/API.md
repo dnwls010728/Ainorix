@@ -127,6 +127,30 @@ Validate a 2D skeleton (a file or values) without writing: the first error with 
 | `path` | string |  | *.skel2d.json to check. |
 | `values` | object |  | An asset to check instead of a file. |
 
+### `skeleton2d.draft_template`
+
+A starting rig draft for a kind of character: joints (with where each goes), bones and parts in draw order. With an image, joints and regions are first guesses from its opaque bounds and body proportions, to correct with image.grid.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `kind` | string | yes | humanoid-front or humanoid-side (facing right). |
+| `image` | string |  | The character illustration (transparent background) the draft is for. |
+| `joints` | object |  | Joints you placed: {name: [x, y]} in image pixels; regions are fitted to them (widths measured from the image). |
+| `out` | string |  | Also write the draft to this *.skel2d-draft.json. |
+
+### `skeleton2d.build`
+
+Build a skeleton asset from a rig draft: cut each part out of the illustration, mesh it, weight it to its bones, place it so the setup pose is the picture. Keeps the clips of an existing asset. Returns coverage (pixels no part took), warnings and a picture of the draft.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `draft` | string |  | *.skel2d-draft.json to build from (or values). |
+| `values` | object |  | The draft itself; with draft it is also written there. |
+| `out` | string | yes | *.skel2d.json to write. |
+| `partsDir` | string |  | Folder for the cut part images (default: <out name>-parts/). |
+| `dryRun` | boolean |  | Only check and draw the draft picture; write nothing else. |
+| `draftImage` | string |  | PNG for the draft picture (default .oe/vision/draft.png). |
+
 ### `skeleton2d.overlay`
 
 Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. Returns where each bone is in the picture. Writes a PNG to read.

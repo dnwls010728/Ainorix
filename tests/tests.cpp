@@ -20987,6 +20987,130 @@ TEST(Skeleton2DAgentVision) {
     RemoveAll(project);
 }
 
+TEST(Skeleton2DBuildFromDraft) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton2d_build");
+    CHECK(e.Open(project, &error));
+    // A figure on a transparent 100 x 200 picture: a red body (x 40..59, y 40..119) and a green arm (x 60..89, y 50..59).
+    Image picture;
+    picture.width = 100;
+    picture.height = 200;
+    picture.rgba.assign(100 * 200 * 4, 0);
+    auto fill = [&](int x0, int y0, int x1, int y1, uint8_t r, uint8_t g) {
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x) {
+                uint8_t* p = &picture.rgba[(static_cast<size_t>(y) * 100 + static_cast<size_t>(x)) * 4];
+                p[0] = r, p[1] = g, p[2] = 0, p[3] = 255;
+            }
+    };
+    fill(40, 40, 60, 120, 255, 0);
+    fill(60, 50, 90, 60, 0, 255);
+    CHECK(WritePng(project + "/figure.png", picture, true));
+    const char* draft = R"({"image":"figure.png",
+      "joints":{"hip":[50,118],"neck":[50,42],"shoulder":[60,55],"elbow":[75,55],"hand":[89,55],"spare":[1,1]},
+      "bones":[{"name":"spine","from":"hip","to":"neck"},{"name":"upper","parent":"spine","from":"shoulder","to":"elbow"},
+               {"name":"fore","parent":"upper","from":"elbow","to":"hand"}],
+      "parts":[{"name":"body","rect":[38,38,22,84],"bone":"spine"},
+               {"name":"arm","polygon":[[60,46],[92,46],[92,64],[60,64]],"bones":["upper","fore"],"cell":5}]})";
+
+    // A dry run checks and draws the draft, writes nothing else; coverage is complete; the unused joint is reported.
+    Json args = Json::parse(R"({"out":"chars/figure.skel2d.json","dryRun":true})");
+    args["values"] = Json::parse(draft);
+    Json dry = e.Call("skeleton2d.build", args);
+    CHECK(dry["ok"].asBool() && !dry["result"]["written"].asBool() && !FileExists(project + "/chars/figure.skel2d.json"));
+    CHECK(dry["result"]["coverage"]["uncovered"].asNumber() == 0 && dry["result"]["coverage"]["opaque"].asNumber() == 20 * 80 + 30 * 10);
+    CHECK(dry["result"]["warnings"].dump().find("joints.spare") != std::string::npos && FileExists(project + "/.oe/vision/draft.png"));
+    // Origin: the bottom centre of the opaque pixels (65, 120); 2 units tall: 80 px / 2 = 40 px per unit.
+    CHECK(dry["result"]["pixelsPerUnit"].asNumber() == 40 && dry["result"]["origin"][0].asNumber() == 65 && dry["result"]["origin"][1].asNumber() == 120);
+
+    // The build writes the asset and the cut parts; the arm is a mesh weighted between its two bones.
+    args["dryRun"] = false;
+    args["draft"] = "chars/figure.skel2d-draft.json";
+    Json built = e.Call("skeleton2d.build", args);
+    CHECK(built["ok"].asBool() && built["result"]["written"].asBool() && FileExists(project + "/chars/figure.skel2d-draft.json"));
+    CHECK(FileExists(project + "/chars/figure-parts/body.png") && FileExists(project + "/chars/figure-parts/arm.png"));
+    CHECK(built["result"]["parts"][1]["rect"] == Json(Json::Array{58, 48, 34, 14}) && built["result"]["parts"][1]["vertices"].asInt() > 8);
+    const auto def = e.Assets().GetSkeleton2D("chars/figure.skel2d.json");
+    CHECK(def != nullptr);
+    if (!def) return;
+    CHECK(def->bones.size() == 4 && def->slots.size() == 2 && def->pixelsPerUnit == 40);
+    const Skeleton2DAttachment* arm = def->FindAttachment("", 1, "arm");
+    CHECK(arm && arm->IsMesh() && arm->weights.size() == arm->vertices.size() / 2);
+    if (arm) {
+        // The vertex nearest the hand leans on the forearm, the one nearest the shoulder on the upper arm.
+        size_t nearHand = 0, nearShoulder = 0;
+        for (size_t v = 0; v < arm->vertices.size() / 2; ++v) {
+            if (arm->vertices[v * 2] > arm->vertices[nearHand * 2]) nearHand = v;
+            if (arm->vertices[v * 2] < arm->vertices[nearShoulder * 2]) nearShoulder = v;
+        }
+        auto weightOf = [&](size_t v, int bone) {
+            float w = 0;
+            for (const auto& i : arm->weights[v]) if (i.first == bone) w += i.second;
+            return w;
+        };
+        CHECK(weightOf(nearHand, 3) > 0.9f && weightOf(nearShoulder, 2) > 0.9f);
+    }
+    // The setup pose is the picture: bones at their joints (world = (pixel - origin) / 40, y up).
+    Skeleton2DPose pose = Skeleton2DSample(*def, nullptr, 0);
+    const Vec3 elbow = pose.world[3].TransformPoint(Vec3());
+    CHECK(std::fabs(elbow.x - 0.25f) < 1e-3f && std::fabs(elbow.y - 1.625f) < 1e-3f);
+    const Vec3 tip = pose.world[3].TransformPoint(Vec3(def->bones[3].length, 0, 0));
+    CHECK(std::fabs(tip.x - 0.6f) < 1e-3f && std::fabs(tip.y - 1.625f) < 1e-3f);
+    // ...and draws it: red body and green arm where the picture has them.
+    Call(e, "scene.new", R"({"empty":true})");
+    CHECK(Call(e, "entity.create", R"({"name":"Figure","components":{"Transform":{},"Skeleton2D":{"asset":"chars/figure.skel2d.json"}}})")["ok"].asBool());
+    RenderView view;
+    view.eye = Vec3(0, 1, 10);
+    view.view = Mat4::LookAt(view.eye, Vec3(0, 1, 0), Vec3(0, 1, 0));
+    view.proj = Mat4::Orthographic(1.25f, 1, 0.1f, 50);  // 100 x 100 pixels show x -1.25..1.25, y -0.25..2.25 (40 px per unit)
+    view.drawUI = false;
+    RenderTarget target;
+    target.Resize(100, 100);
+    e.Renderer().Render(e.GetScene(), view, target);
+    auto pixel = [&](float wx, float wy) { return target.color[static_cast<size_t>((2.25f - wy) * 40) * 100 + static_cast<size_t>((wx + 1.25f) * 40)] & 0xFFFFFF; };
+    CHECK(pixel(-0.375f, 1.0f) == 0x0000FF && pixel(0.375f, 1.625f) == 0x00FF00 && pixel(0.9f, 1.625f) != 0x00FF00);
+
+    // Rebuilding keeps the clips; a draft that drops a bone a clip keys is refused and the file stays.
+    CHECK(Call(e, "skeleton2d.set", R"({"path":"chars/figure.skel2d.json","clip":"wave","values":{"bones":{"fore":{"rotate":[[0,0],[1,45]]}}}})")["ok"].asBool());
+    args.erase("values");
+    Json again = e.Call("skeleton2d.build", args);
+    CHECK(again["ok"].asBool() && again["result"]["keptClips"].asInt() == 1);
+    Json renamed = Json::parse(draft);
+    renamed["bones"][2]["name"] = "lower";
+    renamed["parts"][1]["bones"][1] = "lower";
+    args["values"] = renamed;
+    Json refused = e.Call("skeleton2d.build", args);
+    CHECK(refused["error"]["code"].asString() == "invalid_skeleton" && refused["error"]["hint"].asString().find("remove the clip") != std::string::npos);
+    CHECK(e.Assets().GetSkeleton2D("chars/figure.skel2d.json")->FindClip("wave") != nullptr);
+
+    // Draft mistakes name their place.
+    Json bad = Json::parse(draft);
+    bad["parts"][0]["colour"] = "red";
+    args["values"] = bad;
+    CHECK(e.Call("skeleton2d.build", args)["error"]["message"].asString().find("parts[0]: unknown field 'colour'") != std::string::npos);
+    bad = Json::parse(draft);
+    bad["parts"][1].erase("bones");
+    args["values"] = bad;
+    CHECK(e.Call("skeleton2d.build", args)["error"]["code"].asString() == "invalid_draft");
+    bad = Json::parse(draft);
+    bad["joints"]["elbow"] = nullptr;
+    args["values"] = bad;
+    CHECK(e.Call("skeleton2d.build", args)["error"]["message"].asString().find("not placed yet") != std::string::npos);
+
+    // Templates: joints and regions from the picture's bounds; given joints move the regions with them.
+    Json front = Call(e, "skeleton2d.draft_template", R"({"kind":"humanoid-front","image":"figure.png","out":"chars/t.skel2d-draft.json"})");
+    CHECK(front["ok"].asBool() && front["result"]["guessed"].asBool() && front["result"]["draft"]["joints"].size() == 20);
+    CHECK(front["result"]["draft"]["parts"].size() == 10 && front["result"]["notes"].has("elbow_l") && FileExists(project + "/chars/t.skel2d-draft.json"));
+    Json moved = Call(e, "skeleton2d.draft_template", R"({"kind":"humanoid-side","joints":{"knee_front":[300,700]}})");
+    CHECK(moved["result"]["draft"]["joints"]["knee_front"] == Json(Json::Array{300, 700}) && !moved["result"]["guessed"].asBool());
+    CHECK(Call(e, "skeleton2d.draft_template", R"({"kind":"humanoid-front","joints":{"elbw_l":[1,1]}})")["error"]["code"].asString() == "invalid_args");
+    CHECK(Call(e, "skeleton2d.draft_template", R"({"kind":"dragon"})")["error"]["code"].asString() == "invalid_args");
+    Json templ = Json::parse(R"({"out":"chars/t.skel2d.json","draft":"chars/t.skel2d-draft.json","dryRun":true})");
+    CHECK(e.Call("skeleton2d.build", templ)["ok"].asBool());  // a template builds as it is
+    RemoveAll(project);
+}
+
 TEST(AnimationPropertyTracks) {
     Engine e;
     std::string error;

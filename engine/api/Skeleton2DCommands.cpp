@@ -8,6 +8,7 @@
 #include <set>
 
 #include "app/Engine.h"
+#include "app/Skeleton2DBuild.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
 #include "render/ImageDraw.h"
@@ -223,6 +224,56 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                out["stats"] = Stats(*def);
                out["warnings"] = Warnings(engine, *def);
                return out;
+           }});
+    r.Add({"skeleton2d.draft_template",
+           "A starting rig draft for a kind of character: joints (with where each goes), bones and parts in draw order. With an image, "
+           "joints and regions are first guesses from its opaque bounds and body proportions, to correct with image.grid.",
+           Params()
+               .Req("kind", "string", "humanoid-front or humanoid-side (facing right).")
+               .Opt("image", "string", "The character illustration (transparent background) the draft is for.")
+               .Opt("joints", "object", "Joints you placed: {name: [x, y]} in image pixels; regions are fitted to them (widths measured from the image).")
+               .Opt("out", "string", "Also write the draft to this *.skel2d-draft.json."),
+           false, [](Engine& engine, const Json& args) {
+               Json result = Skeleton2DDraftTemplate(engine, args["kind"].asString(), args["image"].asString(""), args["joints"]);
+               if (args.has("out")) {
+                   const std::string out = args["out"].asString();
+                   const std::string full = engine.ResolvePath(out);
+                   CreateDirectories(ParentPath(full));
+                   if (!WriteTextFile(full, result["draft"].dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + out);
+                   result["out"] = out;
+               }
+               return result;
+           }});
+    r.Add({"skeleton2d.build",
+           "Build a skeleton asset from a rig draft: cut each part out of the illustration, mesh it, weight it to its bones, place it so the setup "
+           "pose is the picture. Keeps the clips of an existing asset. Returns coverage (pixels no part took), warnings and a picture of the draft.",
+           Params()
+               .Opt("draft", "string", "*.skel2d-draft.json to build from (or values).")
+               .Opt("values", "object", "The draft itself; with draft it is also written there.")
+               .Req("out", "string", "*.skel2d.json to write.")
+               .Opt("partsDir", "string", "Folder for the cut part images (default: <out name>-parts/).")
+               .Opt("dryRun", "boolean", "Only check and draw the draft picture; write nothing else.")
+               .Opt("draftImage", "string", "PNG for the draft picture (default .oe/vision/draft.png)."),
+           false, [](Engine& engine, const Json& args) {
+               Json draft;
+               if (args.has("values")) {
+                   draft = args["values"];
+                   if (args.has("draft") && !args["dryRun"].asBool()) {
+                       const std::string full = engine.ResolvePath(args["draft"].asString());
+                       CreateDirectories(ParentPath(full));
+                       if (!WriteTextFile(full, draft.dump(2) + "\n")) throw ApiError("write_failed", "cannot write " + args["draft"].asString());
+                   }
+               } else if (args.has("draft")) {
+                   std::string text, error;
+                   if (!ReadTextFile(engine.ResolvePath(args["draft"].asString()), text))
+                       throw ApiError("not_found", "cannot read " + args["draft"].asString(), "Make one with skeleton2d.draft_template {kind, image, out}.");
+                   draft = Json::parse(text, &error);
+                   if (!error.empty()) throw ApiError("invalid_draft", "invalid JSON: " + error);
+               } else {
+                   throw ApiError("invalid_args", "pass draft (a file) or values (the draft)");
+               }
+               return BuildSkeleton2D(engine, draft, args["out"].asString(), args["partsDir"].asString(""), args["dryRun"].asBool(),
+                                      args["draftImage"].asString(""));
            }});
     r.Add({"skeleton2d.overlay",
            "Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. "
