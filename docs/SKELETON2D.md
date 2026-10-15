@@ -14,6 +14,9 @@ generator the agent drives (Codex image generation, see `games/RPG/tools/` for t
 engine supplies deterministic tools — coordinate grids, alpha outlines, triangulation, automatic weights,
 pose renders and measurements — that turn the agent's judgement into a valid rig.
 
+**Sample:** `games/Adventurer2D` (`oe editor games/Adventurer2D`, then Play) is a character made with this pipeline from one
+generated picture; its `AGENTS.md` lists the commands that made it.
+
 ## Concepts
 
 - **Skeleton asset** (`*.skel2d.json`): bones, slots, attachments, skins and clips. Shared by every entity that uses it.

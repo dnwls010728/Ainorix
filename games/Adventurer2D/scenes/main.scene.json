@@ -1,0 +1,21 @@
+{
+  "format": "ownengine.scene",
+  "version": 1,
+  "name": "Adventurer",
+  "entities": [
+    {"id": 1, "name": "Camera", "components": {
+      "Transform": {"position": [0, 1.3, 10]},
+      "Camera": {"projection": "orthographic", "orthoSize": 1.65, "clearColor": [0.55, 0.72, 0.86]}}},
+    {"id": 2, "name": "Ground", "components": {
+      "Transform": {"position": [0, -0.25, -1]},
+      "Sprite": {"width": 20, "height": 0.5, "color": [0.36, 0.5, 0.28]}}},
+    {"id": 3, "name": "Adventurer", "components": {
+      "Transform": {},
+      "Skeleton2D": {"asset": "chars/hero.skel2d.json", "clip": "idle", "mix": 0.15},
+      "Script": {"path": "scripts/hero.lua"}}},
+    {"id": 4, "name": "Title", "components": {
+      "UIText": {"text": "Skeleton2D sample: one generated picture, cut, rigged and animated by commands", "x": 24, "y": 20, "size": 20, "color": [0.1, 0.14, 0.2]}}},
+    {"id": 5, "name": "Hint", "components": {
+      "UIText": {"text": "Left/Right: walk   Space: jump   J: attack   H: hit   W (hold): wave   K: fall   R: stand up", "anchor": "bottom", "y": -24, "size": 20, "color": [0.1, 0.14, 0.2]}}}
+  ]
+}

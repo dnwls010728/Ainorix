@@ -274,7 +274,8 @@ Skeleton2DClip ParseClip(const Json& c, const std::string& where, const std::str
             const std::string at = where + ".events[" + std::to_string(i) + "]";
             OnlyFields(list[static_cast<int>(i)], at, {"time", "name"});
             AnimationMarker marker;
-            marker.time = Number(list[static_cast<int>(i)]["time"], at + ".time", 0, 0, clip.duration);
+            // A hair past the end still counts as the end: times written as text come back a rounding step off.
+            marker.time = std::min(static_cast<double>(clip.duration), static_cast<double>(Number(list[static_cast<int>(i)]["time"], at + ".time", 0, 0, clip.duration + 1e-4f)));
             marker.name = Name(list[static_cast<int>(i)]["name"], at + ".name");
             clip.events.push_back(marker);
         }

@@ -21396,6 +21396,9 @@ TEST(Skeleton2DMotionSpringsIk) {
     CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"jump"})")["result"]["loop"].asBool() == false);
     def = e.Assets().GetSkeleton2D("side.skel2d.json");
     CHECK(def && def->FindClip("jump") && def->FindClip("jump")->events.size() == 2 && def->FindClip("walk"));
+    // An event at the very end (death's "dead") survives the trip through the file (times as text round a hair up).
+    CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"death","params":{"duration":1.2}})")["ok"].asBool());
+    CHECK(Call(e, "skeleton2d.check", R"({"path":"side.skel2d.json"})")["result"]["valid"].asBool());
     CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"moonwalk"})")["error"]["code"].asString() == "invalid_args");
     CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"walk","params":{"stride":500}})")["error"]["code"].asString() == "invalid_args");
     CHECK(Call(e, "skeleton2d.motion", R"({"path":"side.skel2d.json","recipe":"idle","bones":{"hip":"pelvis","chest":"ribs","head":"x","upper_arm_front":"y","upper_arm_back":"z"}})")["error"]["code"].asString() == "not_found");
@@ -21459,6 +21462,51 @@ TEST(Skeleton2DMotionSpringsIk) {
                                            "ik":[{"name":"x","bones":["a","b"],"target":"root"}]})"), &why) && why.find("child of the first") != std::string::npos);
     CHECK(!ParseSkeleton2D(Json::parse(R"({"slots":[],"bones":[{"name":"root"}],"springs":[{"bone":"root"}]})"), &why) && why.find("springs[0].bone") != std::string::npos);
     RemoveAll(project);
+}
+
+TEST(Adventurer2DGame) {
+    // games/Adventurer2D: the Skeleton2D sample. The asset is valid, the script checks clean, keys play the clips
+    // (walk moving the body, a jump to its end, a fall), and the scarf spring swings.
+    Engine e;
+    std::string error;
+    const std::string project = TestSourceDir() + "/games/Adventurer2D";
+    CHECK(e.Open(project, &error));
+    Json check = Call(e, "skeleton2d.check", R"({"path":"chars/hero.skel2d.json"})")["result"];
+    CHECK(check["valid"].asBool() && check["stats"]["clips"].has("walk") && check["stats"]["clips"].has("death"));
+    Json script = Call(e, "script.check", R"({"path":"scripts/hero.lua"})")["result"];
+    CHECK(script["errors"].asInt() == 0 && script["warnings"].asInt() == 0);
+    auto state = [&]() { return Call(e, "skeleton2d.state", R"({"id":"Adventurer","bones":false})")["result"]; };
+    auto key = [&](const char* name, bool down) {
+        Json args = Json::MakeObject();
+        args["key"] = name;
+        args["down"] = down;
+        CHECK(e.Call("input.key", args)["ok"].asBool());
+    };
+    auto step = [&](int frames) {
+        Json args = Json::MakeObject();
+        args["frames"] = frames;
+        CHECK(e.Call("sim.step", args)["ok"].asBool());
+    };
+    Call(e, "sim.play");
+    step(10);
+    CHECK(state()["clip"].asString() == "idle");
+    key("Right", true);
+    step(40);
+    CHECK(state()["clip"].asString() == "walk" && PosOf(e, "Adventurer").x > 0.5f);
+    key("Right", false);
+    key("Space", true);
+    step(2);
+    key("Space", false);
+    step(20);
+    Json jumping = state();
+    CHECK(jumping["clip"].asString() == "jump" && std::fabs(jumping["springs"]["scarf"].asFloat()) > 3);
+    step(60);
+    CHECK(state()["clip"].asString() == "idle");  // the jump played to its end, then back to idle
+    key("K", true);
+    step(90);
+    CHECK(state()["clip"].asString() == "death" && state()["finished"].asBool());
+    CHECK(Call(e, "script.errors")["result"].size() == 0);
+    Call(e, "sim.stop");
 }
 
 TEST(AnimationPropertyTracks) {
