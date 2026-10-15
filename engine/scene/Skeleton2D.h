@@ -31,6 +31,7 @@ struct Skeleton2DAttachment {
     float pivot[2] = {0.5f, 0.5f};  // in the rectangle: 0,0 = bottom-left, 1,1 = top-right
     float x = 0, y = 0, rotation = 0, scaleX = 1, scaleY = 1;  // where the pivot sits in the bone's space
     float width = 0, height = 0;  // world size of the rectangle; 0 = pixels / pixelsPerUnit
+    bool filled = false;          // its picture was repainted where front parts hid it (skeleton2d.variant_import): nothing to reveal
     // Mesh: vertices in rectangle pixels (x right, y down), triangles as index triples, and per
     // vertex up to four (bone index, weight) pairs; empty weights = rigid to the slot's bone.
     std::vector<float> vertices;  // x0, y0, x1, y1, ...

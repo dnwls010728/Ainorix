@@ -160,40 +160,11 @@ void CopyTexel(const Texture& t, int x, int y, Image& image, int ix, int iy) {
 // A grid over the cut: every cell holding an opaque pixel becomes two triangles. Simple, even and deterministic;
 // cells hanging over the outline only draw transparent texels.
 void GridMesh(Part& part, int alphaThreshold, int maxVertices) {
-    int cell = part.cell > 0 ? part.cell : std::max(6, static_cast<int>(std::lround(static_cast<double>(std::max(part.w, part.h)) / 10.0)));
-    for (;; cell += std::max(1, cell / 4)) {
-        const int nx = (part.w + cell - 1) / cell, ny = (part.h + cell - 1) / cell;
-        std::map<int, int> ids;
-        std::vector<std::array<int, 2>> corners;
-        std::vector<int> tris;
-        auto vertex = [&](int i, int j) {
-            const int key = j * (nx + 1) + i;
-            auto found = ids.find(key);
-            if (found != ids.end()) return found->second;
-            const int id = static_cast<int>(corners.size());
-            ids[key] = id;
-            corners.push_back({std::min(i * cell, part.w), std::min(j * cell, part.h)});
-            return id;
-        };
-        for (int j = 0; j < ny; ++j)
-            for (int i = 0; i < nx; ++i) {
-                bool used = false;
-                for (int y = j * cell; y < std::min(part.h, (j + 1) * cell) && !used; ++y)
-                    for (int x = i * cell; x < std::min(part.w, (i + 1) * cell) && !used; ++x)
-                        used = part.cut.rgba[(static_cast<size_t>(y) * static_cast<size_t>(part.w) + static_cast<size_t>(x)) * 4 + 3] > alphaThreshold;
-                if (!used) continue;
-                const int a = vertex(i, j), b = vertex(i + 1, j), c = vertex(i + 1, j + 1), d = vertex(i, j + 1);
-                tris.insert(tris.end(), {a, d, c, a, c, b});
-            }
-        if (static_cast<int>(corners.size()) > maxVertices) continue;
-        part.cell = cell;
-        for (const auto& corner : corners) {
-            part.vertices.push(corner[0]);
-            part.vertices.push(corner[1]);
-        }
-        for (int t : tris) part.triangles.push(t);
-        return;
-    }
+    std::vector<int> vertices;
+    std::vector<uint32_t> triangles;
+    part.cell = Skeleton2DGridMesh(part.cut, part.cell, alphaThreshold, maxVertices, vertices, triangles);
+    for (int v : vertices) part.vertices.push(v);
+    for (uint32_t t : triangles) part.triangles.push(static_cast<int>(t));
 }
 
 Json Warning(const std::string& where, const std::string& message, const std::string& hint) {
@@ -208,6 +179,41 @@ const Rgba8 kPartColors[] = {{255, 99, 71, 255}, {65, 105, 225, 255}, {50, 205, 
                              {0, 206, 209, 255}, {255, 215, 0, 255}, {255, 105, 180, 255}, {139, 195, 74, 255}, {121, 134, 203, 255}};
 
 }  // namespace
+
+int Skeleton2DGridMesh(const Image& image, int cell, int alphaThreshold, int maxVertices, std::vector<int>& vertices, std::vector<uint32_t>& triangles) {
+    const int w = image.width, h = image.height;
+    if (cell <= 0) cell = std::max(6, static_cast<int>(std::lround(static_cast<double>(std::max(w, h)) / 10.0)));
+    for (;; cell += std::max(1, cell / 4)) {
+        const int nx = (w + cell - 1) / cell, ny = (h + cell - 1) / cell;
+        std::map<int, int> ids;
+        std::vector<std::array<int, 2>> corners;
+        std::vector<uint32_t> tris;
+        auto vertex = [&](int i, int j) {
+            const int key = j * (nx + 1) + i;
+            auto found = ids.find(key);
+            if (found != ids.end()) return static_cast<uint32_t>(found->second);
+            const int id = static_cast<int>(corners.size());
+            ids[key] = id;
+            corners.push_back({std::min(i * cell, w), std::min(j * cell, h)});
+            return static_cast<uint32_t>(id);
+        };
+        for (int j = 0; j < ny; ++j)
+            for (int i = 0; i < nx; ++i) {
+                bool used = false;
+                for (int y = j * cell; y < std::min(h, (j + 1) * cell) && !used; ++y)
+                    for (int x = i * cell; x < std::min(w, (i + 1) * cell) && !used; ++x)
+                        used = image.rgba[(static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4 + 3] > alphaThreshold;
+                if (!used) continue;
+                const uint32_t a = vertex(i, j), b = vertex(i + 1, j), c = vertex(i + 1, j + 1), d = vertex(i, j + 1);
+                tris.insert(tris.end(), {a, d, c, a, c, b});
+            }
+        if (static_cast<int>(corners.size()) > maxVertices) continue;
+        vertices.clear();
+        for (const auto& corner : corners) vertices.insert(vertices.end(), {corner[0], corner[1]});
+        triangles = tris;
+        return cell;
+    }
+}
 
 Json BuildSkeleton2D(Engine& engine, const Json& draft, const std::string& out, const std::string& partsDirArg, bool dryRun,
                      const std::string& overlayOut) {

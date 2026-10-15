@@ -1,11 +1,19 @@
 #pragma once
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "core/Json.h"
 
 namespace oe {
 
 class Engine;
+struct Image;
+
+// A grid mesh over an image: every cell (`cell` pixels; <= 0 picks about a tenth of the image) holding a pixel with
+// alpha above `alphaThreshold` becomes two triangles; cells grow until there are at most `maxVertices` vertices.
+// Fills `vertices` with image pixels (x0, y0, x1, y1, ...) and returns the cell size used.
+int Skeleton2DGridMesh(const Image& image, int cell, int alphaThreshold, int maxVertices, std::vector<int>& vertices, std::vector<uint32_t>& triangles);
 
 // From a rig draft to a skeleton asset (docs/SKELETON2D.md, "Building from a picture"). A draft names joints as
 // pixel points on one illustration, bones between joints, and parts: regions of the illustration (polygon,

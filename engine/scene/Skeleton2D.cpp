@@ -130,7 +130,7 @@ std::vector<Skeleton2DKey> Keys(const Json& list, const std::string& where, KeyK
 }
 
 Skeleton2DAttachment ParseAttachment(const Json& a, const std::string& where, const std::string& name, const Skeleton2DDef& def) {
-    OnlyFields(a, where, {"image", "rect", "pivot", "x", "y", "rotation", "scaleX", "scaleY", "width", "height", "vertices", "triangles", "weights"});
+    OnlyFields(a, where, {"image", "rect", "pivot", "x", "y", "rotation", "scaleX", "scaleY", "width", "height", "vertices", "triangles", "weights", "filled"});
     Skeleton2DAttachment out;
     out.name = name;
     if (!a["image"].isString() || a["image"].asString().empty()) Fail(where + ".image", "must be a project image path");
@@ -155,6 +155,8 @@ Skeleton2DAttachment ParseAttachment(const Json& a, const std::string& where, co
     out.scaleY = Number(a["scaleY"], where + ".scaleY", 1);
     out.width = Number(a["width"], where + ".width", 0, 0, 10000);
     out.height = Number(a["height"], where + ".height", 0, 0, 10000);
+    if (a.has("filled") && !a["filled"].isBool()) Fail(where + ".filled", "must be true or false");
+    out.filled = a["filled"].asBool(false);
     const bool mesh = a.has("vertices") || a.has("triangles") || a.has("weights");
     if (!mesh) return out;
     const Json& v = a["vertices"];

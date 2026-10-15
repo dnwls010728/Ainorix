@@ -21196,6 +21196,162 @@ TEST(Skeleton2DReview) {
     RemoveAll(project);
 }
 
+TEST(Skeleton2DVariants) {
+    Engine e;
+    std::string error;
+    const std::string project = TempProject("skeleton2d_variants");
+    CHECK(e.Open(project, &error));
+    auto solid = [&](const char* name, int w, int h, uint8_t r, uint8_t g, uint8_t b) {
+        Image image;
+        image.width = w;
+        image.height = h;
+        image.rgba.clear();
+        for (int i = 0; i < w * h; ++i) image.rgba.insert(image.rgba.end(), {r, g, b, 255});
+        CHECK(WritePng(project + "/" + name, image, true));
+    };
+    solid("body.png", 20, 80, 255, 0, 0);
+    solid("arm.png", 40, 10, 0, 255, 0);
+    // A body (1 x 4 units at 20 px per unit) with an arm lying over its upper right half.
+    const char* asset = R"({"path":"figure.skel2d.json","overwrite":true,"values":{"pixelsPerUnit":20,
+      "bones":[{"name":"root"},{"name":"shoulder","parent":"root","y":3,"length":2}],
+      "slots":[{"name":"body","bone":"root","attachment":"body"},{"name":"arm","bone":"shoulder","attachment":"arm"}],
+      "skins":{"default":{"body":{"body":{"image":"body.png","pivot":[0.5,0]}},"arm":{"arm":{"image":"arm.png","pivot":[0,0.5]}}}}}})";
+    CHECK(Call(e, "skeleton2d.create", asset)["ok"].asBool());
+    auto revealedBody = [&]() {
+        const Json analysis = Call(e, "skeleton2d.analyze", R"({"path":"figure.skel2d.json","angle":90,"render":false})");
+        for (const Json& p : analysis["result"]["problems"].items())
+            if (p["kind"].asString() == "revealed" && p["subject"].asString() == "body") return true;
+        return false;
+    };
+    CHECK(revealedBody());
+
+    // The request: the body's hidden area in magenta, padded to a shape generators draw (20 x 80 -> 2:3 is the nearest).
+    Json made = Call(e, "skeleton2d.variant_requests", R"({"path":"figure.skel2d.json","slots":["body"]})");
+    CHECK(made["ok"].asBool() && made["result"]["requests"].size() == 1 && !made["result"]["consent"].asString().empty());
+    const Json& summary = made["result"]["requests"][0];
+    CHECK(summary["hiddenUnder"].asString() == "arm" && summary["editPixels"].asInt() > 50);
+    const std::string folder = project + "/.oe/variants/figure/body-fill/";
+    for (const char* file : {"source.png", "mask.png", "edit.png", "prompt.txt", "request.json"}) CHECK(FileExists(folder + file));
+    const Json request = e.ReadProjectJson(".oe/variants/figure/body-fill/request.json");
+    CHECK(request["crop"][2].asInt() == 20 && request["crop"][3].asInt() == 80 && request["prompt"].asString().find("\"arm\"") != std::string::npos);
+    const auto edit = e.Assets().GetTexture(".oe/variants/figure/body-fill/edit.png");
+    CHECK(edit && edit->width == 53 && edit->height == 80);  // 80 * 2 / 3, rounded
+    if (!edit) return;
+
+    // A "generated" answer: the edit picture with the magenta painted blue, optionally moved, scaled, spoiled.
+    auto answer = [&](const std::string& name, int shift, int scale, bool spoil, bool leaveMagenta, bool opaqueWhite) {
+        Image image;
+        image.width = edit->width * scale;
+        image.height = edit->height * scale;
+        image.rgba.assign(static_cast<size_t>(image.width) * static_cast<size_t>(image.height) * 4, 0);
+        for (int y = 0; y < image.height; ++y)
+            for (int x = 0; x < image.width; ++x) {
+                const int sx = x / scale - shift, sy = y / scale;
+                uint32_t c = sx >= 0 && sx < edit->width ? edit->texels[static_cast<size_t>(sy * edit->width + sx)] : 0;
+                if ((c & 0xFFFFFF) == 0xFF00FF && !leaveMagenta) c = 0xFFC80000u;  // blue
+                if (spoil && (c >> 24)) c = 0xFF00FFFFu;                            // everything yellow
+                if (opaqueWhite && !(c >> 24)) c = 0xFFFFFFFFu;
+                uint8_t* p = &image.rgba[(static_cast<size_t>(y) * static_cast<size_t>(image.width) + static_cast<size_t>(x)) * 4];
+                p[0] = static_cast<uint8_t>(c & 255), p[1] = static_cast<uint8_t>((c >> 8) & 255), p[2] = static_cast<uint8_t>((c >> 16) & 255), p[3] = static_cast<uint8_t>(c >> 24);
+            }
+        CHECK(WritePng(project + "/" + name, image, true));
+    };
+    auto import = [&](const std::string& result) {
+        Json args = Json::parse(R"({"request":".oe/variants/figure/body-fill/request.json"})");
+        args["result"] = result;
+        return e.Call("skeleton2d.variant_import", args);
+    };
+    answer("spoiled.png", 0, 1, true, false, false);
+    Json refused = import("spoiled.png");
+    CHECK(refused["error"]["code"].asString() == "variant_rejected" && refused["error"]["message"].asString().find("outside the area") != std::string::npos);
+    answer("magenta.png", 0, 1, false, true, false);
+    CHECK(import("magenta.png")["error"]["message"].asString().find("magenta") != std::string::npos);
+    Image wide;
+    wide.width = 64;
+    wide.height = 64;
+    wide.rgba.assign(64 * 64 * 4, 255);
+    CHECK(WritePng(project + "/square.png", wide, true));
+    CHECK(import("square.png")["error"]["code"].asString() == "variant_rejected");
+    CHECK(!e.Assets().GetSkeleton2D("figure.skel2d.json")->FindAttachment("", 0, "body")->filled);  // nothing changed
+
+    // Moved by 2 px and drawn at twice the size: matched, the masked area taken, the skeleton pointed at the new picture.
+    answer("good.png", 2, 2, false, false, false);
+    Json taken = import("good.png");
+    CHECK(taken["ok"].asBool() && taken["result"]["shift"][0].asInt() == 2 && taken["result"]["difference"].asNumber() < 0.02);
+    CHECK(taken["result"]["image"].asString() == "body-filled.png" && FileExists(project + "/body-filled.png"));
+    const auto def = e.Assets().GetSkeleton2D("figure.skel2d.json");
+    const Skeleton2DAttachment* body = def ? def->FindAttachment("", 0, "body") : nullptr;
+    CHECK(body && body->filled && body->image == "body-filled.png");
+    const auto filled = e.Assets().GetTexture("body-filled.png");
+    CHECK(filled && filled->width == 20 && filled->height == 80);
+    if (filled) {
+        // Under the arm (right half, rows 15..24) it is blue now; the left half stays red.
+        CHECK((filled->texels[static_cast<size_t>(20 * 20 + 15)] & 0xFFFFFF) == 0xC80000 && (filled->texels[static_cast<size_t>(20 * 20 + 3)] & 0xFFFFFF) == 0x0000FF);
+    }
+    CHECK(!revealedBody());
+
+    // An opaque white answer: the white is keyed out (an attachment variant redraws everything it is asked to).
+    Json fist = Call(e, "skeleton2d.variant_requests", R"({"path":"figure.skel2d.json","kind":"attachment","slot":"arm","name":"fist","description":"a closed fist"})");
+    CHECK(fist["ok"].asBool() && fist["result"]["requests"].size() == 1);
+    const auto armEdit = e.Assets().GetTexture(".oe/variants/figure/arm-fist/source.png");
+    CHECK(armEdit != nullptr);
+    if (armEdit) {
+        Image image;
+        image.width = armEdit->width;
+        image.height = armEdit->height;
+        image.rgba.clear();
+        for (uint32_t c : armEdit->texels) {
+            const bool on = (c >> 24) != 0;
+            image.rgba.insert(image.rgba.end(), {static_cast<uint8_t>(on ? 255 : 255), static_cast<uint8_t>(on ? 200 : 255), static_cast<uint8_t>(on ? 0 : 255), 255});
+        }
+        CHECK(WritePng(project + "/.oe/variants/figure/arm-fist/result.png", image, true));
+    }
+    Json added = Call(e, "skeleton2d.variant_import", R"({"request":".oe/variants/figure/arm-fist/request.json"})");
+    CHECK(added["ok"].asBool() && added["result"]["keyedBackground"].asBool() && added["result"]["attachment"].asString() == "fist");
+    const auto withFist = e.Assets().GetSkeleton2D("figure.skel2d.json");
+    const Skeleton2DAttachment* fistAttachment = withFist ? withFist->FindAttachment("", 1, "fist") : nullptr;
+    CHECK(fistAttachment && fistAttachment->image == "arm-fist.png" && !fistAttachment->filled && withFist->FindAttachment("", 1, "arm"));
+    const auto fistPicture = e.Assets().GetTexture("arm-fist.png");
+    CHECK(fistPicture && (fistPicture->texels[0] >> 24) == 255 && (fistPicture->texels[0] & 0xFFFFFF) == 0x00C8FF);
+
+    // A grown canvas keeps the picture where it was: the same pixel is red before and after.
+    CHECK(Call(e, "skeleton2d.create", asset)["ok"].asBool());
+    CHECK(Call(e, "skeleton2d.variant_requests", R"({"path":"figure.skel2d.json","slots":["body"],"grow":4,"outDir":"grown"})")["ok"].asBool());
+    Call(e, "scene.new", R"({"empty":true})");
+    Call(e, "entity.create", R"({"name":"F","components":{"Transform":{},"Skeleton2D":{"asset":"figure.skel2d.json"}}})");
+    RenderView view;
+    view.eye = Vec3(0, 2, 10);
+    view.view = Mat4::LookAt(view.eye, Vec3(0, 2, 0), Vec3(0, 1, 0));
+    view.proj = Mat4::Orthographic(2.5f, 1, 0.1f, 50);
+    view.drawUI = false;
+    auto pixel = [&](float wx, float wy) {
+        RenderTarget target;
+        target.Resize(100, 100);
+        e.Renderer().Render(e.GetScene(), view, target);
+        return target.color[static_cast<size_t>((4.5f - wy) * 20) * 100 + static_cast<size_t>((wx + 2.5f) * 20)] & 0xFFFFFF;
+    };
+    CHECK(pixel(-0.25f, 1.0f) == 0x0000FF);
+    const auto grownEdit = e.Assets().GetTexture("grown/body-fill/edit.png");
+    CHECK(grownEdit != nullptr);
+    if (grownEdit) {
+        Image image;
+        image.width = grownEdit->width;
+        image.height = grownEdit->height;
+        image.rgba.clear();
+        for (uint32_t c : grownEdit->texels) {
+            if ((c & 0xFFFFFF) == 0xFF00FF) c = 0xFFC80000u;
+            image.rgba.insert(image.rgba.end(), {static_cast<uint8_t>(c & 255), static_cast<uint8_t>((c >> 8) & 255), static_cast<uint8_t>((c >> 16) & 255), static_cast<uint8_t>(c >> 24)});
+        }
+        CHECK(WritePng(project + "/grown/body-fill/result.png", image, true));
+    }
+    Json grown = Call(e, "skeleton2d.variant_import", R"({"request":"grown/body-fill/request.json"})");
+    CHECK(grown["ok"].asBool());
+    const auto grownPicture = e.Assets().GetTexture("body-filled.png");
+    CHECK(grownPicture && grownPicture->width == 28 && grownPicture->height == 88);
+    CHECK(pixel(-0.25f, 1.0f) == 0x0000FF && pixel(0.6f, 3.6f) != 0xC80000);  // in place; the grown margin above the arm stays empty
+    RemoveAll(project);
+}
+
 TEST(AnimationPropertyTracks) {
     Engine e;
     std::string error;

@@ -118,7 +118,8 @@ slot or clip ever shows, clips without duration. File writes are not part of sce
   space in the setup pose. `width`/`height` give its world size (default pixels / `pixelsPerUnit`).
   With `vertices` (rectangle pixels, x right, y down), `triangles` (index triples) and optional `weights` (per vertex
   1..4 `[bone, weight]` pairs, normalized) it is a mesh that bends; without weights a mesh moves with its slot's bone.
-  At most 1024 attachments, 4096 vertices each.
+  `filled: true` marks a picture repainted where front parts hid it (set by `skeleton2d.variant_import`; the analysis
+  then does not report it as revealed). At most 1024 attachments, 4096 vertices each.
 - **clips**: each timeline is a list of keys `[time, value..., curve]` with increasing times; `curve` (the way to the
   next key) is `linear` (default), `step`, `smooth`, `easeIn` or `easeOut`. Bone `rotate` `[t, degrees]` is added to
   the setup rotation, `translate` `[t, x, y]` to the setup position, `scale` `[t, sx, sy]` multiplies the setup scale;
@@ -239,6 +240,55 @@ revealed picture tinted magenta, opened joints circled red. On the 1024 x 1536 t
 `skeleton2d.poses {..., columns?, cell?, focus?, zoom?, out?}` draws the poses as a labeled contact sheet; `focus:
 "bone"` centres every cell on that joint, zoomed (`zoom`, default 3), to compare a shoulder or a knee across a clip.
 
+## Repainting parts
+
+Cut from one illustration, a part has nothing where another part was in front of it: the torso has the arm's
+pixels (or nothing) under the arm, and they show when the arm lifts (`revealed` in the analysis). An image
+generator can paint what was hidden. The engine does not call one: it writes requests an agent hands to one and
+checks what comes back. **Sending the pictures to a generator shares them with that service; ask the user first.**
+
+`skeleton2d.variant_requests {path, kind?, slots?, reach?, grow?, outDir?}`
+
+- `kind: "fill"` (default): for every part (or `slots`), the area of its picture that lay under a part drawn after
+  it in the setup pose, within `reach` pixels of the part's own pixels (default 15% of the part), widened by two
+  pixels. `grow` first enlarges the part's canvas by that many pixels on every side, for parts cut too tightly to
+  continue under their neighbour.
+- `kind: "attachment"` with `slot`, `name` and `description`: a new picture for the slot (a fist, closed eyes),
+  the whole canvas editable.
+
+Each request is a folder under `outDir` (default `.oe/variants/<skeleton>/<slot>-<fill|name>/`): `edit.png` (the
+part with the area to paint in magenta), `source.png`, `mask.png` (transparent = may change), the shared
+`context.png` (the whole figure), `prompt.txt` (names the part and every part that hid it) and `request.json`.
+Generators draw at a few shapes, so the pictures are padded to the nearest of square, 2:3 and 3:2 (`crop` in the
+request says where the part is). The reply lists the requests with the images to send, in order, and the `result`
+path to save the answer at.
+
+With Codex CLI (as used for `games/RPG` art):
+`codex exec --skip-git-repo-check -c "sandbox_mode='read-only'" -i <folder>/edit.png -i <outDir>/context.png -`
+with "Generate exactly one image with your native image generation tool, editing the first attached image ..." and
+the prompt on stdin; the picture lands in `~/.codex/generated_images/<session>/`.
+
+`skeleton2d.variant_import {request, result?, maxShift?, tolerance?}` checks the answer before it touches anything:
+
+- it must have the shape of the request's pictures (any size: it is scaled);
+- the area that had to stay is matched against the source over shifts of up to `maxShift` pixels (default 8,
+  the smallest shift wins in flat areas) and a per-channel tint (0.75..1.33, channels too dark to measure stay at
+  1); if it still differs by more than `tolerance` (default 0.08 of full scale) the answer is refused - generators
+  often redraw the whole picture, and a slightly different redraw passes while a different picture does not;
+- a fill with magenta left in more than a twentieth of the area is refused;
+- an answer without transparency has its background keyed out (the colour of its corners).
+
+It then keeps only the masked area of the answer, writes a new picture beside the part's (`<image>-filled.png`,
+`<slot>-<name>.png`; the originals stay), regrids a mesh part over it (the old cell size, each vertex weighted like
+the nearest old vertices) and updates the asset: a fill replaces the attachment's picture and marks it
+`filled: true` (the analysis no longer reports it as revealed), an attachment variant is added to the slot. A
+rebuild with `skeleton2d.build` cuts the parts again from the illustration: import the fills again afterwards.
+
+On the test adventurer the torso request (both arms and the head had hidden parts of it) came back from Codex
+redrawn as a whole, slightly larger; the import found a (-2, -4) shift, accepted it at 5.7% difference and kept
+only the masked area: the sleeves now continue under the arms when they lift. The whole character offered as the
+answer instead was refused at 18.1%.
+
 ## Rendering
 
 A skeleton is drawn as one skinned mesh through the same path as skinned 3D models: the attachments of the current
@@ -287,9 +337,14 @@ unchecked line.
   (revealed area and its mask, an opened hip, a folded mesh, a loop seam, a still clip passing, contact sheets). On
   the test adventurer it reports the torso's armpit edges, the legs' tops under the tunic hem and the scarf under the
   arm as revealed - the problems seen by eye in M3. Not done: foot sliding (needs planted bones; with M6 motion).
-- [ ] **M5 — Generated fills.** `skeleton2d.variant_requests` (mask + prompt files for hidden areas the analysis found
-  and for extra attachments: closed eyes, hand poses), `skeleton2d.variant_import` (rejects changes outside the mask,
-  corrects small shifts/tints, registers attachments). Sending a picture to an image generator needs the user's consent.
+- [x] **M5 — Generated fills.** `app/Skeleton2DVariants.cpp`: `skeleton2d.variant_requests` (fill areas from the setup
+  pose's coverage, attachment variants, shape padding, prompts naming the covering parts) and
+  `skeleton2d.variant_import` (shape check and scaling, shift and tint matching, refusal, magenta check, background
+  keying, regrid with weight transfer, `filled` attachments the analysis skips). `Skeleton2DGridMesh` is shared with
+  the build; the review rasterizer moved to `app/Skeleton2DRaster.h`. Test `Skeleton2DVariants` (refused spoiled,
+  magenta and square answers; a moved, doubled answer accepted; a keyed attachment variant; a grown canvas keeping its
+  place). Run with Codex on the test adventurer's torso (see "Repainting parts"). Not done: the other five requests of
+  that rig were not sent; a rebuild drops imported fills (re-import them).
 - [ ] **M6 — Motion.** `skeleton2d.motion {recipe}` writes clips from parameters (idle breathing, walk, run, jump,
   attack, hit, death) onto the bones the draft named; `SpringBone2D`-style secondary motion and two-bone IK for feet.
 - [ ] **M7 — Agent guide.** `docs/SKELETON2D_AGENT.md` (the step-by-step workflow with a check per step), a

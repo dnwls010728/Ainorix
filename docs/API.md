@@ -187,6 +187,34 @@ A contact sheet of a skeleton's poses (a clip sampled, or stress poses), each la
 | `cell` | integer |  | Cell size in pixels, 64..1024 (default 256). |
 | `out` | string |  | PNG path (default .oe/vision/poses.png). |
 
+### `skeleton2d.variant_requests`
+
+Write image-generator requests for pictures a skeleton is missing: fill (the area of each part hidden under a front part, which shows when it moves) or attachment (a new version of a part). Each request has edit/source/mask/context images, a prompt and where to save the answer. Sending them to a generator shares them: ask the user first.
+
+| arg | type | required | description |
+|---|---|---|---|
+| `path` | string | yes | *.skel2d.json. |
+| `kind` | string |  | fill (default) or attachment. |
+| `slots` | array |  | fill: only these slots (default: every slot with a hidden area). |
+| `slot` | string |  | attachment: the slot to draw a new picture for. |
+| `name` | string |  | attachment: the new attachment's name (fist, eyes_closed). |
+| `description` | string |  | attachment: what the new picture shows. |
+| `reach` | number |  | fill: how far from the part's own pixels to repaint, in pixels (default 15% of the part). |
+| `grow` | integer |  | Grow the part's canvas by this many pixels on every side first (room to paint beyond its cut). |
+| `skin` | string |  | Skin to use. |
+| `outDir` | string |  | Folder for the requests (default .oe/variants/<skeleton name>). |
+
+### `skeleton2d.variant_import`
+
+Bring back a generated picture for a request: checked against the source (size, a small shift and tint, nothing changed outside the mask), only the masked area kept, written as a new image, and the skeleton updated (meshes regridded, weights carried over).
+
+| arg | type | required | description |
+|---|---|---|---|
+| `request` | string | yes | The request.json of skeleton2d.variant_requests. |
+| `result` | string |  | The generated PNG (default: the request's result path). |
+| `maxShift` | integer |  | Largest misalignment searched, pixels (default 8). |
+| `tolerance` | number |  | Largest allowed change outside the mask after shift and tint, 0..1 (default 0.08). |
+
 ### `skeleton2d.overlay`
 
 Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. Returns where each bone is in the picture. Writes a PNG to read.

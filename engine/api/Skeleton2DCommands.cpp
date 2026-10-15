@@ -10,6 +10,7 @@
 #include "app/Engine.h"
 #include "app/Skeleton2DBuild.h"
 #include "app/Skeleton2DReview.h"
+#include "app/Skeleton2DVariants.h"
 #include "assets/Assets.h"
 #include "core/FileSystem.h"
 #include "render/ImageDraw.h"
@@ -302,6 +303,31 @@ void RegisterSkeleton2DCommands(CommandRegistry& r) {
                .Opt("cell", "integer", "Cell size in pixels, 64..1024 (default 256).")
                .Opt("out", "string", "PNG path (default .oe/vision/poses.png)."),
            false, [](Engine& engine, const Json& args) { return Skeleton2DContactSheet(engine, args); }});
+    r.Add({"skeleton2d.variant_requests",
+           "Write image-generator requests for pictures a skeleton is missing: fill (the area of each part hidden under a front part, which "
+           "shows when it moves) or attachment (a new version of a part). Each request has edit/source/mask/context images, a prompt and "
+           "where to save the answer. Sending them to a generator shares them: ask the user first.",
+           Params()
+               .Req("path", "string", "*.skel2d.json.")
+               .Opt("kind", "string", "fill (default) or attachment.")
+               .OptWith("slots", Json::parse(R"({"type":"array","description":"fill: only these slots (default: every slot with a hidden area)."})"))
+               .Opt("slot", "string", "attachment: the slot to draw a new picture for.")
+               .Opt("name", "string", "attachment: the new attachment's name (fist, eyes_closed).")
+               .Opt("description", "string", "attachment: what the new picture shows.")
+               .Opt("reach", "number", "fill: how far from the part's own pixels to repaint, in pixels (default 15% of the part).")
+               .Opt("grow", "integer", "Grow the part's canvas by this many pixels on every side first (room to paint beyond its cut).")
+               .Opt("skin", "string", "Skin to use.")
+               .Opt("outDir", "string", "Folder for the requests (default .oe/variants/<skeleton name>)."),
+           false, [](Engine& engine, const Json& args) { return Skeleton2DVariantRequests(engine, args); }});
+    r.Add({"skeleton2d.variant_import",
+           "Bring back a generated picture for a request: checked against the source (size, a small shift and tint, nothing changed outside "
+           "the mask), only the masked area kept, written as a new image, and the skeleton updated (meshes regridded, weights carried over).",
+           Params()
+               .Req("request", "string", "The request.json of skeleton2d.variant_requests.")
+               .Opt("result", "string", "The generated PNG (default: the request's result path).")
+               .Opt("maxShift", "integer", "Largest misalignment searched, pixels (default 8).")
+               .Opt("tolerance", "number", "Largest allowed change outside the mask after shift and tint, 0..1 (default 0.08)."),
+           false, [](Engine& engine, const Json& args) { return Skeleton2DVariantImport(engine, args); }});
     r.Add({"skeleton2d.overlay",
            "Draw a skeleton with its rig on top: bones (yellow, named), mesh edges and vertices, optionally one bone's weights as a heat map. "
            "Returns where each bone is in the picture. Writes a PNG to read.",
