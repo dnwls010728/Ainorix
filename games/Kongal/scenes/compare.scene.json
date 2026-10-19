@@ -1,0 +1,152 @@
+{
+ "format": "ownengine.scene",
+ "version": 1,
+ "name": "Compare",
+ "entities": [
+  {
+   "id": 1,
+   "name": "Main Camera",
+   "components": {
+    "Transform": {
+     "position": [
+      1.1,
+      0.85,
+      2.6
+     ],
+     "rotation": [
+      -8.660375977534432,
+      22.932100437589785,
+      0
+     ]
+    },
+    "Camera": {
+     "fov": 30,
+     "nearPlane": 0.05,
+     "farPlane": 50,
+     "clearColor": [
+      0.925,
+      0.93,
+      0.905
+     ]
+    },
+    "PostProcess": {
+     "bloom": 0.18,
+     "bloomThreshold": 0.85,
+     "vignette": 0.35,
+     "vignetteRadius": 0.3,
+     "vignetteSoftness": 1.1,
+     "vignetteColor": [
+      0.8,
+      0.6,
+      0.37
+     ],
+     "saturation": 0.97,
+     "shadowTint": [
+      1,
+      0.96,
+      0.92
+     ],
+     "highlightTint": [
+      1.04,
+      1,
+      0.92
+     ],
+     "fxaa": true,
+     "shader": "shaders/watercolor.shader.json"
+    }
+   }
+  },
+  {
+   "id": 2,
+   "name": "Sun",
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      3,
+      0
+     ],
+     "rotation": [
+      -44.56810590471152,
+      -50.71059313749964,
+      0
+     ]
+    },
+    "DirectionalLight": {
+     "color": [
+      1,
+      0.902,
+      0.7216
+     ],
+     "intensity": 0.45,
+     "ambient": [
+      0.8838,
+      0.8405,
+      0.761
+     ],
+     "hemisphere": true,
+     "groundAmbient": [
+      0.7466,
+      0.5733,
+      0.4
+     ],
+     "shadows": true,
+     "shadowStrength": 0.3
+    }
+   }
+  },
+  {
+   "id": 3,
+   "name": "Blob",
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.002,
+      0
+     ],
+     "rotation": [
+      -90,
+      0,
+      0
+     ],
+     "scale": [
+      1.2,
+      1.2,
+      1
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "quad",
+     "material": "materials/blob.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ],
+     "castShadows": false
+    }
+   }
+  },
+  {
+   "id": 4,
+   "name": "Kongal",
+   "components": {
+    "MeshRenderer": {
+     "mesh": "assets/models/kongal_v7_anim.glb",
+     "material": "materials/kongal_toon.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Animator": {
+     "clip": "Idle",
+     "playing": false,
+     "time": 0.5
+    }
+   }
+  }
+ ]
+}

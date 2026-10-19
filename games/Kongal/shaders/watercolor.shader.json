@@ -1,0 +1,436 @@
+{
+ "format": "ownengine.shader",
+ "stage": "post",
+ "uniforms": {
+  "wobble": 2.8,
+  "bleed": 0.2,
+  "edgeDarken": 0.1,
+  "wash": 0.32,
+  "granulation": 0.045,
+  "paper": 0.041
+ },
+ "nodes": [
+  {
+   "op": "uv"
+  },
+  {
+   "op": "texel"
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    2,
+    3,
+    2,
+    3
+   ],
+   "args": [
+    1
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    0,
+    2
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0,
+    0,
+    1,
+    0
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    3,
+    4
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 0.5
+  },
+  {
+   "op": "constant",
+   "value": 1
+  },
+  {
+   "op": "constant",
+   "value": 0
+  },
+  {
+   "op": "constant",
+   "value": [
+    0.012,
+    0.012,
+    1.3,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    5,
+    9
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    10
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0.012,
+    0.012,
+    7.1,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    5,
+    12
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    13
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0,
+    1,
+    0,
+    0
+   ]
+  },
+  {
+   "op": "mix",
+   "args": [
+    11,
+    14,
+    15
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    16,
+    6
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "wobble"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    17,
+    18
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    19,
+    1
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    0,
+    20
+   ]
+  },
+  {
+   "op": "sceneColor",
+   "args": [
+    21
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 1.6
+  },
+  {
+   "op": "sceneBlur",
+   "args": [
+    21,
+    23
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "bleed"
+  },
+  {
+   "op": "mix",
+   "args": [
+    22,
+    24,
+    25
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    26,
+    24
+   ]
+  },
+  {
+   "op": "length",
+   "args": [
+    27
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 6
+  },
+  {
+   "op": "multiply",
+   "args": [
+    28,
+    29
+   ]
+  },
+  {
+   "op": "clamp",
+   "args": [
+    30,
+    8,
+    7
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "edgeDarken"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    31,
+    32
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    7,
+    33
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    26,
+    34
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0.007,
+    0.007,
+    3.7,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    5,
+    36
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    37
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    38,
+    6
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "wash"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    39,
+    40
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    41,
+    7
+   ]
+  },
+  {
+   "op": "pow",
+   "args": [
+    35,
+    42
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0.35,
+    0.35,
+    2,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    5,
+    44
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    45
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    46,
+    6
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "granulation"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    47,
+    48
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0.08,
+    0.08,
+    5,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    5,
+    50
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    51
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0.6,
+    0.6,
+    9,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    5,
+    53
+   ]
+  },
+  {
+   "op": "noise",
+   "args": [
+    54
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 0.3
+  },
+  {
+   "op": "mix",
+   "args": [
+    52,
+    55,
+    56
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    57,
+    6
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "paper"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    58,
+    59
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    49,
+    60
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    61,
+    7
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    43,
+    62
+   ]
+  }
+ ],
+ "color": 63
+}

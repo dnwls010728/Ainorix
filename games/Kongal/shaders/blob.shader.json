@@ -1,0 +1,22 @@
+{
+  "format": "ownengine.shader",
+  "uniforms": {"tint": [0.2633, 0.1193, 0.0397, 1], "strength": 0.32},
+  "nodes": [
+    {"op": "uv"},
+    {"op": "constant", "value": [0.5, 0.5, 0, 0]},
+    {"op": "subtract", "args": [0, 1]},
+    {"op": "length", "args": [2]},
+    {"op": "constant", "value": 0.5},
+    {"op": "constant", "value": 0.05},
+    {"op": "smoothstep", "args": [4, 5, 3]},
+    {"op": "uniform", "name": "strength"},
+    {"op": "multiply", "args": [6, 7]},
+    {"op": "uniform", "name": "tint"},
+    {"op": "constant", "value": [1, 1, 1, 0]},
+    {"op": "multiply", "args": [9, 10]},
+    {"op": "constant", "value": [0, 0, 0, 1]},
+    {"op": "multiply", "args": [8, 12]},
+    {"op": "add", "args": [11, 13]}
+  ],
+  "color": 14
+}

@@ -1,0 +1,883 @@
+{
+ "format": "ownengine.shader",
+ "uniforms": {
+  "rimDir": [
+   0.6549,
+   0.4534,
+   -0.6046,
+   0
+  ],
+  "rimColor": [
+   0.35,
+   0.2609,
+   0.089,
+   0
+  ],
+  "termK": [
+   0.09,
+   -0.3004,
+   -0.5193,
+   0
+  ],
+  "dabShadeK": [
+   -0.2093,
+   -0.8245,
+   -0.9805,
+   0
+  ],
+  "dabLightK": [
+   0.2,
+   0.0456,
+   -0.479,
+   0
+  ]
+ },
+ "nodes": [
+  {
+   "op": "baseColor"
+  },
+  {
+   "op": "normal"
+  },
+  {
+   "op": "ambient"
+  },
+  {
+   "op": "objectPosition"
+  },
+  {
+   "op": "viewDirection"
+  },
+  {
+   "op": "constant",
+   "value": 0
+  },
+  {
+   "op": "constant",
+   "value": 1
+  },
+  {
+   "op": "constant",
+   "value": 0.5
+  },
+  {
+   "op": "constant",
+   "value": 9
+  },
+  {
+   "op": "multiply",
+   "args": [
+    3,
+    8
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    9
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    10,
+    7
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 0.18
+  },
+  {
+   "op": "multiply",
+   "args": [
+    11,
+    12
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 140
+  },
+  {
+   "op": "multiply",
+   "args": [
+    3,
+    14
+   ]
+  },
+  {
+   "op": "fbm",
+   "args": [
+    15
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    16,
+    7
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 0.04
+  },
+  {
+   "op": "multiply",
+   "args": [
+    17,
+    18
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    6,
+    19
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    2,
+    1,
+    0,
+    3
+   ],
+   "args": [
+    1
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    1,
+    0,
+    -1,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    21,
+    22
+   ]
+  },
+  {
+   "op": "normalize",
+   "args": [
+    23
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    1,
+    2,
+    0,
+    3
+   ],
+   "args": [
+    1
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    2,
+    0,
+    1,
+    3
+   ],
+   "args": [
+    24
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    2,
+    0,
+    1,
+    3
+   ],
+   "args": [
+    1
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    1,
+    2,
+    0,
+    3
+   ],
+   "args": [
+    24
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    25,
+    26
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    27,
+    28
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    29,
+    30
+   ]
+  },
+  {
+   "op": "dot",
+   "args": [
+    3,
+    24
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    16,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    32,
+    33
+   ]
+  },
+  {
+   "op": "dot",
+   "args": [
+    3,
+    31
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0,
+    75,
+    0,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    35,
+    36
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0,
+    0,
+    1.7,
+    0
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    34,
+    37
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    39,
+    38
+   ]
+  },
+  {
+   "op": "noise",
+   "args": [
+    40
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 0.8
+  },
+  {
+   "op": "multiply",
+   "args": [
+    31,
+    42
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    24,
+    43
+   ]
+  },
+  {
+   "op": "normalize",
+   "args": [
+    44
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    1,
+    2,
+    0,
+    3
+   ],
+   "args": [
+    1
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    2,
+    0,
+    1,
+    3
+   ],
+   "args": [
+    45
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    2,
+    0,
+    1,
+    3
+   ],
+   "args": [
+    1
+   ]
+  },
+  {
+   "op": "swizzle",
+   "value": [
+    1,
+    2,
+    0,
+    3
+   ],
+   "args": [
+    45
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    46,
+    47
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    48,
+    49
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    50,
+    51
+   ]
+  },
+  {
+   "op": "dot",
+   "args": [
+    3,
+    45
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    20,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    53,
+    54
+   ]
+  },
+  {
+   "op": "dot",
+   "args": [
+    3,
+    52
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0,
+    85,
+    0,
+    0
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    56,
+    57
+   ]
+  },
+  {
+   "op": "constant",
+   "value": [
+    0,
+    0,
+    5.3,
+    0
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    55,
+    58
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    60,
+    59
+   ]
+  },
+  {
+   "op": "noise",
+   "args": [
+    61
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 0.195
+  },
+  {
+   "op": "constant",
+   "value": 0.105
+  },
+  {
+   "op": "constant",
+   "value": 0.15
+  },
+  {
+   "op": "multiply",
+   "args": [
+    41,
+    63
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    62,
+    64
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    66,
+    67
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    68,
+    65
+   ]
+  },
+  {
+   "op": "abs",
+   "args": [
+    69
+   ]
+  },
+  {
+   "op": "step",
+   "args": [
+    5,
+    69
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    6,
+    71
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 1.2
+  },
+  {
+   "op": "constant",
+   "value": 0.8
+  },
+  {
+   "op": "multiply",
+   "args": [
+    71,
+    73
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    72,
+    74
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    75,
+    76
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    70,
+    77
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "dabShadeK"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    79,
+    78
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    6,
+    80
+   ]
+  },
+  {
+   "op": "dot",
+   "args": [
+    1,
+    4
+   ]
+  },
+  {
+   "op": "clamp",
+   "args": [
+    82,
+    5,
+    6
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    6,
+    83
+   ]
+  },
+  {
+   "op": "constant",
+   "value": 2.5
+  },
+  {
+   "op": "pow",
+   "args": [
+    84,
+    85
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "rimDir"
+  },
+  {
+   "op": "dot",
+   "args": [
+    1,
+    87
+   ]
+  },
+  {
+   "op": "constant",
+   "value": -0.25
+  },
+  {
+   "op": "constant",
+   "value": 0.55
+  },
+  {
+   "op": "smoothstep",
+   "args": [
+    89,
+    90,
+    88
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    86,
+    91
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "rimColor"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    92,
+    93
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    2,
+    81
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    0,
+    95
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    96,
+    94
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    97,
+    20
+   ]
+  },
+  {
+   "op": "lightVector"
+  },
+  {
+   "op": "dot",
+   "args": [
+    1,
+    99
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    100,
+    13
+   ]
+  },
+  {
+   "op": "constant",
+   "value": -0.32
+  },
+  {
+   "op": "constant",
+   "value": 0.32
+  },
+  {
+   "op": "smoothstep",
+   "args": [
+    102,
+    103,
+    101
+   ]
+  },
+  {
+   "op": "lightAttenuation"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    104,
+    105
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    6,
+    106
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    106,
+    107
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "termK"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    108,
+    109
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    6,
+    110
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    76,
+    107
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    75,
+    112
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    70,
+    113
+   ]
+  },
+  {
+   "op": "uniform",
+   "name": "dabLightK"
+  },
+  {
+   "op": "mix",
+   "args": [
+    79,
+    115,
+    106
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    116,
+    114
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    6,
+    117
+   ]
+  },
+  {
+   "op": "lightColor"
+  },
+  {
+   "op": "multiply",
+   "args": [
+    119,
+    106
+   ]
+  },
+  {
+   "op": "add",
+   "args": [
+    2,
+    120
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    121,
+    111
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    122,
+    118
+   ]
+  },
+  {
+   "op": "subtract",
+   "args": [
+    123,
+    95
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    0,
+    124
+   ]
+  },
+  {
+   "op": "multiply",
+   "args": [
+    125,
+    20
+   ]
+  }
+ ],
+ "color": 98,
+ "light": 126
+}

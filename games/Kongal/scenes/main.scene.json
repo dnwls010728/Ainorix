@@ -1,0 +1,2606 @@
+{
+ "format": "ownengine.scene",
+ "version": 1,
+ "name": "Meadow",
+ "entities": [
+  {
+   "id": 1,
+   "name": "Main Camera",
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      2.36,
+      3.4
+     ],
+     "rotation": [
+      -28,
+      0,
+      0
+     ]
+    },
+    "Camera": {
+     "fov": 36,
+     "clearColor": [
+      0.97,
+      0.92,
+      0.82
+     ]
+    },
+    "CameraFollow": {
+     "target": 10,
+     "offset": [
+      0,
+      1.7,
+      3
+     ],
+     "lookOffset": [
+      0,
+      0.1,
+      0
+     ],
+     "smoothing": 6
+    },
+    "PostProcess": {
+     "bloom": 0.18,
+     "bloomThreshold": 0.85,
+     "vignette": 0.12,
+     "vignetteRadius": 0.3,
+     "vignetteSoftness": 1.1,
+     "vignetteColor": [
+      0.62,
+      0.42,
+      0.28
+     ],
+     "saturation": 0.97,
+     "shadowTint": [
+      1,
+      0.96,
+      0.92
+     ],
+     "highlightTint": [
+      1.04,
+      1,
+      0.92
+     ],
+     "fxaa": true,
+     "fog": 0.35,
+     "fogColor": [
+      0.97,
+      0.92,
+      0.82
+     ],
+     "fogStart": 8,
+     "fogEnd": 28,
+     "shader": "shaders/watercolor.shader.json"
+    }
+   }
+  },
+  {
+   "id": 2,
+   "name": "Sun",
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      6,
+      0
+     ],
+     "rotation": [
+      -50,
+      35,
+      0
+     ]
+    },
+    "DirectionalLight": {
+     "color": [
+      1,
+      0.902,
+      0.7216
+     ],
+     "intensity": 0.45,
+     "ambient": [
+      0.8838,
+      0.8405,
+      0.761
+     ],
+     "hemisphere": true,
+     "groundAmbient": [
+      0.7466,
+      0.5733,
+      0.4
+     ],
+     "shadows": true,
+     "shadowStrength": 0.6
+    }
+   }
+  },
+  {
+   "id": 3,
+   "name": "Sky",
+   "components": {
+    "Skybox": {
+     "sky": [
+      0.93,
+      0.88,
+      0.76
+     ],
+     "horizon": [
+      0.98,
+      0.93,
+      0.82
+     ],
+     "ground": [
+      0.84,
+      0.74,
+      0.56
+     ],
+     "intensity": 0.9
+    }
+   }
+  },
+  {
+   "id": 4,
+   "name": "Meadow",
+   "components": {
+    "Transform": {
+     "scale": [
+      60,
+      1,
+      60
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "plane",
+     "material": "materials/meadow.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Collider": {
+     "center": [
+      0,
+      -0.5,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 10,
+   "name": "Player",
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.34,
+      0
+     ]
+    },
+    "CharacterBody": {
+     "shape": "sphere",
+     "radius": 0.34,
+     "stepHeight": 0.12
+    },
+    "Script": {
+     "path": "scripts/kongal_player.lua",
+     "params": {
+      "walk": 1.4,
+      "run": 2.6
+     }
+    },
+    "Tag": {
+     "tags": "player"
+    }
+   }
+  },
+  {
+   "id": 11,
+   "name": "Kongal",
+   "parent": 10,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      -0.34,
+      0
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "assets/models/kongal_v7_anim.glb",
+     "material": "materials/kongal_toon.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Animator": {
+     "clip": "Idle",
+     "blend": 0.2
+    }
+   }
+  },
+  {
+   "id": 100,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      -2.6,
+      0,
+      -2.2
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.17600000000000002,
+     "height": 1.7600000000000002,
+     "center": [
+      0,
+      0.8800000000000001,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 101,
+   "name": "Trunk",
+   "parent": 100,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.49500000000000005,
+      0
+     ],
+     "scale": [
+      0.198,
+      0.9900000000000001,
+      0.198
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 102,
+   "name": "Canopy",
+   "parent": 100,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.265,
+      0
+     ],
+     "scale": [
+      1.045,
+      0.8800000000000001,
+      1.045
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 103,
+   "name": "Canopy",
+   "parent": 100,
+   "components": {
+    "Transform": {
+     "position": [
+      0.30800000000000005,
+      1.595,
+      0.11000000000000001
+     ],
+     "scale": [
+      0.66,
+      0.6050000000000001,
+      0.66
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 104,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      3.1,
+      0,
+      -3.4
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.20800000000000002,
+     "height": 2.08,
+     "center": [
+      0,
+      1.04,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 105,
+   "name": "Trunk",
+   "parent": 104,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.5850000000000001,
+      0
+     ],
+     "scale": [
+      0.23399999999999999,
+      1.1700000000000002,
+      0.23399999999999999
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 106,
+   "name": "Canopy",
+   "parent": 104,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.4949999999999999,
+      0
+     ],
+     "scale": [
+      1.2349999999999999,
+      1.04,
+      1.2349999999999999
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 107,
+   "name": "Canopy",
+   "parent": 104,
+   "components": {
+    "Transform": {
+     "position": [
+      0.36400000000000005,
+      1.885,
+      0.13
+     ],
+     "scale": [
+      0.78,
+      0.7150000000000001,
+      0.78
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 108,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      -4.4,
+      0,
+      1.8
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.16,
+     "height": 1.6,
+     "center": [
+      0,
+      0.8,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 109,
+   "name": "Trunk",
+   "parent": 108,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.45,
+      0
+     ],
+     "scale": [
+      0.18,
+      0.9,
+      0.18
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 110,
+   "name": "Canopy",
+   "parent": 108,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.15,
+      0
+     ],
+     "scale": [
+      0.95,
+      0.8,
+      0.95
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 111,
+   "name": "Canopy",
+   "parent": 108,
+   "components": {
+    "Transform": {
+     "position": [
+      0.28,
+      1.45,
+      0.1
+     ],
+     "scale": [
+      0.6,
+      0.55,
+      0.6
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 112,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      4.6,
+      0,
+      1.2
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.14400000000000002,
+     "height": 1.4400000000000002,
+     "center": [
+      0,
+      0.7200000000000001,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 113,
+   "name": "Trunk",
+   "parent": 112,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.405,
+      0
+     ],
+     "scale": [
+      0.162,
+      0.81,
+      0.162
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 114,
+   "name": "Canopy",
+   "parent": 112,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.035,
+      0
+     ],
+     "scale": [
+      0.855,
+      0.7200000000000001,
+      0.855
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 115,
+   "name": "Canopy",
+   "parent": 112,
+   "components": {
+    "Transform": {
+     "position": [
+      0.25200000000000006,
+      1.305,
+      0.09000000000000001
+     ],
+     "scale": [
+      0.54,
+      0.49500000000000005,
+      0.54
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 116,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      0.6,
+      0,
+      -5.6
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.22399999999999998,
+     "height": 2.2399999999999998,
+     "center": [
+      0,
+      1.1199999999999999,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 117,
+   "name": "Trunk",
+   "parent": 116,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.63,
+      0
+     ],
+     "scale": [
+      0.252,
+      1.26,
+      0.252
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 118,
+   "name": "Canopy",
+   "parent": 116,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.6099999999999999,
+      0
+     ],
+     "scale": [
+      1.3299999999999998,
+      1.1199999999999999,
+      1.3299999999999998
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 119,
+   "name": "Canopy",
+   "parent": 116,
+   "components": {
+    "Transform": {
+     "position": [
+      0.392,
+      2.03,
+      0.13999999999999999
+     ],
+     "scale": [
+      0.84,
+      0.77,
+      0.84
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 120,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.2,
+      0,
+      4.8
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.192,
+     "height": 1.92,
+     "center": [
+      0,
+      0.96,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 121,
+   "name": "Trunk",
+   "parent": 120,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.54,
+      0
+     ],
+     "scale": [
+      0.216,
+      1.08,
+      0.216
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 122,
+   "name": "Canopy",
+   "parent": 120,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.38,
+      0
+     ],
+     "scale": [
+      1.14,
+      0.96,
+      1.14
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 123,
+   "name": "Canopy",
+   "parent": 120,
+   "components": {
+    "Transform": {
+     "position": [
+      0.336,
+      1.74,
+      0.12
+     ],
+     "scale": [
+      0.72,
+      0.66,
+      0.72
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 124,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      6.5,
+      0,
+      -6.5
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.24,
+     "height": 2.4000000000000004,
+     "center": [
+      0,
+      1.2000000000000002,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 125,
+   "name": "Trunk",
+   "parent": 124,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.675,
+      0
+     ],
+     "scale": [
+      0.27,
+      1.35,
+      0.27
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 126,
+   "name": "Canopy",
+   "parent": 124,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.7249999999999999,
+      0
+     ],
+     "scale": [
+      1.4249999999999998,
+      1.2000000000000002,
+      1.4249999999999998
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 127,
+   "name": "Canopy",
+   "parent": 124,
+   "components": {
+    "Transform": {
+     "position": [
+      0.42000000000000004,
+      2.175,
+      0.15000000000000002
+     ],
+     "scale": [
+      0.8999999999999999,
+      0.8250000000000001,
+      0.8999999999999999
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 128,
+   "name": "Tree",
+   "components": {
+    "Transform": {
+     "position": [
+      -7,
+      0,
+      -5
+     ]
+    },
+    "Collider": {
+     "shape": "capsule",
+     "radius": 0.20800000000000002,
+     "height": 2.08,
+     "center": [
+      0,
+      1.04,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "id": 129,
+   "name": "Trunk",
+   "parent": 128,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      0.5850000000000001,
+      0
+     ],
+     "scale": [
+      0.23399999999999999,
+      1.1700000000000002,
+      0.23399999999999999
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "cube",
+     "material": "materials/toon_trunk.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 130,
+   "name": "Canopy",
+   "parent": 128,
+   "components": {
+    "Transform": {
+     "position": [
+      0,
+      1.4949999999999999,
+      0
+     ],
+     "scale": [
+      1.2349999999999999,
+      1.04,
+      1.2349999999999999
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 131,
+   "name": "Canopy",
+   "parent": 128,
+   "components": {
+    "Transform": {
+     "position": [
+      0.36400000000000005,
+      1.885,
+      0.13
+     ],
+     "scale": [
+      0.78,
+      0.7150000000000001,
+      0.78
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 132,
+   "name": "Rock",
+   "components": {
+    "Transform": {
+     "position": [
+      1.8,
+      0.12,
+      -1.4
+     ],
+     "scale": [
+      0.55,
+      0.32,
+      0.45
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_rock.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Collider": {
+     "shape": "sphere",
+     "radius": 0.5
+    }
+   }
+  },
+  {
+   "id": 133,
+   "name": "Rock",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.6,
+      0.096,
+      1.4
+     ],
+     "scale": [
+      0.44000000000000006,
+      0.256,
+      0.36000000000000004
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_rock.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Collider": {
+     "shape": "sphere",
+     "radius": 0.5
+    }
+   }
+  },
+  {
+   "id": 134,
+   "name": "Rock",
+   "components": {
+    "Transform": {
+     "position": [
+      2.4,
+      0.144,
+      2.8
+     ],
+     "scale": [
+      0.66,
+      0.384,
+      0.54
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_rock.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Collider": {
+     "shape": "sphere",
+     "radius": 0.5
+    }
+   }
+  },
+  {
+   "id": 135,
+   "name": "Rock",
+   "components": {
+    "Transform": {
+     "position": [
+      -3.5,
+      0.16799999999999998,
+      -4.5
+     ],
+     "scale": [
+      0.77,
+      0.44799999999999995,
+      0.63
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_rock.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Collider": {
+     "shape": "sphere",
+     "radius": 0.5
+    }
+   }
+  },
+  {
+   "id": 136,
+   "name": "Rock",
+   "components": {
+    "Transform": {
+     "position": [
+      5.2,
+      0.108,
+      -1.8
+     ],
+     "scale": [
+      0.49500000000000005,
+      0.28800000000000003,
+      0.405
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_rock.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    },
+    "Collider": {
+     "shape": "sphere",
+     "radius": 0.5
+    }
+   }
+  },
+  {
+   "id": 137,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      -7.999123446642944,
+      0.13976677651506234,
+      6.732232272034619
+     ],
+     "scale": [
+      0.43677117660956977,
+      0.31447524715889025,
+      0.43677117660956977
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 138,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      -4.63118522457368,
+      0.1631405732124767,
+      3.669930590162952
+     ],
+     "scale": [
+      0.5098142912889897,
+      0.3670662897280726,
+      0.5098142912889897
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 139,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      -2.731002983977554,
+      0.18448718472220335,
+      4.032848289251723
+     ],
+     "scale": [
+      0.5765224522568855,
+      0.41509616562495755,
+      0.5765224522568855
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 140,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      0.6856043453726937,
+      0.1730478020296655,
+      2.9522326788642594
+     ],
+     "scale": [
+      0.5407743813427046,
+      0.3893575545667473,
+      0.5407743813427046
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 141,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      5.0681187645849395,
+      0.14792621874992093,
+      -4.127923620924318
+     ],
+     "scale": [
+      0.4622694335935029,
+      0.33283399218732207,
+      0.4622694335935029
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 142,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      3.3264216535382065,
+      0.11717318113389107,
+      3.1687310166511367
+     ],
+     "scale": [
+      0.3661661910434096,
+      0.2636396575512549,
+      0.3661661910434096
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 143,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      2.9425528845482294,
+      0.20055057483564626,
+      -0.5136693979211477
+     ],
+     "scale": [
+      0.6267205463613945,
+      0.451238793380204,
+      0.6267205463613945
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 144,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      4.918543784375556,
+      0.16125332445709656,
+      -6.034616000035133
+     ],
+     "scale": [
+      0.5039166389284268,
+      0.36281998002846727,
+      0.5039166389284268
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 145,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      6.770691736960174,
+      0.17380040658907983,
+      3.0160230896510285
+     ],
+     "scale": [
+      0.5431262705908745,
+      0.3910509148254296,
+      0.5431262705908745
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 146,
+   "name": "Bush",
+   "components": {
+    "Transform": {
+     "position": [
+      1.2389237774717259,
+      0.1992000794667751,
+      6.591927967309918
+     ],
+     "scale": [
+      0.6225002483336721,
+      0.44820017880024393,
+      0.6225002483336721
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_leaf.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 147,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.788558612013496,
+      0.05,
+      -2.3045921108241156
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 148,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      4.720393379088674,
+      0.05,
+      -2.3484776566496484
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 149,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -4.86397531063481,
+      0.05,
+      -2.8330458392543
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 150,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.0014203470206913,
+      0.05,
+      -2.8717723767607346
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 151,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      6.121663782336592,
+      0.05,
+      0.8031897311113725
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 152,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      3.2098107888408984,
+      0.05,
+      5.289928048984114
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 153,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -6.179280723994262,
+      0.05,
+      -3.1711281715757815
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 154,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      0.8488203258480975,
+      0.05,
+      0.12321652896852098
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 155,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.099797626072447,
+      0.05,
+      -4.298701399610705
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 156,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      5.7255767428900946,
+      0.05,
+      -6.231682246193142
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 157,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.8835117681340832,
+      0.05,
+      -2.182287029541231
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 158,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      2.3018945005265508,
+      0.05,
+      5.940870349733564
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 159,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      0.2079679720140848,
+      0.05,
+      -4.682294359282727
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 160,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.3212964648014385,
+      0.05,
+      -3.0296839177746717
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 161,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -1.8976060389064284,
+      0.05,
+      -1.0646959003362317
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 162,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -2.343996951051055,
+      0.05,
+      0.4432436849191992
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 163,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      1.5966124369747061,
+      0.05,
+      -3.7347717661106827
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 164,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      5.6909269777550024,
+      0.05,
+      -0.590284871678001
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 165,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      5.082161707841867,
+      0.05,
+      1.8918236982504941
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 166,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      1.880896496065379,
+      0.05,
+      0.22740937081510593
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 167,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      0.06929528949283714,
+      0.05,
+      2.645930506124129
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 168,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      6.154016428233132,
+      0.05,
+      -1.445890685751052
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 169,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      2.9152445820696853,
+      0.05,
+      -3.4843091547881757
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 170,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      1.2160354751236904,
+      0.05,
+      -2.091769596138862
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 171,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -2.3716023058498292,
+      0.05,
+      -1.5199544180743185
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 172,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      4.126095424930609,
+      0.05,
+      5.2858068087537795
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 173,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -5.444965275211709,
+      0.05,
+      4.4686195168032405
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 174,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -5.91178108794232,
+      0.05,
+      -1.3047450465637933
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 175,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -4.849997597676701,
+      0.05,
+      -5.909624152309086
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 176,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      6.946872141187485,
+      0.05,
+      -3.9199230619333325
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 177,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      1.8530980864786992,
+      0.05,
+      -4.9804605524896
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 178,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -0.6005056926982971,
+      0.05,
+      1.3008228197232001
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 179,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -5.070868912185947,
+      0.05,
+      5.906192890790381
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 180,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      5.383915513932665,
+      0.05,
+      5.468042666310464
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 181,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      5.393092679974201,
+      0.05,
+      5.70867232638815
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 182,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      3.655789605647227,
+      0.05,
+      -3.1440978870466805
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 183,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -6.8531875935630815,
+      0.05,
+      -3.5238850147108947
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 184,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      -5.935442246000955,
+      0.05,
+      -6.977828538034963
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 185,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      1.6357612463812166,
+      0.05,
+      -3.7607320708971153
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 186,
+   "name": "Flower",
+   "components": {
+    "Transform": {
+     "position": [
+      3.3760844321810106,
+      0.05,
+      -0.14894833376116523
+     ],
+     "scale": [
+      0.07,
+      0.07,
+      0.07
+     ]
+    },
+    "MeshRenderer": {
+     "mesh": "sphere",
+     "material": "materials/toon_flower.mat.json",
+     "color": [
+      1,
+      1,
+      1
+     ]
+    }
+   }
+  },
+  {
+   "id": 13,
+   "name": "Hint",
+   "components": {
+    "UIText": {
+     "text": "WASD / 방향키: 이동   Shift: 달리기   Q/E: 카메라 회전",
+     "anchor": "bottom",
+     "y": -24,
+     "size": 20,
+     "font": "assets/fonts/NanumMyeongjo-Bold.ttf",
+     "color": [
+      0.3,
+      0.22,
+      0.13
+     ]
+    }
+   }
+  }
+ ]
+}
